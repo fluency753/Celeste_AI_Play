@@ -12,9 +12,9 @@
 | 游戏 | Steam 版《蔚蓝》（Celeste） | 示例安装目录：`D:\Fluency\software\steam\steamapps\common\Celeste` |
 | Mod 加载器 | Everest，用 Olympus 安装 | 安装前先备份游戏目录 |
 | 录制 | OBS Studio 28 或更新 | 示例安装目录：`D:\Fluency\software\steam\steamapps\common\OBS Studio` |
-| 容器 | Docker Desktop（WSL2 后端） | 智能体的工具在断网容器中运行 |
-| 运行环境 | Python 3 | 主控与智能体运行时 |
-| 模型 | Anthropic API 密钥 | 写入本地 `.env`，不提交到仓库 |
+| 容器 | Docker Desktop（WSL2 后端） | 智能体（Claude Code）整体运行在容器中 |
+| 运行环境 | Python 3 | 主控 |
+| 模型 | Claude Max 套餐，无需 API 密钥 | 在 Windows 上装好 Claude Code，用 `claude setup-token` 生成长期令牌 |
 
 ## 2. 一次性准备
 
@@ -28,16 +28,18 @@
 | 6 | 安装桥接 Mod（CelesteAI.Bridge） | 未实现 |
 | 7 | 安装 OBS 锁步插件，放入 OBS 目录下的 `obs-plugins\64bit` 与 `data\obs-plugins\<插件名>` | 未实现 |
 | 8 | 在 OBS 中建场景：游戏捕获（Celeste.exe）、应用音频捕获（Celeste.exe）、HUD 浏览器源；输出 60 fps，录制格式 MKV，关闭桌面音频与麦克风 | 可预先配置 |
-| 9 | 构建断网沙箱镜像 | 未实现 |
-| 10 | 生成并审核知识库（物理参数与机制） | 未实现 |
-| 11 | 复制配置模板，填入游戏与 OBS 路径、存档槽位、API 密钥 | 未实现 |
+| 9 | 在 Windows 上安装 Claude Code，运行 `claude setup-token` 用 Max 账号登录，把得到的令牌写入项目根目录的 `.env`（变量名 `CLAUDE_CODE_OAUTH_TOKEN`）。`.env` 里不要放 `ANTHROPIC_API_KEY`，否则会改按 API 计费 | 可执行 |
+| 10 | 构建智能体镜像：固定版本的 Claude Code、防火墙脚本、托管配置、非 root 用户 | 未实现 |
+| 11 | 运行容器隔离测试：`claude auth status` 显示订阅令牌；访问非白名单网站失败；Bash 里访问任何网站都失败 | 未实现 |
+| 12 | 生成并审核知识库（物理参数与机制） | 未实现 |
+| 13 | 复制配置模板，填入游戏与 OBS 路径、存档槽位 | 未实现 |
 
 ## 3. 运行一次挑战（未实现）
 
 计划中的流程如下，全部由主控自动串联：
 
 1. **准备阶段（不计时）**：在 `test` 存档上让智能体编写模拟器与规划程序并完成校准；`test` 存档可随时重置，不计成绩。
-2. **正式挑战**：启动游戏与 OBS，启动主控并指定智能体（如 Opus 5.5）与对应的正式存档。
+2. **正式挑战**：先在 Claude Code 里用 `/usage` 确认 Max 额度充足，最好在一个新的 5 小时窗口里开跑；然后启动游戏与 OBS，启动主控并指定智能体（如 Opus 5.5）与对应的正式存档。主控会为该存档启动独立容器并在其中运行 Claude Code。
 3. 主控校验存档名与槽位，备份存档，开始录制。
 4. 从正式存档进入序章时开始 2 小时计时，依次通关序章、1A、2A。剧情能跳过的一律自动跳过。推理强度默认 high，可按房间难度动态调整。
 5. 运行期间右上角 HUD 显示游戏时间、思考与工具时间、上下文大小、压缩次数、当前房间与思考语句，思考语句约每 3 秒刷新一次。
@@ -62,3 +64,5 @@
 | Steam 更新了游戏或 OBS 后出错 | 插件与 Mod 和版本绑定，需重新编译并重跑校准测试 |
 | 游戏窗口失焦后弹出暂停菜单 | 桥接 Mod 会屏蔽此行为；若仍出现，检查 Mod 是否加载 |
 | 存档进度不对 | 从 `runs/` 中的存档备份恢复，并确认已关闭云同步 |
+| 运行中途停下，提示达到用量上限 | Max 额度触顶后无头运行不会自动等待；主控会暂停计时，额度恢复后续跑，成绩中注明 |
+| 想用 Fable 5.1 | Max 上 Fable 另有用量限制，先在 Claude Code 的 `/model` 列表确认可用及计费方式 |
