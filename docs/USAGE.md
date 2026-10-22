@@ -30,10 +30,21 @@
 | 7 | 构建并安装桥接 Mod，见第 3 节 | 可执行 |
 | 8 | 安装 OBS 锁步插件，放入 OBS 目录下的 `obs-plugins\64bit` 与 `data\obs-plugins\<插件名>` | 未实现 |
 | 9 | 在 OBS 中建场景：游戏捕获（Celeste.exe）、应用音频捕获（Celeste.exe）、HUD 浏览器源；输出 60 fps，录制格式 MKV，关闭桌面音频与麦克风 | 可预先配置 |
-| 10 | 在 Windows 上安装 Claude Code，运行 `claude setup-token` 用 Max 账号登录，把得到的令牌写入项目根目录的 `.env`（变量名 `CLAUDE_CODE_OAUTH_TOKEN`）。`.env` 里不要放 `ANTHROPIC_API_KEY`，否则会改按 API 计费 | 可执行 |
+| 10 | 生成 Claude Code 令牌，见 2.1 节 | 可执行 |
 | 11 | 构建智能体镜像：固定版本的 Claude Code、防火墙脚本、托管配置、非 root 用户 | 未实现 |
 | 12 | 运行容器隔离测试：`claude auth status` 显示订阅令牌；访问非白名单网站失败；Bash 里访问任何网站都失败 | 未实现 |
 | 13 | 生成并审核知识库（物理参数与机制） | 未实现 |
+
+### 2.1 生成 Claude Code 令牌
+
+在自己的电脑上、普通（非管理员）PowerShell 里操作，任意目录都可以：
+
+1. 安装 Claude Code：执行 `irm https://claude.ai/install.ps1 | iex`。安装过程不显示进度，结束后关闭这个窗口。
+2. 新开一个 PowerShell，执行 `claude --version`，能打印版本号即安装成功。若提示找不到 `claude`，改用完整路径 `& "$env:USERPROFILE\.local\bin\claude.exe"` 代替下面命令里的 `claude`。
+3. 执行 `claude setup-token`。浏览器会打开 Claude 授权页，用 Max 账号登录并点授权；若浏览器没有自动打开，就把终端里显示的链接复制到浏览器。
+4. 授权完成后，终端会打印一长串令牌（有效期一年）。用鼠标选中整串令牌并复制，注意换行显示的部分也要选全。
+5. 执行 `notepad .env`（在仓库根目录下），把令牌粘贴在 `CLAUDE_CODE_OAUTH_TOKEN=` 后面，不加引号和空格，保存并关闭。
+6. 令牌等同于账号凭据：不要发给任何人，也不要提交到仓库。`.env` 已被 `.gitignore` 排除。
 
 ## 3. 桥接 Mod：构建、安装与测试
 
