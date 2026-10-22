@@ -29,3 +29,6 @@ Thumbs.db
 
 # 本机构建配置
 local.props
+
+# 本机测试产物
+smoke/

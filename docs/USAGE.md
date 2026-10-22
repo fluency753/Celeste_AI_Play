@@ -1,6 +1,6 @@
 # 使用说明
 
-> **项目尚未完成。** 目前可以使用的只有桥接 Mod（M1，代码已完成、待本机实测）及其测试客户端。其余步骤按最终流程编写，尚未实现的标注为"未实现"，每轮开发后同步更新。
+> **项目尚未完成。** 目前可以使用的是桥接 Mod（M1，已在本机实测通过）、测试客户端与菜单宏。其余步骤按最终流程编写，尚未实现的标注为"未实现"，每轮开发后同步更新。
 >
 > 最后更新：2026-10-22
 
@@ -11,7 +11,7 @@
 | 操作系统 | Windows 10 2004 或更新，或 Windows 11 | OBS 的应用音频捕获需要这一版本 |
 | 游戏 | Steam 版《蔚蓝》（Celeste）1.4.0.0 | 示例安装目录：`D:\Fluency\software\steam\steamapps\common\Celeste` |
 | Mod 加载器 | Everest（.NET 8 版本，已在 6642 上验证编译） | 用 Olympus 或 CeleMod 安装 |
-| 构建工具 | .NET 8 SDK | 编译桥接 Mod |
+| 构建工具 | .NET 8 SDK | 编译桥接 Mod；可用官方脚本做用户级安装，无需管理员权限 |
 | 运行环境 | Python 3 | 主控与测试客户端 |
 | 录制 | OBS Studio 28 或更新 | 示例安装目录：`D:\Fluency\software\steam\steamapps\common\OBS Studio` |
 | 容器 | Docker Desktop（WSL2 后端） | 智能体（Claude Code）整体运行在容器中 |
@@ -41,7 +41,7 @@
 
 ### 3.1 构建与安装
 
-先关闭游戏，在仓库根目录的 PowerShell 中执行：
+先关闭游戏。如果 .NET SDK 没有加入 PATH，先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。然后在仓库根目录的 PowerShell 中执行：
 
 ```powershell
 .\tools\deploy_bridge.ps1 -CelesteDir "D:\Fluency\software\steam\steamapps\common\Celeste"
@@ -51,7 +51,7 @@
 
 ### 3.2 冒烟测试
 
-1. 启动游戏，选 `test` 存档进入序章，走到 Madeline 可以操作的位置。
+1. 启动游戏，停在标题画面即可。执行 `python tools\enter_save.py test --leave-active`，菜单宏会自动选中 `test` 存档、进入关卡、跳过开场，停在 Madeline 可以操作的第一帧（实测约 7 秒）。
 2. 在仓库根目录执行 `python tools\bridge_client.py smoke --out-dir smoke`。
 3. 通过的标准：冻结 1 秒帧号不变；单帧推进恰好 1 帧；向右走并起跳 51 帧后有轨迹与截图；最后自动交还控制。截图保存在 `smoke\` 里。
 
@@ -66,6 +66,7 @@
 | `python tools\bridge_client.py advance --until controllable --max 600` | 空输入推进，直到恢复可操作（过场、重生时用） |
 | `python tools\bridge_client.py skip` | 跳过当前剧情 |
 | `python tools\bridge_client.py deactivate` | 交还控制，游戏恢复正常运行 |
+| `python tools\enter_save.py <存档名>` | 从标题画面进入该存档的关卡，停在可操作的第一帧；加 `--leave-active` 保持接管 |
 
 按键写法：`L R U D` 方向，`J` 跳，`X` 冲刺，`Z` 下冲刺，`G` 抓，`T` 交互，`C` 确认，`B` 返回，`P` 暂停，`N` 日志；`A:角度` 表示左摇杆模拟方向（0 为右，90 为上）。每段以帧数开头，例如 `"6,R,J"` 表示按住右与跳 6 帧。
 
@@ -97,6 +98,7 @@
 | 现象 | 处理 |
 | --- | --- |
 | `deploy_bridge.ps1` 提示文件被占用 | 游戏还在运行，关闭后重试 |
+| 平时自己玩时少了很多 Mod | 运行 AI 时用的是 AIPlay 配置；在 CeleMod 里切回自己的配置即可 |
 | 测试客户端连不上 | 确认游戏已启动且 `log.txt` 里有 `[CelesteAIBridge] loaded`；端口被占用时日志会提示 |
 | 接管后按键没有反应 | 检查是否有其他 Mod 改了输入；建议用只启用 CelesteAIBridge 的 Mod 配置 |
 | Steam 更新了游戏或 OBS 后出错 | 插件与 Mod 和版本绑定，需重新编译并重跑校准测试 |
