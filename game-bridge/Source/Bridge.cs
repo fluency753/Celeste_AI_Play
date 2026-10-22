@@ -231,6 +231,10 @@ internal static class Bridge {
                 if (Engine.Scene is Level level && level.InCutscene && !level.SkippingCutscene) {
                     level.SkipCutscene();
                     skipped = true;
+                } else if (Engine.Scene is IntroVignette vignette && !vignette.exiting) {
+                    // 序章开场的独立场景：等同于在它的暂停菜单里选"跳过"
+                    vignette.StartGame();
+                    skipped = true;
                 }
                 IpcServer.Send(Reply.Ok(req.Id, w => w.WriteBoolean("skipped", skipped)));
                 break;
