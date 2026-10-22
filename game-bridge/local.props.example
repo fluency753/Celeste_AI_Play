@@ -1,0 +1,6 @@
+<!-- 复制为 local.props（不入库），把 CelestePrefix 改成本机的游戏目录 -->
+<Project>
+    <PropertyGroup>
+        <CelestePrefix>D:\path\to\steamapps\common\Celeste</CelestePrefix>
+    </PropertyGroup>
+</Project>

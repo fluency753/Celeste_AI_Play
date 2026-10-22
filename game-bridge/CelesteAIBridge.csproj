@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- 本机路径写在 local.props（不入库），参考 local.props.example -->
+    <Import Project="local.props" Condition="Exists('local.props')" />
+
+    <PropertyGroup>
+        <AssemblyName>CelesteAIBridge</AssemblyName>
+        <RootNamespace>CelesteAI.Bridge</RootNamespace>
+        <TargetFramework>net8.0</TargetFramework>
+        <LangVersion>latest</LangVersion>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
+        <!-- Publicizer 生成的类型与原程序集同名，忽略重复类型警告 -->
+        <NoWarn>$(NoWarn);CS0436</NoWarn>
+        <Version>0.1.0</Version>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(CelestePrefix)' == ''">
+        <CelestePrefix>..\..\Celeste</CelestePrefix>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Reference Include="$(CelestePrefix)\Celeste.dll" Private="false" Publicize="true" />
+        <Reference Include="$(CelestePrefix)\FNA.dll" Private="false" Publicize="true" />
+        <Reference Include="$(CelestePrefix)\MMHOOK_Celeste.dll" Private="false" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.1" PrivateAssets="all" ExcludeAssets="runtime" />
+        <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" ExcludeAssets="runtime" />
+    </ItemGroup>
+
+    <!-- 构建后把 DLL 放到 Mod 目录结构里的 bin/，与 everest.yaml 对应 -->
+    <Target Name="CopyToModBin" AfterTargets="Build">
+        <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll;$(OutputPath)$(AssemblyName).pdb" DestinationFolder="$(MSBuildThisFileDirectory)bin" />
+    </Target>
+
+</Project>
