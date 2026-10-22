@@ -1,4 +1,4 @@
-# 构建 CelesteAIBridge 并安装到游戏的 Mods 目录。
+﻿# 构建 CelesteAIBridge 并安装到游戏的 Mods 目录。
 # 用法（PowerShell）：
 #   .\tools\deploy_bridge.ps1 -CelesteDir "D:\path\to\steamapps\common\Celeste"
 # 需要 .NET 8 SDK。游戏运行中无法覆盖 DLL，请先关闭游戏。

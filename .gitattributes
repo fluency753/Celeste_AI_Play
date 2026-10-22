@@ -1,0 +1,2 @@
+# Windows PowerShell 5.1 需要带 BOM 的 UTF-8 才能正确读取中文
+*.ps1 text eol=crlf
