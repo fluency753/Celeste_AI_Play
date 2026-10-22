@@ -45,6 +45,7 @@
 4. 授权完成后，终端会打印一长串令牌（有效期一年）。用鼠标选中整串令牌并复制，注意换行显示的部分也要选全。
 5. 执行 `notepad .env`（在仓库根目录下），把令牌粘贴在 `CLAUDE_CODE_OAUTH_TOKEN=` 后面，不加引号和空格，保存并关闭。
 6. 令牌等同于账号凭据：不要发给任何人，也不要提交到仓库。`.env` 已被 `.gitignore` 排除。
+7. 核对：带上该令牌执行 `claude auth status`，`authMethod` 应为 `oauth_token`。已在作者本机验证（Claude Code 2.1.309），`opus`（claude-opus-5-5）与 `fable`（claude-fable-5-1）均可调用，上下文窗口均为 100 万 token。
 
 ## 3. 桥接 Mod：构建、安装与测试
 
