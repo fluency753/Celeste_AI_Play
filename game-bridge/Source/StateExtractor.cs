@@ -63,6 +63,10 @@ internal static class StateExtractor {
             w.WriteNull("save");
         }
 
+        if (Engine.Scene is Overworld overworld) {
+            WriteMenu(w, overworld);
+        }
+
         if (Engine.Scene is not Level level) {
             w.WriteNull("level");
             w.WriteNull("player");
@@ -84,6 +88,40 @@ internal static class StateExtractor {
                 WriteTiles(w, level, player, entities, opt.Margin);
             }
         }
+    }
+
+    /// <summary>菜单场景的当前页面；在选档页额外给出光标与各槽位，供主控用固定宏导航。</summary>
+    private static void WriteMenu(Utf8JsonWriter w, Overworld overworld) {
+        w.WriteStartObject("menu");
+        w.WriteString("current", overworld.Current?.GetType().Name);
+        w.WriteString("next", overworld.Next?.GetType().Name);
+        if (overworld.Current is OuiFileSelect fileSelect && fileSelect.Slots != null) {
+            w.WriteNumber("slotIndex", fileSelect.SlotIndex);
+            w.WriteBoolean("slotSelected", fileSelect.SlotSelected);
+            w.WriteStartArray("slots");
+            for (int i = 0; i < fileSelect.Slots.Length; i++) {
+                OuiFileSelectSlot? slot = fileSelect.Slots[i];
+                if (slot == null) continue;
+                w.WriteStartObject();
+                w.WriteNumber("index", i);
+                w.WriteNumber("fileSlot", slot.FileSlot);
+                w.WriteString("name", slot.Name);
+                w.WriteBoolean("exists", slot.Exists);
+                w.WriteBoolean("startingGame", slot.StartingGame);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            if (fileSelect.SlotIndex >= 0 && fileSelect.SlotIndex < fileSelect.Slots.Length
+                && fileSelect.Slots[fileSelect.SlotIndex] is { selected: true, buttons: { } buttons } current) {
+                w.WriteNumber("buttonIndex", current.buttonIndex);
+                w.WriteStartArray("buttons");
+                foreach (OuiFileSelectSlot.Button button in buttons) {
+                    w.WriteStringValue(button.Label);
+                }
+                w.WriteEndArray();
+            }
+        }
+        w.WriteEndObject();
     }
 
     private static void WriteLevel(Utf8JsonWriter w, Level level) {

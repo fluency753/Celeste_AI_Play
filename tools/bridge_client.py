@@ -70,6 +70,14 @@ def summarize_obs(obs: dict) -> str:
     save = obs.get("save")
     if save:
         lines.append(f"save: {save['name']} (slot {save['slot']})")
+    menu = obs.get("menu")
+    if menu:
+        lines.append(f"menu: current={menu.get('current')} next={menu.get('next')}")
+        if "slotIndex" in menu:
+            slots = ", ".join(f"{s['index']}:{s['name'] or '-'}" for s in menu.get("slots", []))
+            lines.append(f"  slotIndex={menu['slotIndex']} selected={menu['slotSelected']} slots=[{slots}]")
+        if "buttons" in menu:
+            lines.append(f"  buttons={menu['buttons']} buttonIndex={menu['buttonIndex']}")
     level = obs.get("level")
     if level:
         lines.append(f"level: {level['sid']} side {level['side']} room {level['room']} "
