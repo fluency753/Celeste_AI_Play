@@ -1,0 +1,28 @@
+# 运行产出与录像
+runs/
+*.mkv
+*.mp4
+*.flv
+
+# 密钥与本机配置
+.env
+*.key
+configs/local*
+
+# 游戏文件、反编译产物与存档
+decompiled/
+game-files/
+Saves/
+*.celeste
+
+# 构建产物
+bin/
+obj/
+build/
+__pycache__/
+*.pyc
+.venv/
+
+# 系统文件
+.DS_Store
+Thumbs.db
