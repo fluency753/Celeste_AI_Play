@@ -87,8 +87,10 @@
     margin-top: calc(12 * var(--px)); padding: calc(8 * var(--px)) calc(10 * var(--px));
     border-radius: calc(8 * var(--px)); background: rgba(255, 255, 255, 0.06); border: max(1px, var(--px)) solid rgba(255, 255, 255, 0.08);
     font-size: calc(14 * var(--px)); line-height: 1.5; min-height: calc(42 * var(--px));
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
   }
+  /* 四行放不下时字号缩小一档、最多五行（卡片高度上限不变） */
+  .thought.small { font-size: calc(12 * var(--px)); -webkit-line-clamp: 5; }
   .thought.fade { animation: fadein 200ms ease-out; }
   @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 </style>
@@ -288,15 +290,18 @@ function render() {
     budgetbar.classList.toggle("warn", r >= 0.85);
   }
 
-  // 思考语句：每隔几秒检查一次，有新语句才淡入替换
-  const interval = ((config && config.thought_check_s) || 3) * 1000;
-  if (shownThought === null || Date.now() - lastThoughtCheck >= interval) {
+  // 思考语句：一有新语句就淡入替换（thought_check_s 大于 0 时改为每隔几秒检查一次）。
+  // 主控在每段动作开始推进之前会等 HUD 换好新语句，所以录像里新语句和这段动作的第一帧同时出现
+  const interval = ((config && config.thought_check_s) || 0) * 1000;
+  if (shownThought === null || interval <= 0 || Date.now() - lastThoughtCheck >= interval) {
     lastThoughtCheck = Date.now();
     const next = m.thought || "";
     if (next !== shownThought) {
       shownThought = next;
       const el = $("thought");
       el.textContent = next;
+      el.classList.remove("small");
+      if (el.scrollHeight > el.clientHeight + 1) el.classList.add("small");
       el.classList.remove("fade"); void el.offsetWidth; el.classList.add("fade");
     }
   }

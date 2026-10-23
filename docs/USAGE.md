@@ -171,7 +171,8 @@ docker build -t celeste-agent:0.1 agent-container
 | --- | --- | --- |
 | `--agent` | 必填 | 智能体标签，决定容器 `celeste-agent-<标签>`、工作区 `workspaces/<标签>/` 与日志目录 `runs/<标签>/`。同一个模型在 test 存档准备、正式存档挑战时用同一个标签，准备好的程序就能带进正式挑战 |
 | `--save` | 必填 | 游戏内存档名；与当前存档不一致时拒绝开始 |
-| `--model` | `opus` | Claude Code 模型别名，如 `opus`、`fable` |
+| `--model` | `opus` | Claude Code 模型别名，如 `opus`、`fable`、`haiku`；第三方提供方用它自己的模型名，如 DeepSeek 的 `deepseek-flash` |
+| `--provider` | `anthropic` | 模型提供方：`anthropic`（Max 订阅令牌）或 `configs\providers.json` 里的第三方，如 `deepseek`，见 4.9 节 |
 | `--effort` | `high` | 开局的推理强度：`low`、`medium`、`high`、`xhigh`、`max`；之后智能体可以用 `set_effort` 自己调整 |
 | `--max-minutes` | 240 | 现实时间上限，从智能体第一次真正执行游戏工具时开始计（准备阶段不算）；主要指标是游戏内章节计时，这里只防止无限运行 |
 | `--study-minutes` | 60 | 准备阶段（读知识库、写笔记与程序）的上限，不计入现实用时；到时自动开始计时并开放游戏工具 |
@@ -181,6 +182,7 @@ docker build -t celeste-agent:0.1 agent-container
 | `--no-quota-wait` | 关 | 额度到上限时直接停止，不等待 |
 | `--chapters` | 无 | 依次通关的章节编号，例如 `0,1,2`（正式挑战），见 4.6 节；给了它就不用 `--chapter` |
 | `--sim` | 关 | 开放预置模拟器，见 4.5 节 |
+| `--free-planning` | 关 | 取消"每次暂停只允许一轮工具"的限制并恢复自动重试（见下文"每次暂停一轮工具"）；默认有这个限制 |
 | `--record` | 关 | 用 OBS 锁步录制，见 4.4 节 |
 | `--no-hud-window` | 关 | 不在屏幕上打开置顶 HUD 窗口（默认运行时自动打开，见 4.2 节） |
 | `--resume` / `--fresh-session` | 无 / 关 | 续跑一次中断的运行，见 4.8 节 |
@@ -194,9 +196,10 @@ docker build -t celeste-agent:0.1 agent-container
 容器里的智能体：
 
 - **工具**：Bash、Read、Write、Edit、Glob、Grep 与两个游戏工具。WebSearch、WebFetch 在托管配置里被拒绝；Claude Code 以受限模式启动，不读取任何用户、项目或本地设置文件，文件工具只能访问 `/workspace` 与 `/kb`。
-- **网络**：容器出站只放行 Anthropic 官方域名与宿主机上的游戏工具端口；Bash 命令（智能体自写的程序）在零网络的沙箱里运行，连 Anthropic 也连不上。验收方法见 2.4 节。
+- **网络**：容器出站只放行所用模型平台的域名（默认 Anthropic 官方域名；`--provider deepseek` 时只放行 api.deepseek.com，不放行 Anthropic）与宿主机上的游戏工具端口；Bash 命令（智能体自写的程序）在零网络的沙箱里运行，连模型平台也连不上。验收方法见 2.4 节。
+- **没有后台任务**：容器里的 Claude Code 以 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 启动，Bash 命令只在前台运行，默认最多 5 分钟（可以用 timeout 参数加到 10 分钟），超时就结束、不会转入后台。
 - **工作区** `/workspace`：对应宿主机的 `workspaces\<标签>\`，跨房间、跨章节、跨运行保留。每次观测与动作后，主控把完整观测（`game/latest_obs.json`）、上一次动作的全精度逐帧轨迹（`game/last_act.json`）与每个房间的首次观测（`game/rooms/`）写进来，供智能体的程序读取。
-- **知识库** `/kb`：只读挂载仓库的 `kb/`，记录物理常量、状态机、实体规则、全部技巧与机制库、工作区数据格式，以及 `reference/` 里的社区资料原文（见 2.5 节）。
+- **知识库** `/kb`：只读挂载仓库的 `kb/`，记录物理常量、状态机、实体规则、全部技巧与机制库、工作区数据格式，以及 `reference/` 里的社区资料原文（见 2.5 节）。技巧与机制的专有名词一律用英文（wallbounce、cornerboost、coyote time、liftboost 等），不用中文译名；基本动作（冲刺、跳、抓墙、体力）与实体名照常用中文。系统提示词也这样写，并要求智能体的思考语句同样只把这类专有名词写成英文。改知识库时可以用 `python tools\english_terms.py kb\*.md orchestrator\prompts\*.md`（加 `--check` 只检查）按其中的对照表统一替换；不要用它处理 `kb\reference\` 的原文。
 - **计划文件**：智能体可以把程序算出的按键序列写成 JSON 文件，调用 `act` 时传 `plan_file`，不必把按键抄进参数。
 - 主控在每轮开始时核对智能体拿到的工具列表，出现上面以外的工具会立即停止。
 
@@ -212,6 +215,15 @@ docker build -t celeste-agent:0.1 agent-container
 - Opus 5.5 与 Fable 5.1 在 Claude Code 里的上下文窗口都是 100 万 token（在容器里用 `/context` 实测），整份知识库约 24 万 token，读完后还有约 72 万 token 才会触发自动压缩。
 
 2026-10-22 用 Haiku 5.5 测试准备阶段：27 个文件全部读完，用时 35 秒（并行读取），上下文约 24.4 万 token；读完后智能体写好 `notes.md` 再调用 `observe`，主控在这时开始计时，时间预算按预期生效。
+
+每次暂停一轮工具（默认；`--free-planning` 取消）：
+
+- 游戏只在 `act` 执行时推进。每次 `act` 返回、游戏冻结之后，智能体只能思考一轮、调用一轮工具（同一条消息里并行发起的几个调用算一轮，例如一个 Bash 运行模拟器加一个 Read），下一条消息必须是 `act`。这样它不能在一次暂停里反复跑模拟器、直到算出一条一次通关整个房间的路线再执行：路线没把握也要上去试，试错过程真实发生在游戏里、录进录像，每次尝试都换一句新的思考语句。
+- 实现：容器的托管配置登记了 PreToolUse 钩子（`agent-container/celeste-gate.py`），Claude Code 调用任何工具之前都先问主控的 `/gate`；主控按输出流里 tool_use 所属的消息分组计轮。第二轮的调用（包括 `observe`）被拒绝，拒绝理由交给模型，提示它直接 `act`。拒绝次数记在 `metrics.json` 的 `pause_denials`，主控输出里有 `[gate] 拒绝 …`。
+- `act` 与 `set_effort` 不受限制。准备阶段（第一次调用 `observe` 或 `act` 之前：读知识库、写程序、自测）不受限制；第一次调用游戏工具时开始第一次暂停，这次调用本身不占预算。续跑（`--resume`）没有准备阶段。
+- 只有算得上一次尝试的 `act` 才恢复工具机会：至少推进 20 帧（`RunConfig.pause_min_frames`），或者因为事件（死亡、换房间、落地、偏离预期等）停下。只推进一两帧的 `act`（例如为了换一轮工具）不恢复，返回结果里会提示；动作不合法、没有推进时也不恢复。
+- 计划文件的自动重试同时关闭（`retry` 被忽略，结果里会说明），因为它会在一次暂停里自动跑多次重算。
+- 2026-10-23 用 Haiku 5.5 在 test 存档序章实测（预算 8 分钟，`--sim --record`）：第一次试跑时智能体把搜索放进后台、用"只推进 1 帧的 `act`"换新的一轮去读结果，现在这两种绕法都堵上了（后台任务关闭，短 `act` 不恢复机会）。第二次试跑：准备阶段照常读知识库；第二轮调用被拒绝 1 次，随即 `act`；房间 1 起跳太早掉进坑里、换起跳点重试，会塌的木桥上又掉下去三次，最后通关序章，章节计时 1:05.365，19 次决策，死亡 4 次。录像 4252 帧（70.9 秒）从选档页开始，无缺帧；逐段核对，每段动作的第一帧 HUD 上已经是这段的新思考语句，三行的思考语句完整显示。
 
 非可控段由主控处理，节奏与原版游戏一致：
 
@@ -234,7 +246,7 @@ docker build -t celeste-agent:0.1 agent-container
 
 - **计划文件**：除了按键段数组，还可以写成对象 `{"inputs", "expect", "tolerance", "stop_on", "retry"}`，格式见 `kb/game_data.md` §3。
 - **预期轨迹与偏离停止**：`expect` 是智能体的模拟器预测的逐帧位置（可附状态名）。桥接每帧推进后立即对照，x 或 y 偏差超过 `tolerance` 像素（或状态不符）就在这一帧停下，停止原因 `deviate`，返回第几帧、预期与实际。
-- **自动重试**：`retry` 声明一个重算命令。遇到死亡（先推进到重生）、偏离预期、或按键用完仍在本房间时，主控在容器的零网络沙箱里运行它；它读 `game/retry.json` 与最新观测、从当前状态重算并改写同一个计划文件，主控接着执行，最多 5 次，期间不唤醒智能体。命令出错、超时（最长 60 秒）、没改动计划或新计划不合法时停止，把经过与错误输出返回给智能体。重算用时计入工具时间，次数记在 `metrics.json` 的 `retries`。
+- **自动重试**（只在 `--free-planning` 时生效；默认每次暂停一轮工具，`retry` 被忽略）：`retry` 声明一个重算命令。遇到死亡（先推进到重生）、偏离预期、或按键用完仍在本房间时，主控在容器的零网络沙箱里运行它；它读 `game/retry.json` 与最新观测、从当前状态重算并改写同一个计划文件，主控接着执行，最多 5 次，期间不唤醒智能体。命令出错、超时（最长 60 秒）、没改动计划或新计划不合法时停止，把经过与错误输出返回给智能体。重算用时计入工具时间，次数记在 `metrics.json` 的 `retries`。
 
 M4 验收（2026-10-22，`test` 存档 1A，桥接 0.6.0）：`python calibration\m4_acceptance.py --agent dev-haiku` 全部通过——
 
@@ -274,8 +286,8 @@ HUD 是一个本地网页，显示智能体名称与状态、当前房间、章�
 
 - **服务**：主控运行时会在进程内启动 HUD 服务：`http://127.0.0.1:47790/hud`（`--hud-port` 改端口，`--no-hud` 关闭）。也可以单独启动：`.\.venv\Scripts\python.exe -m overlay.server`。它总是显示最近一次运行（`runs\latest.txt`），换一局不用刷新页面；`--run <运行目录>` 可以固定显示某一局。
 - **置顶窗口**：主控运行时自动打开（`--no-hud-window` 关闭；已经开着就沿用），结束时关闭；也可以单独打开：`.\.venv\Scripts\python.exe -m overlay.window`（需要 `pip install -r requirements.txt` 装上 pywebview，使用系统自带的 WebView2）。窗口透明、无边框、置顶、点击穿透、不进任务栏、不抢焦点；贴在游戏窗口客户区右上角，宽度为游戏窗口的 22%、边距 2%，随游戏窗口移动与缩放；游戏最小化时隐藏。游戏窗口按进程名 `Celeste.exe` 查找，不会认错成同名的资源管理器窗口。游戏要用窗口化或无边框全屏，独占全屏盖不上去。这个窗口不会进录像（OBS 的游戏采集只采游戏画面，录像里的 HUD 来自浏览器源）。
-- **OBS**：`tools\obs_setup.py` 建的场景里已经有 HUD（见 4.4 节）。它用"本地文件"方式打开 `overlay\hud.html`，页面再去连 HUD 服务取数据，所以 OBS 比主控先启动也没关系。自己加时：添加"浏览器"来源，勾选本地文件选这个页面（或 URL 填 `http://127.0.0.1:47790/hud`，但 OBS 启动时服务必须已在运行），1080p 下宽 430、高 344，放在右上角（右、上各留约 38 像素）。页面背景透明，不用额外设置。
-- **实时性**：执行中桥接每 6 帧（0.1 秒）推送一次章节计时、冲刺次数与房间，页面每 0.1 秒取一次数据并在两次之间按实时外推，所以主计时逐帧走动、左侧色条随冲刺状态变色；思考期间思考时间持续走动。思考语句每 3 秒检查一次，有新语句才淡入替换。
+- **OBS**：`tools\obs_setup.py` 建的场景里已经有 HUD（见 4.4 节）。它用"本地文件"方式打开 `overlay\hud.html`，页面再去连 HUD 服务取数据，所以 OBS 比主控先启动也没关系。自己加时：添加"浏览器"来源，勾选本地文件选这个页面（或 URL 填 `http://127.0.0.1:47790/hud`，但 OBS 启动时服务必须已在运行），1080p 下宽 430、高 386，放在右上角（右、上各留约 38 像素）。页面背景透明，不用额外设置。
+- **实时性**：执行中桥接每 6 帧（0.1 秒）推送一次章节计时、冲刺次数与房间，页面每 0.1 秒取一次数据并在两次之间按实时外推，所以主计时逐帧走动、左侧色条随冲刺状态变色；思考期间思考时间持续走动。思考语句一有新的就淡入替换；主控在每段动作推进之前先把新语句写出、等 0.4 秒（`RunConfig.thought_lead_s`，游戏冻结着，录像里不占时间）让 HUD 换好，所以录像里新语句与这段动作的第一帧同时出现，不再滞后（以前每 3 秒才检查一次，常常动作做完、进了下一个房间才换上）。想恢复定时检查，在 `configs\local.hud.json` 里设 `thought_check_s`。
 - **配置**：配色、名称与参数在 `configs\hud.json`；本机想改的项写进 `configs\local.hud.json`（不入库），会覆盖同名项。
 
 | 区域 | 内容 |
@@ -285,7 +297,7 @@ HUD 是一个本地网页，显示智能体名称与状态、当前房间、章�
 | 推理强度 | 主计时右侧：五格刻度与档位名（低、中、高、超高、最高；`configs\hud.json` 的 `effort_names` 可改）；超高与最高用琥珀色；智能体申请了切换、还没生效时后面跟一个闪烁的"→ 目标档位" |
 | 统计 | 思考总时间、工具调用总时间、对话上下文（进度条按自动压缩阈值，达到 90% 变橙）、压缩次数。一轮里有工具在运行时（输出流里出现 tool_use、还没收到结果）算工具时间，包括容器里的 Bash、Read、Write 等和游戏工具；没有工具在运行时算思考时间（模型推理、输出、压缩上下文）；游戏真正推进的时间两边都不算，单独记为游戏推进时间 |
 | 时间预算 | 已用现实时间 / 预算，用到 85% 变橙；准备阶段改为显示知识库阅读进度与准备用时（不计时） |
-| 思考 | 当前思考语句，最多两行 |
+| 思考 | 当前思考语句，最多四行；超过四行时自动缩小字号、最多五行 |
 | 左侧色条 | Madeline 的发色：一次冲刺绯红、冲刺用尽冰蓝、两次冲刺粉色 |
 
 M5 验收（2026-10-23，桥接 0.7.0）：`python calibration\m5_hud_demo.py` 不调用模型，按"思考 3 秒 → 执行"的节奏驱动游戏三轮，全部通过。执行中每轮收到 8～11 次进度推送，章节计时随之前进；连拍置顶窗口：思考时主计时静止、思考时间走动，执行时主计时逐帧前进，向上冲刺时色条变成冰蓝、落地恢复绯红，思考语句按 3 秒间隔淡入。窗口启动前后前台窗口不变（不抢焦点）。
@@ -338,8 +350,9 @@ M5 验收（2026-10-23，桥接 0.7.0）：`python calibration\m5_hud_demo.py` �
 .\.venv\Scripts\python.exe tools\obs_setup.py stop
 ```
 
-- `obs_setup.py` 不动你自己的配置文件与场景：CelesteAI 配置文件是 1920×1080、60 fps、NV12、48 kHz；场景里只有游戏采集、应用音频捕获（只录 Celeste.exe）与 HUD 浏览器源，没有桌面音频和麦克风。场景集合已存在时不改动（你在 OBS 里的调整会保留），`setup --reset` 重建（原来的先备份）。`status` 查看插件是否加载、是否连上桥接。
-- 主控接管游戏后开始录制，结束（通关、预算用完或中断）时先停止录制、等 ffmpeg 收尾，再交还游戏控制；结果写进 `summary.json` 的 `recording`。
+- `obs_setup.py` 不动你自己的配置文件与场景：CelesteAI 配置文件是 1920×1080、60 fps、NV12、48 kHz；场景里只有游戏采集、应用音频捕获（只录 Celeste.exe）与 HUD 浏览器源，没有桌面音频和麦克风。场景集合已存在时不改动（你在 OBS 里的调整会保留），只把 HUD 浏览器源的宽高同步成 `configs\recording.json` 里的值（HUD 加高后旧场景会切掉卡片底部；OBS 运行时不改，`stop` 之后再 `launch` 即可）；`setup --reset` 重建（原来的先备份）。`status` 查看插件是否加载、是否连上桥接。
+- **开局也录进去**：主控先把游戏退回选档页（这一步不录、快速完成），从选档页开始录制，再按正常速度选存档、进地图、选章节、进关卡、用暂停菜单跳过开场剧情，所以录像从选档页开始。HUD 在这段时间显示智能体名称、推理强度与"等待"，计时都是 0。`--resume` 续跑与 `--skip-enter` 时没有开局，接管游戏后开始录制。
+- 结束（通关、预算用完或中断）时先停止录制、等 ffmpeg 收尾，再交还游戏控制；结果写进 `summary.json` 的 `recording`。
 - 游戏窗口不能最小化：最小化后游戏的画面缓冲缩成 8×8 像素，录像里只剩 HUD、游戏区域是一块深色方块。主控在开始录制前、以及录制中每次推进游戏前检查，发现最小化就把窗口还原（不激活，不抢你当前窗口的焦点）并在输出里提示。窗口被别的窗口挡住不影响录制。
 - 录制期间动作块按 60 fps 实时播放（节奏由 OBS 决定），`--play-speed` 不起作用。
 - 其他参数：`--ffmpeg`、`--record-video-args`、`--audio-offset-ms` 临时覆盖配置；`--record-marker` 在画面左下角画帧号条码（只用于校准）。
@@ -430,6 +443,36 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC）：校�
 
 实测（2026-10-23，Haiku 5.5，`dev-haiku` 标签，test 存档 2A）：把上限设成 0.5、等待时长限制成 15 秒，连续 16 次"到上限 → 结束进程 → 等待 → 用 `--resume` 接回"都接回了同一个会话，上下文逐次累加，等待时间不计入现实用时；随后用 `--resume` 续跑这次运行，会话、上下文与决策数都接上了，智能体接着之前的思路继续游玩。
 
+### 4.9 其他平台的模型（`--provider`）
+
+除了 Max 订阅里的 Claude 模型，也可以让其他平台的模型进同一个沙箱游玩：容器里运行的还是同一个 Claude Code，只是通过平台兼容 Anthropic 的接口调用它们的模型；工具、提示词、知识库、沙箱、每次暂停一轮工具、HUD 与录制全部相同。提供方列在 `configs\providers.json`，目前有 `deepseek`。
+
+**API 密钥只放在本机**，不入库、不出现在命令行与日志里：
+
+1. 把密钥存成本机的一个文本文件（只有密钥一行），放在仓库目录之外，例如 `D:\secrets\deepseek.key`。
+2. 新建 `configs\local.providers.json`（`configs\local*` 不入库），写上文件位置：
+
+   ```json
+   { "deepseek": { "key_file": "D:\\secrets\\deepseek.key" } }
+   ```
+
+   也可以不建这个文件，改设环境变量 `DEEPSEEK_API_KEY`。
+3. 主控读出密钥，经 `docker exec -e 变量名` 把它作为 `ANTHROPIC_AUTH_TOKEN` 交给容器里的 Claude Code（值从主控进程的环境传入，不写进命令行）。智能体自写的程序在零网络的 Bash 沙箱里运行；Claude Code 启动子进程时清除的凭据变量里同时有 `ANTHROPIC_AUTH_TOKEN` 与订阅令牌（订阅令牌看不到这一点已在隔离验收中实测）。
+
+**运行**（DeepSeek V4.1 Flash；存档要先在游戏里建好，和 opus5.5、fable5.1 一样）：
+
+```powershell
+.\.venv\Scripts\python.exe -m orchestrator.run --agent deepseek-flash --save <存档名> --provider deepseek --model deepseek-flash --chapters 0,1,2 --sim --record --max-minutes 600
+```
+
+- 模型名：`deepseek-flash`（DeepSeek 官方接口里这个名字目前指向 V4.1 Flash 1017）、`deepseek-v4-pro`。主控在模型名后加 `[1m]`，让 Claude Code 按 100 万 token 的上下文压缩（压缩窗口 786432 token），Claude Code 的各个模型槽位与子智能体都指向这个模型，与 DeepSeek 文档里的 Claude Code 配置一致。HUD 显示的名字在 `configs\hud.json` 的 `names` 里。
+- 网络：容器的防火墙只放行 `api.deepseek.com` 与游戏工具端口，**不放行 Anthropic**；Max 订阅令牌不会传给第三方。换提供方会改变容器的防火墙设置，主控会自动重建容器（工作区与会话保留）。建议每个模型用自己的 `--agent` 标签。
+- 截图照常附上（DeepSeek 接口支持图片）；`set_effort` 照常可用，强度作为请求参数发给平台，效果以实测为准。
+- 额度：Max 额度等待只针对订阅。第三方按用量计费，余额不足或接口出错时 Claude Code 报错、主控停止本次运行，游戏冻结在原处，处理好之后用 `--resume` 续跑（续跑沿用原来的提供方）。
+- 认证失败（密钥错了、过期）时 Claude Code 会按退避重试 10 次、拖约 3 分钟，主控在第二次 401 时就停下并提示检查密钥。
+- 2026-10-23 用假密钥检查整条链路（`--provider deepseek --model deepseek-flash --sim`，test 存档）：容器重建后只连得上 api.deepseek.com（Anthropic 与其他网站的域名都解析不到）；Claude Code 拿到全部游戏工具、连上游戏工具服务，请求到达 DeepSeek 并返回 401（"api key ****0000 is invalid"），主控 4 秒内停下；启动命令里没有密钥。用真密钥的试跑待做。
+- 加别的平台：在 `configs\providers.json` 里照 `deepseek` 加一项（接口地址 `base_url`、防火墙放行的 `allowed_domains`、密钥的 `key_env` / `key_file`、模型名后缀 `model_suffix`、传给 Claude Code 的 `env`），平台需要提供兼容 Anthropic Messages 的接口。
+
 ## 5. 查看结果
 
 每次运行的产出在 `runs/<智能体>/<时间戳>/`（不入库），`runs/latest.txt` 记录最近一次运行的目录：
@@ -469,4 +512,6 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC）：校�
 | 提示找不到 docker | Docker Desktop 没有启动，或装好后还没新开终端；启动 Docker Desktop 后新开 PowerShell 再试 |
 | 想让智能体从零开始（清空它写的程序与笔记） | 删除 `workspaces\<标签>\`；会话记录在数据卷 `celeste-claude-<标签>` 里，可用 `docker volume rm` 删除（需先 `docker rm -f celeste-agent-<标签>`） |
 | 改了 `agent-container/` 之后 | 重新执行 `docker build -t celeste-agent:0.1 agent-container`；主控发现镜像变了会自动重建容器，工作区保留 |
+| `--provider deepseek` 提示找不到密钥 | 按 4.9 节建 `configs\local.providers.json`，或设环境变量 `DEEPSEEK_API_KEY` |
+| 智能体总被提示"这次暂停的工具机会已经用完" | 这是默认规则：每次 `act` 之后只能调用一轮工具（见 4.1 节）。调试时想不受限制，加 `--free-planning` |
 | PowerShell 里中文显示成乱码 | 日志文件本身是 UTF-8；用 `tools\run_status.py` 查看，或先执行 `chcp 65001` |

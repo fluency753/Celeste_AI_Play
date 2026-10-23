@@ -40,6 +40,49 @@ def load_dotenv(path: Path) -> dict[str, str]:
     return values
 
 
+PROVIDERS = REPO_ROOT / "configs" / "providers.json"
+LOCAL_PROVIDERS = REPO_ROOT / "configs" / "local.providers.json"   # 本机覆盖（不入库）：密钥文件的位置等
+
+
+def load_provider(name: str) -> dict:
+    """模型提供方的设置（configs/providers.json，本机的 configs/local.providers.json 覆盖同名项）。"""
+    import json  # noqa: WPS433
+
+    merged: dict = {}
+    for path in (PROVIDERS, LOCAL_PROVIDERS):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data.get(name), dict):
+            merged.update(data[name])
+    if not merged:
+        raise SystemExit(f"未知的模型提供方 {name!r}：见 configs/providers.json")
+    merged["name"] = name
+    return merged
+
+
+def load_api_key(provider: dict) -> str:
+    """第三方提供方的 API 密钥：先看环境变量 key_env，再读本机 key_file（只含密钥，或 KEY=VALUE 形式的 .env）。
+    密钥只在内存里传给容器，不写进任何文件、日志或命令行。"""
+    env_name = provider.get("key_env") or ""
+    if env_name and os.environ.get(env_name):
+        return os.environ[env_name].strip()
+    key_file = provider.get("key_file") or ""
+    if key_file:
+        path = Path(os.path.expandvars(os.path.expanduser(key_file)))
+        if not path.is_file():
+            raise SystemExit(f"找不到 {provider['name']} 的密钥文件（configs/local.providers.json 的 key_file）")
+        text = path.read_text(encoding="utf-8-sig").strip()
+        if "=" in text:
+            values = load_dotenv(path)
+            text = values.get(env_name) or next(iter(values.values()), "")
+        if text:
+            return text.strip()
+    raise SystemExit(f"缺少 {provider['name']} 的 API 密钥：在 configs/local.providers.json 里把 "
+                     f'{{"{provider["name"]}": {{"key_file": "密钥文件的路径"}}}} 写好，或设置环境变量 {env_name}')
+
+
 def find_claude_exe() -> str:
     found = shutil.which("claude")
     if found:
@@ -70,7 +113,9 @@ def find_docker_exe() -> str:
 class RunConfig:
     agent: str                      # 智能体标签，如 opus5.5
     save: str                       # 存档名，如 test
-    model: str                      # Claude Code 模型别名：opus / fable
+    model: str                      # Claude Code 模型别名：opus / fable；第三方提供方写它的模型名
+    provider: str = "anthropic"     # 模型提供方（configs/providers.json）：anthropic 用 Max 订阅，其他用本机保存的 API 密钥
+    provider_info: dict | None = None  # load_provider(provider) 的结果
     effort: str = "high"
     bridge_port: int = 47774
     mcp_port: int = 47780
@@ -91,7 +136,24 @@ class RunConfig:
     quota_wait: bool = True          # 额度用完（或到 max_usage）时等重置后接着同一个会话；False 则直接停止
     quota_wait_max_h: float = 24.0   # 重置还要等更久时直接停止
     quota_wait_cap_s: float | None = None  # 只用于测试：等待额度的最长秒数
+    pause_limit: bool = True         # 每次暂停（act 返回后）只允许一轮工具调用，然后必须 act；自动重试关闭（见 pausegate.py）
+    pause_min_frames: int = 20       # act 至少推进这么多帧（或因事件停下）才算一次尝试、重新计工具预算
+    thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
     sim: bool = False                # 预置模拟器：把本机的 sim/dist 只读挂到容器的 /sim，每次停下都把当前帧的完整场景写进工作区
+
+    @property
+    def third_party(self) -> bool:
+        """非 Anthropic 的提供方：用 API 密钥，经它兼容 Anthropic 的接口运行同一个 Claude Code。"""
+        return self.provider != "anthropic"
+
+    @property
+    def provider_domains(self) -> list[str]:
+        return list((self.provider_info or {}).get("allowed_domains") or [])
+
+    @property
+    def images(self) -> bool:
+        """观测里附不附截图（只支持文字的模型关掉，观测里另有字符地图与精确数据）。"""
+        return bool((self.provider_info or {}).get("images", True))
 
     @property
     def workspace_dir(self) -> Path:

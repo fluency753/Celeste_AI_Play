@@ -165,6 +165,29 @@ def scene_collection(cfg: dict) -> dict:
     }
 
 
+def sync_hud_size(collection: Path, cfg: dict) -> bool:
+    """场景集合已存在时，只把 HUD 浏览器源的宽高改成配置里的值（HUD 页面变高后旧场景会把卡片底部切掉），
+    其他调整原样保留。OBS 退出时会写回场景集合，所以只在 OBS 没在运行时改。"""
+    if obs_running():
+        return False
+    try:
+        data = json.loads(collection.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    hud = cfg["hud"]
+    changed = False
+    for source in data.get("sources", []):
+        settings = source.get("settings") or {}
+        if source.get("id") == "browser_source" and source.get("name") == "HUD":
+            for key in ("width", "height"):
+                if settings.get(key) != hud[key]:
+                    settings[key] = hud[key]
+                    changed = True
+    if changed:
+        collection.write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
+    return changed
+
+
 def setup(cfg: dict, reset: bool = False) -> None:
     """配置文件：每次都把画布、帧率、颜色、声音这几项写成录制需要的值（其他设置保留）。
     场景集合：不存在时才创建；--reset 时先备份再重建（你在 OBS 里对这个场景的调整会被覆盖）。"""
@@ -174,7 +197,9 @@ def setup(cfg: dict, reset: bool = False) -> None:
     changed = merge_ini(profile, profile_settings(cfg))
     print(f"配置文件：{profile}{'（已更新）' if changed else ''}")
     if collection.exists() and not reset:
-        print(f"场景集合：{collection}（已存在，未改动；要重建用 setup --reset）")
+        resized = sync_hud_size(collection, cfg)
+        print(f"场景集合：{collection}（已存在，" + ("只把 HUD 浏览器源的尺寸更新为配置值" if resized else "未改动")
+              + "；要重建用 setup --reset）")
         return
     if collection.exists():
         backup = collection.with_name(collection.name + "." + datetime.now().strftime("%Y%m%d-%H%M%S") + ".bak")

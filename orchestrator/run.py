@@ -27,12 +27,14 @@ from pathlib import Path
 import uvicorn
 
 from .agent import ClaudeRunner, resume_prompt
-from .config import CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, load_dotenv
+from .config import (CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, load_api_key, load_dotenv,
+                     load_provider)
 from .container import ensure_container
 from .game_session import GameSession
 from .kb_study import KbStudy
 from .metrics import Metrics
 from .recording import Recorder, RecordingError, options_from
+from .pausegate import PauseGate
 from .server import TRANSPORT_SECURITY, build_server
 
 
@@ -40,7 +42,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--agent", required=True, help="智能体标签，用于日志目录与独立配置目录，如 opus5.5、dev-opus")
     ap.add_argument("--save", required=True, help="游戏内存档名，如 test、opus5.5、fable5.1")
-    ap.add_argument("--model", default="opus", help="Claude Code 模型别名：opus / fable 等（默认 opus）")
+    ap.add_argument("--model", default="opus", help="Claude Code 模型别名：opus / fable 等（默认 opus）；第三方提供方写它的模型名")
+    ap.add_argument("--provider", default="anthropic",
+                    help="模型提供方（configs/providers.json）：anthropic（默认，Max 订阅）、deepseek 等。"
+                         "第三方提供方的 API 密钥只从本机读取（configs/local.providers.json 的 key_file，或环境变量）")
     ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
     ap.add_argument("--max-minutes", type=float, default=240.0, help="现实时间上限（分钟）；目标以游戏内计时为主，这里只防止无限运行")
     ap.add_argument("--bridge-port", type=int, default=47774)
@@ -60,6 +65,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="可选：Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）就提前暂停智能体、等额度重置后接着玩；"
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
+    ap.add_argument("--free-planning", action="store_true",
+                    help="不限制每次暂停的工具调用（默认：act 返回后只允许一轮工具，然后必须 act；自动重试关闭）")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
     ap.add_argument("--no-hud-window", action="store_true",
                     help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
@@ -87,17 +94,17 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     previous = args.previous = load_previous(args.resume) if args.resume else None
     if previous:
         state = previous["state"]
-        for key in ("model", "effort", "max_minutes", "runtime"):
+        for key in ("model", "effort", "max_minutes", "runtime", "provider"):
             flag = f"--{key.replace('_', '-')}"
             if not any(a == flag or a.startswith(flag + "=") for a in sys.argv):
-                setattr(args, key, state[key])
+                setattr(args, key, state.get(key, getattr(args, key)))
         if not any(a == "--effort" or a.startswith("--effort=") for a in sys.argv):
             # 推理强度沿用中断时生效的那个（智能体可能用 set_effort 调整过），而不是开局的值
             args.effort = previous["metrics"].get("effort") or args.effort
         args.sim = args.sim or state["sim"]
         args.skip_enter = True
         args.no_study = True
-    cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort,
+    cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort, provider=args.provider,
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
     cfg.chapter = args.chapter
@@ -115,6 +122,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.quota_wait_cap_s = args.quota_wait_cap_seconds
     cfg.quota_wait_max_h = args.quota_wait_max_hours
     cfg.sim = args.sim
+    cfg.pause_limit = not args.free_planning
+    cfg.provider_info = load_provider(cfg.provider)
+    if cfg.third_party and cfg.runtime != "container":
+        raise SystemExit("第三方模型提供方只支持容器运行方式")
     if previous:
         state = previous["state"]
         if (args.agent, args.save) != (state["agent"], state["save"]):
@@ -149,13 +160,17 @@ def load_previous(path: str) -> dict:
 def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None) -> None:
     """记下续跑需要的设置与 Claude Code 会话编号。"""
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
-    state = {"agent": cfg.agent, "save": cfg.save, "model": cfg.model, "effort": cfg.effort, "max_minutes": cfg.max_minutes,
+    state = {"agent": cfg.agent, "save": cfg.save, "model": cfg.model, "provider": cfg.provider,
+             "effort": cfg.effort, "max_minutes": cfg.max_minutes,
              "runtime": cfg.runtime, "sim": cfg.sim, "all_chapters": all_chapters, "session_id": session_id,
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_token() -> str:
+def load_token(cfg: RunConfig) -> str:
+    """Anthropic：Max 订阅令牌（.env）；第三方提供方：本机保存的 API 密钥。都只在内存里，不打印、不写文件。"""
+    if cfg.third_party:
+        return load_api_key(cfg.provider_info or {})
     token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or load_dotenv(REPO_ROOT / ".env").get("CLAUDE_CODE_OAUTH_TOKEN", "")
     if not token:
         raise SystemExit("缺少 CLAUDE_CODE_OAUTH_TOKEN：请按使用说明 2.1 节运行 claude setup-token，并写入仓库根目录的 .env")
@@ -170,18 +185,57 @@ def make_run_dir(agent: str) -> Path:
     return run_dir
 
 
-def enter_save(cfg: RunConfig) -> None:
-    from tools.enter_save import enter_save as macro  # noqa: WPS433（延迟导入，避免 --help 时连接游戏）
+def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
+    """菜单宏进入存档。录制时开局也录进去：先（不录、快进）退回选档页，从那里开始录制，
+    再按正常速度选存档、进地图、选章节、进关卡、用暂停菜单跳过开场剧情。"""
+    from tools.enter_save import enter_save as macro, to_file_select  # noqa: WPS433（延迟导入，避免 --help 时连接游戏）
     from tools.bridge_client import BridgeClient
 
     client = BridgeClient(port=cfg.bridge_port, timeout=120)
     try:
         t0 = time.monotonic()
-        obs = macro(client, cfg.save, chapter=cfg.chapter)
+        if recorder is not None:
+            to_file_select(client)
+            recorder.call = client.call
+            recorder.start()
+            print("[record] 从选档页开始录制：选存档、进章节、跳过开场都按正常速度录进录像", flush=True)
+            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1)
+        else:
+            obs = macro(client, cfg.save, chapter=cfg.chapter)
         print(f"[run] 已进入存档 {cfg.save}：{obs['level']['sid']} 房间 {obs['level']['room']}"
               f"（菜单宏用时 {time.monotonic() - t0:.1f} 秒）", flush=True)
+    except BaseException:
+        if recorder is not None and recorder.started:
+            recorder.stop()
+        raise
     finally:
         client.close()
+
+
+def add_gate_route(app, gate: PauseGate) -> None:
+    """容器里的 PreToolUse 钩子（agent-container/celeste-gate.py）每次调用工具前 POST 到这里。"""
+    from starlette.requests import Request  # noqa: WPS433
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def endpoint(request: Request):
+        try:
+            data = await request.json()
+        except ValueError:
+            data = {}
+        allow, reason = await gate.decide(str(data.get("tool_name") or ""), data.get("tool_use_id"))
+        return JSONResponse({"decision": "allow" if allow else "deny", "reason": reason})
+
+    app.router.routes.insert(0, Route("/gate", endpoint, methods=["POST"]))
+
+
+def write_placeholder_metrics(run_dir: Path, cfg: RunConfig) -> None:
+    """开局录制期间 HUD 显示的内容：名字、推理强度与"等待"，计时都是 0（主控接管后由 Metrics 接着写）。"""
+    now = time.time()
+    data = {"agent": cfg.agent, "model": cfg.model, "effort": cfg.effort, "status": "starting", "started_wall": 0.0,
+            "budget_s": cfg.budget_seconds, "chapter": "", "room": "", "thought": "", "written_wall": now,
+            "phase_since_wall": now, "thinking_since_wall": now}
+    (run_dir / "metrics.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
 def check_resume_position(cfg: RunConfig) -> None:
@@ -272,7 +326,7 @@ def port_free(port: int) -> bool:
 
 
 async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, token: str | None,
-                    previous: dict | None = None) -> dict:
+                    previous: dict | None = None, recorder: Recorder | None = None) -> dict:
     study = None
     if cfg.study and cfg.runtime == "container" and not args.no_agent:
         extra = {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None
@@ -287,16 +341,17 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
         from overlay.server import start_in_thread  # noqa: WPS433
         hud = start_in_thread(args.hud_port)
         print(f"[run] HUD：http://127.0.0.1:{args.hud_port}/hud"
-              + ("" if hud else "（端口已被占用，沿用已在运行的 HUD 服务）"), flush=True)
+              + ("" if hud else "（已在运行，沿用）"), flush=True)
     hud_window = None if (args.no_hud or args.no_hud_window) else start_hud_window(args.hud_port, run_dir)
     try:
-        return await _run_session(cfg, args, run_dir, token, previous, study, metrics)
+        return await _run_session(cfg, args, run_dir, token, previous, study, metrics, recorder)
     finally:
         stop_hud_window(hud_window)
 
 
 async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, token: str | None,
-                       previous: dict | None, study: KbStudy | None, metrics: Metrics) -> dict:
+                       previous: dict | None, study: KbStudy | None, metrics: Metrics,
+                       recorder: Recorder | None = None) -> dict:
     session = GameSession(cfg, run_dir, metrics)
     obs = session.connect()
     print(f"[run] 已接管游戏：{obs['level']['sid']} 房间 {obs['level']['room']}，存档 {cfg.save}", flush=True)
@@ -308,8 +363,9 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
     resumed_session = previous["state"].get("session_id") if previous and not args.fresh_session else None
     session_id = resumed_session or str(uuid.uuid4())
     write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous)
-    recorder = None
-    if args.record:
+    if recorder is not None:
+        recorder.call = session.bridge_call  # 开局时已经开始录制（见 enter_save），之后改用主控的连接
+    elif args.record:
         recorder = Recorder(session.bridge_call,
                             options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms, args.record_marker),
                             log=lambda m: print(m, flush=True))
@@ -318,11 +374,15 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
         except RecordingError:
             session.close()
             raise
+    if recorder is not None:
         session.before_advance = recorder.check_window
 
-    server = build_server(session, study)
+    gate = PauseGate(metrics, enabled=cfg.pause_limit and cfg.runtime == "container",
+                     log=lambda m: print(m, flush=True), min_frames=cfg.pause_min_frames, started=previous is not None)
+    server = build_server(session, study, gate)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
+    add_gate_route(app, gate)
     web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
     web_task = asyncio.create_task(web.serve())
     while not web.started:
@@ -353,7 +413,8 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
                     note = ("（系统）主控中断后续跑，这是一个新的会话：之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。"
                             "游戏一直冻结在中断时的那一帧，章节计时没有走。先看一遍 /workspace/notes.md，再调用 observe 继续游玩。")
             runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", container, study,
-                                  session_id=session_id, resume=resumed_session is not None, resume_note=note)
+                                  session_id=session_id, resume=resumed_session is not None, resume_note=note,
+                                  gate=gate)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()
@@ -393,21 +454,40 @@ def main() -> int:
     previous = args.previous
     if not port_free(cfg.mcp_port):
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
-    token = None if args.no_agent else load_token()
+    token = None if args.no_agent else load_token(cfg)
     run_dir = make_run_dir(cfg.agent)
     print(f"[run] 日志目录：{run_dir}", flush=True)
-    if previous:
-        check_resume_position(cfg)
-    elif not cfg.skip_enter:
-        enter_save(cfg)
+    recorder = None
     try:
-        summary = asyncio.run(run_async(cfg, args, run_dir, token, previous))
+        if previous:
+            check_resume_position(cfg)
+        elif not cfg.skip_enter:
+            if args.record:
+                # 开局（选存档、进章节）也录进录像：录制从选档页开始。HUD 服务先起来，显示这一局的名字
+                if not args.no_hud:
+                    from overlay.server import start_in_thread  # noqa: WPS433
+                    start_in_thread(args.hud_port)
+                    write_placeholder_metrics(run_dir, cfg)
+                recorder = Recorder(None, options_from(run_dir, args.ffmpeg, args.record_video_args,
+                                                       args.audio_offset_ms, args.record_marker),
+                                    log=lambda m: print(m, flush=True))
+            enter_save(cfg, recorder)
+        summary = asyncio.run(run_async(cfg, args, run_dir, token, previous, recorder))
     except KeyboardInterrupt:
         print("[run] 已中断", flush=True)
         return 130
     except RecordingError as exc:
         print(f"[record] {exc}", flush=True)
         return 2
+    finally:
+        if recorder is not None and recorder.started:  # 没走到主控的收尾（例如启动阶段出错）：在这里停止录制
+            from tools.bridge_client import BridgeClient  # noqa: WPS433
+            client = BridgeClient(port=cfg.bridge_port, timeout=120)
+            try:
+                recorder.call = client.call
+                recorder.stop()
+            finally:
+                client.close()
     print(f"[run] 结束：{summary['stop_reason']}；决策 {summary['decisions']} 次，死亡 {summary['deaths']} 次，"
           f"用时 {summary['elapsed_s']:.0f} 秒（思考 {summary['thinking_s']:.0f}，工具 {summary['tool_s']:.0f}，"
           f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）"

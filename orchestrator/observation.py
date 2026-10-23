@@ -252,7 +252,7 @@ def describe_obs(obs: dict, elapsed_s: float, budget_s: float, full_room: bool =
             f"下蹲 {_yn(player['ducking'])}  可操作 {_yn(obs.get('controllable', False))}")
         lines.append(
             f"碰撞箱 x {hb[0]}~{hb[0] + hb[2]}，y {hb[1]}~{hb[1] + hb[3]}；"
-            f"剩余帧数：土狼时间 {t['jumpGrace']}，可变跳 {t['varJump']}，冲刺冷却 {t['dashCooldown']}")
+            f"剩余帧数：coyote time {t['jumpGrace']}，variable jump {t['varJump']}，dash cooldown {t['dashCooldown']}")
     if level:
         cam = level["camera"]
         b = level["bounds"]

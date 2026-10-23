@@ -1,12 +1,23 @@
 #!/bin/bash
 # 出站防火墙（容器启动时以 root 执行一次）。
-# 只放行：Anthropic 官方域名的 443 端口、宿主机上主控的游戏工具端口。其余出站一律拒绝，包括 DNS：
+# 只放行：模型服务的 443 端口（默认 Anthropic 官方域名；第三方提供方的容器只放行它自己的域名，见
+# configs/providers.json）、宿主机上主控的游戏工具端口。其余出站一律拒绝，包括 DNS：
 # 允许的域名在这里预先解析并写入 /etc/hosts，之后容器内任何程序都无法再解析其他域名。
 set -euo pipefail
 
 MCP_PORT="${MCP_PORT:-47780}"
-ALLOWED_DOMAINS="api.anthropic.com claude.ai claude.com platform.claude.com"
-ANTHROPIC_CIDRS="160.79.104.0/23"   # Anthropic 公布的入站地址段（Claude API 与 Console）
+if [ "${ALLOW_ANTHROPIC:-1}" = "1" ]; then
+    ALLOWED_DOMAINS="api.anthropic.com claude.ai claude.com platform.claude.com"
+    ANTHROPIC_CIDRS="160.79.104.0/23"   # Anthropic 公布的入站地址段（Claude API 与 Console）
+else
+    ALLOWED_DOMAINS=""
+    ANTHROPIC_CIDRS=""
+fi
+ALLOWED_DOMAINS="$(echo "$ALLOWED_DOMAINS ${PROVIDER_DOMAINS:-}" | xargs)"
+if [ -z "$ALLOWED_DOMAINS" ]; then
+    echo "[firewall] 没有任何允许的模型服务域名" >&2
+    exit 1
+fi
 
 resolve_v4() { getent ahostsv4 "$1" | awk '{print $1}' | sort -u; }
 

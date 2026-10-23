@@ -8,13 +8,13 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `README.md`（本文件） | 单位与坐标约定、时间步长、碰撞箱、亚像素模型、实体更新顺序、模拟器搭建指南 |
+| `README.md`（本文件） | 单位与坐标约定、时间步长、碰撞箱、subpixel 模型、实体更新顺序、模拟器搭建指南 |
 | `player_physics.md` | 核心：Player 全部常量、每帧更新顺序、各状态（Normal / Dash / Climb / DreamDash 等）的完整规则、碰撞回调、死亡与换房、Monocle 碰撞与平台运动 |
-| `input.md` | 游戏侧的输入语义：按键"按下"与缓冲、抓取、方向与瞄准、8 向吸附、蹲冲；以及"哪一帧的输入决定什么" |
+| `input.md` | 游戏侧的输入语义：按键"按下"与缓冲、抓取、方向与瞄准、8 向吸附、crouch dash；以及"哪一帧的输入决定什么" |
 | `entities.md` | 序章、1A（Forsaken City）、2A（Old Site）里会遇到的实体类型：碰撞箱、计时、交互规则 |
 | `game_data.md` | （已有文件）工作区里观测与轨迹数据的格式说明 |
-| `techniques.md` | 移动技巧：Strawberry Jam 各训练场（Beginner→Grandmaster）与 celeste.ink 收录的全部原版技巧（super/hyper/wavedash/ultra/抓角加速/墙弹/梦境块技巧等）的条件、帧窗口、数值、harness 输入例、本三章可用性；SJ 各大厅技巧对照表 |
-| `mechanics.md` | 机制库：章节计时与冻结帧（冻结帧不计 IGT）、SJ 机制库（Library）全部小节的规则、后续章节实体（Theo、水母、泡泡、羽毛、云、岩浆块、弹球/河豚、水、月亮块）的交互规则 |
+| `techniques.md` | 移动技巧：Strawberry Jam 各训练场（Beginner→Grandmaster）与 celeste.ink 收录的全部原版技巧（super/hyper/wavedash/ultra/cornerboost/wallbounce/dream block tech 等）的条件、帧窗口、数值、harness 输入例、本三章可用性；SJ 各大厅技巧对照表 |
+| `mechanics.md` | 机制库：章节计时与 freeze frames（freeze frames 不计 IGT）、SJ 机制库（Library）全部小节的规则、后续章节实体（Theo、水母、泡泡、羽毛、云、岩浆块、弹球/河豚、水、月亮块）的交互规则 |
 | `reference/` | 外部资料原文照录：Celeste Wiki（celeste.ink）全部技巧页面，草莓酱训练场（Beginner → Grandmaster）与机制库的全部文本（英文、简体中文），以及项目作者提供的社区资料（反向钟《Celeste 机制详解》源码解读、岩浆块机制说明，附原 PDF）。索引见 `reference/README.md`；默认正确，数值不一致时以本知识库里对照代码核实的文件为准 |
 
 ## 2. 坐标与单位
@@ -44,24 +44,24 @@
 
 | 用 RawDeltaTime（不受时间倍率影响） | 用 DeltaTime（受时间倍率影响） |
 | --- | --- |
-| 冻结帧计时器 `FreezeTimer` 的递减 | Player 的全部物理、全部计时器 |
+| freeze frames 计时器 `FreezeTimer` 的递减 | Player 的全部物理、全部计时器 |
 | 章节计时、屏幕震动、少数剧情脚本 | 实体（平台、尖刺以外的会动物体）的运动与计时 |
 | | 协程（`yield return 秒数`）的等待，除非显式设为用原始时间 |
-| | 输入按键缓冲计数器（`VirtualButton` 的缓冲） |
+| | 输入 input buffer 计数器（`VirtualButton` 的缓冲） |
 
-- **TimeRate 变化**：个别剧情会改变 `Engine.TimeRate`（例如序章结尾的慢动作，把 TimeRate 逐帧降到 0）。TimeRate = 0 时 DeltaTime = 0：Player 照常"更新"但什么都不动，按键缓冲也不衰减。正常可操作的游玩中 TimeRate = 1。
+- **TimeRate 变化**：个别剧情会改变 `Engine.TimeRate`（例如序章结尾的慢动作，把 TimeRate 逐帧降到 0）。TimeRate = 0 时 DeltaTime = 0：Player 照常"更新"但什么都不动，input buffer 也不衰减。正常可操作的游玩中 TimeRate = 1。
 - **辅助模式的游戏速度**（Assist Game Speed）通过 TimeRateB 生效；本项目存档按默认 1.0 处理。
 
-### 3.3 冻结帧（Freeze）
+### 3.3 Freeze frames（Freeze）
 
 - 某些事件调用"冻结 t 秒"：若当前冻结剩余时间小于 t，就把它设为 t。常见：**冲刺开始 0.05 s**、吃冲刺水晶 0.05 s、冲碎冲刺砖 0.05 s、离开梦境块 0.05 s。0.05 s = **3 帧**。
-- 冻结中的每一帧：**输入照常读取并更新**（按键缓冲计数照常递减），但关卡里几乎所有实体都**不更新**（Player 不动、计时器不走、平台不动、`Scene.TimeActive` 不增加）。冻结剩余时间每帧减 RawDeltaTime，减到 0 后下一帧恢复正常。
-- 桥接工具的帧计数里，冻结帧也算帧（`act` 消耗的帧数包含冻结帧）。轨迹在冻结帧里状态不变。
+- 冻结中的每一帧：**输入照常读取并更新**（input buffer 计数照常递减），但关卡里几乎所有实体都**不更新**（Player 不动、计时器不走、平台不动、`Scene.TimeActive` 不增加）。冻结剩余时间每帧减 RawDeltaTime，减到 0 后下一帧恢复正常。
+- 桥接工具的帧计数里，freeze frames 也算帧（`act` 消耗的帧数包含 freeze frames）。轨迹在 freeze frames 里状态不变。
 - 磁带块（CassetteBlock）的节拍在冻结时会被额外推进同样的时长（见 `entities.md`）。
 
 ## 4. Madeline 的位置与碰撞箱
 
-- `Position`（整数）是**碰撞箱底边的中点**。观测里的 `pos` = 整数位置 + 亚像素余量。
+- `Position`（整数）是**碰撞箱底边的中点**。观测里的 `pos` = 整数位置 + subpixel 余量。
 - 碰撞箱相对 `Position` 的偏移（左、上为负）：
 
 | 名称 | 宽 × 高 | 左上角偏移 | 覆盖范围（相对 Position） | 用途 |
@@ -76,7 +76,7 @@
 - 是否"下蹲"（`Ducking`）就是"当前碰撞箱是不是下蹲碰撞箱"。切换下蹲只换碰撞箱，底边不变。
 - 区间都是左闭右开：两个矩形"重叠"要求严格相交（只贴边不算重叠）。
 
-## 5. 亚像素（余量）模型
+## 5. Subpixel（余量）模型
 
 所有会动的东西（Madeline 这类 Actor，以及平台这类 Platform）都用同一套"整数位置 + 浮点余量"：
 
@@ -93,7 +93,7 @@
 每个游戏帧（桥接工具推进一帧）按顺序：
 
 1. 读取输入，更新所有虚拟按键（缓冲计数器在这里递减/重置，见 `input.md`）。
-2. 若处于冻结帧：只做冻结计时，跳过其余步骤。
+2. 若处于 freeze frames：只做冻结计时，跳过其余步骤。
 3. `Scene.BeforeUpdate`：`TimeActive += DeltaTime`；处理上一帧排队的实体增删（被移除的实体、死亡时生成的尸体，都在这一刻才真正离开/加入）。
 4. `Level.Update`：若未暂停、未冻结、不在换房过渡中，则按顺序更新所有实体（见下节）。换房过渡期间只有少数实体更新，Madeline 由过渡脚本移动。
 5. `AfterUpdate`：执行"帧末回调"。
@@ -133,7 +133,7 @@
 | --- | --- | --- |
 | 重力 Gravity | 900 px/s² | 速度 +15 px/s（半重力 +7.5） |
 | 最大下落 MaxFall | 160 px/s | 2.667 px |
-| 快速下落上限 FastMaxFall | 240 px/s | 4.0 px |
+| fastfall 上限 FastMaxFall | 240 px/s | 4.0 px |
 | 最大跑速 MaxRun | 90 px/s | 1.5 px |
 | 地面加速 RunAccel | 1000 px/s² | 16.667 px/s |
 | 空中加速（×0.65） | 650 px/s² | 10.833 px/s |
@@ -143,16 +143,16 @@
 | 冲刺速度 DashSpeed | 240 px/s | 4.0 px（对角每轴 2.828 px） |
 | 冲刺结束速度 EndDashSpeed | 160 px/s | 2.667 px |
 | 攀爬上/下/滑 | −45 / 80 / 30 px/s | −0.75 / 1.333 / 0.5 px |
-| 蹬墙跳水平 WallJumpHSpeed | 130 px/s | 2.167 px |
+| walljump 水平 WallJumpHSpeed | 130 px/s | 2.167 px |
 | 体力：向上爬 / 静止抓墙 | 45.4545 / 10 每秒 | 0.7576 / 0.1667 每帧 |
 
 ## 8. 如何用本知识库搭一个逐帧模拟器（建议阅读顺序）
 
-1. **本文件 §3–§6**：dt、冻结帧、亚像素、实体更新顺序。
-2. **`input.md`**：每帧输入如何变成 `MoveX`、`MoveY`、瞄准方向、`Jump.Pressed` 等；尤其是按键缓冲 5 帧、松键清缓冲、冲刺方向在冻结结束后才读取。
+1. **本文件 §3–§6**：dt、freeze frames、subpixel、实体更新顺序。
+2. **`input.md`**：每帧输入如何变成 `MoveX`、`MoveY`、瞄准方向、`Jump.Pressed` 等；尤其是 input buffer 5 帧、松键清缓冲、冲刺方向在冻结结束后才读取。
 3. **`player_physics.md` §3（每帧更新顺序）**：这是模拟器主循环的骨架，必须逐条照抄顺序。
 4. **`player_physics.md` §5（StNormal）+ §6（碰撞回调与修正）+ §14（Monocle 碰撞与平台运动）**：跑、跳、重力、墙、碰撞。先只实现这几部分，用"原地跳""助跑跳""走下平台"的轨迹和游戏对比。
-5. **`player_physics.md` §7（平台速度）+ §8（StDash）**：冲刺时间线（受理帧 → 3 帧冻结 → 10 帧 240 速 → 结束），super / hyper / 蹬墙。
+5. **`player_physics.md` §7（liftboost）+ §8（StDash）**：冲刺时间线（受理帧 → 3 帧冻结 → 10 帧 240 速 → 结束），super / hyper / walljump。
 6. **`player_physics.md` §9（StClimb）**、§10（StDreamDash，2A 需要）、§12（弹簧等实体给的速度）、§13（死亡、边界、换房）。
 7. **`entities.md`**：只实现当前房间里出现的实体类型。
 8. **校验**：把观测里的 `player.internal` 作为初始状态，喂入与 `act` 相同的输入，对比 `last_act.json` 的逐帧轨迹（位置、速度、状态）。轨迹第 j 行是"用第 j 帧输入更新完之后"的状态。先做到一致，再做路径搜索。

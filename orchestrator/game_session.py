@@ -315,6 +315,11 @@ class GameSession:
             raise ActError("thought 太长，请压缩到一两句话（120 字以内）")
         stop = self._stop_list(stop_on or plan.stop_on)
         frames = self._check_plan(plan)
+        pre_notes: list[str] = []
+        if plan.retry and self.cfg.pause_limit:
+            # 每次尝试都要由智能体自己想过、带一句新的思考语句发起，所以不自动重试
+            plan = replace(plan, retry=None)
+            pre_notes.append("本次运行关闭了自动重试，计划里的 retry 被忽略")
         if plan.retry and not self.container:
             raise ActError("本次运行不能自动重试（没有智能体容器），请去掉计划里的 retry")
         plan_path = None
@@ -325,7 +330,7 @@ class GameSession:
         self.decision_index += 1
         start_room = self.metrics.state.room
         attempts: list[dict] = []
-        total_game_s, total_auto, notes = 0.0, 0, []
+        total_game_s, total_auto, notes = 0.0, 0, list(pre_notes)
         attempt = 0
         while True:
             label = thought if attempt == 0 else f"{thought}（自动重试 {attempt}）"
@@ -399,6 +404,9 @@ class GameSession:
         self.metrics.update(status="executing")
         extra = {"expect": plan.expect, "tolerance": plan.tolerance} if plan.expect else {}
         self._before_advance()
+        # HUD 每 0.1 秒取一次数据、淡入 0.2 秒：等它换上这段动作的思考语句再推进，
+        # 录像里新语句就和这段动作的第一帧同时出现（游戏冻结时录像不写帧，这段等待不进录像）
+        time.sleep(self.cfg.thought_lead_s)
         with self.lock:
             t0 = time.monotonic()
             reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,

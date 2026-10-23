@@ -27,7 +27,8 @@ COPY managed-settings.json /etc/claude-code/managed-settings.json
 COPY init-firewall.sh /usr/local/sbin/init-firewall.sh
 COPY entrypoint.sh /usr/local/sbin/entrypoint.sh
 COPY netcheck.py /opt/netcheck.py
-RUN chmod 644 /etc/claude-code/managed-settings.json \
+COPY celeste-gate.py /usr/local/lib/celeste/gate.py
+RUN chmod 644 /etc/claude-code/managed-settings.json /usr/local/lib/celeste/gate.py \
     && chmod 755 /usr/local/sbin/init-firewall.sh /usr/local/sbin/entrypoint.sh
 
 # 普通用户：工作区 /workspace（可写，挂载宿主目录），知识库 /kb（只读挂载）

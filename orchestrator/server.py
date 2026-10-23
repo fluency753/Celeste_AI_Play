@@ -13,7 +13,7 @@ from .observation import describe_attempts, describe_obs, describe_step, room_js
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图与整个房间的实体和字符地图，其余时候只给文字状态与画面附近的信息。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
-  按键：L R U D 方向，J 跳，X 冲刺，Z 蹲冲，G 抓墙，T 交互；K、Y、V 是第二个跳、冲刺、蹲冲键
+  按键：L R U D 方向，J 跳，X 冲刺，Z crouch dash，G 抓墙，T 交互；K、Y、V 是第二个跳、冲刺、crouch dash 键
   （按住 J 时按下 K 也算一次新的"按下"，可以在相邻两帧各跳一次）；A:角度 表示摇杆角度（0 右、90 上）。
   只写帧数表示这些帧不按任何键，例如 "5"。一次最多 600 帧。
 plan_file：（有工作区时可用）工作区里的计划文件路径，与 inputs 二选一。内容是按键段数组，或对象：
@@ -56,7 +56,12 @@ TRANSPORT_SECURITY = TransportSecuritySettings(
 )
 
 
-def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServer:
+NO_RETRY_NOTE = "\n本次运行每次暂停只允许一轮工具调用，并且关闭了自动重试：计划文件里的 retry 会被忽略。"
+SHORT_ACT_NOTE = ("【注意】这次 act 只推进了很少几帧（少于 {n} 帧）、也没有因为事件停下，不算一次尝试："
+                  "本次暂停的工具机会没有恢复，下一步请直接用 act 执行一段完整的尝试。")
+
+
+def build_server(session: GameSession, study: KbStudy | None = None, gate=None) -> MCPServer:
     server = MCPServer(name="celeste", instructions="《蔚蓝》游戏工具：observe 查看当前帧，act 推进若干帧。",
                        log_level="WARNING")
     metrics = session.metrics
@@ -99,7 +104,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 obs, image = await asyncio.to_thread(session.observe)
                 state["described_room"] = room_key(obs)
                 content: list = []
-                if image:
+                if image and session.cfg.images:
                     content.append(Image(data=upscale_png(image), format="png"))
                 content.append(describe_obs(obs, *clock_text(), full_room=True, effort=effort_line(metrics))
                                + "\n\n整个房间的精确数据（像素坐标）：\n" + room_json(obs)
@@ -108,7 +113,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             finally:
                 finish()
 
-    @server.tool(name="act", description=ACT_DESCRIPTION, structured_output=False)
+    act_description = ACT_DESCRIPTION + (NO_RETRY_NOTE if session.cfg.pause_limit else "")
+
+    @server.tool(name="act", description=act_description, structured_output=False)
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
                   stop_on: list[str] | None = None) -> list:
         async with call_lock:
@@ -118,6 +125,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             try:
                 outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file)
                 parts = [describe_step(outcome.result)]
+                # act 返回之后是一次新的暂停，工具预算重新计；只推进了几帧的 act 不算一次尝试，不重新计
+                if gate is not None and not gate.after_act(int(outcome.result.get("consumed") or 0),
+                                                           str(outcome.result.get("stop") or "")):
+                    parts.append(SHORT_ACT_NOTE.format(n=gate.min_frames))
                 if len(outcome.attempts) > 1:
                     parts.insert(0, describe_attempts(outcome.attempts))
                 if outcome.auto_notes:
@@ -134,7 +145,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 if session.workspace:
                     parts.append(ws_note)
                 content: list = []
-                if outcome.image_b64 and new_room:
+                if outcome.image_b64 and new_room and session.cfg.images:
                     content.append(Image(data=upscale_png(outcome.image_b64), format="png"))
                 content.append("\n\n".join(parts))
                 return content

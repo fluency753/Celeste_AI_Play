@@ -131,9 +131,10 @@ def analyze_segments(csv_path: Path) -> dict:
 
 
 class Recorder:
-    """call 是向桥接发指令的函数（GameSession.bridge_call，或独立脚本里的 BridgeClient.call）。"""
+    """call 是向桥接发指令的函数（GameSession.bridge_call，或独立脚本里的 BridgeClient.call）；
+    开局录制时先用菜单宏的连接，主控接管后换成 GameSession.bridge_call（录制状态在桥接与插件里，与连接无关）。"""
 
-    def __init__(self, call: Callable[..., dict], options: RecordOptions, log: Callable[[str], None] = print):
+    def __init__(self, call: Callable[..., dict] | None, options: RecordOptions, log: Callable[[str], None] = print):
         self.call = call
         self.opts = options
         self.log = log

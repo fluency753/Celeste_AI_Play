@@ -42,11 +42,16 @@ CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
 
-def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None) -> str:
+def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None, pause_limit: bool = False,
+                   pause_min_frames: int = 20) -> str:
     extra = "container_zh.md" if runtime == "container" else "host_zh.md"
     text = (PROMPTS / "system_zh.md").read_text(encoding="utf-8") + "\n\n" + (PROMPTS / extra).read_text(encoding="utf-8")
     if sim and runtime == "container":
         text += "\n\n" + (PROMPTS / "sim_zh.md").read_text(encoding="utf-8")
+    if runtime == "container":
+        # 每次暂停只允许一轮工具（自动重试关闭），或者不限制（可以把规划程序写成自动重试命令）
+        text += "\n\n" + (PROMPTS / ("pause_zh.md" if pause_limit else "retry_zh.md")).read_text(
+            encoding="utf-8").replace("{min_frames}", str(pause_min_frames))
     if chapters and len(chapters) > 1:
         names = " → ".join(chapter_name_by_id(c) for c in chapters)
         text += ("\n\n# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
@@ -96,10 +101,12 @@ def _strip_images(value):
 class ClaudeRunner:
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
                  token: str, container: str | None = None, study: KbStudy | None = None,
-                 session_id: str | None = None, resume: bool = False, resume_note: str | None = None):
+                 session_id: str | None = None, resume: bool = False, resume_note: str | None = None,
+                 gate=None):
         """resume=True：用 --resume 接着 session_id 这个已有的会话（续跑）；resume_note 不为空时代替开局的第一条消息。"""
         self.cfg = cfg
         self.study = study
+        self.gate = gate                         # 每次暂停的工具预算（pausegate.PauseGate），按输出流里的消息分组
         self.container = container
         self.run_dir = run_dir
         self.session = session
@@ -127,24 +134,48 @@ class ClaudeRunner:
         """当前生效的推理强度（启动参数与 /effort 切换都以它为准）。"""
         return self.metrics.state.effort or self.cfg.effort
 
+    def _model_name(self) -> str:
+        """传给 Claude Code 的模型名；第三方提供方可以加后缀（例如 [1m]：按 100 万 token 上下文压缩）。"""
+        suffix = (self.cfg.provider_info or {}).get("model_suffix") or "" if self.cfg.third_party else ""
+        return self.cfg.model + suffix
+
+    def _provider_env(self) -> dict[str, str]:
+        """第三方提供方：接口地址、API 密钥与模型槽位。都经 docker exec -e 名字 从环境传进容器，值不进命令行；
+        不传 Max 订阅令牌，所以订阅令牌不会发给第三方。"""
+        info = self.cfg.provider_info or {}
+        env = {"ANTHROPIC_BASE_URL": info["base_url"], "ANTHROPIC_AUTH_TOKEN": self.token}
+        for key, value in (info.get("env") or {}).items():
+            env[key] = str(value).replace("{model_base}", self.cfg.model).replace("{model}", self._model_name())
+        return env
+
+    def _credential_names(self) -> list[str]:
+        return list(self._provider_env()) if self.cfg.third_party else ["CLAUDE_CODE_OAUTH_TOKEN"]
+
     def _common_args(self) -> list[str]:
         args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                "--model", self.cfg.model, "--effort", self.effort,
+                "--model", self._model_name(), "--effort", self.effort,
                 "--strict-mcp-config", "--permission-mode", "dontAsk",
                 *(["--resume", self.session_id] if self.resume else ["--session-id", self.session_id])]
-        if self.cfg.autocompact:
-            args += ["--autocompact", self.cfg.autocompact]
+        autocompact = self.cfg.autocompact or (self.cfg.provider_info or {}).get("autocompact")
+        if autocompact:
+            args += ["--autocompact", str(autocompact)]
         return args
 
     def _command(self) -> list[str]:
         if self.cfg.runtime == "container":
             mcp = json.dumps({"mcpServers": {"celeste": {
                 "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
-            prompt = compose_prompt("container", self.cfg.sim, self.cfg.chapters)
+            prompt = compose_prompt("container", self.cfg.sim, self.cfg.chapters, self.cfg.pause_limit,
+                                    self.cfg.pause_min_frames)
             (self.run_dir / "system_prompt.md").write_text(prompt, encoding="utf-8")
             return [
                 find_docker_exe(), "exec", "-i", "-u", "agent", "-w", "/workspace",
-                "-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "MCP_TOOL_TIMEOUT=900000", "-e", "MAX_MCP_OUTPUT_TOKENS=40000",
+                *[arg for name in self._credential_names() for arg in ("-e", name)],
+                "-e", "MCP_TOOL_TIMEOUT=900000", "-e", "MAX_MCP_OUTPUT_TOKENS=40000",
+                # 不允许后台任务：游戏只在 act 时推进，后台跑的搜索会绕过每次暂停一轮工具的限制，也让计时失真。
+                # 前台命令默认最多等 5 分钟（可以用 timeout 参数加到 10 分钟），超时就结束，不会转入后台
+                "-e", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+                "-e", "BASH_DEFAULT_TIMEOUT_MS=300000", "-e", "BASH_MAX_TIMEOUT_MS=600000",
                 self.container, "claude", *self._common_args(),
                 # 受限模式：不读取用户、项目与本地设置文件（智能体改不了自己的配置），文件工具只能访问工作区与知识库
                 "--restricted", "--add-dir", "/kb", *(["--add-dir", "/sim"] if self.cfg.sim else []),
@@ -177,8 +208,11 @@ class ClaudeRunner:
         drop_prefixes = ("CLAUDE", "ANTHROPIC", "MCP_", "MAX_THINKING", "MAX_MCP", "DISABLE_", "OTEL_")
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(drop_prefixes)}
         if self.cfg.runtime == "container":
-            # docker exec -e CLAUDE_CODE_OAUTH_TOKEN 从这里取值传进容器，令牌不会出现在命令行里
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = self.token
+            # docker exec -e 名字 从这里取值传进容器，令牌与密钥不会出现在命令行里
+            if self.cfg.third_party:
+                env.update(self._provider_env())
+            else:
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = self.token
             return env
         config_dir = REPO_ROOT / "agent-home" / self.cfg.agent
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -453,6 +487,15 @@ class ClaudeRunner:
                 print("[agent] 上下文压缩中……", flush=True)
             elif event.get("compact_result"):
                 self.metrics.update(status=self._idle_status())
+        elif etype == "system" and subtype == "api_retry":
+            # 认证失败不会自己好：Claude Code 会按退避重试 10 次（约 3 分钟），连续两次 401 就直接停下
+            if event.get("error_status") == 401 and (event.get("attempt") or 0) >= 2 and not self.stop_reason:
+                who = (self.cfg.provider_info or {}).get("label") or self.cfg.provider
+                self.stop_reason = (f"{who} 认证失败（401）：检查 API 密钥" if self.cfg.third_party
+                                    else "认证失败（401）：检查 .env 里的 CLAUDE_CODE_OAUTH_TOKEN")
+                print(f"[agent] {self.stop_reason}，停止运行", flush=True)
+                if self.proc and self.proc.returncode is None:
+                    self.proc.terminate()
         elif etype == "system" and subtype == "compact_boundary":
             meta = event.get("compact_metadata") or {}
             self.metrics.add(compactions=1, compact_s=(meta.get("duration_ms") or 0) / 1000)
@@ -476,6 +519,8 @@ class ClaudeRunner:
                     self._tool_calls_this_turn += 1
                     # 工具时间从这里开始，到对应的 tool_result 为止（见 metrics.py）
                     self.metrics.tool_begin(str(block.get("id")), str(block.get("name", "")).startswith("mcp__celeste__"))
+                    if self.gate is not None:
+                        self.gate.note_tool_use(str(block.get("id")), message.get("id"))
         elif etype == "user":
             content = (event.get("message") or {}).get("content")
             for block in content if isinstance(content, list) else []:

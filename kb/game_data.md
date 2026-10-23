@@ -45,7 +45,7 @@
 | `bounds` | 房间范围 `[x, y, 宽, 高]`（世界坐标，像素）。走出边界会进入相邻房间；从底部掉出且下面没有房间会死亡 |
 | `camera` | 画面左上角的世界坐标 `[x, y]`；画面大小 320×180 |
 | `inCutscene` / `skippingCutscene` / `paused` / `transitioning` / `frozen` / `completed` | 剧情中、正在跳过剧情、暂停、房间转场中、游戏冻结（如冲刺开始的几帧）、章节已完成 |
-| `freezeTimer` / `freezeFrames` | 冻结帧：剩余冻结秒数，以及接下来还会冻结几帧（冲刺开始、吃冲刺水晶、撞碎冲刺砖、离开梦境块等，见 `README.md` §3.3）。例如 `act` 在吃到水晶那一帧停下（`stop_on` 含 `refill`）时，这里会告诉你接下来还有几帧 Madeline 不动 |
+| `freezeTimer` / `freezeFrames` | freeze frames：剩余冻结秒数，以及接下来还会冻结几帧（冲刺开始、吃冲刺水晶、撞碎冲刺砖、离开梦境块等，见 `README.md` §3.3）。例如 `act` 在吃到水晶那一帧停下（`stop_on` 含 `refill`）时，这里会告诉你接下来还有几帧 Madeline 不动 |
 | `wind` | 当前风的速度 `[x, y]`（像素/秒）；没有风时为 `[0, 0]` |
 | `canPause`、`dialogOpen`、`dialogWaiting` | 主控跳过剧情时使用，可以忽略 |
 | `chapterTimeTicks` | 章节计时，1 tick = 100 纳秒（÷ 10 000 000 得秒） |
@@ -55,7 +55,7 @@
 
 | 字段 | 含义 |
 | --- | --- |
-| `pos` | 精确位置 `[x, y]` = 整数位置 + 亚像素余量；是碰撞箱**底边中点** |
+| `pos` | 精确位置 `[x, y]` = 整数位置 + subpixel 余量；是碰撞箱**底边中点** |
 | `speed` | 速度 `[vx, vy]`，像素/秒，y 向下为正 |
 | `state` / `stateId` | 状态机状态名与编号（Normal=0、Climb=1、Dash=2、Boost=4、RedDash=5、DreamDash=9、Dummy=11 等） |
 | `dashes` / `maxDashes` | 当前冲刺次数 / 上限 |
@@ -64,27 +64,27 @@
 | `holding` | 手里拿着的物体类型名（一般为 null） |
 | `wallLeft` / `wallRight` | 左/右 1 像素处是否有实心物（贴墙） |
 | `hitbox` | 当前碰撞箱 `[左, 上, 宽, 高]`（世界坐标） |
-| `timers` | 几个计时器的剩余**帧数**（向上取整）：`jumpGrace` 土狼时间、`varJump` 可变跳、`dashCooldown` 冲刺冷却 |
+| `timers` | 几个计时器的剩余**帧数**（向上取整）：`jumpGrace` coyote time、`varJump` variable jump、`dashCooldown` dash cooldown |
 | `internal` | 模拟器需要的内部状态，原始数值（计时器单位是**秒**），见下 |
 
 `internal` 的字段：
 
 | 字段 | 含义 |
 | --- | --- |
-| `position` / `remainder` | 整数位置与亚像素余量（`pos` = 二者之和） |
+| `position` / `remainder` | 整数位置与 subpixel 余量（`pos` = 二者之和） |
 | `speed` | 同 `player.speed` |
 | `liftSpeed` / `liftSpeedTimer` | 从移动平台继承的速度及其剩余保留时间 |
 | `dashDir` / `lastAim` | 当前（或上一次）冲刺方向的单位向量 / 上一帧的瞄准方向 |
 | `moveX` | 上一帧读到的水平输入（-1、0、1） |
 | `onGround` / `wasOnGround` | 本帧、上一帧是否着地 |
-| `jumpGraceTimer`、`varJumpTimer`、`varJumpSpeed` | 土狼时间剩余、可变跳剩余与可变跳保持的速度 |
+| `jumpGraceTimer`、`varJumpTimer`、`varJumpSpeed` | coyote time 剩余、variable jump 剩余与 variable jump 保持的速度 |
 | `autoJump` / `autoJumpTimer` | 弹簧等造成的"自动按住跳"及其剩余时间 |
 | `maxFall` | 当前的下落速度上限 |
-| `dashCooldownTimer`、`dashRefillCooldownTimer`、`dashAttackTimer`、`dashStartedOnGround` | 冲刺冷却、落地补充冲刺前的冷却、冲刺攻击窗口、本次冲刺是否从地面开始 |
-| `forceMoveX` / `forceMoveXTimer` | 被强制的水平输入（如蹬墙跳后）及剩余时间 |
-| `wallSlideTimer` / `wallSlideDir` | 贴墙下滑的剩余时间与方向 |
+| `dashCooldownTimer`、`dashRefillCooldownTimer`、`dashAttackTimer`、`dashStartedOnGround` | dash cooldown、落地补充冲刺前的冷却、dash attack 窗口、本次冲刺是否从地面开始 |
+| `forceMoveX` / `forceMoveXTimer` | 被强制的水平输入（如 walljump 后）及剩余时间 |
+| `wallSlideTimer` / `wallSlideDir` | wallslide 的剩余时间与方向 |
 | `wallSpeedRetentionTimer` / `wallSpeedRetained` | 撞墙后保留水平速度的剩余时间与被保留的速度 |
-| `wallBoostDir` / `wallBoostTimer` | 抓墙跳后的反向加速窗口 |
+| `wallBoostDir` / `wallBoostTimer` | climbjump 后的反向加速窗口 |
 | `climbNoMoveTimer`、`hopWaitX`、`hopWaitXSpeed` | 攀爬相关计时与爬到墙顶后的跳跃等待 |
 | `noWindTimer`、`lowFrictionStopTimer`、`minHoldTimer` | 风、低摩擦地面与抓取相关的计时（本轮章节基本用不到） |
 
@@ -195,15 +195,15 @@
 写法与 `act` 的 `inputs` 完全一样：
 
 - `"帧数"`：这些帧什么都不按；`"帧数,按键,按键…"`：这些帧按住列出的键。
-- 按键：`L R U D` 方向，`J` 跳，`X` 冲刺，`Z` 蹲冲（以下蹲姿态冲刺，见 `input.md`），`G` 抓，`T` 交互；`K`、`Y`、`V` 分别是第二个跳、冲刺、蹲冲键；`A:角度` 表示左摇杆模拟方向（0 为右、90 为上、180 为左、270 为下，满幅度），出现时取代方向键。
-- 段与段之间不会自动松键：`"1,R,J"` 后接 `"14,R,J"` 等于连续按住跳 15 帧，只算一次起跳。同一个键要再"按下"一次，中间至少要有 1 帧不按它；**换另一个键就不用**：按住 J 时按下 K 也算一次新的起跳输入（冲刺 X/Y、蹲冲 Z/V 同理），所以相邻两帧可以各跳一次（`techniques.md` 7.5）。
+- 按键：`L R U D` 方向，`J` 跳，`X` 冲刺，`Z` crouch dash（以下蹲姿态冲刺，见 `input.md`），`G` 抓，`T` 交互；`K`、`Y`、`V` 分别是第二个跳、冲刺、crouch dash 键；`A:角度` 表示左摇杆模拟方向（0 为右、90 为上、180 为左、270 为下，满幅度），出现时取代方向键。
+- 段与段之间不会自动松键：`"1,R,J"` 后接 `"14,R,J"` 等于连续按住跳 15 帧，只算一次起跳。同一个键要再"按下"一次，中间至少要有 1 帧不按它；**换另一个键就不用**：按住 J 时按下 K 也算一次新的起跳输入（冲刺 X/Y、crouch dash Z/V 同理），所以相邻两帧可以各跳一次（`techniques.md` 7.5）。
 - 单次 `act` 最多 600 帧，超过就拆成几次。
 
 ### 3.2 预期轨迹 `expect` 与容差 `tolerance`
 
-- `expect` 每帧一项，与按键逐帧对齐：第 i 项是**计划第 i 帧推进之后** Madeline 的位置，口径与 `last_act.json` 轨迹里的 `x`、`y` 相同（整数位置 + 亚像素余量，全精度）。可以写成 `[x, y]`，也可以附状态名 `[x, y, "Dash"]`（状态名与轨迹的 `state` 列相同，如 `Normal`、`Dash`、`Climb`）；`null` 表示这一帧不检查。
+- `expect` 每帧一项，与按键逐帧对齐：第 i 项是**计划第 i 帧推进之后** Madeline 的位置，口径与 `last_act.json` 轨迹里的 `x`、`y` 相同（整数位置 + subpixel 余量，全精度）。可以写成 `[x, y]`，也可以附状态名 `[x, y, "Dash"]`（状态名与轨迹的 `state` 列相同，如 `Normal`、`Dash`、`Climb`）；`null` 表示这一帧不检查。
 - `expect` 可以比按键短（只检查前面若干帧），不能比按键长。
-- 冻结帧里 Madeline 不动，预期位置要与上一帧相同；动作执行时的加载帧不算计划帧，不需要写。
+- freeze frames 里 Madeline 不动，预期位置要与上一帧相同；动作执行时的加载帧不算计划帧，不需要写。
 - 桥接在每帧推进后立即对照：x 或 y 与预期相差超过 `tolerance` 像素（默认 1），或给出的状态名不符，就在**这一帧**停下，停止原因 `deviate`。`last_act.json` 的 `result` 里会有：
   - `expectFrames`、`tolerance`：本次对照了几帧、容差多少；
   - `deviation`：`{"frame": 全局帧号, "index": 计划第几帧（从 1 起）, "expected": [x, y(, 状态)], "actual": [x, y, 状态]}`。

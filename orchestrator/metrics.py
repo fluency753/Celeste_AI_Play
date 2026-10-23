@@ -49,6 +49,7 @@ class MetricsState:
     compactions: int = 0
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）
     retries: int = 0                  # 自动重试次数（重算程序运行次数，不唤醒大模型）
+    pause_denials: int = 0            # 每次暂停的工具预算用完后被拒绝的工具调用次数（见 pausegate.py）
     replan_s: float = 0.0             # 重算程序用时（已包含在工具时间里）
     study_s: float = 0.0              # 准备阶段（读知识库等）用时，不计入 elapsed_s
     kb_progress: float | None = None  # 知识库已读比例（0~1）；None = 没有准备阶段
@@ -215,7 +216,7 @@ class Metrics:
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
                 "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "context_tokens",
-                "effort_pending", "effort_changes", "effort_log")
+                "effort_pending", "effort_changes", "effort_log", "pause_denials")
 
     def restore(self, previous: dict, resumed_from: str) -> None:
         """续跑：接着上一段运行的统计累计（现实用时从上一段的值接着走）。"""

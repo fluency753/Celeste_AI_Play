@@ -103,6 +103,49 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
     raise RuntimeError(f"未能在 {max_actions} 步内进入存档 {save_name}：\n{summarize_obs(obs)}")
 
 
+def to_file_select(c: BridgeClient, max_actions: int = 120, menu_speed: int = 4) -> dict:
+    """从任意画面退回选档页（光标停在存档列表上，没有选中任何存档）。
+    录制开局之前用：这一段不进录像，所以可以快进；之后从选档页开始录，选存档、进章节都按正常速度。"""
+    obs = c.call("activate", entities=False, tiles=False)["obs"]
+    for _ in range(max_actions):
+        scene = obs.get("scene")
+        menu = obs.get("menu") or {}
+        if scene == "Level":
+            level = obs["level"]
+            if obs.get("controllable") or level.get("paused"):
+                obs = leave_level_by_pause_menu(c)  # 先返回地图
+                continue
+            if level.get("inCutscene") and not level.get("skippingCutscene"):
+                skipped, obs, _, _ = skip_by_pause_menu(c)
+                if skipped:
+                    continue
+            obs = step(c, ["120"], stop_on=["controllable"], speed=menu_speed)["obs"]
+            continue
+        if scene == "IntroVignette":
+            skipped, obs, _, _ = skip_by_pause_menu(c)
+            if not skipped:
+                obs = step(c, ["30"])["obs"]
+            continue
+        if scene in ("LevelEnter", "AreaComplete"):
+            obs = press(c, "C", settle=30)["obs"]
+            continue
+        if scene != "Overworld" or menu.get("next"):
+            obs = step(c, ["10"], speed=menu_speed)["obs"]
+            continue
+        current = menu.get("current")
+        if current == "OuiFileSelect":
+            if not menu.get("slotSelected"):
+                return obs
+            obs = press(c, "B", settle=20)["obs"]
+        elif current in ("OuiChapterSelect", "OuiChapterPanel"):
+            obs = press(c, "B", settle=30)["obs"]  # 退回选章页 / 主菜单
+        elif current in ("OuiTitleScreen", "OuiMainMenu"):
+            obs = press(c, "C", settle=30)["obs"]  # 标题画面 → 主菜单 → "攀登"进选档页
+        else:
+            obs = step(c, ["10"], speed=menu_speed)["obs"]
+    raise RuntimeError(f"未能在 {max_actions} 步内退回选档页：\n{summarize_obs(obs)}")
+
+
 def handle_file_select(c: BridgeClient, obs: dict, save_name: str) -> dict:
     menu = obs["menu"]
     targets = [s["index"] for s in menu["slots"] if s["exists"] and s["name"] == save_name]

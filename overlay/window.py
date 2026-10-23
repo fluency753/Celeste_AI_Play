@@ -36,7 +36,7 @@ SW_HIDE = 0
 SW_SHOWNOACTIVATE = 4
 
 HUD_TITLE = "Celeste AI HUD"
-HEIGHT_RATIO = 0.80   # 窗口高 / 宽：卡片约占 0.74，余下透明
+HEIGHT_RATIO = 0.90   # 窗口高 / 宽：卡片最高约占 0.86（思考语句四到五行时），余下透明
 
 
 def _user32():
