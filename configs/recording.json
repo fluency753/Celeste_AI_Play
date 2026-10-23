@@ -11,6 +11,7 @@
   "sample_rate": 48000,
   "game_window": "Celeste:SDL_app:Celeste.exe",
   "hud": {
+    "local_file": true,
     "url": "http://127.0.0.1:47790/hud",
     "width": 430,
     "height": 344,

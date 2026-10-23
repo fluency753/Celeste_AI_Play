@@ -69,6 +69,8 @@ def make_handler(pinned: Path | None):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Cache-Control", "no-store")
+            # OBS 浏览器源用本地文件打开页面时，页面来自另一个源，需要允许它跨源取数据
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

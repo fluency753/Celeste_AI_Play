@@ -103,7 +103,10 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const STATE_URL = params.get("state") || "/hud/state";
+// 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
+// 这样 OBS 先于 HUD 服务启动也不要紧，服务起来后页面自动取到数据
+const STATE_URL = params.get("state") ||
+  (location.protocol.startsWith("http") && location.pathname.startsWith("/hud") ? "/hud/state" : "http://127.0.0.1:47790/hud/state");
 const STATUS = {
   starting:  ["等待", "idle", false],
   studying:  ["准备中", "studying", true],

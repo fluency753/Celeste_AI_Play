@@ -141,7 +141,11 @@ def scene_collection(cfg: dict) -> dict:
     })
     sound = _source("Celeste 游戏声音", "wasapi_process_output_capture",
                     {"window": cfg["game_window"], "priority": 2}, mixers=0xFF)
+    # 用本地文件打开 HUD 页面（页面再去连 HUD 服务取数据）：OBS 比主控先启动、HUD 服务还没起来时，
+    # 网址模式的页面加载失败后不会重试，本地文件模式不受影响
+    page = REPO_ROOT / "overlay" / "hud.html"
     overlay = _source("HUD", "browser_source", {
+        "is_local_file": bool(hud.get("local_file", True)), "local_file": str(page).replace(os.sep, "/"),
         "url": hud["url"], "width": hud["width"], "height": hud["height"], "css": "",
         "reroute_audio": False, "restart_when_active": False, "shutdown": False, "fps_custom": False,
     })
