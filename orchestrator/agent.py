@@ -1,10 +1,12 @@
 """启动并驱动 Claude Code（无头模式）。
 
-隔离措施（开发阶段在宿主机上运行时）：
-- --tools "" 关闭全部内置工具（命令、文件、联网都没有），只能调用本项目的游戏工具；
-- --strict-mcp-config 只加载本项目的 MCP 服务；--permission-mode dontAsk 拒绝一切未预先允许的调用；
-- 独立的 CLAUDE_CONFIG_DIR，并关闭 CLAUDE.md 与自动记忆，不读取使用者自己的 Claude Code 配置；
-- --system-prompt-file 用游戏智能体的提示词替换默认的编程助手提示词。
+两种运行方式：
+- container（默认）：在 Docker 容器里用 docker exec 启动 Claude Code。开放 Bash、Read、Write、Edit、Glob、Grep
+  与游戏工具；容器出站只放行 Anthropic 与主控端口，Bash 命令在零网络的沙箱里运行（见 agent-container/）。
+- host（M2 的过渡方式）：在本机启动，--tools "" 关闭全部内置工具，只能调用游戏工具。
+
+两种方式共同的措施：--strict-mcp-config 只加载本项目的游戏工具服务；--permission-mode dontAsk 拒绝一切未预先
+允许的调用；不读取使用者自己的 Claude Code 配置、CLAUDE.md 与自动记忆；启动时核对工具列表，多出任何工具立即停止。
 """
 from __future__ import annotations
 
@@ -14,11 +16,20 @@ import os
 import uuid
 from pathlib import Path
 
-from .config import REPO_ROOT, RunConfig, find_claude_exe
+from .config import REPO_ROOT, RunConfig, find_claude_exe, find_docker_exe
 from .game_session import GameSession
 from .metrics import Metrics
 
-ALLOWED_TOOLS = ["mcp__celeste__observe", "mcp__celeste__act"]
+GAME_TOOLS = ["mcp__celeste__observe", "mcp__celeste__act"]
+CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
+PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
+
+
+def compose_prompt(runtime: str) -> str:
+    extra = "container_zh.md" if runtime == "container" else "host_zh.md"
+    return (PROMPTS / "system_zh.md").read_text(encoding="utf-8") + "\n\n" + (PROMPTS / extra).read_text(encoding="utf-8")
+
+
 FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关本章。"
 CONTINUE_PROMPT = "本章还没有通关，请继续调用 act 游玩。"
 
@@ -35,8 +46,9 @@ def _strip_images(value):
 
 class ClaudeRunner:
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
-                 token: str, reset_clock):
+                 token: str, reset_clock, container: str | None = None):
         self.cfg = cfg
+        self.container = container
         self.run_dir = run_dir
         self.session = session
         self.metrics = metrics
@@ -52,28 +64,53 @@ class ClaudeRunner:
         self._init_checked = False
         self.stop_reason = ""
 
+    def _common_args(self) -> list[str]:
+        return ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                "--model", self.cfg.model, "--effort", self.cfg.effort,
+                "--strict-mcp-config", "--permission-mode", "dontAsk", "--session-id", self.session_id]
+
     def _command(self) -> list[str]:
+        if self.cfg.runtime == "container":
+            mcp = json.dumps({"mcpServers": {"celeste": {
+                "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
+            prompt = compose_prompt("container")
+            (self.run_dir / "system_prompt.md").write_text(prompt, encoding="utf-8")
+            return [
+                find_docker_exe(), "exec", "-i", "-u", "agent", "-w", "/workspace",
+                "-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "MCP_TOOL_TIMEOUT=900000", "-e", "MAX_MCP_OUTPUT_TOKENS=40000",
+                self.container, "claude", *self._common_args(),
+                "--tools", ",".join(CONTAINER_BUILTIN_TOOLS),
+                "--mcp-config", mcp,
+                "--allowedTools", *CONTAINER_BUILTIN_TOOLS, *GAME_TOOLS,
+                "--append-system-prompt", prompt,
+            ]
         mcp_config = self.run_dir / "mcp.json"
         mcp_config.write_text(json.dumps({"mcpServers": {"celeste": {
             "type": "http", "url": f"http://127.0.0.1:{self.cfg.mcp_port}/mcp"}}}), encoding="utf-8")
-        prompt_file = REPO_ROOT / "orchestrator" / "prompts" / "system_zh.md"
+        prompt_file = self.run_dir / "system_prompt.md"
+        prompt_file.write_text(compose_prompt("host"), encoding="utf-8")
         return [
-            find_claude_exe(), "-p",
-            "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-            "--model", self.cfg.model, "--effort", self.cfg.effort,
+            find_claude_exe(), *self._common_args(),
             "--tools", "",
-            "--strict-mcp-config", "--mcp-config", str(mcp_config),
-            "--permission-mode", "dontAsk",
-            "--allowedTools", *ALLOWED_TOOLS,
+            "--mcp-config", str(mcp_config),
+            "--allowedTools", *GAME_TOOLS,
             "--system-prompt-file", str(prompt_file),
-            "--session-id", self.session_id,
         ]
+
+    def _allowed_tool(self, name: str) -> bool:
+        if name.startswith("mcp__celeste__"):
+            return True
+        return self.cfg.runtime == "container" and name in CONTAINER_BUILTIN_TOOLS
 
     def _env(self) -> dict[str, str]:
         # 去掉所有 Claude / Anthropic / MCP 相关的继承变量（例如外层 Claude Code 会话留下的推理强度、
         # 入口标记、API 密钥），只保留系统变量，再设置本项目需要的那几项。
         drop_prefixes = ("CLAUDE", "ANTHROPIC", "MCP_", "MAX_THINKING", "MAX_MCP", "DISABLE_", "OTEL_")
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(drop_prefixes)}
+        if self.cfg.runtime == "container":
+            # docker exec -e CLAUDE_CODE_OAUTH_TOKEN 从这里取值传进容器，令牌不会出现在命令行里
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = self.token
+            return env
         config_dir = REPO_ROOT / "agent-home" / self.cfg.agent
         config_dir.mkdir(parents=True, exist_ok=True)
         env.update({
@@ -172,7 +209,7 @@ class ClaudeRunner:
         if etype == "system" and subtype == "init" and not self._init_checked:
             self._init_checked = True
             tools = event.get("tools") or []
-            unexpected = [t for t in tools if not t.startswith("mcp__celeste__") and t != "EndConversation"]
+            unexpected = [t for t in tools if not self._allowed_tool(t)]
             servers = {s.get("name"): s.get("status") for s in event.get("mcp_servers") or []}
             print(f"[agent] model={event.get('model')} tools={tools} mcp={servers}", flush=True)
             if unexpected:

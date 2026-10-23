@@ -35,3 +35,6 @@ smoke/
 
 # 智能体的独立 Claude Code 配置目录（含登录态，不能提交）
 agent-home/
+
+# 智能体工作区（智能体自己写的程序、笔记与主控写入的观测数据）
+workspaces/

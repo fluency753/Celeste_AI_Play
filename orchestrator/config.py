@@ -39,6 +39,22 @@ def find_claude_exe() -> str:
     raise FileNotFoundError("找不到 claude 可执行文件，请先安装 Claude Code（见使用说明 2.1 节）")
 
 
+def find_docker_exe() -> str:
+    """Docker Desktop 装好后，已打开的终端里 PATH 可能还没更新，所以再找几个默认安装位置。"""
+    found = shutil.which("docker")
+    if found:
+        return found
+    candidates = []
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        candidates += [Path(local) / "Programs" / "DockerDesktop" / "resources" / "bin" / "docker.exe",
+                       Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Docker" / "Docker" / "resources" / "bin" / "docker.exe"]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    raise FileNotFoundError("找不到 docker 可执行文件，请先安装 Docker Desktop（见使用说明 2.3 节）")
+
+
 @dataclass
 class RunConfig:
     agent: str                      # 智能体标签，如 opus5.5
@@ -53,6 +69,14 @@ class RunConfig:
     auto_speed: int = 1             # 转场、剧情、重生等自动推进段的速度（1 = 与原版一致；大于 1 只用于调试）
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
     chapter: int | None = None      # 菜单宏进入的章节编号；None = 选章页当前章节
+    runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具（M2 的过渡方式）
+    image: str = "celeste-agent:0.1"
+    seccomp_unconfined: bool = True  # 容器内 Bash 沙箱（bubblewrap）需要创建命名空间，Docker 默认的 seccomp 配置不允许
+
+    @property
+    def workspace_dir(self) -> Path:
+        """智能体的工作区：按智能体标签区分，跨存档、跨运行保留（test 存档上准备的程序可以带进正式挑战）。"""
+        return REPO_ROOT / "workspaces" / self.agent
 
     @property
     def budget_seconds(self) -> float:
