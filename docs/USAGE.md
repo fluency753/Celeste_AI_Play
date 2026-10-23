@@ -88,9 +88,9 @@ python -m venv .venv
 | `python tools\bridge_client.py observe --out shot.png` | 读取当前帧的状态、实体、字符地图与截图 |
 | `python tools\bridge_client.py step "30,R" "1,R,J" "20,R" --stop death,room --out after.png` | 按帧推进，遇到死亡或换房提前停下 |
 | `python tools\bridge_client.py advance --until controllable --max 600` | 空输入推进，直到恢复可操作（过场、重生时用） |
-| `python tools\bridge_client.py skip` | 跳过当前剧情 |
+| `python tools\bridge_client.py skip` | 调试用：直接跳过当前剧情，不经过暂停菜单（主控与菜单宏都改用暂停菜单跳过） |
 | `python tools\bridge_client.py deactivate` | 交还控制，游戏恢复正常运行 |
-| `python tools\enter_save.py <存档名>` | 从标题画面进入该存档的关卡，停在可操作的第一帧；加 `--leave-active` 保持接管 |
+| `python tools\enter_save.py <存档名>` | 从标题画面进入该存档的关卡，用暂停菜单跳过开场，停在可操作的第一帧；加 `--chapter 0` 指定章节（0 序章、1 被遗弃之城、2 旧址），加 `--leave-active` 保持接管 |
 
 按键写法：`L R U D` 方向，`J` 跳，`X` 冲刺，`Z` 下冲刺，`G` 抓，`T` 交互，`C` 确认，`B` 返回，`P` 暂停，`N` 日志；`A:角度` 表示左摇杆模拟方向（0 为右，90 为上）。每段以帧数开头，例如 `"6,R,J"` 表示按住右与跳 6 帧。
 
@@ -117,11 +117,19 @@ python -m venv .venv
 | `--model` | `opus` | Claude Code 模型别名，如 `opus`、`fable` |
 | `--effort` | `high` | 推理强度：`low`、`medium`、`high`、`xhigh`、`max` |
 | `--max-minutes` | 120 | 现实时间预算，从接管游戏开始计 |
+| `--chapter` | 选章页当前章节 | 菜单宏进入的章节：0 序章、1 被遗弃之城、2 旧址 |
 | `--skip-enter` | 关 | 已在关卡内可操作时跳过菜单宏 |
 | `--no-agent` | 关 | 只启动游戏工具服务、不启动智能体，用于手动调试 |
-| `--play-speed` / `--auto-speed` | 1 / 4 | 智能体动作段与转场、剧情、重生段的推进速度（每次渲染推进几帧） |
+| `--play-speed` / `--auto-speed` | 1 / 1 | 智能体动作段与转场、剧情、重生段的推进速度（每次渲染推进几帧）。1 与原版一致；大于 1 是快进，只用于调试，录像会失真 |
 
 隔离方式（M2 过渡做法，M3 改为容器）：Claude Code 以 `--tools ""` 关闭全部内置工具（不能执行命令、读写文件、联网），只加载本项目的游戏工具；子进程的环境变量里去掉了所有继承的 Claude 与 Anthropic 变量，使用独立配置目录 `agent-home/<标签>/`，并关闭 CLAUDE.md 与自动记忆。主控在智能体启动时检查它拿到的工具列表，出现游戏工具以外的工具会立即停止。
+
+非可控段由主控处理，节奏与原版游戏一致：
+
+- 房间转场、死亡动画与重生：按原速播放（转场约 39 帧，死亡到重生约 103 帧）。
+- 能跳过的剧情：像玩家一样按暂停键，停留约 0.3 秒后在菜单里下移到"跳过剧情"，再停留约 0.17 秒后确认；序章开场同样在它的暂停菜单里选"跳过"。录像里会出现暂停菜单与跳过时的转场。
+- 不能跳过的剧情：按原速播放，对话框等待翻页时按确认键。
+- 智能体只能按游玩按键（方向、跳、冲刺、抓、交互），暂停、确认、返回等菜单键只由主控使用。
 
 智能体能用的两个工具：
 
@@ -132,7 +140,17 @@ python -m venv .venv
 
 实测（2026-10-22，Opus 5.5，推理强度 high，`test` 存档序章）：4 分 39 秒通关，21 次决策，死亡 3 次；其中思考 215 秒、游戏推进 58 秒、工具开销 0.8 秒；最终上下文约 7.2 万 token。Max 用量：这一局约占 5 小时窗口的 2%。
 
-### 4.2 正式挑战（部分未实现）
+### 4.2 重放一次运行（不调用模型）
+
+按某次运行记录下的决策逐条重放，用来复现问题或检查主控、桥接的改动是否影响游戏结果：
+
+```powershell
+.\.venv\Scripts\python.exe -m orchestrator.replay runs\dev-opus\20261022-200717 --save test --chapter 0
+```
+
+每条决策会打印停止原因与实际帧数，并与原记录比对（"一致"或"不同"）。重放的日志写在 `runs\replay\<时间戳>\`。实测：重放 Opus 的序章记录，21 次决策逐帧一致，两段剧情都通过暂停菜单跳过。
+
+### 4.3 正式挑战（部分未实现）
 
 计划中的流程如下，全部由主控自动串联：
 
