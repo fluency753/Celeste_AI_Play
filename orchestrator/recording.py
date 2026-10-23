@@ -12,6 +12,7 @@
     video.mkv      只有画面
     audio.wav      只有声音（32 位浮点立体声，每个游玩帧 1/60 秒）
     frames.csv     每个成片帧对应的游戏帧号、章节计时与 OBS 时间戳（对账用）
+    segments.csv   连续推进的各段与每段开头量到的声音延迟（声音按它对齐）
     ffmpeg_*.log   ffmpeg 的输出
 """
 from __future__ import annotations
@@ -112,6 +113,22 @@ def analyze_frames(csv_path: Path) -> dict:
     }
 
 
+def analyze_segments(csv_path: Path) -> dict:
+    """segments.csv：插件把录像分成一段段连续推进的帧，每段开头量一次声音延迟（见插件说明）。"""
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    except OSError as exc:
+        return {"segments": 0, "error": str(exc)}
+    latencies = sorted(float(r["measured_ms"]) for r in rows if r.get("method") == "measured")
+    return {
+        "segments": len(rows),
+        "measured": len(latencies),
+        "latency_ms_median": latencies[len(latencies) // 2] if latencies else None,
+        "latency_ms_range": [latencies[0], latencies[-1]] if latencies else None,
+    }
+
+
 class Recorder:
     """call 是向桥接发指令的函数（GameSession.bridge_call，或独立脚本里的 BridgeClient.call）。"""
 
@@ -179,6 +196,7 @@ class Recorder:
             "dir": str(directory),
             "files": files,
             "check": analyze_frames(directory / "frames.csv"),
+            "audio_sync": analyze_segments(directory / "segments.csv"),
             "options": {"video_args": self.opts.video_args, "audio_offset_ms": self.opts.audio_offset_ms,
                         "marker": self.opts.marker},
         }

@@ -28,6 +28,14 @@ OBS_DECLARE_MODULE()
 #define WAIT_MS 10
 #define KEEP_RING 1024
 #define AUDIO_RING_SECONDS 6
+/* 声音对齐：桥接在游戏停住超过 60 毫秒时暂停全部声音、推进时恢复，所以每段动作开头的声音都是
+ * "完全静音 → 有声"的一条边。两个保留帧相隔超过 SEG_GAP_NS 就算新的一段，在预计位置附近找这条边，
+ * 量出这一刻采集管线的延迟（OBS 的音频缓冲会在录制中途变化），取最近几次的中位数用于这一段。 */
+#define SEG_GAP_NS 100000000ULL      /* 100 ms */
+#define ONSET_WINDOW_NS 250000000LL  /* 在预计位置前后 250 ms 内找 */
+#define ONSET_SILENCE 240            /* 边之前至少 5 ms（48 kHz 下 240 个样本）完全静音 */
+#define ONSET_THRESHOLD 1e-5f
+#define OFFSET_HISTORY 5
 
 /* ------------------------------------------------------------------ 连接与锁步状态 */
 
@@ -220,6 +228,22 @@ struct chunk {
 	float *data; /* 交错立体声 */
 };
 
+struct pend {
+	uint64_t ts;  /* 视频帧时间戳 */
+	uint32_t seg; /* 所在的段 */
+	long long index;
+};
+
+enum seg_state { SEG_UNKNOWN, SEG_MEASURED, SEG_FALLBACK };
+
+struct segment {
+	uint64_t start_ts;   /* 这一段第一帧的时间戳 */
+	long long first_index;
+	enum seg_state state;
+	double offset_ns;    /* 这一段用的声音偏移 */
+	double measured_ns;  /* 这一段量到的延迟（没量到时为 NAN） */
+};
+
 struct gp_output {
 	obs_output_t *output;
 	char dir[MAX_PATH];
@@ -240,8 +264,16 @@ struct gp_output {
 	SRWLOCK alock;
 	struct chunk *chunks;
 	size_t nchunks, cap;
-	uint64_t *pending; /* 等待音频的保留帧的起始时间（已加偏移） */
+	struct pend *pending; /* 等待音频的保留帧 */
 	size_t npending, pcap;
+	/* 段与声音对齐 */
+	struct segment *segs;
+	size_t nsegs, segcap;
+	uint64_t last_frame_ts;
+	double history[OFFSET_HISTORY]; /* 最近几次量到的延迟（纳秒） */
+	int nhistory, hpos;
+	double cur_offset_ns;
+	FILE *seg_csv;
 };
 
 static struct gp_output *active_output;
@@ -272,6 +304,7 @@ static void *gp_create(obs_data_t *settings, obs_output_t *output)
 	snprintf(o->video_args, sizeof(o->video_args), "%s",
 		 (args && *args) ? args : "-c:v libx264 -preset veryfast -crf 16");
 	o->audio_offset_ms = obs_data_get_double(settings, "audio_offset_ms");
+	o->cur_offset_ns = o->audio_offset_ms * 1e6;
 	return o;
 }
 
@@ -281,9 +314,11 @@ static void free_audio(struct gp_output *o)
 		bfree(o->chunks[i].data);
 	bfree(o->chunks);
 	bfree(o->pending);
+	bfree(o->segs);
 	o->chunks = NULL;
 	o->pending = NULL;
-	o->nchunks = o->cap = o->npending = o->pcap = 0;
+	o->segs = NULL;
+	o->nchunks = o->cap = o->npending = o->pcap = o->nsegs = o->segcap = 0;
 }
 
 static void gp_destroy(void *data)
@@ -371,6 +406,10 @@ static bool start_failed(struct gp_output *o, const char *msg)
 		fclose(o->csv);
 		o->csv = NULL;
 	}
+	if (o->seg_csv) {
+		fclose(o->seg_csv);
+		o->seg_csv = NULL;
+	}
 	rec_set(REC_FAILED, 0, msg);
 	return false;
 }
@@ -408,10 +447,13 @@ static bool gp_start(void *data)
 	o->wav = fopen(path, "wb");
 	snprintf(path, sizeof(path), "%s\\frames.csv", o->dir);
 	o->csv = fopen(path, "w");
-	if (!o->wav || !o->csv)
+	snprintf(path, sizeof(path), "%s\\segments.csv", o->dir);
+	o->seg_csv = fopen(path, "w");
+	if (!o->wav || !o->csv || !o->seg_csv)
 		return start_failed(o, "cannot create output files (does the directory exist?)");
 	write_wav_header(o->wav, o->rate, 0);
 	fprintf(o->csv, "index,game_frame,chapter_ticks,obs_ts_ns\n");
+	fprintf(o->seg_csv, "segment,first_index,start_ts_ns,measured_ms,offset_ms,method\n");
 
 	if (!obs_output_can_begin_data_capture(o->output, 0))
 		return start_failed(o, "cannot begin data capture");
@@ -426,6 +468,8 @@ static bool gp_start(void *data)
 /* 把 [t, t + 1/fps) 的音频写进 WAV；没有数据的部分补静音 */
 static void write_audio_interval(struct gp_output *o, uint64_t t)
 {
+	if (!o->wav)
+		return;
 	uint32_t n = (uint32_t)((uint64_t)o->rate * o->fps_den / o->fps_num);
 	float *buf = bzalloc((size_t)n * 2 * sizeof(float));
 	const double ns_per_sample = 1e9 / o->rate;
@@ -463,24 +507,110 @@ static uint64_t audio_end(struct gp_output *o)
 	return c->ts + (uint64_t)((double)c->frames * 1e9 / o->rate);
 }
 
+/* 在 [from, to] 里找"至少 5 ms 完全静音之后第一个有声样本"。1 找到；0 整个范围的声音都到了但没有；-1 声音还没到齐 */
+static int find_onset(struct gp_output *o, int64_t from, int64_t to, uint64_t *onset)
+{
+	const double ns_per_sample = 1e9 / o->rate;
+	long long silent = 0;
+	int64_t covered = from; /* 已经检查到的时间 */
+	for (size_t i = 0; i < o->nchunks; i++) {
+		struct chunk *c = &o->chunks[i];
+		double c_start = (double)c->ts;
+		for (uint32_t k = 0; k < c->frames; k++) {
+			double t = c_start + k * ns_per_sample;
+			if (t < (double)from)
+				continue;
+			if (t > (double)to)
+				return 0;
+			if ((int64_t)t > covered + (int64_t)(2 * ns_per_sample))
+				silent = 0; /* 采集数据有空档：静音计数重新开始 */
+			covered = (int64_t)t;
+			float l = c->data[k * 2], r = c->data[k * 2 + 1];
+			if (fabsf(l) > ONSET_THRESHOLD || fabsf(r) > ONSET_THRESHOLD) {
+				if (silent >= ONSET_SILENCE) {
+					*onset = (uint64_t)t;
+					return 1;
+				}
+				silent = 0;
+			} else {
+				silent++;
+			}
+		}
+	}
+	return (int64_t)audio_end(o) >= to ? 0 : -1;
+}
+
+static int cmp_double(const void *a, const void *b)
+{
+	double x = *(const double *)a, y = *(const double *)b;
+	return x < y ? -1 : x > y;
+}
+
+/* 确定一段的声音偏移；声音还没到齐时返回 false（等下一次） */
+static bool resolve_segment(struct gp_output *o, struct segment *sg, uint32_t seg_index, bool force)
+{
+	/* 恢复声音的指令在这一段第二帧的更新里生效：边应该对齐到第二帧的开头 */
+	int64_t target = (int64_t)sg->start_ts + (int64_t)o->frame_ns;
+	int64_t center = target + (int64_t)o->cur_offset_ns;
+	uint64_t onset = 0;
+	int r = find_onset(o, center - ONSET_WINDOW_NS, center + ONSET_WINDOW_NS, &onset);
+	if (r < 0 && !force)
+		return false;
+	sg->measured_ns = NAN;
+	if (r == 1) {
+		sg->measured_ns = (double)((int64_t)onset - target);
+		o->history[o->hpos] = sg->measured_ns;
+		o->hpos = (o->hpos + 1) % OFFSET_HISTORY;
+		if (o->nhistory < OFFSET_HISTORY)
+			o->nhistory++;
+		double sorted[OFFSET_HISTORY];
+		memcpy(sorted, o->history, sizeof(double) * o->nhistory);
+		qsort(sorted, o->nhistory, sizeof(double), cmp_double);
+		o->cur_offset_ns = sorted[o->nhistory / 2];
+		sg->state = SEG_MEASURED;
+	} else {
+		sg->state = SEG_FALLBACK;
+	}
+	sg->offset_ns = o->cur_offset_ns;
+	if (o->seg_csv) {
+		if (r == 1)
+			fprintf(o->seg_csv, "%u,%lld,%llu,%.2f,%.2f,measured\n", seg_index, sg->first_index,
+				(unsigned long long)sg->start_ts, sg->measured_ns / 1e6, sg->offset_ns / 1e6);
+		else
+			fprintf(o->seg_csv, "%u,%lld,%llu,,%.2f,previous\n", seg_index, sg->first_index,
+				(unsigned long long)sg->start_ts, sg->offset_ns / 1e6);
+	}
+	return true;
+}
+
 /* 音频到齐的保留帧依次写出 */
 static void flush_pending(struct gp_output *o, bool force)
 {
 	size_t done = 0;
 	uint64_t end = audio_end(o);
 	while (done < o->npending) {
-		uint64_t t = o->pending[done];
-		if (!force && t + o->frame_ns > end)
+		struct pend *p = &o->pending[done];
+		struct segment *sg = &o->segs[p->seg];
+		if (sg->state == SEG_UNKNOWN && !resolve_segment(o, sg, p->seg, force))
 			break;
-		write_audio_interval(o, t);
+		int64_t t = (int64_t)p->ts + (int64_t)sg->offset_ns;
+		if (t < 0)
+			t = 0;
+		if (!force && (uint64_t)t + o->frame_ns > end)
+			break;
+		write_audio_interval(o, (uint64_t)t);
 		done++;
 	}
 	if (done) {
-		memmove(o->pending, o->pending + done, (o->npending - done) * sizeof(uint64_t));
+		memmove(o->pending, o->pending + done, (o->npending - done) * sizeof(struct pend));
 		o->npending -= done;
 	}
-	/* 丢掉不再需要的旧音频 */
-	uint64_t keep_from = o->npending ? o->pending[0] : end;
+	/* 丢掉不再需要的旧音频（还在等的帧往前留出找边的范围） */
+	uint64_t keep_from = end;
+	if (o->npending) {
+		int64_t first = (int64_t)o->pending[0].ts + (int64_t)o->cur_offset_ns - 2 * ONSET_WINDOW_NS;
+		keep_from = first > 0 ? (uint64_t)first : 0;
+	}
 	uint64_t horizon = (uint64_t)AUDIO_RING_SECONDS * 1000000000ULL;
 	if (end > horizon && keep_from > end - horizon)
 		keep_from = end - horizon;
@@ -542,15 +672,31 @@ static void gp_raw_video(void *data, struct video_data *frame)
 	rec_set(REC_RECORDING, o->written, NULL);
 	ReleaseSRWLockExclusive(&o->vlock);
 
-	uint64_t start = frame->timestamp;
-	double off = o->audio_offset_ms * 1e6;
-	start = off >= 0 ? start + (uint64_t)off : start - (uint64_t)(-off);
 	AcquireSRWLockExclusive(&o->alock);
+	if (o->stopping) { /* 两把锁之间 gp_stop 已经收尾 */
+		ReleaseSRWLockExclusive(&o->alock);
+		return;
+	}
+	if (o->nsegs == 0 || frame->timestamp - o->last_frame_ts > SEG_GAP_NS) {
+		if (o->nsegs == o->segcap) {
+			o->segcap = o->segcap ? o->segcap * 2 : 64;
+			o->segs = brealloc(o->segs, o->segcap * sizeof(struct segment));
+		}
+		struct segment *sg = &o->segs[o->nsegs++];
+		memset(sg, 0, sizeof(*sg));
+		sg->start_ts = frame->timestamp;
+		sg->first_index = o->written - 1;
+		sg->state = SEG_UNKNOWN;
+	}
+	o->last_frame_ts = frame->timestamp;
 	if (o->npending == o->pcap) {
 		o->pcap = o->pcap ? o->pcap * 2 : 256;
-		o->pending = brealloc(o->pending, o->pcap * sizeof(uint64_t));
+		o->pending = brealloc(o->pending, o->pcap * sizeof(struct pend));
 	}
-	o->pending[o->npending++] = start;
+	o->pending[o->npending].ts = frame->timestamp;
+	o->pending[o->npending].seg = (uint32_t)(o->nsegs - 1);
+	o->pending[o->npending].index = o->written - 1;
+	o->npending++;
 	flush_pending(o, false);
 	ReleaseSRWLockExclusive(&o->alock);
 }
@@ -654,6 +800,10 @@ static void gp_stop(void *data, uint64_t ts)
 	if (o->csv) {
 		fclose(o->csv);
 		o->csv = NULL;
+	}
+	if (o->seg_csv) {
+		fclose(o->seg_csv);
+		o->seg_csv = NULL;
 	}
 	if (o->stdin_wr) {
 		CloseHandle(o->stdin_wr); /* ffmpeg 读到结尾后收尾 */
