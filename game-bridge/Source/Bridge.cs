@@ -19,7 +19,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.8.3";
+    public const string Version = "0.8.4";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -131,9 +131,8 @@ internal static class Bridge {
 
     /// <summary>游戏把这一帧呈现到屏幕之后调用（FNA Game.EndDraw）。</summary>
     public static void AfterPresent() {
-        if (pendingAck != null) {
-            WaitForGpu();
-        }
+        // 不再读回像素等显卡：FNA 每次读回都会泄漏一块整屏大小的内存（每帧约 8 MB），
+        // 而 OBS 采到上一帧的真正原因是采集钩子的拷贝间隔（见 WaitSincePresent），与显卡是否做完无关
         FlushPendingAck();
         SincePresent.Restart();
     }
@@ -153,24 +152,6 @@ internal static class Bridge {
         Halt(runOriginal);
         if (PendingRenders.Count == 0) {
             Engine.Instance.SuppressDraw();
-        }
-    }
-
-    private static readonly Color[] SyncPixel = new Color[1];
-    private static bool gpuSyncFailed;
-
-    /// <summary>
-    /// 等显卡把这一帧（以及 OBS 游戏采集钩子在 Present 里做的拷贝）真正做完再回复。
-    /// Present 返回时这些命令可能还在显卡队列里，OBS 若立刻渲染，有时采到的是上一帧。
-    /// 读回后备缓冲的 1 个像素会让 CPU 等到同一个设备上之前的命令全部执行完。
-    /// </summary>
-    private static void WaitForGpu() {
-        if (gpuSyncFailed) return;
-        try {
-            Engine.Instance.GraphicsDevice.GetBackBufferData(new Rectangle(0, 0, 1, 1), SyncPixel, 0, 1);
-        } catch (Exception ex) {
-            gpuSyncFailed = true;
-            Log.Warn($"GPU sync for lockstep failed, OBS may capture the previous frame: {ex.Message}");
         }
     }
 
