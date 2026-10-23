@@ -179,6 +179,12 @@ class GameSession:
             raise RuntimeError(f"当前存档是 {save!r}，与配置的 {self.cfg.save!r} 不一致，拒绝开始")
         self.start_sid = obs["level"]["sid"]
         self._update_metrics_from_obs(obs)
+        if self.workspace:
+            # 上一次运行留下的观测与动作记录已经过时：先换成当前这一帧，避免智能体在准备阶段读到旧数据
+            for stale in ("game/last_act.json", "game/retry.json"):
+                (self.workspace / stale).unlink(missing_ok=True)
+            reply = self.client.call("observe", image=False, scope="room", fields=True)
+            self._write_workspace(self._track_motion(enrich_obs(reply["obs"])))
         return obs
 
     def close(self) -> None:
