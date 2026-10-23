@@ -147,6 +147,8 @@ docker build -t celeste-agent:0.1 agent-container
 | `python tools\bridge_client.py deactivate` | 交还控制，游戏恢复正常运行 |
 | `python tools\enter_save.py <存档名>` | 从标题画面进入该存档的关卡，用暂停菜单跳过开场，停在可操作的第一帧；加 `--chapter 0` 指定章节（0 序章、1 被遗弃之城、2 旧址），加 `--leave-active` 保持接管 |
 
+**预置模拟器的校准（开发中）**：`python calibration\sim_capture.py --chapter 3 --rooms=00-a,01-b --cases 2 --out runs\simcases\3a` 在 test 存档里载入指定房间、做随机操作，把起止两帧的完整场景与逐帧轨迹存成用例；加 `--targets` 把 Madeline 放到房间里各类实体旁边定点测（同类实体跨章节累计只测 `--per-type` 个，默认 2）；`--speed` 为每个游戏循环推进的帧数（默认 60，即 60 倍速，只跳过中间帧的绘制）；`--assets 文件` 只导出模拟器用的贴图尺寸与精灵动画表。`load_room`、`teleport` 两个桥接命令只在 test 存档上可用，不会动正式存档。
+
 按键写法：`L R U D` 方向，`J` 跳，`X` 冲刺，`Z` 蹲冲，`G` 抓，`T` 交互，`C` 确认，`B` 返回，`P` 暂停，`N` 日志；`A:角度` 表示左摇杆模拟方向（0 为右，90 为上）。每段以帧数开头，例如 `"6,R,J"` 表示按住右与跳 6 帧。
 
 ## 4. 运行智能体
@@ -319,7 +321,7 @@ M5 验收（2026-10-23，桥接 0.7.0）：`python calibration\m5_hud_demo.py` �
 **每次录制**
 
 ```powershell
-# 1. 启动游戏（桥接 0.8.5 以上），再启动 OBS：自动建好专用的配置文件与场景集合 CelesteAI 并最小化到托盘
+# 1. 启动游戏（桥接 0.8.5 以上；当前版本 0.10.1），再启动 OBS：自动建好专用的配置文件与场景集合 CelesteAI 并最小化到托盘
 .\.venv\Scripts\python.exe tools\obs_setup.py launch
 # 2. 运行主控时加 --record
 .\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --record

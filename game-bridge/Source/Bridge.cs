@@ -20,7 +20,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.8.5";
+    public const string Version = "0.10.1";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -391,6 +391,37 @@ internal static class Bridge {
                 IpcServer.Send(Reply.Ok(req.Id));
                 break;
 
+            case "sim_assets":
+                // 预置模拟器的资源表（贴图尺寸与精灵动画；只在本机使用，见 SimState.WriteAssets）
+                byte[] assets = Reply.Object(SimState.WriteAssets);
+                IpcServer.Send(Reply.Ok(req.Id, w => {
+                    w.WritePropertyName("assets");
+                    w.WriteRawValue(assets, skipInputValidation: true);
+                }));
+                break;
+            case "sim_state":
+                // 预置模拟器的起始状态：当前帧的完整场景（见 SimState）
+                if (Engine.Scene is not Level simLevel) {
+                    IpcServer.Send(Reply.Error(req.Id, "not in a level"));
+                    break;
+                }
+                byte[] state = Reply.Object(w => SimState.Write(w, simLevel, GetInt(a, "margin", 4)));
+                IpcServer.Send(Reply.Ok(req.Id, w => {
+                    w.WritePropertyName("state");
+                    w.WriteRawValue(state, skipInputValidation: true);
+                }));
+                break;
+
+            case "teleport":
+                // 仅供模拟器校准：在 test 存档里把 Madeline 放到指定位置附近的空位（不与实心物体重叠）
+                Teleport(req.Id, a);
+                break;
+
+            case "load_room":
+                // 仅供模拟器校准：在 test 存档里直接载入同一章节的某个房间（玩家重生在房间的出生点）
+                LoadRoom(req.Id, a);
+                break;
+
             case "skip_cutscene":
                 // 仅供调试：直接调用跳过，不经过暂停菜单。主控与菜单宏改用暂停菜单跳过（与玩家操作一致）。
                 bool skipped = false;
@@ -409,6 +440,105 @@ internal static class Bridge {
                 IpcServer.Send(Reply.Error(req.Id, $"unknown cmd '{req.Cmd}'"));
                 break;
         }
+    }
+
+    private static void LoadRoom(long id, JsonElement a) {
+        if (!Active) {
+            IpcServer.Send(Reply.Error(id, "bridge not active; send activate first"));
+            return;
+        }
+        if (SaveData.Instance?.Name != "test") {
+            IpcServer.Send(Reply.Error(id, "load_room is only allowed on the 'test' save"));
+            return;
+        }
+        if (Engine.Scene is not Level level || job != null) {
+            IpcServer.Send(Reply.Error(id, "load_room needs a level scene and no running step"));
+            return;
+        }
+        string room = GetString(a, "room", "");
+        AreaKey area = level.Session.Area;
+        // 可指定章节（编号，A 面）：校准时直接进入尚未解锁的章节
+        if (a.TryGetProperty("chapter", out JsonElement ch) && ch.ValueKind == JsonValueKind.Number) {
+            area = new AreaKey(ch.GetInt32(), AreaMode.Normal);
+        }
+        MapData? map = AreaData.Get(area)?.Mode[(int) area.Mode]?.MapData;
+        if (map == null || map.Get(room) == null) {
+            IpcServer.Send(Reply.Error(id, $"no room '{room}' in chapter {area.ID}"));
+            return;
+        }
+        var session = new Session(area) {
+            Level = room,
+            FirstLevel = false,
+            StartedFromBeginning = false,
+        };
+        session.Inventory = area.Equals(level.Session.Area) ? level.Session.Inventory : AreaData.Get(area).Mode[(int) area.Mode].Inventory;
+        // 校准用：可以预先设定会话标记（例如 2A 的追逐要求先经过房间 3）与能力（梦境冲刺、冲刺次数）
+        if (a.TryGetProperty("levelFlags", out JsonElement lf) && lf.ValueKind == JsonValueKind.Array) {
+            foreach (JsonElement f in lf.EnumerateArray()) session.LevelFlags.Add(f.GetString() ?? "");
+        }
+        if (a.TryGetProperty("flags", out JsonElement fl) && fl.ValueKind == JsonValueKind.Array) {
+            foreach (JsonElement f in fl.EnumerateArray()) session.SetFlag(f.GetString() ?? "");
+        }
+        if (a.TryGetProperty("dreamDash", out JsonElement dd) && dd.ValueKind is JsonValueKind.True or JsonValueKind.False) {
+            session.Inventory.DreamDash = dd.GetBoolean();
+        }
+        if (a.TryGetProperty("dashes", out JsonElement da) && da.ValueKind == JsonValueKind.Number) {
+            session.Inventory.Dashes = da.GetInt32();
+        }
+        Vector2? spawn = null;
+        if (a.TryGetProperty("spawn", out JsonElement sp) && sp.ValueKind == JsonValueKind.Array && sp.GetArrayLength() == 2) {
+            spawn = new Vector2(sp[0].GetSingle(), sp[1].GetSingle());
+        }
+        Engine.Scene = new LevelLoader(session, spawn);
+        IpcServer.Send(Reply.Ok(id, w => w.WriteString("room", room)));
+    }
+
+    private static void Teleport(long id, JsonElement a) {
+        if (!Active || job != null) {
+            IpcServer.Send(Reply.Error(id, "teleport needs an active bridge and no running step"));
+            return;
+        }
+        if (SaveData.Instance?.Name != "test") {
+            IpcServer.Send(Reply.Error(id, "teleport is only allowed on the 'test' save"));
+            return;
+        }
+        if (Engine.Scene is not Level level || level.Tracker.GetEntity<Player>() is not { } player) {
+            IpcServer.Send(Reply.Error(id, "no player"));
+            return;
+        }
+        if (!a.TryGetProperty("x", out JsonElement xe) || !a.TryGetProperty("y", out JsonElement ye)) {
+            IpcServer.Send(Reply.Error(id, "missing x/y"));
+            return;
+        }
+        var target = new Vector2(MathF.Round(xe.GetSingle()), MathF.Round(ye.GetSingle()));
+        Vector2 original = player.Position;
+        Vector2? found = null;
+        // 由近到远找一个不与实心物体重叠、且在房间内的位置
+        for (int r = 0; r <= 48 && found == null; r++) {
+            for (int dy = -r; dy <= r && found == null; dy++) {
+                for (int dx = -r; dx <= r && found == null; dx++) {
+                    if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != r) continue;
+                    Vector2 p = target + new Vector2(dx, dy);
+                    player.Position = p;
+                    if (!player.CollideCheck<Solid>() && level.Bounds.Contains((int) p.X, (int) p.Y - 6)) found = p;
+                }
+            }
+        }
+        if (found == null) {
+            player.Position = original;
+            IpcServer.Send(Reply.Error(id, "no free spot near target"));
+            return;
+        }
+        player.Position = found.Value;
+        player.ZeroRemainderX();
+        player.ZeroRemainderY();
+        player.Speed = Vector2.Zero;
+        player.Dashes = player.MaxDashes;
+        if (player.StateMachine.State != Player.StNormal) player.StateMachine.State = Player.StNormal;
+        IpcServer.Send(Reply.Ok(id, w => {
+            w.WriteNumber("x", found.Value.X);
+            w.WriteNumber("y", found.Value.Y);
+        }));
     }
 
     private static void SendObservation(long id, JsonElement a, bool defaultImage) {
