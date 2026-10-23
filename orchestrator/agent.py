@@ -8,8 +8,8 @@
 两种方式共同的措施：--strict-mcp-config 只加载本项目的游戏工具服务；--permission-mode dontAsk 拒绝一切未预先
 允许的调用；不读取使用者自己的 Claude Code 配置、CLAUDE.md 与自动记忆；启动时核对工具列表，多出任何工具立即停止。
 
-Max 额度：5 小时窗口的用量到达上限（--max-usage）时结束 Claude Code 进程，游戏保持冻结，等到额度重置后用
---resume 接着同一个会话继续（上下文保留），等待时间不计入现实用时；7 天窗口到上限则结束本次运行。
+Max 额度：5 小时或 7 天窗口的用量到达上限（--max-usage）时结束 Claude Code 进程，游戏保持冻结，等到额度重置后用
+--resume 接着同一个会话继续（上下文保留），等待时间不计入现实用时；要等超过 --quota-wait-max-hours 才重置时结束本次运行。
 """
 from __future__ import annotations
 
@@ -97,7 +97,8 @@ class ClaudeRunner:
         self.session_id = session_id or str(uuid.uuid4())
         self.resume = resume                     # True：用 --resume 接着已有的会话
         self.resume_note = resume_note
-        self.quota_until: float | None = None    # 5 小时额度到上限：预计重置的时刻（墙钟，秒）
+        self.quota_until: float | None = None    # 额度到上限：预计重置的时刻（墙钟，秒）
+        self.quota_reason = ""
         self.proc: asyncio.subprocess.Process | None = None
         self.turns = 0
         self.idle_turns = 0
@@ -186,7 +187,7 @@ class ClaudeRunner:
                 stopped = await self._run_process(workdir, first)
                 if stopped or self.quota_until is None:
                     break
-                # 5 小时额度到上限：游戏保持冻结，等额度重置后接着同一个会话
+                # 额度到上限：游戏保持冻结，等额度重置后接着同一个会话
                 minutes = await self._wait_for_quota()
                 self.resume = True
                 self.idle_turns = 0
@@ -195,7 +196,7 @@ class ClaudeRunner:
                     study_note = self.study.reminder()
                 elif not self.metrics.playing and self.study is not None:
                     study_note = "知识库已经读完；整理好笔记后调用 observe 开始游玩。"
-                first = resume_prompt("Max 额度的 5 小时窗口用到了上限", minutes, study_note)
+                first = resume_prompt(self.quota_reason, minutes, study_note)
         finally:
             self._events.close()
         return self.stop_reason
@@ -255,7 +256,7 @@ class ClaudeRunner:
             stderr_log.close()
 
     async def _wait_for_quota(self) -> float:
-        """等到 5 小时窗口重置（再多等 2 分钟）；返回等待的分钟数。等待期间游戏冻结，现实用时不走。"""
+        """等到额度重置（再多等 2 分钟）；返回等待的分钟数。等待期间游戏冻结，现实用时不走。"""
         now = time.time()
         until = max(self.quota_until or 0.0, now + 60.0) + 120.0
         if self.cfg.quota_wait_cap_s is not None:  # 只用于测试
@@ -383,18 +384,27 @@ class ClaudeRunner:
             self.metrics.update(usage_5h=five, usage_7d=seven,
                                 usage_resets_at=(windows.get("five_hour") or {}).get("resetsAt"))
             limit = self.cfg.max_usage
-            over5 = limit and five is not None and five >= limit
-            over7 = limit and seven is not None and seven >= limit
-            rejected = info.get("status") == "rejected"
-            if (over5 or over7 or rejected) and not self.stop_reason and self.quota_until is None:
-                resets = (windows.get("five_hour") or {}).get("resetsAt") or info.get("resetsAt")
-                if self.cfg.quota_wait and not over7 and resets:
-                    # 5 小时窗口到上限：结束这个进程，等额度重置后接着同一个会话（见 run）
-                    self.quota_until = float(resets)
-                    print(f"[agent] Max 用量达到上限 {limit:.0%}（5 小时 {five}，7 天 {seven}），暂停智能体等待额度重置", flush=True)
+            over = []  # 到了上限的窗口：(名称, 重置时刻)
+            if limit and five is not None and five >= limit:
+                over.append(("5 小时窗口", (windows.get("five_hour") or {}).get("resetsAt")))
+            if limit and seven is not None and seven >= limit:
+                over.append(("7 天窗口", (windows.get("seven_day") or {}).get("resetsAt")))
+            if not over and info.get("status") == "rejected":
+                over.append((f"{info.get('rateLimitType') or ''}窗口", info.get("resetsAt")))
+            if over and not self.stop_reason and self.quota_until is None:
+                names = "、".join(name for name, _ in over)
+                resets = [float(r) for _, r in over if r]
+                until = max(resets) if len(resets) == len(over) else None
+                text = f"Max 用量达到上限 {limit:.0%}（5 小时 {five}，7 天 {seven}）"
+                if self.cfg.quota_wait and until and until - time.time() <= self.cfg.quota_wait_max_h * 3600:
+                    # 结束这个进程，游戏保持冻结，等额度重置后接着同一个会话（见 run）
+                    self.quota_until = until
+                    self.quota_reason = f"Max 额度的{names}用到了上限"
+                    print(f"[agent] {text}，暂停智能体，等{names}重置"
+                          f"（{time.strftime('%m-%d %H:%M', time.localtime(until))}）", flush=True)
                 else:
-                    # 7 天窗口到上限（或关闭了等待）：结束本次运行；同一账号还有其他会话要用
-                    self.stop_reason = f"Max 用量达到上限 {limit:.0%}（5 小时 {five}，7 天 {seven}）"
+                    # 关闭了等待，或要等太久：结束本次运行（之后可以用 --resume 续跑）
+                    self.stop_reason = text
                     print(f"[agent] {self.stop_reason}，停止运行", flush=True)
                 if self.proc and self.proc.returncode is None:
                     self.proc.terminate()
