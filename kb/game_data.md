@@ -142,6 +142,7 @@
 ```json
 {
   "decision": 12,
+  "attempt": 0,
   "thought": "……",
   "inputs": ["12,R", "1,R,J", "15,R,J"],
   "plan_file": null,
@@ -159,7 +160,8 @@
 }
 ```
 
-- `stop`：停止原因：`done` 全部执行完、`death`、`room` 换房、`land` 落地、`refill` 冲刺恢复、`uncontrollable`、`controllable`、`complete`。
+- `attempt`：0 是你提交的计划；1、2…是自动重试时重算出的计划（§3.3）。
+- `stop`：停止原因：`done` 全部执行完、`death`、`room` 换房、`land` 落地、`refill` 冲刺恢复、`uncontrollable`、`controllable`、`complete`，以及 `deviate` 偏离预期轨迹（计划里给了 `expect` 时，见 §3.2；此时 `result` 里还有 `deviation`）。
 - `consumed` / `planned`：实际执行 / 计划执行的帧数（提前停下时前者更小）。
 - `trajectory`：每个执行帧一行，全精度。**第 j 行（从 1 数）是按下第 j 帧的按键、游戏更新完这一帧之后的状态**，帧号 = `startFrame + j`。所以 `obs.frame` 等于下一次 `act` 的 `startFrame`，轨迹第一行反映的是第一帧输入的效果。
 - `events`：该段内发生的事件及其帧号。
@@ -168,19 +170,65 @@
 
 ## 3. 计划文件（`act` 的 `plan_file` 参数）
 
-工作区里的 JSON 文件，内容是按键段数组，或带 `inputs` 字段的对象：
+工作区里的 JSON 文件。最简单的写法是按键段数组：
 
 ```json
 ["12,R", "1,R,J", "15,R,J", "8,R"]
 ```
 
+完整写法是对象，除 `inputs` 外都可省略（其他字段，例如 `note`，主控不读，可以自由附带）：
+
 ```json
-{"inputs": ["30,R", "1,R,X", "20,R"], "note": "可以附带任何其他字段，主控只读 inputs"}
+{
+  "inputs": ["1,R,Z", "3,R", "6,R", "1,R,J", "11,R,J", "30,R"],
+  "expect": [[1312.0, -1040.0], [1312.0, -1040.0, "Dash"], null, "…每帧一项…"],
+  "tolerance": 0.5,
+  "stop_on": ["room", "land"],
+  "retry": {"command": "python3 planner.py --replan", "max": 3, "timeout_s": 20, "on": ["death", "deviate"]}
+}
 ```
 
-按键段写法与 `act` 的 `inputs` 完全一样：
+### 3.1 按键段
+
+写法与 `act` 的 `inputs` 完全一样：
 
 - `"帧数"`：这些帧什么都不按；`"帧数,按键,按键…"`：这些帧按住列出的键。
-- 按键：`L R U D` 方向，`J` 跳，`X` 冲刺，`Z` 蹲冲（以下蹲姿态冲刺，见 `input.md`），`G` 抓，`T` 交互；`A:角度` 表示左摇杆模拟方向（0 为右、90 为上、180 为左、270 为下，满幅度），出现时取代方向键。
-- 段与段之间不会自动松键：`"1,R,J"` 后接 `"14,R,J"` 等于连续按住跳 15 帧，只算一次起跳。要再跳一次，中间至少要有 1 帧不按 J（冲刺 X 同理）。
+- 按键：`L R U D` 方向，`J` 跳，`X` 冲刺，`Z` 蹲冲（以下蹲姿态冲刺，见 `input.md`），`G` 抓，`T` 交互；`K`、`Y`、`V` 分别是第二个跳、冲刺、蹲冲键；`A:角度` 表示左摇杆模拟方向（0 为右、90 为上、180 为左、270 为下，满幅度），出现时取代方向键。
+- 段与段之间不会自动松键：`"1,R,J"` 后接 `"14,R,J"` 等于连续按住跳 15 帧，只算一次起跳。同一个键要再"按下"一次，中间至少要有 1 帧不按它；**换另一个键就不用**：按住 J 时按下 K 也算一次新的起跳输入（冲刺 X/Y、蹲冲 Z/V 同理），所以相邻两帧可以各跳一次（`techniques.md` 7.5）。
 - 单次 `act` 最多 600 帧，超过就拆成几次。
+
+### 3.2 预期轨迹 `expect` 与容差 `tolerance`
+
+- `expect` 每帧一项，与按键逐帧对齐：第 i 项是**计划第 i 帧推进之后** Madeline 的位置，口径与 `last_act.json` 轨迹里的 `x`、`y` 相同（整数位置 + 亚像素余量，全精度）。可以写成 `[x, y]`，也可以附状态名 `[x, y, "Dash"]`（状态名与轨迹的 `state` 列相同，如 `Normal`、`Dash`、`Climb`）；`null` 表示这一帧不检查。
+- `expect` 可以比按键短（只检查前面若干帧），不能比按键长。
+- 冻结帧里 Madeline 不动，预期位置要与上一帧相同；动作执行时的加载帧不算计划帧，不需要写。
+- 桥接在每帧推进后立即对照：x 或 y 与预期相差超过 `tolerance` 像素（默认 1），或给出的状态名不符，就在**这一帧**停下，停止原因 `deviate`。`last_act.json` 的 `result` 里会有：
+  - `expectFrames`、`tolerance`：本次对照了几帧、容差多少；
+  - `deviation`：`{"frame": 全局帧号, "index": 计划第几帧（从 1 起）, "expected": [x, y(, 状态)], "actual": [x, y, 状态]}`。
+- 用途：模拟器的预测与实际不符时，及早停下重算，而不是带着错误把整个房间按完；同时得到"第几帧开始不一致"的精确线索，用来修正模拟器。
+
+### 3.3 自动重试 `retry`
+
+在计划里声明一个重算命令，主控遇到指定情况时自己运行它、执行它改写后的计划，**不需要你再调用工具**：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `command` | 必填 | 在 `/workspace` 里用 `sh -c` 运行的命令，最多 500 字符（长的写成脚本） |
+| `max` | 3 | 本次 `act` 最多重算几次（1～5） |
+| `timeout_s` | 20 | 每次重算的时限（1～60 秒），超时连同子进程一起结束 |
+| `on` | `["death", "deviate"]` | 哪些情况触发：`death` 死亡（主控先推进到重生、可操作之后再运行）、`deviate` 偏离预期、`done` 按键用完但仍在本房间（用来"先走一段、再算下一段"） |
+
+- 触发条件还要满足：Madeline 可操作，并且仍在本次 `act` 开始时的房间里。换了房间、章节完成、或停在其他原因（例如 `land`）都直接返回给你。
+- 运行前主控已经写好最新数据：`game/latest_obs.json`（当前完整观测）、`game/last_act.json`（刚才那次执行的逐帧轨迹与偏差），以及 `game/retry.json`：
+
+```json
+{"decision": 12, "attempt": 1, "max": 3, "reason": "deviate", "plan_file": "/workspace/plans/room.json",
+ "deviation": {"frame": 867, "index": 15, "expected": [1356.0, -1062.75], "actual": [1356.0, -1064.75, "Normal"]},
+ "events": [...], "consumed": 15, "planned": 71}
+```
+
+- 环境变量：`CELESTE_RETRY_ATTEMPT`（第几次重算）、`CELESTE_RETRY_REASON`、`CELESTE_RETRY_FILE`（即 `/workspace/game/retry.json`）、`CELESTE_PLAN_FILE`（计划文件的路径）。
+- 命令要**从当前状态出发**重算，并把新计划写回同一个计划文件（`CELESTE_PLAN_FILE`），然后以退出码 0 结束。主控读回文件：退出码不为 0、超时、文件没有改动、或新计划不合法，都会停止重试，把经过（含错误输出的末尾）返回给你。
+- 新计划里的 `inputs`、`expect`、`tolerance`、`stop_on` 生效；`retry` 一律沿用第一次提交时的设置，重算出的计划不能增加次数。
+- 运行环境与 Bash 沙箱相同：完全没有网络，只能写 `/workspace` 与 `/tmp`，环境变量只有 PATH、HOME（= /tmp）、LANG 与上面的 `CELESTE_*`。预装的 Python 库都能用。
+- 重算用时计入工具时间；每次重算与每次执行都记进决策日志（`attempt` 字段），`act` 的返回里有"自动重试经过"。
