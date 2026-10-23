@@ -44,6 +44,7 @@
 | `bounds` | 房间范围 `[x, y, 宽, 高]`（世界坐标，像素）。走出边界会进入相邻房间；从底部掉出且下面没有房间会死亡 |
 | `camera` | 画面左上角的世界坐标 `[x, y]`；画面大小 320×180 |
 | `inCutscene` / `skippingCutscene` / `paused` / `transitioning` / `frozen` / `completed` | 剧情中、正在跳过剧情、暂停、房间转场中、游戏冻结（如冲刺开始的几帧）、章节已完成 |
+| `freezeTimer` / `freezeFrames` | 冻结帧：剩余冻结秒数，以及接下来还会冻结几帧（冲刺开始、吃冲刺水晶、撞碎冲刺砖、离开梦境块等，见 `README.md` §3.3）。例如 `act` 在吃到水晶那一帧停下（`stop_on` 含 `refill`）时，这里会告诉你接下来还有几帧 Madeline 不动 |
 | `wind` | 当前风的速度 `[x, y]`（像素/秒）；没有风时为 `[0, 0]` |
 | `canPause`、`dialogOpen`、`dialogWaiting` | 主控跳过剧情时使用，可以忽略 |
 | `chapterTimeTicks` | 章节计时，1 tick = 100 纳秒（÷ 10 000 000 得秒） |

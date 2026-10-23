@@ -114,10 +114,9 @@ def follow(window, args) -> None:
     if not hwnd:
         print("找不到 HUD 窗口", flush=True)
         return
-    game_was_foreground = user32.FindWindowW(None, args.game_title)
     make_overlay(user32, hwnd)
-    if game_was_foreground:
-        user32.SetForegroundWindow(game_was_foreground)   # 启动时 WebView2 可能抢走焦点，还给游戏
+    if args.previous_foreground and user32.GetForegroundWindow() == hwnd:
+        user32.SetForegroundWindow(args.previous_foreground)   # 加载页面时 WebView2 会激活一次窗口：把焦点还回去
     last = None
     hidden = False
     while True:
@@ -173,6 +172,7 @@ def main() -> int:
                 waited = True
             time.sleep(1)
 
+    args.previous_foreground = _user32().GetForegroundWindow()
     window = webview.create_window(HUD_TITLE, args.url, width=420, height=336, frameless=True, transparent=True,
                                    on_top=True, focus=False, resizable=False, easy_drag=False, shadow=False,
                                    text_select=False, zoomable=False)
