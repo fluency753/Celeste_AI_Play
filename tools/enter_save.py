@@ -46,12 +46,15 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
     for _ in range(max_actions):
         scene = obs.get("scene")
         menu = obs.get("menu") or {}
+        loaded = (obs.get("save") or {}).get("name")
+        wrong_save = loaded is not None and loaded != save_name  # 游戏里当前载入的是别的存档
 
         # 进入关卡之后的部分会被录像：一律按正常速度推进，剧情用暂停菜单跳过
         if scene == "Level":
             level = obs["level"]
-            if chapter is not None and area_id(level.get("sid")) != chapter and (obs.get("controllable") or level.get("paused")):
-                obs = leave_level_by_pause_menu(c)  # 在别的章节里：先返回地图
+            elsewhere = wrong_save or (chapter is not None and area_id(level.get("sid")) != chapter)
+            if elsewhere and (obs.get("controllable") or level.get("paused")):
+                obs = leave_level_by_pause_menu(c)  # 在别的存档或别的章节里：先返回地图
                 continue
             if obs.get("controllable"):
                 return obs
@@ -85,7 +88,9 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
             continue
 
         current = menu.get("current")
-        if current == "OuiChapterSelect" and chapter is not None and menu.get("area", chapter) != chapter:
+        if wrong_save and current in ("OuiChapterSelect", "OuiChapterPanel"):
+            obs = press(c, "B", settle=30)["obs"]  # 别的存档的地图：退回主菜单，再从选档页选
+        elif current == "OuiChapterSelect" and chapter is not None and menu.get("area", chapter) != chapter:
             obs = press(c, "R" if chapter > menu["area"] else "L", settle=20)["obs"]
         elif current == "OuiChapterPanel" and chapter is not None and menu.get("panelArea", chapter) != chapter:
             obs = press(c, "B", settle=30)["obs"]  # 打开的是别的章节面板：退回选章页
