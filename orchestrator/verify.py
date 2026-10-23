@@ -109,6 +109,7 @@ def main() -> int:
     token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or load_dotenv(REPO_ROOT / ".env").get("CLAUDE_CODE_OAUTH_TOKEN", "")
     if not token:
         raise SystemExit("缺少 CLAUDE_CODE_OAUTH_TOKEN（见使用说明 2.1 节）")
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token  # docker exec -e CLAUDE_CODE_OAUTH_TOKEN 从本进程环境取值
     cfg = RunConfig(agent=args.agent, save="-", model="-", mcp_port=args.mcp_port)
     container = ensure_container(cfg)
     report = Report()
