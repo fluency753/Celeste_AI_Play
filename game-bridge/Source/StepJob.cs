@@ -36,6 +36,7 @@ internal sealed class StepJob {
     private readonly Utf8JsonWriter entityTrajectory;
     private readonly Dictionary<int, Vector2> lastEntityPos = new();
     private readonly long startFrame;
+    private readonly int progressEvery;
     private readonly List<ExpectRow?>? expect;
     private readonly float tolerance;
     private (long frame, int index, ExpectRow expected, float? x, float? y, string? state)? deviation;
@@ -53,8 +54,9 @@ internal sealed class StepJob {
 
     public StepJob(long requestId, List<InputFrame> plan, IEnumerable<string> stopOn, int framesPerTick,
         bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false,
-        List<ExpectRow?>? expect = null, float tolerance = 1f) {
+        List<ExpectRow?>? expect = null, float tolerance = 1f, int progressEvery = 0) {
         RequestId = requestId;
+        this.progressEvery = Math.Max(0, progressEvery);
         this.expect = expect is { Count: > 0 } ? expect : null;
         this.tolerance = tolerance;
         this.plan = plan;
@@ -127,6 +129,9 @@ internal sealed class StepJob {
         if (level is { Completed: true }) Emit(frame, "complete", null);
 
         CheckExpectation(frame, p);
+        if (progressEvery > 0 && level != null && (index % progressEvery == 0 || StopReason != null || index >= plan.Count)) {
+            SendProgress(level, p, frame);
+        }
 
         lastAlive = alive;
         if (room != null) lastRoom = room;
@@ -140,6 +145,23 @@ internal sealed class StepJob {
     }
 
     public void Cancel() => StopReason ??= "cancelled";
+
+    /// <summary>执行过程中定时推送进度（HUD 用来逐帧显示章节计时、冲刺次数与房间）。</summary>
+    private void SendProgress(Level level, Player? p, long frame) {
+        Session s = level.Session;
+        IpcServer.Send(Reply.Event("progress", w => {
+            w.WriteNumber("req", RequestId);
+            w.WriteNumber("frame", frame);
+            w.WriteNumber("index", index);
+            w.WriteString("sid", s.Area.SID);
+            w.WriteString("room", s.Level);
+            w.WriteNumber("chapterTimeTicks", s.Time);
+            w.WriteNumber("deaths", s.Deaths);
+            w.WriteNumber("dashes", p?.Dashes ?? 0);
+            w.WriteNumber("maxDashes", p?.MaxDashes ?? 0);
+            w.WriteBoolean("dead", p == null || p.Dead);
+        }));
+    }
 
     /// <summary>对照刚推进的这一帧与预期轨迹；第一次超出容差时记下偏差并停下。</summary>
     private void CheckExpectation(long frame, Player? p) {

@@ -226,6 +226,10 @@ internal static class StateExtractor {
         w.WriteBoolean("dialogWaiting", textbox is { waitingForInput: true });
         w.WriteBoolean("transitioning", level.Transitioning);
         w.WriteBoolean("frozen", level.Frozen);
+        // 冻结帧（冲刺开始、吃水晶、撞碎冲刺砖等）：剩余秒数，以及接下来还会冻结几帧
+        w.WriteNumber("freezeTimer", Engine.FreezeTimer);
+        w.WriteNumber("freezeFrames", Engine.FreezeTimer <= 0f ? 0
+            : (int) Math.Ceiling(Engine.FreezeTimer / Engine.RawDeltaTime - 1e-4f));
         w.WriteBoolean("completed", level.Completed);
         w.WriteNumber("chapterTimeTicks", s.Time);
         w.WriteNumber("deaths", s.Deaths);

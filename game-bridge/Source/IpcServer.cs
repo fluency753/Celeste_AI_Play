@@ -120,6 +120,18 @@ internal static class Reply {
 
     public static string Error(long id, string error) => Build(id, false, error, null);
 
+    /// <summary>主动推送的事件（不是某个请求的回复）：{"event": name, …}。</summary>
+    public static string Event(string name, Action<Utf8JsonWriter> body) {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(buffer, Options)) {
+            w.WriteStartObject();
+            w.WriteString("event", name);
+            body(w);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
     private static string Build(long id, bool ok, string? error, Action<Utf8JsonWriter>? body) {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = new Utf8JsonWriter(buffer, Options)) {

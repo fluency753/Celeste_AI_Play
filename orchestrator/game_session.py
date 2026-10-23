@@ -23,6 +23,7 @@ AGENT_KEYS_TEXT = "L R U D J X Z G T K Y V，以及 A:角度"
 DEFAULT_STOP_ON = ["death", "room", "complete"]
 VALID_STOP_ON = {"death", "room", "uncontrollable", "controllable", "land", "refill", "complete"}
 END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
+PROGRESS_EVERY = 6                   # 执行中每 6 帧（0.1 秒）推送一次进度给 HUD
 
 # 自动重试：计划文件里声明重算程序，死亡或偏离预期时由主控在零网络沙箱里运行它，不唤醒大模型
 RETRY_REASONS = {"death", "deviate", "done"}
@@ -373,7 +374,8 @@ class GameSession:
         with self.lock:
             t0 = time.monotonic()
             reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
-                                     scope="room", fields=True, entityTrajectory=True, **extra)
+                                     scope="room", fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
+                                     on_event=self._on_progress, **extra)
             game_s = time.monotonic() - t0
             result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
             self._log_frames(result, frames, thought, auto=False)
@@ -448,7 +450,8 @@ class GameSession:
                     continue
             inputs = ["1,C", "29"] if level.get("dialogWaiting") and not level.get("paused") else ["30"]
             reply = self.client.call("step", inputs=inputs, stop_on=["controllable", "complete"],
-                                     speed=self.cfg.auto_speed, image=False, entities=False, tiles=False)
+                                     speed=self.cfg.auto_speed, image=False, entities=False, tiles=False,
+                                     progress=PROGRESS_EVERY, on_event=self._on_progress)
             log_step(inputs, reply["result"])
             obs = reply["obs"]
         self.metrics.add(auto_game_s=time.monotonic() - t0)
@@ -460,6 +463,18 @@ class GameSession:
         return obs, image, total, notes
 
     # ---- 日志与统计 ----
+
+    def _on_progress(self, event: dict) -> None:
+        """执行中桥接每隔几帧推送一次进度：更新统计，HUD 据此逐帧显示章节计时、冲刺与房间。"""
+        if event.get("event") != "progress":
+            return
+        self.metrics.update(
+            chapter_time_ticks=event.get("chapterTimeTicks", self.metrics.state.chapter_time_ticks),
+            room=event.get("room", self.metrics.state.room),
+            chapter=event.get("sid", self.metrics.state.chapter),
+            dashes=event.get("dashes", 0),
+            max_dashes=event.get("maxDashes", 0),
+        )
 
     def _handle_events(self, result: dict) -> None:
         for e in result.get("events", []):

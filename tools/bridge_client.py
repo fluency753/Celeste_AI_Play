@@ -36,7 +36,8 @@ class BridgeClient:
         finally:
             self.sock.close()
 
-    def call(self, cmd: str, **args) -> dict:
+    def call(self, cmd: str, on_event=None, **args) -> dict:
+        """发送一条指令并等待它的回复。执行中桥接推送的事件（{"event": …}，例如 step 的 progress）交给 on_event。"""
         req_id = self.next_id
         self.next_id += 1
         payload = {"id": req_id, "cmd": cmd, **args}
@@ -47,6 +48,10 @@ class BridgeClient:
             if not line:
                 raise ConnectionError("bridge closed the connection")
             reply = json.loads(line)
+            if "event" in reply:
+                if on_event is not None:
+                    on_event(reply)
+                continue
             if reply.get("id") == req_id:
                 if not reply.get("ok"):
                     raise RuntimeError(f"{cmd} failed: {reply.get('error')}")

@@ -1,0 +1,146 @@
+"""置顶 HUD 窗口（Windows）：把 HUD 页面放进一个透明、无边框、置顶、点击穿透、不抢焦点的小窗口，
+贴在游戏窗口客户区的右上角，随游戏窗口移动与缩放。
+
+用法（仓库根目录；先启动主控或 `python -m overlay.server`）：
+    python -m overlay.window
+    python -m overlay.window --width-ratio 0.22 --margin 0.02 --game-title Celeste
+
+需要 pywebview（pip install pywebview，使用系统自带的 WebView2）。游戏需运行在窗口化或无边框全屏模式。
+"""
+from __future__ import annotations
+
+import argparse
+import ctypes
+import ctypes.wintypes as wt
+import sys
+import threading
+import time
+
+GWL_EXSTYLE = -20
+WS_EX_TOPMOST = 0x00000008
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_APPWINDOW = 0x00040000
+WS_EX_LAYERED = 0x00080000
+WS_EX_NOACTIVATE = 0x08000000
+LWA_ALPHA = 0x2
+HWND_TOPMOST = -1
+SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
+SWP_NOOWNERZORDER = 0x0200
+SW_HIDE = 0
+SW_SHOWNOACTIVATE = 4
+
+HUD_TITLE = "Celeste AI HUD"
+HEIGHT_RATIO = 0.80   # 窗口高 / 宽：卡片约占 0.74，余下透明
+
+
+def _user32():
+    user32 = ctypes.windll.user32
+    user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user32.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
+    user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user32.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    user32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    user32.FindWindowW.restype = wt.HWND
+    user32.GetForegroundWindow.restype = wt.HWND
+    return user32
+
+
+def set_dpi_awareness() -> None:
+    """按物理像素定位，避免高 DPI 下窗口位置与大小被系统缩放。"""
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # 每显示器 V2
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except (AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+
+
+def game_client_rect(user32, title: str):
+    """游戏窗口客户区在屏幕上的位置与大小（物理像素）；找不到或最小化时返回 None。"""
+    hwnd = user32.FindWindowW(None, title)
+    if not hwnd or user32.IsIconic(hwnd) or not user32.IsWindowVisible(hwnd):
+        return None
+    rect = wt.RECT()
+    if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+        return None
+    origin = wt.POINT(0, 0)
+    user32.ClientToScreen(hwnd, ctypes.byref(origin))
+    return origin.x, origin.y, rect.right - rect.left, rect.bottom - rect.top
+
+
+def make_overlay(user32, hwnd) -> None:
+    """点击穿透、不激活、不进任务栏、置顶。"""
+    style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+    layered = bool(style & WS_EX_LAYERED)
+    style = (style | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED) & ~WS_EX_APPWINDOW
+    user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style)
+    if not layered:
+        # 新加的分层样式必须设一次透明度，否则窗口不显示；整体不透明，半透明由页面的卡片底色负责
+        user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
+
+
+def follow(window, args) -> None:
+    """等窗口出现后改成覆盖层样式，然后一直贴着游戏窗口右上角。"""
+    user32 = _user32()
+    window.events.shown.wait(30)
+    hwnd = None
+    for _ in range(100):
+        hwnd = user32.FindWindowW(None, HUD_TITLE)
+        if hwnd:
+            break
+        time.sleep(0.1)
+    if not hwnd:
+        print("找不到 HUD 窗口", flush=True)
+        return
+    game_was_foreground = user32.FindWindowW(None, args.game_title)
+    make_overlay(user32, hwnd)
+    if game_was_foreground:
+        user32.SetForegroundWindow(game_was_foreground)   # 启动时 WebView2 可能抢走焦点，还给游戏
+    last = None
+    hidden = False
+    while True:
+        rect = game_client_rect(user32, args.game_title)
+        if rect is None:
+            if not hidden:
+                user32.ShowWindow(hwnd, SW_HIDE)
+                hidden = True
+        else:
+            gx, gy, gw, gh = rect
+            width = max(160, round(gw * args.width_ratio))
+            height = round(width * HEIGHT_RATIO)
+            margin = round(gw * args.margin)
+            target = (gx + gw - margin - width, gy + margin, width, height)
+            if target != last or hidden:
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, *target, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER)
+                last, hidden = target, False
+            else:
+                # 别的置顶窗口可能盖上来：定期把自己放回最上层（不激活）
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | 0x0001 | 0x0002)
+        time.sleep(args.interval)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--url", default="http://127.0.0.1:47790/hud")
+    ap.add_argument("--game-title", default="Celeste", help="游戏窗口标题")
+    ap.add_argument("--width-ratio", type=float, default=0.22, help="HUD 宽度占游戏窗口宽度的比例")
+    ap.add_argument("--margin", type=float, default=0.02, help="距游戏窗口右上角的边距（占游戏窗口宽度的比例）")
+    ap.add_argument("--interval", type=float, default=0.25, help="跟随游戏窗口的检查间隔（秒）")
+    args = ap.parse_args()
+    if sys.platform != "win32":
+        raise SystemExit("置顶窗口只支持 Windows；其他系统请在 OBS 或浏览器里打开 HUD 页面")
+    set_dpi_awareness()
+    import webview  # noqa: WPS433（只在 Windows 上需要）
+
+    window = webview.create_window(HUD_TITLE, args.url, width=420, height=336, frameless=True, transparent=True,
+                                   on_top=True, focus=False, resizable=False, easy_drag=False, shadow=False,
+                                   text_select=False, zoomable=False)
+    webview.start(follow, (window, args), gui="edgechromium")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

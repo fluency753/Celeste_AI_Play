@@ -48,6 +48,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="准备阶段（读知识库、写笔记）的上限分钟数，不计入现实用时；到时自动开始计时")
     ap.add_argument("--max-usage", type=float, default=0.9,
                     help="Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）就停止本次运行，默认 0.9")
+    ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
+    ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     args = ap.parse_args()
@@ -109,6 +111,11 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
             print("[run] 提示：kb/reference/ 不存在，准备阶段只读知识库本身（见使用说明 2.5 节生成参考资料原文）", flush=True)
     metrics = Metrics(run_dir / "metrics.json", cfg.agent, cfg.model, cfg.effort, cfg.budget_seconds,
                       study=study is not None)
+    if not args.no_hud:
+        from overlay.server import start_in_thread  # noqa: WPS433
+        hud = start_in_thread(args.hud_port)
+        print(f"[run] HUD：http://127.0.0.1:{args.hud_port}/hud"
+              + ("" if hud else "（端口已被占用，沿用已在运行的 HUD 服务）"), flush=True)
     session = GameSession(cfg, run_dir, metrics)
     obs = session.connect()
     print(f"[run] 已接管游戏：{obs['level']['sid']} 房间 {obs['level']['room']}，存档 {cfg.save}", flush=True)

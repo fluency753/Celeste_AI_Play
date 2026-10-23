@@ -74,6 +74,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         now = time.monotonic()
         metrics.add(tool_s=max(0.0, (now - t_start) - game_s))
         state["last_return"] = now
+        metrics.mark_thinking()
         metrics.update(status="thinking")
 
     def clock_text() -> tuple[float, float]:
@@ -139,6 +140,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
 
     def reset_clock() -> None:
         state["last_return"] = time.monotonic()
+        metrics.mark_thinking()
 
     server.reset_clock = reset_clock  # type: ignore[attr-defined]
     return server

@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Celeste AI HUD</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  /* 尺寸以卡片宽度为基准：设计稿按 1080p 下卡片宽 422 px（游戏宽 1920 的 22%）给出像素值，
+     这里换算成视口宽度的比例，窗口或浏览器源放大缩小时整体等比缩放。 */
+  :root {
+    --card: rgba(20, 23, 38, 0.78);
+    --border: rgba(255, 255, 255, 0.12);
+    --text: #F2F4F8;
+    --label: #9AA3B8;
+    --track: rgba(255, 255, 255, 0.12);
+    --bar: #5B8DEF;
+    --warn: #F08A3C;
+    --theme: #E0475B;
+    --status: #8A93A6;
+    --px: calc(100vw / 430);          /* 1 设计像素 */
+    --pad: calc(4 * var(--px));        /* 卡片与视口边缘的留白，给阴影用 */
+  }
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  body {
+    font-family: "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-shadow: 0 var(--px) var(--px) rgba(0, 0, 0, 0.55);
+  }
+  .num { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .card {
+    position: relative;
+    margin: var(--pad);
+    padding: calc(16 * var(--px)) calc(18 * var(--px)) calc(14 * var(--px)) calc(24 * var(--px));
+    background: var(--card);
+    border: max(1px, var(--px)) solid var(--border);
+    border-radius: calc(14 * var(--px));
+    box-shadow: 0 calc(4 * var(--px)) calc(14 * var(--px)) rgba(0, 0, 0, 0.35);
+    box-sizing: border-box;
+  }
+  .card.hidden { visibility: hidden; }
+  .bar-left {
+    position: absolute; left: calc(9 * var(--px)); top: calc(16 * var(--px)); bottom: calc(16 * var(--px));
+    width: calc(4 * var(--px)); border-radius: calc(2 * var(--px)); background: var(--theme);
+    transition: background-color 120ms linear;
+  }
+  .head { display: flex; align-items: center; gap: calc(10 * var(--px)); font-size: calc(16 * var(--px)); line-height: 1.3; }
+  .name { font-weight: 700; white-space: nowrap; }
+  .status { display: flex; align-items: center; gap: calc(6 * var(--px)); color: var(--label); white-space: nowrap; }
+  .dot { width: calc(8 * var(--px)); height: calc(8 * var(--px)); border-radius: 50%; background: var(--status); }
+  .dot.breathe { animation: breathe 1.6s ease-in-out infinite; }
+  @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .room { margin-left: auto; font-weight: 700; white-space: nowrap; }
+  .timer { font-size: calc(32 * var(--px)); font-weight: 700; line-height: 1.15; margin: calc(8 * var(--px)) 0 calc(10 * var(--px)); letter-spacing: -0.01em; }
+  .rule { height: max(1px, var(--px)); background: var(--border); margin-bottom: calc(10 * var(--px)); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: calc(16 * var(--px)); row-gap: calc(9 * var(--px)); }
+  .label { font-size: calc(12 * var(--px)); color: var(--label); line-height: 1.4; }
+  .value { font-size: calc(16 * var(--px)); font-weight: 700; line-height: 1.3; }
+  .ctx { display: flex; align-items: center; gap: calc(8 * var(--px)); }
+  .track { flex: 1; height: calc(4 * var(--px)); border-radius: calc(2 * var(--px)); background: var(--track); overflow: hidden; }
+  .fill { display: block; height: 100%; width: 0; background: var(--bar); border-radius: inherit; }
+  .fill.warn { background: var(--warn); }
+  .budget { margin-top: calc(11 * var(--px)); }
+  .budget .row { display: flex; justify-content: space-between; align-items: baseline; }
+  .budget .row .num { font-size: calc(12 * var(--px)); color: var(--label); }
+  .budget .track { margin-top: calc(5 * var(--px)); }
+  .thought {
+    margin-top: calc(12 * var(--px)); padding: calc(8 * var(--px)) calc(10 * var(--px));
+    border-radius: calc(8 * var(--px)); background: rgba(255, 255, 255, 0.06); border: max(1px, var(--px)) solid rgba(255, 255, 255, 0.08);
+    font-size: calc(14 * var(--px)); line-height: 1.5; min-height: calc(42 * var(--px));
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .thought.fade { animation: fadein 200ms ease-out; }
+  @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+</style>
+</head>
+<body>
+<div class="card hidden" id="card">
+  <div class="bar-left" id="theme"></div>
+  <div class="head">
+    <span class="name" id="name">—</span>
+    <span class="status"><span class="dot" id="dot"></span><span id="status">等待</span></span>
+    <span class="room" id="room"></span>
+  </div>
+  <div class="timer num" id="timer">0:00:00.000</div>
+  <div class="rule"></div>
+  <div class="grid">
+    <div><div class="label">思考总时间</div><div class="value num" id="thinking">0:00:00</div></div>
+    <div><div class="label">工具调用总时间</div><div class="value num" id="tool">0:00:00</div></div>
+    <div><div class="label">对话上下文</div>
+      <div class="ctx"><span class="value num" id="ctx">0</span><span class="track"><span class="fill" id="ctxbar"></span></span></div></div>
+    <div><div class="label">压缩次数</div><div class="value num" id="compact">0</div></div>
+  </div>
+  <div class="budget">
+    <div class="row"><span class="label" id="budgetLabel">时间预算</span><span class="num" id="budget">0:00:00 / 0:00:00</span></div>
+    <div class="track"><div class="fill" id="budgetbar"></div></div>
+  </div>
+  <div class="thought" id="thought"></div>
+</div>
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const STATE_URL = params.get("state") || "/hud/state";
+const STATUS = {
+  starting:  ["等待", "idle", false],
+  studying:  ["准备中", "studying", true],
+  thinking:  ["思考中", "thinking", true],
+  compacting:["压缩上下文", "thinking", true],
+  executing: ["执行中", "executing", false],
+  auto:      ["自动推进", "idle", false],
+  retrying:  ["自动重试", "retrying", false],
+  done:      ["已完成", "idle", false],
+  stopped:   ["已结束", "idle", false],
+};
+let state = null, config = null, offset = 0, shownThought = null, lastThoughtCheck = 0;
+const $ = (id) => document.getElementById(id);
+
+function pad(n, w = 2) { return String(Math.floor(n)).padStart(w, "0"); }
+function clock(sec, ms = false) {
+  sec = Math.max(0, sec);
+  const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = Math.floor(sec) % 60;
+  let out = `${h}:${pad(m)}:${pad(s)}`;
+  if (ms) out += "." + pad(Math.floor((sec * 1000) % 1000), 3);
+  return out;
+}
+function tokens(n) {
+  if (!n) return "0";
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e4) return Math.round(n / 1000) + "k";
+  return (n / 1000).toFixed(1) + "k";
+}
+function roomText(m) {
+  const chapters = (config && config.chapters) || {};
+  const ch = chapters[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
+  return m.room ? `${ch} · ${m.room}` : ch;
+}
+function displayName(m) {
+  const names = (config && config.names) || {};
+  return names[m.agent] || names[m.model] || m.agent || "—";
+}
+function applyColors() {
+  const c = (config && config.colors) || {};
+  const root = document.documentElement.style;
+  for (const [key, css] of [["card", "--card"], ["border", "--border"], ["text", "--text"], ["label", "--label"],
+                            ["track", "--track"], ["bar", "--bar"], ["warn", "--warn"]]) {
+    if (c[key]) root.setProperty(css, c[key]);
+  }
+}
+
+async function poll() {
+  try {
+    const t0 = Date.now() / 1000;
+    const res = await fetch(STATE_URL, { cache: "no-store" });
+    const data = await res.json();
+    const t1 = Date.now() / 1000;
+    offset = data.now - (t0 + t1) / 2;
+    if (!config || JSON.stringify(config) !== JSON.stringify(data.config)) { config = data.config; applyColors(); }
+    state = data.metrics || null;
+  } catch (e) { /* 主控未启动时保持上一帧 */ }
+}
+
+function render() {
+  const card = $("card");
+  if (!state) { card.classList.add("hidden"); return; }
+  card.classList.remove("hidden");
+  const m = state, c = (config && config.colors) || {};
+  const now = Date.now() / 1000 + offset;
+  const [text, kind, breathe] = STATUS[m.status] || [m.status, "idle", false];
+  const playing = m.started_wall > 0;
+  const ended = m.status === "done" || m.status === "stopped";
+
+  $("name").textContent = displayName(m);
+  $("status").textContent = text;
+  const dot = $("dot");
+  dot.style.background = c[kind] || "#8A93A6";
+  dot.classList.toggle("breathe", breathe);
+  $("room").textContent = roomText(m);
+
+  // 冲刺状态色：Madeline 的发色
+  let theme = c.dash1 || "#E0475B";
+  if (m.max_dashes > 0 && m.dashes === 0) theme = c.dash0 || "#5BC0EB";
+  else if (m.dashes >= 2) theme = c.dash2 || "#F28AC4";
+  $("theme").style.background = theme;
+
+  // 主计时：章节计时。执行中两次进度推送之间按实时外推（最多 0.15 秒）
+  let game = (m.chapter_time_ticks || 0) / 1e7;
+  if ((m.status === "executing" || m.status === "auto") && m.chapter_time_wall > 0) {
+    game += Math.min(0.15, Math.max(0, now - m.chapter_time_wall));
+  }
+  $("timer").textContent = clock(game, true);
+
+  let thinking = m.thinking_s || 0;
+  if (playing && !ended && (m.status === "thinking" || m.status === "compacting") && m.thinking_since_wall > 0) {
+    thinking += Math.max(0, now - m.thinking_since_wall);
+  }
+  $("thinking").textContent = clock(thinking);
+  let tool = m.tool_s || 0;
+  if (m.status === "retrying" && m.phase_since_wall > 0) tool += Math.max(0, now - m.phase_since_wall);
+  $("tool").textContent = clock(tool);
+
+  const ctx = m.context_tokens || 0;
+  $("ctx").textContent = tokens(ctx);
+  const limit = (config && config.compact_threshold) || 967000;
+  const ratio = Math.min(1, ctx / limit);
+  const ctxbar = $("ctxbar");
+  ctxbar.style.width = (ratio * 100).toFixed(1) + "%";
+  ctxbar.classList.toggle("warn", ratio >= 0.9);
+  $("compact").textContent = String(m.compactions || 0);
+
+  const budgetbar = $("budgetbar");
+  if (m.status === "studying") {
+    const study = (m.study_s || 0) + (m.written_wall > 0 ? Math.max(0, now - m.written_wall) : 0);
+    $("budgetLabel").textContent = "准备阶段（不计时）";
+    $("budget").textContent = `知识库 ${Math.round((m.kb_progress || 0) * 100)}% · ${clock(study)}`;
+    budgetbar.style.width = ((m.kb_progress || 0) * 100).toFixed(1) + "%";
+    budgetbar.classList.remove("warn");
+  } else {
+    let used = m.elapsed_s || 0;
+    if (playing && !ended) used = Math.max(0, now - m.started_wall);
+    const budget = m.budget_s || 0;
+    $("budgetLabel").textContent = "时间预算";
+    $("budget").textContent = `${clock(used)} / ${clock(budget)}`;
+    const r = budget > 0 ? Math.min(1, used / budget) : 0;
+    budgetbar.style.width = (r * 100).toFixed(1) + "%";
+    budgetbar.classList.toggle("warn", r >= 0.85);
+  }
+
+  // 思考语句：每隔几秒检查一次，有新语句才淡入替换
+  const interval = ((config && config.thought_check_s) || 3) * 1000;
+  if (shownThought === null || Date.now() - lastThoughtCheck >= interval) {
+    lastThoughtCheck = Date.now();
+    const next = m.thought || "";
+    if (next !== shownThought) {
+      shownThought = next;
+      const el = $("thought");
+      el.textContent = next;
+      el.classList.remove("fade"); void el.offsetWidth; el.classList.add("fade");
+    }
+  }
+}
+
+poll();
+setInterval(poll, Number(params.get("poll") || 100));
+(function loop() { render(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>

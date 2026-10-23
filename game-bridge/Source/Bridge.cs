@@ -16,7 +16,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.6.0";
+    public const string Version = "0.7.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -294,7 +294,8 @@ internal static class Bridge {
             recordTrajectory: GetBool(a, "trajectory", true),
             recordEntities: GetBool(a, "entityTrajectory", false),
             expect: expect,
-            tolerance: tolerance);
+            tolerance: tolerance,
+            progressEvery: GetInt(a, "progress", 0));
 
         if (job.Finished) {
             FinishJob(); // 空计划：直接回报当前帧

@@ -1,0 +1,44 @@
+{
+  "names": {
+    "opus": "Opus 5.5",
+    "opus5.5": "Opus 5.5",
+    "fable": "Fable 5.1",
+    "fable5.1": "Fable 5.1",
+    "haiku": "Haiku 5.5",
+    "sonnet": "Sonnet 5.5"
+  },
+  "chapters": {
+    "Celeste/0-Intro": "序章",
+    "Celeste/1-ForsakenCity": "1A",
+    "Celeste/2-OldSite": "2A",
+    "Celeste/3-CelestialResort": "3A",
+    "Celeste/4-GoldenRidge": "4A",
+    "Celeste/5-MirrorTemple": "5A",
+    "Celeste/6-Reflection": "6A",
+    "Celeste/7-Summit": "7A",
+    "Celeste/8-Epilogue": "终章",
+    "Celeste/9-Core": "8A",
+    "Celeste/LostLevels": "第九章"
+  },
+  "context_window": 1000000,
+  "compact_threshold": 967000,
+  "thought_check_s": 3,
+  "poll_ms": 100,
+  "colors": {
+    "card": "rgba(20, 23, 38, 0.78)",
+    "border": "rgba(255, 255, 255, 0.12)",
+    "text": "#F2F4F8",
+    "label": "#9AA3B8",
+    "track": "rgba(255, 255, 255, 0.12)",
+    "bar": "#5B8DEF",
+    "warn": "#F08A3C",
+    "dash0": "#5BC0EB",
+    "dash1": "#E0475B",
+    "dash2": "#F28AC4",
+    "thinking": "#F5B841",
+    "executing": "#4CC38A",
+    "retrying": "#F08A3C",
+    "studying": "#7AA2F7",
+    "idle": "#8A93A6"
+  }
+}

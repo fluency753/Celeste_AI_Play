@@ -55,6 +55,11 @@ class MetricsState:
     usage_resets_at: int | None = None
     output_tokens: int = 0
     thinking_tokens: int = 0
+    # HUD 用来在两次写入之间自己走表的时间点（墙钟，秒）
+    phase_since_wall: float = 0.0     # 当前 status 开始的时刻
+    thinking_since_wall: float = 0.0  # 当前这段思考开始的时刻（上一次工具结果送回）
+    chapter_time_wall: float = 0.0    # chapter_time_ticks 最近一次更新的时刻
+    written_wall: float = 0.0         # 本文件最近一次写出的时刻
 
 
 class Metrics:
@@ -63,9 +68,11 @@ class Metrics:
         self._lock = threading.Lock()
         self._t0 = time.monotonic()
         self.playing = not study
+        now = time.time()
         self.state = MetricsState(agent=agent, model=model, effort=effort,
-                                  started_wall=time.time() if self.playing else 0.0, budget_s=budget_s,
-                                  status="studying" if study else "starting", kb_progress=0.0 if study else None)
+                                  started_wall=now if self.playing else 0.0, budget_s=budget_s,
+                                  status="studying" if study else "starting", kb_progress=0.0 if study else None,
+                                  phase_since_wall=now, thinking_since_wall=now)
         self.write()
 
     def elapsed(self) -> float:
@@ -82,13 +89,26 @@ class Metrics:
             self._t0 = now
             self.playing = True
             self.state.started_wall = time.time()
+            self.state.thinking_since_wall = self.state.started_wall
+            self.state.phase_since_wall = self.state.started_wall
             self.state.status = "thinking"
             self._write_locked()
 
     def update(self, **changes) -> None:
         with self._lock:
+            now = time.time()
+            if "status" in changes and changes["status"] != self.state.status:
+                self.state.phase_since_wall = now
+            if "chapter_time_ticks" in changes and changes["chapter_time_ticks"] != self.state.chapter_time_ticks:
+                self.state.chapter_time_wall = now
             for key, value in changes.items():
                 setattr(self.state, key, value)
+            self._write_locked()
+
+    def mark_thinking(self) -> None:
+        """一段思考开始（工具结果刚送回，或刚发出一条消息）。"""
+        with self._lock:
+            self.state.thinking_since_wall = time.time()
             self._write_locked()
 
     def add(self, **increments) -> None:
@@ -113,6 +133,7 @@ class Metrics:
             self._write_locked()
 
     def _write_locked(self) -> None:
+        self.state.written_wall = time.time()
         self.state.elapsed_s = self.elapsed()
         if not self.playing:
             self.state.study_s = time.monotonic() - self._t0
