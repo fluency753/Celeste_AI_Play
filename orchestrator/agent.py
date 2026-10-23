@@ -65,9 +65,12 @@ class ClaudeRunner:
         self.stop_reason = ""
 
     def _common_args(self) -> list[str]:
-        return ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+        args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                 "--model", self.cfg.model, "--effort", self.cfg.effort,
                 "--strict-mcp-config", "--permission-mode", "dontAsk", "--session-id", self.session_id]
+        if self.cfg.autocompact:
+            args += ["--autocompact", self.cfg.autocompact]
+        return args
 
     def _command(self) -> list[str]:
         if self.cfg.runtime == "container":
@@ -219,18 +222,29 @@ class ClaudeRunner:
     def _handle(self, event: dict) -> None:
         etype = event.get("type")
         subtype = event.get("subtype")
-        if etype == "system" and subtype == "init" and not self._init_checked:
-            self._init_checked = True
+        if etype == "system" and subtype == "init":
+            # 每轮开始都会输出一次 init：每次都核对工具列表，只在第一次打印
             tools = event.get("tools") or []
             unexpected = [t for t in tools if not self._allowed_tool(t)]
             servers = {s.get("name"): s.get("status") for s in event.get("mcp_servers") or []}
-            print(f"[agent] model={event.get('model')} tools={tools} mcp={servers}", flush=True)
+            if not self._init_checked:
+                print(f"[agent] model={event.get('model')} tools={tools} mcp={servers}", flush=True)
+            self._init_checked = True
             if unexpected:
                 print(f"[agent] 发现不应开放的工具 {unexpected}，立即停止", flush=True)
                 self.stop_reason = f"隔离检查失败：{unexpected}"
                 self.proc.terminate()
+        elif etype == "system" and subtype == "status":
+            if event.get("status") == "compacting":
+                self.metrics.update(status="compacting")
+                print("[agent] 上下文压缩中……", flush=True)
+            elif event.get("compact_result"):
+                self.metrics.update(status="thinking")
         elif etype == "system" and subtype == "compact_boundary":
-            self.metrics.add(compactions=1)
+            meta = event.get("compact_metadata") or {}
+            self.metrics.add(compactions=1, compact_s=(meta.get("duration_ms") or 0) / 1000)
+            print(f"[agent] 压缩完成（{meta.get('trigger')}）：{meta.get('pre_tokens')} → {meta.get('post_tokens')} token，"
+                  f"用时 {(meta.get('duration_ms') or 0) / 1000:.1f} 秒", flush=True)
         elif etype == "assistant":
             message = event.get("message") or {}
             usage = message.get("usage") or {}

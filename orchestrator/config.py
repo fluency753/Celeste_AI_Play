@@ -71,6 +71,7 @@ class RunConfig:
     chapter: int | None = None      # 菜单宏进入的章节编号；None = 选章页当前章节
     runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具（M2 的过渡方式）
     image: str = "celeste-agent:0.1"
+    autocompact: str | None = None   # Claude Code 自动压缩的窗口：None 用默认，"auto" 或 100000~1000000 的 token 数
     seccomp_unconfined: bool = True  # 容器内 Bash 沙箱（bubblewrap）需要创建命名空间，Docker 默认的 seccomp 配置不允许
 
     @property

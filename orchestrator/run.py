@@ -41,6 +41,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--chapter", type=int, help="进入的章节编号：0 序章、1 被遗弃之城、2 旧址；默认进入选章页当前选中的章节")
     ap.add_argument("--skip-enter", action="store_true", help="已在关卡内且可操作时，跳过菜单宏")
     ap.add_argument("--no-agent", action="store_true", help="不启动智能体，只运行工具服务直到 Ctrl+C")
+    ap.add_argument("--autocompact", help="上下文自动压缩的窗口大小：auto，或 100000~1000000 的 token 数（默认用 Claude Code 的设置）")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     args = ap.parse_args()
@@ -49,6 +50,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
     cfg.chapter = args.chapter
     cfg.runtime = args.runtime
+    cfg.autocompact = args.autocompact
     return cfg, args
 
 

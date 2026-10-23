@@ -55,15 +55,17 @@ def _create(cfg: RunConfig, name: str) -> None:
 
 def ensure_container(cfg: RunConfig, log=print) -> str:
     """返回已就绪（防火墙生效）的容器名。配置变了（镜像、端口）就重建容器；工作区与会话数据卷保留。"""
-    if docker("image", "inspect", cfg.image, check=False).returncode != 0:
+    image = docker("image", "inspect", "-f", "{{.Id}}", cfg.image, check=False)
+    if image.returncode != 0:
         raise RuntimeError(f"找不到镜像 {cfg.image}，请先在仓库根目录执行：docker build -t {cfg.image} agent-container")
+    image_id = image.stdout.strip()
     name = container_name(cfg.agent)
-    inspect = docker("inspect", "-f", "{{.State.Running}}|{{json .Config.Labels}}", name, check=False)
+    inspect = docker("inspect", "-f", "{{.State.Running}}|{{.Image}}|{{json .Config.Labels}}", name, check=False)
     if inspect.returncode == 0:
-        running, _, labels = inspect.stdout.strip().partition("|")
-        stale = any(f'"{k}":"{v}"' not in labels for k, v in _labels(cfg).items())
+        running, container_image, labels = inspect.stdout.strip().split("|", 2)
+        stale = container_image != image_id or any(f'"{k}":"{v}"' not in labels for k, v in _labels(cfg).items())
         if stale:
-            log(f"[container] {name} 的配置已变化，重建（工作区与会话保留）")
+            log(f"[container] {name} 的镜像或配置已变化，重建（工作区与会话保留）")
             docker("rm", "-f", name)
             _create(cfg, name)
         elif running != "true":

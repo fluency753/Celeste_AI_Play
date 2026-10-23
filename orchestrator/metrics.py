@@ -21,7 +21,7 @@ class MetricsState:
     agent: str = ""
     model: str = ""
     effort: str = ""
-    status: str = "starting"          # starting / thinking / executing / auto / done / stopped
+    status: str = "starting"          # starting / thinking / executing / auto / compacting / done / stopped
     started_wall: float = 0.0
     elapsed_s: float = 0.0
     budget_s: float = 0.0
@@ -35,6 +35,7 @@ class MetricsState:
     deaths: int = 0
     context_tokens: int = 0
     compactions: int = 0
+    compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）
     chapter: str = ""
     room: str = ""
     chapter_time_ticks: int = 0
