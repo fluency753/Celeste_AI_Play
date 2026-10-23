@@ -16,7 +16,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.4.1";
+    public const string Version = "0.5.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -288,7 +288,8 @@ internal static class Bridge {
             wantImage: GetBool(a, "image", true),
             buffer: GetString(a, "buffer", "level"),
             snapshot: ReadSnapshotOptions(a),
-            recordTrajectory: GetBool(a, "trajectory", true));
+            recordTrajectory: GetBool(a, "trajectory", true),
+            recordEntities: GetBool(a, "entityTrajectory", false));
 
         if (job.Finished) {
             FinishJob(); // 空计划：直接回报当前帧
@@ -300,6 +301,7 @@ internal static class Bridge {
         Tiles = GetBool(a, "tiles", true),
         Margin = GetInt(a, "margin", 16),
         Room = GetString(a, "scope", "view") == "room",
+        Fields = GetBool(a, "fields", false),
     };
 
     private static bool GetBool(JsonElement a, string name, bool fallback) =>

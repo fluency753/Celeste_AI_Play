@@ -80,6 +80,8 @@ class GameSession:
         self.done_reason = ""
         self.start_sid: str | None = None
         self.decision_index = 0
+        self._last_positions: dict = {}
+        self._last_room = None
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
         self._decisions_log = open(run_dir / "decisions.jsonl", "a", encoding="utf-8")
         # 容器方式下，观测与轨迹同时写进智能体的工作区，供它自写的程序读取
@@ -113,11 +115,28 @@ class GameSession:
 
     def observe(self) -> tuple[dict, str | None]:
         with self.lock:
-            reply = self.client.call("observe", image=True, scope="room")
-        obs = enrich_obs(reply["obs"])
+            reply = self.client.call("observe", image=True, scope="room", fields=True)
+        obs = self._track_motion(enrich_obs(reply["obs"]))
         self._update_metrics_from_obs(obs)
         self._write_workspace(obs)
         return obs, reply.get("image")
+
+    def _track_motion(self, obs: dict) -> dict:
+        """与上一次暂停时比较，给移动过的实体标上位移 moved = [dx, dy]（同一房间内按编号对照）。"""
+        level = obs.get("level") or {}
+        key = (level.get("sid"), level.get("room"))
+        last = self._last_positions if getattr(self, "_last_room", None) == key else {}
+        current = {}
+        for e in obs.get("entities") or []:
+            if "id" not in e:
+                continue
+            current[e["id"]] = (e["x"], e["y"])
+            if e["id"] in last:
+                dx, dy = e["x"] - last[e["id"]][0], e["y"] - last[e["id"]][1]
+                if dx or dy:
+                    e["moved"] = [round(dx, 2), round(dy, 2)]
+        self._last_positions, self._last_room = current, key
+        return obs
 
     # ---- 工作区数据 ----
 
@@ -194,7 +213,7 @@ class GameSession:
         with self.lock:
             t0 = time.monotonic()
             reply = self.client.call("step", inputs=inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
-                                     scope="room")
+                                     scope="room", fields=True, entityTrajectory=True)
             game_s = time.monotonic() - t0
             result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
             self._log_frames(result, frames, thought, auto=False)
@@ -206,6 +225,7 @@ class GameSession:
                 obs, image, auto_frames, notes = self._auto_advance(obs, image)
 
         self.metrics.update(last_stop=result["stop"])
+        obs = self._track_motion(obs)
         self._update_metrics_from_obs(obs)
         self._write_workspace(obs, {
             "decision": self.decision_index, "thought": thought, "inputs": inputs, "plan_file": plan_file,
@@ -272,7 +292,7 @@ class GameSession:
         if total:
             notes.append(f"主控自动推进了 {total} 帧（转场、剧情、死亡与重生，均为正常速度）")
             if not self.done:
-                reply = self.client.call("observe", image=True, scope="room")
+                reply = self.client.call("observe", image=True, scope="room", fields=True)
                 obs, image = enrich_obs(reply["obs"]), reply.get("image")
         return obs, image, total, notes
 

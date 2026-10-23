@@ -44,6 +44,7 @@
 | `bounds` | 房间范围 `[x, y, 宽, 高]`（世界坐标，像素）。走出边界会进入相邻房间；从底部掉出且下面没有房间会死亡 |
 | `camera` | 画面左上角的世界坐标 `[x, y]`；画面大小 320×180 |
 | `inCutscene` / `skippingCutscene` / `paused` / `transitioning` / `frozen` / `completed` | 剧情中、正在跳过剧情、暂停、房间转场中、游戏冻结（如冲刺开始的几帧）、章节已完成 |
+| `wind` | 当前风的速度 `[x, y]`（像素/秒）；没有风时为 `[0, 0]` |
 | `canPause`、`dialogOpen`、`dialogWaiting` | 主控跳过剧情时使用，可以忽略 |
 | `chapterTimeTicks` | 章节计时，1 tick = 100 纳秒（÷ 10 000 000 得秒） |
 | `deaths` / `deathsInRoom` | 本章死亡次数 / 本房间死亡次数 |
@@ -95,12 +96,15 @@
 {"type": "Spikes", "cat": "hazard", "x": 64, "y": 96, "w": 16, "h": 3, "dir": "Up"}
 ```
 
+- `id`：实体编号。同一次进入房间期间固定不变，用来跨暂停、跨帧对照同一个实体（离开房间再回来会重新编号）。
 - `type`：游戏里的类型名（与 `entities.md` 的条目一一对应）。
 - `cat`：大类：`hazard` 致死物、`spring` 弹簧、`refill` 冲刺水晶、`booster` 泡泡、`feather` 羽毛、`collectible` 收集品、`dream_block` 梦境块、`dynamic_solid` 会动的实心块、`jumpthru` 单向平台、`solid` 其他实心块、`interactive` 可交互物、`other` 其他。
 - `x, y, w, h`：碰撞箱左上角与宽高（世界坐标）。`shape` 不是矩形时出现：`circle`（此时 `r` 为半径，`x, y, w, h` 是外接矩形）、`list`（多个碰撞箱的组合，给出的是外接矩形）、`grid`。
 - `visible: false`：实体存在但当前不可见。
 - `parts`：由多个碰撞箱组合成的实体（`shape` 为 `list`），逐个给出其中矩形部分的 `[x, y, 宽, 高]`。
 - `Killbox`（`cat` 为 `hazard`）：坑底的致死区，碰到即死；它只在 Madeline 接近时才真正生效，但一直列出。
+- `fields`：该实体当前的全部状态字段（自动读取实体自身声明的数值、布尔、枚举、向量、矩形与节点数组，例如速度、所处状态、计时器、轨道节点、进度、目标点），外加 `liftSpeed`（平台或角色当前带给乘客的速度）与 `stateMachine`（实体有状态机时的当前状态编号）。字段名就是游戏内部的名字，含义可结合 `entities.md` 推断；只有数值，没有代码。
+- `moved`：与上一次暂停时相比的位移 `[dx, dy]`，只在移动过的实体上出现。
 - 附加属性：
   - 尖刺 `dir`（Up / Down / Left / Right，刺尖朝向）；弹簧 `orient`（Floor / WallLeft / WallRight，含义见 `entities.md`）；泡泡 `red`。
   - 冲刺水晶 `twoDashes`；被吃掉后 `collected: true` 与 `respawnTimer`（距重生的秒数）。
@@ -159,6 +163,7 @@
 - `consumed` / `planned`：实际执行 / 计划执行的帧数（提前停下时前者更小）。
 - `trajectory`：每个执行帧一行，全精度。**第 j 行（从 1 数）是按下第 j 帧的按键、游戏更新完这一帧之后的状态**，帧号 = `startFrame + j`。所以 `obs.frame` 等于下一次 `act` 的 `startFrame`，轨迹第一行反映的是第一帧输入的效果。
 - `events`：该段内发生的事件及其帧号。
+- `entityTrajectory`：画面附近（外扩 64 像素）实体的逐帧位置，格式 `[帧, 实体编号, x, y]`（碰撞箱左上角），只在位置变化的帧记录一行；编号与观测里的 `id` 对应。用它可以拟合移动平台、追逐者、落石等的运动规律。
 - `auto_frames` / `auto_notes`：动作结束后主控自动推进的帧数与说明（转场、剧情、死亡与重生）。这些帧不在 `trajectory` 里。
 
 ## 3. 计划文件（`act` 的 `plan_file` 参数）

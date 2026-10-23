@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import math
+import re
 
 from PIL import Image as PILImage
 
@@ -108,6 +109,39 @@ def room_exits(level: dict, neighbors: list[dict] | None) -> list[dict]:
     return out
 
 
+KEY_FIELD = re.compile(r"(?i)(speed|vel|state|timer|target|percent|node|dir|angle|radius|delay|wait|anger|chase|"
+                       r"moving|active|triggered|falling|lerp|ease|progress|amount)")
+
+
+def key_fields(entity: dict, limit: int = 10) -> dict:
+    """从反射读出的状态字段里挑出与运动有关的几项（完整字段在工作区文件里）。"""
+    fields = entity.get("fields") or {}
+    picked = {}
+    for name, value in fields.items():
+        if KEY_FIELD.search(name) and not isinstance(value, list | dict) or (
+                isinstance(value, list) and len(value) == 2 and all(isinstance(v, (int, float)) for v in value)
+                and KEY_FIELD.search(name)):
+            picked[name] = round(value, 3) if isinstance(value, float) else value
+            if len(picked) >= limit:
+                break
+    if "stateMachine" in fields:
+        picked["stateMachine"] = fields["stateMachine"]
+    return picked
+
+
+def is_dynamic(entity: dict) -> bool:
+    if entity.get("moved"):
+        return True
+    fields = entity.get("fields") or {}
+    for name, value in fields.items():
+        if re.search(r"(?i)speed|vel", name):
+            if isinstance(value, (int, float)) and value:
+                return True
+            if isinstance(value, list) and len(value) == 2 and any(isinstance(v, (int, float)) and v for v in value):
+                return True
+    return False
+
+
 def enrich_obs(obs: dict) -> dict:
     """整房间观测里补上合并后的地形碰撞箱与出口，原地修改并返回。"""
     tiles = obs.get("tiles")
@@ -115,6 +149,16 @@ def enrich_obs(obs: dict) -> dict:
         obs["solids"] = solid_rects(tiles)
         obs["exits"] = room_exits(obs.get("level") or {}, obs.get("neighbors"))
     return obs
+
+
+def compact_entity(entity: dict) -> dict:
+    """给智能体看的实体：去掉完整字段，只给会动的实体保留与运动有关的字段。"""
+    out = {k: v for k, v in entity.items() if k != "fields"}
+    if is_dynamic(entity):
+        picked = key_fields(entity)
+        if picked:
+            out["state"] = picked
+    return out
 
 
 def room_json(obs: dict) -> str:
@@ -125,7 +169,7 @@ def room_json(obs: dict) -> str:
         "room": level.get("room"), "bounds": level.get("bounds"), "exits": obs.get("exits", []),
         "spawns": obs.get("spawns", []), "respawnPoint": obs.get("respawnPoint"),
         "solids": obs.get("solids", []),
-        "entities": obs.get("entities", []),
+        "entities": [compact_entity(e) for e in obs.get("entities", [])],
         "triggers": [t for t in obs.get("triggers", []) if not t["type"].startswith(COSMETIC_TRIGGERS)],
         "player": {k: player.get(k) for k in ("pos", "speed", "state", "dashes", "maxDashes", "stamina", "onGround",
                                               "facing", "ducking", "hitbox", "internal") if k in player},
@@ -230,8 +274,15 @@ def describe_obs(obs: dict, elapsed_s: float, budget_s: float, full_room: bool =
                         "activated", "fallen"):
                 if key in e:
                     extra.append(f"{key}={e[key]}")
+            if e.get("moved"):
+                extra.append(f"本次移动 Δ=({e['moved'][0]}, {e['moved'][1]})")
+            if is_dynamic(e):
+                picked = key_fields(e, limit=6)
+                if picked:
+                    extra.append("状态 " + json.dumps(picked, ensure_ascii=False, separators=(",", ":")))
             extra_text = (" " + " ".join(extra)) if extra else ""
-            lines.append(f"- {e['type']} [{e['cat']}] 左上 ({e['x']}, {e['y']}) 宽高 {e['w']}×{e['h']}{extra_text}")
+            ident = f"#{e['id']} " if "id" in e else ""
+            lines.append(f"- {ident}{e['type']} [{e['cat']}] 左上 ({e['x']}, {e['y']}) 宽高 {e['w']}×{e['h']}{extra_text}")
 
     if tiles:
         ox, oy = tiles["origin"]
@@ -255,6 +306,14 @@ def describe_step(result: dict, max_rows: int = 30) -> str:
         lines.append("事件：" + "；".join(
             f"帧 {e['frame']} {STOP_TEXT.get(e['type'], e['type'])}{('(' + e['detail'] + ')') if e.get('detail') else ''}"
             for e in events))
+    moving = {}
+    for row in result.get("entityTrajectory") or []:
+        frame, ident, x, y = row
+        first = moving.setdefault(ident, [frame, x, y, frame, x, y])
+        first[3:] = [frame, x, y]
+    if moving:
+        parts = [f"#{i} ({v[1]:.0f},{v[2]:.0f})→({v[4]:.0f},{v[5]:.0f})" for i, v in list(moving.items())[:10]]
+        lines.append(f"这段动作中画面附近有 {len(moving)} 个实体移动过（编号 起点→终点）：" + "；".join(parts))
     traj = result.get("trajectory") or []
     if traj:
         step = max(1, math.ceil(len(traj) / max_rows))

@@ -14,6 +14,8 @@ internal sealed class SnapshotOptions {
     public int Margin = 16;
     /// <summary>true：地形与实体覆盖整个房间；false：只覆盖当前画面（外扩 Margin）。</summary>
     public bool Room = false;
+    /// <summary>true：每个实体附带反射读出的全部状态字段（fields）。</summary>
+    public bool Fields = false;
 }
 
 /// <summary>
@@ -107,7 +109,7 @@ internal static class StateExtractor {
         if (opt.Entities || opt.Tiles) {
             List<EntityInfo> entities = CollectEntities(level, ScopeRect(level, opt));
             if (opt.Entities) {
-                WriteEntities(w, entities);
+                WriteEntities(w, entities, opt.Fields);
             }
             if (opt.Tiles) {
                 WriteTiles(w, level, player, entities, opt);
@@ -214,6 +216,10 @@ internal static class StateExtractor {
         w.WriteBoolean("inCutscene", level.InCutscene);
         w.WriteBoolean("skippingCutscene", level.SkippingCutscene);
         w.WriteBoolean("paused", level.Paused);
+        w.WriteStartArray("wind");
+        w.WriteNumberValue(level.Wind.X);
+        w.WriteNumberValue(level.Wind.Y);
+        w.WriteEndArray();
         w.WriteBoolean("canPause", level.CanPause);
         Textbox? textbox = level.Entities.FindFirst<Textbox>();
         w.WriteBoolean("dialogOpen", textbox != null);
@@ -380,10 +386,11 @@ internal static class StateExtractor {
         return list;
     }
 
-    private static void WriteEntities(Utf8JsonWriter w, List<EntityInfo> entities) {
+    private static void WriteEntities(Utf8JsonWriter w, List<EntityInfo> entities, bool fields) {
         w.WriteStartArray("entities");
         foreach (EntityInfo info in entities) {
             w.WriteStartObject();
+            w.WriteNumber("id", EntityState.IdOf(info.Entity));
             w.WriteString("type", info.Type);
             w.WriteString("cat", info.Category);
             w.WriteNumber("x", Round(info.X));
@@ -414,6 +421,9 @@ internal static class StateExtractor {
                 w.WriteEndArray();
             }
             EntityCatalog.WriteProps(w, info.Entity);
+            if (fields) {
+                EntityState.WriteFields(w, info.Entity);
+            }
             w.WriteEndObject();
         }
         w.WriteEndArray();

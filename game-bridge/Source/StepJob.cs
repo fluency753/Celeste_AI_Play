@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Celeste;
+using Microsoft.Xna.Framework;
 using Monocle;
 
 namespace CelesteAI.Bridge;
@@ -26,6 +27,10 @@ internal sealed class StepJob {
     private readonly ArrayBufferWriter<byte> trajectoryBuffer = new();
     private readonly Utf8JsonWriter trajectory;
     private readonly List<(long frame, string type, string? detail)> events = new();
+    private readonly bool recordEntities;
+    private readonly ArrayBufferWriter<byte> entityBuffer = new();
+    private readonly Utf8JsonWriter entityTrajectory;
+    private readonly Dictionary<int, Vector2> lastEntityPos = new();
     private readonly long startFrame;
 
     private int index;
@@ -40,7 +45,7 @@ internal sealed class StepJob {
     public bool Finished => StopReason != null;
 
     public StepJob(long requestId, List<InputFrame> plan, IEnumerable<string> stopOn, int framesPerTick,
-        bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory) {
+        bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false) {
         RequestId = requestId;
         this.plan = plan;
         this.stopOn = new HashSet<string>(stopOn, StringComparer.OrdinalIgnoreCase);
@@ -51,6 +56,9 @@ internal sealed class StepJob {
         this.recordTrajectory = recordTrajectory;
         trajectory = new Utf8JsonWriter(trajectoryBuffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         trajectory.WriteStartArray();
+        this.recordEntities = recordEntities;
+        entityTrajectory = new Utf8JsonWriter(entityBuffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        entityTrajectory.WriteStartArray();
         startFrame = Bridge.Frame;
 
         Level? level = Engine.Scene as Level;
@@ -60,6 +68,17 @@ internal sealed class StepJob {
         lastControllable = StateExtractor.IsControllable(level, p);
         lastOnGround = p?.onGround ?? false;
         lastDashes = p?.Dashes ?? 0;
+        if (recordEntities && level != null) {
+            // 记下起始位置作为基准，之后只记录有变化的帧
+            Rectangle view = StateExtractor.ViewRect(level, 64);
+            foreach (Entity e in level.Entities) {
+                if (e is Player or SolidTiles or Trigger || e.Collider == null) continue;
+                EntityState.TryTopLeft(e, out Vector2 pos);
+                if (view.Contains((int) pos.X, (int) pos.Y) || e.Collider.Bounds.Intersects(view)) {
+                    lastEntityPos[EntityState.IdOf(e)] = pos;
+                }
+            }
+        }
 
         // "直到可控/失控"类条件在开始时就已满足，则不推进
         if (this.stopOn.Contains("controllable") && lastControllable) {
@@ -78,6 +97,9 @@ internal sealed class StepJob {
         Player? p = level == null ? null : StateExtractor.GetPlayer(level);
         if (recordTrajectory) {
             StateExtractor.WriteTrajectoryRow(trajectory, frame, p);
+        }
+        if (recordEntities && level != null) {
+            RecordEntities(level, frame);
         }
 
         bool alive = p is { Dead: false };
@@ -106,6 +128,25 @@ internal sealed class StepJob {
     }
 
     public void Cancel() => StopReason ??= "cancelled";
+
+    /// <summary>画面附近（外扩 64 像素）每个实体：位置有变化的帧记一行 [帧, 编号, x, y]（碰撞箱左上角）。</summary>
+    private void RecordEntities(Level level, long frame) {
+        Rectangle view = StateExtractor.ViewRect(level, 64);
+        foreach (Entity e in level.Entities) {
+            if (e is Player or SolidTiles or Trigger || e.Collider == null) continue;
+            EntityState.TryTopLeft(e, out Vector2 pos);
+            if (!view.Contains((int) pos.X, (int) pos.Y) && !e.Collider.Bounds.Intersects(view)) continue;
+            int id = EntityState.IdOf(e);
+            if (lastEntityPos.TryGetValue(id, out Vector2 last) && last == pos) continue;
+            lastEntityPos[id] = pos;
+            entityTrajectory.WriteStartArray();
+            entityTrajectory.WriteNumberValue(frame);
+            entityTrajectory.WriteNumberValue(id);
+            entityTrajectory.WriteNumberValue(pos.X);
+            entityTrajectory.WriteNumberValue(pos.Y);
+            entityTrajectory.WriteEndArray();
+        }
+    }
 
     private void Emit(long frame, string type, string? detail) {
         events.Add((frame, type, detail));
@@ -138,6 +179,13 @@ internal sealed class StepJob {
             w.WriteEndObject();
             w.WritePropertyName("trajectory");
             w.WriteRawValue(trajectoryBuffer.WrittenSpan, skipInputValidation: true);
+        }
+        if (recordEntities) {
+            entityTrajectory.WriteEndArray();
+            entityTrajectory.Flush();
+            w.WriteString("entityTrajectoryFormat", "frame,id,x,y");
+            w.WritePropertyName("entityTrajectory");
+            w.WriteRawValue(entityBuffer.WrittenSpan, skipInputValidation: true);
         }
     }
 
