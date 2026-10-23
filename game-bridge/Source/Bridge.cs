@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using Celeste;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using Celeste.Mod;
 using Monocle;
 
@@ -19,7 +20,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.8.4";
+    public const string Version = "0.8.5";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -131,10 +132,32 @@ internal static class Bridge {
 
     /// <summary>游戏把这一帧呈现到屏幕之后调用（FNA Game.EndDraw）。</summary>
     public static void AfterPresent() {
-        // 不再读回像素等显卡：FNA 每次读回都会泄漏一块整屏大小的内存（每帧约 8 MB），
-        // 而 OBS 采到上一帧的真正原因是采集钩子的拷贝间隔（见 WaitSincePresent），与显卡是否做完无关
+        if (pendingAck != null) {
+            WaitForGpu();
+        }
         FlushPendingAck();
         SincePresent.Restart();
+    }
+
+    private static RenderTarget2D? syncTarget;
+    private static readonly Color[] SyncPixel = new Color[1];
+    private static bool gpuSyncFailed;
+
+    /// <summary>
+    /// 等显卡把这一帧（以及 OBS 游戏采集钩子在 Present 里做的拷贝）真正做完再回复，否则 OBS 偶尔采到上一帧
+    /// （实测约 2%）。做法是读回一个 1×1 渲染目标：读回要等同一设备上之前的命令全部执行完。
+    /// 不能读后备缓冲：FNA3D 读后备缓冲时每次新建一块整屏大小的暂存纹理且不释放（每帧泄漏约 8 MB）；
+    /// 渲染目标的暂存纹理会被缓存复用，没有泄漏。
+    /// </summary>
+    private static void WaitForGpu() {
+        if (gpuSyncFailed) return;
+        try {
+            syncTarget ??= new RenderTarget2D(Engine.Instance.GraphicsDevice, 1, 1);
+            syncTarget.GetData(SyncPixel);
+        } catch (Exception ex) {
+            gpuSyncFailed = true;
+            Log.Warn($"GPU sync for lockstep failed, OBS may capture the previous frame: {ex.Message}");
+        }
     }
 
     private const double MinPresentGapMs = 9.0;
