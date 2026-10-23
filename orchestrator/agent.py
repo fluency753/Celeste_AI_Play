@@ -304,10 +304,17 @@ class ClaudeRunner:
         elif etype == "rate_limit_event":
             info = event.get("rate_limit_info") or {}
             windows = info.get("unifiedWindows") or {}
-            self.metrics.update(
-                usage_5h=(windows.get("five_hour") or {}).get("utilization"),
-                usage_7d=(windows.get("seven_day") or {}).get("utilization"),
-                usage_resets_at=(windows.get("five_hour") or {}).get("resetsAt"))
+            five = (windows.get("five_hour") or {}).get("utilization")
+            seven = (windows.get("seven_day") or {}).get("utilization")
+            self.metrics.update(usage_5h=five, usage_7d=seven,
+                                usage_resets_at=(windows.get("five_hour") or {}).get("resetsAt"))
+            limit = self.cfg.max_usage
+            if limit and any(u is not None and u >= limit for u in (five, seven)) and not self.stop_reason:
+                # 同一账号还有其他会话（包括开发会话）要用：到上限就结束本次运行
+                self.stop_reason = f"Max 用量达到上限 {limit:.0%}（5 小时 {five}，7 天 {seven}）"
+                print(f"[agent] {self.stop_reason}，停止运行", flush=True)
+                if self.proc and self.proc.returncode is None:
+                    self.proc.terminate()
             if info.get("status") not in (None, "allowed", "allowed_warning"):
                 print(f"[agent] 用量限制：{info}", flush=True)
         elif etype == "system" and subtype == "api_retry":

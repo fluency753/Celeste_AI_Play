@@ -46,6 +46,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--no-study", action="store_true", help="跳过开始前的读知识库阶段（调试用）")
     ap.add_argument("--study-minutes", type=float, default=60.0,
                     help="准备阶段（读知识库、写笔记）的上限分钟数，不计入现实用时；到时自动开始计时")
+    ap.add_argument("--max-usage", type=float, default=0.9,
+                    help="Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）就停止本次运行，默认 0.9")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     args = ap.parse_args()
@@ -57,6 +59,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.autocompact = args.autocompact
     cfg.study = not args.no_study
     cfg.study_minutes = args.study_minutes
+    cfg.max_usage = args.max_usage
     return cfg, args
 
 

@@ -75,6 +75,7 @@ class RunConfig:
     seccomp_unconfined: bool = True  # 容器内 Bash 沙箱（bubblewrap）需要创建命名空间，Docker 默认的 seccomp 配置不允许
     study: bool = True               # 开始游玩前先读完知识库（只在容器运行方式下生效：本机方式没有 Read 工具）
     study_minutes: float = 60.0      # 准备阶段上限；到时自动开始计时并开放游戏工具
+    max_usage: float = 0.9           # Max 套餐 5 小时或 7 天窗口的用量达到这个比例就停止本次运行（同一账号还要留给其他会话）
 
     @property
     def workspace_dir(self) -> Path:
