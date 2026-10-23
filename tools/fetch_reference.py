@@ -22,6 +22,7 @@ import json
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -43,8 +44,16 @@ SJ_LEVELS = ["Beginner", "Intermediate", "Advanced", "Expert", "Grandmaster"]
 def api(params: dict) -> dict:
     query = urllib.parse.urlencode({**params, "format": "json", "formatversion": "2"})
     req = urllib.request.Request(f"{WIKI_API}?{query}", headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            break
+        except (urllib.error.URLError, TimeoutError) as exc:  # 站点偶尔返回 502 等临时错误
+            if attempt == 3:
+                raise
+            print(f"  请求失败（{exc}），{2 ** attempt * 3} 秒后重试", flush=True)
+            time.sleep(2 ** attempt * 3)
     if "error" in data:
         raise RuntimeError(f"wiki API 出错：{data['error']}")
     time.sleep(0.5)  # 对站点友好一些
