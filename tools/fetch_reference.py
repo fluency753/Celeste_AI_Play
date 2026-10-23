@@ -64,6 +64,11 @@ def tech_pages() -> list[str]:
         if "continue" not in data:
             break
         params.update(data["continue"])
+    # "Tech/" 下的子页面（例如从其他 wiki 移植来的技巧难度表），有的没有挂分类
+    data = api({"action": "query", "list": "allpages", "apprefix": "Tech/", "apnamespace": "0", "aplimit": "500"})
+    for page in data["query"]["allpages"]:
+        if page["title"] not in titles and not WIKI_EXCLUDE.search(page["title"]):
+            titles.append(page["title"])
     return titles
 
 
