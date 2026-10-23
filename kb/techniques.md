@@ -2,7 +2,7 @@
 
 本文件收录"怎样利用规则移动得更快/更远/更高"的技巧：Strawberry Jam（草莓酱）训练场 Beginner→Grandmaster 五个 gym 教授的全部技巧，加上 Celeste Community Wiki（celeste.ink）技巧页列出的全部原版技巧（只存在于 mod 的机制除外），去重后每个技巧一个条目，别名并列。机制库（SJ Library：碰撞容错、摩擦、冻结帧、计时等"规则本身"）以及后续章节实体的交互规则放在 `mechanics.md`。
 
-本文件只写技巧的定义、条件、帧窗口和数值，不写任何房间布局、路线、解法或收集品位置。原始常量与更新顺序以 `player_physics.md`、`input.md`、`entities.md` 为准，本文只引用其章节，不重复常量表。
+本文件只写技巧的定义、条件、帧窗口和数值，不写任何房间布局、路线、解法或收集品位置。原始常量与更新顺序以 `player_physics.md`、`input.md`、`entities.md` 为准，本文只引用其章节，不重复常量表。每个原文小节（celeste.ink 技巧页及子页面、SJ 各 gym 与机制库）对应本文哪一节，见 §9 覆盖对照表；原文副本在 `/kb/reference/`。
 
 ---
 
@@ -185,6 +185,14 @@
 - **本轮章节**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Library "Dash Speed"；NamuWiki；【代码已核实】。
 
+### 2.10 擦地（Cornerslip）与 jasig jump
+
+- **作用**：擦过地面边缘而**不发生落地碰撞**：照样补满冲刺、获得土狼时间，但竖直速度不被清零，继续下落或上升。
+- **规则**【代码已核实（由更新顺序推出）】：地面判定、补冲刺、土狼计时都在本帧开头、移动之前做（`player_physics.md` §3 第 4、9、11 步）。若某帧开头脚恰好贴在平台边缘上（vy ≥ 0），这一帧就算在地面上。随后本帧的水平移动先把人带离边缘，竖直移动就没有撞到地面。
+- **jasig jump**：在擦地给的土狼时间里做蹲跳（社区名）。
+- **本轮章节**：✓ / ✓ / ✓（需要像素级对齐）
+- **来源 / 核实**：celeste.ink Tech「Cornerslip」；机制由代码推出，可用性（未实测）。
+
 ---
 
 ## 3. 冲刺类
@@ -290,10 +298,12 @@
   - **空中已经处于下蹲时开始冲刺，会先起身**（undemo / omed dash）。因此不能紧接着连续两次下蹲冲刺：第二次冲刺时人还蹲着，会被起身。必须等自动起身（下落、土狼时间已过）之后再冲刺。
   - 任何方向都可以：上、斜上（diag demo）、水平、斜下。
 - **Demohyper**：空中下蹲水平冲刺，贴上平台或在土狼时间内起跳 → hyper（325 / −52.5）。冲刺中的水平速度是 240，普通斜下冲刺只有 169.7（空中）或 203.6（地面）。**反向 demohyper** 同理。
+  - 冲刺前水平速度 < 200 时，下蹲水平冲刺比地面斜下冲刺快（斜下：max(169.7, v) × 1.2；水平：max(240, v)，在 v = 200 时相等）【由规则推算，与 celeste.ink Demodash 页一致】。
+- **保持下蹲进入下一次冲刺**：在地面上下蹲（例如地面斜下冲刺之后），紧接着从地面开始的冲刺不会起身（起身分支只在空中生效），可以带着下蹲碰撞箱向上冲刺（Archie 的一种做法）【代码已核实】。
 - **输入**：`["1,R,Z", "3,R", "10,R"]`；手动：`["1,D,X", "3,R", "10,R"]`；demohyper（落地或贴地后）：`[..., "1,R,J", "11,R,J"]`。
 - **本轮章节**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Grandmaster Gym "Crouch Dash"；celeste.ink（Demodash、Diag demo、Up demo、Undemo）；BWIKI；【代码已核实】。
-- **社区说法核对**：celeste.ink 说"冲刺前 4 帧内按下"，代码只看 F0 那一帧是否按住下（或用 Z），之后 F1–F3 改方向不影响下蹲【社区说法与代码不符（表述不精确）】。BWIKI 说"dd 后玛德琳抬高 2px"，代码中切换碰撞箱时底边不变，没有找到这一效果（未核实，疑为泡泡 Archie 的效果，见 6.2）。
+- **社区说法核对**：celeste.ink Tech 页说"冲刺前 4 帧内按下"，代码只看 F0 那一帧是否按住下（或用 Z），之后 F1–F3 改方向不影响下蹲【社区说法与代码不符（表述不精确）】。celeste.ink Demodash 子页的说法（"冲刺第 1 帧按住下，第 5 帧之前改方向"）与代码一致。BWIKI 说"dd 后玛德琳抬高 2px"，代码中切换碰撞箱时底边不变，没有找到这一效果（未核实，疑为泡泡 Archie 的效果，见 6.2）。
 
 ### 3.10 Ultra（ultradash，究极冲刺，u）
 
@@ -305,6 +315,8 @@
 - **最佳接法**：extended hyper 在 **F14** 起跳；F15 立即斜下冲刺。F15 状态更新先受理冲刺，不吃空中摩擦，所以保留的就是 325。
 - **输入**：`["1,R,Z", "3,R", "10,R", "1,R,J", "1,R,X", "3,R,D", "1,R,D", "<m>,R", "1,R", "1,R,J", "11,R,J"]`。F14 hyper；F15 冲刺（F0 不按 D）；F4' 斜下；`<m>` 帧下落到 L；滑 1 帧；起跳。
 - **结果**：落地 vx = (325 − 4.333 × 冲刺结束到落地的空中帧数) × 1.2 ≈ 390；起跳 −6.667 + 40 → ≈ 423。比 hyper 快约 20–30%。普通空中斜下冲刺（无前置速度）：169.7 → 203.6，起跳后 ≈ 237。
+- **排查**：落地后速度变成 160 → 冲刺在地面上结束了（起点太低）；落地没有 ×1.2 → 在"贴地未撞"的那一帧起跳了（celeste.ink 估计缓冲起跳有约 3/8 的概率出现这种情况，未核实）；速度仍然掉得快 → 在地面上停留太久（地面摩擦大于空中，冲刺中没有摩擦）。
+- **Heart ultra**（表演性质）：碰到水晶之心后、被弹开之前的几帧里斜下冲刺（未核实）。
 - **本轮章节**：△（教学后，需要落差）/ ✓（需要 ≥ 28 px 的落差）/ ✓（同）
 - **来源 / 核实**：SJ Expert Gym "Ultra"、Library "Ultra Mechanics"；celeste.ink；BWIKI；【代码已核实】。
 
@@ -431,7 +443,12 @@
 - **规则**【代码已核实】（`player_physics.md` §5.10）：爬墙跳在帧 C、moveX = 0 → 窗口 0.2 s。第 C+1…C+12 帧的检查读的是**上一帧**的 moveX，所以在 **C+1…C+11 共 11 帧**内按离墙方向，下一帧生效。窗口内"疲劳"判定用的体力额外加 27.5。
 - **超频（overclock）**：退还不受 110 上限限制。地面上处于攀爬状态时爬墙跳不耗体力，之后离地再触发偷体力 → 137.5；或在爬墙跳后、退还前吃水晶（先补满 110 再 +27.5）。在地面上时每帧都会把体力重置为 110，所以退还必须发生在离地之后。
 - **用途**：代替中性跳无体力上墙（尽早偷体力，不按上）；把水平的平台加速换成 130；快速重新抓住坠落块。
-- **半体力攀爬（half stamina climbing，TAS 级）**：偷体力后约 2 帧内人仍离墙足够近，可以再爬墙跳（+40 朝墙），用一次爬墙跳的体力换两次的高度（未核实）。
+- **半体力攀爬（half stamina climbing，TAS 级）**：偷体力后约 2 帧内人仍离墙足够近，可以再爬墙跳（+40 朝墙），用一次爬墙跳的体力换两次的高度（未核实）。这 2 帧内也可以中性跳（不耗体力），比只用中性跳爬得快。
+- **偷体力的速度细节**【代码已核实，与 celeste.ink 数值一致】：按离墙方向的那一帧先吃空中加速（0 → 10.83）；下一帧被设为 130，同帧再算空中摩擦：仍按住离墙方向 → 125.67；已松开 → 119.17。
+- **变体**（celeste.ink）：
+  - **偷体力中性跳（wallboost neutral）**：偷体力后立刻转回墙，循环 = 无体力上墙。最佳做法是起跳后下一帧就按离墙方向，再下一帧松开。比纯中性跳略快；在地图禁用中性跳时也能用。
+  - **抓角加速偷体力（cornerboost wallboost，cobwob）**：用无方向的爬墙跳做抓角加速，再偷体力：速度被重置为 130，朝反方向跳出。
+  - **蹬墙后偷体力（wallkick wallboost）**：带着水平速度做无方向爬墙跳（例如先中性蹬墙、再无方向爬墙跳），偷体力可以在离墙更远处（celeste.ink：最远约 14 px）才触发。窗口内任何时刻按离墙方向都会把 vx 设为 130。
 - **输入**（攀爬在右墙上）：`["1,G,J", "1,L,J", "10,J"]`。C 帧爬墙跳（无方向），C+1 按 L，C+2 生效。
 - **本轮章节**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Grandmaster Gym "Wallboost"（11 帧窗口、overclock，与代码一致）；celeste.ink（138，代码 137.5）；BWIKI（偷体力，"10 帧"有误差）；【代码已核实】。
@@ -441,6 +458,8 @@
 - **规则**（`player_physics.md` §1.4、§9）：满 110；向上爬 45.45/s；抓着不动 10/s；向下爬不耗；空中爬墙跳 27.5（地面上不耗）；体力 < 20 为疲劳，不能**开始**抓墙，但已在墙上可以继续，可以爬墙跳；体力 ≤ 0 掉下。蹬墙跳、中性跳、贴墙下滑都不耗体力。
 - **爬墙跳连发**：在 StNormal 里，上升中仍在墙边 2 px 内、按住抓、朝墙时，可以再爬墙跳（不需要先抓上墙）。harness 两次按跳之间至少松开 1 帧。
 - **结果**【由规则推算】：每 12 帧重按一次（按 11 帧、松 1 帧），近似保持 −105，约 105 px/s；4 次爬墙跳约 84 px 用 48 帧，爬同样高度要约 111 帧。以体力换时间。
+- **体力为 0 也能触发机关**：贴墙下滑时按住抓，即使不能抓墙，也算"骑"在墙上，照样触发交通块等骑乘机关（`player_physics.md` §5.2 第 7 步）【代码已核实】。
+- **Stamina cancel**（celeste.ink）：爬墙时按住上、反复点按抓，据称比一直按住更省体力。代码里重新抓墙后有 5 帧不扣体力也不能移动；上升中不能抓墙，所以每次松开后要等 vy ≥ 0 才能再抓。这种做法速度慢，对计时无益（未核实）。
 - **本轮章节**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Stamina"；【代码已核实】。
 
@@ -451,11 +470,23 @@
   - 蹬墙跳/爬墙跳只要碰撞箱平移 3 px 后与墙重叠 ≥ 1 px 即可；而攀爬到墙顶时，如果翻墙被挡（墙顶朝 Facing 方向 8 px 内有朝上/左/右的尖刺，或头顶 6 px 内有实心物），向上爬会停在"手部够不到"的位置，那里的碰撞箱底部比墙顶低好几 px。
   - **五跳**：爬到顶 → 爬墙跳 → 下落时缓冲第二次爬墙跳：第一帧满足"重叠 ≥ 1 px"时就起跳（碰撞箱底部只比墙顶低 1 px）→ 起点更高。也可以用中性跳从合适高度跳进墙角，只用一次爬墙跳。
   - 同理可以在墙顶角缓冲**蹬墙跳**（远离墙）换水平距离。
-  - **六跳**：带着水平速度做五跳，触发抓角加速（5.2），多出 +40。
-  - SJ 的"踩刺边跳"利用的是受击箱比碰撞箱底部短 2 px：碰撞箱已经够到墙（可蹬）时，受击箱还碰不到墙顶的尖刺。具体几何（未核实）。
+  - **六跳**：带着水平速度（空中满速 90）做五跳，触发抓角加速（5.2），多出 +40。
+  - **带刺墙角跳（spiked cornerjump，SJ"踩刺边跳"）**：墙面布满尖刺时，从墙顶最上面 2 px 起跳：碰撞箱底部只与墙重叠 1–2 px（可以蹬），而受击箱底部比碰撞箱高 2 px，完全在墙顶之上，碰不到墙面的尖刺。死于尖刺说明跳晚了【代码已核实（几何由碰撞箱/受击箱定义推出）】。社区常把它误称为 spike jump（那是 5.4 的另一个技巧）。
+- **社区给出的数值**（celeste.ink，未逐一核实）：爬墙时停在墙顶下第 7 个像素；五跳必须在墙顶以下约 5.54 px 以内起跳，最优是最上面约 0.21 px（5/24 px），水平可走约 54.6 px；六跳必须在最上面约 2.87 px 以内，最优时约 59.75 px。
 - **输入**：`["1,G,J", "<k>,G", "5,G,J", "11,J"]`（第二段在下落中缓冲）。
 - **本轮章节**：✓ / ✓ / ✓
-- **来源 / 核实**：SJ Expert Gym "Corner Jump"；celeste.ink（5 Jump、6 Jump）；BWIKI（五跳）；规则【代码已核实】，位置差的具体像素数【由规则推算，未核实】。
+- **来源 / 核实**：SJ Expert Gym "Corner Jump"；celeste.ink Tech「Cornerjump」「5jump」「Spiked Cornerjump」「6jump」；BWIKI（五跳）；规则【代码已核实】，像素数【社区数值，未核实】。
+
+### 4.8 悬垂越过（Overhangs：4tile / 5tile / crouched 5tile / 6tile / k×1）
+
+- **作用**：天花板从墙上伸出 k 格时，无冲刺地从墙边绕过悬出部分上去：蹬墙或偷体力离墙，以头顶不低于天花板高度的位置从悬出边缘下方经过（顶角修正把人挪出边缘），然后中性墙角踢、反向抓角加速，或转身抓住边缘上去。1–3 格很容易，4 格起才算技巧。
+- **规则要点**（celeste.ink，由代码规则可以解释）：
+  - **4tile**：贴墙，从天花板下约 25.5–26.75 px 处蹬墙；头撞到天花板最后 4 px 时被顶角修正挪到边缘外并上移 1 px（`mechanics.md` Corner Correction）；随后在很短的窗口里松开或反按方向，在边缘下 ≤ 2 px、离墙 ≤ 2 px、且不在远离墙方向运动时抓住。用反向抓角或中性墙角踢更宽松（可缓冲）。
+  - **5tile**：几乎完美的 4tile（竖直窗口约 0.12 px，水平窗口约 0.42 px），只能用反向抓角或中性墙角踢收尾。
+  - **crouched 5tile / 6tile**：蹲跳后用偷体力代替蹬墙（蹬墙会起身），以下蹲碰撞箱从悬出部分下穿过；越过边缘的下一帧自动起身，再墙角踢或抓墙。6tile 需要连续两次偷体力，输入极密。
+  - **k×1**：墙只往下延伸 1 格时，从离天花板不到 1 格处做短跳越过 2 格（蹲着可 3 格）悬出。
+- **本轮章节**：✓ / ✓ / ✓（无冲刺爬升用；数值为社区给出）
+- **来源 / 核实**：celeste.ink Tech「Overhangs」及其子节；规则依据（顶角修正、抓墙距离、自动起身）【代码已核实】，具体像素窗口（未核实）。
 
 ---
 
@@ -488,11 +519,15 @@
   - **斜向接近**：斜上冲刺撞进墙角（SJ Expert）。
   - **带刺抓角（spiked cornerboost）**：墙顶或墙面有尖刺。受击箱比碰撞箱底部短 2 px；尖刺按运动方向判定（运动方向与刺尖同向时不死）（推断）。
   - **无冲刺 / wavedash 接抓角**：跳起后松开再按跳做爬墙跳；无冲刺时从跑速 90 起：90 + 40 = 130。
-  - **双重抓角（double cornerboost）**：第一次爬墙跳后仍未撞墙、仍在 2 px 内时，再爬墙跳一次，再 +40。需要水平速度较低：celeste.ink 说 ≲ 144，BWIKI 说 ≤ 100（未核实）。harness 两次按跳之间至少隔 1 帧。
+  - **社区叫法**：情形 1 = "good cb"，情形 2 = "bad cb"。以 240 移动时（每帧 4 px），4 个起点亚像素位置里有 1 个必然是 bad cb（celeste.ink，与代码一致）。celeste.ink 写撞墙后"5 帧内"越过墙角就退还速度；代码是撞墙后的 4 次检查【社区说法与代码不符（数帧方式不同）】。
+  - **双重抓角（double cornerboost，dcb）**：第一次爬墙跳后仍未撞墙、仍在 2 px 内时，再爬墙跳一次，再 +40。celeste.ink 给出的上限约 144.33 px/s，第二跳是帧精确的（下一帧）。**harness 只有一个 J 键，两次按跳之间至少隔 1 帧，所以第二跳最早在 2 帧后**：要求 2 帧内的水平位移不超过剩余间隙，实际只在很低速度下可行【由规则推算】。BWIKI 写 ≤ 100（未核实）。
+  - **七跳 / 八跳 / 九跳 / 更长的跳（7jump / 8jump / 9jump / longer jumps）**：无冲刺地连续抓角加速、双重抓角，再从墙顶起跳，越过 7–9 格以上的带刺地面（celeste.ink 给出了起跳时机与亚像素窗口）。依赖双重抓角的版本在 harness 下基本不可行。
+  - **换房抓角**（celeste.ink"更长的跳"）：在向上换房前最后一帧蹬墙。蹬墙重置了水平速度，但"撞墙保留速度"没有被清掉（换房过渡期间计时冻结）；换房后缓冲爬墙跳，拿回保留速度 + 40（机制与代码一致，用途未核实）。
   - **向下抓角（downward cornerboost）**：下落中做时，间隙 ≤ 1 px 会先抓上墙、丢掉速度，所以必须恰好离墙 2 px【代码已核实】。
   - **反向抓角（reverse cornerboost，RCB，反 cb）**：墙在身后。按向墙的方向（Facing 转向墙）+ 抓 + 跳 → 爬墙跳，vx 保留但 +40 朝墙 → 运动方向上 −40。常用来取消斜上冲刺并保留大部分速度。
   - **中性反向抓角（neutral RCB）**：起跳帧朝向墙但 moveX = 0 → 没有 −40；但会开启 11 帧偷体力窗口，其间一旦按运动方向（离墙），vx 会被设为 130。所以要 11 帧不按方向，空中减速变为 10.833/帧。
   - **消失方块抓角（disappearing block cornerboost）**：方块（磁带块、门等）在爬墙跳后立刻消失，不会撞上，保留 原速 + 40。
+  - **mod 抓角方块 / Cornerboost Protection**：见附录 A（原版没有）。
 - **本轮章节**：✓ / ✓ / ✓（序章用无冲刺版）
 - **来源 / 核实**：SJ Expert Gym "Corner Boost"；celeste.ink（全部变体）；BWIKI；【代码已核实】。BWIKI 写"靠近墙 4 像素内"，代码是间隙 ≤ 2 px【社区说法与代码不符】。
 
@@ -512,7 +547,9 @@
   - 受击箱比碰撞箱底部短 2 px：脚离朝上尖刺的底座 ≥ 1 px 就不会碰到。
   - 站地时碰撞箱与任何尖刺重叠，这一帧不补冲刺。所以从带刺表面起跳永远补不回冲刺。
 - **贴刺跳（spike jump）**：带刺的表面向你移动（移动块推着尖刺）或风把你压向尖刺时，只要你在朝离开尖刺的方向运动，就可以与尖刺重叠并从那个表面起跳、蹬墙。块要移动得足够快，否则在起跳前就会死。补体力、不补冲刺。风版本需要特定的竖直位置。
-- **本轮章节**：方向性尖刺 ✓ / ✓ / ✓；贴刺跳 ✗ / △（仅当尖刺附着在会动的块上，未核实是否存在）/ △（同）；风 ✗。
+- **尖刺攀爬（spike climb，narrow spiked climb）**：致死条件是"速度朝向尖刺或为 0"，所以只要速度**严格**朝离开尖刺的方向（哪怕极小），就可以贴着带刺的墙上升，最后蹬墙或爬墙跳离开。社区做法是每帧左右交替来维持极小的离墙速度；按代码，速度一旦为 0 或朝墙就会死，所以交替的时序必须保证每帧结束时速度离墙（未核实）。
+- **尖刺穿越（spike clip）**：朝上尖刺只有在受击箱底边 ≤ 尖刺底边时才致死，并且每帧只检测一次。下方没有地面的悬空尖刺，若下落足够快，一帧在尖刺区之上、下一帧已在其下，就穿过去了（5.5）【代码已核实（判定规则）】。
+- **本轮章节**：方向性尖刺 ✓ / ✓ / ✓；尖刺攀爬 △ / △ / △（TAS 级）；尖刺穿越 △ / △ / △（需悬空尖刺）；贴刺跳 ✗ / △（仅当尖刺附着在会动的块上，未核实是否存在）/ △（同）；风 ✗。
 - **来源 / 核实**：SJ Grandmaster Gym "Spike Jump"、Library "Hitboxes"；celeste.ink；BWIKI（踩刺跳）；方向规则【代码已核实】，移动块推刺的时序（未核实）。
 
 ### 5.5 帧与穿越（Frames / 0-framing / clipping）
@@ -523,9 +560,10 @@
 
 ### 5.6 磕顶跳（Ceiling pop，cpop，cp）
 
-- **作用**：带向下速度抓墙时，若正好抓在墙的最底像素、亚像素足够低，会滑出墙底一帧；这一帧爬墙跳得到朝前的水平速度（爬墙跳的 +40 朝墙方向，而墙已经不在前面）。主要是 TAS 技巧。
+- **作用**：在墙的下端下方爬墙跳：爬墙跳的 +40 朝墙方向，而前方已经没有墙，于是人钻到悬出的墙下面，得到更多水平距离。
+- **规则**【代码已核实（机制）】：攀爬状态每帧**先**处理跳，**后**检查"面前 1 px 还有没有墙"。所以向下爬滑出墙底后的那一帧仍在攀爬状态，这一帧按跳仍是爬墙跳。水平移动先于竖直移动，所以 +40 的水平速度先把人带到墙下，竖直上升随后被墙底挡住。带向下速度抓墙时，竖直速度乘 0.2，亚像素合适时也能立刻得到这一帧。这一帧通常是帧精确的：缓冲的跳会在更早一帧执行，变成普通爬墙跳。
 - **本轮章节**：△ / △ / △（需要像素级与亚像素设置）
-- **来源 / 核实**：celeste.ink；BWIKI；（未核实）。
+- **来源 / 核实**：celeste.ink Tech「Ceiling Pop (cpop)」；BWIKI；机制【代码已核实】，亚像素窗口（未核实）。
 
 ---
 
@@ -542,7 +580,9 @@
   1. 起跳（第 1 次）后 9 帧内冲刺：冲刺开始时又加一次（第 2 次）。若是斜下冲刺且水平分量更快，就保留下来，可接 ultra。
   2. 在平台上 hyper → 落回平台兔子跳（hyper 兔子跳，2 次），再接斜下冲刺（3 次）。
   3. 墙弹 + 斜下冲刺（墙弹取消，4.3）。
-  4. 对移动墙连续爬墙跳、中性跳 + 反向抓角，等。
+  4. 对移动墙连续爬墙跳、中性跳 + 反向抓角，等。celeste.ink：从移动块蹬墙后立刻（帧精确）朝块爬墙跳，第二跳也拿到加成；若第二跳是普通蹬墙，会被重置为 130 + 块速；若是无方向爬墙跳，会变成偷体力而抵消两次加成。对着移动墙反复爬墙跳，只在块速 < 180（最好 < 120）时有效，因为离墙 > 2 px 就不能爬墙跳了。harness 两跳之间至少隔 1 帧，帧精确的连跳不可行。
+  5. **机关加速兔子跳（block boost bunnyhop）**：短 hyper 落回仍在移动的块上，在加成宽限内再起跳（celeste.ink："10 帧内"，与代码的宽限一致）。
+- **延迟机关加速的常见用法**（celeste.ink）：抓着交通块或冲刺砖时斜向冲向另一面墙，在 9 帧内蹬墙，保留块的速度。
 - **数值**：交通块去程最高速约 π × 路径长度 px/s（`entities.md` ZipMover），即使超过 250 也截断到 250。
 - **输入**（交通块上起跳后冲刺）：`["1,R,J", "1,R", "1,R,X", "3,R,D", "1,R,D", "10,R"]`。起跳后 9 帧内冲刺。
 - **本轮章节**：✗（序章只有向下的巨石，没有向上或水平的加成）/ ✓（交通块）/ ✓（交通块、开关门、移动梦境块）
@@ -553,20 +593,27 @@
 规则见 `player_physics.md` §10。以下全部【代码已核实】，除注明外。
 
 - **梦境跳（Dream jump，果冻跳）**：在出口帧 E 跳键"按下"（可提前 4 帧缓冲），且冲刺方向有水平分量 → 普通起跳：vx = 出口速度 + 40·moveX（水平穿出 240 → 280），vy = −105。竖直穿出不能梦境跳。
+  - **窗口**：出口帧前 4 帧到出口帧按下 → 在 E 执行；出口后的 3 个冻结帧里按下 → 缓冲到 E+4；E+4…E+8 是 5 个土狼帧。按键窗口合计 13 帧（celeste.ink，与代码一致）。在 E 执行的那一跳之后，土狼计时会被重新设为 0.1 s（见梦境双跳）。
+  - **斜向梦境跳**：起跳给水平速度 +40，但竖直速度被**覆盖**为 −105。斜下穿出（vy = +169.7）应在出口帧就跳（缓冲）；斜上穿出（vy = −169.7，比 −105 更快）应等到土狼时间末尾、vy 已衰减到接近 −105 时再跳（celeste.ink，与代码一致）。
+  - **中性 / 反向梦境跳**：不按方向只拿高度；按反方向拿高度并减速 40（可作为刹车，但不能瞬间停住）。
 - **梦境双跳（Dream double jump，果冻双跳）**：梦境跳之后，出口处理又把土狼计时设为 0.1 s，所以在土狼时间内能再普通起跳一次，再 +40 → 320，vy 重置为 −105。harness：E 帧之前缓冲第一跳；E+1 松开；E+2 或 E+3（冻结帧）再按并按住，第二跳在 E+4（第一个正常帧）执行。
   - 输入：`["5,R,J", "1,R", "3,R,J", "11,R,J"]`（第一段的最后一帧是 E）。
   - 按反方向做两次跳可以在出口刹车（每跳 −40）。
-- **梦境反抓（Dream grab，果冻反抓）**：出口时按住抓，并按住朝向一侧可抓墙的方向（通常是**反方向**，即梦境块本身：水平穿出时若身后 5 px 内有实心物，会先被拉回贴住）→ 直接进入攀爬。条件是冲刺方向向下或有水平分量（正上穿出不行）。
+- **梦境反抓（Dream grab，果冻反抓）**：出口时按住抓，并按住朝向一侧可抓墙的方向（通常是**反方向**，即梦境块本身：水平穿出时若身后 5 px 内有实心物，会先被拉回贴住）→ 直接进入攀爬。条件是冲刺方向向下或有水平分量（正上穿出不行）。被抓的那一面有尖刺或禁止攀爬时不行（celeste.ink）。输入可以在出口前缓冲（按住即可）。
+  - **反抓 hyper（dream grab hyper）**：抓墙**不清零**土狼计时，所以反抓之后仍可在土狼时间内从攀爬状态冲刺并 super/hyper（离梦境块比普通梦境 hyper 稍近）【代码已核实】。
 - **梦境 hyper / super（Dream hyper / super，果冻 Hyper/Super；反向梦境 hyper/super）**：出口后冻结 3 帧（E+1–E+3），E+4 起计时，土狼计时剩 0.0833。在 E+4 受理冲刺（F0），让跳在 F4（E+8）"按下"→ F4 立即 super；若 F0 下蹲 → hyper。土狼计时在 F4–F7 都 > 0，**共 4 帧窗口**（与 SJ 的"最多 4 帧"一致）。
   - 输入（从 E+1 开始）：`["4,R,D,X", "3,R", "1,R,J", "11,R,J"]`。X 在冻结帧按下并按住，E+4 受理冲刺；F0 按住 D → 下蹲；F4 起跳 → hyper。
   - 若进入梦境块时处于下蹲（下蹲冲刺进入），出口后仍蹲着；空中下蹲时开始冲刺会**先起身**，于是只能 super，不能 hyper。
   - 斜向穿出、从上下面出来时，向哪边 hyper 都可以（反向梦境 hyper）。
   - **冲刺冷却**：进入梦境块的那次冲刺冷却 12 个正常帧，出口冻结的 3 帧不算。若梦境块很短（E 距那次冲刺的 F0 不足约 14 帧），E+4 还不能冲刺。
   - 结果：梦境 hyper 325 / −52.5（比梦境跳快、低）；梦境 super 260 / −105，弧线几乎等于梦境跳，很少有用。冲刺不补回（这次冲刺用掉了出口补满的那一次）。
+  - celeste.ink 说窗口"4–8 帧，demohyper 恒为 8 帧"。按代码，跳**执行**的帧只能落在土狼计时 > 0 的 F4–F7（冲刺在 E+4 受理时）；"8 帧"应理解为按键窗口，包含冲刺冻结帧里的缓冲（推断）。
 - **梦境墙弹（Dream wallbounce）**：进入梦境块时冲刺攻击被清零，所以出口时不能直接墙弹。原版做法是出口后（出口已补满冲刺）立即正上冲刺，再正常墙弹，同样受上面的冷却限制。celeste.ink 把"在梦境块内获得额外冲刺再墙弹"列为 mod 技巧，那一形式不收录。
 - **梦境斜下穿出接落地 ×1.2**：斜下穿出后冲刺方向仍为斜下，落地触发 ultra 转换：169.7 → 203.6（推断，未实测）。
 - **缓冲冲刺出梦境块**：SJ 说水平穿出时缓冲冲刺，会在离块 4 px 处冲刺（未核实）。
 - **Splipped droosts**：在带刺梦境块的上角做梦境冲刺而不进入块（celeste.ink 梗名）（未核实）。
+- **梦境穿角（dream corner clip）**：梦境块的碰撞范围较宽，冲进梦境块与其他实心物夹出的角落，可以穿过 1 格宽的墙（celeste.ink；代码中出口卡进实心物时会向对角方向最多 5 px 搜索空位，可能与此有关，未核实）。
+- **梦境中带物品（dream smuggle 等）**：见 6.7。
 - **本轮章节**：✗ / ✗ / ✓（梦境块激活后）
 - **来源 / 核实**：SJ Beginner Gym "Dream Jump"、"Dream Grab"；Expert Gym "Dream Hyper"、"Dream Super"；Grandmaster Gym "Dream Double Jump"；celeste.ink；BWIKI。
 
@@ -595,7 +642,7 @@
   - **向下换房**：状态设为 Normal，vy = max(0, vy)，取消 AutoJump 与可变跳；**vx 保留**（可以用来取消 gultra 而保留速度）。
 - **换房墙弹（transition wallbounce，Kermit tech）**：正上冲刺穿过向上换房，到新房间后仍在冲刺攻击中、冲刺方向仍为正上 → 在 StNormal 里贴墙按跳即墙弹。冲刺已被换房补满。
 - **换房 super/hyper**：水平冲刺穿过侧向换房，冲刺状态保留；到新房间后要**落在地面上**再按跳（土狼计时被清零了）；冲刺次数已被补满，相当于免费 extended。
-- **Kermit dash**：冲刺状态跨换房保留，玩家可以在冲刺方向不变的情况下继续控制（celeste.ink，niche）。
+- **Kermit dash**（celeste.ink）：冲刺穿过**竖直**换房时，冲刺状态被结束，但冲刺攻击计时和冲刺方向都保留。所以到新房间后仍能做冲刺类动作（墙弹、撞碎冲刺砖、进梦境块），并且冲刺已经被换房补满。与代码一致：向上换房把状态设为 Normal，向下换房同样；两者都不清零冲刺攻击计时，也不改冲刺方向。
 - **本轮章节**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Screen Transitions"；celeste.ink；BWIKI（切板）；【代码已核实】。SJ 说向上换房"只在上升速度不足时才把人往上推"，代码是无条件设为 −105，向上冲刺穿过时也会被压到 −105，而且 vx 清零【社区说法与代码不符】。
 
@@ -604,7 +651,9 @@
 - **规则**【代码已核实，磁带块】：磁带块要变为实心时，若 Madeline 与它重叠，先尝试把她**直接上移 1–4 px**；挪不开则这组块本帧保持不可碰撞，下一帧再试（她在里面时就一直不实心，附着物也不启用）。变实心的同一帧，块再上移 1 px（作为平台移动，给骑在上面的人 −60 px/s 的平台速度）。
 - **reform boost / cassette boost**：在块恢复实心的瞬间、人刚好有一点点在块内时起跳。被上挪 + 块上移 1 px 的平台速度 → 跳得更高。不要缓冲这次跳（SJ）。
 - **reform kick**：人在未激活块的碰撞箱里，块恢复时横向移出块，同时按跳 → 从刚恢复的块侧面蹬出。
-- **带刺块**：块的碰撞箱先于附着的尖刺变实心，所以可以站上正在恢复的带刺块并补回冲刺（SJ，未核实）。
+- **带刺块**：块的碰撞箱先于附着的尖刺变实心，所以可以站上正在恢复的带刺块并补回冲刺（SJ，未核实）。celeste.ink 说磁带块例外（附着物与块同时恢复）。按代码，磁带块恢复时同一帧启用附着物，与 celeste.ink 一致。
+- **磁带块抬升（cassette raise）**：在磁带块激活和取消激活的整个过程中都待在块里，块会上移 2 px，可重复（celeste.ink；与上面"恢复时上移 1 px"、预告时各移 1 px 的规则有关，具体机制未核实）。
+- **换房磁带偏移（screen transition cassette offset）**：在磁带块切换的那一刻换房，新房间该颜色的块高 1 px，旧颜色的低 1 px（celeste.ink，未核实）。
 - move block、core block 版本见 `mechanics.md` §3（后续章节）。
 - **本轮章节**：✗ / △（只有隐藏的磁带房间有磁带块）/ △（同）
 - **来源 / 核实**：SJ Grandmaster Gym "Reform Tech"；celeste.ink（Cassoosted fuper 为梗技巧，需要羽毛，不收录细节）；磁带块部分【代码已核实】。
@@ -641,6 +690,20 @@
 | Seeker 反弹（Seeker bounce） | seeker 撞墙后的短暂状态里撞它：约 hyper 速度并补冲刺 | seeker | 未核实 |
 | 门处平地 ultra 取消（Grounded ultra cancel） | 钥匙门/镜像神殿门开启时的状态取消保住 390 | 门 | 未核实 |
 | 带刺交换块贴刺跳 / 交换块抓墙 | 见 5.4；冲刺中按住抓撞向同向移动的交换块 → 直接抓墙 | 交换块 | 部分核实 |
+| 弹球穿越（Bumper clip） | 弹球被撞后碰撞箱会消失几帧，这时缓冲冲刺可以穿过去 | 弹球 | 未核实 |
+| 物品横扫（Holdable slash） | 竖直速度足够时中性下放，物品与人同高，可以水平（甚至向下）冲刺接回 | 水母/Theo | 未核实 |
+| 物品滞空 / 物品攀爬 / 带物品中性跳（Holdable stall / climb / neutral jump） | 中性下放后很快接回以延长滞空；下放 → 爬墙跳或中性跳 → 接回，实现"带着物品"爬墙 | 水母/Theo | 原理已核实（拿着时不能抓墙、不能爬墙跳） |
+| 物品梯（Holdable laddering） | 两只水母交替下放、接回，持续上升；Theo 需要下方有上升的块 | 水母/Theo | 未核实 |
+| 弹球冻结期带物品冲刺（Holdable dash smuggle from bumpers） | 撞弹球的冻结帧里松开抓，冲刺前再接回，从而"带着物品冲刺" | 弹球+物品 | 未核实 |
+| 弹簧加速取消（Springboost cancel） | 拿着物品碰墙面弹簧后立刻扔出再接回，以换取竖直速度、去掉水平速度 | 弹簧+物品 | 未核实 |
+| 反抓 hyper 带物品 / 无抓带物品梦境 hyper（Holdable dream hyper / grabless） | 带物品进梦境块后反抓再 hyper；或出口先梦境跳、再 hyper、再接回物品 | 物品+梦境块 | 未核实 |
+| 带物品岩浆块 super/hyper（Holdable core super/hyper） | 在岩浆块的土狼帧里把物品向反方向扔出，做岩浆块 super/hyper 再接回 | 物品+岩浆块 | 未核实 |
+| 岩浆块附着物错位（Core block entity displacement，ced） | 岩浆块恢复时先变实心、后启用附着物；附着物恢复前再弄碎它，附着物会留在块弹到的位置 | 岩浆块 | 未核实 |
+| 单向平台穿越（Jumpthrough clip）/ 羽毛穿越 / 羽毛碰撞箱保留 | 被块与单向平台夹住时被推下穿过平台；羽毛快结束时碰单向平台可从另一侧穿过；用特殊方式结束羽毛可保留异常的碰撞箱/受击箱组合 | 移动块/羽毛 | 未核实 |
+| 熔岩中性跳（Lava neutrals） | 熔岩/冰墙的伤害区前有 1 px 实心，可以缓冲中性跳、爬墙跳、墙弹等 | 熔岩/冰墙 | 未核实 |
+| 刺球眩晕 / 刺球冻结（Spinner stunning / freeze） | 刺球每 3 帧才检测一次是否靠近 Madeline 以启用碰撞，在检测帧暂停可跳过检测（TAS）；关卡运行约 118 小时后计时精度耗尽，三分之二的刺球不再启用 | 刺球 | 未核实 |
+| Koral clip | 移动块把人推到房间边界并"卡进"块里，块再往回走时人被传送到块运动方向的一侧 | 移动块+房间边界 | 未核实（1A 交通块理论上可能，△） |
+| Heart ultra | 见 3.10 | 水晶之心 | 未核实 |
 
 ---
 
@@ -674,10 +737,13 @@ F0 时冲刺方向为零，算"水平"，冲刺攻击已开始；若此时离地
 | --- | --- | --- | --- |
 | 回图重开（Bubsdrop） | 用蹬墙跳/爬墙跳抵消向上换房带来的上升，不落到入口的单向平台上，掉回上一个房间；重生点改为该房间上部最近的出生点 | ✗（依赖特定房间结构，对计时无益） | 未核实 |
 | 剧情跳过取消冲刺 / 剧情 ultra / 剧情位移（Cutscene skip, cutscene ultra, cutscene warp） | 剧情开始时减速，首帧跳过可保速但取消冲刺状态；部分剧情跳过只改 x | ✗（剧情由 harness 自动跳过，agent 无法控制时机） | 未核实 |
-| 暂停缓冲（Pause buffering） | 解除暂停后约 10 帧内的输入合并到第一帧，逐帧输入用 | ✗（harness 本身逐帧；暂停期间 IGT 照走） | 未核实 |
+| 暂停缓冲（Pause buffering） | 解除暂停后约 10 帧内还没有恢复控制，其中最后 5 帧里的按键会在恢复后的第一帧执行，用来逐帧输入（celeste.ink：缓冲窗口 6 帧） | ✗（harness 本身逐帧；暂停期间 IGT 照走） | 未核实 |
 | 半体力攀爬（Half stamina climbing） | 见 4.5 | ✓（TAS 级） | 未核实 |
-| Kermit dash | 见 6.5 | ✓ | 原理已核实 |
-| 仅见名称的条目 | NamuWiki 列有 Jasig jump、Yep、Bino storage、Oshiro super、Overclock、Climb jump cancel 等名称。其中 Overclock 见 4.5，Oshiro super 见 6.7 弹跳；"climb jump cancel"按"用爬墙跳取消冲刺"理解，见 3.14、5.2；其余没有找到定义 | — | — |
+| Kermit dash | 见 6.5 | ✓ | 代码已核实 |
+| 望远镜技巧（Bino clip / bino control storage / bino interaction storage / bino extensions） | 卡刺：用望远镜让屏幕外刺球卸载；控制存储：在望远镜里移动（需暂停缓冲）；交互存储：进入望远镜行走后一旦离地，"正在用望远镜"的标记不清除，下一次换房时会把状态设为 Normal（可取消冲刺，例如保住平地 ultra 的速度）；延长：反复进出扩大镜头范围 | △（1A/2A 有望远镜；harness 不能暂停，交互存储理论上可行）（未核实） | 未核实 |
+| Roboboost | 在移动块上做 6 帧 hyper 兔子跳 + 反向抓角加速（TAS） | △ / △ / △ | 未核实 |
+| 亚像素操纵（Subpixel manipulation） | 不是独立技巧：通过组合动作把余量（`README.md` §5）调到特定值，以满足像素级技巧。模拟器可以直接枚举 | ✓ | — |
+| 仅见名称的条目 | NamuWiki 列有 Jasig jump（2.10）、Bino storage（本表望远镜技巧）、Oshiro super（6.7 弹跳）、Overclock（4.5）、Climb jump cancel（按"用爬墙跳取消冲刺"理解，3.14、5.2）、Yep（无定义）。celeste.ink Tech/aurora 草稿页里另有一批只有名字的条目，见 §9.3 | — | — |
 
 ---
 
@@ -745,7 +811,180 @@ F0 时冲刺方向为零，算"水平"，冲刺攻击已开始；若此时离地
 
 ### 8.3 机制库（Library）
 
-机制库共 26 节（速度、帧、机关加速、弹跳、碰撞距离容错、墙角修正、狼跳、下蹲、灰砖、冲刺状态保留、冲刺冷却、冲刺速度、下落方块、下落速度、羽毛加速、冻结帧、摩擦力、碰撞箱、预输入、跳跃加速、跳跃高度控制、延迟机关加速、房间切换、体力值、Ultra 机理、水），每节一行规则与核实见 `mechanics.md` §2。
+机制库共 25 个有正文的小节（速度、帧、机关加速、弹跳、碰撞距离容错、墙角修正、狼跳、下蹲、灰砖、冲刺状态保留、冲刺冷却、冲刺速度、下落方块、下落速度、冻结帧、摩擦力、碰撞箱、预输入、跳跃加速、跳跃高度控制、延迟机关加速、房间切换、体力值、Ultra 机理、水）。另有"羽毛加速"只有标题、没有正文，其内容在 Grandmaster gym 羽毛技巧小节。每节的规则与核实见 `mechanics.md` §2。
+
+---
+
+## 9. 来源覆盖对照表（原文小节 → 本知识库位置）
+
+原文副本放在 `/kb/reference/`（只读，与本文件或代码冲突时以本文件和代码为准）。下表中「」里是原文的小节标题，可以直接在对应文件里搜索。"本三章"一栏只在与条目本身不同或需要强调时填写。
+
+### 9.1 celeste.ink Tech 页：`/kb/reference/celeste_wiki/Tech.md`
+
+| 原文小节 | 本知识库位置 | 备注 |
+| --- | --- | --- |
+| 「Berry Mechanics」 | 不收录 | 收集品，与移动和计时无关（`entities.md` §6） |
+| 「Climbhop」 | `player_physics.md` §9.3；4.7 | 墙顶有尖刺、头顶有实心物时不翻墙 |
+| 「Corner Correction」 | 5.1；`mechanics.md` 2.6 | |
+| 「Coyote Time/Jump」 | 2.4 | |
+| 「Dash Attack」 | 3.15 | |
+| 「Directional Spikes」 | 5.4 | |
+| 「Fastbubbling」 | 6.7；`mechanics.md` 3.2 | 本三章 ✗（无泡泡） |
+| 「Fastfalling (Fastfall)」 | 2.6 | |
+| 「Input Buffering」 | 2.5 | 原文"之后 4 帧" = 按下帧 + 4 帧，与代码的 5 帧一致 |
+| 「Liftboost」 | 6.1；`mechanics.md` 2.3、2.22 | 一致（10 帧计时 = 停下后 9 帧） |
+| 「Screen Transition」 | 6.5；`mechanics.md` 2.23 | 原文"竖直换房后给少量竖直速度"：代码是向上换房**设为** −105，向下换房只保证 vy ≥ 0 |
+| 「Wind Resistance」 | `mechanics.md` 2.8 | 本三章 ✗（无风） |
+| 「Spring Cancel」 | 2.5；6.4 | |
+| 「Superdash (Super)」 | 3.2 | |
+| 「Hyperdash (Hyper)」 | 3.3；3.7 | |
+| 「Extended Dashes」 | 3.2；3.3 | "10 帧后恢复冲刺" = F10，一致 |
+| 「Reverse Dashes」 | 3.6；3.8 | |
+| 「Midair Dashes」 | 3.4；3.5 | 原文"离平台 < 3 px 会贴上"一致；"冲刺撞到平台顶部 3 px 会被角修正"——代码为 4 px |
+| 「Ultradash (Ultra)」 | 3.10 | |
+| 「Chained Ultras」 | 3.11 | |
+| 「Grounded Ultras」 | 3.12 | |
+| 「Grounded Ultra Cancel」 | 3.12；3.14；6.7 | |
+| 「Delayed Ultra」 | 3.13 | |
+| 「Demodash (Demo)」 | 3.9 | "冲刺前 4 帧内按下"与代码不符（只看 F0） |
+| 「Demohyper」 | 3.9 | |
+| 「Up Diagonal Demo (Diag Demo)」 | 3.9 | |
+| 「Wallbounce (wounce, wb)」 | 4.2 | |
+| 「Spiked Wallbounce」 | 4.3 | |
+| 「Bunnyhop (Bhop)」 | 2.2 | |
+| 「Cornerjump」「5jump」「Spiked Cornerjump」 | 4.7 | |
+| 「Cornerkick」 | 5.3 | |
+| 「Ceiling Pop (cpop)」 | 5.6 | |
+| 「Crouch Jumps」 | 2.7 | |
+| 「Neutral Jump (Neutral)」 | 4.4 | |
+| 「Wallboost」「Cornerboost Wallboost (cobwob)」「Wallboost Neutral」「Wallkick Wallboost」 | 4.5 | |
+| 「Cornerboost (cb)」「Downward Cornerboosts」「Double Cornerboost (dcb)」「Reverse Cornerboost (rcb)」「Neutral Reverse Cornerboost (nrcb)」「Spiked Cornerboost」「Disappearing Block Cornerboost」 | 5.2 | "撞墙后 5 帧内退还速度"——代码为 4 次检查 |
+| 「6jump」 | 4.7；5.2 | |
+| 「7jump」「8jump」「9jump」「Longer jumps」 | 5.2 | harness 单跳键，依赖双重抓角的版本基本不可行 |
+| 「Modded Cornerboosts」 | 附录 A | 原版没有 |
+| 「Overhangs」「4tile」「5tile」「Crouched 5tile」「6tile」「k×1 overhang」 | 4.8 | |
+| 「Spike Climb」「Narrow Spiked Climb」「Spike Clip」「Spike Jumps」 | 5.4；5.5 | |
+| 「Stamina Cancel」 | 4.6 | |
+| 「Cornerslip」 | 2.10 | |
+| 「Archie」「Bubble Super / Hyper」 | 6.7；`mechanics.md` 3.2 | 本三章 ✗ |
+| 「Bumper Clip」「Launch Boost」 | 6.7；`mechanics.md` 3.4 | 原文"约 +50"与代码 ×1.2（280 → 336）一致 |
+| 「Fish / Iceball / Oshiro / Seeker / Snowball Jump」 | 6.7；`mechanics.md` 2.4 | 本三章 ✗ |
+| 「Cloud Jump / Spiked Cloud Jump」「Cloud Hyper/Super」「Cloud Hyper Bunnyhop」 | 6.7；`mechanics.md` 3.5 | 本三章 ✗ |
+| 「Core Hyper/Super」「Holdable Core Super/Hyper」「Core Block Entity Displacement (ced)」 | 6.7；`mechanics.md` 3.6 | 本三章 ✗ |
+| 「Delayed Blockboost」「Multiboost」 | 6.1 | 1A / 2A ✓ |
+| 「Dream Grab」「Dream Jump」「Dream Double-Jump」「Dream Hyper」 | 6.2 | 2A ✓ |
+| 「Dream Smuggle」「Dream Grab Hyper」「Holdable Dream Hyper」「Holdable Grabless Dream Hyper」 | 6.2（反抓 hyper）；6.7 | 不带物品的反抓 hyper 2A ✓；带物品的 ✗。原文"拾取要 12 帧"，代码的拾取动画是 0.16 s ≈ 10 帧，另有状态切换帧（未实测） |
+| 「Featherboost」「Feather Super」「Feather Clip」「Feather Hitbox Preservation」 | 6.7；`mechanics.md` 3.3 | 本三章 ✗ |
+| 「Heart Ultras」 | 3.10；6.7 | 表演性质 |
+| 「Jumpthrough Clip」 | 6.7 | 未核实 |
+| 「Lava Neutrals」 | 6.7 | 本三章 ✗ |
+| 「Moon Boost」 | 6.7；`mechanics.md` 3.7 | 本三章 ✗ |
+| 「Reform Tech」「Reform Kick」「Reform Boost (Cassette Boost)」「Cassoosted Fuper」 | 6.6 | 1A / 2A 只有磁带房间有磁带块（△）；Cassoosted fuper 需羽毛（✗） |
+| 「Seeker Bounce」 | 6.7 | 本三章 ✗ |
+| 「Theo/Jelly Regrabs」「Holdable Slash」「Neutral Drop」「Holdable Stall」「Holdable Climb」「Holdable Neutral Jump」「Holdable Laddering」「Theo/Jelly Ultras」「Holdable Dash Smuggle (From bumpers)」「Throwable Backboost (Backboost)」「Jellyvator / Theovator」「Springboost cancel」 | 6.7；`mechanics.md` 3.1 | 本三章 ✗（无可拾取物） |
+| 「Waterboost」 | 6.7；`mechanics.md` 2.26 | 本三章 ✗ |
+| 「Koral Clip」 | 6.7 | △，未核实 |
+| 「Bino Tech」「Bino Clip」「Bino Control Storage」「Bino Interaction Storage」「Bino Extensions」 | 7.6 | △，未核实 |
+| 「Bubsdrop」「Cutscene Warps」「Pause Buffering」「Roboboost」「Subpixel Manipulation」 | 7.6 | |
+| 「Cassette Raise」「Screen Transition Cassette Offset」 | 6.6 | 未核实 |
+| 「Half Stamina Climbing」 | 4.5 | |
+| 「Kermit Dash」 | 6.5 | 与代码一致 |
+| 「Spinner Stunning」「Spinner Freeze」 | 6.7 | 本三章 ✗（无刺球） |
+| 「Undemo (omed) Dashing」 | 3.9 | |
+| 「Trivia」「References」 | 不收录 | |
+
+### 9.2 celeste.ink 子页面：`/kb/reference/celeste_wiki/*.md`
+
+| 文件 | 本知识库位置 | 备注 |
+| --- | --- | --- |
+| `Bubsdrop.md` | 7.6 | |
+| `Bunnyhops.md`（hyper 兔子跳、连续 ultra、机关加速兔子跳） | 2.2；3.7；3.11；6.1 | |
+| `Dashing.md` | 3.1；3.15 | 各章冲刺次数与 0.4 一致 |
+| `Demodash.md`（demo 按键、斜向 demo、Archie、demohyper） | 3.9；6.7 | demo 按键与输入优先级对 harness 无意义（有 Z 键）；"第 1 帧按下、第 5 帧前改方向"与代码一致 |
+| `Dream_tech.md`（斜向 / 双跳 / 反向梦境跳、梦境 hyper/super、梦境穿角） | 6.2 | |
+| `Freeze_frames.md` | `mechanics.md` §1 | "冲刺多 1 帧 Madeline 静止而其他东西在动" = F0（速度为 0），一致 |
+| `Hyperdashes.md` | 3.3–3.6；6.2；6.7 | vy = 52.5，与代码一致 |
+| `Momentum.md` | 6.1；6.2；6.7 | 占位页 |
+| `Neutrals.md` | 4.4 | |
+| `Pause_Buffering.md` | 7.6 | |
+| `Stamina.md` | 4.6；`mechanics.md` 2.24 | |
+| `Superdashes.md` | 3.2；3.5；3.6 | |
+| `Tech_aurora.md` | 9.3 | 草稿名称清单 |
+| `Ultradashes.md` | 3.10–3.13 | |
+| `Vators.md`（斜向 vator、中性下放、重新拾取的冷却） | 6.7；`mechanics.md` 3.1 | |
+| `Wallbounces.md` | 4.2 | |
+
+### 9.3 `Tech_aurora.md` 草稿清单（只有名称）
+
+- **已有条目**：Dashing、Walking / Movement / Friction / Momentum / Buffering（3.1、2.8、6.1、2.5）；Grabbing / Climbing / Jumping（`player_physics.md` §5、§9）；Bunny Hopping、Fast Falling、Fast Bubbling、Dream Jump、Corner Jump、Wallbounce、Wavedash、Jelly Regrab、Jellyvator、Theo Regrab、Bubble Tech、Supers、Water Dash Preservation、Wall Slides、Neutrals、Mid-air Supers、Extended Supers/Hypers、Simple / Advanced Spike Tech、Ultras、Block Boost、Cornerboost、Crouch Climb、Reverse Tech、Neutral Object Drops、Pufferfish/Bumper Boosts、Spiked Clouds、Wallbounce Leniency、Wallboosts、Overclocks、Hyper Bunny Hop、Dashless Cornerboosts、Demos、Demo Hypers、Reform Tech、Dream hypers、Theovators、Slow Falling（2.3）、Archie、Corner Kick、Chained Ultras、Double Block Boosts、Core Hypers、Retention Tech（撞墙速度保留，5.2）、Grounded Ultras、RCB、Dream Smuggling、Diagonal Demo、Dream Double Jumps、Feather Clip、Cassette Block Boosts、Throwable Neutrals/Climbs、Backboosts、Moonboost、Super Wave、Bino Storage、Cassette Raising、Ceiling Pops、Delayed Ultra、DCB、Grounded Wallboost（地面上爬墙跳后偷体力 = 超频，4.5）、Half Stamina Climb、Jelly Laddering、Multiboosts、Water Boost、Undemo、6 Tile Overhang、Roboboost、Spike Climb、Jump Thru Clip、Feather Boost / Bounce / Super、Theo Pickup、Theo Wall Jump、Water Jumps。
+- **只有名称、没有找到定义，未收录**：Pixels?、Basic / Advanced Clips、Bound Warping / Double Bound Warp（Kevin / 交换块）、Launch Dash Redirect、Momentum Transfers、Max Distance Throwable Objects、Grab Neutrals、Jellyfish Bump / Jelly Bump、Backwards Corner Boost、Instant bunny hop（Theo）、Climbhop Entanglement、Climbhop Cancel、Climb Boost、Coyote Ultra、Dashbounce、Downwards Dream Smuggle、Jellyfish Duping、Throwable Dashes、Double Ghost Blocks、1 tile bunny hop、9px Speed Conversion、Downward Demo、Infinite Stall、Instant Delayed Ultra、Moon Boost Cornerboost、Moon Spring Multiboost、Wind walking、Crouch Spam Speed Loss、Crush jump infinite speed gain、Entity Elevator、Fish Dash Cancel、Ground Pixel Gravity Transfer、Jelly Ceiling Throw、Zipper Wall Clip。
+
+### 9.4 SJ 训练场：`/kb/reference/strawberry_jam/gyms_en.md`（中文 `gyms_zh.md`）
+
+| 原文小节 | 本文件位置 |
+| --- | --- |
+| 「Beginner Cloud Jump」「Beginner Theo Tech」 | 6.7 |
+| 「Beginner Dream Grab」「Beginner Dream Jump」 | 6.2 |
+| 「Intermediate Fast Bubble」「Intermediate Jelly Regrab」「Intermediate Lift」「Intermediate Neutral Drop」 | 6.7 |
+| 「Intermediate Hyper」 | 3.3；3.4 |
+| 「Intermediate Super」 | 3.2 |
+| 「Intermediate Wall Bounce」 | 4.2 |
+| 「Advanced B/P Boosts」「Advanced Jellyvator」「Advanced Theo Regrab」 | 6.7 |
+| 「Advanced Bunnyhop」 | 3.7 |
+| 「Advanced Crouch Jump」 | 2.7 |
+| 「Advanced Midair Super」 | 3.5 |
+| 「Advanced Neutral Jump」 | 4.4 |
+| 「Advanced Reverse」 | 3.6 |
+| 「Expert Cornerboost」 | 5.2 |
+| 「Expert Cornerjump」 | 4.7 |
+| 「Expert Dream Hyper」 | 6.2 |
+| 「Expert Jelly Climb」「Expert Jelly Smuggle」「Expert Theo Vator」 | 6.7 |
+| 「Expert Multi」 | 6.1 |
+| 「Expert Ultra」 | 3.10 |
+| 「Grandmaster Backboost」「Grandmaster Moonboost」 | 6.7 |
+| 「Grandmaster Chain」 | 3.11 |
+| 「Grandmaster Core Hyper」 | 6.7；`mechanics.md` 3.6 |
+| 「Grandmaster Cornerkick」 | 5.3 |
+| 「Grandmaster Crouch Dash」 | 3.9；6.7（Archie） |
+| 「Grandmaster Dream Double Jump」 | 6.2 |
+| 「Grandmaster Feather Tech」 | 6.7；`mechanics.md` 3.3 |
+| 「Grandmaster Grounded」 | 3.12 |
+| 「Grandmaster Reform Tech」 | 6.6 |
+| 「Grandmaster Spike Jump」 | 5.4 |
+| 「Grandmaster Superwave」 | 3.8 |
+| 「Grandmaster Wallboost」 | 4.5 |
+| 「Grandmaster Wallbounce Leniency」（含带刺墙弹） | 4.3 |
+
+### 9.5 SJ 机制库：`/kb/reference/strawberry_jam/library_en.md`（中文 `library_zh.md`）
+
+| 原文小节 | `mechanics.md` 位置 | 相关技巧 |
+| --- | --- | --- |
+| 「Library Speed」 | 2.1 | §1 |
+| 「Library Frames」 | 2.2 | 5.5 |
+| 「Library Block Boost」 | 2.3 | 6.1 |
+| 「Library Bouncing」 | 2.4 | 6.7 |
+| 「Library Collision Leniency」 | 2.5 | 4.1 |
+| 「Library Corner Correction」 | 2.6 | 5.1 |
+| 「Library Coyote Time」 | 2.7 | 2.4 |
+| 「Library Crouching」 | 2.8 | 2.7 |
+| 「Library Crumble Blocks」 | 2.9 | 6.3 |
+| 「Library Dash Attack」 | 2.10 | 3.15 |
+| 「Library Dash Spacing」 | 2.11 | 3.1 |
+| 「Library Dash Speed Preservation」 | 2.12 | 3.1；2.9 |
+| 「Library Falling Blocks」 | 2.13 | 6.3 |
+| 「Library Fall Speed」 | 2.14 | 2.6 |
+| （Feather Boosts，只有标题） | 2.15 | 6.7 |
+| 「Library Freeze Frames」 | 2.16、§1 | 0.5 |
+| 「Library Friction」 | 2.17 | 2.8 |
+| 「Library Hitbox」 | 2.18 | 5.4 |
+| 「Library Input Buffer」 | 2.19 | 2.5 |
+| 「Library Jump Boost」 | 2.20 | 2.1 |
+| 「Library Jump Control」 | 2.21 | 2.3 |
+| 「Library Momentum Carry」 | 2.22 | 6.1 |
+| 「Library Screen Transitions」 | 2.23 | 6.5 |
+| 「Library Stamina Management」 | 2.24 | 4.6 |
+| 「Library Ultra Mechanics」 | 2.25 | 3.10 |
+| 「Library Water」 | 2.26 | 6.7 |
 
 ---
 
@@ -755,7 +994,8 @@ F0 时冲刺方向为零，算"水平"，冲刺攻击已开始；若此时离地
 | --- | --- |
 | 侧向单向平台（sideways jumpthrough） | 竖直放置、只从一侧挡的平台，SJ 用来做像素定位和侧向角修正演示 |
 | 修改过的梦境块（加速 / 可控速度的梦境块） | 机制库用来"给一段速度"做演示的梦境块 |
-| 抓角加速一致化方块 | Expert gym 用来消除原版抓角加速随初始位置失败的问题的方块 |
+| 抓角加速一致化方块（cornerboost block） | Expert gym 用来消除"bad cb"的方块：按速度加大蹬墙检测距离（celeste.ink：> 124.33 时 4 px，> 184.33 时 5 px，依此类推） |
+| Cornerboost Protection（Extended Variants 选项） | 撞墙后仍给 +40，前提是上一帧还不能爬墙跳；作用于整张地图 |
 | 跳跃水晶（jump refill） | 给若干次空中跳跃的水晶，机制库演示跳跃加速用 |
 | Extended Variants 冻结帧开关、Stamina Meter 体力条 | 工具类 mod，不是实体；不影响原版规则 |
 | 梦境块内的冲刺水晶（Dream redirect） | celeste.ink 列为 mod 技巧：在梦境块里补冲刺并改向 |
@@ -769,10 +1009,16 @@ F0 时冲刺方向为零，算"水平"，冲刺攻击已开始；若此时离地
 4. 抓角加速距离：BWIKI 写"4 像素内"；代码间隙 ≤ 2 px。
 5. 空中 super 容错：NamuWiki 写"上 1 下 3"；代码侧撞上抬最多 4 px、贴地要求间隙 ≤ 2 px、单向平台 6 px。
 6. Demodash 输入：celeste.ink 写"冲刺前 4 帧内按下"；代码只看 F0 是否按住下（或 Z）。
-7. 超级弹倍率：SJ/celeste.ink 写"约 1.5–2 倍"；代码在发射时按住同方向给水平 ×1.2（280 → 336）。
+7. 超级弹倍率：BWIKI 和 celeste.ink 的 Techniques 页写"约 1.5–2 倍"，SJ 只说"大得多"；代码在发射时按住同方向给水平 ×1.2（280 → 336）。celeste.ink Tech 页的"约 +50"与代码一致。
 8. 下蹲冲刺后"抬高 2 px"（BWIKI）：代码中没有，可能是泡泡 Archie 的效果。
 9. 偷体力窗口：BWIKI 写 10 帧；代码与 SJ、celeste.ink 一致为 11 帧。
 10. NamuWiki 双重机关加速算例"825"算术有误；按代码截断后 hyper 加成上限为 637.5。
+11. 冲刺侧撞角修正：celeste.ink Tech「Midair Dashes」写"平台顶部 3 px"；代码为 4 px。
+12. 撞墙速度保留：celeste.ink Tech「Cornerboost (cb)」写"5 帧内"；代码为撞墙后的 4 次检查（0.06 s）。
+13. 竖直换房：celeste.ink Tech「Screen Transition」写"给少量竖直速度"；代码向上换房设 vy = −105、vx = 0，向下换房只保证 vy ≥ 0。
+14. 梦境块带物品：celeste.ink 写"拾取要 12 帧"；代码拾取动画 0.16 s ≈ 10 帧（另有状态切换帧，未实测）。
+15. 梦境 hyper 窗口：celeste.ink 写"4–8 帧"；代码中跳的执行帧最多 4 帧（F4–F7，冲刺在 E+4 受理时），8 帧应是含缓冲的按键窗口（推断）。
+- **表述差异、并不矛盾**：celeste.ink 说缓冲"之后 4 帧"，即按下帧 + 4 帧 = 代码的 5 帧；SJ 说冲刺"共 15 帧（含冻结帧）"，与 F0–F14 一致。
 
 **未核实**：岩浆块"垂直 ×2.25"（celeste.ink）；双重抓角的速度阈值（144 / 100）；吃水晶冻结的起始帧；缓冲冲刺出梦境块的"4 px"；羽毛斜向初速是否未归一化；seeker 反弹、望远镜卡刺、熔岩攀爬、ceiling pop、bubsdrop、剧情跳过类、带水母进果冻的细节；贴刺跳在 1A/2A 是否有带刺移动块。
 
@@ -790,7 +1036,11 @@ F0 时冲刺方向为零，算"水平"，冲刺攻击已开始；若此时离地
 - https://en.namu.wiki/w/Strawberry%20Jam%20Collab
 - https://github.com/StrawberryJam2021/StrawberryJam2021（只含 helper 代码，没有 gym 文本；用于确认 SJ 自定义实体名单）
 
-尝试但未能打开：https://celeste.ink/wiki/Tech（多次失败；改用同站 Techniques 页与其草稿页）、https://celeste.ink/wiki/Ultradash、https://celeste.ink/wiki/Cornerboosts、https://celeste.ink/wiki/Techniques/sandbox、NamuWiki 的 SJ 各大厅子页面、https://celestecn.miraheze.org/wiki/技巧、TV Tropes SJ 页、YouTube gym 视频页。
+尝试但未能直接打开：https://celeste.ink/wiki/Tech（多次失败；改为阅读下面的原文副本）、https://celeste.ink/wiki/Ultradash、https://celeste.ink/wiki/Cornerboosts、https://celeste.ink/wiki/Techniques/sandbox、NamuWiki 的 SJ 各大厅子页面、https://celestecn.miraheze.org/wiki/技巧、TV Tropes SJ 页、YouTube gym 视频页。
+
+**原文副本（`/kb/reference/`，对照表见 §9）**：
+- `/kb/reference/celeste_wiki/Tech.md`（https://celeste.ink/wiki/Tech 修订 13628，GPLv3）及子页面 `Bubsdrop.md`、`Bunnyhops.md`、`Dashing.md`、`Demodash.md`、`Dream_tech.md`、`Freeze_frames.md`、`Hyperdashes.md`、`Momentum.md`、`Neutrals.md`、`Pause_Buffering.md`、`Stamina.md`、`Superdashes.md`、`Tech_aurora.md`、`Ultradashes.md`、`Vators.md`、`Wallbounces.md`。
+- `/kb/reference/strawberry_jam/gyms_en.md`、`gyms_zh.md`、`library_en.md`、`library_zh.md`（SJ 训练场与机制库全文）。
 
 **本地资料（只阅读，未复制原文）**：
 - Strawberry Jam 2021 mod 的对话文件（英文与简体中文，键 `SJ2021_Gym_*`、`SJ2021_Library_*`），即各 gym 小节与机制库的说明文字；本文用自己的话概括。

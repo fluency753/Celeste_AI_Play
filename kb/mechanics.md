@@ -1,6 +1,6 @@
 # 机制库（Mechanics）
 
-本文件收录"规则本身"：Strawberry Jam（草莓酱）训练场机制库（Library）全部 26 节的规则，章节计时与冻结帧，以及后续章节实体（Theo、水母、泡泡、羽毛、云、岩浆块、弹球/河豚、水、月亮块）的交互规则。技巧的用法见 `techniques.md`；原始常量见 `player_physics.md`、`input.md`、`entities.md`。
+本文件收录"规则本身"：Strawberry Jam（草莓酱）训练场机制库（Library）全部小节（25 节正文，外加只有标题的"羽毛加速"）的规则，章节计时与冻结帧，以及后续章节实体（Theo、水母、泡泡、羽毛、云、岩浆块、弹球/河豚、水、月亮块）的交互规则。技巧的用法见 `techniques.md`；原始常量见 `player_physics.md`、`input.md`、`entities.md`。
 
 核实标记与 `techniques.md` §0.3 相同：【代码已核实】/【由规则推算】/（未核实）/【社区说法与代码不符】。所有内容都用文字描述，不含代码，不含房间内容。
 
@@ -31,7 +31,7 @@
 
 ## 2. SJ 机制库（Library）全部小节
 
-SJ 中文名取 SJ 官方简体中文译名。"本三章"指 序章 / 1A / 2A 是否有这条规则起作用的场景（规则本身是全局的）。
+SJ 中文名取 SJ 官方简体中文译名。"本三章"指 序章 / 1A / 2A 是否有这条规则起作用的场景（规则本身是全局的）。原文在 `/kb/reference/strawberry_jam/library_en.md`（中文 `library_zh.md`），按「Library …」小节标题查找，对照表见 `techniques.md` §9.5。机制库原文与代码冲突时以代码为准，冲突处已标出。
 
 ### 2.1 速度（Speed）
 - 单位 px/s。常用速度：跑步 90，蹬墙跳 130，斜向冲刺每轴 169.71，羽毛巡航最高 190，冲刺 240，hyper 325。【代码已核实】
@@ -120,6 +120,7 @@ SJ 中文名取 SJ 官方简体中文译名。"本三章"指 序章 / 1A / 2A �
 - 本三章：✓。
 
 ### 2.15 羽毛加速（Feather Boosts）
+- SJ 机制库里这一节只有标题、没有正文；说明在 Grandmaster gym「Grandmaster Feather Tech」的第一小节（`/kb/reference/strawberry_jam/gyms_en.md`）。
 - 羽毛变身完成时，初速 = 250 × 当时的方向输入（无输入则沿朝向）；之后速度以每帧 16.7 趋向目标速度（按住方向时 140 → 190，不按 91），所以开头一小段比巡航快。斜向输入时初速是否更大取决于方向向量是否归一化（未核实）。【代码已核实（250、目标速度）】
 - 本三章：✗。
 
@@ -218,7 +219,7 @@ SJ 中文名取 SJ 官方简体中文译名。"本三章"指 序章 / 1A / 2A �
 - 速度 = 280 × 方向；若 vy ≤ 50，vy = min(−150, vy) 并设 AutoJump。
 - **超级弹**：发射时按住与弹射同向的水平方向 → vx ×1.2（336）；若发射那一刻没按，下一个正常帧（冻结之后）补判一次。补满冲刺与体力，冲刺冷却 0.2 s。
 - 弹射状态：vy 以 450（上升时）/ 225（下降时）px/s² 趋向 160，vx 以 200 px/s² 趋向 0，速度大小 < 220 时回到普通状态；期间可冲刺、可拾取。
-- SJ / celeste.ink 写"约 1.5–2 倍"【社区说法与代码不符：代码为 ×1.2】。
+- BWIKI 和 celeste.ink 的 Techniques 页写"约 1.5–2 倍"【社区说法与代码不符：代码为 ×1.2】；celeste.ink Tech 页「Launch Boost」写"约多 50"，与代码（+56）一致。
 
 ### 3.5 云（Cloud，蓝 / 粉）
 - 【代码已核实】站上云（vy ≥ 0）时，云以 180 px/s 向下，再以 1200 px/s² 减速并回升；回升期间云以平台速度 −220 移动（起跳只取到 −130，即 vy = −235）。
@@ -242,3 +243,4 @@ SJ 中文名取 SJ 官方简体中文译名。"本三章"指 序章 / 1A / 2A �
 - Strawberry Jam 2021 mod 对话文件（机制库各节与 gym 公告，英文与简体中文；只阅读并概括，未复制原文）。
 - 反编译游戏代码：`Player.cs`、`Level.cs`、Monocle `Engine.cs` / `Scene.cs` / `Actor.cs`、`Spikes.cs`、`CassetteBlock.cs`、`Cloud.cs`、`BounceBlock.cs`、`FloatySpaceBlock.cs`、`Glider.cs`、`TheoCrystal.cs`、`Puffer.cs`、`Bumper.cs`（只用于核实，未复制代码）。
 - 网页：https://celeste.ink/wiki/Techniques 、https://celeste.ink/wiki/User:Snowmanonahoe/Techniques 、https://wiki.biligame.com/celeste/%E9%AB%98%E7%BA%A7%E6%8A%80%E5%B7%A7 、https://en.namu.wiki/w/Celeste/%EC%8B%AC%ED%99%94%20%EA%B8%B0%EC%88%A0
+- 原文副本：`/kb/reference/strawberry_jam/library_en.md`、`library_zh.md`、`gyms_en.md`；`/kb/reference/celeste_wiki/Tech.md`、`Freeze_frames.md`、`Stamina.md`。
