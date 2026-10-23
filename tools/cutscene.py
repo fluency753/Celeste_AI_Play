@@ -130,4 +130,9 @@ def leave_level_by_pause_menu(client, max_wait_frames: int = 60) -> dict:
             obs = step([f"1,{'D' if yes > menu['selection'] else 'U'}", "6"])
             menu = obs.get("pauseMenu") or menu
         obs = step(["1,C", "30"])
+    # 等关卡真正退出（擦除转场、保存），避免调用方在退出途中又按暂停
+    for _ in range(60):
+        if obs.get("scene") != "Level":
+            break
+        obs = step(["10"])
     return obs
