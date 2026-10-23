@@ -32,3 +32,6 @@ local.props
 
 # 本机测试产物
 smoke/
+
+# 智能体的独立 Claude Code 配置目录（含登录态，不能提交）
+agent-home/

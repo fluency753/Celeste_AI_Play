@@ -9,7 +9,10 @@ from __future__ import annotations
 import argparse
 import sys
 
-from bridge_client import BridgeClient, summarize_obs
+try:
+    from bridge_client import BridgeClient, summarize_obs
+except ImportError:  # 作为 tools 包导入时
+    from tools.bridge_client import BridgeClient, summarize_obs
 
 QUIET = dict(image=False, entities=False, tiles=False, trajectory=False)
 
