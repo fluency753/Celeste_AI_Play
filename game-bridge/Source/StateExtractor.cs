@@ -71,6 +71,13 @@ internal static class StateExtractor {
             w.WriteString("name", save.Name);
             w.WriteNumber("slot", save.FileSlot);
             w.WriteNumber("fileTimeTicks", save.Time);
+            // 存档文件在磁盘上的位置（主控在开跑前备份它）
+            try {
+                string file = UserIO.GetSaveFilePath(SaveData.GetFilename(save.FileSlot));
+                w.WriteString("file", file);
+            } catch (Exception) {
+                w.WriteNull("file");
+            }
             w.WriteEndObject();
         } else {
             w.WriteNull("save");

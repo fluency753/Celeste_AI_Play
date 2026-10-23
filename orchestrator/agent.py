@@ -17,7 +17,7 @@ import os
 import uuid
 from pathlib import Path
 
-from .config import REPO_ROOT, RunConfig, find_claude_exe, find_docker_exe
+from .config import REPO_ROOT, RunConfig, chapter_name_by_id, find_claude_exe, find_docker_exe
 from .game_session import GameSession
 from .kb_study import KbStudy
 from .metrics import Metrics
@@ -27,12 +27,19 @@ CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
 
-def compose_prompt(runtime: str) -> str:
+def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None) -> str:
     extra = "container_zh.md" if runtime == "container" else "host_zh.md"
-    return (PROMPTS / "system_zh.md").read_text(encoding="utf-8") + "\n\n" + (PROMPTS / extra).read_text(encoding="utf-8")
+    text = (PROMPTS / "system_zh.md").read_text(encoding="utf-8") + "\n\n" + (PROMPTS / extra).read_text(encoding="utf-8")
+    if sim and runtime == "container":
+        text += "\n\n" + (PROMPTS / "sim_zh.md").read_text(encoding="utf-8")
+    if chapters and len(chapters) > 1:
+        names = " → ".join(chapter_name_by_id(c) for c in chapters)
+        text += ("\n\n# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
+                 "一章通关后系统自动进入下一章，你接着玩；之前写的程序与笔记都在工作区里，可以继续用。")
+    return text
 
 
-FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关本章。"
+FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关。"
 
 
 def study_prompt(study: KbStudy) -> str:
@@ -94,14 +101,14 @@ class ClaudeRunner:
         if self.cfg.runtime == "container":
             mcp = json.dumps({"mcpServers": {"celeste": {
                 "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
-            prompt = compose_prompt("container")
+            prompt = compose_prompt("container", self.cfg.sim, self.cfg.chapters)
             (self.run_dir / "system_prompt.md").write_text(prompt, encoding="utf-8")
             return [
                 find_docker_exe(), "exec", "-i", "-u", "agent", "-w", "/workspace",
                 "-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "MCP_TOOL_TIMEOUT=900000", "-e", "MAX_MCP_OUTPUT_TOKENS=40000",
                 self.container, "claude", *self._common_args(),
                 # 受限模式：不读取用户、项目与本地设置文件（智能体改不了自己的配置），文件工具只能访问工作区与知识库
-                "--restricted", "--add-dir", "/kb",
+                "--restricted", "--add-dir", "/kb", *(["--add-dir", "/sim"] if self.cfg.sim else []),
                 "--tools", ",".join(CONTAINER_BUILTIN_TOOLS),
                 "--mcp-config", mcp,
                 "--allowedTools", *CONTAINER_BUILTIN_TOOLS, *GAME_TOOLS,
@@ -111,7 +118,7 @@ class ClaudeRunner:
         mcp_config.write_text(json.dumps({"mcpServers": {"celeste": {
             "type": "http", "url": f"http://127.0.0.1:{self.cfg.mcp_port}/mcp"}}}), encoding="utf-8")
         prompt_file = self.run_dir / "system_prompt.md"
-        prompt_file.write_text(compose_prompt("host"), encoding="utf-8")
+        prompt_file.write_text(compose_prompt("host", chapters=self.cfg.chapters), encoding="utf-8")
         return [
             find_claude_exe(), *self._common_args(),
             "--tools", "",

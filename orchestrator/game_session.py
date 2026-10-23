@@ -8,9 +8,9 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .config import REPO_ROOT, RunConfig
+from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id
 from .metrics import Metrics
-from .observation import enrich_obs
+from .observation import enrich_obs, fmt_ticks
 from .sandbox import run_program
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -160,6 +160,9 @@ class GameSession:
         self.container: str | None = None   # 智能体容器（自动重试时在里面运行重算程序）
         self._last_positions: dict = {}
         self._last_room = None
+        # 依次通关多章：当前章节完成后，主控自动进入队列里的下一章
+        self.chapter_queue: list[int] = list(cfg.chapters[1:]) if cfg.chapters else []
+        self.chapter_finished = False
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
         self._decisions_log = open(run_dir / "decisions.jsonl", "a", encoding="utf-8")
         # 容器方式下，观测与轨迹同时写进智能体的工作区，供它自写的程序读取
@@ -186,6 +189,7 @@ class GameSession:
                 (self.workspace / stale).unlink(missing_ok=True)
             reply = self.client.call("observe", image=False, scope="room", fields=True)
             self._write_workspace(self._track_motion(enrich_obs(reply["obs"])))
+            self._write_sim_state()
         return obs
 
     def close(self) -> None:
@@ -205,6 +209,7 @@ class GameSession:
     def observe(self) -> tuple[dict, str | None]:
         with self.lock:
             reply = self.client.call("observe", image=True, scope="room", fields=True)
+            self._write_sim_state()
         obs = self._track_motion(enrich_obs(reply["obs"]))
         self._update_metrics_from_obs(obs)
         self._write_workspace(obs)
@@ -273,6 +278,19 @@ class GameSession:
                 self._write_json("game/last_act.json", act_record)
         except OSError:
             pass  # 工作区写入失败不影响游戏推进
+
+    def _write_sim_state(self) -> None:
+        """预置模拟器的起始状态：当前这一帧的完整场景（调用方持有连接锁）。取不到时删掉旧文件，免得智能体用错帧。"""
+        if not (self.cfg.sim and self.workspace):
+            return
+        path = self.workspace / "game" / "sim_state.json"
+        try:
+            reply = self.client.call("sim_state", margin=4)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(reply["state"], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            tmp.replace(path)
+        except Exception:
+            path.unlink(missing_ok=True)
 
     # ---- 动作 ----
 
@@ -389,8 +407,12 @@ class GameSession:
                              decisions=1 if attempt == 0 else 0)
 
             auto_frames, notes = 0, []
-            if not self.done and not obs.get("controllable"):
+            if not self.done and not self.chapter_finished and not obs.get("controllable"):
                 obs, image, auto_frames, notes = self._auto_advance(obs, image)
+            if self.chapter_finished and not self.done:
+                obs, image, more = self._enter_next_chapter()
+                notes.extend(more)
+            self._write_sim_state()
 
         self.metrics.update(last_stop=result["stop"])
         obs = self._track_motion(obs)
@@ -428,7 +450,7 @@ class GameSession:
             self._handle_events(result)
 
         for _ in range(600):
-            if self.done:
+            if self.done or self.chapter_finished:
                 break
             scene = obs.get("scene")
             if scene in END_SCENES:
@@ -438,7 +460,7 @@ class GameSession:
             if scene == "Level" and obs.get("controllable"):
                 break
             if level.get("completed"):
-                self._mark_done("章节完成")
+                self._chapter_complete()
                 break
             if not level.get("inCutscene"):
                 skip_tries = 0  # 一段剧情结束，下一段剧情可以重新尝试
@@ -462,7 +484,7 @@ class GameSession:
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         if total:
             notes.append(f"主控自动推进了 {total} 帧（转场、剧情、死亡与重生，均为正常速度）")
-            if not self.done:
+            if not self.done and not self.chapter_finished:
                 reply = self.client.call("observe", image=True, scope="room", fields=True)
                 obs, image = enrich_obs(reply["obs"]), reply.get("image")
         return obs, image, total, notes
@@ -486,7 +508,45 @@ class GameSession:
             if e["type"] == "death":
                 self.metrics.add(deaths=1)
             elif e["type"] == "complete":
-                self._mark_done("章节完成")
+                self._chapter_complete()
+
+    def _chapter_complete(self) -> None:
+        """当前章节通关：记下分段成绩；还有下一章就等进入下一章，否则本次运行完成。"""
+        if self.done or self.chapter_finished:
+            return
+        st = self.metrics.state
+        self.metrics.add_split(st.chapter, st.chapter_time_ticks)
+        if self.chapter_queue:
+            self.chapter_finished = True
+        else:
+            self._mark_done("章节完成")
+
+    def _enter_next_chapter(self) -> tuple[dict, str | None, list[str]]:
+        """（调用方持有连接锁）走完结算画面、回到地图、进入下一章，停在可操作的第一帧。"""
+        from enter_save import enter_save  # noqa: WPS433（tools 目录已在 sys.path 里）
+
+        split = (self.metrics.state.splits or [])[-1]
+        chapter = self.chapter_queue.pop(0)
+        self.metrics.update(status="auto", thought="")
+        t0 = time.monotonic()
+        enter_save(self.client, self.cfg.save, chapter=chapter)
+        self.metrics.add(auto_game_s=time.monotonic() - t0)
+        reply = self.client.call("observe", image=True, scope="room", fields=True)
+        obs, image = enrich_obs(reply["obs"]), reply.get("image")
+        self.chapter_finished = False
+        level = obs.get("level") or {}
+        self.start_sid = level.get("sid", self.start_sid)
+        self.metrics.update(chapter=level.get("sid", ""), room=level.get("room", ""),
+                            chapter_time_ticks=level.get("chapterTimeTicks", 0))
+        note = (f"【{chapter_name(split['chapter'])}通关】章节计时 {fmt_ticks(split['ticks'])}，死亡 {split['deaths']} 次。"
+                f"系统已自动走完结算画面并进入{chapter_name(level.get('sid', ''))}（新章节的计时从 0 开始），"
+                f"下面是新章节第一个房间；继续游玩。")
+        remaining = "、".join(chapter_name_by_id(c) for c in self.chapter_queue)
+        if remaining:
+            note += f"之后还有：{remaining}。"
+        else:
+            note += "这是本次的最后一章。"
+        return obs, image, [note]
 
     def _mark_done(self, reason: str) -> None:
         if not self.done:

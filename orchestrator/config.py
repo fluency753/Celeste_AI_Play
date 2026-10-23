@@ -14,6 +14,17 @@ CHAPTER_NAMES = {
     "Celeste/2-OldSite": "2 旧址",
 }
 
+# 章节编号（菜单宏与 --chapters 用的地图编号）→ 章节 SID
+CHAPTER_SIDS = {0: "Celeste/0-Intro", 1: "Celeste/1-ForsakenCity", 2: "Celeste/2-OldSite"}
+
+
+def chapter_name(sid: str) -> str:
+    return CHAPTER_NAMES.get(sid, sid or "?")
+
+
+def chapter_name_by_id(chapter: int) -> str:
+    return chapter_name(CHAPTER_SIDS.get(chapter, f"第 {chapter} 号章节"))
+
 
 def load_dotenv(path: Path) -> dict[str, str]:
     """读取 KEY=VALUE 形式的 .env；忽略注释与空行，兼容带 BOM 的 UTF-8。"""
@@ -69,6 +80,7 @@ class RunConfig:
     auto_speed: int = 1             # 转场、剧情、重生等自动推进段的速度（1 = 与原版一致；大于 1 只用于调试）
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
     chapter: int | None = None      # 菜单宏进入的章节编号；None = 选章页当前章节
+    chapters: list[int] | None = None  # 依次通关的章节（如 [0, 1, 2]）：一章完成后主控自动进入下一章，智能体接着玩
     runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具（M2 的过渡方式）
     image: str = "celeste-agent:0.1"
     autocompact: str | None = None   # Claude Code 自动压缩的窗口：None 用默认，"auto" 或 100000~1000000 的 token 数
@@ -76,11 +88,17 @@ class RunConfig:
     study: bool = True               # 开始游玩前先读完知识库（只在容器运行方式下生效：本机方式没有 Read 工具）
     study_minutes: float = 60.0      # 准备阶段上限；到时自动开始计时并开放游戏工具
     max_usage: float = 0.9           # Max 套餐 5 小时或 7 天窗口的用量达到这个比例就停止本次运行（同一账号还要留给其他会话）
+    sim: bool = False                # 预置模拟器：把本机的 sim/dist 只读挂到容器的 /sim，每次停下都把当前帧的完整场景写进工作区
 
     @property
     def workspace_dir(self) -> Path:
         """智能体的工作区：按智能体标签区分，跨存档、跨运行保留（test 存档上准备的程序可以带进正式挑战）。"""
         return REPO_ROOT / "workspaces" / self.agent
+
+    @property
+    def sim_dir(self) -> Path:
+        """预置模拟器的发布目录（只在本机，不入库；内容见 /sim/README.md）。"""
+        return REPO_ROOT / "sim" / "dist"
 
     @property
     def budget_seconds(self) -> float:

@@ -45,6 +45,8 @@ class MetricsState:
     chapter: str = ""
     room: str = ""
     chapter_time_ticks: int = 0
+    completed_ticks: int = 0          # 本次运行里已经通关的章节的计时之和（依次通关多章时，总计时 = 它 + 当前章节计时）
+    splits: list | None = None        # 已通关章节的分段成绩：[{"chapter": sid, "ticks": n, "deaths": n}, ...]
     dashes: int = 0
     max_dashes: int = 0
     thought: str = ""
@@ -116,6 +118,18 @@ class Metrics:
             for key, value in increments.items():
                 setattr(self.state, key, getattr(self.state, key) + value)
             self._write_locked()
+
+    def add_split(self, chapter: str, ticks: int) -> dict:
+        """记下一章的成绩（章节计时与这一章里的死亡次数），并把它加进已完成章节的总计时。"""
+        with self._lock:
+            splits = list(self.state.splits or [])
+            deaths_before = sum(s["deaths"] for s in splits)
+            split = {"chapter": chapter, "ticks": int(ticks), "deaths": self.state.deaths - deaths_before}
+            splits.append(split)
+            self.state.splits = splits
+            self.state.completed_ticks = sum(s["ticks"] for s in splits)
+            self._write_locked()
+            return split
 
     def set_thought(self, thought: str) -> None:
         with self._lock:

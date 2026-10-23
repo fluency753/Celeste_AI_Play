@@ -36,7 +36,8 @@ def area_id(sid: str | None) -> int | None:
 
 
 def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None) -> dict:
-    """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。"""
+    """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。
+    也可以从通关之后接着用：结算画面、回到地图、选下一章、进入，一路处理到可操作的第一帧。"""
     obs = c.call("activate", entities=False, tiles=False)["obs"]
     tried_skip: set[str] = set()
     vignette_tries = 0
@@ -71,6 +72,10 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
 
         if scene == "LevelEnter":
             obs = press(c, "C", settle=30)["obs"]  # 第一次进入章节时的明信片：按确认继续
+            continue
+
+        if scene == "AreaComplete":
+            obs = press(c, "C", settle=30)["obs"]  # 章节结算画面：等动画走完后按确认回到地图
             continue
 
         if scene != "Overworld" or menu.get("next"):

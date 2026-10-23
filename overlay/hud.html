@@ -188,9 +188,11 @@ function render() {
   else if (m.dashes >= 2) theme = c.dash2 || "#F28AC4";
   $("theme").style.background = theme;
 
-  // 主计时：章节计时。执行中两次进度推送之间按实时外推（最多 0.15 秒）
-  let game = (m.chapter_time_ticks || 0) / 1e7;
-  if ((m.status === "executing" || m.status === "auto") && m.chapter_time_wall > 0) {
+  // 主计时：游戏内计时。依次通关多章时是已通关各章与当前章之和（当前章已通关时不重复计入）。
+  // 执行中两次进度推送之间按实时外推（最多 0.15 秒）
+  const chapterDone = (m.splits || []).some(s => s.chapter === m.chapter);
+  let game = ((m.completed_ticks || 0) + (chapterDone ? 0 : (m.chapter_time_ticks || 0))) / 1e7;
+  if (!chapterDone && (m.status === "executing" || m.status === "auto") && m.chapter_time_wall > 0) {
     game += Math.min(0.15, Math.max(0, now - m.chapter_time_wall));
   }
   $("timer").textContent = clock(game, true);

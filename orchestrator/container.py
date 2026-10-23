@@ -2,6 +2,7 @@
 
 容器里：/workspace 挂载宿主机的 workspaces/<标签>/（可写），/kb 挂载仓库的 kb/（只读），
 /home/agent/.claude 是独立的数据卷（会话记录，便于中断后续跑）。游戏目录、存档、OBS 都不挂载。
+开放预置模拟器（--sim）时，本机的 sim/dist 只读挂到 /sim。
 """
 from __future__ import annotations
 
@@ -32,7 +33,8 @@ def docker(*args: str, check: bool = True, timeout: float = 120) -> subprocess.C
 
 def _labels(cfg: RunConfig) -> dict[str, str]:
     return {f"{LABEL}.image": cfg.image, f"{LABEL}.mcp_port": str(cfg.mcp_port),
-            f"{LABEL}.seccomp": "unconfined" if cfg.seccomp_unconfined else "default", f"{LABEL}.init": "1"}
+            f"{LABEL}.seccomp": "unconfined" if cfg.seccomp_unconfined else "default", f"{LABEL}.init": "1",
+            f"{LABEL}.sim": "1" if cfg.sim else "0"}
 
 
 def _create(cfg: RunConfig, name: str) -> None:
@@ -47,6 +49,8 @@ def _create(cfg: RunConfig, name: str) -> None:
             "-v", f"{REPO_ROOT / 'kb'}:/kb:ro",
             "-v", f"celeste-claude-{slug(cfg.agent)}:/home/agent/.claude",
             "--label", f"{LABEL}=agent"]
+    if cfg.sim:
+        args += ["-v", f"{cfg.sim_dir}:/sim:ro"]
     if cfg.seccomp_unconfined:
         args += ["--security-opt", "seccomp=unconfined"]
     for key, value in _labels(cfg).items():

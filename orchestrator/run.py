@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import socket
 import sys
 import time
@@ -42,6 +43,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--play-speed", type=int, default=1, help="智能体动作段的推进速度（每次渲染推进几帧）")
     ap.add_argument("--auto-speed", type=int, default=1, help="转场、剧情、重生段的推进速度；1 与原版一致，大于 1 为快进（只用于调试，录像会失真）")
     ap.add_argument("--chapter", type=int, help="进入的章节编号：0 序章、1 被遗弃之城、2 旧址；默认进入选章页当前选中的章节")
+    ap.add_argument("--chapters", help="依次通关的章节编号，逗号分隔，例如 0,1,2（正式挑战）：一章通关后主控自动走完结算画面、"
+                                       "进入下一章，智能体接着玩；给了它就不用 --chapter")
     ap.add_argument("--skip-enter", action="store_true", help="已在关卡内且可操作时，跳过菜单宏")
     ap.add_argument("--no-agent", action="store_true", help="不启动智能体，只运行工具服务直到 Ctrl+C")
     ap.add_argument("--autocompact", help="上下文自动压缩的窗口大小：auto，或 100000~1000000 的 token 数（默认用 Claude Code 的设置）")
@@ -58,6 +61,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--ffmpeg", help="ffmpeg 路径（默认：configs/local.recording.json → PATH → winget 安装位置）")
     ap.add_argument("--record-video-args", help="ffmpeg 视频编码参数（默认见 configs/recording.json）")
     ap.add_argument("--audio-offset-ms", type=float, help="声音相对画面的偏移毫秒数（默认用校准结果，见 configs/local.recording.json）")
+    ap.add_argument("--sim", action="store_true",
+                    help="开放预置模拟器：本机 sim/dist 只读挂到容器的 /sim，每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     args = ap.parse_args()
@@ -65,11 +70,22 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
     cfg.chapter = args.chapter
+    if args.chapters:
+        cfg.chapters = [int(x) for x in args.chapters.split(",") if x.strip()]
+        if not cfg.chapters:
+            raise SystemExit("--chapters 至少要给一个章节编号")
+        cfg.chapter = cfg.chapters[0]
     cfg.runtime = args.runtime
     cfg.autocompact = args.autocompact
     cfg.study = not args.no_study
     cfg.study_minutes = args.study_minutes
     cfg.max_usage = args.max_usage
+    cfg.sim = args.sim
+    if cfg.sim:
+        if cfg.runtime != "container":
+            raise SystemExit("--sim 只能用于容器运行方式")
+        if not (cfg.sim_dir / "celeste-sim").is_file():
+            raise SystemExit(f"找不到预置模拟器：{cfg.sim_dir / 'celeste-sim'}（模拟器只在本机，见使用说明的预置模拟器一节）")
     return cfg, args
 
 
@@ -102,6 +118,23 @@ def enter_save(cfg: RunConfig) -> None:
         client.close()
 
 
+def backup_save(obs: dict, run_dir: Path) -> None:
+    """开跑前把当前存档文件（与 Everest 的附加存档）复制到本次运行的目录，出问题时可以手动还原。"""
+    path = (obs.get("save") or {}).get("file")
+    if not path:
+        print("[run] 提示：桥接没有报告存档文件的位置（桥接 0.10.2 以上才有），跳过存档备份", flush=True)
+        return
+    src = Path(path)
+    dest = run_dir / "save_backup"
+    copied = []
+    for candidate in (src, src.with_name(src.stem + "-modsavedata" + src.suffix)):
+        if candidate.is_file():
+            dest.mkdir(exist_ok=True)
+            shutil.copy2(candidate, dest / candidate.name)
+            copied.append(candidate.name)
+    print(f"[run] 已备份存档：{', '.join(copied) or '（存档文件还不存在）'} → {dest}", flush=True)
+
+
 def port_free(port: int) -> bool:
     with socket.socket() as s:
         try:
@@ -114,7 +147,8 @@ def port_free(port: int) -> bool:
 async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, token: str | None) -> dict:
     study = None
     if cfg.study and cfg.runtime == "container" and not args.no_agent:
-        study = KbStudy(REPO_ROOT / "kb", cfg.study_minutes)
+        extra = {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None
+        study = KbStudy(REPO_ROOT / "kb", cfg.study_minutes, extra)
         if not study.has_reference:
             print("[run] 提示：kb/reference/ 不存在，准备阶段只读知识库本身（见使用说明 2.5 节生成参考资料原文）", flush=True)
     metrics = Metrics(run_dir / "metrics.json", cfg.agent, cfg.model, cfg.effort, cfg.budget_seconds,
@@ -127,6 +161,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
     session = GameSession(cfg, run_dir, metrics)
     obs = session.connect()
     print(f"[run] 已接管游戏：{obs['level']['sid']} 房间 {obs['level']['room']}，存档 {cfg.save}", flush=True)
+    backup_save(obs, run_dir)
     recorder = None
     if args.record:
         recorder = Recorder(session.bridge_call,
@@ -183,6 +218,8 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
         session.close()  # 交还游戏控制
         summary = metrics.snapshot()
         summary.update(stop_reason=reason, completed=session.done and session.done_reason == "章节完成",
+                       chapters=cfg.chapters, splits=metrics.state.splits or [],
+                       total_time_ticks=metrics.state.completed_ticks + (0 if session.done else metrics.state.chapter_time_ticks),
                        start_sid=session.start_sid, turns=runner.turns if runner else 0,
                        session_id=runner.session_id if runner else None, run_dir=str(run_dir),
                        kb_study=study.summary() if study else None, recording=recording)

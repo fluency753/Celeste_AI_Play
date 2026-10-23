@@ -58,13 +58,20 @@ def _ranges(lines: list[int]) -> str:
 
 
 class KbStudy:
-    def __init__(self, kb_dir: Path, minutes: float):
+    def __init__(self, kb_dir: Path, minutes: float, extra: dict[str, Path] | None = None):
+        """extra：知识库以外也要读完的文件，容器里的绝对路径 → 本机路径（例如预置模拟器的说明 /sim/README.md），
+        排在知识库正文之后、社区原文之前。"""
         self.kb_dir = kb_dir
         self.minutes = minutes
         self.files = required_files(kb_dir)
+        self.extra = dict(extra or {})
+        if self.extra:
+            k = next((i for i, rel in enumerate(self.files) if rel.startswith("reference/")), len(self.files))
+            self.files[k:k] = list(self.extra)
         self.total: dict[str, int] = {}
         for rel in self.files:
-            text = (kb_dir / rel).read_text(encoding="utf-8")
+            source = self.extra.get(rel) or (kb_dir / rel)
+            text = source.read_text(encoding="utf-8")
             self.total[rel] = max(1, len(text.splitlines()))
         self.read: dict[str, set[int]] = {rel: set() for rel in self.files}
         self.started = time.monotonic()
@@ -84,9 +91,12 @@ class KbStudy:
             return False
         path = str(info.get("filePath") or "")
         prefix = CONTAINER_KB + "/"
-        if not path.startswith(prefix):
+        if path in self.extra:
+            rel = path
+        elif path.startswith(prefix):
+            rel = path[len(prefix):]
+        else:
             return False
-        rel = path[len(prefix):]
         if rel not in self.read:
             return False
         start = int(info.get("startLine") or 1)
@@ -123,15 +133,18 @@ class KbStudy:
         done = sum(min(len(self.read[rel]), self.total[rel]) for rel in self.files)
         return done / total if total else 1.0
 
+    def container_path(self, rel: str) -> str:
+        return rel if rel in self.extra else f"{CONTAINER_KB}/{rel}"
+
     def container_paths(self) -> list[str]:
-        return [f"{CONTAINER_KB}/{rel}" for rel in self.files]
+        return [self.container_path(rel) for rel in self.files]
 
     def reminder(self) -> str:
         lines = ["知识库还没有读完，游戏工具暂不执行（没有消耗任何游戏帧，也没有开始计时）。还没读到的部分："]
         for rel in self.files:
             missing = self.unread(rel)
             if missing:
-                lines.append(f"- {CONTAINER_KB}/{rel}：第 {_ranges(missing)} 行（共 {self.total[rel]} 行）")
+                lines.append(f"- {self.container_path(rel)}：第 {_ranges(missing)} 行（共 {self.total[rel]} 行）")
         lines.append("请用 Read 读完这些行再开始（文件长时 Read 会截断，用 offset 与 limit 接着读，直到最后一行）。")
         return "\n".join(lines)
 

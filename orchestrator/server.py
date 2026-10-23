@@ -29,6 +29,7 @@ stop_on：提前停下的条件，可选 death room uncontrollable land refill c
 死亡、换房后的转场、剧情与重生由系统自动推进，返回时 Madeline 已可操作。"""
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json）"
+SIM_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
 OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图，以及整个房间的实体与字符地图。act 的返回已经包含最新状态，只在需要重新看画面或整个房间时调用。"
 
@@ -45,6 +46,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     server = MCPServer(name="celeste", instructions="《蔚蓝》游戏工具：observe 查看当前帧，act 推进若干帧。",
                        log_level="WARNING")
     metrics = session.metrics
+    ws_note = SIM_NOTE if session.cfg.sim else WORKSPACE_NOTE
     # 截图只在进入新房间时（以及主动 observe 时）附上；同时给出整个房间的实体与地图，平时只描述画面附近
     state = {"last_return": time.monotonic(), "described_room": None}
 
@@ -94,7 +96,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     content.append(Image(data=upscale_png(image), format="png"))
                 content.append(describe_obs(obs, *clock_text(), full_room=True)
                                + "\n\n整个房间的精确数据（像素坐标）：\n" + room_json(obs)
-                               + ("\n" + WORKSPACE_NOTE if session.workspace else ""))
+                               + ("\n" + ws_note if session.workspace else ""))
                 return content
             finally:
                 finish(t0, 0.0)
@@ -118,7 +120,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 if outcome.auto_notes:
                     parts.append("；".join(outcome.auto_notes))
                 if session.done:
-                    parts.append(f"【{session.done_reason}】本章已结束，不需要再调用工具，请直接结束本轮。")
+                    parts.append(f"【{session.done_reason}】本次要通关的章节已全部完成，不需要再调用工具，请直接结束本轮。")
                 new_room = room_key(outcome.obs) != state["described_room"]
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
@@ -127,7 +129,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 if new_room:
                     parts.append("整个房间的精确数据（像素坐标）：\n" + room_json(outcome.obs))
                 if session.workspace:
-                    parts.append(WORKSPACE_NOTE)
+                    parts.append(ws_note)
                 content: list = []
                 if outcome.image_b64 and new_room:
                     content.append(Image(data=upscale_png(outcome.image_b64), format="png"))
