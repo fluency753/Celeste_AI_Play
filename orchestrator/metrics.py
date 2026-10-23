@@ -43,6 +43,11 @@ class MetricsState:
     thought: str = ""
     thought_updated_wall: float = 0.0
     last_stop: str = ""
+    usage_5h: float | None = None     # Max 套餐 5 小时窗口已用比例（0~1），来自 Claude Code 的 rate_limit_event
+    usage_7d: float | None = None     # 7 天窗口已用比例
+    usage_resets_at: int | None = None
+    output_tokens: int = 0
+    thinking_tokens: int = 0
 
 
 class Metrics:

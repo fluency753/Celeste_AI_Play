@@ -191,8 +191,21 @@ class ClaudeRunner:
             for block in message.get("content") or []:
                 if block.get("type") == "tool_use":
                     self._tool_calls_this_turn += 1
+        elif etype == "rate_limit_event":
+            info = event.get("rate_limit_info") or {}
+            windows = info.get("unifiedWindows") or {}
+            self.metrics.update(
+                usage_5h=(windows.get("five_hour") or {}).get("utilization"),
+                usage_7d=(windows.get("seven_day") or {}).get("utilization"),
+                usage_resets_at=(windows.get("five_hour") or {}).get("resetsAt"))
+            if info.get("status") not in (None, "allowed", "allowed_warning"):
+                print(f"[agent] 用量限制：{info}", flush=True)
         elif etype == "system" and subtype == "api_retry":
             print(f"[agent] API 重试：{event.get('error')} attempt={event.get('attempt')}", flush=True)
         elif etype == "result":
-            print(f"[agent] 第 {self.turns} 轮结束：{subtype} is_error={event.get('is_error')}", flush=True)
+            usage = event.get("usage") or {}
+            self.metrics.add(output_tokens=usage.get("output_tokens", 0),
+                             thinking_tokens=(usage.get("output_tokens_details") or {}).get("thinking_tokens", 0))
+            print(f"[agent] 第 {self.turns} 轮结束：{subtype} is_error={event.get('is_error')} "
+                  f"输出 {usage.get('output_tokens', 0)} token", flush=True)
             self._turn_done.set()
