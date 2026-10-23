@@ -32,14 +32,15 @@ def docker(*args: str, check: bool = True, timeout: float = 120) -> subprocess.C
 
 def _labels(cfg: RunConfig) -> dict[str, str]:
     return {f"{LABEL}.image": cfg.image, f"{LABEL}.mcp_port": str(cfg.mcp_port),
-            f"{LABEL}.seccomp": "unconfined" if cfg.seccomp_unconfined else "default"}
+            f"{LABEL}.seccomp": "unconfined" if cfg.seccomp_unconfined else "default", f"{LABEL}.init": "1"}
 
 
 def _create(cfg: RunConfig, name: str) -> None:
     workspace = cfg.workspace_dir
     workspace.mkdir(parents=True, exist_ok=True)
     (REPO_ROOT / "kb").mkdir(exist_ok=True)
-    args = ["run", "-d", "--name", name, "--hostname", "celeste-agent",
+    # --init：用 tini 作 1 号进程，回收沙箱留下的子进程，避免僵尸进程堆积
+    args = ["run", "-d", "--init", "--name", name, "--hostname", "celeste-agent",
             "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW",
             "-e", f"MCP_PORT={cfg.mcp_port}",
             "-v", f"{workspace}:/workspace",

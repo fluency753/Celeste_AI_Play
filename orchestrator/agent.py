@@ -187,7 +187,7 @@ class ClaudeRunner:
             if self.container:
                 # docker exec 的客户端退出不一定会结束容器里的进程：把 agent 用户的进程全部结束
                 kill = await asyncio.create_subprocess_exec(
-                    find_docker_exe(), "exec", self.container, "pkill", "-u", "agent",
+                    find_docker_exe(), "exec", self.container, "pkill", "-KILL", "-u", "agent",
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
                 await kill.wait()
             reader.cancel()
