@@ -54,7 +54,35 @@ def _yn(v: bool) -> str:
     return "是" if v else "否"
 
 
-def describe_obs(obs: dict, elapsed_s: float, budget_s: float) -> str:
+VIEW_W, VIEW_H = 320, 180
+
+
+def crop_to_view(obs: dict, margin: int = 16) -> tuple[list[dict], dict | None]:
+    """把整房间的实体与字符地图裁到当前画面（外扩 margin），用于每次动作后的简要文字。"""
+    level = obs.get("level") or {}
+    cam = level.get("camera")
+    entities = obs.get("entities") or []
+    tiles = obs.get("tiles")
+    if not cam:
+        return entities, tiles
+    x0, y0 = cam[0] - margin, cam[1] - margin
+    x1, y1 = cam[0] + VIEW_W + margin, cam[1] + VIEW_H + margin
+    shown = [e for e in entities if e["x"] < x1 and e["x"] + e["w"] > x0 and e["y"] < y1 and e["y"] + e["h"] > y0]
+    if tiles and tiles.get("rows"):
+        ox, oy = tiles["origin"]
+        rows = tiles["rows"]
+        c0 = max(0, int(math.floor((x0 - ox) / 8)))
+        c1 = min(len(rows[0]), int(math.ceil((x1 - ox) / 8)))
+        r0 = max(0, int(math.floor((y0 - oy) / 8)))
+        r1 = min(len(rows), int(math.ceil((y1 - oy) / 8)))
+        if c1 > c0 and r1 > r0:
+            tiles = {**tiles, "origin": [ox + 8 * c0, oy + 8 * r0], "rows": [row[c0:c1] for row in rows[r0:r1]],
+                     "scope": "view"}
+    return shown, tiles
+
+
+def describe_obs(obs: dict, elapsed_s: float, budget_s: float, full_room: bool = True) -> str:
+    """full_room=True：整个房间的实体与地图（进入新房间、主动观察时）；False：只描述当前画面附近。"""
     lines: list[str] = []
     level = obs.get("level")
     player = obs.get("player")
@@ -90,25 +118,32 @@ def describe_obs(obs: dict, elapsed_s: float, budget_s: float) -> str:
         if flags:
             lines.append("当前：" + "、".join(flags))
 
-    entities = obs.get("entities") or []
+    if full_room:
+        entities, tiles = obs.get("entities") or [], obs.get("tiles")
+    else:
+        entities, tiles = crop_to_view(obs)
     if entities:
         px, py = player["pos"] if player else (0.0, 0.0)
         entities = sorted(entities, key=lambda e: math.hypot(e["x"] + e["w"] / 2 - px, e["y"] + e["h"] / 2 - py))
-        lines.append(f"视野内实体（按距离排序，共 {len(entities)} 个，最多列 25 个）：")
-        for e in entities[:25]:
+        limit = 60 if full_room else 25
+        where = "整个房间的实体" if full_room else "画面附近的实体"
+        lines.append(f"{where}（按距离排序，共 {len(entities)} 个，最多列 {limit} 个）：")
+        for e in entities[:limit]:
             extra = []
-            for key in ("dir", "orient", "twoDashes", "red", "r", "shape", "visible"):
+            for key in ("dir", "orient", "twoDashes", "red", "r", "shape", "visible", "collected", "respawnTimer",
+                        "start", "target", "percent", "triggered", "falling", "canDash", "active", "node",
+                        "activated", "fallen"):
                 if key in e:
                     extra.append(f"{key}={e[key]}")
             extra_text = (" " + " ".join(extra)) if extra else ""
             lines.append(f"- {e['type']} [{e['cat']}] 左上 ({e['x']}, {e['y']}) 宽高 {e['w']}×{e['h']}{extra_text}")
 
-    tiles = obs.get("tiles")
     if tiles:
         ox, oy = tiles["origin"]
         rows = tiles["rows"]
         cols = len(rows[0]) if rows else 0
-        lines.append(f"字符地图（每格 8×8 像素；第 0 行第 0 列格子的左上角是世界坐标 ({ox}, {oy})，"
+        scope = "整个房间" if tiles.get("scope") == "room" else "当前画面附近"
+        lines.append(f"字符地图（{scope}；每格 8×8 像素；第 0 行第 0 列格子的左上角是世界坐标 ({ox}, {oy})，"
                      f"第 r 行第 c 列的左上角是 ({ox} + 8c, {oy} + 8r)）：")
         lines.append("    " + "".join(str(c // 10) for c in range(cols)))
         lines.append("    " + "".join(str(c % 10) for c in range(cols)))

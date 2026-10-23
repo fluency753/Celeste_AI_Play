@@ -12,6 +12,8 @@ internal sealed class SnapshotOptions {
     public bool Tiles = true;
     /// <summary>视野外额外包含的像素边距。</summary>
     public int Margin = 16;
+    /// <summary>true：地形与实体覆盖整个房间；false：只覆盖当前画面（外扩 Margin）。</summary>
+    public bool Room = false;
 }
 
 /// <summary>
@@ -42,6 +44,15 @@ internal static class StateExtractor {
         return player.StateMachine.State is not (Player.StDummy or Player.StIntroWalk or Player.StIntroJump
             or Player.StIntroRespawn or Player.StIntroWakeUp or Player.StIntroMoonJump or Player.StIntroThinkForABit);
     }
+
+    /// <summary>整个房间（外扩 margin）。</summary>
+    public static Rectangle RoomRect(Level level, int margin) {
+        Rectangle b = level.Bounds;
+        return new Rectangle(b.X - margin, b.Y - margin, b.Width + margin * 2, b.Height + margin * 2);
+    }
+
+    public static Rectangle ScopeRect(Level level, SnapshotOptions opt) =>
+        opt.Room ? RoomRect(level, opt.Margin) : ViewRect(level, opt.Margin);
 
     public static Rectangle ViewRect(Level level, int margin) {
         Vector2 cam = level.Camera.Position;
@@ -90,12 +101,12 @@ internal static class StateExtractor {
         w.WriteBoolean("controllable", IsControllable(level, player));
 
         if (opt.Entities || opt.Tiles) {
-            List<EntityInfo> entities = CollectEntities(level, ViewRect(level, opt.Margin));
+            List<EntityInfo> entities = CollectEntities(level, ScopeRect(level, opt));
             if (opt.Entities) {
                 WriteEntities(w, entities);
             }
             if (opt.Tiles) {
-                WriteTiles(w, level, player, entities, opt.Margin);
+                WriteTiles(w, level, player, entities, opt);
             }
         }
     }
@@ -304,7 +315,8 @@ internal static class StateExtractor {
     private static List<EntityInfo> CollectEntities(Level level, Rectangle view) {
         var list = new List<EntityInfo>();
         foreach (Entity e in level.Entities) {
-            if (e is Player or Trigger or SolidTiles or Killbox || !e.Collidable || e.Collider == null) {
+            // 已被吃掉、等待重生的冲刺水晶不可碰撞，但仍要报告（附重生倒计时）
+            if (e is Player or Trigger or SolidTiles or Killbox || e.Collider == null || (!e.Collidable && e is not Refill)) {
                 continue;
             }
             Collider c = e.Collider;
@@ -347,8 +359,8 @@ internal static class StateExtractor {
     }
 
     /// <summary>视野内的字符地图，8 像素一格；地形之外叠加主要实体与 Madeline。</summary>
-    private static void WriteTiles(Utf8JsonWriter w, Level level, Player? player, List<EntityInfo> entities, int margin) {
-        Rectangle view = ViewRect(level, margin);
+    private static void WriteTiles(Utf8JsonWriter w, Level level, Player? player, List<EntityInfo> entities, SnapshotOptions opt) {
+        Rectangle view = ScopeRect(level, opt);
         const int cell = 8;
         int originX = (int) MathF.Floor(view.Left / (float) cell) * cell;
         int originY = (int) MathF.Floor(view.Top / (float) cell) * cell;
@@ -379,6 +391,7 @@ internal static class StateExtractor {
         }
 
         w.WriteStartObject("tiles");
+        w.WriteString("scope", opt.Room ? "room" : "view");
         w.WriteStartArray("origin");
         w.WriteNumberValue(originX);
         w.WriteNumberValue(originY);

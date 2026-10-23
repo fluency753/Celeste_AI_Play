@@ -83,7 +83,7 @@
 
 ### 1.3 `entities`
 
-视野内（画面范围外扩 16 像素）可碰撞的实体，不含 Madeline、触发器与地形网格：
+**整个房间**（房间范围外扩 16 像素）内可碰撞的实体，不含 Madeline、触发器与地形网格；已被吃掉、等待重生的冲刺水晶也会列出：
 
 ```json
 {"type": "Spikes", "cat": "hazard", "x": 64, "y": 96, "w": 16, "h": 3, "dir": "Up"}
@@ -93,11 +93,19 @@
 - `cat`：大类：`hazard` 致死物、`spring` 弹簧、`refill` 冲刺水晶、`booster` 泡泡、`feather` 羽毛、`collectible` 收集品、`dream_block` 梦境块、`dynamic_solid` 会动的实心块、`jumpthru` 单向平台、`solid` 其他实心块、`interactive` 可交互物、`other` 其他。
 - `x, y, w, h`：碰撞箱左上角与宽高（世界坐标）。`shape` 不是矩形时出现：`circle`（此时 `r` 为半径，`x, y, w, h` 是外接矩形）、`list`（多个碰撞箱的组合，给出的是外接矩形）、`grid`。
 - `visible: false`：实体存在但当前不可见。
-- 附加属性：尖刺 `dir`（Up / Down / Left / Right，刺尖朝向）、弹簧 `orient`（Floor / WallLeft / WallRight，含义见 `entities.md`）、冲刺水晶 `twoDashes`、泡泡 `red`。
+- 附加属性：
+  - 尖刺 `dir`（Up / Down / Left / Right，刺尖朝向）；弹簧 `orient`（Floor / WallLeft / WallRight，含义见 `entities.md`）；泡泡 `red`。
+  - 冲刺水晶 `twoDashes`；被吃掉后 `collected: true` 与 `respawnTimer`（距重生的秒数）。
+  - 交通块 ZipMover：`start` / `target` 轨道两端（实体左上角的世界坐标）、`percent` 当前进度（0 在起点，1 在终点）。
+  - 坠落块 FallingBlock：`triggered` 已被触发、`falling` 已开始下落。
+  - 冲刺砖 DashBlock：`canDash` 能否被冲刺撞碎。
+  - 梦境块 DreamBlock：`active` 是否已能冲刺穿过；会移动的梦境块有 `node`（另一端位置）。
+  - 开关门 SwitchGate：`node`（打开后移动到的位置）；触碰开关 TouchSwitch：`activated`。
+  - 桥块 BridgeTile：`fallen` 是否已塌落。
 
 ### 1.4 `tiles`
 
-视野内的字符地图，每格 8×8 像素：
+**整个房间**（外扩 16 像素）的字符地图，每格 8×8 像素（`scope` 字段为 `room`）：
 
 ```json
 {"origin": [0, -8], "cell": 8, "rows": ["####......", "..."], "legend": {"#": "地形（实心）", ...}}

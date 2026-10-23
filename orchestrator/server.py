@@ -10,7 +10,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from .game_session import ActError, GameSession
 from .observation import describe_obs, describe_step, upscale_png
 
-ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测（截图 + 文字状态）。
+ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图与整个房间的实体和字符地图，其余时候只给文字状态与画面附近的信息。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
 plan_file：（有工作区时可用）工作区里的计划文件路径，内容是同样格式的 JSON 数组；与 inputs 二选一。
@@ -23,7 +23,7 @@ stop_on：提前停下的条件，可选 death room uncontrollable land refill c
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json）"
 
-OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图与文字状态。通常 act 的返回已经包含最新观测，只在需要重新查看时调用。"
+OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图，以及整个房间的实体与字符地图。act 的返回已经包含最新状态，只在需要重新看画面或整个房间时调用。"
 
 
 # 只接受本机与容器（经 host.docker.internal）的请求，防止 DNS 重绑定
@@ -38,7 +38,12 @@ def build_server(session: GameSession) -> MCPServer:
     server = MCPServer(name="celeste", instructions="《蔚蓝》游戏工具：observe 查看当前帧，act 推进若干帧。",
                        log_level="WARNING")
     metrics = session.metrics
-    state = {"last_return": time.monotonic()}
+    # 截图只在进入新房间时（以及主动 observe 时）附上；同时给出整个房间的实体与地图，平时只描述画面附近
+    state = {"last_return": time.monotonic(), "described_room": None}
+
+    def room_key(obs: dict):
+        level = obs.get("level") or {}
+        return (level.get("sid"), level.get("room"))
     call_lock = asyncio.Lock()
 
     def begin() -> float:
@@ -61,10 +66,12 @@ def build_server(session: GameSession) -> MCPServer:
             t0 = begin()
             try:
                 obs, image = await asyncio.to_thread(session.observe)
+                state["described_room"] = room_key(obs)
                 content: list = []
                 if image:
                     content.append(Image(data=upscale_png(image), format="png"))
-                content.append(describe_obs(obs, *clock_text()) + ("\n" + WORKSPACE_NOTE if session.workspace else ""))
+                content.append(describe_obs(obs, *clock_text(), full_room=True)
+                               + ("\n" + WORKSPACE_NOTE if session.workspace else ""))
                 return content
             finally:
                 finish(t0, 0.0)
@@ -85,11 +92,15 @@ def build_server(session: GameSession) -> MCPServer:
                     parts.append("；".join(outcome.auto_notes))
                 if session.done:
                     parts.append(f"【{session.done_reason}】本章已结束，不需要再调用工具，请直接结束本轮。")
-                parts.append(describe_obs(outcome.obs, *clock_text()))
+                new_room = room_key(outcome.obs) != state["described_room"]
+                if new_room:
+                    state["described_room"] = room_key(outcome.obs)
+                    parts.append("【进入新房间】下面是新房间的截图，以及整个房间的实体与字符地图。")
+                parts.append(describe_obs(outcome.obs, *clock_text(), full_room=new_room))
                 if session.workspace:
                     parts.append(WORKSPACE_NOTE)
                 content: list = []
-                if outcome.image_b64:
+                if outcome.image_b64 and new_room:
                     content.append(Image(data=upscale_png(outcome.image_b64), format="png"))
                 content.append("\n\n".join(parts))
                 return content

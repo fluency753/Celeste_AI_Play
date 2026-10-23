@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json;
 using Celeste;
+using Microsoft.Xna.Framework;
 using Monocle;
 
 namespace CelesteAI.Bridge;
@@ -63,6 +64,12 @@ internal static class EntityCatalog {
     };
 
     public static void WriteProps(Utf8JsonWriter w, Entity e) {
+        void Vec(string name, Vector2 v) {
+            w.WriteStartArray(name);
+            w.WriteNumberValue(v.X);
+            w.WriteNumberValue(v.Y);
+            w.WriteEndArray();
+        }
         switch (e) {
             case Spikes spikes:
                 w.WriteString("dir", spikes.Direction.ToString());
@@ -72,9 +79,41 @@ internal static class EntityCatalog {
                 break;
             case Refill refill:
                 w.WriteBoolean("twoDashes", refill.twoDashes);
+                if (!refill.Collidable) {
+                    w.WriteBoolean("collected", true);
+                    w.WriteNumber("respawnTimer", refill.respawnTimer);
+                }
                 break;
             case Booster booster:
                 w.WriteBoolean("red", booster.red);
+                break;
+            case ZipMover zip:
+                // 轨道两端（实体左上角位置），以及当前进度 0~1；画面上轨道本来就画着
+                Vec("start", zip.start);
+                Vec("target", zip.target);
+                w.WriteNumber("percent", zip.percent);
+                break;
+            case FallingBlock falling:
+                w.WriteBoolean("triggered", falling.Triggered);
+                w.WriteBoolean("falling", falling.HasStartedFalling);
+                break;
+            case DashBlock dashBlock:
+                w.WriteBoolean("canDash", dashBlock.canDash);
+                break;
+            case DreamBlock dream:
+                w.WriteBoolean("active", dream.playerHasDreamDash);
+                if (dream.node is { } node) {
+                    Vec("node", node);
+                }
+                break;
+            case SwitchGate gate:
+                Vec("node", gate.node);
+                break;
+            case TouchSwitch touch:
+                w.WriteBoolean("activated", touch.Switch?.Activated ?? false);
+                break;
+            case BridgeTile tile:
+                w.WriteBoolean("fallen", tile.Fallen);
                 break;
         }
     }
