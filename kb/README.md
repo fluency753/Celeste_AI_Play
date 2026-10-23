@@ -15,7 +15,7 @@
 | `game_data.md` | （已有文件）工作区里观测与轨迹数据的格式说明 |
 | `techniques.md` | 移动技巧：Strawberry Jam 各训练场（Beginner→Grandmaster）与 celeste.ink 收录的全部原版技巧（super/hyper/wavedash/ultra/抓角加速/墙弹/梦境块技巧等）的条件、帧窗口、数值、harness 输入例、本三章可用性；SJ 各大厅技巧对照表 |
 | `mechanics.md` | 机制库：章节计时与冻结帧（冻结帧不计 IGT）、SJ 机制库（Library）全部小节的规则、后续章节实体（Theo、水母、泡泡、羽毛、云、岩浆块、弹球/河豚、水、月亮块）的交互规则 |
-| `reference/` | 外部资料原文照录：Celeste Wiki（celeste.ink）全部技巧页面，草莓酱训练场（Beginner → Grandmaster）与机制库的全部文本（英文、简体中文）。索引见 `reference/README.md`；与本知识库其他文件冲突时以其他文件为准 |
+| `reference/` | 外部资料原文照录：Celeste Wiki（celeste.ink）全部技巧页面，草莓酱训练场（Beginner → Grandmaster）与机制库的全部文本（英文、简体中文），以及项目作者提供的社区资料（反向钟《Celeste 机制详解》源码解读、岩浆块机制说明，附原 PDF）。索引见 `reference/README.md`；默认正确，数值不一致时以本知识库里对照代码核实的文件为准 |
 
 ## 2. 坐标与单位
 

@@ -23,6 +23,10 @@ def required_files(kb_dir: Path) -> list[str]:
     ref = kb_dir / "reference"
     if (ref / "README.md").exists():
         files.append("reference/README.md")
+    community = ref / "community"
+    if community.is_dir():   # 项目作者提供的社区资料（如《Celeste 机制详解》），大的在前
+        docs = sorted(community.glob("*.md"), key=lambda p: (-p.stat().st_size, p.name))
+        files += [f"reference/community/{p.name}" for p in docs]
     wiki = ref / "celeste_wiki"
     if wiki.is_dir():
         pages = sorted(p.name for p in wiki.glob("*.md"))

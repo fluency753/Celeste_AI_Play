@@ -106,6 +106,14 @@ docker build -t celeste-agent:0.1 agent-container
 
 需要能访问 celeste.ink，并且已经安装草莓酱 Mod（`Mods\StrawberryJam2021.zip`）。只要其中一份时可加 `--skip-wiki` 或 `--skip-sj`。输出在 `kb\reference\`，索引见其中的 `README.md`。2026-10-22 实测：wiki 17 个页面，草莓酱训练场 230 条、机制库 86 条，共约 310 KB。
 
+另外可以导入你手上的 PDF 资料（同样只放本机），文字版每页标出原文页码，原 PDF 一并复制，智能体需要看插图时可以直接打开：
+
+```powershell
+.\.venv\Scripts\python.exe tools\import_reference_pdf.py 资料.pdf --name celeste_mechanics_explained --title "Celeste 机制详解（反向钟）" --note "来源：……"
+```
+
+提取文字需要 poppler 的 `pdftotext` 或 `pip install pypdf`。目前已导入两份：反向钟《Celeste 机制详解》（125 页，源码解读与机制详解，文字版约 240 KB）与《岩浆块机制说明》。只重新生成索引：`tools\fetch_reference.py --index-only`。准备阶段会要求智能体把这些文字版也读完，整份知识库约 34 万 token。
+
 ## 3. 桥接 Mod：构建、安装与测试
 
 桥接 Mod（CelesteAIBridge）运行在游戏进程内，只监听本机 `127.0.0.1:47774`。未接管时游戏照常可玩；测试客户端发送 `activate` 后，游戏冻结在当前帧，只有收到 `step` 才逐帧推进。

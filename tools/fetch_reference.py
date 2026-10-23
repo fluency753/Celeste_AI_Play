@@ -9,7 +9,7 @@
     python tools/fetch_reference.py --celeste-dir "D:\\path\\to\\steamapps\\common\\Celeste"
 
 输出（kb/reference/ 已在 .gitignore 中，随 kb/ 一起只读挂载进智能体容器的 /kb/reference/）：
-    kb/reference/README.md
+    kb/reference/README.md（按目录里现有的文件生成，包括用 tools/import_reference_pdf.py 导入的社区资料）
     kb/reference/celeste_wiki/<页面>.md
     kb/reference/strawberry_jam/gyms_en.md、gyms_zh.md、library_en.md、library_zh.md
 """
@@ -491,38 +491,50 @@ def fetch_sj(celeste_dir: Path, out_dir: Path) -> list[dict]:
 
 # ---------------------------------------------------------------- 索引
 
-def write_index(out: Path, wiki: list[dict], license_text: str, sj: list[dict]) -> None:
+def _first_heading(path: Path) -> str:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return path.stem
+
+
+def write_index(out: Path) -> None:
+    """按目录里现有的文件生成索引（单独抓取某一部分、或手动导入社区资料后都会完整列出）。"""
     lines = [
         "# 参考资料原文（reference/）",
         "",
-        "这里是两份外部资料的原文照录，由 `tools/fetch_reference.py` 在本机生成，不提交到仓库。",
-        "它们是社区资料，写法、数值精度与本知识库其他文件不同：**与 `techniques.md`、`player_physics.md` 等"
-        "（已对照游戏代码核实）冲突时，以那些文件为准。** 原文里偶尔提到的具体章节、房间、速通路线只是举例背景，"
-        "本轮挑战的路线仍要你自己根据房间数据规划。",
+        "这里是外部资料的原文照录，在本机生成或导入，不提交到仓库。",
+        "社区资料的写法、数帧口径（是否把当前帧、冻结帧算在内）与本知识库其他文件可能不同，机制本身一致；"
+        "项目作者已审核，默认正确。数值与 `techniques.md`、`player_physics.md` 等（已对照游戏代码核实）不一致时，以那些文件为准。"
+        "原文里偶尔提到的具体章节、房间、速通路线只是举例背景，本轮挑战的路线仍要你自己根据房间数据规划。",
         "",
-        f"## Celeste Wiki（celeste.ink）技巧页面（许可：{license_text}）",
-        "",
-        "| 页面 | 文件 | 字符数 |",
-        "|---|---|---|",
     ]
-    for page in wiki:
-        lines.append(f"| {page['title']} | `{page['file']}` | {page['chars']} |")
-    lines += [
-        "",
-        "`Tech.md` 是总表（机制、冲刺技巧、无冲刺技巧、实体技巧、其他技巧），其余是总表里各大类的详细子页面。",
-        "",
-        "## 草莓酱（Strawberry Jam Collab）训练场与机制库",
-        "",
-        "| 文件 | 内容 | 条目数 |",
-        "|---|---|---|",
-    ]
-    desc = {"gyms": "训练场 Beginner → Grandmaster 各房间说明", "library": "机制库全文"}
-    for item in sj:
-        kind = "gyms" if "gyms_" in item["file"] else "library"
-        lang = "英文" if item["file"].endswith("_en.md") else "简体中文"
-        lines.append(f"| `{item['file']}` | {desc[kind]}（{lang}） | {item['keys']} |")
-    lines += ["", "训练场与机制库讲的技巧和机制都是原版游戏就有的。个别演示房间用 Mod 实体来摆位置或做演示"
-              "（例如侧向的单向平台、改造过的梦境块），原版章节里没有这些实体，但讲的机制本身是原版的。", ""]
+    wiki_dir = out / "celeste_wiki"
+    if wiki_dir.is_dir():
+        pages = sorted(wiki_dir.glob("*.md"), key=lambda p: (p.name != "Tech.md", p.name))
+        lines += ["## Celeste Wiki（celeste.ink）技巧页面（许可：GPLv3）", "", "| 页面 | 文件 | 大小 |", "|---|---|---|"]
+        lines += [f"| {_first_heading(p)} | `celeste_wiki/{p.name}` | {p.stat().st_size // 1024} KB |" for p in pages]
+        lines += ["", "`Tech.md` 是总表（机制、冲刺技巧、无冲刺技巧、实体技巧、其他技巧），其余是总表里各大类的详细子页面。", ""]
+    sj_dir = out / "strawberry_jam"
+    if sj_dir.is_dir():
+        desc = {"gyms": "训练场 Beginner → Grandmaster 各房间说明", "library": "机制库全文"}
+        lines += ["## 草莓酱（Strawberry Jam Collab）训练场与机制库", "", "| 文件 | 内容 | 条目数 |", "|---|---|---|"]
+        for p in sorted(sj_dir.glob("*.md")):
+            kind = "gyms" if p.name.startswith("gyms_") else "library"
+            lang = "英文" if p.name.endswith("_en.md") else "简体中文"
+            keys = sum(1 for line in p.read_text(encoding="utf-8").splitlines() if line.startswith("### "))
+            lines.append(f"| `strawberry_jam/{p.name}` | {desc[kind]}（{lang}） | {keys} |")
+        lines += ["", "训练场与机制库讲的技巧和机制都是原版游戏就有的。个别演示房间用 Mod 实体来摆位置或做演示"
+                  "（例如侧向的单向平台、改造过的梦境块），原版章节里没有这些实体，但讲的机制本身是原版的。", ""]
+    community = out / "community"
+    if community.is_dir() and any(community.glob("*.md")):
+        lines += ["## 社区资料（项目作者提供）", "", "| 文档 | 文件 | 原 PDF |", "|---|---|---|"]
+        for p in sorted(community.glob("*.md"), key=lambda p: -p.stat().st_size):
+            pdf = community / "pdf" / (p.stem + ".pdf")
+            lines.append(f"| {_first_heading(p)} | `community/{p.name}` | "
+                         + (f"`community/pdf/{pdf.name}`" if pdf.exists() else "—") + " |")
+        lines += ["", "文字版由 PDF 的文字层提取，插图只剩图注；需要看图时用 Read 打开原 PDF，用 pages 参数指定页码"
+                  "（文字版里以 `<!-- 原文第 N 页 -->` 标出页码）。", ""]
     (out / "README.md").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -533,21 +545,19 @@ def main() -> int:
     ap.add_argument("--out", default=str(REPO_ROOT / "kb" / "reference"), help="输出目录")
     ap.add_argument("--skip-wiki", action="store_true")
     ap.add_argument("--skip-sj", action="store_true")
+    ap.add_argument("--index-only", action="store_true", help="只按现有文件重新生成 README.md 索引")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    wiki: list[dict] = []
-    license_text = ""
-    sj: list[dict] = []
-    if not args.skip_wiki:
+    if not args.index_only and not args.skip_wiki:
         print("抓取 Celeste Wiki 技巧页面…", flush=True)
-        wiki, license_text = fetch_wiki(out / "celeste_wiki")
-    if not args.skip_sj:
+        fetch_wiki(out / "celeste_wiki")
+    if not args.index_only and not args.skip_sj:
         print("读取草莓酱训练场与机制库文本…", flush=True)
-        sj = fetch_sj(Path(args.celeste_dir), out / "strawberry_jam")
-    write_index(out, wiki, license_text, sj)
+        fetch_sj(Path(args.celeste_dir), out / "strawberry_jam")
+    write_index(out)
     print(f"完成：{out}", flush=True)
     return 0
 
