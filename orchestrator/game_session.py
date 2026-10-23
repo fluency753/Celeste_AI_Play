@@ -197,6 +197,11 @@ class GameSession:
             self._frames_log.close()
             self._decisions_log.close()
 
+    def bridge_call(self, cmd: str, **args) -> dict:
+        """主控其他部分（如录制）向桥接发指令：与智能体的动作互斥，共用同一个连接（桥接只接受一个连接）。"""
+        with self.lock:
+            return self.client.call(cmd, **args)
+
     def observe(self) -> tuple[dict, str | None]:
         with self.lock:
             reply = self.client.call("observe", image=True, scope="room", fields=True)

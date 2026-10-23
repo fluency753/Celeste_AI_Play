@@ -17,7 +17,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.8.0";
+    public const string Version = "0.8.1";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -292,7 +292,7 @@ internal static class Bridge {
                     w.WriteBoolean("connected", ClockServer.Connected);
                     w.WriteBoolean("lockstep", lockstepEngaged);
                     w.WritePropertyName("plugin");
-                    if (ClockServer.PluginStatus is { } status) w.WriteRawValue(status, skipInputValidation: false);
+                    if (ClockServer.PluginStatus is { } status && IsJson(status)) w.WriteRawValue(status, skipInputValidation: true);
                     else w.WriteNullValue();
                     w.WriteEndObject();
                 }));
@@ -423,6 +423,15 @@ internal static class Bridge {
         Room = GetString(a, "scope", "view") == "room",
         Fields = GetBool(a, "fields", false),
     };
+
+    private static bool IsJson(string text) {
+        try {
+            using JsonDocument _ = JsonDocument.Parse(text);
+            return true;
+        } catch (JsonException) {
+            return false;
+        }
+    }
 
     private static bool GetBool(JsonElement a, string name, bool fallback) =>
         a.ValueKind == JsonValueKind.Object && a.TryGetProperty(name, out JsonElement v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False

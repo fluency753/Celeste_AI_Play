@@ -1,0 +1,20 @@
+{
+  "_说明": "录制与 OBS 的默认设置。本机不同的值（OBS 安装目录、ffmpeg、编码参数、校准出的声音偏移）写在 configs/local.recording.json，只写要改的键。",
+  "obs_dir": "",
+  "ffmpeg": "",
+  "video_args": "-c:v libx264 -preset veryfast -crf 16 -g 120",
+  "audio_offset_ms": 0,
+  "profile": "CelesteAI",
+  "collection": "CelesteAI",
+  "canvas": [1920, 1080],
+  "fps": 60,
+  "sample_rate": 48000,
+  "game_window": "Celeste:SDL_app:Celeste.exe",
+  "hud": {
+    "url": "http://127.0.0.1:47790/hud",
+    "width": 430,
+    "height": 344,
+    "x": 1452,
+    "y": 38
+  }
+}

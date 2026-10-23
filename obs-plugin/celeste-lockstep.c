@@ -57,6 +57,8 @@ static struct {
 	unsigned head, count;
 } keep;
 
+static CRITICAL_SECTION send_lock;
+
 static void send_line(const char *fmt, ...)
 {
 	char buf[4096];
@@ -72,8 +74,66 @@ static void send_line(const char *fmt, ...)
 	EnterCriticalSection(&g.lock);
 	SOCKET s = g.sock;
 	LeaveCriticalSection(&g.lock);
-	if (s != INVALID_SOCKET)
+	if (s != INVALID_SOCKET) {
+		EnterCriticalSection(&send_lock); /* 多个线程都会发：整行一起发，避免交错 */
 		send(s, buf, n, 0);
+		LeaveCriticalSection(&send_lock);
+	}
+}
+
+/* 录制状态（报告给桥接，主控通过 hello 读取） */
+enum rec_state { REC_IDLE, REC_RECORDING, REC_FINISHING, REC_FINISHED, REC_FAILED };
+static const char *const rec_state_names[] = {"idle", "recording", "finishing", "finished", "failed"};
+static struct {
+	SRWLOCK lock;
+	enum rec_state state;
+	long long frames;
+	char dir[MAX_PATH];
+	char error[512];
+} rec;
+
+static void rec_set(enum rec_state state, long long frames, const char *error)
+{
+	AcquireSRWLockExclusive(&rec.lock);
+	rec.state = state;
+	if (frames >= 0)
+		rec.frames = frames;
+	if (error)
+		snprintf(rec.error, sizeof(rec.error), "%s", error);
+	ReleaseSRWLockExclusive(&rec.lock);
+}
+
+/* JSON 字符串转义（只处理会破坏 JSON 的字符） */
+static void json_escape(char *out, size_t cap, const char *in)
+{
+	size_t n = 0;
+	for (; in && *in && n + 7 < cap; in++) {
+		unsigned char c = (unsigned char)*in;
+		if (c == '"' || c == '\\') {
+			out[n++] = '\\';
+			out[n++] = (char)c;
+		} else if (c < 0x20) {
+			n += (size_t)snprintf(out + n, cap - n, "\\u%04x", c);
+		} else {
+			out[n++] = (char)c;
+		}
+	}
+	out[n] = 0;
+}
+
+static void send_status(void)
+{
+	char dir[MAX_PATH * 2], err[1100];
+	AcquireSRWLockShared(&rec.lock);
+	enum rec_state state = rec.state;
+	long long frames = rec.frames;
+	json_escape(dir, sizeof(dir), rec.dir);
+	json_escape(err, sizeof(err), rec.error);
+	ReleaseSRWLockShared(&rec.lock);
+	send_line("S {\"state\":\"%s\",\"recording\":%s,\"frames\":%lld,\"tokens\":%lld,\"kept\":%lld,\"late\":%lld,"
+		  "\"dir\":\"%s\",\"error\":\"%s\"}",
+		  rec_state_names[state], state == REC_RECORDING ? "true" : "false", frames, g.tokens, g.kept, g.late_ticks,
+		  dir, err);
 }
 
 static void keep_push(uint64_t ts, long long frame, long long ticks)
@@ -173,6 +233,8 @@ struct gp_output {
 	uint64_t wav_frames;
 	long long written;
 	bool failed;
+	bool stopping; /* gp_stop 之后，迟到的原始帧回调直接忽略 */
+	SRWLOCK vlock;  /* 原始画面回调与 gp_stop 之间的互斥 */
 	char error[512];
 	/* 音频 */
 	SRWLOCK alock;
@@ -203,6 +265,7 @@ static void *gp_create(obs_data_t *settings, obs_output_t *output)
 	struct gp_output *o = bzalloc(sizeof(*o));
 	o->output = output;
 	InitializeSRWLock(&o->alock);
+	InitializeSRWLock(&o->vlock);
 	snprintf(o->dir, sizeof(o->dir), "%s", obs_data_get_string(settings, "dir"));
 	snprintf(o->ffmpeg, sizeof(o->ffmpeg), "%s", obs_data_get_string(settings, "ffmpeg"));
 	const char *args = obs_data_get_string(settings, "video_args");
@@ -287,15 +350,38 @@ static bool spawn(const char *cmdline, HANDLE *proc, HANDLE *stdin_wr, const cha
 	return true;
 }
 
+/* 开始失败时清理已经打开的东西 */
+static bool start_failed(struct gp_output *o, const char *msg)
+{
+	set_error(o, msg);
+	if (o->stdin_wr) {
+		CloseHandle(o->stdin_wr);
+		o->stdin_wr = NULL;
+	}
+	if (o->proc) {
+		TerminateProcess(o->proc, 1);
+		CloseHandle(o->proc);
+		o->proc = NULL;
+	}
+	if (o->wav) {
+		fclose(o->wav);
+		o->wav = NULL;
+	}
+	if (o->csv) {
+		fclose(o->csv);
+		o->csv = NULL;
+	}
+	rec_set(REC_FAILED, 0, msg);
+	return false;
+}
+
 static bool gp_start(void *data)
 {
 	struct gp_output *o = data;
 	struct obs_video_info ovi;
 	struct obs_audio_info oai;
-	if (!obs_get_video_info(&ovi) || !obs_get_audio_info(&oai)) {
-		set_error(o, "video/audio not initialised");
-		return false;
-	}
+	if (!obs_get_video_info(&ovi) || !obs_get_audio_info(&oai))
+		return start_failed(o, "video/audio not initialised");
 	o->width = ovi.output_width;
 	o->height = ovi.output_height;
 	o->fps_num = ovi.fps_num;
@@ -316,26 +402,21 @@ static bool gp_start(void *data)
 		 "-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709 \"%s\\video.mkv\"",
 		 o->ffmpeg, o->width, o->height, o->fps_num, o->fps_den, o->video_args, o->dir);
 	snprintf(log_path, sizeof(log_path), "%s\\ffmpeg_video.log", o->dir);
-	if (!spawn(cmd, &o->proc, &o->stdin_wr, log_path)) {
-		set_error(o, "cannot start ffmpeg (check the ffmpeg path)");
-		return false;
-	}
+	if (!spawn(cmd, &o->proc, &o->stdin_wr, log_path))
+		return start_failed(o, "cannot start ffmpeg (check the ffmpeg path)");
 	snprintf(path, sizeof(path), "%s\\audio.wav", o->dir);
 	o->wav = fopen(path, "wb");
 	snprintf(path, sizeof(path), "%s\\frames.csv", o->dir);
 	o->csv = fopen(path, "w");
-	if (!o->wav || !o->csv) {
-		set_error(o, "cannot create output files");
-		return false;
-	}
+	if (!o->wav || !o->csv)
+		return start_failed(o, "cannot create output files (does the directory exist?)");
 	write_wav_header(o->wav, o->rate, 0);
 	fprintf(o->csv, "index,game_frame,chapter_ticks,obs_ts_ns\n");
 
-	if (!obs_output_can_begin_data_capture(o->output, 0)) {
-		set_error(o, "cannot begin data capture");
-		return false;
-	}
+	if (!obs_output_can_begin_data_capture(o->output, 0))
+		return start_failed(o, "cannot begin data capture");
 	active_output = o;
+	rec_set(REC_RECORDING, 0, "");
 	obs_output_begin_data_capture(o->output, 0);
 	blog(LOG_INFO, "[" PLUGIN "] recording to %s (%ux%u @ %u/%u, audio %u Hz)", o->dir, o->width, o->height,
 	     o->fps_num, o->fps_den, o->rate);
@@ -444,16 +525,22 @@ static void gp_raw_video(void *data, struct video_data *frame)
 {
 	struct gp_output *o = data;
 	long long game_frame, ticks;
-	if (o->failed || !keep_take(frame->timestamp, &game_frame, &ticks))
+	AcquireSRWLockExclusive(&o->vlock);
+	if (o->stopping || o->failed || !keep_take(frame->timestamp, &game_frame, &ticks)) {
+		ReleaseSRWLockExclusive(&o->vlock);
 		return;
+	}
 	bool ok = write_plane(o->stdin_wr, frame->data[0], frame->linesize[0], o->width, o->height) &&
 		  write_plane(o->stdin_wr, frame->data[1], frame->linesize[1], o->width, o->height / 2);
 	if (!ok) {
 		set_error(o, "ffmpeg pipe closed");
+		ReleaseSRWLockExclusive(&o->vlock);
 		return;
 	}
 	fprintf(o->csv, "%lld,%lld,%lld,%llu\n", o->written, game_frame, ticks, (unsigned long long)frame->timestamp);
 	o->written++;
+	rec_set(REC_RECORDING, o->written, NULL);
+	ReleaseSRWLockExclusive(&o->vlock);
 
 	uint64_t start = frame->timestamp;
 	double off = o->audio_offset_ms * 1e6;
@@ -474,6 +561,10 @@ static void gp_raw_audio(void *data, struct audio_data *frames)
 	if (o->failed || !frames->frames)
 		return;
 	AcquireSRWLockExclusive(&o->alock);
+	if (o->stopping) {
+		ReleaseSRWLockExclusive(&o->alock);
+		return;
+	}
 	if (o->nchunks == o->cap) {
 		o->cap = o->cap ? o->cap * 2 : 256;
 		o->chunks = brealloc(o->chunks, o->cap * sizeof(struct chunk));
@@ -486,30 +577,58 @@ static void gp_raw_audio(void *data, struct audio_data *frames)
 	ReleaseSRWLockExclusive(&o->alock);
 }
 
+/* 收尾任务：输出对象可能在 ffmpeg 收尾前就被释放，所以把需要的东西单独拷一份 */
+struct finish_job {
+	HANDLE proc;
+	char ffmpeg[MAX_PATH];
+	char dir[MAX_PATH];
+	long long written;
+	bool failed;
+	char error[512];
+};
+
 static DWORD WINAPI finish_thread(LPVOID param)
 {
-	struct gp_output *o = param;
+	struct finish_job *job = param;
 	char cmd[4096], log_path[MAX_PATH * 2];
-	if (o->proc) {
-		WaitForSingleObject(o->proc, INFINITE);
-		CloseHandle(o->proc);
-		o->proc = NULL;
+	if (job->proc) {
+		WaitForSingleObject(job->proc, INFINITE);
+		DWORD code = 0;
+		GetExitCodeProcess(job->proc, &code);
+		CloseHandle(job->proc);
+		if (code != 0 && !job->failed) {
+			job->failed = true;
+			snprintf(job->error, sizeof(job->error), "ffmpeg (video) exited with code %lu, see ffmpeg_video.log",
+				 (unsigned long)code);
+		}
 	}
-	if (!o->failed && o->written > 0) {
+	if (!job->failed && job->written > 0) {
 		snprintf(cmd, sizeof(cmd),
 			 "\"%s\" -hide_banner -loglevel warning -y -i \"%s\\video.mkv\" -i \"%s\\audio.wav\" -map 0:v -map 1:a "
 			 "-c:v copy -c:a aac -b:a 256k \"%s\\gameplay.mkv\"",
-			 o->ffmpeg, o->dir, o->dir, o->dir);
-		snprintf(log_path, sizeof(log_path), "%s\\ffmpeg_mux.log", o->dir);
+			 job->ffmpeg, job->dir, job->dir, job->dir);
+		snprintf(log_path, sizeof(log_path), "%s\\ffmpeg_mux.log", job->dir);
 		HANDLE mux;
 		if (spawn(cmd, &mux, NULL, log_path)) {
 			WaitForSingleObject(mux, INFINITE);
+			DWORD code = 0;
+			GetExitCodeProcess(mux, &code);
 			CloseHandle(mux);
+			if (code != 0) {
+				job->failed = true;
+				snprintf(job->error, sizeof(job->error), "ffmpeg (mux) exited with code %lu, see ffmpeg_mux.log",
+					 (unsigned long)code);
+			}
+		} else {
+			job->failed = true;
+			snprintf(job->error, sizeof(job->error), "cannot start ffmpeg for muxing");
 		}
 	}
-	send_line("S {\"recording\":false,\"finished\":true,\"frames\":%lld,\"error\":\"%s\"}", o->written,
-		  o->failed ? o->error : "");
-	blog(LOG_INFO, "[" PLUGIN "] finished: %lld gameplay frames", o->written);
+	rec_set(job->failed ? REC_FAILED : REC_FINISHED, job->written, job->failed ? job->error : "");
+	send_status();
+	blog(LOG_INFO, "[" PLUGIN "] finished: %lld gameplay frames%s%s", job->written, job->failed ? ", error: " : "",
+	     job->failed ? job->error : "");
+	bfree(job);
 	return 0;
 }
 
@@ -517,9 +636,14 @@ static void gp_stop(void *data, uint64_t ts)
 {
 	(void)ts;
 	struct gp_output *o = data;
-	obs_output_end_data_capture(o->output);
+	if (active_output != o)
+		return; /* 没有成功开始，或已经停过 */
 	active_output = NULL;
+	obs_output_end_data_capture(o->output);
+	/* 迟到的原始帧回调可能还在路上：先拿到两把锁再关文件 */
+	AcquireSRWLockExclusive(&o->vlock);
 	AcquireSRWLockExclusive(&o->alock);
+	o->stopping = true;
 	if (o->wav) {
 		flush_pending(o, true);
 		write_wav_header(o->wav, o->rate, o->wav_frames);
@@ -535,9 +659,21 @@ static void gp_stop(void *data, uint64_t ts)
 		CloseHandle(o->stdin_wr); /* ffmpeg 读到结尾后收尾 */
 		o->stdin_wr = NULL;
 	}
-	HANDLE t = CreateThread(NULL, 0, finish_thread, o, 0, NULL);
+	struct finish_job *job = bzalloc(sizeof(*job));
+	job->proc = o->proc;
+	o->proc = NULL;
+	snprintf(job->ffmpeg, sizeof(job->ffmpeg), "%s", o->ffmpeg);
+	snprintf(job->dir, sizeof(job->dir), "%s", o->dir);
+	job->written = o->written;
+	job->failed = o->failed;
+	snprintf(job->error, sizeof(job->error), "%s", o->error);
+	ReleaseSRWLockExclusive(&o->vlock);
+	rec_set(REC_FINISHING, job->written, NULL);
+	HANDLE t = CreateThread(NULL, 0, finish_thread, job, 0, NULL);
 	if (t)
 		CloseHandle(t);
+	else
+		finish_thread(job);
 }
 
 static struct obs_output_info gp_info = {
@@ -554,34 +690,74 @@ static struct obs_output_info gp_info = {
 
 /* ------------------------------------------------------------------ 录制指令（UI 线程执行） */
 
+static void stop_current(void)
+{
+	if (!recording_output)
+		return;
+	/* 锁步已停：等已经采到、还在输出队列里的游戏帧交给录制输出（最多 1 秒），再停止 */
+	ULONGLONG deadline = GetTickCount64() + 1000;
+	for (;;) {
+		AcquireSRWLockShared(&keep.lock);
+		unsigned left = keep.count;
+		ReleaseSRWLockShared(&keep.lock);
+		if (!left || GetTickCount64() >= deadline)
+			break;
+		Sleep(5);
+	}
+	obs_output_stop(recording_output);
+	obs_output_release(recording_output);
+	recording_output = NULL;
+}
+
 static void start_task(void *param)
 {
 	obs_data_t *settings = param;
-	if (recording_output) {
-		obs_output_stop(recording_output);
-		obs_output_release(recording_output);
-		recording_output = NULL;
-	}
+	stop_current();
+	AcquireSRWLockExclusive(&keep.lock);
+	keep.head = keep.count = 0;
+	ReleaseSRWLockExclusive(&keep.lock);
+	EnterCriticalSection(&g.lock);
+	g.tokens = g.kept = g.late_ticks = 0;
+	g.outstanding = 0;
+	g.reply_kind = 0;
+	LeaveCriticalSection(&g.lock);
+	AcquireSRWLockExclusive(&rec.lock);
+	snprintf(rec.dir, sizeof(rec.dir), "%s", obs_data_get_string(settings, "dir"));
+	rec.state = REC_IDLE;
+	rec.frames = 0;
+	rec.error[0] = 0;
+	ReleaseSRWLockExclusive(&rec.lock);
+
 	recording_output = obs_output_create("celeste_gameplay_output", "celeste-gameplay", settings, NULL);
 	obs_data_release(settings);
 	if (recording_output && obs_output_start(recording_output)) {
 		InterlockedExchange(&g.lockstep, 1);
 		send_line("L 1");
-		send_line("S {\"recording\":true,\"frames\":0}");
 	} else {
-		const char *err = recording_output ? obs_output_get_last_error(recording_output) : "create failed";
-		send_line("S {\"recording\":false,\"error\":\"start failed: %s\"}", err ? err : "unknown");
+		char msg[600];
+		const char *err = recording_output ? obs_output_get_last_error(recording_output) : NULL;
+		AcquireSRWLockShared(&rec.lock);
+		bool have = rec.error[0] != 0;
+		ReleaseSRWLockShared(&rec.lock);
+		if (!have) {
+			snprintf(msg, sizeof(msg), "start failed: %s", err ? err : "cannot create output");
+			rec_set(REC_FAILED, 0, msg);
+		} else {
+			rec_set(REC_FAILED, 0, NULL);
+		}
+		if (recording_output) {
+			obs_output_release(recording_output);
+			recording_output = NULL;
+		}
 	}
+	send_status();
 }
 
 static void stop_task(void *param)
 {
 	(void)param;
-	if (recording_output) {
-		obs_output_stop(recording_output);
-		obs_output_release(recording_output);
-		recording_output = NULL;
-	}
+	stop_current();
+	send_status();
 }
 
 static void handle_command(const char *json)
@@ -683,10 +859,7 @@ static DWORD WINAPI net_thread(LPVOID param)
 			ULONGLONG now = GetTickCount64();
 			if (now - last_status > 1000) {
 				last_status = now;
-				struct gp_output *o = active_output;
-				send_line("S {\"recording\":%s,\"frames\":%lld,\"tokens\":%lld,\"kept\":%lld,\"late\":%lld,\"error\":\"%s\"}",
-					  o ? "true" : "false", o ? o->written : 0LL, g.tokens, g.kept, g.late_ticks,
-					  (o && o->failed) ? o->error : "");
+				send_status();
 			}
 		}
 		InterlockedExchange(&g.connected, 0);
@@ -706,8 +879,10 @@ static DWORD WINAPI net_thread(LPVOID param)
 bool obs_module_load(void)
 {
 	InitializeCriticalSection(&g.lock);
+	InitializeCriticalSection(&send_lock);
 	InitializeConditionVariable(&g.reply_cv);
 	InitializeSRWLock(&keep.lock);
+	InitializeSRWLock(&rec.lock);
 	g.sock = INVALID_SOCKET;
 	obs_register_output(&gp_info);
 	obs_add_tick_callback(on_tick, NULL);

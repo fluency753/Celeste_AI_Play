@@ -4,6 +4,7 @@
     python -m orchestrator.run --agent dev-opus --save test --model opus
     python -m orchestrator.run --agent dev-opus --save test --model opus --max-minutes 20 --effort medium
     python -m orchestrator.run --agent dev --save test --no-agent      # 只启动工具服务，用于手动调试
+    python -m orchestrator.run --agent opus5.5 --save opus5.5 --record # 同时用 OBS 录制（先 python tools/obs_setup.py launch）
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from .container import ensure_container
 from .game_session import GameSession
 from .kb_study import KbStudy
 from .metrics import Metrics
+from .recording import Recorder, RecordingError, options_from
 from .server import TRANSPORT_SECURITY, build_server
 
 
@@ -50,6 +52,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）就停止本次运行，默认 0.9")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务")
+    ap.add_argument("--record", action="store_true",
+                    help="用 OBS 锁步录制：只录游戏真正推进的帧，成片在日志目录的 recording/ 下（需要先启动 OBS）")
+    ap.add_argument("--record-marker", action="store_true", help="录制时在画面左下角画帧号条码（只用于校准）")
+    ap.add_argument("--ffmpeg", help="ffmpeg 路径（默认：configs/local.recording.json → PATH → winget 安装位置）")
+    ap.add_argument("--record-video-args", help="ffmpeg 视频编码参数（默认见 configs/recording.json）")
+    ap.add_argument("--audio-offset-ms", type=float, help="声音相对画面的偏移毫秒数（默认用校准结果，见 configs/local.recording.json）")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     args = ap.parse_args()
@@ -119,6 +127,16 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
     session = GameSession(cfg, run_dir, metrics)
     obs = session.connect()
     print(f"[run] 已接管游戏：{obs['level']['sid']} 房间 {obs['level']['room']}，存档 {cfg.save}", flush=True)
+    recorder = None
+    if args.record:
+        recorder = Recorder(session.bridge_call,
+                            options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms, args.record_marker),
+                            log=lambda m: print(m, flush=True))
+        try:
+            recorder.start()
+        except RecordingError:
+            session.close()
+            raise
 
     server = build_server(session, study)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
@@ -156,12 +174,18 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
                 await asyncio.wait_for(web_task, timeout=10)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 web_task.cancel()
+        recording = None
+        if recorder:
+            try:
+                recording = recorder.stop()
+            except Exception as exc:  # noqa: BLE001（录制收尾失败不影响交还游戏控制与写总结）
+                print(f"[record] 停止录制失败：{exc}", flush=True)
         session.close()  # 交还游戏控制
         summary = metrics.snapshot()
         summary.update(stop_reason=reason, completed=session.done and session.done_reason == "章节完成",
                        start_sid=session.start_sid, turns=runner.turns if runner else 0,
                        session_id=runner.session_id if runner else None, run_dir=str(run_dir),
-                       kb_study=study.summary() if study else None)
+                       kb_study=study.summary() if study else None, recording=recording)
         (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
 
@@ -180,6 +204,9 @@ def main() -> int:
     except KeyboardInterrupt:
         print("[run] 已中断", flush=True)
         return 130
+    except RecordingError as exc:
+        print(f"[record] {exc}", flush=True)
+        return 2
     print(f"[run] 结束：{summary['stop_reason']}；决策 {summary['decisions']} 次，死亡 {summary['deaths']} 次，"
           f"用时 {summary['elapsed_s']:.0f} 秒（思考 {summary['thinking_s']:.0f}，工具 {summary['tool_s']:.0f}，"
           f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）"
