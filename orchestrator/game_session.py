@@ -81,6 +81,10 @@ class GameSession:
         self.decision_index = 0
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
         self._decisions_log = open(run_dir / "decisions.jsonl", "a", encoding="utf-8")
+        # 容器方式下，观测与轨迹同时写进智能体的工作区，供它自写的程序读取
+        self.workspace: Path | None = cfg.workspace_dir if cfg.runtime == "container" else None
+        if self.workspace:
+            (self.workspace / "game" / "rooms").mkdir(parents=True, exist_ok=True)
 
     # ---- 连接与观测 ----
 
@@ -111,13 +115,64 @@ class GameSession:
             reply = self.client.call("observe", image=True)
         obs = reply["obs"]
         self._update_metrics_from_obs(obs)
+        self._write_workspace(obs)
         return obs, reply.get("image")
+
+    # ---- 工作区数据 ----
+
+    def resolve_plan_file(self, plan_file: str) -> list[str]:
+        """读取工作区里的计划文件：JSON 数组 ["12,R", "1,R,J"]，或 {"inputs": [...]}。"""
+        if not self.workspace:
+            raise ActError("本次运行没有工作区，不能使用 plan_file，请直接传 inputs")
+        rel = plan_file.strip()
+        if rel.startswith("/workspace/"):
+            rel = rel[len("/workspace/"):]
+        path = (self.workspace / rel).resolve()
+        if self.workspace.resolve() not in path.parents:
+            raise ActError(f"plan_file 必须在 /workspace 下：{plan_file}")
+        if not path.is_file():
+            raise ActError(f"找不到计划文件 {plan_file}")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ActError(f"计划文件不是合法的 JSON：{exc}") from exc
+        inputs = data.get("inputs") if isinstance(data, dict) else data
+        if not isinstance(inputs, list) or not all(isinstance(x, str) for x in inputs):
+            raise ActError('计划文件的内容必须是按键段数组，例如 ["12,R", "1,R,J"]，或 {"inputs": [...]}')
+        return inputs
+
+    def _write_json(self, rel: str, data) -> None:
+        path = self.workspace / rel
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+
+    def _write_workspace(self, obs: dict, act_record: dict | None = None) -> None:
+        if not self.workspace:
+            return
+        try:
+            self._write_json("game/latest_obs.json", {"decision": self.decision_index, "obs": obs})
+            level = obs.get("level") or {}
+            if level.get("room") is not None and obs.get("tiles"):
+                sid = str(level.get("sid", "unknown")).replace("/", "_")
+                room_rel = f"game/rooms/{sid}__{level['room']}.json"
+                if not (self.workspace / room_rel).exists():
+                    self._write_json(room_rel, {"decision": self.decision_index, "obs": obs})
+            if act_record is not None:
+                self._write_json("game/last_act.json", act_record)
+        except OSError:
+            pass  # 工作区写入失败不影响游戏推进
 
     # ---- 动作 ----
 
-    def act(self, inputs: list[str], thought: str, stop_on: list[str] | None) -> ActOutcome:
+    def act(self, inputs: list[str] | None, thought: str, stop_on: list[str] | None,
+            plan_file: str | None = None) -> ActOutcome:
         if self.done:
             raise ActError("章节已完成，无需再操作，请直接结束本轮。")
+        if plan_file:
+            if inputs:
+                raise ActError("inputs 与 plan_file 只能二选一")
+            inputs = self.resolve_plan_file(plan_file)
         thought = (thought or "").strip()
         if not thought:
             raise ActError("thought 不能为空：用一两句话说明这段操作的意图")
@@ -150,9 +205,13 @@ class GameSession:
 
         self.metrics.update(last_stop=result["stop"])
         self._update_metrics_from_obs(obs)
+        self._write_workspace(obs, {
+            "decision": self.decision_index, "thought": thought, "inputs": inputs, "plan_file": plan_file,
+            "stop_on": stop, "result": result, "auto_frames": auto_frames, "auto_notes": notes,
+        })
         self._decisions_log.write(json.dumps({
             "i": self.decision_index, "t": round(self.metrics.elapsed(), 3), "thought": thought,
-            "inputs": inputs, "stop_on": stop, "stop": result["stop"], "consumed": result["consumed"],
+            "inputs": inputs, "plan_file": plan_file, "stop_on": stop, "stop": result["stop"], "consumed": result["consumed"],
             "planned": result["planned"], "events": result["events"], "game_s": round(game_s, 3),
             "auto_frames": auto_frames, "auto_notes": notes,
         }, ensure_ascii=False) + "\n")

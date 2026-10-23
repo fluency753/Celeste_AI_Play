@@ -1,6 +1,9 @@
 {
   "permissions": {
-    "deny": ["WebSearch", "WebFetch"],
+    "deny": [
+      "WebSearch",
+      "WebFetch"
+    ],
     "disableBypassPermissionsMode": "disable"
   },
   "sandbox": {
@@ -13,6 +16,11 @@
       "allowedDomains": [],
       "strictAllowlist": true,
       "allowManagedDomainsOnly": true
+    },
+    "filesystem": {
+      "allowWrite": [
+        "/tmp"
+      ]
     }
   },
   "disableClaudeAiConnectors": true,

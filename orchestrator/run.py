@@ -21,9 +21,10 @@ import uvicorn
 
 from .agent import ClaudeRunner
 from .config import REPO_ROOT, RunConfig, load_dotenv
+from .container import ensure_container
 from .game_session import GameSession
 from .metrics import Metrics
-from .server import build_server
+from .server import TRANSPORT_SECURITY, build_server
 
 
 def parse_args() -> tuple[RunConfig, argparse.Namespace]:
@@ -40,11 +41,14 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--chapter", type=int, help="进入的章节编号：0 序章、1 被遗弃之城、2 旧址；默认进入选章页当前选中的章节")
     ap.add_argument("--skip-enter", action="store_true", help="已在关卡内且可操作时，跳过菜单宏")
     ap.add_argument("--no-agent", action="store_true", help="不启动智能体，只运行工具服务直到 Ctrl+C")
+    ap.add_argument("--runtime", choices=["container", "host"], default="container",
+                    help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     args = ap.parse_args()
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort,
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
     cfg.chapter = args.chapter
+    cfg.runtime = args.runtime
     return cfg, args
 
 
@@ -93,7 +97,8 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
     print(f"[run] 已接管游戏：{obs['level']['sid']} 房间 {obs['level']['room']}，存档 {cfg.save}", flush=True)
 
     server = build_server(session)
-    app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1")
+    app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
+                                     transport_security=TRANSPORT_SECURITY)
     web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
     web_task = asyncio.create_task(web.serve())
     while not web.started:
@@ -110,8 +115,13 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
             await web_task
             reason = "手动结束"
         else:
-            runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", server.reset_clock)
-            print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 预算 {cfg.max_minutes:g} 分钟", flush=True)
+            container = None
+            if cfg.runtime == "container":
+                container = await asyncio.to_thread(ensure_container, cfg, lambda m: print(m, flush=True))
+                print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
+            runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", server.reset_clock, container)
+            print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
+                  f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()
     finally:
         metrics.update(status="done" if session.done else "stopped")

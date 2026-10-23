@@ -5,6 +5,7 @@ import asyncio
 import time
 
 from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 
 from .game_session import ActError, GameSession
 from .observation import describe_obs, describe_step, upscale_png
@@ -12,6 +13,7 @@ from .observation import describe_obs, describe_step, upscale_png
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测（截图 + 文字状态）。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
+plan_file：（有工作区时可用）工作区里的计划文件路径，内容是同样格式的 JSON 数组；与 inputs 二选一。
   按键：L R U D 方向，J 跳，X 冲刺，Z 下冲刺，G 抓墙，T 交互；A:角度 表示摇杆角度（0 右、90 上）。
   只写帧数表示这些帧不按任何键，例如 "5"。一次最多 600 帧。
 thought：一两句中文，说明这段操作的意图，会显示给观众。
@@ -19,7 +21,17 @@ stop_on：提前停下的条件，可选 death room uncontrollable land refill c
   默认 ["death", "room", "complete"]，death 与 complete 总会生效。
 死亡、换房后的转场、剧情与重生由系统自动推进，返回时 Madeline 已可操作。"""
 
+WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json）"
+
 OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图与文字状态。通常 act 的返回已经包含最新观测，只在需要重新查看时调用。"
+
+
+# 只接受本机与容器（经 host.docker.internal）的请求，防止 DNS 重绑定
+TRANSPORT_SECURITY = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=["127.0.0.1:*", "localhost:*", "host.docker.internal:*"],
+    allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://host.docker.internal:*"],
+)
 
 
 def build_server(session: GameSession) -> MCPServer:
@@ -52,19 +64,20 @@ def build_server(session: GameSession) -> MCPServer:
                 content: list = []
                 if image:
                     content.append(Image(data=upscale_png(image), format="png"))
-                content.append(describe_obs(obs, *clock_text()))
+                content.append(describe_obs(obs, *clock_text()) + ("\n" + WORKSPACE_NOTE if session.workspace else ""))
                 return content
             finally:
                 finish(t0, 0.0)
 
     @server.tool(name="act", description=ACT_DESCRIPTION, structured_output=False)
-    async def act(inputs: list[str], thought: str, stop_on: list[str] | None = None) -> list:
+    async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
+                  stop_on: list[str] | None = None) -> list:
         async with call_lock:
             t0 = begin()
             game_s = 0.0
             auto_before = metrics.state.auto_game_s
             try:
-                outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on)
+                outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file)
                 # 工具时间不含任何推进游戏的时间（动作块与自动推进段都算游戏时间）
                 game_s = outcome.game_s + (metrics.state.auto_game_s - auto_before)
                 parts = [describe_step(outcome.result)]
@@ -73,6 +86,8 @@ def build_server(session: GameSession) -> MCPServer:
                 if session.done:
                     parts.append(f"【{session.done_reason}】本章已结束，不需要再调用工具，请直接结束本轮。")
                 parts.append(describe_obs(outcome.obs, *clock_text()))
+                if session.workspace:
+                    parts.append(WORKSPACE_NOTE)
                 content: list = []
                 if outcome.image_b64:
                     content.append(Image(data=upscale_png(outcome.image_b64), format="png"))

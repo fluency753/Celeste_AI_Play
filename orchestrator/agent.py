@@ -79,6 +79,8 @@ class ClaudeRunner:
                 find_docker_exe(), "exec", "-i", "-u", "agent", "-w", "/workspace",
                 "-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "MCP_TOOL_TIMEOUT=900000", "-e", "MAX_MCP_OUTPUT_TOKENS=40000",
                 self.container, "claude", *self._common_args(),
+                # 受限模式：不读取用户、项目与本地设置文件（智能体改不了自己的配置），文件工具只能访问工作区与知识库
+                "--restricted", "--add-dir", "/kb",
                 "--tools", ",".join(CONTAINER_BUILTIN_TOOLS),
                 "--mcp-config", mcp,
                 "--allowedTools", *CONTAINER_BUILTIN_TOOLS, *GAME_TOOLS,
@@ -177,6 +179,18 @@ class ClaudeRunner:
         if self.proc is None:
             return
         try:
+            await self._shutdown_process()
+        finally:
+            if self.container:
+                # docker exec 的客户端退出不一定会结束容器里的进程：把 agent 用户的进程全部结束
+                kill = await asyncio.create_subprocess_exec(
+                    find_docker_exe(), "exec", self.container, "pkill", "-u", "agent",
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                await kill.wait()
+            reader.cancel()
+
+    async def _shutdown_process(self) -> None:
+        try:
             if self.proc.stdin and not self.proc.stdin.is_closing():
                 self.proc.stdin.close()
             await asyncio.wait_for(self.proc.wait(), timeout=30)
@@ -186,7 +200,6 @@ class ClaudeRunner:
                 await asyncio.wait_for(self.proc.wait(), timeout=10)
             except asyncio.TimeoutError:
                 self.proc.kill()
-        reader.cancel()
 
     async def _read_stdout(self) -> None:
         assert self.proc and self.proc.stdout
