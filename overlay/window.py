@@ -90,6 +90,35 @@ def monitor_work_area(user32, title: str):
     return r.left, r.top, r.right, r.bottom
 
 
+class DWM_BLURBEHIND(ctypes.Structure):
+    _fields_ = [("dwFlags", wt.DWORD), ("fEnable", wt.BOOL), ("hRgnBlur", wt.HRGN), ("fTransitionOnMaximized", wt.BOOL)]
+
+
+def per_pixel_alpha(window, hwnd) -> None:
+    """让窗口按像素透明：页面透明的地方露出游戏，卡片按自己的半透明底色叠在游戏上。
+
+    pywebview 的 transparent 在 Windows 上只把网页背景设成透明，透出来的是窗体自己的底色（浅灰），
+    所以卡片四周有白边、卡片也不是真的半透明。这里把窗体底色改成黑色（GDI 画出的黑色 alpha 为 0），
+    再用一个空区域打开 DWM 的"背后模糊"——不会真的模糊，只是让 DWM 按像素的 alpha 合成窗口。
+    """
+    try:
+        import clr  # noqa: F401（pywebview 已加载 pythonnet）
+        from System import Action
+        from System.Drawing import Color
+        form = window.native
+        form.Invoke(Action(lambda: setattr(form, "BackColor", Color.Black)))
+    except Exception as exc:  # noqa: BLE001
+        print(f"设置窗体底色失败：{exc}", flush=True)
+    gdi32 = ctypes.windll.gdi32
+    gdi32.CreateRectRgn.restype = wt.HRGN
+    region = gdi32.CreateRectRgn(0, 0, -1, -1)
+    blur = DWM_BLURBEHIND(0x1 | 0x2, True, region, False)   # DWM_BB_ENABLE | DWM_BB_BLURREGION
+    result = ctypes.windll.dwmapi.DwmEnableBlurBehindWindow(wt.HWND(hwnd), ctypes.byref(blur))
+    gdi32.DeleteObject(region)
+    if result != 0:
+        print(f"DwmEnableBlurBehindWindow 失败：0x{result & 0xFFFFFFFF:08X}", flush=True)
+
+
 def make_overlay(user32, hwnd) -> None:
     """点击穿透、不激活、不进任务栏、置顶。"""
     style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
@@ -97,7 +126,7 @@ def make_overlay(user32, hwnd) -> None:
     style = (style | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED) & ~WS_EX_APPWINDOW
     user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style)
     if not layered:
-        # 新加的分层样式必须设一次透明度，否则窗口不显示；整体不透明，半透明由页面的卡片底色负责
+        # 新加的分层样式必须设一次透明度，否则窗口不显示；整体不透明度 255，按像素的透明由 per_pixel_alpha 负责
         user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
 
 
@@ -114,6 +143,7 @@ def follow(window, args) -> None:
     if not hwnd:
         print("找不到 HUD 窗口", flush=True)
         return
+    per_pixel_alpha(window, hwnd)
     make_overlay(user32, hwnd)
     if args.previous_foreground and user32.GetForegroundWindow() == hwnd:
         user32.SetForegroundWindow(args.previous_foreground)   # 加载页面时 WebView2 会激活一次窗口：把焦点还回去
