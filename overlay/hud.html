@@ -115,6 +115,7 @@ const STATUS = {
   executing: ["执行中", "executing", false],
   auto:      ["自动推进", "idle", false],
   retrying:  ["自动重试", "retrying", false],
+  quota_wait:["等待额度重置", "idle", false],
   done:      ["已完成", "idle", false],
   stopped:   ["已结束", "idle", false],
 };
@@ -176,7 +177,12 @@ function render() {
   const ended = m.status === "done" || m.status === "stopped";
 
   $("name").textContent = displayName(m);
-  $("status").textContent = text;
+  let statusText = text;
+  if (m.status === "quota_wait" && m.quota_wait_until) {
+    const d = new Date(m.quota_wait_until * 1000);
+    statusText = `${text}（${pad(d.getHours())}:${pad(d.getMinutes())} 恢复）`;
+  }
+  $("status").textContent = statusText;
   const dot = $("dot");
   dot.style.background = c[kind] || "#8A93A6";
   dot.classList.toggle("breathe", breathe);
@@ -223,8 +229,11 @@ function render() {
     budgetbar.style.width = ((m.kb_progress || 0) * 100).toFixed(1) + "%";
     budgetbar.classList.remove("warn");
   } else {
+    // 现实用时：主控每次写出时的值，两次写出之间按实时外推（等待额度时不走；续跑时接着上一段）
     let used = m.elapsed_s || 0;
-    if (playing && !ended) used = Math.max(0, now - m.started_wall);
+    if (playing && !ended && m.status !== "quota_wait" && m.written_wall > 0) {
+      used += Math.max(0, now - m.written_wall);
+    }
     const budget = m.budget_s || 0;
     $("budgetLabel").textContent = "时间预算";
     $("budget").textContent = `${clock(used)} / ${clock(budget)}`;

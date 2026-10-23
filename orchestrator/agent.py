@@ -7,6 +7,9 @@
 
 两种方式共同的措施：--strict-mcp-config 只加载本项目的游戏工具服务；--permission-mode dontAsk 拒绝一切未预先
 允许的调用；不读取使用者自己的 Claude Code 配置、CLAUDE.md 与自动记忆；启动时核对工具列表，多出任何工具立即停止。
+
+Max 额度：5 小时窗口的用量到达上限（--max-usage）时结束 Claude Code 进程，游戏保持冻结，等到额度重置后用
+--resume 接着同一个会话继续（上下文保留），等待时间不计入现实用时；7 天窗口到上限则结束本次运行。
 """
 from __future__ import annotations
 
@@ -58,6 +61,16 @@ def study_prompt(study: KbStudy) -> str:
 CONTINUE_PROMPT = "本章还没有通关，请继续调用 act 游玩。"
 
 
+def resume_prompt(reason: str, minutes: float, study_note: str | None = None) -> str:
+    """Claude Code 进程被结束后，用 --resume 接着同一个会话时发出的第一条消息。"""
+    text = (f"（系统）{reason}，你的上一轮在中途被结束，暂停了约 {minutes:.0f} 分钟，现在接着同一个会话继续。"
+            "这段时间游戏一直冻结，章节计时与现实用时都没有走；但如果被结束时有一个 act 正在执行，它已经执行完了，"
+            "结果没能送回给你。")
+    if study_note:
+        return text + "准备阶段还没有结束：\n" + study_note
+    return text + "请先调用 observe 看清当前这一帧（工作区里的 game/ 文件也已更新），再继续游玩。"
+
+
 def _strip_images(value):
     """写日志时去掉图片的 base64，避免日志膨胀。"""
     if isinstance(value, dict):
@@ -70,7 +83,9 @@ def _strip_images(value):
 
 class ClaudeRunner:
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
-                 token: str, reset_clock, container: str | None = None, study: KbStudy | None = None):
+                 token: str, reset_clock, container: str | None = None, study: KbStudy | None = None,
+                 session_id: str | None = None, resume: bool = False, resume_note: str | None = None):
+        """resume=True：用 --resume 接着 session_id 这个已有的会话（续跑）；resume_note 不为空时代替开局的第一条消息。"""
         self.cfg = cfg
         self.study = study
         self.container = container
@@ -79,7 +94,10 @@ class ClaudeRunner:
         self.metrics = metrics
         self.token = token
         self.reset_clock = reset_clock
-        self.session_id = str(uuid.uuid4())
+        self.session_id = session_id or str(uuid.uuid4())
+        self.resume = resume                     # True：用 --resume 接着已有的会话
+        self.resume_note = resume_note
+        self.quota_until: float | None = None    # 5 小时额度到上限：预计重置的时刻（墙钟，秒）
         self.proc: asyncio.subprocess.Process | None = None
         self.turns = 0
         self.idle_turns = 0
@@ -92,7 +110,8 @@ class ClaudeRunner:
     def _common_args(self) -> list[str]:
         args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                 "--model", self.cfg.model, "--effort", self.cfg.effort,
-                "--strict-mcp-config", "--permission-mode", "dontAsk", "--session-id", self.session_id]
+                "--strict-mcp-config", "--permission-mode", "dontAsk",
+                *(["--resume", self.session_id] if self.resume else ["--session-id", self.session_id])]
         if self.cfg.autocompact:
             args += ["--autocompact", self.cfg.autocompact]
         return args
@@ -158,14 +177,41 @@ class ClaudeRunner:
     async def run(self) -> str:
         workdir = self.run_dir / "agent_cwd"
         workdir.mkdir(exist_ok=True)
+        if self.resume_note:
+            first = self.resume_note
+        else:
+            first = study_prompt(self.study) if self.study else FIRST_PROMPT
+        try:
+            while True:
+                stopped = await self._run_process(workdir, first)
+                if stopped or self.quota_until is None:
+                    break
+                # 5 小时额度到上限：游戏保持冻结，等额度重置后接着同一个会话
+                minutes = await self._wait_for_quota()
+                self.resume = True
+                self.idle_turns = 0
+                study_note = None
+                if not self.metrics.playing and self.study is not None and not self.study.ready():
+                    study_note = self.study.reminder()
+                elif not self.metrics.playing and self.study is not None:
+                    study_note = "知识库已经读完；整理好笔记后调用 observe 开始游玩。"
+                first = resume_prompt("Max 额度的 5 小时窗口用到了上限", minutes, study_note)
+        finally:
+            self._events.close()
+        return self.stop_reason
+
+    async def _run_process(self, workdir: Path, first: str) -> bool:
+        """启动一个 Claude Code 进程并驱动到结束。返回 True 表示本次运行结束；False 表示因额度暂停，稍后续上。"""
         stderr_log = open(self.run_dir / "claude_stderr.log", "ab")
+        self._init_checked = False
+        self._turn_done.clear()
         self.proc = await asyncio.create_subprocess_exec(
             *self._command(), cwd=str(workdir), env=self._env(),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=stderr_log,
             limit=64 * 1024 * 1024)
         reader = asyncio.create_task(self._read_stdout())
         try:
-            await self._send(study_prompt(self.study) if self.study else FIRST_PROMPT)
+            await self._send(first)
             while True:
                 if not self.metrics.playing and self.study is not None:
                     # 准备阶段：不消耗现实用时预算，只受准备阶段上限约束
@@ -184,18 +230,22 @@ class ClaudeRunner:
                     remaining = self.cfg.budget_seconds - self.metrics.elapsed()
                     if remaining <= 0 or not await self._wait_turn(remaining):
                         self.stop_reason = "时间预算用完"
-                        break
+                        return True
+                if self.quota_until is not None and not self.stop_reason:
+                    return False
                 if reader.done():
                     self.stop_reason = self.stop_reason or "Claude Code 进程已退出"
-                    break
+                    return True
                 self._turn_done.clear()
                 if self.session.done:
                     self.stop_reason = self.session.done_reason
-                    break
+                    return True
+                if self.stop_reason:
+                    return True
                 self.idle_turns = self.idle_turns + 1 if self._tool_calls_this_turn == 0 else 0
                 if self.idle_turns >= 3:
                     self.stop_reason = "连续 3 轮没有调用工具"
-                    break
+                    return True
                 if self.study is not None and not self.study.ready():
                     await self._send(self.study.reminder())
                 else:
@@ -203,8 +253,25 @@ class ClaudeRunner:
         finally:
             await self._shutdown(reader)
             stderr_log.close()
-            self._events.close()
-        return self.stop_reason
+
+    async def _wait_for_quota(self) -> float:
+        """等到 5 小时窗口重置（再多等 2 分钟）；返回等待的分钟数。等待期间游戏冻结，现实用时不走。"""
+        now = time.time()
+        until = max(self.quota_until or 0.0, now + 60.0) + 120.0
+        if self.cfg.quota_wait_cap_s is not None:  # 只用于测试
+            until = min(until, now + self.cfg.quota_wait_cap_s)
+        self.metrics.pause(until)
+        self.metrics.update(thought="")
+        print(f"[agent] 等待 Max 额度重置：约 {(until - now) / 60:.0f} 分钟后（{time.strftime('%H:%M', time.localtime(until))}）"
+              "接着同一个会话继续；游戏保持冻结", flush=True)
+        while time.time() < until:
+            await asyncio.sleep(min(30.0, max(0.5, until - time.time())))
+        waited = self.metrics.resume()
+        if self.study is not None and not self.metrics.playing:
+            self.study.started += waited  # 准备阶段的上限不算等待的时间
+        self.quota_until = None
+        print(f"[agent] 额度等待结束（{waited / 60:.0f} 分钟），恢复智能体", flush=True)
+        return waited / 60.0
 
     async def _wait_turn(self, timeout: float) -> bool:
         """等这一轮结束；超时返回 False（这一轮仍在进行）。"""
@@ -316,10 +383,19 @@ class ClaudeRunner:
             self.metrics.update(usage_5h=five, usage_7d=seven,
                                 usage_resets_at=(windows.get("five_hour") or {}).get("resetsAt"))
             limit = self.cfg.max_usage
-            if limit and any(u is not None and u >= limit for u in (five, seven)) and not self.stop_reason:
-                # 同一账号还有其他会话（包括开发会话）要用：到上限就结束本次运行
-                self.stop_reason = f"Max 用量达到上限 {limit:.0%}（5 小时 {five}，7 天 {seven}）"
-                print(f"[agent] {self.stop_reason}，停止运行", flush=True)
+            over5 = limit and five is not None and five >= limit
+            over7 = limit and seven is not None and seven >= limit
+            rejected = info.get("status") == "rejected"
+            if (over5 or over7 or rejected) and not self.stop_reason and self.quota_until is None:
+                resets = (windows.get("five_hour") or {}).get("resetsAt") or info.get("resetsAt")
+                if self.cfg.quota_wait and not over7 and resets:
+                    # 5 小时窗口到上限：结束这个进程，等额度重置后接着同一个会话（见 run）
+                    self.quota_until = float(resets)
+                    print(f"[agent] Max 用量达到上限 {limit:.0%}（5 小时 {five}，7 天 {seven}），暂停智能体等待额度重置", flush=True)
+                else:
+                    # 7 天窗口到上限（或关闭了等待）：结束本次运行；同一账号还有其他会话要用
+                    self.stop_reason = f"Max 用量达到上限 {limit:.0%}（5 小时 {five}，7 天 {seven}）"
+                    print(f"[agent] {self.stop_reason}，停止运行", flush=True)
                 if self.proc and self.proc.returncode is None:
                     self.proc.terminate()
             if info.get("status") not in (None, "allowed", "allowed_warning"):

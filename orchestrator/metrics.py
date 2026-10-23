@@ -6,6 +6,8 @@
 - 游戏推进时间：桥接逐帧推进所用的墙钟时间（动作块与自动推进段分开记）。
 - 准备时间：开始游玩前读知识库、写笔记与程序的墙钟时间，单独记，不计入现实用时；
   现实用时从第一次真正执行游戏工具时开始（没有准备阶段时从启动时开始）。
+- 等待额度：Max 用量到达上限后等待额度重置的时间单独记（waited_s），不计入现实用时与准备时间。
+- 续跑（--resume）时从上一段运行的统计接着累计。
 每次更新都会原子地写出 metrics.json，供 HUD 读取。
 """
 from __future__ import annotations
@@ -23,7 +25,7 @@ class MetricsState:
     agent: str = ""
     model: str = ""
     effort: str = ""
-    status: str = "starting"          # starting / studying / thinking / executing / auto / retrying / compacting / done / stopped
+    status: str = "starting"          # starting / studying / thinking / executing / auto / retrying / compacting / quota_wait / done / stopped
     started_wall: float = 0.0
     elapsed_s: float = 0.0
     budget_s: float = 0.0
@@ -55,6 +57,10 @@ class MetricsState:
     usage_5h: float | None = None     # Max 套餐 5 小时窗口已用比例（0~1），来自 Claude Code 的 rate_limit_event
     usage_7d: float | None = None     # 7 天窗口已用比例
     usage_resets_at: int | None = None
+    waited_s: float = 0.0             # 等待 Max 额度重置的总时间（不计入现实用时）
+    quota_waits: int = 0              # 等待额度重置的次数
+    quota_wait_until: float | None = None  # 正在等待时：预计恢复的时刻（墙钟，秒）
+    resumed_from: str | None = None   # 续跑时：上一段运行的日志目录
     output_tokens: int = 0
     thinking_tokens: int = 0
     # HUD 用来在两次写入之间自己走表的时间点（墙钟，秒）
@@ -69,6 +75,9 @@ class Metrics:
         self._path = path
         self._lock = threading.Lock()
         self._t0 = time.monotonic()
+        self._offset = 0.0              # 续跑时上一段运行已用的现实用时
+        self._paused = 0.0              # 从 _t0 起暂停（等待额度）的总秒数
+        self._pause_start: float | None = None
         self.playing = not study
         now = time.time()
         self.state = MetricsState(agent=agent, model=model, effort=effort,
@@ -77,9 +86,14 @@ class Metrics:
                                   phase_since_wall=now, thinking_since_wall=now)
         self.write()
 
+    def _running(self, now: float) -> float:
+        """从 _t0 起、扣除暂停之后的秒数。"""
+        paused = self._paused + (now - self._pause_start if self._pause_start is not None else 0.0)
+        return max(0.0, now - self._t0 - paused)
+
     def elapsed(self) -> float:
-        """现实用时（准备阶段不算）。"""
-        return time.monotonic() - self._t0 if self.playing else 0.0
+        """现实用时（准备阶段与等待额度的时间不算）。"""
+        return self._offset + self._running(time.monotonic()) if self.playing else 0.0
 
     def start_play(self) -> None:
         """准备阶段结束，开始计现实用时。"""
@@ -87,13 +101,65 @@ class Metrics:
             if self.playing:
                 return
             now = time.monotonic()
-            self.state.study_s = now - self._t0
+            self.state.study_s = self._running(now)
             self._t0 = now
+            self._paused = 0.0
+            self._pause_start = now if self._pause_start is not None else None
             self.playing = True
             self.state.started_wall = time.time()
             self.state.thinking_since_wall = self.state.started_wall
             self.state.phase_since_wall = self.state.started_wall
             self.state.status = "thinking"
+            self._write_locked()
+
+    def pause(self, until_wall: float | None = None) -> None:
+        """等待额度重置：现实用时（或准备时间）停止走表。"""
+        with self._lock:
+            if self._pause_start is None:
+                self._pause_start = time.monotonic()
+            now = time.time()
+            if self.state.status != "quota_wait":
+                self.state.phase_since_wall = now
+            self.state.status = "quota_wait"
+            self.state.quota_wait_until = until_wall
+            self._write_locked()
+
+    def resume(self) -> float:
+        """额度恢复：返回这次等待的秒数。"""
+        with self._lock:
+            if self._pause_start is None:
+                return 0.0
+            waited = time.monotonic() - self._pause_start
+            self._paused += waited
+            self._pause_start = None
+            self.state.waited_s += waited
+            self.state.quota_waits += 1
+            self.state.quota_wait_until = None
+            self.state.status = "thinking" if self.playing else "studying"
+            self.state.phase_since_wall = time.time()
+            self._write_locked()
+            return waited
+
+    RESTORED = ("thinking_s", "tool_s", "play_game_s", "auto_game_s", "decisions", "frames_played", "frames_auto",
+                "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
+                "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
+                "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "context_tokens")
+
+    def restore(self, previous: dict, resumed_from: str) -> None:
+        """续跑：接着上一段运行的统计累计（现实用时从上一段的值接着走）。"""
+        with self._lock:
+            for key in self.RESTORED:
+                if key in previous and previous[key] is not None:
+                    setattr(self.state, key, previous[key])
+            self._offset = float(previous.get("elapsed_s") or 0.0)
+            self._t0 = time.monotonic()
+            self._paused = 0.0
+            self.playing = True
+            now = time.time()
+            self.state.started_wall = float(previous.get("started_wall") or now)
+            self.state.resumed_from = resumed_from
+            self.state.status = "starting"
+            self.state.phase_since_wall = self.state.thinking_since_wall = now
             self._write_locked()
 
     def update(self, **changes) -> None:
@@ -150,7 +216,7 @@ class Metrics:
         self.state.written_wall = time.time()
         self.state.elapsed_s = self.elapsed()
         if not self.playing:
-            self.state.study_s = time.monotonic() - self._t0
+            self.state.study_s = self._running(time.monotonic())
         tmp = self._path.with_suffix(".tmp")
         try:
             tmp.write_text(json.dumps(asdict(self.state), ensure_ascii=False, indent=2), encoding="utf-8")

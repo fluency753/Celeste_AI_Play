@@ -35,9 +35,11 @@ def area_id(sid: str | None) -> int | None:
         return None
 
 
-def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None) -> dict:
+def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None,
+               menu_speed: int = 4) -> dict:
     """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。
-    也可以从通关之后接着用：结算画面、回到地图、选下一章、进入，一路处理到可操作的第一帧。"""
+    也可以从通关之后接着用：结算画面、回到地图、选下一章、进入，一路处理到可操作的第一帧。
+    menu_speed：等待菜单切换与载入时每次渲染推进几帧（开跑前用 4 省时间；正式运行中途换章时用 1，录像不快进）。"""
     obs = c.call("activate", entities=False, tiles=False)["obs"]
     tried_skip: set[str] = set()
     vignette_tries = 0
@@ -79,7 +81,7 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
             continue
 
         if scene != "Overworld" or menu.get("next"):
-            obs = step(c, ["10"], speed=4)["obs"]  # 加载或菜单切换中
+            obs = step(c, ["10"], speed=menu_speed)["obs"]  # 加载或菜单切换中
             continue
 
         current = menu.get("current")

@@ -529,7 +529,7 @@ class GameSession:
         chapter = self.chapter_queue.pop(0)
         self.metrics.update(status="auto", thought="")
         t0 = time.monotonic()
-        enter_save(self.client, self.cfg.save, chapter=chapter)
+        enter_save(self.client, self.cfg.save, chapter=chapter, menu_speed=1)  # 正常速度，录像里不快进
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         reply = self.client.call("observe", image=True, scope="room", fields=True)
         obs, image = enrich_obs(reply["obs"]), reply.get("image")
