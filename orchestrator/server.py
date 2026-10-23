@@ -18,7 +18,7 @@ inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["1
   （按住 J 时按下 K 也算一次新的"按下"，可以在相邻两帧各跳一次）；A:角度 表示摇杆角度（0 右、90 上）。
   只写帧数表示这些帧不按任何键，例如 "5"。一次最多 600 帧。
 plan_file：（有工作区时可用）工作区里的计划文件路径，与 inputs 二选一。内容是按键段数组，或对象：
-  {"inputs": [...], "expect": [[x, y], [x, y, "StDash"], null, ...], "tolerance": 0.5,
+  {"inputs": [...], "expect": [[x, y], [x, y, "Dash"], null, ...], "tolerance": 0.5,
    "stop_on": [...], "retry": {"command": "python3 planner.py", "max": 3, "timeout_s": 20, "on": ["death", "deviate"]}}
   expect 是每帧推进后 Madeline 的预期位置（与轨迹 x、y 同一口径，可附状态名），偏差超过 tolerance 像素就停下（deviate）。
   retry：死亡、偏离（或 "done"：按键用完仍在本房间）时，主控在零网络沙箱里运行 command（工作目录 /workspace），
