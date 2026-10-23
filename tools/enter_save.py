@@ -67,9 +67,6 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
             obs = press(c, "R" if chapter > menu["area"] else "L", settle=20)["obs"]
         elif current == "OuiChapterPanel" and chapter is not None and menu.get("panelArea", chapter) != chapter:
             obs = press(c, "B", settle=30)["obs"]  # 打开的是别的章节面板：退回选章页
-        elif current == "OuiChapterPanel" and menu.get("panelSelectingMode") is False and menu.get("panelCheckpointCount", 0) > 1 \
-                and menu.get("panelCheckpoint", 0) != 0:
-            obs = press(c, "U", settle=12)["obs"]  # 有检查点时回到第一个（从章节开头开始）
         elif current in ("OuiTitleScreen", "OuiMainMenu", "OuiChapterSelect", "OuiChapterPanel"):
             obs = press(c, "C", settle=30)["obs"]
         elif current == "OuiFileSelect":
