@@ -21,7 +21,13 @@
   "level": {...},
   "player": {...},
   "entities": [...],
-  "tiles": {...}
+  "tiles": {...},
+  "solids": [[x, y, 宽, 高], ...],
+  "exits": [...],
+  "neighbors": [...],
+  "spawns": [[x, y], ...],
+  "respawnPoint": [x, y],
+  "triggers": [...]
 }
 ```
 
@@ -93,6 +99,8 @@
 - `cat`：大类：`hazard` 致死物、`spring` 弹簧、`refill` 冲刺水晶、`booster` 泡泡、`feather` 羽毛、`collectible` 收集品、`dream_block` 梦境块、`dynamic_solid` 会动的实心块、`jumpthru` 单向平台、`solid` 其他实心块、`interactive` 可交互物、`other` 其他。
 - `x, y, w, h`：碰撞箱左上角与宽高（世界坐标）。`shape` 不是矩形时出现：`circle`（此时 `r` 为半径，`x, y, w, h` 是外接矩形）、`list`（多个碰撞箱的组合，给出的是外接矩形）、`grid`。
 - `visible: false`：实体存在但当前不可见。
+- `parts`：由多个碰撞箱组合成的实体（`shape` 为 `list`），逐个给出其中矩形部分的 `[x, y, 宽, 高]`。
+- `Killbox`（`cat` 为 `hazard`）：坑底的致死区，碰到即死；它只在 Madeline 接近时才真正生效，但一直列出。
 - 附加属性：
   - 尖刺 `dir`（Up / Down / Left / Right，刺尖朝向）；弹簧 `orient`（Floor / WallLeft / WallRight，含义见 `entities.md`）；泡泡 `red`。
   - 冲刺水晶 `twoDashes`；被吃掉后 `collected: true` 与 `respawnTimer`（距重生的秒数）。
@@ -114,6 +122,16 @@
 - 第 `r` 行第 `c` 列格子覆盖世界坐标 `x ∈ [origin.x + 8c, origin.x + 8c + 8)`，`y ∈ [origin.y + 8r, origin.y + 8r + 8)`。
 - `#` 是地形网格（实心）。`= - ^ v < > * S o O F ~ $ ?` 是叠加上去的实体（含义见 `legend`），精确形状以 `entities` 为准；`M` 是 Madeline。
 - 地形网格本身就是 8 像素对齐的，`#` 格子就是精确的实心区域。
+
+### 1.5 `solids`、`exits`、`neighbors`、`spawns`、`respawnPoint`、`triggers`
+
+由主控根据整房间数据补充：
+
+- `solids`：把 `tiles` 里所有 `#` 格子合并成的矩形碰撞箱 `[x, y, 宽, 高]`（像素，世界坐标）。与 `tiles` 表示同一片地形，只是换成碰撞箱形式；其他实心物（坠落块、交通块等）在 `entities` 里。
+- `neighbors`：与本房间边界相接的房间 `{"room": 名称, "bounds": [x, y, 宽, 高]}`，只有范围，不含内容。
+- `exits`：本房间与相邻房间共用的边界段，即可能的出口：`{"side": "left/right/top/bottom", "x": ..., "y": [起, 止], "room": 相邻房间}`（左右出口给出 x 与 y 区间，上下出口给出 y 与 x 区间）。出口段上是否被地形挡住，要对照 `solids`。
+- `spawns`：本房间的重生点（死亡后可能在这些点之一重生）；`respawnPoint`：当前生效的重生点。
+- `triggers`：触发器 `{"type": 类型名, "rect": [x, y, 宽, 高]}`。触发器不挡路，Madeline 进入范围时触发效果（例如改变重生点、开始剧情）；返回给你的文字里省略了镜头、音乐、光照等与操作无关的触发器，文件里保留全部。
 
 ## 2. 上一次动作 `last_act.json`
 

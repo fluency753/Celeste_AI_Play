@@ -8,7 +8,7 @@ from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .game_session import ActError, GameSession
-from .observation import describe_obs, describe_step, upscale_png
+from .observation import describe_obs, describe_step, room_json, upscale_png
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图与整个房间的实体和字符地图，其余时候只给文字状态与画面附近的信息。
 
@@ -71,6 +71,7 @@ def build_server(session: GameSession) -> MCPServer:
                 if image:
                     content.append(Image(data=upscale_png(image), format="png"))
                 content.append(describe_obs(obs, *clock_text(), full_room=True)
+                               + "\n\n整个房间的精确数据（像素坐标）：\n" + room_json(obs)
                                + ("\n" + WORKSPACE_NOTE if session.workspace else ""))
                 return content
             finally:
@@ -95,8 +96,10 @@ def build_server(session: GameSession) -> MCPServer:
                 new_room = room_key(outcome.obs) != state["described_room"]
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
-                    parts.append("【进入新房间】下面是新房间的截图，以及整个房间的实体与字符地图。")
+                    parts.append("【进入新房间】下面是新房间的截图、整个房间的字符地图，以及整个房间的精确数据（JSON）。")
                 parts.append(describe_obs(outcome.obs, *clock_text(), full_room=new_room))
+                if new_room:
+                    parts.append("整个房间的精确数据（像素坐标）：\n" + room_json(outcome.obs))
                 if session.workspace:
                     parts.append(WORKSPACE_NOTE)
                 content: list = []

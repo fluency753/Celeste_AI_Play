@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .config import REPO_ROOT, RunConfig
 from .metrics import Metrics
+from .observation import enrich_obs
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
@@ -113,7 +114,7 @@ class GameSession:
     def observe(self) -> tuple[dict, str | None]:
         with self.lock:
             reply = self.client.call("observe", image=True, scope="room")
-        obs = reply["obs"]
+        obs = enrich_obs(reply["obs"])
         self._update_metrics_from_obs(obs)
         self._write_workspace(obs)
         return obs, reply.get("image")
@@ -195,7 +196,7 @@ class GameSession:
             reply = self.client.call("step", inputs=inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
                                      scope="room")
             game_s = time.monotonic() - t0
-            result, obs, image = reply["result"], reply["obs"], reply.get("image")
+            result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
             self._log_frames(result, frames, thought, auto=False)
             self._handle_events(result)
             self.metrics.add(play_game_s=game_s, frames_played=result["consumed"], decisions=1)
@@ -272,7 +273,7 @@ class GameSession:
             notes.append(f"主控自动推进了 {total} 帧（转场、剧情、死亡与重生，均为正常速度）")
             if not self.done:
                 reply = self.client.call("observe", image=True, scope="room")
-                obs, image = reply["obs"], reply.get("image")
+                obs, image = enrich_obs(reply["obs"]), reply.get("image")
         return obs, image, total, notes
 
     # ---- 日志与统计 ----

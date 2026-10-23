@@ -100,6 +100,10 @@ internal static class StateExtractor {
         WritePlayer(w, level, player);
         w.WriteBoolean("controllable", IsControllable(level, player));
 
+        if (opt.Room) {
+            WriteRoomExtras(w, level);
+        }
+
         if (opt.Entities || opt.Tiles) {
             List<EntityInfo> entities = CollectEntities(level, ScopeRect(level, opt));
             if (opt.Entities) {
@@ -310,13 +314,56 @@ internal static class StateExtractor {
         w.WriteEndObject();
     }
 
+    /// <summary>整房间模式的附加信息：相邻房间（用来确定出口）、重生点、触发器。</summary>
+    private static void WriteRoomExtras(Utf8JsonWriter w, Level level) {
+        Session session = level.Session;
+        Rectangle b = level.Bounds;
+        Rectangle touch = new(b.X - 1, b.Y - 1, b.Width + 2, b.Height + 2);
+        w.WriteStartArray("neighbors");
+        foreach (LevelData data in session.MapData.Levels) {
+            if (data.Name == session.Level || !data.Bounds.Intersects(touch)) continue;
+            w.WriteStartObject();
+            w.WriteString("room", data.Name);
+            WriteRect(w, "bounds", data.Bounds.X, data.Bounds.Y, data.Bounds.Width, data.Bounds.Height);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+
+        w.WriteStartArray("spawns");
+        foreach (Vector2 spawn in session.LevelData?.Spawns ?? new List<Vector2>()) {
+            w.WriteStartArray();
+            w.WriteNumberValue(spawn.X);
+            w.WriteNumberValue(spawn.Y);
+            w.WriteEndArray();
+        }
+        w.WriteEndArray();
+        if (session.RespawnPoint is { } respawn) {
+            w.WriteStartArray("respawnPoint");
+            w.WriteNumberValue(respawn.X);
+            w.WriteNumberValue(respawn.Y);
+            w.WriteEndArray();
+        }
+
+        w.WriteStartArray("triggers");
+        foreach (Entity e in level.Entities) {
+            if (e is not Trigger trigger || trigger.Collider == null) continue;
+            w.WriteStartObject();
+            w.WriteString("type", trigger.GetType().Name);
+            WriteRect(w, "rect", Round(trigger.Collider.AbsoluteLeft), Round(trigger.Collider.AbsoluteTop),
+                Round(trigger.Collider.Width), Round(trigger.Collider.Height));
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
     internal readonly record struct EntityInfo(Entity Entity, string Type, string Category, float X, float Y, float W, float H, string Shape, float Radius);
 
     private static List<EntityInfo> CollectEntities(Level level, Rectangle view) {
         var list = new List<EntityInfo>();
         foreach (Entity e in level.Entities) {
             // 已被吃掉、等待重生的冲刺水晶不可碰撞，但仍要报告（附重生倒计时）
-            if (e is Player or Trigger or SolidTiles or Killbox || e.Collider == null || (!e.Collidable && e is not Refill)) {
+            // 致死区 Killbox 只在 Madeline 接近时才可碰撞，但一直报告
+            if (e is Player or Trigger or SolidTiles || e.Collider == null || (!e.Collidable && e is not (Refill or Killbox))) {
                 continue;
             }
             Collider c = e.Collider;
@@ -351,6 +398,20 @@ internal static class StateExtractor {
             }
             if (!info.Entity.Visible) {
                 w.WriteBoolean("visible", false);
+            }
+            if (info.Entity.Collider is ColliderList parts) {
+                // 组合碰撞箱：逐个给出（只列矩形部分）
+                w.WriteStartArray("parts");
+                foreach (Collider part in parts.colliders) {
+                    if (part is not Hitbox) continue;
+                    w.WriteStartArray();
+                    w.WriteNumberValue(Round(part.AbsoluteLeft));
+                    w.WriteNumberValue(Round(part.AbsoluteTop));
+                    w.WriteNumberValue(Round(part.Width));
+                    w.WriteNumberValue(Round(part.Height));
+                    w.WriteEndArray();
+                }
+                w.WriteEndArray();
             }
             EntityCatalog.WriteProps(w, info.Entity);
             w.WriteEndObject();

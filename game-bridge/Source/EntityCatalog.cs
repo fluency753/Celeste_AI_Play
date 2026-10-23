@@ -26,7 +26,7 @@ internal static class EntityCatalog {
     };
 
     public static string Category(Entity e) => e switch {
-        Spikes or TriggerSpikes or CrystalStaticSpinner or DustStaticSpinner or RotateSpinner or TrackSpinner
+        Killbox or Spikes or TriggerSpikes or CrystalStaticSpinner or DustStaticSpinner or RotateSpinner or TrackSpinner
             or Lightning or FireBall or Seeker or BadelineOldsite or AngryOshiro or FinalBoss or Snowball
             or SandwichLava or RisingLava => "hazard",
         Spring => "spring",

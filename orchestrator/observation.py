@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import math
 
 from PIL import Image as PILImage
@@ -55,6 +56,100 @@ def _yn(v: bool) -> str:
 
 
 VIEW_W, VIEW_H = 320, 180
+
+
+def solid_rects(tiles: dict | None) -> list[list[int]]:
+    """把字符地图里的地形格子（#）合并成像素坐标的矩形碰撞箱 [x, y, 宽, 高]（先按行取连续段，再纵向合并相同的段）。"""
+    if not tiles or not tiles.get("rows"):
+        return []
+    ox, oy = tiles["origin"]
+    cell = tiles.get("cell", 8)
+    rects: list[list[int]] = []
+    open_runs: dict[tuple[int, int], list[int]] = {}
+    for r, row in enumerate(list(tiles["rows"]) + [""]):
+        runs, c = set(), 0
+        while c < len(row):
+            if row[c] == "#":
+                start = c
+                while c < len(row) and row[c] == "#":
+                    c += 1
+                runs.add((start, c))
+            else:
+                c += 1
+        for key in list(open_runs):
+            if key not in runs:
+                rects.append(open_runs.pop(key))
+        for c0, c1 in runs:
+            if (c0, c1) in open_runs:
+                open_runs[(c0, c1)][3] += cell
+            else:
+                open_runs[(c0, c1)] = [ox + c0 * cell, oy + r * cell, (c1 - c0) * cell, cell]
+    return sorted(rects, key=lambda q: (q[1], q[0]))
+
+
+def room_exits(level: dict, neighbors: list[dict] | None) -> list[dict]:
+    """相邻房间与当前房间共用的边界段，就是可能的出口（是否被地形挡住要看地形）。"""
+    if not neighbors or not level.get("bounds"):
+        return []
+    bx, by, bw, bh = level["bounds"]
+    out = []
+    for n in neighbors:
+        nx, ny, nw, nh = n["bounds"]
+        y0, y1 = max(by, ny), min(by + bh, ny + nh)
+        x0, x1 = max(bx, nx), min(bx + bw, nx + nw)
+        if nx + nw == bx and y1 > y0:
+            out.append({"side": "left", "x": bx, "y": [y0, y1], "room": n["room"]})
+        elif nx == bx + bw and y1 > y0:
+            out.append({"side": "right", "x": bx + bw, "y": [y0, y1], "room": n["room"]})
+        elif ny + nh == by and x1 > x0:
+            out.append({"side": "top", "y": by, "x": [x0, x1], "room": n["room"]})
+        elif ny == by + bh and x1 > x0:
+            out.append({"side": "bottom", "y": by + bh, "x": [x0, x1], "room": n["room"]})
+    return out
+
+
+def enrich_obs(obs: dict) -> dict:
+    """整房间观测里补上合并后的地形碰撞箱与出口，原地修改并返回。"""
+    tiles = obs.get("tiles")
+    if tiles and tiles.get("scope") == "room":
+        obs["solids"] = solid_rects(tiles)
+        obs["exits"] = room_exits(obs.get("level") or {}, obs.get("neighbors"))
+    return obs
+
+
+def room_json(obs: dict) -> str:
+    """进入新房间时附在返回结果里的完整数据：所有数值都是像素坐标，与游戏一致。"""
+    level = obs.get("level") or {}
+    player = obs.get("player") or {}
+    data = {
+        "room": level.get("room"), "bounds": level.get("bounds"), "exits": obs.get("exits", []),
+        "spawns": obs.get("spawns", []), "respawnPoint": obs.get("respawnPoint"),
+        "solids": obs.get("solids", []),
+        "entities": obs.get("entities", []),
+        "triggers": [t for t in obs.get("triggers", []) if not t["type"].startswith(COSMETIC_TRIGGERS)],
+        "player": {k: player.get(k) for k in ("pos", "speed", "state", "dashes", "maxDashes", "stamina", "onGround",
+                                              "facing", "ducking", "hitbox", "internal") if k in player},
+    }
+    lines = ["{"]
+    keys = list(data)
+    for i, key in enumerate(keys):
+        value = data[key]
+        tail = "," if i < len(keys) - 1 else ""
+        if isinstance(value, list) and value and key in ("solids", "entities", "triggers", "exits"):
+            lines.append(f'  "{key}": [')
+            for j, item in enumerate(value):
+                lines.append("    " + json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+                             + ("," if j < len(value) - 1 else ""))
+            lines.append("  ]" + tail)
+        else:
+            lines.append(f'  "{key}": ' + json.dumps(value, ensure_ascii=False, separators=(",", ":")) + tail)
+    lines.append("}")
+    return "\n".join(lines)
+
+
+# 与操作无关的触发器（镜头、音乐、光照等），在给智能体看的数据里省略（工作区文件里保留全部）
+COSMETIC_TRIGGERS = ("Camera", "Music", "Ambience", "Light", "Bloom", "Rumble", "Sound", "Altmusic", "Minitext",
+                     "Lookout", "Spawn", "Wind")
 
 
 def crop_to_view(obs: dict, margin: int = 16) -> tuple[list[dict], dict | None]:
