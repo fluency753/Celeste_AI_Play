@@ -108,5 +108,20 @@ def leave_level_by_pause_menu(client, max_wait_frames: int = 60) -> dict:
             break
         obs = step([f"1,{'D' if target > menu['selection'] else 'U'}", "6"])
         menu = obs.get("pauseMenu") or menu
-    obs = step(["1,C", "30"])
+    obs = step(["1,C", "20"])
+    # 选中后会弹出确认菜单：标题是同一个按钮文字（不可选），下面是"是 / 取消"，默认选中"是"
+    for _ in range(3):
+        menu = obs.get("pauseMenu")
+        if not menu or not menu.get("focused") or not menu["items"]:
+            break
+        head = menu["items"][0]
+        if head.get("id") != wanted or head["selectable"]:
+            break
+        yes = next((it["index"] for it in menu["items"] if it["selectable"] and not it["disabled"]), None)
+        if yes is None:
+            break
+        while menu["selection"] != yes:
+            obs = step([f"1,{'D' if yes > menu['selection'] else 'U'}", "6"])
+            menu = obs.get("pauseMenu") or menu
+        obs = step(["1,C", "30"])
     return obs
