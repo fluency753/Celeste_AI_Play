@@ -192,10 +192,13 @@ class GameSession:
             self._write_sim_state()
         return obs
 
-    def close(self) -> None:
+    def close(self, release: bool = True) -> None:
+        """release=False：不交还控制，游戏冻结在当前帧（章节计时不走），之后可以用 --resume 续跑。
+        注意游戏在暂停菜单里章节计时也照走，所以没通关就停下的运行一律保持冻结。"""
         try:
             if self.client:
-                self.client.call("deactivate")
+                if release:
+                    self.client.call("deactivate")
                 self.client.close()
         finally:
             self._frames_log.close()

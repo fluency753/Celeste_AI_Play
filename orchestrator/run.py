@@ -323,7 +323,11 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
                 recording = recorder.stop()
             except Exception as exc:  # noqa: BLE001（录制收尾失败不影响交还游戏控制与写总结）
                 print(f"[record] 停止录制失败：{exc}", flush=True)
-        session.close()  # 交还游戏控制
+        # 通关了就交还游戏控制；没通关（时间预算用完、出错、Ctrl+C）就让游戏冻结在当前帧，章节计时不走，可以 --resume 续跑
+        session.close(release=session.done or args.no_agent)
+        if not (session.done or args.no_agent):
+            print("[run] 游戏保持冻结在当前帧（章节计时不走）：可以用 --resume 续跑；"
+                  "不续跑时用 python tools\\bridge_client.py deactivate 交还控制", flush=True)
         summary = metrics.snapshot()
         summary.update(stop_reason=reason, completed=session.done and session.done_reason == "章节完成",
                        chapters=cfg.chapters, splits=metrics.state.splits or [],
