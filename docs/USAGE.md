@@ -92,6 +92,19 @@ docker build -t celeste-agent:0.1 agent-container
 
 2026-10-22 在作者本机实测：全部通过。
 
+### 2.5 生成知识库里的参考资料原文
+
+知识库 `kb/` 里的物理常量与机制文件已入库；另外两份社区资料的原文不入库（第三方文本，不在公开仓库里再分发），需要在本机生成一次，生成后随 `kb/` 一起只读挂载进容器的 `/kb/reference/`：
+
+- Celeste Wiki（celeste.ink）的 Tech 总表与全部技巧子页面（转成 Markdown，许可 GPLv3）；
+- 草莓酱（Strawberry Jam Collab）训练场 Beginner → Grandmaster 的全部说明文字与机制库全文（英文、简体中文），直接从本机安装的 Mod 压缩包读取。
+
+```powershell
+.\.venv\Scripts\python.exe tools\fetch_reference.py --celeste-dir "D:\Fluency\software\steam\steamapps\common\Celeste"
+```
+
+需要能访问 celeste.ink，并且已经安装草莓酱 Mod（`Mods\StrawberryJam2021.zip`）。只要其中一份时可加 `--skip-wiki` 或 `--skip-sj`。输出在 `kb\reference\`，索引见其中的 `README.md`。2026-10-22 实测：wiki 17 个页面，草莓酱训练场 230 条、机制库 86 条，共约 310 KB。
+
 ## 3. 桥接 Mod：构建、安装与测试
 
 桥接 Mod（CelesteAIBridge）运行在游戏进程内，只监听本机 `127.0.0.1:47774`。未接管时游戏照常可玩；测试客户端发送 `activate` 后，游戏冻结在当前帧，只有收到 `step` 才逐帧推进。
