@@ -8,7 +8,7 @@
      在 WAV 里出现的位置给出声音相对画面的延迟，建议的 audio_offset_ms 写进 configs/local.recording.json；
   4. gameplay.mkv 合成成功，画面与声音时长一致。
 
-前提：游戏开着（桥接 0.8.1 以上），test 存档停在关卡里、Madeline 可操作并站在平地上（建议 1A 房间 6）；
+前提：游戏开着（桥接 0.8.5 以上），test 存档停在关卡里、Madeline 可操作并站在平地上（建议 1A 房间 6）；
 OBS 已用 python tools/obs_setup.py launch 启动，插件已连上桥接。
 
 用法（仓库根目录）：
