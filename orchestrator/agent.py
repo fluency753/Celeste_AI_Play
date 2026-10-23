@@ -8,8 +8,9 @@
 两种方式共同的措施：--strict-mcp-config 只加载本项目的游戏工具服务；--permission-mode dontAsk 拒绝一切未预先
 允许的调用；不读取使用者自己的 Claude Code 配置、CLAUDE.md 与自动记忆；启动时核对工具列表，多出任何工具立即停止。
 
-Max 额度：5 小时或 7 天窗口的用量到达上限（--max-usage）时结束 Claude Code 进程，游戏保持冻结，等到额度重置后用
---resume 接着同一个会话继续（上下文保留），等待时间不计入现实用时；要等超过 --quota-wait-max-hours 才重置时结束本次运行。
+Max 额度：默认一直用到额度真正用完（Claude Code 报告限额拒绝）为止；用完时结束 Claude Code 进程，游戏保持冻结，
+等到额度重置后用 --resume 接着同一个会话继续（上下文保留），等待时间不计入现实用时；要等超过
+--quota-wait-max-hours 才重置时结束本次运行。可选的 --max-usage 让主控在用量到某个比例时提前这样暂停。
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import asyncio
 import time
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -26,6 +28,9 @@ from .kb_study import KbStudy
 from .metrics import Metrics
 
 GAME_TOOLS = ["mcp__celeste__observe", "mcp__celeste__act"]
+# 额度用完时 Claude Code 给出的提示（没收到 rejected 限额事件时的后备判断），例如
+# "Claude AI usage limit reached|1792766400"、"You've hit your limit · resets 3pm"
+LIMIT_TEXT = re.compile(r"usage limit|hit your (?:usage )?limit|rate[ _]limit", re.I)
 CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
@@ -99,6 +104,7 @@ class ClaudeRunner:
         self.resume_note = resume_note
         self.quota_until: float | None = None    # 额度到上限：预计重置的时刻（墙钟，秒）
         self.quota_reason = ""
+        self._windows: dict[str, dict] = {}      # 最近一次限额事件里各窗口的用量与重置时刻
         self.proc: asyncio.subprocess.Process | None = None
         self.turns = 0
         self.idle_turns = 0
@@ -335,6 +341,38 @@ class ClaudeRunner:
             self._events.flush()
             self._handle(event)
 
+    def _quota_hit(self, names: str, until: float | None, text: str) -> None:
+        """额度用完（或到了 --max-usage）：等得起就暂停等重置，否则结束本次运行。"""
+        if self.stop_reason or self.quota_until is not None:
+            return
+        if self.cfg.quota_wait and until and until - time.time() <= self.cfg.quota_wait_max_h * 3600:
+            # 结束这个进程，游戏保持冻结，等额度重置后接着同一个会话（见 run）
+            self.quota_until = until
+            self.quota_reason = f"Max 额度的{names}用到了上限"
+            print(f"[agent] {text}，暂停智能体，等{names}重置"
+                  f"（{time.strftime('%m-%d %H:%M', time.localtime(until))}）", flush=True)
+        else:
+            # 关闭了等待、不知道何时重置，或要等太久：结束本次运行（之后可以用 --resume 续跑）
+            self.stop_reason = text
+            print(f"[agent] {self.stop_reason}，停止运行", flush=True)
+        if self.proc and self.proc.returncode is None:
+            self.proc.terminate()
+
+    def _quota_from_text(self, text: str) -> None:
+        """没收到 rejected 限额事件、只看到"额度用完"提示时的后备：重置时刻取提示里的时间戳，
+        否则取最近一次限额事件里用量最高的窗口的重置时刻，都没有就 30 分钟后再试。"""
+        if self.stop_reason or self.quota_until is not None:
+            return
+        now = time.time()
+        m = re.search(r"\|(\d{10})", text)
+        until = float(m.group(1)) if m else None
+        if until is None and self._windows:
+            name, win = max(self._windows.items(), key=lambda kv: kv[1].get("utilization") or 0)
+            if win.get("resetsAt") and float(win["resetsAt"]) > now:
+                until = float(win["resetsAt"])
+        until = max(until or now + 1800, now + 300)
+        self._quota_hit("用量窗口", until, f"Max 额度用完（{text.strip()[:80]}）")
+
     def _handle(self, event: dict) -> None:
         etype = event.get("type")
         subtype = event.get("subtype")
@@ -363,6 +401,10 @@ class ClaudeRunner:
                   f"用时 {(meta.get('duration_ms') or 0) / 1000:.1f} 秒", flush=True)
         elif etype == "assistant":
             message = event.get("message") or {}
+            if event.get("error") == "rate_limit" or message.get("model") == "<synthetic>":
+                text = " ".join(b.get("text", "") for b in message.get("content") or [] if b.get("type") == "text")
+                if event.get("error") == "rate_limit" or LIMIT_TEXT.search(text):
+                    self._quota_from_text(text)
             usage = message.get("usage") or {}
             context = (usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
                        + usage.get("cache_creation_input_tokens", 0))
@@ -379,40 +421,35 @@ class ClaudeRunner:
         elif etype == "rate_limit_event":
             info = event.get("rate_limit_info") or {}
             windows = info.get("unifiedWindows") or {}
+            self._windows.update({k: v for k, v in windows.items() if isinstance(v, dict)})
             five = (windows.get("five_hour") or {}).get("utilization")
             seven = (windows.get("seven_day") or {}).get("utilization")
             self.metrics.update(usage_5h=five, usage_7d=seven,
                                 usage_resets_at=(windows.get("five_hour") or {}).get("resetsAt"))
-            limit = self.cfg.max_usage
+            limit = self.cfg.max_usage  # 默认 None：不提前暂停，用到额度真正用完
             over = []  # 到了上限的窗口：(名称, 重置时刻)
             if limit and five is not None and five >= limit:
                 over.append(("5 小时窗口", (windows.get("five_hour") or {}).get("resetsAt")))
             if limit and seven is not None and seven >= limit:
                 over.append(("7 天窗口", (windows.get("seven_day") or {}).get("resetsAt")))
             if not over and info.get("status") == "rejected":
-                over.append((f"{info.get('rateLimitType') or ''}窗口", info.get("resetsAt")))
-            if over and not self.stop_reason and self.quota_until is None:
+                kind = {"five_hour": "5 小时窗口", "seven_day": "7 天窗口"}.get(info.get("rateLimitType"), "用量窗口")
+                over.append((kind, info.get("resetsAt")))
+            if over:
                 names = "、".join(name for name, _ in over)
                 resets = [float(r) for _, r in over if r]
                 until = max(resets) if len(resets) == len(over) else None
-                text = f"Max 用量达到上限 {limit:.0%}（5 小时 {five}，7 天 {seven}）"
-                if self.cfg.quota_wait and until and until - time.time() <= self.cfg.quota_wait_max_h * 3600:
-                    # 结束这个进程，游戏保持冻结，等额度重置后接着同一个会话（见 run）
-                    self.quota_until = until
-                    self.quota_reason = f"Max 额度的{names}用到了上限"
-                    print(f"[agent] {text}，暂停智能体，等{names}重置"
-                          f"（{time.strftime('%m-%d %H:%M', time.localtime(until))}）", flush=True)
-                else:
-                    # 关闭了等待，或要等太久：结束本次运行（之后可以用 --resume 续跑）
-                    self.stop_reason = text
-                    print(f"[agent] {self.stop_reason}，停止运行", flush=True)
-                if self.proc and self.proc.returncode is None:
-                    self.proc.terminate()
+                usage = f"5 小时 {five}，7 天 {seven}"
+                text = (f"Max 用量达到设定的上限 {limit:.0%}（{usage}）" if limit and info.get("status") != "rejected"
+                        else f"Max 额度用完（{names}；{usage}）")
+                self._quota_hit(names, until, text)
             if info.get("status") not in (None, "allowed", "allowed_warning"):
                 print(f"[agent] 用量限制：{info}", flush=True)
         elif etype == "system" and subtype == "api_retry":
             print(f"[agent] API 重试：{event.get('error')} attempt={event.get('attempt')}", flush=True)
         elif etype == "result":
+            if event.get("is_error") and LIMIT_TEXT.search(str(event.get("result") or "")):
+                self._quota_from_text(str(event.get("result")))
             usage = event.get("usage") or {}
             self.metrics.add(output_tokens=usage.get("output_tokens", 0),
                              thinking_tokens=(usage.get("output_tokens_details") or {}).get("thinking_tokens", 0))

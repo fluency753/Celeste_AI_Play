@@ -54,9 +54,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--no-study", action="store_true", help="跳过开始前的读知识库阶段（调试用）")
     ap.add_argument("--study-minutes", type=float, default=60.0,
                     help="准备阶段（读知识库、写笔记）的上限分钟数，不计入现实用时；到时自动开始计时")
-    ap.add_argument("--max-usage", type=float, default=0.9,
-                    help="Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）时暂停智能体、等额度重置后接着玩"
-                         "（游戏保持冻结，等待不计时），默认 0.9")
+    ap.add_argument("--max-usage", type=float, default=None,
+                    help="可选：Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）就提前暂停智能体、等额度重置后接着玩；"
+                         "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务")
     ap.add_argument("--record", action="store_true",
@@ -70,7 +70,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     ap.add_argument("--no-quota-wait", action="store_true",
-                    help="额度到上限时直接停止（默认：游戏保持冻结，等额度重置后接着同一个会话继续）")
+                    help="额度用完时直接停止（默认：游戏保持冻结，等额度重置后接着同一个会话继续）")
     ap.add_argument("--quota-wait-max-hours", type=float, default=24.0,
                     help="额度重置还要等超过这么多小时就停止本次运行（之后可用 --resume 续跑），默认 24")
     ap.add_argument("--quota-wait-cap-seconds", type=float, help=argparse.SUPPRESS)  # 只用于测试：等待额度的最长秒数

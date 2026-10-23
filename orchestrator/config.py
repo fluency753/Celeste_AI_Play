@@ -87,8 +87,8 @@ class RunConfig:
     seccomp_unconfined: bool = True  # 容器内 Bash 沙箱（bubblewrap）需要创建命名空间，Docker 默认的 seccomp 配置不允许
     study: bool = True               # 开始游玩前先读完知识库（只在容器运行方式下生效：本机方式没有 Read 工具）
     study_minutes: float = 60.0      # 准备阶段上限；到时自动开始计时并开放游戏工具
-    max_usage: float = 0.9           # Max 套餐 5 小时或 7 天窗口的用量到这个比例：暂停等额度重置（quota_wait），或停止本次运行
-    quota_wait: bool = True          # 到上限时等额度重置后接着同一个会话；False 则直接停止
+    max_usage: float | None = None   # 可选：5 小时或 7 天窗口的用量到这个比例就提前暂停；None = 用到额度真正用完
+    quota_wait: bool = True          # 额度用完（或到 max_usage）时等重置后接着同一个会话；False 则直接停止
     quota_wait_max_h: float = 24.0   # 重置还要等更久时直接停止
     quota_wait_cap_s: float | None = None  # 只用于测试：等待额度的最长秒数
     sim: bool = False                # 预置模拟器：把本机的 sim/dist 只读挂到容器的 /sim，每次停下都把当前帧的完整场景写进工作区
