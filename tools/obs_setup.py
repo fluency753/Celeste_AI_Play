@@ -241,19 +241,40 @@ def launch(cfg: dict, obs_dir: Path, minimized: bool, reset: bool = False) -> No
     if selection.get("Profile") != cfg["profile"]:
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps(selection, ensure_ascii=False, indent=2), encoding="utf-8")
+    clear_stale_sentinel()
     exe = obs_dir / "bin" / "64bit" / "obs64.exe"
     args = [str(exe), "--profile", cfg["profile"], "--collection", cfg["collection"], "--scene", "Celeste AI",
-            "--disable-shutdown-check", "--disable-updater", "--disable-missing-files-check"]
+            "--disable-updater", "--disable-missing-files-check"]
     if minimized:
         args.append("--minimize-to-tray")
-    subprocess.Popen(args, cwd=exe.parent, creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+    # 独立于启动它的进程：启动脚本所在的终端或作业被关掉时，OBS 不跟着被结束
+    flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    try:
+        subprocess.Popen(args, cwd=exe.parent, creationflags=flags | 0x01000000)   # CREATE_BREAKAWAY_FROM_JOB
+    except OSError:
+        subprocess.Popen(args, cwd=exe.parent, creationflags=flags)
     print(f"已启动 OBS（{exe}）")
-    for _ in range(40):
+    started = time.monotonic()
+    while time.monotonic() - started < 30:
         time.sleep(0.5)
         info = plugin_log_status()
-        if info.get("connected") or info.get("loaded") is False:
+        if info.get("connected"):
             break
     print_status()
+
+
+def clear_stale_sentinel() -> None:
+    """OBS 没有正常退出（崩溃或被强制结束）时会留下 .sentinel/run_* 文件，下次启动先弹窗问要不要进安全模式，
+    插件在安全模式下不加载。OBS 没在运行时这些文件都是过时的：说明一下并删掉，按正常模式启动。"""
+    sentinel = obs_config_dir() / ".sentinel"
+    stale = list(sentinel.glob("run_*")) if sentinel.is_dir() else []
+    if stale:
+        print("上次 OBS 没有正常退出（崩溃或被强制结束）；按正常模式启动，不进安全模式")
+        for path in stale:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def latest_log() -> Path | None:
