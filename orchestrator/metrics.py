@@ -138,5 +138,17 @@ class Metrics:
         if not self.playing:
             self.state.study_s = time.monotonic() - self._t0
         tmp = self._path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(asdict(self.state), ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self._path)
+        try:
+            tmp.write_text(json.dumps(asdict(self.state), ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            return
+        # Windows 上目标文件正被别的进程打开（HUD 服务每秒读十几次）时替换会被拒绝：稍等重试；
+        # 实在不行就跳过这一次（下一次写入会补上），统计文件写不进去不能让运行中断
+        for _ in range(40):
+            try:
+                os.replace(tmp, self._path)
+                return
+            except PermissionError:
+                time.sleep(0.005)
+            except OSError:
+                return
