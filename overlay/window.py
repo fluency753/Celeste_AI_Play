@@ -71,6 +71,25 @@ def game_client_rect(user32, title: str):
     return origin.x, origin.y, rect.right - rect.left, rect.bottom - rect.top
 
 
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
+
+
+def monitor_work_area(user32, title: str):
+    """游戏窗口所在显示器的工作区（物理像素）。"""
+    hwnd = user32.FindWindowW(None, title)
+    if not hwnd:
+        return None
+    user32.MonitorFromWindow.restype = wt.HMONITOR
+    monitor = user32.MonitorFromWindow(hwnd, 2)   # MONITOR_DEFAULTTONEAREST
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(MONITORINFO)
+    if not monitor or not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+        return None
+    r = info.rcWork
+    return r.left, r.top, r.right, r.bottom
+
+
 def make_overlay(user32, hwnd) -> None:
     """点击穿透、不激活、不进任务栏、置顶。"""
     style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
@@ -112,7 +131,13 @@ def follow(window, args) -> None:
             width = max(160, round(gw * args.width_ratio))
             height = round(width * HEIGHT_RATIO)
             margin = round(gw * args.margin)
-            target = (gx + gw - margin - width, gy + margin, width, height)
+            x, y = gx + gw - margin - width, gy + margin
+            work = monitor_work_area(user32, args.game_title)
+            if work is not None:
+                # 游戏窗口有一部分在屏幕外时，把 HUD 挪回屏幕内，免得被切掉
+                x = max(work[0], min(x, work[2] - width))
+                y = max(work[1], min(y, work[3] - height))
+            target = (x, y, width, height)
             if target != last or hidden:
                 user32.SetWindowPos(hwnd, HWND_TOPMOST, *target, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER)
                 last, hidden = target, False
