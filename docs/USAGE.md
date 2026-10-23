@@ -1,8 +1,8 @@
 # 使用说明
 
-> **项目尚未完成。** 目前可以使用的是桥接 Mod（M1）、测试客户端与菜单宏，以及主控（M2）：能让智能体在本机独立游玩一个章节（见第 4.1 节）。其余步骤按最终流程编写，尚未实现的标注为"未实现"，每轮开发后同步更新。
+> **项目尚未完成。** 目前可以使用的是桥接 Mod（M1）、测试客户端与菜单宏、主控（M2），以及智能体容器、工作区与知识库（M3）：智能体在断网容器里独立游玩一个章节，可以自己写程序辅助（见第 4.1 节）。其余步骤按最终流程编写，尚未实现的标注为"未实现"，每轮开发后同步更新。
 >
-> 最后更新：2026-10-22（M2）
+> 最后更新：2026-10-22（M3）
 
 ## 1. 环境要求
 
@@ -14,7 +14,7 @@
 | 构建工具 | .NET 8 SDK | 编译桥接 Mod；可用官方脚本做用户级安装，无需管理员权限 |
 | 运行环境 | Python 3.11 或更新（已在 3.14 上验证） | 主控与测试客户端；依赖装在仓库内的虚拟环境 `.venv` 里 |
 | 录制 | OBS Studio 28 或更新 | 示例安装目录：`D:\Fluency\software\steam\steamapps\common\OBS Studio` |
-| 容器 | Docker Desktop（WSL2 后端） | M3 起智能体（Claude Code）整体运行在容器中；M2 开发阶段暂不需要 |
+| 容器 | Docker Desktop（WSL2 后端），已在 29.9 上验证 | 智能体（Claude Code）整体运行在容器中，安装见 2.3 节 |
 | 模型 | Claude Max 套餐，无需 API 密钥 | 在 Windows 上装好 Claude Code，用 `claude setup-token` 生成长期令牌 |
 
 ## 2. 一次性准备
@@ -32,9 +32,10 @@
 | 9 | 在 OBS 中建场景：游戏捕获（Celeste.exe）、应用音频捕获（Celeste.exe）、HUD 浏览器源；输出 60 fps，录制格式 MKV，关闭桌面音频与麦克风 | 可预先配置 |
 | 10 | 生成 Claude Code 令牌，见 2.1 节 | 可执行 |
 | 10a | 建立 Python 虚拟环境并安装依赖，见 2.2 节 | 可执行 |
-| 11 | 构建智能体镜像：固定版本的 Claude Code、防火墙脚本、托管配置、非 root 用户 | 未实现 |
-| 12 | 运行容器隔离测试：`claude auth status` 显示订阅令牌；访问非白名单网站失败；Bash 里访问任何网站都失败 | 未实现 |
-| 13 | 生成并审核知识库（物理参数与机制） | 未实现 |
+| 10b | 安装 Docker Desktop，见 2.3 节 | 可执行 |
+| 11 | 构建智能体镜像，见 2.4 节 | 可执行 |
+| 12 | 运行容器隔离验收，见 2.4 节 | 可执行 |
+| 13 | 审核知识库 `kb/`（物理参数与机制，只讲规则，不讲关卡怎么过） | 已生成，待审核 |
 
 ### 2.1 生成 Claude Code 令牌
 
@@ -58,6 +59,38 @@ python -m venv .venv
 ```
 
 之后所有 `python` 命令都可以用 `.\.venv\Scripts\python.exe` 代替，或先执行 `.\.venv\Scripts\Activate.ps1` 激活虚拟环境。依赖只有三个：`mcp`（游戏工具服务）、`pillow`（截图放大）、`uvicorn`（本机 HTTP 服务）。
+
+### 2.3 安装 Docker Desktop
+
+1. **装 WSL**（管理员权限，需要重启）：右键开始按钮 →"终端（管理员）"，执行 `wsl --install --no-distribution`，完成后重启电脑。Docker 不需要 Ubuntu 等发行版。
+2. **检查 WSL 版本**：重启后在普通 PowerShell 执行 `wsl --version`，应为 2.1.5 或更新；否则执行 `wsl --update`。
+3. **下载并安装**：从 [Docker 官网](https://docs.docker.com/desktop/setup/install/windows-install/) 下载 `Docker Desktop Installer.exe`，双击安装，配置页勾选 **Use WSL 2 instead of Hyper-V**。
+4. **首次启动**：在开始菜单打开 Docker Desktop，接受服务协议（个人使用免费），登录与问卷可以跳过；左下角显示 Engine running 即可。
+5. **验证**：新开 PowerShell 执行 `docker version`（Client 与 Server 都有版本号）和 `docker run --rm hello-world`（打印 `Hello from Docker!`）。
+
+装好后已经打开的终端里可能找不到 `docker` 命令，新开一个终端即可；主控也会自动去默认安装位置找。
+
+### 2.4 构建智能体镜像与隔离验收
+
+在仓库根目录执行（Docker Desktop 需在运行）：
+
+```powershell
+docker build -t celeste-agent:0.1 agent-container
+.\.venv\Scripts\python.exe -m orchestrator.verify --agent opus
+```
+
+第一次构建约 1～2 分钟。镜像里有固定版本的 Claude Code（2.1.309）、Python 3 与 numpy、scipy、numba、pillow、networkx、gcc / g++，没有任何游戏文件。
+
+验收脚本会创建（或复用）智能体容器 `celeste-agent-opus`，逐项检查并打印"通过 / 不通过"：
+
+| 类别 | 检查内容 |
+| --- | --- |
+| 认证 | 容器里的 Claude Code 使用订阅令牌（`oauth_token`），环境里没有 API 密钥 |
+| 防火墙 | Claude Code 本身只能连到 Anthropic 官方域名与宿主机上主控的游戏工具端口；任意网站、直连 IP、外部 DNS、宿主机其他端口（包括游戏桥接端口）全部失败 |
+| Bash 沙箱 | 让容器里的 Claude Code 用 Bash 工具运行同一套检查：全部失败，包括 Anthropic 与主控端口；命令环境里看不到登录令牌；只能写工作区与 `/tmp` |
+| 权限 | 智能体用户改不了防火墙、托管配置与 `/etc/hosts`；托管配置拒绝联网工具、禁止退出沙箱 |
+
+2026-10-22 在作者本机实测：全部通过。
 
 ## 3. 桥接 Mod：构建、安装与测试
 
@@ -96,23 +129,23 @@ python -m venv .venv
 
 ## 4. 运行智能体
 
-### 4.1 开发阶段：本机运行一个章节（可用）
+### 4.1 让智能体游玩一个章节（可用）
 
-1. 启动游戏，停在标题画面或任意菜单即可（使用只启用 CelesteAIBridge 的 AIPlay 配置）。
+1. 启动 Docker Desktop 与游戏，游戏停在标题画面或任意菜单即可（使用只启用 CelesteAIBridge 的 AIPlay 配置）。
 2. 在仓库根目录执行：
 
    ```powershell
-   .\.venv\Scripts\python.exe -m orchestrator.run --agent dev-opus --save test --model opus --effort high --max-minutes 20
+   .\.venv\Scripts\python.exe -m orchestrator.run --agent opus --save test --model opus --chapter 0 --max-minutes 20
    ```
 
-3. 主控会依次：用菜单宏进入 `test` 存档、跳过开场；接管游戏并核对存档名；在 `127.0.0.1:47780` 启动游戏工具服务；启动 Claude Code（无头模式）开始游玩。章节完成、时间预算用完或智能体连续 3 轮不调用工具时结束，并交还游戏控制。
+3. 主控会依次：用菜单宏进入 `test` 存档、跳过开场；接管游戏并核对存档名；在 `127.0.0.1:47780` 启动游戏工具服务；创建或复用智能体容器 `celeste-agent-<标签>`，在容器里启动 Claude Code（无头模式）开始游玩。章节完成、时间预算用完或智能体连续 3 轮不调用工具时结束，并交还游戏控制。
 4. 另开一个 PowerShell 查看进度：`.\.venv\Scripts\python.exe tools\run_status.py`（加 `-n 30` 显示更多决策）。
 
 常用参数：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--agent` | 必填 | 智能体标签，决定日志目录 `runs/<标签>/` 与独立配置目录 `agent-home/<标签>/` |
+| `--agent` | 必填 | 智能体标签，决定容器 `celeste-agent-<标签>`、工作区 `workspaces/<标签>/` 与日志目录 `runs/<标签>/`。同一个模型在 test 存档准备、正式存档挑战时用同一个标签，准备好的程序就能带进正式挑战 |
 | `--save` | 必填 | 游戏内存档名；与当前存档不一致时拒绝开始 |
 | `--model` | `opus` | Claude Code 模型别名，如 `opus`、`fable` |
 | `--effort` | `high` | 推理强度：`low`、`medium`、`high`、`xhigh`、`max` |
@@ -120,9 +153,20 @@ python -m venv .venv
 | `--chapter` | 选章页当前章节 | 菜单宏进入的章节：0 序章、1 被遗弃之城、2 旧址 |
 | `--skip-enter` | 关 | 已在关卡内可操作时跳过菜单宏 |
 | `--no-agent` | 关 | 只启动游戏工具服务、不启动智能体，用于手动调试 |
+| `--runtime` | `container` | `container`：智能体在容器里运行；`host`：在本机运行，只开放两个游戏工具（M2 的过渡方式，不需要 Docker） |
+| `--autocompact` | Claude Code 默认 | 上下文自动压缩的窗口：`auto`，或 100000～1000000 的 token 数 |
 | `--play-speed` / `--auto-speed` | 1 / 1 | 智能体动作段与转场、剧情、重生段的推进速度（每次渲染推进几帧）。1 与原版一致；大于 1 是快进，只用于调试，录像会失真 |
 
-隔离方式（M2 过渡做法，M3 改为容器）：Claude Code 以 `--tools ""` 关闭全部内置工具（不能执行命令、读写文件、联网），只加载本项目的游戏工具；子进程的环境变量里去掉了所有继承的 Claude 与 Anthropic 变量，使用独立配置目录 `agent-home/<标签>/`，并关闭 CLAUDE.md 与自动记忆。主控在智能体启动时检查它拿到的工具列表，出现游戏工具以外的工具会立即停止。
+容器里的智能体：
+
+- **工具**：Bash、Read、Write、Edit、Glob、Grep 与两个游戏工具。WebSearch、WebFetch 在托管配置里被拒绝；Claude Code 以受限模式启动，不读取任何用户、项目或本地设置文件，文件工具只能访问 `/workspace` 与 `/kb`。
+- **网络**：容器出站只放行 Anthropic 官方域名与宿主机上的游戏工具端口；Bash 命令（智能体自写的程序）在零网络的沙箱里运行，连 Anthropic 也连不上。验收方法见 2.4 节。
+- **工作区** `/workspace`：对应宿主机的 `workspaces\<标签>\`，跨房间、跨章节、跨运行保留。每次观测与动作后，主控把完整观测（`game/latest_obs.json`）、上一次动作的全精度逐帧轨迹（`game/last_act.json`）与每个房间的首次观测（`game/rooms/`）写进来，供智能体的程序读取。
+- **知识库** `/kb`：只读挂载仓库的 `kb/`，记录物理常量、状态机与实体规则，以及工作区数据格式。
+- **计划文件**：智能体可以把程序算出的按键序列写成 JSON 文件，调用 `act` 时传 `plan_file`，不必把按键抄进参数。
+- 主控在每轮开始时核对智能体拿到的工具列表，出现上面以外的工具会立即停止。
+
+`--runtime host` 时（M2 的过渡方式）：Claude Code 直接在本机运行，以 `--tools ""` 关闭全部内置工具，只能调用两个游戏工具；使用独立配置目录 `agent-home/<标签>/`，并关闭 CLAUDE.md 与自动记忆。
 
 非可控段由主控处理，节奏与原版游戏一致：
 
@@ -131,14 +175,14 @@ python -m venv .venv
 - 不能跳过的剧情：按原速播放，对话框等待翻页时按确认键。
 - 智能体只能按游玩按键（方向、跳、冲刺、抓、交互），暂停、确认、返回等菜单键只由主控使用。
 
-智能体能用的两个工具：
+两个游戏工具：
 
 | 工具 | 作用 |
 | --- | --- |
 | `observe` | 不推进游戏，返回当前帧截图（放大 2 倍）与文字状态：Madeline 位置、速度、状态、碰撞箱与计时器，视野内实体，带行列号的字符地图 |
-| `act` | 按 `"帧数,按键"` 序列推进游戏，可设置截断条件（死亡、换房、落地等）；返回逐帧轨迹取样与新的观测。转场、剧情、死亡与重生由主控自动推进 |
+| `act` | 按 `"帧数,按键"` 序列（或工作区里的计划文件）推进游戏，可设置截断条件（死亡、换房、落地等）；返回逐帧轨迹取样与新的观测。转场、剧情、死亡与重生由主控自动推进 |
 
-实测（2026-10-22，Opus 5.5，推理强度 high，`test` 存档序章）：4 分 39 秒通关，21 次决策，死亡 3 次；其中思考 215 秒、游戏推进 58 秒、工具开销 0.8 秒；最终上下文约 7.2 万 token。Max 用量：这一局约占 5 小时窗口的 2%。
+M2 实测（2026-10-22，本机方式，Opus 5.5，推理强度 high，`test` 存档序章）：4 分 39 秒通关，21 次决策，死亡 3 次；其中思考 215 秒、游戏推进 58 秒、工具开销 0.8 秒；最终上下文约 7.2 万 token。Max 用量：这一局约占 5 小时窗口的 2%。
 
 ### 4.2 重放一次运行（不调用模型）
 
@@ -172,7 +216,8 @@ python -m venv .venv
 | frames.jsonl | 每个推进帧一行：帧号、按键、思考语句、所属决策、Madeline 位置速度状态；自动推进的帧标 `auto` | 已实现 |
 | agent_events.jsonl | Claude Code 输出的全部事件（图片数据已省略），可复盘智能体的每一步 | 已实现 |
 | summary.json | 结束时的汇总与结束原因 | 已实现 |
-| claude_stderr.log、mcp.json、agent_cwd/ | Claude Code 的错误输出、工具服务配置、空的工作目录 | 已实现 |
+| system_prompt.md | 本次运行发给智能体的完整提示词 | 已实现 |
+| claude_stderr.log、mcp.json、agent_cwd/ | Claude Code 的错误输出；本机方式下的工具服务配置与空工作目录 | 已实现 |
 | recording.mkv | OBS 录像，只含游玩帧 | 未实现 |
 | inputs.tas | 回放用的逐帧按键与系统事件 | 未实现 |
 | manifest.json | 版本、配置与哈希 | 未实现 |
@@ -192,4 +237,7 @@ python -m venv .venv
 | 主控提示端口 47780 已被占用 | 另一个主控还在运行；结束它，或加 `--mcp-port 47781` |
 | 主控提示存档名不一致 | 游戏当前进入的不是 `--save` 指定的存档；回到标题画面重新运行，菜单宏会自动选择 |
 | 智能体卡住或想提前结束 | 在运行主控的窗口按 Ctrl+C；主控会交还游戏控制并写出 summary.json |
+| 提示找不到 docker | Docker Desktop 没有启动，或装好后还没新开终端；启动 Docker Desktop 后新开 PowerShell 再试 |
+| 想让智能体从零开始（清空它写的程序与笔记） | 删除 `workspaces\<标签>\`；会话记录在数据卷 `celeste-claude-<标签>` 里，可用 `docker volume rm` 删除（需先 `docker rm -f celeste-agent-<标签>`） |
+| 改了 `agent-container/` 之后 | 重新执行 `docker build -t celeste-agent:0.1 agent-container`；主控发现镜像变了会自动重建容器，工作区保留 |
 | PowerShell 里中文显示成乱码 | 日志文件本身是 UTF-8；用 `tools\run_status.py` 查看，或先执行 `chcp 65001` |
