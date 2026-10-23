@@ -23,11 +23,15 @@ def cutscene_skippable(obs: dict) -> bool:
     return scene == "Level" and bool(level.get("inCutscene")) and not level.get("skippingCutscene")
 
 
-def skip_by_pause_menu(client, on_step: StepHook | None = None, max_wait_frames: int = 60) -> tuple[bool, dict, int, str]:
+def skip_by_pause_menu(client, on_step: StepHook | None = None, max_wait_frames: int = 60,
+                       open_delay: int = 18, move_delay: int = 10) -> tuple[bool, dict, int, str]:
     """返回 (是否已选中跳过, 最新观测, 消耗的游戏帧数, 原因)。
 
     原因：skipped 已跳过；not_cutscene 当前不在剧情里；no_pause 这一刻打不开暂停菜单（稍后可再试）；
     no_skip 暂停菜单里没有"跳过"（这段剧情不能跳过）。
+
+    open_delay / move_delay：菜单打开后、每次移动后停留的帧数，让录像里的操作节奏接近真人
+    （默认约 0.3 秒与 0.17 秒）。
     """
     used = 0
 
@@ -56,6 +60,9 @@ def skip_by_pause_menu(client, on_step: StepHook | None = None, max_wait_frames:
         menu = obs.get("pauseMenu")
         if not menu or not menu.get("focused"):
             return False, obs, used, "no_pause"
+        if open_delay > 0:
+            obs = step([str(open_delay)])
+            menu = obs.get("pauseMenu") or menu
 
     target = next((it["index"] for it in menu["items"]
                    if it.get("id") in SKIP_IDS and it["selectable"] and not it["disabled"]), None)
@@ -67,7 +74,7 @@ def skip_by_pause_menu(client, on_step: StepHook | None = None, max_wait_frames:
         selection = menu["selection"]
         if selection == target:
             break
-        obs = step([f"1,{'D' if target > selection else 'U'}", "3"])
+        obs = step([f"1,{'D' if target > selection else 'U'}", str(max(1, move_delay))])
         menu = obs.get("pauseMenu") or menu
     else:
         obs = step(["1,B", "10"])
