@@ -33,7 +33,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--save", required=True, help="游戏内存档名，如 test、opus5.5、fable5.1")
     ap.add_argument("--model", default="opus", help="Claude Code 模型别名：opus / fable 等（默认 opus）")
     ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
-    ap.add_argument("--max-minutes", type=float, default=120.0, help="现实时间预算（分钟）")
+    ap.add_argument("--max-minutes", type=float, default=240.0, help="现实时间上限（分钟）；目标以游戏内计时为主，这里只防止无限运行")
     ap.add_argument("--bridge-port", type=int, default=47774)
     ap.add_argument("--mcp-port", type=int, default=47780)
     ap.add_argument("--play-speed", type=int, default=1, help="智能体动作段的推进速度（每次渲染推进几帧）")
