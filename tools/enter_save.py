@@ -39,7 +39,7 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
         # 进入关卡之后的部分会被录像：一律按正常速度推进，剧情用暂停菜单跳过
         if scene == "Level":
             level = obs["level"]
-            if chapter is not None and level.get("chapter") != chapter and obs.get("controllable"):
+            if chapter is not None and level.get("chapter") != chapter and (obs.get("controllable") or level.get("paused")):
                 obs = leave_level_by_pause_menu(c)  # 在别的章节里：先返回地图
                 continue
             if obs.get("controllable"):
