@@ -91,7 +91,13 @@ def leave_level_by_pause_menu(client, max_wait_frames: int = 60) -> dict:
 
     obs = client.call("observe", **QUIET)["obs"]
     menu = obs.get("pauseMenu")
+    if menu is not None and not any(it.get("id") in ("menu_pause_return", "menu_pause_savequit")
+                                     for it in menu["items"] if it["selectable"]):
+        obs = step(["1,B", "20"])  # 停在别的子菜单里：先退回去
+        menu = obs.get("pauseMenu")
     if menu is None:
+        if (obs.get("level") or {}).get("paused"):
+            obs = step(["1,B", "20"])  # 暂停中但没有可识别的菜单：先取消暂停
         obs = step(["1,P"])
         waited = 0
         while not (obs.get("pauseMenu") or {}).get("focused") and waited < max_wait_frames:

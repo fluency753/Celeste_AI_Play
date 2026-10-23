@@ -27,6 +27,14 @@ def press(c: BridgeClient, key: str, settle: int = 12) -> dict:
     return step(c, [f"1,{key}", str(settle)])
 
 
+def area_id(sid: str | None) -> int | None:
+    """官方章节的编号：Celeste/0-Intro → 0，Celeste/1-ForsakenCity → 1。"""
+    try:
+        return int(str(sid).split("/", 1)[1].split("-", 1)[0])
+    except (IndexError, ValueError):
+        return None
+
+
 def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None) -> dict:
     """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。"""
     obs = c.call("activate", entities=False, tiles=False)["obs"]
@@ -39,7 +47,7 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
         # 进入关卡之后的部分会被录像：一律按正常速度推进，剧情用暂停菜单跳过
         if scene == "Level":
             level = obs["level"]
-            if chapter is not None and level.get("chapter") != chapter and (obs.get("controllable") or level.get("paused")):
+            if chapter is not None and area_id(level.get("sid")) != chapter and (obs.get("controllable") or level.get("paused")):
                 obs = leave_level_by_pause_menu(c)  # 在别的章节里：先返回地图
                 continue
             if obs.get("controllable"):
