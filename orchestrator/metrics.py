@@ -4,6 +4,8 @@
 - 思考时间：工具结果送回之后，到智能体发起下一次工具调用之间的墙钟时间（含模型推理与输出）。
 - 工具时间：工具处理耗时减去其中真正推进游戏的耗时。
 - 游戏推进时间：桥接逐帧推进所用的墙钟时间（动作块与自动推进段分开记）。
+- 准备时间：开始游玩前读知识库、写笔记与程序的墙钟时间，单独记，不计入现实用时；
+  现实用时从第一次真正执行游戏工具时开始（没有准备阶段时从启动时开始）。
 每次更新都会原子地写出 metrics.json，供 HUD 读取。
 """
 from __future__ import annotations
@@ -21,7 +23,7 @@ class MetricsState:
     agent: str = ""
     model: str = ""
     effort: str = ""
-    status: str = "starting"          # starting / thinking / executing / auto / compacting / done / stopped
+    status: str = "starting"          # starting / studying / thinking / executing / auto / compacting / done / stopped
     started_wall: float = 0.0
     elapsed_s: float = 0.0
     budget_s: float = 0.0
@@ -36,6 +38,8 @@ class MetricsState:
     context_tokens: int = 0
     compactions: int = 0
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）
+    study_s: float = 0.0              # 准备阶段（读知识库等）用时，不计入 elapsed_s
+    kb_progress: float | None = None  # 知识库已读比例（0~1）；None = 没有准备阶段
     chapter: str = ""
     room: str = ""
     chapter_time_ticks: int = 0
@@ -52,16 +56,32 @@ class MetricsState:
 
 
 class Metrics:
-    def __init__(self, path: Path, agent: str, model: str, effort: str, budget_s: float):
+    def __init__(self, path: Path, agent: str, model: str, effort: str, budget_s: float, study: bool = False):
         self._path = path
         self._lock = threading.Lock()
         self._t0 = time.monotonic()
+        self.playing = not study
         self.state = MetricsState(agent=agent, model=model, effort=effort,
-                                  started_wall=time.time(), budget_s=budget_s)
+                                  started_wall=time.time() if self.playing else 0.0, budget_s=budget_s,
+                                  status="studying" if study else "starting", kb_progress=0.0 if study else None)
         self.write()
 
     def elapsed(self) -> float:
-        return time.monotonic() - self._t0
+        """现实用时（准备阶段不算）。"""
+        return time.monotonic() - self._t0 if self.playing else 0.0
+
+    def start_play(self) -> None:
+        """准备阶段结束，开始计现实用时。"""
+        with self._lock:
+            if self.playing:
+                return
+            now = time.monotonic()
+            self.state.study_s = now - self._t0
+            self._t0 = now
+            self.playing = True
+            self.state.started_wall = time.time()
+            self.state.status = "thinking"
+            self._write_locked()
 
     def update(self, **changes) -> None:
         with self._lock:
@@ -92,6 +112,8 @@ class Metrics:
 
     def _write_locked(self) -> None:
         self.state.elapsed_s = self.elapsed()
+        if not self.playing:
+            self.state.study_s = time.monotonic() - self._t0
         tmp = self._path.with_suffix(".tmp")
         tmp.write_text(json.dumps(asdict(self.state), ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, self._path)

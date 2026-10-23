@@ -23,6 +23,7 @@ from .agent import ClaudeRunner
 from .config import REPO_ROOT, RunConfig, load_dotenv
 from .container import ensure_container
 from .game_session import GameSession
+from .kb_study import KbStudy
 from .metrics import Metrics
 from .server import TRANSPORT_SECURITY, build_server
 
@@ -42,6 +43,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--skip-enter", action="store_true", help="已在关卡内且可操作时，跳过菜单宏")
     ap.add_argument("--no-agent", action="store_true", help="不启动智能体，只运行工具服务直到 Ctrl+C")
     ap.add_argument("--autocompact", help="上下文自动压缩的窗口大小：auto，或 100000~1000000 的 token 数（默认用 Claude Code 的设置）")
+    ap.add_argument("--no-study", action="store_true", help="跳过开始前的读知识库阶段（调试用）")
+    ap.add_argument("--study-minutes", type=float, default=60.0,
+                    help="准备阶段（读知识库、写笔记）的上限分钟数，不计入现实用时；到时自动开始计时")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     args = ap.parse_args()
@@ -51,6 +55,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.chapter = args.chapter
     cfg.runtime = args.runtime
     cfg.autocompact = args.autocompact
+    cfg.study = not args.no_study
+    cfg.study_minutes = args.study_minutes
     return cfg, args
 
 
@@ -93,12 +99,18 @@ def port_free(port: int) -> bool:
 
 
 async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, token: str | None) -> dict:
-    metrics = Metrics(run_dir / "metrics.json", cfg.agent, cfg.model, cfg.effort, cfg.budget_seconds)
+    study = None
+    if cfg.study and cfg.runtime == "container" and not args.no_agent:
+        study = KbStudy(REPO_ROOT / "kb", cfg.study_minutes)
+        if not study.has_reference:
+            print("[run] 提示：kb/reference/ 不存在，准备阶段只读知识库本身（见使用说明 2.5 节生成参考资料原文）", flush=True)
+    metrics = Metrics(run_dir / "metrics.json", cfg.agent, cfg.model, cfg.effort, cfg.budget_seconds,
+                      study=study is not None)
     session = GameSession(cfg, run_dir, metrics)
     obs = session.connect()
     print(f"[run] 已接管游戏：{obs['level']['sid']} 房间 {obs['level']['room']}，存档 {cfg.save}", flush=True)
 
-    server = build_server(session)
+    server = build_server(session, study)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
     web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
@@ -121,7 +133,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
             if cfg.runtime == "container":
                 container = await asyncio.to_thread(ensure_container, cfg, lambda m: print(m, flush=True))
                 print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
-            runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", server.reset_clock, container)
+            runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", server.reset_clock, container, study)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()
@@ -137,7 +149,8 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
         summary = metrics.snapshot()
         summary.update(stop_reason=reason, completed=session.done and session.done_reason == "章节完成",
                        start_sid=session.start_sid, turns=runner.turns if runner else 0,
-                       session_id=runner.session_id if runner else None, run_dir=str(run_dir))
+                       session_id=runner.session_id if runner else None, run_dir=str(run_dir),
+                       kb_study=study.summary() if study else None)
         (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
 
@@ -158,7 +171,9 @@ def main() -> int:
         return 130
     print(f"[run] 结束：{summary['stop_reason']}；决策 {summary['decisions']} 次，死亡 {summary['deaths']} 次，"
           f"用时 {summary['elapsed_s']:.0f} 秒（思考 {summary['thinking_s']:.0f}，工具 {summary['tool_s']:.0f}，"
-          f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）", flush=True)
+          f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）"
+          + (f"；准备阶段 {summary['study_s']:.0f} 秒，知识库已读 {summary['kb_study']['progress']:.0%}"
+             if summary.get("kb_study") else ""), flush=True)
     return 0 if summary["completed"] else 1
 
 

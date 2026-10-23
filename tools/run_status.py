@@ -30,6 +30,8 @@ def main() -> int:
           f"游戏推进 {m['play_game_s'] + m['auto_game_s']:.1f}s")
     print(f"决策 {m['decisions']}  帧 {m['frames_played']}+{m['frames_auto']}(自动)  死亡 {m['deaths']}  "
           f"上下文 {m['context_tokens']:,}  压缩 {m['compactions']}  章节 {m['chapter']}  房间 {m['room']}")
+    if m.get("kb_progress") is not None:
+        print(f"准备阶段 {m.get('study_s', 0):.0f}s（不计入用时）  知识库已读 {m['kb_progress']:.0%}")
     if m.get("usage_5h") is not None:
         print(f"Max 用量：5 小时窗口 {m['usage_5h']:.0%}，7 天窗口 {m['usage_7d']:.0%}")
     print(f"当前想法：{m['thought']}")

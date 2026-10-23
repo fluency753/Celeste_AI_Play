@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import json
 import os
 import uuid
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from .config import REPO_ROOT, RunConfig, find_claude_exe, find_docker_exe
 from .game_session import GameSession
+from .kb_study import KbStudy
 from .metrics import Metrics
 
 GAME_TOOLS = ["mcp__celeste__observe", "mcp__celeste__act"]
@@ -31,6 +33,21 @@ def compose_prompt(runtime: str) -> str:
 
 
 FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关本章。"
+
+
+def study_prompt(study: KbStudy) -> str:
+    files = "\n".join(f"- {path}" for path in study.container_paths())
+    return (
+        "开始游玩之前，先用 Read 工具把知识库从头到尾完整读一遍，按下面的顺序：\n"
+        f"{files}\n\n"
+        "要求：每个文件都读到最后一行。文件长时 Read 会按长度截断，看到截断就用 offset 与 limit 接着读，"
+        "不要只读开头，也不要用 Grep 或 Bash 代替阅读。草莓酱文本的中文版（*_zh.md）与英文版是同一内容的翻译，可以不读。"
+        "主控会核对你读过的行，读完之前 observe 与 act 不会执行。\n\n"
+        "读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些程序"
+        "（模拟器、搜索）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
+        f"这个准备阶段（读知识库、写笔记、写程序）不计入现实用时，上限 {study.minutes:g} 分钟，到时自动开始计时；"
+        "从你第一次成功调用 observe 或 act 起开始计时。游戏在你思考期间一直暂停，章节计时只算游戏真正推进的帧。"
+    )
 CONTINUE_PROMPT = "本章还没有通关，请继续调用 act 游玩。"
 
 
@@ -46,8 +63,9 @@ def _strip_images(value):
 
 class ClaudeRunner:
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
-                 token: str, reset_clock, container: str | None = None):
+                 token: str, reset_clock, container: str | None = None, study: KbStudy | None = None):
         self.cfg = cfg
+        self.study = study
         self.container = container
         self.run_dir = run_dir
         self.session = session
@@ -140,17 +158,24 @@ class ClaudeRunner:
             limit=64 * 1024 * 1024)
         reader = asyncio.create_task(self._read_stdout())
         try:
-            await self._send(FIRST_PROMPT)
+            await self._send(study_prompt(self.study) if self.study else FIRST_PROMPT)
             while True:
-                remaining = self.cfg.budget_seconds - self.metrics.elapsed()
-                if remaining <= 0:
-                    self.stop_reason = "时间预算用完"
-                    break
-                try:
-                    await asyncio.wait_for(self._turn_done.wait(), timeout=remaining)
-                except asyncio.TimeoutError:
-                    self.stop_reason = "时间预算用完"
-                    break
+                if not self.metrics.playing and self.study is not None:
+                    # 准备阶段：不消耗现实用时预算，只受准备阶段上限约束
+                    remaining = self.study.deadline() - time.monotonic()
+                    if remaining <= 0 or not await self._wait_turn(remaining):
+                        if not self.metrics.playing:
+                            self.study.force_open()
+                            self.metrics.start_play()
+                            self.reset_clock()
+                            print(f"[agent] 准备阶段到达上限 {self.study.minutes:g} 分钟，开始计时"
+                                  f"（知识库已读 {self.study.progress():.0%}）", flush=True)
+                        continue
+                else:
+                    remaining = self.cfg.budget_seconds - self.metrics.elapsed()
+                    if remaining <= 0 or not await self._wait_turn(remaining):
+                        self.stop_reason = "时间预算用完"
+                        break
                 if reader.done():
                     self.stop_reason = self.stop_reason or "Claude Code 进程已退出"
                     break
@@ -162,12 +187,26 @@ class ClaudeRunner:
                 if self.idle_turns >= 3:
                     self.stop_reason = "连续 3 轮没有调用工具"
                     break
-                await self._send(CONTINUE_PROMPT)
+                if self.study is not None and not self.study.ready():
+                    await self._send(self.study.reminder())
+                else:
+                    await self._send(CONTINUE_PROMPT)
         finally:
             await self._shutdown(reader)
             stderr_log.close()
             self._events.close()
         return self.stop_reason
+
+    async def _wait_turn(self, timeout: float) -> bool:
+        """等这一轮结束；超时返回 False（这一轮仍在进行）。"""
+        try:
+            await asyncio.wait_for(self._turn_done.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    def _idle_status(self) -> str:
+        return "thinking" if self.metrics.playing else "studying"
 
     async def _send(self, text: str) -> None:
         self.turns += 1
@@ -176,7 +215,7 @@ class ClaudeRunner:
         self.proc.stdin.write((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
         await self.proc.stdin.drain()
         self.reset_clock()
-        self.metrics.update(status="thinking")
+        self.metrics.update(status=self._idle_status())
 
     async def _shutdown(self, reader: asyncio.Task) -> None:
         if self.proc is None:
@@ -239,7 +278,7 @@ class ClaudeRunner:
                 self.metrics.update(status="compacting")
                 print("[agent] 上下文压缩中……", flush=True)
             elif event.get("compact_result"):
-                self.metrics.update(status="thinking")
+                self.metrics.update(status=self._idle_status())
         elif etype == "system" and subtype == "compact_boundary":
             meta = event.get("compact_metadata") or {}
             self.metrics.add(compactions=1, compact_s=(meta.get("duration_ms") or 0) / 1000)
@@ -255,6 +294,11 @@ class ClaudeRunner:
             for block in message.get("content") or []:
                 if block.get("type") == "tool_use":
                     self._tool_calls_this_turn += 1
+        elif etype == "user" and self.study is not None and self.study.finished is None:
+            if self.study.note_result(event):
+                print(f"[agent] 知识库已读完：{len(self.study.files)} 个文件，"
+                      f"用时 {self.study.finished - self.study.started:.0f} 秒", flush=True)
+            self.metrics.update(kb_progress=round(self.study.progress(), 4))
         elif etype == "rate_limit_event":
             info = event.get("rate_limit_info") or {}
             windows = info.get("unifiedWindows") or {}

@@ -8,6 +8,7 @@ from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .game_session import ActError, GameSession
+from .kb_study import KbStudy
 from .observation import describe_obs, describe_step, room_json, upscale_png
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图与整个房间的实体和字符地图，其余时候只给文字状态与画面附近的信息。
@@ -34,7 +35,7 @@ TRANSPORT_SECURITY = TransportSecuritySettings(
 )
 
 
-def build_server(session: GameSession) -> MCPServer:
+def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServer:
     server = MCPServer(name="celeste", instructions="《蔚蓝》游戏工具：observe 查看当前帧，act 推进若干帧。",
                        log_level="WARNING")
     metrics = session.metrics
@@ -48,8 +49,20 @@ def build_server(session: GameSession) -> MCPServer:
 
     def begin() -> float:
         now = time.monotonic()
+        if not metrics.playing:
+            # 第一次真正执行游戏工具：准备阶段结束，现实用时从这里开始
+            metrics.start_play()
+            state["last_return"] = now
+            print(f"[run] 开始游玩：准备阶段用时 {metrics.state.study_s:.0f} 秒"
+                  + (f"，知识库已读 {study.progress():.0%}" if study else ""), flush=True)
         metrics.add(thinking_s=now - state["last_return"])
         return now
+
+    def gated() -> str | None:
+        """知识库没读完时不执行游戏工具，返回提示。"""
+        if study is None or study.ready():
+            return None
+        return study.reminder()
 
     def finish(t_start: float, game_s: float) -> None:
         now = time.monotonic()
@@ -63,6 +76,8 @@ def build_server(session: GameSession) -> MCPServer:
     @server.tool(name="observe", description=OBSERVE_DESCRIPTION, structured_output=False)
     async def observe() -> list:
         async with call_lock:
+            if (note := gated()) is not None:
+                return [note]
             t0 = begin()
             try:
                 obs, image = await asyncio.to_thread(session.observe)
@@ -81,6 +96,8 @@ def build_server(session: GameSession) -> MCPServer:
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
                   stop_on: list[str] | None = None) -> list:
         async with call_lock:
+            if (note := gated()) is not None:
+                return [note]
             t0 = begin()
             game_s = 0.0
             auto_before = metrics.state.auto_game_s
