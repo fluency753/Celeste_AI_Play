@@ -136,6 +136,6 @@ def describe_step(result: dict, max_rows: int = 30) -> str:
             if len(row) < 8 or row[1] is None:
                 lines.append(f"  {row[0]}: (Madeline 不在场)")
             else:
-                f, x, y, vx, vy, st, dashes, ground = row
-                lines.append(f"  {f}: {x}, {y}, {vx}, {vy}, {st}, {dashes}, {ground}")
+                f, x, y, vx, vy, st, dashes, ground = row[:8]
+                lines.append(f"  {f}: {x:.2f}, {y:.2f}, {vx:.1f}, {vy:.1f}, {st}, {dashes}, {ground}")
     return "\n".join(lines)

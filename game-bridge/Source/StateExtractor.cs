@@ -219,14 +219,13 @@ internal static class StateExtractor {
         }
 
         w.WriteStartObject("player");
-        Vector2 exact = p.Position + p.PositionRemainder;
         w.WriteStartArray("pos");
-        w.WriteNumberValue(Round(exact.X, 4));
-        w.WriteNumberValue(Round(exact.Y, 4));
+        w.WriteNumberValue(p.Position.X + p.PositionRemainder.X);
+        w.WriteNumberValue(p.Position.Y + p.PositionRemainder.Y);
         w.WriteEndArray();
         w.WriteStartArray("speed");
-        w.WriteNumberValue(Round(p.Speed.X, 3));
-        w.WriteNumberValue(Round(p.Speed.Y, 3));
+        w.WriteNumberValue(p.Speed.X);
+        w.WriteNumberValue(p.Speed.Y);
         w.WriteEndArray();
         int st = p.StateMachine.State;
         w.WriteString("state", StateName(st));
@@ -250,6 +249,53 @@ internal static class StateExtractor {
         w.WriteNumber("varJump", Frames(p.varJumpTimer));
         w.WriteNumber("dashCooldown", Frames(p.dashCooldownTimer));
         w.WriteEndObject();
+        WritePlayerInternal(w, p);
+        w.WriteEndObject();
+    }
+
+    /// <summary>Madeline 的内部状态（原始数值，计时器单位为秒），供智能体的模拟器从任意时刻接着推演。</summary>
+    private static void WritePlayerInternal(Utf8JsonWriter w, Player p) {
+        void Vec(string name, Vector2 v) {
+            w.WriteStartArray(name);
+            w.WriteNumberValue(v.X);
+            w.WriteNumberValue(v.Y);
+            w.WriteEndArray();
+        }
+        w.WriteStartObject("internal");
+        Vec("position", p.Position);
+        Vec("remainder", p.PositionRemainder);
+        Vec("speed", p.Speed);
+        Vec("liftSpeed", p.LiftSpeed);
+        w.WriteNumber("liftSpeedTimer", p.liftSpeedTimer);
+        Vec("dashDir", p.DashDir);
+        Vec("lastAim", p.lastAim);
+        w.WriteNumber("moveX", p.moveX);
+        w.WriteBoolean("onGround", p.onGround);
+        w.WriteBoolean("wasOnGround", p.wasOnGround);
+        w.WriteNumber("jumpGraceTimer", p.jumpGraceTimer);
+        w.WriteNumber("varJumpTimer", p.varJumpTimer);
+        w.WriteNumber("varJumpSpeed", p.varJumpSpeed);
+        w.WriteBoolean("autoJump", p.AutoJump);
+        w.WriteNumber("autoJumpTimer", p.AutoJumpTimer);
+        w.WriteNumber("maxFall", p.maxFall);
+        w.WriteNumber("dashCooldownTimer", p.dashCooldownTimer);
+        w.WriteNumber("dashRefillCooldownTimer", p.dashRefillCooldownTimer);
+        w.WriteNumber("dashAttackTimer", p.dashAttackTimer);
+        w.WriteBoolean("dashStartedOnGround", p.dashStartedOnGround);
+        w.WriteNumber("forceMoveX", p.forceMoveX);
+        w.WriteNumber("forceMoveXTimer", p.forceMoveXTimer);
+        w.WriteNumber("wallSlideTimer", p.wallSlideTimer);
+        w.WriteNumber("wallSlideDir", p.wallSlideDir);
+        w.WriteNumber("wallSpeedRetentionTimer", p.wallSpeedRetentionTimer);
+        w.WriteNumber("wallSpeedRetained", p.wallSpeedRetained);
+        w.WriteNumber("wallBoostDir", p.wallBoostDir);
+        w.WriteNumber("wallBoostTimer", p.wallBoostTimer);
+        w.WriteNumber("climbNoMoveTimer", p.climbNoMoveTimer);
+        w.WriteNumber("hopWaitX", p.hopWaitX);
+        w.WriteNumber("hopWaitXSpeed", p.hopWaitXSpeed);
+        w.WriteNumber("noWindTimer", p.noWindTimer);
+        w.WriteNumber("lowFrictionStopTimer", p.lowFrictionStopTimer);
+        w.WriteNumber("minHoldTimer", p.minHoldTimer);
         w.WriteEndObject();
     }
 
@@ -375,11 +421,11 @@ internal static class StateExtractor {
         if (p == null) {
             w.WriteNullValue();
         } else {
-            Vector2 exact = p.Position + p.PositionRemainder;
-            w.WriteNumberValue(Round(exact.X, 2));
-            w.WriteNumberValue(Round(exact.Y, 2));
-            w.WriteNumberValue(Round(p.Speed.X, 1));
-            w.WriteNumberValue(Round(p.Speed.Y, 1));
+            // 全精度：智能体用它校准自己写的模拟器
+            w.WriteNumberValue(p.Position.X + p.PositionRemainder.X);
+            w.WriteNumberValue(p.Position.Y + p.PositionRemainder.Y);
+            w.WriteNumberValue(p.Speed.X);
+            w.WriteNumberValue(p.Speed.Y);
             w.WriteStringValue(StateName(p.StateMachine.State));
             w.WriteNumberValue(p.Dashes);
             w.WriteNumberValue(p.onGround ? 1 : 0);
