@@ -13,6 +13,7 @@
 | `input.md` | 游戏侧的输入语义：按键"按下"与缓冲、抓取、方向与瞄准、8 向吸附、蹲冲；以及"哪一帧的输入决定什么" |
 | `entities.md` | 序章、1A（Forsaken City）、2A（Old Site）里会遇到的实体类型：碰撞箱、计时、交互规则 |
 | `game_data.md` | （已有文件）工作区里观测与轨迹数据的格式说明 |
+| `reference/` | 外部资料原文照录：Celeste Wiki（celeste.ink）全部技巧页面，草莓酱训练场（Beginner → Grandmaster）与机制库的全部文本（英文、简体中文）。索引见 `reference/README.md`；与本知识库其他文件冲突时以其他文件为准 |
 
 ## 2. 坐标与单位
 

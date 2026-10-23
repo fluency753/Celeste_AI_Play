@@ -38,3 +38,6 @@ agent-home/
 
 # 智能体工作区（智能体自己写的程序、笔记与主控写入的观测数据）
 workspaces/
+
+# 知识库里的外部资料原文（celeste.ink 与草莓酱文本，用 tools/fetch_reference.py 在本机生成）
+kb/reference/
