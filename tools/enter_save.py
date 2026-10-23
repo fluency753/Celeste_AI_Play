@@ -69,6 +69,10 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
             obs = step(c, ["30"])["obs"]
             continue
 
+        if scene == "LevelEnter":
+            obs = press(c, "C", settle=30)["obs"]  # 第一次进入章节时的明信片：按确认继续
+            continue
+
         if scene != "Overworld" or menu.get("next"):
             obs = step(c, ["10"], speed=4)["obs"]  # 加载或菜单切换中
             continue
