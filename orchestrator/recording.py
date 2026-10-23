@@ -154,7 +154,7 @@ class Recorder:
         clock = self.clock()
         if not clock.get("connected"):
             raise RecordingError("OBS 插件没有连上桥接的时钟端口：先运行 python tools/obs_setup.py launch 启动 OBS"
-                                 "（插件见使用说明 4.5 节）")
+                                 "（插件构建见使用说明 4.4 节）")
         self.call("record", action="start", dir=str(directory), ffmpeg=self.opts.ffmpeg, video_args=self.opts.video_args,
                   audio_offset_ms=self.opts.audio_offset_ms, marker=self.opts.marker)
         deadline = time.monotonic() + timeout

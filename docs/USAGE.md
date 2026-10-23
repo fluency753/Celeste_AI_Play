@@ -264,7 +264,7 @@ HUD 是一个本地网页，显示智能体名称与状态、当前房间、章�
 
 - **服务**：主控运行时会在进程内启动 HUD 服务：`http://127.0.0.1:47790/hud`（`--hud-port` 改端口，`--no-hud` 关闭）。也可以单独启动：`.\.venv\Scripts\python.exe -m overlay.server`。它总是显示最近一次运行（`runs\latest.txt`），换一局不用刷新页面；`--run <运行目录>` 可以固定显示某一局。
 - **置顶窗口**：`.\.venv\Scripts\python.exe -m overlay.window`（需要 `pip install -r requirements.txt` 装上 pywebview，使用系统自带的 WebView2）。窗口透明、无边框、置顶、点击穿透、不进任务栏、不抢焦点；贴在游戏窗口客户区右上角，宽度为游戏窗口的 22%、边距 2%，随游戏窗口移动与缩放；游戏最小化时隐藏。游戏要用窗口化或无边框全屏，独占全屏盖不上去。
-- **OBS**：添加"浏览器"来源，URL 填 `http://127.0.0.1:47790/hud`；1080p 录像时宽 430、高 344，放在画面右上角（右、上各留约 38 像素）。页面背景透明，不用额外设置。
+- **OBS**：`tools\obs_setup.py` 建的场景里已经有 HUD（见 4.4 节）。它用"本地文件"方式打开 `overlay\hud.html`，页面再去连 HUD 服务取数据，所以 OBS 比主控先启动也没关系。自己加时：添加"浏览器"来源，勾选本地文件选这个页面（或 URL 填 `http://127.0.0.1:47790/hud`，但 OBS 启动时服务必须已在运行），1080p 下宽 430、高 344，放在右上角（右、上各留约 38 像素）。页面背景透明，不用额外设置。
 - **实时性**：执行中桥接每 6 帧（0.1 秒）推送一次章节计时、冲刺次数与房间，页面每 0.1 秒取一次数据并在两次之间按实时外推，所以主计时逐帧走动、左侧色条随冲刺状态变色；思考期间思考时间持续走动。思考语句每 3 秒检查一次，有新语句才淡入替换。
 - **配置**：配色、名称与参数在 `configs\hud.json`；本机想改的项写进 `configs\local.hud.json`（不入库），会覆盖同名项。
 
@@ -289,14 +289,79 @@ M5 验收（2026-10-23，桥接 0.7.0）：`python calibration\m5_hud_demo.py` �
 
 每条决策会打印停止原因与实际帧数，并与原记录比对（"一致"或"不同"）。重放的日志写在 `runs\replay\<时间戳>\`。实测：重放 Opus 的序章记录，21 次决策逐帧一致，两段剧情都通过暂停菜单跳过。
 
-### 4.4 正式挑战（部分未实现）
+### 4.4 录制：OBS 只录游玩帧（可用）
+
+录制时 OBS 的每个视频帧都向游戏要一帧：游戏推进一帧、画到屏幕上，OBS 采下这一帧；智能体思考、游戏停住时 OBS 一帧也不写。成片的帧数等于游玩帧数，声音也只取游玩帧对应的那 1/60 秒，思考时间在成片里完全不存在。HUD 作为场景里的浏览器源一起录进去。
+
+**一次性准备**
+
+1. 安装 OBS 32（Steam 版即可）与 ffmpeg（`winget install Gyan.FFmpeg`）。
+2. 构建并安装锁步插件（先关闭 OBS；不需要 Visual Studio，脚本会用 pip 装 zig 交叉编译）：
+
+   ```powershell
+   .\.venv\Scripts\python.exe tools\build_obs_plugin.py --obs-dir "D:\path\to\OBS Studio"
+   ```
+
+   OBS 更新后要重新构建，并重跑下面的校准测试。
+3. 本机设置写进 `configs\local.recording.json`（不入库，只写要改的键；默认值见 `configs\recording.json`）：
+
+   ```json
+   {
+     "obs_dir": "D:\\path\\to\\OBS Studio",
+     "ffmpeg": "C:\\Users\\<你>\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe",
+     "video_args": "-c:v h264_nvenc -preset p5 -tune hq -rc constqp -qp 16 -g 120",
+     "audio_offset_ms": 130
+   }
+   ```
+
+   `video_args` 是 ffmpeg 的视频编码参数：有 NVIDIA 显卡用上面的 NVENC，否则保留默认的 libx264。`audio_offset_ms` 只在某段量不到声音延迟时作为后备（见下）。
+
+**每次录制**
+
+```powershell
+# 1. 启动游戏（桥接 0.8.3 以上），再启动 OBS：自动建好专用的配置文件与场景集合 CelesteAI 并最小化到托盘
+.\.venv\Scripts\python.exe tools\obs_setup.py launch
+# 2. 运行主控时加 --record
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --record
+# 3. 结束后关闭 OBS，并把 OBS 下次打开时选中的配置还原成你原来的
+.\.venv\Scripts\python.exe tools\obs_setup.py stop
+```
+
+- `obs_setup.py` 不动你自己的配置文件与场景：CelesteAI 配置文件是 1920×1080、60 fps、NV12、48 kHz；场景里只有游戏采集、应用音频捕获（只录 Celeste.exe）与 HUD 浏览器源，没有桌面音频和麦克风。场景集合已存在时不改动（你在 OBS 里的调整会保留），`setup --reset` 重建（原来的先备份）。`status` 查看插件是否加载、是否连上桥接。
+- 主控接管游戏后开始录制，结束（通关、预算用完或中断）时先停止录制、等 ffmpeg 收尾，再交还游戏控制；结果写进 `summary.json` 的 `recording`。
+- 录制期间动作块按 60 fps 实时播放（节奏由 OBS 决定），`--play-speed` 不起作用。
+- 其他参数：`--ffmpeg`、`--record-video-args`、`--audio-offset-ms` 临时覆盖配置；`--record-marker` 在画面左下角画帧号条码（只用于校准）。
+
+**产出**（`runs\<智能体>\<时间>\recording\`）
+
+| 文件 | 内容 |
+| --- | --- |
+| gameplay.mkv | 成片：画面 + 声音（AAC 256 kbps） |
+| video.mkv、audio.wav | 只有画面、只有声音（32 位浮点，每帧 800 个样本） |
+| frames.csv | 每个成片帧对应的游戏帧号、章节计时与 OBS 时间戳 |
+| segments.csv | 连续推进的各段，以及每段开头量到的声音延迟 |
+| recording.json | 结果摘要：帧数、缺帧与重复检查、声音对齐情况 |
+
+**声音怎么对齐**：OBS 采到的声音比画面晚 110～170 毫秒，而且录制中途 OBS 增加音频缓冲时会突然变化约 70 毫秒，不能用一个固定值。桥接在游戏停住超过 60 毫秒时暂停全部声音，所以每段动作开头的声音都从完全静音恢复；插件在每段开头找这条边，量出当时的延迟（取最近 5 次的中位数）用于这一段。
+
+**校准测试**（游戏停在 test 存档的关卡里、Madeline 站在平地上，OBS 已启动）：
+
+```powershell
+.\.venv\Scripts\python.exe calibration\m6_recording_test.py --rounds 40 --think 0.7
+```
+
+不调用模型，模拟 40 轮"停 0.7 秒 → 推进约 1 秒"并录制，检查：成片帧数 = 推进的帧数、游戏帧号连续；每一帧画面里的帧号条码与记录一致（证明 OBS 采到的正是那一帧）；WAV 长度 = 帧数 × 800；每段都量到声音延迟、对齐误差不超过一帧；gameplay.mkv 含画面与声音。
+
+M6 验收（2026-10-23，桥接 0.8.3，OBS 32.2.2，RTX 5080 + NVENC）：校准测试全部通过——2219 帧画面与条码逐帧一致，40 段全部量到声音延迟，对齐误差中位数 0 毫秒、最大 12.7 毫秒。实测 Opus 5.5 游玩 4 分 31 秒（15 次决策、死亡 4 次），成片 1633 帧（27.2 秒），帧号连续、无缺帧无重复，19 段中 15 段量到声音延迟（130～152 毫秒），HUD 一同录入。
+
+### 4.5 正式挑战（部分未实现）
 
 计划中的流程如下，全部由主控自动串联：
 
 1. **准备阶段（不计时）**：在 `test` 存档上让智能体编写模拟器与规划程序并完成校准；`test` 存档可随时重置，不计成绩。
-2. **正式挑战**：先在 Claude Code 里用 `/usage` 确认 Max 额度充足，最好在一个新的 5 小时窗口里开跑；然后启动游戏与 OBS，启动主控并指定智能体（如 Opus 5.5）与对应的正式存档。主控会为该存档启动独立容器并在其中运行 Claude Code。
-3. 主控校验存档名与槽位，备份存档，开始录制。
-4. 从正式存档进入序章时开始计时，依次通关序章、1A、2A。成绩以游戏内章节计时为主，现实时间只设宽松上限。剧情能跳过的一律通过暂停菜单跳过。推理强度默认 high，可按房间难度动态调整。
+2. **正式挑战**：先在 Claude Code 里用 `/usage` 确认 Max 额度充足，最好在一个新的 5 小时窗口里开跑；然后启动游戏，用 `tools\obs_setup.py launch` 启动 OBS，启动主控并指定智能体（如 Opus 5.5）与对应的正式存档，加 `--record`。主控会为该存档启动独立容器并在其中运行 Claude Code。
+3. 主控校验存档名与槽位，备份存档（未实现），开始录制。
+4. 从正式存档进入序章时开始计时，依次通关序章、1A、2A（章节之间的衔接未实现）。成绩以游戏内章节计时为主，现实时间只设宽松上限。剧情能跳过的一律通过暂停菜单跳过。推理强度默认 high，可按房间难度动态调整。
 5. 运行期间右上角 HUD 显示游戏时间、思考与工具时间、上下文大小、压缩次数、当前房间与思考语句，思考语句约每 3 秒刷新一次。
 6. 通关或时间用完后停止录制，产出写入 `runs/`。
 
@@ -313,7 +378,7 @@ M5 验收（2026-10-23，桥接 0.7.0）：`python calibration\m5_hud_demo.py` �
 | summary.json | 结束时的汇总与结束原因 | 已实现 |
 | system_prompt.md | 本次运行发给智能体的完整提示词 | 已实现 |
 | claude_stderr.log、mcp.json、agent_cwd/ | Claude Code 的错误输出；本机方式下的工具服务配置与空工作目录 | 已实现 |
-| recording.mkv | OBS 录像，只含游玩帧 | 未实现 |
+| recording/ | OBS 锁步录制的成片 gameplay.mkv 与对账文件（见 4.4 节） | 已实现（加 `--record`） |
 | inputs.tas | 回放用的逐帧按键与系统事件 | 未实现 |
 | manifest.json | 版本、配置与哈希 | 未实现 |
 
@@ -327,6 +392,9 @@ M5 验收（2026-10-23，桥接 0.7.0）：`python calibration\m5_hud_demo.py` �
 | 接管后按键没有反应 | 检查是否有其他 Mod 改了输入；建议用只启用 CelesteAIBridge 的 Mod 配置 |
 | Steam 更新了游戏或 OBS 后出错 | 插件与 Mod 和版本绑定，需重新编译并重跑校准测试 |
 | 存档进度不对 | 从 `runs/` 中的存档备份恢复，并确认已关闭云同步 |
+| OBS 启动时弹出"安全模式"对话框 | 上次 OBS 没有正常退出。用 `tools\obs_setup.py launch` 启动会先清掉过时的崩溃标记；已弹出时选正常模式（安全模式不加载锁步插件） |
+| `--record` 提示 OBS 插件没有连上桥接 | 先启动游戏再启动 OBS 都可以，插件每秒重连一次；用 `tools\obs_setup.py status` 看插件是否加载，没加载就重新运行 `tools\build_obs_plugin.py` |
+| 录像里没有 HUD | 场景是旧版本建的（网址模式）：关闭 OBS 后运行 `tools\obs_setup.py setup --reset` 重建场景 |
 | 运行中途停下，提示达到用量上限 | Max 额度触顶后无头运行不会自动等待；主控会暂停计时，额度恢复后续跑，成绩中注明 |
 | 想用 Fable 5.1 | Max 上 Fable 另有用量限制，先在 Claude Code 的 `/model` 列表确认可用及计费方式 |
 | 主控提示端口 47780 已被占用 | 另一个主控还在运行；结束它，或加 `--mcp-port 47781` |
