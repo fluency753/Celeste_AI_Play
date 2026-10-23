@@ -27,7 +27,8 @@ def press(c: BridgeClient, key: str, settle: int = 12) -> dict:
     return step(c, [f"1,{key}", str(settle)])
 
 
-def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120) -> dict:
+def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None) -> dict:
+    """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。"""
     obs = c.call("activate", entities=False, tiles=False)["obs"]
     tried_skip: set[str] = set()
     vignette_tries = 0
@@ -62,7 +63,9 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120) -> dict:
             continue
 
         current = menu.get("current")
-        if current in ("OuiTitleScreen", "OuiMainMenu", "OuiChapterSelect", "OuiChapterPanel"):
+        if current == "OuiChapterSelect" and chapter is not None and menu.get("area", chapter) != chapter:
+            obs = press(c, "R" if chapter > menu["area"] else "L", settle=20)["obs"]
+        elif current in ("OuiTitleScreen", "OuiMainMenu", "OuiChapterSelect", "OuiChapterPanel"):
             obs = press(c, "C", settle=30)["obs"]
         elif current == "OuiFileSelect":
             obs = handle_file_select(c, obs, save_name)
@@ -96,12 +99,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("save", help="存档名，如 test、opus5.5")
     ap.add_argument("--port", type=int, default=47774)
+    ap.add_argument("--chapter", type=int, help="章节编号：0 序章、1 被遗弃之城、2 旧址；默认进入选章页当前选中的章节")
     ap.add_argument("--leave-active", action="store_true", help="完成后保持接管（默认交还控制）")
     args = ap.parse_args()
 
     c = BridgeClient(port=args.port)
     try:
-        obs = enter_save(c, args.save)
+        obs = enter_save(c, args.save, chapter=args.chapter)
         print(summarize_obs(obs))
         if not args.leave_active:
             c.call("deactivate")

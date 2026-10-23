@@ -52,6 +52,7 @@ class RunConfig:
     play_speed: int = 1             # 智能体动作块的推进速度（1 = 实时 60 帧/秒）
     auto_speed: int = 1             # 转场、剧情、重生等自动推进段的速度（1 = 与原版一致；大于 1 只用于调试）
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
+    chapter: int | None = None      # 菜单宏进入的章节编号；None = 选章页当前章节
 
     @property
     def budget_seconds(self) -> float:

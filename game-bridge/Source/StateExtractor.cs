@@ -105,6 +105,16 @@ internal static class StateExtractor {
         w.WriteStartObject("menu");
         w.WriteString("current", overworld.Current?.GetType().Name);
         w.WriteString("next", overworld.Next?.GetType().Name);
+        if (overworld.Current is OuiChapterSelect chapterSelect) {
+            w.WriteNumber("area", chapterSelect.area); // 0 = 序章，1 = 1 被遗弃之城，2 = 2 旧址……
+        }
+        if (overworld.Current is OuiChapterPanel panel) {
+            w.WriteNumber("panelArea", panel.Area.ID);
+            w.WriteString("panelSide", panel.Area.Mode.ToString());
+            w.WriteBoolean("panelSelectingMode", panel.selectingMode);
+            w.WriteNumber("panelCheckpoint", panel.checkpoint);
+            w.WriteNumber("panelCheckpointCount", panel.checkpoints?.Count ?? 0);
+        }
         if (overworld.Current is OuiFileSelect fileSelect && fileSelect.Slots != null) {
             w.WriteNumber("slotIndex", fileSelect.SlotIndex);
             w.WriteBoolean("slotSelected", fileSelect.SlotSelected);

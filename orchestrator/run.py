@@ -37,12 +37,14 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--mcp-port", type=int, default=47780)
     ap.add_argument("--play-speed", type=int, default=1, help="智能体动作段的推进速度（每次渲染推进几帧）")
     ap.add_argument("--auto-speed", type=int, default=1, help="转场、剧情、重生段的推进速度；1 与原版一致，大于 1 为快进（只用于调试，录像会失真）")
+    ap.add_argument("--chapter", type=int, help="进入的章节编号：0 序章、1 被遗弃之城、2 旧址；默认进入选章页当前选中的章节")
     ap.add_argument("--skip-enter", action="store_true", help="已在关卡内且可操作时，跳过菜单宏")
     ap.add_argument("--no-agent", action="store_true", help="不启动智能体，只运行工具服务直到 Ctrl+C")
     args = ap.parse_args()
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort,
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
+    cfg.chapter = args.chapter
     return cfg, args
 
 
@@ -68,7 +70,7 @@ def enter_save(cfg: RunConfig) -> None:
     client = BridgeClient(port=cfg.bridge_port, timeout=120)
     try:
         t0 = time.monotonic()
-        obs = macro(client, cfg.save)
+        obs = macro(client, cfg.save, chapter=cfg.chapter)
         print(f"[run] 已进入存档 {cfg.save}：{obs['level']['sid']} 房间 {obs['level']['room']}"
               f"（菜单宏用时 {time.monotonic() - t0:.1f} 秒）", flush=True)
     finally:
