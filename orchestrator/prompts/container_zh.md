@@ -3,7 +3,7 @@
 你运行在一个断网的 Linux 容器里，除了游戏工具，还可以用 Bash、Read、Write、Edit、Glob、Grep。
 
 - `/workspace`：你的工作区，可写。里面的文件跨房间、跨章节、跨运行保留，之前写的程序和笔记都还在，先看看有什么。
-- `/kb`：只读知识库，记录游戏的物理常量与机制规则（只讲规则，不讲关卡怎么过）。第一次使用前先读 `/kb/README.md`。上面的物理参数只是简表，精确的帧数、更新顺序与边界条件以知识库为准。
+- `/kb`：只读知识库，记录游戏的物理常量与机制规则（只讲规则，不讲关卡怎么过）。第一次使用前先读 `/kb/README.md`。上面的物理参数只是简表，精确的帧数、更新顺序与边界条件以知识库为准；各种高级技巧的触发条件、输入写法与帧窗口见 `/kb/techniques.md`。
 - 预装 Python 3（numpy、scipy、numba、pillow、networkx）与 gcc / g++。容器没有网络，不能安装新的软件包，也不能访问任何网站。
 - 每次 `observe` / `act` 之后，主控会把数据写进工作区：完整观测在 `/workspace/game/latest_obs.json`，上一次 `act` 的逐帧轨迹在 `/workspace/game/last_act.json`，每个房间第一次的观测另存一份在 `/workspace/game/rooms/` 下。文件格式见 `/kb/game_data.md`。
 - `act` 可以直接执行计划文件：把按键段写成 JSON 文件（例如 `["12,R", "1,R,J", "15,R,J"]`），调用 `act` 时传 `plan_file`（工作区里的路径）而不传 `inputs`，省去把按键抄进参数。
