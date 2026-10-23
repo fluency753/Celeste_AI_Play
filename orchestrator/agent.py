@@ -175,6 +175,9 @@ class ClaudeRunner:
                 # 不允许后台任务：游戏只在 act 时推进，后台跑的搜索会绕过每次暂停一轮工具的限制，也让计时失真。
                 # 前台命令默认最多等 5 分钟（可以用 timeout 参数加到 10 分钟），超时就结束，不会转入后台
                 "-e", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+                # Bash 等子进程里清掉凭据变量（ANTHROPIC_AUTH_TOKEN 等）：第三方的 API 密钥不能让智能体的程序看到。
+                # 不设时 Claude Code 只清订阅令牌，实测 Bash 里能读到 ANTHROPIC_AUTH_TOKEN
+                "-e", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
                 "-e", "BASH_DEFAULT_TIMEOUT_MS=300000", "-e", "BASH_MAX_TIMEOUT_MS=600000",
                 self.container, "claude", *self._common_args(),
                 # 受限模式：不读取用户、项目与本地设置文件（智能体改不了自己的配置），文件工具只能访问工作区与知识库

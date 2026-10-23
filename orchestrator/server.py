@@ -56,7 +56,8 @@ TRANSPORT_SECURITY = TransportSecuritySettings(
 )
 
 
-NO_RETRY_NOTE = "\n本次运行每次暂停只允许一轮工具调用，并且关闭了自动重试：计划文件里的 retry 会被忽略。"
+NO_RETRY_NOTE = ("\n本次运行每次暂停只允许一轮工具调用：act 返回后只能再调用一轮工具，然后必须 act；"
+                 "推进至少 {n} 帧或因事件停下的 act 才恢复这一轮。自动重试关闭：计划文件里的 retry 会被忽略。")
 SHORT_ACT_NOTE = ("【注意】这次 act 只推进了很少几帧（少于 {n} 帧）、也没有因为事件停下，不算一次尝试："
                   "本次暂停的工具机会没有恢复，下一步请直接用 act 执行一段完整的尝试。")
 
@@ -76,6 +77,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     call_lock = asyncio.Lock()
 
     def begin() -> None:
+        if gate is not None:
+            gate.start()  # 第一次真正执行游戏工具：每次暂停一轮工具的限制从这里开始
         if not metrics.playing:
             # 第一次真正执行游戏工具：准备阶段结束，现实用时从这里开始
             metrics.start_play()
@@ -113,7 +116,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             finally:
                 finish()
 
-    act_description = ACT_DESCRIPTION + (NO_RETRY_NOTE if session.cfg.pause_limit else "")
+    act_description = ACT_DESCRIPTION + (NO_RETRY_NOTE.format(n=session.cfg.pause_min_frames) if session.cfg.pause_limit else "")
 
     @server.tool(name="act", description=act_description, structured_output=False)
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,

@@ -166,8 +166,8 @@ def scene_collection(cfg: dict) -> dict:
 
 
 def sync_hud_size(collection: Path, cfg: dict) -> bool:
-    """场景集合已存在时，只把 HUD 浏览器源的宽高改成配置里的值（HUD 页面变高后旧场景会把卡片底部切掉），
-    其他调整原样保留。OBS 退出时会写回场景集合，所以只在 OBS 没在运行时改。"""
+    """场景集合已存在时，只把 HUD 浏览器源的宽高与它在场景里的位置改成配置里的值（HUD 改尺寸后，旧场景会切掉
+    卡片或让它离开右上角），其他调整原样保留。OBS 退出时会写回场景集合，所以只在 OBS 没在运行时改。"""
     if obs_running():
         return False
     try:
@@ -182,6 +182,12 @@ def sync_hud_size(collection: Path, cfg: dict) -> bool:
             for key in ("width", "height"):
                 if settings.get(key) != hud[key]:
                     settings[key] = hud[key]
+                    changed = True
+        if source.get("id") == "scene":
+            for item in settings.get("items") or []:
+                pos = {"x": float(hud["x"]), "y": float(hud["y"])}
+                if item.get("name") == "HUD" and item.get("pos") != pos:
+                    item["pos"] = pos
                     changed = True
     if changed:
         collection.write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
@@ -198,7 +204,7 @@ def setup(cfg: dict, reset: bool = False) -> None:
     print(f"配置文件：{profile}{'（已更新）' if changed else ''}")
     if collection.exists() and not reset:
         resized = sync_hud_size(collection, cfg)
-        print(f"场景集合：{collection}（已存在，" + ("只把 HUD 浏览器源的尺寸更新为配置值" if resized else "未改动")
+        print(f"场景集合：{collection}（已存在，" + ("只把 HUD 浏览器源的尺寸与位置更新为配置值" if resized else "未改动")
               + "；要重建用 setup --reset）")
         return
     if collection.exists():

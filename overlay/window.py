@@ -3,7 +3,7 @@
 
 用法（仓库根目录；先启动主控或 `python -m overlay.server`）：
     python -m overlay.window
-    python -m overlay.window --width-ratio 0.22 --margin 0.02
+    python -m overlay.window --width-ratio 0.182 --margin 0.02
 
 主控运行时会自动启动它（--no-hud-window 关闭）。游戏窗口按进程名 Celeste.exe 查找（--game-title 可改成按标题找），
 不会认错成同名的资源管理器窗口。
@@ -36,7 +36,7 @@ SW_HIDE = 0
 SW_SHOWNOACTIVATE = 4
 
 HUD_TITLE = "Celeste AI HUD"
-HEIGHT_RATIO = 0.90   # 窗口高 / 宽：卡片最高约占 0.86（思考语句四到五行时），余下透明
+HEIGHT_RATIO = 1.01   # 窗口高 / 宽：卡片最高约占 0.97（思考语句五到六行时），余下透明
 
 
 def _user32():
@@ -214,7 +214,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://127.0.0.1:47790/hud")
     ap.add_argument("--game-title", default=None, help="按窗口标题找游戏窗口（默认按进程名 Celeste.exe 找）")
-    ap.add_argument("--width-ratio", type=float, default=0.22, help="HUD 宽度占游戏窗口宽度的比例")
+    ap.add_argument("--width-ratio", type=float, default=0.182, help="HUD 宽度占游戏窗口宽度的比例（1080p 下 350 像素）")
     ap.add_argument("--margin", type=float, default=0.02, help="距游戏窗口右上角的边距（占游戏窗口宽度的比例）")
     ap.add_argument("--interval", type=float, default=0.25, help="跟随游戏窗口的检查间隔（秒）")
     args = ap.parse_args()

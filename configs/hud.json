@@ -27,17 +27,15 @@
   "thought_check_s": 0,
   "poll_ms": 100,
   "colors": {
-    "card": "rgba(20, 23, 38, 0.78)",
-    "border": "rgba(255, 255, 255, 0.12)",
-    "text": "#F2F4F8",
-    "label": "#9AA3B8",
-    "track": "rgba(255, 255, 255, 0.12)",
-    "bar": "#5B8DEF",
+    "card": "rgba(16, 19, 34, 0.80)",
+    "border": "rgba(255, 255, 255, 0.10)",
+    "text": "#F3F5FA",
+    "label": "#8F9AB3",
     "warn": "#F08A3C",
     "dash0": "#5BC0EB",
     "dash1": "#E0475B",
     "dash2": "#F28AC4",
-    "effort": "#5B8DEF",
+    "effort": "#7FA6F5",
     "effort_high": "#F5B841",
     "thinking": "#F5B841",
     "executing": "#4CC38A",
@@ -45,12 +43,5 @@
     "retrying": "#F08A3C",
     "studying": "#7AA2F7",
     "idle": "#8A93A6"
-  },
-  "effort_names": {
-    "low": "低",
-    "medium": "中",
-    "high": "高",
-    "xhigh": "超高",
-    "max": "最高"
   }
 }

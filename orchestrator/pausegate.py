@@ -6,7 +6,8 @@
 怎么做：容器的托管配置里登记了 PreToolUse 钩子（agent-container/celeste-gate.py），Claude Code 每次调用
 工具之前都会问主控的 /gate。这里按 Claude Code 输出流里的 tool_use 所属的消息分组：一条消息里并行发起的
 几个调用算同一轮。规则：
-- 准备阶段（还没有调用过 observe 或 act）不受限制；第一次调用游戏工具时开始第一次暂停（这次调用本身不占预算）。
+- 准备阶段（游戏工具还没有真正执行过）不受限制；第一次执行游戏工具时开始第一次暂停（这次调用本身不占预算）。
+  注意不能看 metrics.playing：有准备阶段时，第一次游戏工具的钩子先于它开始计时。
   续跑时没有准备阶段：一开始就是一次暂停。
 - act 与 set_effort 不受限制。act 执行完、返回之后是一次新的暂停，预算重新计——但只有这一次 act 算得上
   一次尝试时才重新计：推进了至少 min_frames 帧，或者因为事件（死亡、换房间、落地、偏离预期……）停下。
@@ -19,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import time
 
-GAME_TOOLS = {"mcp__celeste__observe", "mcp__celeste__act"}
 EXEMPT = {"mcp__celeste__act", "mcp__celeste__set_effort"}
 
 DENY_REASON = ("这次暂停的工具机会已经用完：每次 act 之后只能再调用一轮工具（同一条消息里并行发起的几个调用算一轮）。"
@@ -68,15 +68,16 @@ class PauseGate:
             await asyncio.sleep(0.02)
         return None
 
-    async def decide(self, tool_name: str, tool_use_id: str | None) -> tuple[bool, str]:
-        if not self.enabled or not self.metrics.playing:
-            return True, ""
+    def start(self) -> None:
+        """游戏工具第一次真正执行（server.py 的 begin）：准备阶段结束，开始第一次暂停。
+        以执行为准、不以钩子里看到的调用为准：准备阶段知识库没读完时游戏工具不执行，不算开始。"""
         if not self._started:
-            if tool_name in GAME_TOOLS:
-                self._started = True   # 准备阶段结束：这次调用开始第一次暂停，本身不占预算
-                self.reset()
-            return True, ""
-        if tool_name in EXEMPT:
+            self._started = True
+            self.reset()
+
+    async def decide(self, tool_name: str, tool_use_id: str | None) -> tuple[bool, str]:
+        # 准备阶段（还没有真正执行过游戏工具）不受限制；第一次调用游戏工具本身也不占预算（它在 start 之前）
+        if not self.enabled or not self._started or tool_name in EXEMPT:
             return True, ""
         message = await self._message_of(tool_use_id) if tool_use_id else None
         message = message or f"?{tool_use_id}"
