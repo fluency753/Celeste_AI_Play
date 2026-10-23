@@ -33,6 +33,9 @@ local.props
 # 本机测试产物
 smoke/
 
+# 预置模拟器（由反编译代码移植，只放本机，不入库）
+sim/
+
 # 智能体的独立 Claude Code 配置目录（含登录态，不能提交）
 agent-home/
 
