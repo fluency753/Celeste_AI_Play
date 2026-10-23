@@ -274,6 +274,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
         except RecordingError:
             session.close()
             raise
+        session.before_advance = recorder.check_window
 
     server = build_server(session, study)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",

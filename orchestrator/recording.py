@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from . import gamewindow
 from .config import REPO_ROOT
 
 CONFIG = REPO_ROOT / "configs" / "recording.json"
@@ -155,6 +156,7 @@ class Recorder:
         if not clock.get("connected"):
             raise RecordingError("OBS 插件没有连上桥接的时钟端口：先运行 python tools/obs_setup.py launch 启动 OBS"
                                  "（插件构建见使用说明 4.4 节）")
+        gamewindow.ensure_visible(self.log)  # 游戏窗口最小化时 OBS 采不到画面
         self.call("record", action="start", dir=str(directory), ffmpeg=self.opts.ffmpeg, video_args=self.opts.video_args,
                   audio_offset_ms=self.opts.audio_offset_ms, marker=self.opts.marker)
         deadline = time.monotonic() + timeout
@@ -169,6 +171,11 @@ class Recorder:
                 return clock
             time.sleep(0.2)
         raise RecordingError(f"等待 OBS 插件开始录制超时（{timeout:g} 秒）：{plugin}")
+
+    def check_window(self) -> None:
+        """录制中每次推进游戏前调用：游戏窗口被最小化了就不激活地还原（否则这段录像没有游戏画面）。"""
+        if self.started:
+            gamewindow.ensure_visible(self.log)
 
     def stop(self, timeout: float = 900.0) -> dict | None:
         """停止录制并等 ffmpeg 收尾；返回结果摘要（也写进 recording/recording.json）。"""

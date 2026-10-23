@@ -158,6 +158,7 @@ class GameSession:
         self.start_sid: str | None = None
         self.decision_index = 0
         self.container: str | None = None   # 智能体容器（自动重试时在里面运行重算程序）
+        self.before_advance = None          # 每次推进游戏前调用（录制时：确认游戏窗口没有最小化）
         self._last_positions: dict = {}
         self._last_room = None
         # 依次通关多章：当前章节完成后，主控自动进入队列里的下一章
@@ -397,6 +398,7 @@ class GameSession:
         self.metrics.set_thought(thought)
         self.metrics.update(status="executing")
         extra = {"expect": plan.expect, "tolerance": plan.tolerance} if plan.expect else {}
+        self._before_advance()
         with self.lock:
             t0 = time.monotonic()
             reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
@@ -444,6 +446,7 @@ class GameSession:
         total, notes = 0, []
         skip_tries = 0  # 本段剧情已尝试跳过的次数
         self.metrics.update(status="auto")
+        self._before_advance()
         t0 = time.monotonic()
 
         def log_step(inputs: list[str], result: dict) -> None:
@@ -493,6 +496,14 @@ class GameSession:
                 obs, image = enrich_obs(reply["obs"]), reply.get("image")
         return obs, image, total, notes
 
+    def _before_advance(self) -> None:
+        """推进游戏之前的检查（录制时由 run.py 设成"确认游戏窗口没有最小化"）；出错不影响游玩。"""
+        if self.before_advance is not None:
+            try:
+                self.before_advance()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[run] 推进前检查出错（忽略）：{exc}", flush=True)
+
     # ---- 日志与统计 ----
 
     def _on_progress(self, event: dict) -> None:
@@ -531,6 +542,7 @@ class GameSession:
 
         split = (self.metrics.state.splits or [])[-1]
         chapter = self.chapter_queue.pop(0)
+        self._before_advance()
         self.metrics.update(status="auto", thought="")
         t0 = time.monotonic()
         enter_save(self.client, self.cfg.save, chapter=chapter, menu_speed=1)  # 正常速度，录像里不快进
