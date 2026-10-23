@@ -44,3 +44,6 @@ workspaces/
 
 # 知识库里的外部资料原文（celeste.ink 与草莓酱文本，用 tools/fetch_reference.py 在本机生成）
 kb/reference/
+
+# 本机笔记（交接材料等，只在本机）
+local/
