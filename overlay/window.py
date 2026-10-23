@@ -158,7 +158,20 @@ def main() -> int:
     if sys.platform != "win32":
         raise SystemExit("置顶窗口只支持 Windows；其他系统请在 OBS 或浏览器里打开 HUD 页面")
     set_dpi_awareness()
+    import urllib.request
     import webview  # noqa: WPS433（只在 Windows 上需要）
+
+    # HUD 服务还没起来时页面会加载失败且不会自动重试：先等服务就绪
+    waited = False
+    while True:
+        try:
+            urllib.request.urlopen(args.url, timeout=2).close()
+            break
+        except OSError:
+            if not waited:
+                print(f"等待 HUD 服务 {args.url} ……（启动主控或 python -m overlay.server）", flush=True)
+                waited = True
+            time.sleep(1)
 
     window = webview.create_window(HUD_TITLE, args.url, width=420, height=336, frameless=True, transparent=True,
                                    on_top=True, focus=False, resizable=False, easy_drag=False, shadow=False,
