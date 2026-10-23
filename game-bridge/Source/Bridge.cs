@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -16,7 +17,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.7.0";
+    public const string Version = "0.8.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -41,12 +42,26 @@ internal static class Bridge {
 
     public static void Tick(Action runOriginal) {
         DrainInbox();
+        FlushPendingAck();
+        UpdateLoopMode();
 
         if (!Active) {
             runOriginal();
             return;
         }
 
+        long before = Frame;
+        if (lockstepEngaged) {
+            LockstepTick(runOriginal);
+        } else {
+            NormalTick(runOriginal);
+        }
+        UpdateAudio(Frame != before);
+    }
+
+    // ---- 普通节拍：每个游戏循环推进 FramesPerTick 帧 ----
+
+    private static void NormalTick(Action runOriginal) {
         if (job == null) {
             if (IsLoading()) {
                 AdvanceFrame(runOriginal, InputFrame.Neutral);
@@ -71,6 +86,85 @@ internal static class Bridge {
             if (job.Finished) {
                 FinishJob();
             }
+        }
+    }
+
+    // ---- 锁步节拍：录制时由 OBS 的视频节拍驱动，每个令牌推进一帧 ----
+
+    private static bool lockstepEngaged;
+    private static long? pendingAck;
+    private static readonly Stopwatch SinceAdvance = Stopwatch.StartNew();
+    private static bool audioFrozen;
+
+    /// <summary>录制校准用：在画面左下角画出帧号条码（只在校准时打开）。</summary>
+    public static bool DrawFrameMarker;
+
+    private static void LockstepTick(Action runOriginal) {
+        bool wantsFrame = job != null || IsLoading();
+        // 没有要推进的帧时也要及时回复令牌；等待令牌的同时限制空转的循环频率
+        if (!ClockServer.TryTakeToken(wantsFrame ? 6 : 3, out long token)) {
+            Halt(runOriginal);
+            return;
+        }
+        if (!wantsFrame) {
+            ClockServer.Send($"N {token}");
+            Halt(runOriginal);
+            return;
+        }
+        if (IsLoading()) {
+            AdvanceFrame(runOriginal, InputFrame.Neutral);
+            if (job != null) job.LoadingFrames++;
+        } else {
+            AdvanceFrame(runOriginal, job!.NextInput());
+            job.AfterFrame(Frame);
+            if (job.Finished) {
+                FinishJob();
+            }
+        }
+        pendingAck = token; // 这一帧画到屏幕上之后（EndDraw）再回复，OBS 下一次渲染就能采到它
+    }
+
+    /// <summary>游戏把这一帧呈现到屏幕之后调用（FNA Game.EndDraw）。</summary>
+    public static void AfterPresent() => FlushPendingAck();
+
+    private static void FlushPendingAck() {
+        if (pendingAck is not { } token) return;
+        pendingAck = null;
+        long ticks = Engine.Scene is Level level ? level.Session.Time : 0;
+        ClockServer.Send($"F {token} {Frame} {ticks}");
+    }
+
+    /// <summary>锁步时改成不限速的游戏循环（关垂直同步），由令牌决定推进；结束后恢复原设置。</summary>
+    private static void UpdateLoopMode() {
+        bool want = Active && ClockServer.Connected && ClockServer.LockstepRequested;
+        if (want == lockstepEngaged) return;
+        lockstepEngaged = want;
+        try {
+            Engine.Instance.IsFixedTimeStep = !want;
+            Engine.Graphics.SynchronizeWithVerticalRetrace = !want && global::Celeste.Settings.Instance.VSync;
+            Engine.Graphics.ApplyChanges();
+        } catch (Exception ex) {
+            Log.Warn($"switching game loop mode failed: {ex.Message}");
+        }
+        Log.Info($"lockstep {(want ? "engaged" : "released")}");
+    }
+
+    /// <summary>游戏冻结时声音也冻结：超过 60 毫秒没有推进就暂停 FMOD 主总线，推进时立即恢复。</summary>
+    private static void UpdateAudio(bool advanced) {
+        if (advanced) {
+            SinceAdvance.Restart();
+            if (audioFrozen) SetAudioFrozen(false);
+        } else if (!audioFrozen && SinceAdvance.ElapsedMilliseconds > 60) {
+            SetAudioFrozen(true);
+        }
+    }
+
+    private static void SetAudioFrozen(bool frozen) {
+        audioFrozen = frozen;
+        try {
+            Audio.BusPaused("bus:/", frozen);
+        } catch (Exception ex) {
+            Log.Warn($"audio freeze failed: {ex.Message}");
         }
     }
 
@@ -103,6 +197,8 @@ internal static class Bridge {
             return;
         }
         InputInjector.Uninstall();
+        if (audioFrozen) SetAudioFrozen(false);
+        DrawFrameMarker = false;
         Active = false;
         engineHalted = true;
         FeedInputThisFrame = false;
@@ -192,7 +288,25 @@ internal static class Bridge {
                     w.WriteBoolean("active", Active);
                     w.WriteNumber("frame", Frame);
                     w.WriteString("scene", Engine.Scene?.GetType().Name ?? "none");
+                    w.WriteStartObject("clock");
+                    w.WriteBoolean("connected", ClockServer.Connected);
+                    w.WriteBoolean("lockstep", lockstepEngaged);
+                    w.WritePropertyName("plugin");
+                    if (ClockServer.PluginStatus is { } status) w.WriteRawValue(status, skipInputValidation: false);
+                    else w.WriteNullValue();
+                    w.WriteEndObject();
                 }));
+                break;
+
+            case "record":
+                // 转给 OBS 插件：{"action": "start" | "stop", "dir", "ffmpeg", "video_args", "audio_offset_ms"}
+                if (!ClockServer.Connected) {
+                    IpcServer.Send(Reply.Error(req.Id, "OBS plugin not connected to the clock port"));
+                    break;
+                }
+                DrawFrameMarker = GetBool(a, "marker", DrawFrameMarker);
+                ClockServer.Send("R " + a.GetRawText());
+                IpcServer.Send(Reply.Ok(req.Id, w => w.WriteBoolean("marker", DrawFrameMarker)));
                 break;
 
             case "activate":

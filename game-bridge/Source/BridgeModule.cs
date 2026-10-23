@@ -20,11 +20,13 @@ public class BridgeModule : EverestModule {
     public override void Load() {
         Hooks.Load();
         IpcServer.Start(Settings.Port);
+        ClockServer.Start(Settings.ClockPort);
         Log.Info($"loaded v{Bridge.Version}, listening on 127.0.0.1:{Settings.Port}");
     }
 
     public override void Unload() {
         IpcServer.Stop();
+        ClockServer.Stop();
         Bridge.Deactivate();
         Hooks.Unload();
     }
@@ -34,6 +36,10 @@ public class BridgeSettings : EverestModuleSettings {
     /// <summary>IPC 端口，只监听 127.0.0.1。</summary>
     [SettingIgnore]
     public int Port { get; set; } = 47774;
+
+    /// <summary>锁步时钟端口（OBS 插件连接），只监听 127.0.0.1。</summary>
+    [SettingIgnore]
+    public int ClockPort { get; set; } = 47776;
 }
 
 internal static class Log {

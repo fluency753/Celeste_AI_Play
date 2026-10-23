@@ -1,6 +1,9 @@
 using System;
+using System.Reflection;
 using Celeste;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
+using MonoMod.RuntimeDetour;
 using Mono.Cecil.Cil;
 using Monocle;
 using MonoMod.Cil;
@@ -13,7 +16,16 @@ namespace CelesteAI.Bridge;
 /// 这样冻结时游戏逻辑完全不推进，但窗口消息与绘制照常进行。
 /// </summary>
 internal static class Hooks {
+    private static Hook? endDrawHook;
+
     public static void Load() {
+        // FNA 的 Game.EndDraw 里调用 Present：钩在它之后，锁步时回复"这一帧已经呈现"
+        MethodInfo? endDraw = typeof(Game).GetMethod("EndDraw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (endDraw != null) {
+            endDrawHook = new Hook(endDraw, typeof(Hooks).GetMethod(nameof(OnEndDraw), BindingFlags.Static | BindingFlags.NonPublic)!);
+        } else {
+            Log.Error("Game.EndDraw not found; lockstep acks fall back to the next update");
+        }
         On.Celeste.Celeste.Update += OnCelesteUpdate;
         IL.Monocle.Engine.Update += ILEngineUpdate;
         On.Monocle.MInput.Update += OnMInputUpdate;
@@ -22,6 +34,8 @@ internal static class Hooks {
     }
 
     public static void Unload() {
+        endDrawHook?.Dispose();
+        endDrawHook = null;
         On.Celeste.Celeste.Update -= OnCelesteUpdate;
         IL.Monocle.Engine.Update -= ILEngineUpdate;
         On.Monocle.MInput.Update -= OnMInputUpdate;
@@ -31,7 +45,16 @@ internal static class Hooks {
 
     // 每个 FNA 节拍进入一次；由 Bridge 决定本节拍推进几帧
     private static void OnCelesteUpdate(On.Celeste.Celeste.orig_Update orig, global::Celeste.Celeste self, GameTime gameTime) {
-        Bridge.Tick(() => orig(self, gameTime));
+        // 接管期间每帧的时长固定为目标帧时长（锁步时游戏循环不限速，FNA 给出的实际间隔会变）
+        GameTime time = Bridge.Active ? new GameTime(gameTime.TotalGameTime, self.TargetElapsedTime) : gameTime;
+        Bridge.Tick(() => orig(self, time));
+    }
+
+    private delegate void OrigEndDraw(Game self);
+
+    private static void OnEndDraw(OrigEndDraw orig, Game self) {
+        orig(self);
+        Bridge.AfterPresent();
     }
 
     private static void ILEngineUpdate(ILContext il) {
@@ -61,7 +84,29 @@ internal static class Hooks {
 
     private static void OnRenderCore(On.Celeste.Celeste.orig_RenderCore orig, global::Celeste.Celeste self) {
         orig(self);
+        if (Bridge.DrawFrameMarker) {
+            DrawFrameMarker();
+        }
         Bridge.AfterRender();
+    }
+
+    /// <summary>录制校准：在窗口左下角画 16 格黑白条码，表示当前帧号的低 16 位（每格 12×12 像素，外加白框）。</summary>
+    private static void DrawFrameMarker() {
+        const int Cell = 12;
+        GraphicsDevice device = Engine.Instance.GraphicsDevice;
+        device.SetRenderTarget(null);
+        int width = device.PresentationParameters.BackBufferWidth;
+        int height = device.PresentationParameters.BackBufferHeight;
+        device.Viewport = new Viewport(0, 0, width, height);
+        int y = height - Cell - 4;
+        long frame = Bridge.Frame;
+        Draw.SpriteBatch.Begin();
+        Draw.Rect(0, y - 4, Cell * 16 + 8, Cell + 8, Color.White);
+        for (int bit = 0; bit < 16; bit++) {
+            bool on = ((frame >> bit) & 1) != 0;
+            Draw.Rect(4 + bit * Cell, y, Cell, Cell, on ? Color.Black : Color.White);
+        }
+        Draw.SpriteBatch.End();
     }
 
     // 接管期间让关卡加载等后台线程同步执行，保证逐帧推进的确定性（同 CelesteTAS）
