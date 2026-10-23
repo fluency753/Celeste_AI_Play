@@ -110,14 +110,18 @@ def per_pixel_alpha(window, hwnd) -> None:
         form.Invoke(Action(lambda: setattr(form, "BackColor", Color.Black)))
     except Exception as exc:  # noqa: BLE001
         print(f"设置窗体底色失败：{exc}", flush=True)
-    gdi32 = ctypes.windll.gdi32
-    gdi32.CreateRectRgn.restype = wt.HRGN
-    region = gdi32.CreateRectRgn(0, 0, -1, -1)
-    blur = DWM_BLURBEHIND(0x1 | 0x2, True, region, False)   # DWM_BB_ENABLE | DWM_BB_BLURREGION
-    result = ctypes.windll.dwmapi.DwmEnableBlurBehindWindow(wt.HWND(hwnd), ctypes.byref(blur))
-    gdi32.DeleteObject(region)
-    if result != 0:
-        print(f"DwmEnableBlurBehindWindow 失败：0x{result & 0xFFFFFFFF:08X}", flush=True)
+    try:
+        gdi32 = ctypes.windll.gdi32
+        gdi32.CreateRectRgn.restype = wt.HRGN
+        gdi32.DeleteObject.argtypes = [wt.HGDIOBJ]
+        region = gdi32.CreateRectRgn(0, 0, -1, -1)
+        blur = DWM_BLURBEHIND(0x1 | 0x2, True, region, False)   # DWM_BB_ENABLE | DWM_BB_BLURREGION
+        result = ctypes.windll.dwmapi.DwmEnableBlurBehindWindow(wt.HWND(hwnd), ctypes.byref(blur))
+        gdi32.DeleteObject(region)
+        if result != 0:
+            print(f"DwmEnableBlurBehindWindow 失败：0x{result & 0xFFFFFFFF:08X}", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"开启按像素透明失败：{exc}", flush=True)
 
 
 def make_overlay(user32, hwnd) -> None:
