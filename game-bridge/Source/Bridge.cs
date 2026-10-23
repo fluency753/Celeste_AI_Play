@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading;
 using Celeste;
 using Microsoft.Xna.Framework;
 using Celeste.Mod;
@@ -18,7 +19,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.8.2";
+    public const string Version = "0.8.3";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -104,14 +105,17 @@ internal static class Bridge {
         bool wantsFrame = job != null || IsLoading();
         // 没有要推进的帧时也要及时回复令牌；等待令牌的同时限制空转的循环频率
         if (!ClockServer.TryTakeToken(wantsFrame ? 6 : 3, out long token)) {
-            Halt(runOriginal);
+            HaltWithoutDrawing(runOriginal);
             return;
         }
         if (!wantsFrame) {
             ClockServer.Send($"N {token}");
-            Halt(runOriginal);
+            HaltWithoutDrawing(runOriginal);
             return;
         }
+        // OBS 的游戏采集钩子最多每 1/120 秒拷贝一次画面，离上一次呈现太近的那次呈现不会被拷贝：
+        // 停住时不重画（见 HaltWithoutDrawing），推进前再确认离上一次呈现已超过这个间隔
+        WaitSincePresent(MinPresentGapMs);
         if (IsLoading()) {
             AdvanceFrame(runOriginal, InputFrame.Neutral);
             if (job != null) job.LoadingFrames++;
@@ -131,6 +135,25 @@ internal static class Bridge {
             WaitForGpu();
         }
         FlushPendingAck();
+        SincePresent.Restart();
+    }
+
+    private const double MinPresentGapMs = 9.0;
+    private static readonly Stopwatch SincePresent = Stopwatch.StartNew();
+
+    private static void WaitSincePresent(double ms) {
+        // Thread.Sleep 的精度不够（可能睡 15 毫秒），这里只差几毫秒，直接空转等待
+        while (SincePresent.Elapsed.TotalMilliseconds < ms) {
+            Thread.SpinWait(200);
+        }
+    }
+
+    /// <summary>锁步时停住的节拍不重画：画面保持上一帧，也不占用 OBS 采集钩子的拷贝间隔。有截图请求时照常画。</summary>
+    private static void HaltWithoutDrawing(Action runOriginal) {
+        Halt(runOriginal);
+        if (PendingRenders.Count == 0) {
+            Engine.Instance.SuppressDraw();
+        }
     }
 
     private static readonly Color[] SyncPixel = new Color[1];
