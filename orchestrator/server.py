@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -63,23 +62,20 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     metrics = session.metrics
     ws_note = SIM_NOTE if session.cfg.sim else WORKSPACE_NOTE
     # 截图只在进入新房间时（以及主动 observe 时）附上；同时给出整个房间的实体与地图，平时只描述画面附近
-    state = {"last_return": time.monotonic(), "described_room": None}
+    # 思考与工具时间由主控按 Claude Code 输出流里的 tool_use / tool_result 事件统计（见 metrics.py），这里不计时
+    state = {"described_room": None}
 
     def room_key(obs: dict):
         level = obs.get("level") or {}
         return (level.get("sid"), level.get("room"))
     call_lock = asyncio.Lock()
 
-    def begin() -> float:
-        now = time.monotonic()
+    def begin() -> None:
         if not metrics.playing:
             # 第一次真正执行游戏工具：准备阶段结束，现实用时从这里开始
             metrics.start_play()
-            state["last_return"] = now
             print(f"[run] 开始游玩：准备阶段用时 {metrics.state.study_s:.0f} 秒"
                   + (f"，知识库已读 {study.progress():.0%}" if study else ""), flush=True)
-        metrics.add(thinking_s=now - state["last_return"])
-        return now
 
     def gated() -> str | None:
         """知识库没读完时不执行游戏工具，返回提示。"""
@@ -87,11 +83,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             return None
         return study.reminder()
 
-    def finish(t_start: float, game_s: float) -> None:
-        now = time.monotonic()
-        metrics.add(tool_s=max(0.0, (now - t_start) - game_s))
-        state["last_return"] = now
-        metrics.mark_thinking()
+    def finish() -> None:
         metrics.update(status="thinking")
 
     def clock_text() -> tuple[float, float]:
@@ -102,7 +94,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         async with call_lock:
             if (note := gated()) is not None:
                 return [note]
-            t0 = begin()
+            begin()
             try:
                 obs, image = await asyncio.to_thread(session.observe)
                 state["described_room"] = room_key(obs)
@@ -114,7 +106,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                                + ("\n" + ws_note if session.workspace else ""))
                 return content
             finally:
-                finish(t0, 0.0)
+                finish()
 
     @server.tool(name="act", description=ACT_DESCRIPTION, structured_output=False)
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
@@ -122,13 +114,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         async with call_lock:
             if (note := gated()) is not None:
                 return [note]
-            t0 = begin()
-            game_s = 0.0
-            auto_before = metrics.state.auto_game_s
+            begin()
             try:
                 outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file)
-                # 工具时间不含任何推进游戏的时间（动作块与自动推进段都算游戏时间）
-                game_s = outcome.game_s + (metrics.state.auto_game_s - auto_before)
                 parts = [describe_step(outcome.result)]
                 if len(outcome.attempts) > 1:
                     parts.insert(0, describe_attempts(outcome.attempts))
@@ -153,11 +141,11 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             except ActError as err:
                 return [f"动作未执行（没有消耗任何游戏帧）：{err}"]
             finally:
-                finish(t0, game_s)
+                finish()
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
     async def set_effort(level: str, reason: str = "") -> list:
-        # 不推进游戏、不受准备阶段限制，也不开始计现实用时；耗时可以忽略，算在思考时间里
+        # 不推进游戏、不受准备阶段限制，也不开始计现实用时；耗时可以忽略
         level = (level or "").strip().lower()
         if level not in EFFORT_LEVELS:
             return [f"无效的推理强度 {level!r}：只能是 {'、'.join(EFFORT_LEVELS)}。"]
@@ -172,9 +160,4 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         return [f"已登记：推理强度将从 {current} 切换为 {level}。现在请直接结束本轮（回复一句话，不再调用工具），"
                 f"系统会立即切换并让你继续；在本轮结束之前仍按 {current} 运行。"]
 
-    def reset_clock() -> None:
-        state["last_return"] = time.monotonic()
-        metrics.mark_thinking()
-
-    server.reset_clock = reset_clock  # type: ignore[attr-defined]
     return server

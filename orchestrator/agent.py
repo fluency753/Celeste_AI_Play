@@ -95,7 +95,7 @@ def _strip_images(value):
 
 class ClaudeRunner:
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
-                 token: str, reset_clock, container: str | None = None, study: KbStudy | None = None,
+                 token: str, container: str | None = None, study: KbStudy | None = None,
                  session_id: str | None = None, resume: bool = False, resume_note: str | None = None):
         """resume=True：用 --resume 接着 session_id 这个已有的会话（续跑）；resume_note 不为空时代替开局的第一条消息。"""
         self.cfg = cfg
@@ -105,7 +105,6 @@ class ClaudeRunner:
         self.session = session
         self.metrics = metrics
         self.token = token
-        self.reset_clock = reset_clock
         self.session_id = session_id or str(uuid.uuid4())
         self.resume = resume                     # True：用 --resume 接着已有的会话
         self.resume_note = resume_note
@@ -226,6 +225,7 @@ class ClaudeRunner:
     async def _run_process(self, workdir: Path, first: str) -> bool:
         """启动一个 Claude Code 进程并驱动到结束。返回 True 表示本次运行结束；False 表示因额度暂停，稍后续上。"""
         stderr_log = open(self.run_dir / "claude_stderr.log", "ab")
+        self.metrics.turn_end()  # 新的 Claude Code 进程：之前没收到结果的工具调用都不算了
         self._init_checked = False
         self._turn_done.clear()
         self.proc = await asyncio.create_subprocess_exec(
@@ -242,7 +242,6 @@ class ClaudeRunner:
                     if remaining <= 0:
                         self.study.force_open()
                         self.metrics.start_play()
-                        self.reset_clock()
                         print(f"[agent] 准备阶段到达上限 {self.study.minutes:g} 分钟，开始计时"
                               f"（知识库已读 {self.study.progress():.0%}）", flush=True)
                         continue
@@ -276,6 +275,7 @@ class ClaudeRunner:
                     await self._send(note + CONTINUE_PROMPT)
         finally:
             await self._shutdown(reader)
+            self.metrics.turn_end()
             stderr_log.close()
 
     def _effort_at_start(self) -> str:
@@ -356,7 +356,7 @@ class ClaudeRunner:
         self.turns += 1
         self._tool_calls_this_turn = 0
         await self._write(text)
-        self.reset_clock()
+        self.metrics.turn_begin()
         self.metrics.update(status=self._idle_status())
 
     async def _shutdown(self, reader: asyncio.Task) -> None:
@@ -474,7 +474,15 @@ class ClaudeRunner:
             for block in message.get("content") or []:
                 if block.get("type") == "tool_use":
                     self._tool_calls_this_turn += 1
-        elif etype == "user" and self.study is not None and self.study.finished is None:
+                    # 工具时间从这里开始，到对应的 tool_result 为止（见 metrics.py）
+                    self.metrics.tool_begin(str(block.get("id")), str(block.get("name", "")).startswith("mcp__celeste__"))
+        elif etype == "user":
+            content = (event.get("message") or {}).get("content")
+            for block in content if isinstance(content, list) else []:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    self.metrics.tool_end(str(block.get("tool_use_id")))
+            if self.study is None or self.study.finished is not None:
+                return
             if self.study.note_result(event):
                 print(f"[agent] 知识库已读完：{len(self.study.files)} 个文件，"
                       f"用时 {self.study.finished - self.study.started:.0f} 秒", flush=True)
@@ -521,4 +529,5 @@ class ClaudeRunner:
                              thinking_tokens=(usage.get("output_tokens_details") or {}).get("thinking_tokens", 0))
             print(f"[agent] 第 {self.turns} 轮结束：{subtype} is_error={event.get('is_error')} "
                   f"输出 {usage.get('output_tokens', 0)} token", flush=True)
+            self.metrics.turn_end()
             self._turn_done.set()

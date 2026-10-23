@@ -1,8 +1,11 @@
 """运行统计：思考时间、工具时间、游戏推进时间、上下文大小、压缩次数等。
 
 统计口径与设计文档第 4.5 节一致：
-- 思考时间：工具结果送回之后，到智能体发起下一次工具调用之间的墙钟时间（含模型推理与输出）。
-- 工具时间：工具处理耗时减去其中真正推进游戏的耗时。
+- 一轮（主控发出消息到 Claude Code 报告这一轮结束）里的每一刻，要么算思考，要么算工具：
+  有工具在运行（输出流里出现 tool_use、还没收到对应的 tool_result）时算工具时间，没有时算思考时间（含模型推理、
+  输出与上下文压缩）。工具包括容器里的 Bash、Read、Write 等和游戏工具；同时运行几个工具只算一份时间。
+- 工具时间里扣掉游戏真正推进的时间（act 的动作块、转场与剧情的自动推进），那部分记为游戏推进时间；
+  自动重试时重算程序的用时算工具时间。两轮之间、准备阶段、等待额度时都不计。
 - 游戏推进时间：桥接逐帧推进所用的墙钟时间（动作块与自动推进段分开记）。
 - 准备时间：开始游玩前读知识库、写笔记与程序的墙钟时间，单独记，不计入现实用时；
   现实用时从第一次真正执行游戏工具时开始（没有准备阶段时从启动时开始）。
@@ -30,7 +33,7 @@ class MetricsState:
     effort_pending: str | None = None  # 智能体用 set_effort 申请、本轮结束后才生效的强度
     effort_changes: int = 0           # 推理强度实际切换的次数
     effort_log: list | None = None    # 每次切换：[{"t": 现实用时, "from", "to", "chapter", "room", "reason"}, ...]
-    status: str = "starting"         # starting / studying / thinking / executing / auto / retrying / compacting / quota_wait / done / stopped
+    status: str = "starting"         # starting / studying / thinking / tool / executing / auto / retrying / compacting / quota_wait / done / stopped
     started_wall: float = 0.0
     elapsed_s: float = 0.0
     budget_s: float = 0.0
@@ -70,7 +73,7 @@ class MetricsState:
     thinking_tokens: int = 0
     # HUD 用来在两次写入之间自己走表的时间点（墙钟，秒）
     phase_since_wall: float = 0.0     # 当前 status 开始的时刻
-    thinking_since_wall: float = 0.0  # 当前这段思考开始的时刻（上一次工具结果送回）
+    thinking_since_wall: float = 0.0  # 当前这一段（思考，或运行容器工具）开始的时刻
     chapter_time_wall: float = 0.0    # chapter_time_ticks 最近一次更新的时刻
     written_wall: float = 0.0         # 本文件最近一次写出的时刻
 
@@ -84,6 +87,10 @@ class Metrics:
         self._paused = 0.0              # 从 _t0 起暂停（等待额度）的总秒数
         self._pause_start: float | None = None
         self._effort_reason = ""
+        self._in_turn = False           # 智能体正在进行一轮（主控发出消息之后、这一轮结束之前）
+        self._tools: set[str] = set()   # 正在运行的工具调用（tool_use 的编号）
+        self._seg_mark = time.monotonic()  # 上一次把时间结算进思考或工具的时刻
+        self._seg_game = 0.0            # 那一刻的游戏推进时间累计
         self.playing = not study
         now = time.time()
         self.state = MetricsState(agent=agent, model=model, effort=effort,
@@ -101,11 +108,66 @@ class Metrics:
         """现实用时（准备阶段与等待额度的时间不算）。"""
         return self._offset + self._running(time.monotonic()) if self.playing else 0.0
 
+    # ---- 思考与工具时间 ----
+
+    def _flush_locked(self) -> None:
+        """把上一次结算到现在的这一段记进思考或工具时间（规则见模块说明）。"""
+        now = time.monotonic()
+        game = self.state.play_game_s + self.state.auto_game_s
+        dt = now - self._seg_mark
+        if self.playing and self._in_turn and self._pause_start is None and dt > 0:
+            if self._tools:
+                self.state.tool_s += max(0.0, dt - max(0.0, game - self._seg_game))
+            else:
+                self.state.thinking_s += dt
+        self._seg_mark, self._seg_game = now, game
+        self.state.thinking_since_wall = time.time()
+
+    def turn_begin(self) -> None:
+        """主控给智能体发出一条消息：一轮开始。"""
+        with self._lock:
+            self._flush_locked()
+            self._in_turn = True
+            self._write_locked()
+
+    def turn_end(self) -> None:
+        """Claude Code 报告这一轮结束（或进程退出）。"""
+        with self._lock:
+            self._flush_locked()
+            self._in_turn = False
+            self._tools.clear()
+            self._write_locked()
+
+    def tool_begin(self, tool_id: str, game_tool: bool = False) -> None:
+        """输出流里出现一次工具调用。容器工具（Bash 等）把状态切成"运行工具"；游戏工具的状态由游戏会话设置。"""
+        with self._lock:
+            if tool_id in self._tools:
+                return
+            self._flush_locked()
+            self._tools.add(tool_id)
+            if not game_tool and self.playing and self.state.status in ("thinking", "starting"):
+                self.state.status = "tool"
+                self.state.phase_since_wall = time.time()
+            self._write_locked()
+
+    def tool_end(self, tool_id: str) -> None:
+        """输出流里出现这次工具调用的结果。"""
+        with self._lock:
+            if tool_id not in self._tools:
+                return
+            self._flush_locked()
+            self._tools.discard(tool_id)
+            if not self._tools and self.playing and self.state.status in ("tool", "executing", "auto", "retrying"):
+                self.state.status = "thinking"
+                self.state.phase_since_wall = time.time()
+            self._write_locked()
+
     def start_play(self) -> None:
         """准备阶段结束，开始计现实用时。"""
         with self._lock:
             if self.playing:
                 return
+            self._flush_locked()  # 准备阶段的时间不计入思考与工具
             now = time.monotonic()
             self.state.study_s = self._running(now)
             self._t0 = now
@@ -121,6 +183,9 @@ class Metrics:
     def pause(self, until_wall: float | None = None) -> None:
         """等待额度重置：现实用时（或准备时间）停止走表。"""
         with self._lock:
+            self._flush_locked()
+            self._in_turn = False
+            self._tools.clear()
             if self._pause_start is None:
                 self._pause_start = time.monotonic()
             now = time.time()
@@ -167,6 +232,9 @@ class Metrics:
             self.state.resumed_from = resumed_from
             self.state.status = "starting"
             self.state.phase_since_wall = self.state.thinking_since_wall = now
+            self._in_turn = False
+            self._tools.clear()
+            self._seg_mark, self._seg_game = time.monotonic(), self.state.play_game_s + self.state.auto_game_s
             self._write_locked()
 
     def update(self, **changes) -> None:

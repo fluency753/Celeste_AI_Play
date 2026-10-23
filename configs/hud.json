@@ -39,6 +39,7 @@
     "effort_high": "#F5B841",
     "thinking": "#F5B841",
     "executing": "#4CC38A",
+    "tool": "#9D8CF2",
     "retrying": "#F08A3C",
     "studying": "#7AA2F7",
     "idle": "#8A93A6"

@@ -3,7 +3,10 @@
 
 用法（仓库根目录；先启动主控或 `python -m overlay.server`）：
     python -m overlay.window
-    python -m overlay.window --width-ratio 0.22 --margin 0.02 --game-title Celeste
+    python -m overlay.window --width-ratio 0.22 --margin 0.02
+
+主控运行时会自动启动它（--no-hud-window 关闭）。游戏窗口按进程名 Celeste.exe 查找（--game-title 可改成按标题找），
+不会认错成同名的资源管理器窗口。
 
 需要 pywebview（pip install pywebview，使用系统自带的 WebView2）。游戏需运行在窗口化或无边框全屏模式。
 """
@@ -15,6 +18,7 @@ import ctypes.wintypes as wt
 import sys
 import threading
 import time
+from pathlib import Path
 
 GWL_EXSTYLE = -20
 WS_EX_TOPMOST = 0x00000008
@@ -43,6 +47,12 @@ def _user32():
     user32.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
     user32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
     user32.FindWindowW.restype = wt.HWND
+    user32.IsWindow.argtypes = [wt.HWND]
+    user32.IsIconic.argtypes = [wt.HWND]
+    user32.IsWindowVisible.argtypes = [wt.HWND]
+    user32.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+    user32.ClientToScreen.argtypes = [wt.HWND, ctypes.POINTER(wt.POINT)]
+    user32.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
     user32.GetForegroundWindow.restype = wt.HWND
     user32.SetForegroundWindow.argtypes = [wt.HWND]
     return user32
@@ -59,9 +69,25 @@ def set_dpi_awareness() -> None:
             ctypes.windll.user32.SetProcessDPIAware()
 
 
-def game_client_rect(user32, title: str):
+_game_hwnd = {"value": None}
+
+
+def find_game(user32, title: str | None):
+    """游戏窗口：给了标题就按标题找；否则按进程名 Celeste.exe 找（找到后缓存，窗口还在就不再枚举）。"""
+    if title:
+        return user32.FindWindowW(None, title)
+    hwnd = _game_hwnd["value"]
+    if hwnd and user32.IsWindow(hwnd):
+        return hwnd
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from orchestrator.gamewindow import find_game_window  # noqa: WPS433
+    _game_hwnd["value"] = find_game_window()
+    return _game_hwnd["value"]
+
+
+def game_client_rect(user32, title: str | None):
     """游戏窗口客户区在屏幕上的位置与大小（物理像素）；找不到或最小化时返回 None。"""
-    hwnd = user32.FindWindowW(None, title)
+    hwnd = find_game(user32, title)
     if not hwnd or user32.IsIconic(hwnd) or not user32.IsWindowVisible(hwnd):
         return None
     rect = wt.RECT()
@@ -76,9 +102,9 @@ class MONITORINFO(ctypes.Structure):
     _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
 
 
-def monitor_work_area(user32, title: str):
+def monitor_work_area(user32, title: str | None):
     """游戏窗口所在显示器的工作区（物理像素）。"""
-    hwnd = user32.FindWindowW(None, title)
+    hwnd = find_game(user32, title)
     if not hwnd:
         return None
     user32.MonitorFromWindow.restype = wt.HMONITOR
@@ -187,7 +213,7 @@ def follow(window, args) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://127.0.0.1:47790/hud")
-    ap.add_argument("--game-title", default="Celeste", help="游戏窗口标题")
+    ap.add_argument("--game-title", default=None, help="按窗口标题找游戏窗口（默认按进程名 Celeste.exe 找）")
     ap.add_argument("--width-ratio", type=float, default=0.22, help="HUD 宽度占游戏窗口宽度的比例")
     ap.add_argument("--margin", type=float, default=0.02, help="距游戏窗口右上角的边距（占游戏窗口宽度的比例）")
     ap.add_argument("--interval", type=float, default=0.25, help="跟随游戏窗口的检查间隔（秒）")

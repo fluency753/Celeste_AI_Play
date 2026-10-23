@@ -136,6 +136,7 @@ const STATUS = {
   starting:  ["等待", "idle", false],
   studying:  ["准备中", "studying", true],
   thinking:  ["思考中", "thinking", true],
+  tool:      ["运行工具", "tool", true],
   compacting:["压缩上下文", "thinking", true],
   executing: ["执行中", "executing", false],
   auto:      ["自动推进", "idle", false],
@@ -251,7 +252,9 @@ function render() {
     thinking += Math.max(0, now - m.thinking_since_wall);
   }
   $("thinking").textContent = clock(thinking);
+  // 工具时间：容器里的 Bash、Read 等与游戏工具从调用到返回的时间（不含游戏推进）；运行工具时同样实时走表
   let tool = m.tool_s || 0;
+  if (playing && !ended && m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
   if (m.status === "retrying" && m.phase_since_wall > 0) tool += Math.max(0, now - m.phase_since_wall);
   $("tool").textContent = clock(tool);
 

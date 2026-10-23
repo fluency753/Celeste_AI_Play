@@ -14,8 +14,10 @@ import argparse
 import asyncio
 import json
 import os
+import importlib.util
 import shutil
 import socket
+import subprocess
 import sys
 import time
 import uuid
@@ -58,7 +60,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="可选：Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）就提前暂停智能体、等额度重置后接着玩；"
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
-    ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务")
+    ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
+    ap.add_argument("--no-hud-window", action="store_true",
+                    help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
     ap.add_argument("--record", action="store_true",
                     help="用 OBS 锁步录制：只录游戏真正推进的帧，成片在日志目录的 recording/ 下（需要先启动 OBS）")
     ap.add_argument("--record-marker", action="store_true", help="录制时在画面左下角画帧号条码（只用于校准）")
@@ -227,6 +231,37 @@ def backup_save(obs: dict, run_dir: Path) -> None:
           else "[run] 提示：存档文件还不存在，跳过备份", flush=True)
 
 
+def start_hud_window(port: int, run_dir: Path) -> subprocess.Popen | None:
+    """在屏幕上打开置顶 HUD 窗口（只在 Windows）：贴在游戏窗口右上角、点击穿透、不抢焦点，游戏最小化时隐藏。
+    录像里的 HUD 来自 OBS 的浏览器源，与它无关；OBS 的游戏采集也采不到这个窗口，所以录像里不会出现两份。"""
+    if sys.platform != "win32":
+        return None
+    import ctypes  # noqa: WPS433
+
+    if ctypes.windll.user32.FindWindowW(None, "Celeste AI HUD"):
+        print("[run] 置顶 HUD 窗口已经开着，沿用", flush=True)
+        return None
+    if importlib.util.find_spec("webview") is None:
+        print("[run] 提示：没装 pywebview，不打开置顶 HUD 窗口（.venv 里 pip install -r requirements.txt）", flush=True)
+        return None
+    log = open(run_dir / "hud_window.log", "ab")
+    proc = subprocess.Popen([sys.executable, "-m", "overlay.window", "--url", f"http://127.0.0.1:{port}/hud"],
+                            cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT,
+                            creationflags=0x08000000)  # CREATE_NO_WINDOW：不弹出控制台
+    print("[run] 已打开置顶 HUD 窗口（贴在游戏窗口右上角；--no-hud-window 关闭）", flush=True)
+    return proc
+
+
+def stop_hud_window(proc: subprocess.Popen | None) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
 def port_free(port: int) -> bool:
     with socket.socket() as s:
         try:
@@ -253,6 +288,15 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
         hud = start_in_thread(args.hud_port)
         print(f"[run] HUD：http://127.0.0.1:{args.hud_port}/hud"
               + ("" if hud else "（端口已被占用，沿用已在运行的 HUD 服务）"), flush=True)
+    hud_window = None if (args.no_hud or args.no_hud_window) else start_hud_window(args.hud_port, run_dir)
+    try:
+        return await _run_session(cfg, args, run_dir, token, previous, study, metrics)
+    finally:
+        stop_hud_window(hud_window)
+
+
+async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, token: str | None,
+                       previous: dict | None, study: KbStudy | None, metrics: Metrics) -> dict:
     session = GameSession(cfg, run_dir, metrics)
     obs = session.connect()
     print(f"[run] 已接管游戏：{obs['level']['sid']} 房间 {obs['level']['room']}，存档 {cfg.save}", flush=True)
@@ -308,7 +352,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
                 else:
                     note = ("（系统）主控中断后续跑，这是一个新的会话：之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。"
                             "游戏一直冻结在中断时的那一帧，章节计时没有走。先看一遍 /workspace/notes.md，再调用 observe 继续游玩。")
-            runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", server.reset_clock, container, study,
+            runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", container, study,
                                   session_id=session_id, resume=resumed_session is not None, resume_note=note)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
