@@ -24,6 +24,10 @@ internal static class InputInjector {
     private const Buttons GrabButton = Buttons.X;
     private const Buttons TalkButton = Buttons.Y;
     private const Buttons CrouchDashButton = Buttons.RightShoulder;
+    // 第二套键（摇杆按下与左肩键在接管期间没有别的绑定）
+    private const Buttons Jump2Button = Buttons.LeftShoulder;
+    private const Buttons Dash2Button = Buttons.LeftStick;
+    private const Buttons CrouchDash2Button = Buttons.RightStick;
 
     // 菜单动作：键盘，避免与游戏内动作共用按钮
     private const Keys ConfirmKey = Keys.NumPad0;
@@ -61,11 +65,11 @@ internal static class InputInjector {
         Set(settings, "MenuRight", Buttons.DPadRight, Buttons.LeftThumbstickRight);
         Set(settings, "MenuUp", Buttons.DPadUp, Buttons.LeftThumbstickUp);
         Set(settings, "MenuDown", Buttons.DPadDown, Buttons.LeftThumbstickDown);
-        Set(settings, "Jump", JumpButton);
-        Set(settings, "Dash", DashButton);
+        Set(settings, "Jump", JumpButton, Jump2Button);
+        Set(settings, "Dash", DashButton, Dash2Button);
         Set(settings, "Grab", GrabButton);
         Set(settings, "Talk", TalkButton);
-        Set(settings, "DemoDash", CrouchDashButton);
+        Set(settings, "DemoDash", CrouchDashButton, CrouchDash2Button);
         SetKey(settings, "Confirm", ConfirmKey);
         SetKey(settings, "Cancel", BackKey);
         SetKey(settings, "Pause", PauseKey);
@@ -140,6 +144,9 @@ internal static class InputInjector {
         if (input.Has(Act.Grab)) buttons |= GrabButton;
         if (input.Has(Act.Talk)) buttons |= TalkButton;
         if (input.Has(Act.CrouchDash)) buttons |= CrouchDashButton;
+        if (input.Has(Act.Jump2)) buttons |= Jump2Button;
+        if (input.Has(Act.Dash2)) buttons |= Dash2Button;
+        if (input.Has(Act.CrouchDash2)) buttons |= CrouchDash2Button;
         if (input.AngleDeg == null) {
             if (input.Has(Act.Up)) buttons |= Buttons.DPadUp;
             if (input.Has(Act.Down)) buttons |= Buttons.DPadDown;

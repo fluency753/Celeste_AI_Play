@@ -21,6 +21,7 @@ STOP_TEXT = {
     "refill": "冲刺次数恢复",
     "complete": "章节完成",
     "cancelled": "被取消",
+    "deviate": "偏离预期轨迹",
 }
 
 
@@ -298,9 +299,42 @@ def describe_obs(obs: dict, elapsed_s: float, budget_s: float, full_room: bool =
     return "\n".join(lines)
 
 
+def describe_deviation(dev: dict, tolerance: float) -> str:
+    exp, act = dev.get("expected") or [], dev.get("actual") or []
+    exp_text = f"({exp[0]:.2f}, {exp[1]:.2f}{', ' + exp[2] if len(exp) > 2 else ''})" if len(exp) >= 2 else "?"
+    if len(act) >= 2 and act[0] is not None:
+        act_text = f"({act[0]:.2f}, {act[1]:.2f}, {act[2] if len(act) > 2 else '?'})"
+        diff = f"，差 ({act[0] - exp[0]:+.2f}, {act[1] - exp[1]:+.2f})"
+    else:
+        act_text, diff = "(Madeline 不在场)", ""
+    return (f"计划第 {dev.get('index')} 帧（全局帧 {dev.get('frame')}）偏离预期：预期 {exp_text}，实际 {act_text}{diff}，"
+            f"容差 {tolerance:g} 像素")
+
+
+def describe_attempts(attempts: list[dict]) -> str:
+    """自动重试的经过：每次执行与每次重算各一行。"""
+    lines = ["自动重试经过："]
+    for a in attempts:
+        if a["kind"] == "execute":
+            text = f"  第 {a['attempt'] + 1} 次执行：{a['consumed']}/{a['planned']} 帧，{STOP_TEXT.get(a['stop'], a['stop'])}"
+            if a.get("deviation"):
+                text += f"（计划第 {a['deviation'].get('index')} 帧）"
+        else:
+            text = (f"  重算 {a['attempt']}（原因：{STOP_TEXT.get(a['reason'], a['reason'])}）："
+                    f"{'超时' if a.get('timed_out') else '退出码 ' + str(a['returncode'])}，{a['seconds']:.1f} 秒")
+            if a.get("error"):
+                text += f"；{a['error'].strip()[-300:]}"
+        lines.append(text)
+    return "\n".join(lines)
+
+
 def describe_step(result: dict, max_rows: int = 30) -> str:
     stop = result.get("stop", "?")
     lines = [f"执行了 {result['consumed']}/{result['planned']} 帧，停止原因：{STOP_TEXT.get(stop, stop)}"]
+    if result.get("expectFrames"):
+        lines.append(f"预期轨迹：对照了前 {result['expectFrames']} 帧，容差 {result.get('tolerance', 1):g} 像素")
+    if result.get("deviation"):
+        lines.append(describe_deviation(result["deviation"], result.get("tolerance", 1)))
     events = result.get("events") or []
     if events:
         lines.append("事件：" + "；".join(

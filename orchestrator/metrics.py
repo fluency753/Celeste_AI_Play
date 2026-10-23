@@ -23,7 +23,7 @@ class MetricsState:
     agent: str = ""
     model: str = ""
     effort: str = ""
-    status: str = "starting"          # starting / studying / thinking / executing / auto / compacting / done / stopped
+    status: str = "starting"          # starting / studying / thinking / executing / auto / retrying / compacting / done / stopped
     started_wall: float = 0.0
     elapsed_s: float = 0.0
     budget_s: float = 0.0
@@ -38,6 +38,8 @@ class MetricsState:
     context_tokens: int = 0
     compactions: int = 0
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）
+    retries: int = 0                  # 自动重试次数（重算程序运行次数，不唤醒大模型）
+    replan_s: float = 0.0             # 重算程序用时（已包含在工具时间里）
     study_s: float = 0.0              # 准备阶段（读知识库等）用时，不计入 elapsed_s
     kb_progress: float | None = None  # 知识库已读比例（0~1）；None = 没有准备阶段
     chapter: str = ""

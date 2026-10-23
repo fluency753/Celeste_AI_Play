@@ -133,6 +133,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
             if cfg.runtime == "container":
                 container = await asyncio.to_thread(ensure_container, cfg, lambda m: print(m, flush=True))
                 print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
+                session.container = container
             runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", server.reset_clock, container, study)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)

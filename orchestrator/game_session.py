@@ -5,22 +5,97 @@ import json
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .config import REPO_ROOT, RunConfig
 from .metrics import Metrics
 from .observation import enrich_obs
+from .sandbox import run_program
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
 from cutscene import skip_by_pause_menu  # noqa: E402
 
-LETTERS = set("LRUDJXZGTCBPN")       # 桥接认识的全部按键
-AGENT_LETTERS = set("LRUDJXZGT")     # 智能体只能用游玩按键；暂停、确认、返回等菜单键由主控使用
+LETTERS = set("LRUDJXZGTKYVCBPN")    # 桥接认识的全部按键
+AGENT_LETTERS = set("LRUDJXZGTKYV")  # 智能体只能用游玩按键；暂停、确认、返回等菜单键由主控使用
+AGENT_KEYS_TEXT = "L R U D J X Z G T K Y V，以及 A:角度"
 DEFAULT_STOP_ON = ["death", "room", "complete"]
 VALID_STOP_ON = {"death", "room", "uncontrollable", "controllable", "land", "refill", "complete"}
 END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
+
+# 自动重试：计划文件里声明重算程序，死亡或偏离预期时由主控在零网络沙箱里运行它，不唤醒大模型
+RETRY_REASONS = {"death", "deviate", "done"}
+DEFAULT_RETRY_ON = ("death", "deviate")
+MAX_RETRIES = 5
+MAX_RETRY_TIMEOUT_S = 60.0
+
+
+@dataclass
+class RetrySpec:
+    command: str
+    max: int = 3
+    timeout_s: float = 20.0
+    on: tuple[str, ...] = DEFAULT_RETRY_ON
+
+
+@dataclass
+class PlanSpec:
+    inputs: list[str]
+    expect: list | None = None
+    tolerance: float = 1.0
+    stop_on: list[str] | None = None
+    retry: RetrySpec | None = None
+    text: str = ""          # 计划文件原文，用来判断重算程序有没有改动计划
+
+
+def _number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def parse_plan(data, text: str = "") -> PlanSpec:
+    """计划文件：按键段数组 ["12,R", "1,R,J"]，或对象 {"inputs", "expect", "tolerance", "stop_on", "retry"}。"""
+    if isinstance(data, list):
+        data = {"inputs": data}
+    if not isinstance(data, dict):
+        raise ActError('计划文件必须是按键段数组，或含 "inputs" 的对象')
+    inputs = data.get("inputs")
+    if not isinstance(inputs, list) or not all(isinstance(x, str) for x in inputs):
+        raise ActError('计划文件的 "inputs" 必须是按键段数组，例如 ["12,R", "1,R,J"]')
+    expect = data.get("expect")
+    if expect is not None:
+        if not isinstance(expect, list):
+            raise ActError('"expect" 必须是数组：每帧一项，null（不检查）、[x, y] 或 [x, y, "状态名"]')
+        for i, row in enumerate(expect):
+            if row is None:
+                continue
+            if (not isinstance(row, list) or len(row) < 2 or not _number(row[0]) or not _number(row[1])
+                    or (len(row) >= 3 and row[2] is not None and not isinstance(row[2], str))):
+                raise ActError(f'"expect" 第 {i + 1} 项格式不对：应为 null、[x, y] 或 [x, y, "状态名"]')
+    tolerance = data.get("tolerance", 1.0)
+    if not _number(tolerance) or tolerance < 0:
+        raise ActError('"tolerance" 必须是非负数（像素）')
+    stop_on = data.get("stop_on")
+    if stop_on is not None and (not isinstance(stop_on, list) or not all(isinstance(x, str) for x in stop_on)):
+        raise ActError('"stop_on" 必须是字符串数组')
+    retry = None
+    raw = data.get("retry")
+    if raw is not None:
+        if not isinstance(raw, dict) or not isinstance(raw.get("command"), str) or not raw["command"].strip():
+            raise ActError('"retry" 必须是对象，并给出 "command"（在 /workspace 下运行的命令）')
+        if len(raw["command"]) > 500:
+            raise ActError('"retry.command" 太长（最多 500 字符），请写成脚本')
+        count = raw.get("max", 3)
+        timeout_s = raw.get("timeout_s", 20)
+        on = raw.get("on", list(DEFAULT_RETRY_ON))
+        if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_RETRIES:
+            raise ActError(f'"retry.max" 必须是 1～{MAX_RETRIES} 的整数')
+        if not _number(timeout_s) or not 1 <= timeout_s <= MAX_RETRY_TIMEOUT_S:
+            raise ActError(f'"retry.timeout_s" 必须在 1～{MAX_RETRY_TIMEOUT_S:g} 秒之间')
+        if not isinstance(on, list) or not on or not set(on) <= RETRY_REASONS:
+            raise ActError(f'"retry.on" 必须是 {sorted(RETRY_REASONS)} 的非空子集')
+        retry = RetrySpec(raw["command"].strip(), count, float(timeout_s), tuple(on))
+    return PlanSpec(list(inputs), expect, float(tolerance), stop_on, retry, text)
 
 
 class ActError(ValueError):
@@ -35,6 +110,7 @@ class ActOutcome:
     game_s: float
     auto_frames: int
     auto_notes: list[str]
+    attempts: list[dict] = field(default_factory=list)   # 每次执行与每次重算的摘要（有自动重试时多于一项）
 
 
 def expand_inputs(inputs: list[str], max_frames: int, allowed: set[str] = AGENT_LETTERS) -> list[str]:
@@ -60,7 +136,7 @@ def expand_inputs(inputs: list[str], max_frames: int, allowed: set[str] = AGENT_
                 except ValueError as exc:
                     raise ActError(f"角度写法错误：{t}") from exc
             elif not set(t) <= allowed:
-                raise ActError(f"未知按键 {t!r}；可用：L R U D J X Z G T，以及 A:角度")
+                raise ActError(f"未知按键 {t!r}；可用：{AGENT_KEYS_TEXT}")
         frames.extend([",".join(tokens)] * n)
         if len(frames) > max_frames:
             raise ActError(f"一次最多推进 {max_frames} 帧，请拆成多次 act")
@@ -80,6 +156,7 @@ class GameSession:
         self.done_reason = ""
         self.start_sid: str | None = None
         self.decision_index = 0
+        self.container: str | None = None   # 智能体容器（自动重试时在里面运行重算程序）
         self._last_positions: dict = {}
         self._last_room = None
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
@@ -140,8 +217,7 @@ class GameSession:
 
     # ---- 工作区数据 ----
 
-    def resolve_plan_file(self, plan_file: str) -> list[str]:
-        """读取工作区里的计划文件：JSON 数组 ["12,R", "1,R,J"]，或 {"inputs": [...]}。"""
+    def _plan_path(self, plan_file: str) -> Path:
         if not self.workspace:
             raise ActError("本次运行没有工作区，不能使用 plan_file，请直接传 inputs")
         rel = plan_file.strip()
@@ -150,16 +226,19 @@ class GameSession:
         path = (self.workspace / rel).resolve()
         if self.workspace.resolve() not in path.parents:
             raise ActError(f"plan_file 必须在 /workspace 下：{plan_file}")
+        return path
+
+    def resolve_plan_file(self, plan_file: str) -> PlanSpec:
+        """读取工作区里的计划文件（格式见 parse_plan 与知识库 game_data.md）。"""
+        path = self._plan_path(plan_file)
         if not path.is_file():
             raise ActError(f"找不到计划文件 {plan_file}")
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            data = json.loads(text)
         except (OSError, ValueError) as exc:
             raise ActError(f"计划文件不是合法的 JSON：{exc}") from exc
-        inputs = data.get("inputs") if isinstance(data, dict) else data
-        if not isinstance(inputs, list) or not all(isinstance(x, str) for x in inputs):
-            raise ActError('计划文件的内容必须是按键段数组，例如 ["12,R", "1,R,J"]，或 {"inputs": [...]}')
-        return inputs
+        return parse_plan(data, text)
 
     def _write_json(self, rel: str, data) -> None:
         path = self.workspace / rel
@@ -192,12 +271,78 @@ class GameSession:
         if plan_file:
             if inputs:
                 raise ActError("inputs 与 plan_file 只能二选一")
-            inputs = self.resolve_plan_file(plan_file)
+            plan = self.resolve_plan_file(plan_file)
+        else:
+            plan = PlanSpec(inputs=inputs) if isinstance(inputs, list) else PlanSpec(inputs=[])
         thought = (thought or "").strip()
         if not thought:
             raise ActError("thought 不能为空：用一两句话说明这段操作的意图")
         if len(thought) > 120:
             raise ActError("thought 太长，请压缩到一两句话（120 字以内）")
+        stop = self._stop_list(stop_on or plan.stop_on)
+        frames = self._check_plan(plan)
+        if plan.retry and not self.container:
+            raise ActError("本次运行不能自动重试（没有智能体容器），请去掉计划里的 retry")
+        plan_path = None
+        if plan_file:
+            rel = self._plan_path(plan_file).relative_to(self.workspace.resolve())
+            plan_path = "/workspace/" + rel.as_posix()   # 容器里看到的路径
+
+        self.decision_index += 1
+        start_room = self.metrics.state.room
+        attempts: list[dict] = []
+        total_game_s, total_auto, notes = 0.0, 0, []
+        attempt = 0
+        while True:
+            label = thought if attempt == 0 else f"{thought}（自动重试 {attempt}）"
+            result, obs, image, game_s, auto_frames, auto_notes = self._execute(
+                plan, frames, label, stop, plan_file, attempt)
+            total_game_s += game_s
+            total_auto += auto_frames
+            notes.extend(auto_notes)
+            attempts.append({"kind": "execute", "attempt": attempt, "stop": result["stop"],
+                             "consumed": result["consumed"], "planned": result["planned"],
+                             "deviation": result.get("deviation")})
+            retry = plan.retry
+            reason = result["stop"]
+            if (self.done or retry is None or attempt >= retry.max or reason not in retry.on
+                    or not obs.get("controllable") or (obs.get("level") or {}).get("room") != start_room):
+                break
+            # 在零网络沙箱里运行智能体的重算程序，它应当改写同一个计划文件
+            attempt += 1
+            self.metrics.update(status="retrying")
+            self._write_json("game/retry.json", {
+                "decision": self.decision_index, "attempt": attempt, "max": retry.max, "reason": reason,
+                "plan_file": plan_path,
+                "deviation": result.get("deviation"), "events": result.get("events"),
+                "consumed": result["consumed"], "planned": result["planned"],
+            })
+            program = run_program(self.container, retry.command, retry.timeout_s, env={
+                "CELESTE_RETRY_ATTEMPT": attempt, "CELESTE_RETRY_REASON": reason,
+                "CELESTE_RETRY_FILE": "/workspace/game/retry.json", "CELESTE_PLAN_FILE": plan_path,
+            })
+            self.metrics.add(retries=1, replan_s=program.seconds)
+            record = {"kind": "replan", "attempt": attempt, "reason": reason, "seconds": round(program.seconds, 2),
+                      "returncode": program.returncode, "timed_out": program.timed_out}
+            attempts.append(record)
+            if not program.ok:
+                record["error"] = (program.stderr or program.stdout)[-600:]
+                break
+            try:
+                new_plan = self.resolve_plan_file(plan_file)
+                if new_plan.text == plan.text:
+                    record["error"] = "重算程序没有改动计划文件"
+                    break
+                frames = self._check_plan(new_plan)
+                new_stop = self._stop_list(stop_on or new_plan.stop_on)
+            except ActError as err:
+                record["error"] = f"重算后的计划不合法：{err}"
+                break
+            # 重试次数与条件以第一次提交的计划为准，重算出的计划不能放宽
+            plan, stop = replace(new_plan, retry=retry), new_stop
+        return ActOutcome(result, obs, image, total_game_s, total_auto, notes, attempts)
+
+    def _stop_list(self, stop_on: list[str] | None) -> list[str]:
         stop = list(stop_on) if stop_on else list(DEFAULT_STOP_ON)
         bad = [s for s in stop if s not in VALID_STOP_ON]
         if bad:
@@ -205,20 +350,30 @@ class GameSession:
         for must in ("death", "complete"):
             if must not in stop:
                 stop.append(must)
-        frames = expand_inputs(inputs, self.cfg.max_frames_per_act)
+        return stop
 
-        self.decision_index += 1
+    def _check_plan(self, plan: PlanSpec) -> list[str]:
+        frames = expand_inputs(plan.inputs, self.cfg.max_frames_per_act)
+        if plan.expect is not None and len(plan.expect) > len(frames):
+            raise ActError(f'"expect" 有 {len(plan.expect)} 帧，比按键的 {len(frames)} 帧还多')
+        return frames
+
+    def _execute(self, plan: PlanSpec, frames: list[str], thought: str, stop: list[str], plan_file: str | None,
+                 attempt: int):
+        """执行一次计划：推进游戏、自动推进非可控段、记录日志与工作区数据。"""
         self.metrics.set_thought(thought)
         self.metrics.update(status="executing")
+        extra = {"expect": plan.expect, "tolerance": plan.tolerance} if plan.expect else {}
         with self.lock:
             t0 = time.monotonic()
-            reply = self.client.call("step", inputs=inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
-                                     scope="room", fields=True, entityTrajectory=True)
+            reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
+                                     scope="room", fields=True, entityTrajectory=True, **extra)
             game_s = time.monotonic() - t0
             result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
             self._log_frames(result, frames, thought, auto=False)
             self._handle_events(result)
-            self.metrics.add(play_game_s=game_s, frames_played=result["consumed"], decisions=1)
+            self.metrics.add(play_game_s=game_s, frames_played=result["consumed"],
+                             decisions=1 if attempt == 0 else 0)
 
             auto_frames, notes = 0, []
             if not self.done and not obs.get("controllable"):
@@ -228,17 +383,19 @@ class GameSession:
         obs = self._track_motion(obs)
         self._update_metrics_from_obs(obs)
         self._write_workspace(obs, {
-            "decision": self.decision_index, "thought": thought, "inputs": inputs, "plan_file": plan_file,
-            "stop_on": stop, "result": result, "auto_frames": auto_frames, "auto_notes": notes,
+            "decision": self.decision_index, "attempt": attempt, "thought": thought, "inputs": plan.inputs,
+            "plan_file": plan_file, "stop_on": stop, "tolerance": plan.tolerance if plan.expect else None,
+            "result": result, "auto_frames": auto_frames, "auto_notes": notes,
         })
         self._decisions_log.write(json.dumps({
-            "i": self.decision_index, "t": round(self.metrics.elapsed(), 3), "thought": thought,
-            "inputs": inputs, "plan_file": plan_file, "stop_on": stop, "stop": result["stop"], "consumed": result["consumed"],
-            "planned": result["planned"], "events": result["events"], "game_s": round(game_s, 3),
+            "i": self.decision_index, "attempt": attempt, "t": round(self.metrics.elapsed(), 3), "thought": thought,
+            "inputs": plan.inputs, "plan_file": plan_file, "stop_on": stop, "stop": result["stop"],
+            "consumed": result["consumed"], "planned": result["planned"], "events": result["events"],
+            "deviation": result.get("deviation"), "game_s": round(game_s, 3),
             "auto_frames": auto_frames, "auto_notes": notes,
         }, ensure_ascii=False) + "\n")
         self._decisions_log.flush()
-        return ActOutcome(result, obs, image, game_s, auto_frames, notes)
+        return result, obs, image, game_s, auto_frames, notes
 
     # ---- 非可控段：剧情、转场、死亡与重生由主控自动推进 ----
 

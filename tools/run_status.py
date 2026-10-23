@@ -28,7 +28,8 @@ def main() -> int:
     print(f"{run_dir}")
     print(f"状态 {m['status']}  用时 {m['elapsed_s']:.0f}s / {m['budget_s']:.0f}s  思考 {m['thinking_s']:.0f}s  工具 {m['tool_s']:.1f}s  "
           f"游戏推进 {m['play_game_s'] + m['auto_game_s']:.1f}s")
-    print(f"决策 {m['decisions']}  帧 {m['frames_played']}+{m['frames_auto']}(自动)  死亡 {m['deaths']}  "
+    print(f"决策 {m['decisions']}  自动重试 {m.get('retries', 0)}（重算 {m.get('replan_s', 0):.1f}s）  "
+          f"帧 {m['frames_played']}+{m['frames_auto']}(自动)  死亡 {m['deaths']}  "
           f"上下文 {m['context_tokens']:,}  压缩 {m['compactions']}  章节 {m['chapter']}  房间 {m['room']}")
     if m.get("kb_progress") is not None:
         print(f"准备阶段 {m.get('study_s', 0):.0f}s（不计入用时）  知识库已读 {m['kb_progress']:.0%}")
@@ -45,7 +46,8 @@ def main() -> int:
             d = json.loads(line)
             gap = "" if prev_t is None else f" +{d['t'] - prev_t:.0f}s"
             prev_t = d["t"]
-            print(f"#{d['i']:>3} t={d['t']:.0f}s{gap} {d['stop']:<8} {d['consumed']}/{d['planned']}帧 "
+            tag = f".{d['attempt']}" if d.get("attempt") else "  "
+            print(f"#{d['i']:>3}{tag} t={d['t']:.0f}s{gap} {d['stop']:<8} {d['consumed']}/{d['planned']}帧 "
                   f"{' '.join(d['inputs'])[:70]}  | {d['thought']}")
     summary = run_dir / "summary.json"
     if summary.exists():

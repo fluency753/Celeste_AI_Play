@@ -10,7 +10,8 @@
    包括游戏桥接端口）全部失败。
 3. Bash 沙箱（让 Claude Code 用它的 Bash 工具运行同一套检查）：全部失败，包括 Anthropic 与主控端口；
    命令环境里看不到登录令牌；只能写工作区与 /tmp。
-4. 权限：agent 用户改不了防火墙与托管配置。
+4. 重算程序沙箱（自动重试时主控运行智能体程序用的沙箱）：同 3。
+5. 权限：agent 用户改不了防火墙与托管配置。
 """
 from __future__ import annotations
 
@@ -24,8 +25,14 @@ import threading
 
 from .config import RunConfig, find_docker_exe, load_dotenv, REPO_ROOT
 from .container import docker, ensure_container
+from .sandbox import run_program
 
 MUST_FAIL = ["dns", "ip_direct", "dns_external", "google", "github", "bridge_port", "host_other"]
+PROBE_COMMAND = ("python3 /opt/netcheck.py {mcp} {bridge} --json; "
+                 "echo TOKEN-LEN=${{#CLAUDE_CODE_OAUTH_TOKEN}}; echo ENV-ATTEMPT=$CELESTE_RETRY_ATTEMPT; "
+                 "touch /workspace/.verify_probe && echo WS-WRITE=ok || echo WS-WRITE=fail; "
+                 "touch /home/agent/.verify_probe 2>/dev/null && echo HOME-WRITE=ok || echo HOME-WRITE=fail; "
+                 "touch /kb/.verify_probe 2>/dev/null && echo KB-WRITE=ok || echo KB-WRITE=fail")
 
 
 def parse_netcheck(text: str) -> dict[str, str]:
@@ -154,7 +161,22 @@ def main() -> int:
         report.check("TMP-WRITE=ok" in raw, "可以写 /tmp")
         report.check("HOME-WRITE=fail" in raw, "不能写家目录（Claude Code 配置所在处）")
 
-        print("4. 权限", flush=True)
+        print("4. 重算程序沙箱（自动重试时运行智能体程序的地方）", flush=True)
+        probe = run_program(container, PROBE_COMMAND.format(mcp=args.mcp_port, bridge=args.bridge_port), 60,
+                            env={"CELESTE_RETRY_ATTEMPT": 1})
+        raw = probe.stdout + probe.stderr
+        results = parse_netcheck(raw)
+        if not results:
+            report.check(False, "沙箱检查没有输出", raw[:300])
+        for key in MUST_FAIL + ["anthropic", "mcp_port"]:
+            report.check(results.get(key, "").startswith("失败"), f"应失败：{key}", results.get(key, "无结果"))
+        report.check("TOKEN-LEN=0" in raw, "程序环境里看不到登录令牌")
+        report.check("WS-WRITE=ok" in raw, "可以写工作区 /workspace")
+        report.check("HOME-WRITE=fail" in raw, "不能写家目录（Claude Code 配置所在处）")
+        report.check("KB-WRITE=fail" in raw, "不能写知识库 /kb")
+        report.check("ENV-ATTEMPT=1" in raw, "主控传入的 CELESTE_* 变量可见")
+
+        print("5. 权限", flush=True)
         r = docker("exec", "-u", "agent", container, "iptables", "-F", "OUTPUT", check=False)
         report.check(r.returncode != 0, "agent 用户改不了防火墙")
         r = docker("exec", "-u", "agent", container, "sh", "-c",

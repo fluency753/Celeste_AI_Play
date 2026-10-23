@@ -16,7 +16,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.5.0";
+    public const string Version = "0.6.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -278,6 +278,9 @@ internal static class Bridge {
         }
 
         List<InputFrame> plan = StepJob.ParsePlan(inputs, MaxPlanFrames);
+        List<StepJob.ExpectRow?>? expect = StepJob.ParseExpect(a, MaxPlanFrames);
+        float tolerance = a.TryGetProperty("tolerance", out JsonElement tol) && tol.ValueKind == JsonValueKind.Number
+            ? Math.Max(0f, tol.GetSingle()) : 1f;
         List<string> stopOn = a.TryGetProperty("stop_on", out JsonElement s) && s.ValueKind == JsonValueKind.Array
             ? s.EnumerateArray().Select(e => e.GetString() ?? "").Where(x => x.Length > 0).ToList()
             : new List<string>();
@@ -289,7 +292,9 @@ internal static class Bridge {
             buffer: GetString(a, "buffer", "level"),
             snapshot: ReadSnapshotOptions(a),
             recordTrajectory: GetBool(a, "trajectory", true),
-            recordEntities: GetBool(a, "entityTrajectory", false));
+            recordEntities: GetBool(a, "entityTrajectory", false),
+            expect: expect,
+            tolerance: tolerance);
 
         if (job.Finished) {
             FinishJob(); // 空计划：直接回报当前帧

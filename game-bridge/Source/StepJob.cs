@@ -13,8 +13,12 @@ namespace CelesteAI.Bridge;
 /// 一次"推进 N 帧"的任务：逐帧取出按键，记录轨迹与事件，按截断条件提前停下。
 /// 截断条件：death 死亡、room 换房、uncontrollable 失去控制、controllable 恢复控制、
 /// land 落地、refill 冲刺次数恢复、complete 通关。
+/// 给了预期轨迹（expect）时还会逐帧对照 Madeline 的位置与状态，偏差超过容差（tolerance）就以 deviate 停下。
 /// </summary>
 internal sealed class StepJob {
+    /// <summary>预期轨迹的一帧：该帧推进之后 Madeline 的位置（与轨迹里的 x、y 同一口径），可选状态名。</summary>
+    public readonly record struct ExpectRow(float X, float Y, string? State);
+
     public readonly long RequestId;
     public readonly int FramesPerTick;
     public readonly bool WantImage;
@@ -32,6 +36,9 @@ internal sealed class StepJob {
     private readonly Utf8JsonWriter entityTrajectory;
     private readonly Dictionary<int, Vector2> lastEntityPos = new();
     private readonly long startFrame;
+    private readonly List<ExpectRow?>? expect;
+    private readonly float tolerance;
+    private (long frame, int index, ExpectRow expected, float? x, float? y, string? state)? deviation;
 
     private int index;
     private string? lastRoom;
@@ -45,8 +52,11 @@ internal sealed class StepJob {
     public bool Finished => StopReason != null;
 
     public StepJob(long requestId, List<InputFrame> plan, IEnumerable<string> stopOn, int framesPerTick,
-        bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false) {
+        bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false,
+        List<ExpectRow?>? expect = null, float tolerance = 1f) {
         RequestId = requestId;
+        this.expect = expect is { Count: > 0 } ? expect : null;
+        this.tolerance = tolerance;
         this.plan = plan;
         this.stopOn = new HashSet<string>(stopOn, StringComparer.OrdinalIgnoreCase);
         FramesPerTick = framesPerTick;
@@ -116,6 +126,8 @@ internal sealed class StepJob {
         if (alive && dashes > lastDashes) Emit(frame, "refill", dashes.ToString());
         if (level is { Completed: true }) Emit(frame, "complete", null);
 
+        CheckExpectation(frame, p);
+
         lastAlive = alive;
         if (room != null) lastRoom = room;
         lastControllable = controllable;
@@ -128,6 +140,26 @@ internal sealed class StepJob {
     }
 
     public void Cancel() => StopReason ??= "cancelled";
+
+    /// <summary>对照刚推进的这一帧与预期轨迹；第一次超出容差时记下偏差并停下。</summary>
+    private void CheckExpectation(long frame, Player? p) {
+        int i = index - 1; // 刚执行的是计划里的第 i 帧（从 0 起）
+        if (expect == null || deviation != null || i < 0 || i >= expect.Count || expect[i] is not { } row) {
+            return;
+        }
+        float? x = p == null ? null : p.Position.X + p.PositionRemainder.X;
+        float? y = p == null ? null : p.Position.Y + p.PositionRemainder.Y;
+        string? state = p == null ? null : StateExtractor.StateName(p.StateMachine.State);
+        bool off = x == null || y == null
+                   || MathF.Abs(x.Value - row.X) > tolerance || MathF.Abs(y.Value - row.Y) > tolerance
+                   || (row.State != null && !string.Equals(row.State, state, StringComparison.OrdinalIgnoreCase));
+        if (!off) {
+            return;
+        }
+        deviation = (frame, i + 1, row, x, y, state);
+        events.Add((frame, "deviate", (i + 1).ToString()));
+        StopReason ??= "deviate";
+    }
 
     /// <summary>画面附近（外扩 64 像素）每个实体：位置有变化的帧记一行 [帧, 编号, x, y]（碰撞箱左上角）。</summary>
     private void RecordEntities(Level level, long frame) {
@@ -171,6 +203,26 @@ internal sealed class StepJob {
             w.WriteEndObject();
         }
         w.WriteEndArray();
+        if (expect != null) {
+            w.WriteNumber("expectFrames", expect.Count);
+            w.WriteNumber("tolerance", tolerance);
+        }
+        if (deviation is { } d) {
+            w.WriteStartObject("deviation");
+            w.WriteNumber("frame", d.frame);
+            w.WriteNumber("index", d.index);
+            w.WriteStartArray("expected");
+            w.WriteNumberValue(d.expected.X);
+            w.WriteNumberValue(d.expected.Y);
+            if (d.expected.State != null) w.WriteStringValue(d.expected.State);
+            w.WriteEndArray();
+            w.WriteStartArray("actual");
+            if (d.x is { } ax) w.WriteNumberValue(ax); else w.WriteNullValue();
+            if (d.y is { } ay) w.WriteNumberValue(ay); else w.WriteNullValue();
+            if (d.state != null) w.WriteStringValue(d.state); else w.WriteNullValue();
+            w.WriteEndArray();
+            w.WriteEndObject();
+        }
         if (recordTrajectory) {
             trajectory.WriteEndArray();
             trajectory.Flush();
@@ -187,6 +239,33 @@ internal sealed class StepJob {
             w.WritePropertyName("entityTrajectory");
             w.WriteRawValue(entityBuffer.WrittenSpan, skipInputValidation: true);
         }
+    }
+
+    /// <summary>解析 expect：每个元素是 null（这一帧不检查）、[x, y] 或 [x, y, "状态名"]。</summary>
+    public static List<ExpectRow?>? ParseExpect(JsonElement a, int maxFrames) {
+        if (!a.TryGetProperty("expect", out JsonElement el) || el.ValueKind == JsonValueKind.Null) {
+            return null;
+        }
+        if (el.ValueKind != JsonValueKind.Array) {
+            throw new FormatException("expect must be an array");
+        }
+        var rows = new List<ExpectRow?>();
+        foreach (JsonElement row in el.EnumerateArray()) {
+            if (rows.Count >= maxFrames) {
+                throw new FormatException($"expect exceeds {maxFrames} frames");
+            }
+            if (row.ValueKind == JsonValueKind.Null) {
+                rows.Add(null);
+                continue;
+            }
+            if (row.ValueKind != JsonValueKind.Array || row.GetArrayLength() < 2
+                || row[0].ValueKind != JsonValueKind.Number || row[1].ValueKind != JsonValueKind.Number) {
+                throw new FormatException("each expect row must be null, [x, y] or [x, y, state]");
+            }
+            string? state = row.GetArrayLength() >= 3 && row[2].ValueKind == JsonValueKind.String ? row[2].GetString() : null;
+            rows.Add(new ExpectRow(row[0].GetSingle(), row[1].GetSingle(), state));
+        }
+        return rows;
     }
 
     /// <summary>

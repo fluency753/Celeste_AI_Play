@@ -22,11 +22,16 @@ public enum Act : ushort {
     Back = 1 << 10,
     Pause = 1 << 11,
     Journal = 1 << 12,
+    // 第二套跳跃、冲刺、蹲冲键：与真人把同一动作绑到两个键一样，按住一个键时按下另一个键也算"按下"
+    Jump2 = 1 << 13,
+    Dash2 = 1 << 14,
+    CrouchDash2 = 1 << 15,
 }
 
 /// <summary>
 /// 一帧的输入。文本写法沿用 TAS 习惯，用逗号或加号分隔：
-/// L R U D 方向，J 跳，X 冲刺，Z 下冲刺，G 抓，T 交互，C 确认，B 返回，P 暂停，N 日志；
+/// L R U D 方向，J 跳，X 冲刺，Z 蹲冲（下冲刺），G 抓，T 交互，C 确认，B 返回，P 暂停，N 日志；
+/// K、Y、V 分别是第二个跳、冲刺、蹲冲键（同一动作绑两个键，可以在相邻两帧各"按下"一次）；
 /// A:角度 表示左摇杆的模拟方向（0 为右，90 为上），用于羽毛等需要角度的场合。
 /// </summary>
 public readonly struct InputFrame : IEquatable<InputFrame> {
@@ -46,6 +51,7 @@ public readonly struct InputFrame : IEquatable<InputFrame> {
         ['L'] = Act.Left, ['R'] = Act.Right, ['U'] = Act.Up, ['D'] = Act.Down,
         ['J'] = Act.Jump, ['X'] = Act.Dash, ['Z'] = Act.CrouchDash, ['G'] = Act.Grab,
         ['T'] = Act.Talk, ['C'] = Act.Confirm, ['B'] = Act.Back, ['P'] = Act.Pause, ['N'] = Act.Journal,
+        ['K'] = Act.Jump2, ['Y'] = Act.Dash2, ['V'] = Act.CrouchDash2,
     };
 
     public static InputFrame Parse(string? text) {

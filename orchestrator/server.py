@@ -9,14 +9,20 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .game_session import ActError, GameSession
 from .kb_study import KbStudy
-from .observation import describe_obs, describe_step, room_json, upscale_png
+from .observation import describe_attempts, describe_obs, describe_step, room_json, upscale_png
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图与整个房间的实体和字符地图，其余时候只给文字状态与画面附近的信息。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
-plan_file：（有工作区时可用）工作区里的计划文件路径，内容是同样格式的 JSON 数组；与 inputs 二选一。
-  按键：L R U D 方向，J 跳，X 冲刺，Z 蹲冲，G 抓墙，T 交互；A:角度 表示摇杆角度（0 右、90 上）。
+  按键：L R U D 方向，J 跳，X 冲刺，Z 蹲冲，G 抓墙，T 交互；K、Y、V 是第二个跳、冲刺、蹲冲键
+  （按住 J 时按下 K 也算一次新的"按下"，可以在相邻两帧各跳一次）；A:角度 表示摇杆角度（0 右、90 上）。
   只写帧数表示这些帧不按任何键，例如 "5"。一次最多 600 帧。
+plan_file：（有工作区时可用）工作区里的计划文件路径，与 inputs 二选一。内容是按键段数组，或对象：
+  {"inputs": [...], "expect": [[x, y], [x, y, "StDash"], null, ...], "tolerance": 0.5,
+   "stop_on": [...], "retry": {"command": "python3 planner.py", "max": 3, "timeout_s": 20, "on": ["death", "deviate"]}}
+  expect 是每帧推进后 Madeline 的预期位置（与轨迹 x、y 同一口径，可附状态名），偏差超过 tolerance 像素就停下（deviate）。
+  retry：死亡、偏离（或 "done"：按键用完仍在本房间）时，主控在零网络沙箱里运行 command（工作目录 /workspace），
+  它应读取 /workspace/game/ 下的最新数据并改写同一个计划文件，主控接着执行，最多 max 次，不唤醒你。格式详见 /kb/game_data.md。
 thought：一两句中文，说明这段操作的意图，会显示给观众。
 stop_on：提前停下的条件，可选 death room uncontrollable land refill complete；
   默认 ["death", "room", "complete"]，death 与 complete 总会生效。
@@ -106,6 +112,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 # 工具时间不含任何推进游戏的时间（动作块与自动推进段都算游戏时间）
                 game_s = outcome.game_s + (metrics.state.auto_game_s - auto_before)
                 parts = [describe_step(outcome.result)]
+                if len(outcome.attempts) > 1:
+                    parts.insert(0, describe_attempts(outcome.attempts))
                 if outcome.auto_notes:
                     parts.append("；".join(outcome.auto_notes))
                 if session.done:
