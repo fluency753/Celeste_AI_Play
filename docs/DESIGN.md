@@ -509,10 +509,10 @@ HUD 采用"一个大数字、四个小统计、一句思考"的深色卡片，�
 | 层 | 做法 | 防的是什么 |
 | --- | --- | --- |
 | 容器边界 | 智能体以非 root 用户运行在独立容器里；知识库只读挂载，工作区可写挂载；不挂载游戏、OBS 与存档目录 | 读取游戏代码与进程 |
-| 出站防火墙 | 参照官方开发容器的防火墙脚本，默认拒绝一切出站，只放行 api.anthropic.com、claude.ai、claude.com、platform.claude.com 与宿主机上的主控端口，并关闭非必要流量 | 联网搜索、下载资料 |
+| 出站防火墙 | 容器启动时由 root 设置 iptables：默认拒绝一切出站，只放行 Anthropic 官方域名（api.anthropic.com、claude.ai、claude.com、platform.claude.com 及其公布的地址段 160.79.104.0/23）的 443 端口与宿主机上的主控端口；这些域名启动时预先解析并写入 /etc/hosts，随后连 DNS 也封闭；关闭遥测等非必要流量 | 联网搜索、下载资料 |
 | 工具白名单 | 只开放 Bash、Read、Write、Edit、Glob、Grep 与主控的游戏工具；只加载主控这一个 MCP 服务 | 借内置工具或其他连接器上网 |
-| 托管配置 | 在容器的托管配置文件里拒绝 WebSearch 与 WebFetch；文件归 root 所有，智能体无法改回 | 智能体自己改配置 |
-| Bash 沙箱 | 开启 Claude Code 自带的 Bash 沙箱，不放行任何域名；容器内需打开嵌套沙箱的兼容选项 | 自写程序带着登录令牌直接调用模型接口 |
+| 托管配置 | 在容器的托管配置文件里拒绝 WebSearch 与 WebFetch、禁止跳过权限模式、关闭 claude.ai 连接器；文件归 root 所有。Claude Code 以受限模式（--restricted）启动，不读取用户、项目与本地设置文件，文件工具只能访问工作区与知识库，智能体无法通过改设置文件放宽限制 | 智能体自己改配置 |
+| Bash 沙箱 | 开启 Claude Code 自带的 Bash 沙箱：强制开启、不可退出、域名白名单为空且锁定；沙箱不可用时拒绝启动。容器内 bubblewrap 需要创建命名空间，因此容器以 seccomp=unconfined 运行，并打开嵌套沙箱的兼容选项；命令环境里看不到登录令牌，只能写工作区与 /tmp | 自写程序带着登录令牌直接调用模型接口 |
 
 防火墙由容器的 root 启动脚本设置，之后降为普通用户再启动 Claude Code，智能体没有权限改动规则。
 
@@ -522,8 +522,8 @@ HUD 采用"一个大数字、四个小统计、一句思考"的深色卡片，�
 | --- | --- |
 | 运行与多轮控制 | 主控用 docker exec 启动 `claude -p`，输入输出都用 stream-json。一个房间一轮：主控送入新房间的提示，智能体用游戏工具打完这个房间后结束本轮 |
 | 游戏工具 | 主控在宿主机上提供 HTTP 形式的 MCP 服务（act、observe、recall\_frame、set\_effort）；工具返回的截图模型可以直接看到 |
-| 系统提示词 | 用 --append-system-prompt-file 追加第 5.7 节的任务目标，保留 Claude Code 自带的工具说明 |
-| 权限模式 | 容器内用跳过权限确认的模式无人值守运行；拒绝规则在该模式下仍然生效 |
+| 系统提示词 | 主控把第 5.7 节的任务目标与工作区说明拼好后用 --append-system-prompt 追加，保留 Claude Code 自带的工具说明 |
+| 权限模式 | 用 dontAsk 模式无人值守运行：只有预先允许的工具（Bash、Read、Write、Edit、Glob、Grep 与游戏工具）能用，其余一律拒绝；跳过权限模式在托管配置里被禁用 |
 | 推理强度 | 启动时 --effort high。智能体用 set\_effort 申请调整，主控在下一个房间开始前发送 /effort 生效；同一房间连续失败时，主控在下一轮消息里加入 ultrathink 请求更深推理 |
 | 上下文与压缩 | Claude Code 在接近上限时自动压缩；主控从输出流的压缩事件计数 |
 | 计时与 token | 主控给输出流的每个事件打时间戳：工具结果送回到下一条模型消息之间计为思考时间，工具调用起止之间计为工具时间，usage 字段给出上下文大小 |
@@ -545,13 +545,14 @@ HUD 采用"一个大数字、四个小统计、一句思考"的深色卡片，�
 5. 在容器里验证三件事：`claude auth status` 显示订阅令牌；访问任意非白名单网站失败；在 Bash 里访问 api.anthropic.com 也失败。
 6. 主控启动游戏工具服务，再用 docker exec 拉起 `claude -p` 开始运行。
 
-### 12.7 需要在 test 存档上实测确认
+### 12.7 实测结论（M3，2026-10-22）
 
-- 所用 Claude Code 版本的 stream-json 是否输出压缩事件；若不输出，按相邻请求输入 token 的骤降判定。
-- 容器内 Bash 沙箱能否正常启动。
-- 容器能否访问宿主机上的主控端口（host.docker.internal）。
-- MCP 返回的截图可能被缩放压缩，清晰度是否够用。
-- 无头模式下 /effort 的生效时机。
+- **压缩事件**：Claude Code 2.1.309 的 stream-json 会输出「压缩中」状态与 `compact_boundary` 事件，含触发方式、压缩前后 token 数与耗时；主控据此计数。实测：自动压缩窗口设为 10 万 token 时，约 6.9 万 token 处触发，压到约 5700 token，用时 25 秒，之后继续正常游玩。
+- **Bash 沙箱**：Docker 默认的 seccomp 配置不允许 bubblewrap 创建命名空间，沙箱启动失败时命令直接失败（不会退回无沙箱运行）。容器改用 seccomp=unconfined 并打开嵌套沙箱兼容选项后正常：沙箱内网络全部不通，包括 Anthropic 与主控端口。容器以 --init 运行，回收沙箱留下的子进程。
+- **宿主机端口**：Docker Desktop 下，容器经 host.docker.internal 能连到宿主机上只监听 127.0.0.1 的主控端口；防火墙只放行这一个端口，游戏桥接端口不可达。游戏工具服务的主机名白名单加入 host.docker.internal。
+- **截图**：640×360 的放大截图模型可以正常看到，配合文字状态与字符地图足以规划（序章与 1A 实测）。
+- **斜杠命令**：stream-json 输入 `/compact` 会触发手动压缩；加 --disable-slash-commands 后失效。智能体本身没有 Skill 工具，调不到内置技能，所以保留斜杠命令，留给主控用于 /effort 等动态调整（M4 接入）。
+- **启动参数**：容器里用 --restricted --add-dir /kb、--tools 指定六个内置工具、--permission-mode dontAsk、--strict-mcp-config；系统提示词由主控拼好后用 --append-system-prompt 传入。每轮开始时输出流都会重发 init 事件，主控每次都核对工具列表。
 
 ## 参考资料
 
