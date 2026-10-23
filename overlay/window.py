@@ -44,6 +44,7 @@ def _user32():
     user32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
     user32.FindWindowW.restype = wt.HWND
     user32.GetForegroundWindow.restype = wt.HWND
+    user32.SetForegroundWindow.argtypes = [wt.HWND]
     return user32
 
 
@@ -145,11 +146,14 @@ def follow(window, args) -> None:
         return
     per_pixel_alpha(window, hwnd)
     make_overlay(user32, hwnd)
-    if args.previous_foreground and user32.GetForegroundWindow() == hwnd:
-        user32.SetForegroundWindow(args.previous_foreground)   # 加载页面时 WebView2 会激活一次窗口：把焦点还回去
+    # pywebview 在页面开始加载时会激活一次窗口，WebView2 获得焦点也可能稍晚发生：
+    # 启动后的一段时间里只要发现自己成了前台窗口，就把焦点还给启动前的窗口
+    settle_until = time.monotonic() + 15.0
     last = None
     hidden = False
     while True:
+        if args.previous_foreground and time.monotonic() < settle_until and user32.GetForegroundWindow() == hwnd:
+            user32.SetForegroundWindow(args.previous_foreground)
         rect = game_client_rect(user32, args.game_title)
         if rect is None:
             if not hidden:
