@@ -11,10 +11,10 @@ import sys
 
 try:
     from bridge_client import BridgeClient, summarize_obs
-    from cutscene import skip_by_pause_menu
+    from cutscene import leave_level_by_pause_menu, skip_by_pause_menu
 except ImportError:  # 作为 tools 包导入时
     from tools.bridge_client import BridgeClient, summarize_obs
-    from tools.cutscene import skip_by_pause_menu
+    from tools.cutscene import leave_level_by_pause_menu, skip_by_pause_menu
 
 QUIET = dict(image=False, entities=False, tiles=False, trajectory=False)
 
@@ -39,6 +39,9 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
         # 进入关卡之后的部分会被录像：一律按正常速度推进，剧情用暂停菜单跳过
         if scene == "Level":
             level = obs["level"]
+            if chapter is not None and level.get("chapter") != chapter and obs.get("controllable"):
+                obs = leave_level_by_pause_menu(c)  # 在别的章节里：先返回地图
+                continue
             if obs.get("controllable"):
                 return obs
             if level["inCutscene"] and not level["skippingCutscene"] and level["room"] not in tried_skip:

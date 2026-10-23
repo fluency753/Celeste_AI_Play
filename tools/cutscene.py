@@ -82,3 +82,31 @@ def skip_by_pause_menu(client, on_step: StepHook | None = None, max_wait_frames:
 
     obs = step(["1,C", "1"])
     return True, obs, used, "skipped"
+
+
+def leave_level_by_pause_menu(client, max_wait_frames: int = 60) -> dict:
+    """在关卡里用暂停菜单"返回地图"（没有就选"保存并退出"），回到选章页。返回最新观测。"""
+    def step(inputs: list[str]) -> dict:
+        return client.call("step", inputs=inputs, speed=1, **QUIET)["obs"]
+
+    obs = client.call("observe", **QUIET)["obs"]
+    menu = obs.get("pauseMenu")
+    if menu is None:
+        obs = step(["1,P"])
+        waited = 0
+        while not (obs.get("pauseMenu") or {}).get("focused") and waited < max_wait_frames:
+            obs = step(["2"])
+            waited += 2
+        menu = obs.get("pauseMenu")
+        if not menu:
+            raise RuntimeError("打不开暂停菜单，无法离开关卡")
+    ids = [it.get("id") for it in menu["items"]]
+    wanted = "menu_pause_return" if "menu_pause_return" in ids else "menu_pause_savequit"
+    target = next(it["index"] for it in menu["items"] if it.get("id") == wanted)
+    for _ in range(len(menu["items"]) + 2):
+        if menu["selection"] == target:
+            break
+        obs = step([f"1,{'D' if target > menu['selection'] else 'U'}", "6"])
+        menu = obs.get("pauseMenu") or menu
+    obs = step(["1,C", "30"])
+    return obs
