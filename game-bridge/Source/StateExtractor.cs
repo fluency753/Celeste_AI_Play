@@ -67,6 +67,16 @@ internal static class StateExtractor {
             WriteMenu(w, overworld);
         }
 
+        // 暂停菜单（关卡内或序章开场）：主控据此像玩家一样"暂停 → 下移 → 跳过剧情"
+        TextMenu? pauseMenu = Engine.Scene switch {
+            Level { Paused: true } paused => paused.Entities.FindFirst<TextMenu>(),
+            IntroVignette vignette => vignette.menu,
+            _ => null,
+        };
+        if (pauseMenu != null) {
+            WritePauseMenu(w, pauseMenu);
+        }
+
         if (Engine.Scene is not Level level) {
             w.WriteNull("level");
             w.WriteNull("player");
@@ -124,6 +134,45 @@ internal static class StateExtractor {
         w.WriteEndObject();
     }
 
+    /// <summary>暂停菜单中可识别的按钮：按当前语言的显示文本反查对话键。</summary>
+    private static readonly string[] PauseMenuKeys = {
+        "menu_pause_resume", "menu_pause_skip_cutscene", "menu_pause_retry", "menu_pause_assist",
+        "menu_pause_variant", "menu_pause_options", "menu_pause_restartarea", "menu_pause_savequit",
+        "menu_pause_return", "intro_vignette_resume", "intro_vignette_skip", "intro_vignette_quit",
+    };
+
+    private static void WritePauseMenu(Utf8JsonWriter w, TextMenu menu) {
+        var ids = new Dictionary<string, string>();
+        foreach (string key in PauseMenuKeys) {
+            if (Dialog.Has(key)) {
+                ids.TryAdd(Dialog.Clean(key), key);
+            }
+        }
+        w.WriteStartObject("pauseMenu");
+        w.WriteBoolean("focused", menu.Focused);
+        w.WriteNumber("selection", menu.Selection);
+        w.WriteStartArray("items");
+        for (int i = 0; i < menu.Items.Count; i++) {
+            TextMenu.Item item = menu.Items[i];
+            string label = item switch {
+                TextMenu.Button button => button.Label,
+                TextMenu.Header header => header.Title,
+                _ => item.SearchLabel() ?? item.GetType().Name,
+            };
+            w.WriteStartObject();
+            w.WriteNumber("index", i);
+            w.WriteString("label", label);
+            if (label != null && ids.TryGetValue(label, out string? id)) {
+                w.WriteString("id", id);
+            }
+            w.WriteBoolean("selectable", item.Selectable);
+            w.WriteBoolean("disabled", item.Disabled);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
     private static void WriteLevel(Utf8JsonWriter w, Level level) {
         Session s = level.Session;
         w.WriteStartObject("level");
@@ -140,6 +189,10 @@ internal static class StateExtractor {
         w.WriteBoolean("inCutscene", level.InCutscene);
         w.WriteBoolean("skippingCutscene", level.SkippingCutscene);
         w.WriteBoolean("paused", level.Paused);
+        w.WriteBoolean("canPause", level.CanPause);
+        Textbox? textbox = level.Entities.FindFirst<Textbox>();
+        w.WriteBoolean("dialogOpen", textbox != null);
+        w.WriteBoolean("dialogWaiting", textbox is { waitingForInput: true });
         w.WriteBoolean("transitioning", level.Transitioning);
         w.WriteBoolean("frozen", level.Frozen);
         w.WriteBoolean("completed", level.Completed);

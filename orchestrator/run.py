@@ -36,7 +36,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--bridge-port", type=int, default=47774)
     ap.add_argument("--mcp-port", type=int, default=47780)
     ap.add_argument("--play-speed", type=int, default=1, help="智能体动作段的推进速度（每次渲染推进几帧）")
-    ap.add_argument("--auto-speed", type=int, default=4, help="转场、剧情、重生段的推进速度")
+    ap.add_argument("--auto-speed", type=int, default=1, help="转场、剧情、重生段的推进速度；1 与原版一致，大于 1 为快进（只用于调试，录像会失真）")
     ap.add_argument("--skip-enter", action="store_true", help="已在关卡内且可操作时，跳过菜单宏")
     ap.add_argument("--no-agent", action="store_true", help="不启动智能体，只运行工具服务直到 Ctrl+C")
     args = ap.parse_args()

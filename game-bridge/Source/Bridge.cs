@@ -16,7 +16,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.1.0";
+    public const string Version = "0.2.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -227,6 +227,7 @@ internal static class Bridge {
                 break;
 
             case "skip_cutscene":
+                // 仅供调试：直接调用跳过，不经过暂停菜单。主控与菜单宏改用暂停菜单跳过（与玩家操作一致）。
                 bool skipped = false;
                 if (Engine.Scene is Level level && level.InCutscene && !level.SkippingCutscene) {
                     level.SkipCutscene();

@@ -1,4 +1,4 @@
-"""菜单宏：从标题画面一路进入指定存档的关卡，跳过开场，停在 Madeline 可操作的第一帧。
+"""菜单宏：从标题画面一路进入指定存档的关卡，用暂停菜单跳过开场，停在 Madeline 可操作的第一帧。
 
 只依据桥接报告的菜单状态做决定，不看画面。用法：
     python tools/enter_save.py test
@@ -11,8 +11,10 @@ import sys
 
 try:
     from bridge_client import BridgeClient, summarize_obs
+    from cutscene import skip_by_pause_menu
 except ImportError:  # 作为 tools 包导入时
     from tools.bridge_client import BridgeClient, summarize_obs
+    from tools.cutscene import skip_by_pause_menu
 
 QUIET = dict(image=False, entities=False, tiles=False, trajectory=False)
 
@@ -27,22 +29,32 @@ def press(c: BridgeClient, key: str, settle: int = 12) -> dict:
 
 def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120) -> dict:
     obs = c.call("activate", entities=False, tiles=False)["obs"]
+    tried_skip: set[str] = set()
+    vignette_tries = 0
     for _ in range(max_actions):
         scene = obs.get("scene")
         menu = obs.get("menu") or {}
 
+        # 进入关卡之后的部分会被录像：一律按正常速度推进，剧情用暂停菜单跳过
         if scene == "Level":
             level = obs["level"]
             if obs.get("controllable"):
                 return obs
-            if level["inCutscene"] and not level["skippingCutscene"]:
-                c.call("skip_cutscene")
-            obs = step(c, ["600"], stop_on=["controllable"], speed=4)["obs"]
+            if level["inCutscene"] and not level["skippingCutscene"] and level["room"] not in tried_skip:
+                tried_skip.add(level["room"])
+                skipped, obs, _, _ = skip_by_pause_menu(c)
+                if skipped:
+                    continue
+            obs = step(c, ["120"], stop_on=["controllable"])["obs"]
             continue
 
         if scene == "IntroVignette":
-            c.call("skip_cutscene")
-            obs = step(c, ["30"], speed=4)["obs"]
+            if vignette_tries < 3:  # 开场刚淡入时可能还不接受暂停，隔半秒再试
+                vignette_tries += 1
+                skipped, obs, _, _ = skip_by_pause_menu(c)
+                if skipped:
+                    continue
+            obs = step(c, ["30"])["obs"]
             continue
 
         if scene != "Overworld" or menu.get("next"):

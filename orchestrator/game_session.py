@@ -13,8 +13,10 @@ from .metrics import Metrics
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
+from cutscene import skip_by_pause_menu  # noqa: E402
 
-LETTERS = set("LRUDJXZGTCBPN")
+LETTERS = set("LRUDJXZGTCBPN")       # 桥接认识的全部按键
+AGENT_LETTERS = set("LRUDJXZGT")     # 智能体只能用游玩按键；暂停、确认、返回等菜单键由主控使用
 DEFAULT_STOP_ON = ["death", "room", "complete"]
 VALID_STOP_ON = {"death", "room", "uncontrollable", "controllable", "land", "refill", "complete"}
 END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
@@ -34,7 +36,7 @@ class ActOutcome:
     auto_notes: list[str]
 
 
-def expand_inputs(inputs: list[str], max_frames: int) -> list[str]:
+def expand_inputs(inputs: list[str], max_frames: int, allowed: set[str] = AGENT_LETTERS) -> list[str]:
     """把 ["6,R,J", "10,R"] 展开成逐帧按键文本，并做与桥接一致的校验。"""
     if not isinstance(inputs, list) or not inputs:
         raise ActError("inputs 必须是非空数组，例如 [\"10,R\", \"1,R,J\"]")
@@ -56,7 +58,7 @@ def expand_inputs(inputs: list[str], max_frames: int) -> list[str]:
                     float(t[2:])
                 except ValueError as exc:
                     raise ActError(f"角度写法错误：{t}") from exc
-            elif not set(t) <= LETTERS:
+            elif not set(t) <= allowed:
                 raise ActError(f"未知按键 {t!r}；可用：L R U D J X Z G T，以及 A:角度")
         frames.extend([",".join(tokens)] * n)
         if len(frames) > max_frames:
@@ -160,34 +162,54 @@ class GameSession:
     # ---- 非可控段：剧情、转场、死亡与重生由主控自动推进 ----
 
     def _auto_advance(self, obs: dict, image: str | None):
+        """非可控段一律按正常速度推进（与原版一致，录像里不快进）。
+        能跳过的剧情像玩家一样用暂停菜单跳过；不能跳过的剧情正常播放，对话框等待翻页时按确认键。"""
         total, notes = 0, []
+        skip_tries = 0  # 本段剧情已尝试跳过的次数
         self.metrics.update(status="auto")
-        for _ in range(60):
+        t0 = time.monotonic()
+
+        def log_step(inputs: list[str], result: dict) -> None:
+            nonlocal total
+            total += result["consumed"] + result.get("loadingFrames", 0)
+            self.metrics.add(frames_auto=result["consumed"])
+            self._log_frames(result, expand_inputs(inputs, 10_000, LETTERS), "(自动推进)", auto=True)
+            self._handle_events(result)
+
+        for _ in range(600):
             if self.done:
                 break
             scene = obs.get("scene")
             if scene in END_SCENES:
                 self._mark_done(f"离开关卡（{scene}）")
                 break
-            level = obs.get("level")
+            level = obs.get("level") or {}
             if scene == "Level" and obs.get("controllable"):
                 break
-            if level and level.get("completed"):
+            if level.get("completed"):
                 self._mark_done("章节完成")
                 break
-            if level and level.get("inCutscene") and not level.get("skippingCutscene"):
-                self.client.call("skip_cutscene")
-                notes.append("跳过剧情")
-            t0 = time.monotonic()
-            reply = self.client.call("step", inputs=["300"], stop_on=["controllable", "complete"],
+            if not level.get("inCutscene"):
+                skip_tries = 0  # 一段剧情结束，下一段剧情可以重新尝试
+            elif not level.get("skippingCutscene") and skip_tries < 3:
+                skip_tries += 1
+                skipped, obs, _, reason = skip_by_pause_menu(self.client, on_step=log_step)
+                if skipped:
+                    notes.append("用暂停菜单跳过剧情")
+                    continue
+                if reason == "no_skip":
+                    skip_tries = 3  # 菜单里没有"跳过"：这段剧情只能看完，不再反复打开菜单
+                    notes.append("这段剧情不能跳过，按正常速度播放")
+                elif reason != "no_pause":
+                    continue
+            inputs = ["1,C", "29"] if level.get("dialogWaiting") and not level.get("paused") else ["30"]
+            reply = self.client.call("step", inputs=inputs, stop_on=["controllable", "complete"],
                                      speed=self.cfg.auto_speed, image=False, entities=False, tiles=False)
-            self.metrics.add(auto_game_s=time.monotonic() - t0, frames_auto=reply["result"]["consumed"])
-            self._log_frames(reply["result"], [""] * reply["result"]["consumed"], "(自动推进)", auto=True)
-            self._handle_events(reply["result"])
-            total += reply["result"]["consumed"] + reply["result"]["loadingFrames"]
+            log_step(inputs, reply["result"])
             obs = reply["obs"]
+        self.metrics.add(auto_game_s=time.monotonic() - t0)
         if total:
-            notes.append(f"主控自动推进了 {total} 帧（转场、剧情、死亡与重生）")
+            notes.append(f"主控自动推进了 {total} 帧（转场、剧情、死亡与重生，均为正常速度）")
             if not self.done:
                 reply = self.client.call("observe", image=True)
                 obs, image = reply["obs"], reply.get("image")

@@ -50,7 +50,7 @@ class RunConfig:
     max_minutes: float = 120.0      # 现实时间预算
     max_frames_per_act: int = 600   # 单次 act 最多推进的帧数
     play_speed: int = 1             # 智能体动作块的推进速度（1 = 实时 60 帧/秒）
-    auto_speed: int = 4             # 过场、重生等自动推进段的速度
+    auto_speed: int = 1             # 转场、剧情、重生等自动推进段的速度（1 = 与原版一致；大于 1 只用于调试）
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
 
     @property
