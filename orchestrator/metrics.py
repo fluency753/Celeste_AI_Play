@@ -7,6 +7,8 @@
 - 准备时间：开始游玩前读知识库、写笔记与程序的墙钟时间，单独记，不计入现实用时；
   现实用时从第一次真正执行游戏工具时开始（没有准备阶段时从启动时开始）。
 - 等待额度：Max 用量到达上限后等待额度重置的时间单独记（waited_s），不计入现实用时与准备时间。
+- 推理强度：effort 是当前生效的强度；智能体用 set_effort 申请的强度先记在 effort_pending，本轮结束后才生效，
+  每次切换记进 effort_log。
 - 续跑（--resume）时从上一段运行的统计接着累计。
 每次更新都会原子地写出 metrics.json，供 HUD 读取。
 """
@@ -24,8 +26,11 @@ from pathlib import Path
 class MetricsState:
     agent: str = ""
     model: str = ""
-    effort: str = ""
-    status: str = "starting"          # starting / studying / thinking / executing / auto / retrying / compacting / quota_wait / done / stopped
+    effort: str = ""                  # 当前生效的推理强度（low / medium / high / xhigh / max）
+    effort_pending: str | None = None  # 智能体用 set_effort 申请、本轮结束后才生效的强度
+    effort_changes: int = 0           # 推理强度实际切换的次数
+    effort_log: list | None = None    # 每次切换：[{"t": 现实用时, "from", "to", "chapter", "room", "reason"}, ...]
+    status: str = "starting"         # starting / studying / thinking / executing / auto / retrying / compacting / quota_wait / done / stopped
     started_wall: float = 0.0
     elapsed_s: float = 0.0
     budget_s: float = 0.0
@@ -78,6 +83,7 @@ class Metrics:
         self._offset = 0.0              # 续跑时上一段运行已用的现实用时
         self._paused = 0.0              # 从 _t0 起暂停（等待额度）的总秒数
         self._pause_start: float | None = None
+        self._effort_reason = ""
         self.playing = not study
         now = time.time()
         self.state = MetricsState(agent=agent, model=model, effort=effort,
@@ -143,7 +149,8 @@ class Metrics:
     RESTORED = ("thinking_s", "tool_s", "play_game_s", "auto_game_s", "decisions", "frames_played", "frames_auto",
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
                 "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
-                "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "context_tokens")
+                "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "context_tokens",
+                "effort_pending", "effort_changes", "effort_log")
 
     def restore(self, previous: dict, resumed_from: str) -> None:
         """续跑：接着上一段运行的统计累计（现实用时从上一段的值接着走）。"""
@@ -196,6 +203,27 @@ class Metrics:
             self.state.completed_ticks = sum(s["ticks"] for s in splits)
             self._write_locked()
             return split
+
+    def request_effort(self, level: str | None, reason: str = "") -> None:
+        """智能体申请切换推理强度（None = 取消申请）；本轮结束后由 ClaudeRunner 生效。"""
+        with self._lock:
+            self.state.effort_pending = level
+            self._effort_reason = reason if level else ""
+            self._write_locked()
+
+    def effort_applied(self, level: str, via: str) -> dict:
+        """推理强度已经切换：记下切换前后、当时的房间与申请理由。"""
+        with self._lock:
+            entry = {"t": round(self.elapsed(), 1), "from": self.state.effort, "to": level,
+                     "chapter": self.state.chapter, "room": self.state.room,
+                     "reason": self._effort_reason, "via": via}
+            self.state.effort = level
+            self.state.effort_pending = None
+            self.state.effort_changes += 1
+            self.state.effort_log = [*(self.state.effort_log or []), entry]
+            self._effort_reason = ""
+            self._write_locked()
+            return entry
 
     def set_thought(self, thought: str) -> None:
         with self._lock:

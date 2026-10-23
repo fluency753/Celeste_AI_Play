@@ -426,7 +426,8 @@ class GameSession:
             "result": result, "auto_frames": auto_frames, "auto_notes": notes,
         })
         self._decisions_log.write(json.dumps({
-            "i": self.decision_index, "attempt": attempt, "t": round(self.metrics.elapsed(), 3), "thought": thought,
+            "i": self.decision_index, "attempt": attempt, "t": round(self.metrics.elapsed(), 3),
+            "effort": self.metrics.state.effort, "thought": thought,
             "inputs": plan.inputs, "plan_file": plan_file, "stop_on": stop, "stop": result["stop"],
             "consumed": result["consumed"], "planned": result["planned"], "events": result["events"],
             "deviation": result.get("deviation"), "game_s": round(game_s, 3),

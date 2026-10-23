@@ -1,4 +1,4 @@
-"""游戏工具 MCP 服务：智能体能用的只有这里的 observe 与 act。"""
+"""游戏工具 MCP 服务：智能体能用的游戏工具只有这里的 observe、act 与 set_effort。"""
 from __future__ import annotations
 
 import asyncio
@@ -32,6 +32,21 @@ WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐�
 SIM_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
 OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图，以及整个房间的实体与字符地图。act 的返回已经包含最新状态，只在需要重新看画面或整个房间时调用。"
+
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+SET_EFFORT_DESCRIPTION = """调整你自己的推理强度：low、medium、high、xhigh、max（由低到高；默认 high，当前值在观测头部）。
+强度越高，每次思考越深入，但每次决策更慢、消耗的额度更多；简单的房间可以调低，需要精确规划的难房间可以调高。
+切换在本轮结束后生效：调用后直接结束本轮（回复一句话，不再调用工具），系统会立即切换，并发消息让你接着玩。
+不推进游戏，也不消耗游戏帧。reason：一句话说明为什么调整（记入日志）。"""
+
+
+def effort_line(metrics) -> str:
+    st = metrics.state
+    line = f"推理强度：{st.effort}"
+    if st.effort_pending:
+        line += f"（已申请切换为 {st.effort_pending}，结束本轮后生效）"
+    return line
 
 
 # 只接受本机与容器（经 host.docker.internal）的请求，防止 DNS 重绑定
@@ -94,7 +109,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 content: list = []
                 if image:
                     content.append(Image(data=upscale_png(image), format="png"))
-                content.append(describe_obs(obs, *clock_text(), full_room=True)
+                content.append(describe_obs(obs, *clock_text(), full_room=True, effort=effort_line(metrics))
                                + "\n\n整个房间的精确数据（像素坐标）：\n" + room_json(obs)
                                + ("\n" + ws_note if session.workspace else ""))
                 return content
@@ -125,7 +140,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
                     parts.append("【进入新房间】下面是新房间的截图、整个房间的字符地图，以及整个房间的精确数据（JSON）。")
-                parts.append(describe_obs(outcome.obs, *clock_text(), full_room=new_room))
+                parts.append(describe_obs(outcome.obs, *clock_text(), full_room=new_room, effort=effort_line(metrics)))
                 if new_room:
                     parts.append("整个房间的精确数据（像素坐标）：\n" + room_json(outcome.obs))
                 if session.workspace:
@@ -139,6 +154,23 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 return [f"动作未执行（没有消耗任何游戏帧）：{err}"]
             finally:
                 finish(t0, game_s)
+
+    @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
+    async def set_effort(level: str, reason: str = "") -> list:
+        # 不推进游戏、不受准备阶段限制，也不开始计现实用时；耗时可以忽略，算在思考时间里
+        level = (level or "").strip().lower()
+        if level not in EFFORT_LEVELS:
+            return [f"无效的推理强度 {level!r}：只能是 {'、'.join(EFFORT_LEVELS)}。"]
+        current, pending = metrics.state.effort, metrics.state.effort_pending
+        if level == current:
+            if pending:
+                metrics.request_effort(None)
+                return [f"已取消切换到 {pending} 的申请，推理强度保持 {current}。"]
+            return [f"推理强度已经是 {current}，不需要切换。"]
+        metrics.request_effort(level, (reason or "").strip()[:200])
+        print(f"[run] 智能体申请把推理强度从 {current} 切换为 {level}：{reason}", flush=True)
+        return [f"已登记：推理强度将从 {current} 切换为 {level}。现在请直接结束本轮（回复一句话，不再调用工具），"
+                f"系统会立即切换并让你继续；在本轮结束之前仍按 {current} 运行。"]
 
     def reset_clock() -> None:
         state["last_return"] = time.monotonic()

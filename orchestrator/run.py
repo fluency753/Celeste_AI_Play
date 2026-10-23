@@ -87,6 +87,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             flag = f"--{key.replace('_', '-')}"
             if not any(a == flag or a.startswith(flag + "=") for a in sys.argv):
                 setattr(args, key, state[key])
+        if not any(a == "--effort" or a.startswith("--effort=") for a in sys.argv):
+            # 推理强度沿用中断时生效的那个（智能体可能用 set_effort 调整过），而不是开局的值
+            args.effort = previous["metrics"].get("effort") or args.effort
         args.sim = args.sim or state["sim"]
         args.skip_enter = True
         args.no_study = True

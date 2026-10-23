@@ -221,8 +221,10 @@ def crop_to_view(obs: dict, margin: int = 16) -> tuple[list[dict], dict | None]:
     return shown, tiles
 
 
-def describe_obs(obs: dict, elapsed_s: float, budget_s: float, full_room: bool = True) -> str:
-    """full_room=True：整个房间的实体与地图（进入新房间、主动观察时）；False：只描述当前画面附近。"""
+def describe_obs(obs: dict, elapsed_s: float, budget_s: float, full_room: bool = True,
+                 effort: str | None = None) -> str:
+    """full_room=True：整个房间的实体与地图（进入新房间、主动观察时）；False：只描述当前画面附近。
+    effort：附在头部的推理强度说明（例如"推理强度：high"）。"""
     lines: list[str] = []
     level = obs.get("level")
     player = obs.get("player")
@@ -234,6 +236,8 @@ def describe_obs(obs: dict, elapsed_s: float, budget_s: float, full_room: bool =
     else:
         head += f"场景 {obs.get('scene')}"
     head += f" · 现实用时 {fmt_clock(elapsed_s)} / 预算 {fmt_clock(budget_s)}"
+    if effort:
+        head += f" · {effort}"
     lines.append(head)
 
     if player:

@@ -35,10 +35,19 @@
     "dash0": "#5BC0EB",
     "dash1": "#E0475B",
     "dash2": "#F28AC4",
+    "effort": "#5B8DEF",
+    "effort_high": "#F5B841",
     "thinking": "#F5B841",
     "executing": "#4CC38A",
     "retrying": "#F08A3C",
     "studying": "#7AA2F7",
     "idle": "#8A93A6"
+  },
+  "effort_names": {
+    "low": "低",
+    "medium": "中",
+    "high": "高",
+    "xhigh": "超高",
+    "max": "最高"
   }
 }

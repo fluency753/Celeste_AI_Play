@@ -54,7 +54,23 @@
   .dot.breathe { animation: breathe 1.6s ease-in-out infinite; }
   @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   .room { margin-left: auto; font-weight: 700; white-space: nowrap; }
-  .timer { font-size: calc(32 * var(--px)); font-weight: 700; line-height: 1.15; margin: calc(8 * var(--px)) 0 calc(10 * var(--px)); letter-spacing: -0.01em; }
+  .top { display: flex; align-items: flex-end; justify-content: space-between; gap: calc(12 * var(--px));
+         margin: calc(8 * var(--px)) 0 calc(10 * var(--px)); }
+  .timer { font-size: calc(32 * var(--px)); font-weight: 700; line-height: 1.15; letter-spacing: -0.01em; white-space: nowrap; }
+  /* 推理强度：计时右侧的小块，五格刻度由低到高，xhigh 与 max 用暖色 */
+  .effort { text-align: right; white-space: nowrap; padding-bottom: calc(2 * var(--px)); }
+  .effort.hidden { display: none; }
+  .effort .label { line-height: 1.3; }
+  .effort-val { display: flex; align-items: flex-end; justify-content: flex-end; gap: calc(7 * var(--px));
+                font-size: calc(16 * var(--px)); font-weight: 700; line-height: 1.25; }
+  .meter { display: inline-flex; align-items: flex-end; gap: calc(2 * var(--px)); height: calc(14 * var(--px));
+           padding-bottom: calc(3 * var(--px)); }
+  .meter i { display: block; width: calc(4 * var(--px)); border-radius: calc(1 * var(--px)); background: var(--track);
+             transition: background-color 200ms linear; }
+  .meter i:nth-child(1) { height: 36%; } .meter i:nth-child(2) { height: 52%; } .meter i:nth-child(3) { height: 68%; }
+  .meter i:nth-child(4) { height: 84%; } .meter i:nth-child(5) { height: 100%; }
+  .meter i.on { background: var(--effort, var(--bar)); }
+  .pending { color: var(--pending, #F5B841); font-weight: 500; animation: breathe 1.6s ease-in-out infinite; }
   .rule { height: max(1px, var(--px)); background: var(--border); margin-bottom: calc(10 * var(--px)); }
   .grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: calc(16 * var(--px)); row-gap: calc(9 * var(--px)); }
   .label { font-size: calc(12 * var(--px)); color: var(--label); line-height: 1.4; }
@@ -85,7 +101,16 @@
     <span class="status"><span class="dot" id="dot"></span><span id="status">等待</span></span>
     <span class="room" id="room"></span>
   </div>
-  <div class="timer num" id="timer">0:00:00.000</div>
+  <div class="top">
+    <div class="timer num" id="timer">0:00:00.000</div>
+    <div class="effort hidden" id="effortBox">
+      <div class="label">推理强度</div>
+      <div class="effort-val">
+        <span class="meter" id="effortMeter"><i></i><i></i><i></i><i></i><i></i></span>
+        <span id="effort"></span><span class="pending" id="effortPending"></span>
+      </div>
+    </div>
+  </div>
   <div class="rule"></div>
   <div class="grid">
     <div><div class="label">思考总时间</div><div class="value num" id="thinking">0:00:00</div></div>
@@ -119,6 +144,9 @@ const STATUS = {
   done:      ["已完成", "idle", false],
   stopped:   ["已结束", "idle", false],
 };
+// 推理强度：Claude Code 的五档，刻度格数与默认中文名（configs/hud.json 的 effort_names 可覆盖）
+const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+const EFFORT_NAMES = { low: "低", medium: "中", high: "高", xhigh: "超高", max: "最高" };
 let state = null, config = null, offset = 0, shownThought = null, lastThoughtCheck = 0;
 const $ = (id) => document.getElementById(id);
 
@@ -202,6 +230,21 @@ function render() {
     game += Math.min(0.15, Math.max(0, now - m.chapter_time_wall));
   }
   $("timer").textContent = clock(game, true);
+
+  // 推理强度：当前生效的档位；智能体申请了切换、还没生效时，后面跟一个呼吸闪烁的"→ 目标档位"
+  const box = $("effortBox");
+  const level = EFFORT_LEVELS.indexOf(m.effort);
+  box.classList.toggle("hidden", level < 0);
+  if (level >= 0) {
+    const names = Object.assign({}, EFFORT_NAMES, (config && config.effort_names) || {});
+    $("effort").textContent = names[m.effort] || m.effort;
+    const pending = m.effort_pending && m.effort_pending !== m.effort ? (names[m.effort_pending] || m.effort_pending) : "";
+    $("effortPending").textContent = pending ? `→ ${pending}` : "";
+    const warm = level >= 3;
+    box.style.setProperty("--effort", warm ? (c.effort_high || "#F5B841") : (c.effort || c.bar || "#5B8DEF"));
+    box.style.setProperty("--pending", c.thinking || "#F5B841");
+    $("effortMeter").querySelectorAll("i").forEach((el, i) => el.classList.toggle("on", i <= level));
+  }
 
   let thinking = m.thinking_s || 0;
   if (playing && !ended && (m.status === "thinking" || m.status === "compacting") && m.thinking_since_wall > 0) {

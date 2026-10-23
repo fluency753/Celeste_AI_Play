@@ -8,6 +8,11 @@
 两种方式共同的措施：--strict-mcp-config 只加载本项目的游戏工具服务；--permission-mode dontAsk 拒绝一切未预先
 允许的调用；不读取使用者自己的 Claude Code 配置、CLAUDE.md 与自动记忆；启动时核对工具列表，多出任何工具立即停止。
 
+推理强度：以 --effort 启动（默认 high）。智能体用游戏工具 set_effort 申请调整，本轮结束后主控在同一个会话里发送
+/effort <强度>（Claude Code 的斜杠命令，回复 "Set effort level to …" 即为生效），再发消息让它接着玩；
+一轮进行中发出的 /effort 要等这一轮结束才会执行，所以只在两轮之间切换。Claude Code 进程重启（额度等待后接回会话）
+时用当前强度启动。
+
 Max 额度：默认一直用到额度真正用完（Claude Code 报告限额拒绝）为止；用完时结束 Claude Code 进程，游戏保持冻结，
 等到额度重置后用 --resume 接着同一个会话继续（上下文保留），等待时间不计入现实用时；要等超过
 --quota-wait-max-hours 才重置时结束本次运行。可选的 --max-usage 让主控在用量到某个比例时提前这样暂停。
@@ -27,7 +32,9 @@ from .game_session import GameSession
 from .kb_study import KbStudy
 from .metrics import Metrics
 
-GAME_TOOLS = ["mcp__celeste__observe", "mcp__celeste__act"]
+GAME_TOOLS = ["mcp__celeste__observe", "mcp__celeste__act", "mcp__celeste__set_effort"]
+# /effort 命令成功时 Claude Code 的回复，例如 "Set effort level to low (this session only): ..."
+EFFORT_OK = re.compile(r"^Set effort level to (\w+)")
 # 额度用完时 Claude Code 给出的提示（没收到 rejected 限额事件时的后备判断），例如
 # "Claude AI usage limit reached|1792766400"、"You've hit your limit · resets 3pm"
 LIMIT_TEXT = re.compile(r"usage limit|hit your (?:usage )?limit|rate[ _]limit", re.I)
@@ -113,10 +120,17 @@ class ClaudeRunner:
         self._turn_done = asyncio.Event()
         self._init_checked = False
         self.stop_reason = ""
+        self._command_active = False             # 正在执行主控自己发出的斜杠命令（/effort）
+        self._command_reply = ""
+
+    @property
+    def effort(self) -> str:
+        """当前生效的推理强度（启动参数与 /effort 切换都以它为准）。"""
+        return self.metrics.state.effort or self.cfg.effort
 
     def _common_args(self) -> list[str]:
         args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                "--model", self.cfg.model, "--effort", self.cfg.effort,
+                "--model", self.cfg.model, "--effort", self.effort,
                 "--strict-mcp-config", "--permission-mode", "dontAsk",
                 *(["--resume", self.session_id] if self.resume else ["--session-id", self.session_id])]
         if self.cfg.autocompact:
@@ -190,6 +204,8 @@ class ClaudeRunner:
             first = study_prompt(self.study) if self.study else FIRST_PROMPT
         try:
             while True:
+                if (note := self._effort_at_start()):
+                    first = note + first
                 stopped = await self._run_process(workdir, first)
                 if stopped or self.quota_until is None:
                     break
@@ -253,13 +269,53 @@ class ClaudeRunner:
                 if self.idle_turns >= 3:
                     self.stop_reason = "连续 3 轮没有调用工具"
                     return True
+                note = await self._switch_effort() if self.metrics.state.effort_pending else ""
                 if self.study is not None and not self.study.ready():
-                    await self._send(self.study.reminder())
+                    await self._send(note + self.study.reminder())
                 else:
-                    await self._send(CONTINUE_PROMPT)
+                    await self._send(note + CONTINUE_PROMPT)
         finally:
             await self._shutdown(reader)
             stderr_log.close()
+
+    def _effort_at_start(self) -> str:
+        """启动（或额度等待后重启）Claude Code 之前：有待生效的推理强度就直接用它作启动参数。"""
+        level = self.metrics.state.effort_pending
+        if not level:
+            return ""
+        before = self.effort
+        if level == before:
+            self.metrics.request_effort(None)
+            return ""
+        self.metrics.effort_applied(level, via="启动参数")
+        print(f"[agent] 推理强度 {before} → {level}（重启 Claude Code 时生效）", flush=True)
+        return f"（系统）推理强度已从 {before} 切换为 {level}。"
+
+    async def _switch_effort(self) -> str:
+        """两轮之间切换推理强度：在同一个会话里发送 /effort <强度>，等 Claude Code 确认。返回给智能体的说明。"""
+        level = self.metrics.state.effort_pending
+        before = self.effort
+        if level == before:
+            self.metrics.request_effort(None)
+            return ""
+        self._command_reply = ""
+        self._command_active = True
+        self._turn_done.clear()
+        try:
+            await self._write(f"/effort {level}")
+            finished = await self._wait_turn(60)
+        finally:
+            self._command_active = False
+            self._turn_done.clear()
+        reply = self._command_reply or ""
+        m = EFFORT_OK.match(reply)
+        if finished and m and m.group(1) == level:
+            self.metrics.effort_applied(level, via="/effort")
+            print(f"[agent] 推理强度 {before} → {level}", flush=True)
+            return f"（系统）推理强度已从 {before} 切换为 {level}。"
+        self.metrics.request_effort(None)
+        print(f"[agent] 推理强度切换失败（{reply[:120]!r}），保持 {before}", flush=True)
+        return f"（系统）推理强度切换没有成功，仍为 {before}。"
 
     async def _wait_for_quota(self) -> float:
         """等到额度重置（再多等 2 分钟）；返回等待的分钟数。等待期间游戏冻结，现实用时不走。"""
@@ -291,12 +347,15 @@ class ClaudeRunner:
     def _idle_status(self) -> str:
         return "thinking" if self.metrics.playing else "studying"
 
-    async def _send(self, text: str) -> None:
-        self.turns += 1
-        self._tool_calls_this_turn = 0
+    async def _write(self, text: str) -> None:
         message = {"type": "user", "message": {"role": "user", "content": text}}
         self.proc.stdin.write((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
         await self.proc.stdin.drain()
+
+    async def _send(self, text: str) -> None:
+        self.turns += 1
+        self._tool_calls_this_turn = 0
+        await self._write(text)
         self.reset_clock()
         self.metrics.update(status=self._idle_status())
 
@@ -401,6 +460,8 @@ class ClaudeRunner:
                   f"用时 {(meta.get('duration_ms') or 0) / 1000:.1f} 秒", flush=True)
         elif etype == "assistant":
             message = event.get("message") or {}
+            if self._command_active:
+                return  # /effort 等主控命令的回复，不是模型输出
             if event.get("error") == "rate_limit" or message.get("model") == "<synthetic>":
                 text = " ".join(b.get("text", "") for b in message.get("content") or [] if b.get("type") == "text")
                 if event.get("error") == "rate_limit" or LIMIT_TEXT.search(text):
@@ -447,6 +508,11 @@ class ClaudeRunner:
                 print(f"[agent] 用量限制：{info}", flush=True)
         elif etype == "system" and subtype == "api_retry":
             print(f"[agent] API 重试：{event.get('error')} attempt={event.get('attempt')}", flush=True)
+        elif etype == "result" and (self._command_active or EFFORT_OK.match(str(event.get("result") or ""))):
+            # 主控发出的 /effort 命令执行完（超时之后才到的确认也在这里吃掉，不当作智能体的一轮）
+            self._command_reply = str(event.get("result") or "")
+            if self._command_active:
+                self._turn_done.set()
         elif etype == "result":
             if event.get("is_error") and LIMIT_TEXT.search(str(event.get("result") or "")):
                 self._quota_from_text(str(event.get("result")))
