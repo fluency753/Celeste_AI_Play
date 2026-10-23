@@ -163,13 +163,15 @@ class ClaudeRunner:
                 if not self.metrics.playing and self.study is not None:
                     # 准备阶段：不消耗现实用时预算，只受准备阶段上限约束
                     remaining = self.study.deadline() - time.monotonic()
-                    if remaining <= 0 or not await self._wait_turn(remaining):
-                        if not self.metrics.playing:
-                            self.study.force_open()
-                            self.metrics.start_play()
-                            self.reset_clock()
-                            print(f"[agent] 准备阶段到达上限 {self.study.minutes:g} 分钟，开始计时"
-                                  f"（知识库已读 {self.study.progress():.0%}）", flush=True)
+                    if remaining <= 0:
+                        self.study.force_open()
+                        self.metrics.start_play()
+                        self.reset_clock()
+                        print(f"[agent] 准备阶段到达上限 {self.study.minutes:g} 分钟，开始计时"
+                              f"（知识库已读 {self.study.progress():.0%}）", flush=True)
+                        continue
+                    # 每秒复查一次：智能体在这一轮中途开始游玩时，要立即改用现实用时预算
+                    if not await self._wait_turn(min(remaining, 1.0)):
                         continue
                 else:
                     remaining = self.cfg.budget_seconds - self.metrics.elapsed()
