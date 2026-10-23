@@ -30,9 +30,14 @@ def main() -> int:
     try:
         # 1A 最后一个房间 end：终点触发器在房间里 (240, 120)，宽 64 高 32
         with session.lock:
-            session.client.call("load_room", room="end", chapter=1)
-            session.client.call("teleport", x=4050, y=-3056)
-            session.client.call("step", inputs=["20"], image=False, entities=False, tiles=False)
+            c = session.client
+            c.call("load_room", room="end", chapter=1)
+            for _ in range(40):  # 等房间载入完、恢复可操作
+                obs = c.call("step", inputs=["10"], image=False, entities=False, tiles=False)["obs"]
+                if obs.get("controllable") and (obs.get("level") or {}).get("room") == "end":
+                    break
+            c.call("teleport", x=4050, y=-3056)
+            c.call("step", inputs=["20"], image=False, entities=False, tiles=False)
         outcome = session.act(["90,R"], "衔接自检：走进终点", ["death", "room"])
         level = outcome.obs.get("level") or {}
         print("停止原因：", outcome.result["stop"])
