@@ -15,7 +15,9 @@ CHAPTER_NAMES = {
 }
 
 # 章节编号（菜单宏与 --chapters 用的地图编号）→ 章节 SID
-CHAPTER_SIDS = {0: "Celeste/0-Intro", 1: "Celeste/1-ForsakenCity", 2: "Celeste/2-OldSite"}
+CHAPTER_SIDS = {i:'Celeste/'+name for i,name in enumerate([
+    '0-Intro','1-ForsakenCity','2-OldSite','3-CelestialResort','4-GoldenRidge',
+    '5-MirrorTemple','6-Reflection','7-Summit','8-Epilogue','9-Core','LostLevels'])}
 
 
 def chapter_name(sid: str) -> str:
@@ -116,6 +118,7 @@ class RunConfig:
     model: str                      # Claude Code 模型别名：opus / fable；第三方提供方写它的模型名
     provider: str = "anthropic"     # 模型提供方（configs/providers.json）：anthropic 用 Max 订阅，其他用本机保存的 API 密钥
     provider_info: dict | None = None  # load_provider(provider) 的结果
+    engine: str = "claude"          # claude：原有执行器；codex：原生 app-server + 客户端沙箱工具
     effort: str = "high"
     bridge_port: int = 47774
     mcp_port: int = 47780
@@ -124,9 +127,13 @@ class RunConfig:
     play_speed: int = 1             # 智能体动作块的推进速度（1 = 实时 60 帧/秒）
     auto_speed: int = 1             # 转场、剧情、重生等自动推进段的速度（1 = 与原版一致；大于 1 只用于调试）
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
+    create_save: bool = False       # 显式新建空存档；只用于首次进档，不用于续跑或换章
+    save_slot: int | None = None    # 存档身份由槽位决定，名称可以重复
+    cutscene_mode: str = 'auto'     # auto 自动跳过；agent 自行决定观看、推进或跳过
+    play_scope: str = 'chapter'     # independent of the user's dynamic stop goal
     chapter: int | None = None      # 菜单宏进入的章节编号；None = 选章页当前章节
     chapters: list[int] | None = None  # 依次通关的章节（如 [0, 1, 2]）：一章完成后主控自动进入下一章，智能体接着玩
-    runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具（M2 的过渡方式）
+    runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具
     image: str = "celeste-agent:0.1"
     autocompact: str | None = None   # Claude Code 自动压缩的窗口：None 用默认，"auto" 或 100000~1000000 的 token 数
     seccomp_unconfined: bool = True  # 容器内 Bash 沙箱（bubblewrap）需要创建命名空间，Docker 默认的 seccomp 配置不允许
@@ -149,9 +156,12 @@ class RunConfig:
     playback_max_s: float = 30.0     # 一轮回放的时长上限（超过时这一轮整体提高倍速，防止回放拖得太长）
     thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
     sim: bool = False                # 预置模拟器：把本机的 sim/dist 只读挂到容器的 /sim，每次停下都把当前帧的完整场景写进工作区
+    sim_assist: bool = False         # 新手模式的限额模拟：后台持有模拟器，真实试玩赚取体力
+    knowledge_profile: str = "full"  # explore：精简入门资料和独立工作区；full：原有速通资料
     record: bool = True              # OBS 录屏：主控自己启动 OBS（没在运行时）并锁步录制，结束时关掉它启动的 OBS
+    continuous_music: bool = False   # 直播：冻结逻辑时继续播放音乐，仅暂停音效
     live: bool = True                # 实时展示：智能体思考期间用 narrate 随时更新 HUD 的思考内容，运行程序期间报告进度（HUD 工具栏）
-    live_remind_s: float = 30.0      # 实时展示：思考状态累计这么多秒没有 narrate，就在下一次调用工具时提醒（半分钟计时器）
+    live_remind_s: float = 10.0      # 实时展示：累计这么多秒没有公开解说，在下一次工具调用时提醒
 
     @property
     def third_party(self) -> bool:
@@ -175,7 +185,12 @@ class RunConfig:
     @property
     def workspace_dir(self) -> Path:
         """智能体的工作区：按智能体标签区分，跨存档、跨运行保留（test 存档上准备的程序可以带进正式挑战）。"""
-        return REPO_ROOT / "workspaces" / self.agent
+        tag = self.agent + ("-explore" if self.knowledge_profile == "explore" else "")
+        return REPO_ROOT / "workspaces" / tag
+
+    @property
+    def kb_dir(self) -> Path:
+        return REPO_ROOT / "kb" / "explore" if self.knowledge_profile == "explore" else REPO_ROOT / "kb"
 
     @property
     def sim_dir(self) -> Path:

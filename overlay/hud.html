@@ -8,9 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-  /* 尺寸以卡片宽度为基准：设计稿按 1080p 下页面宽 350 px（游戏宽 1920 的约 18%）给出像素值，
-     换算成视口宽度的比例，置顶窗口或 OBS 浏览器源放大缩小时整体等比缩放。
-     版式：一个大数字（章节计时，左侧色条跟随 Madeline 的发色），其余信息安静地排在下面，思考语句字号最大。 */
+  /* 字号由独立设置决定；卡片占满当前窗口或 OBS 来源的内容区域。 */
   :root {
     --card: rgba(16, 19, 34, 0.80);
     --rule: rgba(255, 255, 255, 0.10);
@@ -18,9 +16,14 @@
     --label: #8F9AB3;
     --warn: #F08A3C;
     --theme: #E0475B;
-    --px: calc(100vw / 350);           /* 1 设计像素 */
+    --px: 1px;                       /* 字号独立于窗口尺寸 */
   }
   html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  * { scrollbar-width:thin; scrollbar-color:#64718b transparent; }
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#64718b; border-radius:6px; }
+  ::-webkit-scrollbar-thumb:hover { background:#8291ad; }
   body {
     font-family: "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
     color: var(--text);
@@ -32,6 +35,8 @@
          font-variant-numeric: tabular-nums; font-weight: 600; letter-spacing: 0.01em; }
   .card {
     position: relative;
+    display: flex; flex-direction: column; box-sizing: border-box;
+    height: calc(var(--hud-height, 100vh) - 8 * var(--px));
     margin: calc(4 * var(--px));
     padding: calc(13 * var(--px)) calc(16 * var(--px)) calc(14 * var(--px)) calc(21 * var(--px));
     background: var(--card);
@@ -40,6 +45,7 @@
     box-shadow: 0 calc(3 * var(--px)) calc(12 * var(--px)) rgba(0, 0, 0, 0.32);
   }
   .card.hidden { visibility: hidden; }
+  .card > * { flex-shrink: 0; }
   .bar-left {
     position: absolute; left: calc(8 * var(--px)); top: calc(14 * var(--px)); bottom: calc(14 * var(--px));
     width: calc(3 * var(--px)); border-radius: calc(2 * var(--px)); background: var(--theme);
@@ -93,26 +99,77 @@
 
   .thought {
     margin-top: calc(10 * var(--px));
-    font-size: calc(17 * var(--px)); line-height: 1.5; font-weight: 500;
-    display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden;
+    font-size: calc(15 * var(--px)); line-height: 1.5; font-weight: 500;
+    flex: 1 1 0; min-height: 0;
+    overflow-y: auto; overscroll-behavior: contain;
     overflow-wrap: anywhere;
   }
+  .thought-entry { padding: calc(9 * var(--px)) calc(10 * var(--px)); margin: calc(7 * var(--px)) calc(3 * var(--px)) calc(7 * var(--px)) 0;
+    background: rgba(150, 173, 225, 0.10); border: 1px solid var(--rule); border-radius: calc(9 * var(--px)); white-space: pre-wrap; }
+  .thought-entry:last-child { background: rgba(127, 166, 245, 0.18); }
+  .thought-entry .tag { display: block; color: var(--label); font-size: calc(11 * var(--px)); font-weight: 400; }
+  .hud-desktop .head { cursor: move; user-select: none; }
+  .window-bar { display:none; }
+  .hud-desktop .window-bar { display:flex; align-items:center; gap:calc(5 * var(--px)); margin-bottom:calc(5 * var(--px)); cursor:move; user-select:none; }
+  .window-bar .caption { flex:1; color:var(--label); font-size:calc(11 * var(--px)); }
+  .window-bar button { color:var(--label); background:transparent; border:1px solid transparent; border-radius:4px; padding:calc(2 * var(--px)) calc(5 * var(--px)); font:inherit; font-size:calc(12 * var(--px)); cursor:pointer; }
+  .window-bar button:hover { background:rgba(150,173,225,.18); color:var(--text); }
+  .window-bar button[aria-pressed="true"] { color:#a9caff; background:rgba(91,145,230,.2); }
+  #windowClose:hover { background:#b83b4d; color:white; }
+  .thought-entry.from-user { background: rgba(91,145,230,.24); }
+  .thought-entry.system { font-size:calc(12 * var(--px)); color:#d8c395; text-align:center; background:rgba(190,153,82,.1); }
+  #agentControls { margin-top: calc(8 * var(--px)); padding-top: calc(8 * var(--px)); border-top: 1px solid var(--rule);
+    max-height:48vh; min-height:0; flex-shrink:1; overflow-y:auto; overscroll-behavior:contain; }
+  .obs-surface #agentControls { display: none; }
+  .obs-surface body { width: 100vw; height: 100vh; }
+  #agentInput { box-sizing: border-box; width: 100%; height: calc(54 * var(--px)); resize: none; padding: calc(7 * var(--px)); border: 1px solid #52678e; border-radius: 6px; background: #1b2436; color: var(--text); font: inherit; font-size: calc(13 * var(--px)); }
+  #liveEffort { min-width:0; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; font:inherit; font-size:calc(12 * var(--px)); padding:calc(3 * var(--px)); }
+  #sessionSelect { box-sizing:border-box; width:100%; margin-bottom:calc(6 * var(--px)); padding:calc(4 * var(--px)); border:1px solid #52678e; border-radius:5px; background:#1b2436; color:var(--text); font:inherit; font-size:calc(12 * var(--px)); }
+  #sessionPanel { font-size:calc(12 * var(--px)); margin-bottom:calc(6 * var(--px)); }
+  #sessionPanel summary { cursor:pointer; color:var(--label); padding:calc(3 * var(--px)) 0; }
+  #sessionPanel input, #sessionPanel select { box-sizing:border-box; min-width:0; max-width:100%; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; padding:calc(4 * var(--px)); }
+  #sessionName { width:100%; margin-top:calc(4 * var(--px)); }
+  #sessionModel { flex:1; width:0; }
+  #modelChoiceStatus { font-size:calc(11 * var(--px)); color:var(--warn); overflow-wrap:anywhere; }
+  #sessionOperation { color:var(--label); overflow-wrap:anywhere; white-space:pre-wrap; }
+  #goalPanel { margin-bottom:calc(6 * var(--px)); font-size:calc(12 * var(--px)); max-height:38vh; overflow:auto; }
+  #goalPanel summary { cursor:pointer; color:var(--label); padding:calc(3 * var(--px)) 0; }
+  #goalText { box-sizing:border-box; width:100%; height:calc(45 * var(--px)); resize:vertical; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:5px; }
+  #goalPanel select, #goalPanel input { min-width:0; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; padding:calc(3 * var(--px)); }
+  .goal-row { display:flex; gap:calc(3 * var(--px)); margin-top:calc(4 * var(--px)); }
+  .goal-row select { flex:1; } .goal-row input { width:calc(60 * var(--px)); }
+  #goalStatus { color:var(--label); font-size:calc(11 * var(--px)); margin-top:calc(5 * var(--px)); white-space:pre-wrap; }
+  #goalStop { border-color:#ae665d; }
+  .control-buttons { display:flex; align-items:center; gap:calc(5 * var(--px)); margin-top:calc(5 * var(--px)); }
+  .control-buttons button { font:inherit; font-size:calc(12 * var(--px)); border:1px solid #52678e; border-radius:5px; color:#dce8ff; background:#263652; padding:calc(4 * var(--px)) calc(8 * var(--px)); cursor:pointer; }
+  .control-buttons button:disabled { opacity:.4; cursor:default; }
+  #agentSend { margin-left:auto; }
+  #controlStatus { font-size:calc(11 * var(--px)); color:var(--label); margin-top:calc(3 * var(--px)); }
+  .resize-handle { display: none; position: fixed; z-index: 100; }
+  .hud-desktop .resize-handle { display: block; background: rgba(127, 166, 245, 0.02); }
+  .hud-desktop .resize-handle:hover { background: rgba(127, 166, 245, 0.3); }
+  [data-resize="n"], [data-resize="s"] { left: 12px; right: 12px; height: 7px; cursor: ns-resize; }
+  [data-resize="n"] { top: 0; } [data-resize="s"] { bottom: 0; }
+  [data-resize="w"], [data-resize="e"] { top: 12px; bottom: 12px; width: 7px; cursor: ew-resize; }
+  [data-resize="w"] { left: 0; } [data-resize="e"] { right: 0; }
+  [data-resize="nw"], [data-resize="ne"], [data-resize="sw"], [data-resize="se"] { width: 13px; height: 13px; }
+  [data-resize="nw"] { top: 0; left: 0; cursor: nwse-resize; }
+  [data-resize="ne"] { top: 0; right: 0; cursor: nesw-resize; }
+  [data-resize="sw"] { bottom: 0; left: 0; cursor: nesw-resize; }
+  [data-resize="se"] { bottom: 0; right: 0; cursor: nwse-resize; }
   .thought:empty { display: none; }
-  /* 五行放不下时字号缩小一档、最多六行（页面高度不变） */
-  .thought.small { font-size: calc(15 * var(--px)); -webkit-line-clamp: 6; }
-  .thought.fade { animation: fadein 200ms ease-out; }
   /* 规划回放时思考语句下面的一行小字：第几轮、推演了多少条路线 */
   .meta { margin-top: calc(4 * var(--px)); font-size: calc(13 * var(--px)); color: var(--label);
           display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .meta:empty { display: none; }
-  @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
   @media (prefers-reduced-motion: reduce) {
-    .dot.breathe, .pending, .thought.fade { animation: none; }
+    .dot.breathe, .pending { animation: none; }
   }
 </style>
 </head>
 <body>
 <div class="card hidden" id="card">
+  <div class="window-bar"><span class="caption">HUD</span><button id="windowPin" type="button" aria-label="切换窗口置顶" aria-pressed="true" title="取消置顶">置顶</button><button id="windowMinimize" type="button" aria-label="最小化到托盘" title="最小化到托盘；双击右下角红色 AI 图标恢复">−</button><button id="windowClose" type="button" aria-label="关闭桌面 HUD" title="关闭桌面 HUD">×</button></div>
   <div class="bar-left" id="theme"></div>
   <div class="head">
     <span class="name" id="name">—</span>
@@ -135,26 +192,66 @@
     <div class="stat"><span class="k">上下文</span><span class="v num" id="ctx">0</span></div>
     <div class="stat"><span class="k">工具</span><span class="v num" id="tool">0:00:00</span></div>
     <div class="stat"><span class="k">压缩</span><span class="v num" id="compact">0</span></div>
+    <div class="stat hidden" id="chatSourceBox"><span class="k">数据来源</span><span class="v" id="chatSource">—</span></div>
+    <div class="stat hidden" id="chatCallsBox"><span class="k" id="toolCountLabel">聊天工具调用</span><span class="v num" id="chatCalls">—</span></div>
     <div class="stat"><span class="k">知识库读取</span><span class="v num" id="study">—</span></div>
     <div class="stat"><span class="k">死亡</span><span class="v num" id="deaths">0 次</span></div>
     <div class="stat"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0 次</span></div>
     <div class="stat"><span class="k">推演路径</span><span class="v num" id="simRuns">0 条</span></div>
     <div class="stat"><span class="k">推演最速</span><span class="v num" id="simBest">—</span></div>
+    <div class="stat wide hidden" id="simEnergyBox"><span class="k">模拟体力</span><span class="v num" id="simEnergy">—</span></div>
     <div class="stat wide"><span class="k">调用工具</span><span class="v call" id="toolCall">—</span></div>
   </div>
   <div class="rule"></div>
-  <div class="thought" id="thought"></div>
+  <div class="thought" id="thought" tabindex="0" aria-label="公开解说历史，可滚动查看"></div>
   <div class="meta" id="meta"></div>
+  <form id="agentControls">
+    <select id="sessionSelect" aria-label="独立 agent 会话" title="选择本项目的 agent 会话；试玩结束后可切换聊天" disabled><option>正在读取会话…</option></select>
+    <details id="sessionPanel">
+      <summary>会话管理</summary>
+      <select id="sessionRuntime" aria-label="新会话执行器与提供方"><option value="codex:codex">Codex</option></select>
+      <input id="sessionName" aria-label="新会话名称" placeholder="新会话名称（可选）" maxlength="60">
+      <div class="control-buttons"><select id="sessionModel" aria-label="新会话模型" disabled><option value="">正在读取模型…</option></select><button id="sessionModelRefresh" type="button" title="重新读取所选执行器的模型列表">刷新</button></div>
+      <div id="modelChoiceStatus" role="status"></div>
+      <div class="control-buttons"><label>推理 <select id="sessionEffort" disabled><option value="">读取中…</option></select></label><button id="sessionNew" type="button" title="新建独立会话并准备入门资料，完成后可聊天或开始试玩">新建并准备</button><button id="sessionDisconnect" type="button">断开会话</button></div>
+      <select id="sessionSave" aria-label="选择游戏存档"><option value="">选择存档…</option><option value="new">新建独立存档</option></select>
+      <input id="sessionSaveName" aria-label="新存档名" placeholder="新存档名（留空由 agent 取名）" maxlength="20" hidden>
+      <div id="sessionSaveStatus" role="status" hidden></div>
+      <div class="control-buttons"><label>起始A面 <input id="sessionChapter" type="number" min="0" max="10" value="0" style="width:3.5em"></label><select id="sessionScope" aria-label="试玩范围"><option value="campaign">顺序游玩</option><option value="chapter">仅这一章</option></select><button id="sessionPlay" type="button" title="进入所选存档和章节后保持暂停，点击继续才开始操作">开始试玩</button></div>
+      <label><input id="sessionSimAssist" type="checkbox" disabled>有限模拟辅助<span id="simAvailability">（检查安装状态…）</span></label>
+      <div id="sessionOperation" role="status" hidden></div>
+    </details>
+    <details id="goalPanel">
+      <summary>目标与停止条件</summary>
+      <textarea id="goalText" aria-label="任务目标" placeholder="自由填写任务，例如探索支路、尝试收集眼前的草莓" maxlength="4000"></textarea>
+      <div class="control-buttons"><span>自动停止：</span><select id="goalMatch" aria-label="条件组合"><option value="all">满足全部条件</option><option value="any">满足任一条件</option></select><button id="goalAdd" type="button">＋条件</button></div>
+      <div id="goalConditions"></div>
+      <div class="control-buttons"><button id="goalSave" type="button">更新目标</button><button id="goalClear" type="button">清除目标</button><button id="goalStop" type="button" title="取消正在执行的动作，结束试玩并保存录像">立即停止并保存</button></div>
+      <div id="goalStatus" role="status"></div>
+    </details>
+    <textarea id="agentInput" aria-label="给独立 agent 的提示" placeholder="给 agent 发提示… Enter 发送，Shift+Enter 换行" maxlength="4000"></textarea>
+    <div class="control-buttons" style="flex-wrap:wrap"><button id="togglePlay" type="button" disabled>暂停</button><button id="toggleFast" type="button" aria-pressed="false" title="切换独立 agent 的 Fast 模式，下一轮生效" disabled>Fast：—</button><select id="liveEffort" aria-label="当前会话推理强度" title="手动固定推理强度，下一轮生效；自动表示由 agent 调整" disabled><option value="auto">推理：自动</option></select><select id="cutsceneMode" aria-label="剧情处理模式" title="可在开始前和游玩中切换；agent决定时自行观看、推进、选择或跳过" disabled><option value="auto">剧情：自动跳过</option><option value="agent">剧情：agent决定</option></select><button id="agentSend" type="submit" disabled>发送</button></div>
+    <div id="controlStatus" role="status">正在连接主控…</div>
+  </form>
 </div>
+<div class="resize-handle" data-resize="n"></div><div class="resize-handle" data-resize="s"></div>
+<div class="resize-handle" data-resize="w"></div><div class="resize-handle" data-resize="e"></div>
+<div class="resize-handle" data-resize="nw"></div><div class="resize-handle" data-resize="ne"></div>
+<div class="resize-handle" data-resize="sw"></div><div class="resize-handle" data-resize="se"></div>
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
+const PAGE_VERSION = 45;
+const OBS_SURFACE = params.get('surface') === 'obs';
+document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
 // 这样 OBS 先于 HUD 服务启动也不要紧，服务起来后页面自动取到数据
 const STATE_URL = params.get("state") ||
   (location.protocol.startsWith("http") && location.pathname.startsWith("/hud") ? "/hud/state" : "http://127.0.0.1:47790/hud/state");
 const STATUS = {
   starting:  ["等待", "idle", false],
+  paused:    ["用户暂停", "idle", false],
+  chat_idle: ["等待聊天", "idle", false],
   studying:  ["读知识库", "studying", true],
   thinking:  ["思考中", "thinking", true],
   tool:      ["运行工具", "tool", true],
@@ -167,10 +264,39 @@ const STATUS = {
   done:      ["已完成", "idle", false],
   stopped:   ["已结束", "idle", false],
 };
-// 推理强度：Claude Code 的五档，显示英文档位名（configs/hud.json 的 effort_names 可覆盖）
+// 推理强度：显示执行器实际确认的档位，显示英文档位名（configs/hud.json 的 effort_names 可覆盖）
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
-let state = null, config = null, offset = 0, shownThought = null, lastThoughtCheck = 0;
+let state = null, config = null, offset = 0, shownThought = null;
+let historyRun = null, historySignature = "", historyReady = false, followHistory = true;
+let historyEndpoint = null;
 const $ = (id) => document.getElementById(id);
+document.querySelectorAll('.head,.window-bar').forEach(region=>region.addEventListener('pointerdown', (event) => {
+  if (event.target.closest('button') || !document.documentElement.classList.contains('hud-desktop')) return;
+  event.preventDefault(); window.pywebview?.api.drag_region('move');
+}));
+window.addEventListener('hud-window-state', event=>{
+  const pinned=!!event.detail.topmost;
+  $('windowPin').setAttribute('aria-pressed',String(pinned));
+  $('windowPin').title=pinned?'取消置顶':'将 HUD 保持在最前';
+});
+for (const [id,action] of [['windowPin','pin'],['windowMinimize','minimize'],['windowClose','close']]) {
+  $(id).onclick=()=>window.pywebview?.api.window_action(action);
+}
+for (const handle of document.querySelectorAll('[data-resize]')) {
+  handle.addEventListener('pointerdown', (event) => {
+    event.preventDefault(); window.pywebview?.api.drag_region(handle.dataset.resize);
+  });
+}
+let fontWheelAt = 0;
+window.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey || !document.documentElement.classList.contains('hud-desktop')) return;
+  event.preventDefault();
+  if (performance.now() - fontWheelAt < 70 || !event.deltaY) return;
+  fontWheelAt = performance.now();
+  window.pywebview?.api.change_font(event.deltaY < 0 ? 1 : -1).then(scale => {
+    if (scale && config) { config.font_scale = scale; applyTypography(); }
+  });
+}, {passive: false});
 
 function pad(n, w = 2) { return String(Math.floor(n)).padStart(w, "0"); }
 function clock(sec) {
@@ -187,9 +313,13 @@ function tokens(n) {
   if (n >= 1e4) return Math.round(n / 1000) + "k";
   return (n / 1000).toFixed(1) + "k";
 }
+function telemetryLabel(m) {
+  return ({codex_app_server:'独立 Codex',claude_stream_json:'独立 Claude'})[m.telemetry_source] || '';
+}
 function displayName(m) {
   const names = (config && config.names) || {};
-  return names[m.agent] || names[m.model] || m.agent || "—";
+  if (telemetryLabel(m)) return names[m.model] || m.model || '—';
+  return names[m.model] || names[m.agent] || m.model || m.agent || '—';
 }
 function applyColors() {
   const c = (config && config.colors) || {};
@@ -200,23 +330,124 @@ function applyColors() {
   }
 }
 
+function applyObsLayout() {
+  applyTypography();
+}
+function applyTypography() {
+  const scale = (config && config.font_scale) || 1;
+  const mapping = OBS_SURFACE ? 1 : 1 / (devicePixelRatio || 1);
+  document.body.style.setProperty('--px', `${scale * mapping}px`);
+}
+window.addEventListener('resize', applyObsLayout);
+
 async function poll() {
   try {
     const t0 = Date.now() / 1000;
     const res = await fetch(STATE_URL, { cache: "no-store" });
     const data = await res.json();
+    if (data.config && data.config.page_version && data.config.page_version !== PAGE_VERSION) {
+      location.reload(); return;
+    }
     const t1 = Date.now() / 1000;
     offset = data.now - (t0 + t1) / 2;
-    if (!config || JSON.stringify(config) !== JSON.stringify(data.config)) { config = data.config; applyColors(); }
-    state = data.metrics || null;
+    if (!config || JSON.stringify(config) !== JSON.stringify(data.config)) { config = data.config; applyColors(); applyObsLayout(); }
+    // 切换会话或数据暂时不可用时保留上次画面，避免整个卡片闪空。
+    if (data.metrics) state = data.metrics;
   } catch (e) { /* 主控未启动时保持上一帧 */ }
 }
+
+function thoughtEntry(item) {
+  const entry = document.createElement("div");
+  entry.className = "thought-entry"; entry.dataset.id = item.id;
+  entry.dataset.signature = JSON.stringify(item);
+  entry.classList.toggle('from-user', item.role === 'user');
+  entry.classList.toggle('system', item.role === 'system');
+  const label = document.createElement("span"); label.className = "tag";
+  const stamp = item.wall ? new Date(item.wall * 1000) : null;
+  label.textContent = `${stamp ? `${pad(stamp.getHours())}:${pad(stamp.getMinutes())}:${pad(stamp.getSeconds())} · ` : ""}${item.kind || "解说"}`;
+  entry.append(label, document.createTextNode(item.text));
+  return entry;
+}
+
+function syncThoughtEntries(el, items, reset) {
+  if (reset) el.replaceChildren();
+  const existing = new Map(Array.from(el.children, entry => [entry.dataset.id, entry]));
+  items.forEach((item, index) => {
+    const id = String(item.id);
+    let entry = existing.get(id);
+    if (!entry) entry = thoughtEntry(item);
+    else if (entry.dataset.signature !== JSON.stringify(item)) {
+      const updated = thoughtEntry(item);
+      entry.replaceWith(updated); entry = updated;
+    }
+    existing.delete(id);
+    if (el.children[index] !== entry) el.insertBefore(entry, el.children[index] || null);
+  });
+  for (const entry of existing.values()) entry.remove();
+}
+
+function setText(el, value) {
+  const text = String(value);
+  if (el.textContent !== text) el.textContent = text;
+}
+
+async function pollHistory() {
+  try {
+    const url = historyEndpoint || (config && config.history_url) || STATE_URL.replace(/\/state$/, "/history");
+    let response = await fetch(url, {cache: "no-store"});
+    // 正在游玩的旧主控不必重启；可暂用独立 HUD 服务提供新接口。
+    if (!response.ok) {
+      historyEndpoint = "http://127.0.0.1:47792/hud/history";
+      response = await fetch(historyEndpoint, {cache: "no-store"});
+    }
+    if (!response.ok) return;
+    const data = await response.json();
+    const items = (data.items || []).slice(-12);
+    const signature = JSON.stringify([data.run, items]);
+    if (signature === historySignature) return;
+    historySignature = signature;
+    const el = $("thought");
+    const first = !historyReady || historyRun !== data.run;
+    const oldTop = el.scrollTop;
+    const visibleEntry = Array.from(el.children).find(entry => entry.offsetTop - el.offsetTop + entry.offsetHeight > oldTop);
+    const anchor = visibleEntry && visibleEntry.dataset.id;
+    const anchorDelta = visibleEntry ? oldTop - (visibleEntry.offsetTop - el.offsetTop) : 0;
+    const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 3;
+    syncThoughtEntries(el, items, first);
+    if (first) {
+      el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      followHistory = true;
+    } else if (followHistory || wasAtBottom) {
+      el.scrollTop = el.scrollHeight;
+      followHistory = true;
+    } else {
+      const retained = Array.from(el.children).find(entry => entry.dataset.id === anchor);
+      el.scrollTop = retained ? retained.offsetTop - el.offsetTop + anchorDelta : oldTop;
+    }
+    historyReady = items.length > 0; historyRun = data.run;
+    if (!historyReady) shownThought = null;
+  } catch (error) { /* 历史服务短暂离线时保留已有内容 */ }
+}
+
+$("thought").addEventListener("scroll", () => {
+  const el = $("thought"); followHistory = el.scrollHeight - el.scrollTop - el.clientHeight < 10;
+}, {passive: true});
+new ResizeObserver(() => {
+  const el = $("thought");
+  if (followHistory) el.scrollTop = el.scrollHeight;
+}).observe($("thought"));
 
 function render() {
   const card = $("card");
   if (!state) { card.classList.add("hidden"); return; }
   card.classList.remove("hidden");
   const m = state, c = (config && config.colors) || {};
+  const source = telemetryLabel(m);
+  $("chatSourceBox").classList.toggle("hidden", !source);
+  $("chatCallsBox").classList.toggle("hidden", !source);
+  setText($("chatSource"), source);
+  setText($("toolCountLabel"), "工具调用");
+  setText($("chatCalls"), m.tool_calls == null ? '—' : `${m.tool_calls} 次`);
   const now = Date.now() / 1000 + offset;
   // 规划回放与智能体的思考同时进行（回放画上一轮，智能体在想下一轮）：回放期间状态栏显示"规划回放"
   const replaying = !!m.replaying || m.status === "replaying";
@@ -226,14 +457,14 @@ function render() {
   const counting = playing || (m.kb_progress != null && m.kb_progress >= 1);
   const ended = m.status === "done" || m.status === "stopped";
 
-  $("name").textContent = displayName(m);
+  setText($("name"), displayName(m));
   let statusText = text;
   if (m.status === "studying") statusText = `${text} ${Math.round((m.kb_progress || 0) * 100)}%`;
   if (m.status === "quota_wait" && m.quota_wait_until) {
     const d = new Date(m.quota_wait_until * 1000);
     statusText = `${text}（${pad(d.getHours())}:${pad(d.getMinutes())} 恢复）`;
   }
-  $("status").textContent = statusText;
+  setText($("status"), statusText);
   const dot = $("dot");
   dot.style.background = c[kind] || "#8F9AB3";
   dot.classList.toggle("breathe", breathe);
@@ -241,8 +472,12 @@ function render() {
   const chapters = (config && config.chapters) || {};
   const ch = chapters[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
   const room = $("room");
-  room.textContent = ch;
-  if (m.room) { const r = document.createElement("span"); r.className = "rm"; r.textContent = m.room; room.appendChild(r); }
+  const roomLabel = JSON.stringify([ch, m.room]);
+  if (room.dataset.label !== roomLabel) {
+    room.dataset.label = roomLabel;
+    room.textContent = ch;
+    if (m.room) { const r = document.createElement("span"); r.className = "rm"; r.textContent = m.room; room.appendChild(r); }
+  }
 
   // 冲刺状态色：Madeline 的发色
   let theme = c.dash1 || "#E0475B";
@@ -258,8 +493,8 @@ function render() {
     game += Math.min(0.15, Math.max(0, now - m.chapter_time_wall));
   }
   const timer = $("timer");
-  timer.firstChild.nodeValue = clock(game);
-  timer.lastChild.textContent = "." + pad(Math.floor((game * 1000) % 1000), 3);
+  if (timer.firstChild.nodeValue !== clock(game)) timer.firstChild.nodeValue = clock(game);
+  setText(timer.lastChild, "." + pad(Math.floor((game * 1000) % 1000), 3));
 
   // 推理强度：当前生效的档位（英文）；申请了切换、还没生效时，后面跟一个呼吸闪烁的"→ 目标档位"
   const box = $("effortBox");
@@ -279,36 +514,41 @@ function render() {
   if (counting && !ended && (m.status === "thinking" || m.status === "compacting") && m.thinking_since_wall > 0) {
     thinking += Math.max(0, now - m.thinking_since_wall);
   }
-  $("thinking").textContent = clock(thinking);
+  setText($("thinking"), clock(thinking));
   // 工具时间：容器里的 Bash、Read 等与游戏工具从调用到返回的时间（不含游戏推进）；运行工具时同样实时走表
   let tool = m.tool_s || 0;
   if (counting && !ended && m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
   if (m.status === "retrying" && m.phase_since_wall > 0) tool += Math.max(0, now - m.phase_since_wall);
-  $("tool").textContent = clock(tool);
+  setText($("tool"), clock(tool));
 
   // 知识库读取：开局到知识库读完的用时（读完后不再走）；跳过准备阶段（--no-study）时显示"—"
   let study = m.study_s || 0;
   if (m.status === "studying" && m.written_wall > 0) study += Math.max(0, now - m.written_wall);
   const studyEl = $("study");
-  studyEl.textContent = study > 0 || m.status === "studying" ? clock(study) : "—";
+  setText(studyEl, study > 0 || m.status === "studying" ? clock(study) : "—");
   studyEl.classList.toggle("dim", !(study > 0 || m.status === "studying"));
 
   const ctx = m.context_tokens || 0;
-  const limit = (config && config.compact_threshold) || 967000;
-  $("ctx").textContent = tokens(ctx);
-  $("ctx").classList.toggle("warn", ctx / limit >= 0.9);
-  $("compact").textContent = String(m.compactions || 0);
+  const limit = m.context_window || (config && config.compact_threshold) || null;
+  setText($("ctx"), m.context_tokens == null ? "—" : tokens(ctx));
+  $("ctx").title = limit ? `上下文窗口 ${tokens(limit)} token` : "执行器尚未提供上下文窗口大小";
+  $("ctx").classList.toggle("warn", !!limit && ctx / limit >= 0.9);
+  setText($("compact"), m.compactions == null ? "—" : String(m.compactions));
 
   // 死亡次数
-  $("deaths").textContent = `${m.deaths || 0} 次`;
+  setText($("deaths"), `${m.deaths || 0} 次`);
 
   // 预置模拟器：调用次数（调用了模拟器的消息数）、当前这次调用推演的路线条数（这一轮回放画完清零）、
   // 当前房间里推演出的最快出房用时（换房间清零）
-  $("simCalls").textContent = `${m.sim_calls || 0} 次`;
+  setText($("simCalls"), `${m.sim_calls || 0} 次`);
+  const energy = m.sim_energy;
+  $("simEnergyBox").classList.toggle("hidden", !energy);
+  setText($("simEnergy"), energy ? `${energy.balance} / ${energy.capacity}` : "—");
+  $("simEnergyBox").title = energy ? energy.rules : "";
   const runs = m.sim_round_rollouts || 0;
-  $("simRuns").textContent = (runs >= 10000 ? `${(runs / 10000).toFixed(runs >= 1e6 ? 0 : 1)}万` : runs.toLocaleString("en-US")) + " 条";
+  setText($("simRuns"), (runs >= 10000 ? `${(runs / 10000).toFixed(runs >= 1e6 ? 0 : 1)}万` : runs.toLocaleString("en-US")) + " 条");
   const best = m.sim_best_frames || 0;
-  $("simBest").textContent = best > 0 ? `${(best / 60).toFixed(3)}s` : "—";
+  setText($("simBest"), best > 0 ? `${(best / 60).toFixed(3)}s` : "—");
   $("simBest").classList.toggle("dim", best <= 0);
 
   // 调用工具：智能体正在调用的工具与说明（Bash 用它写的 description，文件工具用路径）；没有在调用工具时显示"—"
@@ -327,27 +567,353 @@ function render() {
   // 实时展示开着时，思考语句的位置一直显示智能体此刻的思考（它在回放上一轮时已经在想下一轮），这一轮在试什么写在下面的小字里
   const roundInfo = m.replay_round > 0
     ? `第 ${m.replay_round} 轮规划 · 推演 ${(m.replay_runs || 0).toLocaleString("en-US")} 条路线` : "即将执行的路线";
-  $("meta").textContent = !replaying ? "" : (m.live && m.replay_label ? `${roundInfo} · ${m.replay_label}` : roundInfo);
+  setText($("meta"), !replaying ? "" : (m.live && m.replay_label ? `${roundInfo} · ${m.replay_label}` : roundInfo));
 
-  // 思考语句：一有新语句就淡入替换（thought_check_s 大于 0 时改为每隔几秒检查一次）。
-  // 主控在每段动作开始推进之前会等 HUD 换好新语句，所以录像里新语句和这段动作的第一帧同时出现
-  const interval = ((config && config.thought_check_s) || 0) * 1000;
-  if (shownThought === null || interval <= 0 || Date.now() - lastThoughtCheck >= interval) {
-    lastThoughtCheck = Date.now();
-    const next = replaying && !m.live ? (m.replay_label || "") : (m.thought || "");
+  // 历史尚未就绪时，最新公开解说也使用同一气泡结构。
+  if (!historyReady) {
+    const next = (replaying && !m.live ? (m.replay_label || "") : (m.thought || ""));
     if (next !== shownThought) {
       shownThought = next;
       const el = $("thought");
-      el.textContent = next;
-      el.classList.remove("small");
-      if (el.scrollHeight > el.clientHeight + 1) el.classList.add("small");
-      el.classList.remove("fade"); void el.offsetWidth; el.classList.add("fade");
+      el.replaceChildren(...(next ? [thoughtEntry({id: "latest", text: next,
+        wall: m.thought_updated_wall})] : []));
+      el.scrollTop = el.scrollHeight;
     }
   }
 }
 
 poll();
+let controlData = null, sendingMessage = false, wakingAgent = false, switchingSession = false, sessionSignature = '';
+let goalRevision = null, goalRun = null, goalDirty = false, savingGoal = false, goalError = '', controlError = '';
+const GOAL_FIELDS = {room:'房间',map_complete:'当前地图通关',map:'地图变化',side:'面别 A/B/C',deaths:'本地图死亡次数',frame:'游戏推进帧数',elapsed:'运行时间（秒）'};
+function goalRow(condition={field:'room',op:'changed'}) {
+  const row=document.createElement('div'); row.className='goal-row';
+  const field=document.createElement('select'), op=document.createElement('select'), value=document.createElement('input'), remove=document.createElement('button');
+  field.setAttribute('aria-label','条件字段'); op.setAttribute('aria-label','判断方式'); value.setAttribute('aria-label','条件值');
+  for (const [key,label] of Object.entries(GOAL_FIELDS)) field.add(new Option(label,key));
+  field.value=condition.field; remove.type='button'; remove.textContent='×'; remove.setAttribute('aria-label','删除条件');
+  const update=()=>{
+    const numeric=['deaths','frame','elapsed'].includes(field.value);
+    op.replaceChildren(...(numeric ? [['delta_gte','再增加至少'],['gte','达到至少'],['lte','不高于'],['eq','等于']] : field.value==='map_complete' ? [['eq','为真']] : field.value==='map' ? [['changed','发生变化']] : [['changed','发生变化'],['eq','变为']]).map(([v,t])=>new Option(t,v)));
+    value.type=numeric?'number':'text'; value.min='0'; value.value=numeric?'1':'';
+    value.placeholder=field.value==='room'?'房间名':field.value==='side'?'B':'';
+    value.disabled=op.value==='changed'||field.value==='map_complete'; value.hidden=value.disabled;
+  };
+  update(); op.value=condition.op; if (condition.value!=null) value.value=String(condition.value);
+  value.disabled=op.value==='changed'||field.value==='map_complete'; value.hidden=value.disabled;
+  field.onchange=()=>{update();goalDirty=true;};
+  op.onchange=()=>{value.disabled=op.value==='changed'||field.value==='map_complete';value.hidden=value.disabled;goalDirty=true;};
+  value.oninput=()=>goalDirty=true;
+  remove.onclick=()=>{row.remove();goalDirty=true;};
+  row.append(field,op,value,remove); return row;
+}
+function renderGoal(c) {
+  const goal=c.goal || {revision:0,text:'',conditions:[],match:'all',active:false};
+  if (goalRun!==controlData.run) {goalRun=controlData.run;goalDirty=false;goalRevision=null;}
+  if (goalRevision!==goal.revision && !goalDirty && !savingGoal) {
+    goalRevision=goal.revision; $('goalText').value=goal.text||''; $('goalMatch').value=goal.match||'all';
+    $('goalConditions').replaceChildren(...(goal.conditions||[]).map(goalRow));
+  }
+  const enabled=c.connected && c.goals_enabled && !savingGoal && !switchingSession;
+  for (const input of $('goalPanel').querySelectorAll('textarea,select,input,button')) input.disabled=!enabled;
+  if (enabled) for (const row of $('goalConditions').children) row.children[2].disabled=row.children[1].value==='changed'||row.children[0].value==='map_complete';
+  $('goalAdd').disabled=!enabled || $('goalConditions').children.length>=12;
+  $('goalStatus').textContent=goalError || (!c.goals_enabled ? '当前未在试玩；开始试玩后可实时修改目标。' : goal.reached ? '停止条件已触发，正在保存录像。' :
+    goal.active ? (goal.text||'自定义停止目标') + ((goal.conditions||[]).length ? ` · ${goal.match==='any'?'任一':'全部'}条件满足后停止` : ' · 无自动停止条件') : '未设置自定义目标；按本次试玩范围继续。');
+}
+function primaryControlView(data, local = {}) {
+  const c=data?.control || {}, operation=data?.operation || {};
+  const waiting = label=>({label,disabled:true,action:null});
+  const stage={preparing:'准备中…',connecting:'接入中…',starting:'启动中…',naming:'取名中…'}[operation.status];
+  if(stage) return waiting(stage);
+  if(local.lifecycleBusy) return waiting('处理中…');
+  if(local.switchingSession) return waiting('切换中…');
+  if(data?.waking || local.wakingAgent) return waiting('唤起中…');
+  if(!c.connected) return data?.can_wake
+    ? {label:data.ready_to_play?'连接 agent':'唤起 agent',disabled:false,action:'wake'}
+    : waiting('未连接');
+  if(c.chat_only) return waiting(data.ready_to_play?'待开始':'试玩已结束');
+  const pending=(c.actions || []).find(a=>['pause','resume'].includes(a.kind) && a.status==='queued');
+  if(c.phase==='pausing' || pending?.kind==='pause') return waiting('暂停中…');
+  if(pending?.kind==='resume') return waiting('恢复中…');
+  return {label:c.paused?'继续':'暂停',disabled:false,action:c.paused?'resume':'pause'};
+}
+const CONTROL_URL = new URL('/api/control', new URL(STATE_URL, location.href)).href;
+const MODELS_URL = new URL('/api/models', new URL(STATE_URL, location.href)).href;
+const SAVES_URL = new URL('/api/saves', new URL(STATE_URL, location.href)).href;
+let savesLoading=false, savesError='', saveSelectionRun=null;
+function selectedSave() {
+  const value=$('sessionSave').value;
+  return value==='new' ? {save:$('sessionSaveName').value.trim(),create_save:true,save_slot:null} :
+    value.startsWith('existing:') ? {save:$('sessionSave').selectedOptions[0].dataset.name,create_save:false,save_slot:Number(value.slice(9))} : null;
+}
+function updateSaveChoice() {
+  const fresh=$('sessionSave').value==='new';
+  $('sessionSaveName').hidden=!fresh;
+  $('sessionSaveStatus').textContent=savesError;
+  $('sessionSaveStatus').hidden=!savesError;
+}
+async function loadSaveChoices() {
+  if(savesLoading) return;
+  savesLoading=true;savesError='';
+  try {
+    const response=await fetch(SAVES_URL,{cache:'no-store'}),data=await response.json();
+    if(!response.ok)throw Error(data.error || '无法读取存档列表');
+    const old=$('sessionSave').value;
+    $('sessionSave').replaceChildren(new Option('选择存档…',''),new Option('新建独立存档','new'),
+      ...data.saves.map(item=>{
+        const option=new Option(`${item.name}（槽位 ${item.slot}）`,'existing:'+item.slot);
+        option.dataset.name=item.name;return option;
+      }));
+    $('sessionSave').value=Array.from($('sessionSave').options).some(o=>o.value===old)?old:'';
+  } catch(error){savesError=error.message;}
+  finally{savesLoading=false;updateSaveChoice();await pollControl();}
+}
+$('sessionSave').onchange=()=>{updateSaveChoice();pollControl();};
+$('sessionSaveName').oninput=()=>pollControl();
+$('sessionPanel').addEventListener('toggle',()=>{if($('sessionPanel').open)loadSaveChoices();});
+let modelCatalog={models:[]}, modelsLoading=false, modelCatalogError='', modelRequest=0;
+function chosenRuntime(){ const [engine,provider]=$('sessionRuntime').value.split(':');return controlData?.runtimes?{engine,provider}:{}; }
+let liveEffortSignature='',changingEffort=false;
+function syncLiveEffort(data,busy) {
+  const c=data.control,model=modelCatalog.models.find(item=>item.id===data.model);
+  const efforts=c.effort_levels || model?.efforts || [];
+  const signature=JSON.stringify([data.model,efforts]);
+  if(signature!==liveEffortSignature){
+    liveEffortSignature=signature;
+    $('liveEffort').replaceChildren(...['auto',...efforts].map(value=>{
+      const option=document.createElement('option');option.value=value;option.textContent=value==='auto'?'推理：自动':`推理：${value}`;return option;
+    }));
+  }
+  const pending=(c.actions || []).find(a=>a.kind==='effort' && a.status==='queued');
+  $('liveEffort').value=pending?.text || c.effort_manual || 'auto';
+  $('liveEffort').disabled=!c.connected || !c.effort_control || !efforts.length || busy || !!pending || changingEffort;
+  $('liveEffort').title=`当前：${c.effort || state?.effort || '—'}${c.effort_pending?` → ${c.effort_pending}（下轮生效）`:''}；选择档位会手动固定，选择自动恢复 agent 调整。`;
+}
+function updateModelEfforts() {
+  const selected=modelCatalog.models.find(item=>item.id===$('sessionModel').value);
+  const old=$('sessionEffort').value;
+  $('sessionEffort').replaceChildren(...(selected?.efforts || []).map(value=>{
+    const option=document.createElement('option');option.value=value;option.textContent=value;return option;
+  }));
+  if(selected){
+    const current=selected.id===controlData?.model ? state?.effort : null;
+    $('sessionEffort').value=selected.efforts.includes(old)?old:selected.efforts.includes(current)?current:selected.default_effort;
+    $('sessionModel').title=selected.description;
+  }
+}
+async function loadModelChoices(refresh=false) {
+  const requestId=++modelRequest;
+  modelsLoading=true; modelCatalogError='';
+  await pollControl();
+  if(!state) await poll(); // 首次加载先取得当前推理强度，避免快速缓存响应把既有选择重置。
+  try {
+    const response=await fetch(MODELS_URL+'?'+new URLSearchParams({...chosenRuntime(),refresh:refresh?'1':'0'}),{cache:'no-store'});
+    const data=await response.json();
+    if(requestId!==modelRequest)return;
+    if(!response.ok || !data.models?.length) throw Error(data.error || '没有可选模型，请刷新重试。');
+    const previous=$('sessionModel').value;
+    modelCatalog=data;
+    $('sessionModel').replaceChildren(...data.models.map(item=>{
+      const option=document.createElement('option');option.value=item.id;option.textContent=item.label;return option;
+    }));
+    const ids=data.models.map(item=>item.id);
+    $('sessionModel').value=ids.includes(previous)?previous:ids.includes(controlData?.model)?controlData.model:data.default_model;
+    updateModelEfforts();
+  } catch(error){if(requestId===modelRequest)modelCatalogError=error.message;}
+  finally {if(requestId===modelRequest){modelsLoading=false;$('modelChoiceStatus').textContent=modelCatalogError || (modelCatalog.source==='provider_config'?'模型列表来自本机提供方配置。':'');await pollControl();}}
+}
+$('sessionRuntime').onchange=()=>{modelCatalog={models:[]};$('sessionModel').replaceChildren();$('sessionEffort').replaceChildren();loadModelChoices();};
+$('sessionModel').onchange=()=>{updateModelEfforts();pollControl();};
+$('sessionModelRefresh').onclick=()=>loadModelChoices(true);
+async function pollControl() {
+  if (OBS_SURFACE) return;
+  try {
+    const response = await fetch(CONTROL_URL, {cache:'no-store'});
+    if (!response.ok) throw Error('主控暂未连接');
+    controlData = await response.json();
+    const runtimeSelect=$('sessionRuntime'), runtimeOptions=controlData.runtimes || [{id:'codex:codex',label:'Codex'}];
+    runtimeSelect.hidden=!controlData.runtimes;
+    const runtimeSignature=JSON.stringify(runtimeOptions);
+    if(runtimeSelect.dataset.options!==runtimeSignature){
+      const previous=runtimeSelect.dataset.options?runtimeSelect.value:controlData.runtime;
+      runtimeSelect.dataset.options=runtimeSignature;
+      runtimeSelect.replaceChildren(...runtimeOptions.map(item=>{const o=document.createElement('option');o.value=item.id;o.textContent=item.label;return o;}));
+      if(runtimeOptions.some(item=>item.id===previous))runtimeSelect.value=previous;
+    }
+    const c = controlData.control;
+    renderGoal(c);
+    const sessions = controlData.sessions || [];
+    const signature = JSON.stringify([sessions,controlData.selected_session]);
+    if (signature !== sessionSignature && !switchingSession) {
+      sessionSignature = signature;
+      $('sessionSelect').replaceChildren(...sessions.map(session => {
+        const option = document.createElement('option'); option.value=session.id; option.textContent=session.label;
+        option.selected=session.id === controlData.selected_session; return option;
+      }));
+    }
+    $('sessionSelect').disabled = switchingSession || !controlData.can_wake || controlData.waking || c.phase === 'chatting';
+    const pending = (c.actions || []).find(a => a.kind !== 'message' && a.status === 'queued');
+    const last = (c.messages || []).filter(m => m.role === 'user').at(-1);
+    const delivery = last ? ({queued:'提示等待发送',waiting:'提示等待提交',submitted:'提示已提交给 agent',error:'提示发送失败'}[last.status] || '') : '';
+    $('controlStatus').textContent = !c.connected ? (controlData.waking || wakingAgent ? '正在唤起 agent…' : controlData.can_wake ? '试玩已结束，可唤起 agent 聊天' : '主控未连接') :
+      c.phase === 'pausing' || pending?.kind === 'pause' ? '暂停中，等待当前动作结束…' :
+      (c.chat_only ? (controlData.ready_to_play ? '准备完成 · 可聊天' : '试玩已结束 · 可聊天') : c.paused ? '已暂停，仍可发送提示' : '正在试玩') + (delivery ? ' · ' + delivery : '');
+    const primary=primaryControlView(controlData,{wakingAgent,lifecycleBusy,switchingSession});
+    $('togglePlay').textContent=primary.label;
+    $('togglePlay').disabled=primary.disabled;
+    $('agentSend').disabled = !c.connected || sendingMessage;
+    $('toggleFast').textContent = `Fast：${c.fast == null ? '—' : c.fast ? '开' : '关'}${c.fast_pending ? '（下轮）' : ''}`;
+    $('toggleFast').setAttribute('aria-pressed', String(!!c.fast));
+    $('toggleFast').hidden = !c.fast_control;
+    $('toggleFast').disabled = !c.connected || !c.fast_control || (c.actions || []).some(a => a.kind === 'fast' && a.status === 'queued');
+    if (switchingSession) {
+      $('controlStatus').textContent = '正在交接会话…';
+      for (const id of ['togglePlay','toggleFast','agentSend']) $(id).disabled = true;
+    }
+    const operation = controlData.operation || {};
+    if(saveSelectionRun!==controlData.run){
+      saveSelectionRun=controlData.run;$('sessionSave').value='';$('sessionSaveName').value='';updateSaveChoice();
+    }
+    const busy = lifecycleBusy || ['preparing','connecting','starting','naming'].includes(operation.status);
+    syncLiveEffort(controlData,busy || switchingSession);
+    const pendingStory=(c.actions || []).find(a=>a.kind==='cutscene_mode' && ['queued','waiting'].includes(a.status));
+    $('cutsceneMode').value=pendingStory?.text || c.cutscene_mode || 'auto';
+    $('cutsceneMode').disabled=!c.connected || !c.cutscene_control || busy || !!pendingStory;
+    const manageable = controlData.session_management && (controlData.can_create_session || controlData.can_wake) && c.phase !== 'chatting' && !switchingSession && !controlData.waking && !busy;
+    const selectedModel=modelCatalog.models.find(item=>item.id===$('sessionModel').value);
+    $('sessionNew').disabled = !manageable || modelsLoading || !!modelCatalogError || !selectedModel?.efforts.includes($('sessionEffort').value);
+    $('sessionDisconnect').disabled = !manageable || !c.connected;
+    const save=selectedSave();
+    $('sessionPlay').disabled = !manageable || !controlData.ready_to_play || savesLoading || !!savesError || !save || (!save.create_save && !save.save);
+    for (const id of ['sessionName','sessionModel','sessionEffort','sessionChapter']) $(id).disabled=busy;
+    for(const id of ['sessionSave','sessionSaveName'])$(id).disabled=busy || !manageable;
+    $('sessionScope').disabled=busy || !manageable;
+    $('sessionSimAssist').disabled=busy || !manageable || !controlData.sim_available;
+    if(!controlData.sim_available)$('sessionSimAssist').checked=false;
+    $('simAvailability').textContent=controlData.sim_available ? '' : '（未安装，可关闭此项直接试玩）';
+    $('sessionModel').disabled=busy || modelsLoading || !modelCatalog.models.length;
+    $('sessionEffort').disabled=busy || modelsLoading || !selectedModel;
+    $('sessionModelRefresh').disabled=busy || modelsLoading;
+    $('sessionOperation').textContent = lifecycleError || (operation.status==='error' ? operation.error :
+      busy ? ({preparing:'正在准备入门资料…',connecting:'正在接入会话…',starting:'正在进入章节…',naming:'会话正在取名…'}[operation.status] || '正在交接会话…') : '');
+    $('sessionOperation').hidden=!$('sessionOperation').textContent;
+    if (busy) {
+      $('controlStatus').textContent=$('sessionOperation').textContent;
+      for (const id of ['sessionSelect','togglePlay','toggleFast','agentSend']) $(id).disabled=true;
+    }
+  } catch (error) {
+    $('controlStatus').textContent = error.message;
+    $('togglePlay').textContent = '未连接';
+    $('togglePlay').disabled = $('agentSend').disabled = true;
+    $('toggleFast').disabled = true;
+    $('liveEffort').disabled = true;
+    $('sessionSelect').disabled = true;
+    for (const id of ['sessionNew','sessionDisconnect','sessionPlay']) $(id).disabled=true;
+  }
+}
+let lifecycleBusy=false, lifecycleError='';
+async function sessionAction(kind, options) {
+  lifecycleBusy=true; lifecycleError='';
+  await pollControl();
+  const ok=await sendControl(kind, options ? JSON.stringify(options) : '');
+  if(!ok) lifecycleError=controlError || '会话操作失败';
+  if(ok && kind==='new_session') $('sessionName').value='';
+  lifecycleBusy=false;
+  await pollControl();
+}
+$('sessionNew').onclick=()=>sessionAction('new_session',{...chosenRuntime(),name:$('sessionName').value,model:$('sessionModel').value,effort:$('sessionEffort').value});
+$('sessionDisconnect').onclick=()=>sessionAction('disconnect');
+$('sessionPlay').onclick=()=>{
+  const raw=$('sessionChapter').value.trim(), chapter=Number(raw);
+  if(!raw || !Number.isInteger(chapter) || chapter<0 || chapter>10){
+    lifecycleError='请填写0～10的A面章节编号（0为序章）。'; pollControl(); return;
+  }
+  const choice=selectedSave();
+  if(!choice || (!choice.create_save && !choice.save)){lifecycleError='请显式选择存档。';pollControl();return;}
+  if(choice.create_save && chapter!==0){lifecycleError='新存档须从序章（0）开始。';pollControl();return;}
+  sessionAction('play_session',{chapter,...choice,scope:$('sessionScope').value,sim_assist:$('sessionSimAssist').checked});
+};
+async function sendControl(kind, text='') {
+  if (!controlData) return false;
+  controlError = '';
+  try {
+    const response = await fetch(CONTROL_URL, {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({run:controlData.run,kind,text})});
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || '提交失败');
+    await pollControl(); return true;
+  } catch (error) { controlError=error.message; $('controlStatus').textContent = error.message; return false; }
+}
+$('togglePlay').onclick = async () => {
+  const primary=primaryControlView(controlData,{wakingAgent,lifecycleBusy,switchingSession});
+  if(primary.disabled || !primary.action) return;
+  $('togglePlay').disabled = true;
+  if (primary.action==='wake') {
+    wakingAgent = true;
+    await sendControl('wake');
+    wakingAgent = false;
+    await pollControl();
+  } else await sendControl(primary.action);
+};
+$('toggleFast').onclick = async () => {
+  $('toggleFast').disabled = true;
+  await sendControl('fast', controlData?.control.fast ? 'off' : 'on');
+};
+$('cutsceneMode').onchange=async()=>{await sendControl('cutscene_mode',$('cutsceneMode').value);};
+$('liveEffort').onchange=async()=>{
+  const level=$('liveEffort').value;
+  changingEffort=true;$('liveEffort').disabled=true;
+  await sendControl('effort',level);
+  changingEffort=false;await pollControl();
+};
+$('goalText').oninput=()=>goalDirty=true;
+$('goalMatch').onchange=()=>goalDirty=true;
+$('goalAdd').onclick=()=>{if($('goalConditions').children.length<12){$('goalConditions').append(goalRow());goalDirty=true;}};
+async function saveGoal(kind) {
+  goalError='';
+  if (kind==='goal' && Array.from($('goalConditions').children).some(row => ['deaths','frame','elapsed'].includes(row.children[0].value) && !row.children[2].value.trim())) {
+    goalError='请填写数值条件。'; $('goalStatus').textContent=goalError; return;
+  }
+  const conditions=Array.from($('goalConditions').children).map(row=>{
+    const [field,op,value]=row.children;
+    return {field:field.value,op:op.value,value:field.value==='map_complete'?true:['deaths','frame','elapsed'].includes(field.value)?Number(value.value):value.value.trim()};
+  });
+  savingGoal=true;
+  const ok=await sendControl(kind,kind==='goal'?JSON.stringify({text:$('goalText').value,conditions,match:$('goalMatch').value}):'');
+  savingGoal=false;
+  if(!ok) goalError=controlError || '目标未更新，请重试。';
+  if(ok){goalDirty=false;goalRevision=null;}
+  await pollControl();
+}
+$('goalSave').onclick=()=>saveGoal('goal');
+$('goalClear').onclick=()=>saveGoal('goal_clear');
+$('goalStop').onclick=()=>saveGoal('stop');
+$('sessionSelect').onchange = async () => {
+  switchingSession = true; $('sessionSelect').disabled = true;
+  const target = $('sessionSelect').value;
+  const success = await sendControl('switch', target);
+  if (success) $('agentInput').value = '';
+  switchingSession = false; sessionSignature = '';
+  await pollControl();
+};
+$('agentControls').onsubmit = async event => {
+  event.preventDefault(); const text = $('agentInput').value.trim();
+  if (!text || sendingMessage || $('agentSend').disabled) return;
+  sendingMessage = true; $('agentSend').disabled = true;
+  if (await sendControl('message', text)) $('agentInput').value = '';
+  sendingMessage = false; await pollControl();
+};
+$('agentInput').onkeydown = event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+    event.preventDefault(); $('agentControls').requestSubmit();
+  }
+};
+pollControl(); setInterval(pollControl, 750);
+loadModelChoices();
+loadSaveChoices();
 setInterval(poll, Number(params.get("poll") || 100));
+pollHistory(); setInterval(pollHistory, 750);
 (function loop() { render(); requestAnimationFrame(loop); })();
 </script>
 </body>

@@ -75,6 +75,20 @@ def find_game_window() -> int | None:
     return found[0] if found else None
 
 
+def capture_size() -> tuple[int, int] | None:
+    """游戏采集的实际客户区尺寸（与屏幕 DPI 缩放后的窗口截图尺寸不同）。"""
+    if not _IS_WINDOWS:
+        return None
+    ctypes, wt, user32, _kernel32, _enum = _api()
+    hwnd = find_game_window()
+    if hwnd is None:
+        return None
+    rect = wt.RECT()
+    if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+        return None
+    return (rect.right, rect.bottom) if rect.right > 64 and rect.bottom > 64 else None
+
+
 def ensure_visible(log=print, wait_s: float = 3.0) -> str:
     """确认游戏窗口没有最小化；最小化了就不激活地还原，并等它恢复正常大小。
     返回 "ok"、"restored"、"restore_failed"、"not_found" 或 "unsupported"。"""

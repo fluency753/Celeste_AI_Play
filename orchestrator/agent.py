@@ -3,7 +3,7 @@
 两种运行方式：
 - container（默认）：在 Docker 容器里用 docker exec 启动 Claude Code。开放 Bash、Read、Write、Edit、Glob、Grep
   与游戏工具；容器出站只放行 Anthropic 与主控端口，Bash 命令在零网络的沙箱里运行（见 agent-container/）。
-- host（M2 的过渡方式）：在本机启动，--tools "" 关闭全部内置工具，只能调用游戏工具。
+- host（仅游戏工具模式）：在本机启动，--tools "" 关闭全部内置工具，只能调用游戏工具。
 
 两种方式共同的措施：--strict-mcp-config 只加载本项目的游戏工具服务；--permission-mode dontAsk 拒绝一切未预先
 允许的调用；不读取使用者自己的 Claude Code 配置、CLAUDE.md 与自动记忆；启动时核对工具列表，多出任何工具立即停止。
@@ -27,12 +27,16 @@ import re
 import uuid
 from pathlib import Path
 
-from .config import REPO_ROOT, RunConfig, chapter_name_by_id, find_claude_exe, find_docker_exe
+from .config import REPO_ROOT, RunConfig, find_claude_exe, find_docker_exe
 from .game_session import GameSession
 from .kb_study import KbStudy
 from .metrics import Metrics
+from .session_controls import RuntimeCapabilities, SessionControls
+from .telemetry import public_event
+from .prompting import play_prompt, study_prompt, resume_prompt, FIRST_PROMPT, CONTINUE_PROMPT
 
-GAME_TOOLS = ["mcp__celeste__observe", "mcp__celeste__act", "mcp__celeste__set_effort"]
+GAME_TOOLS = ['mcp__celeste__' + name for name in
+              ('observe', 'act', 'set_effort', 'cutscene', 'exit_level', 'simulate')]
 NARRATE_TOOL = "mcp__celeste__narrate"   # 实时展示开着时才有：更新 HUD 上的思考语句（算思考时间，不算工具）
 # /effort 命令成功时 Claude Code 的回复，例如 "Set effort level to low (this session only): ..."
 EFFORT_OK = re.compile(r"^Set effort level to (\w+)")
@@ -40,77 +44,6 @@ EFFORT_OK = re.compile(r"^Set effort level to (\w+)")
 # "Claude AI usage limit reached|1792766400"、"You've hit your limit · resets 3pm"
 LIMIT_TEXT = re.compile(r"usage limit|hit your (?:usage )?limit|rate[ _]limit", re.I)
 CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
-PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
-
-
-def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None, pause_limit: bool = False,
-                   rounds_per_room: int = 3, death_bonus: int = 1, playback: bool = False, live: bool = False) -> str:
-    """系统提示词。按预置模拟器的开关分成两个版本（目标都是以最短的章节计时通关）：
-    - 开模拟器（默认，容器运行方式）：智能体可以随意调用 /sim 寻找并优化路线；提示词里写明做法、建议的工作方式、
-      物理参数简表、规划与优化的要求、自动重试与规划回放（system_sim、container_sim、sim、free/pause、retry、playback）；
-    - 关模拟器（--no-sim，或本机运行方式）：不教怎么玩，只写目标、规则（不得调用或破解模拟器、不读游戏程序）与工具接口，
-      其余由智能体自己决定（system_nosim、container_nosim）；容器里另有展示接口（show.trajectory），算出的逐帧轨迹
-      可以交给系统画给观众看，只用于展示。
-    实时展示（live，两个版本都适用）：要求思考期间用 narrate 随时更新 HUD 的思考语句、运行程序期间报告进度（live_zh.md）。"""
-    interface = (PROMPTS / "interface_zh.md").read_text(encoding="utf-8")
-
-    def part(name: str) -> str:
-        return (PROMPTS / name).read_text(encoding="utf-8")
-
-    if not (sim and runtime == "container"):
-        text = part("system_nosim_zh.md").replace("{interface}", interface)
-        text += "\n\n" + part("container_nosim_zh.md" if runtime == "container" else "host_zh.md")
-    else:
-        text = part("system_sim_zh.md").replace("{interface}", interface)
-        text += "\n\n" + part("container_sim_zh.md") + "\n\n" + part("sim_zh.md")
-        # 默认不限制思考与调用（free_zh.md，可以把规划程序写成自动重试命令）；--limit-planning 时按章节记账（pause_zh.md）
-        if pause_limit:
-            text += "\n\n" + part("pause_zh.md").replace(
-                "{rounds4}", str(rounds_per_room * 4)).replace("{rounds}", str(rounds_per_room)).replace("{death}", str(death_bonus))
-        else:
-            text += "\n\n" + part("free_zh.md")
-            text += "\n\n" + part("retry_zh.md")
-        if playback:
-            text += "\n\n" + part("playback_zh.md")
-    if live and runtime == "container":
-        text += "\n\n" + part("live_zh.md")
-    if chapters and len(chapters) > 1:
-        names = " → ".join(chapter_name_by_id(c) for c in chapters)
-        text += ("\n\n# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
-                 "一章通关后系统自动进入下一章，你接着玩；之前写的程序与笔记都在工作区里，可以继续用。")
-    return text
-
-
-FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关。"
-
-
-def study_prompt(study: KbStudy, sim: bool = False) -> str:
-    files = "\n".join(f"- {path}" for path in study.container_paths())
-    return (
-        "开始游玩之前，先用 Read 工具把知识库从头到尾完整读一遍，按下面的顺序：\n"
-        f"{files}\n\n"
-        "要求：每个文件都读到最后一行。文件长时 Read 会按长度截断，看到截断就用 offset 与 limit 接着读，"
-        "不要只读开头，也不要用 Grep 或 Bash 代替阅读。草莓酱文本的中文版（*_zh.md）与英文版是同一内容的翻译，可以不读。"
-        "主控会核对你读过的行，读完之前 observe 与 act 不会执行。\n\n"
-        + ("读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些搜索与规划程序"
-           "（模拟器直接用 /sim 预置的）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
-           if sim else "读完后调用 observe 开始游玩。\n") +
-        f"准备阶段最多 {study.minutes:g} 分钟，到时游戏工具自动开放。"
-        "游戏在你思考期间一直暂停，章节计时只算游戏真正推进的帧。"
-    )
-CONTINUE_PROMPT = "本章还没有通关，请继续调用 act 游玩。"
-
-
-def resume_prompt(reason: str, minutes: float, study_note: str | None = None) -> str:
-    """Claude Code 进程被结束后，用 --resume 接着同一个会话时发出的第一条消息。"""
-    text = (f"（系统）{reason}，你的上一轮在中途被结束，暂停了约 {minutes:.0f} 分钟，现在接着同一个会话继续。"
-            "这段时间游戏一直冻结，章节计时没有走；但如果被结束时有一个 act 正在执行，它已经执行完了，"
-            "结果没能送回给你。")
-    if study_note:
-        return text + "准备阶段还没有结束：\n" + study_note
-    return text + "请先调用 observe 看清当前这一帧（工作区里的 game/ 文件也已更新），再继续游玩。"
-
-
 def tool_label(name: str, tool_input) -> str:
     """HUD"调用工具"一栏：工具名（游戏工具去掉前缀）加一句说明——Bash 用智能体写的 description，文件工具用路径，查找用模式。"""
     short = name.removeprefix("mcp__celeste__")
@@ -139,13 +72,17 @@ def _strip_images(value):
     return value
 
 
-class ClaudeRunner:
+class ClaudeRunner(SessionControls):
+    capabilities = RuntimeCapabilities(effort_levels=('low', 'medium', 'high', 'max'))
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
                  token: str, container: str | None = None, study: KbStudy | None = None,
                  session_id: str | None = None, resume: bool = False, resume_note: str | None = None,
-                 gate=None, playback=None):
+                 gate=None, playback=None, start_paused=False, prepare_only=False, chat_only=False, naming_only=False):
         """resume=True：用 --resume 接着 session_id 这个已有的会话（续跑）；resume_note 不为空时代替开局的第一条消息。"""
         self.cfg = cfg
+        selected = next((m for m in (cfg.provider_info or {}).get('models', []) if m.get('id') == cfg.model), None)
+        if selected:
+            self.capabilities = RuntimeCapabilities(effort_levels=tuple(selected.get('efforts', ('low','medium','high'))))
         self.study = study
         self.gate = gate                         # 规划轮次（pausegate.PauseGate），按输出流里的消息分组
         self.playback = playback                 # 规划回放（playback.Playback）：按输出流里的消息把模拟器推演分轮
@@ -170,6 +107,57 @@ class ClaudeRunner:
         self.stop_reason = ""
         self._command_active = False             # 正在执行主控自己发出的斜杠命令（/effort）
         self._command_reply = ""
+        self.prepare_only, self.chat_only, self.naming_only = prepare_only, chat_only, naming_only
+        self.name_result, self.naming_reply = None, None
+        self.turn_done = self._turn_done
+        self.turn_id = None
+        self._interrupt_responses = {}
+        self._init_controls(disabled=prepare_only, start_paused=start_paused)
+        self.action_lock = getattr(session, 'tool_lock', self.action_lock)
+
+    async def _validate_effort(self, value):
+        if value not in self.capabilities.effort_levels:
+            raise ValueError('Claude 执行器支持 low、medium、high、max；不支持 xhigh')
+
+    async def _interrupt_user(self):
+        if not self.turn_active or self.user_interrupted or self.turn_done.is_set():
+            return
+        self.user_interrupted = True
+        ident = str(uuid.uuid4())
+        future = asyncio.get_running_loop().create_future()
+        self._interrupt_responses[ident] = future
+        try:
+            # Claude Agent SDK control protocol (query.py::_send_control_request).
+            packet = {'type': 'control_request', 'request_id': ident,
+                      'request': {'subtype': 'interrupt'}}
+            self.proc.stdin.write((json.dumps(packet) + '\n').encode('utf-8'))
+            await self.proc.stdin.drain()
+            await asyncio.wait_for(future, 10)
+        except Exception:
+            self.user_interrupted = False
+            raise
+        finally:
+            self._interrupt_responses.pop(ident, None)
+
+    async def _next_user_turn(self, fallback):
+        while self.paused and not self.pending_messages:
+            if self.metrics.state.status != 'paused':
+                self.metrics.update(status='paused')
+            if self.session.done or self.stop_requested:
+                return False
+            if self.control_task and self.control_task.done():
+                await self.control_task
+            await asyncio.sleep(.1)
+        if self.session.done or self.stop_requested:
+            return False
+        rows, self.pending_messages = self.pending_messages, []
+        text = '\n'.join(row['text'] for row in rows) if rows else fallback
+        if self.paused:
+            text += '\n试玩仍处于暂停状态。只回复用户，不调用游戏操作，回复后结束本轮。'
+        await self._send(text)
+        for row in rows:
+            self.control.mark(row['id'], 'submitted', '已提交给当前 agent 会话')
+        return True
 
     @property
     def effort(self) -> str:
@@ -207,8 +195,8 @@ class ClaudeRunner:
         if self.cfg.runtime == "container":
             mcp = json.dumps({"mcpServers": {"celeste": {
                 "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
-            prompt = compose_prompt("container", self.cfg.sim, self.cfg.chapters, self.cfg.pause_limit,
-                                    self.cfg.rounds_per_room, self.cfg.death_bonus, self.cfg.playback, self.cfg.live)
+            prompt = play_prompt(self.cfg)
+            prompt += self._lifecycle_prompt()
             (self.run_dir / "system_prompt.md").write_text(prompt, encoding="utf-8")
             return [
                 find_docker_exe(), "exec", "-i", "-u", "agent", "-w", "/workspace",
@@ -233,7 +221,7 @@ class ClaudeRunner:
         mcp_config.write_text(json.dumps({"mcpServers": {"celeste": {
             "type": "http", "url": f"http://127.0.0.1:{self.cfg.mcp_port}/mcp"}}}), encoding="utf-8")
         prompt_file = self.run_dir / "system_prompt.md"
-        prompt_file.write_text(compose_prompt("host", chapters=self.cfg.chapters), encoding="utf-8")
+        prompt_file.write_text(play_prompt(self.cfg) + self._lifecycle_prompt(), encoding="utf-8")
         return [
             find_claude_exe(), *self._common_args(),
             "--tools", "",
@@ -243,7 +231,16 @@ class ClaudeRunner:
         ]
 
     def _game_tools(self) -> list[str]:
+        if self.prepare_only or self.chat_only:
+            return ['mcp__celeste__set_effort'] + ([NARRATE_TOOL] if self.cfg.live else [])
         return GAME_TOOLS + ([NARRATE_TOOL] if self.cfg.live else [])
+
+    def _lifecycle_prompt(self):
+        if self.prepare_only:
+            return '\n本次仅准备：按要求完整读取知识库、整理工作区 notes.md 后结束本轮；不调用游戏工具，不开始试玩。'
+        if self.chat_only:
+            return '\n本次仅聊天：回复用户、读取笔记，不观察或操作游戏，不运行规划程序，不自行开始试玩。没有用户消息时等待。'
+        return ''
 
     def _allowed_tool(self, name: str) -> bool:
         if name.startswith("mcp__celeste__"):
@@ -283,6 +280,16 @@ class ClaudeRunner:
             first = self.resume_note
         else:
             first = study_prompt(self.study, self.cfg.sim) if self.study else FIRST_PROMPT
+        if self.prepare_only:
+            first += self._lifecycle_prompt()
+        self.metrics.update(telemetry_source='claude_stream_json', chat_thread_id=self.session_id)
+        if self.paused:
+            self.pause_at = time.monotonic()
+            self.metrics.pause()
+            self.metrics.update(status='paused')
+        if self.control:
+            self.control_task = asyncio.create_task(self._controls())
+            self.heartbeat_task = asyncio.create_task(self._heartbeat())
         try:
             while True:
                 if (note := self._effort_at_start()):
@@ -292,6 +299,9 @@ class ClaudeRunner:
                     break
                 # 额度到上限：游戏保持冻结，等额度重置后接着同一个会话
                 minutes = await self._wait_for_quota()
+                if self.session.done or self.stop_requested:
+                    self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
+                    break
                 self.resume = True
                 self.idle_turns = 0
                 study_note = None
@@ -301,6 +311,12 @@ class ClaudeRunner:
                     study_note = "知识库已经读完；整理好笔记后调用 observe 开始游玩。"
                 first = resume_prompt(self.quota_reason, minutes, study_note)
         finally:
+            tasks = [task for task in (self.control_task, self.heartbeat_task) if task]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if self.control:
+                self.control.heartbeat(stopped=True, phase='stopped', session_id=self.session_id)
             self._events.close()
         return self.stop_reason
 
@@ -315,13 +331,23 @@ class ClaudeRunner:
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=stderr_log,
             limit=64 * 1024 * 1024)
         reader = asyncio.create_task(self._read_stdout())
+        started = time.monotonic()
         try:
-            await self._send(first)
+            if not await self._next_user_turn(first):
+                self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
+                return True
             while True:
+                if reader.done():
+                    await reader
+                    self.stop_reason = self.stop_reason or 'Claude Code 输出流已结束'
+                    return True
                 if not self.metrics.playing and self.study is not None:
                     # 准备阶段：不消耗现实用时预算，只受准备阶段上限约束
                     remaining = self.study.deadline() - time.monotonic()
                     if remaining <= 0:
+                        if self.prepare_only:
+                            self.stop_reason = '准备超时，知识库阅读未完成'
+                            return True
                         self.study.force_open()
                         self.metrics.start_play()
                         print(f"[agent] 准备阶段到达上限 {self.study.minutes:g} 分钟，开始计时"
@@ -331,30 +357,48 @@ class ClaudeRunner:
                     if not await self._wait_turn(min(remaining, 1.0)):
                         continue
                 else:
-                    remaining = self.cfg.budget_seconds - self.metrics.elapsed()
-                    if remaining <= 0 or not await self._wait_turn(remaining):
+                    remaining = self.cfg.budget_seconds - (time.monotonic()-started if self.naming_only else self.metrics.elapsed())
+                    if remaining <= 0:
                         self.stop_reason = "时间预算用完"
                         return True
+                    if not await self._wait_turn(min(remaining, 1.0)):
+                        if self.control_task and self.control_task.done():
+                            await self.control_task
+                        if self.session.done:
+                            self.stop_reason = self.session.done_reason
+                            return True
+                        continue
                 if self.quota_until is not None and not self.stop_reason:
                     return False
                 if reader.done():
                     self.stop_reason = self.stop_reason or "Claude Code 进程已退出"
                     return True
                 self._turn_done.clear()
+                self.turn_active = False
                 if self.session.done:
                     self.stop_reason = self.session.done_reason
                     return True
                 if self.stop_reason:
                     return True
-                self.idle_turns = self.idle_turns + 1 if self._tool_calls_this_turn == 0 else 0
+                if self.naming_only:
+                    from .save_naming import parse_name
+                    self.name_result = parse_name(self.naming_reply)
+                    self.stop_reason = '存档命名完成'
+                    return True
+                if self.prepare_only and self.study.complete():
+                    self.completed_preparation = True
+                    self.stop_reason = '知识库准备完成'
+                    return True
+                self.idle_turns = (self.idle_turns + 1 if self._tool_calls_this_turn == 0
+                                   and not self.user_interrupted and not self.paused and not self.chat_only else 0)
                 if self.idle_turns >= 3:
                     self.stop_reason = "连续 3 轮没有调用工具"
                     return True
                 note = await self._switch_effort() if self.metrics.state.effort_pending else ""
-                if self.study is not None and not self.study.ready():
-                    await self._send(note + self.study.reminder())
-                else:
-                    await self._send(note + CONTINUE_PROMPT)
+                next_prompt = self.study.reminder() if self.study is not None and not self.study.ready() else CONTINUE_PROMPT
+                if not await self._next_user_turn(note + next_prompt):
+                    self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
+                    return True
         finally:
             await self._shutdown(reader)
             self.metrics.turn_end()
@@ -392,7 +436,11 @@ class ClaudeRunner:
         reply = self._command_reply or ""
         m = EFFORT_OK.match(reply)
         if finished and m and m.group(1) == level:
+            queued = self.metrics.state.effort_pending
             self.metrics.effort_applied(level, via="/effort")
+            next_effort = self.manual_effort or (queued if queued != level else None)
+            if next_effort and next_effort != level:
+                self.metrics.request_effort(next_effort, '用户设置等待下一轮生效')
             print(f"[agent] 推理强度 {before} → {level}", flush=True)
             return f"（系统）推理强度已从 {before} 切换为 {level}。"
         self.metrics.request_effort(None)
@@ -410,7 +458,11 @@ class ClaudeRunner:
         print(f"[agent] 等待 Max 额度重置：约 {(until - now) / 60:.0f} 分钟后（{time.strftime('%H:%M', time.localtime(until))}）"
               "接着同一个会话继续；游戏保持冻结", flush=True)
         while time.time() < until:
-            await asyncio.sleep(min(30.0, max(0.5, until - time.time())))
+            if self.session.done or self.stop_requested:
+                break
+            if self.control_task and self.control_task.done():
+                await self.control_task
+            await asyncio.sleep(min(.5, max(.01, until - time.time())))
         waited = self.metrics.resume()
         if self.study is not None and not self.metrics.playing:
             self.study.started += waited  # 准备阶段的上限不算等待的时间
@@ -436,6 +488,10 @@ class ClaudeRunner:
 
     async def _send(self, text: str) -> None:
         self.turns += 1
+        self.turn_id = str(self.turns)
+        self.user_interrupted = False
+        self.turn_active = True
+        self.turn_done.clear()
         self._tool_calls_this_turn = 0
         await self._write(text)
         self.metrics.turn_begin()
@@ -478,7 +534,7 @@ class ClaudeRunner:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            self._events.write(json.dumps(_strip_images(event), ensure_ascii=False) + "\n")
+            self._events.write(json.dumps(public_event(_strip_images(event)), ensure_ascii=False) + "\n")
             self._events.flush()
             self._handle(event)
 
@@ -517,7 +573,17 @@ class ClaudeRunner:
     def _handle(self, event: dict) -> None:
         etype = event.get("type")
         subtype = event.get("subtype")
-        if etype == "system" and subtype == "init":
+        if etype == 'control_response':
+            response = event.get('response') or {}
+            future = self._interrupt_responses.get(response.get('request_id'))
+            if future and not future.done():
+                if response.get('subtype') == 'error':
+                    future.set_exception(RuntimeError(response.get('error', 'interrupt failed')))
+                else:
+                    future.set_result(response)
+        elif etype == "system" and subtype == "init":
+            if event.get("model"):
+                self.metrics.update(model=event["model"])
             # 每轮开始都会输出一次 init：每次都核对工具列表，只在第一次打印
             tools = event.get("tools") or []
             unexpected = [t for t in tools if not self._allowed_tool(t)]
@@ -531,6 +597,7 @@ class ClaudeRunner:
                 self.proc.terminate()
         elif etype == "system" and subtype == "status":
             if event.get("status") == "compacting":
+                self._public_compaction(self.metrics.state.compactions)
                 self.metrics.update(status="compacting")
                 print("[agent] 上下文压缩中……", flush=True)
             elif event.get("compact_result"):
@@ -545,6 +612,7 @@ class ClaudeRunner:
                 if self.proc and self.proc.returncode is None:
                     self.proc.terminate()
         elif etype == "system" and subtype == "compact_boundary":
+            self._public_compaction(self.metrics.state.compactions, completed=True)
             meta = event.get("compact_metadata") or {}
             self.metrics.add(compactions=1, compact_s=(meta.get("duration_ms") or 0) / 1000)
             print(f"[agent] 压缩完成（{meta.get('trigger')}）：{meta.get('pre_tokens')} → {meta.get('post_tokens')} token，"
@@ -562,7 +630,13 @@ class ClaudeRunner:
                        + usage.get("cache_creation_input_tokens", 0))
             if context:
                 self.metrics.update(context_tokens=context)
-            for block in message.get("content") or []:
+            for index, block in enumerate(message.get("content") or []):
+                if block.get("type") == "tool_use":
+                    self.metrics.add(tool_calls=1)
+                if block.get('type') == 'text' and block.get('text'):
+                    if self.naming_only:
+                        self.naming_reply = block['text']
+                    self._public_message(str(message.get('id') or uuid.uuid4()) + ":" + str(index), block['text'])
                 if block.get("type") == "tool_use" and block.get("name") == NARRATE_TOOL:
                     self._tool_calls_this_turn += 1     # 只换 HUD 上的思考语句：算思考时间，不显示在"调用工具"一栏
                     continue
@@ -627,6 +701,8 @@ class ClaudeRunner:
             if self._command_active:
                 self._turn_done.set()
         elif etype == "result":
+            if self.naming_only and event.get('result'):
+                self.naming_reply = event['result']
             if event.get("is_error") and LIMIT_TEXT.search(str(event.get("result") or "")):
                 self._quota_from_text(str(event.get("result")))
             usage = event.get("usage") or {}

@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 import uuid
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -141,23 +142,23 @@ def scene_collection(cfg: dict) -> dict:
     })
     sound = _source("Celeste 游戏声音", "wasapi_process_output_capture",
                     {"window": cfg["game_window"], "priority": 2}, mixers=0xFF)
-    # 用本地文件打开 HUD 页面（页面再去连 HUD 服务取数据）：OBS 比主控先启动、HUD 服务还没起来时，
-    # 网址模式的页面加载失败后不会重试，本地文件模式不受影响
+    # OBS 33 的本地文件源不能跨源访问回环服务；默认用同源 HTTP，启动 OBS 前先启动 HUD 服务。
     page = REPO_ROOT / "overlay" / "hud.html"
     overlay = _source("HUD", "browser_source", {
-        "is_local_file": bool(hud.get("local_file", True)), "local_file": str(page).replace(os.sep, "/"),
+        "is_local_file": bool(hud.get("local_file", False)), "local_file": str(page).replace(os.sep, "/"),
         "url": hud["url"], "width": hud["width"], "height": hud["height"], "css": "",
         "reroute_audio": False, "restart_when_active": False, "shutdown": False, "fps_custom": False,
     })
-    scene = _source("Celeste AI", "scene", {
+    scene_name = cfg.get("scene", "Celeste AI")
+    scene = _source(scene_name, "scene", {
         "id_counter": 3, "custom_size": False,
         "items": [_item(game, 1, 0.0, 0.0, (float(width), float(height))),
                   _item(sound, 2, 0.0, 0.0, None),
-                  _item(overlay, 3, float(hud["x"]), float(hud["y"]), None)],
+                  _item(overlay, 3, float(hud["x"]), float(hud["y"]), None, locked=False)],
     })
     return {
-        "current_scene": "Celeste AI", "current_program_scene": "Celeste AI",
-        "scene_order": [{"name": "Celeste AI"}], "name": cfg["collection"],
+        "current_scene": scene_name, "current_program_scene": scene_name,
+        "scene_order": [{"name": scene_name}], "name": cfg["collection"],
         "sources": [scene, game, sound, overlay], "groups": [], "quick_transitions": [], "transitions": [],
         "saved_projectors": [], "current_transition": "Fade", "transition_duration": 300, "preview_locked": False,
         "scaling_enabled": False, "scaling_level": 0, "scaling_off_x": 0.0, "scaling_off_y": 0.0,
@@ -166,8 +167,7 @@ def scene_collection(cfg: dict) -> dict:
 
 
 def sync_hud_size(collection: Path, cfg: dict) -> bool:
-    """场景集合已存在时，只把 HUD 浏览器源的宽高与它在场景里的位置改成配置里的值（HUD 改尺寸后，旧场景会切掉
-    卡片或让它离开右上角），其他调整原样保留。OBS 退出时会写回场景集合，所以只在 OBS 没在运行时改。"""
+    """迁移旧整画布 HUD；迁移后保留用户在 OBS 中调整的来源尺寸和所有场景变换。"""
     if obs_running():
         return False
     try:
@@ -176,18 +176,26 @@ def sync_hud_size(collection: Path, cfg: dict) -> bool:
         return False
     hud = cfg["hud"]
     changed = False
+    migrated = set()
     for source in data.get("sources", []):
         settings = source.get("settings") or {}
         if source.get("id") == "browser_source" and source.get("name") == "HUD":
-            for key in ("width", "height"):
-                if settings.get(key) != hud[key]:
-                    settings[key] = hud[key]
+            desired = {"url": hud["url"], "is_local_file": bool(hud.get("local_file", False))}
+            if [settings.get("width"), settings.get("height")] == cfg["canvas"]:
+                desired.update(width=hud["width"], height=hud["height"])
+                migrated.add(source.get("uuid"))
+            for key, value in desired.items():
+                if settings.get(key) != value:
+                    settings[key] = value
                     changed = True
+    for source in data.get("sources", []):
         if source.get("id") == "scene":
-            for item in settings.get("items") or []:
-                pos = {"x": float(hud["x"]), "y": float(hud["y"])}
-                if item.get("name") == "HUD" and item.get("pos") != pos:
-                    item["pos"] = pos
+            for item in (source.get("settings") or {}).get("items") or []:
+                if item.get("name") == "HUD" and item.get("source_uuid") in migrated:
+                    if item.get("pos") == {"x": 0.0, "y": 0.0}:
+                        item["pos"] = {"x": float(hud["x"]), "y": float(hud["y"])}
+                        item.pop("pos_rel", None)  # OBS 33 重新计算相对位置
+                    item["locked"] = False
                     changed = True
     if changed:
         collection.write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
@@ -199,12 +207,14 @@ def setup(cfg: dict, reset: bool = False) -> None:
     场景集合：不存在时才创建；--reset 时先备份再重建（你在 OBS 里对这个场景的调整会被覆盖）。"""
     base = obs_config_dir() / "basic"
     profile = base / "profiles" / cfg["profile"] / "basic.ini"
-    collection = base / "scenes" / f"{cfg['collection']}.json"
+    collection = base / "scenes" / f"{cfg.get('collection_file', cfg['collection'])}.json"
+    # OBS 按标准录像目录查询剩余空间；目录不存在时 Windows 查询失败，会显示 0 MB。
+    Path(profile_settings(cfg)["SimpleOutput"]["FilePath"]).mkdir(parents=True, exist_ok=True)
     changed = merge_ini(profile, profile_settings(cfg))
     print(f"配置文件：{profile}{'（已更新）' if changed else ''}")
     if collection.exists() and not reset:
         resized = sync_hud_size(collection, cfg)
-        print(f"场景集合：{collection}（已存在，" + ("只把 HUD 浏览器源的尺寸与位置更新为配置值" if resized else "未改动")
+        print(f"场景集合：{collection}（已存在，" + ("已更新 HUD 来源；保留 OBS 自定义布局" if resized else "未改动")
               + "；要重建用 setup --reset）")
         return
     if collection.exists():
@@ -270,15 +280,16 @@ def obs_running() -> bool:
 
 def launch(cfg: dict, obs_dir: Path, minimized: bool, reset: bool = False) -> None:
     if obs_running():
-        raise SystemExit("OBS 已经在运行：请先关闭（或确认它用的是 CelesteAI 配置文件与场景集合，然后直接开始）")
+        raise SystemExit("OBS 已经在运行；主控可以沿用当前场景。需要重新启动 OBS 时请先关闭它。")
     setup(cfg, reset)
+    ensure_hud_service(cfg)
     selection = read_selection()
     if selection.get("Profile") != cfg["profile"]:
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps(selection, ensure_ascii=False, indent=2), encoding="utf-8")
     clear_stale_sentinel()
     exe = obs_dir / "bin" / "64bit" / "obs64.exe"
-    args = [str(exe), "--profile", cfg["profile"], "--collection", cfg["collection"], "--scene", "Celeste AI",
+    args = [str(exe), "--profile", cfg["profile"], "--collection", cfg["collection"], "--scene", cfg.get("scene", "Celeste AI"),
             "--disable-updater", "--disable-missing-files-check"]
     if minimized:
         args.append("--minimize-to-tray")
@@ -296,6 +307,40 @@ def launch(cfg: dict, obs_dir: Path, minimized: bool, reset: bool = False) -> No
         if info.get("connected"):
             break
     print_status()
+
+
+def ensure_hud_service(cfg: dict) -> None:
+    """URL 模式要在 OBS 打开页面之前就绪。独立启动的服务可跨多次主控运行复用。"""
+    if cfg["hud"].get("local_file", False):
+        return
+    url = cfg["hud"]["url"]
+    from urllib.parse import urlsplit
+    address = urlsplit(url)
+    if address.hostname not in ("127.0.0.1", "localhost"):
+        raise SystemExit("自动启动 HUD 只支持本机地址")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def ready() -> bool:
+        try:
+            with opener.open(url, timeout=1) as response:
+                return response.status == 200
+        except OSError:
+            return False
+
+    if ready():
+        return
+    log = REPO_ROOT / "build" / "hud-service.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("ab") as stream:
+        subprocess.Popen([sys.executable, "-X", "utf8", "-m", "overlay.server", "--port", str(address.port or 80)],
+                         cwd=REPO_ROOT, stdout=stream, stderr=stream, stdin=subprocess.DEVNULL,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if ready():
+            return
+        time.sleep(0.1)
+    raise SystemExit(f"HUD 服务未启动，见 {log}")
 
 
 def clear_stale_sentinel() -> None:

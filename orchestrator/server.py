@@ -1,7 +1,8 @@
-"""游戏工具 MCP 服务：智能体能用的游戏工具只有这里的 observe、act 与 set_effort。"""
+"""游戏工具 MCP 服务：观测、游玩、公开解说、推理强度与按用户要求退出关卡。"""
 from __future__ import annotations
 
 import asyncio
+import json
 
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -26,7 +27,7 @@ thought：一两句中文，会显示给观众。只写你对当前房间或这�
   不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。
 stop_on：提前停下的条件，可选 death room uncontrollable land refill complete；
   默认 ["death", "room", "complete"]，death 与 complete 总会生效。
-死亡、换房后的转场、剧情与重生由系统自动推进，返回时 Madeline 已可操作。"""
+死亡、换房后的转场与重生由系统自动推进；剧情按当前模式处理，agent模式可能停在剧情中，需要阅读story与画面后自行操作。"""
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json）"
 SIM_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
@@ -49,7 +50,7 @@ thought：一两句中文（120 字以内），只写你对当前房间或这一
 也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。
 思考期间随时调用：一有初步判断就先写一句，之后想法每有进展再写一句，不要攒到 act 时才写。"""
 
-# 实时展示的半分钟计时器：思考状态累计满 RunConfig.live_remind_s 秒没有 narrate，就在智能体下一次调用任何工具时
+# 实时展示的解说更新计时器：思考状态累计满 RunConfig.live_remind_s 秒没有 narrate，就在智能体下一次调用任何工具时
 # 由容器里的 PreToolUse 钩子把这句提醒放到那次工具结果旁边（见 run.add_gate_route 与 agent-container/celeste-gate.py）
 LIVE_REMINDER = ("（系统·实时展示）你已经思考了约 {s} 秒没有更新 HUD 上的思考内容，观众看不到你此刻的思路。"
                  "请调用 narrate 写一句你现在的分析与判断，之后想法每有进展再写一句。")
@@ -93,6 +94,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         level = obs.get("level") or {}
         return (level.get("sid"), level.get("room"))
     call_lock = asyncio.Lock()
+    # Shared with runtimes that invoke MCP directly, rather than forwarding calls.
+    session.tool_lock = call_lock
 
     def begin() -> None:
         if gate is not None:
@@ -105,6 +108,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     def gated() -> str | None:
         """知识库没读完时不执行游戏工具，返回提示。"""
+        guard = getattr(session, 'control_guard', None)
+        if guard and (note := guard()):
+            return note
         if study is None or study.ready():
             return None
         return study.reminder()
@@ -114,6 +120,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     def header_line() -> str:
         line = effort_line(metrics)
+        energy = getattr(metrics.state, "sim_energy", None)
+        if energy:
+            line += f"\n模拟体力：{energy['balance']}/{energy['capacity']}（预测花费体力，真实操作和首次到新房间补充）"
         if gate is not None and gate.enabled:
             line += "\n" + gate.status_line()
         return line
@@ -169,7 +178,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if outcome.auto_notes:
                     parts.append("；".join(outcome.auto_notes))
                 if session.done:
-                    parts.append(f"【{session.done_reason}】本次要通关的章节已全部完成，不需要再调用工具，请直接结束本轮。")
+                    parts.append(f"【{session.done_reason}】本次试玩已结束，不需要再调用工具，请直接结束本轮。")
                 new_room = room_key(outcome.obs) != state["described_room"]
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
@@ -188,6 +197,40 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 return [f"动作未执行（没有消耗任何游戏帧）：{err}"]
             finally:
                 finish()
+
+    @server.tool(name='exit_level', description='仅在用户要求退出时调用：通过游戏暂停菜单保存并退出当前关卡，回到地图或主菜单，结束本次试玩并保存录像。退出不算通关。', structured_output=False)
+    async def exit_level(reason: str) -> list:
+        async with call_lock:
+            if (note := gated()) is not None:
+                return [note]
+            begin()
+            result = await asyncio.to_thread(session.exit_level, reason)
+            return [json.dumps(result,ensure_ascii=False) + '\n已退出关卡，本次试玩结束，请结束本轮，不再调用游戏工具。']
+
+    @server.tool(name='cutscene', description='处理剧情：wait观看播放，advance推进一页对话，choose选择当前可见选项index，skip尝试跳过整段。遇到分支选项必须明确choose，advance不会代选。frames为1～180。', structured_output=False)
+    async def cutscene(action: str, frames: int = 30, choice: int | None = None) -> list:
+        async with call_lock:
+            if (note := gated()) is not None:return [note]
+            begin()
+            obs,image,info=await asyncio.to_thread(session.cutscene,action,frames,choice)
+            result=[]
+            if image and session.cfg.images:result.append(Image(data=upscale_png(image),format='png'))
+            result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line())+'\n'+room_json(obs))
+            return result
+
+    @server.tool(name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)
+    async def simulate(candidates: list[list[str]] | None = None) -> list:
+        async with call_lock:
+            if (note := gated()) is not None:
+                return [note]
+            if not getattr(session, 'sim_energy', None):
+                return ['本次未启用限额模拟辅助。']
+            if candidates is None:
+                result = session.sim_energy.snapshot()
+            else:
+                begin()
+                result = await asyncio.to_thread(session.simulate, {'candidates': candidates})
+            return [json.dumps(result, ensure_ascii=False)]
 
     if session.cfg.live:
         @server.tool(name="narrate", description=NARRATE_DESCRIPTION, structured_output=False)
@@ -209,6 +252,12 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         level = (level or "").strip().lower()
         if level not in EFFORT_LEVELS:
             return [f"无效的推理强度 {level!r}：只能是 {'、'.join(EFFORT_LEVELS)}。"]
+        policy = getattr(session, 'effort_policy', None)
+        if policy:
+            try:
+                await policy(level)
+            except ValueError as exc:
+                return [str(exc)]
         current, pending = metrics.state.effort, metrics.state.effort_pending
         if level == current:
             if pending:

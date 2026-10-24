@@ -10,6 +10,7 @@ import re
 from PIL import Image as PILImage
 
 from .config import CHAPTER_NAMES
+from .connectivity import static_connectivity
 
 STOP_TEXT = {
     "done": "按键全部执行完",
@@ -156,11 +157,32 @@ def enrich_obs(obs: dict) -> dict:
 def compact_entity(entity: dict) -> dict:
     """给智能体看的实体：去掉完整字段，只给会动的实体保留与运动有关的字段。"""
     out = {k: v for k, v in entity.items() if k != "fields"}
+    if entity.get("cat") == "collectible":
+        for key in ("collected", "isGhostBerry", "flyingAway", "Winged", "Golden", "Moon", "WaitingOnSeeds"):
+            if key in (entity.get("fields") or {}):
+                out.setdefault(key, entity["fields"][key])
     if is_dynamic(entity):
         picked = key_fields(entity)
         if picked:
             out["state"] = picked
     return out
+
+
+def terrain_regions(obs: dict) -> list[str]:
+    """Report static barriers for both observed objects and actual exit openings."""
+    data=static_connectivity(obs)
+    if not data:return []
+    separated=[f"{e['type']}#{e['id']}" for e in data['entities'] if e['relation']=='separated']
+    exits=[e for e in data['exits'] if e['relation']!='connected']
+    narrow=[f"{e['type']}#{e['id']}" for e in data['entities'] if e['relation']=='narrow']
+    if data['regions']<2 and not separated and not exits and not narrow:return []
+    lines=[f"静态地形检查：空区分成{data['regions']}块；按实际地形和当前碰撞箱核对，连通不等于能跳到。"]
+    if separated:lines.append('隔开当前空区的物体：'+'、'.join(separated)+'；需找实际开口或其他入口，不要隔墙硬冲。')
+    labels={'blocked':'邻接边界上没有实际开口','separated':'实际开口与当前区域被静态墙隔断，不能在本房间内直达','narrow':'当前碰撞箱无法通过，改变姿态后的通路尚未验证'}
+    for e in exits:lines.append(f"出口 {e.get('room')}（{e['side']}）：{labels[e['relation']]}。")
+    if narrow:lines.append('当前碰撞箱无法接近：'+'、'.join(narrow)+'；不排除改变姿态或其他入口。')
+    lines.append(data['limitations'])
+    return lines
 
 
 def room_json(obs: dict) -> str:
@@ -169,6 +191,7 @@ def room_json(obs: dict) -> str:
     player = obs.get("player") or {}
     data = {
         "room": level.get("room"), "bounds": level.get("bounds"), "exits": obs.get("exits", []),
+        "exitsNote": "仅相邻房间的边界投影，不保证有开口，也不保证从当前位置可达；先核对地形。",
         "spawns": obs.get("spawns", []), "respawnPoint": obs.get("respawnPoint"),
         "solids": obs.get("solids", []),
         "entities": [compact_entity(e) for e in obs.get("entities", [])],
@@ -176,6 +199,12 @@ def room_json(obs: dict) -> str:
         "player": {k: player.get(k) for k in ("pos", "speed", "state", "dashes", "maxDashes", "stamina", "onGround",
                                               "facing", "ducking", "hitbox", "internal") if k in player},
     }
+    if level.get('dialogOpen') or level.get('dialogChoices') or level.get('inCutscene'):
+        data['dialog']={key:level.get(key) for key in ('dialogOpen','dialogWaiting','dialogChoices','dialogChoiceIndex','dialogChoiceReady')}
+    if obs.get('story'):
+        data['story']=obs['story']
+    connectivity=static_connectivity(obs)
+    if connectivity:data['connectivity']=connectivity
     lines = ["{"]
     keys = list(data)
     for i, key in enumerate(keys):
@@ -240,6 +269,17 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None) -
     if effort:
         head += f" · {effort}"
     lines.append(head)
+    for story in obs.get('story') or []:
+        portrait=story.get('speakerPortrait') or {}
+        speaker=portrait.get('sprite')
+        if story.get('text'):
+            lines.append(('当前对白（头像标识 '+speaker+'）' if speaker else '当前剧情文字')+'：'+story['text'])
+        if story.get('controls'):
+            lines.append('当前教学按键：'+json.dumps(story['controls'],ensure_ascii=False))
+    if (level or {}).get('dialogChoices'):
+        lines.append('当前需要选择对话选项；advance不会代选，请用cutscene(action="choose", choice=index)：')
+        for option in level['dialogChoices']:
+            lines.append(f"  {option['index']}: {option['text']}" + ('（当前选中）' if option.get('selected') else ''))
 
     if player:
         x, y = player["pos"]
@@ -258,7 +298,7 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None) -
         cam = level["camera"]
         b = level["bounds"]
         lines.append(f"画面左上角世界坐标 ({cam[0]}, {cam[1]})，画面 320×180；"
-                     f"本房间范围 x {b[0]}~{b[0] + b[2]}，y {b[1]}~{b[1] + b[3]}（离开这个范围就会进入相邻房间）")
+                     f"本房间范围 x {b[0]}~{b[0] + b[2]}，y {b[1]}~{b[1] + b[3]}（边界未必有出口；相邻房间不等于可直接到达）")
         flags = [name for name, key in (("剧情中", "inCutscene"), ("转场中", "transitioning"), ("暂停", "paused")) if level.get(key)]
         if flags:
             lines.append("当前：" + "、".join(flags))
@@ -267,6 +307,13 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None) -
         entities, tiles = obs.get("entities") or [], obs.get("tiles")
     else:
         entities, tiles = crop_to_view(obs)
+    lines.extend(terrain_regions(obs))
+    collectibles = [compact_entity(e) for e in entities if e.get("cat") == "collectible"]
+    if collectibles:
+        lines.append("当前观测中的收集品（是否能接近需结合地形确认）：")
+        for e in collectibles:
+            status = "已收集" if e.get("collected") else "此前存档已取得的幽灵收集品" if e.get("isGhostBerry") else "尚未确认收集"
+            lines.append(f"- {e['type']}#{e.get('id', '?')} 碰撞范围 ({e['x']}, {e['y']}, {e['w']}, {e['h']})；{status}")
     if entities:
         px, py = player["pos"] if player else (0.0, 0.0)
         entities = sorted(entities, key=lambda e: math.hypot(e["x"] + e["w"] / 2 - px, e["y"] + e["h"] / 2 - py))
@@ -295,6 +342,8 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None) -
         rows = tiles["rows"]
         cols = len(rows[0]) if rows else 0
         scope = "整个房间" if tiles.get("scope") == "room" else "当前画面附近"
+        if tiles.get("legend"):
+            lines.append("图例：" + "；".join(f"{symbol}={meaning}" for symbol, meaning in tiles["legend"].items()))
         lines.append(f"字符地图（{scope}；每格 8×8 像素；第 0 行第 0 列格子的左上角是世界坐标 ({ox}, {oy})，"
                      f"第 r 行第 c 列的左上角是 ({ox} + 8c, {oy} + 8r)）：")
         lines.append("    " + "".join(str(c // 10) for c in range(cols)))

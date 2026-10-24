@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -20,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.11.4";
+    public const string Version = "0.12.5";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -110,6 +111,8 @@ internal static class Bridge {
     private enum AudioMode { Playing, Frozen, MusicOnly }
     private static AudioMode audioMode = AudioMode.Playing;
     private static bool sfxPausedByUs;
+    private static bool continuousMusic;
+    private static AudioMode IdleAudio => continuousMusic ? AudioMode.MusicOnly : AudioMode.Frozen;
     /// <summary>停住后第几个节拍暂停声音（见 LockstepTick）；idleTokens 是自上一帧以来没有推进的节拍数。</summary>
     private const int FreezeAfterIdleTokens = 2;
     private static int idleTokens;
@@ -133,7 +136,7 @@ internal static class Bridge {
             // 约四分之一的接缝里上一帧末尾被截成静音（实测 3–19 毫秒，听得出断口）；晚一个节拍留出余量，
             // 代价是每个接缝跳过约一帧长度的音乐（接缝两边有 2 毫秒淡出淡入，听不出来）。
             // 更早的做法是等 60 毫秒才暂停，每个接缝丢约 50 毫秒
-            if (++idleTokens >= FreezeAfterIdleTokens) SetAudio(AudioMode.Frozen);
+            if (++idleTokens >= FreezeAfterIdleTokens) SetAudio(IdleAudio);
             HaltWithoutDrawing(runOriginal);
             return;
         }
@@ -217,6 +220,7 @@ internal static class Bridge {
 
     private static void FlushPendingAck() {
         if (pendingAck is not { } token) return;
+        RecordingAudio.Publish(token, pendingAckReplay);
         pendingAck = null;
         long ticks = pendingAckReplay ? -1 : Engine.Scene is Level level ? level.Session.Time : 0;
         pendingAckReplay = false;
@@ -248,8 +252,8 @@ internal static class Bridge {
         } else if (replayed) {
             SinceAdvance.Restart();
             SetAudio(AudioMode.MusicOnly);
-        } else if (audioMode != AudioMode.Frozen && SinceAdvance.ElapsedMilliseconds > 60) {
-            SetAudio(AudioMode.Frozen);
+        } else if (audioMode != IdleAudio && SinceAdvance.ElapsedMilliseconds > 60) {
+            SetAudio(IdleAudio);
         }
     }
 
@@ -306,6 +310,7 @@ internal static class Bridge {
     }
 
     public static void Deactivate() {
+        RecordingAudio.Stop();
         if (job != null) {
             job.Cancel();
             FinishJob();
@@ -338,6 +343,7 @@ internal static class Bridge {
         CurrentInput = input;
         try {
             runOriginal();
+            RecordingAudio.Advance();
         } finally {
             engineHalted = true;
             FeedInputThisFrame = false;
@@ -406,6 +412,20 @@ internal static class Bridge {
                     w.WriteBoolean("active", Active);
                     w.WriteNumber("frame", Frame);
                     w.WriteString("scene", Engine.Scene?.GetType().Name ?? "none");
+                    w.WriteBoolean("continuous_music", continuousMusic);
+                    w.WriteString("audio_mode", audioMode.ToString());
+                    w.WriteBoolean("record_audio_nrt", true);
+                    w.WriteBoolean("create_save", true);
+                    w.WriteBoolean("dialog_choices", true);
+                    w.WriteBoolean("story_text", true);
+                    w.WriteBoolean("record_audio_active", RecordingAudio.Enabled);
+                    w.WriteNumber("record_audio_frames", RecordingAudio.RenderedFrames);
+                    if (Audio.CurrentMusicEventInstance is { } music && music.getTimelinePosition(out int musicPosition) == FMOD.RESULT.OK) {
+                        w.WriteNumber("live_music_ms", musicPosition);
+                        if (RecordingAudio.PositionFor(music) is { } recordingPosition)
+                            w.WriteNumber("record_music_ms", recordingPosition);
+                    }
+                    if (RecordingAudio.Error != null) w.WriteString("record_audio_error", RecordingAudio.Error);
                     w.WriteStartObject("clock");
                     w.WriteBoolean("connected", ClockServer.Connected);
                     w.WriteBoolean("lockstep", lockstepEngaged);
@@ -423,11 +443,21 @@ internal static class Bridge {
                     break;
                 }
                 DrawFrameMarker = GetBool(a, "marker", DrawFrameMarker);
+                continuousMusic = GetBool(a, "continuous_music", continuousMusic);
+                string recordAction = GetString(a, "action", "");
+                if (recordAction == "start" && GetString(a, "audio_source", "obs_mix") == "game_nrt") {
+                    using JsonDocument plugin = JsonDocument.Parse(ClockServer.PluginStatus ?? "{}");
+                    if (!plugin.RootElement.TryGetProperty("audio_nrt", out JsonElement capability) || capability.ValueKind != JsonValueKind.True)
+                        throw new InvalidOperationException("Update the OBS lockstep plugin for independent recording audio");
+                    RecordingAudio.Start(Audio.System, Path.Combine(Engine.ContentDirectory, "FMOD", "Desktop"), BridgeModule.Settings.ClockPort);
+                }
+                else if (recordAction == "stop") RecordingAudio.Stop();
                 ClockServer.Send("R " + a.GetRawText());
                 IpcServer.Send(Reply.Ok(req.Id, w => w.WriteBoolean("marker", DrawFrameMarker)));
                 break;
 
             case "activate":
+                continuousMusic = GetBool(a, "continuous_music", continuousMusic);
                 if (!Active) {
                     InputInjector.Install();
                     Active = true;
@@ -440,6 +470,20 @@ internal static class Bridge {
             case "deactivate":
                 Deactivate();
                 IpcServer.Send(Reply.Ok(req.Id));
+                break;
+
+            case "create_save":
+                if (job != null || Playback.Running) throw new InvalidOperationException("game action already running");
+                string requestedName = GetString(a, "name", "").Trim();
+                bool dryRun = GetBool(a, "dry_run", false);
+                int createdSlot = SaveCreation.Start(requestedName, dryRun);
+                IpcServer.Send(Reply.Ok(req.Id, w => {
+                    w.WriteNumber("slot", createdSlot);
+                    w.WriteString("name", requestedName);
+                    w.WriteBoolean("started", !dryRun);
+                    w.WriteBoolean("dry_run", dryRun);
+                    w.WriteBoolean("persisted", File.Exists(UserIO.GetSaveFilePath(SaveData.GetFilename(createdSlot))));
+                }));
                 break;
 
             case "observe":

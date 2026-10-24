@@ -300,7 +300,7 @@ winget install Gyan.FFmpeg
 | --- | --- | --- |
 | `--agent <标签>` | 必填 | 智能体标签：容器 `celeste-agent-<标签>`、工作区 `workspaces\<标签>\`、日志 `runs\<标签>\`、会话数据卷 `celeste-claude-<标签>` |
 | `--save <存档名>` | 必填 | 游戏内存档名；与当前存档不一致时拒绝开始 |
-| `--provider` | `anthropic` | 模型平台：`anthropic`（订阅令牌）、`deepseek`、`openai`（GPT，未实测）或 `configs\local.providers.json` 里自定义的 |
+| `--provider` | `anthropic` | 模型平台：`anthropic`（订阅令牌）、`deepseek`或 `configs\local.providers.json` 里自定义的 |
 | `--model` | `opus` | Anthropic 用别名（`opus`、`fable`、`haiku`）；第三方用它自己的模型名（如 `deepseek-flash`；GPT 填网关里的 `model_name`） |
 | `--effort` | `high` | 开局推理强度 `low`/`medium`/`high`/`xhigh`/`max`；智能体可以用 `set_effort` 自己调整 |
 | `--chapters 0,1,2` | 无 | 依次通关的章节（0 序章、1 1A、2 2A……）；给了它就不用 `--chapter` |
@@ -354,7 +354,7 @@ winget install Gyan.FFmpeg
 | --- | --- | --- |
 | `configs\recording.json` | 是 | 录制默认值：`obs_dir`、`ffmpeg`、`video_args`、`audio_offset_ms`、OBS 配置文件与场景集合名、画布 1920×1080、60 fps、48 kHz、游戏窗口、HUD 浏览器源的位置与大小 |
 | `configs\local.recording.json` | 否 | 本机覆盖上面的键 |
-| `configs\providers.json` | 是 | 模型平台：`label`、`status`、`auth`、`base_url`、`allowed_domains`（防火墙放行的域名）、`allowed_host_ports`（放行的宿主机端口，例如 GPT 网关）、`gateway_check`、`key_env`、`key_file`、`model_suffix`、`images`、`autocompact`、`env`（传给 Claude Code 的模型槽位等） |
+| `configs\providers.json` | 是 | 模型平台：`label`、`status`、`auth`、`base_url`、`allowed_domains`（防火墙放行的域名）、`allowed_host_ports`（放行的宿主机端口，例如自定义兼容服务）、`gateway_check`、`key_env`、`key_file`、`model_suffix`、`images`、`autocompact`、`env`（传给 Claude Code 的模型槽位等） |
 | `configs\local.providers.json` | 否 | 本机覆盖与自定义平台；密钥文件位置写在这里 |
 | `configs\hud.json` | 是 | HUD：智能体显示名 `names`、章节名、颜色、上下文窗口等 |
 | `.env` | 否 | `CLAUDE_CODE_OAUTH_TOKEN` |
@@ -389,46 +389,9 @@ winget install Gyan.FFmpeg
    或者设环境变量 `DEEPSEEK_API_KEY`。
 3. 运行时加 `--provider deepseek --model deepseek-flash`（或 `deepseek-v4-pro`）。
 
-### 9.2 GPT（OpenAI）：只有接口，尚未实测
+### 9.2 原生 GPT
 
-OpenAI 的接口不是 Anthropic 格式，Claude Code 不能直接调用，所以要在本机运行一个"Anthropic 接口 → OpenAI 接口"的转换网关，例如 [LiteLLM 代理](https://docs.litellm.ai/docs/tutorials/claude_non_anthropic_models)。网关持有 OpenAI 的密钥，容器只连宿主机上网关的端口、用网关自己的访问密钥。
-
-1. 安装网关（单独的环境，不装进本项目的 `.venv`）：
-
-   ```powershell
-   uv tool install 'litellm[proxy]'      # 或：python -m pip install "litellm[proxy]"
-   ```
-
-2. 写网关配置 `litellm.yaml`（`model_name` 是之后 `--model` 要填的名字，`model` 是 OpenAI 的模型名）：
-
-   ```yaml
-   model_list:
-     - model_name: <给智能体用的名字>
-       litellm_params:
-         model: openai/<OpenAI 模型名>
-         api_key: os.environ/OPENAI_API_KEY
-   ```
-
-3. 启动网关。只监听本机回环地址即可：Docker Desktop 把容器里对 `host.docker.internal` 的连接转到宿主机的 127.0.0.1（主控的游戏工具端口也是这样连的），这样不会弹出 Windows 防火墙询问，局域网里的其他机器也连不上网关：
-
-   ```powershell
-   $env:OPENAI_API_KEY = "<OpenAI 密钥>"
-   $env:LITELLM_MASTER_KEY = "sk-<一串随机字符>"
-   litellm --config litellm.yaml --host 127.0.0.1 --port 4000
-   ```
-
-   2026-10-24 在作者本机核对过防火墙（用一个只监听 127.0.0.1:4000 的临时网页服务代替网关）：按 `openai` 的配置建的容器能访问 `host.docker.internal:4000`，连不上宿主机的其他端口，解析不到 api.openai.com、api.anthropic.com 等任何域名，Anthropic 的地址段也被拒绝。
-
-4. 把网关访问密钥（`LITELLM_MASTER_KEY` 的值）存成本机文件，写进 `configs\local.providers.json`（端口改了的话一并改）：
-
-   ```json
-   { "openai": { "key_file": "D:\\secrets\\litellm.key",
-                 "base_url": "http://host.docker.internal:4000", "allowed_host_ports": [4000],
-                 "gateway_check": "http://127.0.0.1:4000/health/liveliness" } }
-   ```
-
-5. **重新构建智能体镜像**（2026-10-24 起防火墙才支持放行宿主机上的网关端口）：`docker build -t celeste-agent:0.1 agent-container`。
-6. 运行：`--provider openai --model <model_name>`。主控开跑前会访问 `gateway_check` 确认网关在运行，并提示这个平台尚未实测。
+GPT 使用 Codex 已登录的原生执行器，不依赖 Anthropic 转换网关。使用 HUD 新建、准备和开始会话，或通过 start_gpt.ps1 显式传入准备目录与存档。详见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。自定义 Anthropic 兼容服务继续使用下一节的通用平台配置。
 
 ### 9.3 其他兼容 Anthropic 接口的平台
 
@@ -484,7 +447,6 @@ Remove-Item "<OBS 目录>\obs-plugins\64bit\celeste-lockstep.dll"
 | OBS 弹出"安全模式" | 用 `tools\obs_setup.py launch` 启动（会清掉崩溃标记）；已弹出时选正常模式 |
 | 录像里没有游戏画面 | 录制时游戏窗口被最小化；主控会自动还原，失败时手动还原后重录 |
 | 第三方平台提示找不到密钥 | 按 9 节写 `configs\local.providers.json` 的 `key_file`，或设环境变量 |
-| `--provider openai` 提示连不上网关 | 先按 9.2 节启动 LiteLLM，`gateway_check` 的地址在浏览器能打开 |
 | 智能体想从零开始 | 删除 `workspaces\<标签>\`，再 `docker rm -f celeste-agent-<标签>`、`docker volume rm celeste-claude-<标签>` |
 | 存档进度不对 | 从运行目录的 `save_backup\` 恢复（先关游戏），并确认已关闭云同步 |
 

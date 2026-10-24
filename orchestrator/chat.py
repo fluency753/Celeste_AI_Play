@@ -1,0 +1,77 @@
+"""通关后按需唤起原 agent 会话，仅聊天，不建立游戏桥接或录制连接。"""
+import argparse
+import asyncio
+import json
+from pathlib import Path
+
+from .lifecycle import host_runner
+from .runtimes import runtime, config_from_state
+from .container import ensure_container
+from .metrics import Metrics
+
+
+def can_wake(directory):
+    if directory is None:
+        return False
+    try:
+        state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
+        runtime(state.get("engine"))
+        if state.get("session_kind") == "ready":
+            preparation = json.loads((directory / "prepare_summary.json").read_text(encoding="utf-8"))
+            return (bool(state.get("session_id"))
+                    and preparation.get('engine', 'codex') == state['engine']
+                    and preparation.get('provider', 'codex') == state.get('provider', 'codex' if state['engine']=='codex' else 'anthropic')
+                    and preparation.get("kb_study", {}).get("complete") is True
+                    and not preparation.get("quick_check") and preparation.get("success") is not False)
+        summary = json.loads((directory / "summary.json").read_text(encoding="utf-8"))
+        return bool(state.get("session_id")) and (summary.get("completed") is True or summary.get("user_stopped") is True)
+    except (OSError, ValueError):
+        return False
+
+
+async def chat(directory, name_request=None):
+    if not can_wake(directory):
+        raise ValueError("只能唤起已准备或已完成试玩的会话")
+    state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
+    if name_request and state.get('session_kind') != 'ready':
+        raise ValueError('自动取名仅用于准备完成、尚未开始的新试玩')
+    previous = json.loads((directory / "metrics.json").read_text(encoding="utf-8"))
+    cfg = config_from_state(state, previous)
+    runtime(cfg.engine).token(cfg)
+    from .control import RunControl
+    cfg.cutscene_mode=RunControl(directory).cutscene_preference() or state.get('cutscene_mode','auto')
+    cfg.sim, cfg.live, cfg.chapters = False, True, []
+    if name_request:
+        cfg.max_minutes = 3
+    container = await asyncio.to_thread(ensure_container, cfg)
+    metrics = Metrics(directory / "metrics.json", cfg.agent, cfg.model, cfg.effort, cfg.budget_seconds)
+    metrics.restore(previous, str(directory))
+    try:
+        async with host_runner(cfg, directory, metrics, container, session_id=state['session_id'],
+                               resume=True, chat_only=True, naming_only=bool(name_request)) as runner:
+            runner.ready_to_play = state.get('session_kind') == 'ready'
+            if name_request:
+                from .save_naming import PROMPT
+                runner.control.enqueue('message', PROMPT)
+            await runner.run()
+            if name_request:
+                if not runner.name_result:
+                    raise ValueError('会话没有完成存档命名')
+                result = directory / 'save_name_result.json'
+                temporary = result.with_suffix('.tmp')
+                temporary.write_text(json.dumps({'request_id': name_request, 'name': runner.name_result}, ensure_ascii=False), encoding='utf-8')
+                temporary.replace(result)
+    finally:
+        metrics.update(status="done")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run", required=True, type=Path)
+    parser.add_argument('--name-save', help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    asyncio.run(chat(args.run.resolve(), args.name_save))
+
+
+if __name__ == "__main__":
+    main()

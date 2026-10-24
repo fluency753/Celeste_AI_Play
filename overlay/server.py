@@ -17,14 +17,30 @@ import json
 import sys
 import threading
 import time
+from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from .history import read_history
+from .layout import Layout
+from .typography import load_font
+from orchestrator.control import RunControl
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PAGE = Path(__file__).resolve().parent / "hud.html"
 CONFIG = REPO_ROOT / "configs" / "hud.json"
 LOCAL_CONFIG = REPO_ROOT / "configs" / "local.hud.json"   # 本机覆盖（不入库）
 DEFAULT_PORT = 47790
+_wake_lock = threading.Lock()
+
+
+def waking(directory):
+    try:
+        host = json.loads((directory / "chat_host.json").read_text(encoding="utf-8"))
+        status = json.loads((Path(host["directory"]) / "status.json").read_text(encoding="utf-8"))
+        return status.get("state") == "running" and time.time() - host["wall"] < 60
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def load_config() -> dict:
@@ -39,16 +55,26 @@ def load_config() -> dict:
                 config[key] = {**config[key], **value}
             else:
                 config[key] = value
+    config["desktop_layout"] = Layout().custom
+    config["font_scale"] = load_font()
     return config
 
 
-def current_run(pinned: Path | None) -> Path | None:
+def anchor_run(pinned: Path | None) -> Path | None:
     if pinned is not None:
         return pinned
     try:
-        return Path((REPO_ROOT / "runs" / "latest.txt").read_text(encoding="utf-8").strip())
+        value=(REPO_ROOT / 'runs/latest.txt').read_text(encoding='utf-8').strip()
+        if value and Path(value).is_dir():return Path(value)
     except OSError:
-        return None
+        pass
+    from orchestrator.session_store import idle_anchor
+    return idle_anchor(REPO_ROOT)
+
+
+def current_run(pinned: Path | None) -> Path | None:
+    from orchestrator.conversations import selected_run
+    return selected_run(anchor_run(pinned))
 
 
 def read_metrics(run_dir: Path | None) -> dict | None:
@@ -79,14 +105,139 @@ def make_handler(pinned: Path | None):
             path = self.path.split("?", 1)[0]
             if path in ("/", "/hud", "/hud/"):
                 self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+            elif path == '/api/saves':
+                from orchestrator.saves import inventory, supports_unicode
+                try:
+                    self._send(200, json.dumps({'saves': inventory(), 'unicode_names': supports_unicode()}, ensure_ascii=False).encode('utf-8'), 'application/json')
+                except ValueError as exc:
+                    self._send(503, json.dumps({'saves': [], 'error': str(exc)}, ensure_ascii=False).encode('utf-8'), 'application/json')
+            elif path == '/api/models':
+                from orchestrator.runtimes import runtime
+                try:
+                    from urllib.parse import parse_qs
+                    query = parse_qs(urlparse(self.path).query)
+                    refresh = query.get('refresh') == ['1']
+                    payload = runtime(query.get('engine',['codex'])[0]).models(query.get('provider',[None])[0], refresh=refresh)
+                    self._send(200, json.dumps(payload, ensure_ascii=False).encode('utf-8'), 'application/json')
+                except (RuntimeError, OSError, ValueError, TimeoutError) as exc:
+                    self._send(503, json.dumps({'models': [], 'error': '无法读取模型列表：' + str(exc)}, ensure_ascii=False).encode('utf-8'), 'application/json')
+            elif path == "/api/control":
+                directory = current_run(pinned)
+                metrics = read_metrics(directory) or {}
+                payload = {"run": str(directory), "model": metrics.get("model"), "room": metrics.get("room"),
+                           "control": RunControl(directory).snapshot() if directory else {"connected": False}}
+                from orchestrator.chat import can_wake
+                payload["can_wake"] = can_wake(directory)
+                payload["waking"] = waking(directory) if directory and not payload["control"]["connected"] else False
+                from orchestrator.conversations import catalog, read_json, session_key
+                payload["sessions"] = [{"id":record["key"], "label":record["label"], "model":record["model"]}
+                                       for record in catalog(anchor_run(pinned))]
+                selected = read_json(directory / "run_state.json") if directory else {}
+                payload["selected_session"] = session_key(selected) if selected.get("session_id") else None
+                from orchestrator.runtimes import configured_runtimes
+                payload["runtimes"] = configured_runtimes()
+                payload["runtime"] = selected.get("engine", "codex") + ":" + selected.get("provider", "codex" if selected.get("engine", "codex") == "codex" else "anthropic")
+                payload['save'] = read_json(directory / 'run_state.json').get('save') if directory else None
+                payload['save_slot'] = read_json(directory / 'run_state.json').get('save_slot') if directory else None
+                from orchestrator.session_actions import operation_status
+                payload["operation"] = operation_status(anchor_run(pinned))
+                payload["ready_to_play"] = bool(directory and read_json(directory / 'run_state.json').get('session_kind') == 'ready')
+                payload['session_management'] = pinned is None
+                idle=bool(directory and read_json(directory/'run_state.json').get('session_kind') in {'idle','standby'})
+                payload['can_create_session']=payload['can_wake'] or idle
+                from orchestrator.play_scope import sim_available
+                payload['sim_available']=sim_available(REPO_ROOT)
+                self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json")
             elif path == "/hud/state":
                 run_dir = current_run(pinned)
-                payload = {"now": time.time(), "config": load_config(), "metrics": read_metrics(run_dir),
+                metrics = read_metrics(run_dir)
+                config = load_config()
+                payload = {"now": time.time(), "config": config, "metrics": metrics,
                            "run": str(run_dir) if run_dir else None}
                 self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
+            elif path == "/hud/history":
+                run_dir = current_run(pinned)
+                payload = {"run": str(run_dir) if run_dir else None,
+                           "items": read_history(run_dir, read_metrics(run_dir))}
+                self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
             else:
                 self._send(404, b"not found", "text/plain")
+
+        def do_POST(self):
+            try:
+                if self.path != "/api/control":
+                    raise ValueError("未知控制接口")
+                origin = self.headers.get("Origin")
+                if origin and (urlparse(origin).scheme != "http" or urlparse(origin).hostname not in {"127.0.0.1", "localhost"}):
+                    raise ValueError("只接受本机控制页面")
+                if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                    raise ValueError("请求必须是 JSON")
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 20000:
+                    raise ValueError("请求大小无效")
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict):
+                    raise ValueError("请求必须是 JSON 对象")
+                directory = current_run(pinned)
+                if directory is None or data.get("run") != str(directory):
+                    raise ValueError("当前运行已变化，请刷新后重试")
+                control = RunControl(directory)
+                from orchestrator.session_actions import operation_status, BUSY
+                if operation_status(anchor_run(pinned)).get('status') in BUSY:
+                    raise ValueError('会话正在准备或接入，请等待完成')
+                if data.get('kind') in {'new_session', 'disconnect', 'play_session'}:
+                    if pinned is not None:
+                        raise ValueError('固定预览模式不提供会话管理，请使用跟随最新运行的 HUD 服务')
+                    from orchestrator.session_actions import create_session, disconnect, play_session
+                    with _wake_lock:
+                        if current_run(pinned) != directory:
+                            raise ValueError('当前会话已变化，请重试')
+                        if data['kind'] == 'disconnect':
+                            disconnect(anchor_run(pinned), directory)
+                            result = {'disconnected': True}
+                        else:
+                            options = json.loads(data.get('text') or '{}')
+                            result = (create_session if data['kind'] == 'new_session' else play_session)(anchor_run(pinned), directory, options)
+                    self._send(200, json.dumps(result, ensure_ascii=False).encode('utf-8'), 'application/json')
+                    return
+                if data.get("kind") == "switch":
+                    from orchestrator.conversations import switch_session
+                    with _wake_lock:
+                        # 重新核对，避免两个客户端同时切换到不同会话。
+                        if current_run(pinned) != directory:
+                            raise ValueError("当前会话已变化，请重试")
+                        target = switch_session(anchor_run(pinned), directory, data.get("text"))
+                    self._send(200, json.dumps({"run": str(target)}).encode(), "application/json")
+                    return
+                if data.get("kind") == "wake":
+                    from orchestrator.chat import can_wake
+                    from orchestrator.background import launch
+                    with _wake_lock:
+                        if not can_wake(directory):
+                            raise ValueError("本次试玩尚未完成，不能唤起结束后的聊天")
+                        if not control.snapshot()["connected"] and not waking(directory):
+                            host, status = launch(["--run", str(directory)], service="chat")
+                            (directory / "chat_host.json").write_text(json.dumps({
+                                "directory": str(host), "wall": time.time()}), encoding="utf-8")
+                    self._send(200, b'{"waking":true}', "application/json")
+                    return
+                if not control.snapshot()["connected"]:
+                    raise ValueError("主控未连接，消息尚未发送")
+                if data.get('kind') == 'effort':
+                    if not control.snapshot().get('effort_control'):
+                        raise ValueError('当前主控还不支持手动推理强度，请更新主控后重试')
+                    if data.get('text') != 'auto':
+                        from orchestrator.model_catalog import resolve_selection
+                        resolve_selection((read_metrics(directory) or {}).get('model'),data.get('text'))
+                if data.get('kind')=='cutscene_mode' and not control.snapshot().get('cutscene_control'):
+                    raise ValueError('请断开并重新连接会话后再切换剧情模式')
+                if data.get("kind") in {"goal", "goal_clear", "stop"} and not control.snapshot().get("goals_enabled"):
+                    raise ValueError("当前未在试玩，不能修改或触发停止目标")
+                ident = control.enqueue(data.get("kind"), data.get("text", ""))
+                self._send(200, json.dumps({"id": ident}).encode(), "application/json")
+            except (ValueError, TypeError, RuntimeError, OSError) as exc:
+                self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False).encode("utf-8"), "application/json")
 
     return Handler
 

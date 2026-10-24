@@ -174,7 +174,7 @@ docker build -t celeste-agent:0.1 agent-container
 | `--agent` | 必填 | 智能体标签，决定容器 `celeste-agent-<标签>`、工作区 `workspaces/<标签>/` 与日志目录 `runs/<标签>/`。同一个模型在 test 存档准备、正式存档挑战时用同一个标签，准备好的程序就能带进正式挑战 |
 | `--save` | 必填 | 游戏内存档名；与当前存档不一致时拒绝开始 |
 | `--model` | `opus` | Claude Code 模型别名，如 `opus`、`fable`、`haiku`；第三方提供方用它自己的模型名，如 DeepSeek 的 `deepseek-flash` |
-| `--provider` | `anthropic` | 模型提供方：`anthropic`（Max 订阅令牌）或 `configs\providers.json` 里的第三方，如 `deepseek`、`openai`（GPT，只有接口、尚未实测），见 4.9 节 |
+| `--provider` | `anthropic` | 模型提供方：`anthropic`（Max 订阅令牌）或 `configs\providers.json` 里的第三方，如 `deepseek`，见 4.9 节 |
 | `--effort` | `high` | 开局的推理强度：`low`、`medium`、`high`、`xhigh`、`max`；之后智能体可以用 `set_effort` 自己调整 |
 | `--max-minutes` | 240 | 现实时间上限，从智能体第一次真正执行游戏工具时开始计（准备阶段不算）；主要指标是游戏内章节计时，这里只防止无限运行。**观测里不显示**（2026-10-24 起）：显示"现实用时 / 预算"会让智能体赶时间、执行还没优化完的路线 |
 | `--study-minutes` | 60 | 准备阶段（读知识库、写笔记与程序）的上限，不计入现实用时；到时自动开始计时并开放游戏工具 |
@@ -492,7 +492,7 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC）：校�
 
 ### 4.9 其他平台的模型（`--provider`）
 
-除了 Max 订阅里的 Claude 模型，也可以让其他平台的模型进同一个沙箱游玩：容器里运行的还是同一个 Claude Code，只是通过平台兼容 Anthropic 的接口调用它们的模型；工具、提示词、知识库、沙箱、规划轮次与回放、HUD 与录制全部相同。提供方列在 `configs\providers.json`，目前有 `deepseek`（已实测）与 `openai`（GPT，只有接口、尚未实测，见本节末尾）。
+除了 Max 订阅里的 Claude 模型，也可以让其他平台的模型进同一个沙箱游玩：容器里运行的还是同一个 Claude Code，只是通过平台兼容 Anthropic 的接口调用它们的模型；工具、提示词、知识库、沙箱、规划轮次与回放、HUD 与录制全部相同。提供方列在 `configs\providers.json`，目前有 `deepseek`（已实测）；GPT 使用原生 `--engine codex` 执行器。
 
 **API 密钥只放在本机**，不入库、不出现在命令行与日志里：
 
@@ -521,13 +521,7 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC）：校�
 - 2026-10-23 用真密钥在 test 存档序章试跑（`--sim --record`，标签 `dev-deepseek`）：`/models` 列出 `deepseek-flash` 与 `deepseek-v4-pro`；准备阶段读完知识库 45 秒、连同写工具共 4 分钟；游玩 10 分钟，9 次决策、没有死亡，停在第 2 个房间。它每次暂停用一次 Bash 跑自己写的束搜索，第二次调用被拒绝后直接执行；思考语句里 bunnyhop、jumpthru、climb 等用英文。第一次试跑发现"每次暂停一轮工具"在有准备阶段时没有生效（第一次游戏工具的钩子先于计时开始），已改正，第二次试跑里生效。扫描本机的运行记录与工作区，没有任何文件含有密钥。
 - 加别的平台：在 `configs\providers.json`（或本机的 `configs\local.providers.json`）里照 `deepseek` 加一项（接口地址 `base_url`、防火墙放行的 `allowed_domains`、要放行的宿主机端口 `allowed_host_ports`、开跑前检查的地址 `gateway_check`、密钥的 `key_env` / `key_file`、模型名后缀 `model_suffix`、传给 Claude Code 的 `env`），平台需要提供兼容 Anthropic Messages 的接口；部署向导的 platform 步骤选"其他平台"会帮你写好。
 
-**GPT（`--provider openai`，2026-10-24，只做了接口，尚未实际接入）**：OpenAI 的接口不是 Anthropic 格式，Claude Code 不能直接调用，所以要在本机运行一个"Anthropic 接口 → OpenAI 接口"的网关（例如 LiteLLM 代理，它对外提供 `/v1/messages`，内部转成 OpenAI 的请求）。网关持有 OpenAI 的密钥，容器里的 Claude Code 只连宿主机上网关的端口，用的是网关自己的访问密钥。
-
-- 配置（`configs\providers.json` 的 `openai` 项）：`base_url` 为 `http://host.docker.internal:4000`，`allowed_domains` 为空（容器连不上任何外部域名，包括 OpenAI 与 Anthropic），`allowed_host_ports` 为 `[4000]`（防火墙放行宿主机的这个端口），`gateway_check` 为 `http://127.0.0.1:4000/health/liveliness`，网关访问密钥从 `OPENAI_GATEWAY_KEY` 或 `key_file` 读。端口不同时在 `configs\local.providers.json` 里改这几项。
-- 开跑前主控访问 `gateway_check`，连不上就提示先启动网关并退出；`status` 不是 `ready` 的平台开跑时都会提示"尚未实测"。
-- 防火墙放行宿主机端口（`PROVIDER_HOST_PORTS`）是 2026-10-24 加的，用 GPT 之前要重新构建镜像：`docker build -t celeste-agent:0.1 agent-container`。
-- 启动网关、填配置的完整步骤见 [DEPLOY.md 9.2 节](DEPLOY.md#92-gptopenai只有接口尚未实测)。`--model` 填网关配置里的 `model_name`。
-- 尚未实测的地方：网关对 Claude Code 的工具调用、图片、长上下文与推理强度参数的转换是否完整，HUD 的上下文统计是否准确。
+**GPT**：使用原生 `--engine codex`，不再内置经 Claude Code 转换 OpenAI 协议的预设。准备、存档选择与 HUD 会话流程见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。第三方 Anthropic 兼容接口仍可按上一段配置。
 
 ## 5. 查看结果
 
@@ -572,5 +566,4 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC）：校�
 | 智能体总被提示"本章的规划轮次已经用完" | 只在 `--limit-planning` 时有：每个新房间按大小存入轮次（一屏 3 轮、至少 3 轮）、死亡补 1 轮，调用模拟器的消息才扣（见 4.1 节）；用完后 Bash 被拒绝。调试时想不受限制，加 `--free-planning` |
 | 录像里没有规划回放 | 开模拟器时回放只画 `/sim` 的推演（自写模拟器的搜索没有记录）；关模拟器时只画智能体用 `show.trajectory()` 交来的轨迹（它没交就没有）；`--no-playback` 时都不画。主控输出里搜 `[playback]` |
 | HUD 上思考很久不变 | `--no-live` 时思考只在每次 `act` 时更新；实时展示时取决于智能体有没有调用 `narrate`（看 `agent_events.jsonl`） |
-| `--provider openai` 提示连不上网关 | 先按 4.9 节末尾启动网关；在浏览器里打开 `gateway_check` 的地址应有响应 |
 | PowerShell 里中文显示成乱码 | 日志文件本身是 UTF-8；用 `tools\run_status.py` 查看，或先执行 `chcp 65001` |

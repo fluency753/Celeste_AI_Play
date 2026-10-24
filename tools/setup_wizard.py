@@ -395,14 +395,16 @@ def step_platform(a: Answers) -> None:
     info = known.get(provider, {})
     if provider == "anthropic":
         setup_anthropic(a)
-    elif provider == "openai":
-        setup_openai(a, info)
     else:
         setup_api_key(provider, info)
     defaults = {"anthropic": "opus", "deepseek": "deepseek-flash"}
     previous = a.get("model") if a.get("provider_prev") == provider else None
-    a["model"] = ask("模型名（Anthropic 用别名 opus、fable、haiku；第三方用它自己的模型名；GPT 填网关 config.yaml 里的 model_name）",
+    a["model"] = ask("模型名（Anthropic 用别名 opus、fable、haiku；第三方用它自己的模型名）",
                      previous or defaults.get(provider))
+    models = list(info.get('models') or [])
+    if not any(row.get('id') == a['model'] for row in models):
+        models.append({'id':a['model'], 'efforts':['low','medium','high']})
+        merge_json(LOCAL_PROVIDERS, {provider:{'models':models}})
     a["provider_prev"] = provider
 
 
@@ -452,18 +454,6 @@ def setup_api_key(provider: str, info: dict) -> None:
         return
     merge_json(LOCAL_PROVIDERS, {provider: {"key_file": path}})
     ok(f"密钥文件 {path} 已写进 configs/local.providers.json（不入库）")
-
-
-def setup_openai(a: Answers, info: dict) -> None:
-    say("  GPT：OpenAI 的接口不是 Anthropic 格式，容器里的 Claude Code 不能直接调用。需要在本机运行一个把 Anthropic "
-        "接口转成 OpenAI 接口的网关（例如 LiteLLM 代理，见 docs/DEPLOY.md 的 GPT 一节），网关持有 OpenAI 的密钥，"
-        "容器只连宿主机上网关的端口。这条路径目前只有接口，尚未实测。")
-    port = ask("网关在本机监听的端口", str((info.get("allowed_host_ports") or [4000])[0]))
-    merge_json(LOCAL_PROVIDERS, {"openai": {
-        "base_url": f"http://host.docker.internal:{port}", "allowed_host_ports": [int(port)],
-        "gateway_check": f"http://127.0.0.1:{port}/health/liveliness"}})
-    setup_api_key("openai", {**info, "label": "网关的访问密钥（LiteLLM 的 master key）"})
-    note("智能体镜像要用 2026-10-24 之后的版本构建（防火墙才放行宿主机上的网关端口）：在 docker 步骤里重新构建镜像")
 
 
 def setup_custom_provider() -> str:

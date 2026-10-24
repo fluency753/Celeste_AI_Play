@@ -78,10 +78,13 @@ class RecordOptions:
     video_args: str
     audio_offset_ms: float = 0.0
     marker: bool = False     # 校准用：在画面左下角画帧号条码
+    continuous_music: bool = False
+    audio_source: str = "obs_mix"
 
 
 def options_from(run_dir: Path, ffmpeg: str | None = None, video_args: str | None = None,
-                 audio_offset_ms: float | None = None, marker: bool = False) -> RecordOptions:
+                 audio_offset_ms: float | None = None, marker: bool = False,
+                 continuous_music: bool | None = None) -> RecordOptions:
     config = load_config()
     return RecordOptions(
         dir=run_dir / "recording",
@@ -89,6 +92,8 @@ def options_from(run_dir: Path, ffmpeg: str | None = None, video_args: str | Non
         video_args=video_args or config.get("video_args") or "",
         audio_offset_ms=float(audio_offset_ms if audio_offset_ms is not None else config.get("audio_offset_ms", 0.0)),
         marker=marker,
+        continuous_music=bool(config.get("continuous_music", False) if continuous_music is None else continuous_music),
+        audio_source=str(config.get("audio_source", "obs_mix")),
     )
 
 
@@ -163,24 +168,37 @@ class Recorder:
         if not str(directory).isascii():
             raise RecordingError(f"录制目录只能用英文路径（OBS 插件用 ANSI 接口写文件）：{directory}")
         directory.mkdir(parents=True, exist_ok=True)
-        clock = self.clock()
+        hello = self.call("hello")
+        clock = hello.get("clock") or {}
+        if self.opts.audio_source not in ("obs_mix", "game_nrt"):
+            raise RecordingError(f"未知录音来源：{self.opts.audio_source}")
+        if self.opts.audio_source == "game_nrt" and not hello.get("record_audio_nrt"):
+            raise RecordingError("独立录像音频需要更新桥接 Mod 和 OBS 锁步插件（桥接 0.12.0 起支持）")
+        if self.opts.audio_source == "game_nrt" and not (clock.get("plugin") or {}).get("audio_nrt"):
+            raise RecordingError("OBS 锁步插件尚不支持独立录像音频，请更新插件并重启 OBS")
         if not clock.get("connected"):
             raise RecordingError("OBS 插件没有连上桥接的时钟端口：先运行 python tools/obs_setup.py launch 启动 OBS"
                                  "（插件构建见使用说明 4.4 节）")
         gamewindow.ensure_visible(self.log)  # 游戏窗口最小化时 OBS 采不到画面
         self.call("record", action="start", dir=str(directory), ffmpeg=self.opts.ffmpeg, video_args=self.opts.video_args,
-                  audio_offset_ms=self.opts.audio_offset_ms, marker=self.opts.marker)
+                  audio_offset_ms=self.opts.audio_offset_ms, marker=self.opts.marker,
+                  continuous_music=self.opts.continuous_music,
+                  audio_source=self.opts.audio_source,
+                  audio_sync="fixed" if self.opts.continuous_music else "onset")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             clock, plugin = self._plugin()
             if plugin.get("state") == "failed":
+                self.call("record", action="stop")  # release the secondary mixer after a failed plugin start
                 raise RecordingError(f"OBS 插件开始录制失败：{plugin.get('error')}")
             if plugin.get("state") == "recording" and clock.get("lockstep"):
                 self.started = True
-                self.log(f"[record] 开始录制：{directory}（ffmpeg {self.opts.video_args}；声音偏移 "
-                         f"{self.opts.audio_offset_ms:g} ms{'；帧号条码' if self.opts.marker else ''}）")
+                audio = "独立游戏音频（不输出到声卡）" if self.opts.audio_source == "game_nrt" else f"声音偏移 {self.opts.audio_offset_ms:g} ms"
+                self.log(f"[record] 开始录制：{directory}（ffmpeg {self.opts.video_args}；{audio}"
+                         f"{'；帧号条码' if self.opts.marker else ''}）")
                 return clock
             time.sleep(0.2)
+        self.call("record", action="stop")
         raise RecordingError(f"等待 OBS 插件开始录制超时（{timeout:g} 秒）：{plugin}")
 
     def check_window(self) -> None:
@@ -188,7 +206,7 @@ class Recorder:
         if self.started:
             gamewindow.ensure_visible(self.log)
 
-    def stop(self, timeout: float = 900.0) -> dict | None:
+    def stop(self, timeout: float = 900.0, on_capture_stopped: Callable[[], None] | None = None) -> dict | None:
         """停止录制并等 ffmpeg 收尾；返回结果摘要（也写进 recording/recording.json）。"""
         if not self.started:
             return None
@@ -196,7 +214,13 @@ class Recorder:
         self.call("record", action="stop", marker=False)
         deadline = time.monotonic() + timeout
         clock, plugin = self._plugin()
+        released = False
         while time.monotonic() < deadline:
+            if (not released and on_capture_stopped is not None and not clock.get('lockstep')
+                    and plugin.get('state') in {'idle','finishing','finished','failed'}
+                    and plugin.get('recording') is not True):
+                on_capture_stopped()
+                released = True
             if plugin.get("state") in ("finished", "failed") and not clock.get("lockstep"):
                 break
             time.sleep(0.3)
@@ -214,9 +238,11 @@ class Recorder:
             "dir": str(directory),
             "files": files,
             "check": analyze_frames(directory / "frames.csv"),
-            "audio_sync": analyze_segments(directory / "segments.csv"),
+            "audio_sync": ({"method": "game_nrt", "sample_rate": 48000, "samples_per_frame": 800}
+                           if self.opts.audio_source == "game_nrt" else analyze_segments(directory / "segments.csv")),
             "options": {"video_args": self.opts.video_args, "audio_offset_ms": self.opts.audio_offset_ms,
-                        "marker": self.opts.marker},
+                        "marker": self.opts.marker, "continuous_music": self.opts.continuous_music,
+                        "audio_source": self.opts.audio_source},
         }
         if result["state"] == "finished" and "gameplay.mkv" in files:
             self.log("[record] 生成纯享版（去掉规划回放的帧）……")

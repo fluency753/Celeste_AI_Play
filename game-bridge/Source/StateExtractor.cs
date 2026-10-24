@@ -65,6 +65,7 @@ internal static class StateExtractor {
     public static void WriteSnapshot(Utf8JsonWriter w, SnapshotOptions opt) {
         w.WriteNumber("frame", Bridge.Frame);
         w.WriteString("scene", Engine.Scene?.GetType().Name ?? "none");
+        StoryText.Write(w, Engine.Scene);
 
         if (SaveData.Instance is { } save) {
             w.WriteStartObject("save");
@@ -231,6 +232,22 @@ internal static class StateExtractor {
         Textbox? textbox = level.Entities.FindFirst<Textbox>();
         w.WriteBoolean("dialogOpen", textbox != null);
         w.WriteBoolean("dialogWaiting", textbox is { waitingForInput: true });
+        CS06_Campfire? campfire = level.Entities.FindFirst<CS06_Campfire>();
+        bool choices = campfire?.currentOptions is { Count: > 0 };
+        w.WriteNumber("dialogChoiceIndex", choices ? campfire!.currentOptionIndex : -1);
+        w.WriteBoolean("dialogChoiceReady", choices && !level.Paused && campfire!.optionEase >= 0.999f);
+        w.WriteStartArray("dialogChoices");
+        if (choices) {
+            for (int i = 0; i < campfire!.currentOptions.Count; i++) {
+                var option = campfire.currentOptions[i];
+                w.WriteStartObject();
+                w.WriteNumber("index", i);
+                w.WriteString("text", Dialog.Clean(option.Question.Ask));
+                w.WriteBoolean("selected", i == campfire.currentOptionIndex);
+                w.WriteEndObject();
+            }
+        }
+        w.WriteEndArray();
         w.WriteBoolean("transitioning", level.Transitioning);
         w.WriteBoolean("frozen", level.Frozen);
         // 冻结帧（冲刺开始、吃水晶、撞碎冲刺砖等）：剩余秒数，以及接下来还会冻结几帧

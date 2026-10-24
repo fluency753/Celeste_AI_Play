@@ -35,6 +35,8 @@ def _labels(cfg: RunConfig) -> dict[str, str]:
     return {f"{LABEL}.image": cfg.image, f"{LABEL}.mcp_port": str(cfg.mcp_port),
             f"{LABEL}.seccomp": "unconfined" if cfg.seccomp_unconfined else "default", f"{LABEL}.init": "1",
             f"{LABEL}.sim": "1" if cfg.sim else "0", f"{LABEL}.provider": cfg.provider,
+            f"{LABEL}.knowledge": cfg.knowledge_profile,
+            f"{LABEL}.workspace_tag": cfg.workspace_dir.name,
             f"{LABEL}.domains": ",".join(cfg.provider_domains),
             f"{LABEL}.host_ports": ",".join(str(p) for p in cfg.provider_host_ports)}
 
@@ -53,8 +55,8 @@ def _create(cfg: RunConfig, name: str) -> None:
             # 第三方提供方经宿主机上的网关接入时（例如 GPT），另外放行宿主机上网关的端口（需要 2026-10-24 之后构建的镜像）
             "-e", f"PROVIDER_HOST_PORTS={' '.join(str(p) for p in cfg.provider_host_ports)}",
             "-v", f"{workspace}:/workspace",
-            "-v", f"{REPO_ROOT / 'kb'}:/kb:ro",
-            "-v", f"celeste-claude-{slug(cfg.agent)}:/home/agent/.claude",
+            "-v", f"{cfg.kb_dir}:/kb:ro",
+            "-v", f"celeste-claude-{slug(cfg.workspace_dir.name)}:/home/agent/.claude",
             "--label", f"{LABEL}=agent"]
     if cfg.sim:
         args += ["-v", f"{cfg.sim_dir}:/sim:ro"]
@@ -71,7 +73,7 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
     if image.returncode != 0:
         raise RuntimeError(f"找不到镜像 {cfg.image}，请先在仓库根目录执行：docker build -t {cfg.image} agent-container")
     image_id = image.stdout.strip()
-    name = container_name(cfg.agent)
+    name = container_name(cfg.agent + ("-explore" if cfg.knowledge_profile == "explore" else ""))
     inspect = docker("inspect", "-f", "{{.State.Running}}|{{.Image}}|{{json .Config.Labels}}", name, check=False)
     if inspect.returncode == 0:
         running, container_image, labels = inspect.stdout.strip().split("|", 2)

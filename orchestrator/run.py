@@ -28,9 +28,9 @@ from pathlib import Path
 
 import uvicorn
 
-from .agent import ClaudeRunner, resume_prompt
-from .config import (CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, load_api_key, load_dotenv,
-                     load_provider)
+from .prompting import resume_prompt
+from .runtimes import RUNTIMES, runtime
+from .config import CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id
 from .container import ensure_container
 from .game_session import GameSession
 from .kb_study import KbStudy
@@ -45,7 +45,17 @@ from .server import LIVE_REMINDER, TRANSPORT_SECURITY, build_server
 def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--agent", required=True, help="智能体标签，用于日志目录与独立配置目录，如 opus5.5、dev-opus")
+    ap.add_argument("--engine", choices=list(RUNTIMES), default=None,
+                    help="独立执行器：claude（原有）、codex（原生 GPT，复用 Codex 登录）")
+    ap.add_argument("--prepared", help="复用 preparation 完成的知识库准备与独立会话（校验知识库未变化）")
+    ap.add_argument("--start-paused", action="store_true", help="原生 GPT 启动后保持暂停，可先聊天再点继续")
+    ap.add_argument("--knowledge", choices=["explore", "full"], default=None,
+                    help="原生 GPT 默认 explore：新手探索；full 保留原有速通资料")
     ap.add_argument("--save", required=True, help="游戏内存档名，如 test、opus5.5、fable5.1")
+    ap.add_argument("--save-slot", type=int, help="已有存档的槽位编号；同名存档通过槽位区分")
+    ap.add_argument('--cutscene-mode',choices=['auto','agent'],default=None,help='剧情：auto主控自动跳过；agent自行观看、推进或跳过')
+    ap.add_argument('--scope',choices=['chapter','campaign'],default=None,help='单章或按官方章节顺序游玩；独立于停止目标')
+    ap.add_argument("--create-save", action="store_true", help="显式在空槽位新建独立存档，只允许从序章开始；名称允许重复")
     ap.add_argument("--model", default="opus", help="Claude Code 模型别名：opus / fable 等（默认 opus）；第三方提供方写它的模型名")
     ap.add_argument("--provider", default="anthropic",
                     help="模型提供方（configs/providers.json）：anthropic（默认，Max 订阅）、deepseek 等。"
@@ -90,6 +100,13 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "（和规划回放帧），成片（完整版与纯享版）在日志目录的 recording/ 下；结束时关掉主控启动的 OBS")
     ap.add_argument("--no-record", dest="record", action="store_false",
                     help="关闭 OBS 录屏：不启动、不调用 OBS，也不录制")
+    ap.add_argument("--keep-obs-open", action="store_true",
+                    help="结束时保留主控启动的 OBS（直播时使用）；锁步录像仍正常收尾，OBS 配置选择可在手动关闭后用 tools/obs_setup.py restore 还原")
+    music = ap.add_mutually_exclusive_group()
+    music.add_argument("--continuous-music", dest="continuous_music", action="store_true", default=None,
+                       help="游戏冻结时 BGM 继续播放，音效暂停；录像使用校准后的固定音频偏移")
+    music.add_argument("--freeze-music", dest="continuous_music", action="store_false",
+                       help="游戏冻结时音乐一起暂停（录像可按静音恢复边自动校准声音）")
     ap.add_argument("--record-marker", action="store_true", help="录制时在画面左下角画帧号条码（只用于校准）")
     ap.add_argument("--ffmpeg", help="ffmpeg 路径（默认：configs/local.recording.json → PATH → winget 安装位置）")
     ap.add_argument("--record-video-args", help="ffmpeg 视频编码参数（默认见 configs/recording.json）")
@@ -97,6 +114,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--sim", dest="sim", action="store_true", default=None,
                     help="开放预置模拟器（容器运行方式下默认开启，写不写都一样）：本机 sim/dist 只读挂到容器的 /sim，"
                          "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
+    ap.add_argument("--sim-assist", action=argparse.BooleanOptionalAction, default=None,
+                    help="新手 GPT 默认开启按体力计费的短路线预测；不向智能体开放模拟器文件")
     ap.add_argument("--live", dest="live", action="store_true", default=None,
                     help="实时展示（默认开启，写不写都一样）：要求智能体思考期间用 narrate 工具随时更新 HUD 上的思考内容，"
                          "运行程序期间用 /workspace/game/show.py 的 status() 报告进度（HUD 工具栏实时显示）")
@@ -142,12 +161,46 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
     cfg.chapter = args.chapter
+    cfg.play_scope=args.scope or (previous['state'].get('play_scope','chapter') if previous else 'chapter')
+    cfg.create_save = args.create_save
+    cfg.cutscene_mode = args.cutscene_mode or (previous['state'].get('cutscene_mode','auto') if previous else 'auto')
+    if previous and args.cutscene_mode is None:
+        from .control import RunControl
+        cfg.cutscene_mode=RunControl(previous['dir']).cutscene_preference() or cfg.cutscene_mode
+    cfg.save_slot = args.save_slot if args.save_slot is not None else previous['state'].get('save_slot') if previous else None
+    if cfg.save_slot is not None and (cfg.save_slot < 0 or args.create_save):
+        raise SystemExit('--save-slot 须为非负槽位编号，不能与 --create-save 合用')
     if args.chapters:
         cfg.chapters = [int(x) for x in args.chapters.split(",") if x.strip()]
         if not cfg.chapters:
             raise SystemExit("--chapters 至少要给一个章节编号")
         cfg.chapter = cfg.chapters[0]
+    elif cfg.play_scope=='campaign' and not previous:
+        from .play_scope import chapter_sequence
+        cfg.chapters=chapter_sequence(cfg.chapter if cfg.chapter is not None else 0,'campaign')
+        cfg.chapter=cfg.chapters[0]
+    if args.create_save and (args.resume or args.skip_enter or cfg.chapter != 0):
+        raise SystemExit('--create-save 只可从序章新开一局，不能与续跑或跳过进档合用')
     cfg.runtime = args.runtime
+    cfg.engine = args.engine or (previous["state"].get("engine", "claude") if previous else "claude")
+    adapter = runtime(cfg.engine)
+    cfg.knowledge_profile = args.knowledge or (previous["state"].get("knowledge_profile", "full") if previous
+                                             else adapter.default_knowledge)
+    if previous and cfg.knowledge_profile != previous["state"].get("knowledge_profile", "full"):
+        raise SystemExit("不能通过 --resume 改变知识范围；请新建准备会话，避免继承已有攻略知识")
+    if not any(a == '--model' or a.startswith('--model=') for a in sys.argv) and not previous:
+        cfg.model = adapter.default_model
+    if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv) and not previous:
+        cfg.effort = adapter.default_effort
+    adapter.configure(cfg, cfg.provider)
+    if args.prepared and (args.no_study or previous):
+        raise SystemExit("--prepared 只用于已准备会话新开一局，不能与 --no-study 或 --resume 合用")
+    if args.prepared:
+        prepared_metadata = json.loads((Path(args.prepared)/'prepare_summary.json').read_text(encoding='utf-8'))
+        if not any(a == '--model' or a.startswith('--model=') for a in sys.argv):
+            cfg.model = prepared_metadata.get('requested_model') or prepared_metadata['metrics']['model']
+        if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv):
+            cfg.effort = prepared_metadata['metrics']['effort']
     cfg.autocompact = args.autocompact
     cfg.study = not args.no_study
     cfg.study_minutes = args.study_minutes
@@ -156,8 +209,17 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.quota_wait_cap_s = args.quota_wait_cap_seconds
     cfg.quota_wait_max_h = args.quota_wait_max_hours
     if args.sim is None:
-        args.sim = args.runtime == "container"    # 默认开预置模拟器；本机运行方式没有模拟器
+        args.sim = args.runtime == "container" and cfg.knowledge_profile != "explore"
+    if cfg.knowledge_profile == "explore" and args.sim:
+        raise SystemExit("新手探索不提供精确模拟器；需要原有速通模式时明确选择 --knowledge full")
     cfg.sim = args.sim
+    cfg.sim_assist = (bool(previous["state"].get("sim_assist", False)) if previous else
+                      cfg.knowledge_profile == "explore" and cfg.runtime == 'container'
+                      and (cfg.sim_dir / 'celeste-sim').is_file()) if args.sim_assist is None else args.sim_assist
+    if cfg.sim_assist and (cfg.sim or cfg.runtime != "container"):
+        raise SystemExit("限额模拟辅助仅支持容器模式，不能同时开放无限制 --sim")
+    if cfg.sim_assist and not (cfg.sim_dir / "celeste-sim").is_file():
+        raise SystemExit("限额模拟辅助需要 sim/dist/celeste-sim；可用 --no-sim-assist 关闭")
     cfg.pause_limit = bool(args.limit_planning) and not args.free_planning
     cfg.rounds_per_room = max(1, args.rounds_per_room)
     cfg.room_scale = max(1.0, args.room_scale)
@@ -165,9 +227,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.live = args.live is not False     # 默认开启
     args.record = args.record is not False  # 默认开启
     cfg.record = args.record
-    cfg.provider_info = load_provider(cfg.provider)
-    check_provider(cfg.provider_info)
-    if cfg.third_party and cfg.runtime != "container":
+    from .recording import load_config
+    cfg.continuous_music = bool(load_config().get("continuous_music", False) if args.continuous_music is None
+                               else args.continuous_music)
+    if not args.no_agent and adapter.mcp:
+        check_provider(cfg.provider_info)
+    if cfg.third_party and cfg.runtime != "container" and not args.no_agent:
         raise SystemExit("第三方模型提供方只支持容器运行方式")
     if previous:
         state = previous["state"]
@@ -206,9 +271,9 @@ def load_previous(path: str) -> dict:
 def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None) -> None:
     """记下续跑需要的设置与 Claude Code 会话编号。"""
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
-    state = {"agent": cfg.agent, "save": cfg.save, "model": cfg.model, "provider": cfg.provider,
-             "effort": cfg.effort, "max_minutes": cfg.max_minutes,
-             "runtime": cfg.runtime, "sim": cfg.sim, "live": cfg.live, "record": cfg.record, "playback": cfg.playback, "all_chapters": all_chapters, "session_id": session_id,
+    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
+             "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
+             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "record": cfg.record, "playback": cfg.playback, "all_chapters": all_chapters, "session_id": session_id,
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -226,16 +291,6 @@ def check_provider(info: dict) -> None:
                 pass
         except Exception as exc:  # noqa: BLE001
             raise SystemExit(f"连不上 {info.get('name')} 的接口转换网关（{url}）：{exc}。先按 docs/DEPLOY.md 的说明在本机启动网关")
-
-
-def load_token(cfg: RunConfig) -> str:
-    """Anthropic：Max 订阅令牌（.env）；第三方提供方：本机保存的 API 密钥。都只在内存里，不打印、不写文件。"""
-    if cfg.third_party:
-        return load_api_key(cfg.provider_info or {})
-    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or load_dotenv(REPO_ROOT / ".env").get("CLAUDE_CODE_OAUTH_TOKEN", "")
-    if not token:
-        raise SystemExit("缺少 CLAUDE_CODE_OAUTH_TOKEN：请按使用说明 2.1 节运行 claude setup-token，并写入仓库根目录的 .env")
-    return token
 
 
 def make_run_dir(agent: str) -> Path:
@@ -260,22 +315,26 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
             recorder.call = client.call
             recorder.start()
             print("[record] 从选档页开始录制：选存档、进章节、跳过开场都按正常速度录进录像", flush=True)
-            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1)
+            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode)
         else:
-            obs = macro(client, cfg.save, chapter=cfg.chapter)
-        print(f"[run] 已进入存档 {cfg.save}：{obs['level']['sid']} 房间 {obs['level']['room']}"
+            obs = macro(client, cfg.save, chapter=cfg.chapter, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode)
+        cfg.save_slot = (obs.get('save') or {}).get('slot', cfg.save_slot)
+        print(f"[run] 已进入存档 {cfg.save}：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}"
               f"（菜单宏用时 {time.monotonic() - t0:.1f} 秒）", flush=True)
     except BaseException:
-        if recorder is not None and recorder.started:
-            recorder.stop()
+        try:
+            if recorder is not None and recorder.started:
+                recorder.stop()
+        finally:
+            client.call('deactivate')
         raise
     finally:
         client.close()
 
 
-def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | None = None) -> None:
+def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | None = None, session=None) -> None:
     """容器里的 PreToolUse 钩子（agent-container/celeste-gate.py）每次调用工具前 POST 到这里。
-    实时展示时（live_remind_s 不为空）兼作半分钟计时器的提醒通道：思考状态累计满 live_remind_s 秒没有 narrate，
+    实时展示时（live_remind_s 不为空）兼作解说更新计时器的提醒通道：思考状态累计满 live_remind_s 秒没有 narrate，
     回复里带上 context，钩子把它作为 additionalContext 交给 Claude Code，出现在这次工具结果旁边。"""
     from starlette.requests import Request  # noqa: WPS433
     from starlette.responses import JSONResponse
@@ -287,6 +346,9 @@ def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | No
         except ValueError:
             data = {}
         tool_name = str(data.get("tool_name") or "")
+        guard = getattr(session, 'program_guard', getattr(session, 'control_guard', None))
+        if tool_name == 'Bash' and guard and (reason := guard()):
+            return JSONResponse({'decision': 'deny', 'reason': reason, 'context': ''})
         allow, reason = await gate.decide(tool_name, data.get("tool_use_id"))
         context = ""
         if allow and live_remind_s and metrics is not None:
@@ -305,8 +367,7 @@ def ensure_obs() -> bool:
     返回 True 表示是主控启动的（结束时由主控关掉）；OBS 已经在运行就直接用，返回 False。"""
     from tools import obs_setup  # noqa: WPS433（延迟导入：不录屏时不碰 OBS）
     if obs_setup.obs_running():
-        print("[record] OBS 已经在运行，直接使用（需要是 CelesteAI 配置文件与场景集合；改过 HUD 页面时先关掉它，"
-              "让主控重新启动）；结束时不关闭", flush=True)
+        print("[record] OBS 已经在运行，沿用当前场景；结束时不关闭", flush=True)
         return False
     try:
         obs_dir = obs_setup.find_obs_dir(None)
@@ -347,6 +408,8 @@ def check_resume_position(cfg: RunConfig) -> None:
         save = (obs.get("save") or {}).get("name")
         if save != cfg.save:
             raise SystemExit(f"游戏当前的存档是 {save!r}，不是 {cfg.save!r}")
+        if cfg.save_slot is not None and (obs.get('save') or {}).get('slot') != cfg.save_slot:
+            raise SystemExit(f'游戏当前存档槽位与续跑指定的槽位 {cfg.save_slot} 不一致')
         sid = (obs.get("level") or {}).get("sid")
         want = CHAPTER_SIDS.get(cfg.chapter) if cfg.chapter is not None else sid
         if obs.get("scene") == "Level":
@@ -354,11 +417,16 @@ def check_resume_position(cfg: RunConfig) -> None:
                 raise SystemExit(f"游戏当前在 {chapter_name(sid)}，续跑的章节是 {chapter_name(want)}：请确认 --resume 的目录")
             print(f"[run] 续跑：游戏停在 {chapter_name(sid)} 房间 {(obs.get('level') or {}).get('room')}", flush=True)
             return
+        from tools.cutscene import story_pending
+        if cfg.cutscene_mode=='agent' and story_pending(obs):return
         if cfg.chapter is None:
             raise SystemExit(f"游戏当前不在关卡里（{obs.get('scene')}），无法续跑")
         print(f"[run] 续跑：游戏在 {obs.get('scene')}，进入{chapter_name_by_id(cfg.chapter)}", flush=True)
-        obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1)
-        print(f"[run] 已进入 {obs['level']['sid']} 房间 {obs['level']['room']}", flush=True)
+        obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode)
+        print(f"[run] 已进入 {(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}", flush=True)
+    except BaseException:
+        client.call('deactivate')
+        raise
     finally:
         client.close()
 
@@ -428,11 +496,20 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
     study = None
     if cfg.study and cfg.runtime == "container" and not args.no_agent:
         extra = {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None
-        study = KbStudy(REPO_ROOT / "kb", cfg.study_minutes, extra)
-        if not study.has_reference:
+        study = KbStudy(cfg.kb_dir, cfg.study_minutes, extra)
+        if not study.has_reference and cfg.knowledge_profile == "full":
             print("[run] 提示：kb/reference/ 不存在，准备阶段只读知识库本身（见使用说明 2.5 节生成参考资料原文）", flush=True)
+    prepared = None
+    if args.prepared:
+        from .prepared import load_preparation
+        prepared = load_preparation(args.prepared, cfg, study)
     metrics = Metrics(run_dir / "metrics.json", cfg.agent, cfg.model, cfg.effort, cfg.budget_seconds,
                       study=study is not None)
+    if prepared:
+        metrics.kb_finished()
+        metrics.update(kb_progress=1.0, study_s=prepared["metrics"].get("study_s", 0),
+                       tool_calls=prepared["metrics"].get("tool_calls", 0),
+                       compactions=prepared["metrics"].get("compactions", 0))
     if previous:
         metrics.restore(previous["metrics"], str(previous["dir"]))
     if not args.no_hud:
@@ -442,30 +519,77 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
               + ("" if hud else "（已在运行，沿用）"), flush=True)
     hud_window = None if (args.no_hud or args.no_hud_window) else start_hud_window(args.hud_port, run_dir)
     try:
-        return await _run_session(cfg, args, run_dir, token, previous, study, metrics, recorder)
+        return await _run_session(cfg, args, run_dir, token, previous, study, metrics, recorder, prepared)
     finally:
         stop_hud_window(hud_window)
 
 
 async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, token: str | None,
                        previous: dict | None, study: KbStudy | None, metrics: Metrics,
-                       recorder: Recorder | None = None) -> dict:
+                       recorder: Recorder | None = None, prepared: dict | None = None) -> dict:
+    if previous and (previous["dir"] / "goal.json").exists():
+        previous_goal = json.loads((previous["dir"] / "goal.json").read_text(encoding="utf-8"))
+        if previous_goal.get("active") and not previous_goal.get("reached"):
+            shutil.copy2(previous["dir"] / "goal.json", run_dir / "goal.json")
+    if previous and (previous["dir"] / "sim_energy.json").exists():
+        shutil.copy2(previous["dir"] / "sim_energy.json", run_dir / "sim_energy.json")
     session = GameSession(cfg, run_dir, metrics)
+    result = None
+    try:
+        result = await _run_connected_session(cfg,args,run_dir,token,previous,study,metrics,recorder,prepared,session)
+        return result
+    finally:
+        # 即使连接、后台初始化或其他清理失败，也必须通过自己的连接解除接管。
+        had_connection = getattr(session,'client',None) is not None
+        session.close(release=True)
+        if cfg is not None:
+            cfg._game_released = had_connection
+        if result is not None:
+            result['game_released'] = True
+            (run_dir / 'summary.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+        print('[run] 已交还游戏控制，游戏恢复正常运行',flush=True)
+
+
+async def _run_connected_session(cfg, args, run_dir, token, previous, study, metrics, recorder, prepared, session):
+    if args.prepared or previous:
+        from .control import RunControl
+        source_control = RunControl(Path(args.prepared) if args.prepared else previous['dir'])
+        preference = source_control.fast_preference()
+        if preference is not None:
+            RunControl(run_dir).set_fast(preference)
+        RunControl(run_dir).set_effort(source_control.effort_preference())
+        RunControl(run_dir).set_cutscene_mode(source_control.cutscene_preference() or cfg.cutscene_mode)
     obs = session.connect()
-    print(f"[run] 已接管游戏：{obs['level']['sid']} 房间 {obs['level']['room']}，存档 {cfg.save}", flush=True)
+    print(f"[run] 已接管游戏：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}，存档 {cfg.save}", flush=True)
     if previous:
         session.decision_index = int(previous["metrics"].get("decisions") or 0)
         print(f"[run] 续跑 {previous['dir']}：已通关 {len(metrics.state.splits or [])} 章，现实用时已用 "
               f"{metrics.elapsed() / 60:.0f} 分钟" + (f"，剩余章节 {cfg.chapters}" if cfg.chapters else ""), flush=True)
     backup_save(obs, run_dir)
     resumed_session = previous["state"].get("session_id") if previous and not args.fresh_session else None
+    if prepared:
+        resumed_session = prepared["session_id"]
     session_id = resumed_session or str(uuid.uuid4())
+    if args.no_agent:
+        metrics.update(telemetry_source="external", chat_thread_id=None)
     write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous)
+    if args.prepared:
+        try:
+            prepared_state = json.loads((Path(args.prepared) / 'run_state.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            prepared_state = {}
+        if prepared_state.get('session_name'):
+            state = json.loads((run_dir / 'run_state.json').read_text(encoding='utf-8'))
+            state['session_name'] = prepared_state['session_name']
+            temporary = run_dir / 'run_state.tmp'
+            temporary.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
+            temporary.replace(run_dir / 'run_state.json')
     if recorder is not None:
         recorder.call = session.bridge_call  # 开局时已经开始录制（见 enter_save），之后改用主控的连接
     elif args.record:
         recorder = Recorder(session.bridge_call,
-                            options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms, args.record_marker),
+                            options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms, args.record_marker,
+                                         continuous_music=cfg.continuous_music),
                             log=lambda m: print(m, flush=True))
         try:
             recorder.start()
@@ -490,7 +614,8 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
     server = build_server(session, study, gate)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
-    add_gate_route(app, gate, metrics, cfg.live_remind_s if cfg.live and cfg.runtime == "container" else None)
+    add_gate_route(app, gate, metrics, cfg.live_remind_s if cfg.live and cfg.runtime == "container" else None,
+                   session=session)
     web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
     web_task = asyncio.create_task(web.serve())
     while not web.started:
@@ -519,14 +644,23 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
                     note = resume_prompt("主控中断后续跑", gap)
                 else:
                     note = ("（系统）主控中断后续跑，这是一个新的会话：之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。"
-                            "游戏一直冻结在中断时的那一帧，章节计时没有走。先看一遍 /workspace/notes.md，再调用 observe 继续游玩。")
-            runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", container, study,
-                                  session_id=session_id, resume=resumed_session is not None, resume_note=note,
-                                  gate=gate, playback=playback if playback.collect else None)
+                            "上次退出后已交还游戏控制，游戏状态可能发生变化。先看 /workspace/notes.md，再调用 observe 核对当前状态后继续。")
+            from .runtimes import runtime
+            runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
+                game_server=server, token=token, session_id=session_id,
+                resume=resumed_session is not None, resume_note=note,
+                gate=gate, playback=playback if playback.collect else None, start_paused=args.start_paused)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()
     finally:
+        finish_error = None
+        if session.done and session.done_reason == "章节完成":
+            try:
+                await asyncio.to_thread(session.finish_at_results)
+            except Exception as exc:
+                finish_error = str(exc)
+                print(f"[run] 结算收尾未完成：{exc}", flush=True)
         metrics.update(status="done" if session.done else "stopped")
         web.should_exit = True
         if not web_task.done():
@@ -540,19 +674,20 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
         recording = None
         if recorder:
             try:
-                recording = recorder.stop()
+                def release_after_capture():
+                    session.bridge_call('deactivate')
+                    cfg._game_released=True
+                    print('[run] 锁步录制已停止，已交还游戏控制；视频后处理继续进行',flush=True)
+                recording = recorder.stop(on_capture_stopped=release_after_capture)
             except Exception as exc:  # noqa: BLE001（录制收尾失败不影响交还游戏控制与写总结）
                 print(f"[record] 停止录制失败：{exc}", flush=True)
-        # 通关了就交还游戏控制；没通关（时间预算用完、出错、Ctrl+C）就让游戏冻结在当前帧，章节计时不走，可以 --resume 续跑
-        session.close(release=session.done or args.no_agent)
-        if not (session.done or args.no_agent):
-            print("[run] 游戏保持冻结在当前帧（章节计时不走）：可以用 --resume 续跑；"
-                  "不续跑时用 python tools\\bridge_client.py deactivate 交还控制", flush=True)
+        # 锁步结束后先释放，外层finally仍负责关闭连接及异常兜底；暂停不走结束流程。
         summary = metrics.snapshot()
         summary.update(stop_reason=reason, completed=session.done and session.done_reason == "章节完成",
+                       user_stopped=session.user_stopped, goal=session.goals.snapshot(),
                        chapters=cfg.chapters, splits=metrics.state.splits or [],
-                       total_time_ticks=metrics.state.completed_ticks + (0 if session.done else metrics.state.chapter_time_ticks),
-                       start_sid=session.start_sid, turns=runner.turns if runner else 0,
+                       total_time_ticks=metrics.state.completed_ticks + (0 if session.done_reason == "章节完成" or session.chapter_finished else metrics.state.chapter_time_ticks),
+                       start_sid=session.start_sid, end_scene=session.end_scene, finish_error=finish_error, turns=runner.turns if runner else 0,
                        session_id=runner.session_id if runner else None, run_dir=str(run_dir),
                        resumed_from=str(previous["dir"]) if previous else None,
                        kb_study=study.summary() if study else None, recording=recording)
@@ -562,19 +697,33 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
 
 def main() -> int:
     cfg, args = parse_args()
+    if cfg.create_save:
+        from .saves import validate_selection
+        validate_selection(cfg.save, True, cfg.chapter)
+    if args.prepared:
+        # 在选档、录制或连接游戏前验证，错误的准备目录不能导致游戏动作。
+        from .prepared import load_preparation
+        preparation_study = KbStudy(cfg.kb_dir, cfg.study_minutes,
+                                    {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None)
+        load_preparation(args.prepared, cfg, preparation_study)
     previous = args.previous
     if not port_free(cfg.mcp_port):
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
-    token = None if args.no_agent else load_token(cfg)
+    from .bridge_requirements import preflight_bridge
+    preflight_bridge(cfg.bridge_port)
+    from .runtimes import runtime
+    token = None if args.no_agent else runtime(cfg.engine).token(cfg)
     run_dir = make_run_dir(cfg.agent)
     print(f"[run] 日志目录：{run_dir}", flush=True)
     recorder = None
     obs_launched = False
+    handoff_needed = False
     try:
         if args.record:
             obs_launched = ensure_obs()
         if previous:
             check_resume_position(cfg)
+            handoff_needed = True
         elif not cfg.skip_enter:
             if args.record:
                 # 开局（选存档、进章节）也录进录像：录制从选档页开始。HUD 服务先起来，显示这一局的名字
@@ -583,9 +732,11 @@ def main() -> int:
                     start_in_thread(args.hud_port)
                     write_placeholder_metrics(run_dir, cfg)
                 recorder = Recorder(None, options_from(run_dir, args.ffmpeg, args.record_video_args,
-                                                       args.audio_offset_ms, args.record_marker),
+                                                       args.audio_offset_ms, args.record_marker,
+                                                       continuous_music=cfg.continuous_music),
                                     log=lambda m: print(m, flush=True))
             enter_save(cfg, recorder)
+            handoff_needed = True
         summary = asyncio.run(run_async(cfg, args, run_dir, token, previous, recorder))
     except KeyboardInterrupt:
         print("[run] 已中断", flush=True)
@@ -595,23 +746,30 @@ def main() -> int:
         return 2
     finally:
         try:
-            if recorder is not None and recorder.started:  # 没走到主控的收尾（例如启动阶段出错）：在这里停止录制
+            if (recorder is not None and recorder.started) or (handoff_needed and not getattr(cfg,'_game_released',False)):
+                # 进入存档后、正式会话创建前也可能失败；此时原宏连接已经关闭，在这里收尾并恢复游戏。
                 from tools.bridge_client import BridgeClient  # noqa: WPS433
                 client = BridgeClient(port=cfg.bridge_port, timeout=120)
                 try:
-                    recorder.call = client.call
-                    recorder.stop()
+                    if recorder is not None and recorder.started:
+                        recorder.call = client.call
+                        recorder.stop()
                 finally:
-                    client.close()
+                    try:
+                        client.call('deactivate')
+                    finally:
+                        client.close()
         finally:
-            if obs_launched:   # 录完（成片与纯享版都已写好）再关掉主控启动的 OBS
+            if obs_launched and not args.keep_obs_open:
                 close_obs()
+            elif obs_launched:
+                print("[record] --keep-obs-open：保留 OBS，直播可继续；手动关闭后可运行 python tools/obs_setup.py restore 还原配置选择", flush=True)
     print(f"[run] 结束：{summary['stop_reason']}；决策 {summary['decisions']} 次，死亡 {summary['deaths']} 次，"
           f"用时 {summary['elapsed_s']:.0f} 秒（思考 {summary['thinking_s']:.0f}，工具 {summary['tool_s']:.0f}，"
           f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）"
           + (f"；准备阶段 {summary['study_s']:.0f} 秒，知识库已读 {summary['kb_study']['progress']:.0%}"
              if summary.get("kb_study") else ""), flush=True)
-    return 0 if summary["completed"] else 1
+    return 0 if summary["completed"] or summary.get("user_stopped") else 1
 
 
 if __name__ == "__main__":

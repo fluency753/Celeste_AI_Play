@@ -29,6 +29,8 @@ from pathlib import Path
 
 @dataclass
 class MetricsState:
+    telemetry_source: str = "agent"
+    chat_thread_id: str | None = None
     agent: str = ""
     model: str = ""
     effort: str = ""                  # 当前生效的推理强度（low / medium / high / xhigh / max）
@@ -48,6 +50,8 @@ class MetricsState:
     frames_auto: int = 0
     deaths: int = 0
     context_tokens: int = 0
+    context_window: int | None = None
+    tool_calls: int | None = None
     compactions: int = 0
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）
     retries: int = 0                  # 自动重试次数（重算程序运行次数，不唤醒大模型）
@@ -68,6 +72,7 @@ class MetricsState:
     narrates: int = 0                 # 实时展示：智能体调用 narrate 的次数
     narrate_reminders: int = 0        # 实时展示：思考状态累计半分钟没有 narrate、在下一次调用工具时提醒的次数
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）
+    sim_energy: dict | None = None    # 后台限额模拟体力；None 表示本局未开启
     sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数（全程累计，写进总结）
     sim_round_rollouts: int = 0       # 当前这次模拟器调用推演的路线条数（HUD 显示；这一轮回放画完清零）
     sim_best_frames: int = 0          # 当前房间里推演出的最快出房帧数，从进入房间的那一帧算起（0 = 还没有；换房间清零）
@@ -278,7 +283,7 @@ class Metrics:
             self.state.quota_wait_until = until_wall
             self._write_locked()
 
-    def resume(self) -> float:
+    def resume(self, *, quota: bool = True) -> float:
         """额度恢复：返回这次等待的秒数。"""
         with self._lock:
             if self._pause_start is None:
@@ -286,8 +291,9 @@ class Metrics:
             waited = time.monotonic() - self._pause_start
             self._paused += waited
             self._pause_start = None
-            self.state.waited_s += waited
-            self.state.quota_waits += 1
+            if quota:
+                self.state.waited_s += waited
+                self.state.quota_waits += 1
             self.state.quota_wait_until = None
             self.state.status = "thinking" if (self.playing or self.kb_done) else "studying"
             self.state.phase_since_wall = time.time()
@@ -299,7 +305,7 @@ class Metrics:
                 "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "context_tokens",
                 "effort_pending", "effort_changes", "effort_log", "pause_denials", "plan_rounds_used", "replays", "replay_s", "replay_act_s",
-                "sim_calls", "sim_rollouts")
+                "sim_calls", "sim_rollouts", "tool_calls", "context_window")
 
     def restore(self, previous: dict, resumed_from: str) -> None:
         """续跑：接着上一段运行的统计累计（现实用时从上一段的值接着走）。"""

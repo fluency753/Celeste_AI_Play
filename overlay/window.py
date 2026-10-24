@@ -1,14 +1,12 @@
-"""置顶 HUD 窗口（Windows）：把 HUD 页面放进一个透明、无边框、置顶、点击穿透、不抢焦点的小窗口，
-贴在游戏窗口客户区的右上角，随游戏窗口移动与缩放。
+"""独立 HUD 窗口（Windows）：无边框，可拖动、缩放、最小化、关闭和切换置顶。
+位置与大小独立保存；不根据游戏窗口的位置或可见性改变显示。
 
 用法（仓库根目录；先启动主控或 `python -m overlay.server`）：
     python -m overlay.window
-    python -m overlay.window --width-ratio 0.182 --margin 0.02
 
-主控运行时会自动启动它（--no-hud-window 关闭）。游戏窗口按进程名 Celeste.exe 查找（--game-title 可改成按标题找），
-不会认错成同名的资源管理器窗口。
+主控运行时会自动启动它（--no-hud-window 关闭）。最小化到托盘，任务栏保持隐藏；双击红色 AI 图标恢复窗口。
 
-需要 pywebview（pip install pywebview，使用系统自带的 WebView2）。游戏需运行在窗口化或无边框全屏模式。
+需要 pywebview（pip install pywebview，使用系统自带的 WebView2）。
 """
 from __future__ import annotations
 
@@ -18,7 +16,8 @@ import ctypes.wintypes as wt
 import sys
 import threading
 import time
-from pathlib import Path
+from .layout import Layout
+from .placement import PlacementAPI, MIN_HEIGHT, DEFAULT_HEIGHT
 
 GWL_EXSTYLE = -20
 WS_EX_TOPMOST = 0x00000008
@@ -55,6 +54,11 @@ def _user32():
     user32.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
     user32.GetForegroundWindow.restype = wt.HWND
     user32.SetForegroundWindow.argtypes = [wt.HWND]
+    user32.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
+    user32.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+    user32.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
+    user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+    user32.GetAsyncKeyState.restype = ctypes.c_short
     return user32
 
 
@@ -69,52 +73,20 @@ def set_dpi_awareness() -> None:
             ctypes.windll.user32.SetProcessDPIAware()
 
 
-_game_hwnd = {"value": None}
-
-
-def find_game(user32, title: str | None):
-    """游戏窗口：给了标题就按标题找；否则按进程名 Celeste.exe 找（找到后缓存，窗口还在就不再枚举）。"""
-    if title:
-        return user32.FindWindowW(None, title)
-    hwnd = _game_hwnd["value"]
-    if hwnd and user32.IsWindow(hwnd):
-        return hwnd
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from orchestrator.gamewindow import find_game_window  # noqa: WPS433
-    _game_hwnd["value"] = find_game_window()
-    return _game_hwnd["value"]
-
-
-def game_client_rect(user32, title: str | None):
-    """游戏窗口客户区在屏幕上的位置与大小（物理像素）；找不到或最小化时返回 None。"""
-    hwnd = find_game(user32, title)
-    if not hwnd or user32.IsIconic(hwnd) or not user32.IsWindowVisible(hwnd):
-        return None
-    rect = wt.RECT()
-    if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
-        return None
-    origin = wt.POINT(0, 0)
-    user32.ClientToScreen(hwnd, ctypes.byref(origin))
-    return origin.x, origin.y, rect.right - rect.left, rect.bottom - rect.top
-
-
 class MONITORINFO(ctypes.Structure):
     _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
 
 
-def monitor_work_area(user32, title: str | None):
-    """游戏窗口所在显示器的工作区（物理像素）。"""
-    hwnd = find_game(user32, title)
-    if not hwnd:
-        return None
+def window_work_area(user32, hwnd):
+    """HUD 所在显示器的工作区，与游戏是否存在、是否可见无关。"""
     user32.MonitorFromWindow.restype = wt.HMONITOR
-    monitor = user32.MonitorFromWindow(hwnd, 2)   # MONITOR_DEFAULTTONEAREST
+    monitor = user32.MonitorFromWindow(hwnd, 2)
     info = MONITORINFO()
     info.cbSize = ctypes.sizeof(MONITORINFO)
-    if not monitor or not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
-        return None
-    r = info.rcWork
-    return r.left, r.top, r.right, r.bottom
+    if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+        r = info.rcWork
+        return r.left, r.top, r.right, r.bottom
+    return 0, 0, max(200, user32.GetSystemMetrics(0)), max(260, user32.GetSystemMetrics(1))
 
 
 class DWM_BLURBEHIND(ctypes.Structure):
@@ -150,73 +122,191 @@ def per_pixel_alpha(window, hwnd) -> None:
         print(f"开启按像素透明失败：{exc}", flush=True)
 
 
-def make_overlay(user32, hwnd) -> None:
-    """点击穿透、不激活、不进任务栏、置顶。"""
+def initialize_style(window, user32):
+    """初始化无边框及隐藏任务栏条目，不再提供旧点击穿透模式。"""
+    from System import Action
+    from System.Windows.Forms import FormBorderStyle
+
+    handles = []
+    def apply():
+        form = window.native
+        form.ControlBox = False
+        form.FormBorderStyle = getattr(FormBorderStyle, "None")
+        handles.append(int(form.Handle.ToInt64()))
+    window.native.Invoke(Action(apply))
+    hwnd = handles[0]
+    # 不改 ShowInTaskbar 属性：它会重建 HWND，打断 WebView2 初始化。
+    user32.ShowWindow(hwnd, SW_HIDE)
     style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
-    layered = bool(style & WS_EX_LAYERED)
-    style = (style | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED) & ~WS_EX_APPWINDOW
-    user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style)
-    if not layered:
-        # 新加的分层样式必须设一次透明度，否则窗口不显示；整体不透明度 255，按像素的透明由 per_pixel_alpha 负责
-        user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
+    user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE,
+                            (style | WS_EX_TOOLWINDOW) & ~(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_APPWINDOW))
+    user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+    return hwnd
 
 
-def follow(window, args) -> None:
-    """等窗口出现后改成覆盖层样式，然后一直贴着游戏窗口右上角。"""
+def client_rect(user32, hwnd):
+    r, origin = wt.RECT(), wt.POINT(0, 0)
+    if not user32.GetClientRect(hwnd, ctypes.byref(r)):
+        return None
+    user32.ClientToScreen(hwnd, ctypes.byref(origin))
+    return origin.x, origin.y, r.right - r.left, r.bottom - r.top
+
+
+def make_tray_icon():
+    """Owned, opaque high-contrast icon; no shared SystemIcons handle is destroyed."""
+    from System.Drawing import Bitmap, Color, Font, FontStyle, Graphics, GraphicsUnit, Icon, RectangleF, SolidBrush, StringAlignment, StringFormat
+    from System.Drawing.Drawing2D import SmoothingMode
+    bitmap = Bitmap(32, 32)
+    graphics = Graphics.FromImage(bitmap)
+    font = Font('Segoe UI', 19, FontStyle.Bold, GraphicsUnit.Pixel)
+    brush = SolidBrush(Color.White)
+    format_ = StringFormat()
+    handle = None
+    try:
+        graphics.SmoothingMode = SmoothingMode.AntiAlias
+        graphics.Clear(Color.FromArgb(224, 71, 91))
+        format_.Alignment = StringAlignment.Center
+        format_.LineAlignment = StringAlignment.Center
+        graphics.DrawString('AI', font, brush, RectangleF(0, 0, 32, 32), format_)
+        handle = bitmap.GetHicon()
+        borrowed = Icon.FromHandle(handle)
+        try:
+            return borrowed.Clone()
+        finally:
+            borrowed.Dispose()
+    finally:
+        if handle is not None:
+            destroy = ctypes.windll.user32.DestroyIcon
+            destroy.argtypes = [wt.HICON]
+            destroy(wt.HICON(int(handle.ToInt64())))
+        format_.Dispose()
+        brush.Dispose()
+        font.Dispose()
+        graphics.Dispose()
+        bitmap.Dispose()
+
+
+class TrayControl:
+    """任务栏隐藏时，托盘提供恢复、最小化、置顶和关闭入口。"""
+    def __init__(self, window, placement):
+        from System import Action
+        from System.Drawing import Color, SystemIcons
+        from System.Windows.Forms import NotifyIcon, ContextMenuStrip, ToolStripMenuItem
+        self.window, self.commands = window, placement._commands
+
+        def create():
+            self.menu = ContextMenuStrip()
+            self.menu.BackColor = Color.FromArgb(22, 26, 40)
+            self.menu.ForeColor = Color.White
+            self.pin = ToolStripMenuItem("置顶")
+            self.pin.Checked = placement._topmost
+            for label, command in (("显示 HUD", "restore"), ("最小化", "minimize")):
+                item = ToolStripMenuItem(label)
+                item.Click += lambda *_, command=command: self.commands.put(command)
+                self.menu.Items.Add(item)
+            self.pin.Click += lambda *_: self.commands.put("pin")
+            self.menu.Items.Add(self.pin)
+            for label, command in (("恢复默认位置和大小", "reset"), ("关闭桌面 HUD", "close")):
+                item = ToolStripMenuItem(label)
+                item.Click += lambda *_, command=command: self.commands.put(command)
+                self.menu.Items.Add(item)
+            self.icon = NotifyIcon()
+            try:
+                self.tray_icon = make_tray_icon()
+            except Exception as exc:
+                print(f'[hud] 托盘图标绘制失败：{exc}', flush=True)
+                self.tray_icon = SystemIcons.Application.Clone()
+            self.icon.Icon = self.tray_icon
+            self.icon.Text = "Celeste AI HUD · 双击显示 · 右键菜单"
+            self.icon.ContextMenuStrip = self.menu
+            self.icon.DoubleClick += lambda *_: self.commands.put("restore")
+            self.icon.Visible = True
+            def dispose(*_):
+                self.icon.Visible = False
+                self.icon.Dispose()
+                self.tray_icon.Dispose()
+                self.menu.Dispose()
+            window.native.FormClosed += dispose
+        window.native.Invoke(Action(create))
+        print("[hud] 托盘：双击恢复窗口；菜单可最小化、置顶、恢复布局或关闭", flush=True)
+
+    def set_topmost(self, value):
+        from System import Action
+        self.window.native.Invoke(Action(lambda: setattr(self.pin, 'Checked', value)))
+
+
+def manage(window, args) -> None:
+    """独立窗口：只保存自身的正常位置，不根据游戏执行显隐或置顶。"""
     user32 = _user32()
     window.events.shown.wait(30)
-    hwnd = None
-    for _ in range(100):
-        hwnd = user32.FindWindowW(None, HUD_TITLE)
-        if hwnd:
-            break
-        time.sleep(0.1)
-    if not hwnd:
-        print("找不到 HUD 窗口", flush=True)
-        return
+    window.events.loaded.wait(30)
+    hwnd = initialize_style(window, user32)
     per_pixel_alpha(window, hwnd)
-    make_overlay(user32, hwnd)
-    # pywebview 在页面开始加载时会激活一次窗口，WebView2 获得焦点也可能稍晚发生：
-    # 启动后的一段时间里只要发现自己成了前台窗口，就把焦点还给启动前的窗口
-    settle_until = time.monotonic() + 15.0
-    last = None
+    placement = args.placement
+    placement._user32 = user32
+    layout = Layout()
+    placement._topmost = layout.topmost
+    window.on_top = layout.topmost
+    placement._enable(True, hwnd)
+    target = layout.window_target(window_work_area(user32, hwnd))
+    user32.SetWindowPos(hwnd, 0, *target, SWP_NOACTIVATE | SWP_NOOWNERZORDER | 0x0004)
+    saved_rect = client_rect(user32, hwnd) or target
+    layout.save_window(saved_rect, placement._topmost)
+    tray = TrayControl(window, placement)
     hidden = False
-    while True:
-        if args.previous_foreground and time.monotonic() < settle_until and user32.GetForegroundWindow() == hwnd:
-            user32.SetForegroundWindow(args.previous_foreground)
-        rect = game_client_rect(user32, args.game_title)
-        if rect is None:
-            if not hidden:
-                user32.ShowWindow(hwnd, SW_HIDE)
+    saved_at = 0.0
+    print("[hud] 独立窗口已就绪：显示、最小化和置顶均由用户控制", flush=True)
+    while user32.IsWindow(hwnd):
+        while not placement._commands.empty():
+            command = placement._commands.get_nowait()
+            if command == 'close':
+                if not hidden and not user32.IsIconic(hwnd):
+                    current = client_rect(user32, hwnd)
+                    if current:
+                        layout.save_window(current, placement._topmost)
+                window.destroy()
+                return
+            elif command == 'minimize':
+                if not hidden and not user32.IsIconic(hwnd):
+                    current = client_rect(user32, hwnd)
+                    if current:
+                        layout.save_window(current, placement._topmost)
+                # A transparent WS_EX_TOOLWINDOW leaves a white iconic caption on
+                # the desktop when minimized. Keep its normal geometry and hide it.
+                window.hide()
                 hidden = True
-        else:
-            gx, gy, gw, gh = rect
-            width = max(160, round(gw * args.width_ratio))
-            height = round(width * HEIGHT_RATIO)
-            margin = round(gw * args.margin)
-            x, y = gx + gw - margin - width, gy + margin
-            work = monitor_work_area(user32, args.game_title)
-            if work is not None:
-                # 游戏窗口有一部分在屏幕外时，把 HUD 挪回屏幕内，免得被切掉
-                x = max(work[0], min(x, work[2] - width))
-                y = max(work[1], min(y, work[3] - height))
-            target = (x, y, width, height)
-            if target != last or hidden:
-                user32.SetWindowPos(hwnd, HWND_TOPMOST, *target, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER)
-                last, hidden = target, False
-            else:
-                # 别的置顶窗口可能盖上来：定期把自己放回最上层（不激活）
-                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | 0x0001 | 0x0002)
+            elif command == 'restore':
+                window.show()
+                window.restore()
+                hidden = False
+            elif command == 'pin':
+                placement._topmost = not placement._topmost
+                window.on_top = placement._topmost
+                tray.set_topmost(placement._topmost)
+                placement._sync_page()
+                layout.save_window(saved_rect, placement._topmost)
+            elif command == 'reset':
+                layout.reset()
+                target = layout.window_target(window_work_area(user32, hwnd))
+                user32.SetWindowPos(hwnd, 0, *target, SWP_NOACTIVATE | SWP_NOOWNERZORDER | 0x0004)
+                saved_rect = target
+                layout.save_window(saved_rect, placement._topmost)
+        if not hidden and not user32.IsIconic(hwnd) and not placement._dragging:
+            current = client_rect(user32, hwnd)
+            if current and current != saved_rect and time.monotonic() - saved_at >= .15:
+                layout.save_window(current, placement._topmost)
+                saved_rect, saved_at = current, time.monotonic()
         time.sleep(args.interval)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://127.0.0.1:47790/hud")
-    ap.add_argument("--game-title", default=None, help="按窗口标题找游戏窗口（默认按进程名 Celeste.exe 找）")
-    ap.add_argument("--width-ratio", type=float, default=0.182, help="HUD 宽度占游戏窗口宽度的比例（1080p 下 350 像素）")
-    ap.add_argument("--margin", type=float, default=0.02, help="距游戏窗口右上角的边距（占游戏窗口宽度的比例）")
-    ap.add_argument("--interval", type=float, default=0.25, help="跟随游戏窗口的检查间隔（秒）")
+    ap.add_argument("--game-title", default=None, help=argparse.SUPPRESS)  # 兼容旧命令，不再跟随游戏
+    ap.add_argument("--width-ratio", type=float, default=0.182, help=argparse.SUPPRESS)
+    ap.add_argument("--margin", type=float, default=0.02, help=argparse.SUPPRESS)
+    ap.add_argument("--interval", type=float, default=0.25, help="保存窗口布局与处理托盘命令的间隔（秒）")
+    ap.add_argument("--edit", action="store_true", help=argparse.SUPPRESS)  # 兼容旧命令，所有窗口默认可调整
     args = ap.parse_args()
     if sys.platform != "win32":
         raise SystemExit("置顶窗口只支持 Windows；其他系统请在 OBS 或浏览器里打开 HUD 页面")
@@ -236,11 +326,15 @@ def main() -> int:
                 waited = True
             time.sleep(1)
 
-    args.previous_foreground = _user32().GetForegroundWindow()
-    window = webview.create_window(HUD_TITLE, args.url, width=420, height=336, frameless=True, transparent=True,
-                                   on_top=True, focus=False, resizable=False, easy_drag=False, shadow=False,
+    args.placement = PlacementAPI()
+    window = webview.create_window(HUD_TITLE, args.url, width=420, height=DEFAULT_HEIGHT, frameless=True, transparent=True,
+                                   js_api=args.placement,
+                                   min_size=(200, MIN_HEIGHT),
+                                   on_top=Layout().topmost, focus=True, resizable=True, easy_drag=False, shadow=False,
                                    text_select=False, zoomable=False)
-    webview.start(follow, (window, args), gui="edgechromium")
+    args.placement._window = window
+    window.events.loaded += args.placement._sync_page
+    webview.start(manage, (window, args), gui="edgechromium")
     return 0
 
 
