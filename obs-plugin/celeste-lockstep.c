@@ -547,6 +547,7 @@ static void write_audio_interval(struct gp_output *o, uint64_t t, long long inde
 		return;
 	uint32_t n = (uint32_t)((uint64_t)o->rate * o->fps_den / o->fps_num);
 	float *buf = bzalloc((size_t)n * 2 * sizeof(float));
+	uint8_t *got = bzalloc(n);
 	const double ns_per_sample = 1e9 / o->rate;
 	for (size_t i = 0; i < o->nchunks; i++) {
 		struct chunk *c = &o->chunks[i];
@@ -555,20 +556,43 @@ static void write_audio_interval(struct gp_output *o, uint64_t t, long long inde
 		double t0 = (double)t;
 		if (c_end <= t0 || c_start >= t0 + n * ns_per_sample)
 			continue;
-		long long k_from = (long long)ceil((c_start - t0) / ns_per_sample);
-		long long k_to = (long long)ceil((c_end - t0) / ns_per_sample);
+		/* 输出的第 k 个样本取这一块里离 t0 + k/rate 最近的样本：idx = floor(k - u + 0.5)，u 是这一块第 0 个样本
+		 * 在输出里的位置（可带小数）。这一块负责的 k 按同样的舍入算：k ∈ [ceil(u - 0.5), ceil(u + frames - 0.5))，
+		 * 相邻两块正好首尾衔接。以前范围用 ceil(u)、位置用四舍五入，u 的小数部分在 (0, 0.5) 时每个块边界上
+		 * 有一个样本两块都不取、留成 0：每 1024 个样本一个 0（约每秒 47 次），连续游玩时听起来是持续的电流声。 */
+		double u = (c_start - t0) / ns_per_sample;
+		long long k_from = (long long)ceil(u - 0.5);
+		long long k_to = (long long)ceil(u + c->frames - 0.5);
 		if (k_from < 0)
 			k_from = 0;
 		if (k_to > n)
 			k_to = n;
 		for (long long k = k_from; k < k_to; k++) {
-			long long idx = llround((t0 + k * ns_per_sample - c_start) / ns_per_sample);
+			long long idx = (long long)floor((double)k - u + 0.5);
 			if (idx < 0 || idx >= c->frames)
 				continue;
 			buf[k * 2] = c->data[idx * 2];
 			buf[k * 2 + 1] = c->data[idx * 2 + 1];
+			got[k] = 1;
 		}
 	}
+	/* 块的时间戳按纳秒取整，偶尔会让两块之间漏掉一个样本：两边都有声音的单个空样本用相邻样本补上 */
+	for (uint32_t k = 0; k < n; k++) {
+		if (got[k])
+			continue;
+		bool left = k > 0 && got[k - 1], right = k + 1 < n && got[k + 1];
+		if (left && right) {
+			buf[k * 2] = (buf[(k - 1) * 2] + buf[(k + 1) * 2]) * 0.5f;
+			buf[k * 2 + 1] = (buf[(k - 1) * 2 + 1] + buf[(k + 1) * 2 + 1]) * 0.5f;
+		} else if (left && (k + 1 == n || (k + 2 < n && got[k + 2]))) {
+			buf[k * 2] = buf[(k - 1) * 2];
+			buf[k * 2 + 1] = buf[(k - 1) * 2 + 1];
+		} else if (right && (k == 0 || (k >= 2 && got[k - 2]))) {
+			buf[k * 2] = buf[(k + 1) * 2];
+			buf[k * 2 + 1] = buf[(k + 1) * 2 + 1];
+		}
+	}
+	bfree(got);
 	uint32_t fade = o->rate * SEAM_FADE_MS / 1000;
 	bool faded_out = false;
 	if (fade_in)
