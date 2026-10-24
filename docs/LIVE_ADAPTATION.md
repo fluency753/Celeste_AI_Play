@@ -269,7 +269,7 @@ HUD 底部「剧情」下拉框提供「自动跳过」和「agent决定」，�
 
 录制停止分成捕获停止与文件后处理。Recorder.stop在确认锁步关闭、插件不再录制后，通过原有会话连接先deactivate；原始文件封装与纯享版转码随后继续，不再阻塞游戏控制。外层finally仍关闭连接并处理异常兜底。回归覆盖片尾期间不触发map_complete、恢复片尾、立即停止、结算停留以及先释放后转码的顺序。
 
-2026-10-25实测：复用“小岚”槽位12及原会话补完1A片尾，随后用相同收尾函数确认AreaComplete，退回稳定的OuiChapterSelect（地图标记area=2，未进入2A），解除接管。49项针对性回归通过，原生检查记录local/ending-map-menu-20261025-024350/report.json与local/ending-map-hold-20261025-024429/report.json。补录后检查画面发现OBS采集到桌面播放器，因此拼接文件标为review-only，不作为有效的完整游戏录像；原始gameplay.mkv及gameplay_pure.mkv保留未覆盖。
+2026-10-25实测：复用“小岚”槽位12及原会话补完1A片尾，随后用相同收尾函数确认AreaComplete，退回稳定的OuiChapterSelect（地图标记area=2，未进入2A），解除接管。49项针对性回归通过，原生检查记录local/ending-map-menu-20261025-024350/report.json与local/ending-map-hold-20261025-024429/report.json。最初仅检查最终帧，误把末尾播放器画面判定为整段补录无效；逐段检查后确认篝火片尾、章节完成画面及确认后的过渡均保留，播放器仅出现在最后额外60帧片段。已剔除该片段，导出gameplay_with_ending.mkv（29673帧）和gameplay_pure_with_ending.mkv（29590帧），见local/ending-combined.json；原始gameplay.mkv及gameplay_pure.mkv保留未覆盖。
 
 ### 当前可见剧情信息（桥接0.12.4）
 
