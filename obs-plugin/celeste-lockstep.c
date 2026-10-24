@@ -65,6 +65,7 @@ static struct {
 	uint64_t ts[KEEP_RING];
 	long long frame[KEEP_RING];
 	long long ticks[KEEP_RING];
+	long long token[KEEP_RING];
 	unsigned head, count;
 } keep;
 
@@ -142,12 +143,12 @@ static void send_status(void)
 	json_escape(err, sizeof(err), rec.error);
 	ReleaseSRWLockShared(&rec.lock);
 	send_line("S {\"state\":\"%s\",\"recording\":%s,\"frames\":%lld,\"tokens\":%lld,\"kept\":%lld,\"late\":%lld,"
-		  "\"dir\":\"%s\",\"error\":\"%s\"}",
+		  "\"dir\":\"%s\",\"error\":\"%s\",\"audio_nrt\":true}",
 		  rec_state_names[state], state == REC_RECORDING ? "true" : "false", frames, g.tokens, g.kept, g.late_ticks,
 		  dir, err);
 }
 
-static void keep_push(uint64_t ts, long long frame, long long ticks)
+static void keep_push(uint64_t ts, long long frame, long long ticks, long long token)
 {
 	AcquireSRWLockExclusive(&keep.lock);
 	unsigned idx = (keep.head + keep.count) % KEEP_RING;
@@ -158,12 +159,13 @@ static void keep_push(uint64_t ts, long long frame, long long ticks)
 	keep.ts[idx] = ts;
 	keep.frame[idx] = frame;
 	keep.ticks[idx] = ticks;
+	keep.token[idx] = token;
 	keep.count++;
 	ReleaseSRWLockExclusive(&keep.lock);
 }
 
 /* 查找并移除某个时间戳；比它更早的条目（已经错过的）一并丢弃 */
-static bool keep_take(uint64_t ts, long long *frame, long long *ticks)
+static bool keep_take(uint64_t ts, long long *frame, long long *ticks, long long *token)
 {
 	bool found = false;
 	AcquireSRWLockExclusive(&keep.lock);
@@ -174,6 +176,7 @@ static bool keep_take(uint64_t ts, long long *frame, long long *ticks)
 		if (t == ts) {
 			*frame = keep.frame[keep.head];
 			*ticks = keep.ticks[keep.head];
+			*token = keep.token[keep.head];
 			found = true;
 		}
 		keep.head = (keep.head + 1) % KEEP_RING;
@@ -212,7 +215,7 @@ static void on_tick(void *param, float seconds)
 	}
 	if (g.reply_kind && g.reply_id == g.outstanding) {
 		if (g.reply_kind == 'F') {
-			keep_push(ts, g.reply_frame, g.reply_ticks);
+			keep_push(ts, g.reply_frame, g.reply_ticks, g.reply_id);
 			g.kept++;
 		}
 		g.outstanding = 0;
@@ -257,6 +260,10 @@ struct gp_output {
 	char ffmpeg[MAX_PATH];
 	char video_args[1024];
 	double audio_offset_ms;
+	bool fixed_audio_sync; /* BGM 持续播放时没有恢复边，使用已校准的偏移 */
+	bool game_audio;
+	HANDLE audio_mapping;
+	const uint8_t *audio_view;
 	uint32_t width, height, fps_num, fps_den, rate;
 	uint64_t frame_ns;
 	HANDLE proc, stdin_wr;
@@ -321,6 +328,8 @@ static void *gp_create(obs_data_t *settings, obs_output_t *output)
 		 (args && *args) ? args : "-c:v libx264 -preset veryfast -crf 16");
 	o->audio_offset_ms = obs_data_get_double(settings, "audio_offset_ms");
 	o->cur_offset_ns = o->audio_offset_ms * 1e6;
+	o->fixed_audio_sync = strcmp(obs_data_get_string(settings, "audio_sync"), "fixed") == 0;
+	o->game_audio = strcmp(obs_data_get_string(settings, "audio_source"), "game_nrt") == 0;
 	return o;
 }
 
@@ -343,6 +352,8 @@ static void free_audio(struct gp_output *o)
 static void gp_destroy(void *data)
 {
 	struct gp_output *o = data;
+	if (o->audio_view) UnmapViewOfFile(o->audio_view);
+	if (o->audio_mapping) CloseHandle(o->audio_mapping);
 	free_audio(o);
 	bfree(o);
 }
@@ -445,6 +456,18 @@ static bool gp_start(void *data)
 	o->fps_num = ovi.fps_num;
 	o->fps_den = ovi.fps_den;
 	o->rate = oai.samples_per_sec;
+	if (o->game_audio) {
+		if (o->fps_num != 60 * o->fps_den)
+			return start_failed(o, "independent game audio requires 60 fps");
+		o->rate = 48000;
+		o->audio_mapping = OpenFileMappingA(FILE_MAP_READ, FALSE, "Local\\CelesteAIRecordAudio-47776");
+		if (o->audio_mapping)
+			o->audio_view = MapViewOfFile(o->audio_mapping, FILE_MAP_READ, 0, 0, 0);
+		const int32_t *h = (const int32_t *)o->audio_view;
+		if (!h || h[0] != 0x43414941 || h[1] != 1 || h[2] != 48000 || h[3] != 2 ||
+		    h[4] != 800 || h[5] != 1024 || h[6] != 6464)
+			return start_failed(o, "independent game audio is unavailable (update the bridge and OBS plugin)");
+	}
 	o->frame_ns = (uint64_t)(1000000000.0 * ovi.fps_den / ovi.fps_num + 0.5);
 	o->filled = 0;
 	o->prev_ts = 0;
@@ -623,7 +646,7 @@ static bool resolve_segment(struct gp_output *o, struct segment *sg, uint32_t se
 	int64_t target = (int64_t)sg->start_ts;
 	int64_t center = target + (int64_t)o->cur_offset_ns;
 	uint64_t onset = 0;
-	int r = find_onset(o, center - ONSET_WINDOW_NS, center + ONSET_WINDOW_NS, &onset);
+	int r = o->fixed_audio_sync ? 0 : find_onset(o, center - ONSET_WINDOW_NS, center + ONSET_WINDOW_NS, &onset);
 	if (r < 0 && !force)
 		return false;
 	sg->measured_ns = NAN;
@@ -649,8 +672,8 @@ static bool resolve_segment(struct gp_output *o, struct segment *sg, uint32_t se
 			fprintf(o->seg_csv, "%u,%lld,%llu,%.2f,%.2f,measured\n", seg_index, sg->first_index,
 				(unsigned long long)sg->start_ts, sg->measured_ns / 1e6, sg->offset_ns / 1e6);
 		else
-			fprintf(o->seg_csv, "%u,%lld,%llu,,%.2f,previous\n", seg_index, sg->first_index,
-				(unsigned long long)sg->start_ts, sg->offset_ns / 1e6);
+			fprintf(o->seg_csv, "%u,%lld,%llu,,%.2f,%s\n", seg_index, sg->first_index,
+				(unsigned long long)sg->start_ts, sg->offset_ns / 1e6, o->fixed_audio_sync ? "fixed" : "previous");
 	}
 	return true;
 }
@@ -726,11 +749,27 @@ static bool write_plane(HANDLE h, const uint8_t *data, uint32_t linesize, uint32
 static void gp_raw_video(void *data, struct video_data *frame)
 {
 	struct gp_output *o = data;
-	long long game_frame, ticks;
+	long long game_frame, ticks, token;
 	AcquireSRWLockExclusive(&o->vlock);
-	if (o->stopping || o->failed || !keep_take(frame->timestamp, &game_frame, &ticks)) {
+	if (o->stopping || o->failed || !keep_take(frame->timestamp, &game_frame, &ticks, &token)) {
 		ReleaseSRWLockExclusive(&o->vlock);
 		return;
+	}
+	float pcm[1600];
+	if (o->game_audio) {
+		const uint8_t *slot = o->audio_view + 64 + (token % 1024) * 6464;
+		long long before = *(volatile const long long *)slot;
+		MemoryBarrier();
+		int32_t error = *(const int32_t *)(slot + 8);
+		memcpy(pcm, slot + 64, sizeof(pcm));
+		MemoryBarrier();
+		long long after = *(volatile const long long *)slot;
+		if (before != token || after != token || error) {
+			set_error(o, "independent audio frame missing or failed; refusing to substitute live music");
+			rec_set(REC_FAILED, o->written, o->error);
+			ReleaseSRWLockExclusive(&o->vlock);
+			return;
+		}
 	}
 	/* 规划回放帧（章节计时 -1）跟不上节拍时（一帧要画很多线），中间漏掉的节拍用这一帧补上：回放时音乐一直在放，
 	 * 不补的话漏掉那几个节拍的声音会被跳过，录像里的音乐听起来像加速。补的帧章节计时记为 -2。游玩帧不补，
@@ -756,6 +795,14 @@ static void gp_raw_video(void *data, struct video_data *frame)
 		fprintf(o->csv, "%lld,%lld,%lld,%llu\n", o->written, game_frame, j < fill ? -2LL : ticks,
 			(unsigned long long)ts);
 		o->written++;
+		if (o->game_audio) {
+			if (fwrite(pcm, sizeof(float), 1600, o->wav) != 1600) {
+				set_error(o, "cannot write independent audio frame");
+				ReleaseSRWLockExclusive(&o->vlock);
+				return;
+			}
+			o->wav_frames += 800;
+		}
 		stamps[copies++] = ts;
 	}
 	o->filled += fill;
@@ -763,6 +810,7 @@ static void gp_raw_video(void *data, struct video_data *frame)
 	o->prev_ticks = ticks;
 	rec_set(REC_RECORDING, o->written, NULL);
 	ReleaseSRWLockExclusive(&o->vlock);
+	if (o->game_audio) return;
 
 	AcquireSRWLockExclusive(&o->alock);
 	if (o->stopping) { /* 两把锁之间 gp_stop 已经收尾 */
@@ -808,7 +856,7 @@ static void gp_raw_video(void *data, struct video_data *frame)
 static void gp_raw_audio(void *data, struct audio_data *frames)
 {
 	struct gp_output *o = data;
-	if (o->failed || !frames->frames)
+	if (o->game_audio || o->failed || !frames->frames)
 		return;
 	AcquireSRWLockExclusive(&o->alock);
 	if (o->stopping) {

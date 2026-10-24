@@ -19,6 +19,7 @@ public class BridgeModule : EverestModule {
 
     public override void Load() {
         Hooks.Load();
+        RecordingAudio.Load();
         IpcServer.Start(Settings.Port);
         ClockServer.Start(Settings.ClockPort);
         Log.Info($"loaded v{Bridge.Version}, listening on 127.0.0.1:{Settings.Port}");
@@ -28,6 +29,7 @@ public class BridgeModule : EverestModule {
         IpcServer.Stop();
         ClockServer.Stop();
         Bridge.Deactivate();
+        RecordingAudio.Unload();
         Hooks.Unload();
     }
 }

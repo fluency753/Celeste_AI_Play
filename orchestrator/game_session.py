@@ -9,14 +9,15 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id
+from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, CHAPTER_SIDS
 from .metrics import Metrics
 from .observation import enrich_obs, fmt_ticks
 from .sandbox import run_program
+from .goals import GoalManager
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
-from cutscene import skip_by_pause_menu  # noqa: E402
+from cutscene import skip_by_pause_menu, leave_level_by_pause_menu, story_pending  # noqa: E402
 
 LETTERS = set("LRUDJXZGTKYVCBPN")    # 桥接认识的全部按键
 AGENT_LETTERS = set("LRUDJXZGTKYV")  # 智能体只能用游玩按键；暂停、确认、返回等菜单键由主控使用
@@ -156,7 +157,11 @@ class GameSession:
         self.client: BridgeClient | None = None
         self.done = False
         self.done_reason = ""
+        self.user_stopped = False
+        self.goals = GoalManager(run_dir)
+        self._goal_progress = {}
         self.start_sid: str | None = None
+        self.end_scene: str | None = None
         self.decision_index = 0
         self.container: str | None = None   # 智能体容器（自动重试时在里面运行重算程序）
         self.before_advance = None          # 每次推进游戏前调用（录制时：确认游戏窗口没有最小化）
@@ -168,10 +173,15 @@ class GameSession:
         # 依次通关多章：当前章节完成后，主控自动进入队列里的下一章
         self.chapter_queue: list[int] = list(cfg.chapters[1:]) if cfg.chapters else []
         self.chapter_finished = False
+        self._pending_complete = False
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
         self._decisions_log = open(run_dir / "decisions.jsonl", "a", encoding="utf-8")
         # 容器方式下，观测与轨迹同时写进智能体的工作区，供它自写的程序读取
         self.workspace: Path | None = cfg.workspace_dir if cfg.runtime == "container" else None
+        from .sim_assist import SimEnergy
+        self.sim_energy = SimEnergy(run_dir / "sim_energy.json") if cfg.sim_assist else None
+        if self.sim_energy:
+            self.metrics.update(sim_energy=self.sim_energy.snapshot())
         if self.workspace:
             (self.workspace / "game" / "rooms").mkdir(parents=True, exist_ok=True)
             # 给观众看的展示接口（HUD 进度、轨迹记录），每次运行都换成主控这一版；上次运行留下的进度清掉
@@ -182,14 +192,20 @@ class GameSession:
 
     def connect(self) -> dict:
         self.client = BridgeClient(port=self.cfg.bridge_port, timeout=600)
-        reply = self.client.call("activate", entities=False, tiles=False)
+        self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
+        reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music)
         obs = reply["obs"]
-        if obs.get("scene") != "Level":
+        if obs.get("scene") != "Level" and not (self.cfg.cutscene_mode == 'agent' and story_pending(obs)):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
         save = (obs.get("save") or {}).get("name")
         if save != self.cfg.save:
             raise RuntimeError(f"当前存档是 {save!r}，与配置的 {self.cfg.save!r} 不一致，拒绝开始")
-        self.start_sid = obs["level"]["sid"]
+        slot = (obs.get('save') or {}).get('slot')
+        if self.cfg.save_slot is not None and slot != self.cfg.save_slot:
+            raise RuntimeError(f'当前存档槽位 {slot} 与指定槽位 {self.cfg.save_slot} 不一致')
+        self.cfg.save_slot = slot
+        self.start_sid = (obs.get('level') or {}).get('sid') or CHAPTER_SIDS.get(self.cfg.chapter) or self.metrics.state.chapter
+        if self.start_sid:self.metrics.update(chapter=self.start_sid)
         self._update_metrics_from_obs(obs)
         if self.workspace:
             # 上一次运行留下的观测与动作记录已经过时：先换成当前这一帧，避免智能体在准备阶段读到旧数据
@@ -201,13 +217,15 @@ class GameSession:
         return obs
 
     def close(self, release: bool = True) -> None:
-        """release=False：不交还控制，游戏冻结在当前帧（章节计时不走），之后可以用 --resume 续跑。
-        注意游戏在暂停菜单里章节计时也照走，所以没通关就停下的运行一律保持冻结。"""
+        """试玩结束交还控制；release=False 仅供明确需要保留接管的内部调试使用。"""
+        client, self.client = self.client, None
         try:
-            if self.client:
-                if release:
-                    self.client.call("deactivate")
-                self.client.close()
+            if client:
+                try:
+                    if release:
+                        client.call("deactivate")
+                finally:
+                    client.close()
         finally:
             self._frames_log.close()
             self._decisions_log.close()
@@ -306,10 +324,58 @@ class GameSession:
 
     # ---- 动作 ----
 
+    def simulate(self, request: dict) -> dict:
+        from .sim_assist import validate_request, run_predictions, write_replay
+        if not self.sim_energy:
+            raise ActError("本局未开启限额模拟辅助")
+        if self.done or self.goals.stop_motion.is_set():
+            raise ActError("试玩已结束，不能继续预测")
+        candidates, cost = validate_request(request)
+        # Capture and predict under the same lock: predictions always refer to the actual current frame.
+        with self.lock:
+            if self.done or self.goals.stop_motion.is_set():
+                raise ActError("试玩已结束，不能继续预测")
+            directory = self.run_dir / "sim_private"
+            directory.mkdir(exist_ok=True)
+            ident = self.sim_energy.reserve(cost)
+            self.metrics.update(sim_energy=self.sim_energy.snapshot())
+            try:
+                state = self.client.call("sim_state", margin=4)["state"]
+                (directory / "state.json").write_text(json.dumps(state), encoding="utf-8")
+                result = run_predictions(self.cfg, directory, candidates)
+            except Exception:
+                self.sim_energy.finish(ident, refund=True)
+                self.metrics.update(sim_energy=self.sim_energy.snapshot())
+                raise
+            self.sim_energy.finish(ident)
+        result.update(receipt=ident, cost=cost, energy=self.sim_energy.snapshot(), candidates=candidates)
+        if self.workspace:
+            (self.workspace / "game" / "sim_assist").mkdir(parents=True, exist_ok=True)
+            self._write_json("game/sim_assist/latest.json", result)
+            try:
+                write_replay(self.workspace, result["results"], result["info"].get("frame", 0))
+            except (OSError, ValueError, OverflowError):
+                result["replay_warning"] = "本次预测已完成，但轨迹回放记录失败"
+        # Playback accounts for logged rollouts. When disabled it still collects logs for metrics.
+        if not self.playback:
+            self.metrics.add(sim_calls=1, sim_rollouts=len(candidates))
+        # Keep ordinary replies short; frame-by-frame details remain available on demand.
+        summary = {k: v for k, v in result.items() if k != "results"}
+        summary["results"] = [{"stop": r.get("stop"), "detail": r.get("detail"),
+                               "frames": len(r.get("frames", [])),
+                               "last_frame": (r.get("frames") or [None])[-1],
+                               "events": r.get("events", []), "warnings": r.get("warnings", [])}
+                              for r in result["results"]]
+        if self.workspace:
+            summary["trajectory_file"] = "/workspace/game/sim_assist/latest.json"
+        return summary
+
     def act(self, inputs: list[str] | None, thought: str, stop_on: list[str] | None,
             plan_file: str | None = None) -> ActOutcome:
         if self.done:
-            raise ActError("章节已完成，无需再操作，请直接结束本轮。")
+            raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
+        if ((self.last_obs or {}).get('level') or {}).get('dialogChoices'):
+            raise ActError('当前有对话选项，请使用cutscene的choose动作明确选择')
         if plan_file:
             if inputs:
                 raise ActError("inputs 与 plan_file 只能二选一")
@@ -422,23 +488,32 @@ class GameSession:
         # 录像里新语句就和这段动作的第一帧同时出现（游戏冻结时录像不写帧，这段等待不进录像）
         time.sleep(self.cfg.thought_lead_s)
         with self.lock:
+            if self.goals.stop_motion.is_set():
+                raise ActError("已请求停止，本次动作未执行")
             t0 = time.monotonic()
             reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
                                      scope="room", fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
                                      on_event=self._on_progress, **extra)
             game_s = time.monotonic() - t0
             result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
+            if self.sim_energy:
+                from .sim_assist import moving_frames
+                previous = (self.last_obs or {}).get("player") or {}
+                self.sim_energy.reward(moving_frames=moving_frames(result.get("trajectory") or [], previous.get("pos")))
             self._log_frames(result, frames, thought, auto=False)
             self._handle_events(result)
+            self._commit_completion(obs)
+            self.goals.check(self.goal_values(obs))
             self.metrics.add(play_game_s=game_s, frames_played=result["consumed"],
                              decisions=1 if attempt == 0 else 0)
 
             auto_frames, notes = 0, []
-            if not self.done and not self.chapter_finished and not obs.get("controllable"):
+            if not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and not obs.get("controllable"):
                 obs, image, auto_frames, notes = self._auto_advance(obs, image)
-            if self.chapter_finished and not self.done:
+            if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs, image, more = self._enter_next_chapter()
                 notes.extend(more)
+            self.goals.check(self.goal_values(obs))
             self._write_sim_state()
 
         self.metrics.update(last_stop=result["stop"])
@@ -460,11 +535,11 @@ class GameSession:
         self._decisions_log.flush()
         return result, obs, image, game_s, auto_frames, notes
 
-    # ---- 非可控段：剧情、转场、死亡与重生由主控自动推进 ----
+    # ---- 非可控段：按剧情模式交接，自动处理转场、死亡与重生 ----
 
     def _auto_advance(self, obs: dict, image: str | None):
         """非可控段一律按正常速度推进（与原版一致，录像里不快进）。
-        能跳过的剧情像玩家一样用暂停菜单跳过；不能跳过的剧情正常播放，对话框等待翻页时按确认键。"""
+        auto模式跳过剧情或推进普通对话；agent模式交回剧情控制权，分支选项始终要求明确选择。"""
         total, notes = 0, []
         skip_tries = 0  # 本段剧情已尝试跳过的次数
         self.metrics.update(status="auto")
@@ -479,9 +554,14 @@ class GameSession:
             self._handle_events(result)
 
         for _ in range(600):
-            if self.done or self.chapter_finished:
+            if self.done or self.chapter_finished or self.goals.stop_motion.is_set():
                 break
             scene = obs.get("scene")
+            if self.cfg.cutscene_mode == 'agent' and story_pending(obs):
+                notes.append('剧情等待你的操作：可观看等待、推进、选择对话选项或跳过。')
+                break
+            self._commit_completion(obs)
+            if self.done or self.chapter_finished:break
             if scene in END_SCENES:
                 self._mark_done(f"离开关卡（{scene}）")
                 break
@@ -493,7 +573,7 @@ class GameSession:
                 break
             if not level.get("inCutscene"):
                 skip_tries = 0  # 一段剧情结束，下一段剧情可以重新尝试
-            elif not level.get("skippingCutscene") and skip_tries < 3:
+            elif self.cfg.cutscene_mode == 'auto' and not level.get("skippingCutscene") and skip_tries < 3:
                 skip_tries += 1
                 skipped, obs, _, reason = skip_by_pause_menu(self.client, on_step=log_step)
                 if skipped:
@@ -504,7 +584,10 @@ class GameSession:
                     notes.append("这段剧情不能跳过，按正常速度播放")
                 elif reason != "no_pause":
                     continue
-            inputs = ["1,C", "29"] if level.get("dialogWaiting") and not level.get("paused") else ["30"]
+            if level.get('dialogChoices') and not level.get('skippingCutscene'):
+                notes.append('当前需要明确选择对话选项，主控不会代选。')
+                break
+            inputs = ["1,C", "29"] if self.cfg.cutscene_mode == 'auto' and level.get("dialogWaiting") and not level.get("paused") else ["30"]
             reply = self.client.call("step", inputs=inputs, stop_on=["controllable", "complete"],
                                      speed=self.cfg.auto_speed, image=False, entities=False, tiles=False,
                                      progress=PROGRESS_EVERY, on_event=self._on_progress)
@@ -539,24 +622,182 @@ class GameSession:
             dashes=event.get("dashes", 0),
             max_dashes=event.get("maxDashes", 0),
         )
+        values = self.goal_values()
+        values.update(frame=event.get("frame", values.get("frame")), room=event.get("room", values.get("room")),
+                      deaths=event.get("deaths", values.get("deaths")), dead=event.get("dead", False))
+        values["map"] = f"{event.get('sid', self.metrics.state.chapter)}:{values['side']}"
+        self._goal_progress = dict(values)
+        self.goals.check(values)
+        if self.goals.stop_motion.is_set() and not self.goals.cancel_sent:
+            self.goals.cancel_sent = True
+            self.client.cancel_pending()
+
+    def goal_values(self, obs=None):
+        observation = obs if obs is not None else self.last_obs or {}
+        level = observation.get("level") or {}
+        sid = level.get("sid", self.metrics.state.chapter)
+        side = level.get("side", "A")
+        values = {"room": level.get("room", self.metrics.state.room), "map": f"{sid}:{side}", "side": side,
+                "map_complete": bool(level.get("completed")), "deaths": level.get("deaths", 0),
+                "frame": observation.get("frame", 0), "elapsed": self.metrics.elapsed(),
+                "dead": bool((observation.get("player") or {}).get("dead"))}
+        if obs is None:
+            values.update(self._goal_progress)
+            values["elapsed"] = self.metrics.elapsed()
+        return values
+
+    def finish_user_stop(self):
+        self.user_stopped = True
+        if not self.done:
+            self._mark_done(self.goals.snapshot().get("stop_reason", "用户停止"))
+
+    def cutscene(self, action: str, frames: int = 30, choice: int | None = None) -> tuple:
+        if action not in {'wait','advance','choose','skip'} or type(frames) is not int or not 1 <= frames <= 180:
+            raise ActError('剧情动作须为 wait/advance/choose/skip，frames为1～180')
+        with self.lock:
+            if self.done or self.goals.stop_motion.is_set():raise ActError('本次试玩已结束')
+            self._before_advance()
+            obs=self.client.call('observe',image=False,entities=False,tiles=False)['obs']
+            if not story_pending(obs) and not (obs.get('level') or {}).get('skippingCutscene'):
+                raise ActError('当前没有待处理的剧情')
+            options=(obs.get('level') or {}).get('dialogChoices') or []
+            if action in {'advance','choose'} and obs.get('scene')=='Level' and 'dialogChoices' not in (obs.get('level') or {}):
+                raise ActError('推进或选择剧情需要更新桥接0.12.3，避免把分支对话误当普通翻页')
+            if action in {'advance','choose'} and ((obs.get('level') or {}).get('paused') or obs.get('pauseMenu')):
+                raise ActError('当前暂停菜单尚未关闭，不能把菜单确认当作对话确认')
+            if action == 'advance' and options:
+                raise ActError('当前有对话选项，必须用 choose 明确指定 choice，或等待/跳过整段剧情')
+            used=0
+            started=time.monotonic()
+            def log(inputs,result):
+                nonlocal used
+                used += result.get('consumed',0)+result.get('loadingFrames',0)
+                self._log_frames(result,expand_inputs(inputs,10000,LETTERS),'(agent处理剧情)',auto=False)
+                self._handle_events(result)
+            def step(inputs):
+                reply=self.client.call('step',inputs=inputs,stop_on=['complete'],speed=1,image=False,
+                                       entities=False,tiles=False,progress=PROGRESS_EVERY,on_event=self._on_progress)
+                log(inputs,reply['result'])
+                return reply['obs']
+            skipped=False
+            if action=='skip':
+                skipped,obs,_,why=skip_by_pause_menu(self.client,on_step=log)
+            elif action=='choose':
+                if type(choice) is not int or not any(item.get('index')==choice for item in options):
+                    raise ActError('choice须为当前可见对话选项的index')
+                signature=[(item.get('index'),item.get('text')) for item in options]
+                for _ in range(len(options)*2+2):
+                    level=obs.get('level') or {}
+                    if [(item.get('index'),item.get('text')) for item in level.get('dialogChoices') or []] != signature:
+                        raise ActError('对话选项已改变，请重新观察后再选择')
+                    if not level.get('dialogChoiceReady'):
+                        raise ActError('对话选项仍在动画中，请先 wait 再选择')
+                    current=level.get('dialogChoiceIndex')
+                    if current==choice:
+                        obs=step(['1,C','1']);break
+                    obs=step(['1,D' if current < choice else '1,U','1'])
+                else:raise ActError('未能定位对话选项，没有按确认')
+            else:
+                obs=step(['1,C',str(max(1,frames-1))] if action=='advance' else [str(frames)])
+            self.metrics.add(play_game_s=time.monotonic()-started,frames_played=used)
+            self._commit_completion(obs)
+            if not self.done and not story_pending(obs) and not obs.get('controllable'):
+                obs,_,_,_=self._auto_advance(obs,None)
+            reply=self.client.call('observe',image=True,scope='room',fields=True)
+            obs=self._track_motion(enrich_obs(reply['obs']))
+            self._update_metrics_from_obs(obs);self._write_workspace(obs)
+            info={'action':action,'frames':used,'skipped':skipped,'scene':obs.get('scene'),'finished':self.done}
+            if action=='skip' and not skipped:info['note']=why
+            return obs,reply.get('image'),info
+
+    def exit_level(self, reason: str) -> dict:
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 120:
+            raise ActError('退出原因须为1～120字')
+        with self.lock:
+            if self.done or self.goals.stop_motion.is_set():
+                raise ActError('本次试玩已停止，不能继续操作菜单')
+            self._before_advance()
+            self.metrics.update(status='auto',thought=reason.strip())
+            before = (self.last_obs or {}).get('frame',0)
+            started = time.monotonic()
+            obs = leave_level_by_pause_menu(self.client)
+            if obs.get('scene') != 'Overworld':
+                raise ActError('退出尚未完成，请重新观察当前菜单状态')
+            self.metrics.add(auto_game_s=time.monotonic()-started,
+                             frames_auto=max(0,obs.get('frame',before)-before))
+            self.last_obs, self.end_scene = obs, obs['scene']
+            self.chapter_queue.clear()
+            self.user_stopped = True
+            self._mark_done('agent 退出关卡')
+            result = {'exited':True,'scene':obs['scene'],'completed':False,'run_finished':True,
+                      'save':self.cfg.save,'save_slot':self.cfg.save_slot,'reason':reason.strip()}
+            (self.run_dir/'exit_level.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+            return result
 
     def _handle_events(self, result: dict) -> None:
         for e in result.get("events", []):
             if e["type"] == "death":
                 self.metrics.add(deaths=1)
             elif e["type"] == "complete":
-                self._chapter_complete()
+                if self.cfg.cutscene_mode == 'agent':self._pending_complete=True
+                else:self._chapter_complete()
+
+    def _commit_completion(self, obs):
+        if self._pending_complete and not story_pending(obs):
+            self._pending_complete=False
+            self._chapter_complete()
 
     def _chapter_complete(self) -> None:
         """当前章节通关：记下分段成绩；还有下一章就等进入下一章，否则本次运行完成。"""
         if self.done or self.chapter_finished:
             return
         st = self.metrics.state
+        values = self.goal_values()
+        values["map_complete"] = True
+        if self.goals.check(values):
+            self.user_stopped = True
+            self.chapter_queue.clear()
         self.metrics.add_split(st.chapter, st.chapter_time_ticks)
         if self.chapter_queue:
             self.chapter_finished = True
         else:
             self._mark_done("章节完成")
+
+    def finish_at_results(self) -> None:
+        """最终章只走完片尾并保存到结算页，不确认结算、不进入下一章。"""
+        if not self.done or self.done_reason != "章节完成" or self.chapter_queue:
+            return
+        with self.lock:
+            if self.goals.immediate:
+                return
+            obs = self.client.call("observe", image=False, entities=False, tiles=False)["obs"]
+            started = time.monotonic()
+            for _ in range(600):
+                self.end_scene = obs.get('scene')
+                if self.goals.immediate:
+                    return
+                if self.start_sid == 'Celeste/0-Intro' and self.end_scene == 'Overworld':
+                    self.metrics.add(auto_game_s=time.monotonic() - started)
+                    print('[run] 序章已保存，停在选章地图，不进入下一章', flush=True)
+                    return
+                if obs.get("scene") == "AreaComplete":
+                    self.metrics.add(auto_game_s=time.monotonic() - started)
+                    print("[run] 最终章节已保存，停在结算画面，不进入下一章", flush=True)
+                    return
+                allowed = {'Level', 'LevelExit'}
+                if self.start_sid == 'Celeste/0-Intro':
+                    allowed.add('OverworldLoader')
+                if obs.get("scene") not in allowed:
+                    raise RuntimeError(f"最终章结算出现意外场景：{obs.get('scene')}")
+                level = obs.get("level") or {}
+                inputs = ["1,C", "29"] if level.get("dialogWaiting") else ["30"]
+                self._before_advance()
+                reply = self.client.call("step", inputs=inputs, stop_on=[], speed=self.cfg.auto_speed,
+                                         image=False, entities=False, tiles=False)
+                self._log_frames(reply["result"], expand_inputs(inputs, 10000, LETTERS), "(最终章结算)", auto=True)
+                self.metrics.add(frames_auto=reply["result"]["consumed"])
+                obs = reply["obs"]
+            raise RuntimeError("最终章节片尾尚未到达结算画面，已停止自动推进")
 
     def _enter_next_chapter(self) -> tuple[dict, str | None, list[str]]:
         """（调用方持有连接锁）走完结算画面、回到地图、进入下一章，停在可操作的第一帧。"""
@@ -567,12 +808,16 @@ class GameSession:
         self._before_advance()
         self.metrics.update(status="auto", thought="")
         t0 = time.monotonic()
-        enter_save(self.client, self.cfg.save, chapter=chapter, menu_speed=1)  # 正常速度，录像里不快进
+        enter_save(self.client, self.cfg.save, chapter=chapter, menu_speed=1, save_slot=self.cfg.save_slot, cutscene_mode=self.cfg.cutscene_mode,
+                   should_stop=self.goals.stop_motion.is_set)  # 正常速度，录像里不快进
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         reply = self.client.call("observe", image=True, scope="room", fields=True)
         obs, image = enrich_obs(reply["obs"]), reply.get("image")
         self.chapter_finished = False
         level = obs.get("level") or {}
+        if self.goals.stop_motion.is_set():
+            self.chapter_finished = not level or level.get("sid") == split["chapter"]
+            return obs, image, ["用户停止了自动换图，游戏保持在当前帧。"]
         self.start_sid = level.get("sid", self.start_sid)
         self.metrics.update(chapter=level.get("sid", ""), room=level.get("room", ""),
                             chapter_time_ticks=level.get("chapterTimeTicks", 0))
@@ -603,8 +848,13 @@ class GameSession:
         self._frames_log.flush()
 
     def _update_metrics_from_obs(self, obs: dict) -> None:
+        self._goal_progress = {}
         level = obs.get("level") or {}
         player = obs.get("player") or {}
+        if self.sim_energy:
+            if level.get("sid") and level.get("room") is not None and not player.get("dead"):
+                self.sim_energy.reward(room=f"{level['sid']}:{level.get('mode', level.get('side', 0))}:{level['room']}")
+            self.metrics.update(sim_energy=self.sim_energy.snapshot())
         if (level.get("sid"), level.get("room")) != (self.metrics.state.chapter, self.metrics.state.room):
             self.metrics.update(sim_best_frames=0)   # HUD 的"推演最快"只看当前房间
             self.room_entry_frame = obs.get("frame")   # 进入这个房间的那一帧（推演最速从这里算起）

@@ -14,6 +14,14 @@ QUIET = dict(image=False, entities=False, tiles=False)
 StepHook = Callable[[list[str], dict], None]
 
 
+def story_pending(obs: dict) -> bool:
+    if obs.get('scene') in {'IntroVignette', 'LevelEnter'}:
+        return True
+    level = obs.get('level') or {}
+    return obs.get('scene') == 'Level' and not level.get('skippingCutscene') and bool(
+        level.get('inCutscene') or level.get('dialogOpen') or level.get('dialogWaiting') or level.get('dialogChoices'))
+
+
 def cutscene_skippable(obs: dict) -> bool:
     """当前是否处在可以尝试跳过的剧情里（序章开场，或关卡内的剧情且尚未在跳过中）。"""
     scene = obs.get("scene")
@@ -91,7 +99,8 @@ def leave_level_by_pause_menu(client, max_wait_frames: int = 60) -> dict:
 
     obs = client.call("observe", **QUIET)["obs"]
     menu = obs.get("pauseMenu")
-    if menu is not None and not any(it.get("id") in ("menu_pause_return", "menu_pause_savequit")
+    exit_ids = ('menu_pause_return','menu_pause_savequit','intro_vignette_quit')
+    if menu is not None and not any(it.get("id") in exit_ids
                                      for it in menu["items"] if it["selectable"]):
         obs = step(["1,B", "20"])  # 停在别的子菜单里：先退回去
         menu = obs.get("pauseMenu")
@@ -111,7 +120,9 @@ def leave_level_by_pause_menu(client, max_wait_frames: int = 60) -> dict:
         if not menu:
             raise RuntimeError("打不开暂停菜单，无法离开关卡")
     ids = [it.get("id") for it in menu["items"]]
-    wanted = "menu_pause_return" if "menu_pause_return" in ids else "menu_pause_savequit"
+    wanted = next((key for key in exit_ids if key in ids),None)
+    if wanted is None:
+        raise RuntimeError('当前菜单没有可用的保存退出选项')
     target = next(it["index"] for it in menu["items"] if it.get("id") == wanted)
     for _ in range(len(menu["items"]) + 2):
         if menu["selection"] == target:
@@ -136,7 +147,7 @@ def leave_level_by_pause_menu(client, max_wait_frames: int = 60) -> dict:
         obs = step(["1,C", "30"])
     # 等关卡真正退出（擦除转场、保存），避免调用方在退出途中又按暂停
     for _ in range(60):
-        if obs.get("scene") != "Level":
+        if obs.get('scene')=='Overworld' or obs.get('scene') not in {'Level','LevelExit','IntroVignette','LevelEnter','OverworldLoader'}:
             break
         obs = step(["10"])
     return obs

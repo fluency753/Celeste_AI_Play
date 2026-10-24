@@ -4,18 +4,20 @@
   "ffmpeg": "",
   "video_args": "-c:v libx264 -preset veryfast -crf 16 -g 120",
   "audio_offset_ms": 0,
+  "audio_source": "game_nrt",
   "profile": "CelesteAI",
   "collection": "CelesteAI",
+  "scene": "Celeste AI",
   "canvas": [1920, 1080],
   "fps": 60,
   "sample_rate": 48000,
   "game_window": "Celeste:SDL_app:Celeste.exe",
   "hud": {
-    "local_file": true,
-    "url": "http://127.0.0.1:47790/hud",
-    "width": 350,
-    "height": 508,
-    "x": 1532,
-    "y": 38
+    "local_file": false,
+    "url": "http://127.0.0.1:47790/hud?surface=obs",
+    "width": 420,
+    "height": 760,
+    "x": 1480,
+    "y": 40
   }
 }

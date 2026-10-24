@@ -29,6 +29,8 @@ class BridgeClient:
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.file = self.sock.makefile("rwb")
         self.next_id = 1
+        self.cancel_check = None
+        self._cancel_sent = False
 
     def close(self) -> None:
         try:
@@ -38,7 +40,12 @@ class BridgeClient:
 
     def call(self, cmd: str, on_event=None, **args) -> dict:
         """发送一条指令并等待它的回复。执行中桥接推送的事件（{"event": …}，例如 step 的 progress）交给 on_event。"""
+        if cmd == "step" and self.cancel_check is not None and self.cancel_check():
+            raise InterruptedError("用户停止请求已生效，不再推进游戏")
         req_id = self.next_id
+        self._cancel_sent = False
+        if cmd == "step" and self.cancel_check is not None:
+            args.setdefault("progress", 6)
         self.next_id += 1
         payload = {"id": req_id, "cmd": cmd, **args}
         self.file.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
@@ -51,11 +58,19 @@ class BridgeClient:
             if "event" in reply:
                 if on_event is not None:
                     on_event(reply)
+                if self.cancel_check is not None and self.cancel_check() and not self._cancel_sent:
+                    self.cancel_pending()
                 continue
             if reply.get("id") == req_id:
                 if not reply.get("ok"):
                     raise RuntimeError(f"{cmd} failed: {reply.get('error')}")
                 return reply
+
+    def cancel_pending(self) -> None:
+        """仅从 on_event 回调使用；共用当前连接，id=0 的确认由读取循环忽略。"""
+        self.file.write(b'{"id":0,"cmd":"cancel"}\n')
+        self.file.flush()
+        self._cancel_sent = True
 
 
 def save_image(reply: dict, path: str | None) -> None:

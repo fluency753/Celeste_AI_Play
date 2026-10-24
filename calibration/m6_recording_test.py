@@ -35,6 +35,7 @@ from orchestrator.config import RunConfig  # noqa: E402
 from orchestrator.game_session import GameSession  # noqa: E402
 from orchestrator.metrics import Metrics  # noqa: E402
 from orchestrator.recording import Recorder, options_from  # noqa: E402
+from orchestrator import gamewindow  # noqa: E402
 from overlay.server import start_in_thread  # noqa: E402
 
 FAILED = 0
@@ -64,9 +65,9 @@ def probe(ffmpeg: str, path: Path) -> dict:
         return {"error": out.stderr}
 
 
-def decode_markers(ffmpeg: str, video: Path, width: int, height: int) -> list[int]:
+def decode_markers(ffmpeg: str, video: Path, width: int, height: int, capture_width: int = 1920) -> list[int]:
     """读出每一帧左下角条码表示的帧号低 16 位（游戏窗口与画布 1:1 时的位置）。"""
-    scale = width / 1920.0
+    scale = width / float(capture_width)
     region_w, region_h = int(round((CELL * 16 + 8) * scale)), int(round((CELL + 8) * scale))
     y0 = height - region_h
     cmd = [ffmpeg, "-v", "error", "-i", str(video), "-vf", f"crop={region_w}:{region_h}:0:{y0},format=gray",
@@ -153,7 +154,10 @@ def main() -> int:
     session = GameSession(cfg, run_dir, metrics)
     session.workspace = None
     session.connect()
-    options = options_from(run_dir, args.ffmpeg, args.video_args, args.audio_offset_ms, marker=not args.no_marker)
+    # 校准需要静音恢复边，固定用冻结音乐模式；直播持续 BGM 模式复用这里量出的偏移。
+    options = options_from(run_dir, args.ffmpeg, args.video_args, args.audio_offset_ms,
+                           marker=not args.no_marker, continuous_music=False)
+    options.audio_source = "obs_mix"  # this calibration specifically measures the wall-clock OBS audio pipeline
     recorder = Recorder(session.bridge_call, options, log=lambda m: print(m, flush=True))
 
     plans = [
@@ -164,6 +168,8 @@ def main() -> int:
     acts = []   # (推进前的帧号, 推进后的帧号)
     try:
         recorder.start()
+        capture_size = gamewindow.capture_size()
+        print(f"游戏采集尺寸：{capture_size}", flush=True)
         for i in range(args.rounds):
             inputs, thought = plans[i % len(plans)]
             metrics.mark_thinking()
@@ -207,7 +213,8 @@ def main() -> int:
           f"{stream.get('nb_read_frames')} / {len(rows)}")
 
     if not args.no_marker:
-        marks = decode_markers(options.ffmpeg, rec_dir / "video.mkv", width, height)
+        marks = decode_markers(options.ffmpeg, rec_dir / "video.mkv", width, height,
+                               capture_size[0] if capture_size else 1920)
         diffs = [((m - (f & 0xFFFF)) + 0x8000) % 0x10000 - 0x8000 for m, f in zip(marks, frames)]
         exact = sum(1 for d in diffs if d == 0)
         histogram = {d: diffs.count(d) for d in sorted(set(diffs))}

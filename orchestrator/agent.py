@@ -518,6 +518,8 @@ class ClaudeRunner:
         etype = event.get("type")
         subtype = event.get("subtype")
         if etype == "system" and subtype == "init":
+            if event.get("model"):
+                self.metrics.update(model=event["model"])
             # 每轮开始都会输出一次 init：每次都核对工具列表，只在第一次打印
             tools = event.get("tools") or []
             unexpected = [t for t in tools if not self._allowed_tool(t)]
