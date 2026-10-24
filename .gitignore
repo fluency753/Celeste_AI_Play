@@ -4,10 +4,11 @@ runs/
 *.mp4
 *.flv
 
-# 密钥与本机配置
+# 密钥与本机配置（部署向导生成的启动脚本 start_local.ps1 也是本机文件）
 .env
 *.key
 configs/local*
+start_local.ps1
 
 # 游戏文件、反编译产物与存档
 decompiled/

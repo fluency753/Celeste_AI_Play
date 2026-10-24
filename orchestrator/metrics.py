@@ -63,6 +63,8 @@ class MetricsState:
     replay_s: float = 0.0             # 规划回放用时（游戏不推进；逐轮回放与智能体的思考、工具同时进行，照常计入它们）
     replay_act_s: float = 0.0         # 其中执行前在 act 里把镜头送回 Madeline 的用时（和游戏推进时间一样不计入工具时间）
     tool_call: str = ""               # 正在调用的工具（HUD 的"调用工具"一栏，例如"Bash · 搜索第二个房间"；没有时为空）
+    tool_status: str = ""             # 实时展示：正在运行的程序用 show.status() 报告的进度（工具调用返回后清空）
+    live: bool = False                # 实时展示开着（HUD 据此在规划回放时仍把思考语句放在主位）
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）
     sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数（全程累计，写进总结）
     sim_round_rollouts: int = 0       # 当前这次模拟器调用推演的路线条数（HUD 显示；这一轮回放画完清零）
@@ -158,6 +160,7 @@ class Metrics:
             self._tools.clear()
             self._tool_labels.clear()
             self.state.tool_call = ""
+            self.state.tool_status = ""
             self._write_locked()
 
     def _tool_summary(self) -> str:
@@ -196,6 +199,8 @@ class Metrics:
             self._tools.discard(tool_id)
             self._tool_labels.pop(tool_id, None)
             self.state.tool_call = self._tool_summary()
+            if not self._tools:
+                self.state.tool_status = ""
             if not self._tools and (self.playing or self.kb_done) and self.state.status in ("tool", "executing", "auto", "retrying"):
                 self.state.status = "thinking"
                 self.state.phase_since_wall = time.time()
@@ -349,6 +354,18 @@ class Metrics:
             self._effort_reason = ""
             self._write_locked()
             return entry
+
+    @property
+    def tools_running(self) -> bool:
+        return bool(self._tools)
+
+    def set_tool_status(self, text: str) -> None:
+        """实时展示：程序报告的进度（只在有工具在运行时显示）。"""
+        with self._lock:
+            text = text if self._tools else ""
+            if text != self.state.tool_status:
+                self.state.tool_status = text
+                self._write_locked()
 
     def set_thought(self, thought: str) -> None:
         with self._lock:

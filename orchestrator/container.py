@@ -35,7 +35,8 @@ def _labels(cfg: RunConfig) -> dict[str, str]:
     return {f"{LABEL}.image": cfg.image, f"{LABEL}.mcp_port": str(cfg.mcp_port),
             f"{LABEL}.seccomp": "unconfined" if cfg.seccomp_unconfined else "default", f"{LABEL}.init": "1",
             f"{LABEL}.sim": "1" if cfg.sim else "0", f"{LABEL}.provider": cfg.provider,
-            f"{LABEL}.domains": ",".join(cfg.provider_domains)}
+            f"{LABEL}.domains": ",".join(cfg.provider_domains),
+            f"{LABEL}.host_ports": ",".join(str(p) for p in cfg.provider_host_ports)}
 
 
 def _create(cfg: RunConfig, name: str) -> None:
@@ -49,6 +50,8 @@ def _create(cfg: RunConfig, name: str) -> None:
             # 防火墙放行哪些模型服务：Anthropic 订阅只放行 Anthropic；第三方提供方只放行它自己的域名，不放行 Anthropic
             "-e", f"ALLOW_ANTHROPIC={'0' if cfg.third_party else '1'}",
             "-e", f"PROVIDER_DOMAINS={' '.join(cfg.provider_domains)}",
+            # 第三方提供方经宿主机上的网关接入时（例如 GPT），另外放行宿主机上网关的端口（需要 2026-10-24 之后构建的镜像）
+            "-e", f"PROVIDER_HOST_PORTS={' '.join(str(p) for p in cfg.provider_host_ports)}",
             "-v", f"{workspace}:/workspace",
             "-v", f"{REPO_ROOT / 'kb'}:/kb:ro",
             "-v", f"celeste-claude-{slug(cfg.agent)}:/home/agent/.claude",

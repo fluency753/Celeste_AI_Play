@@ -689,6 +689,17 @@ DeepSeek V4.1 Flash 在不限制规划轮次后的 30 分钟短测（test 存档
 - **纯享版录像**：录制结束时除了含规划回放的完整版 gameplay.mkv，主控再生成只有真实游玩帧的 gameplay\_pure.mkv——按 frames.csv 去掉章节计时为 -1、-2 的帧，画面挑帧后按录制参数重新编码，声音按帧裁剪、接缝处各淡出淡入 5 毫秒。
 - **音乐接缝的另一半**（桥接 0.11.4）：这次短测的录像里每段开头已经没有静音，但约四分之一的接缝，暂停前最后一帧末尾有 3～19 毫秒静音——第一个空闲节拍就暂停时，暂停正好卡在上一帧那 1/60 秒的末尾，FMOD 按混音块生效有十几毫秒的抖动。改为第二个空闲节拍才暂停，代价是接缝处音乐向前跳约一帧长度（有淡出淡入）。M6 测试 18 段全部通过，末尾静音最长 0.5 毫秒。
 
+### 14.8 实时展示、关模拟器版本的轨迹绘制、GPT 接口与一键部署（2026-10-24）
+
+- **实时展示开关**（默认开，`--no-live` 关）。关时与之前相同：HUD 的思考语句只在每次 `act` 时随 `thought` 更新，工具栏只显示工具名与说明。开时：
+  - 新增游戏工具 `narrate(thought)`：智能体思考期间想法每有进展就写一句，主控立即写进 HUD 的思考（不超过 120 字）。它不推进游戏、不占规划轮次（门控豁免），在输出流里不当作工具调用开始计时，所以 HUD 工具栏不显示它、用时算思考时间——否则每写一句话状态栏都会闪成"运行工具"。
+  - 工作区展示接口 `game/show.py` 的 `status(text)`：智能体在长时间运行的程序里报告进度。为了不给容器开新的端口或通道，进度走文件：程序把一句话原子地写进 `game/hud_status.json`（自身限流 0.2 秒），主控的轮询线程（`orchestrator/live.py`）每 0.2 秒看一次修改时间，只在有工具在运行时把内容交给 HUD，工具全部返回或一轮结束时清掉。程序在零网络沙箱里运行也能写这个文件，因为工作区本来就可写。
+  - 提示词多一段 `live_zh.md`（只在开时加入），规则与 `thought` 相同：只写分析与判断，不写数值与算法名。
+  - HUD：开时规划回放期间思考位置保留最新的思考，回放的轮次说明移到状态下面一行；关时回放说明照旧占用思考位置。
+- **关模拟器版本的轨迹绘制**：智能体在关模拟器的版本里常常自己写模拟器，观众同样想看它的试错过程。不去接入它的程序（形式不可预知），而是给一个接口：`show.trajectory(points, result, start_frame)` 把一条逐帧轨迹按预置模拟器推演记录的同一格式（CSL2）写进 `game/simlog/`，规划回放模块不必区分来源，按同样的规则分轮、挑线、变色、移镜头。轨迹准不准都照画、不加标注——这是展示，不影响成绩；提示词按用户的原话写明"计算与否由你自主决定"。`show.py` 由主控在每次运行开始时写进工作区，只用标准库。
+- **GPT 接口**（只做接口，暂不实际接入）：容器里始终运行 Claude Code，它只会说 Anthropic Messages 协议，OpenAI 的接口格式不同，所以设计成在本机运行一个协议转换网关（如 LiteLLM 代理），容器只连宿主机上网关的端口。这样 OpenAI 的密钥只在网关里，容器连不上任何外部域名。为此：平台配置新增 `allowed_host_ports`（防火墙放行的宿主机端口，`PROVIDER_HOST_PORTS`）与 `gateway_check`（开跑前检查网关是否在运行）；`status` 字段标明平台是否实测过，未实测的平台开跑时提示。
+- **一键部署**：`setup.ps1`（只负责找到或安装 Python、建虚拟环境、装依赖）+ `tools/setup_wizard.py`（12 步向导：系统、游戏与 Everest、.NET、桥接 Mod、Docker 与镜像、智能体平台与密钥、录制、模拟器、知识库参考资料、存档、开关、自检）。每一步先检查再动手，改动前询问；`--check` 只检查，`--only` 重做某几步；回答存在 `configs/local.deploy.json`，令牌写 `.env`，粘贴的密钥写到用户目录下的密钥文件，都不入库；最后生成本机启动脚本 `start_local.ps1`（正式、试跑、续跑三种用法）。详细的手动步骤与全部开关见 [DEPLOY.md](DEPLOY.md)。
+
 ## 参考资料
 
 - [EverestAPI：Everest 加载器与 Olympus 安装器](https://github.com/EverestAPI)
@@ -710,3 +721,5 @@ DeepSeek V4.1 Flash 在不限制规划轮次后的 30 分钟短测（test 存档
 - [Claude Code：钩子（PreToolUse）](https://code.claude.com/docs/en/hooks.md)
 - [DeepSeek：Anthropic API 兼容](https://api-docs.deepseek.com/guides/anthropic_api)
 - [DeepSeek：在 Claude Code 中使用](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/)
+- [LiteLLM：在 Claude Code 里使用非 Anthropic 模型](https://docs.litellm.ai/docs/tutorials/claude_non_anthropic_models)
+- [LiteLLM：Claude Code 客户端设置](https://docs.litellm.ai/docs/proxy/client_setup/claude_code)

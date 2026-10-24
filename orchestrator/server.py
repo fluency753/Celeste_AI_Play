@@ -41,6 +41,11 @@ SET_EFFORT_DESCRIPTION = """调整你自己的推理强度：low、medium、high
 不推进游戏，也不消耗游戏帧。reason：一句话说明为什么调整（记入日志）。"""
 
 
+NARRATE_DESCRIPTION = """更新 HUD 上给观众看的思考内容（实时展示）：观众在直播画面上看你此刻在想什么。不推进游戏，也不计入章节计时。
+thought：一两句中文（120 字以内），只写你对当前房间或这一段的分析与判断，不写具体数值（帧数、坐标、速度等），
+也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。"""
+
+
 def effort_line(metrics) -> str:
     st = metrics.state
     line = f"推理强度：{st.effort}"
@@ -174,6 +179,18 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 return [f"动作未执行（没有消耗任何游戏帧）：{err}"]
             finally:
                 finish()
+
+    if session.cfg.live:
+        @server.tool(name="narrate", description=NARRATE_DESCRIPTION, structured_output=False)
+        async def narrate(thought: str) -> list:
+            # 不推进游戏、不受准备阶段限制、不开始计现实用时；只换 HUD 上的思考语句
+            text = " ".join((thought or "").split())
+            if not text:
+                return ["thought 不能为空。"]
+            if len(text) > 120:
+                return ["thought 太长，请压缩到一两句话（120 字以内）。"]
+            metrics.set_thought(text)
+            return ["已更新。"]
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
     async def set_effort(level: str, reason: str = "") -> list:

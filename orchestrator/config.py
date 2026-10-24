@@ -149,6 +149,7 @@ class RunConfig:
     playback_max_s: float = 30.0     # 一轮回放的时长上限（超过时这一轮整体提高倍速，防止回放拖得太长）
     thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
     sim: bool = False                # 预置模拟器：把本机的 sim/dist 只读挂到容器的 /sim，每次停下都把当前帧的完整场景写进工作区
+    live: bool = True                # 实时展示：智能体思考期间用 narrate 随时更新 HUD 的思考内容，运行程序期间报告进度（HUD 工具栏）
 
     @property
     def third_party(self) -> bool:
@@ -158,6 +159,11 @@ class RunConfig:
     @property
     def provider_domains(self) -> list[str]:
         return list((self.provider_info or {}).get("allowed_domains") or [])
+
+    @property
+    def provider_host_ports(self) -> list[int]:
+        """第三方提供方要连的宿主机端口（例如本机的接口转换网关）；防火墙除了主控端口另外放行这些。"""
+        return [int(p) for p in (self.provider_info or {}).get("allowed_host_ports") or []]
 
     @property
     def images(self) -> bool:

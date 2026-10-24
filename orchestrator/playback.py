@@ -315,7 +315,8 @@ class Playback:
         self.log = log
         # collect：收集推演记录（HUD 的模拟器调用与推演统计、限制规划轮次时按"调用了模拟器的消息"记账，都靠它）；
         # enabled：画进游戏（规划回放）
-        self.collect = bool(cfg.sim and session.workspace is not None)
+        # 开模拟器时记录来自 /sim 的 sim.py；关模拟器时来自智能体用 /workspace/game/show.py 的 trajectory() 记下的轨迹
+        self.collect = session.workspace is not None
         self.enabled = bool(self.collect and cfg.playback)
         self.dir = session.workspace / "game" / "simlog" if session.workspace is not None else None
         self.archive = session.run_dir / "playback"

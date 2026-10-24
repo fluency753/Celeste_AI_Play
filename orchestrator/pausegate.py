@@ -42,7 +42,7 @@ def room_rounds(base: int, bounds, scale: float = 2.0) -> int:
     k = math.log2(scale) if scale > 0 else 1.0
     return max(base, math.ceil(base * (w / SCREEN_W) ** k * (h / SCREEN_H) ** k - 1e-9))
 
-EXEMPT = {"mcp__celeste__act", "mcp__celeste__set_effort"}
+EXEMPT = {"mcp__celeste__act", "mcp__celeste__set_effort", "mcp__celeste__narrate"}
 
 
 class PauseGate:

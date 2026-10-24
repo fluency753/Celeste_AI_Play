@@ -35,6 +35,7 @@ from .kb_study import KbStudy
 from .metrics import Metrics
 from .recording import Recorder, RecordingError, options_from
 from .pausegate import PauseGate
+from .live import LiveStatus
 from .playback import Playback
 from .server import TRANSPORT_SECURITY, build_server
 
@@ -75,7 +76,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--room-scale", type=float, default=2.0,
                     help="房间的长、高每变成这么多倍，存入的轮次乘这么多（默认 2，即与面积成正比），向上取整")
     ap.add_argument("--no-playback", action="store_true",
-                    help="不把模拟器推演过的路线画进游戏（规划回放；只在开模拟器时有）")
+                    help="不把推演过的路线画进游戏（规划回放：开模拟器时画 /sim 的推演，关模拟器时画智能体用 show.trajectory 记下的轨迹）")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
     ap.add_argument("--no-hud-window", action="store_true",
                     help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
@@ -88,8 +89,14 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--sim", dest="sim", action="store_true", default=None,
                     help="开放预置模拟器（容器运行方式下默认开启，写不写都一样）：本机 sim/dist 只读挂到容器的 /sim，"
                          "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
+    ap.add_argument("--live", dest="live", action="store_true", default=None,
+                    help="实时展示（默认开启，写不写都一样）：要求智能体思考期间用 narrate 工具随时更新 HUD 上的思考内容，"
+                         "运行程序期间用 /workspace/game/show.py 的 status() 报告进度（HUD 工具栏实时显示）")
+    ap.add_argument("--no-live", dest="live", action="store_false",
+                    help="关闭实时展示：HUD 的思考内容只在每次 act 时更新（之前的做法）")
     ap.add_argument("--no-sim", dest="sim", action="store_false",
-                    help="不开放预置模拟器：智能体照知识库自己写模拟器，提示词用不带模拟器的做法（按段规划、按段执行；之前的配置）")
+                    help="关模拟器的版本：不开放预置模拟器，智能体只能用自己的办法通关；提示词不教打法，只写目标、规则与工具接口"
+                         "（算出的逐帧轨迹可以用工作区的 show.trajectory() 交给系统画出来）")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     ap.add_argument("--no-quota-wait", action="store_true",
@@ -115,6 +122,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             args.effort = previous["metrics"].get("effort") or args.effort
         if args.sim is None:
             args.sim = bool(state["sim"])
+        if args.live is None:
+            args.live = bool(state.get("live", True))
         args.skip_enter = True
         args.no_study = True
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort, provider=args.provider,
@@ -141,7 +150,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.rounds_per_room = max(1, args.rounds_per_room)
     cfg.room_scale = max(1.0, args.room_scale)
     cfg.playback = not args.no_playback
+    cfg.live = args.live is not False     # 默认开启
     cfg.provider_info = load_provider(cfg.provider)
+    check_provider(cfg.provider_info)
     if cfg.third_party and cfg.runtime != "container":
         raise SystemExit("第三方模型提供方只支持容器运行方式")
     if previous:
@@ -183,9 +194,24 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
     state = {"agent": cfg.agent, "save": cfg.save, "model": cfg.model, "provider": cfg.provider,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes,
-             "runtime": cfg.runtime, "sim": cfg.sim, "all_chapters": all_chapters, "session_id": session_id,
+             "runtime": cfg.runtime, "sim": cfg.sim, "live": cfg.live, "all_chapters": all_chapters, "session_id": session_id,
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def check_provider(info: dict) -> None:
+    """未实测的提供方给出提示；经本机网关接入的（例如 GPT）开跑前检查网关在不在运行。"""
+    status = str(info.get("status") or "ready")
+    if status != "ready":
+        print(f"[run] 注意：模型提供方 {info.get('label') or info.get('name')} {status}", flush=True)
+    url = info.get("gateway_check")
+    if url:
+        import urllib.request  # noqa: WPS433
+        try:
+            with urllib.request.urlopen(url, timeout=5):
+                pass
+        except Exception as exc:  # noqa: BLE001
+            raise SystemExit(f"连不上 {info.get('name')} 的接口转换网关（{url}）：{exc}。先按 docs/DEPLOY.md 的说明在本机启动网关")
 
 
 def load_token(cfg: RunConfig) -> str:
@@ -406,6 +432,10 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
     playback = Playback(cfg, session, metrics, gate, log=lambda m: print(m, flush=True))
     if playback.collect:
         session.playback = playback
+    live = None
+    metrics.update(live=bool(cfg.live))
+    if cfg.live and session.workspace is not None:
+        live = LiveStatus(session.workspace / "game" / "hud_status.json", metrics).start()
     server = build_server(session, study, gate)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
@@ -454,6 +484,8 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 web_task.cancel()
         playback.close()
+        if live is not None:
+            live.close()
         recording = None
         if recorder:
             try:

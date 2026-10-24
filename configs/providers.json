@@ -1,5 +1,5 @@
 {
-  "_说明": "智能体可以用的模型提供方。所有提供方都用同一套环境：容器里的 Claude Code、同样的工具、提示词、知识库与沙箱；第三方提供方通过它们兼容 Anthropic 的接口接入。密钥不写在这里：放在本机，由 configs/local.providers.json 的 key_file 指向（configs/local* 不入库），或者放在环境变量 key_env 里。 env 里 {model} 是带 model_suffix 的模型名（例如 [1m] 让 Claude Code 按 100 万 token 上下文压缩），{model_base} 不带后缀。",
+  "_说明": "智能体可以用的模型提供方。所有提供方都用同一套环境：容器里的 Claude Code、同样的工具、提示词、知识库与沙箱；第三方提供方通过它们兼容 Anthropic 的接口接入。密钥不写在这里：放在本机，由 configs/local.providers.json 的 key_file 指向（configs/local* 不入库），或者放在环境变量 key_env 里。 env 里 {model} 是带 model_suffix 的模型名（例如 [1m] 让 Claude Code 按 100 万 token 上下文压缩），{model_base} 不带后缀。 第三方提供方可以写 allowed_host_ports：容器还要连宿主机上的这些端口（例如本机的接口转换网关）；status 不是 ready 时主控会提示这个提供方尚未实测；gateway_check 是主控开跑前在本机检查网关是否在运行的地址。",
   "anthropic": {
     "label": "Anthropic（Max 订阅）",
     "auth": "subscription"
@@ -16,6 +16,30 @@
     "model_suffix": "[1m]",
     "images": true,
     "autocompact": "786432",
+    "env": {
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "{model}",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "{model}",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{model_base}",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "{model_base}",
+      "API_TIMEOUT_MS": "600000"
+    },
+    "status": "ready"
+  },
+  "openai": {
+    "label": "OpenAI（GPT）",
+    "status": "未接入：只有接口，尚未实测",
+    "_说明": "Claude Code 只会说 Anthropic Messages 接口，OpenAI 的接口格式不同，所以要在本机运行一个把 Anthropic 接口转成 OpenAI 接口的网关（例如 LiteLLM 代理，见 docs/DEPLOY.md 的 GPT 一节）。网关持有 OpenAI 的密钥；容器只连宿主机上网关的端口，用网关自己的访问密钥（key_env / key_file）。也可以把 base_url 改成别的提供 Anthropic 兼容接口的服务（那时把它的域名写进 allowed_domains、去掉 allowed_host_ports）。",
+    "auth": "api_key",
+    "base_url": "http://host.docker.internal:4000",
+    "allowed_domains": [],
+    "allowed_host_ports": [
+      4000
+    ],
+    "gateway_check": "http://127.0.0.1:4000/health/liveliness",
+    "key_env": "OPENAI_GATEWAY_KEY",
+    "key_file": "",
+    "model_suffix": "",
+    "images": true,
     "env": {
       "ANTHROPIC_DEFAULT_OPUS_MODEL": "{model}",
       "ANTHROPIC_DEFAULT_SONNET_MODEL": "{model}",

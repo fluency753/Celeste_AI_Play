@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import threading
 import time
@@ -173,6 +174,9 @@ class GameSession:
         self.workspace: Path | None = cfg.workspace_dir if cfg.runtime == "container" else None
         if self.workspace:
             (self.workspace / "game" / "rooms").mkdir(parents=True, exist_ok=True)
+            # 给观众看的展示接口（HUD 进度、轨迹记录），每次运行都换成主控这一版；上次运行留下的进度清掉
+            shutil.copyfile(REPO_ROOT / "orchestrator" / "workspace_files" / "show.py", self.workspace / "game" / "show.py")
+            (self.workspace / "game" / "hud_status.json").unlink(missing_ok=True)
 
     # ---- 连接与观测 ----
 

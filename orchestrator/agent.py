@@ -33,6 +33,7 @@ from .kb_study import KbStudy
 from .metrics import Metrics
 
 GAME_TOOLS = ["mcp__celeste__observe", "mcp__celeste__act", "mcp__celeste__set_effort"]
+NARRATE_TOOL = "mcp__celeste__narrate"   # 实时展示开着时才有：更新 HUD 上的思考语句（算思考时间，不算工具）
 # /effort 命令成功时 Claude Code 的回复，例如 "Set effort level to low (this session only): ..."
 EFFORT_OK = re.compile(r"^Set effort level to (\w+)")
 # 额度用完时 Claude Code 给出的提示（没收到 rejected 限额事件时的后备判断），例如
@@ -43,12 +44,14 @@ PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
 
 def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None, pause_limit: bool = False,
-                   rounds_per_room: int = 3, death_bonus: int = 1, playback: bool = False) -> str:
+                   rounds_per_room: int = 3, death_bonus: int = 1, playback: bool = False, live: bool = False) -> str:
     """系统提示词。按预置模拟器的开关分成两个版本（目标都是以最短的章节计时通关）：
     - 开模拟器（默认，容器运行方式）：智能体可以随意调用 /sim 寻找并优化路线；提示词里写明做法、建议的工作方式、
       物理参数简表、规划与优化的要求、自动重试与规划回放（system_sim、container_sim、sim、free/pause、retry、playback）；
     - 关模拟器（--no-sim，或本机运行方式）：不教怎么玩，只写目标、规则（不得调用或破解模拟器、不读游戏程序）与工具接口，
-      其余由智能体自己决定（system_nosim、container_nosim）。"""
+      其余由智能体自己决定（system_nosim、container_nosim）；容器里另有展示接口（show.trajectory），算出的逐帧轨迹
+      可以交给系统画给观众看，只用于展示。
+    实时展示（live，两个版本都适用）：要求思考期间用 narrate 随时更新 HUD 的思考语句、运行程序期间报告进度（live_zh.md）。"""
     interface = (PROMPTS / "interface_zh.md").read_text(encoding="utf-8")
 
     def part(name: str) -> str:
@@ -69,6 +72,8 @@ def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None =
             text += "\n\n" + part("retry_zh.md")
         if playback:
             text += "\n\n" + part("playback_zh.md")
+    if live and runtime == "container":
+        text += "\n\n" + part("live_zh.md")
     if chapters and len(chapters) > 1:
         names = " → ".join(chapter_name_by_id(c) for c in chapters)
         text += ("\n\n# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
@@ -203,7 +208,7 @@ class ClaudeRunner:
             mcp = json.dumps({"mcpServers": {"celeste": {
                 "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
             prompt = compose_prompt("container", self.cfg.sim, self.cfg.chapters, self.cfg.pause_limit,
-                                    self.cfg.rounds_per_room, self.cfg.death_bonus, self.cfg.playback)
+                                    self.cfg.rounds_per_room, self.cfg.death_bonus, self.cfg.playback, self.cfg.live)
             (self.run_dir / "system_prompt.md").write_text(prompt, encoding="utf-8")
             return [
                 find_docker_exe(), "exec", "-i", "-u", "agent", "-w", "/workspace",
@@ -221,7 +226,7 @@ class ClaudeRunner:
                 "--restricted", "--add-dir", "/kb", *(["--add-dir", "/sim"] if self.cfg.sim else []),
                 "--tools", ",".join(CONTAINER_BUILTIN_TOOLS),
                 "--mcp-config", mcp,
-                "--allowedTools", *CONTAINER_BUILTIN_TOOLS, *GAME_TOOLS,
+                "--allowedTools", *CONTAINER_BUILTIN_TOOLS, *self._game_tools(),
                 "--append-system-prompt", prompt,
             ]
         mcp_config = self.run_dir / "mcp.json"
@@ -233,9 +238,12 @@ class ClaudeRunner:
             find_claude_exe(), *self._common_args(),
             "--tools", "",
             "--mcp-config", str(mcp_config),
-            "--allowedTools", *GAME_TOOLS,
+            "--allowedTools", *self._game_tools(),
             "--system-prompt-file", str(prompt_file),
         ]
+
+    def _game_tools(self) -> list[str]:
+        return GAME_TOOLS + ([NARRATE_TOOL] if self.cfg.live else [])
 
     def _allowed_tool(self, name: str) -> bool:
         if name.startswith("mcp__celeste__"):
@@ -555,6 +563,9 @@ class ClaudeRunner:
             if context:
                 self.metrics.update(context_tokens=context)
             for block in message.get("content") or []:
+                if block.get("type") == "tool_use" and block.get("name") == NARRATE_TOOL:
+                    self._tool_calls_this_turn += 1     # 只换 HUD 上的思考语句：算思考时间，不显示在"调用工具"一栏
+                    continue
                 if block.get("type") == "tool_use":
                     self._tool_calls_this_turn += 1
                     # 工具时间从这里开始，到对应的 tool_result 为止（见 metrics.py）
