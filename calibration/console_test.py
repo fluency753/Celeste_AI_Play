@@ -115,6 +115,32 @@ class ConsoleRunsTests(unittest.TestCase):
                 self.assertFalse(console_api.orchestrator_status()["running"])
 
 
+class LaunchFailureTests(unittest.TestCase):
+    def test_interrupted_run_with_exit_code_1_is_not_a_failure(self):
+        from overlay import console_api
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            host = root / "host"
+            host.mkdir()
+            (host / "status.json").write_text(json.dumps({"state": "exited", "exit_code": 1}), encoding="utf-8")
+            (host / "output.log").write_text("Traceback ...", encoding="utf-8")
+            old = root / "runs" / "dev" / "20261024-170000"
+            new = root / "runs" / "dev" / "20261024-180000"
+            for d in (old, new):
+                d.mkdir(parents=True)
+            record = root / "launch.json"
+            record.write_text(json.dumps({"host": str(host), "latest_before": str(old), "wall": time.time()}), encoding="utf-8")
+            with patch.object(console_api, "REPO_ROOT", root), patch.object(console_api, "LAUNCH_RECORD", record), \
+                 patch.object(console_api, "_port_open", return_value=False):
+                (root / "runs" / "latest.txt").write_text(str(old), encoding="utf-8")
+                status = console_api.orchestrator_status()
+                self.assertTrue(status["failed"])                 # 没开出新的运行就退出了
+                self.assertIn("Traceback", status["log_tail"])
+                (root / "runs" / "latest.txt").write_text(str(new), encoding="utf-8")
+                (new / "summary.json").write_text("{}", encoding="utf-8")
+                self.assertFalse(console_api.orchestrator_status()["failed"])   # 中断：写了总结，退出码 1 正常
+
+
 class FakeRunner(SessionControls):
     supports_interrupt = True
 

@@ -622,10 +622,10 @@ async function refreshStatus() {
     ? `游戏冻结在 ${resumable.agent} 停下的地方（章节计时不走）。可以续跑这次运行，或交还控制让游戏恢复正常。`
     : "游戏被接管、停在当前帧（章节计时不走），没有主控在运行。不续跑时交还控制，游戏恢复正常运行。";
   // 启动失败
-  if (!orch.running && orch.host_state === "exited" && orch.host_exit_code && orch.launched_wall
-      && ui.dismissedLaunch !== orch.launched_wall && Date.now() / 1000 - orch.launched_wall < 3600) {
+  if (orch.failed && orch.launched_wall && ui.dismissedLaunch !== orch.launched_wall
+      && Date.now() / 1000 - orch.launched_wall < 3600) {
     $("launchBanner").hidden = false;
-    $("launchText").textContent = `主控启动后退出了（退出码 ${orch.host_exit_code}）。最后几行输出：`;
+    $("launchText").textContent = `主控没能完成这次运行就退出了（退出码 ${orch.host_exit_code ?? "—"}），没有写出运行总结。最后几行输出：`;
     $("launchLog").textContent = orch.log_tail || "";
   }
   updateStartButton();

@@ -65,10 +65,16 @@ def orchestrator_status(mcp_port: int = 47780) -> dict:
     fresh = bool(metrics) and time.time() - (metrics.get("written_wall") or 0) < 15 and not (run / "summary.json").exists()
     host_running = host.get("state") in {"starting", "running"}
     running = _mutex_exists(CONTROLLER_MUTEX) or _port_open(mcp_port) or fresh or host_running
+    # 启动失败：控制台启动的主控退出了，而且没有为这次启动写出运行总结（中断、预算用完等正常结束都会写 summary.json，
+    # 退出码也可能是 1，那不算失败）
+    started_run = run is not None and str(run) != launch.get("latest_before")
+    failed = (bool(launch.get("host")) and not running and host.get("state") in {"exited", "failed"}
+              and (host.get("state") == "failed" or host.get("exit_code") not in (0, None))
+              and not (started_run and (run / "summary.json").exists()))
     return {"running": running, "run": str(run) if run else None, "host": launch.get("host"),
-            "host_state": host.get("state"), "host_exit_code": host.get("exit_code"),
+            "host_state": host.get("state"), "host_exit_code": host.get("exit_code"), "failed": failed,
             "launched": launch.get("argv"), "launched_wall": launch.get("wall"),
-            "log_tail": _tail(Path(launch["host"]) / "output.log") if launch.get("host") and not running else ""}
+            "log_tail": _tail(Path(launch["host"]) / "output.log") if failed else ""}
 
 
 def _tail(path: Path, limit: int = 1600) -> str:
@@ -158,9 +164,11 @@ def _launch(argv: list[str]) -> dict:
     from orchestrator.background import launch
     if orchestrator_status()["running"]:
         raise ValueError("已有主控在运行；先停止它再开新的运行")
+    before = latest_run()
     host, status_ = launch(argv, service="play")
     LAUNCH_RECORD.parent.mkdir(parents=True, exist_ok=True)
-    LAUNCH_RECORD.write_text(json.dumps({"host": str(host), "argv": argv, "wall": time.time()}, ensure_ascii=False),
+    LAUNCH_RECORD.write_text(json.dumps({"host": str(host), "argv": argv, "wall": time.time(),
+                                         "latest_before": str(before) if before else None}, ensure_ascii=False),
                              encoding="utf-8")
     return {"host": str(host), "status": status_}
 
