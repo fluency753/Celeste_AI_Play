@@ -211,7 +211,11 @@ internal static class RecordingAudio {
             Check(lowLevel.setOutput(OUTPUTTYPE.NOSOUND_NRT));
             Check(lowLevel.setSoftwareFormat(48000, SPEAKERMODE.STEREO, 0));
             Check(lowLevel.setDSPBufferSize(Samples, 2));
-            Check(system.initialize(256, FMOD.Studio.INITFLAGS.SYNCHRONOUS_UPDATE, FMOD.INITFLAGS.NORMAL, IntPtr.Zero));
+            // Streams and asset loading are driven from update, not from FMOD's background threads: the mixer runs
+            // in movie time (one update per recorded frame), so a stream thread working in wall time can starve it
+            // (music dropouts) and makes the two tracks differ. Driven from update, the output is deterministic.
+            Check(system.initialize(256, FMOD.Studio.INITFLAGS.SYNCHRONOUS_UPDATE | FMOD.Studio.INITFLAGS.LOAD_FROM_UPDATE,
+                FMOD.INITFLAGS.STREAM_FROM_UPDATE, IntPtr.Zero));
             Check(lowLevel.getDSPBufferSize(out uint size, out _));
             if (size != Samples) throw new InvalidOperationException("FMOD changed the recording block size");
             foreach (string file in new[] { "Master Bank.bank", "Master Bank.strings.bank", "music.bank", "dlc_music.bank", "sfx.bank", "dlc_sfx.bank", "ui.bank" }) {

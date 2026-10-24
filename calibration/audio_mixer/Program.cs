@@ -9,7 +9,9 @@ Check(FMOD.Studio.System.create(out var live)); live.getLowLevelSystem(out var c
 Check(core.setOutput(FMOD.OUTPUTTYPE.NOSOUND_NRT)); Check(core.setSoftwareFormat(48000,FMOD.SPEAKERMODE.STEREO,0));Check(core.setDSPBufferSize(800,2));
 Check(live.initialize(256,FMOD.Studio.INITFLAGS.SYNCHRONOUS_UPDATE,FMOD.INITFLAGS.NORMAL,IntPtr.Zero));
 foreach(var f in new[]{"Master Bank.bank","Master Bank.strings.bank","music.bank","ui.bank"})Check(live.loadBankFile(Path.Combine(game,"Content","FMOD","Desktop",f),FMOD.Studio.LOAD_BANK_FLAGS.NORMAL,out var bank));
-Check(live.getEvent("event:/music/lvl0/intro",out var desc)); Check(desc.createInstance(out var music));Check(music.start()); for(int i=0;i<30;i++)live.update();
+Check(live.getEvent("event:/music/lvl0/intro",out var desc)); Check(desc.createInstance(out var music));Check(music.start());
+// Start recording 5 s into the music (past the quiet intro), like a recording started mid-level. WARM overrides the frame count.
+int warm=int.Parse(Environment.GetEnvironmentVariable("WARM")??"300"); for(int i=0;i<warm;i++)live.update();
 RecordingAudio.Load();
 try {
 RecordingAudio.Start(live,Path.Combine(game,"Content","FMOD","Desktop"),47876);
@@ -23,11 +25,11 @@ object Mixer(string name)=>typeof(RecordingAudio).GetField(name,flags)!.GetValue
 FMOD.Studio.EventInstance CopyOf(string mixer,FMOD.Studio.EventInstance live){
     var pairs=(System.Collections.IDictionary)Mixer(mixer).GetType().GetField("Pairs")!.GetValue(Mixer(mixer))!;
     var pair=pairs[live.getRaw()]!; return (FMOD.Studio.EventInstance)pair.GetType().GetProperty("Copy")!.GetValue(pair)!;}
-double energy=0, playEnergy=0;
+double energy=0, playEnergy=0; int firstAudible=-1;
 // Optional second argument exports the continuous PCM (full track) for tools/check_recording_audio.py.
 using var capturedPcm = args.Length > 1 ? new MemoryStream() : null;
 for(int i=1;i<=120;i++) { live.update(); RecordingAudio.Advance(); RecordingAudio.Publish(i,false);
-    var pcm=ReadBlock(i,0); energy+=Energy(pcm); playEnergy+=Energy(ReadBlock(i,1));
+    var pcm=ReadBlock(i,0); energy+=Energy(pcm); playEnergy+=Energy(ReadBlock(i,1)); if(firstAudible<0&&Energy(pcm)>0)firstAudible=i;
     if(view.ReadInt32(64L+i*Slot+12)!=0)throw new Exception("Real frame marked as replay");
     var bytes=new byte[Block];Buffer.BlockCopy(pcm,0,bytes,0,Block);capturedPcm?.Write(bytes); }
 if (capturedPcm != null) {
@@ -40,7 +42,11 @@ if (capturedPcm != null) {
     wav.Write(System.Text.Encoding.ASCII.GetBytes("data")); wav.Write(pcm.Length); wav.Write(pcm);
     Console.WriteLine("PCM WAV: " + args[1]);
 }
-Console.WriteLine($"ERROR={RecordingAudio.Error ?? "none"} ENERGY full={energy} play={playEnergy}");
+Console.WriteLine($"ERROR={RecordingAudio.Error ?? "none"} ENERGY full={energy} play={playEnergy} FIRST_AUDIBLE_FRAME={firstAudible}");
+// Both mixers render the same real frames from the same state: identical output (streams are driven from update, so no
+// wall-clock stream thread can starve one of them). The seeded music needs a few blocks to seek into its stream.
+if(energy!=playEnergy)throw new Exception("The two tracks differ on real frames (stream not driven from update?)");
+if(warm>=300&&(firstAudible<1||firstAudible>15))throw new Exception($"Seeded music took {firstAudible} frames to start");
 var copy=CopyOf("play",music); var fullCopy=CopyOf("full",music);
 copy.getTimelinePosition(out var before); fullCopy.getTimelinePosition(out var fullBefore);
 for(int i=0;i<120;i++)live.update();
