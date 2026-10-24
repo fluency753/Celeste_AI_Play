@@ -16,8 +16,9 @@ from orchestrator.playback import Playback
 from orchestrator.recording import Recorder, options_from
 
 
-def check_tracks(directory: Path, recording: dict) -> dict:
-    """独立游戏音频（game_nrt）的两条音轨：完整版每个成片帧 800 个样本、回放帧里有音乐；纯享版只有游玩帧、纯享版用它。"""
+def check_tracks(directory: Path, recording: dict, hello: dict) -> dict:
+    """独立游戏音频（game_nrt）的两条音轨：完整版每个成片帧 800 个样本，回放期间音乐继续走（完整版的音乐位置比纯享版
+    多出回放的长度）；纯享版只有游玩帧、纯享版用它。回放帧不要求有声：序章刚进关时音乐开头是一段安静的前奏。"""
     if (recording.get("options") or {}).get("audio_source") != "game_nrt":
         return {"audio_source": (recording.get("options") or {}).get("audio_source")}
     import numpy as np
@@ -34,11 +35,14 @@ def check_tracks(directory: Path, recording: dict) -> dict:
     replay = full[ticks < 0]
     rms = lambda blocks: float(np.sqrt(np.mean(np.square(blocks)))) if blocks.size else 0.0
     silent = int((np.abs(replay).max(axis=(1, 2)) == 0).sum()) if replay.size else 0
-    assert rms(replay) > 1e-4, "完整版音轨的规划回放帧里没有音乐"
-    assert silent == 0, f"完整版音轨有 {silent} 个回放帧是静音"
+    full_ms, play_ms = hello.get("record_music_full_ms"), hello.get("record_music_ms")
+    expected = int((ticks < 0).sum()) * 1000 / 60
+    if full_ms is not None and play_ms is not None:   # 有音乐时：回放期间完整版的音乐继续走，纯享版不走
+        assert abs((full_ms - play_ms) - expected) < 60, f"完整版音乐领先 {full_ms - play_ms} 毫秒，回放 {expected:.0f} 毫秒"
     assert recording["pure"].get("audio") == "audio_play.wav", recording["pure"]
     return {"full_frames": len(full), "play_frames": len(play), "replay_frames": int((ticks < 0).sum()),
-            "replay_rms": round(rms(replay), 5), "play_rms": round(rms(play), 5), "pure_audio": recording["pure"]["audio"]}
+            "replay_silent_frames": silent, "replay_rms": round(rms(replay), 5), "play_rms": round(rms(play), 5),
+            "music_full_ms": full_ms, "music_play_ms": play_ms, "pure_audio": recording["pure"]["audio"]}
 
 
 def main() -> None:
@@ -78,6 +82,7 @@ sim.close()
         assert frozen["frame"] == before["frame"], "规划回放推进了游戏"
         assert frozen["player"]["pos"] == before["player"]["pos"], "规划回放改变了角色位置"
         session.act(["20"], "回放完成，检查真实动作和纯享版录像。", None)
+        hello = session.bridge_call("hello")   # 录像两条音轨里音乐走到的位置（停止录制前）
         recording = recorder.stop()
         check = recording["check"]
         assert recording["state"] == "finished", recording
@@ -85,7 +90,7 @@ sim.close()
         assert check["missing_frames"] == 0 and check["repeats"] == 0, check
         assert recording["pure"]["state"] == "finished", recording["pure"]
         assert recording["pure"]["frames"] == 20, recording["pure"]
-        audio = check_tracks(Path(recording["dir"]), recording)
+        audio = check_tracks(Path(recording["dir"]), recording, hello)
         summary = {"playback": True, "rollouts": metrics.state.sim_rollouts,
                    "game_unchanged_during_playback": True, "audio": audio, "recording": recording}
         (run_dir / "check.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
