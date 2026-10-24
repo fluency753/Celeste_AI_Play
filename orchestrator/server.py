@@ -10,7 +10,7 @@ from .game_session import ActError, GameSession
 from .kb_study import KbStudy
 from .observation import describe_attempts, describe_obs, describe_step, room_json, upscale_png
 
-ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图与整个房间的实体和字符地图，其余时候只给文字状态与画面附近的信息。
+ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图、整个房间的字符地图与精确数据（JSON；房间信息以精确数据为准，截图仅作参考），其余时候只给文字状态与画面附近的信息。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
   按键：L R U D 方向，J 跳，X 冲刺，Z crouch dash，G 抓墙，T 交互；K、Y、V 是第二个跳、冲刺、crouch dash 键
@@ -31,7 +31,10 @@ stop_on：提前停下的条件，可选 death room uncontrollable land refill c
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json）"
 SIM_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
-OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图，以及整个房间的实体与字符地图。act 的返回已经包含最新状态，只在需要重新看画面或整个房间时调用。"
+OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图，以及整个房间的字符地图与精确数据（JSON；房间信息以精确数据为准，截图仅作参考）。act 的返回已经包含最新状态，只在需要重新看画面或整个房间时调用。"
+
+# 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
+ROOM_JSON_HEADER = "整个房间的精确数据（像素坐标；房间信息以此为准，截图与字符地图仅作参考）：\n"
 
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
@@ -135,7 +138,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if image and session.cfg.images:
                     content.append(Image(data=upscale_png(image), format="png"))
                 content.append(describe_obs(obs, full_room=True, effort=header_line())
-                               + "\n\n整个房间的精确数据（像素坐标）：\n" + room_json(obs)
+                               + "\n\n" + ROOM_JSON_HEADER + room_json(obs)
                                + ("\n" + ws_note if session.workspace else ""))
                 return content
             finally:
@@ -170,10 +173,10 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 new_room = room_key(outcome.obs) != state["described_room"]
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
-                    parts.append("【进入新房间】下面是新房间的截图、整个房间的字符地图，以及整个房间的精确数据（JSON）。")
+                    parts.append("【进入新房间】下面是新房间的截图、整个房间的字符地图，以及整个房间的精确数据（JSON）。房间信息以精确数据为准，截图仅作参考。")
                 parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line()))
                 if new_room:
-                    parts.append("整个房间的精确数据（像素坐标）：\n" + room_json(outcome.obs))
+                    parts.append(ROOM_JSON_HEADER + room_json(outcome.obs))
                 if session.workspace:
                     parts.append(ws_note)
                 content: list = []
