@@ -62,6 +62,8 @@ internal static class RecordingAudio {
         AddHook(nameof(EventInstance.setTimelinePosition), nameof(OnSeek));
         Hooks.Add(new Hook(typeof(Bus).GetMethod(nameof(Bus.stopAllEvents))!,
             typeof(RecordingAudio).GetMethod(nameof(OnBusStop), BindingFlags.NonPublic | BindingFlags.Static)!));
+        Hooks.Add(new Hook(typeof(Bus).GetMethod(nameof(Bus.setPaused))!,
+            typeof(RecordingAudio).GetMethod(nameof(OnBusPause), BindingFlags.NonPublic | BindingFlags.Static)!));
     }
 
     private static void AddHook(string method, string handler) => Hooks.Add(new Hook(
@@ -91,7 +93,7 @@ internal static class RecordingAudio {
                 source = live;
                 full = new Mixer("full");
                 play = new Mixer("play");
-                foreach (Mixer mixer in Mixers) mixer.Open(bankDirectory);
+                foreach (Mixer mixer in Mixers) { mixer.Open(bankDirectory); mixer.SeedBusPause(live); }
                 Check(live.getBankList(out Bank[] banks));
                 foreach (Bank bank in banks) {
                     if (bank.getEventList(out EventDescription[] events) != RESULT.OK) continue;
@@ -289,6 +291,24 @@ internal static class RecordingAudio {
             if (Pairs.TryGetValue(live.getRaw(), out Pair? pair)) pair.Copy.setTimelinePosition(position);
         }
 
+        public void PauseBus(Bus live, bool paused) {
+            if (studio != null && live.getID(out Guid id) == RESULT.OK && studio.getBusByID(id, out Bus copy) == RESULT.OK)
+                copy.setPaused(paused);
+        }
+
+        /// <summary>Bus pause state when recording starts; after that every setPaused is mirrored as it is issued
+        /// (see OnBusPause). Polling getPaused each frame is not enough: the live system runs asynchronously and
+        /// reports the state of its last processed update, so right after the bridge resumes the game (master and
+        /// SFX buses unpaused this tick) it still reads paused and the first frame after a pause came out silent.</summary>
+        public void SeedBusPause(FMOD.Studio.System live) {
+            if (studio == null || live.getBankList(out Bank[] banks) != RESULT.OK) return;
+            foreach (Bank bank in banks) {
+                if (bank.getBusList(out Bus[] buses) != RESULT.OK) continue;
+                foreach (Bus bus in buses)
+                    if (bus.getPaused(out bool paused) == RESULT.OK) PauseBus(bus, paused);
+            }
+        }
+
         public void StopBus(Bus live, STOP_MODE mode) {
             if (studio != null && live.getID(out Guid id) == RESULT.OK && studio.getBusByID(id, out Bus copy) == RESULT.OK)
                 copy.stopAllEvents(mode);
@@ -322,7 +342,7 @@ internal static class RecordingAudio {
                     if (bus.getID(out Guid id) != RESULT.OK || studio.getBusByID(id, out Bus copy) != RESULT.OK) continue;
                     if (bus.getVolume(out float volume, out _) == RESULT.OK) copy.setVolume(volume);
                     if (bus.getMute(out bool mute) == RESULT.OK) copy.setMute(mute);
-                    if (bus.getPaused(out bool paused) == RESULT.OK) copy.setPaused(paused);
+                    // pause state is mirrored as it is set (OnBusPause), not polled here
                 }
             }
         }
@@ -366,6 +386,11 @@ internal static class RecordingAudio {
     private delegate RESULT StopCall(EventInstance self, STOP_MODE mode);
     private delegate RESULT SeekCall(EventInstance self, int position);
     private delegate RESULT BusStopCall(Bus self, STOP_MODE mode);
+    private delegate RESULT BusPauseCall(Bus self, bool paused);
+    private static RESULT OnBusPause(BusPauseCall orig, Bus self, bool paused) {
+        Mirror(m => m.PauseBus(self, paused));
+        return orig(self, paused);
+    }
     private static RESULT OnBusStop(BusStopCall orig, Bus self, STOP_MODE mode) {
         Mirror(m => m.StopBus(self, mode));
         return orig(self, mode);

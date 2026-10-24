@@ -64,7 +64,18 @@ var fullStudio=(FMOD.Studio.System)Mixer("full").GetType().GetField("studio",Sys
 bool sfxPaused = fullStudio.getBus("bus:/ui_sfx",out var copyBus)!=FMOD.RESULT.OK || (copyBus.getPaused(out var p)==FMOD.RESULT.OK && p);
 Console.WriteLine($"REPLAY full energy={replayEnergy} play energy={replayPlay} full {fullBefore}->{fullAfterReplay} ms, play {after}->{afterReplay} ms, sfx paused={sfxPaused}");
 if(replayEnergy<=0||replayPlay!=0||afterReplay!=after||fullAfterReplay-fullBefore<900||!sfxPaused||RecordingAudio.ReplayFrames!=60)throw new Exception("Replay tracks failed");
-foreach(var bus in new[]{"bus:/gameplay_sfx","bus:/ui_sfx","bus:/music/stings"}) if(live.getBus(bus,out var b)==FMOD.RESULT.OK)b.setPaused(false);
+// Replay -> frozen (master paused, nothing rendered) -> resume: the first real frame must have sound. Bus pauses are
+// mirrored as they are issued (the live game's async getters lag one update, which made this frame silent).
+string[] sfxBuses={"bus:/gameplay_sfx","bus:/ui_sfx","bus:/music/stings"};
+foreach(var bus in sfxBuses) if(live.getBus(bus,out var b)==FMOD.RESULT.OK)b.setPaused(true);
+for(int i=200;i<210;i++){RecordingAudio.AdvanceReplay();RecordingAudio.Publish(i,true);}
+Check(live.getBus("bus:/",out var masterBus)); Check(masterBus.setPaused(true));
+var fullMaster=fullStudio.getBus("bus:/",out var fm)==FMOD.RESULT.OK&&fm.getPaused(out var fmp)==FMOD.RESULT.OK&&fmp;
+foreach(var bus in sfxBuses) if(live.getBus(bus,out var b)==FMOD.RESULT.OK)b.setPaused(false);
+Check(masterBus.setPaused(false));
+RecordingAudio.Advance();RecordingAudio.Publish(210,false);
+Console.WriteLine($"SEAM mirrored master pause={fullMaster} first real frame after replay: full={Energy(ReadBlock(210,0))} play={Energy(ReadBlock(210,1))}");
+if(!fullMaster||Energy(ReadBlock(210,0))<=0||Energy(ReadBlock(210,1))<=0)throw new Exception("First real frame after a replay and a pause is silent");
 // A replay token published without a rendered block must be silence, never a repeated block.
 RecordingAudio.Publish(181,true); if(Energy(ReadBlock(181,0))!=0)throw new Exception("Stale block was repeated");
 // New one-shot events must be copied even when the game immediately releases them.
