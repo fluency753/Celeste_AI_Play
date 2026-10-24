@@ -77,8 +77,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="（--limit-planning 时）一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 3，至少 3）；大房间按 --room-scale 放大")
     ap.add_argument("--room-scale", type=float, default=2.0,
                     help="房间的长、高每变成这么多倍，存入的轮次乘这么多（默认 2，即与面积成正比），向上取整")
-    ap.add_argument("--no-playback", action="store_true",
-                    help="不把推演过的路线画进游戏（规划回放：开模拟器时画 /sim 的推演，关模拟器时画智能体用 show.trajectory 记下的轨迹）")
+    ap.add_argument("--playback", dest="playback", action="store_true", default=None,
+                    help="规划回放（默认开启，写不写都一样）：把推演过的路线按轮画进游戏给观众看（开模拟器时画 /sim 的推演，"
+                         "关模拟器时画智能体用 show.trajectory() 交来的轨迹）；回放不推进游戏、不计章节计时")
+    ap.add_argument("--no-playback", dest="playback", action="store_false",
+                    help="关闭规划回放：不把推演过的路线画进游戏")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
     ap.add_argument("--no-hud-window", action="store_true",
                     help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
@@ -131,6 +134,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             args.live = bool(state.get("live", True))
         if args.record is None:
             args.record = bool(state.get("record", True))
+        if args.playback is None:
+            args.playback = bool(state.get("playback", True))
         args.skip_enter = True
         args.no_study = True
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort, provider=args.provider,
@@ -156,7 +161,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.pause_limit = bool(args.limit_planning) and not args.free_planning
     cfg.rounds_per_room = max(1, args.rounds_per_room)
     cfg.room_scale = max(1.0, args.room_scale)
-    cfg.playback = not args.no_playback
+    cfg.playback = args.playback is not False   # 默认开启
     cfg.live = args.live is not False     # 默认开启
     args.record = args.record is not False  # 默认开启
     cfg.record = args.record
@@ -203,7 +208,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
     state = {"agent": cfg.agent, "save": cfg.save, "model": cfg.model, "provider": cfg.provider,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes,
-             "runtime": cfg.runtime, "sim": cfg.sim, "live": cfg.live, "record": cfg.record, "all_chapters": all_chapters, "session_id": session_id,
+             "runtime": cfg.runtime, "sim": cfg.sim, "live": cfg.live, "record": cfg.record, "playback": cfg.playback, "all_chapters": all_chapters, "session_id": session_id,
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
