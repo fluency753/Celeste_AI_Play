@@ -38,6 +38,7 @@ OBS_DECLARE_MODULE()
 #define ONSET_SILENCE 240            /* 边之前至少 5 ms（48 kHz 下 240 个样本）完全静音 */
 #define ONSET_THRESHOLD 1e-5f
 #define OFFSET_HISTORY 5
+#define SEAM_TRUST_NS 20e6           /* 20 ms：这一段量到的延迟与中位数相差不超过它就直接用 */
 
 /* ------------------------------------------------------------------ 连接与锁步状态 */
 
@@ -640,7 +641,9 @@ static bool resolve_segment(struct gp_output *o, struct segment *sg, uint32_t se
 	} else {
 		sg->state = SEG_FALLBACK;
 	}
-	sg->offset_ns = o->cur_offset_ns;
+	/* 这一段量到的值与最近几次的中位数相差不大（FMOD 混音按块生效，每段差几毫秒）时直接用它，恢复的那一刻正好落在
+	 * 第一帧开头；差得多（误把别的声音当成恢复的边）时用中位数 */
+	sg->offset_ns = r == 1 && fabs(sg->measured_ns - o->cur_offset_ns) <= SEAM_TRUST_NS ? sg->measured_ns : o->cur_offset_ns;
 	if (o->seg_csv) {
 		if (r == 1)
 			fprintf(o->seg_csv, "%u,%lld,%llu,%.2f,%.2f,measured\n", seg_index, sg->first_index,
