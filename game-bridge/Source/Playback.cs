@@ -25,12 +25,24 @@ namespace CelesteAI.Bridge;
 /// - 刚进章节时圆圈转场（Level.Wipe）还没放完：回放帧先把转场放完（只是画面效果：转场只影响能不能暂停），
 ///   黑屏消失之后才开始画线；
 /// - 回放帧里音乐照常播放、音效暂停（见 Bridge.UpdateAudio）。
-/// 录制时每个回放帧照常回复 OBS 插件，章节计时记为 -1，声音保持冻结。
+/// 录制时每个回放帧照常回复 OBS 插件，章节计时记为 -1。
+///
+/// 画得快：一轮常有两三千条线，逐条逐段每帧重画一遍要 20 ms 以上，跟不上 60 帧（录像里回放时的音乐会被跳掉一截）。
+/// 所以不再变化的线画进三张缓存层（世界坐标的渲染目标，覆盖整个房间，渲染开始前更新）：
+/// - 历史层：前几轮的淡灰线，每轮只合进来一次；
+/// - 本轮层：其他与出口路线走过的每一段（一段只画一次），死亡路线变完红之后整条画进来；
+/// - 灰色层：这一轮开始转灰时把整轮画成淡灰，转灰期间两层交叉淡化，放完直接合进历史层。
+/// 每帧只重画还在延伸的那一小段、还没变完色的死亡路线和金色路线。每段线按预先算好的方向与长度画，不再每帧算三角函数。
+/// 房间大到建不了缓存层（超过 4096 像素）时退回逐条重画。
 /// </summary>
 internal static class Playback {
     private sealed class Track {
         public float[] F = Array.Empty<float>();       // 每个点的帧号（共线的点已合并）
         public Vector2[] P = Array.Empty<Vector2>();
+        public float[] Ang = Array.Empty<float>();     // 第 i 段（P[i-1] → P[i]）的方向
+        public float[] Len = Array.Empty<float>();     // 第 i 段的长度
+        public int Baked;                              // 已经画进本轮层的点（其他与出口路线：第 1～Baked 段）
+        public bool Settled;                           // 死亡路线变完红之后整条画进了本轮层
         public int Kind;                               // 0 其他、1 死亡、2 出口、3 最快
         public int Delay;                              // 第几个画面帧开始出现
         public int Cursor;
@@ -62,6 +74,21 @@ internal static class Playback {
     private static bool camValid, returnStarted;
     private static Vector2 savedCam, savedPreShake;
     private static bool swapped;
+
+    // 缓存层（见文件头）
+    private const int LayerMargin = 16, MaxLayerSize = 4096;
+    private static RenderTarget2D? historyRt, roundRt, grayRt;
+    private static Rectangle area;                         // 缓存层覆盖的世界范围（房间范围外加一圈）
+    private static bool layersReady;                       // 这一帧的缓存层已经更新好（渲染开始前更新，渲染完复位）
+    private static bool layersBroken;                      // 建渲染目标失败过：以后一直逐条重画
+    private static int historyDrawn;                       // History 里已经画进历史层的条数
+    private static bool historyClear = true, roundClear = true, grayReady;
+    private static int mergeUpTo = -1;                     // 灰色层里的整轮待合进历史层：合完之后 historyDrawn = mergeUpTo
+    // 渲染用时（回放帧整帧渲染，含游戏本身），回复主控时报告
+    private static readonly System.Diagnostics.Stopwatch RenderWatch = new();
+    private static double renderTotalMs, renderMaxMs;
+    private static int renderFrames;
+    private static bool timing;
 
     public static bool Running => running;
     public static long StepCount;                          // 画过的回放帧数（桥接据此在回放时放音乐）
@@ -104,6 +131,10 @@ internal static class Playback {
         returnStarted = false;
         frame = 0;
         requestId = id;
+        roundClear = true;
+        grayReady = false;
+        renderTotalMs = renderMaxMs = 0;
+        renderFrames = 0;
         running = true;
         return null;
     }
@@ -112,11 +143,20 @@ internal static class Playback {
     public static void Finish() {
         if (!running) return;
         running = false;
+        int before = History.Count;
         History.AddRange(Tracks);
+        // 灰色层里已经是这一轮的淡灰线：下一次渲染前整张合进历史层（不用再逐条画）
+        mergeUpTo = grayReady && historyDrawn == before ? History.Count : -1;
+        grayReady = false;
         Tracks.Clear();
         if (returnFrames > 0) cam = realCam;
         int drawn = frame;
-        IpcServer.Send(Reply.Ok(requestId, w => w.WriteNumber("frames", drawn)));
+        double avg = renderFrames > 0 ? renderTotalMs / renderFrames : 0, max = renderMaxMs;
+        IpcServer.Send(Reply.Ok(requestId, w => {
+            w.WriteNumber("frames", drawn);
+            w.WriteNumber("render_avg_ms", Math.Round(avg, 2));
+            w.WriteNumber("render_max_ms", Math.Round(max, 2));
+        }));
     }
 
     /// <summary>真实执行开始：清掉历史线，镜头还给游戏（金色参考线留到这次执行结束）。</summary>
@@ -125,12 +165,16 @@ internal static class Playback {
         overlay = false;
         camValid = false;
         History.Clear();
+        historyDrawn = 0;
+        historyClear = true;
+        mergeUpTo = -1;
     }
 
     public static void Reset() {
         running = false;
         Tracks.Clear();
         EndOverlay();
+        DisposeLayers();
     }
 
     // ---- 每个回放帧 ----
@@ -200,6 +244,9 @@ internal static class Playback {
     /// <summary>Celeste.RenderCore 之前：换上回放镜头与单独的随机数（回放进行中与两轮之间；观测截图的那一帧除外）。</summary>
     public static void BeforeRender() {
         if (!Showing || Engine.Scene is not Level level) return;
+        timing = running;
+        if (timing) RenderWatch.Restart();
+        layersReady = UpdateLayers(level);
         savedCam = level.Camera.Position;
         savedPreShake = level.cameraPreShake;
         level.Camera.Position = cam;
@@ -209,6 +256,14 @@ internal static class Playback {
 
     /// <summary>Celeste.RenderCore 之后：原样换回镜头与随机数。</summary>
     public static void AfterRender() {
+        layersReady = false;
+        if (timing) {
+            timing = false;
+            double ms = RenderWatch.Elapsed.TotalMilliseconds;
+            renderTotalMs += ms;
+            renderFrames++;
+            if (ms > renderMaxMs) renderMaxMs = ms;
+        }
         if (!swapped) return;
         swapped = false;
         Calc.PopRandom();
@@ -228,7 +283,11 @@ internal static class Playback {
             DepthStencilState.None, RasterizerState.CullNone, null, camera.Matrix);
         try {
             if (drawOverlay) {
-                foreach (Track t in History) DrawRange(t, 0f, t.Last, t.Faded);
+                if (layersReady && historyDrawn == History.Count) {
+                    if (History.Count > 0) Draw.SpriteBatch.Draw(historyRt, new Vector2(area.X, area.Y), Color.White);
+                } else {
+                    foreach (Track t in History) DrawRange(t, 0f, t.Last, t.Faded);
+                }
             }
             if (running) {
                 DrawTracks();
@@ -239,9 +298,15 @@ internal static class Playback {
     }
 
     private static void DrawTracks() {
-        // 这一轮的最后 fade 帧：所有线转成淡灰（之后留在历史层），标记与幽灵淡出
+        // 这一轮的最后 fade 帧：所有线转成淡灰（之后留在历史层），标记淡出
         float toGray = fade > 0 && frame > frames - fade ? Math.Clamp((frame - (frames - fade)) / (float) fade, 0f, 1f) : 0f;
         float keep = 1f - toGray;
+        bool layers = layersReady;
+        if (layers) {
+            // 不再变化的线在缓存层里；转灰期间本轮层淡出、灰色层淡入
+            if (toGray > 0f && grayReady) Draw.SpriteBatch.Draw(grayRt, new Vector2(area.X, area.Y), Color.White * toGray);
+            if (keep > 0f) Draw.SpriteBatch.Draw(roundRt, new Vector2(area.X, area.Y), Color.White * keep);
+        }
         // 先画淡色的，金色的一条最后画（压在上面）
         for (int pass = 0; pass < 2; pass++) {
             foreach (Track t in Tracks) {
@@ -251,16 +316,21 @@ internal static class Playback {
                 if (l <= 0f) continue;
                 float shown = Math.Min(l, t.Last);
                 Color green = Color.Lerp(Green * (GreenAlpha * dim), t.Faded, toGray);
-                // 走到头之后：死亡变红、金色变金，从终点往起点每个画面帧传导 recolor 帧
-                float since = frame - t.FinishAt;
-                float back = since > 0f && (best || t.Kind == 1) ? since * recolor : 0f;
-                if (back <= 0f) {
-                    DrawRange(t, 0f, shown, green);
-                } else {
-                    float split = Math.Max(0f, t.Last - back);
-                    DrawRange(t, 0f, split, green);
-                    Color done = best ? Gold : Red * (RedAlpha * dim);
-                    DrawRange(t, split, t.Last, Color.Lerp(done, t.Faded, toGray));
+                if (layers && t.Kind is 0 or 2) {
+                    // 画进本轮层的段之后：还在延伸的那一小段
+                    DrawRange(t, t.F[t.Baked], shown, green, t.Baked + 1);
+                } else if (!(layers && t.Settled)) {
+                    // 走到头之后：死亡变红、金色变金，从终点往起点每个画面帧传导 recolor 帧
+                    float since = frame - t.FinishAt;
+                    float back = since > 0f && (best || t.Kind == 1) ? since * recolor : 0f;
+                    if (back <= 0f) {
+                        DrawRange(t, 0f, shown, green);
+                    } else {
+                        float split = Math.Max(0f, t.Last - back);
+                        DrawRange(t, 0f, split, green);
+                        Color done = best ? Gold : Red * (RedAlpha * dim);
+                        DrawRange(t, split, t.Last, Color.Lerp(done, t.Faded, toGray));
+                    }
                 }
                 if (keep <= 0.01f) continue;
                 (Vector2 head, _) = Head(t, shown);
@@ -279,18 +349,143 @@ internal static class Playback {
         }
     }
 
-    /// <summary>画路线在帧号 [from, to] 之间的一段（两端按帧号插值）。</summary>
-    private static void DrawRange(Track t, float from, float to, Color color) {
+    /// <summary>画路线在帧号 [from, to] 之间的一段（两端按帧号插值），从第 start 段开始找。</summary>
+    private static void DrawRange(Track t, float from, float to, Color color, int start = 1) {
         if (t.P.Length < 2 || to <= from) return;
-        for (int i = 1; i < t.P.Length; i++) {
+        for (int i = Math.Max(1, start); i < t.P.Length; i++) {
             float f0 = t.F[i - 1], f1 = t.F[i];
             if (f1 <= from) continue;
             if (f0 >= to) break;
+            float len = t.Len[i];
+            if (len <= 0f) continue;
             float span = Math.Max(1e-3f, f1 - f0);
-            Vector2 p0 = f0 >= from ? t.P[i - 1] : Vector2.Lerp(t.P[i - 1], t.P[i], (from - f0) / span);
-            Vector2 p1 = f1 <= to ? t.P[i] : Vector2.Lerp(t.P[i - 1], t.P[i], (to - f0) / span);
-            Draw.Line(p0 + Lift, p1 + Lift, color);
+            float u0 = f0 >= from ? 0f : (from - f0) / span;
+            float u1 = f1 <= to ? 1f : (to - f0) / span;
+            if (u1 <= u0) continue;
+            Vector2 p0 = u0 <= 0f ? t.P[i - 1] : Vector2.Lerp(t.P[i - 1], t.P[i], u0);
+            Draw.LineAngle(p0 + Lift, t.Ang[i], len * (u1 - u0), color);
         }
+    }
+
+    // ---- 缓存层 ----
+
+    /// <summary>渲染开始前（还没有绑定任何渲染目标）更新缓存层；返回这一帧能不能用缓存层。</summary>
+    private static bool UpdateLayers(Level level) {
+        if (!EnsureLayers(level)) return false;
+        GraphicsDevice device = Engine.Instance.GraphicsDevice;
+        bool bound = false;
+        try {
+            // 历史层：真实执行开始后清空；上一轮的灰色层整张合进来；其余（没有灰色层的轮）逐条补画
+            bool historyWork = historyClear || mergeUpTo >= 0 || historyDrawn < History.Count;
+            if (historyWork) {
+                BeginLayer(device, historyRt!, historyClear);
+                bound = true;
+                historyClear = false;
+                if (mergeUpTo >= 0) {
+                    Draw.SpriteBatch.Draw(grayRt, new Vector2(area.X, area.Y), Color.White);
+                    historyDrawn = Math.Min(mergeUpTo, History.Count);
+                    mergeUpTo = -1;
+                }
+                for (; historyDrawn < History.Count; historyDrawn++) {
+                    Track t = History[historyDrawn];
+                    DrawRange(t, 0f, t.Last, t.Faded);
+                }
+                Draw.SpriteBatch.End();
+            }
+            if (!running) return true;
+            // 本轮层：其他与出口路线走过的每一段画一次；死亡路线变完红后整条画一次
+            BeginLayer(device, roundRt!, roundClear);
+            bound = true;
+            if (roundClear) {
+                roundClear = false;
+                foreach (Track t in Tracks) {
+                    t.Baked = 0;
+                    t.Settled = false;
+                }
+            }
+            Color green = Green * (GreenAlpha * dim), red = Red * (RedAlpha * dim);
+            foreach (Track t in Tracks) {
+                float l = (frame - t.Delay) * speed;
+                if (l <= 0f || t.P.Length < 2) continue;
+                if (t.Kind is 0 or 2) {
+                    int from = t.Baked;
+                    while (t.Baked + 1 < t.P.Length && t.F[t.Baked + 1] <= l) t.Baked++;
+                    if (t.Baked > from) DrawRange(t, t.F[from], t.F[t.Baked], green, from + 1);
+                } else if (t.Kind == 1 && !t.Settled && (frame - t.FinishAt) * recolor >= t.Last) {
+                    DrawRange(t, 0f, t.Last, red);
+                    t.Settled = true;
+                }
+            }
+            Draw.SpriteBatch.End();
+            // 灰色层：这一轮开始转灰时整轮画一次淡灰
+            bool graying = fade > 0 && frame > frames - fade;
+            if (graying && !grayReady) {
+                BeginLayer(device, grayRt!, true);
+                foreach (Track t in Tracks) DrawRange(t, 0f, t.Last, t.Faded);
+                Draw.SpriteBatch.End();
+                grayReady = true;
+            }
+            return true;
+        } catch (Exception e) {
+            Log.Info($"playback layers failed, falling back to direct drawing: {e.Message}");
+            layersBroken = true;
+            DisposeLayers();
+            return false;
+        } finally {
+            if (bound) device.SetRenderTarget(null);
+        }
+    }
+
+    private static void BeginLayer(GraphicsDevice device, RenderTarget2D target, bool clear) {
+        device.SetRenderTarget(target);
+        if (clear) device.Clear(Color.Transparent);
+        Draw.SpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp,
+            DepthStencilState.None, RasterizerState.CullNone, null, Matrix.CreateTranslation(-area.X, -area.Y, 0f));
+    }
+
+    /// <summary>缓存层覆盖当前房间；房间变了就重建（历史线与本轮已画的部分重新画进去）。</summary>
+    private static bool EnsureLayers(Level level) {
+        if (layersBroken) return false;
+        Rectangle want = level.Bounds;
+        want.Inflate(LayerMargin, LayerMargin);
+        if (want.Width <= 0 || want.Height <= 0 || want.Width > MaxLayerSize || want.Height > MaxLayerSize) {
+            DisposeLayers();
+            return false;
+        }
+        if (historyRt is { IsDisposed: false } && roundRt is { IsDisposed: false } && grayRt is { IsDisposed: false } && want == area)
+            return true;
+        DisposeLayers();
+        area = want;
+        try {
+            GraphicsDevice device = Engine.Instance.GraphicsDevice;
+            historyRt = NewLayer(device);
+            roundRt = NewLayer(device);
+            grayRt = NewLayer(device);
+        } catch (Exception e) {
+            Log.Info($"playback layers unavailable, drawing directly: {e.Message}");
+            layersBroken = true;
+            DisposeLayers();
+            return false;
+        }
+        historyDrawn = 0;
+        historyClear = true;
+        roundClear = true;
+        grayReady = false;
+        mergeUpTo = -1;
+        return true;
+    }
+
+    private static RenderTarget2D NewLayer(GraphicsDevice device) =>
+        new(device, area.Width, area.Height, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
+
+    private static void DisposeLayers() {
+        historyRt?.Dispose();
+        roundRt?.Dispose();
+        grayRt?.Dispose();
+        historyRt = roundRt = grayRt = null;
+        historyDrawn = 0;
+        grayReady = false;
+        mergeUpTo = -1;
     }
 
     // ---- 解析 ----
@@ -316,6 +511,13 @@ internal static class Playback {
                     }
                     break;
             }
+        }
+        track.Ang = new float[n];
+        track.Len = new float[n];
+        for (int j = 1; j < n; j++) {
+            Vector2 d = track.P[j] - track.P[j - 1];
+            track.Len[j] = d.Length();
+            track.Ang[j] = (float) Math.Atan2(d.Y, d.X);
         }
         return track;
     }

@@ -2,14 +2,14 @@
 
 为什么：不限制时，智能体会在暂停里反复跑模拟器，直到把一个房间打磨到极致（录像里看不到这些尝试）；
 每次暂停只给一轮又太紧，它只敢走稳妥的慢路线。折中是按章节给一个规划轮次的池子：每进入一个没来过的
-房间存入 rounds_per_room 轮（默认 5），在游戏里真的死了补 death_bonus 轮（默认 1），没用完的留给后面的
+房间存入 rounds_per_room 轮（默认 3），在游戏里真的死了补 death_bonus 轮（默认 1），没用完的留给后面的
 房间，换章节清零。规划过程本身由 playback.py 在执行前画进游戏（规划回放），观众能看到试错。
 
 怎么做：容器的托管配置里登记了 PreToolUse 钩子（agent-container/celeste-gate.py），Claude Code 每次调用
 工具之前都会问主控的 /gate。规则：
 - 每个房间存入的轮次按房间大小算：以一屏大小（320×180，1A 第一个房间那么大）存入 rounds_per_room 轮为基准，房间的长、
   高每变成 room_scale 倍（默认 2），轮次就乘 room_scale，向上取整——即 ceil(rounds_per_room × (宽/320)^k × (高/180)^k)，
-  k = log2(room_scale)；默认 k = 1，与面积成正比（两倍长、两倍高的房间 20 轮）；每个房间至少 rounds_per_room 轮。
+  k = log2(room_scale)；默认 k = 1，与面积成正比（默认 3 轮时，两倍长、两倍高的房间 12 轮）；每个房间至少 rounds_per_room 轮。
 - 准备阶段（游戏工具还没有真正执行过）不受限制。注意不能看 metrics.playing：有准备阶段时，
   第一次游戏工具的钩子先于它开始计时。
 - 开放了预置模拟器（sim_only）时，只有调用了模拟器的消息占一轮：一条消息的工具全部返回后，这期间 /sim 写出了
@@ -46,7 +46,7 @@ EXEMPT = {"mcp__celeste__act", "mcp__celeste__set_effort"}
 
 
 class PauseGate:
-    def __init__(self, metrics, enabled: bool = True, log=print, rounds_per_room: int = 5, death_bonus: int = 1,
+    def __init__(self, metrics, enabled: bool = True, log=print, rounds_per_room: int = 3, death_bonus: int = 1,
                  started: bool = False, sim_only: bool = False, state_path: Path | None = None,
                  room_scale: float = 2.0):
         self.metrics = metrics

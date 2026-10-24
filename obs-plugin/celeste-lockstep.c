@@ -6,6 +6,8 @@
  * 2. 只录游玩帧：插件自带一个原始画面输出（celeste_gameplay_output），只把"刚采到一个新游戏帧"的视频帧
  *    交给 ffmpeg 编码；每个保留的视频帧配上同一时段（加音频偏移）的 1/fps 秒音频，写进 WAV，结束时合成 MKV。
  *    思考期间、桥接空闲时的视频帧都不写，所以成片的帧数等于游玩帧数。
+ *    规划回放的帧（游戏不推进、只重画画面，章节计时 -1）期间音乐一直在放：这时画一帧跟不上节拍，就把漏掉的节拍
+ *    用下一帧补上（章节计时记 -2），声音一段不丢，音乐保持原速。
  * 3. 对账：每个保留帧记一行（成片里的序号、游戏帧号、章节计时、OBS 时间戳）到 frames.csv。
  *
  * 与桥接的协议（每行一条，见 game-bridge/Source/ClockServer.cs）：
@@ -256,6 +258,9 @@ struct gp_output {
 	FILE *wav, *csv;
 	uint64_t wav_frames;
 	long long written;
+	long long filled;    /* 回放帧跟不上节拍时补的帧数 */
+	uint64_t prev_ts;    /* 上一个写出的保留帧（视频锁内） */
+	long long prev_ticks;
 	bool failed;
 	bool stopping; /* gp_stop 之后，迟到的原始帧回调直接忽略 */
 	SRWLOCK vlock;  /* 原始画面回调与 gp_stop 之间的互斥 */
@@ -427,6 +432,9 @@ static bool gp_start(void *data)
 	o->fps_den = ovi.fps_den;
 	o->rate = oai.samples_per_sec;
 	o->frame_ns = (uint64_t)(1000000000.0 * ovi.fps_den / ovi.fps_num + 0.5);
+	o->filled = 0;
+	o->prev_ts = 0;
+	o->prev_ticks = 0;
 	CreateDirectoryA(o->dir, NULL);
 
 	struct video_scale_info vsi = {VIDEO_FORMAT_NV12, o->width, o->height, VIDEO_RANGE_PARTIAL, VIDEO_CS_709};
@@ -660,15 +668,35 @@ static void gp_raw_video(void *data, struct video_data *frame)
 		ReleaseSRWLockExclusive(&o->vlock);
 		return;
 	}
-	bool ok = write_plane(o->stdin_wr, frame->data[0], frame->linesize[0], o->width, o->height) &&
-		  write_plane(o->stdin_wr, frame->data[1], frame->linesize[1], o->width, o->height / 2);
-	if (!ok) {
-		set_error(o, "ffmpeg pipe closed");
-		ReleaseSRWLockExclusive(&o->vlock);
-		return;
+	/* 规划回放帧（章节计时 -1）跟不上节拍时（一帧要画很多线），中间漏掉的节拍用这一帧补上：回放时音乐一直在放，
+	 * 不补的话漏掉那几个节拍的声音会被跳过，录像里的音乐听起来像加速。补的帧章节计时记为 -2。游玩帧不补，
+	 * 成片里的游玩帧数仍然等于游戏推进的帧数。 */
+	int fill = 0;
+	if (ticks == -1 && o->prev_ticks == -1 && o->written > 0 && frame->timestamp > o->prev_ts &&
+	    frame->timestamp - o->prev_ts <= SEG_GAP_NS) {
+		long long k = (long long)((frame->timestamp - o->prev_ts + o->frame_ns / 2) / o->frame_ns) - 1;
+		if (k > 0)
+			fill = (int)k;
 	}
-	fprintf(o->csv, "%lld,%lld,%lld,%llu\n", o->written, game_frame, ticks, (unsigned long long)frame->timestamp);
-	o->written++;
+	uint64_t stamps[1 + SEG_GAP_NS / 1000000ULL];
+	long long first = o->written;
+	int copies = 0;
+	for (int j = 0; j <= fill; j++) {
+		uint64_t ts = j < fill ? o->prev_ts + (uint64_t)(j + 1) * o->frame_ns : frame->timestamp;
+		if (!write_plane(o->stdin_wr, frame->data[0], frame->linesize[0], o->width, o->height) ||
+		    !write_plane(o->stdin_wr, frame->data[1], frame->linesize[1], o->width, o->height / 2)) {
+			set_error(o, "ffmpeg pipe closed");
+			ReleaseSRWLockExclusive(&o->vlock);
+			return;
+		}
+		fprintf(o->csv, "%lld,%lld,%lld,%llu\n", o->written, game_frame, j < fill ? -2LL : ticks,
+			(unsigned long long)ts);
+		o->written++;
+		stamps[copies++] = ts;
+	}
+	o->filled += fill;
+	o->prev_ts = frame->timestamp;
+	o->prev_ticks = ticks;
 	rec_set(REC_RECORDING, o->written, NULL);
 	ReleaseSRWLockExclusive(&o->vlock);
 
@@ -677,26 +705,29 @@ static void gp_raw_video(void *data, struct video_data *frame)
 		ReleaseSRWLockExclusive(&o->alock);
 		return;
 	}
-	if (o->nsegs == 0 || frame->timestamp - o->last_frame_ts > SEG_GAP_NS) {
-		if (o->nsegs == o->segcap) {
-			o->segcap = o->segcap ? o->segcap * 2 : 64;
-			o->segs = brealloc(o->segs, o->segcap * sizeof(struct segment));
+	for (int j = 0; j < copies; j++) {
+		uint64_t ts = stamps[j];
+		if (o->nsegs == 0 || ts - o->last_frame_ts > SEG_GAP_NS) {
+			if (o->nsegs == o->segcap) {
+				o->segcap = o->segcap ? o->segcap * 2 : 64;
+				o->segs = brealloc(o->segs, o->segcap * sizeof(struct segment));
+			}
+			struct segment *sg = &o->segs[o->nsegs++];
+			memset(sg, 0, sizeof(*sg));
+			sg->start_ts = ts;
+			sg->first_index = first + j;
+			sg->state = SEG_UNKNOWN;
 		}
-		struct segment *sg = &o->segs[o->nsegs++];
-		memset(sg, 0, sizeof(*sg));
-		sg->start_ts = frame->timestamp;
-		sg->first_index = o->written - 1;
-		sg->state = SEG_UNKNOWN;
+		o->last_frame_ts = ts;
+		if (o->npending == o->pcap) {
+			o->pcap = o->pcap ? o->pcap * 2 : 256;
+			o->pending = brealloc(o->pending, o->pcap * sizeof(struct pend));
+		}
+		o->pending[o->npending].ts = ts;
+		o->pending[o->npending].seg = (uint32_t)(o->nsegs - 1);
+		o->pending[o->npending].index = first + j;
+		o->npending++;
 	}
-	o->last_frame_ts = frame->timestamp;
-	if (o->npending == o->pcap) {
-		o->pcap = o->pcap ? o->pcap * 2 : 256;
-		o->pending = brealloc(o->pending, o->pcap * sizeof(struct pend));
-	}
-	o->pending[o->npending].ts = frame->timestamp;
-	o->pending[o->npending].seg = (uint32_t)(o->nsegs - 1);
-	o->pending[o->npending].index = o->written - 1;
-	o->npending++;
 	flush_pending(o, false);
 	ReleaseSRWLockExclusive(&o->alock);
 }

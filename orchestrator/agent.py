@@ -59,7 +59,7 @@ SUGGEST_OWN = (
 
 
 def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None, pause_limit: bool = False,
-                   rounds_per_room: int = 5, death_bonus: int = 1, playback: bool = False) -> str:
+                   rounds_per_room: int = 3, death_bonus: int = 1, playback: bool = False) -> str:
     extra = "container_zh.md" if runtime == "container" else "host_zh.md"
     text = ((PROMPTS / "system_zh.md").read_text(encoding="utf-8") + "\n\n"
             + (PROMPTS / extra).read_text(encoding="utf-8").replace("{suggest}", SUGGEST_SIM if sim else SUGGEST_OWN))

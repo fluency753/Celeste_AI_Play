@@ -69,8 +69,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--free-planning", action="store_true",
                     help="不限制规划轮次（默认：按章节记账，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮；"
                          "自动重试关闭），也不播规划回放")
-    ap.add_argument("--rounds-per-room", type=int, default=5,
-                    help="一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 5）；大房间按 --room-scale 放大")
+    ap.add_argument("--rounds-per-room", type=int, default=3,
+                    help="一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 3，至少 3）；大房间按 --room-scale 放大")
     ap.add_argument("--room-scale", type=float, default=2.0,
                     help="房间的长、高每变成这么多倍，存入的轮次乘这么多（默认 2，即与面积成正比），向上取整")
     ap.add_argument("--no-playback", action="store_true",

@@ -19,13 +19,14 @@
 4. 按推演的先后出场，看起来像搜索一步步往前推进。
 路线每帧一个点；画之前把共线的点合并（误差不到 0.3 个游戏像素），点上带着帧号，回放时照样按帧推进。
 
-怎么画（桥接 0.11 的 playback 命令，见 game-bridge/Source/Playback.cs）：游戏不推进，桥接只重画画面。
+怎么画（桥接 0.11.1 的 playback 命令，见 game-bridge/Source/Playback.cs）：游戏不推进，桥接只重画画面。
 所有轮次用同一个倍速（playback_speed，默认 2 倍）：路线按推演先后在 playback_stagger_s 秒里陆续从 Madeline
 身上长出来，延伸中一律淡绿色细线（线多时整体再调淡）；一条线走到头的那一帧定下结果：死亡的从死亡点往起点一路变成淡红，
 金色的一条从终点往起点一路变成实心金色（传导速度 playback_recolor，默认 4 倍速），其余的保持淡绿；只画线，不画角色。
-镜头跟着金色路线的前端平滑移动；所有线变完色之后这一轮再转成淡灰。
-进章节的圆圈转场（或换房间）还没结束时桥接不画，那一轮不回放。
-录制时这些帧照常录进录像（声音冻结），frames.csv 里它们的章节计时记为 -1。
+镜头先跟着伸得最远的绿线，变金时跟着变色点往回移；没有金色时画完沿最远的线回到起点；所有线变完色之后这一轮再转成淡灰。
+进章节的圆圈转场还没放完时，回放帧先把转场放完，黑屏消失后再画线。
+录制时这些帧照常录进录像：音乐照常播放、音效暂停，frames.csv 里它们的章节计时记为 -1；画一帧跟不上节拍时，
+录制插件把漏掉的节拍补上（记为 -2），音乐保持原速。前几轮留下的淡灰线桥接缓存成一张图，不再每帧重画。
 """
 from __future__ import annotations
 
@@ -468,6 +469,7 @@ class Playback:
         record = {"t": time.time(), "decision": self.session.decision_index + 1, "round": number, "label": rd.label,
                   "rollouts": rd.rollouts, "frames": seg["frames"], "speed": seg["speed"], "dim": seg["dim"],
                   "skipped": (reply or {}).get("skipped"),
+                  "render_avg_ms": (reply or {}).get("render_avg_ms"), "render_max_ms": (reply or {}).get("render_max_ms"),
                   "tracks": [{"kind": t.kind, "stop": STOPS.get(t.stop), "frames": len(t.path),
                               "end": [round(float(v), 1) for v in t.path[-1]]} for t in rd.tracks]}
         self._archive(record)
@@ -489,6 +491,9 @@ class Playback:
             self.metrics.update(replaying=False, replay_round=0, replay_label="", replay_runs=0)
         if reply and reply.get("skipped"):
             self.log(f"[playback] 画面还在转场（{reply['skipped']}），这一段不回放")
+        elif reply and reply.get("render_avg_ms") and float(reply["render_avg_ms"]) > 14:
+            # 一帧画不完 1/60 秒：录像里靠插件补帧保住声音，画面会显得慢一些
+            self.log(f"[playback] 这一段渲染偏慢：平均每帧 {reply['render_avg_ms']} ms，最慢 {reply.get('render_max_ms')} ms")
         return reply
 
     def _archive(self, record: dict) -> None:
