@@ -20,7 +20,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.10.2";
+    public const string Version = "0.11.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -52,14 +52,19 @@ internal static class Bridge {
             runOriginal();
             return;
         }
+        // 规划回放的最后一帧已经在上一个节拍画出来了：回复主控
+        if (Playback.Done) {
+            Playback.Finish();
+        }
 
         long before = Frame;
+        long replayBefore = Playback.StepCount;
         if (lockstepEngaged) {
             LockstepTick(runOriginal);
         } else {
             NormalTick(runOriginal);
         }
-        UpdateAudio(Frame != before);
+        UpdateAudio(Frame != before, Playback.StepCount != replayBefore);
     }
 
     // ---- 普通节拍：每个游戏循环推进 FramesPerTick 帧 ----
@@ -70,6 +75,10 @@ internal static class Bridge {
                 AdvanceFrame(runOriginal, InputFrame.Neutral);
             } else {
                 Halt(runOriginal);
+                // 规划回放：游戏不推进，这个节拍照常重画（回放镜头与路线在渲染钩子里画）
+                if (Playback.Running && Engine.Scene is Level level) {
+                    Playback.Step(level);
+                }
             }
             return;
         }
@@ -96,14 +105,19 @@ internal static class Bridge {
 
     private static bool lockstepEngaged;
     private static long? pendingAck;
+    private static bool pendingAckReplay;
     private static readonly Stopwatch SinceAdvance = Stopwatch.StartNew();
-    private static bool audioFrozen;
+    private enum AudioMode { Playing, Frozen, MusicOnly }
+    private static AudioMode audioMode = AudioMode.Playing;
+    private static bool sfxPausedByUs;
+    // 规划回放时只放音乐：音效、界面音效与音乐里的短促音效（stings）暂停
+    private static readonly string[] SfxBuses = { "bus:/gameplay_sfx", "bus:/ui_sfx", "bus:/music/stings" };
 
     /// <summary>录制校准用：在画面左下角画出帧号条码（只在校准时打开）。</summary>
     public static bool DrawFrameMarker;
 
     private static void LockstepTick(Action runOriginal) {
-        bool wantsFrame = job != null || IsLoading();
+        bool wantsFrame = job != null || IsLoading() || Playback.Running;
         // 没有要推进的帧时也要及时回复令牌；等待令牌的同时限制空转的循环频率
         if (!ClockServer.TryTakeToken(wantsFrame ? 6 : 3, out long token)) {
             HaltWithoutDrawing(runOriginal);
@@ -117,6 +131,14 @@ internal static class Bridge {
         // OBS 的游戏采集钩子最多每 1/120 秒拷贝一次画面，离上一次呈现太近的那次呈现不会被拷贝：
         // 停住时不重画（见 HaltWithoutDrawing），推进前再确认离上一次呈现已超过这个间隔
         WaitSincePresent(MinPresentGapMs);
+        if (job == null && Playback.Running && !IsLoading()) {
+            // 规划回放的一帧：不推进游戏，只重画；回复里章节计时记为 -1，录像对账时与游玩帧分开
+            Halt(runOriginal);
+            if (Engine.Scene is Level level) Playback.Step(level);
+            pendingAck = token;
+            pendingAckReplay = true;
+            return;
+        }
         if (IsLoading()) {
             AdvanceFrame(runOriginal, InputFrame.Neutral);
             if (job != null) job.LoadingFrames++;
@@ -181,7 +203,8 @@ internal static class Bridge {
     private static void FlushPendingAck() {
         if (pendingAck is not { } token) return;
         pendingAck = null;
-        long ticks = Engine.Scene is Level level ? level.Session.Time : 0;
+        long ticks = pendingAckReplay ? -1 : Engine.Scene is Level level ? level.Session.Time : 0;
+        pendingAckReplay = false;
         ClockServer.Send($"F {token} {Frame} {ticks}");
     }
 
@@ -200,24 +223,51 @@ internal static class Bridge {
         Log.Info($"lockstep {(want ? "engaged" : "released")}");
     }
 
-    /// <summary>游戏冻结时声音也冻结：超过 60 毫秒没有推进就暂停 FMOD 主总线，推进时立即恢复。</summary>
-    private static void UpdateAudio(bool advanced) {
+    /// <summary>游戏冻结时声音也冻结：超过 60 毫秒没有推进就暂停 FMOD 主总线，推进时立即恢复。
+    /// 规划回放的帧里音乐照常播放（音效暂停），录像里的音乐与之后真实执行时的音乐连在一起。</summary>
+    private static void UpdateAudio(bool advanced, bool replayed) {
         if (advanced) {
             SinceAdvance.Restart();
-            if (audioFrozen) SetAudioFrozen(false);
-        } else if (!audioFrozen && SinceAdvance.ElapsedMilliseconds > 60) {
-            SetAudioFrozen(true);
+            SetAudio(AudioMode.Playing);
+        } else if (replayed) {
+            SinceAdvance.Restart();
+            SetAudio(AudioMode.MusicOnly);
+        } else if (audioMode != AudioMode.Frozen && SinceAdvance.ElapsedMilliseconds > 60) {
+            SetAudio(AudioMode.Frozen);
         }
     }
 
-    private static void SetAudioFrozen(bool frozen) {
-        audioFrozen = frozen;
+    private static void SetAudio(AudioMode mode) {
+        if (mode == audioMode) return;
         try {
-            Audio.BusPaused("bus:/", frozen);
+            switch (mode) {
+                case AudioMode.Playing:
+                    // 先在主总线还停着时恢复音效总线，再放开主总线，免得音效先冒出来
+                    if (sfxPausedByUs) {
+                        foreach (string bus in SfxBuses) Audio.BusPaused(bus, false);
+                        sfxPausedByUs = false;
+                    }
+                    Audio.BusPaused("bus:/", false);
+                    break;
+                case AudioMode.MusicOnly:
+                    if (!sfxPausedByUs) {
+                        foreach (string bus in SfxBuses) Audio.BusPaused(bus, true);
+                        sfxPausedByUs = true;
+                    }
+                    Audio.BusPaused("bus:/", false);
+                    break;
+                case AudioMode.Frozen:
+                    Audio.BusPaused("bus:/", true);
+                    break;
+            }
         } catch (Exception ex) {
-            Log.Warn($"audio freeze failed: {ex.Message}");
+            Log.Warn($"audio mode {mode} failed: {ex.Message}");
         }
+        audioMode = mode;
     }
+
+    /// <summary>这一帧画完要截图回复（观测）：规划回放这一帧不换镜头、不画线。</summary>
+    public static bool CapturePending => PendingRenders.Count > 0;
 
     /// <summary>绘制完成后调用：处理需要截图的回复。</summary>
     public static void AfterRender() {
@@ -248,7 +298,8 @@ internal static class Bridge {
             return;
         }
         InputInjector.Uninstall();
-        if (audioFrozen) SetAudioFrozen(false);
+        Playback.Reset();
+        SetAudio(AudioMode.Playing);
         DrawFrameMarker = false;
         Active = false;
         engineHalted = true;
@@ -381,6 +432,27 @@ internal static class Bridge {
 
             case "step":
                 StartStep(req.Id, a);
+                break;
+
+            case "playback":
+                // 规划回放：游戏不推进，按主控给的路线重画若干帧，画完再回复（见 Playback）
+                if (!Active || job != null || Engine.Scene is not Level pbLevel) {
+                    IpcServer.Send(Reply.Error(req.Id, "playback needs an active bridge, a level and no running step"));
+                    break;
+                }
+                if (pbLevel.Transitioning) {
+                    // 换房间的转场还没结束（不应出现：只在 Madeline 可操作时回放）：这次不画
+                    IpcServer.Send(Reply.Ok(req.Id, w => { w.WriteNumber("frames", 0); w.WriteString("skipped", "transition"); }));
+                    break;
+                }
+                if (Playback.Start(req.Id, a, pbLevel) is { } pbError) {
+                    IpcServer.Send(Reply.Error(req.Id, pbError));
+                }
+                break;
+
+            case "playback_clear":
+                Playback.EndOverlay();
+                IpcServer.Send(Reply.Ok(req.Id));
                 break;
 
             case "cancel":
@@ -563,8 +635,8 @@ internal static class Bridge {
             IpcServer.Send(Reply.Error(id, "bridge not active; send activate first"));
             return;
         }
-        if (job != null) {
-            IpcServer.Send(Reply.Error(id, "busy: a step is already running"));
+        if (job != null || Playback.Running) {
+            IpcServer.Send(Reply.Error(id, "busy: a step or a playback is already running"));
             return;
         }
         if (!a.TryGetProperty("inputs", out JsonElement inputs)) {
@@ -572,6 +644,7 @@ internal static class Bridge {
             return;
         }
 
+        Playback.EndOverlay(); // 真实执行开始：规划回放的历史线清掉，镜头还给游戏
         List<InputFrame> plan = StepJob.ParsePlan(inputs, MaxPlanFrames);
         List<StepJob.ExpectRow?>? expect = StepJob.ParseExpect(a, MaxPlanFrames);
         float tolerance = a.TryGetProperty("tolerance", out JsonElement tol) && tol.ValueKind == JsonValueKind.Number

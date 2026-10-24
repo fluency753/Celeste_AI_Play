@@ -94,6 +94,9 @@
   /* 五行放不下时字号缩小一档、最多六行（页面高度不变） */
   .thought.small { font-size: calc(15 * var(--px)); -webkit-line-clamp: 6; }
   .thought.fade { animation: fadein 200ms ease-out; }
+  /* 规划回放时思考语句下面的一行小字：第几轮、推演了多少条路线 */
+  .meta { margin-top: calc(4 * var(--px)); font-size: calc(13 * var(--px)); color: var(--label); }
+  .meta:empty { display: none; }
   @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
   @media (prefers-reduced-motion: reduce) {
     .dot.breathe, .pending, .thought.fade { animation: none; }
@@ -124,11 +127,16 @@
     <div class="stat"><span class="k">上下文</span><span class="v num" id="ctx">0</span></div>
     <div class="stat"><span class="k">工具</span><span class="v num" id="tool">0:00:00</span></div>
     <div class="stat"><span class="k">压缩</span><span class="v num" id="compact">0</span></div>
-    <div class="stat"><span class="k">知识库</span><span class="v num" id="study">—</span></div>
-    <div class="stat"><span class="k">现实用时</span><span class="v num" id="budget">0:00 / 0:00</span></div>
+    <div class="stat"><span class="k">知识库读取</span><span class="v num" id="study">—</span></div>
+    <div class="stat"><span class="k">死亡</span><span class="v num" id="deaths">0</span></div>
+    <div class="stat" id="roundsRow"><span class="k">规划剩余</span><span class="v num" id="rounds">—</span></div>
+    <div class="stat"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0</span></div>
+    <div class="stat"><span class="k">推演路径</span><span class="v num" id="simRuns">0</span></div>
+    <div class="stat"><span class="k">推演最快</span><span class="v num" id="simBest">—</span></div>
   </div>
   <div class="rule"></div>
   <div class="thought" id="thought"></div>
+  <div class="meta" id="meta"></div>
 </div>
 <script>
 "use strict";
@@ -146,6 +154,7 @@ const STATUS = {
   executing: ["执行中", "executing", false],
   auto:      ["自动推进", "idle", false],
   retrying:  ["自动重试", "retrying", false],
+  replaying: ["规划回放", "replay", true],
   quota_wait:["等待额度重置", "idle", false],
   done:      ["已完成", "idle", false],
   stopped:   ["已结束", "idle", false],
@@ -201,7 +210,9 @@ function render() {
   card.classList.remove("hidden");
   const m = state, c = (config && config.colors) || {};
   const now = Date.now() / 1000 + offset;
-  const [text, kind, breathe] = STATUS[m.status] || [m.status, "idle", false];
+  // 规划回放与智能体的思考同时进行（回放画上一轮，智能体在想下一轮）：回放期间状态栏显示"规划回放"
+  const replaying = !!m.replaying || m.status === "replaying";
+  const [text, kind, breathe] = replaying ? STATUS.replaying : (STATUS[m.status] || [m.status, "idle", false]);
   const playing = m.started_wall > 0;
   const ended = m.status === "done" || m.status === "stopped";
 
@@ -265,7 +276,7 @@ function render() {
   if (m.status === "retrying" && m.phase_since_wall > 0) tool += Math.max(0, now - m.phase_since_wall);
   $("tool").textContent = clock(tool);
 
-  // 知识库：准备阶段读知识库、写笔记的总用时（不计入现实用时）；跳过准备阶段时显示"—"
+  // 知识库读取：准备阶段读知识库、写笔记的总用时（不计入现实用时）；跳过准备阶段（--no-study）时显示"—"
   let study = m.study_s || 0;
   if (m.status === "studying" && m.written_wall > 0) study += Math.max(0, now - m.written_wall);
   const studyEl = $("study");
@@ -278,19 +289,28 @@ function render() {
   $("ctx").classList.toggle("warn", ctx / limit >= 0.9);
   $("compact").textContent = String(m.compactions || 0);
 
-  // 现实用时 / 预算：主控每次写出时的值，两次写出之间按实时外推（等待额度时不走；续跑时接着上一段）
-  let used = m.elapsed_s || 0;
-  if (playing && !ended && m.status !== "quota_wait" && m.written_wall > 0) used += Math.max(0, now - m.written_wall);
-  const budget = m.budget_s || 0;
-  $("budget").textContent = `${hm(used)} / ${hm(budget)}`;
-  $("budget").classList.toggle("warn", budget > 0 && used / budget >= 0.85);
+  // 规划轮次（本章剩余）与死亡次数；不限制规划轮次时显示"不限"
+  $("rounds").textContent = m.plan_rounds_left == null ? "不限" : `${m.plan_rounds_left} 轮`;
+  $("deaths").textContent = String(m.deaths || 0);
+
+  // 预置模拟器：调用次数（调用了模拟器的消息数）、推演过的路线总条数、当前房间里推演出的最快出房用时（换房间清零）
+  $("simCalls").textContent = String(m.sim_calls || 0);
+  const runs = m.sim_rollouts || 0;
+  $("simRuns").textContent = runs >= 10000 ? `${(runs / 10000).toFixed(runs >= 1e6 ? 0 : 1)}万` : runs.toLocaleString("en-US");
+  const best = m.sim_best_frames || 0;
+  $("simBest").textContent = best > 0 ? `${(best / 60).toFixed(3)}s` : "—";
+  $("simBest").classList.toggle("dim", best <= 0);
+
+  // 规划回放：思考语句的位置显示这一轮在试什么，下面一行小字是第几轮、推演了多少条路线（执行前画最终路线时写"即将执行"）
+  $("meta").textContent = !replaying ? "" : m.replay_round > 0
+    ? `第 ${m.replay_round} 轮规划 · 推演 ${(m.replay_runs || 0).toLocaleString("en-US")} 条路线` : "即将执行的路线";
 
   // 思考语句：一有新语句就淡入替换（thought_check_s 大于 0 时改为每隔几秒检查一次）。
   // 主控在每段动作开始推进之前会等 HUD 换好新语句，所以录像里新语句和这段动作的第一帧同时出现
   const interval = ((config && config.thought_check_s) || 0) * 1000;
   if (shownThought === null || interval <= 0 || Date.now() - lastThoughtCheck >= interval) {
     lastThoughtCheck = Date.now();
-    const next = m.thought || "";
+    const next = replaying ? (m.replay_label || "") : (m.thought || "");
     if (next !== shownThought) {
       shownThought = next;
       const el = $("thought");

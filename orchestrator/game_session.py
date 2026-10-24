@@ -159,6 +159,8 @@ class GameSession:
         self.decision_index = 0
         self.container: str | None = None   # 智能体容器（自动重试时在里面运行重算程序）
         self.before_advance = None          # 每次推进游戏前调用（录制时：确认游戏窗口没有最小化）
+        self.playback = None                # 规划回放（playback.Playback）：每次执行计划之前把推演过的路线画进游戏
+        self.last_obs: dict | None = None   # 最近一次观测（回放用房间边界）
         self._last_positions: dict = {}
         self._last_room = None
         # 依次通关多章：当前章节完成后，主控自动进入队列里的下一章
@@ -268,6 +270,7 @@ class GameSession:
         tmp.replace(path)
 
     def _write_workspace(self, obs: dict, act_record: dict | None = None) -> None:
+        self.last_obs = obs
         if not self.workspace:
             return
         try:
@@ -400,6 +403,12 @@ class GameSession:
     def _execute(self, plan: PlanSpec, frames: list[str], thought: str, stop: list[str], plan_file: str | None,
                  attempt: int):
         """执行一次计划：推进游戏、自动推进非可控段、记录日志与工作区数据。"""
+        if attempt == 0 and self.playback is not None:
+            # 规划回放（游戏不推进）：先等排队的轮次放完（不持有连接锁，回放线程要用），再把镜头送回 Madeline
+            self.playback.drain()
+            self._before_advance()
+            with self.lock:
+                self.playback.final()
         self.metrics.set_thought(thought)
         self.metrics.update(status="executing")
         extra = {"expect": plan.expect, "tolerance": plan.tolerance} if plan.expect else {}
@@ -591,6 +600,8 @@ class GameSession:
     def _update_metrics_from_obs(self, obs: dict) -> None:
         level = obs.get("level") or {}
         player = obs.get("player") or {}
+        if (level.get("sid"), level.get("room")) != (self.metrics.state.chapter, self.metrics.state.room):
+            self.metrics.update(sim_best_frames=0)   # HUD 的"推演最快"只看当前房间
         self.metrics.update(
             chapter=level.get("sid", self.metrics.state.chapter),
             room=level.get("room", self.metrics.state.room),

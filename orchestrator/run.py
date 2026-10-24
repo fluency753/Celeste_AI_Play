@@ -35,6 +35,7 @@ from .kb_study import KbStudy
 from .metrics import Metrics
 from .recording import Recorder, RecordingError, options_from
 from .pausegate import PauseGate
+from .playback import Playback
 from .server import TRANSPORT_SECURITY, build_server
 
 
@@ -66,7 +67,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--free-planning", action="store_true",
-                    help="不限制每次暂停的工具调用（默认：act 返回后只允许一轮工具，然后必须 act；自动重试关闭）")
+                    help="不限制规划轮次（默认：按章节记账，每进入一个没来过的房间存入 --rounds-per-room 轮，死亡补 1 轮；"
+                         "自动重试关闭），也不播规划回放")
+    ap.add_argument("--rounds-per-room", type=int, default=5, help="每进入本章一个没来过的房间存入的规划轮次（默认 5）")
+    ap.add_argument("--no-playback", action="store_true",
+                    help="执行前不把模拟器推演过的路线画进游戏（规划回放；只在 --sim 且限制规划轮次时有）")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
     ap.add_argument("--no-hud-window", action="store_true",
                     help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
@@ -123,6 +128,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.quota_wait_max_h = args.quota_wait_max_hours
     cfg.sim = args.sim
     cfg.pause_limit = not args.free_planning
+    cfg.rounds_per_room = max(1, args.rounds_per_room)
+    cfg.playback = not args.no_playback
     cfg.provider_info = load_provider(cfg.provider)
     if cfg.third_party and cfg.runtime != "container":
         raise SystemExit("第三方模型提供方只支持容器运行方式")
@@ -378,7 +385,12 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
         session.before_advance = recorder.check_window
 
     gate = PauseGate(metrics, enabled=cfg.pause_limit and cfg.runtime == "container",
-                     log=lambda m: print(m, flush=True), min_frames=cfg.pause_min_frames, started=previous is not None)
+                     log=lambda m: print(m, flush=True), rounds_per_room=cfg.rounds_per_room,
+                     death_bonus=cfg.death_bonus, started=previous is not None, sim_only=cfg.sim,
+                     state_path=cfg.workspace_dir / "game" / "rounds.json" if cfg.runtime == "container" else None)
+    playback = Playback(cfg, session, metrics, gate, log=lambda m: print(m, flush=True))
+    if playback.collect:
+        session.playback = playback
     server = build_server(session, study, gate)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
@@ -414,7 +426,7 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
                             "游戏一直冻结在中断时的那一帧，章节计时没有走。先看一遍 /workspace/notes.md，再调用 observe 继续游玩。")
             runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", container, study,
                                   session_id=session_id, resume=resumed_session is not None, resume_note=note,
-                                  gate=gate)
+                                  gate=gate, playback=playback if playback.collect else None)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()
@@ -426,6 +438,7 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
                 await asyncio.wait_for(web_task, timeout=10)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 web_task.cancel()
+        playback.close()
         recording = None
         if recorder:
             try:

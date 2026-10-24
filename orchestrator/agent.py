@@ -42,16 +42,35 @@ CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
 
+SUGGEST_SIM = (
+    '建议：**直接用预置模拟器**（见下文"预置模拟器"），不要自己再写一个模拟器。你的程序主要写搜索与规划：在观测给出的房间几何上'
+    '以"到达出口所需帧数最少"为目标自动规划按键序列（把各种高级技巧作为宏动作纳入搜索），生成计划文件后交给 `act` 执行。'
+    '**针对具体的房间结构设计搜索**：根据地形、尖刺、平台、实体与出口的位置，为这个房间定制剪枝条件（例如提前剪掉注定掉坑、'
+    '撞上尖刺、离出口越来越远或明显比已知路线慢的分支）与引导条件（例如中间目标点、先上某个平台再去出口、按离出口的距离或'
+    '预计剩余帧数排序），用什么算法（A*、广度优先、束搜索、随机或进化搜索……）也由你决定，还可以根据上一次搜索的结果调整方向。'
+    '把模拟器预测的轨迹写进计划的 `expect`，实际偏离时会在那一帧停下。写好的搜索程序要在后面的房间和章节反复使用，'
+    '按房间改剪枝与引导条件。Bash 单条命令有运行时间上限，长的搜索要自己设时限。')
+SUGGEST_OWN = (
+    '建议：照知识库写一个与游戏逐帧一致的 Madeline 模拟器，再写搜索程序，在观测给出的房间几何上以"到达出口所需帧数最少"'
+    '为目标自动规划按键序列（把各种高级技巧作为宏动作纳入搜索），生成计划文件后交给 `act` 执行。针对具体的房间结构设计搜索的'
+    '剪枝条件与引导条件，算法也由你决定；把模拟器预测的轨迹写进计划的 `expect`，实际偏离时会在那一帧停下。执行后用 '
+    '`last_act.json` 的实际轨迹对照模拟结果，修正程序。模拟器准确，就能打出帧级精确的高速路线，这正是降低章节计时的关键。'
+    '写好的程序要在后面的房间和章节反复使用。Bash 单条命令有运行时间上限，长的搜索要自己设时限。')
+
+
 def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None, pause_limit: bool = False,
-                   pause_min_frames: int = 20) -> str:
+                   rounds_per_room: int = 5, death_bonus: int = 1, playback: bool = False) -> str:
     extra = "container_zh.md" if runtime == "container" else "host_zh.md"
-    text = (PROMPTS / "system_zh.md").read_text(encoding="utf-8") + "\n\n" + (PROMPTS / extra).read_text(encoding="utf-8")
+    text = ((PROMPTS / "system_zh.md").read_text(encoding="utf-8") + "\n\n"
+            + (PROMPTS / extra).read_text(encoding="utf-8").replace("{suggest}", SUGGEST_SIM if sim else SUGGEST_OWN))
     if sim and runtime == "container":
         text += "\n\n" + (PROMPTS / "sim_zh.md").read_text(encoding="utf-8")
     if runtime == "container":
         # 每次暂停只允许一轮工具（自动重试关闭），或者不限制（可以把规划程序写成自动重试命令）
         text += "\n\n" + (PROMPTS / ("pause_zh.md" if pause_limit else "retry_zh.md")).read_text(
-            encoding="utf-8").replace("{min_frames}", str(pause_min_frames))
+            encoding="utf-8").replace("{rounds}", str(rounds_per_room)).replace("{death}", str(death_bonus))
+        if pause_limit and playback and sim:
+            text += "\n\n" + (PROMPTS / "playback_zh.md").read_text(encoding="utf-8")
     if chapters and len(chapters) > 1:
         names = " → ".join(chapter_name_by_id(c) for c in chapters)
         text += ("\n\n# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
@@ -62,7 +81,7 @@ def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None =
 FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关。"
 
 
-def study_prompt(study: KbStudy) -> str:
+def study_prompt(study: KbStudy, sim: bool = False) -> str:
     files = "\n".join(f"- {path}" for path in study.container_paths())
     return (
         "开始游玩之前，先用 Read 工具把知识库从头到尾完整读一遍，按下面的顺序：\n"
@@ -71,7 +90,8 @@ def study_prompt(study: KbStudy) -> str:
         "不要只读开头，也不要用 Grep 或 Bash 代替阅读。草莓酱文本的中文版（*_zh.md）与英文版是同一内容的翻译，可以不读。"
         "主控会核对你读过的行，读完之前 observe 与 act 不会执行。\n\n"
         "读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些程序"
-        "（模拟器、搜索）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
+        + ("（搜索与规划；模拟器直接用 /sim 预置的）。" if sim else "（模拟器、搜索）。") +
+        "把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
         f"这个准备阶段（读知识库、写笔记、写程序）不计入现实用时，上限 {study.minutes:g} 分钟，到时自动开始计时；"
         "从你第一次成功调用 observe 或 act 起开始计时。游戏在你思考期间一直暂停，章节计时只算游戏真正推进的帧。"
     )
@@ -102,11 +122,12 @@ class ClaudeRunner:
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
                  token: str, container: str | None = None, study: KbStudy | None = None,
                  session_id: str | None = None, resume: bool = False, resume_note: str | None = None,
-                 gate=None):
+                 gate=None, playback=None):
         """resume=True：用 --resume 接着 session_id 这个已有的会话（续跑）；resume_note 不为空时代替开局的第一条消息。"""
         self.cfg = cfg
         self.study = study
-        self.gate = gate                         # 每次暂停的工具预算（pausegate.PauseGate），按输出流里的消息分组
+        self.gate = gate                         # 规划轮次（pausegate.PauseGate），按输出流里的消息分组
+        self.playback = playback                 # 规划回放（playback.Playback）：按输出流里的消息把模拟器推演分轮
         self.container = container
         self.run_dir = run_dir
         self.session = session
@@ -166,7 +187,7 @@ class ClaudeRunner:
             mcp = json.dumps({"mcpServers": {"celeste": {
                 "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
             prompt = compose_prompt("container", self.cfg.sim, self.cfg.chapters, self.cfg.pause_limit,
-                                    self.cfg.pause_min_frames)
+                                    self.cfg.rounds_per_room, self.cfg.death_bonus, self.cfg.playback)
             (self.run_dir / "system_prompt.md").write_text(prompt, encoding="utf-8")
             return [
                 find_docker_exe(), "exec", "-i", "-u", "agent", "-w", "/workspace",
@@ -237,7 +258,7 @@ class ClaudeRunner:
         if self.resume_note:
             first = self.resume_note
         else:
-            first = study_prompt(self.study) if self.study else FIRST_PROMPT
+            first = study_prompt(self.study, self.cfg.sim) if self.study else FIRST_PROMPT
         try:
             while True:
                 if (note := self._effort_at_start()):
@@ -524,11 +545,16 @@ class ClaudeRunner:
                     self.metrics.tool_begin(str(block.get("id")), str(block.get("name", "")).startswith("mcp__celeste__"))
                     if self.gate is not None:
                         self.gate.note_tool_use(str(block.get("id")), message.get("id"))
+                    if self.playback is not None:
+                        self.playback.note_tool_use(message.get("id"), str(block.get("id")), str(block.get("name", "")),
+                                                    block.get("input"))
         elif etype == "user":
             content = (event.get("message") or {}).get("content")
             for block in content if isinstance(content, list) else []:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     self.metrics.tool_end(str(block.get("tool_use_id")))
+                    if self.playback is not None:
+                        self.playback.note_tool_result(str(block.get("tool_use_id")))
             if self.study is None or self.study.finished is not None:
                 return
             if self.study.note_result(event):

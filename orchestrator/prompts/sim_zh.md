@@ -4,7 +4,7 @@
 游戏逐帧对照过，结果可以直接当作游戏的结果使用。用法见 `/sim/README.md`（开始前会要求你读完）。
 
 - 每次游戏停下，主控都会把当前这一帧的完整场景写到 `/workspace/game/sim_state.json`，模拟器从它出发推演任意按键。
-- 用 `/sim/sim.py` 的 `Sim` / `SimPool` 在 Python 里调用，或直接用 `/sim/celeste-sim` 命令行。
+- 用 `/sim/sim.py` 的 `Sim` / `SimPool` 在 Python 里调用，或直接用 `/sim/celeste-sim` 命令行。容器有多个 CPU 核，`SimPool()` 默认开 4 个进程并行推演，可以用 `workers` 参数开更多。
 - 用它来规划和搜索：比较候选按键的结果、找最快的路线，再把选中的按键与它预测的逐帧位置（`expect`）写成计划文件交给
   `act`。
 - 不需要再自己从头写一个物理模拟器；你自己的程序主要写搜索与规划。不要试图分析模拟器的内部实现。

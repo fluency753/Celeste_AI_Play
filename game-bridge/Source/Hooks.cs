@@ -30,6 +30,7 @@ internal static class Hooks {
         IL.Monocle.Engine.Update += ILEngineUpdate;
         On.Monocle.MInput.Update += OnMInputUpdate;
         On.Celeste.Celeste.RenderCore += OnRenderCore;
+        On.Celeste.GameplayRenderer.Render += OnGameplayRender;
         On.Celeste.RunThread.Start += OnRunThreadStart;
     }
 
@@ -40,6 +41,7 @@ internal static class Hooks {
         IL.Monocle.Engine.Update -= ILEngineUpdate;
         On.Monocle.MInput.Update -= OnMInputUpdate;
         On.Celeste.Celeste.RenderCore -= OnRenderCore;
+        On.Celeste.GameplayRenderer.Render -= OnGameplayRender;
         On.Celeste.RunThread.Start -= OnRunThreadStart;
     }
 
@@ -83,11 +85,22 @@ internal static class Hooks {
     }
 
     private static void OnRenderCore(On.Celeste.Celeste.orig_RenderCore orig, global::Celeste.Celeste self) {
-        orig(self);
+        // 规划回放：这一帧借用回放镜头与单独的随机数渲染，渲染完原样换回（见 Playback）
+        Playback.BeforeRender();
+        try {
+            orig(self);
+        } finally {
+            Playback.AfterRender();
+        }
         if (Bridge.DrawFrameMarker) {
             DrawFrameMarker();
         }
         Bridge.AfterRender();
+    }
+
+    private static void OnGameplayRender(On.Celeste.GameplayRenderer.orig_Render orig, GameplayRenderer self, Scene scene) {
+        orig(self, scene);
+        Playback.DrawWorld(self.Camera);
     }
 
     /// <summary>录制校准：在窗口左下角画 16 格黑白条码，表示当前帧号的低 16 位（每格 12×12 像素，外加白框）。</summary>

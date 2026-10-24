@@ -90,7 +90,7 @@ def options_from(run_dir: Path, ffmpeg: str | None = None, video_args: str | Non
 
 
 def analyze_frames(csv_path: Path) -> dict:
-    """检查 frames.csv：成片帧数、游戏帧号是否连续（不连续说明有游玩帧没录上）。"""
+    """检查 frames.csv：成片帧数、游戏帧号是否连续（不连续说明有游玩帧没录上）；规划回放的帧另计。"""
     rows = []
     try:
         with open(csv_path, newline="", encoding="utf-8") as f:
@@ -98,6 +98,9 @@ def analyze_frames(csv_path: Path) -> dict:
                 rows.append((int(row["index"]), int(row["game_frame"]), int(row["chapter_ticks"]), int(row["obs_ts_ns"])))
     except (OSError, KeyError, ValueError) as exc:
         return {"rows": 0, "error": str(exc)}
+    # 规划回放的帧（游戏不推进、只重画画面）章节计时记为 -1：不参与连续性检查，单独计数
+    replay = sum(1 for r in rows if r[2] == -1)
+    rows_all, rows = rows, [r for r in rows if r[2] != -1]
     gaps, repeats = [], 0
     for (_, prev, _, _), (index, cur, _, _) in zip(rows, rows[1:]):
         if cur == prev:
@@ -105,7 +108,8 @@ def analyze_frames(csv_path: Path) -> dict:
         elif cur != prev + 1:
             gaps.append({"index": index, "from": prev, "to": cur, "missing": cur - prev - 1})
     return {
-        "rows": len(rows),
+        "rows": len(rows_all),
+        "replay_frames": replay,
         "first_game_frame": rows[0][1] if rows else None,
         "last_game_frame": rows[-1][1] if rows else None,
         "missing_frames": sum(g["missing"] for g in gaps if g["missing"] > 0),
@@ -216,7 +220,7 @@ class Recorder:
         check = result["check"]
         seconds = (result["frames"] or 0) / 60.0
         self.log(f"[record] 录制结束：{result['state']}，{result['frames']} 帧（{seconds:.1f} 秒），"
-                 f"缺帧 {check.get('missing_frames')}，重复 {check.get('repeats')}"
+                 f"其中规划回放 {check.get('replay_frames') or 0} 帧，缺帧 {check.get('missing_frames')}，重复 {check.get('repeats')}"
                  + (f"，错误：{result['error']}" if result["error"] else "")
                  + (f"；成片 {directory / 'gameplay.mkv'}" if "gameplay.mkv" in files else ""))
         return result

@@ -22,7 +22,8 @@ plan_file：（有工作区时可用）工作区里的计划文件路径，与 i
   expect 是每帧推进后 Madeline 的预期位置（与轨迹 x、y 同一口径，可附状态名），偏差超过 tolerance 像素就停下（deviate）。
   retry：死亡、偏离（或 "done"：按键用完仍在本房间）时，主控在零网络沙箱里运行 command（工作目录 /workspace），
   它应读取 /workspace/game/ 下的最新数据并改写同一个计划文件，主控接着执行，最多 max 次，不唤醒你。格式详见 /kb/game_data.md。
-thought：一两句中文，说明这段操作的意图，会显示给观众。
+thought：一两句中文，会显示给观众。只写你对当前房间或这一段的分析与判断（难点在哪、怎么取舍、打算怎么过），
+  不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。
 stop_on：提前停下的条件，可选 death room uncontrollable land refill complete；
   默认 ["death", "room", "complete"]，death 与 complete 总会生效。
 死亡、换房后的转场、剧情与重生由系统自动推进，返回时 Madeline 已可操作。"""
@@ -56,10 +57,13 @@ TRANSPORT_SECURITY = TransportSecuritySettings(
 )
 
 
-NO_RETRY_NOTE = ("\n本次运行每次暂停只允许一轮工具调用：act 返回后只能再调用一轮工具，然后必须 act；"
-                 "推进至少 {n} 帧或因事件停下的 act 才恢复这一轮。自动重试关闭：计划文件里的 retry 会被忽略。")
-SHORT_ACT_NOTE = ("【注意】这次 act 只推进了很少几帧（少于 {n} 帧）、也没有因为事件停下，不算一次尝试："
-                  "本次暂停的工具机会没有恢复，下一步请直接用 act 执行一段完整的尝试。")
+NO_RETRY_NOTE = ("\n本次运行限制规划轮次（平均每个房间 {n} 轮）：本章每进入一个没来过的房间存入 {n} 轮，在游戏里死亡补 {d} 轮，"
+                 "没用完的留给本章后面的房间；剩余轮数写在观测头部。{rule}"
+                 "自动重试关闭：计划文件里的 retry 会被忽略。")
+RULE_SIM = ("只有调用了模拟器的消息占一轮，其他工具不占；剩余轮数也写在每次调用模拟器的输出末尾，随时可读 "
+            "/workspace/game/rounds.json。用完后 Bash 被拒绝（模拟器只能通过它调用），请直接 act。")
+RULE_ALL = "act 与 set_effort 以外的工具每条消息占一轮，用完后只能 act。"
+PLAYBACK_NOTE = "每一轮规划在模拟器里推演过的路线，系统会在下一轮之前画进游戏给观众看（不推进游戏、不计入章节计时）。"
 
 
 def build_server(session: GameSession, study: KbStudy | None = None, gate=None) -> MCPServer:
@@ -97,6 +101,18 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     def clock_text() -> tuple[float, float]:
         return metrics.elapsed(), metrics.state.budget_s
 
+    def header_line() -> str:
+        line = effort_line(metrics)
+        if gate is not None and gate.enabled:
+            line += "\n" + gate.status_line()
+        return line
+
+    def credit(obs: dict) -> None:
+        """规划轮次：进入本章没来过的房间就存入轮次。"""
+        if gate is not None:
+            level = obs.get("level") or {}
+            gate.on_room(level.get("sid"), level.get("room"))
+
     @server.tool(name="observe", description=OBSERVE_DESCRIPTION, structured_output=False)
     async def observe() -> list:
         async with call_lock:
@@ -105,18 +121,23 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             begin()
             try:
                 obs, image = await asyncio.to_thread(session.observe)
+                credit(obs)
                 state["described_room"] = room_key(obs)
                 content: list = []
                 if image and session.cfg.images:
                     content.append(Image(data=upscale_png(image), format="png"))
-                content.append(describe_obs(obs, *clock_text(), full_room=True, effort=effort_line(metrics))
+                content.append(describe_obs(obs, *clock_text(), full_room=True, effort=header_line())
                                + "\n\n整个房间的精确数据（像素坐标）：\n" + room_json(obs)
                                + ("\n" + ws_note if session.workspace else ""))
                 return content
             finally:
                 finish()
 
-    act_description = ACT_DESCRIPTION + (NO_RETRY_NOTE.format(n=session.cfg.pause_min_frames) if session.cfg.pause_limit else "")
+    rule = RULE_SIM if session.cfg.sim else RULE_ALL
+    act_description = ACT_DESCRIPTION + (NO_RETRY_NOTE.format(n=session.cfg.rounds_per_room, d=session.cfg.death_bonus, rule=rule)
+                                         if session.cfg.pause_limit else "")
+    if session.cfg.pause_limit and session.cfg.playback and session.cfg.sim:
+        act_description += PLAYBACK_NOTE
 
     @server.tool(name="act", description=act_description, structured_output=False)
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
@@ -126,12 +147,12 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 return [note]
             begin()
             try:
+                deaths_before = metrics.state.deaths
                 outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file)
                 parts = [describe_step(outcome.result)]
-                # act 返回之后是一次新的暂停，工具预算重新计；只推进了几帧的 act 不算一次尝试，不重新计
-                if gate is not None and not gate.after_act(int(outcome.result.get("consumed") or 0),
-                                                           str(outcome.result.get("stop") or "")):
-                    parts.append(SHORT_ACT_NOTE.format(n=gate.min_frames))
+                if gate is not None:
+                    gate.on_death(metrics.state.deaths - deaths_before)  # 在游戏里死了：补规划轮次
+                    credit(outcome.obs)
                 if len(outcome.attempts) > 1:
                     parts.insert(0, describe_attempts(outcome.attempts))
                 if outcome.auto_notes:
@@ -142,7 +163,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
                     parts.append("【进入新房间】下面是新房间的截图、整个房间的字符地图，以及整个房间的精确数据（JSON）。")
-                parts.append(describe_obs(outcome.obs, *clock_text(), full_room=new_room, effort=effort_line(metrics)))
+                parts.append(describe_obs(outcome.obs, *clock_text(), full_room=new_room, effort=header_line()))
                 if new_room:
                     parts.append("整个房间的精确数据（像素坐标）：\n" + room_json(outcome.obs))
                 if session.workspace:

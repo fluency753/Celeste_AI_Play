@@ -136,8 +136,16 @@ class RunConfig:
     quota_wait: bool = True          # 额度用完（或到 max_usage）时等重置后接着同一个会话；False 则直接停止
     quota_wait_max_h: float = 24.0   # 重置还要等更久时直接停止
     quota_wait_cap_s: float | None = None  # 只用于测试：等待额度的最长秒数
-    pause_limit: bool = True         # 每次暂停（act 返回后）只允许一轮工具调用，然后必须 act；自动重试关闭（见 pausegate.py）
-    pause_min_frames: int = 20       # act 至少推进这么多帧（或因事件停下）才算一次尝试、重新计工具预算
+    pause_limit: bool = True         # 限制规划轮次（按章节记账，见 pausegate.py）；自动重试关闭
+    rounds_per_room: int = 5         # 每进入本章一个没来过的房间存入的规划轮次
+    death_bonus: int = 1             # 在游戏里死亡一次补的规划轮次
+    playback: bool = True            # 执行前把这次规划里模拟器推演过的路线画进游戏（规划回放，见 playback.py）
+    playback_ratio: int = 100        # 每多少条推演画一条路线（线条数随推演条数等比增长）
+    playback_min_tracks: int = 40    # 每一轮至少画几条（推演少于这个数时全画）
+    playback_speed: float = 2.0      # 回放倍速：每个画面帧推进几帧游戏时间（所有轮次相同）
+    playback_recolor: float = 4.0    # 线走到头定下结果后（死亡变红、金色变金）从终点往起点变色的传导倍速
+    playback_stagger_s: float = 0.8  # 一轮里各条路线按推演先后陆续出场的时间跨度（秒）
+    playback_max_s: float = 30.0     # 一轮回放的时长上限（超过时这一轮整体提高倍速，防止回放拖得太长）
     thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
     sim: bool = False                # 预置模拟器：把本机的 sim/dist 只读挂到容器的 /sim，每次停下都把当前帧的完整场景写进工作区
 

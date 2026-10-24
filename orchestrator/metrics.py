@@ -49,7 +49,20 @@ class MetricsState:
     compactions: int = 0
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）
     retries: int = 0                  # 自动重试次数（重算程序运行次数，不唤醒大模型）
-    pause_denials: int = 0            # 每次暂停的工具预算用完后被拒绝的工具调用次数（见 pausegate.py）
+    pause_denials: int = 0            # 规划轮次用完后被拒绝的工具调用次数（见 pausegate.py）
+    plan_rounds_left: int | None = None  # 本章还剩的规划轮次；None = 不限（--free-planning）
+    plan_rounds_used: int = 0         # 用掉的规划轮次（准备阶段不算）
+    replaying: bool = False           # 规划回放正在画面上播放（与智能体的思考同时进行，不改 status）
+    replay_round: int = 0             # 正在回放这次规划的第几轮（0 = 执行前画最终路线）
+    replay_rounds: int = 0            # 已收进的轮数
+    replay_label: str = ""            # 这一轮的说明（智能体写在 Bash 的 description 里）
+    replay_runs: int = 0              # 这一轮在模拟器里推演了多少条路线
+    replays: int = 0                  # 播过的规划回放段数
+    replay_s: float = 0.0             # 规划回放用时（游戏不推进；逐轮回放与智能体的思考、工具同时进行，照常计入它们）
+    replay_act_s: float = 0.0         # 其中执行前在 act 里把镜头送回 Madeline 的用时（和游戏推进时间一样不计入工具时间）
+    sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）
+    sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数
+    sim_best_frames: int = 0          # 当前房间里推演出的最快出房帧数（0 = 还没有；换房间清零）
     replan_s: float = 0.0             # 重算程序用时（已包含在工具时间里）
     study_s: float = 0.0              # 准备阶段（读知识库等）用时，不计入 elapsed_s
     kb_progress: float | None = None  # 知识库已读比例（0~1）；None = 没有准备阶段
@@ -114,7 +127,7 @@ class Metrics:
     def _flush_locked(self) -> None:
         """把上一次结算到现在的这一段记进思考或工具时间（规则见模块说明）。"""
         now = time.monotonic()
-        game = self.state.play_game_s + self.state.auto_game_s
+        game = self.state.play_game_s + self.state.auto_game_s + self.state.replay_act_s
         dt = now - self._seg_mark
         if self.playing and self._in_turn and self._pause_start is None and dt > 0:
             if self._tools:
@@ -216,7 +229,8 @@ class Metrics:
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
                 "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "context_tokens",
-                "effort_pending", "effort_changes", "effort_log", "pause_denials")
+                "effort_pending", "effort_changes", "effort_log", "pause_denials", "plan_rounds_used", "replays", "replay_s", "replay_act_s",
+                "sim_calls", "sim_rollouts")
 
     def restore(self, previous: dict, resumed_from: str) -> None:
         """续跑：接着上一段运行的统计累计（现实用时从上一段的值接着走）。"""
@@ -235,7 +249,7 @@ class Metrics:
             self.state.phase_since_wall = self.state.thinking_since_wall = now
             self._in_turn = False
             self._tools.clear()
-            self._seg_mark, self._seg_game = time.monotonic(), self.state.play_game_s + self.state.auto_game_s
+            self._seg_mark, self._seg_game = time.monotonic(), self.state.play_game_s + self.state.auto_game_s + self.state.replay_act_s
             self._write_locked()
 
     def update(self, **changes) -> None:

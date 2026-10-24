@@ -98,6 +98,10 @@ def leave_level_by_pause_menu(client, max_wait_frames: int = 60) -> dict:
     if menu is None:
         if (obs.get("level") or {}).get("paused"):
             obs = step(["1,B", "20"])  # 暂停中但没有可识别的菜单：先取消暂停
+        waited = 0
+        while (obs.get("level") or {}).get("canPause") is False and waited < 240:
+            obs = step(["2"])  # 进章节的圆圈转场、换房间等还没结束时游戏不让暂停：等它结束（反正要离开关卡）
+            waited += 2
         obs = step(["1,P"])
         waited = 0
         while not (obs.get("pauseMenu") or {}).get("focused") and waited < max_wait_frames:

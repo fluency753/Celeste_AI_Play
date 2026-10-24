@@ -42,6 +42,7 @@
     "tool": "#9D8CF2",
     "retrying": "#F08A3C",
     "studying": "#7AA2F7",
-    "idle": "#8A93A6"
+    "idle": "#8A93A6",
+    "replay": "#F2C14E"
   }
 }
