@@ -138,9 +138,9 @@
 
   /* 运行页里"存档与章节""知识库"的摘要 */
   .summary { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; display: grid; gap: 3px; }
-  .summary div { display: grid; grid-template-columns: 64px 1fr; gap: 8px; font-size: 13px; }
-  .summary div span:first-child { color: var(--muted); }
-  .summary .go { justify-self: start; margin-top: 4px; }
+  .summary > div:not(.presets) { display: grid; grid-template-columns: 64px 1fr; gap: 8px; font-size: 13px; }
+  .summary > div:not(.presets) span:first-child { color: var(--muted); }
+  .summary .go { margin-top: 6px; }
 
   details.more { border-top: 1px solid var(--line); padding-top: 10px; margin-bottom: 14px; }
   details.more summary { cursor: pointer; color: var(--muted); }

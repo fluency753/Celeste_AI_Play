@@ -232,7 +232,6 @@ def about() -> dict:
     """版本、环境、项目地址、作者、更新记录与待办。"""
     import platform
     import re
-    import shutil
     from orchestrator.gamepaths import celeste_dir_info
     git = _run(["git", "log", "-1", "--format=%h|%cs|%s"])
     commit, date, subject = (git.split("|", 2) + ["", "", ""])[:3] if git else ("", "", "")
@@ -265,6 +264,11 @@ def about() -> dict:
     except OSError:
         pass
     reference = REPO_ROOT / "kb" / "reference"
+    try:
+        from orchestrator.codex_rpc import codex_executable
+        codex = codex_executable()
+    except Exception:  # noqa: BLE001（没装 Codex 时它会报错）
+        codex = ""
 
     def read(name: str) -> str:
         try:
@@ -291,8 +295,7 @@ def about() -> dict:
             {"name": "Docker", "value": docker or "没找到", "ok": bool(docker)},
             {"name": "OBS", "value": str(obs_dir) if obs_dir else "没找到",
              "note": "锁步插件已安装" if plugin else ("锁步插件没装" if obs_dir else ""), "ok": bool(obs_dir and plugin)},
-            {"name": "Codex CLI", "value": "已安装" if shutil.which("codex") else "没找到", "note": "原生 GPT 执行器用",
-             "ok": bool(shutil.which("codex"))},
+            {"name": "Codex", "value": codex or "没找到", "note": "原生 GPT 执行器用", "ok": bool(codex)},
         ],
         "changelog": read("CHANGELOG.md"), "todo": read("TODO.md"),
     }
