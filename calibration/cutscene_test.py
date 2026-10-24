@@ -99,6 +99,14 @@ class CutsceneTests(unittest.TestCase):
         self.s._commit_completion({'scene':'AreaComplete'})
         self.assertTrue(self.s.done)
 
+    def test_story_completion_continues_to_next_chapter_when_queued(self):
+        self.s.chapter_queue=[1]
+        self.s._handle_events({'events':[{'type':'complete'}]})
+        with patch.object(self.s,'_enter_next_chapter',return_value=(dialog(),None,[])) as next_chapter:
+            self.s.cutscene('advance')
+        next_chapter.assert_called_once()
+        self.assertFalse(self.s.done)
+
     def test_entry_hands_intro_to_agent_without_skip_or_inputs(self):
         obs={'scene':'IntroVignette','save':{'name':'player','slot':1}}
         client=Mock();client.call.return_value={'obs':obs}

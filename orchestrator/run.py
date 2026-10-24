@@ -168,13 +168,13 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.save_slot = args.save_slot if args.save_slot is not None else previous['state'].get('save_slot') if previous else None
     if cfg.save_slot is not None and (cfg.save_slot < 0 or args.create_save):
         raise SystemExit('--save-slot 须为非负槽位编号，不能与 --create-save 合用')
-    if args.create_save and (args.resume or args.skip_enter or args.chapter != 0 or args.chapters):
-        raise SystemExit('--create-save 只可用于 --chapter 0 新开一局，不能与续跑或跳过进档合用')
     if args.chapters:
         cfg.chapters = [int(x) for x in args.chapters.split(",") if x.strip()]
         if not cfg.chapters:
             raise SystemExit("--chapters 至少要给一个章节编号")
         cfg.chapter = cfg.chapters[0]
+    if args.create_save and (args.resume or args.skip_enter or cfg.chapter != 0):
+        raise SystemExit('--create-save 只可从序章新开一局，不能与续跑或跳过进档合用')
     cfg.runtime = args.runtime
     cfg.engine = args.engine or (previous["state"].get("engine", "claude") if previous else "claude")
     cfg.knowledge_profile = args.knowledge or (previous["state"].get("knowledge_profile", "full") if previous

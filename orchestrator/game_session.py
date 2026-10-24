@@ -703,6 +703,8 @@ class GameSession:
             self._commit_completion(obs)
             if not self.done and not story_pending(obs) and not obs.get('controllable'):
                 obs,_,_,_=self._auto_advance(obs,None)
+            if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
+                obs,_,_=self._enter_next_chapter()
             reply=self.client.call('observe',image=True,scope='room',fields=True)
             obs=self._track_motion(enrich_obs(reply['obs']))
             self._update_metrics_from_obs(obs);self._write_workspace(obs)
