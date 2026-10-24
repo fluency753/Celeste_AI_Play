@@ -3,9 +3,10 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from orchestrator.config import REPO_ROOT
+from orchestrator.config import REPO_ROOT, RunConfig
+from orchestrator.modes import KNOWLEDGE_OF_MODE, game_tools, remind_seconds
 from orchestrator.observation import describe_obs
-from orchestrator.prompting import compose_prompt
+from orchestrator.prompting import play_prompt
 from orchestrator.run import _keeps_game_frozen
 
 
@@ -21,16 +22,55 @@ def _observation():
                          {"id": 2, "type": "Strawberry", "cat": "collectible", "x": 8, "y": 8, "w": 4, "h": 4}]}
 
 
+def _cfg(mode="speedrun", sim=True, live=False, sim_assist=False, cutscene_mode="auto"):
+    cfg = RunConfig(agent="t", save="test", model="opus")
+    cfg.mode, cfg.knowledge_profile = mode, KNOWLEDGE_OF_MODE[mode]
+    cfg.sim, cfg.live, cfg.sim_assist, cfg.cutscene_mode = sim, live, sim_assist, cutscene_mode
+    cfg.live_remind_s = remind_seconds(live)
+    cfg.chapter, cfg.chapters = 1, None
+    return cfg
+
+
 class FormalRunTest(unittest.TestCase):
-    def test_live_pacing_only_for_native_gpt(self):
-        claude = compose_prompt("container", sim=True, live=True)
-        self.assertNotIn("直播节奏", claude)
-        self.assertNotIn("找到一条安全", claude)
-        self.assertIn("半分钟", claude)
-        codex = compose_prompt("container", sim=True, live=True, engine="codex", remind_s=10)
-        self.assertIn("直播节奏", codex)
-        self.assertIn("10 秒", codex)
-        self.assertNotIn("{remind}", claude + codex)
+    def test_prompt_versions_by_mode(self):
+        speedrun = play_prompt(_cfg())
+        self.assertIn("# 思考与工具状态（HUD）", speedrun)
+        self.assertIn("半分钟", speedrun)
+        self.assertNotIn("# 直播", speedrun)
+        self.assertNotIn("exit_level", speedrun)
+        self.assertNotIn("当前剧情模式", speedrun)
+        self.assertIn("预置模拟器", speedrun)
+        nosim = play_prompt(_cfg(sim=False))
+        self.assertIn("本次运行不提供预置模拟器", nosim)
+        self.assertNotIn("# 预置模拟器", nosim)
+        speedrun_live = play_prompt(_cfg(live=True))
+        self.assertIn("# 直播", speedrun_live)
+        self.assertIn("10 秒", speedrun_live)
+        self.assertIn("exit_level", speedrun_live)
+        self.assertNotIn("节奏要求", speedrun_live)          # 速通 + 直播不加探索的节奏要求
+        self.assertNotIn("找到一条安全", speedrun_live)
+        explore = play_prompt(_cfg(mode="explore", sim=False, sim_assist=True))
+        self.assertIn("# 新手探索 Celeste", explore)
+        self.assertIn("observe/act/narrate/set_effort/cutscene/simulate", explore)
+        self.assertNotIn("exit_level", explore)
+        self.assertNotIn("# 直播", explore)
+        self.assertNotIn("10–20 秒", explore)
+        self.assertIn("本次指定章节：1 被遗弃之城", explore)
+        explore_live = play_prompt(_cfg(mode="explore", sim=False, sim_assist=True, live=True))
+        self.assertIn("# 直播（探索）", explore_live)
+        self.assertIn("10–20 秒", explore_live)
+        self.assertIn("observe/act/narrate/set_effort/exit_level/cutscene/simulate", explore_live)
+        for text in (speedrun, nosim, speedrun_live, explore, explore_live):
+            self.assertNotIn("{remind}", text)
+            self.assertNotIn("{game_tools}", text)
+            self.assertNotIn("# 新手探索", text) if text in (speedrun, nosim, speedrun_live) else None
+
+    def test_tools_by_mode(self):
+        self.assertEqual(game_tools(_cfg()), ["observe", "act", "narrate", "set_effort"])
+        self.assertEqual(game_tools(_cfg(live=True)), ["observe", "act", "narrate", "set_effort", "exit_level", "cutscene"])
+        self.assertEqual(game_tools(_cfg(mode="explore", sim=False, sim_assist=True)),
+                         ["observe", "act", "narrate", "set_effort", "cutscene", "simulate"])
+        self.assertIn("cutscene", game_tools(_cfg(cutscene_mode="agent")))
 
     def test_route_hints_only_in_explore(self):
         speedrun = describe_obs(_observation(), full_room=True)

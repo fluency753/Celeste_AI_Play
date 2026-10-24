@@ -275,5 +275,5 @@ def _launch_play(current, options):
                           '--scope',options.get('scope','chapter'),
                           '--sim-assist' if options.get('sim_assist',False) else '--no-sim-assist',
                           '--prepared',str(directory),'--chapter',str(options['chapter']), '--effort',manual_effort or read_json(current/'metrics.json').get('effort',state['effort']),
-                          '--keep-obs-open','--playback','--continuous-music','--start-paused','--cutscene-mode',mode] +
+                          '--live','--keep-obs-open','--playback','--continuous-music','--start-paused','--cutscene-mode',mode] +
                          (['--create-save'] if options['create_save'] else ['--save-slot',str(options['save_slot'])]))

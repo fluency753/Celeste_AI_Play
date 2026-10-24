@@ -231,8 +231,8 @@ class ClaudeRunner(SessionControls):
 
     def _game_tools(self) -> list[str]:
         if self.prepare_only or self.chat_only:
-            return ['mcp__celeste__set_effort'] + ([NARRATE_TOOL] if self.cfg.live else [])
-        return GAME_TOOLS + ([NARRATE_TOOL] if self.cfg.live else [])
+            return ['mcp__celeste__set_effort'] + [NARRATE_TOOL]
+        return GAME_TOOLS + [NARRATE_TOOL]
 
     def _lifecycle_prompt(self):
         if self.prepare_only:

@@ -480,10 +480,14 @@ class Playback:
         stagger = int(self.cfg.playback_stagger_s * 60)
         recolor = float(self.cfg.playback_recolor)
         seg = build_segment(rd.tracks, speed, stagger, recolor)
-        cap = self.cfg.playback_max_s * 60
-        if seg["frames"] > cap:   # 太长：这一轮整体提高倍速
-            factor = seg["frames"] / cap
-            seg = build_segment(rd.tracks, speed * factor, max(15, int(stagger / factor)), recolor * factor)
+        cap = self.round_cap_frames()
+        factor = 1.0
+        for _ in range(8):        # 太长：这一轮整体按比例加速（出场间隔、停留与淡出也一起缩短），直到在上限内画完
+            if seg["frames"] <= cap:
+                break
+            factor *= seg["frames"] / cap
+            seg = build_segment(rd.tracks, speed * factor, max(1, int(stagger / factor)), recolor * factor,
+                                hold=max(1, int(18 / factor)), fade=max(1, int(15 / factor)))
         seg["camera"] = "keep"
         try:
             reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=rd.rollouts)
@@ -496,6 +500,12 @@ class Playback:
                   "tracks": [{"kind": t.kind, "stop": STOPS.get(t.stop), "frames": len(t.path),
                               "end": [round(float(v), 1) for v in t.path[-1]]} for t in rd.tracks]}
         self._archive(record)
+
+    def round_cap_frames(self) -> int:
+        """一轮回放最多画多少帧：playback_round_s（1A 第一间那样一屏大的房间）× 当前房间面积 / (320×180)。"""
+        bounds = ((self.session.last_obs or {}).get("level") or {}).get("bounds")
+        scale = (bounds[2] * bounds[3]) / (320 * 180) if bounds and bounds[2] > 0 and bounds[3] > 0 else 1.0
+        return max(1, round(self.cfg.playback_round_s * scale * 60))
 
     def _call(self, seg: dict, round_no: int, label: str, runs: int, in_act: bool = False) -> dict | None:
         """发一段回放给桥接并等它放完（持有游戏连接的锁）。HUD 在这期间显示"规划回放"。"""

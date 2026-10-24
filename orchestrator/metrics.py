@@ -71,7 +71,9 @@ class MetricsState:
     replay_act_s: float = 0.0         # 其中执行前在 act 里把镜头送回 Madeline 的用时（和游戏推进时间一样不计入工具时间）
     tool_call: str = ""               # 正在调用的工具（HUD 的"调用工具"一栏，例如"Bash · 搜索第二个房间"；没有时为空）
     tool_status: str = ""             # 实时展示：正在运行的程序用 show.status() 报告的进度（工具调用返回后清空）
-    live: bool = False                # 实时展示开着（HUD 据此在规划回放时仍把思考语句放在主位）
+    live: bool = False                # 智能体用 narrate 实时更新思考（所有模式都开；HUD 据此在规划回放时仍把思考语句放在主位）
+    live_mode: bool = False           # 直播模式
+    play_mode: str = ""               # 模式说明，例如"速通模式（开模拟器）"、"探索模式 + 直播"
     narrates: int = 0                 # 实时展示：智能体调用 narrate 的次数
     narrate_reminders: int = 0        # 实时展示：思考状态累计半分钟没有 narrate、在下一次调用工具时提醒的次数
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）

@@ -38,6 +38,7 @@ from .metrics import Metrics
 from .recording import Recorder, RecordingError, options_from
 from .pausegate import PauseGate
 from .live import LiveStatus
+from .modes import EXPLORE, KNOWLEDGE_OF_MODE, MODE_OF_KNOWLEDGE, SPEEDRUN, describe as describe_mode, remind_seconds
 from .playback import Playback
 from .server import LIVE_REMINDER, TRANSPORT_SECURITY, build_server
 
@@ -49,8 +50,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="独立执行器：claude（原有）、codex（原生 GPT，复用 Codex 登录）")
     ap.add_argument("--prepared", help="复用 preparation 完成的知识库准备与独立会话（校验知识库未变化）")
     ap.add_argument("--start-paused", action="store_true", help="原生 GPT 启动后保持暂停，可先聊天再点继续")
+    ap.add_argument("--mode", choices=["speedrun", "explore"], default=None,
+                    help="游玩模式（二选一）：speedrun 速通模式（Claude 执行器默认）：完整知识库，可选是否开放预置模拟器；"
+                         "explore 探索模式（原生 GPT 默认）：只有基本操作与工具说明，不开放模拟器文件，可选限额短路线预测。"
+                         "直播模式用 --live 叠加")
     ap.add_argument("--knowledge", choices=["explore", "full"], default=None,
-                    help="原生 GPT 默认 explore：新手探索；full 保留原有速通资料")
+                    help="旧参数，等同 --mode：full = speedrun，explore = explore")
     ap.add_argument("--save", required=True, help="游戏内存档名，如 test、opus5.5、fable5.1")
     ap.add_argument("--save-slot", type=int, help="已有存档的槽位编号；同名存档通过槽位区分")
     ap.add_argument('--cutscene-mode',choices=['auto','agent'],default=None,help='剧情：auto主控自动跳过；agent自行观看、推进或跳过')
@@ -115,14 +120,14 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="开放预置模拟器（容器运行方式下默认开启，写不写都一样）：本机 sim/dist 只读挂到容器的 /sim，"
                          "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
     ap.add_argument("--sim-assist", action=argparse.BooleanOptionalAction, default=None,
-                    help="新手 GPT 默认开启按体力计费的短路线预测；不向智能体开放模拟器文件")
+                    help="只用于探索模式：有额度的短路线预测（探索模式默认开启）；不向智能体开放模拟器文件")
     ap.add_argument("--live", dest="live", action="store_true", default=None,
-                    help="实时展示（默认开启，写不写都一样）：要求智能体思考期间用 narrate 工具随时更新 HUD 上的思考内容，"
-                         "运行程序期间用 /workspace/game/show.py 的 status() 报告进度（HUD 工具栏实时显示）")
+                    help="直播模式（默认关，可与速通或探索模式叠加）：HUD 默认用可交互的网页形式，解说计时 10 秒，"
+                         "可按用户要求退出关卡；速通 + 直播不改变速通目标，探索 + 直播另加直播节奏")
     ap.add_argument("--no-live", dest="live", action="store_false",
-                    help="关闭实时展示：HUD 的思考内容只在每次 act 时更新（之前的做法）")
+                    help="不开直播模式（默认）；续跑时用来关掉原运行的直播模式")
     ap.add_argument("--no-sim", dest="sim", action="store_false",
-                    help="关模拟器的版本：不开放预置模拟器，智能体只能用自己的办法通关；提示词不教打法，只写目标、规则与工具接口"
+                    help="速通模式里关模拟器的版本：不开放预置模拟器，智能体只能用自己的办法通关；提示词不教打法，只写目标、规则与工具接口"
                          "（算出的逐帧轨迹可以用工作区的 show.trajectory() 交给系统画出来）")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
@@ -150,7 +155,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if args.sim is None:
             args.sim = bool(state["sim"])
         if args.live is None:
-            args.live = bool(state.get("live", True))
+            # 直播模式记在 live_mode 里；之前的运行（live 表示实时展示）不算直播
+            args.live = bool(state.get("live_mode", False))
         if args.record is None:
             args.record = bool(state.get("record", True))
         if args.playback is None:
@@ -184,12 +190,17 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.runtime = args.runtime
     cfg.engine = args.engine or (previous["state"].get("engine", "claude") if previous else "claude")
     adapter = runtime(cfg.engine)
-    cfg.knowledge_profile = args.knowledge or (previous["state"].get("knowledge_profile", "full") if previous
-                                             else adapter.default_knowledge)
-    if previous and cfg.knowledge_profile != previous["state"].get("knowledge_profile", "full"):
-        raise SystemExit("不能通过 --resume 改变知识范围；请新建准备会话，避免继承已有攻略知识")
-    # 解说提醒：原生 GPT 直播与新手探索 10 秒；Claude 执行器的速通运行半分钟（与之前一致）
-    cfg.live_remind_s = 10.0 if cfg.engine == "codex" or cfg.knowledge_profile == "explore" else 30.0
+    if args.mode and args.knowledge and MODE_OF_KNOWLEDGE[args.knowledge] != args.mode:
+        raise SystemExit("--mode 与旧参数 --knowledge 不一致，只写 --mode 即可")
+    if previous:
+        state = previous["state"]
+        default_mode = state.get("mode") or MODE_OF_KNOWLEDGE.get(state.get("knowledge_profile", "full"), SPEEDRUN)
+    else:
+        default_mode = MODE_OF_KNOWLEDGE.get(adapter.default_knowledge, SPEEDRUN)
+    cfg.mode = args.mode or (MODE_OF_KNOWLEDGE[args.knowledge] if args.knowledge else default_mode)
+    cfg.knowledge_profile = KNOWLEDGE_OF_MODE[cfg.mode]
+    if previous and cfg.mode != default_mode:
+        raise SystemExit("不能通过 --resume 改变游玩模式（速通 / 探索）；请新开一次运行，避免继承另一种模式的知识")
     if not any(a == '--model' or a.startswith('--model=') for a in sys.argv) and not previous:
         cfg.model = adapter.default_model
     if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv) and not previous:
@@ -211,9 +222,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.quota_wait_cap_s = args.quota_wait_cap_seconds
     cfg.quota_wait_max_h = args.quota_wait_max_hours
     if args.sim is None:
-        args.sim = args.runtime == "container" and cfg.knowledge_profile != "explore"
-    if cfg.knowledge_profile == "explore" and args.sim:
-        raise SystemExit("新手探索不提供精确模拟器；需要原有速通模式时明确选择 --knowledge full")
+        args.sim = args.runtime == "container" and cfg.mode == SPEEDRUN
+    if cfg.mode == EXPLORE and args.sim:
+        raise SystemExit("探索模式不开放模拟器文件（只能用 --sim-assist 的限额短路线预测）；要开模拟器请用速通模式 --mode speedrun")
+    if cfg.mode == SPEEDRUN and args.sim_assist:
+        raise SystemExit("--sim-assist 只用于探索模式；速通模式用 --sim / --no-sim 决定是否开放预置模拟器")
     cfg.sim = args.sim
     cfg.sim_assist = (bool(previous["state"].get("sim_assist", False)) if previous else
                       cfg.knowledge_profile == "explore" and cfg.runtime == 'container'
@@ -226,7 +239,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.rounds_per_room = max(1, args.rounds_per_room)
     cfg.room_scale = max(1.0, args.room_scale)
     cfg.playback = args.playback is not False   # 默认开启
-    cfg.live = args.live is not False     # 默认开启
+    cfg.live = bool(args.live)            # 直播模式，默认关
+    cfg.live_remind_s = remind_seconds(cfg.live)   # 解说计时：直播 10 秒，其余半分钟
     args.record = args.record is not False  # 默认开启
     cfg.record = args.record
     from .recording import load_config
@@ -275,7 +289,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
-             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "record": cfg.record, "playback": cfg.playback, "all_chapters": all_chapters, "session_id": session_id,
+             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "all_chapters": all_chapters, "session_id": session_id,
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -632,13 +646,15 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
     if playback.collect:
         session.playback = playback
     live = None
-    metrics.update(live=bool(cfg.live))
-    if cfg.live and session.workspace is not None:
+    # narrate 与工具状态在所有模式都开（HUD 据 live 把思考放在主位）；直播模式另记 live_mode
+    metrics.update(live=True, live_mode=bool(cfg.live), play_mode=describe_mode(cfg))
+    print(f"[run] 模式：{describe_mode(cfg)}", flush=True)
+    if session.workspace is not None:
         live = LiveStatus(session.workspace / "game" / "hud_status.json", metrics).start()
     server = build_server(session, study, gate)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
-    add_gate_route(app, gate, metrics, cfg.live_remind_s if cfg.live and cfg.runtime == "container" else None,
+    add_gate_route(app, gate, metrics, cfg.live_remind_s if cfg.runtime == "container" else None,
                    session=session)
     web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
     web_task = asyncio.create_task(web.serve())

@@ -30,7 +30,7 @@ if (-not $Play) {
         if ($LASTEXITCODE -ne 0) { throw '准备会话校验失败；游戏、HUD 和 OBS 未改动。' }
     }
     $chapterArgs = if ($Chapters) { @('--chapters', $Chapters) } else { @('--chapter', $Chapter) }
-    $runArgs = @('--engine', 'codex', '--agent', 'gpt-native',
+    $runArgs = @('--engine', 'codex', '--agent', 'gpt-native', '--live',
                  '--keep-obs-open', '--playback', '--continuous-music')
     if (-not $Resume) {
         if (-not $Save.Trim()) { throw '请显式指定 -Save 玩家名；不再默认使用 test。' }

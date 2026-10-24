@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .prompting import play_prompt
+from .modes import game_tools
 from .codex_rpc import CodexRPC
 from .codex_workspace import workspace_call
 from .session_controls import RuntimeCapabilities, SessionControls
@@ -297,6 +298,7 @@ class CodexRunner(SessionControls):
         self._events = (self.run_dir / "codex_events.jsonl").open("a", encoding="utf-8")
         self.metrics.update(telemetry_source="codex_app_server", chat_thread_id=None,
                             tool_calls=self.metrics.state.tool_calls or 0)
+        tools = game_tools(self.cfg)   # 本次按模式注册的游戏工具；剧情模式的说明已在 play_prompt 里
         prompt = play_prompt(self.cfg).replace("调用 simulate 工具", "调用 celeste_simulate 工具")
         prompt += ("\n\n# 原生 Codex 工具映射\n"
                    "这里的 Read/Write/Bash 分别是 celeste_read/celeste_write/celeste_bash；"
@@ -304,9 +306,10 @@ class CodexRunner(SessionControls):
                    "所有自写程序都必须经 celeste_bash 在 Docker 中执行。不要调用任何宿主 shell、apply_patch、"
                    "MCP、浏览器或子智能体；宿主文件系统是只读的。"
                    "只输出给观众的简短公开解说，不输出内部推理正文。"
-                   "用户要求退出关卡时调用 celeste_exit_level；剧情可用 celeste_cutscene 选择wait/advance/choose/skip。公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
+                   + ("用户要求退出关卡时调用 celeste_exit_level；" if "exit_level" in tools else "")
+                   + ("剧情可用 celeste_cutscene 选择wait/advance/choose/skip。" if "cutscene" in tools else "")
+                   + "公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
                    "每次操作后仍应立即公开说明下一步打算，不要持续静默。")
-        prompt += f'\n当前剧情模式：{self.cfg.cutscene_mode}。auto由主控自动跳过，agent由你调用cutscene的wait/advance/choose/skip动作决定。遇到分支选项必须明确choose，不要盲目确认。'
         if self.chat_only:
             prompt += (("\n\n# 试玩前聊天\n这是新会话，已完成入门资料准备，还没有开始试玩。" if getattr(self, "ready_to_play", False)
                         else "\n\n# 试玩结束后的聊天\n本次试玩已经结束。") +

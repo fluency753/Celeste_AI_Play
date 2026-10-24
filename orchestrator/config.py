@@ -153,14 +153,16 @@ class RunConfig:
     playback_speed: float = 3.0      # 回放倍速：每个画面帧推进几帧游戏时间（所有轮次相同）
     playback_recolor: float = 8.0    # 线走到头定下结果后（死亡变红、金色变金）从终点往起点变色的传导倍速
     playback_stagger_s: float = 0.8  # 一轮里各条路线按推演先后陆续出场的时间跨度（秒）
-    playback_max_s: float = 30.0     # 一轮回放的时长上限（超过时这一轮整体提高倍速，防止回放拖得太长）
+    playback_round_s: float = 1.5    # 一轮回放的最长时长（以 1A 第一间、一屏 320×180 的房间为准；房间面积是它的几倍就乘几倍）；
+                                     # 按 playback_speed 画会超过时，这一轮整体按比例加速，在这个时长内画完
     thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
     sim: bool = False                # 预置模拟器：把本机的 sim/dist 只读挂到容器的 /sim，每次停下都把当前帧的完整场景写进工作区
     sim_assist: bool = False         # 新手模式的限额模拟：后台持有模拟器，真实试玩赚取体力
-    knowledge_profile: str = "full"  # explore：精简入门资料和独立工作区；full：原有速通资料
+    knowledge_profile: str = "full"  # explore：精简入门资料和独立工作区；full：原有速通资料（由 mode 决定，见 modes.py）
+    mode: str = "speedrun"           # 速通模式 speedrun / 探索模式 explore（互斥）；直播模式是 live，可以和任一个叠加
     record: bool = True              # OBS 录屏：主控自己启动 OBS（没在运行时）并锁步录制，结束时关掉它启动的 OBS
     continuous_music: bool = False   # 直播：冻结逻辑时继续播放音乐，仅暂停音效
-    live: bool = True                # 实时展示：智能体思考期间用 narrate 随时更新 HUD 的思考内容，运行程序期间报告进度（HUD 工具栏）
+    live: bool = False               # 直播模式（--live）：网页 HUD、解说计时 10 秒、可按用户要求退出关卡；narrate 在所有模式都有
     live_remind_s: float = 30.0      # 实时展示：累计这么多秒没有公开解说，在下一次工具调用时提醒（原生 GPT 与新手探索为 10 秒，见 run.py）
 
     @property

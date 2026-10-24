@@ -14,6 +14,7 @@ from .kb_study import KbStudy
 from .observation import describe_attempts, describe_obs, describe_step, room_json, upscale_png
 from .exploration import GEOMETRY, action_hint
 from .efforts import valid_effort
+from .modes import game_tools, is_explore
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图、整个房间的字符地图与精确数据（JSON；房间信息以精确数据为准，截图仅作参考），其余时候只给文字状态与画面附近的信息。
 
@@ -88,13 +89,14 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                        log_level="WARNING")
     metrics = session.metrics
     ws_note = SIM_NOTE if session.cfg.sim else WORKSPACE_NOTE
-    explore = session.cfg.knowledge_profile == "explore"
-    # 原生 GPT 会话（codex）与新手探索才有的工具：用户要求时退出关卡、智能体自己处理剧情、限额模拟辅助。
-    # Claude 执行器的速通运行（默认 cutscene_mode=auto、不开 sim_assist）不注册它们，工具集与之前一致。
-    native = getattr(session.cfg, "engine", "claude") == "codex"
-    tool_exit_level = native or explore
-    tool_cutscene = native or explore or session.cfg.cutscene_mode == "agent"
-    tool_simulate = bool(getattr(session.cfg, "sim_assist", False))
+    explore = is_explore(session.cfg)
+    # 工具按模式注册（modes.game_tools）：narrate 所有模式都有；exit_level 只在直播模式（用户要求时退出关卡）；
+    # cutscene 在探索、直播或 --cutscene-mode agent 时；simulate 只在探索模式开了限额短路线预测时。
+    # 速通模式不开直播时工具集与之前一致：observe、act、narrate、set_effort。
+    tools = set(game_tools(session.cfg))
+    tool_exit_level = "exit_level" in tools
+    tool_cutscene = "cutscene" in tools
+    tool_simulate = "simulate" in tools
     session.cutscene_tool = tool_cutscene      # 没有剧情工具时，HUD 不提供"剧情交给智能体"的切换
     # 截图只在进入新房间时（以及主动 observe 时）附上；同时给出整个房间的实体与地图，平时只描述画面附近
     # 思考与工具时间由主控按 Claude Code 输出流里的 tool_use / tool_result 事件统计（见 metrics.py），这里不计时
@@ -264,23 +266,23 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 result = await asyncio.to_thread(session.simulate, {'candidates': candidates})
             return [json.dumps(result, ensure_ascii=False)]
 
-    if session.cfg.live:
-        @server.tool(name="narrate", description=NARRATE_DESCRIPTION, structured_output=False)
-        async def narrate(thought: str) -> list:
-            # 不推进游戏、不受准备阶段限制、不开始计现实用时；只换 HUD 上的思考语句
-            text = " ".join((thought or "").split())
-            if not text:
-                return ["thought 不能为空。"]
-            if len(text) > 120:
-                return ["thought 太长，请压缩到一两句话（120 字以内）。"]
-            metrics.set_thought(text)
-            metrics.add(narrates=1)
-            metrics.narrated()
-            try:  # 进 HUD 的公开解说历史（只记这句话本身）
-                publish(session.run_dir, f"narrate:{time.time_ns()}", text)
-            except OSError:
-                pass
-            return ["已更新。"]
+    # narrate 在所有模式都有：思考期间更新 HUD 的思考语句
+    @server.tool(name="narrate", description=NARRATE_DESCRIPTION, structured_output=False)
+    async def narrate(thought: str) -> list:
+        # 不推进游戏、不受准备阶段限制、不开始计现实用时；只换 HUD 上的思考语句
+        text = " ".join((thought or "").split())
+        if not text:
+            return ["thought 不能为空。"]
+        if len(text) > 120:
+            return ["thought 太长，请压缩到一两句话（120 字以内）。"]
+        metrics.set_thought(text)
+        metrics.add(narrates=1)
+        metrics.narrated()
+        try:  # 进 HUD 的公开解说历史（只记这句话本身）
+            publish(session.run_dir, f"narrate:{time.time_ns()}", text)
+        except OSError:
+            pass
+        return ["已更新。"]
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
     async def set_effort(level: str, reason: str = "") -> list:
