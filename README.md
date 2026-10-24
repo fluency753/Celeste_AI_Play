@@ -59,6 +59,7 @@ cd Celeste_AI_Play
 powershell -ExecutionPolicy Bypass -File .\setup.ps1          # 一键部署：逐步检查与安装，配置平台、存档与开关，生成启动脚本
 .\start_local.ps1 -Trial                                      # 在调试存档上试跑
 .\start_local.ps1                                             # 正式挑战
+.\CelesteAIConsole.exe                                         # 或者打开控制台，在图形界面里设置并开始
 ```
 
 也可以直接运行主控（下面的 `opus5.5`、`test` 是本项目的存档名，换成你游戏里的存档名）：
@@ -72,19 +73,19 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1          # 一键部署：�
 
 ### 用控制台
 
-不想记命令行参数时，可以打开控制台：
+不想记命令行参数时，双击仓库根目录的 `CelesteAIConsole.exe` 打开控制台（部署完成后才能用：它用 `.venv` 里的 Python 打开控制台），或者：
 
 ```powershell
 .\.venv\Scripts\python.exe -m overlay.console              # 独立窗口
 .\.venv\Scripts\python.exe -m overlay.console --browser    # 或用浏览器打开 http://127.0.0.1:47790/console
 ```
 
-在控制台里可以：
+控制台有四个页面：
 
-- 选执行器、模型、推理强度、游玩模式与各个开关。
-- 选存档与要依次通关的章节，然后开始运行。
-- 运行中暂停或继续、调整推理强度、给沙箱里的智能体发消息，或者停止、中断运行。
-- 运行结束后续跑，或交还游戏控制。
+- **运行**：选执行器、模型、推理强度、游玩模式、各个开关与其余全部参数（包括规划回放倍速、解说提醒间隔、探索模式规划程序的时长与次数等可调参数），然后开始运行；运行中暂停或继续、调整推理强度、给沙箱里的智能体发消息，或者停止、中断运行；运行结束后续跑，或交还游戏控制。
+- **存档与章节**：地图（目前只有蔚蓝官方章节）、游戏位置（填一次就记住）、存档与要依次通关的章节。
+- **知识库**：按游玩模式查看、编辑智能体能读到的知识库文件，勾选每个文件的阅读权限。
+- **关于**：版本、当前环境、项目地址、作者、待办与更新记录。
 
 页面底部实时显示等价的命令行。控制台启动的运行在独立的后台进程里进行，关掉控制台窗口不影响它。详见 [docs/USAGE.md 4.10 节](docs/USAGE.md#410-控制台在图形界面里设置启动与介入运行)。
 
@@ -167,6 +168,8 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1          # 一键部署：�
 | `--quota-wait-max-hours` | 24 | 额度重置还要等超过这么多小时就停止本次运行 |
 | `--rounds-per-room` / `--room-scale` | 3 / 2 | `--limit-planning` 时：一屏大小的房间存入几轮 / 房间长、高每变成几倍轮次乘几 |
 | `--autocompact` | 平台默认 | 上下文自动压缩的窗口：`auto` 或 100000～1000000 token |
+| `--tune 名称=值` | 不改 | 修改一个可调参数，可以写多个（沿用）：规划回放倍速与每轮最长时长、解说提醒间隔、单次 act 帧数、Bash 时长、探索模式规划程序的时长与次数、限额预测规则等，全部名称与默认值见 [docs/USAGE.md 4.11 节](docs/USAGE.md#411-可调参数--tune) |
+| `--kb-deny 文件,...` | 全部可读 | 不给智能体看的知识库文件（沿用），见 [docs/USAGE.md 4.12 节](docs/USAGE.md#412-知识库的阅读权限--kb-deny) |
 | `--runtime` | `container`（沿用） | `host`：在本机运行、只开放游戏工具（早期的过渡方式，没有沙箱与模拟器） |
 | `--ffmpeg` / `--record-video-args` / `--audio-offset-ms` | 见录制配置 | 临时覆盖 ffmpeg 路径、视频编码参数、声音偏移 |
 | `--bridge-port` / `--mcp-port` / `--hud-port` | 47774 / 47780 / 47790 | 桥接、游戏工具服务、HUD 的端口 |
@@ -206,8 +209,8 @@ Claude 执行器的运行没通关就停下（时间预算用完、出错、Ctrl
 | `sim\dist\` | 预置模拟器：`celeste-sim`（Linux 单文件程序，在容器里运行）、`sim.py`（Python 接口）、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`。由游戏代码生成，不公开分发 | 从已有的开发机把整个文件夹复制到新仓库的同一位置（主控固定从这里挂进容器的 `/sim`）；没有时用 `--no-sim` 运行关模拟器的版本（探索模式的限额预测也需要它，没有时关闭） |
 | `kb\reference\` | 知识库参考资料原文：Celeste Wiki 技巧页面、草莓酱训练场与机制库（中英文）、社区资料（文字版与 PDF） | 复制整个文件夹，或用 `tools\fetch_reference.py`、`tools\import_reference_pdf.py` 重新生成；没有时只读知识库正文 |
 | `.env` | Claude Code 订阅令牌 | 在新电脑上用 `claude setup-token` 重新生成（部署向导会引导） |
-| `configs\local.*.json` | 本机路径、密钥文件位置、录制参数、HUD 窗口位置与字号 | 由部署向导重新写；HUD 窗口的设置会自动重新生成 |
-| `local\` | 后台宿主的启动记录与输出日志、HUD 会话状态等本机运行数据 | 不需要复制 |
+| `configs\local.*.json` | 本机路径、密钥文件位置、录制参数、HUD 窗口位置与字号、控制台记住的游戏位置与知识库阅读权限 | 由部署向导重新写；HUD 窗口与控制台的设置会重新生成 |
+| `local\` | 后台宿主的启动记录与输出日志、HUD 会话状态、按阅读权限生成的知识库副本等本机运行数据 | 不需要复制 |
 | `workspaces\`、`runs\` | 智能体写的程序与笔记；运行记录、录像、存档备份 | 想延续进度时复制 |
 
 知识库正文（`kb\*.md`）在仓库里。反编译的游戏源码、存档、录像、令牌与 API 密钥一律不入库。
@@ -222,12 +225,14 @@ Claude 执行器的运行没通关就停下（时间预算用完、出错、Ctrl
 | [docs/LIVE_ADAPTATION.md](docs/LIVE_ADAPTATION.md) | 原生 GPT、直播、可交互网页 HUD、独立游戏声音、存档选择与剧情控制 |
 | [docs/INCIDENT_20261024.md](docs/INCIDENT_20261024.md) | 故障说明：后台进程依附在聊天会话上，随会话关闭而退出 |
 | [CHANGELOG.md](CHANGELOG.md) | 更新记录 |
+| [TODO.md](TODO.md) | 待办 |
 
 ## 目录结构
 
 ```text
 Celeste_AI_Play/
 ├── setup.ps1        一键部署入口（Python 与虚拟环境，然后启动部署向导）
+├── CelesteAIConsole.exe  控制台的启动器（Windows；源码在 tools/launcher）
 ├── start_gpt.ps1    原生 GPT 的准备与试玩入口
 ├── game-bridge/     桥接 Mod（C#，Everest）
 ├── obs-plugin/      OBS 锁步插件（C，libobs）
@@ -238,7 +243,7 @@ Celeste_AI_Play/
 ├── configs/         HUD、录制与模型平台配置
 ├── calibration/     校准、验收与回归测试
 ├── docs/            文档（部署、使用、设计、直播接入、故障说明）
-├── tools/           部署向导、测试客户端、菜单宏、OBS 配置、插件构建、资料抓取与命令行游戏工具
+├── tools/           部署向导、测试客户端、菜单宏、OBS 配置、插件与启动器构建、资料抓取与命令行游戏工具
 ├── sim/             预置模拟器（只在本机，不入库）
 ├── local/           本机运行数据（不入库）
 ├── workspaces/      智能体工作区（不入库）

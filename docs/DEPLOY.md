@@ -131,7 +131,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only platform,switches # �
 | `%USERPROFILE%\.celeste-ai-play\<平台>.key` | 你粘贴的第三方密钥（只在选择"粘贴"时生成） |
 | `configs\local.providers.json` | 第三方平台密钥文件的位置、自定义平台、新增模型及其推理强度档位 |
 | `configs\local.recording.json` | OBS 目录、ffmpeg 路径、编码参数、声音偏移校准值 |
-| `configs\local.deploy.json` | 向导的回答（不含密钥），其中的游戏目录也用来读取存档列表（没有这个文件时，存档列表改从环境变量 `CELESTE_DIR`、正在运行的游戏或 Steam 库找游戏目录） |
+| `configs\local.deploy.json` | 向导的回答（不含密钥），其中的游戏目录也用来读取存档列表（没有这个文件时，存档列表改从环境变量 `CELESTE_DIR`、控制台里填的游戏位置、正在运行的游戏或 Steam 库找游戏目录） |
 | `start_local.ps1` | 启动脚本（见 5.1 节） |
 | `<Celeste 安装目录>\Mods\CelesteAIBridge\` | 桥接 Mod |
 | `<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll` | 锁步插件 |
@@ -306,12 +306,14 @@ winget install Gyan.FFmpeg
 
 ### 5.3 用控制台
 
+双击仓库根目录的 `CelesteAIConsole.exe`（用 `.venv` 的 Python 打开控制台的启动器），或者：
+
 ```powershell
 .\.venv\Scripts\python.exe -m overlay.console              # 独立窗口（需要 pywebview，requirements.txt 里有）
 .\.venv\Scripts\python.exe -m overlay.console --browser    # 用浏览器打开 http://127.0.0.1:47790/console
 ```
 
-控制台是图形界面，5.2 节的命令都能在里面点选完成：执行器、模型、推理强度、游玩模式与开关、存档与章节；页面底部实时显示等价的命令行。运行中可以暂停或继续、调整推理强度、给智能体发消息、停止或中断；结束后可以续跑或交还游戏控制。控制台启动的主控在独立后台宿主里运行，关掉窗口不影响它。用法详见 [USAGE.md 4.10 节](USAGE.md#410-控制台在图形界面里设置启动与介入运行)。
+控制台是图形界面，主控的全部参数都能在里面设置：执行器、模型、推理强度、游玩模式与开关、存档与章节、可调参数、知识库的阅读权限；页面底部实时显示等价的命令行。运行中可以暂停或继续、调整推理强度、给智能体发消息、停止或中断；结束后可以续跑或交还游戏控制。另有"知识库"页（查看、编辑知识库与设置阅读权限）和"关于"页（版本、当前环境、更新记录与待办）。控制台启动的主控在独立后台宿主里运行，关掉窗口不影响它。手动部署、没有运行部署向导时，在"存档与章节"页填一次游戏位置，控制台会记住。用法详见 [USAGE.md 4.10 节](USAGE.md#410-控制台在图形界面里设置启动与介入运行)。
 
 端口 47790 上是更新前启动的旧版 HUD 服务（没有控制台）时，加 `--restart-service`：没有主控在运行时，它会结束旧服务、启动新版。
 
@@ -375,6 +377,8 @@ winget install Gyan.FFmpeg
 | `--max-usage 0~1` | 不设 | Max 订阅：用量到这个比例就提前暂停、等重置；默认用到真正用完再等 |
 | `--no-quota-wait` / `--quota-wait-max-hours` | 关 / 24 | 额度用完时直接停止 / 最多等多少小时 |
 | `--autocompact` | 平台默认 | 上下文自动压缩窗口：`auto` 或 100000～1000000 token |
+| `--tune 名称=值` | 不改 | 修改可调参数（规划回放倍速与每轮时长、解说提醒间隔、单次 act 帧数、Bash 时长、探索模式规划程序的时长与次数、限额预测规则等），可写多个；全部名称与默认值见 [USAGE.md 4.11 节](USAGE.md#411-可调参数--tune) |
+| `--kb-deny 文件,...` | 全部可读 | 不给智能体看的知识库文件（知识库内的相对路径），见 [USAGE.md 4.12 节](USAGE.md#412-知识库的阅读权限--kb-deny) |
 | `--no-hud-window` / `--no-hud` | 关 / 关 | 不开 HUD 窗口 / 连 HUD 服务也不开 |
 | `--hud-port` | 47790 | HUD 端口 |
 | `--bridge-port` / `--mcp-port` | 47774 / 47780 | 桥接与游戏工具服务的端口 |
@@ -411,6 +415,7 @@ winget install Gyan.FFmpeg
 | `python -m orchestrator.background -- <主控参数>` | 用独立后台宿主启动主控 | — |
 | `python -m overlay.server` / `python -m overlay.window` | 单独启动 HUD 服务（默认跟随 `runs\latest.txt` 指向的运行）/ HUD 窗口 | `--port`、`--run`；`--url` |
 | `python -m overlay.console` | 控制台（5.3 节） | `--port`、`--browser`、`--restart-service` |
+| `tools\build_launcher.py` | 重新构建控制台的启动器 `CelesteAIConsole.exe`（只在改了 `tools\launcher\` 时需要；用 pip 装的 zig 交叉编译） | `--out` |
 | `calibration\m6_recording_test.py` | 录制校准（`obs_mix`） | `--rounds`、`--think`、`--no-marker`、`--audio-offset-ms` |
 | `calibration\chain_check.py` | 多章自动衔接自检 | — |
 | `calibration\reset_test_save.py` | 把 test 存档重置成正式存档的初始进度 / 还原 | `--saves-dir`、`--like`、`--restore` |
@@ -428,7 +433,9 @@ winget install Gyan.FFmpeg
 | `configs\local.hud-window.json`、`configs\local.hud-font.json` | 否 | HUD 窗口的位置、大小、置顶选择与字号（自动保存） |
 | `.env` | 否 | `CLAUDE_CODE_OAUTH_TOKEN` |
 | `configs\local.deploy.json` | 否 | 部署向导的回答 |
-| `orchestrator\config.py`（`RunConfig`） | 是 | 不常改的默认值：规划回放的比例、倍速与每轮最长时长、思考语句提前量、镜像名 `celeste-agent:0.1` 等 |
+| `configs\local.console.json` | 否 | 控制台记住的游戏位置与各模式的知识库阅读权限 |
+| `orchestrator\tuning.py` | 是 | 可调参数的名称、默认值与范围（规划回放的比例、倍速与每轮最长时长、思考语句提前量、解说提醒间隔等）；按运行修改用 `--tune` 或控制台，不用改这个文件 |
+| `orchestrator\config.py`（`RunConfig`） | 是 | 其余默认值，例如镜像名 `celeste-agent:0.1` |
 
 ## 8. 端口、网络与隔离
 
