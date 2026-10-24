@@ -11,6 +11,17 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def console_python() -> str:
+    """独立宿主与它启动的服务都用控制台版的 python.exe（窗口隐藏）。从 pythonw.exe 里启动时（例如控制台的启动器
+    CelesteAIConsole.exe）也换成同一目录下的 python.exe：pythonw 没有控制台，它启动的 tasklist、docker、powershell 等
+    命令行程序每次都会各自弹出一个黑色窗口；python.exe 的隐藏控制台则由这些子进程继承，不会弹窗。"""
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe" and (exe.parent / "python.exe").is_file():
+        return str(exe.parent / "python.exe")
+    return sys.executable
 
 
 def launch(arguments, *, probe=False, service="play"):
@@ -23,7 +34,7 @@ def launch(arguments, *, probe=False, service="play"):
     manifest = directory / "launch.json"
     manifest.write_text(json.dumps({"arguments": arguments, "probe": probe, "service": service,
         "codex_cli": os.environ.get("CODEX_APP_RUNTIME_CLI_PATH")}, ensure_ascii=False), encoding="utf-8")
-    command = subprocess.list2cmdline([sys.executable, "-X", "utf8", "-m", "orchestrator.background",
+    command = subprocess.list2cmdline([console_python(), "-X", "utf8", "-m", "orchestrator.background",
                                        "--worker", str(manifest)])
     quote = lambda value: "'" + str(value).replace("'", "''") + "'"
     script = ("$ErrorActionPreference='Stop'; "
@@ -86,11 +97,11 @@ def worker(manifest):
         for name in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_APP_TOOLS_PIPE_PATH", "CODEX_TOOL_CALL_ID"):
             env.pop(name, None)
         if data.get("probe"):
-            command = [sys.executable, "-c", "import time; time.sleep(12)"]
+            command = [console_python(), "-c", "import time; time.sleep(12)"]
         else:
             module = {"play": "orchestrator.run", "chat": "orchestrator.chat", "prepare": "orchestrator.preparation", "hud": "overlay.server",
                       "hud-window": "overlay.window"}[data.get("service", "play")]
-            command = [sys.executable, "-X", "utf8", "-m", module, *data["arguments"]]
+            command = [console_python(), "-X", "utf8", "-m", module, *data["arguments"]]
         with (directory / "output.log").open("ab", buffering=0) as output:
             process = subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                                        stdout=output, stderr=subprocess.STDOUT,

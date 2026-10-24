@@ -205,5 +205,19 @@ class InterruptControlTests(unittest.TestCase):
             self.assertEqual(row["status"], "error")
 
 
+class BackgroundPythonTests(unittest.TestCase):
+    def test_background_hosts_use_console_python(self):
+        # 从 pythonw（控制台的启动器）里启动的后台宿主与服务要用 python.exe：pythonw 的子进程（tasklist、docker 等）会弹黑色窗口
+        from orchestrator import background
+        with tempfile.TemporaryDirectory() as folder:
+            scripts = Path(folder)
+            (scripts / "python.exe").write_bytes(b"")
+            (scripts / "pythonw.exe").write_bytes(b"")
+            with patch.object(background.sys, "executable", str(scripts / "pythonw.exe")):
+                self.assertEqual(background.console_python(), str(scripts / "python.exe"))
+            with patch.object(background.sys, "executable", str(scripts / "python.exe")):
+                self.assertEqual(background.console_python(), str(scripts / "python.exe"))
+
+
 if __name__ == "__main__":
     unittest.main()

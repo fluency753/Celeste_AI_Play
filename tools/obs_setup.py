@@ -30,6 +30,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from orchestrator.recording import load_config  # noqa: E402
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)   # 从没有控制台的进程（pythonw）里调用时不弹黑色窗口
 STATE = REPO_ROOT / "build" / "obs_previous.json"   # 启动前选中的配置文件与场景集合
 SELECTION_KEYS = ("Profile", "ProfileDir", "SceneCollection", "SceneCollectionFile")
 
@@ -272,7 +273,7 @@ def write_selection(values: dict) -> None:
 
 def obs_running() -> bool:
     out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq obs64.exe", "/NH"], capture_output=True, text=True,
-                         errors="replace").stdout
+                         errors="replace", creationflags=NO_WINDOW).stdout
     return "obs64.exe" in out
 
 
@@ -382,13 +383,13 @@ def stop(wait: float = 20.0, force: bool = False) -> None:
     """关闭 OBS 并还原配置选择。force：正常关闭在 wait 秒内没有退出时强制结束（录制要已经收尾；
     最小化到托盘的 OBS 有时不响应正常关闭）。强制结束留下的崩溃标记在下次 launch 时清掉。"""
     if obs_running():
-        subprocess.run(["taskkill", "/IM", "obs64.exe"], capture_output=True)   # 正常关闭（不加 /F）
+        subprocess.run(["taskkill", "/IM", "obs64.exe"], capture_output=True, creationflags=NO_WINDOW)   # 正常关闭（不加 /F）
         deadline = time.monotonic() + wait
         while obs_running() and time.monotonic() < deadline:
             time.sleep(0.5)
         if obs_running() and force:
             print(f"OBS 在 {wait:g} 秒内没有正常退出，强制结束")
-            subprocess.run(["taskkill", "/F", "/IM", "obs64.exe"], capture_output=True)
+            subprocess.run(["taskkill", "/F", "/IM", "obs64.exe"], capture_output=True, creationflags=NO_WINDOW)
             deadline = time.monotonic() + 10
             while obs_running() and time.monotonic() < deadline:
                 time.sleep(0.5)
