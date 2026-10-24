@@ -419,7 +419,7 @@ class ClaudeRunner:
             return False
 
     def _idle_status(self) -> str:
-        return "thinking" if self.metrics.playing else "studying"
+        return "thinking" if (self.metrics.playing or self.metrics.kb_done) else "studying"
 
     async def _write(self, text: str) -> None:
         message = {"type": "user", "message": {"role": "user", "content": text}}
@@ -577,6 +577,9 @@ class ClaudeRunner:
             if self.study.note_result(event):
                 print(f"[agent] 知识库已读完：{len(self.study.files)} 个文件，"
                       f"用时 {self.study.finished - self.study.started:.0f} 秒", flush=True)
+                self.metrics.update(kb_progress=round(self.study.progress(), 4))
+                self.metrics.kb_finished()
+                return
             self.metrics.update(kb_progress=round(self.study.progress(), 4))
         elif etype == "rate_limit_event":
             info = event.get("rate_limit_info") or {}

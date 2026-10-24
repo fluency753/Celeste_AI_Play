@@ -5,9 +5,11 @@
   有工具在运行（输出流里出现 tool_use、还没收到对应的 tool_result）时算工具时间，没有时算思考时间（含模型推理、
   输出与上下文压缩）。工具包括容器里的 Bash、Read、Write 等和游戏工具；同时运行几个工具只算一份时间。
 - 工具时间里扣掉游戏真正推进的时间（act 的动作块、转场与剧情的自动推进），那部分记为游戏推进时间；
-  自动重试时重算程序的用时算工具时间。两轮之间、准备阶段、等待额度时都不计。
+  自动重试时重算程序的用时算工具时间。两轮之间、读知识库期间、等待额度时都不计；读完知识库之后、开始游玩之前
+  （准备阶段的其余时间：写笔记、写程序、在模拟器里规划第一个房间）照常计入思考与工具。
 - 游戏推进时间：桥接逐帧推进所用的墙钟时间（动作块与自动推进段分开记）。
-- 准备时间：开始游玩前读知识库、写笔记与程序的墙钟时间，单独记，不计入现实用时；
+- 知识库读取（study_s）：从开局到知识库读完的墙钟时间（没读完就开始游玩时记到开始游玩为止）。
+- 准备阶段：开始游玩之前（读知识库、写笔记与程序）不计入现实用时；
   现实用时从第一次真正执行游戏工具时开始（没有准备阶段时从启动时开始）。
 - 等待额度：Max 用量到达上限后等待额度重置的时间单独记（waited_s），不计入现实用时与准备时间。
 - 推理强度：effort 是当前生效的强度；智能体用 set_effort 申请的强度先记在 effort_pending，本轮结束后才生效，
@@ -109,6 +111,7 @@ class Metrics:
         self._seg_mark = time.monotonic()  # 上一次把时间结算进思考或工具的时刻
         self._seg_game = 0.0            # 那一刻的游戏推进时间累计
         self.playing = not study
+        self.kb_done = not study        # 知识库已读完（之后的准备阶段照常计思考与工具时间）
         now = time.time()
         self.state = MetricsState(agent=agent, model=model, effort=effort,
                                   started_wall=now if self.playing else 0.0, budget_s=budget_s,
@@ -132,7 +135,7 @@ class Metrics:
         now = time.monotonic()
         game = self.state.play_game_s + self.state.auto_game_s + self.state.replay_act_s
         dt = now - self._seg_mark
-        if self.playing and self._in_turn and self._pause_start is None and dt > 0:
+        if (self.playing or self.kb_done) and self._in_turn and self._pause_start is None and dt > 0:
             if self._tools:
                 self.state.tool_s += max(0.0, dt - max(0.0, game - self._seg_game))
             else:
@@ -179,7 +182,7 @@ class Metrics:
             if label:
                 self._tool_labels[tool_id] = label
             self.state.tool_call = self._tool_summary()
-            if not game_tool and self.playing and self.state.status in ("thinking", "starting"):
+            if not game_tool and (self.playing or self.kb_done) and self.state.status in ("thinking", "starting"):
                 self.state.status = "tool"
                 self.state.phase_since_wall = time.time()
             self._write_locked()
@@ -193,9 +196,24 @@ class Metrics:
             self._tools.discard(tool_id)
             self._tool_labels.pop(tool_id, None)
             self.state.tool_call = self._tool_summary()
-            if not self._tools and self.playing and self.state.status in ("tool", "executing", "auto", "retrying"):
+            if not self._tools and (self.playing or self.kb_done) and self.state.status in ("tool", "executing", "auto", "retrying"):
                 self.state.status = "thinking"
                 self.state.phase_since_wall = time.time()
+            self._write_locked()
+
+    def kb_finished(self) -> None:
+        """知识库读完：知识库读取的用时到此为止；之后的准备阶段照常计思考与工具时间，状态栏不再显示"读知识库"。"""
+        with self._lock:
+            if self.kb_done:
+                return
+            self._flush_locked()   # 读知识库期间不计入思考与工具
+            self.state.study_s = self._running(time.monotonic())
+            self.kb_done = True
+            now = time.time()
+            self.state.thinking_since_wall = now
+            if self.state.status == "studying":
+                self.state.status = "tool" if self._tools else "thinking"
+                self.state.phase_since_wall = now
             self._write_locked()
 
     def start_play(self) -> None:
@@ -203,9 +221,11 @@ class Metrics:
         with self._lock:
             if self.playing:
                 return
-            self._flush_locked()  # 准备阶段的时间不计入思考与工具
+            self._flush_locked()  # 读完知识库之后的准备时间计入思考与工具，读知识库期间不计
             now = time.monotonic()
-            self.state.study_s = self._running(now)
+            if not self.kb_done:   # 没读完知识库就开始游玩（到了准备阶段上限）：知识库读取记到这里为止
+                self.state.study_s = self._running(now)
+            self.kb_done = True
             self._t0 = now
             self._paused = 0.0
             self._pause_start = now if self._pause_start is not None else None
@@ -242,7 +262,7 @@ class Metrics:
             self.state.waited_s += waited
             self.state.quota_waits += 1
             self.state.quota_wait_until = None
-            self.state.status = "thinking" if self.playing else "studying"
+            self.state.status = "thinking" if (self.playing or self.kb_done) else "studying"
             self.state.phase_since_wall = time.time()
             self._write_locked()
             return waited
@@ -348,7 +368,7 @@ class Metrics:
     def _write_locked(self) -> None:
         self.state.written_wall = time.time()
         self.state.elapsed_s = self.elapsed()
-        if not self.playing:
+        if not self.playing and not self.kb_done:
             self.state.study_s = self._running(time.monotonic())
         tmp = self._path.with_suffix(".tmp")
         try:

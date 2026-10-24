@@ -217,6 +217,8 @@ function render() {
   const replaying = !!m.replaying || m.status === "replaying";
   const [text, kind, breathe] = replaying ? STATUS.replaying : (STATUS[m.status] || [m.status, "idle", false]);
   const playing = m.started_wall > 0;
+  // 思考与工具时间从知识库读完就开始走（准备阶段的其余部分：写笔记、写程序、规划第一个房间）
+  const counting = playing || (m.kb_progress != null && m.kb_progress >= 1);
   const ended = m.status === "done" || m.status === "stopped";
 
   $("name").textContent = displayName(m);
@@ -269,17 +271,17 @@ function render() {
   }
 
   let thinking = m.thinking_s || 0;
-  if (playing && !ended && (m.status === "thinking" || m.status === "compacting") && m.thinking_since_wall > 0) {
+  if (counting && !ended && (m.status === "thinking" || m.status === "compacting") && m.thinking_since_wall > 0) {
     thinking += Math.max(0, now - m.thinking_since_wall);
   }
   $("thinking").textContent = clock(thinking);
   // 工具时间：容器里的 Bash、Read 等与游戏工具从调用到返回的时间（不含游戏推进）；运行工具时同样实时走表
   let tool = m.tool_s || 0;
-  if (playing && !ended && m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
+  if (counting && !ended && m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
   if (m.status === "retrying" && m.phase_since_wall > 0) tool += Math.max(0, now - m.phase_since_wall);
   $("tool").textContent = clock(tool);
 
-  // 知识库读取：准备阶段读知识库、写笔记的总用时（不计入现实用时）；跳过准备阶段（--no-study）时显示"—"
+  // 知识库读取：开局到知识库读完的用时（读完后不再走）；跳过准备阶段（--no-study）时显示"—"
   let study = m.study_s || 0;
   if (m.status === "studying" && m.written_wall > 0) study += Math.max(0, now - m.written_wall);
   const studyEl = $("study");
