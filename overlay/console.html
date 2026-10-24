@@ -648,7 +648,8 @@ async function refreshRuns() {
     const side = document.createElement("span"); side.className = "side";
     const tag = document.createElement("span"); tag.className = "tag";
     if (r.completed) { tag.classList.add("ok"); tag.textContent = "通关"; }
-    else if (r.game_released === false) { tag.classList.add("frozen"); tag.textContent = "游戏保持冻结"; }
+    else if (r.resumable) { tag.classList.add("frozen"); tag.textContent = "游戏冻结中"; }
+    else if (r.game_released === false) { tag.textContent = "停下时保持冻结"; }
     else tag.textContent = r.recording ? (r.pure ? "录像 + 纯享版" : "有录像") : "无录像";
     side.appendChild(tag);
     if (r.resumable) {

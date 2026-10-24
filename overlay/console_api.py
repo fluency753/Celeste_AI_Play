@@ -139,6 +139,8 @@ def runs(limit: int = 40) -> list[dict]:
         found.append(directory)
     found.sort(key=lambda d: d.name, reverse=True)
     latest = latest_run()
+    game = game_status()
+    frozen_now = bool(game.get("running") and game.get("active"))   # 游戏此刻仍被接管、冻结着
     rows = []
     for directory in found[:limit]:
         state = _read_json(directory / "run_state.json")
@@ -155,7 +157,7 @@ def runs(limit: int = 40) -> list[dict]:
             "deaths": summary.get("deaths", metrics.get("deaths")), "finished": bool(summary),
             "recording": (recording / "gameplay.mkv").exists(), "pure": (recording / "gameplay_pure.mkv").exists(),
             "resumable": bool(summary) and summary.get("game_released") is False and latest is not None
-                         and latest.resolve() == directory.resolve(),
+                         and latest.resolve() == directory.resolve() and frozen_now,
         })
     return rows
 

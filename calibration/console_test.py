@@ -88,7 +88,8 @@ class ConsoleRunsTests(unittest.TestCase):
             chat.mkdir(parents=True)
             (chat / "run_state.json").write_text("{}", encoding="utf-8")
             (root / "runs" / "latest.txt").write_text(str(latest), encoding="utf-8")
-            with patch.object(console_api, "REPO_ROOT", root):
+            with patch.object(console_api, "REPO_ROOT", root), \
+                 patch.object(console_api, "game_status", return_value={"running": True, "active": True}):
                 rows = console_api.runs()
                 self.assertEqual([r["stamp"] for r in rows], ["20261024-180000", "20261024-140048"])
                 self.assertEqual([r["resumable"] for r in rows], [True, False])
@@ -99,6 +100,9 @@ class ConsoleRunsTests(unittest.TestCase):
                         console_api.release()
                 with self.assertRaisesRegex(ValueError, "只能续跑"):
                     console_api.resume(str(older))
+            with patch.object(console_api, "REPO_ROOT", root), \
+                 patch.object(console_api, "game_status", return_value={"running": True, "active": False}):
+                self.assertFalse(console_api.runs()[0]["resumable"])     # 已经交还控制：不能续跑
 
     def test_running_detection_from_fresh_metrics(self):
         from overlay import console_api
