@@ -131,7 +131,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only platform,switches # �
 | `%USERPROFILE%\.celeste-ai-play\<平台>.key` | 你粘贴的第三方密钥（只在选择"粘贴"时生成） |
 | `configs\local.providers.json` | 第三方平台密钥文件的位置、自定义平台、新增模型及其推理强度档位 |
 | `configs\local.recording.json` | OBS 目录、ffmpeg 路径、编码参数、声音偏移校准值 |
-| `configs\local.deploy.json` | 向导的回答（不含密钥），其中的游戏目录也用来读取存档列表 |
+| `configs\local.deploy.json` | 向导的回答（不含密钥），其中的游戏目录也用来读取存档列表（没有这个文件时，存档列表改从环境变量 `CELESTE_DIR`、正在运行的游戏或 Steam 库找游戏目录） |
 | `start_local.ps1` | 启动脚本（见 5.1 节） |
 | `<Celeste 安装目录>\Mods\CelesteAIBridge\` | 桥接 Mod |
 | `<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll` | 锁步插件 |
@@ -176,7 +176,7 @@ winget install Microsoft.DotNet.SDK.8
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本编译 `game-bridge\`，把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前版本 0.13.0）。主控开局前会检查桥接版本，低于 0.12.4 时拒绝开始；MOD 形式的 HUD 需要 0.13.0，录像的两条音轨需要 0.12.7 起。
+Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本编译 `game-bridge\`，把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前版本 0.13.1）。主控开局前会检查桥接版本，低于 0.12.4 时拒绝开始；MOD 形式的 HUD 需要 0.13.0，录像的两条音轨需要 0.12.7 起。
 
 冒烟测试（游戏停在标题画面即可）：
 
@@ -215,10 +215,10 @@ Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celes
 winget install OBSProject.OBSStudio     # 或 Steam 版
 winget install Gyan.FFmpeg
 # 关掉 OBS 后编译安装锁步插件（不需要 Visual Studio：脚本用 pip 装 zig 交叉编译，从 GitHub 取同版本的 libobs 头文件）
-.\.venv\Scripts\python.exe tools\build_obs_plugin.py --obs-dir "<OBS 安装目录>"
+.\.venv\Scripts\python.exe tools\build_obs_plugin.py
 ```
 
-OBS 安装版的默认目录是 `C:\Program Files\obs-studio`；`--obs-dir` 一定要写，脚本里的默认值不一定适合你的电脑。
+不写 `--obs-dir` 时，脚本依次在 `configs\local.recording.json` 的 `obs_dir`、`C:\Program Files\obs-studio` 与各个 Steam 库里找 OBS；找不到或装在别处时用 `--obs-dir "<OBS 安装目录>"` 指定。
 
 新建 `configs\local.recording.json`（只写要改的键，默认值在 `configs\recording.json`）：
 
@@ -258,12 +258,12 @@ OBS 安装版的默认目录是 `C:\Program Files\obs-studio`；`--obs-dir` 一�
 ### 4.9 知识库参考资料（可选）
 
 ```powershell
-.\.venv\Scripts\python.exe tools\fetch_reference.py --celeste-dir "<Celeste 安装目录>"            # Wiki + 草莓酱
-.\.venv\Scripts\python.exe tools\fetch_reference.py --celeste-dir "<Celeste 安装目录>" --skip-sj  # 没装草莓酱 Mod
+.\.venv\Scripts\python.exe tools\fetch_reference.py            # Wiki + 草莓酱
+.\.venv\Scripts\python.exe tools\fetch_reference.py --skip-sj  # 没装草莓酱 Mod
 .\.venv\Scripts\python.exe tools\import_reference_pdf.py 资料.pdf --name <英文名> --title "<标题>"   # 导入本机 PDF（可选）
 ```
 
-`--celeste-dir` 一定要写（脚本里的默认值不一定适合你的电脑）。输出在 `kb\reference\`（不入库）。没有它时准备阶段只读知识库本身。
+游戏目录按这个顺序找：`--celeste-dir`、环境变量 `CELESTE_DIR`、部署向导记下的目录、正在运行的 Celeste.exe、各个 Steam 库；都找不到时用 `--celeste-dir "<Celeste 安装目录>"` 指定。输出在 `kb\reference\`（不入库）。没有它时准备阶段只读知识库本身。
 
 ### 4.10 启动脚本（可选）
 
@@ -273,7 +273,7 @@ OBS 安装版的默认目录是 `C:\Program Files\obs-studio`；`--obs-dir` 一�
 
 1. 按 OpenAI 官方说明在本机安装 Codex CLI，执行 `codex login` 登录。主控按 `CODEX_APP_RUNTIME_CLI_PATH` 环境变量、PATH、`%LOCALAPPDATA%\OpenAI\Codex\bin\<版本>\codex.exe`（取最新的一个）的顺序找 `codex`。原生执行器启动 app-server 时关掉了宿主机上的 shell、浏览器、联网搜索等内置工具，模型只能用主控提供的游戏工具与沙箱工具。
 2. Docker Desktop 与智能体镜像照常需要（4.5 节）：GPT 生成的程序在镜像的零网络沙箱里运行。
-3. 用 `start_gpt.ps1` 准备与试玩（5.4 节），或在网页 HUD 的"会话管理"里选"Codex"执行器新建会话。
+3. 用 `start_gpt.ps1` 准备与试玩（5.5 节），或在网页 HUD 的"会话管理"里选"Codex"执行器新建会话。
 
 ## 5. 运行
 
@@ -304,14 +304,25 @@ OBS 安装版的默认目录是 `C:\Program Files\obs-studio`；`--obs-dir` 一�
 
 主控依次：检查桥接版本；（录屏时）OBS 没开就启动它、退回选档页、开始录制；用菜单宏进入存档的章节并跳过开场；核对存档名、备份存档；启动游戏工具服务（`127.0.0.1:47780`）与 HUD 服务（`http://127.0.0.1:47790/hud`）；不用 MOD 形式 HUD 时打开 HUD 窗口；创建或复用容器 `celeste-agent-<标签>` 并启动智能体。智能体先读完知识库（准备阶段），之后游玩；一章通关后自动进入下一章。
 
-### 5.3 查看与结束
+### 5.3 用控制台
+
+```powershell
+.\.venv\Scripts\python.exe -m overlay.console              # 独立窗口（需要 pywebview，requirements.txt 里有）
+.\.venv\Scripts\python.exe -m overlay.console --browser    # 用浏览器打开 http://127.0.0.1:47790/console
+```
+
+控制台是图形界面，5.2 节的命令都能在里面点选完成：执行器、模型、推理强度、游玩模式与开关、存档与章节；页面底部实时显示等价的命令行。运行中可以暂停或继续、调整推理强度、给智能体发消息、停止或中断；结束后可以续跑或交还游戏控制。控制台启动的主控在独立后台宿主里运行，关掉窗口不影响它。用法详见 [USAGE.md 4.10 节](USAGE.md#410-控制台在图形界面里设置启动与介入运行)。
+
+端口 47790 上是更新前启动的旧版 HUD 服务（没有控制台）时，加 `--restart-service`：没有主控在运行时，它会结束旧服务、启动新版。
+
+### 5.4 查看与结束
 
 - 进度：`.\.venv\Scripts\python.exe tools\run_status.py`（加 `-n 30` 显示更多决策）；HUD 在游戏画面右上角（MOD 形式），或在 HUD 窗口里，也可以浏览器打开 `http://127.0.0.1:47790/hud`。
 - 提前结束：在运行主控的窗口按 Ctrl+C，主控会停止录制、写出 `summary.json`。Claude 执行器的运行没通关时游戏冻结在当前帧（章节计时不走），可以 `--resume` 续跑，不续跑时 `.\.venv\Scripts\python.exe tools\bridge_client.py deactivate` 交还控制；通关、退出关卡、原生 GPT 会话与 `--no-agent` 结束时照常交还控制。
 - 产出：`runs\<标签>\<时间戳>\`（`metrics.json`、`decisions.jsonl`、`decision_timing.jsonl`、`frames.jsonl`、`agent_events.jsonl`、`system_prompt.md`、`summary.json`、`save_backup\`、`recording\`）。录像在 `recording\`：完整版 `gameplay.mkv`（含规划回放）与纯享版 `gameplay_pure.mkv`（只有真实游玩帧）。旧录像补生成纯享版：`.\.venv\Scripts\python.exe tools\make_pure.py runs\<标签>\<时间戳>\recording`。
 - `decision_timing.jsonl` 用于诊断推进节奏：记录每轮请求的模型、推理强度、Fast 与服务档位、请求确认耗时、工具请求 / 完成，以及动作请求 / 完成。`decision_wait_s` 是本轮内两次动作之间累计的无工具等待，包含模型请求等待、推理、输出与压缩；`decision_active_s` 还包含中间的工具耗时。暂停与两轮之间的用户等待不计入这两项。请求档位不代表服务端确认的实际档位；不支持 Fast 的执行器记为 `null`。`decisions.jsonl` 同时保留该次动作的等待时间、请求档位、计划帧数与实际帧数，方便对照。
 
-### 5.4 探索模式与原生 GPT
+### 5.5 探索模式与原生 GPT
 
 ```powershell
 .\start_gpt.ps1                                                                         # 准备：新会话读完入门资料（不连游戏、不录制）
@@ -380,7 +391,7 @@ OBS 安装版的默认目录是 `C:\Program Files\obs-studio`；`--obs-dir` 一�
 | --- | --- | --- |
 | `setup.ps1` | 一键部署 | `-Check` 只检查；`-Only 步骤,...` |
 | `tools\setup_wizard.py` | 部署向导 | `--check`；`--only` |
-| `start_gpt.ps1` | 原生 GPT 的准备与试玩 | 见 5.4 节 |
+| `start_gpt.ps1` | 原生 GPT 的准备与试玩 | 见 5.5 节 |
 | `tools\deploy_bridge.ps1` | 编译安装桥接 Mod | `-CelesteDir`（必填）、`-Configuration` |
 | `tools\build_obs_plugin.py` | 编译安装锁步插件 | `--obs-dir`、`--obs-version`、`--no-install` |
 | `tools\obs_setup.py` | OBS 配置与启动 | `setup`/`launch`/`stop`/`status`/`restore`；`--obs-dir`、`--show`、`--reset`、`--force` |
@@ -399,6 +410,7 @@ OBS 安装版的默认目录是 `C:\Program Files\obs-studio`；`--obs-dir` 一�
 | `python -m orchestrator.chat --run <运行目录>` | 运行结束后接着和同一个会话聊天（不连游戏） | — |
 | `python -m orchestrator.background -- <主控参数>` | 用独立后台宿主启动主控 | — |
 | `python -m overlay.server` / `python -m overlay.window` | 单独启动 HUD 服务（默认跟随 `runs\latest.txt` 指向的运行）/ HUD 窗口 | `--port`、`--run`；`--url` |
+| `python -m overlay.console` | 控制台（5.3 节） | `--port`、`--browser`、`--restart-service` |
 | `calibration\m6_recording_test.py` | 录制校准（`obs_mix`） | `--rounds`、`--think`、`--no-marker`、`--audio-offset-ms` |
 | `calibration\chain_check.py` | 多章自动衔接自检 | — |
 | `calibration\reset_test_save.py` | 把 test 存档重置成正式存档的初始进度 / 还原 | `--saves-dir`、`--like`、`--restore` |
@@ -450,7 +462,7 @@ OBS 安装版的默认目录是 `C:\Program Files\obs-studio`；`--obs-dir` 一�
 
 ### 9.2 原生 GPT
 
-GPT 使用本机 Codex 已登录的原生执行器（`--engine codex`），不经过"Anthropic 接口 → OpenAI 接口"转换网关（旧的 `--provider openai` 预设已移除）。部署见 4.11 节；运行用 `start_gpt.ps1`（5.4 节），或在网页 HUD 里新建、准备并开始会话。详见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。
+GPT 使用本机 Codex 已登录的原生执行器（`--engine codex`），不经过"Anthropic 接口 → OpenAI 接口"转换网关（旧的 `--provider openai` 预设已移除）。部署见 4.11 节；运行用 `start_gpt.ps1`（5.5 节），或在网页 HUD 里新建、准备并开始会话。详见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。
 
 ### 9.3 其他兼容 Anthropic 接口的平台
 
@@ -477,7 +489,7 @@ GPT 使用本机 Codex 已登录的原生执行器（`--engine codex`），不�
 | --- | --- |
 | `game-bridge\`（桥接版本号变了） | 关游戏，`.\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"` |
 | `agent-container\` | `docker build -t celeste-agent:0.1 agent-container`（容器会自动重建） |
-| `obs-plugin\` 或 OBS 更新了 | 关 OBS，`tools\build_obs_plugin.py --obs-dir "<OBS 安装目录>"`，重跑录制校准 |
+| `obs-plugin\` 或 OBS 更新了 | 关 OBS，`tools\build_obs_plugin.py`（找不到 OBS 时加 `--obs-dir`），重跑录制校准 |
 | `overlay\hud.html` | 网页 HUD 会在 `configs\hud.json` 的 `page_version` 变化时自动重新加载；仍显示旧页面时，在 OBS 里刷新 HUD 浏览器源（或用 `tools\obs_setup.py stop` 关掉，下次运行时主控会重新启动它），并重开 HUD 窗口 |
 | `requirements.txt` | `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` |
 
