@@ -160,5 +160,15 @@ class FlagTests(unittest.TestCase):
             self.assertFalse(self.parse(root, '--no-hud-mod').hud_mod)
 
 
+class PageVersionTests(unittest.TestCase):
+    def test_web_hud_page_version_matches_config(self):
+        # 不一致时网页 HUD 每次轮询都会以为自己过期、一直刷新
+        import re
+        root = Path(__file__).resolve().parent.parent
+        page = re.search(r"const PAGE_VERSION = (\d+);", (root / "overlay" / "hud.html").read_text(encoding="utf-8"))
+        config = json.loads((root / "configs" / "hud.json").read_text(encoding="utf-8"))
+        self.assertEqual(int(page.group(1)), config["page_version"])
+
+
 if __name__ == "__main__":
     unittest.main()

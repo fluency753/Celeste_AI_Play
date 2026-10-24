@@ -57,7 +57,7 @@ class SessionActionTests(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.root_patch = patch('orchestrator.session_actions.REPO_ROOT', self.root)
         self.root_patch.start()
-        self.save_root_patch = patch('orchestrator.saves.REPO_ROOT', self.root)
+        self.save_root_patch = patch('orchestrator.gamepaths.DEPLOY_ANSWERS', self.root / 'configs/local.deploy.json')
         self.save_root_patch.start()
         (self.root / 'game/Saves').mkdir(parents=True)
         (self.root / 'game/Saves/0.celeste').write_text('<SaveData><Name>test</Name></SaveData>', encoding='utf-8')

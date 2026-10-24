@@ -540,8 +540,8 @@ def write_index(out: Path) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--celeste-dir", default=r"D:\Fluency\software\steam\steamapps\common\Celeste",
-                    help="蔚蓝安装目录（草莓酱 Mod 在其 Mods 子目录下）")
+    ap.add_argument("--celeste-dir", help="蔚蓝安装目录（草莓酱 Mod 在其 Mods 子目录下）；不写时依次看环境变量 CELESTE_DIR、"
+                    "部署配置、正在运行的游戏与各个 Steam 库")
     ap.add_argument("--out", default=str(REPO_ROOT / "kb" / "reference"), help="输出目录")
     ap.add_argument("--skip-wiki", action="store_true")
     ap.add_argument("--skip-sj", action="store_true")
@@ -556,7 +556,14 @@ def main() -> int:
         fetch_wiki(out / "celeste_wiki")
     if not args.index_only and not args.skip_sj:
         print("读取草莓酱训练场与机制库文本…", flush=True)
-        fetch_sj(Path(args.celeste_dir), out / "strawberry_jam")
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from orchestrator.gamepaths import celeste_dir
+        try:
+            game = celeste_dir(args.celeste_dir)
+        except ValueError as exc:
+            raise SystemExit(f"{exc}；或用 --celeste-dir 指定，没装草莓酱 Mod 时加 --skip-sj") from exc
+        fetch_sj(game, out / "strawberry_jam")
     write_index(out)
     print(f"完成：{out}", flush=True)
     return 0

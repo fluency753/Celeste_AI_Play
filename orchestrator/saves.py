@@ -1,16 +1,13 @@
 """Read-only save inventory and explicit selection validation. Never edits game saves."""
-import json
 import re
-from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from .config import REPO_ROOT
+from .gamepaths import celeste_dir
 
 
 def supports_unicode():
     try:
-        deployment = json.loads((REPO_ROOT / 'configs/local.deploy.json').read_text(encoding='utf-8-sig'))
-        manifest = (Path(deployment['celeste_dir']) / 'Mods/CelesteAIBridge/everest.yaml').read_text(encoding='utf-8-sig')
+        manifest = (celeste_dir() / 'Mods/CelesteAIBridge/everest.yaml').read_text(encoding='utf-8-sig')
         version = re.search(r'\bVersion:\s*(\d+)\.(\d+)\.(\d+)', manifest)
         return bool(version and tuple(map(int, version.groups())) >= (0, 12, 1))
     except (OSError, KeyError, TypeError, ValueError):
@@ -19,10 +16,9 @@ def supports_unicode():
 
 def inventory():
     try:
-        deployment = json.loads((REPO_ROOT / 'configs/local.deploy.json').read_text(encoding='utf-8-sig'))
-        directory = Path(deployment['celeste_dir']) / 'Saves'
+        directory = celeste_dir() / 'Saves'
         if not directory.is_dir():
-            raise ValueError('找不到游戏 Saves 目录，请检查部署配置')
+            raise ValueError(f'{directory} 不存在：先启动一次游戏并建好存档')
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise ValueError('无法读取存档列表：' + str(exc)) from exc
     saves = []

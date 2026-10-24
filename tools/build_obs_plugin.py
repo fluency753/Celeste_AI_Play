@@ -4,8 +4,9 @@
 libobs 的头文件从 obs-studio 仓库按与本机 OBS 相同的版本取（只取 libobs 目录）。
 
 用法（仓库根目录；安装前先关闭 OBS）：
-    python tools/build_obs_plugin.py --obs-dir "D:\\path\\to\\OBS Studio"            # 构建并安装
-    python tools/build_obs_plugin.py --obs-dir "..." --no-install                    # 只构建
+    python tools/build_obs_plugin.py                                                 # 自动找 OBS，构建并安装
+    python tools/build_obs_plugin.py --obs-dir "<OBS 安装目录>"                        # 指定 OBS 目录
+    python tools/build_obs_plugin.py --no-install                                    # 只构建
     python tools/build_obs_plugin.py --obs-version 32.2.2 --no-install               # 不读本机 OBS，指定版本
 
 输出：build/obs-plugin/celeste-lockstep.dll；安装到 <OBS>/obs-plugins/64bit/。
@@ -64,13 +65,18 @@ def zig(*args: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--obs-dir", default=r"D:\Fluency\software\steam\steamapps\common\OBS Studio")
+    ap.add_argument("--obs-dir", help="OBS 安装目录（含 bin\\64bit\\obs64.exe）；不写时依次看 configs/local.recording.json 的 "
+                    "obs_dir、Program Files 与各个 Steam 库")
     ap.add_argument("--obs-version", help="不读本机 OBS，直接指定 libobs 版本（如 32.2.2）")
     ap.add_argument("--no-install", action="store_true")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    obs_dir = Path(args.obs_dir)
+    obs_dir = None
+    if not (args.obs_version and args.no_install):
+        sys.path.insert(0, str(REPO_ROOT))
+        from tools.obs_setup import find_obs_dir
+        obs_dir = find_obs_dir(args.obs_dir)
     version = args.obs_version or obs_version(obs_dir)
     print(f"OBS 版本 {version}", flush=True)
     headers = fetch_headers(version)

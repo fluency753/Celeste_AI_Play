@@ -240,7 +240,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 48;
+const PAGE_VERSION = 50;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -343,12 +343,22 @@ function applyTypography() {
 }
 window.addEventListener('resize', applyObsLayout);
 
+// 页面版本对不上时刷新一次换成新页面；刷新后版本仍不一致（页面与配置没有同步更新）时，一分钟内不再刷新，免得一直闪
+function reloadAllowed() {
+  try {
+    const last = Number(sessionStorage.getItem("hudReloadAt") || 0);
+    if (Date.now() - last < 60000) return false;
+    sessionStorage.setItem("hudReloadAt", String(Date.now()));
+  } catch (e) { /* 存储不可用时照常刷新 */ }
+  return true;
+}
+
 async function poll() {
   try {
     const t0 = Date.now() / 1000;
     const res = await fetch(STATE_URL, { cache: "no-store" });
     const data = await res.json();
-    if (data.config && data.config.page_version && data.config.page_version !== PAGE_VERSION) {
+    if (data.config && data.config.page_version && data.config.page_version !== PAGE_VERSION && reloadAllowed()) {
       location.reload(); return;
     }
     const t1 = Date.now() / 1000;

@@ -39,12 +39,10 @@ def obs_config_dir() -> Path:
 
 
 def find_obs_dir(explicit: str | None) -> Path:
-    candidates = [explicit, load_config().get("obs_dir"),
-                  os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "obs-studio"),
-                  os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Steam", "steamapps", "common", "OBS Studio")]
-    for c in candidates:
-        if c and (Path(c) / "bin" / "64bit" / "obs64.exe").exists():
-            return Path(c)
+    from orchestrator.gamepaths import obs_candidates
+    found = obs_candidates(explicit, load_config().get("obs_dir"))
+    if found:
+        return found[0]
     raise SystemExit("找不到 OBS：用 --obs-dir 指定安装目录，或写进 configs/local.recording.json 的 obs_dir")
 
 

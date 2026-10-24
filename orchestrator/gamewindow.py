@@ -75,6 +75,24 @@ def find_game_window() -> int | None:
     return found[0] if found else None
 
 
+def game_executable() -> str | None:
+    """正在运行的 Celeste.exe 的完整路径；找不到或不是 Windows 时返回 None。"""
+    hwnd = find_game_window()
+    if hwnd is None:
+        return None
+    ctypes, wt, user32, kernel32, _enum = _api()
+    pid = wt.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    handle = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        size = wt.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(size.value)
+        return buf.value if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)) else None
+    finally:
+        kernel32.CloseHandle(handle)
+
 def capture_size() -> tuple[int, int] | None:
     """游戏采集的实际客户区尺寸（与屏幕 DPI 缩放后的窗口截图尺寸不同）。"""
     if not _IS_WINDOWS:

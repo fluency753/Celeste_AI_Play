@@ -19,8 +19,27 @@ class SaveCatalogTests(unittest.TestCase):
                              ('10-modsavedata.celeste','<SaveData><Name>ignore</Name></SaveData>'),
                              ('11.celeste','broken')]:
                 (root/'game/Saves'/name).write_text(xml,encoding='utf-8')
-            with patch('orchestrator.saves.REPO_ROOT',root):
+            with patch('orchestrator.gamepaths.DEPLOY_ANSWERS',root/'configs/local.deploy.json'):
                 self.assertEqual(inventory(),[{'slot':10,'name':'直播 & 探索'}])
+
+    def test_game_directory_without_deploy_answers(self):
+        # 手动部署（没有 configs/local.deploy.json）时用环境变量、正在运行的游戏或 Steam 库
+        from orchestrator import gamepaths
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            game=root/'steam/steamapps/common/Celeste'; game.mkdir(parents=True); (game/'Celeste.exe').write_bytes(b'')
+            missing=root/'configs/local.deploy.json'
+            with patch.object(gamepaths,'DEPLOY_ANSWERS',missing), patch.dict('os.environ',{},clear=False):
+                import os; os.environ.pop('CELESTE_DIR',None)
+                with patch.object(gamepaths,'running_game_dir',return_value=None), \
+                     patch.object(gamepaths,'steam_libraries',return_value=[root/'steam']):
+                    self.assertEqual(gamepaths.celeste_dir(),game)
+                with patch.object(gamepaths,'running_game_dir',return_value=None), \
+                     patch.object(gamepaths,'steam_libraries',return_value=[]):
+                    with self.assertRaisesRegex(ValueError,'CELESTE_DIR'):
+                        gamepaths.celeste_dir()
+                    with patch.dict('os.environ',{'CELESTE_DIR':str(game)}):
+                        self.assertEqual(gamepaths.celeste_dir(),game)
 
     def test_selection_is_explicit_and_never_overwrites_existing_names(self):
         with patch('orchestrator.saves.inventory',return_value=[{'slot':10,'name':'test'}]), \
