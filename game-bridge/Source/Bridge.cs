@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.12.7";
+    public const string Version = "0.13.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -215,9 +215,14 @@ internal static class Bridge {
     /// <summary>锁步时停住的节拍不重画：画面保持上一帧，也不占用 OBS 采集钩子的拷贝间隔。有截图请求时照常画。</summary>
     private static void HaltWithoutDrawing(Action runOriginal) {
         Halt(runOriginal);
-        if (PendingRenders.Count == 0) {
-            Engine.Instance.SuppressDraw();
+        if (PendingRenders.Count > 0) return;
+        // 游戏内 HUD 有新内容时（思考语句、计时）隔一会儿重画一次：离上一次呈现至少 50 毫秒，
+        // 不会顶掉 OBS 还没采到的上一个游玩帧；这次呈现没有时钟令牌，插件不录它
+        if (ModHud.RedrawDue && SincePresent.Elapsed.TotalMilliseconds >= 50) {
+            ModHud.NoteIdleDraw();
+            return;
         }
+        Engine.Instance.SuppressDraw();
     }
 
     private static void FlushPendingAck() {
@@ -418,6 +423,7 @@ internal static class Bridge {
                     w.WriteBoolean("continuous_music", continuousMusic);
                     w.WriteString("audio_mode", audioMode.ToString());
                     w.WriteBoolean("record_audio_nrt", true);
+                    w.WriteBoolean("mod_hud", true);
                     w.WriteNumber("record_audio_tracks", RecordingAudio.TrackCount);
                     w.WriteBoolean("create_save", true);
                     w.WriteBoolean("dialog_choices", true);

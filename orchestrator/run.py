@@ -98,6 +98,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--no-playback", dest="playback", action="store_false",
                     help="关闭规划回放：不把推演过的路线画进游戏")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
+    ap.add_argument("--hud-mod", dest="hud_mod", action="store_true", default=None,
+                    help="HUD 以 MOD 形式显示在游戏画面右上角（不开直播时默认开启）：旧版卡片加思考语句历史，章节计时逐帧准确；"
+                         "不打开置顶 HUD 窗口，OBS 浏览器源里的网页 HUD 也不显示。需要桥接 0.13.0")
+    ap.add_argument("--no-hud-mod", dest="hud_mod", action="store_false",
+                    help="不用游戏内 HUD，用网页 HUD（置顶窗口与 OBS 浏览器源；直播模式默认）")
     ap.add_argument("--no-hud-window", action="store_true",
                     help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
     ap.add_argument("--record", dest="record", action="store_true", default=None,
@@ -159,6 +164,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             args.live = bool(state.get("live_mode", False))
         if args.record is None:
             args.record = bool(state.get("record", True))
+        if args.hud_mod is None and "hud_mod" in state:
+            args.hud_mod = bool(state["hud_mod"])
         if args.playback is None:
             args.playback = bool(state.get("playback", True))
         args.skip_enter = True
@@ -240,6 +247,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.room_scale = max(1.0, args.room_scale)
     cfg.playback = args.playback is not False   # 默认开启
     cfg.live = bool(args.live)            # 直播模式，默认关
+    cfg.hud_mod = (not cfg.live) if args.hud_mod is None else bool(args.hud_mod)   # 游戏内 HUD：不开直播时默认开
     cfg.live_remind_s = remind_seconds(cfg.live)   # 解说计时：直播 10 秒，其余半分钟
     args.record = args.record is not False  # 默认开启
     cfg.record = args.record
@@ -289,7 +297,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
-             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "all_chapters": all_chapters, "session_id": session_id,
+             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "session_id": session_id,
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -404,12 +412,27 @@ def close_obs() -> None:
         print(f"[record] {exc}", flush=True)
 
 
+def start_mod_hud(cfg: RunConfig, run_dir: Path):
+    """游戏内 HUD（--hud-mod）：从开局录制到录像收尾一直显示，读的是这次运行的 metrics.json 与公开解说历史。"""
+    if not getattr(cfg, "hud_mod", False):
+        return None
+    try:
+        from overlay.modhud import ModHud  # noqa: WPS433
+        hud = ModHud(run_dir, bridge_port=cfg.bridge_port, log=lambda m: print(m, flush=True))
+        hud.start()
+    except Exception as exc:  # noqa: BLE001（HUD 起不来不影响运行）
+        print(f"[run] 游戏内 HUD 启动失败：{exc}", flush=True)
+        return None
+    print("[run] HUD 以 MOD 形式显示在游戏画面右上角（--no-hud-mod 改用网页 HUD）", flush=True)
+    return hud
+
+
 def write_placeholder_metrics(run_dir: Path, cfg: RunConfig) -> None:
     """开局录制期间 HUD 显示的内容：名字、推理强度与"等待"，计时都是 0（主控接管后由 Metrics 接着写）。"""
     now = time.time()
     data = {"agent": cfg.agent, "model": cfg.model, "effort": cfg.effort, "status": "starting", "started_wall": 0.0,
             "budget_s": cfg.budget_seconds, "chapter": "", "room": "", "thought": "", "written_wall": now,
-            "phase_since_wall": now, "thinking_since_wall": now}
+            "phase_since_wall": now, "thinking_since_wall": now, "hud_mod": bool(getattr(cfg, "hud_mod", False))}
     (run_dir / "metrics.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
@@ -533,7 +556,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
         hud = start_in_thread(args.hud_port)
         print(f"[run] HUD：http://127.0.0.1:{args.hud_port}/hud"
               + ("" if hud else "（已在运行，沿用）"), flush=True)
-    hud_window = None if (args.no_hud or args.no_hud_window) else start_hud_window(args.hud_port, run_dir)
+    hud_window = None if (args.no_hud or args.no_hud_window or cfg.hud_mod) else start_hud_window(args.hud_port, run_dir)
     try:
         return await _run_session(cfg, args, run_dir, token, previous, study, metrics, recorder, prepared)
     finally:
@@ -655,7 +678,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         session.playback = playback
     live = None
     # narrate 与工具状态在所有模式都开（HUD 据 live 把思考放在主位）；直播模式另记 live_mode
-    metrics.update(live=True, live_mode=bool(cfg.live), play_mode=describe_mode(cfg))
+    metrics.update(live=True, live_mode=bool(cfg.live), play_mode=describe_mode(cfg), hud_mod=bool(cfg.hud_mod))
     print(f"[run] 模式：{describe_mode(cfg)}", flush=True)
     if session.workspace is not None:
         live = LiveStatus(session.workspace / "game" / "hud_status.json", metrics).start()
@@ -762,11 +785,15 @@ def main() -> int:
     if not port_free(cfg.mcp_port):
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
     from .bridge_requirements import preflight_bridge
-    preflight_bridge(cfg.bridge_port)
+    hello = preflight_bridge(cfg.bridge_port)
+    if cfg.hud_mod and not hello.get("mod_hud"):
+        print("[run] 桥接还不支持游戏内 HUD（需要 0.13.0）：这次改用网页 HUD", flush=True)
+        cfg.hud_mod = False
     from .runtimes import runtime
     token = None if args.no_agent else runtime(cfg.engine).token(cfg)
     run_dir = make_run_dir(cfg.agent)
     print(f"[run] 日志目录：{run_dir}", flush=True)
+    mod_hud = start_mod_hud(cfg, run_dir)
     recorder = None
     obs_launched = False
     handoff_needed = False
@@ -814,6 +841,8 @@ def main() -> int:
                     finally:
                         client.close()
         finally:
+            if mod_hud is not None:
+                mod_hud.close()
             if obs_launched and not args.keep_obs_open:
                 close_obs()
             elif obs_launched:

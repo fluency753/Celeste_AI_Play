@@ -458,6 +458,8 @@ new ResizeObserver(() => {
 function render() {
   const card = $("card");
   if (!state) { card.classList.add("hidden"); return; }
+  // HUD 以 MOD 形式画在游戏画面里（--hud-mod）时，OBS 浏览器源不再显示这一份（录像里只有游戏画面里的那份）
+  if (OBS_SURFACE && state.hud_mod) { card.classList.add("hidden"); return; }
   card.classList.remove("hidden");
   const m = state, c = (config && config.colors) || {};
   const source = telemetryLabel(m);

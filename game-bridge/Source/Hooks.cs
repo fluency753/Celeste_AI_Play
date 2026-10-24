@@ -95,6 +95,7 @@ internal static class Hooks {
         if (Bridge.DrawFrameMarker) {
             DrawFrameMarker();
         }
+        ModHud.DrawOverlay(); // 游戏内 HUD（--hud-mod）：画在后备缓冲上，观测截图里没有
         Bridge.AfterRender();
     }
 

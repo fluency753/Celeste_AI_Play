@@ -74,6 +74,7 @@ class MetricsState:
     live: bool = False                # 智能体用 narrate 实时更新思考（所有模式都开；HUD 据此在规划回放时仍把思考语句放在主位）
     live_mode: bool = False           # 直播模式
     play_mode: str = ""               # 模式说明，例如"速通模式（开模拟器）"、"探索模式 + 直播"
+    hud_mod: bool = False             # HUD 画在游戏画面里：OBS 浏览器源里的网页 HUD 不显示（录像里只有一份）
     narrates: int = 0                 # 实时展示：智能体调用 narrate 的次数
     narrate_reminders: int = 0        # 实时展示：思考状态累计半分钟没有 narrate、在下一次调用工具时提醒的次数
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）

@@ -30,6 +30,7 @@ public class BridgeModule : EverestModule {
         ClockServer.Stop();
         Bridge.Deactivate();
         RecordingAudio.Unload();
+        ModHud.Unload();
         Hooks.Unload();
     }
 }

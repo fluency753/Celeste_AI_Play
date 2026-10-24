@@ -13,6 +13,8 @@ def preflight_bridge(port):
     from tools.bridge_client import BridgeClient
     client = BridgeClient(port=port)
     try:
-        validate_bridge(client.call('hello'))
+        hello = client.call('hello')
+        validate_bridge(hello)
+        return hello
     finally:
         client.close()
