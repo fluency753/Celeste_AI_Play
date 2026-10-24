@@ -65,7 +65,7 @@ Windows 上 `start_gpt.ps1 -Play` 默认通过 `orchestrator.background` 运行�
 
 验证：`calibration.conversations_test` 覆盖归档过滤、重复身份、目录越界拒绝、消息和偏好隔离、游戏成绩保留、启动失败回退和活动游戏拒绝交接；`calibration.agent_control_test` 覆盖聊天模式的门禁。实测：唤起后收到公开回复，游戏动作计数保持不变；切换到历史会话收到回复，再切回原会话成功。
 
-## 执行器公共接口
+## 执行器公共接口（2026-10-25）
 
 HUD 读取当前运行的 `metrics.json`、`control.sqlite3` 和 `public_events.jsonl`，不读取任何聊天客户端自己的日志。模型与推理强度由执行器确认；取不到的字段保持未知。公开事件只包含消息、动作说明和压缩状态，不导出内部推理。
 
