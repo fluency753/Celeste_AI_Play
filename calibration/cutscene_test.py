@@ -29,7 +29,9 @@ class SceneClient:
             if any(',C' in x for x in inputs):
                 self.obs['level'].update(inCutscene=False,dialogOpen=False,dialogWaiting=False,dialogChoices=[])
                 self.obs['controllable']=True
-            return {'result':{'consumed':sum(int(x.split(',')[0]) for x in inputs),'events':[]},'obs':copy.deepcopy(self.obs)}
+            consumed=sum(int(x.split(',')[0]) for x in inputs)
+            if self.obs.get('level',{}).get('completed') and 'complete' in args.get('stop_on',[]):consumed=min(1,consumed)
+            return {'result':{'consumed':consumed,'events':[]},'obs':copy.deepcopy(self.obs)}
         return {}
     def close(self):pass
 
@@ -92,6 +94,11 @@ class CutsceneTests(unittest.TestCase):
         self.s.cutscene('advance',frames=10)
         self.assertEqual(self.s.client.steps,[['1,C','9']])
 
+    def test_wait_after_completion_does_not_stop_again_on_first_frame(self):
+        self.s.client.obs['level']['completed']=True
+        _,_,info=self.s.cutscene('wait',frames=120)
+        self.assertEqual(info['frames'],120)
+
     def test_completed_event_waits_for_agent_story_to_finish(self):
         self.s._handle_events({'events':[{'type':'complete'}]})
         self.s._commit_completion(dialog())
@@ -121,3 +128,10 @@ class CutsceneTests(unittest.TestCase):
             self.assertEqual(self.s.connect()['scene'],'IntroVignette')
         self.s.cfg.cutscene_mode='auto'
         with patch('orchestrator.game_session.BridgeClient',return_value=client),self.assertRaises(RuntimeError):self.s.connect()
+
+    def test_resume_in_completed_level_restores_pending_ending(self):
+        obs=dialog();obs['level']['completed']=True;obs['save']={'name':'player','slot':1}
+        with patch('orchestrator.game_session.BridgeClient',return_value=SceneClient(obs)):
+            self.s.connect()
+        self.assertTrue(self.s._pending_complete)
+        self.assertFalse(self.s.done)

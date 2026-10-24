@@ -45,6 +45,24 @@ class RecordingAudioTests(unittest.TestCase):
              patch("orchestrator.recording.find_ffmpeg", return_value="ffmpeg"):
             self.assertEqual(options_from(Path("run")).audio_source, "game_nrt")
 
+    def test_game_release_precedes_encoding_and_waits_until_capture_has_stopped(self):
+        with tempfile.TemporaryDirectory() as folder:
+            recorder=self.recorder(folder,Mock());recorder.started=True
+            (Path(folder)/'gameplay.mkv').touch()
+            states=[({'lockstep':True},{'state':'finishing','recording':False}),
+                    ({'lockstep':False},{'state':'finishing','recording':True}),
+                    ({'lockstep':False},{'state':'finishing','recording':False}),
+                    ({'lockstep':False},{'state':'finished','recording':False,'frames':1})]
+            events=[]
+            def state():
+                item=states.pop(0);events.append('capture:'+str(item[0]['lockstep'])+':'+str(item[1]['recording']));return item
+            def pure(*args):
+                self.assertEqual(events.count('release'),1)
+                events.append('encoding');return {}
+            with patch.object(recorder,'_plugin',side_effect=state),patch('orchestrator.recording.time.sleep'),patch('orchestrator.recording.make_pure',side_effect=pure):
+                recorder.stop(on_capture_stopped=lambda:events.append('release'))
+            self.assertEqual(events,['capture:True:False','capture:False:True','capture:False:False','release','capture:False:False','encoding'])
+
     def test_old_plugin_is_rejected_before_starting_secondary_mixer(self):
         with tempfile.TemporaryDirectory() as folder:
             call = Mock(return_value={"record_audio_nrt": True, "clock": {"connected": True, "plugin": {}}})

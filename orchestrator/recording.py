@@ -206,7 +206,7 @@ class Recorder:
         if self.started:
             gamewindow.ensure_visible(self.log)
 
-    def stop(self, timeout: float = 900.0) -> dict | None:
+    def stop(self, timeout: float = 900.0, on_capture_stopped: Callable[[], None] | None = None) -> dict | None:
         """停止录制并等 ffmpeg 收尾；返回结果摘要（也写进 recording/recording.json）。"""
         if not self.started:
             return None
@@ -214,7 +214,13 @@ class Recorder:
         self.call("record", action="stop", marker=False)
         deadline = time.monotonic() + timeout
         clock, plugin = self._plugin()
+        released = False
         while time.monotonic() < deadline:
+            if (not released and on_capture_stopped is not None and not clock.get('lockstep')
+                    and plugin.get('state') in {'idle','finishing','finished','failed'}
+                    and plugin.get('recording') is not True):
+                on_capture_stopped()
+                released = True
             if plugin.get("state") in ("finished", "failed") and not clock.get("lockstep"):
                 break
             time.sleep(0.3)

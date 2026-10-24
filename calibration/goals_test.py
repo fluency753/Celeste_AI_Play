@@ -76,9 +76,10 @@ class GoalTests(unittest.TestCase):
         session.goals=self.goal; session._goal_progress={}; session.done=False; session.done_reason=""; session.user_stopped=False
         session.last_obs={"frame":100,"level":{"sid":"Celeste/1-ForsakenCity","side":"B","room":"start","deaths":2},"player":{"dead":False}}
         session.metrics=SimpleNamespace(state=SimpleNamespace(chapter="Celeste/1-ForsakenCity",room="start",chapter_time_ticks=100),
-                                        elapsed=lambda:10, update=Mock(), add_split=Mock())
+                                        elapsed=lambda:10, update=Mock(), add_split=Mock(),add=Mock())
         session.client=SimpleNamespace(cancel_pending=Mock())
-        session.chapter_queue=[2];session.chapter_finished=False
+        session.chapter_queue=[2];session.chapter_finished=False;session._pending_complete=False
+        session.cfg=SimpleNamespace(auto_speed=1)
         return session
 
     def test_running_action_cancel_uses_progress_and_is_sent_once(self):
@@ -100,22 +101,59 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(session.done_reason,"章节完成")
         self.assertTrue(session.user_stopped)
 
+    def test_map_complete_goal_waits_for_ending_story(self):
+        session=self.session()
+        self.set_goal({'field':'map_complete','op':'eq','value':True})
+        obs={'scene':'Level','level':{'sid':'Celeste/1-ForsakenCity','side':'B','completed':True,'inCutscene':True}}
+        self.assertFalse(session.goal_values(obs)['map_complete'])
+        self.assertFalse(self.goal.check(session.goal_values(obs)))
+        obs['level']['inCutscene']=False
+        self.assertTrue(self.goal.check(session.goal_values(obs)))
+
+    def test_completed_goal_stop_still_uses_chapter_results_path(self):
+        session=self.session();session._pending_complete=True
+        session.finish_user_stop()
+        self.assertEqual(session.chapter_queue,[])
+        self.assertEqual(session.done_reason,'章节完成')
+        self.assertTrue(session.user_stopped)
+
+    def test_immediate_stop_does_not_wait_for_results(self):
+        session=self.session();session._pending_complete=True;self.goal.immediate=True
+        session.finish_user_stop()
+        self.assertNotEqual(session.done_reason,'章节完成')
+
+    def test_results_are_displayed_then_confirmed_and_no_confirm_is_sent_on_map(self):
+        session=self.session();session.done=True;session.done_reason='章节完成';session.chapter_queue=[]
+        session.start_sid='Celeste/1-ForsakenCity';session.lock=threading.Lock()
+        session.metrics.add=Mock();session._before_advance=Mock();session._log_frames=Mock()
+        session.client=SimpleNamespace(call=Mock(side_effect=[{'obs':{'scene':'AreaComplete'}},
+            {'obs':{'scene':'AreaComplete'},'result':{'consumed':120}},
+            {'obs':{'scene':'Overworld','menu':{'current':'OuiChapterPanel'}},'result':{'consumed':30}},
+            {'obs':{'scene':'Overworld','menu':{'current':'OuiChapterSelect'}},'result':{'consumed':30}},
+            {'obs':{'scene':'Overworld','menu':{'current':'OuiChapterSelect'}},'result':{'consumed':60}}]))
+        session.finish_at_results()
+        self.assertEqual([call.kwargs['inputs'] for call in session.client.call.call_args_list[1:]],[['120'],['1,C','29'],['1,B','29'],['60']])
+        self.assertEqual(session.end_scene,'Overworld')
+
     def test_prologue_can_finish_on_overworld_without_advancing_next_chapter(self):
         session=self.session()
         session.done=True;session.done_reason='章节完成';session.chapter_queue=[]
         session.start_sid='Celeste/0-Intro';session.lock=threading.Lock();session.metrics.add=Mock()
-        session.client.call=Mock(return_value={'obs':{'scene':'Overworld'}})
+        session._before_advance=Mock();session._log_frames=Mock()
+        session.client.call=Mock(return_value={'obs':{'scene':'Overworld','menu':{'current':'OuiChapterSelect'}},'result':{'consumed':60}})
         session.finish_at_results()
         self.assertEqual(session.end_scene,'Overworld')
-        session.client.call.assert_called_once_with('observe',image=False,entities=False,tiles=False)
+        self.assertEqual(session.client.call.call_args.kwargs['inputs'],['60'])
 
-    def test_regular_chapter_still_requires_expected_result_scene(self):
+    def test_regular_chapter_can_stop_on_map_without_entering_next_chapter(self):
         session=self.session()
         session.done=True;session.done_reason='章节完成';session.chapter_queue=[]
         session.start_sid='Celeste/1-ForsakenCity';session.lock=threading.Lock()
-        session.client.call=Mock(return_value={'obs':{'scene':'Overworld'}})
-        with self.assertRaisesRegex(RuntimeError,'意外场景'):
-            session.finish_at_results()
+        session._before_advance=Mock();session._log_frames=Mock()
+        session.client.call=Mock(return_value={'obs':{'scene':'Overworld','menu':{'current':'OuiChapterSelect'}},'result':{'consumed':60}})
+        session.finish_at_results()
+        self.assertEqual(session.client.call.call_count,2)
+        self.assertEqual(session.end_scene,'Overworld')
 
     def test_same_connection_cancel_preserves_next_reply(self):
         listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen()

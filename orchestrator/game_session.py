@@ -195,6 +195,7 @@ class GameSession:
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
         reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music)
         obs = reply["obs"]
+        self._pending_complete = bool((obs.get('level') or {}).get('completed'))
         if obs.get("scene") != "Level" and not (self.cfg.cutscene_mode == 'agent' and story_pending(obs)):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
         save = (obs.get("save") or {}).get("name")
@@ -638,7 +639,7 @@ class GameSession:
         sid = level.get("sid", self.metrics.state.chapter)
         side = level.get("side", "A")
         values = {"room": level.get("room", self.metrics.state.room), "map": f"{sid}:{side}", "side": side,
-                "map_complete": bool(level.get("completed")), "deaths": level.get("deaths", 0),
+                "map_complete": bool(level.get("completed")) and not story_pending(observation), "deaths": level.get("deaths", 0),
                 "frame": observation.get("frame", 0), "elapsed": self.metrics.elapsed(),
                 "dead": bool((observation.get("player") or {}).get("dead"))}
         if obs is None:
@@ -648,6 +649,11 @@ class GameSession:
 
     def finish_user_stop(self):
         self.user_stopped = True
+        if not self.goals.immediate and (self._pending_complete or
+                bool(((self.last_obs or {}).get('level') or {}).get('completed'))):
+            self.chapter_queue.clear()
+            self._pending_complete=False
+            if not self.done:self._chapter_complete()
         if not self.done:
             self._mark_done(self.goals.snapshot().get("stop_reason", "用户停止"))
 
@@ -675,7 +681,7 @@ class GameSession:
                 self._log_frames(result,expand_inputs(inputs,10000,LETTERS),'(agent处理剧情)',auto=False)
                 self._handle_events(result)
             def step(inputs):
-                reply=self.client.call('step',inputs=inputs,stop_on=['complete'],speed=1,image=False,
+                reply=self.client.call('step',inputs=inputs,stop_on=[],speed=1,image=False,
                                        entities=False,tiles=False,progress=PROGRESS_EVERY,on_event=self._on_progress)
                 log(inputs,reply['result'])
                 return reply['obs']
@@ -766,7 +772,7 @@ class GameSession:
             self._mark_done("章节完成")
 
     def finish_at_results(self) -> None:
-        """最终章只走完片尾并保存到结算页，不确认结算、不进入下一章。"""
+        """最终章走完片尾，展示并确认结算，停在选章地图，不进入下一章。"""
         if not self.done or self.done_reason != "章节完成" or self.chapter_queue:
             return
         with self.lock:
@@ -774,32 +780,40 @@ class GameSession:
                 return
             obs = self.client.call("observe", image=False, entities=False, tiles=False)["obs"]
             started = time.monotonic()
+            results_shown = False
             for _ in range(600):
                 self.end_scene = obs.get('scene')
                 if self.goals.immediate:
                     return
-                if self.start_sid == 'Celeste/0-Intro' and self.end_scene == 'Overworld':
-                    self.metrics.add(auto_game_s=time.monotonic() - started)
-                    print('[run] 序章已保存，停在选章地图，不进入下一章', flush=True)
-                    return
+                if self.end_scene == 'Overworld':
+                    menu=obs.get('menu') or {}
+                    if menu.get('current') == 'OuiChapterSelect' and not menu.get('next'):
+                        self._before_advance()
+                        reply=self.client.call('step',inputs=['60'],stop_on=[],speed=1,
+                                               image=False,entities=False,tiles=False)
+                        self._log_frames(reply['result'],expand_inputs(['60'],10000,LETTERS),'(选章地图停留)',auto=True)
+                        self.metrics.add(frames_auto=reply['result']['consumed'])
+                        self.end_scene=reply['obs'].get('scene')
+                        self.metrics.add(auto_game_s=time.monotonic() - started)
+                        print('[run] 章节结算已确认，停在选章地图，不进入下一章',flush=True)
+                        return
+                    inputs=['1,B','29'] if menu.get('current')=='OuiChapterPanel' and not menu.get('next') else ['10']
                 if obs.get("scene") == "AreaComplete":
-                    self.metrics.add(auto_game_s=time.monotonic() - started)
-                    print("[run] 最终章节已保存，停在结算画面，不进入下一章", flush=True)
-                    return
-                allowed = {'Level', 'LevelExit'}
-                if self.start_sid == 'Celeste/0-Intro':
-                    allowed.add('OverworldLoader')
-                if obs.get("scene") not in allowed:
-                    raise RuntimeError(f"最终章结算出现意外场景：{obs.get('scene')}")
-                level = obs.get("level") or {}
-                inputs = ["1,C", "29"] if level.get("dialogWaiting") else ["30"]
+                    # 先展示结算，再确认；确认只在AreaComplete内发送，地图中绝不按确认。
+                    inputs=['120'] if not results_shown else ['1,C','29']
+                    results_shown=True
+                elif self.end_scene != 'Overworld':
+                    if self.end_scene not in {'Level','LevelExit','OverworldLoader'}:
+                        raise RuntimeError(f"最终章结算出现意外场景：{self.end_scene}")
+                    level=obs.get('level') or {}
+                    inputs=['1,C','29'] if level.get('dialogWaiting') else ['30']
                 self._before_advance()
                 reply = self.client.call("step", inputs=inputs, stop_on=[], speed=self.cfg.auto_speed,
                                          image=False, entities=False, tiles=False)
                 self._log_frames(reply["result"], expand_inputs(inputs, 10000, LETTERS), "(最终章结算)", auto=True)
                 self.metrics.add(frames_auto=reply["result"]["consumed"])
                 obs = reply["obs"]
-            raise RuntimeError("最终章节片尾尚未到达结算画面，已停止自动推进")
+            raise RuntimeError("最终章节片尾尚未返回选章地图，已停止自动推进")
 
     def _enter_next_chapter(self) -> tuple[dict, str | None, list[str]]:
         """（调用方持有连接锁）走完结算画面、回到地图、进入下一章，停在可操作的第一帧。"""

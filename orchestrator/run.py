@@ -678,10 +678,14 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         recording = None
         if recorder:
             try:
-                recording = recorder.stop()
+                def release_after_capture():
+                    session.bridge_call('deactivate')
+                    cfg._game_released=True
+                    print('[run] 锁步录制已停止，已交还游戏控制；视频后处理继续进行',flush=True)
+                recording = recorder.stop(on_capture_stopped=release_after_capture)
             except Exception as exc:  # noqa: BLE001（录制收尾失败不影响交还游戏控制与写总结）
                 print(f"[record] 停止录制失败：{exc}", flush=True)
-        # 录制先收尾，外层 finally 随后始终解除接管；暂停中的运行不走此结束流程。
+        # 锁步结束后先释放，外层finally仍负责关闭连接及异常兜底；暂停不走结束流程。
         summary = metrics.snapshot()
         summary.update(stop_reason=reason, completed=session.done and session.done_reason == "章节完成",
                        user_stopped=session.user_stopped, goal=session.goals.snapshot(),
