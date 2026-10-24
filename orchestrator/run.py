@@ -55,7 +55,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--save-slot", type=int, help="已有存档的槽位编号；同名存档通过槽位区分")
     ap.add_argument('--cutscene-mode',choices=['auto','agent'],default=None,help='剧情：auto主控自动跳过；agent自行观看、推进或跳过')
     ap.add_argument('--scope',choices=['chapter','campaign'],default=None,help='单章或按官方章节顺序游玩；独立于停止目标')
-    ap.add_argument("--create-save", action="store_true", help="显式在空槽位新建独立存档，只允许从序章开始；名称允许重复")
+    ap.add_argument("--create-save", action="store_true", help="显式新建独立存档：放在现有最新存档的下一个槽位（不填中间的空位），只允许从序章开始；名称允许重复")
     ap.add_argument("--model", default="opus", help="Claude Code 模型别名：opus / fable 等（默认 opus）；第三方提供方写它的模型名")
     ap.add_argument("--provider", default="anthropic",
                     help="模型提供方（configs/providers.json）：anthropic（默认，Max 订阅）、deepseek 等。"
@@ -188,6 +188,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                                              else adapter.default_knowledge)
     if previous and cfg.knowledge_profile != previous["state"].get("knowledge_profile", "full"):
         raise SystemExit("不能通过 --resume 改变知识范围；请新建准备会话，避免继承已有攻略知识")
+    # 解说提醒：原生 GPT 直播与新手探索 10 秒；Claude 执行器的速通运行半分钟（与之前一致）
+    cfg.live_remind_s = 10.0 if cfg.engine == "codex" or cfg.knowledge_profile == "explore" else 30.0
     if not any(a == '--model' or a.startswith('--model=') for a in sys.argv) and not previous:
         cfg.model = adapter.default_model
     if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv) and not previous:
@@ -540,14 +542,36 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
         return result
     finally:
         # 即使连接、后台初始化或其他清理失败，也必须通过自己的连接解除接管。
+        # 例外：Claude 执行器的运行没通关就停下时（时间预算用完、出错、Ctrl+C），游戏冻结在当前帧，章节计时不走，
+        # 可以 --resume 接着玩（见 _keeps_game_frozen）。
         had_connection = getattr(session,'client',None) is not None
-        session.close(release=True)
+        keep = bool(getattr(cfg, '_keep_frozen', False)) and had_connection
+        session.close(release=not keep)
         if cfg is not None:
-            cfg._game_released = had_connection
+            cfg._game_released = had_connection and not keep
         if result is not None:
-            result['game_released'] = True
+            result['game_released'] = not keep
             (run_dir / 'summary.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
-        print('[run] 已交还游戏控制，游戏恢复正常运行',flush=True)
+        if keep:
+            print('[run] 游戏保持冻结在当前帧（章节计时不走）：可以用 --resume 续跑；'
+                  '不续跑时用 python tools\\bridge_client.py deactivate 交还控制', flush=True)
+        else:
+            print('[run] 已交还游戏控制，游戏恢复正常运行',flush=True)
+
+
+def _previous_kept_frozen(previous: dict) -> bool:
+    """续跑的那次运行结束时有没有让游戏保持冻结（summary.json 的 game_released 为 False）。"""
+    try:
+        summary = json.loads((previous["dir"] / "summary.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return (previous.get("state") or {}).get("engine", "claude") == "claude"
+    return summary.get("game_released") is False
+
+
+def _keeps_game_frozen(cfg, args, session) -> bool:
+    """Claude 执行器的运行没通关（也没有因退出关卡等结束）就停下时保持冻结，与之前的约定一致；
+    原生 GPT 直播会话、--no-agent，以及已经结束（通关、退出关卡、达成目标）的运行照常交还控制。"""
+    return getattr(cfg, 'engine', 'claude') == 'claude' and not args.no_agent and not session.done
 
 
 async def _run_connected_session(cfg, args, run_dir, token, previous, study, metrics, recorder, prepared, session):
@@ -643,8 +667,11 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 if resumed_session:
                     note = resume_prompt("主控中断后续跑", gap)
                 else:
+                    frozen = _previous_kept_frozen(previous)
                     note = ("（系统）主控中断后续跑，这是一个新的会话：之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。"
-                            "上次退出后已交还游戏控制，游戏状态可能发生变化。先看 /workspace/notes.md，再调用 observe 核对当前状态后继续。")
+                            + ("游戏一直冻结在中断时的那一帧，章节计时没有走。先看一遍 /workspace/notes.md，再调用 observe 继续游玩。"
+                               if frozen else
+                               "上次退出后已交还游戏控制，游戏状态可能发生变化。先看 /workspace/notes.md，再调用 observe 核对当前状态后继续。"))
             from .runtimes import runtime
             runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
                 game_server=server, token=token, session_id=session_id,
@@ -672,13 +699,14 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         if live is not None:
             live.close()
         recording = None
+        cfg._keep_frozen = _keeps_game_frozen(cfg, args, session)
         if recorder:
             try:
                 def release_after_capture():
                     session.bridge_call('deactivate')
                     cfg._game_released=True
                     print('[run] 锁步录制已停止，已交还游戏控制；视频后处理继续进行',flush=True)
-                recording = recorder.stop(on_capture_stopped=release_after_capture)
+                recording = recorder.stop(on_capture_stopped=None if cfg._keep_frozen else release_after_capture)
             except Exception as exc:  # noqa: BLE001（录制收尾失败不影响交还游戏控制与写总结）
                 print(f"[record] 停止录制失败：{exc}", flush=True)
         # 锁步结束后先释放，外层finally仍负责关闭连接及异常兜底；暂停不走结束流程。
@@ -746,7 +774,8 @@ def main() -> int:
         return 2
     finally:
         try:
-            if (recorder is not None and recorder.started) or (handoff_needed and not getattr(cfg,'_game_released',False)):
+            keep_frozen = bool(getattr(cfg, '_keep_frozen', False))
+            if (recorder is not None and recorder.started) or (handoff_needed and not getattr(cfg,'_game_released',False) and not keep_frozen):
                 # 进入存档后、正式会话创建前也可能失败；此时原宏连接已经关闭，在这里收尾并恢复游戏。
                 from tools.bridge_client import BridgeClient  # noqa: WPS433
                 client = BridgeClient(port=cfg.bridge_port, timeout=120)
@@ -756,7 +785,8 @@ def main() -> int:
                         recorder.stop()
                 finally:
                     try:
-                        client.call('deactivate')
+                        if not keep_frozen:
+                            client.call('deactivate')
                     finally:
                         client.close()
         finally:

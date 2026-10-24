@@ -24,7 +24,7 @@
   },
   "context_window": 1000000,
   "compact_threshold": 967000,
-  "page_version": 48,
+  "page_version": 49,
   "poll_ms": 100,
   "colors": {
     "card": "rgba(16, 19, 34, 0.80)",

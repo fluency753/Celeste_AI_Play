@@ -134,6 +134,8 @@ class SessionControls:
                             self.control.set_fast(self.fast_mode)
                             self.control.mark(row["id"], "submitted", "Fast 设置已保存，下一轮生效")
                         elif row['kind']=='cutscene_mode':
+                            if row['text'] == 'agent' and not getattr(self.session, 'cutscene_tool', True):
+                                raise ValueError('本次运行没有开放剧情工具，剧情由主控自动跳过')
                             self.cfg.cutscene_mode=row['text']
                             self.control.set_cutscene_mode(row['text'])
                             self.control.mark(row['id'],'submitted','剧情模式已更新，当前菜单操作完成后生效')
@@ -210,7 +212,8 @@ class SessionControls:
                 'effort_levels':getattr(self, 'runtime_efforts', self.capabilities.effort_levels)}
 
     def _cutscene_status(self):
-        return {'cutscene_control':True,'cutscene_mode':self.control.cutscene_preference() or self.cfg.cutscene_mode}
+        return {'cutscene_control':getattr(self.session, 'cutscene_tool', True),
+                'cutscene_mode':self.control.cutscene_preference() or self.cfg.cutscene_mode}
 
     def _goal_status(self):
         if self.session is None or not hasattr(self.session, "goals"):

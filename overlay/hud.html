@@ -68,6 +68,7 @@
   .timer .ms { font-size: 0.62em; color: #C9D0DE; }
   .effort { text-align: right; white-space: nowrap; }
   .effort.hidden { display: none; }
+  .stat.hidden { display: none; }   /* 没有数据的行（数据来源、模拟体力等）不显示 */
   .effort .lbl { font-size: calc(12 * var(--px)); color: var(--label); line-height: 1.3; }
   .effort-val { display: flex; align-items: center; justify-content: flex-end; gap: calc(6 * var(--px));
                 font-size: calc(18 * var(--px)); line-height: 1.2; }
@@ -313,10 +314,15 @@ function tokens(n) {
 function telemetryLabel(m) {
   return ({codex_app_server:'独立 Codex',claude_stream_json:'独立 Claude'})[m.telemetry_source] || '';
 }
+// Claude Code 启动时报告完整模型 ID（如 claude-opus-5-5、deepseek-flash[1m]）：去掉上下文后缀、claude- 前缀与版本号再查显示名
+function modelKey(value) {
+  return String(value || "").replace(/\[[^\]]*\]$/, "").replace(/^claude-/, "").replace(/(-\d+)+$/, "");
+}
 function displayName(m) {
   const names = (config && config.names) || {};
-  if (telemetryLabel(m)) return names[m.model] || m.model || '—';
-  return names[m.model] || names[m.agent] || m.model || m.agent || '—';
+  const named = names[m.model] || names[modelKey(m.model)];
+  if (telemetryLabel(m)) return named || m.model || '—';
+  return named || names[m.agent] || m.model || m.agent || '—';
 }
 function applyColors() {
   const c = (config && config.colors) || {};
@@ -388,6 +394,37 @@ function setText(el, value) {
   if (el.textContent !== text) el.textContent = text;
 }
 
+// 历史气泡来自运行日志（有轮询间隔），最新一句思考来自 metrics（每 0.1 秒）：最新一句还没进历史时先补在末尾，
+// 智能体 narrate 或开始一段动作时 HUD 立即换上新语句，不等历史刷新（录像里新语句与动作的第一帧同时出现）。
+let lastHistoryItems = [], latestThought = null;
+function composedThoughts() {
+  const items = lastHistoryItems.slice();
+  const text = latestThought && (latestThought.text || "").trim();
+  if (text && !items.slice(-6).some(item => String(item.text || "").trim() === text)) {
+    items.push({id: "latest", text, kind: "解说", wall: latestThought.wall});
+  }
+  return items.slice(-12);
+}
+function applyThoughts(first) {
+  const el = $("thought");
+  const oldTop = el.scrollTop;
+  const visibleEntry = Array.from(el.children).find(entry => entry.offsetTop - el.offsetTop + entry.offsetHeight > oldTop);
+  const anchor = visibleEntry && visibleEntry.dataset.id;
+  const anchorDelta = visibleEntry ? oldTop - (visibleEntry.offsetTop - el.offsetTop) : 0;
+  const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 3;
+  syncThoughtEntries(el, composedThoughts(), first);
+  if (first) {
+    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    followHistory = true;
+  } else if (followHistory || wasAtBottom) {
+    el.scrollTop = el.scrollHeight;
+    followHistory = true;
+  } else {
+    const retained = Array.from(el.children).find(entry => entry.dataset.id === anchor);
+    el.scrollTop = retained ? retained.offsetTop - el.offsetTop + anchorDelta : oldTop;
+  }
+}
+
 async function pollHistory() {
   try {
     const url = historyEndpoint || (config && config.history_url) || STATE_URL.replace(/\/state$/, "/history");
@@ -403,26 +440,10 @@ async function pollHistory() {
     const signature = JSON.stringify([data.run, items]);
     if (signature === historySignature) return;
     historySignature = signature;
-    const el = $("thought");
     const first = !historyReady || historyRun !== data.run;
-    const oldTop = el.scrollTop;
-    const visibleEntry = Array.from(el.children).find(entry => entry.offsetTop - el.offsetTop + entry.offsetHeight > oldTop);
-    const anchor = visibleEntry && visibleEntry.dataset.id;
-    const anchorDelta = visibleEntry ? oldTop - (visibleEntry.offsetTop - el.offsetTop) : 0;
-    const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 3;
-    syncThoughtEntries(el, items, first);
-    if (first) {
-      el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-      followHistory = true;
-    } else if (followHistory || wasAtBottom) {
-      el.scrollTop = el.scrollHeight;
-      followHistory = true;
-    } else {
-      const retained = Array.from(el.children).find(entry => entry.dataset.id === anchor);
-      el.scrollTop = retained ? retained.offsetTop - el.offsetTop + anchorDelta : oldTop;
-    }
+    lastHistoryItems = items;
+    applyThoughts(first);
     historyReady = items.length > 0; historyRun = data.run;
-    if (!historyReady) shownThought = null;
   } catch (error) { /* 历史服务短暂离线时保留已有内容 */ }
 }
 
@@ -495,7 +516,7 @@ function render() {
 
   // 推理强度：当前生效的档位（英文）；申请了切换、还没生效时，后面跟一个呼吸闪烁的"→ 目标档位"
   const box = $("effortBox");
-  const levels = controlData?.model === m.model ? (controlData.control?.effort_levels || []) : [];
+  const levels = modelKey(controlData?.model) === modelKey(m.model) ? (controlData.control?.effort_levels || []) : [];
   const level = levels.indexOf(m.effort);
   const meter = $("effortMeter");
   if (meter.children.length !== levels.length) {
@@ -576,16 +597,12 @@ function render() {
     ? `第 ${m.replay_round} 轮规划 · 推演 ${(m.replay_runs || 0).toLocaleString("en-US")} 条路线` : "即将执行的路线";
   setText($("meta"), !replaying ? "" : (m.live && m.replay_label ? `${roundInfo} · ${m.replay_label}` : roundInfo));
 
-  // 历史尚未就绪时，最新公开解说也使用同一气泡结构。
-  if (!historyReady) {
-    const next = (replaying && !m.live ? (m.replay_label || "") : (m.thought || ""));
-    if (next !== shownThought) {
-      shownThought = next;
-      const el = $("thought");
-      el.replaceChildren(...(next ? [thoughtEntry({id: "latest", text: next,
-        wall: m.thought_updated_wall})] : []));
-      el.scrollTop = el.scrollHeight;
-    }
+  // 最新一句思考（metrics 每 0.1 秒）：历史就绪前单独显示，就绪后补在历史末尾，直到历史里出现同一句。
+  const next = (replaying && !m.live ? (m.replay_label || "") : (m.thought || ""));
+  if (next !== shownThought) {
+    shownThought = next;
+    latestThought = next ? {text: next, wall: m.thought_updated_wall} : null;
+    applyThoughts(!historyReady);
   }
 }
 

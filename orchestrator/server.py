@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import json
 
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .game_session import ActError, GameSession
+from .telemetry import publish
 from .kb_study import KbStudy
 from .observation import describe_attempts, describe_obs, describe_step, room_json, upscale_png
 from .exploration import GEOMETRY, action_hint
@@ -86,6 +88,14 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                        log_level="WARNING")
     metrics = session.metrics
     ws_note = SIM_NOTE if session.cfg.sim else WORKSPACE_NOTE
+    explore = session.cfg.knowledge_profile == "explore"
+    # 原生 GPT 会话（codex）与新手探索才有的工具：用户要求时退出关卡、智能体自己处理剧情、限额模拟辅助。
+    # Claude 执行器的速通运行（默认 cutscene_mode=auto、不开 sim_assist）不注册它们，工具集与之前一致。
+    native = getattr(session.cfg, "engine", "claude") == "codex"
+    tool_exit_level = native or explore
+    tool_cutscene = native or explore or session.cfg.cutscene_mode == "agent"
+    tool_simulate = bool(getattr(session.cfg, "sim_assist", False))
+    session.cutscene_tool = tool_cutscene      # 没有剧情工具时，HUD 不提供"剧情交给智能体"的切换
     # 截图只在进入新房间时（以及主动 observe 时）附上；同时给出整个房间的实体与地图，平时只描述画面附近
     # 思考与工具时间由主控按 Claude Code 输出流里的 tool_use / tool_result 事件统计（见 metrics.py），这里不计时
     state = {"described_room": None}
@@ -149,7 +159,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 content: list = []
                 if image and session.cfg.images:
                     content.append(Image(data=upscale_png(image), format="png"))
-                content.append(describe_obs(obs, full_room=True, effort=header_line())
+                content.append(describe_obs(obs, full_room=True, effort=header_line(), explore=explore)
                                + "\n\n" + ROOM_JSON_HEADER + room_json(obs)
                                + ("\n" + GEOMETRY if session.cfg.knowledge_profile == "explore" else "")
                                + ("\n" + ws_note if session.workspace else ""))
@@ -195,7 +205,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
                     parts.append("【进入新房间】下面是新房间的截图、整个房间的字符地图，以及整个房间的精确数据（JSON）。房间信息以精确数据为准，截图仅作参考。")
-                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line()))
+                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(), explore=explore))
                 if new_room:
                     parts.append(ROOM_JSON_HEADER + room_json(outcome.obs))
                 if session.cfg.knowledge_profile == "explore" and not session.done:
@@ -216,7 +226,11 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             finally:
                 finish()
 
-    @server.tool(name='exit_level', description='仅在用户要求退出时调用：通过游戏暂停菜单保存并退出当前关卡，回到地图或主菜单，结束本次试玩并保存录像。退出不算通关。', structured_output=False)
+    def optional_tool(enabled: bool, **kw):
+        # 不需要的工具不注册：装饰器原样返回函数，不进 MCP 工具列表
+        return server.tool(**kw) if enabled else (lambda fn: fn)
+
+    @optional_tool(tool_exit_level, name='exit_level', description='仅在用户要求退出时调用：通过游戏暂停菜单保存并退出当前关卡，回到地图或主菜单，结束本次试玩并保存录像。退出不算通关。', structured_output=False)
     async def exit_level(reason: str) -> list:
         async with call_lock:
             if (note := gated()) is not None:
@@ -225,7 +239,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             result = await asyncio.to_thread(session.exit_level, reason)
             return [json.dumps(result,ensure_ascii=False) + '\n已退出关卡，本次试玩结束，请结束本轮，不再调用游戏工具。']
 
-    @server.tool(name='cutscene', description='处理剧情：wait观看播放，advance推进一页对话，choose选择当前可见选项index，skip尝试跳过整段。遇到分支选项必须明确choose，advance不会代选。frames为1～180。', structured_output=False)
+    @optional_tool(tool_cutscene, name='cutscene', description='处理剧情：wait观看播放，advance推进一页对话，choose选择当前可见选项index，skip尝试跳过整段。遇到分支选项必须明确choose，advance不会代选。frames为1～180。', structured_output=False)
     async def cutscene(action: str, frames: int = 30, choice: int | None = None) -> list:
         async with call_lock:
             if (note := gated()) is not None:return [note]
@@ -233,10 +247,10 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             obs,image,info=await asyncio.to_thread(session.cutscene,action,frames,choice)
             result=[]
             if image and session.cfg.images:result.append(Image(data=upscale_png(image),format='png'))
-            result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line())+'\n'+room_json(obs))
+            result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore)+'\n'+room_json(obs))
             return result
 
-    @server.tool(name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)
+    @optional_tool(tool_simulate, name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)
     async def simulate(candidates: list[list[str]] | None = None) -> list:
         async with call_lock:
             if (note := gated()) is not None:
@@ -262,6 +276,10 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             metrics.set_thought(text)
             metrics.add(narrates=1)
             metrics.narrated()
+            try:  # 进 HUD 的公开解说历史（只记这句话本身）
+                publish(session.run_dir, f"narrate:{time.time_ns()}", text)
+            except OSError:
+                pass
             return ["已更新。"]
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)

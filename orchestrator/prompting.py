@@ -6,14 +6,17 @@ PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
 
 def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None, pause_limit: bool = False,
-                   rounds_per_room: int = 3, death_bonus: int = 1, playback: bool = False, live: bool = False) -> str:
+                   rounds_per_room: int = 3, death_bonus: int = 1, playback: bool = False, live: bool = False,
+                   engine: str = "claude", remind_s: float = 30.0) -> str:
     """系统提示词。按预置模拟器的开关分成两个版本（目标都是以最短的章节计时通关）：
     - 开模拟器（默认，容器运行方式）：智能体可以随意调用 /sim 寻找并优化路线；提示词里写明做法、建议的工作方式、
       物理参数简表、规划与优化的要求、自动重试与规划回放（system_sim、container_sim、sim、free/pause、retry、playback）；
     - 关模拟器（--no-sim，或本机运行方式）：不教怎么玩，只写目标、规则（不得调用或破解模拟器、不读游戏程序）与工具接口，
       其余由智能体自己决定（system_nosim、container_nosim）；容器里另有展示接口（show.trajectory），算出的逐帧轨迹
       可以交给系统画给观众看，只用于展示。
-    实时展示（live，两个版本都适用）：要求思考期间用 narrate 随时更新 HUD 的思考语句、运行程序期间报告进度（live_zh.md）。"""
+    实时展示（live，两个版本都适用）：要求思考期间用 narrate 随时更新 HUD 的思考语句、运行程序期间报告进度（live_zh.md）。
+    直播节奏（live_pace_zh.md：找到安全路线就执行、规划程序 10～15 秒返回）只给原生 GPT 直播会话（engine=codex）；
+    Claude 执行器的速通运行不加，目标仍是以最短章节计时通关、想多久由智能体决定。"""
     interface = (PROMPTS / "interface_zh.md").read_text(encoding="utf-8")
 
     def part(name: str) -> str:
@@ -35,7 +38,10 @@ def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None =
         if playback:
             text += "\n\n" + part("playback_zh.md")
     if live and runtime == "container":
-        text += "\n\n" + part("live_zh.md")
+        remind = "半分钟" if remind_s == 30 else f"{remind_s:g} 秒"
+        text += "\n\n" + part("live_zh.md").replace("{remind}", remind)
+        if engine == "codex":
+            text += "\n\n" + part("live_pace_zh.md")
     if chapters and len(chapters) > 1:
         names = " → ".join(chapter_name_by_id(c) for c in chapters)
         text += ("\n\n# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
@@ -50,9 +56,12 @@ def play_prompt(cfg) -> str:
         prompt += '\n本次指定章节：' + str(cfg.chapters) + '；不得自行扩展。'
     else:
         prompt = compose_prompt(cfg.runtime, cfg.sim, cfg.chapters, cfg.pause_limit,
-                                cfg.rounds_per_room, cfg.death_bonus, cfg.playback, cfg.live)
-    prompt += (f'\n当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent由你使用cutscene的'
-               'wait/advance/choose/skip决定。遇到分支必须明确choose，不得用advance代选。')
+                                cfg.rounds_per_room, cfg.death_bonus, cfg.playback, cfg.live,
+                                engine=getattr(cfg, 'engine', 'claude'), remind_s=cfg.live_remind_s)
+    if getattr(cfg, 'engine', 'claude') == 'codex' or cfg.knowledge_profile == 'explore' or cfg.cutscene_mode == 'agent':
+        # 只有开放了 cutscene 工具的运行才说明剧情模式；Claude 速通运行由主控自动跳过剧情（接口说明里已写）
+        prompt += (f'\n当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent由你使用cutscene的'
+                   'wait/advance/choose/skip决定。遇到分支必须明确choose，不得用advance代选。')
     if cfg.sim_assist:
         from .sim_assist import INSTRUCTIONS
         prompt += INSTRUCTIONS

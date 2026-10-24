@@ -11,6 +11,7 @@
           "low",
           "medium",
           "high",
+          "xhigh",
           "max"
         ]
       },
@@ -20,7 +21,9 @@
         "efforts": [
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ]
       },
       {
@@ -29,7 +32,9 @@
         "efforts": [
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ]
       }
     ]
@@ -60,7 +65,9 @@
         "efforts": [
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ]
       },
       {
@@ -68,7 +75,9 @@
         "efforts": [
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ]
       }
     ]

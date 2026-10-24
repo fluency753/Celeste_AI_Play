@@ -72,8 +72,9 @@ class PublicHistory:
                 text = action.get("thought", "").strip()
                 if text:
                     ident = f"act:{action.get('i')}:{action.get('attempt', 0)}"
+                    previous = self.items.get(ident)   # 动作开始时已作为公开事件记下：保留那时的时间
                     self.items[ident] = {"id": ident, "text": text, "kind": "尝试",
-                                         "wall": (metrics.get("started_wall") or 0) + action.get("t", 0)}
+                                         "wall": previous["wall"] if previous else (metrics.get("started_wall") or 0) + action.get("t", 0)}
             if (self.events.path.parent / "control.sqlite3").exists():
                 for message in RunControl(self.events.path.parent).snapshot()["messages"]:
                     if message["role"] == "user":

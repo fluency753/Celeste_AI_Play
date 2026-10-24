@@ -32,7 +32,6 @@ from .game_session import GameSession
 from .kb_study import KbStudy
 from .metrics import Metrics
 from .session_controls import RuntimeCapabilities, SessionControls
-from .telemetry import public_event
 from .prompting import play_prompt, study_prompt, resume_prompt, FIRST_PROMPT, CONTINUE_PROMPT
 
 GAME_TOOLS = ['mcp__celeste__' + name for name in
@@ -534,7 +533,8 @@ class ClaudeRunner(SessionControls):
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            self._events.write(json.dumps(public_event(_strip_images(event)), ensure_ascii=False) + "\n")
+            # 本机运行目录里的完整事件记录保留思考正文，供复盘（runs\evscan.py 等）；它不进 HUD 的会话列表
+            self._events.write(json.dumps(_strip_images(event), ensure_ascii=False) + "\n")
             self._events.flush()
             self._handle(event)
 

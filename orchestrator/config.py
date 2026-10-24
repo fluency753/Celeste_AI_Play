@@ -161,7 +161,7 @@ class RunConfig:
     record: bool = True              # OBS 录屏：主控自己启动 OBS（没在运行时）并锁步录制，结束时关掉它启动的 OBS
     continuous_music: bool = False   # 直播：冻结逻辑时继续播放音乐，仅暂停音效
     live: bool = True                # 实时展示：智能体思考期间用 narrate 随时更新 HUD 的思考内容，运行程序期间报告进度（HUD 工具栏）
-    live_remind_s: float = 10.0      # 实时展示：累计这么多秒没有公开解说，在下一次工具调用时提醒
+    live_remind_s: float = 30.0      # 实时展示：累计这么多秒没有公开解说，在下一次工具调用时提醒（原生 GPT 与新手探索为 10 秒，见 run.py）
 
     @property
     def third_party(self) -> bool:

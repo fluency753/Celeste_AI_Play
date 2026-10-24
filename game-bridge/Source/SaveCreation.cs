@@ -17,8 +17,12 @@ internal static class SaveCreation {
         if (overworld.Next != null) throw new InvalidOperationException("wait for the file-select transition to finish");
         if (UserIO.Saving || select.Slots == null || select.Slots.Any(s => s != null && s.StartingGame))
             throw new InvalidOperationException("a save or new-game operation is already in progress");
-        int index = Array.FindIndex(select.Slots, slot => slot != null && slot.FileSlot >= 0 && !slot.Exists && Vacant(slot.FileSlot));
-        if (index < 0) throw new InvalidOperationException("no empty save slot is available");
+        // New saves go to the slot right after the newest existing one (existing save files or orphaned mod saves),
+        // never into a gap among older slots: those numbers may belong to the player's own saves.
+        int newest = select.Slots.Where(slot => slot != null && slot.FileSlot >= 0 && (slot.Exists || !Vacant(slot.FileSlot)))
+            .Select(slot => slot.FileSlot).DefaultIfEmpty(-1).Max();
+        int index = Array.FindIndex(select.Slots, slot => slot != null && slot.FileSlot == newest + 1 && !slot.Exists && Vacant(slot.FileSlot));
+        if (index < 0) throw new InvalidOperationException($"slot {newest + 1} (after the newest save) is not available on the file-select screen");
         OuiFileSelectSlot target = select.Slots[index];
         if (target.newGameLevelSetPicker?.NewGameLevelSet is { } levelSet && levelSet != "Celeste")
             throw new InvalidOperationException("create_save currently supports the official Celeste level set");

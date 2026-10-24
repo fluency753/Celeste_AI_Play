@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .telemetry import publish
 from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, CHAPTER_SIDS
 from .metrics import Metrics
 from .observation import enrich_obs, fmt_ticks
@@ -482,6 +483,10 @@ class GameSession:
             with self.lock:
                 self.playback.final()
         self.metrics.set_thought(thought)
+        try:  # 这段动作的思考在推进之前就进 HUD 的公开解说历史（动作结束后 decisions.jsonl 用同一个 id）
+            publish(self.run_dir, f"act:{self.decision_index}:{attempt}", thought, kind="尝试")
+        except OSError:
+            pass
         self.metrics.update(status="executing")
         extra = {"expect": plan.expect, "tolerance": plan.tolerance} if plan.expect else {}
         self._before_advance()
