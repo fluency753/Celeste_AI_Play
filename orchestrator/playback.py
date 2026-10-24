@@ -194,6 +194,9 @@ def select(log: LogIndex, k: int, ref: tuple[float, float] | None = None) -> lis
             if len(chosen) >= k:
                 break
             chosen.setdefault(i, KIND_DEATH)
+    if not chosen:   # 没有金色、出口与死亡路线可选：先放进伸得最远的一条，最远点采样从它出发
+        far = int(np.argmax(np.hypot(*(log.end - log.first).T)))
+        chosen[far] = _kind(log, far)
     # 最远点采样：在剩下的路线里，每次挑和已选的形状差得最多的
     pool = np.setdiff1d(np.arange(n), np.fromiter(chosen, dtype=int))
     if len(pool) > 20000:
