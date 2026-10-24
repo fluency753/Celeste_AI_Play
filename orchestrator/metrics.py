@@ -60,6 +60,7 @@ class MetricsState:
     replays: int = 0                  # 播过的规划回放段数
     replay_s: float = 0.0             # 规划回放用时（游戏不推进；逐轮回放与智能体的思考、工具同时进行，照常计入它们）
     replay_act_s: float = 0.0         # 其中执行前在 act 里把镜头送回 Madeline 的用时（和游戏推进时间一样不计入工具时间）
+    tool_call: str = ""               # 正在调用的工具（HUD 的"调用工具"一栏，例如"Bash · 搜索第二个房间"；没有时为空）
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）
     sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数（全程累计，写进总结）
     sim_round_rollouts: int = 0       # 当前这次模拟器调用推演的路线条数（HUD 显示；这一轮回放画完清零）
@@ -104,6 +105,7 @@ class Metrics:
         self._effort_reason = ""
         self._in_turn = False           # 智能体正在进行一轮（主控发出消息之后、这一轮结束之前）
         self._tools: set[str] = set()   # 正在运行的工具调用（tool_use 的编号）
+        self._tool_labels: dict[str, str] = {}   # 正在运行的工具调用 → HUD 上的说明
         self._seg_mark = time.monotonic()  # 上一次把时间结算进思考或工具的时刻
         self._seg_game = 0.0            # 那一刻的游戏推进时间累计
         self.playing = not study
@@ -151,15 +153,32 @@ class Metrics:
             self._flush_locked()
             self._in_turn = False
             self._tools.clear()
+            self._tool_labels.clear()
+            self.state.tool_call = ""
             self._write_locked()
 
-    def tool_begin(self, tool_id: str, game_tool: bool = False) -> None:
-        """输出流里出现一次工具调用。容器工具（Bash 等）把状态切成"运行工具"；游戏工具的状态由游戏会话设置。"""
+    def _tool_summary(self) -> str:
+        labels = [self._tool_labels[t] for t in self._tool_labels if t in self._tools]
+        if not labels:
+            return ""
+        if len(labels) == 1:
+            return labels[0]
+        name, _, detail = labels[0].partition(" · ")   # 并行的几个调用：数量写在前面（后面太长时会被省略）
+        names = {lab.partition(" · ")[0] for lab in labels}
+        head = f"{name} ×{len(labels)}" if len(names) == 1 else f"{name} 等 {len(labels)} 个"
+        return f"{head} · {detail}" if detail else head
+
+    def tool_begin(self, tool_id: str, game_tool: bool = False, label: str = "") -> None:
+        """输出流里出现一次工具调用。容器工具（Bash 等）把状态切成"运行工具"；游戏工具的状态由游戏会话设置。
+        label 是给 HUD 看的"调用工具"一栏（工具名与说明）。"""
         with self._lock:
             if tool_id in self._tools:
                 return
             self._flush_locked()
             self._tools.add(tool_id)
+            if label:
+                self._tool_labels[tool_id] = label
+            self.state.tool_call = self._tool_summary()
             if not game_tool and self.playing and self.state.status in ("thinking", "starting"):
                 self.state.status = "tool"
                 self.state.phase_since_wall = time.time()
@@ -172,6 +191,8 @@ class Metrics:
                 return
             self._flush_locked()
             self._tools.discard(tool_id)
+            self._tool_labels.pop(tool_id, None)
+            self.state.tool_call = self._tool_summary()
             if not self._tools and self.playing and self.state.status in ("tool", "executing", "auto", "retrying"):
                 self.state.status = "thinking"
                 self.state.phase_since_wall = time.time()

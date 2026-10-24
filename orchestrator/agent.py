@@ -109,6 +109,24 @@ def resume_prompt(reason: str, minutes: float, study_note: str | None = None) ->
     return text + "请先调用 observe 看清当前这一帧（工作区里的 game/ 文件也已更新），再继续游玩。"
 
 
+def tool_label(name: str, tool_input) -> str:
+    """HUD"调用工具"一栏：工具名（游戏工具去掉前缀）加一句说明——Bash 用智能体写的 description，文件工具用路径，查找用模式。"""
+    short = name.removeprefix("mcp__celeste__")
+    args = tool_input if isinstance(tool_input, dict) else {}
+    if name == "Bash":
+        detail = str(args.get("description") or "").strip() or " ".join(str(args.get("command") or "").split())[:60]
+    elif name in ("Read", "Write", "Edit", "NotebookEdit"):
+        detail = str(args.get("file_path") or args.get("notebook_path") or "")
+    elif name in ("Glob", "Grep"):
+        detail = str(args.get("pattern") or "")
+    elif short == "set_effort":
+        detail = str(args.get("effort") or args.get("level") or "")
+    else:
+        detail = ""
+    detail = " ".join(detail.split())
+    return f"{short} · {detail}" if detail else short
+
+
 def _strip_images(value):
     """写日志时去掉图片的 base64，避免日志膨胀。"""
     if isinstance(value, dict):
@@ -543,7 +561,8 @@ class ClaudeRunner:
                 if block.get("type") == "tool_use":
                     self._tool_calls_this_turn += 1
                     # 工具时间从这里开始，到对应的 tool_result 为止（见 metrics.py）
-                    self.metrics.tool_begin(str(block.get("id")), str(block.get("name", "")).startswith("mcp__celeste__"))
+                    self.metrics.tool_begin(str(block.get("id")), str(block.get("name", "")).startswith("mcp__celeste__"),
+                                            tool_label(str(block.get("name", "")), block.get("input")))
                     if self.gate is not None:
                         self.gate.note_tool_use(str(block.get("id")), message.get("id"))
                     if self.playback is not None:

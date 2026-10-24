@@ -83,6 +83,9 @@
   .stat .v { font-size: calc(16 * var(--px)); white-space: nowrap; }
   .stat .v.warn { color: var(--warn); }
   .stat .v.dim { color: var(--label); }
+  /* 调用工具：占满一行，放不下时省略 */
+  .stat.wide { grid-column: 1 / -1; }
+  .stat .v.call { font-size: calc(14 * var(--px)); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
   .thought {
     margin-top: calc(10 * var(--px));
@@ -133,6 +136,7 @@
     <div class="stat"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0 次</span></div>
     <div class="stat"><span class="k">推演路径</span><span class="v num" id="simRuns">0 条</span></div>
     <div class="stat"><span class="k">推演最速</span><span class="v num" id="simBest">—</span></div>
+    <div class="stat wide"><span class="k">调用工具</span><span class="v call" id="toolCall">—</span></div>
   </div>
   <div class="rule"></div>
   <div class="thought" id="thought"></div>
@@ -301,6 +305,11 @@ function render() {
   const best = m.sim_best_frames || 0;
   $("simBest").textContent = best > 0 ? `${(best / 60).toFixed(3)}s` : "—";
   $("simBest").classList.toggle("dim", best <= 0);
+
+  // 调用工具：智能体正在调用的工具与说明（Bash 用它写的 description，文件工具用路径）；没有在调用工具时显示"—"
+  const call = (!ended && m.tool_call) || "";
+  $("toolCall").textContent = call || "—";
+  $("toolCall").classList.toggle("dim", !call);
 
   // 规划回放：思考语句的位置显示这一轮在试什么，下面一行小字是第几轮、推演了多少条路线（执行前画最终路线时写"即将执行"）
   $("meta").textContent = !replaying ? "" : m.replay_round > 0
