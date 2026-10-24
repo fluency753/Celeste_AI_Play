@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -164,7 +164,30 @@ class RunConfig:
     continuous_music: bool = False   # 直播：冻结逻辑时继续播放音乐，仅暂停音效
     live: bool = False               # 直播模式（--live）：网页 HUD、解说计时 10 秒、可按用户要求退出关卡；narrate 在所有模式都有
     hud_mod: bool = False            # HUD 以 MOD 形式画在游戏画面里（overlay/modhud.py；不开直播时默认开）
-    live_remind_s: float = 30.0      # 解说计时：思考累计这么多秒没有公开解说，在下一次工具调用时提醒（直播模式为 10 秒，见 modes.remind_seconds）
+    live_remind_s: float = 30.0      # 解说计时：思考累计这么多秒没有公开解说，在下一次工具调用时提醒（由可调参数 remind_s / remind_live_s 决定）
+    # 以下是可调参数（orchestrator/tuning.py，命令行 --tune 名称=值）；默认值就是一直以来的数值
+    thought_max_chars: int = 120     # act 的 thought 与 narrate 的长度上限
+    remind_s: float = 30.0           # 解说提醒间隔（不开直播）
+    remind_live_s: float = 10.0      # 解说提醒间隔（直播）
+    bash_default_s: int = 300        # Claude Code 的 Bash 不写 timeout 时的上限（速通模式）
+    bash_max_s: int = 600            # Bash 写了 timeout 时最多能到多久（速通模式）
+    retry_max: int = 5               # 计划文件 retry.max 的上限
+    retry_timeout_max_s: float = 60.0  # 计划文件 retry.timeout_s 的上限
+    explore_program_s: int = 15      # 探索模式：单次规划程序（Bash）最长秒数
+    explore_program_runs: int | None = None  # 探索模式：两次 act 之间最多运行几次规划程序；None = 不限
+    assist_capacity: int = 100       # 探索模式的限额预测：体力上限
+    assist_initial: int = 40         # 初始体力
+    assist_regen_frames: int = 60    # 真实操作每多少个移动帧恢复 1 点
+    assist_regen_per_min: int = 20   # 每分钟最多恢复几点
+    assist_room_bonus: int = 15      # 首次进入新房间奖励（起始房间不奖励）
+    assist_cost_base: int = 8        # 每次预测的花费 = 基础 + 向上取整(总帧数 / assist_cost_frames) + 每条额外候选 × assist_cost_extra
+    assist_cost_frames: int = 12
+    assist_cost_extra: int = 4
+    assist_max_candidates: int = 6   # 每次最多几条候选
+    assist_max_frames: int = 180     # 每条最多预测几帧
+    assist_max_total: int = 600      # 每次合计最多预测几帧
+    tuning: dict = field(default_factory=dict)   # 与默认值不同的可调参数（记进 run_state，续跑沿用）
+    kb_deny: list = field(default_factory=list)  # 不给智能体看的知识库文件（知识库内的相对路径；控制台的"知识库"页）
 
     @property
     def third_party(self) -> bool:
@@ -192,8 +215,17 @@ class RunConfig:
         return REPO_ROOT / "workspaces" / tag
 
     @property
-    def kb_dir(self) -> Path:
+    def kb_source(self) -> Path:
+        """这个模式的知识库：速通模式是整个 kb/，探索模式只有 kb/explore/。"""
         return REPO_ROOT / "kb" / "explore" if self.knowledge_profile == "explore" else REPO_ROOT / "kb"
+
+    @property
+    def kb_dir(self) -> Path:
+        """挂进容器 /kb 的目录：全部可读时就是知识库本身；有不给看的文件（kb_deny）时是只含允许文件的副本
+        （orchestrator/kb_access.prepare_view 同步）。"""
+        if self.kb_deny:
+            return REPO_ROOT / "local" / "kb_views" / self.workspace_dir.name
+        return self.kb_source
 
     @property
     def sim_dir(self) -> Path:

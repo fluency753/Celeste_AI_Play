@@ -1,7 +1,8 @@
 """控制台（overlay/console.html）的运行设置 → `python -m orchestrator.run` 的命令行参数。
 
 逐项校验后生成参数列表（不拼命令行字符串），再交给 orchestrator/background.py 的独立宿主启动。
-命令行能做的事控制台都能做；控制台没有的少见参数（端口、推进速度、录像编码等）仍可以直接用命令行。
+主控的全部参数（含 --tune 可调参数与 --kb-deny 知识库权限）都能在控制台里设置；只在命令行有的是
+--prepared（用原生 GPT 预先准备好的会话开局，见 start_gpt.ps1）与只用于测试的隐藏参数。
 """
 from __future__ import annotations
 
@@ -19,7 +20,8 @@ MODEL_PATTERN = r"[A-Za-z0-9._:/\[\]-]{1,100}"
 PROVIDER_PATTERN = r"[A-Za-z0-9_.-]{1,60}"
 
 SWITCHES = ("live", "sim", "sim_assist", "playback", "record", "hud_mod", "study", "limit_planning",
-            "keep_obs_open", "start_paused", "quota_wait")
+            "keep_obs_open", "start_paused", "quota_wait", "record_marker", "skip_enter", "no_agent", "hud_window", "hud")
+MAPS = {"celeste": "蔚蓝官方章节"}      # 以后可能加 MOD 地图
 
 DEFAULTS = {
     "engine": "claude", "provider": "anthropic", "model": "opus", "effort": "high", "agent": "",
@@ -27,7 +29,37 @@ DEFAULTS = {
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
     "start_paused": False, "quota_wait": True, "cutscene_mode": "auto", "chapters": [0],
     "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 240, "autocompact": "",
+    # 以下是"更多设置"里的参数，默认值与命令行相同
+    "map": "celeste", "runtime": "container", "study_minutes": 60, "max_usage": None, "quota_wait_max_hours": 24,
+    "play_speed": 1, "auto_speed": 1, "rounds_per_room": 3, "room_scale": 2.0, "record_marker": False,
+    "skip_enter": False, "no_agent": False, "hud_window": True, "hud": True, "bridge_port": 47774,
+    "mcp_port": 47780, "hud_port": 47790, "ffmpeg": "", "record_video_args": "", "audio_offset_ms": None,
+    "tune": {}, "kb_deny": [],
 }
+
+
+def _number(options: dict, key: str, low: float, high: float, label: str, integer: bool = False, optional: bool = False):
+    value = options[key]
+    if value is None or value == "":
+        if optional:
+            return None
+        raise ValueError(f"{label}不能为空")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label}须为数字")
+    if integer and value != int(value):
+        raise ValueError(f"{label}须为整数")
+    if not low <= value <= high:
+        raise ValueError(f"{label}须在 {low:g}～{high:g} 之间")
+    return int(value) if integer else float(value)
+
+
+def _text(options: dict, key: str, limit: int, label: str) -> str:
+    value = options[key]
+    if value is None:
+        return ""
+    if not isinstance(value, str) or len(value) > limit or any(c in value for c in "\r\n\0"):
+        raise ValueError(f"{label}格式无效")
+    return value.strip()
 
 
 def _bool(options: dict, key: str) -> bool:
@@ -90,6 +122,44 @@ def normalize(options: dict) -> dict:
     if compact and compact != "auto" and not (compact.isdigit() and 100000 <= int(compact) <= 1000000):
         raise ValueError("自动压缩窗口须为 auto 或 100000～1000000")
     o["autocompact"] = compact
+    if o["map"] not in MAPS:
+        raise ValueError("目前只支持蔚蓝官方章节")
+    if o["runtime"] not in ("container", "host"):
+        raise ValueError("运行方式须为容器或本机")
+    if o["runtime"] == "host" and ((o["mode"] == SPEEDRUN and o["sim"]) or (o["mode"] == EXPLORE and o["sim_assist"])):
+        raise ValueError("本机运行方式没有沙箱，不能开预置模拟器或限额预测")
+    o["study_minutes"] = _number(o, "study_minutes", 1, 600, "准备阶段上限")
+    o["max_usage"] = _number(o, "max_usage", 0.01, 1, "提前暂停的用量比例", optional=True)
+    o["quota_wait_max_hours"] = _number(o, "quota_wait_max_hours", 0.1, 240, "额度等待上限")
+    o["play_speed"] = _number(o, "play_speed", 1, 20, "动作推进速度", integer=True)
+    o["auto_speed"] = _number(o, "auto_speed", 1, 20, "自动推进速度", integer=True)
+    o["rounds_per_room"] = _number(o, "rounds_per_room", 1, 100, "每屏规划轮次", integer=True)
+    o["room_scale"] = _number(o, "room_scale", 1, 10, "房间放大倍数")
+    for key, label in (("bridge_port", "桥接端口"), ("mcp_port", "游戏工具端口"), ("hud_port", "HUD 端口")):
+        o[key] = _number(o, key, 1024, 65535, label, integer=True)
+    if len({o["bridge_port"], o["mcp_port"], o["hud_port"]}) != 3:
+        raise ValueError("三个端口不能相同")
+    o["ffmpeg"] = _text(o, "ffmpeg", 400, "ffmpeg 路径")
+    o["record_video_args"] = _text(o, "record_video_args", 600, "视频编码参数")
+    o["audio_offset_ms"] = _number(o, "audio_offset_ms", -2000, 2000, "声音偏移", optional=True)
+    from .tuning import BY_KEY, check_relations, coerce
+    tune = o["tune"] or {}
+    if not isinstance(tune, dict):
+        raise ValueError("可调参数须为对象")
+    clean = {}
+    for key, value in tune.items():
+        if key not in BY_KEY:
+            raise ValueError(f"没有名为 {key} 的可调参数")
+        if value is None or value == "":
+            if not BY_KEY[key].optional:
+                continue                      # 留空 = 用默认值
+        clean[key] = coerce(key, value)
+    check_relations(clean)
+    o["tune"] = {k: v for k, v in clean.items() if v != BY_KEY[k].default}
+    from .kb_access import normalize_deny
+    o["kb_deny"] = normalize_deny(o["mode"], o["kb_deny"])
+    if any("," in x for x in o["kb_deny"]):
+        raise ValueError("知识库文件名里不能有逗号")
     return o
 
 
@@ -129,6 +199,34 @@ def build(options: dict) -> list[str]:
         argv.append("--no-quota-wait")
     if o["autocompact"]:
         argv += ["--autocompact", o["autocompact"]]
+    d = DEFAULTS
+    if o["runtime"] != d["runtime"]:
+        argv += ["--runtime", o["runtime"]]
+    for key, flag in (("study_minutes", "--study-minutes"), ("quota_wait_max_hours", "--quota-wait-max-hours"),
+                      ("play_speed", "--play-speed"), ("auto_speed", "--auto-speed"),
+                      ("rounds_per_room", "--rounds-per-room"), ("room_scale", "--room-scale"),
+                      ("bridge_port", "--bridge-port"), ("mcp_port", "--mcp-port"), ("hud_port", "--hud-port")):
+        if o[key] != d[key]:
+            argv += [flag, f"{o[key]:g}"]
+    if o["max_usage"] is not None:
+        argv += ["--max-usage", f"{o['max_usage']:g}"]
+    if o["audio_offset_ms"] is not None:
+        argv += ["--audio-offset-ms", f"{o['audio_offset_ms']:g}"]
+    if o["ffmpeg"]:
+        argv += ["--ffmpeg", o["ffmpeg"]]
+    if o["record_video_args"]:
+        argv += ["--record-video-args", o["record_video_args"]]
+    for key, flag in (("record_marker", "--record-marker"), ("skip_enter", "--skip-enter"), ("no_agent", "--no-agent")):
+        if o[key]:
+            argv.append(flag)
+    if not o["hud"]:
+        argv.append("--no-hud")
+    elif not o["hud_window"]:
+        argv.append("--no-hud-window")
+    from .tuning import argv as tune_argv
+    argv += tune_argv(o["tune"])
+    if o["kb_deny"]:
+        argv += ["--kb-deny", ",".join(o["kb_deny"])]
     return argv
 
 

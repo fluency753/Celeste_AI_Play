@@ -71,6 +71,14 @@ def _strip_images(value):
     return value
 
 
+
+def bash_limits_ms(cfg) -> tuple[int, int]:
+    """Claude Code 的 Bash 时长（毫秒）：(不写 timeout 时的上限, 写了 timeout 时的最长)。"""
+    if getattr(cfg, "mode", "speedrun") == "explore":
+        cap = int(cfg.explore_program_s * 1000)
+        return cap, cap
+    return int(cfg.bash_default_s * 1000), int(cfg.bash_max_s * 1000)
+
 class ClaudeRunner(SessionControls):
     capabilities = RuntimeCapabilities()
     supports_interrupt = True        # 控制台"中断"：结束运行、游戏保持冻结、可续跑
@@ -208,7 +216,9 @@ class ClaudeRunner(SessionControls):
                 # Bash 等子进程里清掉凭据变量（ANTHROPIC_AUTH_TOKEN 等）：第三方的 API 密钥不能让智能体的程序看到。
                 # 不设时 Claude Code 只清订阅令牌，实测 Bash 里能读到 ANTHROPIC_AUTH_TOKEN
                 "-e", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
-                "-e", "BASH_DEFAULT_TIMEOUT_MS=300000", "-e", "BASH_MAX_TIMEOUT_MS=600000",
+                # Bash 的时长上限（可调参数）：速通模式默认 5 分钟、最长 10 分钟；探索模式两者都是单次规划程序的上限（默认 15 秒）
+                "-e", f"BASH_DEFAULT_TIMEOUT_MS={bash_limits_ms(self.cfg)[0]}",
+                "-e", f"BASH_MAX_TIMEOUT_MS={bash_limits_ms(self.cfg)[1]}",
                 self.container, "claude", *self._common_args(),
                 # 受限模式：不读取用户、项目与本地设置文件（智能体改不了自己的配置），文件工具只能访问工作区与知识库
                 "--restricted", "--add-dir", "/kb", *(["--add-dir", "/sim"] if self.cfg.sim else []),

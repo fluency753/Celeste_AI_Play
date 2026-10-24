@@ -10,6 +10,24 @@ def remind_text(seconds: float) -> str:
     return "半分钟" if seconds == 30 else f"{seconds:g} 秒"
 
 
+def fill(text: str, cfg) -> str:
+    """把提示词里可调参数的占位符换成本次的值（orchestrator/tuning.py；默认值下与原来的文字完全相同）。"""
+    from .tuning import seconds_text
+    values = {
+        "{act_max_frames}": str(getattr(cfg, "max_frames_per_act", 600)),
+        "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
+        "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
+        "{explore_program}": seconds_text(getattr(cfg, "explore_program_s", 15)),
+        "{playback_ratio}": str(getattr(cfg, "playback_ratio", 100)),
+        "{playback_min_tracks}": str(getattr(cfg, "playback_min_tracks", 40)),
+        "{thought_max}": str(getattr(cfg, "thought_max_chars", 120)),
+        "{remind}": remind_text(getattr(cfg, "live_remind_s", 30.0)),
+    }
+    for key, value in values.items():
+        text = text.replace(key, value)
+    return text
+
+
 def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None, pause_limit: bool = False,
                    rounds_per_room: int = 3, death_bonus: int = 1, playback: bool = False, live: bool = False,
                    remind_s: float = 30.0) -> str:
@@ -73,10 +91,12 @@ def play_prompt(cfg) -> str:
     if has_cutscene_tool(cfg):
         prompt += (f'\n当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent由你使用cutscene的'
                    'wait/advance/choose/skip决定。遇到分支必须明确choose，不得用advance代选。')
+    if is_explore(cfg) and getattr(cfg, "explore_program_runs", None):
+        prompt += f"\n两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。"
     if cfg.sim_assist:
-        from .sim_assist import INSTRUCTIONS
-        prompt += INSTRUCTIONS
-    return prompt
+        from .sim_assist import AssistRules
+        prompt += AssistRules.of(cfg).instructions()
+    return fill(prompt, cfg)
 
 
 FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关。"

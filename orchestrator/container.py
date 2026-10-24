@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import time
@@ -38,13 +39,19 @@ def _labels(cfg: RunConfig) -> dict[str, str]:
             f"{LABEL}.knowledge": cfg.knowledge_profile,
             f"{LABEL}.workspace_tag": cfg.workspace_dir.name,
             f"{LABEL}.domains": ",".join(cfg.provider_domains),
-            f"{LABEL}.host_ports": ",".join(str(p) for p in cfg.provider_host_ports)}
+            f"{LABEL}.host_ports": ",".join(str(p) for p in cfg.provider_host_ports),
+            # /kb 挂的是知识库本身（0）还是只含允许文件的副本（1，见 kb_access.py）；之前建的容器没有这个标签，按 0 算
+            f"{LABEL}.kb_view": "1" if cfg.kb_deny else "0"}
+
+
+LABEL_DEFAULTS = {f"{LABEL}.kb_view": "0"}
 
 
 def _create(cfg: RunConfig, name: str) -> None:
     workspace = cfg.workspace_dir
     workspace.mkdir(parents=True, exist_ok=True)
     (REPO_ROOT / "kb").mkdir(exist_ok=True)
+    cfg.kb_dir.mkdir(parents=True, exist_ok=True)
     # --init：用 tini 作 1 号进程，回收沙箱留下的子进程，避免僵尸进程堆积
     args = ["run", "-d", "--init", "--name", name, "--hostname", "celeste-agent",
             "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW",
@@ -77,7 +84,9 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
     inspect = docker("inspect", "-f", "{{.State.Running}}|{{.Image}}|{{json .Config.Labels}}", name, check=False)
     if inspect.returncode == 0:
         running, container_image, labels = inspect.stdout.strip().split("|", 2)
-        stale = container_image != image_id or any(f'"{k}":"{v}"' not in labels for k, v in _labels(cfg).items())
+        current = json.loads(labels or "{}") or {}
+        stale = container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
+                                                   for k, v in _labels(cfg).items())
         if stale:
             log(f"[container] {name} 的镜像或配置已变化，重建（工作区与会话保留）")
             docker("rm", "-f", name)

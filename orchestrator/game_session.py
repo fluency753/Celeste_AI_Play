@@ -57,7 +57,8 @@ def _number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def parse_plan(data, text: str = "") -> PlanSpec:
+def parse_plan(data, text: str = "", max_retries: int = MAX_RETRIES,
+               max_timeout_s: float = MAX_RETRY_TIMEOUT_S) -> PlanSpec:
     """计划文件：按键段数组 ["12,R", "1,R,J"]，或对象 {"inputs", "expect", "tolerance", "stop_on", "retry"}。"""
     if isinstance(data, list):
         data = {"inputs": data}
@@ -92,10 +93,10 @@ def parse_plan(data, text: str = "") -> PlanSpec:
         count = raw.get("max", 3)
         timeout_s = raw.get("timeout_s", 20)
         on = raw.get("on", list(DEFAULT_RETRY_ON))
-        if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_RETRIES:
-            raise ActError(f'"retry.max" 必须是 1～{MAX_RETRIES} 的整数')
-        if not _number(timeout_s) or not 1 <= timeout_s <= MAX_RETRY_TIMEOUT_S:
-            raise ActError(f'"retry.timeout_s" 必须在 1～{MAX_RETRY_TIMEOUT_S:g} 秒之间')
+        if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= max_retries:
+            raise ActError(f'"retry.max" 必须是 1～{max_retries} 的整数')
+        if not _number(timeout_s) or not 1 <= timeout_s <= max_timeout_s:
+            raise ActError(f'"retry.timeout_s" 必须在 1～{max_timeout_s:g} 秒之间')
         if not isinstance(on, list) or not on or not set(on) <= RETRY_REASONS:
             raise ActError(f'"retry.on" 必须是 {sorted(RETRY_REASONS)} 的非空子集')
         retry = RetrySpec(raw["command"].strip(), count, float(timeout_s), tuple(on))
@@ -180,7 +181,10 @@ class GameSession:
         # 容器方式下，观测与轨迹同时写进智能体的工作区，供它自写的程序读取
         self.workspace: Path | None = cfg.workspace_dir if cfg.runtime == "container" else None
         from .sim_assist import SimEnergy
-        self.sim_energy = SimEnergy(run_dir / "sim_energy.json") if cfg.sim_assist else None
+        from .sim_assist import AssistRules
+        self.assist_rules = AssistRules.of(cfg)
+        self.sim_energy = SimEnergy(run_dir / "sim_energy.json", rules=self.assist_rules) if cfg.sim_assist else None
+        self.programs_since_act = 0         # 探索模式：两次 act 之间运行过几次规划程序（explore_program_runs）
         if self.sim_energy:
             self.metrics.update(sim_energy=self.sim_energy.snapshot())
         if self.workspace:
@@ -286,7 +290,7 @@ class GameSession:
             data = json.loads(text)
         except (OSError, ValueError) as exc:
             raise ActError(f"计划文件不是合法的 JSON：{exc}") from exc
-        return parse_plan(data, text)
+        return parse_plan(data, text, self.cfg.retry_max, self.cfg.retry_timeout_max_s)
 
     def _write_json(self, rel: str, data) -> None:
         path = self.workspace / rel
@@ -332,7 +336,7 @@ class GameSession:
             raise ActError("本局未开启限额模拟辅助")
         if self.done or self.goals.stop_motion.is_set():
             raise ActError("试玩已结束，不能继续预测")
-        candidates, cost = validate_request(request)
+        candidates, cost = validate_request(request, self.assist_rules)
         # Capture and predict under the same lock: predictions always refer to the actual current frame.
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
@@ -372,8 +376,20 @@ class GameSession:
             summary["trajectory_file"] = "/workspace/game/sim_assist/latest.json"
         return summary
 
+    def program_run_denied(self) -> str | None:
+        """探索模式：两次 act 之间运行规划程序（Bash）的次数到了 explore_program_runs 就拒绝；没到就记一次。"""
+        limit = getattr(self.cfg, "explore_program_runs", None)
+        if not limit or getattr(self.cfg, "mode", "speedrun") != "explore":
+            return None
+        if self.programs_since_act >= limit:
+            return (f"两次 act 之间最多运行 {limit} 次规划程序，这一次已经用完。"
+                    "请先用 act 做一次真实尝试，之后可以再运行。")
+        self.programs_since_act += 1
+        return None
+
     def act(self, inputs: list[str] | None, thought: str, stop_on: list[str] | None,
             plan_file: str | None = None) -> ActOutcome:
+        self.programs_since_act = 0
         if self.done:
             raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
         if ((self.last_obs or {}).get('level') or {}).get('dialogChoices'):
@@ -387,8 +403,8 @@ class GameSession:
         thought = (thought or "").strip()
         if not thought:
             raise ActError("thought 不能为空：用一两句话说明这段操作的意图")
-        if len(thought) > 120:
-            raise ActError("thought 太长，请压缩到一两句话（120 字以内）")
+        if len(thought) > self.cfg.thought_max_chars:
+            raise ActError(f"thought 太长，请压缩到一两句话（{self.cfg.thought_max_chars} 字以内）")
         stop = self._stop_list(stop_on or plan.stop_on)
         frames = self._check_plan(plan)
         pre_notes: list[str] = []

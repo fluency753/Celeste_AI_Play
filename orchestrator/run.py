@@ -40,7 +40,7 @@ from .metrics import Metrics
 from .recording import Recorder, RecordingError, options_from
 from .pausegate import PauseGate
 from .live import LiveStatus
-from .modes import EXPLORE, KNOWLEDGE_OF_MODE, MODE_OF_KNOWLEDGE, SPEEDRUN, describe as describe_mode, remind_seconds
+from .modes import EXPLORE, KNOWLEDGE_OF_MODE, MODE_OF_KNOWLEDGE, SPEEDRUN, describe as describe_mode
 from .playback import Playback
 from .server import LIVE_REMINDER, TRANSPORT_SECURITY, build_server
 
@@ -144,6 +144,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--quota-wait-max-hours", type=float, default=24.0,
                     help="额度重置还要等超过这么多小时就停止本次运行（之后可用 --resume 续跑），默认 24")
     ap.add_argument("--quota-wait-cap-seconds", type=float, help=argparse.SUPPRESS)  # 只用于测试：等待额度的最长秒数
+    ap.add_argument("--tune", action="append", metavar="名称=值", default=[],
+                    help="修改一个可调参数（可以写多个），例如 --tune playback_speed=4 --tune explore_program_s=20；"
+                         "全部参数与默认值见 docs/USAGE.md 的\"可调参数\"一节（orchestrator/tuning.py）。续跑沿用原运行改过的参数")
+    ap.add_argument("--kb-deny", metavar="文件,...",
+                    help="不给智能体看的知识库文件（知识库内的相对路径，逗号分隔，例如 techniques.md,reference/celeste_wiki/Tech.md）："
+                         "这些文件不挂进容器，也不在准备阶段要求阅读。默认全部可读。续跑沿用")
     ap.add_argument("--resume", metavar="RUN_DIR",
                     help="续跑一次中断的运行（主控退出、断电以外的意外）：游戏须仍冻结在原处；接着原来的章节队列、"
                          "统计与 Claude Code 会话。模型、推理强度、章节、--sim 等沿用原运行的设置")
@@ -251,7 +257,18 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.playback = args.playback is not False   # 默认开启
     cfg.live = bool(args.live)            # 直播模式，默认关
     cfg.hud_mod = (not cfg.live) if args.hud_mod is None else bool(args.hud_mod)   # 游戏内 HUD：不开直播时默认开
-    cfg.live_remind_s = remind_seconds(cfg.live)   # 解说计时：直播 10 秒，其余半分钟
+    from .tuning import apply as apply_tuning, parse_pairs  # 可调参数：续跑沿用原运行改过的，再叠加这次写的 --tune
+    try:
+        tuning = dict(previous["state"].get("tuning") or {}) if previous else {}
+        tuning.update(parse_pairs(args.tune))
+        apply_tuning(cfg, tuning)
+    except ValueError as exc:
+        raise SystemExit(f"--tune：{exc}") from None
+    cfg.live_remind_s = cfg.remind_live_s if cfg.live else cfg.remind_s   # 解说计时：默认直播 10 秒，其余半分钟
+    if args.kb_deny is not None:
+        cfg.kb_deny = sorted({x.strip().replace("\\", "/") for x in args.kb_deny.split(",") if x.strip()})
+    elif previous:
+        cfg.kb_deny = list(previous["state"].get("kb_deny") or [])
     args.record = args.record is not False  # 默认开启
     cfg.record = args.record
     from .recording import load_config
@@ -301,6 +318,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "session_id": session_id,
+             "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny),
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -377,6 +395,10 @@ def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | No
         if tool_name == 'Bash' and guard and (reason := guard()):
             return JSONResponse({'decision': 'deny', 'reason': reason, 'context': ''})
         allow, reason = await gate.decide(tool_name, data.get("tool_use_id"))
+        if allow and tool_name == 'Bash' and session is not None and hasattr(session, 'program_run_denied'):
+            denied = session.program_run_denied()     # 探索模式：两次 act 之间的规划程序次数（explore_program_runs）
+            if denied:
+                return JSONResponse({'decision': 'deny', 'reason': denied, 'context': ''})
         context = ""
         if allow and live_remind_s and metrics is not None:
             if tool_name.endswith("__narrate"):
@@ -536,6 +558,9 @@ def port_free(port: int) -> bool:
 async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, token: str | None,
                     previous: dict | None = None, recorder: Recorder | None = None) -> dict:
     study = None
+    if cfg.runtime == "container" and not args.no_agent:
+        from .kb_access import prepare_view
+        prepare_view(cfg)        # 有不给智能体看的知识库文件时，同步只含允许文件的副本（挂进容器 /kb）
     if cfg.study and cfg.runtime == "container" and not args.no_agent:
         extra = {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None
         study = KbStudy(cfg.kb_dir, cfg.study_minutes, extra)

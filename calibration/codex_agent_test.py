@@ -119,11 +119,19 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
         self.runner._validate_resumed_tools({'path': str(path)})
 
-    async def test_live_bash_has_hard_time_limit(self):
-        with patch("orchestrator.codex_agent.run_program", return_value=ProgramResult(0, "ok", "", 0.1, False)) as run:
-            await self.runner._request("item/tool/call", {"tool": "celeste_bash", "arguments": {
-                "command": "python3 planner.py", "description": "测试下一处落脚点", "timeout_s": 1000}})
-        self.assertEqual(run.call_args.args[2], 15)
+    async def test_bash_has_hard_time_limit(self):
+        # 探索模式：单次规划程序的上限（explore_program_s，默认 15 秒，与提示词一致）；速通模式：Bash 最长时长 bash_max_s
+        async def call():
+            with patch("orchestrator.codex_agent.run_program", return_value=ProgramResult(0, "ok", "", 0.1, False)) as run:
+                await self.runner._request("item/tool/call", {"tool": "celeste_bash", "arguments": {
+                    "command": "python3 planner.py", "description": "测试下一处落脚点", "timeout_s": 1000}})
+            return run.call_args.args[2]
+        self.cfg.mode, self.cfg.knowledge_profile = "explore", "explore"
+        self.assertEqual(await call(), 15)
+        self.cfg.explore_program_s = 40
+        self.assertEqual(await call(), 40)
+        self.cfg.mode, self.cfg.knowledge_profile = "speedrun", "full"
+        self.assertEqual(await call(), 600)
 
     async def test_host_permission_request_is_never_approved(self):
         with self.assertRaises(RuntimeError):

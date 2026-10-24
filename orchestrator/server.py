@@ -15,13 +15,14 @@ from .observation import describe_attempts, describe_obs, describe_step, room_js
 from .exploration import GEOMETRY, action_hint
 from .efforts import valid_effort
 from .modes import game_tools, is_explore
+from .prompting import fill
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图、整个房间的字符地图与精确数据（JSON；房间信息以精确数据为准，截图仅作参考），其余时候只给文字状态与画面附近的信息。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
   按键：L R U D 方向，J 跳，X 冲刺，Z crouch dash，G 抓墙，T 交互；K、Y、V 是第二个跳、冲刺、crouch dash 键
   （按住 J 时按下 K 也算一次新的"按下"，可以在相邻两帧各跳一次）；A:角度 表示摇杆角度（0 右、90 上）。
-  只写帧数表示这些帧不按任何键，例如 "5"。一次最多 600 帧。
+  只写帧数表示这些帧不按任何键，例如 "5"。一次最多 {act_max_frames} 帧。
 plan_file：（有工作区时可用）工作区里的计划文件路径，与 inputs 二选一。内容是按键段数组，或对象：
   {"inputs": [...], "expect": [[x, y], [x, y, "Dash"], null, ...], "tolerance": 0.5,
    "stop_on": [...], "retry": {"command": "python3 planner.py", "max": 3, "timeout_s": 20, "on": ["death", "deviate"]}}
@@ -49,7 +50,7 @@ SET_EFFORT_DESCRIPTION = """调整你自己的推理强度：传入当前模型�
 
 
 NARRATE_DESCRIPTION = """更新 HUD 上给观众看的思考内容（实时展示）：观众在直播画面上看你此刻在想什么。不推进游戏，也不计入章节计时。
-thought：一两句中文（120 字以内），只写你对当前房间或这一段的分析与判断，不写具体数值（帧数、坐标、速度等），
+thought：一两句中文（{thought_max} 字以内），只写你对当前房间或这一段的分析与判断，不写具体数值（帧数、坐标、速度等），
 也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。
 思考期间随时调用：一有初步判断就先写一句，之后想法每有进展再写一句，不要攒到 act 时才写。"""
 
@@ -175,7 +176,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     if session.cfg.playback and session.cfg.sim:
         act_description += PLAYBACK_NOTE
 
-    @server.tool(name="act", description=act_description, structured_output=False)
+    @server.tool(name="act", description=fill(act_description, session.cfg), structured_output=False)
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
                   stop_on: list[str] | None = None) -> list:
         async with call_lock:
@@ -267,14 +268,15 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             return [json.dumps(result, ensure_ascii=False)]
 
     # narrate 在所有模式都有：思考期间更新 HUD 的思考语句
-    @server.tool(name="narrate", description=NARRATE_DESCRIPTION, structured_output=False)
+    @server.tool(name="narrate", description=fill(NARRATE_DESCRIPTION, session.cfg), structured_output=False)
     async def narrate(thought: str) -> list:
         # 不推进游戏、不受准备阶段限制、不开始计现实用时；只换 HUD 上的思考语句
         text = " ".join((thought or "").split())
         if not text:
             return ["thought 不能为空。"]
-        if len(text) > 120:
-            return ["thought 太长，请压缩到一两句话（120 字以内）。"]
+        limit = getattr(session.cfg, "thought_max_chars", 120)
+        if len(text) > limit:
+            return [f"thought 太长，请压缩到一两句话（{limit} 字以内）。"]
         metrics.set_thought(text)
         metrics.add(narrates=1)
         metrics.narrated()

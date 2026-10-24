@@ -26,6 +26,14 @@ def spec(name, description, properties, required=()):
 TEXT = {"type": "string"}
 
 
+
+def program_cap(cfg) -> float:
+    """原生执行器里单次程序（celeste_bash）的最长秒数：探索模式用 explore_program_s（提示词里写的上限），
+    速通模式用 Bash 最长时长 bash_max_s（与 Claude Code 的 Bash 相同）。"""
+    if getattr(cfg, "mode", "speedrun") == "explore":
+        return float(cfg.explore_program_s)
+    return float(cfg.bash_max_s)
+
 class CodexRunner(SessionControls):
     capabilities = RuntimeCapabilities(fast=True, live_steering=True)
 
@@ -57,7 +65,7 @@ class CodexRunner(SessionControls):
                        "limit": {"type": "integer", "minimum": 1, "maximum": 500}}, ["path"]),
                  spec("celeste_write", "Write：写入 /workspace 内的文件。不能改知识库、模拟器或宿主机。",
                       {"path": TEXT, "content": TEXT}, ["path", "content"]),
-                 spec("celeste_bash", "Bash：在 Docker 的零网络沙箱运行命令。直播时最长 15 秒；长程序每 1–2 秒用 show.status 报告进度。",
+                 spec("celeste_bash", f"Bash：在 Docker 的零网络沙箱运行命令。最长 {program_cap(self.cfg):g} 秒；长程序每 1–2 秒用 show.status 报告进度。",
                       {"command": TEXT, "description": TEXT, "timeout_s": {"type": "number", "minimum": 1}},
                       ["command", "description"])]
         from .server import build_server
@@ -95,7 +103,7 @@ class CodexRunner(SessionControls):
             text = self.message_text.get(ident, "") + params.get("delta", "")
             self.message_text[ident] = text
             if self.cfg.live and time.monotonic() - self._last_public > 0.4:
-                self.metrics.set_thought(" ".join(text.split())[-120:])
+                self.metrics.set_thought(" ".join(text.split())[-self.cfg.thought_max_chars:])
                 self._last_public = time.monotonic()
         elif method in ("item/started", "item/completed"):
             if method == "item/completed" and item.get("type") == "agentMessage" and self.control:
@@ -169,13 +177,16 @@ class CodexRunner(SessionControls):
                 if self.playback:
                     self.playback.note_tool_use(ident, ident, "Bash", args)
                 command = args["command"].strip()
-                limit = min(float(args.get("timeout_s", 10)), 15 if self.cfg.live else 60)
+                if self.session is not None and hasattr(self.session, "program_run_denied") and (
+                        denied := self.session.program_run_denied()):
+                    raise ValueError(denied)
+                limit = min(float(args.get("timeout_s", 10)), program_cap(self.cfg))
                 result = await asyncio.to_thread(run_program, self.container, command, limit)
                 text = json.dumps({"returncode": result.returncode, "stdout": result.stdout,
                                    "stderr": result.stderr, "seconds": round(result.seconds, 2),
                                    "timed_out": result.timed_out}, ensure_ascii=False)
             elif name == "celeste_narrate" and self.game_server is None:
-                self.metrics.set_thought(str(args.get("thought", ""))[:120])
+                self.metrics.set_thought(str(args.get("thought", ""))[:self.cfg.thought_max_chars])
                 self.metrics.add(narrates=1)
                 self.metrics.narrated()
                 text = "解说已更新"

@@ -19,7 +19,7 @@ class SaveCatalogTests(unittest.TestCase):
                              ('10-modsavedata.celeste','<SaveData><Name>ignore</Name></SaveData>'),
                              ('11.celeste','broken')]:
                 (root/'game/Saves'/name).write_text(xml,encoding='utf-8')
-            with patch('orchestrator.gamepaths.DEPLOY_ANSWERS',root/'configs/local.deploy.json'):
+            with patch('orchestrator.gamepaths.DEPLOY_ANSWERS',root/'configs/local.deploy.json'), patch('orchestrator.gamepaths.CONSOLE_PREFS',root/'none.json'):
                 self.assertEqual(inventory(),[{'slot':10,'name':'直播 & 探索'}])
 
     def test_game_directory_without_deploy_answers(self):
@@ -29,7 +29,7 @@ class SaveCatalogTests(unittest.TestCase):
             root=Path(folder)
             game=root/'steam/steamapps/common/Celeste'; game.mkdir(parents=True); (game/'Celeste.exe').write_bytes(b'')
             missing=root/'configs/local.deploy.json'
-            with patch.object(gamepaths,'DEPLOY_ANSWERS',missing), patch.dict('os.environ',{},clear=False):
+            with patch.object(gamepaths,'DEPLOY_ANSWERS',missing), patch.object(gamepaths,'CONSOLE_PREFS',missing), patch.dict('os.environ',{},clear=False):
                 import os; os.environ.pop('CELESTE_DIR',None)
                 with patch.object(gamepaths,'running_game_dir',return_value=None), \
                      patch.object(gamepaths,'steam_libraries',return_value=[root/'steam']):
