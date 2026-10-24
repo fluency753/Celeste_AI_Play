@@ -293,10 +293,17 @@ def make_handler(pinned: Path | None):
     return Handler
 
 
+class HudServer(ThreadingHTTPServer):
+    """Windows 上 SO_REUSEADDR 允许第二个进程绑定同一个端口（两个 HUD 服务同时监听，请求随机落到旧版本上），
+    所以在 Windows 上不设它：端口被占用时绑定失败，调用方据此沿用已有的服务。"""
+    allow_reuse_address = sys.platform != "win32"
+    daemon_threads = True
+
+
 def start_in_thread(port: int = DEFAULT_PORT, pinned: Path | None = None) -> ThreadingHTTPServer | None:
     """在后台线程启动 HUD 服务；端口已被占用（已有 HUD 服务在跑）时返回 None。"""
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(pinned))
+        server = HudServer(("127.0.0.1", port), make_handler(pinned))
     except OSError:
         return None
     server.daemon_threads = True
@@ -312,7 +319,7 @@ def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     pinned = Path(args.run).resolve() if args.run else None
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(pinned))
+    server = HudServer(("127.0.0.1", args.port), make_handler(pinned))
     print(f"HUD：http://127.0.0.1:{args.port}/hud（Ctrl+C 结束）", flush=True)
     try:
         server.serve_forever()
