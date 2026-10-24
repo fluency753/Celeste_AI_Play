@@ -15,7 +15,19 @@ try {
 RecordingAudio.Start(live,Path.Combine(game,"Content","FMOD","Desktop"),47876);
 using var map=MemoryMappedFile.OpenExisting(@"Local\CelesteAIRecordAudio-47876"); using var view=map.CreateViewAccessor();
 double energy=0;
-for(int i=1;i<=120;i++) { live.update(); RecordingAudio.Advance(); RecordingAudio.Publish(i,false); var bytes=new byte[6400]; view.ReadArray(64L+i*6464+64,bytes,0,6400);var pcm=new float[1600];Buffer.BlockCopy(bytes,0,pcm,0,6400);energy+=pcm.Sum(x=>(double)x*x); }
+// Optional second argument exports the continuous PCM for tools/check_recording_audio.py.
+using var capturedPcm = args.Length > 1 ? new MemoryStream() : null;
+for(int i=1;i<=120;i++) { live.update(); RecordingAudio.Advance(); RecordingAudio.Publish(i,false); var bytes=new byte[6400]; view.ReadArray(64L+i*6464+64,bytes,0,6400);var pcm=new float[1600];Buffer.BlockCopy(bytes,0,pcm,0,6400);energy+=pcm.Sum(x=>(double)x*x); capturedPcm?.Write(bytes); }
+if (capturedPcm != null) {
+    using var wav = new BinaryWriter(File.Create(args[1]));
+    var pcm = capturedPcm.ToArray();
+    wav.Write(System.Text.Encoding.ASCII.GetBytes("RIFF")); wav.Write(36 + pcm.Length);
+    wav.Write(System.Text.Encoding.ASCII.GetBytes("WAVEfmt ")); wav.Write(16);
+    wav.Write((short)3); wav.Write((short)2); wav.Write(48000); wav.Write(48000 * 8);
+    wav.Write((short)8); wav.Write((short)32);
+    wav.Write(System.Text.Encoding.ASCII.GetBytes("data")); wav.Write(pcm.Length); wav.Write(pcm);
+    Console.WriteLine("PCM WAV: " + args[1]);
+}
 Console.WriteLine($"ERROR={RecordingAudio.Error ?? "none"} ENERGY={energy}");
 var pairs=(System.Collections.IDictionary)typeof(RecordingAudio).GetField("Pairs",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static)!.GetValue(null)!;
 var pair=pairs[music.getRaw()]!; var copy=(FMOD.Studio.EventInstance)pair.GetType().GetProperty("Copy")!.GetValue(pair)!;

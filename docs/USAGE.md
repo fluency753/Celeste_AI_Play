@@ -410,6 +410,14 @@ M5 验收（2026-10-23，桥接 0.7.0）：`python calibration\m5_hud_demo.py` �
 
 **音频块边界的断口（电流声）**（2026-10-24 修正）：之前的插件在约一半的段里每 1024 个样本留下一个值为 0 的样本（OBS 音频块的边界，取样时向上取整与四舍五入不一致），连续游玩时听起来是持续的电流声，与接缝无关。修正后块与块首尾衔接、偶尔漏掉的单个样本用相邻样本补上；改完插件要重新编译安装（先 `python tools\obs_setup.py stop`，再 `python tools\build_obs_plugin.py --obs-dir "<OBS 目录>"`）。M6 测试会检查 WAV 里有没有这种断口。
 
+两条录音路线共用 `orchestrator/audio_validation.py` 的断点检测：`obs_mix` 的 M6 校准会调用它，`game_nrt` 的输出也可用同一离线工具检查。默认仅将“左右声道同时精确为零，且同一声道前后信号均高于 1e-6”标为疑似单采样断点，避免把静音中的浮点残留误报。1e-6 是线性振幅（满幅为 1，约 -120 dBFS），与声音恢复校准的 2e-3 阈值分开；较安静的信号可显式降低阈值。结果用于定位候选断点，不等于完整音质鉴定，也不会改写录音。
+
+```powershell
+.\.venv\Scripts\python.exe tools\check_recording_audio.py runs\<agent>\<时间>\recording\audio.wav
+```
+
+离线工具发现疑似断点返回退出码 1，未发现返回 0；文件格式或参数错误返回 2。使用 `--silence-threshold` 调整离线检查阈值，M6 校准的对应参数为 `--dropout-threshold`。检查按块读取，适用于较长录像。`calibration/audio_mixer` 的独立混音器自检可用第二个位置参数导出 float32 立体声 WAV，再交给同一工具检查，整个过程不连接真实游戏或 OBS。
+
 **校准测试**（游戏停在 test 存档的关卡里、Madeline 站在平地上，OBS 已启动）：
 
 ```powershell
