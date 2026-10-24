@@ -263,7 +263,8 @@
           <label class="field">存档<select id="save"></select></label>
           <label class="field" id="newSaveField" hidden>新存档名<input type="text" id="newSave" maxlength="20" placeholder="1～20 个字符"></label>
         </div>
-        <p class="hint" id="saveNote">新存档放在现有最新存档的下一个槽位，只能从序章开始。</p>
+        <p class="hint"><span id="saveNote">新存档放在现有最新存档的下一个槽位，只能从序章开始。</span>
+          <button type="button" class="chip" id="refreshSaves">刷新存档列表</button></p>
         <div class="route" id="route" aria-label="要依次通关的章节"></div>
         <div class="presets">
           <button type="button" class="chip" data-preset="formal">序章 → 2A</button>
@@ -424,15 +425,26 @@ async function loadOptions() {
 }
 
 function fillSaves() {
-  const o = ui.options, sel = $("save");
+  const o = ui.options, sel = $("save"), previous = sel.value;
   const opts = (o.saves || []).map(s => new Option(`${s.name}（槽位 ${s.slot}）`, `slot:${s.slot}`));
   opts.push(new Option("新建存档…", "new"));
   sel.replaceChildren(...opts);
   const test = (o.saves || []).find(s => s.name === "test");
-  if (test) sel.value = `slot:${test.slot}`;
-  $("saveNote").textContent = o.saves_error ? `${o.saves_error}（检查 configs/local.deploy.json 里的游戏目录）`
-    : "新存档放在现有最新存档的下一个槽位，只能从序章开始。";
+  if (previous && opts.some(x => x.value === previous)) sel.value = previous;   // 刷新时保留原来的选择
+  else if (test) sel.value = `slot:${test.slot}`;
+  $("saveNote").textContent = o.saves_error || "新存档放在现有最新存档的下一个槽位，只能从序章开始。";
   onSaveChange();
+}
+
+async function refreshSaves() {
+  const button = $("refreshSaves");
+  button.disabled = true;
+  try {
+    const o = await getJSON("/api/console/options");
+    ui.options.saves = o.saves; ui.options.saves_error = o.saves_error;
+    fillSaves(); schedulePreview();
+  } catch (e) { toast("读取存档列表失败：" + e.message, true); }
+  finally { button.disabled = false; }
 }
 
 async function loadModels() {
@@ -801,6 +813,7 @@ $("live").addEventListener("change", onLive);
 $("hudMod").addEventListener("change", () => { ui.hudTouched = true; onLive(); });
 $("study").addEventListener("change", () => { $("study").dataset.touched = "1"; });
 $("save").addEventListener("change", onSaveChange);
+$("refreshSaves").addEventListener("click", refreshSaves);
 $("setup").addEventListener("input", schedulePreview);
 $("setup").addEventListener("change", schedulePreview);
 $("setup").addEventListener("submit", startRun);
