@@ -7,6 +7,7 @@
   3. 声音：audio.wav 的长度正好是帧数 × 每帧样本数；每段动作开头（声音从暂停恢复的那一刻）
      在 WAV 里出现的位置给出声音相对画面的延迟，建议的 audio_offset_ms 写进 configs/local.recording.json；
      每段动作最后一帧的末尾不该有超过淡出长度（2 毫秒）的静音（声音暂停得太早会截掉一截音乐）；
+     连续的声音里不该有单个样本的断口（左右声道都正好是 0、前后不是 0；插件取音频块边界的老问题，听起来是电流声）；
   4. gameplay.mkv 合成成功，画面与声音时长一致。
 
 前提：游戏开着（桥接 0.8.5 以上），test 存档停在关卡里、Madeline 可操作并站在平地上（建议 1A 房间 6）；
@@ -129,6 +130,18 @@ def wav_tails(path: Path, ends: list[int], samples_per_frame: int, threshold: fl
     return out
 
 
+def wav_dropouts(path: Path) -> list[int]:
+    """单个样本的断口：左右声道都正好是 0、前后样本都不是 0 的位置（样本序号）。
+    插件 2026-10-24 之前取音频块的边界时，有一半的段每 1024 个样本留一个 0，连续游玩时听起来是电流声。"""
+    data = path.read_bytes()
+    pos = data.find(b"data")
+    samples = array.array("f")
+    samples.frombytes(data[pos + 8:pos + 8 + ((len(data) - pos - 8) // 8) * 8])
+    left, right = samples[0::2], samples[1::2]
+    return [i for i in range(1, len(left) - 1)
+            if left[i] == 0.0 and right[i] == 0.0 and left[i - 1] != 0.0 and left[i + 1] != 0.0]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--save", default="test")
@@ -232,6 +245,10 @@ def main() -> int:
     if judged:
         check(all(t <= 3.0 for t in judged), "暂停前最后一帧的音乐没有被截断",
               f"超过 3 毫秒的 {sum(1 for t in judged if t > 3.0)}/{len(judged)} 段，最长 {max(judged):.1f} ms")
+    if wav_path.exists():
+        drops = wav_dropouts(wav_path)
+        check(not drops, "连续的声音里没有单个样本的断口（电流声）",
+              f"{len(drops)} 处" + (f"，前几处的间隔 {[b - a for a, b in zip(drops, drops[1:6])]} 个样本" if len(drops) > 1 else ""))
     segments = []
     seg_path = rec_dir / "segments.csv"
     if seg_path.exists():
