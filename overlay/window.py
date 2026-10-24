@@ -4,7 +4,7 @@
 用法（仓库根目录；先启动主控或 `python -m overlay.server`）：
     python -m overlay.window
 
-主控运行时会自动启动它（--no-hud-window 关闭）。最小化到托盘，任务栏保持隐藏；双击红色 AI 图标恢复窗口。
+主控运行时会自动启动它（--no-hud-window 关闭）。最小化和关闭窗口都隐藏到托盘，任务栏保持隐藏；双击红色 AI 图标恢复窗口。彻底退出请用托盘菜单“退出 HUD”。
 
 需要 pywebview（pip install pywebview，使用系统自带的 WebView2）。
 """
@@ -206,7 +206,7 @@ class TrayControl:
                 self.menu.Items.Add(item)
             self.pin.Click += lambda *_: self.commands.put("pin")
             self.menu.Items.Add(self.pin)
-            for label, command in (("恢复默认位置和大小", "reset"), ("关闭桌面 HUD", "close")):
+            for label, command in (("恢复默认位置和大小", "reset"), ("退出 HUD", "quit")):
                 item = ToolStripMenuItem(label)
                 item.Click += lambda *_, command=command: self.commands.put(command)
                 self.menu.Items.Add(item)
@@ -228,11 +228,24 @@ class TrayControl:
                 self.menu.Dispose()
             window.native.FormClosed += dispose
         window.native.Invoke(Action(create))
-        print("[hud] 托盘：双击恢复窗口；菜单可最小化、置顶、恢复布局或关闭", flush=True)
+        print("[hud] 托盘：双击恢复窗口；关闭窗口保留图标，退出请用托盘菜单", flush=True)
 
     def set_topmost(self, value):
         from System import Action
         self.window.native.Invoke(Action(lambda: setattr(self.pin, 'Checked', value)))
+
+
+def retain_tray_on_close(window, placement):
+    """Intercept native close too (Alt+F4); only explicit quit destroys the tray owner."""
+    placement._quitting = False
+
+    def closing():
+        if placement._quitting:
+            return True
+        placement._commands.put('close')
+        return False
+
+    window.events.closing += closing
 
 
 def manage(window, args) -> None:
@@ -259,21 +272,23 @@ def manage(window, args) -> None:
     while user32.IsWindow(hwnd):
         while not placement._commands.empty():
             command = placement._commands.get_nowait()
-            if command == 'close':
+            if command == 'quit':
                 if not hidden and not user32.IsIconic(hwnd):
                     current = client_rect(user32, hwnd)
                     if current:
                         layout.save_window(current, placement._topmost)
+                placement._quitting = True
                 window.destroy()
                 return
-            elif command == 'minimize':
+            elif command in ('minimize', 'close'):
                 if not hidden and not user32.IsIconic(hwnd):
                     current = client_rect(user32, hwnd)
                     if current:
                         layout.save_window(current, placement._topmost)
                 # A transparent WS_EX_TOOLWINDOW leaves a white iconic caption on
                 # the desktop when minimized. Keep its normal geometry and hide it.
-                window.hide()
+                if not hidden:
+                    window.hide()
                 hidden = True
             elif command == 'restore':
                 window.show()
@@ -333,6 +348,7 @@ def main() -> int:
                                    on_top=Layout().topmost, focus=True, resizable=True, easy_drag=False, shadow=False,
                                    text_select=False, zoomable=False)
     args.placement._window = window
+    retain_tray_on_close(window, args.placement)
     window.events.loaded += args.placement._sync_page
     webview.start(manage, (window, args), gui="edgechromium")
     return 0

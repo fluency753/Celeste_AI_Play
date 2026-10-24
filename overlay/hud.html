@@ -169,7 +169,7 @@
 </head>
 <body>
 <div class="card hidden" id="card">
-  <div class="window-bar"><span class="caption">HUD</span><button id="windowPin" type="button" aria-label="切换窗口置顶" aria-pressed="true" title="取消置顶">置顶</button><button id="windowMinimize" type="button" aria-label="最小化到托盘" title="最小化到托盘；双击右下角红色 AI 图标恢复">−</button><button id="windowClose" type="button" aria-label="关闭桌面 HUD" title="关闭桌面 HUD">×</button></div>
+  <div class="window-bar"><span class="caption">HUD</span><button id="windowPin" type="button" aria-label="切换窗口置顶" aria-pressed="true" title="取消置顶">置顶</button><button id="windowMinimize" type="button" aria-label="最小化到托盘" title="最小化到托盘；双击右下角红色 AI 图标恢复">−</button><button id="windowClose" type="button" aria-label="隐藏到托盘" title="隐藏到托盘；双击红色 AI 图标重新打开">×</button></div>
   <div class="bar-left" id="theme"></div>
   <div class="head">
     <span class="name" id="name">—</span>
@@ -241,7 +241,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 46;
+const PAGE_VERSION = 47;
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——

@@ -3,7 +3,7 @@ import queue
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-from overlay.window import manage
+from overlay.window import manage, retain_tray_on_close
 from overlay.placement import PlacementAPI
 
 
@@ -30,8 +30,8 @@ class WindowTests(unittest.TestCase):
         window.minimize.assert_not_called()
         window.restore.assert_not_called()
 
-    def test_user_controls_pin_minimize_restore_and_close(self):
-        user,window,placement,layout,tray=self.run_window(['pin','minimize','restore','close'])
+    def test_user_controls_pin_minimize_restore_and_quit(self):
+        user,window,placement,layout,tray=self.run_window(['pin','minimize','restore','quit'])
         self.assertFalse(window.on_top)
         self.assertFalse(placement._topmost)
         tray.return_value.set_topmost.assert_called_once_with(False)
@@ -40,6 +40,7 @@ class WindowTests(unittest.TestCase):
         window.show.assert_called_once()
         window.restore.assert_called_once()
         window.destroy.assert_called_once()
+        self.assertTrue(placement._quitting)
         user.ShowWindow.assert_not_called()
 
     def test_minimized_geometry_does_not_overwrite_saved_normal_bounds(self):
@@ -51,6 +52,24 @@ class WindowTests(unittest.TestCase):
         window.hide.assert_called_once()
         window.minimize.assert_not_called()
         self.assertEqual(layout.save_window.call_count,2) # initial restore and explicit hide
+        window.destroy.assert_not_called()
+
+    def test_close_keeps_window_alive_and_tray_can_restore(self):
+        _,window,_,_,_=self.run_window(['close','restore'])
+        window.hide.assert_called_once()
+        window.show.assert_called_once()
+        window.destroy.assert_not_called()
+
+    def test_native_close_is_cancelled_until_explicit_quit(self):
+        window=MagicMock();placement=PlacementAPI()
+        event=window.events.closing
+        retain_tray_on_close(window,placement)
+        callback=event.__iadd__.call_args.args[0]
+        self.assertFalse(callback())
+        self.assertEqual(placement._commands.get_nowait(),'close')
+        placement._quitting=True
+        self.assertTrue(callback())
+        self.assertTrue(placement._commands.empty())
 
     def test_page_bridge_only_accepts_window_commands_when_enabled(self):
         placement=PlacementAPI()
