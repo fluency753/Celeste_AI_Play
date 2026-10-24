@@ -9,7 +9,7 @@
 工具之前都会问主控的 /gate。规则：
 - 每个房间存入的轮次按房间大小算：以一屏大小（320×180，1A 第一个房间那么大）存入 rounds_per_room 轮为基准，房间的长、
   高每变成 room_scale 倍（默认 2），轮次就乘 room_scale，向上取整——即 ceil(rounds_per_room × (宽/320)^k × (高/180)^k)，
-  k = log2(room_scale)；默认 k = 1，与面积成正比（两倍长、两倍高的房间 20 轮）。
+  k = log2(room_scale)；默认 k = 1，与面积成正比（两倍长、两倍高的房间 20 轮）；每个房间至少 rounds_per_room 轮。
 - 准备阶段（游戏工具还没有真正执行过）不受限制。注意不能看 metrics.playing：有准备阶段时，
   第一次游戏工具的钩子先于它开始计时。
 - 开放了预置模拟器（sim_only）时，只有调用了模拟器的消息占一轮：一条消息的工具全部返回后，这期间 /sim 写出了
@@ -32,7 +32,7 @@ SCREEN_W, SCREEN_H = 320, 180     # 一屏：1A 第一个房间的大小，房�
 
 
 def room_rounds(base: int, bounds, scale: float = 2.0) -> int:
-    """一个房间存入的规划轮次：一屏大小的房间 base 轮，长、高每变成 scale 倍轮次乘 scale，向上取整，至少 1 轮。"""
+    """一个房间存入的规划轮次：一屏大小的房间 base 轮，长、高每变成 scale 倍轮次乘 scale，向上取整；比一屏小的房间也给 base 轮。"""
     try:
         w, h = float(bounds[2]), float(bounds[3])
     except (TypeError, IndexError, ValueError):
@@ -40,7 +40,7 @@ def room_rounds(base: int, bounds, scale: float = 2.0) -> int:
     if w <= 0 or h <= 0:
         return base
     k = math.log2(scale) if scale > 0 else 1.0
-    return max(1, math.ceil(base * (w / SCREEN_W) ** k * (h / SCREEN_H) ** k - 1e-9))
+    return max(base, math.ceil(base * (w / SCREEN_W) ** k * (h / SCREEN_H) ** k - 1e-9))
 
 EXEMPT = {"mcp__celeste__act", "mcp__celeste__set_effort"}
 
@@ -130,7 +130,7 @@ class PauseGate:
             return ""
         if self.sim_only:
             return (f"规划轮次：剩余 {self.bank} 轮（这个房间存入了 {self.last_deposit} 轮：按房间大小，一屏大小的房间 "
-                    f"{self.rounds_per_room} 轮，长、高每加倍轮次翻倍；在游戏里死亡 +{self.death_bonus}；没用完的留给本章后面的房间；"
+                    f"{self.rounds_per_room} 轮，长、高每加倍轮次翻倍，至少 {self.rounds_per_room} 轮；在游戏里死亡 +{self.death_bonus}；没用完的留给本章后面的房间；"
                     f"只有调用模拟器的消息占一轮，同一条消息里并行的几次调用算一轮，其他工具不占轮次）")
         return (f"规划轮次：剩余 {self.bank} 轮（本章每进入一个没来过的房间 +{self.rounds_per_room}，"
                 f"在游戏里死亡 +{self.death_bonus}；同一条消息里并行的工具调用算一轮，act 与 set_effort 不占轮次）")
