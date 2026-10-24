@@ -330,7 +330,7 @@ def main() -> int:
     window = webview.create_window(HUD_TITLE, args.url, width=420, height=DEFAULT_HEIGHT, frameless=True, transparent=True,
                                    js_api=args.placement,
                                    min_size=(200, MIN_HEIGHT),
-                                   on_top=Layout().topmost, focus=False, resizable=True, easy_drag=False, shadow=False,
+                                   on_top=Layout().topmost, focus=True, resizable=True, easy_drag=False, shadow=False,
                                    text_select=False, zoomable=False)
     args.placement._window = window
     window.events.loaded += args.placement._sync_page
