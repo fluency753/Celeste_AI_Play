@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -47,10 +46,10 @@ thought：一两句中文（120 字以内），只写你对当前房间或这一
 也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。
 思考期间随时调用：一有初步判断就先写一句，之后想法每有进展再写一句，不要攒到 act 时才写。"""
 
-# 实时展示：两次 act 之间想了这么久却一次 narrate 都没调用，就在 act 的结果里提醒一句
-LIVE_REMIND_S = 20.0
-LIVE_REMINDER = ("（实时展示）上一次 act 返回之后过了约 {s} 秒，期间你没有调用 narrate，观众在 HUD 上一直看不到你的思路。"
-                 "接下来思考时，一有初步判断就先调用 narrate 写一句，之后想法每有进展再写一句，不要等到 act 时才写。")
+# 实时展示的半分钟计时器：思考状态累计满 RunConfig.live_remind_s 秒没有 narrate，就在智能体下一次调用任何工具时
+# 由容器里的 PreToolUse 钩子把这句提醒放到那次工具结果旁边（见 run.add_gate_route 与 agent-container/celeste-gate.py）
+LIVE_REMINDER = ("（系统·实时展示）你已经思考了约 {s} 秒没有更新 HUD 上的思考内容，观众看不到你此刻的思路。"
+                 "请调用 narrate 写一句你现在的分析与判断，之后想法每有进展再写一句。")
 
 
 def effort_line(metrics) -> str:
@@ -85,7 +84,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     ws_note = SIM_NOTE if session.cfg.sim else WORKSPACE_NOTE
     # 截图只在进入新房间时（以及主动 observe 时）附上；同时给出整个房间的实体与地图，平时只描述画面附近
     # 思考与工具时间由主控按 Claude Code 输出流里的 tool_use / tool_result 事件统计（见 metrics.py），这里不计时
-    state = {"described_room": None, "narrates": 0, "act_end": None}
+    state = {"described_room": None}
 
     def room_key(obs: dict):
         level = obs.get("level") or {}
@@ -155,7 +154,6 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             if (note := gated()) is not None:
                 return [note]
             begin()
-            started = time.time()
             try:
                 deaths_before = metrics.state.deaths
                 outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file)
@@ -178,10 +176,6 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     parts.append("整个房间的精确数据（像素坐标）：\n" + room_json(outcome.obs))
                 if session.workspace:
                     parts.append(ws_note)
-                if session.cfg.live and state["narrates"] == 0 and state["act_end"] is not None \
-                        and (waited := started - state["act_end"]) > LIVE_REMIND_S:
-                    parts.append(LIVE_REMINDER.format(s=int(waited)))
-                    metrics.add(narrate_reminders=1)
                 content: list = []
                 if outcome.image_b64 and new_room and session.cfg.images:
                     content.append(Image(data=upscale_png(outcome.image_b64), format="png"))
@@ -190,8 +184,6 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             except ActError as err:
                 return [f"动作未执行（没有消耗任何游戏帧）：{err}"]
             finally:
-                state["narrates"] = 0
-                state["act_end"] = time.time()
                 finish()
 
     if session.cfg.live:
@@ -205,7 +197,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 return ["thought 太长，请压缩到一两句话（120 字以内）。"]
             metrics.set_thought(text)
             metrics.add(narrates=1)
-            state["narrates"] += 1
+            metrics.narrated()
             return ["已更新。"]
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)

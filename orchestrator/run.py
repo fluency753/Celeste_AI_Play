@@ -37,7 +37,7 @@ from .recording import Recorder, RecordingError, options_from
 from .pausegate import PauseGate
 from .live import LiveStatus
 from .playback import Playback
-from .server import TRANSPORT_SECURITY, build_server
+from .server import LIVE_REMINDER, TRANSPORT_SECURITY, build_server
 
 
 def parse_args() -> tuple[RunConfig, argparse.Namespace]:
@@ -259,8 +259,10 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
         client.close()
 
 
-def add_gate_route(app, gate: PauseGate) -> None:
-    """容器里的 PreToolUse 钩子（agent-container/celeste-gate.py）每次调用工具前 POST 到这里。"""
+def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | None = None) -> None:
+    """容器里的 PreToolUse 钩子（agent-container/celeste-gate.py）每次调用工具前 POST 到这里。
+    实时展示时（live_remind_s 不为空）兼作半分钟计时器的提醒通道：思考状态累计满 live_remind_s 秒没有 narrate，
+    回复里带上 context，钩子把它作为 additionalContext 交给 Claude Code，出现在这次工具结果旁边。"""
     from starlette.requests import Request  # noqa: WPS433
     from starlette.responses import JSONResponse
     from starlette.routing import Route
@@ -270,8 +272,16 @@ def add_gate_route(app, gate: PauseGate) -> None:
             data = await request.json()
         except ValueError:
             data = {}
-        allow, reason = await gate.decide(str(data.get("tool_name") or ""), data.get("tool_use_id"))
-        return JSONResponse({"decision": "allow" if allow else "deny", "reason": reason})
+        tool_name = str(data.get("tool_name") or "")
+        allow, reason = await gate.decide(tool_name, data.get("tool_use_id"))
+        context = ""
+        if allow and live_remind_s and metrics is not None:
+            if tool_name.endswith("__narrate"):
+                metrics.narrated()
+            elif (waited := metrics.take_live_reminder(live_remind_s)) is not None:
+                context = LIVE_REMINDER.format(s=int(waited))
+                print(f"[live] 提醒更新 HUD 思考（已思考 {waited:.0f} 秒，调用 {tool_name}）", flush=True)
+        return JSONResponse({"decision": "allow" if allow else "deny", "reason": reason, "context": context})
 
     app.router.routes.insert(0, Route("/gate", endpoint, methods=["POST"]))
 
@@ -439,7 +449,7 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
     server = build_server(session, study, gate)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
-    add_gate_route(app, gate)
+    add_gate_route(app, gate, metrics, cfg.live_remind_s if cfg.live and cfg.runtime == "container" else None)
     web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
     web_task = asyncio.create_task(web.serve())
     while not web.started:

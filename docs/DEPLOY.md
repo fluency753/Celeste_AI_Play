@@ -41,7 +41,7 @@
 | CPU | 4 核 | 8 核以上 | 预置模拟器按进程并行，核越多每秒推演越多（作者本机容器能用 24 核） |
 | 内存 | 16 GB | 32 GB | 游戏、OBS、Docker（WSL2）、智能体同时运行 |
 | 显卡 | 能运行《蔚蓝》 | NVIDIA（支持 NVENC） | 有 NVIDIA 显卡时录制用 NVENC 硬件编码，否则用 libx264 软件编码（占 CPU） |
-| 磁盘 | 20 GB 可用 | 100 GB 以上 | Docker 镜像约 2 GB；录像约每小时 3～4 GB（1080p60，qp16），正式运行可能几个小时 |
+| 磁盘 | 20 GB 可用 | 100 GB 以上 | Docker 镜像约 2 GB；录像每分钟成片约 35 MB（1080p60，NVENC qp16；成片只有游玩帧与规划回放帧，比现实用时短得多，例如 DeepSeek 一次 30 分钟预算的短测，成片约 6 分钟、约 200 MB），另有同样大小量级的纯享版 |
 | 网络 | 能访问模型平台 | — | 部署时还要访问 winget 源、Docker Hub、GitHub（OBS 插件的 libobs 头文件）、celeste.ink（参考资料，可选） |
 
 ### 2.2 软件
@@ -309,7 +309,7 @@ winget install Gyan.FFmpeg
 | `--chapter N` | 选章页当前章节 | 只玩一章 |
 | `--max-minutes` | 240 | 现实时间安全上限（不含准备阶段与等待额度）；**不显示给智能体** |
 | `--sim` / `--no-sim` | 开 | 预置模拟器开关，把项目分成两个版本：开时智能体可以随意调用模拟器寻找并优化路线（提示词写明做法）；关时不能调用模拟器，提示词只写目标、规则与工具接口，不教打法 |
-| `--live` / `--no-live` | 开 | 实时展示：智能体思考期间用 `narrate` 随时更新 HUD 上的思考，运行程序期间用 `show.status()` 报告进度（HUD 工具栏实时显示）；关时 HUD 的思考只在每次 `act` 时更新 |
+| `--live` / `--no-live` | 开 | 实时展示：智能体思考期间用 `narrate` 随时更新 HUD 上的思考，运行程序期间用 `show.status()` 报告进度（HUD 工具栏实时显示）；思考状态累计满半分钟没有更新时，在智能体下一次调用工具时提醒它（`RunConfig.live_remind_s`）；关时 HUD 的思考只在每次 `act` 时更新 |
 | `--no-playback` | 关（即默认回放） | 关闭规划回放（开模拟器时画 `/sim` 的推演，关模拟器时画智能体用 `show.trajectory()` 记下的轨迹） |
 | `--record` | 关 | OBS 锁步录制（先 `obs_setup.py launch`）；生成完整版与纯享版 |
 | `--limit-planning` | 关 | 限制规划轮次（按章节记账，只用于开模拟器的版本）；`--rounds-per-room`（默认 3）、`--room-scale`（默认 2）调整轮次 |

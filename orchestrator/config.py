@@ -150,6 +150,7 @@ class RunConfig:
     thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
     sim: bool = False                # 预置模拟器：把本机的 sim/dist 只读挂到容器的 /sim，每次停下都把当前帧的完整场景写进工作区
     live: bool = True                # 实时展示：智能体思考期间用 narrate 随时更新 HUD 的思考内容，运行程序期间报告进度（HUD 工具栏）
+    live_remind_s: float = 30.0      # 实时展示：思考状态累计这么多秒没有 narrate，就在下一次调用工具时提醒（半分钟计时器）
 
     @property
     def third_party(self) -> bool:

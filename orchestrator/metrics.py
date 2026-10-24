@@ -66,7 +66,7 @@ class MetricsState:
     tool_status: str = ""             # 实时展示：正在运行的程序用 show.status() 报告的进度（工具调用返回后清空）
     live: bool = False                # 实时展示开着（HUD 据此在规划回放时仍把思考语句放在主位）
     narrates: int = 0                 # 实时展示：智能体调用 narrate 的次数
-    narrate_reminders: int = 0        # 实时展示：两次 act 之间思考很久却没有 narrate、在 act 的结果里提醒的次数
+    narrate_reminders: int = 0        # 实时展示：思考状态累计半分钟没有 narrate、在下一次调用工具时提醒的次数
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）
     sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数（全程累计，写进总结）
     sim_round_rollouts: int = 0       # 当前这次模拟器调用推演的路线条数（HUD 显示；这一轮回放画完清零）
@@ -114,6 +114,7 @@ class Metrics:
         self._tool_labels: dict[str, str] = {}   # 正在运行的工具调用 → HUD 上的说明
         self._seg_mark = time.monotonic()  # 上一次把时间结算进思考或工具的时刻
         self._seg_game = 0.0            # 那一刻的游戏推进时间累计
+        self._unnarrated = 0.0          # 实时展示：上次 narrate（或上次提醒）之后累计的思考秒数
         self.playing = not study
         self.kb_done = not study        # 知识库已读完（之后的准备阶段照常计思考与工具时间）
         now = time.time()
@@ -144,8 +145,27 @@ class Metrics:
                 self.state.tool_s += max(0.0, dt - max(0.0, game - self._seg_game))
             else:
                 self.state.thinking_s += dt
+                self._unnarrated += dt
         self._seg_mark, self._seg_game = now, game
         self.state.thinking_since_wall = time.time()
+
+    def narrated(self) -> None:
+        """实时展示：智能体调用了 narrate，半分钟计时器从头算。"""
+        with self._lock:
+            self._flush_locked()
+            self._unnarrated = 0.0
+
+    def take_live_reminder(self, interval: float) -> float | None:
+        """实时展示的半分钟计时器：上次 narrate（或上次提醒）之后在思考状态累计满 interval 秒时，
+        返回累计的秒数并从头计时（这一次要提醒）；否则返回 None。工具运行、游戏推进的时间不算思考。"""
+        with self._lock:
+            self._flush_locked()
+            if self._unnarrated < interval:
+                return None
+            waited, self._unnarrated = self._unnarrated, 0.0
+            self.state.narrate_reminders += 1
+            self._write_locked()
+            return waited
 
     def turn_begin(self) -> None:
         """主控给智能体发出一条消息：一轮开始。"""

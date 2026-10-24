@@ -83,9 +83,13 @@
   .stat .v { font-size: calc(16 * var(--px)); white-space: nowrap; }
   .stat .v.warn { color: var(--warn); }
   .stat .v.dim { color: var(--label); }
-  /* 调用工具：占满一行，放不下时省略 */
+  /* 调用工具：占满一行，放不下时折行，最多三行（再长才省略） */
   .stat.wide { grid-column: 1 / -1; }
-  .stat .v.call { font-size: calc(14 * var(--px)); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .stat .v.call { font-size: calc(14 * var(--px)); line-height: 1.35; min-width: 0; flex: 1 1 auto; text-align: right;
+                  white-space: normal; overflow-wrap: anywhere;
+                  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  /* 折成多行时左对齐，读起来顺 */
+  .stat .v.call.multi { text-align: left; }
 
   .thought {
     margin-top: calc(10 * var(--px));
@@ -310,8 +314,14 @@ function render() {
   // 调用工具：智能体正在调用的工具与说明（Bash 用它写的 description，文件工具用路径）；没有在调用工具时显示"—"
   // 实时展示：正在运行的程序报告的进度跟在工具说明后面
   const call = (!ended && m.tool_call) ? (m.tool_status ? `${m.tool_call} — ${m.tool_status}` : m.tool_call) : "";
-  $("toolCall").textContent = call || "—";
-  $("toolCall").classList.toggle("dim", !call);
+  const callEl = $("toolCall");
+  if (callEl.textContent !== (call || "—")) {
+    callEl.textContent = call || "—";
+    callEl.classList.remove("multi");
+    const line = parseFloat(getComputedStyle(callEl).lineHeight) || 19;
+    callEl.classList.toggle("multi", callEl.scrollHeight > line * 1.5);
+  }
+  callEl.classList.toggle("dim", !call);
 
   // 规划回放：思考语句的位置显示这一轮在试什么，下面一行小字是第几轮、推演了多少条路线（执行前画最终路线时写"即将执行"）
   // 实时展示开着时，思考语句的位置一直显示智能体此刻的思考（它在回放上一轮时已经在想下一轮），这一轮在试什么写在下面的小字里
