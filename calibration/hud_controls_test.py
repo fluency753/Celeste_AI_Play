@@ -7,6 +7,21 @@ import unittest
 
 
 class PrimaryControlTests(unittest.TestCase):
+    def test_telemetry_uses_actual_model_and_runtime_capabilities(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is needed to execute HUD JavaScript')
+        html = (Path(__file__).resolve().parent.parent / 'overlay/hud.html').read_text(encoding='utf-8')
+        source = html[html.index('function telemetryLabel('):html.index('function applyColors()')]
+        script = source + '''
+const config={names:{'gpt-native':'wrong-placeholder','sonnet':'Sonnet'}};
+const cases=[{telemetry_source:'codex_app_server',agent:'gpt-native',model:'actual-gpt'},
+{telemetry_source:'claude_stream_json',agent:'gpt-native',model:'sonnet'}];
+process.stdout.write(JSON.stringify(cases.map(m=>[telemetryLabel(m),displayName(m)])));
+'''
+        result = subprocess.run([node, '-e', script], capture_output=True, text=True, encoding='utf-8', check=True)
+        self.assertEqual(json.loads(result.stdout), [['独立 Codex', 'actual-gpt'], ['独立 Claude', 'Sonnet']])
+
     def test_labels_and_click_actions_follow_controller_lifecycle(self):
         node=shutil.which('node')
         if not node:

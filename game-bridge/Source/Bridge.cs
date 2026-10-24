@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.12.4";
+    public const string Version = "0.12.5";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -484,25 +484,6 @@ internal static class Bridge {
                     w.WriteBoolean("dry_run", dryRun);
                     w.WriteBoolean("persisted", File.Exists(UserIO.GetSaveFilePath(SaveData.GetFilename(createdSlot))));
                 }));
-                break;
-
-            case "name_new_save":
-                // 部署用：只填写当前选中的空存档卡片，由正常的“开始”菜单创建存档。
-                // 不修改已有存档、不直接写文件，也不让游玩工具访问此命令。
-                if (!Active || Engine.Scene is not Overworld ow || ow.Current is not OuiFileSelect select
-                    || !select.SlotSelected || select.SlotIndex < 0 || select.SlotIndex >= select.Slots.Length
-                    || select.Slots[select.SlotIndex] is not { Exists: false } emptySlot
-                    || emptySlot.StartingGame) {
-                    IpcServer.Send(Reply.Error(req.Id, "select an empty save slot before naming it"));
-                    break;
-                }
-                string newName = GetString(a, "name", "").Trim();
-                if (newName.Length < 1 || newName.Length > 20 || newName.Any(ch => char.IsControl(ch) || char.IsSurrogate(ch))) {
-                    IpcServer.Send(Reply.Error(req.Id, "name must be 1-20 printable characters"));
-                    break;
-                }
-                emptySlot.Name = newName;
-                SendObservation(req.Id, a, defaultImage: false);
                 break;
 
             case "observe":

@@ -36,13 +36,21 @@ class JsonTail:
 class PublicHistory:
     def __init__(self, directory: Path):
         self.events = JsonTail(directory / "codex_events.jsonl")
+        self.public = JsonTail(directory / "public_events.jsonl")
         self.actions = JsonTail(directory / "decisions.jsonl")
         self.items = {}
         self.lock = threading.Lock()
 
     def snapshot(self, metrics):
         with self.lock:
-            for event in self.events.read():
+            for event in self.public.read():
+                if event.get("id") and isinstance(event.get("text"), str):
+                    previous = self.items.get(event["id"])
+                    if previous:
+                        event["wall"] = previous["wall"]
+                    self.items[event["id"]] = event
+            # Completed recordings made before the shared event stream keep their history.
+            for event in ([] if self.public.path.exists() else self.events.read()):
                 params = event.get("params") or {}
                 item = params.get("item") or {}
                 if item.get("type") == "contextCompaction" and event.get("method") in {"item/started", "item/completed"}:

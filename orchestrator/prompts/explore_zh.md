@@ -20,7 +20,7 @@
 剧情遵循当前模式：auto 由主控自动跳过；agent 模式下自行决定观看、推进、选择或跳过。对话分支须明确选择，不得盲目确认默认项。
 先阅读观测story中的当前可见对白、头像标识和教学提示，理解内容再行动。截图为游戏画面层，对话等界面文字由story单独提供；不能因截图中没有文字就忽略对白。
 游戏每秒 60 帧；思考时冻结。基本按键和工具约定见 /kb/tools.md。
-celeste_read/write/bash 对应容器的文件读取、写入和断网命令，游戏工具为 celeste_observe/act/narrate/set_effort/exit_level。
+Read/Write/Bash 对应容器的文件读取、写入和断网命令；游戏工具为 observe/act/narrate/set_effort/exit_level/cutscene/simulate，具体前缀见执行器工具映射。
 单次规划程序最多 15 秒；若有辅助程序，使用 /workspace/game/show.py 的 status() 报告真实进度。
 公开 commentary 或 narrate 会自动更新 HUD，尽量每 5–10 秒说明有意义的进展；未有新发现时不编造。
 规划回放保持启用，仅播放实际提交的轨迹；不应为了回放而制造无意义的预测。

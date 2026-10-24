@@ -170,23 +170,22 @@ class BrokerTests(unittest.TestCase):
 
 
 class NativeEntryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_metered_command_never_reaches_agent_shell_and_pause_blocks_it(self):
+    async def test_metered_tool_never_reaches_agent_shell_and_pause_blocks_it(self):
         from orchestrator.codex_agent import CodexRunner
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             cfg = RunConfig(agent="test", save="test", model="test", sim_assist=True)
             metrics = Metrics(root / "metrics.json", "test", "test", "high", 100)
             energy = SimEnergy(root / "energy.json")
-            session = SimpleNamespace(sim_energy=energy, simulate=lambda data: {"cost": 13, "energy": energy.snapshot()})
-            runner = CodexRunner(cfg, root, session, metrics, "container")
+            session = SimpleNamespace(cfg=cfg, metrics=metrics, workspace=None, done=False, sim_energy=energy, simulate=lambda data: {"cost": 13, "energy": energy.snapshot()})
+            from orchestrator.server import build_server
+            runner = CodexRunner(cfg, root, session, metrics, "container", game_server=build_server(session))
             with patch("orchestrator.codex_agent.run_program") as shell:
-                result = await runner._request("item/tool/call", {"tool": "celeste_bash", "arguments": {
-                    "command": 'simulate {"candidates":[["60,R"]]}', "description": "试一条短路线"}})
+                result = await runner._request("item/tool/call", {"tool": "celeste_simulate", "arguments": {"candidates": [["60,R"]]}})
                 self.assertTrue(result["success"])
                 self.assertEqual(json.loads(result["contentItems"][0]["text"])["cost"], 13)
                 runner.paused = True
-                result = await runner._request("item/tool/call", {"tool": "celeste_bash", "arguments": {
-                    "command": 'simulate {"candidates":[["60,R"]]}', "description": "暂停后不应预测"}})
+                result = await runner._request("item/tool/call", {"tool": "celeste_simulate", "arguments": {"candidates": [["60,R"]]}})
                 self.assertFalse(result["success"])
                 shell.assert_not_called()
 

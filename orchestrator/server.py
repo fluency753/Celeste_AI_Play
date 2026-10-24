@@ -91,6 +91,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         level = obs.get("level") or {}
         return (level.get("sid"), level.get("room"))
     call_lock = asyncio.Lock()
+    # Shared with runtimes that invoke MCP directly, rather than forwarding calls.
+    session.tool_lock = call_lock
 
     def begin() -> None:
         if gate is not None:
@@ -103,6 +105,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     def gated() -> str | None:
         """知识库没读完时不执行游戏工具，返回提示。"""
+        guard = getattr(session, 'control_guard', None)
+        if guard and (note := guard()):
+            return note
         if study is None or study.ready():
             return None
         return study.reminder()
@@ -210,6 +215,20 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line())+'\n'+room_json(obs))
             return result
 
+    @server.tool(name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)
+    async def simulate(candidates: list[list[str]] | None = None) -> list:
+        async with call_lock:
+            if (note := gated()) is not None:
+                return [note]
+            if not getattr(session, 'sim_energy', None):
+                return ['本次未启用限额模拟辅助。']
+            if candidates is None:
+                result = session.sim_energy.snapshot()
+            else:
+                begin()
+                result = await asyncio.to_thread(session.simulate, {'candidates': candidates})
+            return [json.dumps(result, ensure_ascii=False)]
+
     if session.cfg.live:
         @server.tool(name="narrate", description=NARRATE_DESCRIPTION, structured_output=False)
         async def narrate(thought: str) -> list:
@@ -230,6 +249,12 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         level = (level or "").strip().lower()
         if level not in EFFORT_LEVELS:
             return [f"无效的推理强度 {level!r}：只能是 {'、'.join(EFFORT_LEVELS)}。"]
+        policy = getattr(session, 'effort_policy', None)
+        if policy:
+            try:
+                await policy(level)
+            except ValueError as exc:
+                return [str(exc)]
         current, pending = metrics.state.effort, metrics.state.effort_pending
         if level == current:
             if pending:

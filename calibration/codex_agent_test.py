@@ -70,12 +70,12 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             denied=await self.runner._request('item/tool/call',{'tool':'celeste_exit_level','arguments':{'reason':'退出'}})
             self.assertFalse(denied['success']);self.server.call_tool.assert_not_awaited()
 
-    async def test_old_thread_exit_command_is_intercepted_without_container_shell(self):
+    async def test_exit_tool_never_uses_container_shell(self):
         self.runner.study=None
         self.runner.session=SimpleNamespace()
         with patch('orchestrator.codex_agent.run_program') as shell:
-            result=await self.runner._request('item/tool/call',{'tool':'celeste_bash',
-                'arguments':{'command':'game exit','description':'按用户要求退出'}})
+            result=await self.runner._request('item/tool/call',{'tool':'celeste_exit_level',
+                'arguments':{'reason':'按用户要求退出'}})
         self.assertTrue(result['success'])
         shell.assert_not_called()
         self.server.call_tool.assert_awaited_with('exit_level',{'reason':'按用户要求退出'})
@@ -90,12 +90,12 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             "threadId": "original", "sandbox": "read-only", "excludeTurns": True})
         self.assertEqual(json.loads((self.root / "session_recovery.json").read_text())["thread"], "recovered")
 
-    async def test_old_thread_story_returns_screenshot_alongside_text(self):
+    async def test_cutscene_tool_returns_screenshot_alongside_text(self):
         self.runner.study=None
         self.runner.session=SimpleNamespace()
         with patch('orchestrator.codex_agent.run_program') as shell:
-            result=await self.runner._request('item/tool/call',{'tool':'celeste_bash',
-                'arguments':{'command':'game story {"action":"wait","frames":30}'}})
+            result=await self.runner._request('item/tool/call',{'tool':'celeste_cutscene',
+                'arguments':{'action':'wait','frames':30}})
         shell.assert_not_called()
         self.server.call_tool.assert_awaited_with('cutscene',{'action':'wait','frames':30})
         self.assertTrue(result['success'])
@@ -106,6 +106,18 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "connection failed"):
             await self.runner._resume_thread({"threadId": "original"})
         self.assertEqual(self.runner.rpc.request.await_count, 1)
+
+    def test_resumed_session_reports_missing_dynamic_tools_without_bash_fallback(self):
+        path = self.root / 'thread.jsonl'
+        tools = ['celeste_observe', 'celeste_act', 'celeste_cutscene', 'celeste_exit_level']
+        path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
+        self.runner._validate_resumed_tools({'path': str(path)})
+        self.cfg.sim_assist = True
+        with self.assertRaisesRegex(RuntimeError, 'celeste_simulate'):
+            self.runner._validate_resumed_tools({'path': str(path)})
+        tools.append('celeste_simulate')
+        path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
+        self.runner._validate_resumed_tools({'path': str(path)})
 
     async def test_live_bash_has_hard_time_limit(self):
         with patch("orchestrator.codex_agent.run_program", return_value=ProgramResult(0, "ok", "", 0.1, False)) as run:

@@ -133,7 +133,7 @@ class RunConfig:
     play_scope: str = 'chapter'     # independent of the user's dynamic stop goal
     chapter: int | None = None      # 菜单宏进入的章节编号；None = 选章页当前章节
     chapters: list[int] | None = None  # 依次通关的章节（如 [0, 1, 2]）：一章完成后主控自动进入下一章，智能体接着玩
-    runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具（M2 的过渡方式）
+    runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具
     image: str = "celeste-agent:0.1"
     autocompact: str | None = None   # Claude Code 自动压缩的窗口：None 用默认，"auto" 或 100000~1000000 的 token 数
     seccomp_unconfined: bool = True  # 容器内 Bash 沙箱（bubblewrap）需要创建命名空间，Docker 默认的 seccomp 配置不允许

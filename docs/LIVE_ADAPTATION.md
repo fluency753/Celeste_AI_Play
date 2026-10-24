@@ -52,32 +52,28 @@ OBS 的 HUD 是独立浏览器来源，页面 URL 带 `?surface=obs`，卡片直
 
 新版 HUD 服务提供同源 `/hud/history`。本次正在运行的旧主控不重启，历史接口临时由独立 47792 服务提供；下次主控启动即自行提供接口。只读显示层不占用游戏桥接连接，不影响章节范围与录制。
 
-## 当前聊天与 HUD
+## 执行器公共接口（2026-10-25）
 
-`overlay/codex_session.py` 只读指定 Codex 聊天的本地 JSONL 会话日志。线程 ID 必须显式指定，或由当前 Codex 环境提供；不会导出其他聊天的数据。
+HUD 读取当前运行的 metrics.json、control.sqlite3 和 public_events.jsonl，不再读取本聊天的 Codex rollout 日志。模型与推理强度由执行器确认；无法取得的字段保持未知。公开事件仅包含消息、动作说明和压缩状态，不导出内部推理。
 
-导出的字段：
+- orchestrator/session_controls.py：公共消息队列、暂停/继续、停止、目标更新/清除、剧情模式、推理强度偏好和心跳。执行器声明 RuntimeCapabilities，并实现验证强度、协议中断；支持活动轮追加输入时再实现 steer。
+- Codex 使用 turn/steer 追加提示；Claude 没有该能力，通过官方 stream-json interrupt 控制请求结束当前轮，下一轮仅提交一次待投递消息。两个执行器均等待已开始的游戏工具结束后才确认暂停。Claude 中断协议参考 anthropics/claude-agent-sdk-python 的 _internal/query.py。
+- Fast 是 Codex 的能力，Claude 不显示该开关，也拒绝相应控制请求。强度选项来自当前执行器的能力或模型目录，后端再次验证。Claude 不提供 xhigh。
+- orchestrator/prompting.py：共享的新手/完整知识模式、剧情规则、恢复提示与限额模拟说明。Claude 也可显式使用 --knowledge explore --sim-assist；限额辅助必须运行在容器中。
+- simulate 为公共 MCP 工具（Codex 映射为 celeste_simulate），与 observe/act/cutscene/exit_level 使用相同的阶段与暂停门禁；体力、预测上限和退款规则不因执行器改变。省略 candidates 只查询体力。
+- orchestrator/telemetry.py：写入两种执行器共用的公开事件；HUD 用同一气泡历史显示消息和压缩状态。旧录像目录没有公共事件文件时，仍可读取原 Codex 公开事件；它只用于已有录像历史。
 
-| 字段 | 来源与口径 |
-| --- | --- |
-| 模型、推理强度 | `turn_context` 和已应用的 `thread_settings_applied`，不使用游戏启动参数的占位值 |
-| 上下文 | 最近一次 `token_count.info.last_token_usage` 的输入加输出；不是重复累计的计费用量 |
-| 上下文窗口 | 同一次用量事件的 `model_context_window` |
-| 压缩次数 | 本聊天日志的 `compacted` 记录；不重复计入其对应的界面事件 |
-| 工具调用 | 本聊天的 function/custom tool call，按 call ID 去重；只显示名称，不导出参数或返回正文 |
-| 工具耗时 | 调用与返回的时间区间并集；并发调用不重复计时 |
-| 解说 | assistant 的公开 `commentary`；不提取或导出 analysis、Reasoning 的正文 |
+HUD 的新建、准备、取名和结束后唤醒会话目前仍由 Codex 专用适配器实现；本次没有宣称这些 CLI 生命周期已支持 Claude。Claude 可通过 orchestrator.run 启动，运行中复用上述 HUD 控制。增加其他执行器时复用公共层，并显式实现所支持的生命周期与模型目录接口。
 
-计数范围是整条聊天，不限于本次游戏。游戏时间、死亡数、分段成绩仍来自游戏统计。HTTP 响应层合并数据，不改写游戏统计文件。日志缺失或字段不明时显示未连接或 `—`，不把未知值显示为零。
+清理：移除 --codex-thread 与聊天日志读取器、内置 openai 转换网关预设及专用部署向导。自定义 Anthropic 兼容平台、域名/宿主端口限制仍保留。移除 Bash 专用的 game exit、game story、simulate 拦截和旧菜单命名回退；桥接最低要求 0.12.4，启动前只读检查，失败不会录制或选择存档。桥接 0.12.5 移除 name_new_save，创建只使用 create_save。
 
-独立预览（先启动服务，再打开桌面窗口；两条命令分别运行）：
+Codex 恢复时检查该线程实际持久化的动态工具。旧线程如果缺少 celeste_simulate，需关闭限额辅助，或新建准备会话；不会静默改用 Bash 隐藏入口。旧工作区、存档和录像均保留。
 
-```powershell
-.\.venv\Scripts\python.exe -m overlay.server --port 47791 --run runs\<agent>\<timestamp> --codex-thread <聊天ID>
-.\.venv\Scripts\python.exe -m overlay.window --url http://127.0.0.1:47791/hud
-```
+启动选择：HUD 可显式选择“从指定章继续”或“仅当前章节”，范围与动态停止目标分别保存。未设置停止目标时继续到所选范围结束；清除目标不会修改范围。新手模拟器为可选项，缺少私有 binary 不阻止普通试玩。会话切换同时继承存档名与槽位。冷启动无历史运行时进入真正的 idle 状态。
 
-现有 47790 服务需要加载新版 `overlay.server`；浏览器源与桌面窗口也需要刷新页面才能加载新增的来源和计数布局。无需重启游戏或更改 OBS 的推流设置。本地日志格式不是稳定的公共协议，应以实际字段为准；不能因为初始化成功就宣称全部遥测可用。
+start_gpt.ps1 不再默认选择 test；新试玩须显式传 -Save，并指定已有 -SaveSlot，或 -CreateSave 从序章新建。-Resume 直接沿用原存档，拒绝额外的存档参数。HUD 中新建存档留空名称仍由 agent 自主取玩家名。
+
+验证使用 calibration/runtime_controls_test.py、agent_control_test.py、sim_assist_test.py、connectivity_test.py、session_bootstrap_test.py、play_scope_test.py 与全量 calibration 回归；均不启动付费模型或推进真实游戏。本轮最终 174 项全部通过；桥接 Release 构建零警告、零错误，剧情文字独立检查通过，HUD JavaScript 与启动 PowerShell 语法检查通过。未重启现有服务或进行新的真实模型试玩。
 
 ## 提示词与知识库
 
@@ -91,7 +87,7 @@ OBS 的 HUD 是独立浏览器来源，页面 URL 带 `?surface=obs`，卡片直
 
 ### 默认采用新手探索
 
-`start_gpt.ps1` 和新建 `--engine codex` 运行默认使用 `explore`。必读仅 `kb/explore/README.md` 和 `tools.md`，共 34 行；`help/controls.md` 在遇到相关困难并先尝试后按需查阅。目标改为通过实际尝试探索并通关，不再要求极限速通。提示词不附带物理参数、高级技巧名称、地图路线或隐藏内容位置。模型自身已有的知识无法清除，但要求不套用记忆中的攻略，用实际结果验证。
+`start_gpt.ps1` 和新建 `--engine codex` 运行默认使用 `explore`。必读仅 `kb/explore/README.md` 和 `tools.md`；`help/controls.md` 在遇到相关困难并先尝试后按需查阅。目标改为通过实际尝试探索并通关，不再要求极限速通。提示词不附带物理参数、高级技巧名称、地图路线或隐藏内容位置。模型自身已有的知识无法清除，但要求不套用记忆中的攻略，用实际结果验证。
 
 容器的 `/kb` 只挂载 `kb/explore/`，不提供 `/sim`。工作区 `workspaces/gpt-native-explore`、容器及会话数据卷与旧模式分开，防止读到旧攻略笔记。旧的完整资料和日志保留；切换知识范围必须新建准备会话，旧 `--prepared` 或 `--resume` 不能混入新手模式。精确模拟器默认关闭，规划回放开关保持开启，只有提交实际预测轨迹时才会出现回放。
 
@@ -100,7 +96,7 @@ OBS 的 HUD 是独立浏览器来源，页面 URL 带 `?surface=obs`，卡片直
 下次明确开始试玩时：
 
 ```powershell
-.\start_gpt.ps1 -Play -Prepared runs\gpt-native\20261024-180723 -Chapter 1
+.\start_gpt.ps1 -Play -Prepared runs\gpt-native\20261024-180723 -Chapter 1 -Save test -SaveSlot 10
 ```
 
 这里的 `-Chapter 1` 表示重新试玩第一章，当前没有自动执行。脚本会先校验资料摘要和知识范围，再交接 HUD。要使用原有速通模式，准备和试玩两步都需显式传 `-Knowledge full`。
@@ -122,14 +118,14 @@ HUD 直接消费 app-server 的公开消息、工具调用、tokenUsage 和 cont
 明确开始试玩时运行（章节可自行选择）：
 
 ```powershell
-.\start_gpt.ps1 -Play -Knowledge full -Prepared runs\gpt-native\20261024-175918 -Chapter 1
+.\start_gpt.ps1 -Play -Knowledge full -Prepared runs\gpt-native\20261024-175918 -Chapter 1 -Save test -SaveSlot 10
 ```
 
 默认开启规划回放、连续 BGM、直播节奏，保留 OBS。单个规划程序直播时最多 15 秒。独立程序的动态工具逐次计入规划轮次，不依赖 Claude Code 的消息分组。首次交接会把旧的当前聊天 HUD 服务换为跟随最新运行的服务，端口和桌面窗口保持原配置。
 
 本机验收：`20261024-175918` 全部 30 份资料共 11,397 行读完，71 次工具调用；模型 `gpt-6.1-sol`、强度 `medium`。同一线程恢复后实际调用 `celeste_observe`，收到第一章结算画面 `AreaComplete` 和截图，游戏动作数为零。程序断网、凭据环境隔离、越界文件拒绝已实测。原生执行器尚未进行整章自动试玩，不能据此宣称通关、回放及录像端到端验收完成。当前仍停在第一章结算处，没有进入第二章。
 
-验证：`python calibration/codex_agent_test.py`、`python calibration/codex_hud_test.py`；只读游戏联调 `python calibration/codex_readonly_check.py --prepared runs\gpt-native\20261024-180723`。
+验证：`python calibration/codex_agent_test.py`、`python calibration/runtime_controls_test.py`；只读游戏联调 `python calibration/codex_readonly_check.py --prepared runs\gpt-native\20261024-180723`。
 
 官方协议参考：[Codex app-server](https://developers.openai.com/codex/app-server/)。
 
@@ -183,7 +179,7 @@ HUD 的“目标与停止条件”展开区提供自由文字任务、可增删�
 
 ### 新手探索的模拟体力
 
-新的原生 GPT 新手局默认开启 `sim_assist`，与原有 `--sim` 分开。智能体容器仍然没有 `/sim`、完整场景快照或原速通知识库；主控在原连接上取得当前帧快照，独立无网络、只读、有限内存/CPU 的 Docker worker 执行有界预测。入口复用已有 `celeste_bash` 的专用 `simulate {"candidates":[["60,R"]]}` 命令，后台截获而不交给 agent 的 shell，因此旧线程无需新增工具 schema。`simulate status` 免费查询余额。准备、聊天、暂停、停止后均不能预测。
+新手局在模拟器文件存在时默认开启可选的 `sim_assist`，HUD 可显式选择是否启用，与原有 `--sim` 分开。智能体容器仍然没有 `/sim`、完整场景快照或原速通知识库；主控在原连接上取得当前帧快照，独立无网络、只读、有限内存/CPU 的 Docker worker 执行有界预测。入口为公共 MCP `simulate` 工具（Codex 名为 `celeste_simulate`），参数为 `{"candidates":[["60,R"]]}`，省略 candidates 免费查询余额。旧线程缺少该工具时不能开启限额辅助。准备、聊天、暂停、停止后均不能预测。
 
 规则：上限 100、初始 40；每 60 个真实操作中的移动帧恢复 1 点，每分钟最多恢复 20 点；首次到新房间奖励 15 点，起始房间不奖励，回头不重复奖励。等待、自动剧情、死亡不恢复体力。每次成本为 `8 + ceil(总预测帧数/12) + 4×额外候选数`：单条 60 帧花 13 点，三条各 120 帧花 46 点。每批最多 6 条，每条 180 帧、合计 600 帧；按提交量收费，模拟提前死亡不降价。后台或快照获取失败退款，正常返回的死亡/不支持结果照常收费。
 
@@ -227,7 +223,7 @@ CLI 对应 `--save 名称 --chapter 0 --create-save`；已有存档可用 `--sav
 
 已创建该目录，并在 `obs_setup.setup()` 中补上自动创建步骤，避免新部署再次出现。未更改 OBS 的推流、音轨和编码设置。
 
-验证：`python calibration/codex_hud_test.py`（日志解析、隐私过滤、时间口径、文件增量与 HTTP 集成测试）。
+验证：`python calibration/runtime_controls_test.py`（日志解析、隐私过滤、时间口径、文件增量与 HTTP 集成测试）。
 
 
 ### 桥接原生新建动作（0.12.2）
@@ -255,7 +251,7 @@ HUD 显式选择「新建独立存档」后，名字输入框可留空；点击�
 
 HUD 底部「剧情」下拉框提供「自动跳过」和「agent决定」，可在开始前或游玩时切换，随当前会话保存并在续跑时沿用；默认保留自动跳过。自动模式用原生暂停菜单跳过剧情，无法跳过时推进普通对白；agent模式将开场和关卡内剧情交给会话，自行等待观看、推进、选择或跳过。加载、转场、死亡与重生仍由主控按正常速度处理。
 
-`celeste_cutscene(action, frames=30, choice=None)` 支持 wait、advance、choose、skip。第六章营火对白的选项独立于普通文本框；桥接仅公开当前可见选项的文字、索引、选中位置和可操作状态。advance 遇到选项拒绝确认，choose 必须明确指定当前选项索引，逐步移动并复核后才确认；选项仍在动画中或内容发生变化时停止，不默认选第一项。旧会话可通过已有的 `celeste_bash` 执行 `game story` 后跟相同参数的JSON，调用同一受控动作。
+`celeste_cutscene(action, frames=30, choice=None)` 支持 wait、advance、choose、skip。第六章营火对白的选项独立于普通文本框；桥接仅公开当前可见选项的文字、索引、选中位置和可操作状态。advance 遇到选项拒绝确认，choose 必须明确指定当前选项索引，逐步移动并复核后才确认；选项仍在动画中或内容发生变化时停止，不默认选第一项。旧 Bash 命令兼容入口已移除；使用正式 cutscene 工具。
 
 交互式剧情仍允许通过act发送真实方向、跳跃与冲刺输入；不能把所有inCutscene状态都当成仅能观看或翻页。序章乌鸦教学在Dummy状态等待方向与冲刺，之后才切换BirdDashTutorial，不能靠该玩家状态预先放行。真正存在分支选项时仍禁止普通act移动选项，必须choose。wait的frames上限180，较长收尾动画应分段等待。
 
@@ -275,13 +271,13 @@ HUD 底部「剧情」下拉框提供「自动跳过」和「agent决定」，�
 
 每次观测的story返回当前显示的对白文字、页码、等待确认状态及speakerPortrait（当前头像资源标识和表情，不伪造角色姓名）。同时覆盖序章开场、明信片、结尾字幕和可见乌鸦教学提示/按键。读取FancyText当前页及字符实际显现程度；不返回下一页、隐藏字符、完整脚本或未来分支。普通对白的部分显示会随wait逐渐补全，等待标志仅用于判断输入时机，不能替代理解文字。
 
-旧会话game story入口之前过滤掉image，现在与原生游戏工具使用同一转换，文字与图片一并传递。截图依旧是320×180游戏画面层，不含对话等HUD渲染层；story与dialogChoices负责提供这些界面文字，提示词已明确读取它们。
+剧情工具返回文字和图片，使用同一响应转换。截图依旧是320×180游戏画面层，不含对话等HUD渲染层；story与dialogChoices负责提供这些界面文字，提示词已明确读取它们。
 
 验证：独立C#检查实际FancyText节点的未显现字符、下一页、上一页、透明度与空文本；32项Python相关测试通过，包含旧会话图片转发和剧情文字进入模型观测。复用既有会话01a16e8b-6ef8-7302-bdde-a6c9cbcdd662和槽位11，agent实际复述“夫人，请问一下。”及下一页“前面的牌子损坏了...这是山路吗？”，读到MADELINE/normal头像标识并自行保存退出。其他主存档哈希未变，无新增主存档，结束后已交还游戏。记录local/story-text-native-20261025-001401/report.json。
 
 ### agent 主动退出关卡与玩家名含义
 
-新增 `celeste_exit_level(reason)`：仅在用户要求退出时调用，复用当前主控桥接连接，通过游戏暂停菜单保存退出到地图/主菜单，结束本次运行并收尾录像；不会标记通关或自动进入下一章。暂停、仅聊天、准备和停止阶段禁止执行。已有线程的持久化工具列表不能新增工具时，可通过现有 `celeste_bash` 的专用 `game exit` 入口调用同一动作，不运行容器 shell。入门工具资料与系统提示词已说明该入口，因此旧准备文件需重新准备，新会话直接可用。
+新增 `celeste_exit_level(reason)`：仅在用户要求退出时调用，复用当前主控桥接连接，通过游戏暂停菜单保存退出到地图/主菜单，结束本次运行并收尾录像；不会标记通关或自动进入下一章。暂停、仅聊天、准备和停止阶段禁止执行。旧 Bash 兼容入口已移除；持久化工具列表缺少该工具的线程需新建准备会话。
 
 命名提示说明的是“玩家角色名”，同时作为存档显示名并用于游戏角色的对话称呼；不给定语言、风格或示例名，也不会改名已有档案。
 

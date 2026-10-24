@@ -27,3 +27,10 @@ class PlayScopeTests(unittest.TestCase):
     def test_unknown_scope_and_boolean_chapter_are_rejected(self):
         for chapter,scope in [(True,'chapter'),(0,'unknown'),(99,'campaign')]:
             with self.assertRaises(ValueError):chapter_sequence(chapter,scope)
+
+    def test_claude_can_select_explore_without_private_simulator(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = self.parse(Path(folder), '--engine', 'claude', '--knowledge', 'explore', '--no-sim-assist')
+            self.assertEqual(cfg.engine, 'claude')
+            self.assertEqual(cfg.knowledge_profile, 'explore')
+            self.assertFalse(cfg.sim)

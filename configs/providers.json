@@ -24,28 +24,5 @@
       "API_TIMEOUT_MS": "600000"
     },
     "status": "ready"
-  },
-  "openai": {
-    "label": "OpenAI（GPT）",
-    "status": "未接入：只有接口，尚未实测",
-    "_说明": "Claude Code 只会说 Anthropic Messages 接口，OpenAI 的接口格式不同，所以要在本机运行一个把 Anthropic 接口转成 OpenAI 接口的网关（例如 LiteLLM 代理，见 docs/DEPLOY.md 的 GPT 一节）。网关持有 OpenAI 的密钥；容器只连宿主机上网关的端口，用网关自己的访问密钥（key_env / key_file）。也可以把 base_url 改成别的提供 Anthropic 兼容接口的服务（那时把它的域名写进 allowed_domains、去掉 allowed_host_ports）。",
-    "auth": "api_key",
-    "base_url": "http://host.docker.internal:4000",
-    "allowed_domains": [],
-    "allowed_host_ports": [
-      4000
-    ],
-    "gateway_check": "http://127.0.0.1:4000/health/liveliness",
-    "key_env": "OPENAI_GATEWAY_KEY",
-    "key_file": "",
-    "model_suffix": "",
-    "images": true,
-    "env": {
-      "ANTHROPIC_DEFAULT_OPUS_MODEL": "{model}",
-      "ANTHROPIC_DEFAULT_SONNET_MODEL": "{model}",
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{model_base}",
-      "CLAUDE_CODE_SUBAGENT_MODEL": "{model_base}",
-      "API_TIMEOUT_MS": "600000"
-    }
   }
 }

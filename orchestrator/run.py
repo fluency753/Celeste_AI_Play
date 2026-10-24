@@ -28,7 +28,8 @@ from pathlib import Path
 
 import uvicorn
 
-from .agent import ClaudeRunner, resume_prompt
+from .agent import ClaudeRunner
+from .prompting import resume_prompt
 from .config import (CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, load_api_key, load_dotenv,
                      load_provider)
 from .container import ensure_container
@@ -187,8 +188,6 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                                              else "explore" if cfg.engine == "codex" else "full")
     if previous and cfg.knowledge_profile != previous["state"].get("knowledge_profile", "full"):
         raise SystemExit("不能通过 --resume 改变知识范围；请新建准备会话，避免继承已有攻略知识")
-    if cfg.knowledge_profile == "explore" and cfg.engine != "codex":
-        raise SystemExit("新手探索模式目前只支持 --engine codex")
     if cfg.engine == "codex":
         cfg.provider = "codex"
         if not any(a == "--model" or a.startswith("--model=") for a in sys.argv) and not previous:
@@ -210,10 +209,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         raise SystemExit("新手探索不提供精确模拟器；需要原有速通模式时明确选择 --knowledge full")
     cfg.sim = args.sim
     cfg.sim_assist = (bool(previous["state"].get("sim_assist", False)) if previous else
-                      cfg.engine == "codex" and cfg.knowledge_profile == "explore" and cfg.runtime == 'container'
+                      cfg.knowledge_profile == "explore" and cfg.runtime == 'container'
                       and (cfg.sim_dir / 'celeste-sim').is_file()) if args.sim_assist is None else args.sim_assist
-    if cfg.sim_assist and (cfg.sim or cfg.engine != "codex" or cfg.runtime != "container"):
-        raise SystemExit("限额模拟辅助仅支持原生 GPT 容器模式，不能同时开放无限制 --sim")
+    if cfg.sim_assist and (cfg.sim or cfg.runtime != "container"):
+        raise SystemExit("限额模拟辅助仅支持容器模式，不能同时开放无限制 --sim")
     if cfg.sim_assist and not (cfg.sim_dir / "celeste-sim").is_file():
         raise SystemExit("限额模拟辅助需要 sim/dist/celeste-sim；可用 --no-sim-assist 关闭")
     cfg.pause_limit = bool(args.limit_planning) and not args.free_planning
@@ -340,7 +339,7 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
         client.close()
 
 
-def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | None = None) -> None:
+def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | None = None, session=None) -> None:
     """容器里的 PreToolUse 钩子（agent-container/celeste-gate.py）每次调用工具前 POST 到这里。
     实时展示时（live_remind_s 不为空）兼作解说更新计时器的提醒通道：思考状态累计满 live_remind_s 秒没有 narrate，
     回复里带上 context，钩子把它作为 additionalContext 交给 Claude Code，出现在这次工具结果旁边。"""
@@ -354,6 +353,9 @@ def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | No
         except ValueError:
             data = {}
         tool_name = str(data.get("tool_name") or "")
+        guard = getattr(session, 'control_guard', None)
+        if tool_name == 'Bash' and guard and (reason := guard()):
+            return JSONResponse({'decision': 'deny', 'reason': reason, 'context': ''})
         allow, reason = await gate.decide(tool_name, data.get("tool_use_id"))
         context = ""
         if allow and live_remind_s and metrics is not None:
@@ -576,9 +578,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         resumed_session = prepared["session_id"]
     session_id = resumed_session or str(uuid.uuid4())
     if args.no_agent:
-        chat_thread = os.environ.get("CODEX_THREAD_ID")
-        metrics.update(telemetry_source="codex_session" if chat_thread else "external",
-                       chat_thread_id=chat_thread)
+        metrics.update(telemetry_source="external", chat_thread_id=None)
     write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous)
     if args.prepared:
         try:
@@ -621,7 +621,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
     server = build_server(session, study, gate)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
-    add_gate_route(app, gate, metrics, cfg.live_remind_s if cfg.live and cfg.runtime == "container" else None)
+    add_gate_route(app, gate, metrics, cfg.live_remind_s if cfg.live and cfg.runtime == "container" else None,
+                   session=session)
     web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
     web_task = asyncio.create_task(web.serve())
     while not web.started:
@@ -660,7 +661,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             else:
                 runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", container, study,
                                       session_id=session_id, resume=resumed_session is not None, resume_note=note,
-                                      gate=gate, playback=playback if playback.collect else None)
+                                      gate=gate, playback=playback if playback.collect else None,
+                                      start_paused=args.start_paused)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()
@@ -720,6 +722,8 @@ def main() -> int:
     previous = args.previous
     if not port_free(cfg.mcp_port):
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
+    from .bridge_requirements import preflight_bridge
+    preflight_bridge(cfg.bridge_port)
     token = None if args.no_agent or cfg.engine == "codex" else load_token(cfg)
     run_dir = make_run_dir(cfg.agent)
     print(f"[run] 日志目录：{run_dir}", flush=True)

@@ -21,7 +21,6 @@ from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .codex_session import apply_session
 from .history import read_history
 from .layout import Layout
 from .typography import load_font
@@ -87,7 +86,7 @@ def read_metrics(run_dir: Path | None) -> dict | None:
         return None   # 文件正在被替换的瞬间读不到：页面保留上一帧
 
 
-def make_handler(pinned: Path | None, chat_thread: str | None = None):
+def make_handler(pinned: Path | None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # 安静运行
             pass
@@ -147,9 +146,7 @@ def make_handler(pinned: Path | None, chat_thread: str | None = None):
             elif path == "/hud/state":
                 run_dir = current_run(pinned)
                 metrics = read_metrics(run_dir)
-                if metrics and chat_thread and metrics.get("telemetry_source") != "codex_app_server":
-                    metrics = {**metrics, "telemetry_source": "codex_session", "chat_thread_id": chat_thread}
-                metrics, config = apply_session(metrics, load_config())
+                config = load_config()
                 payload = {"now": time.time(), "config": config, "metrics": metrics,
                            "run": str(run_dir) if run_dir else None}
                 self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -255,12 +252,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--run", help="固定显示某一次运行的目录（默认跟随 runs/latest.txt）")
-    ap.add_argument("--codex-thread", help="只读接入指定 Codex 聊天的遥测，不改写游戏统计")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     pinned = Path(args.run).resolve() if args.run else None
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(pinned, args.codex_thread))
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(pinned))
     print(f"HUD：http://127.0.0.1:{args.port}/hud（Ctrl+C 结束）", flush=True)
     try:
         server.serve_forever()

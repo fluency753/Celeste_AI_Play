@@ -44,24 +44,28 @@ class SaveCatalogTests(unittest.TestCase):
 
 
 class SaveMenuTests(unittest.TestCase):
+    def test_old_bridge_is_rejected_before_game_activation(self):
+        client = Mock()
+        client.call.return_value = {'create_save': False}
+        with self.assertRaisesRegex(RuntimeError, '0.12.4'):
+            enter_save(client, 'test', chapter=0, create_if_missing=True)
+        client.call.assert_called_once_with('hello')
+
+    def test_farewell_id_matches_shared_chapter_catalog(self):
+        from tools.enter_save import area_id
+        from orchestrator.config import CHAPTER_SIDS
+        for ident, sid in CHAPTER_SIDS.items():
+            self.assertEqual(area_id(sid), ident)
     def menu(self):
         return {'scene':'Overworld','menu':{'current':'OuiFileSelect','slotSelected':True,
             'slotIndex':1,'buttonIndex':0,'slots':[{'index':0,'name':'test','exists':True},
             {'index':1,'name':'Madeline','exists':False}]}}
 
-    def test_new_slot_is_named_then_started_through_normal_menu(self):
-        obs=self.menu();named=copy.deepcopy(obs);named['menu']['slots'][1]['name']='小雪'
-        client=Mock();client.call.return_value={'obs':named}
-        self.assertEqual(handle_file_select(client,obs,'小雪',new_slot=1),named)
-        self.assertEqual(client.call.call_args.args,('name_new_save',))
-        with patch('tools.enter_save.press',return_value={'obs':{'scene':'IntroVignette'}}) as press:
-            handle_file_select(client,named,'小雪',new_slot=1)
-        self.assertEqual(press.call_args.args,(client,'C'))
 
     def test_create_flow_enters_new_save_without_renaming_old_slot(self):
         obs=self.menu();named=copy.deepcopy(obs);named['menu']['slots'][1]['name']='小雪'
         level={'scene':'Level','save':{'name':'小雪','slot':1},'level':{'sid':'Celeste/0-Intro'},'controllable':True}
-        client=Mock();client.call.side_effect=[{'obs':obs},{},{'obs':named}]
+        client=Mock();client.call.side_effect=[{'create_save':True},{'obs':obs},{'slot':1},{'obs':level}]
         with patch('tools.enter_save.press',return_value={'obs':level}):
             self.assertEqual(enter_save(client,'小雪',chapter=0,create_if_missing=True),level)
         self.assertEqual(obs['menu']['slots'][0]['name'],'test')
@@ -69,10 +73,10 @@ class SaveMenuTests(unittest.TestCase):
     def test_new_same_name_uses_empty_slot_instead_of_existing_save(self):
         obs=self.menu();named=copy.deepcopy(obs);named['menu']['slots'][1]['name']='test'
         level={'scene':'Level','save':{'name':'test','slot':1},'level':{'sid':'Celeste/0-Intro'},'controllable':True}
-        client=Mock();client.call.side_effect=[{'obs':obs},{},{'obs':named}]
+        client=Mock();client.call.side_effect=[{'create_save':True},{'obs':obs},{'slot':1},{'obs':level}]
         with patch('tools.enter_save.press',return_value={'obs':level}):
             self.assertEqual(enter_save(client,'test',chapter=0,create_if_missing=True),level)
-        self.assertEqual(client.call.call_args.args,('name_new_save',))
+        self.assertEqual(client.call.call_args_list[2].args,('create_save',))
 
     def test_existing_same_name_menu_uses_exact_slot(self):
         obs=self.menu();obs['menu']['slots'][1].update(name='test',exists=True)
@@ -85,7 +89,7 @@ class SaveMenuTests(unittest.TestCase):
     def test_native_creation_is_one_action_without_cursor_or_keyboard_steps(self):
         menu=self.menu()
         level={'scene':'Level','save':{'name':'test','slot':11},'level':{'sid':'Celeste/0-Intro'},'controllable':True}
-        client=Mock();client.call.side_effect=[{'obs':menu},{'create_save':True},
+        client=Mock();client.call.side_effect=[{'create_save':True},{'obs':menu},
                                               {'slot':11,'name':'test','started':True,'persisted':False},{'obs':level}]
         with patch('tools.enter_save.press') as press,patch('tools.enter_save.handle_file_select') as select:
             result=enter_save(client,'test',chapter=0,create_if_missing=True)
@@ -97,13 +101,13 @@ class SaveMenuTests(unittest.TestCase):
     def test_native_creation_runs_once_while_waiting_for_transition(self):
         menu=self.menu()
         level={'scene':'Level','save':{'name':'same','slot':1},'level':{'sid':'Celeste/0-Intro'},'controllable':True}
-        client=Mock();client.call.side_effect=[{'obs':menu},{'create_save':True},
+        client=Mock();client.call.side_effect=[{'create_save':True},{'obs':menu},
                                               {'slot':1,'name':'same','started':True},{'obs':menu},{'obs':level}]
         self.assertEqual(enter_save(client,'same',chapter=0,create_if_missing=True),level)
         self.assertEqual(sum(call.args==('create_save',) for call in client.call.call_args_list),1)
 
     def test_native_creation_failure_never_falls_back_to_keyboard_creation(self):
-        client=Mock();client.call.side_effect=[{'obs':self.menu()},{'create_save':True},RuntimeError('disk slot occupied')]
+        client=Mock();client.call.side_effect=[{'create_save':True},{'obs':self.menu()},RuntimeError('disk slot occupied')]
         with patch('tools.enter_save.handle_file_select') as select,self.assertRaisesRegex(RuntimeError,'occupied'):
             enter_save(client,'same',chapter=0,create_if_missing=True)
         select.assert_not_called()
@@ -112,7 +116,7 @@ class SaveMenuTests(unittest.TestCase):
         old={'scene':'Level','save':{'name':'test','slot':0},'level':{'sid':'Celeste/0-Intro'},'controllable':True}
         menu=self.menu();named=copy.deepcopy(menu);named['menu']['slots'][1]['name']='test'
         new=copy.deepcopy(old);new['save']['slot']=1
-        client=Mock();client.call.side_effect=[{'obs':old},{},{'obs':named}]
+        client=Mock();client.call.side_effect=[{'create_save':True},{'obs':old},{'slot':1},{'obs':new}]
         with patch('tools.enter_save.leave_level_by_pause_menu',return_value=menu) as leave, \
              patch('tools.enter_save.press',return_value={'obs':new}):
             self.assertEqual(enter_save(client,'test',chapter=0,create_if_missing=True)['save']['slot'],1)
@@ -128,12 +132,6 @@ class SaveMenuTests(unittest.TestCase):
              self.assertRaisesRegex(RuntimeError,'槽位'):
             session.connect()
 
-    def test_slot_changed_to_an_existing_save_aborts_without_input(self):
-        obs=self.menu();obs['menu']['slots'][1].update(exists=True,name='other')
-        client=Mock()
-        with self.assertRaisesRegex(RuntimeError,'槽位'):
-            handle_file_select(client,obs,'小雪',new_slot=1)
-        client.call.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

@@ -14,10 +14,10 @@ narrate 更新观众看到的公开解说，不推进游戏；公开 commentary 
 有判断就及时说明，目标每 5–10 秒有一次有内容的更新，不编造进展。
 set_effort 可以申请调整下一轮推理强度；申请后简短结束本轮让其生效。
 用户要求退出关卡时，调用 exit_level(reason="简短说明")，它会保存退出并结束本次试玩；不算通关，也不进入下一章。
-不要因为遇到困难自行退出。旧会话没有此工具时，可用 celeste_bash 的专用命令 game exit。
+不要因为遇到困难自行退出。
 
-celeste_read 读取 /kb 和 /workspace 的文件；celeste_write 只写 /workspace。
-celeste_bash 在断网沙箱运行辅助程序，直播时最多 15 秒。可以整理观测、保存笔记、绘图；
+Read 读取 /kb 和 /workspace 的文件；Write 只写 /workspace。
+Bash 在断网沙箱运行辅助程序，直播时最多 15 秒；实际工具名和前缀以执行器提供的映射为准。可以整理观测、保存笔记、绘图；
 不要编写物理模拟器或大规模路线搜索代替实际试错，不要为准备工具长时间停止游戏尝试。
 /workspace/game/latest_obs.json 是最新观测，last_act.json 是上次动作的轨迹。
 /workspace/game/show.py 提供 status("进度") 和 trajectory() 展示接口；有实际预测轨迹时可以展示。
@@ -29,5 +29,5 @@ celeste_bash 在断网沙箱运行辅助程序，直播时最多 15 秒。可以
 cutscene(action="wait",frames=60) 等待播放；advance 推进一页；choose(choice=index) 选择可见选项；skip 尝试跳过整段。
 frames必须是1～180的整数；长动画分段wait，每次观察返回状态再决定后续操作。
 剧情中的教学或互动若需要方向、跳跃、冲刺等真实按键，仍可调用act；不能只等待或把教学输入当普通翻页。
-遇到对话选项时必须明确 choose；advance 不会代选。旧会话可用 celeste_bash 的 game story 后跟相同参数 JSON。
+遇到对话选项时必须明确 choose；advance 不会代选。
 只完成本次指定章节；主控报告全部完成后结束，不能自行进入下一章。

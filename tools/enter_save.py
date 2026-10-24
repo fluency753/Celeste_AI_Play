@@ -29,6 +29,8 @@ def press(c: BridgeClient, key: str, settle: int = 12) -> dict:
 
 def area_id(sid: str | None) -> int | None:
     """官方章节的编号：Celeste/0-Intro → 0，Celeste/1-ForsakenCity → 1。"""
+    if sid == "Celeste/LostLevels":
+        return 10
     try:
         return int(str(sid).split("/", 1)[1].split("-", 1)[0])
     except (IndexError, ValueError):
@@ -41,12 +43,12 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
     """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。
     也可以从通关之后接着用：结算画面、回到地图、选下一章、进入，一路处理到可操作的第一帧。
     menu_speed：等待菜单切换与载入时每次渲染推进几帧（开跑前用 4 省时间；正式运行中途换章时用 1，录像不快进）。"""
+    if create_if_missing and not c.call("hello").get("create_save"):
+        raise RuntimeError("新建存档需要 CelesteAIBridge 0.12.4 或更新版本，请更新桥接 Mod。")
     obs = c.call("activate", entities=False, tiles=False)["obs"]
-    direct_creation = create_if_missing and bool(c.call('hello').get('create_save'))
     native_started = False
     tried_skip: set[str] = set()
     vignette_tries = 0
-    new_slot = None
     selected_save_slot = save_slot
     for _ in range(max_actions):
         if should_stop is not None and should_stop():
@@ -56,7 +58,7 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
         loaded = (obs.get("save") or {}).get("name")
         wrong_save = loaded is not None and loaded != save_name  # 游戏里当前载入的是别的存档
         wrong_save = wrong_save or (selected_save_slot is not None and (obs.get('save') or {}).get('slot') != selected_save_slot)
-        if create_if_missing and new_slot is None and not native_started:
+        if create_if_missing and not native_started:
             wrong_save = True  # 同名的已加载存档也不能代替显式新建
         if cutscene_mode == 'agent' and not wrong_save and story_pending(obs):
             if scene != 'Level' or chapter is None or area_id((obs.get('level') or {}).get('sid')) == chapter:
@@ -115,20 +117,13 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
             if native_started:
                 obs = step(c, ['10'], speed=menu_speed)['obs']
                 continue
-            if direct_creation:
+            if create_if_missing:
                 created = c.call('create_save', name=save_name)
                 selected_save_slot = created['slot']
                 native_started = True
                 obs = c.call('observe', **QUIET)['obs']
                 continue
-            if create_if_missing and new_slot is None:
-                slots = menu['slots']
-                empty = next((slot for slot in slots if not slot['exists']), None)
-                if empty is None:
-                    raise RuntimeError('没有可用的空存档槽位，请先在游戏中处理')
-                new_slot = empty['index']
-                selected_save_slot = empty.get('fileSlot', empty['index'])
-            obs = handle_file_select(c, obs, save_name, new_slot=new_slot, save_slot=save_slot)
+            obs = handle_file_select(c, obs, save_name, save_slot=save_slot)
         else:
             obs = step(c, ["10"])["obs"]
     raise RuntimeError(f"未能在 {max_actions} 步内进入存档 {save_name}：\n{summarize_obs(obs)}")
@@ -177,28 +172,18 @@ def to_file_select(c: BridgeClient, max_actions: int = 120, menu_speed: int = 4)
     raise RuntimeError(f"未能在 {max_actions} 步内退回选档页：\n{summarize_obs(obs)}")
 
 
-def handle_file_select(c: BridgeClient, obs: dict, save_name: str, *, new_slot: int | None = None,
-                       save_slot: int | None = None) -> dict:
+def handle_file_select(c: BridgeClient, obs: dict, save_name: str, *, save_slot: int | None = None) -> dict:
     menu = obs["menu"]
     targets = [s["index"] for s in menu["slots"] if s["exists"] and s["name"] == save_name
                and (save_slot is None or s.get('fileSlot',s['index']) == save_slot)]
-    if new_slot is None and len(targets) != 1:
+    if len(targets) != 1:
         raise RuntimeError(f"选档页里找不到名为 {save_name} 的存档")
-    target = targets[0] if new_slot is None else new_slot
-    selected = next((slot for slot in menu['slots'] if slot['index'] == target), None)
-    if selected is None or (new_slot is not None and selected['exists'] and selected['name'] != save_name):
-        raise RuntimeError('新存档槽位已发生变化，拒绝进入其他存档')
-
+    target = targets[0]
     if menu["slotSelected"]:
         if menu["slotIndex"] != target:
             return press(c, "B", settle=20)["obs"]  # 选错了槽位，退回
         if menu.get("buttonIndex", 0) != 0:
             return press(c, "U")["obs"]  # 回到第一个按钮（继续/开始）
-        if new_slot is not None and not selected['exists']:
-            if selected.get('startingGame'):
-                return step(c, ['10'])['obs']
-            if selected['name'] != save_name:
-                return c.call('name_new_save', name=save_name, **QUIET)['obs']
         return press(c, "C", settle=30)["obs"]
 
     diff = target - menu["slotIndex"]

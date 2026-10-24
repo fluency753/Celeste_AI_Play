@@ -8,11 +8,12 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from .agent import compose_prompt
+from .prompting import play_prompt
 from .codex_rpc import CodexRPC
 from .codex_workspace import workspace_call
-from .control import RunControl
+from .session_controls import RuntimeCapabilities, SessionControls
 from .sandbox import run_program
+from .telemetry import public_event
 
 
 def spec(name, description, properties, required=()):
@@ -24,24 +25,13 @@ def spec(name, description, properties, required=()):
 TEXT = {"type": "string"}
 
 
-def public_event(value):
-    if isinstance(value, dict):
-        if str(value.get("type", "")).lower() == "reasoning":
-            return {k: value[k] for k in ("type", "id") if k in value}
-        return {k: ("<image omitted>" if k == "imageUrl" and str(v).startswith("data:") else public_event(v))
-                for k, v in value.items()}
-    if isinstance(value, list):
-        return [public_event(v) for v in value]
-    return value
+class CodexRunner(SessionControls):
+    capabilities = RuntimeCapabilities(fast=True, live_steering=True)
 
-
-class CodexRunner:
     def __init__(self, cfg, run_dir, session, metrics, container, study=None, *, game_server=None,
                  session_id=None, resume=False, resume_note=None, gate=None, playback=None,
                  prepare_only=False, start_paused=False, chat_only=False, naming_only=False):
         self.cfg, self.run_dir, self.session, self.metrics = cfg, run_dir, session, metrics
-        if self.metrics.state.tool_calls is None:
-            self.metrics.update(tool_calls=0)
         self.container, self.study, self.game_server = container, study, game_server
         self.session_id, self.resume, self.resume_note = session_id, resume, resume_note
         self.gate, self.playback, self.prepare_only = gate, playback, prepare_only
@@ -58,18 +48,7 @@ class CodexRunner:
         self.rpc = CodexRPC(run_dir / "codex-control", self._event, self._request)
         self._events = None
         self._last_public = 0.0
-        self.control = None if prepare_only else RunControl(run_dir)
-        self.fast_mode = self.control.fast_preference() if self.control else None
-        self.manual_effort = self.control.effort_preference() if self.control else None
-        self.turn_fast = None
-        self.stop_requested = False
-        self.goal_finishing = False
-        self.paused, self.turn_active, self.user_interrupted = start_paused or chat_only, False, False
-        self.pending_messages = []
-        self.action_lock = asyncio.Lock()
-        self.pause_at, self.paused_seconds = None, 0.0
-        self.control_task = None
-        self.heartbeat_task, self.pausing = None, False
+        self._init_controls(disabled=prepare_only, start_paused=start_paused)
 
     async def tool_specs(self):
         tools = [spec("celeste_read", "Read：读取容器内 UTF-8 文件。知识库阅读只按实际返回的完整行计入。",
@@ -119,10 +98,11 @@ class CodexRunner:
                 self._last_public = time.monotonic()
         elif method in ("item/started", "item/completed"):
             if method == "item/completed" and item.get("type") == "agentMessage" and self.control:
-                self.control.reply(item.get("id", "reply"), item.get("text", ""))
+                self._public_message(item.get("id", "reply"), item.get("text", ""))
                 if self.naming_only:
                     self.naming_reply = item.get('text', '')
             if item.get("type") == "contextCompaction":
+                self._public_compaction(item.get("id"), completed=method == "item/completed")
                 if method == "item/started":
                     self.metrics.update(status="compacting")
                 elif item.get("id") not in self.compacted:
@@ -155,17 +135,17 @@ class CodexRunner:
         ident = params.get("callId") or name
         self.called_tools.append(name)
         self.metrics.add(tool_calls=1)
-        game = name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_narrate", "celeste_exit_level", "celeste_cutscene")
+        game = name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_narrate", "celeste_exit_level", "celeste_cutscene", "celeste_simulate")
         detail = args.get("description") or args.get("path") or ""
         self.metrics.tool_begin(ident, game_tool=game, label=name + (" · " + detail if detail else ""))
         try:
             if name == 'celeste_set_effort' and self.manual_effort is not None:
                 raise ValueError(f'用户已手动固定推理强度为 {self.manual_effort}，请保留用户设置；恢复自动后才可自行调整。')
-            if self.session is not None and hasattr(self.session, "goals") and self.session.goals.stop_motion.is_set() and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene"}:
+            if self.session is not None and hasattr(self.session, "goals") and self.session.goals.stop_motion.is_set() and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("停止目标已触发，正在保存录像，请结束本轮。")
-            if self.chat_only and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene"}:
+            if self.chat_only and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("本次试玩已经结束，当前只提供聊天，不连接或操作游戏。")
-            if self.paused and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene"}:
+            if self.paused and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("用户已暂停试玩。请只回复用户，不推进游戏或运行规划；结束本轮并等待继续。")
             if self.gate and self.gate.enabled:
                 # app-server 的动态调用没有 Claude 消息 ID；每次调用独立记一轮。
@@ -188,40 +168,11 @@ class CodexRunner:
                 if self.playback:
                     self.playback.note_tool_use(ident, ident, "Bash", args)
                 command = args["command"].strip()
-                if command == 'game exit' or command.startswith('game story '):
-                    if self.prepare_only or self.session is None or self.game_server is None:
-                        raise ValueError('当前未在试玩，不能退出关卡')
-                    if self.study and not self.study.complete():
-                        raise ValueError(self.study.reminder())
-                    async with self.action_lock:
-                        if self.paused:
-                            raise ValueError('用户已暂停试玩，不能退出关卡')
-                        result = await self.game_server.call_tool('cutscene', json.loads(command[len('game story '):])) if command.startswith('game story ') else await self.game_server.call_tool('exit_level', {'reason':args.get('description') or '按用户要求退出关卡'})
-                    if result.is_error:
-                        raise ValueError(('剧情动作失败：' if command.startswith('game story ') else '退出关卡失败：') + str(result.content))
-                    return self._game_response(result)
-                elif command == "simulate" or command.startswith("simulate "):
-                    if self.prepare_only or self.session is None or not getattr(self.session, "sim_energy", None):
-                        raise ValueError("限额模拟辅助尚未开启；准备阶段不可预测游戏")
-                    if self.study and not self.study.complete():
-                        raise ValueError(self.study.reminder())
-                    payload = command[len("simulate"):].strip()
-                    if payload == "status":
-                        result = self.session.sim_energy.snapshot()
-                    else:
-                        if payload.startswith("'") and payload.endswith("'"):
-                            payload = payload[1:-1]
-                        async with self.action_lock:
-                            if self.paused:
-                                raise ValueError("用户已暂停试玩，不能运行模拟")
-                            result = await asyncio.to_thread(self.session.simulate, json.loads(payload))
-                    text = json.dumps(result, ensure_ascii=False)
-                else:
-                    limit = min(float(args.get("timeout_s", 10)), 15 if self.cfg.live else 60)
-                    result = await asyncio.to_thread(run_program, self.container, command, limit)
-                    text = json.dumps({"returncode": result.returncode, "stdout": result.stdout,
-                                       "stderr": result.stderr, "seconds": round(result.seconds, 2),
-                                       "timed_out": result.timed_out}, ensure_ascii=False)
+                limit = min(float(args.get("timeout_s", 10)), 15 if self.cfg.live else 60)
+                result = await asyncio.to_thread(run_program, self.container, command, limit)
+                text = json.dumps({"returncode": result.returncode, "stdout": result.stdout,
+                                   "stderr": result.stderr, "seconds": round(result.seconds, 2),
+                                   "timed_out": result.timed_out}, ensure_ascii=False)
             elif name == "celeste_narrate" and self.game_server is None:
                 self.metrics.set_thought(str(args.get("thought", ""))[:120])
                 self.metrics.add(narrates=1)
@@ -231,12 +182,12 @@ class CodexRunner:
                 if self.study is None or not self.study.complete():
                     raise ValueError(self.study.reminder() if self.study else "没有准备阶段")
                 text = "全部知识库已读完；结束本次准备，不启动游戏。"
-            elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene") and self.prepare_only:
+            elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate") and self.prepare_only:
                 raise ValueError("本次只做知识库准备，不开放游戏操作，不会进入关卡。")
             elif game and self.game_server is not None and not self.prepare_only:
                 if name in ("celeste_act", "celeste_observe") and self.study and not self.study.complete():
                     raise ValueError(self.study.reminder())
-                if name in {"celeste_act", "celeste_observe", "celeste_exit_level", "celeste_cutscene"}:
+                if name in {"celeste_act", "celeste_observe", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                     async with self.action_lock:
                         if self.paused:
                             raise ValueError("用户已暂停试玩，不能执行游戏动作")
@@ -274,134 +225,18 @@ class CodexRunner:
         now = time.monotonic()
         return now - started - self.paused_seconds - (now - self.pause_at if self.pause_at else 0)
 
+    async def _steer_user(self, text):
+        await self.rpc.request("turn/steer", {"threadId": self.session_id,
+            "expectedTurnId": self.turn_id, "input": [{"type": "text", "text": text}]})
+
+    async def _validate_effort(self, value):
+        from .model_catalog import resolve_selection
+        await asyncio.to_thread(resolve_selection, self.metrics.state.model, value)
+
     async def _interrupt_user(self):
         if self.turn_active and self.turn_id and not self.turn_done.is_set():
             self.user_interrupted = True
             await self.rpc.request("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id})
-
-    async def _heartbeat(self):
-        while True:
-            self.control.heartbeat(paused=self.paused and not self.pausing,
-                phase="pausing" if self.pausing else "chatting" if self.turn_active else "idle",
-                session_id=self.session_id, chat_only=self.chat_only,
-                fast=self.fast_mode, fast_pending=self.turn_active and self.turn_fast != self.fast_mode,
-                **self._effort_status(), **self._goal_status(), **self._cutscene_status())
-            await asyncio.sleep(.5)
-
-    async def _controls(self):
-        try:
-            while True:
-                await self._check_goal()
-                for row in self.control.pending():
-                    try:
-                        if row["kind"] in {"goal", "goal_clear", "stop"}:
-                            if self.session is None or self.session.done:
-                                raise ValueError("当前未在试玩，不能修改停止目标")
-                            if row["kind"] == "stop":
-                                self.session.goals.stop_now()
-                                await self._check_goal()
-                                self.control.mark(row["id"], "submitted", "已停止游戏，正在保存录像")
-                            else:
-                                if row["kind"] == "goal_clear":
-                                    self.session.goals.clear()
-                                    note = "用户已清除自定义目标及停止条件，撤回先前自定义要求；保留主控最初指定的章节范围。"
-                                else:
-                                    goal = json.loads(row["text"])
-                                    self.session.goals.set(goal, self.session.goal_values())
-                                    note = "用户更新了目标：" + goal.get("text", "") + "。停止条件由主控核验；不要自行进入未指定章节。"
-                                await self._check_goal()
-                                if not self.session.done:
-                                    self.pending_messages.append({**row, "text": note})
-                                    self.control.mark(row["id"], "waiting", "目标已生效，正在通知 agent")
-                                else:
-                                    self.control.mark(row["id"], "submitted", "目标条件已满足，正在保存录像")
-                        elif row["kind"] == "message":
-                            self.pending_messages.append(row)
-                            self.control.mark(row["id"], "waiting", "等待提交给当前会话")
-                        elif row["kind"] == "detach":
-                            if not self.chat_only:
-                                raise ValueError("试玩期间不能切走会话")
-                            self.stop_requested = True
-                            await self._interrupt_user()
-                            self.control.mark(row["id"], "submitted", "聊天会话已释放")
-                        elif row["kind"] == "fast":
-                            self.fast_mode = row["text"] == "on"
-                            self.control.set_fast(self.fast_mode)
-                            self.control.mark(row["id"], "submitted", "Fast 设置已保存，下一轮生效")
-                        elif row['kind']=='cutscene_mode':
-                            self.cfg.cutscene_mode=row['text']
-                            self.control.set_cutscene_mode(row['text'])
-                            self.control.mark(row['id'],'submitted','剧情模式已更新，当前菜单操作完成后生效')
-                            if self.session is not None:
-                                self.session.cfg.cutscene_mode=row['text']
-                                self.pending_messages.append({**row,'text':'用户将剧情处理切换为 '+row['text']+'。agent模式下自行决定观看、推进、选择选项或跳过；不得用advance代选对话选项。'})
-                        elif row['kind'] == 'effort':
-                            value=None if row['text']=='auto' else row['text']
-                            if value is not None:
-                                from .model_catalog import resolve_selection
-                                await asyncio.to_thread(resolve_selection,self.metrics.state.model,value)
-                            self.manual_effort=value
-                            self.control.set_effort(value)
-                            self.metrics.request_effort(value if value != self.metrics.state.effort else None,
-                                                        '用户在 HUD 手动切换推理强度')
-                            self.control.mark(row['id'],'submitted','已恢复自动调整' if value is None else f'已固定为 {value}，下一轮生效')
-                            if self.turn_active and self.turn_id and not self.turn_done.is_set():
-                                note=(f'用户已手动固定推理强度为 {value}。当前工具或动作完成后，请简短结束本轮，系统将按新档位自动继续。不要因此暂停或结束试玩。'
-                                      if value else '用户已恢复自动推理强度，你可以按需调整；之前的手动固定要求已撤回。')
-                                self.pending_messages.append({**row,'text':note})
-                        elif row["kind"] == "pause":
-                            self.paused = True
-                            self.pausing = True
-                            self.control.heartbeat(paused=False, phase="pausing", session_id=self.session_id)
-                            await self._interrupt_user()
-                            async with self.action_lock:
-                                if self.pause_at is None:
-                                    self.pause_at = time.monotonic()
-                                    self.metrics.pause()
-                                self.metrics.update(status="paused")
-                            self.control.mark(row["id"], "submitted", "当前动作已结束，试玩已暂停")
-                        elif row["kind"] == "resume":
-                            if self.chat_only:
-                                raise ValueError("本次试玩已经完成。当前只能聊天，开始新试玩需要另行指定目标。")
-                            if self.pause_at is not None:
-                                self.paused_seconds += time.monotonic() - self.pause_at
-                                self.pause_at = None
-                                self.metrics.resume(quota=False)
-                            self.paused = False
-                            self.control.mark(row["id"], "submitted", "已继续试玩")
-                    except Exception as exc:
-                        self.control.mark(row["id"], "error", str(exc))
-                    finally:
-                        if row["kind"] == "pause":
-                            self.pausing = False
-                if self.turn_active and self.turn_id and not self.turn_done.is_set():
-                    for row in list(self.pending_messages):
-                        if row.get("attempted_turn") == self.turn_id:
-                            continue
-                        row["attempted_turn"] = self.turn_id
-                        # 提交期间先移出待启动队列，避免轮次结束时被重复带入下一轮。
-                        self.pending_messages.remove(row)
-                        try:
-                            text = row["text"] + ("\n（试玩仍处于用户暂停状态。只回复，不调用游戏操作，回复后结束本轮。）" if self.paused else "")
-                            await self.rpc.request("turn/steer", {"threadId": self.session_id,
-                                "expectedTurnId": self.turn_id, "input": [{"type": "text", "text": text}]})
-                            self.control.mark(row["id"], "submitted", "已提交给当前 agent 会话")
-                        except Exception:
-                            self.pending_messages.append(row)
-                            # 当前轮次刚结束或暂不能追加输入：下一轮带入，不丢消息。
-                            self.control.mark(row["id"], "waiting", "等待下一轮提交")
-                            await self._interrupt_user()
-                self.control.heartbeat(paused=self.paused, phase="chatting" if self.turn_active else "idle",
-                    session_id=self.session_id, chat_only=self.chat_only,
-                    fast=self.fast_mode, fast_pending=self.turn_active and self.turn_fast != self.fast_mode,
-                    **self._effort_status(), **self._goal_status(), **self._cutscene_status())
-                await asyncio.sleep(.1)
-        except asyncio.CancelledError:
-            raise
-
-    def _effort_status(self):
-        return {'effort_control':True,'effort':self.metrics.state.effort,
-                'effort_pending':self.metrics.state.effort_pending,'effort_manual':self.manual_effort}
 
     def _record_turn_effort(self, effort, pending):
         queued=self.metrics.state.effort_pending
@@ -410,25 +245,6 @@ class CodexRunner:
         next_effort=self.manual_effort or (queued if queued != effort else None)
         if next_effort and next_effort != effort:
             self.metrics.request_effort(next_effort,'用户设置等待下一轮生效')
-
-    def _cutscene_status(self):
-        return {'cutscene_control':True,'cutscene_mode':self.control.cutscene_preference() or self.cfg.cutscene_mode}
-
-    def _goal_status(self):
-        if self.session is None or not hasattr(self.session, "goals"):
-            return {"goals_enabled": False, "goal": None}
-        return {"goals_enabled": not self.session.done and not self.goal_finishing,
-                "goal": self.session.goals.snapshot()}
-
-    async def _check_goal(self):
-        if self.session is None or not hasattr(self.session, "goals") or self.goal_finishing:
-            return
-        if self.session.goals.check(self.session.goal_values()):
-            self.goal_finishing = True
-            self.paused = True
-            await self._interrupt_user()
-            async with self.action_lock:
-                self.session.finish_user_stop()
 
     def _first_prompt(self):
         if self.study and not self.study.complete():
@@ -459,23 +275,36 @@ class CodexRunner:
             print("[codex] 原会话被其他客户端占用；已复制历史，独立续跑", flush=True)
             return result
 
+    def _validate_resumed_tools(self, thread):
+        # The protocol persists dynamic tools at thread/start and cannot replace
+        # them on resume. Inspect only this runner's returned session metadata.
+        path = thread.get('path')
+        if not path:
+            raise RuntimeError('恢复会话未返回工具登记信息，不能确认游戏接口；请新建准备会话。')
+        with Path(path).open(encoding='utf-8') as stream:
+            meta = json.loads(stream.readline())
+        names = {tool['name'] for tool in meta.get('payload', {}).get('dynamic_tools', [])}
+        required = {'celeste_observe', 'celeste_act', 'celeste_exit_level', 'celeste_cutscene'}
+        if self.cfg.sim_assist:
+            required.add('celeste_simulate')
+        missing = required - names
+        if missing:
+            raise RuntimeError('旧会话缺少正式游戏工具：' + ', '.join(sorted(missing))
+                               + '。请新建准备会话；仅缺模拟工具时也可关闭限额模拟辅助后重试。')
+
     async def run(self):
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self._events = (self.run_dir / "codex_events.jsonl").open("a", encoding="utf-8")
         self.metrics.update(telemetry_source="codex_app_server", chat_thread_id=None,
                             tool_calls=self.metrics.state.tool_calls or 0)
-        prompt = compose_prompt("container", self.cfg.sim, self.cfg.chapters, self.cfg.pause_limit,
-                                self.cfg.rounds_per_room, self.cfg.death_bonus, self.cfg.playback, self.cfg.live)
-        if self.cfg.knowledge_profile == "explore":
-            prompt = (Path(__file__).parent / "prompts/explore_zh.md").read_text(encoding="utf-8")
-            prompt += "\n本次指定章节：" + str(self.cfg.chapters) + "（未指定时由主控决定，不能自行扩展）。"
+        prompt = play_prompt(self.cfg).replace("调用 simulate 工具", "调用 celeste_simulate 工具")
         prompt += ("\n\n# 原生 Codex 工具映射\n"
                    "这里的 Read/Write/Bash 分别是 celeste_read/celeste_write/celeste_bash；"
                    "observe/act/narrate/set_effort 均加 celeste_ 前缀。Edit/Glob/Grep 用沙箱 Bash 完成。"
                    "所有自写程序都必须经 celeste_bash 在 Docker 中执行。不要调用任何宿主 shell、apply_patch、"
                    "MCP、浏览器或子智能体；宿主文件系统是只读的。"
                    "只输出给观众的简短公开解说，不输出内部推理正文。"
-                   "用户要求退出关卡时调用 celeste_exit_level；旧会话没有该工具时，可用 celeste_bash 执行专用命令 game exit。剧情可用 celeste_cutscene 选择wait/advance/choose/skip；旧会话可用 celeste_bash 执行 game story 后跟相同参数JSON。公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
+                   "用户要求退出关卡时调用 celeste_exit_level；剧情可用 celeste_cutscene 选择wait/advance/choose/skip。公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
                    "每次操作后仍应立即公开说明下一步打算，不要持续静默。")
         prompt += f'\n当前剧情模式：{self.cfg.cutscene_mode}。auto由主控自动跳过，agent由你调用cutscene的wait/advance/choose/skip动作决定。遇到分支选项必须明确choose，不要盲目确认。'
         if self.chat_only:
@@ -483,9 +312,6 @@ class CodexRunner:
                         else "\n\n# 试玩结束后的聊天\n本次试玩已经结束。") +
                        "现在仅回答用户的消息、复盘试玩，可以读取原工作区笔记；"
                        "不调用游戏观察、动作或规划程序，不自行开始下一章。用户没有发消息时安静等待。")
-        elif self.cfg.sim_assist:
-            from .sim_assist import INSTRUCTIONS
-            prompt += INSTRUCTIONS
         (self.run_dir / ("chat_system_prompt.md" if self.chat_only else "system_prompt.md")).write_text(prompt, encoding="utf-8")
         started = time.monotonic()
         try:
@@ -500,6 +326,7 @@ class CodexRunner:
                 # thread/resume 使用持久化的动态工具；这里不传该版本协议没有的字段。
                 params.pop("dynamicTools", None)
                 result = await self._resume_thread(params)
+                self._validate_resumed_tools(result['thread'])
             else:
                 result = await self.rpc.request("thread/start", params)
             if result.get("sandbox", {}).get("type") != "readOnly":

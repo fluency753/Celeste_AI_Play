@@ -240,7 +240,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 43;
+const PAGE_VERSION = 44;
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -263,7 +263,7 @@ const STATUS = {
   done:      ["已完成", "idle", false],
   stopped:   ["已结束", "idle", false],
 };
-// 推理强度：Claude Code 的五档，显示英文档位名（configs/hud.json 的 effort_names 可覆盖）
+// 推理强度：显示执行器实际确认的档位，显示英文档位名（configs/hud.json 的 effort_names 可覆盖）
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 let state = null, config = null, offset = 0, shownThought = null;
 let historyRun = null, historySignature = "", historyReady = false, followHistory = true;
@@ -312,11 +312,13 @@ function tokens(n) {
   if (n >= 1e4) return Math.round(n / 1000) + "k";
   return (n / 1000).toFixed(1) + "k";
 }
+function telemetryLabel(m) {
+  return ({codex_app_server:'独立 Codex',claude_stream_json:'独立 Claude'})[m.telemetry_source] || '';
+}
 function displayName(m) {
-  if (m.chat) return m.chat.model || "当前聊天";
   const names = (config && config.names) || {};
-  if (m.telemetry_source === "codex_app_server") return names[m.model] || m.model || "独立 Codex";
-  return names[m.agent] || names[m.model] || m.agent || "—";
+  if (telemetryLabel(m)) return names[m.model] || m.model || '—';
+  return names[m.model] || names[m.agent] || m.model || m.agent || '—';
 }
 function applyColors() {
   const c = (config && config.colors) || {};
@@ -439,13 +441,12 @@ function render() {
   if (!state) { card.classList.add("hidden"); return; }
   card.classList.remove("hidden");
   const m = state, c = (config && config.colors) || {};
-  const chat = m.chat && m.chat.available ? m.chat : null;
-  const native = m.telemetry_source === "codex_app_server";
-  $("chatSourceBox").classList.toggle("hidden", !m.chat && !native);
-  $("chatCallsBox").classList.toggle("hidden", !m.chat && !native);
-  setText($("chatSource"), native ? "独立 Codex" : (chat ? "当前聊天" : "未连接"));
-  setText($("toolCountLabel"), native ? "工具调用" : "聊天工具调用");
-  setText($("chatCalls"), native ? `${m.tool_calls || 0} 次` : (chat ? `${chat.tool_calls} 次` : "—"));
+  const source = telemetryLabel(m);
+  $("chatSourceBox").classList.toggle("hidden", !source);
+  $("chatCallsBox").classList.toggle("hidden", !source);
+  setText($("chatSource"), source);
+  setText($("toolCountLabel"), "工具调用");
+  setText($("chatCalls"), m.tool_calls == null ? '—' : `${m.tool_calls} 次`);
   const now = Date.now() / 1000 + offset;
   // 规划回放与智能体的思考同时进行（回放画上一轮，智能体在想下一轮）：回放期间状态栏显示"规划回放"
   const replaying = !!m.replaying || m.status === "replaying";
@@ -512,12 +513,12 @@ function render() {
   if (counting && !ended && (m.status === "thinking" || m.status === "compacting") && m.thinking_since_wall > 0) {
     thinking += Math.max(0, now - m.thinking_since_wall);
   }
-  setText($("thinking"), m.chat && !chat ? "—" : clock(chat ? chat.thinking_s : thinking));
+  setText($("thinking"), clock(thinking));
   // 工具时间：容器里的 Bash、Read 等与游戏工具从调用到返回的时间（不含游戏推进）；运行工具时同样实时走表
   let tool = m.tool_s || 0;
   if (counting && !ended && m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
   if (m.status === "retrying" && m.phase_since_wall > 0) tool += Math.max(0, now - m.phase_since_wall);
-  setText($("tool"), m.chat && !chat ? "—" : clock(chat ? chat.tool_s : tool));
+  setText($("tool"), clock(tool));
 
   // 知识库读取：开局到知识库读完的用时（读完后不再走）；跳过准备阶段（--no-study）时显示"—"
   let study = m.study_s || 0;
@@ -527,10 +528,10 @@ function render() {
   studyEl.classList.toggle("dim", !(study > 0 || m.status === "studying"));
 
   const ctx = m.context_tokens || 0;
-  const limit = (chat && chat.context_window) || m.context_window || (config && config.compact_threshold) || 967000;
+  const limit = m.context_window || (config && config.compact_threshold) || null;
   setText($("ctx"), m.context_tokens == null ? "—" : tokens(ctx));
-  $("ctx").title = chat ? "最近一次请求的输入与输出 token；不是整条聊天的累计计费用量" : "";
-  $("ctx").classList.toggle("warn", ctx / limit >= 0.9);
+  $("ctx").title = limit ? `上下文窗口 ${tokens(limit)} token` : "执行器尚未提供上下文窗口大小";
+  $("ctx").classList.toggle("warn", !!limit && ctx / limit >= 0.9);
   setText($("compact"), m.compactions == null ? "—" : String(m.compactions));
 
   // 死亡次数
@@ -551,7 +552,7 @@ function render() {
 
   // 调用工具：智能体正在调用的工具与说明（Bash 用它写的 description，文件工具用路径）；没有在调用工具时显示"—"
   // 实时展示：正在运行的程序报告的进度跟在工具说明后面
-  const call = chat ? chat.tool_call : ((!ended && m.tool_call) ? (m.tool_status ? `${m.tool_call} — ${m.tool_status}` : m.tool_call) : "");
+  const call = (!ended && m.tool_call) ? (m.tool_status ? `${m.tool_call} — ${m.tool_status}` : m.tool_call) : "";
   const callEl = $("toolCall");
   if (callEl.textContent !== (call || "—")) {
     callEl.textContent = call || "—";
@@ -569,13 +570,12 @@ function render() {
 
   // 历史尚未就绪时，最新公开解说也使用同一气泡结构。
   if (!historyReady) {
-    const publicChat = chat && chat.commentary_wall > (m.thought_updated_wall || 0) ? chat.public_commentary : "";
-    const next = publicChat || (replaying && !m.live ? (m.replay_label || "") : (m.thought || ""));
+    const next = (replaying && !m.live ? (m.replay_label || "") : (m.thought || ""));
     if (next !== shownThought) {
       shownThought = next;
       const el = $("thought");
       el.replaceChildren(...(next ? [thoughtEntry({id: "latest", text: next,
-        wall: publicChat ? chat.commentary_wall : m.thought_updated_wall})] : []));
+        wall: m.thought_updated_wall})] : []));
       el.scrollTop = el.scrollHeight;
     }
   }
@@ -675,16 +675,17 @@ let modelCatalog={models:[]}, modelsLoading=false, modelCatalogError='';
 let liveEffortSignature='',changingEffort=false;
 function syncLiveEffort(data,busy) {
   const c=data.control,model=modelCatalog.models.find(item=>item.id===data.model);
-  const signature=JSON.stringify([data.model,model?.efforts]);
+  const efforts=c.effort_levels || model?.efforts || [];
+  const signature=JSON.stringify([data.model,efforts]);
   if(signature!==liveEffortSignature){
     liveEffortSignature=signature;
-    $('liveEffort').replaceChildren(...['auto',...(model?.efforts || [])].map(value=>{
+    $('liveEffort').replaceChildren(...['auto',...efforts].map(value=>{
       const option=document.createElement('option');option.value=value;option.textContent=value==='auto'?'推理：自动':`推理：${value}`;return option;
     }));
   }
   const pending=(c.actions || []).find(a=>a.kind==='effort' && a.status==='queued');
   $('liveEffort').value=pending?.text || c.effort_manual || 'auto';
-  $('liveEffort').disabled=!c.connected || !c.effort_control || !model || busy || !!pending || changingEffort;
+  $('liveEffort').disabled=!c.connected || !c.effort_control || !efforts.length || busy || !!pending || changingEffort;
   $('liveEffort').title=`当前：${c.effort || state?.effort || '—'}${c.effort_pending?` → ${c.effort_pending}（下轮生效）`:''}；选择档位会手动固定，选择自动恢复 agent 调整。`;
 }
 function updateModelEfforts() {
@@ -751,7 +752,8 @@ async function pollControl() {
     $('agentSend').disabled = !c.connected || sendingMessage;
     $('toggleFast').textContent = `Fast：${c.fast == null ? '—' : c.fast ? '开' : '关'}${c.fast_pending ? '（下轮）' : ''}`;
     $('toggleFast').setAttribute('aria-pressed', String(!!c.fast));
-    $('toggleFast').disabled = !c.connected || (c.actions || []).some(a => a.kind === 'fast' && a.status === 'queued');
+    $('toggleFast').hidden = !c.fast_control;
+    $('toggleFast').disabled = !c.connected || !c.fast_control || (c.actions || []).some(a => a.kind === 'fast' && a.status === 'queued');
     if (switchingSession) {
       $('controlStatus').textContent = '正在交接会话…';
       for (const id of ['togglePlay','toggleFast','agentSend']) $(id).disabled = true;

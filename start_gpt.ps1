@@ -9,7 +9,10 @@ param(
     [ValidateSet('low','medium','high','xhigh','max')][string]$Effort = 'medium',
     [int]$Chapter = 1,
     [string]$Chapters = '',
-    [string]$Save = 'test'
+    [string]$Save = '',
+    [Nullable[int]]$SaveSlot = $null,
+    [switch]$CreateSave,
+    [ValidateSet('chapter','campaign')][string]$Scope = 'chapter'
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
@@ -26,19 +29,20 @@ if (-not $Play) {
         & $py -X utf8 -m orchestrator.codex_prepared $Prepared --agent gpt-native --knowledge $Knowledge
         if ($LASTEXITCODE -ne 0) { throw '准备会话校验失败；游戏、HUD 和 OBS 未改动。' }
     }
-    # 只交接本仓库旧的独立 HUD 服务；桌面窗口和 OBS 继续使用相同地址。
-    $hudListener = Get-NetTCPConnection -State Listen -LocalPort 47790 -ErrorAction SilentlyContinue
-    foreach ($hudOwner in ($hudListener.OwningProcess | Select-Object -Unique)) {
-        $hudProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$hudOwner"
-        if ($hudProcess.CommandLine -like "*$PSScriptRoot*" -and
-            $hudProcess.CommandLine -match '\-m\s+overlay\.server\b' -and
-            $hudProcess.CommandLine -match '\-\-codex-thread\b') {
-            Stop-Process -Id $hudOwner
-        }
-    }
     $chapterArgs = if ($Chapters) { @('--chapters', $Chapters) } else { @('--chapter', $Chapter) }
-    $runArgs = @('--engine', 'codex', '--agent', 'gpt-native', '--save', $Save,
+    $runArgs = @('--engine', 'codex', '--agent', 'gpt-native',
                  '--keep-obs-open', '--playback', '--continuous-music')
+    if (-not $Resume) {
+        if (-not $Save.Trim()) { throw '请显式指定 -Save 玩家名；不再默认使用 test。' }
+        if ($CreateSave) {
+            if ($null -ne $SaveSlot) { throw '-CreateSave 不能同时指定 -SaveSlot。' }
+            $runArgs += @('--create-save')
+        } elseif ($null -eq $SaveSlot) { throw '使用已有存档时请显式指定 -SaveSlot 槽位编号。' }
+        $runArgs += @('--save', $Save, '--scope', $Scope)
+        if ($null -ne $SaveSlot) { $runArgs += @('--save-slot', $SaveSlot.ToString()) }
+    } elseif ($Save -or $CreateSave -or $null -ne $SaveSlot) {
+        throw '续跑使用原存档，不接受 -Save、-SaveSlot 或 -CreateSave。'
+    }
     if ($Resume) {
         $runArgs += @('--resume', $Resume)
         if ($PSBoundParameters.ContainsKey('Effort')) { $runArgs += @('--effort', $Effort) }

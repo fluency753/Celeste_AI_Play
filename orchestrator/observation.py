@@ -6,7 +6,6 @@ import io
 import json
 import math
 import re
-from collections import deque
 
 from PIL import Image as PILImage
 
