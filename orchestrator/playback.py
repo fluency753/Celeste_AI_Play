@@ -12,8 +12,8 @@
 
 挑哪些路线（select）：线条数随推演条数等比增长——每 playback_ratio 条（默认 100）推演画一条，至少 playback_min_tracks 条
 （默认 40；推演更少时全画），不设上限：
-1. 必选：金色的一条——这一轮往前走的出口里最快的（离起点不到 40 像素的出口多半是掉头回上一个房间，有别的出口时不算），
-   没有出口就取离最远终点最近的；出口路线按出口位置（32 像素一格）各留最快的一条，再补几条最快的；
+1. 必选：金色的一条——这一轮往前走的出口里最快的（离起点不到 40 像素的出口多半是掉头回上一个房间，不算）；
+   这一轮没有往前走的出口就没有金色路线；出口路线按出口位置（32 像素一格）各留最快的一条，再补几条最快的；
 2. 死亡按死亡地点（12 像素一格）归并，每个地点留一条离目标最近的，"差一点"的排在前面，最多占三分之一；
 3. 剩下的名额按路线形状（8 个点的摘要）做最远点采样：每次挑一条和已选的都最不像的；
 4. 按推演的先后出场，看起来像搜索一步步往前推进。
@@ -158,14 +158,15 @@ def select(log: LogIndex, k: int, ref: tuple[float, float] | None = None) -> lis
     if n == 0:
         return []
     if n <= k:
-        best = _best(log, ref)
+        best = _best(log)
         return [(i, KIND_BEST if i == best else _kind(log, i)) for i in range(n)]
     if ref is None:
         ref = tuple(_far_end(log))
     prog = -np.hypot(log.end[:, 0] - ref[0], log.end[:, 1] - ref[1])
     chosen: dict[int, int] = {}
-    best = _best(log, ref)
-    chosen[best] = KIND_BEST
+    best = _best(log)
+    if best is not None:
+        chosen[best] = KIND_BEST
     exits = np.flatnonzero(log.stop == 2)
     if len(exits):
         fastest = exits[np.argsort(log.npts[exits], kind="stable")]
@@ -222,16 +223,16 @@ def _far_end(log: LogIndex) -> np.ndarray:
     return log.end[int(np.argmax(np.hypot(*(log.end - start).T)))]
 
 
-def _best(log: LogIndex, ref) -> int:
-    """一轮的金色路线（回放这一轮时还不知道最终会执行哪条）：往前走的出口里最快的一条——离起点太近的出口多半是
-    掉头回上一个房间，有别的出口时不算；没有出口就取终点离 ref（默认是最远的终点）最近的。"""
+def _best(log: LogIndex, ref=None) -> int | None:
+    """一轮的金色路线：往前走的出口里最快的一条（离起点太近的出口多半是掉头回上一个房间，不算）。
+    这一轮没有往前走的出口时没有金色路线（返回 None）。"""
     exits = np.flatnonzero(log.stop == 2)
-    if len(exits):
-        away = exits[np.hypot(*(log.end[exits] - log.first[exits]).T) > BACKTRACK_PX]
-        pool = away if len(away) else exits
-        return int(pool[np.argmin(log.npts[pool])])
-    ref = ref if ref is not None else _far_end(log)
-    return int(np.argmax(-np.hypot(log.end[:, 0] - ref[0], log.end[:, 1] - ref[1])))
+    if not len(exits):
+        return None
+    away = exits[np.hypot(*(log.end[exits] - log.first[exits]).T) > BACKTRACK_PX]
+    if not len(away):
+        return None
+    return int(away[np.argmin(log.npts[away])])
 
 
 def simplify(path: np.ndarray, tol: float = 0.3) -> list[int]:
@@ -567,7 +568,7 @@ def build_segment(tracks: list[Track], speed: float, stagger: int, recolor: floa
                   fade: int = 15) -> dict:
     """一轮的回放：路线按推演先后在 stagger 帧里陆续出场，每个画面帧推进 speed 帧游戏时间；延伸中一律绿色，
     走到头时死亡的从终点往起点变红、金色的变金（每个画面帧传导 recolor 帧）。所有线都画完、变完色之后再停 hold 帧。
-    镜头的目标点每 4 帧一个，跟着金色路线的前端。"""
+    镜头先跟着伸得最远的绿线，金色路线走到头后跟着变金的那一点往回走；没有金色路线时，所有线画完后沿伸得最远的那条往回走。"""
     n = len(tracks)
     delays = [int(i * stagger / max(1, n - 1)) for i in range(n)]
 
@@ -575,19 +576,47 @@ def build_segment(tracks: list[Track], speed: float, stagger: int, recolor: floa
         last = max(0, len(t.path) - 1)
         return d + last / speed + (last / recolor if t.kind in (KIND_DEATH, KIND_BEST) else 0.0)
 
-    frames = int(math.ceil(max(settled(d, t) for d, t in zip(delays, tracks)))) + hold
-    best_i = next((i for i, t in enumerate(tracks) if t.kind == KIND_BEST), 0)
-    best, best_delay = tracks[best_i].path, delays[best_i]
-    # 镜头目标：金色路线延伸时跟着它的前端；走到头之后跟着变金的那一点从终点往回移，回到起点后停住
-    last = len(best) - 1
+    finish = [d + max(0, len(t.path) - 1) / speed for d, t in zip(delays, tracks)]
+    end_at = max(settled(d, t) for d, t in zip(delays, tracks))
+    best_i = next((i for i, t in enumerate(tracks) if t.kind == KIND_BEST), None)
+    origin = tracks[0].path[0]
+    # 没有金色路线时，镜头最后沿着伸得最远的那条线往回走到起点（同样的传导速度）
+    lead_i = best_i if best_i is not None else int(np.argmax(
+        [float(np.hypot(*(t.path[-1] - origin))) for t in tracks]))
+    lead = tracks[lead_i].path
+    lead_last = len(lead) - 1
+    if best_i is None:
+        back_from = max(finish)                 # 所有线都画完之后再往回走
+        end_at = max(end_at, back_from + lead_last / recolor)
+    else:
+        back_from = finish[best_i]              # 金色路线走到头、开始往回变金
+    frames = int(math.ceil(end_at)) + hold
+
+    # 镜头目标（每 4 帧一个）：往回走之前跟着"伸得最远的绿线"——此刻所有已出场路线里，前端离起点最远的那一点；
+    # 之后沿着金色路线（没有金色时是伸得最远的那条）从终点往回移，回到起点后停住
+    times = np.arange(0, frames + 1, 4, dtype=np.float64)
+    far_d = np.full(len(times), -1.0)
+    far_xy = np.repeat(origin[None, :], len(times), axis=0).astype(np.float64)
+    for d, t in zip(delays, tracks):
+        last_t = len(t.path) - 1
+        idx = np.floor((times - d) * speed).astype(np.int64)
+        ok = idx >= 0
+        if not ok.any():
+            continue
+        idx = np.clip(idx, 0, last_t)
+        pts = t.path[idx]
+        dist = np.hypot(pts[:, 0] - origin[0], pts[:, 1] - origin[1])
+        better = ok & (dist > far_d)
+        far_d[better] = dist[better]
+        far_xy[better] = pts[better]
     focus = []
-    for f in range(0, frames + 1, 4):
-        t = max(0.0, f - best_delay)
-        if t * speed <= last:
-            j = int(t * speed)
+    for i, f in enumerate(times):
+        if f <= back_from:
+            x, y = far_xy[i]
         else:
-            j = max(0, int(last - (t - last / speed) * recolor))
-        focus += [round(float(best[j, 0]), 1), round(float(best[j, 1]), 1)]
+            j = max(0, int(lead_last - (f - back_from) * recolor))
+            x, y = lead[j]
+        focus += [round(float(x), 1), round(float(y), 1)]
     out = [{"p": encode_path(t.path), "n": len(t.path), "k": t.kind, "d": delays[i]} for i, t in enumerate(tracks)]
     # 线多时整体调淡（淡色线叠在一起会发亮）：60 条以内不变，之后按 sqrt 变淡，最低 0.4 倍
     dim = round(min(1.0, max(0.4, math.sqrt(60.0 / max(1, n)))), 3)
