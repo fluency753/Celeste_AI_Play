@@ -4,8 +4,10 @@
     python -m orchestrator.run --agent dev-opus --save test --model opus --no-record
     python -m orchestrator.run --agent dev-opus --save test --model opus --max-minutes 20 --effort medium --no-record
     python -m orchestrator.run --agent dev --save test --no-agent --no-record   # 只启动工具服务，用于手动调试
-    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2   # 正式挑战（默认开预置模拟器、实时展示与 OBS 录屏）
+    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2   # 正式挑战（速通模式，默认开预置模拟器、规划回放、游戏内 HUD 与 OBS 录屏）
     python -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs/opus5.5/<时间戳>     # 中断后续跑（沿用原来的开关）
+
+也可以在控制台（python -m overlay.console）里设置并启动。
 
 OBS 录屏默认开启：OBS 没在运行时主控自己启动它（专用配置文件与场景集合，最小化到托盘），结束时关掉它；
 OBS 已经开着就直接用、结束时不关。--no-record 关闭录屏，不启动也不调用 OBS。
@@ -104,7 +106,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--no-hud-mod", dest="hud_mod", action="store_false",
                     help="不用游戏内 HUD，用网页 HUD（置顶窗口与 OBS 浏览器源；直播模式默认）")
     ap.add_argument("--no-hud-window", action="store_true",
-                    help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
+                    help="不在屏幕上打开网页 HUD 窗口（用网页 HUD 时默认打开：独立窗口，可拖动、缩放、切换置顶，关闭后留在托盘；"
+                         "录像里的 HUD 不受影响）")
     ap.add_argument("--record", dest="record", action="store_true", default=None,
                     help="OBS 录屏（默认开启，写不写都一样）：OBS 没在运行时主控自己启动它，用锁步插件只录游戏真正推进的帧"
                          "（和规划回放帧），成片（完整版与纯享版）在日志目录的 recording/ 下；结束时关掉主控启动的 OBS")
@@ -314,7 +317,7 @@ def check_provider(info: dict) -> None:
             with urllib.request.urlopen(url, timeout=5):
                 pass
         except Exception as exc:  # noqa: BLE001
-            raise SystemExit(f"连不上 {info.get('name')} 的接口转换网关（{url}）：{exc}。先按 docs/DEPLOY.md 的说明在本机启动网关")
+            raise SystemExit(f"连不上 {info.get('name')} 的接口转换网关（{url}）：{exc}。先在本机启动这个网关（地址见平台配置的 gateway_check）")
 
 
 def make_run_dir(agent: str) -> Path:
@@ -491,8 +494,8 @@ def backup_save(obs: dict, run_dir: Path) -> None:
 
 
 def start_hud_window(port: int, run_dir: Path) -> subprocess.Popen | None:
-    """在屏幕上打开置顶 HUD 窗口（只在 Windows）：贴在游戏窗口右上角、点击穿透、不抢焦点，游戏最小化时隐藏。
-    录像里的 HUD 来自 OBS 的浏览器源，与它无关；OBS 的游戏采集也采不到这个窗口，所以录像里不会出现两份。"""
+    """在屏幕上打开网页 HUD 的独立窗口（只在 Windows；overlay/window.py）：无边框，可拖动、缩放、切换置顶，关闭后留在托盘。
+    录像里的网页 HUD 来自 OBS 的浏览器源，与它无关；OBS 的游戏采集也采不到这个窗口，所以录像里不会出现两份。"""
     if sys.platform != "win32":
         return None
     import ctypes  # noqa: WPS433
@@ -507,7 +510,7 @@ def start_hud_window(port: int, run_dir: Path) -> subprocess.Popen | None:
     proc = subprocess.Popen([sys.executable, "-m", "overlay.window", "--url", f"http://127.0.0.1:{port}/hud"],
                             cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT,
                             creationflags=0x08000000)  # CREATE_NO_WINDOW：不弹出控制台
-    print("[run] 已打开置顶 HUD 窗口（贴在游戏窗口右上角；--no-hud-window 关闭）", flush=True)
+    print("[run] 已打开 HUD 窗口（--no-hud-window 关闭）", flush=True)
     return proc
 
 

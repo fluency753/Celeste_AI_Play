@@ -164,7 +164,7 @@ class RunConfig:
     continuous_music: bool = False   # 直播：冻结逻辑时继续播放音乐，仅暂停音效
     live: bool = False               # 直播模式（--live）：网页 HUD、解说计时 10 秒、可按用户要求退出关卡；narrate 在所有模式都有
     hud_mod: bool = False            # HUD 以 MOD 形式画在游戏画面里（overlay/modhud.py；不开直播时默认开）
-    live_remind_s: float = 30.0      # 实时展示：累计这么多秒没有公开解说，在下一次工具调用时提醒（原生 GPT 与新手探索为 10 秒，见 run.py）
+    live_remind_s: float = 30.0      # 解说计时：思考累计这么多秒没有公开解说，在下一次工具调用时提醒（直播模式为 10 秒，见 modes.remind_seconds）
 
     @property
     def third_party(self) -> bool:

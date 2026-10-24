@@ -180,25 +180,12 @@ def step_system(a: Answers) -> None:
 
 
 def find_celeste_candidates() -> list[Path]:
+    """自动找到的游戏目录：正在运行的 Celeste.exe 所在目录，以及各个 Steam 库里的。"""
+    from orchestrator.gamepaths import running_game_dir, steam_app_dirs
     found: list[Path] = []
-    roots: list[Path] = []
-    if os.name == "nt":
-        try:
-            import winreg  # noqa: WPS433
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as key:
-                steam = Path(winreg.QueryValueEx(key, "SteamPath")[0])
-            roots.append(steam)
-            vdf = steam / "steamapps" / "libraryfolders.vdf"
-            if vdf.exists():
-                for match in re.finditer(r'"path"\s+"([^"]+)"', vdf.read_text(encoding="utf-8", errors="ignore")):
-                    roots.append(Path(match.group(1).replace("\\\\", "\\")))
-        except OSError:
-            pass
-        roots += [Path(r"C:\Program Files (x86)\Steam")]
-    for root in roots:
-        candidate = root / "steamapps" / "common" / "Celeste"
-        if (candidate / "Celeste.exe").exists() and candidate not in found:
-            found.append(candidate)
+    for path in [running_game_dir(), *steam_app_dirs("Celeste")]:
+        if path and (path / "Celeste.exe").exists() and path not in found:
+            found.append(path)
     return found
 
 
@@ -479,14 +466,9 @@ def setup_custom_provider() -> str:
 
 
 def find_obs_dir(a: Answers) -> Path | None:
-    candidates = [a.get("obs_dir"), load_json(LOCAL_RECORDING).get("obs_dir")]
-    for game_root in find_celeste_candidates():
-        candidates.append(str(game_root.parent / "OBS Studio"))
-    candidates += [r"C:\Program Files\obs-studio", r"C:\Program Files (x86)\Steam\steamapps\common\OBS Studio"]
-    for c in candidates:
-        if c and (Path(c) / "bin" / "64bit" / "obs64.exe").exists():
-            return Path(c)
-    return None
+    from orchestrator.gamepaths import obs_candidates
+    found = obs_candidates(a.get("obs_dir"), load_json(LOCAL_RECORDING).get("obs_dir"))
+    return found[0] if found else None
 
 
 def step_recording(a: Answers) -> None:
@@ -624,12 +606,15 @@ def step_switches(a: Answers) -> None:
     else:
         a["sim"] = False
         note("没有预置模拟器：用关模拟器的版本（--no-sim）")
-    a["live"] = ask_yes("实时展示（智能体思考期间随时更新 HUD 上的思考，运行程序时报告进度）？", a.get("live", True))
+    # 旧版向导的 "live" 指"实时展示"（现在所有模式都有），与直播模式不是一回事，所以直播模式另用 live_mode 记
+    a["live_mode"] = ask_yes("直播模式（观众实时观看，智能体加快节奏、频繁解说；正式挑战一般不开）？", a.get("live_mode", False))
     a["playback"] = ask_yes("规划回放（把推演过的路线画进游戏给观众看）？", a.get("playback", True))
     a["record"] = ask_yes("OBS 录屏（主控自己启动 OBS 锁步录制，生成完整版与纯享版；结束时关掉它）？", a.get("record", True))
     a["study"] = ask_yes("开局先读完知识库（准备阶段）？", a.get("study", True))
     a["limit_planning"] = sim_ok and a["sim"] and ask_yes("限制规划轮次（一般不开）？", a.get("limit_planning", False))
-    a["hud_window"] = ask_yes("在屏幕上打开置顶 HUD 窗口？", a.get("hud_window", True))
+    a["hud_mod"] = ask_yes("HUD 画在游戏画面右上角（MOD 形式）？否 = 用可交互的网页 HUD（直播模式的默认）",
+                           a.get("hud_mod", not a["live_mode"]))
+    a["hud_window"] = a["hud_mod"] or ask_yes("在屏幕上打开网页 HUD 窗口？", a.get("hud_window", True))
     write_launcher(a)
 
 
@@ -638,12 +623,14 @@ def launcher_args(a: Answers, save: str, chapters: str, minutes: str) -> list[st
             "--model", a.get("model", "opus"), "--effort", a.get("effort", "high"), "--chapters", chapters,
             "--max-minutes", str(minutes)]
     args += [] if a.get("sim") else ["--no-sim"]
-    args += [] if a.get("live", True) else ["--no-live"]
+    args += ["--live"] if a.get("live_mode") else []
+    if a.get("hud_mod") is not None:
+        args.append("--hud-mod" if a["hud_mod"] else "--no-hud-mod")
     args += [] if a.get("playback", True) else ["--no-playback"]
     args += [] if a.get("record", True) else ["--no-record"]
     args += [] if a.get("study", True) else ["--no-study"]
     args += ["--limit-planning"] if a.get("limit_planning") else []
-    args += [] if a.get("hud_window", True) else ["--no-hud-window"]
+    args += [] if a.get("hud_window", True) or a.get("hud_mod") else ["--no-hud-window"]
     return args
 
 
