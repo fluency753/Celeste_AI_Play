@@ -313,10 +313,11 @@ def ensure_obs() -> bool:
 
 
 def close_obs() -> None:
-    """关掉主控启动的 OBS，并把 OBS 下次打开时选中的配置还原成原来的。"""
+    """关掉主控启动的 OBS，并把 OBS 下次打开时选中的配置还原成原来的。此时录制已经收尾（成片与纯享版已写好），
+    正常关闭 30 秒内没有退出（最小化到托盘的 OBS 有时不响应）就强制结束。"""
     from tools import obs_setup  # noqa: WPS433
     try:
-        obs_setup.stop(wait=60.0)
+        obs_setup.stop(wait=30.0, force=True)
     except SystemExit as exc:
         print(f"[record] {exc}", flush=True)
 

@@ -382,7 +382,7 @@ M5 验收（2026-10-23，桥接 0.7.0）：`python calibration\m5_hud_demo.py` �
 .\.venv\Scripts\python.exe -m orchestrator.run --agent dev-opus --save test --model opus --no-record
 ```
 
-- **录屏开关**（2026-10-24）：`--record`（默认）时主控在开局前检查 OBS：没在运行就调用 `tools\obs_setup.py` 的启动流程（自动建好专用的配置文件与场景集合 CelesteAI、记下你原来选中的配置、最小化到托盘、等锁步插件连上桥接），结束时（通关、预算用完、中断或出错，都在成片与纯享版写好之后）关掉 OBS，并把 OBS 下次打开时选中的配置还原成你原来的；OBS 已经开着时直接用（要是 CelesteAI 配置），结束时不关。`--no-record` 时不启动、不调用 OBS。手动管理 OBS 的命令照旧可用：`tools\obs_setup.py launch` / `stop` / `status`。改了 `overlay\hud.html` 或 HUD 尺寸后，先关掉开着的 OBS，让主控下次重新启动它（OBS 的浏览器源不会自动刷新）。
+- **录屏开关**（2026-10-24）：`--record`（默认）时主控在开局前检查 OBS：没在运行就调用 `tools\obs_setup.py` 的启动流程（自动建好专用的配置文件与场景集合 CelesteAI、记下你原来选中的配置、最小化到托盘、等锁步插件连上桥接），结束时（通关、预算用完、中断或出错，都在成片与纯享版写好之后）关掉 OBS（最小化到托盘的 OBS 有时不响应正常关闭，30 秒内没退出就强制结束；`obs_setup.py stop --force` 同样），并把 OBS 下次打开时选中的配置还原成你原来的；OBS 已经开着时直接用（要是 CelesteAI 配置），结束时不关。`--no-record` 时不启动、不调用 OBS。手动管理 OBS 的命令照旧可用：`tools\obs_setup.py launch` / `stop` / `status`。改了 `overlay\hud.html` 或 HUD 尺寸后，先关掉开着的 OBS，让主控下次重新启动它（OBS 的浏览器源不会自动刷新）。
 
 - `obs_setup.py` 不动你自己的配置文件与场景：CelesteAI 配置文件是 1920×1080、60 fps、NV12、48 kHz；场景里只有游戏采集、应用音频捕获（只录 Celeste.exe）与 HUD 浏览器源，没有桌面音频和麦克风。场景集合已存在时不改动（你在 OBS 里的调整会保留），只把 HUD 浏览器源的宽高同步成 `configs\recording.json` 里的值（HUD 加高后旧场景会切掉卡片底部；OBS 运行时不改，`stop` 之后再 `launch` 即可）；`setup --reset` 重建（原来的先备份）。`status` 查看插件是否加载、是否连上桥接。
 - **开局也录进去**：主控先把游戏退回选档页（这一步不录、快速完成），从选档页开始录制，再按正常速度选存档、进地图、选章节、进关卡、用暂停菜单跳过开场剧情，所以录像从选档页开始。HUD 在这段时间显示智能体名称、推理强度与"等待"，计时都是 0。`--resume` 续跑与 `--skip-enter` 时没有开局，接管游戏后开始录制。

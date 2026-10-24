@@ -2,7 +2,7 @@
 
     python tools/obs_setup.py setup     # 写入配置文件与场景集合 CelesteAI（场景集合已存在时不动，--reset 重建）
     python tools/obs_setup.py launch    # 写入后用它们启动 OBS（最小化到托盘）；记下你原来选中的配置，关闭时还原
-    python tools/obs_setup.py stop      # 关闭 OBS，并把 OBS 下次打开时选中的配置还原成你原来的
+    python tools/obs_setup.py stop      # 关闭 OBS，并把 OBS 下次打开时选中的配置还原成你原来的（--force：关不掉时强制结束）
     python tools/obs_setup.py status    # OBS 是否在运行、插件是否加载并连上桥接（看 OBS 最新日志）
 
 配置文件（Video/Audio）：画布与输出 1920×1080、60 帧、NV12、Rec.709 有限范围；48 kHz 立体声。
@@ -335,14 +335,23 @@ def print_status() -> None:
               f"已连上桥接时钟端口：{'是' if info.get('connected') else '否（游戏与桥接是否在运行？插件每秒重连一次）'}")
 
 
-def stop(wait: float = 20.0) -> None:
+def stop(wait: float = 20.0, force: bool = False) -> None:
+    """关闭 OBS 并还原配置选择。force：正常关闭在 wait 秒内没有退出时强制结束（录制要已经收尾；
+    最小化到托盘的 OBS 有时不响应正常关闭）。强制结束留下的崩溃标记在下次 launch 时清掉。"""
     if obs_running():
         subprocess.run(["taskkill", "/IM", "obs64.exe"], capture_output=True)   # 正常关闭（不加 /F）
         deadline = time.monotonic() + wait
         while obs_running() and time.monotonic() < deadline:
             time.sleep(0.5)
+        if obs_running() and force:
+            print(f"OBS 在 {wait:g} 秒内没有正常退出，强制结束")
+            subprocess.run(["taskkill", "/F", "/IM", "obs64.exe"], capture_output=True)
+            deadline = time.monotonic() + 10
+            while obs_running() and time.monotonic() < deadline:
+                time.sleep(0.5)
         if obs_running():
-            raise SystemExit("OBS 没有在限定时间内退出：请手动关闭后再运行 python tools/obs_setup.py restore")
+            raise SystemExit("OBS 没有在限定时间内退出：请手动关闭（或运行 python tools/obs_setup.py stop --force）"
+                             "后再运行 python tools/obs_setup.py restore")
         print("已关闭 OBS")
     restore()
 
@@ -367,6 +376,7 @@ def main() -> int:
     ap.add_argument("--obs-dir")
     ap.add_argument("--show", action="store_true", help="launch 时显示 OBS 窗口（默认最小化到托盘）")
     ap.add_argument("--reset", action="store_true", help="setup / launch 时重建场景集合（原来的先备份）")
+    ap.add_argument("--force", action="store_true", help="stop 时正常关闭 20 秒内没有退出就强制结束（先确认没有在录制）")
     args = ap.parse_args()
     cfg = load_config()
     if args.command == "setup":
@@ -374,7 +384,7 @@ def main() -> int:
     elif args.command == "launch":
         launch(cfg, find_obs_dir(args.obs_dir), minimized=not args.show, reset=args.reset)
     elif args.command == "stop":
-        stop()
+        stop(force=args.force)
     elif args.command == "status":
         print_status()
     elif args.command == "restore":
