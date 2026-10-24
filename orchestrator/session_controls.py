@@ -75,6 +75,8 @@ class SessionControls:
             return '用户已暂停试玩，不能执行游戏操作。'
         if self.session.done or self.goal_finishing:
             return '本次试玩已结束，不能执行游戏操作。'
+        if self.stop_requested and not self.chat_only:
+            return '用户已中断本次运行，不能再执行游戏操作。'
         return None
 
     def _program_guard(self):
@@ -121,6 +123,19 @@ class SessionControls:
                         elif row["kind"] == "message":
                             self.pending_messages.append(row)
                             self.control.mark(row["id"], "waiting", "等待提交给当前会话")
+                        elif row["kind"] == "interrupt":
+                            # 控制台的"中断"：与 Ctrl+C 相同，结束这次运行但不算通关——Claude 执行器的运行会让游戏
+                            # 保持冻结在当前帧，可以 --resume 接着玩（见 run.py 的 _keeps_game_frozen）
+                            if not getattr(self, "supports_interrupt", False):
+                                raise ValueError("当前执行器不支持中断后续跑，请用“停止并保存”")
+                            if self.chat_only or self.session is None or self.session.done:
+                                raise ValueError("当前没有在试玩")
+                            self.stop_reason = "用户中断（游戏保持冻结，可续跑）"
+                            self.stop_requested = True
+                            await self._interrupt_user()
+                            async with self.action_lock:   # 正在执行的动作先走完，游戏停在动作之间
+                                pass
+                            self.control.mark(row["id"], "submitted", "正在结束本次运行，游戏保持冻结")
                         elif row["kind"] == "detach":
                             if not self.chat_only:
                                 raise ValueError("试玩期间不能切走会话")
@@ -207,7 +222,7 @@ class SessionControls:
             raise
 
     def _effort_status(self):
-        return {'effort_control':True,'effort':self.metrics.state.effort,
+        return {'effort_control':True, 'interrupt_control': bool(getattr(self, 'supports_interrupt', False)),'effort':self.metrics.state.effort,
                 'effort_pending':self.metrics.state.effort_pending,'effort_manual':self.manual_effort,
                 'effort_levels':getattr(self, 'runtime_efforts', self.capabilities.effort_levels)}
 

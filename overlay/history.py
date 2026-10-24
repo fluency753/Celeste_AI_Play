@@ -41,7 +41,7 @@ class PublicHistory:
         self.items = {}
         self.lock = threading.Lock()
 
-    def snapshot(self, metrics):
+    def snapshot(self, metrics, limit=12):
         with self.lock:
             for event in self.public.read():
                 if event.get("id") and isinstance(event.get("text"), str):
@@ -81,16 +81,17 @@ class PublicHistory:
                         delivery = {"queued": "等待发送", "waiting": "等待提交", "submitted": "已提交", "error": "发送失败"}.get(message["status"], "")
                         self.items[message["id"]] = {"id": message["id"], "text": message["text"], "role": "user",
                             "kind": "你 · " + delivery, "wall": message["wall"]}
-            ordered = sorted(self.items.values(), key=lambda item: (item["wall"], item["id"]))[-12:]
+            # 保留最近 80 条（控制台的对话栏要看得更多）；HUD 只取最后 12 条
+            ordered = sorted(self.items.values(), key=lambda item: (item["wall"], item["id"]))[-80:]
             self.items = {item["id"]: item for item in ordered}
-            return ordered
+            return ordered[-max(1, min(int(limit), 80)):]
 
 
 _histories = {}
 _lock = threading.Lock()
 
 
-def read_history(directory, metrics):
+def read_history(directory, metrics, limit=12):
     if directory is None:
         return []
     with _lock:
@@ -99,4 +100,4 @@ def read_history(directory, metrics):
                 _histories.pop(next(iter(_histories)))
             _histories[directory] = PublicHistory(directory)
         reader = _histories[directory]
-    return reader.snapshot(metrics or {})
+    return reader.snapshot(metrics or {}, limit)

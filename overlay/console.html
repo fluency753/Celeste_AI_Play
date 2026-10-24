@@ -1,0 +1,856 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Celeste AI 控制台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  /* 控制台：与 HUD 同一套颜色（夜晚的山、Madeline 的发色）。
+     红 = 能冲刺 / 运行中，蓝 = 冲刺用完 / 暂停与冻结，金 = 规划回放与录制，绿 = 正在推进游戏。 */
+  :root {
+    --bg: #141729;
+    --panel: #1B1F36;
+    --raised: #242949;
+    --line: rgba(236, 239, 248, 0.09);
+    --line-strong: rgba(236, 239, 248, 0.18);
+    --text: #ECEFF8;
+    --muted: #8F9AB3;
+    --red: #E0475B;
+    --blue: #5BC0EB;
+    --pink: #F28AC4;
+    --gold: #F2C14E;
+    --green: #4CC38A;
+    --warn: #F08A3C;
+    --radius: 10px;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+  body {
+    font: 14px/1.55 "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num, h1, .metric b { font-family: "Barlow Semi Condensed", "Bahnschrift SemiCondensed", "Bahnschrift", "Segoe UI", sans-serif;
+         font-variant-numeric: tabular-nums; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  /* 顶栏：标题与三盏状态灯（游戏、OBS、主控） */
+  header {
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 12px 22px; background: rgba(20, 23, 41, 0.94); border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(6px);
+  }
+  h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.01em; white-space: nowrap; }
+  h1 small { font-family: "Noto Sans SC", "Microsoft YaHei UI", sans-serif; font-size: 15px; font-weight: 500; color: var(--muted); margin-left: 6px; }
+  .lights { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; }
+  .light { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px 4px 9px; border-radius: 999px;
+           background: var(--panel); border: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
+  .light i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .light.on i { background: var(--green); } .light.active i { background: var(--red); }
+  .light.frozen i { background: var(--blue); } .light.off i { background: #4A5170; }
+  .light .detail { color: var(--muted); }
+  .header-actions { display: flex; gap: 8px; }
+
+  /* 冻结提示条：游戏被接管、没有主控在运行时出现 */
+  .banner { margin: 14px 22px 0; padding: 12px 16px; border-radius: var(--radius); display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+            background: rgba(91, 192, 235, 0.10); border: 1px solid rgba(91, 192, 235, 0.35); }
+  .banner p { margin: 0; flex: 1; min-width: 240px; }
+  .banner.error { background: rgba(224, 71, 91, 0.10); border-color: rgba(224, 71, 91, 0.4); }
+  .banner pre { flex-basis: 100%; margin: 4px 0 0; max-height: 180px; overflow: auto; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+
+  main { display: grid; grid-template-columns: minmax(360px, 1.05fr) minmax(340px, 1fr) minmax(320px, 0.95fr);
+         gap: 18px; padding: 18px 22px 28px; align-items: start; }
+  @media (max-width: 1240px) { main { grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr); } #chatPane { grid-column: 2; } #runPane { grid-row: span 2; } }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; padding: 14px 12px 24px; } #chatPane { grid-column: auto; } header { padding: 10px 12px; } .banner { margin: 12px 12px 0; } }
+
+  section.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 20px; min-width: 0; }
+  .pane > h2 { margin: 0 0 14px; font-size: 17px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; }
+  .pane > h2 .aside { font-size: 13px; font-weight: 400; color: var(--muted); }
+  fieldset { border: 0; margin: 0 0 18px; padding: 0; min-width: 0; }
+  fieldset:disabled { opacity: 0.55; }
+  legend { padding: 0; margin-bottom: 8px; font-weight: 500; color: var(--text); }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row.three { grid-template-columns: 1.3fr 1fr 0.8fr; }
+  label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); min-width: 0; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 9px; color: var(--text);
+  }
+  select:disabled, input:disabled { opacity: 0.6; }
+  textarea { resize: vertical; min-height: 64px; }
+
+  /* 模式：两张并排的选择卡，选中的那张左边一道红线 */
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mode { position: relative; text-align: left; padding: 11px 12px 11px 16px; border-radius: var(--radius); cursor: pointer;
+          background: var(--bg); border: 1px solid var(--line-strong); }
+  .mode b { display: block; font-size: 15px; }
+  .mode span { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+  .mode[aria-checked="true"] { border-color: rgba(224, 71, 91, 0.6); background: rgba(224, 71, 91, 0.08); }
+  .mode[aria-checked="true"]::before { content: ""; position: absolute; left: 6px; top: 11px; bottom: 11px; width: 3px; border-radius: 2px; background: var(--red); }
+
+  /* 开关：一行一个，左边说明，右边拨杆 */
+  .switches { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
+  @media (max-width: 520px) { .switches, .row, .row.three, .modes { grid-template-columns: 1fr; } }
+  .switch { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .switch .text b { display: block; font-weight: 500; }
+  .switch .text span { display: block; font-size: 12px; color: var(--muted); line-height: 1.4; }
+  .switch input { appearance: none; -webkit-appearance: none; width: 34px; height: 20px; border-radius: 999px; background: #3A4063; position: relative; cursor: pointer; margin: 0; flex: none; }
+  .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #C8CEE0; transition: transform 120ms ease; }
+  .switch input:checked { background: var(--red); }
+  .switch input:checked::after { transform: translateX(14px); background: #fff; }
+  .switch input:disabled { opacity: 0.4; cursor: not-allowed; }
+  .switch.wide { grid-column: 1 / -1; }
+
+  /* 章节：一条往上爬的路线，选中的章节点亮、相邻选中的点之间连成红线 */
+  .route { position: relative; height: 128px; margin: 4px 0 6px; }
+  .route svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .route button { position: absolute; transform: translate(-50%, -50%); width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+                  background: var(--bg); border: 2px solid #4A5170; font: 600 13px "Barlow Semi Condensed", "Bahnschrift", sans-serif; color: var(--muted); }
+  .route button[aria-pressed="true"] { background: var(--red); border-color: var(--red); color: #fff; }
+  .route button.current { box-shadow: 0 0 0 4px rgba(91, 192, 235, 0.45); }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: transparent; cursor: pointer; font-size: 12.5px; color: var(--muted); }
+  .chip:hover { color: var(--text); border-color: var(--muted); }
+
+  details.more { border-top: 1px solid var(--line); padding-top: 10px; margin-bottom: 14px; }
+  details.more summary { cursor: pointer; color: var(--muted); }
+  details.more[open] summary { margin-bottom: 10px; }
+
+  .command { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; font: 12px/1.5 Consolas, "Cascadia Mono", monospace;
+             color: #B9C3DD; white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow: auto; }
+  .command.invalid { color: var(--warn); font-family: inherit; font-size: 13px; }
+  .launch { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  .launch .note { color: var(--muted); font-size: 12.5px; flex: 1; min-width: 160px; }
+
+  button.btn { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--raised); cursor: pointer; font-weight: 500; white-space: nowrap; }
+  button.btn:hover:not(:disabled) { border-color: var(--muted); }
+  button.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.btn.primary { background: var(--red); border-color: var(--red); color: #fff; font-weight: 700; padding: 9px 22px; }
+  button.btn.blue { background: rgba(91, 192, 235, 0.16); border-color: rgba(91, 192, 235, 0.55); }
+  button.btn.danger { border-color: rgba(224, 71, 91, 0.55); color: #FF9AA8; }
+  button.btn.small { padding: 4px 10px; font-size: 12.5px; }
+
+  /* 当前运行 */
+  .run-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .run-head .who { font-size: 17px; font-weight: 700; }
+  .status-dot { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  .status-dot i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .run-head .where { margin-left: auto; font-weight: 700; }
+  .run-head .where small { color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .clock { font: 600 44px/1.05 "Barlow Semi Condensed", "Bahnschrift SemiCondensed", "Bahnschrift", sans-serif; font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+  .clock small { font-size: 0.6em; color: #C9D0DE; }
+  .modeline { color: var(--muted); font-size: 13px; }
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+  .metric { background: var(--bg); border-radius: 8px; padding: 7px 10px; min-width: 0; }
+  .metric span { display: block; font-size: 12px; color: var(--muted); }
+  .metric b { display: block; font-size: 19px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .toolcall { font-size: 13px; color: var(--muted); margin: -4px 0 12px; overflow-wrap: anywhere; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .controls select { width: auto; }
+  .empty { color: var(--muted); padding: 18px 0 6px; }
+  .empty b { color: var(--text); display: block; font-weight: 500; margin-bottom: 4px; }
+  .subhead { margin: 20px 0 10px; font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+  .subhead .aside { font-size: 12.5px; font-weight: 400; color: var(--muted); }
+
+  .runs { list-style: none; margin: 0; padding: 0; }
+  .runs li { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+  .runs .title { font-weight: 500; overflow-wrap: anywhere; }
+  .runs .meta { grid-column: 1; color: var(--muted); font-size: 12.5px; }
+  .runs .side { grid-row: 1 / span 2; grid-column: 2; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-strong); color: var(--muted); }
+  .tag.ok { color: var(--green); border-color: rgba(76, 195, 138, 0.5); }
+  .tag.frozen { color: var(--blue); border-color: rgba(91, 192, 235, 0.5); }
+
+  /* 对话：解说、尝试、你的消息与智能体的回复，按时间排在一条线上 */
+  #chatPane { display: flex; flex-direction: column; max-height: calc(100vh - 110px); position: sticky; top: 76px; }
+  @media (max-width: 860px) { #chatPane { position: static; max-height: none; } }
+  .feed { flex: 1; overflow-y: auto; min-height: 220px; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
+  .msg { padding: 8px 11px; border-radius: 10px; background: rgba(150, 173, 225, 0.08); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg .who { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
+  .msg.user { background: rgba(91, 192, 235, 0.13); border-color: rgba(91, 192, 235, 0.3); margin-left: 28px; }
+  .msg.attempt { border-left: 3px solid var(--green); }
+  .msg.system { text-align: center; color: #d8c395; background: rgba(190, 153, 82, 0.08); font-size: 12.5px; }
+  .compose { margin-top: 10px; display: grid; gap: 8px; }
+  .compose .controls { justify-content: space-between; flex-wrap: nowrap; }
+  .compose .delivery { flex: 1; min-width: 0; }
+  a.link { color: var(--muted); text-decoration: none; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line-strong); font-size: 13px; white-space: nowrap; }
+  a.link:hover { color: var(--text); border-color: var(--muted); }
+  .delivery { color: var(--muted); font-size: 12.5px; }
+  .toast { position: fixed; right: 22px; bottom: 22px; max-width: 420px; padding: 10px 14px; border-radius: 10px; background: var(--raised);
+           border: 1px solid var(--line-strong); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); z-index: 20; }
+  .toast.error { border-color: rgba(224, 71, 91, 0.6); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Celeste AI<small>控制台</small></h1>
+  <div class="lights" role="status" aria-live="polite">
+    <span class="light off" id="lightGame"><i></i>游戏 <span class="detail" id="gameDetail">未连接</span></span>
+    <span class="light off" id="lightObs"><i></i>OBS <span class="detail" id="obsDetail">—</span></span>
+    <span class="light off" id="lightRun"><i></i>主控 <span class="detail" id="runDetail">空闲</span></span>
+  </div>
+  <div class="header-actions">
+    <a class="link" href="/hud" target="_blank" rel="noopener">打开 HUD 页面</a>
+  </div>
+</header>
+
+<div class="banner" id="frozenBanner" hidden>
+  <p id="frozenText">游戏被接管、停在当前帧（章节计时不走），没有主控在运行。</p>
+  <button class="btn blue" id="resumeLatest" type="button" hidden>续跑最近一次运行</button>
+  <button class="btn" id="releaseGame" type="button">交还游戏控制</button>
+</div>
+<div class="banner error" id="launchBanner" hidden>
+  <p id="launchText">主控启动后退出了。</p>
+  <button class="btn small" id="launchDismiss" type="button">知道了</button>
+  <pre id="launchLog"></pre>
+</div>
+
+<main>
+  <!-- 新运行 -->
+  <section class="pane" id="setupPane" aria-labelledby="setupTitle">
+    <h2 id="setupTitle">新运行 <span class="aside" id="setupAside">设置好之后开始；同一时间只能有一次运行</span></h2>
+    <form id="setup" autocomplete="off">
+      <fieldset id="fsAgent">
+        <legend>智能体与模型</legend>
+        <div class="row three">
+          <label class="field">执行器与提供方<select id="runtime"></select></label>
+          <label class="field">模型<select id="model"><option>读取中…</option></select></label>
+          <label class="field">推理强度<select id="effort"></select></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label class="field">智能体标签<input type="text" id="agent" maxlength="40" placeholder="例如 dev-opus 或 opus5.5"></label>
+          <label class="field">现实时间上限（分钟）<input type="number" id="maxMinutes" min="1" max="1440" step="1" value="240"></label>
+        </div>
+        <p class="hint">标签决定日志目录 runs/&lt;标签&gt;/ 与智能体的工作区；正式挑战建议用固定标签，调试用 dev- 开头。</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>游玩模式</legend>
+        <div class="modes" role="radiogroup" aria-label="游玩模式">
+          <button type="button" class="mode" role="radio" data-mode="speedrun" aria-checked="true">
+            <b>速通</b><span>以最短的章节计时通关。完整知识库，可开放预置模拟器。</span></button>
+          <button type="button" class="mode" role="radio" data-mode="explore" aria-checked="false">
+            <b>探索</b><span>新手式探索与学习。只有基本操作与工具说明，可用限额短路线预测。</span></button>
+        </div>
+        <div class="switches" style="margin-top:8px">
+          <label class="switch wide"><span class="text"><b>直播</b><span>观众实时观看：解说更勤（10 秒），可按要求退出关卡，HUD 默认用可交互的网页形式；不改变速通目标</span></span><input type="checkbox" id="live"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>开关</legend>
+        <div class="switches">
+          <label class="switch" id="rowSim"><span class="text"><b>预置模拟器</b><span id="simNote">逐帧精确地推演路线</span></span><input type="checkbox" id="sim" checked></label>
+          <label class="switch" id="rowSimAssist" hidden><span class="text"><b>限额短路线预测</b><span id="simAssistNote">按体力额度预测短路线</span></span><input type="checkbox" id="simAssist" checked></label>
+          <label class="switch"><span class="text"><b>规划回放</b><span>把推演过的路线画进游戏</span></span><input type="checkbox" id="playback" checked></label>
+          <label class="switch"><span class="text"><b>OBS 录屏</b><span>锁步录制完整版与纯享版</span></span><input type="checkbox" id="record" checked></label>
+          <label class="switch"><span class="text"><b>游戏内 HUD</b><span id="hudModNote">画在游戏画面右上角</span></span><input type="checkbox" id="hudMod" checked></label>
+          <label class="switch"><span class="text"><b>先读知识库</b><span>开局前的准备阶段，不计现实用时</span></span><input type="checkbox" id="study" checked></label>
+          <label class="switch"><span class="text"><b>开始时先暂停</b><span>进入章节后等你点继续</span></span><input type="checkbox" id="startPaused"></label>
+          <label class="switch"><span class="text"><b>剧情交给智能体</b><span>关时由主控自动跳过剧情</span></span><input type="checkbox" id="cutsceneAgent"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>存档与章节</legend>
+        <div class="row">
+          <label class="field">存档<select id="save"></select></label>
+          <label class="field" id="newSaveField" hidden>新存档名<input type="text" id="newSave" maxlength="20" placeholder="1～20 个字符"></label>
+        </div>
+        <p class="hint" id="saveNote">新存档放在现有最新存档的下一个槽位，只能从序章开始。</p>
+        <div class="route" id="route" aria-label="要依次通关的章节"></div>
+        <div class="presets">
+          <button type="button" class="chip" data-preset="formal">序章 → 2A</button>
+          <button type="button" class="chip" data-preset="one">只玩一章</button>
+          <button type="button" class="chip" data-preset="all">全部章节</button>
+          <button type="button" class="chip" data-preset="clear">清空</button>
+        </div>
+        <p class="hint" id="routeNote"></p>
+      </fieldset>
+
+      <details class="more">
+        <summary>更多设置</summary>
+        <div class="switches">
+          <label class="switch"><span class="text"><b>限制规划轮次</b><span>按章节记账，用完就不能再推演</span></span><input type="checkbox" id="limitPlanning"></label>
+          <label class="switch"><span class="text"><b>额度用完时等待</b><span>游戏冻结，额度重置后接着玩</span></span><input type="checkbox" id="quotaWait" checked></label>
+          <label class="switch"><span class="text"><b>思考时继续放音乐</b><span>直播用；关时游戏冻结，声音一起暂停</span></span><input type="checkbox" id="continuousMusic"></label>
+          <label class="switch"><span class="text"><b>结束后保留 OBS</b><span>直播时让推流接着开</span></span><input type="checkbox" id="keepObs"></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label class="field">上下文自动压缩窗口<input type="text" id="autocompact" placeholder="默认，或 auto / 100000～1000000"></label>
+        </div>
+      </details>
+
+      <div class="command" id="command" aria-live="polite">—</div>
+      <div class="launch">
+        <button class="btn primary" type="submit" id="start" disabled>开始运行</button>
+        <span class="note" id="startNote">开始后主控在后台启动：检查游戏与 OBS、进入存档，然后交给智能体。</span>
+      </div>
+    </form>
+  </section>
+
+  <!-- 当前运行 -->
+  <section class="pane" id="runPane" aria-labelledby="runTitle">
+    <h2 id="runTitle">当前运行 <span class="aside" id="runAside"></span></h2>
+    <div id="runIdle" class="empty"><b>没有正在进行的运行</b>在左边设置好后点“开始运行”，或续跑下面一次停下时保持冻结的运行。</div>
+    <div id="runLive" hidden>
+      <div class="run-head">
+        <span class="who" id="runName">—</span>
+        <span class="status-dot"><i id="runDot"></i><span id="runStatus">—</span></span>
+        <span class="where" id="runWhere"></span>
+      </div>
+      <div class="clock" id="runClock">0:00:00<small>.000</small></div>
+      <div class="modeline" id="runMode"></div>
+      <div class="metrics">
+        <div class="metric"><span>死亡</span><b id="mDeaths">0</b></div>
+        <div class="metric"><span>决策</span><b id="mDecisions">0</b></div>
+        <div class="metric"><span>推理强度</span><b id="mEffort">—</b></div>
+        <div class="metric"><span>思考</span><b id="mThinking">0:00:00</b></div>
+        <div class="metric"><span>工具</span><b id="mTool">0:00:00</b></div>
+        <div class="metric"><span>上下文</span><b id="mContext">0</b></div>
+      </div>
+      <div class="toolcall" id="runToolCall"></div>
+      <div class="controls" id="runControls">
+        <button class="btn blue" type="button" id="pauseToggle">暂停</button>
+        <select id="liveEffort" aria-label="推理强度：自动或固定"></select>
+        <select id="liveCutscene" aria-label="剧情处理"><option value="auto">剧情：自动跳过</option><option value="agent">剧情：交给智能体</option></select>
+        <button class="btn" type="button" id="fastToggle" hidden>Fast：关</button>
+      </div>
+      <div class="controls" style="margin-top:10px">
+        <button class="btn danger" type="button" id="stopRun" title="结束这次运行、保存录像并交还游戏控制">停止并保存录像</button>
+        <button class="btn" type="button" id="interruptRun" title="结束这次运行、保存录像，游戏保持冻结，之后可以续跑">中断（保持冻结，可续跑）</button>
+      </div>
+      <p class="hint" id="controlStatus"></p>
+      <details class="more" style="margin-top:14px" id="goalBox">
+        <summary>目标与停止条件</summary>
+        <textarea id="goalText" maxlength="4000" placeholder="可选：告诉智能体这次要做什么，例如收集眼前的草莓"></textarea>
+        <div class="row three" style="margin-top:8px">
+          <label class="field">条件<select id="goalField">
+            <option value="map_complete">通关当前章节</option><option value="room">到达房间</option>
+            <option value="deaths">死亡次数达到</option><option value="elapsed">现实用时达到（秒）</option></select></label>
+          <label class="field">值<input type="text" id="goalValue" placeholder="房间名或数字"></label>
+          <label class="field">&nbsp;<button class="btn small" type="button" id="goalSave">更新目标</button></label>
+        </div>
+        <p class="hint">满足条件时主控停止运行并保存录像；只写目标文字时不会自动停止。</p>
+      </details>
+    </div>
+
+    <div class="subhead">运行记录 <span class="aside">最近 40 次</span></div>
+    <ul class="runs" id="runs"></ul>
+  </section>
+
+  <!-- 对话 -->
+  <section class="pane" id="chatPane" aria-labelledby="chatTitle">
+    <h2 id="chatTitle">对话 <span class="aside" id="chatAside">解说、尝试、你的消息与智能体的回复</span></h2>
+    <div class="feed" id="feed" aria-live="polite"></div>
+    <form class="compose" id="compose">
+      <textarea id="message" maxlength="4000" placeholder="给沙箱里的智能体发消息：提示、纠正或提问。Enter 发送，Shift+Enter 换行"></textarea>
+      <div class="controls">
+        <span class="delivery" id="delivery">运行开始后可以发消息。</span>
+        <button class="btn" type="submit" id="send" disabled>发送</button>
+      </div>
+    </form>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const STATUS = {
+  starting: ["等待", "var(--muted)"], studying: ["读知识库", "#7AA2F7"], thinking: ["思考中", "var(--gold)"],
+  tool: ["运行工具", "#9D8CF2"], compacting: ["压缩上下文", "var(--gold)"], executing: ["执行中", "var(--green)"],
+  auto: ["自动推进", "var(--muted)"], retrying: ["自动重试", "var(--warn)"], replaying: ["规划回放", "var(--gold)"],
+  quota_wait: ["等待额度重置", "var(--muted)"], paused: ["已暂停", "var(--blue)"], done: ["已完成", "var(--muted)"],
+  stopped: ["已结束", "var(--muted)"],
+};
+const SHORT = ["序", "1A", "2A", "3A", "4A", "5A", "6A", "7A", "终", "8A", "9"];
+
+const ui = { options: null, status: null, control: null, controlRun: null, hud: null, runs: [], models: [],
+             chapters: [0], mode: "speedrun", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "" };
+
+async function getJSON(path) {
+  const res = await fetch(path, { cache: "no-store" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `${path}：${res.status}`);
+  return data;
+}
+async function postJSON(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `${path}：${res.status}`);
+  return data;
+}
+let toastTimer = 0;
+function toast(text, error = false) {
+  const el = $("toast");
+  el.textContent = text; el.classList.toggle("error", error); el.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, error ? 7000 : 3500);
+}
+const pad = (n, w = 2) => String(Math.floor(n)).padStart(w, "0");
+const clock = (s) => { s = Math.max(0, s); return `${Math.floor(s / 3600)}:${pad(s / 60 % 60)}:${pad(s % 60)}`; };
+const tokens = (n) => !n ? "0" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? Math.round(n / 1000) + "k" : (n / 1000).toFixed(1) + "k";
+function ticksText(ticks) {
+  const ms = Math.max(0, Math.floor((ticks || 0) / 1e4));
+  return `${Math.floor(ms / 3600000)}:${pad(ms / 60000 % 60)}:${pad(ms / 1000 % 60)}.${pad(ms % 1000, 3)}`;
+}
+
+// ---------------------------------------------------------------- 新运行：选项与表单
+
+async function loadOptions() {
+  const o = ui.options = await getJSON("/api/console/options");
+  const runtime = $("runtime");
+  runtime.replaceChildren(...o.runtimes.map(r => new Option(r.label, r.id)));
+  runtime.value = o.runtimes.some(r => r.id === "claude:anthropic") ? "claude:anthropic" : (o.runtimes[0] || {}).id;
+  const d = o.defaults;
+  $("maxMinutes").value = d.max_minutes;
+  $("agent").value = (o.deploy && o.deploy.agent) || "";
+  fillSaves();
+  ui.chapters = [0];
+  buildRoute();
+  $("simNote").textContent = o.sim_available ? "逐帧精确地推演路线" : "没有安装预置模拟器（sim/dist）";
+  $("sim").disabled = !o.sim_available; if (!o.sim_available) $("sim").checked = false;
+  $("simAssistNote").textContent = o.sim_available ? "按体力额度预测短路线" : "没有安装预置模拟器（sim/dist）";
+  $("simAssist").disabled = !o.sim_available; if (!o.sim_available) $("simAssist").checked = false;
+  await loadModels();
+  schedulePreview();
+}
+
+function fillSaves() {
+  const o = ui.options, sel = $("save");
+  const opts = (o.saves || []).map(s => new Option(`${s.name}（槽位 ${s.slot}）`, `slot:${s.slot}`));
+  opts.push(new Option("新建存档…", "new"));
+  sel.replaceChildren(...opts);
+  const test = (o.saves || []).find(s => s.name === "test");
+  if (test) sel.value = `slot:${test.slot}`;
+  $("saveNote").textContent = o.saves_error ? `${o.saves_error}（检查 configs/local.deploy.json 里的游戏目录）`
+    : "新存档放在现有最新存档的下一个槽位，只能从序章开始。";
+  onSaveChange();
+}
+
+async function loadModels() {
+  const [engine, provider] = ($("runtime").value || "claude:anthropic").split(":");
+  const sel = $("model");
+  sel.disabled = true; sel.replaceChildren(new Option("读取中…", ""));
+  try {
+    const data = await getJSON(`/api/models?engine=${encodeURIComponent(engine)}&provider=${encodeURIComponent(provider)}`);
+    ui.models = data.models || [];
+    sel.replaceChildren(...ui.models.map(m => new Option(m.label || m.id, m.id)));
+    sel.value = data.default_model || (ui.models[0] || {}).id || "";
+    if (engine === "claude" && provider === "anthropic" && ui.models.some(m => m.id === "opus")) sel.value = "opus";
+    sel.disabled = !ui.models.length;
+  } catch (e) {
+    ui.models = [];
+    sel.replaceChildren(new Option("读不到模型列表", ""));
+    toast(e.message, true);
+  }
+  fillEfforts();
+  if (!$("agent").value) $("agent").value = suggestAgent();
+}
+
+function fillEfforts() {
+  const model = ui.models.find(m => m.id === $("model").value);
+  const efforts = (model && model.efforts) || [];
+  const sel = $("effort"), previous = sel.value;
+  sel.replaceChildren(...efforts.map(e => new Option(e, e)));
+  sel.value = efforts.includes(previous) ? previous : (model && model.default_effort) || efforts[0] || "";
+  sel.disabled = !efforts.length;
+}
+
+function suggestAgent() {
+  const model = ($("model").value || "agent").replace(/\[.*\]$/, "").replace(/[^A-Za-z0-9._-]/g, "");
+  return "dev-" + (model || "agent");
+}
+
+function setMode(mode) {
+  ui.mode = mode;
+  document.querySelectorAll(".mode").forEach(b => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
+  $("rowSim").hidden = mode !== "speedrun";
+  $("rowSimAssist").hidden = mode !== "explore";
+  if (mode === "explore" && !$("study").dataset.touched) $("study").checked = true;
+  schedulePreview();
+}
+
+function onLive() {
+  if (!ui.hudTouched) $("hudMod").checked = !$("live").checked;
+  $("hudModNote").textContent = $("live").checked && !$("hudMod").checked ? "直播时默认用网页 HUD" : "画在游戏画面右上角";
+  schedulePreview();
+}
+
+function onSaveChange() {
+  const isNew = $("save").value === "new";
+  $("newSaveField").hidden = !isNew;
+  if (isNew && ui.chapters[0] !== 0) { ui.chapters = [0, ...ui.chapters.filter(c => c !== 0)]; buildRoute(); }
+  schedulePreview();
+}
+
+// 章节路线：11 个点沿一条往上的折线排开
+function buildRoute() {
+  const host = $("route"), chapters = (ui.options && ui.options.chapters) || [];
+  host.replaceChildren();
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  host.appendChild(svg);
+  const points = chapters.map((c, i) => {
+    const x = 5 + i * (90 / Math.max(1, chapters.length - 1));
+    const y = 82 - Math.min(62, i * 6.2) - (i % 2 ? 5 : 0);
+    return { c, x, y };
+  });
+  const line = (a, b, color, width) => {
+    const l = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    l.setAttribute("x1", a.x + "%"); l.setAttribute("y1", a.y + "%"); l.setAttribute("x2", b.x + "%"); l.setAttribute("y2", b.y + "%");
+    l.setAttribute("stroke", color); l.setAttribute("stroke-width", width); l.setAttribute("stroke-linecap", "round");
+    svg.appendChild(l);
+  };
+  for (let i = 1; i < points.length; i++) {
+    const on = ui.chapters.includes(points[i - 1].c.id) && ui.chapters.includes(points[i].c.id);
+    line(points[i - 1], points[i], on ? "#E0475B" : "rgba(236,239,248,0.16)", on ? 4 : 2);
+  }
+  const current = currentChapterId();
+  for (const p of points) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = SHORT[p.c.id] || String(p.c.id);
+    b.title = p.c.label; b.setAttribute("aria-label", p.c.label);
+    b.setAttribute("aria-pressed", String(ui.chapters.includes(p.c.id)));
+    b.classList.toggle("current", current === p.c.id);
+    b.style.left = p.x + "%"; b.style.top = p.y + "%";
+    b.addEventListener("click", () => {
+      ui.chapters = ui.chapters.includes(p.c.id) ? ui.chapters.filter(c => c !== p.c.id) : [...ui.chapters, p.c.id].sort((a, b) => a - b);
+      buildRoute(); schedulePreview();
+    });
+    host.appendChild(b);
+  }
+  const names = ui.chapters.map(id => (chapters.find(c => c.id === id) || {}).label || id);
+  $("routeNote").textContent = !ui.chapters.length ? "点选要依次通关的章节。"
+    : ui.chapters.length === 1 ? `只玩 ${names[0]}。` : `依次通关：${names.join("、")}；一章通关后主控自动进入下一章。`;
+}
+
+function currentChapterId() {
+  const m = ui.hud && ui.hud.metrics, sid = m && m.chapter;
+  if (!sid || !ui.options) return null;
+  const order = ["0-Intro", "1-ForsakenCity", "2-OldSite", "3-CelestialResort", "4-GoldenRidge", "5-MirrorTemple",
+                 "6-Reflection", "7-Summit", "8-Epilogue", "9-Core", "LostLevels"];
+  const i = order.indexOf(sid.replace(/^Celeste\//, ""));
+  return i >= 0 ? i : null;
+}
+
+function formOptions() {
+  const [engine, provider] = ($("runtime").value || "claude:anthropic").split(":");
+  const saveValue = $("save").value;
+  const existing = (ui.options.saves || []).find(s => `slot:${s.slot}` === saveValue);
+  const save = saveValue === "new" ? { name: $("newSave").value.trim(), slot: null, create: true }
+                                   : { name: existing ? existing.name : "", slot: existing ? existing.slot : null, create: false };
+  const options = {
+    engine, provider, model: $("model").value, effort: $("effort").value, agent: $("agent").value.trim(),
+    mode: ui.mode, live: $("live").checked, sim: $("sim").checked, sim_assist: $("simAssist").checked,
+    playback: $("playback").checked, record: $("record").checked, hud_mod: $("hudMod").checked,
+    study: $("study").checked, limit_planning: $("limitPlanning").checked, quota_wait: $("quotaWait").checked,
+    keep_obs_open: $("keepObs").checked, start_paused: $("startPaused").checked,
+    cutscene_mode: $("cutsceneAgent").checked ? "agent" : "auto", chapters: ui.chapters, save,
+    max_minutes: Number($("maxMinutes").value), autocompact: $("autocompact").value.trim(),
+  };
+  if ($("continuousMusic").checked) options.continuous_music = true;
+  return options;
+}
+
+function schedulePreview() {
+  clearTimeout(ui.previewTimer);
+  ui.previewTimer = setTimeout(preview, 200);
+}
+async function preview() {
+  if (!ui.options) return;
+  const el = $("command");
+  try {
+    const result = await postJSON("/api/console/preview", { options: formOptions() });
+    el.textContent = result.command; el.classList.remove("invalid"); ui.previewOk = true;
+  } catch (e) {
+    el.textContent = e.message; el.classList.add("invalid"); ui.previewOk = false;
+  }
+  updateStartButton();
+}
+function running() { return !!(ui.status && ui.status.orchestrator && ui.status.orchestrator.running); }
+function updateStartButton() {
+  const busy = running();
+  $("start").disabled = !ui.previewOk || busy;
+  $("startNote").textContent = busy ? "已有主控在运行：等它结束、或在右边停止 / 中断后再开新的运行。"
+    : "开始后主控在后台启动：检查游戏与 OBS、进入存档，然后交给智能体。";
+  document.querySelectorAll("#setup fieldset").forEach(f => { f.disabled = busy; });
+}
+
+async function startRun(event) {
+  event.preventDefault();
+  $("start").disabled = true;
+  try {
+    const result = await postJSON("/api/console/start", { options: formOptions() });
+    toast("已启动主控：正在检查游戏与 OBS、进入存档。");
+    $("launchBanner").hidden = true;
+    ui.launchWall = Date.now();
+    await refreshStatus();
+  } catch (e) {
+    toast(e.message, true); updateStartButton();
+  }
+}
+
+// ---------------------------------------------------------------- 状态灯、冻结提示与运行记录
+
+async function refreshStatus() {
+  try { ui.status = await getJSON("/api/console/status"); } catch (e) { return; }
+  const s = ui.status, g = s.game || {}, orch = s.orchestrator || {};
+  const light = (id, cls, detailId, text) => { $(id).className = "light " + cls; $(detailId).textContent = text; };
+  if (!g.running) light("lightGame", "off", "gameDetail", g.reason ? "未运行" : "未运行");
+  else {
+    const scene = (g.scene || "").replace(/^Level Celeste\//, "").replace(/ Normal /, " ");
+    light("lightGame", g.active ? (orch.running ? "active" : "frozen") : "on", "gameDetail",
+          `${g.version || ""} · ${g.active ? (orch.running ? "主控接管中" : "冻结中") : "正常运行"}${scene ? " · " + scene : ""}`);
+  }
+  light("lightObs", s.obs.running ? "on" : s.obs.running === false ? "off" : "off", "obsDetail",
+        s.obs.running ? (g.lockstep ? "锁步录制中" : "运行中") : s.obs.running === false ? "没在运行" : "—");
+  const runName = s.run && s.run.state && s.run.state.agent;
+  light("lightRun", orch.running ? "active" : "off", "runDetail", orch.running ? `运行中 · ${runName || "启动中"}` : "空闲");
+  // 冻结提示
+  const frozen = g.running && g.active && !orch.running;
+  $("frozenBanner").hidden = !frozen;
+  const resumable = ui.runs.find(r => r.resumable);
+  $("resumeLatest").hidden = !resumable;
+  if (frozen) $("frozenText").textContent = resumable
+    ? `游戏冻结在 ${resumable.agent} 停下的地方（章节计时不走）。可以续跑这次运行，或交还控制让游戏恢复正常。`
+    : "游戏被接管、停在当前帧（章节计时不走），没有主控在运行。不续跑时交还控制，游戏恢复正常运行。";
+  // 启动失败
+  if (!orch.running && orch.host_state === "exited" && orch.host_exit_code && orch.launched_wall
+      && ui.dismissedLaunch !== orch.launched_wall && Date.now() / 1000 - orch.launched_wall < 3600) {
+    $("launchBanner").hidden = false;
+    $("launchText").textContent = `主控启动后退出了（退出码 ${orch.host_exit_code}）。最后几行输出：`;
+    $("launchLog").textContent = orch.log_tail || "";
+  }
+  updateStartButton();
+}
+
+async function refreshRuns() {
+  try { ui.runs = await getJSON("/api/console/runs"); } catch (e) { return; }
+  const list = $("runs");
+  list.replaceChildren(...ui.runs.map(r => {
+    const li = document.createElement("li");
+    const title = document.createElement("span"); title.className = "title";
+    const when = r.stamp.replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, "$2-$3 $4:$5");
+    title.textContent = `${r.agent} · ${when}`;
+    const meta = document.createElement("span"); meta.className = "meta";
+    const mode = r.mode === "explore" ? "探索" : "速通";
+    const current = running() && ui.status && ui.status.run && ui.status.run.dir === r.dir;
+    const result = current ? "进行中" : !r.finished ? "没有总结（异常退出）" : r.completed ? "通关" : (r.stop_reason || "已结束");
+    meta.textContent = `${r.model || "—"} · ${mode}${r.live ? " + 直播" : ""} · 存档 ${r.save || "—"} · ${result}`
+      + (r.total_time_ticks ? ` · 章节计时 ${ticksText(r.total_time_ticks)}` : "") + (r.deaths != null ? ` · 死亡 ${r.deaths}` : "");
+    const side = document.createElement("span"); side.className = "side";
+    const tag = document.createElement("span"); tag.className = "tag";
+    if (r.completed) { tag.classList.add("ok"); tag.textContent = "通关"; }
+    else if (r.game_released === false) { tag.classList.add("frozen"); tag.textContent = "游戏保持冻结"; }
+    else tag.textContent = r.recording ? (r.pure ? "录像 + 纯享版" : "有录像") : "无录像";
+    side.appendChild(tag);
+    if (r.resumable) {
+      const b = document.createElement("button"); b.className = "btn small blue"; b.type = "button"; b.textContent = "续跑";
+      b.disabled = running();
+      b.addEventListener("click", () => resumeRun(r.dir));
+      side.appendChild(b);
+    }
+    li.append(title, side, meta);
+    li.title = r.dir;
+    return li;
+  }));
+  if (!ui.runs.length) list.replaceChildren(Object.assign(document.createElement("li"), { textContent: "还没有运行记录。", className: "meta" }));
+}
+
+async function resumeRun(dir) {
+  try {
+    await postJSON("/api/console/resume", { run: dir || (ui.runs.find(r => r.resumable) || {}).dir });
+    toast("已启动续跑：接着原来的章节、统计与会话。");
+    await refreshStatus();
+  } catch (e) { toast(e.message, true); }
+}
+async function releaseGame() {
+  try { await postJSON("/api/console/release", {}); toast("已交还游戏控制，游戏恢复正常运行。"); await refreshStatus(); }
+  catch (e) { toast(e.message, true); }
+}
+
+// ---------------------------------------------------------------- 当前运行：统计、控制与对话
+
+async function refreshRun() {
+  try { ui.hud = await getJSON("/hud/state"); } catch (e) { ui.hud = null; }
+  try { const c = await getJSON("/api/control"); ui.control = c.control || {}; ui.controlRun = c.run; } catch (e) { ui.control = null; }
+  const m = ui.hud && ui.hud.metrics;
+  const live = running() && m;
+  $("runIdle").hidden = !!live; $("runLive").hidden = !live;
+  if (live) renderRun(m);
+  renderControls();
+  const current = currentChapterId();
+  document.querySelectorAll("#route button").forEach((b, i) => b.classList.toggle("current", running() && current === i));
+}
+
+function renderRun(m) {
+  const cfg = (ui.hud && ui.hud.config) || {};
+  const names = cfg.names || {};
+  const key = String(m.model || "").replace(/\[[^\]]*\]$/, "").replace(/^claude-/, "").replace(/-\d+(?:-\d+)*$/, "");
+  $("runName").textContent = names[m.agent] || names[m.model] || names[key] || m.agent || "—";
+  const replaying = m.replaying || m.status === "replaying";
+  const [text, color] = replaying ? STATUS.replaying : (STATUS[m.status] || [m.status || "—", "var(--muted)"]);
+  $("runStatus").textContent = m.status === "studying" ? `${text} ${Math.round((m.kb_progress || 0) * 100)}%` : text;
+  $("runDot").style.background = color;
+  const chapter = (cfg.chapters || {})[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
+  $("runWhere").replaceChildren(document.createTextNode(chapter || ""), Object.assign(document.createElement("small"), { textContent: m.room || "" }));
+  const done = (m.splits || []).some(s => s.chapter === m.chapter);
+  const ticks = (m.completed_ticks || 0) + (done ? 0 : (m.chapter_time_ticks || 0));
+  const t = ticksText(ticks);
+  $("runClock").replaceChildren(document.createTextNode(t.slice(0, -4)), Object.assign(document.createElement("small"), { textContent: t.slice(-4) }));
+  $("runMode").textContent = [m.play_mode, m.hud_mod ? "游戏内 HUD" : "网页 HUD"].filter(Boolean).join(" · ");
+  const now = Date.now() / 1000 + ((ui.hud.now || Date.now() / 1000) - Date.now() / 1000);
+  let thinking = m.thinking_s || 0, tool = m.tool_s || 0;
+  if (["thinking", "compacting"].includes(m.status) && m.thinking_since_wall > 0) thinking += Math.max(0, now - m.thinking_since_wall);
+  if (m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
+  $("mDeaths").textContent = m.deaths || 0;
+  $("mDecisions").textContent = m.decisions || 0;
+  $("mEffort").textContent = m.effort_pending && m.effort_pending !== m.effort ? `${m.effort} → ${m.effort_pending}` : (m.effort || "—");
+  $("mThinking").textContent = clock(thinking);
+  $("mTool").textContent = clock(tool);
+  $("mContext").textContent = tokens(m.context_tokens);
+  $("runToolCall").textContent = m.tool_call ? `正在调用：${m.tool_call}${m.tool_status ? " — " + m.tool_status : ""}` : "";
+  $("runAside").textContent = m.status === "paused" ? "已暂停" : "";
+}
+
+function renderControls() {
+  const c = ui.control || {}, connected = !!c.connected && running();
+  $("pauseToggle").disabled = !connected;
+  $("pauseToggle").textContent = c.paused ? "继续" : "暂停";
+  $("pauseToggle").classList.toggle("primary", !!c.paused);
+  const effort = $("liveEffort");
+  const levels = c.effort_levels || [];
+  const wanted = ["auto", ...levels].join(",");
+  if (effort.dataset.levels !== wanted) {
+    effort.replaceChildren(new Option("推理强度：自动", "auto"), ...levels.map(l => new Option(`推理强度：固定 ${l}`, l)));
+    effort.dataset.levels = wanted;
+  }
+  if (document.activeElement !== effort) effort.value = c.effort_manual || "auto";
+  effort.disabled = !connected || !c.effort_control;
+  const cut = $("liveCutscene");
+  if (document.activeElement !== cut) cut.value = c.cutscene_mode || "auto";
+  cut.disabled = !connected || !c.cutscene_control;
+  $("fastToggle").hidden = !c.fast_control;
+  $("fastToggle").textContent = `Fast：${c.fast ? "开" : "关"}`;
+  $("stopRun").disabled = !connected || !c.goals_enabled;
+  $("interruptRun").hidden = !c.interrupt_control;
+  $("interruptRun").disabled = !connected;
+  $("goalBox").hidden = !c.goals_enabled;
+  $("send").disabled = !connected;
+  const engine = ui.status && ui.status.run && ui.status.run.state && ui.status.run.state.engine;
+  $("delivery").textContent = !running() ? "运行开始后可以发消息。" : !c.connected ? "等待主控连上…"
+    : c.paused ? "试玩已暂停：智能体只回复，不操作游戏。"
+    : engine === "codex" ? "消息会插入智能体当前这一轮。" : "智能体会先停下当前这一轮，再读你的消息。";
+  const last = (c.actions || [])[0];
+  $("controlStatus").textContent = last ? `最近的操作：${last.detail || last.status}` : "";
+}
+
+async function sendControl(kind, text = "") {
+  if (!ui.controlRun) return toast("还没有连上这次运行", true);
+  try { await postJSON("/api/control", { run: ui.controlRun, kind, text }); await refreshRun(); }
+  catch (e) { toast(e.message, true); }
+}
+
+async function refreshFeed() {
+  if (!running() && ui.lastFeed) return;
+  let data;
+  try { data = await getJSON("/hud/history?limit=60"); } catch (e) { return; }
+  const items = data.items || [];
+  const signature = JSON.stringify(items.map(i => [i.id, i.text, i.kind]));
+  if (signature === ui.lastFeed) return;
+  const feed = $("feed");
+  const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+  ui.lastFeed = signature;
+  feed.replaceChildren(...items.map(item => {
+    const div = document.createElement("div");
+    div.className = "msg" + (item.role === "user" ? " user" : item.role === "system" ? " system" : item.kind === "尝试" ? " attempt" : "");
+    const who = document.createElement("span"); who.className = "who";
+    const stamp = item.wall ? new Date(item.wall * 1000) : null;
+    who.textContent = `${stamp ? `${pad(stamp.getHours())}:${pad(stamp.getMinutes())}:${pad(stamp.getSeconds())} · ` : ""}${item.kind || "解说"}`;
+    div.append(who, document.createTextNode(item.text || ""));
+    return div;
+  }));
+  if (!items.length) feed.replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "运行开始后，智能体的解说、每段动作的说明和你们的对话会显示在这里。" }));
+  if (atBottom) feed.scrollTop = feed.scrollHeight;
+}
+
+async function sendMessage(event) {
+  event.preventDefault();
+  const text = $("message").value.trim();
+  if (!text) return;
+  $("send").disabled = true;
+  try { await postJSON("/api/control", { run: ui.controlRun, kind: "message", text }); $("message").value = ""; toast("已发给智能体。"); }
+  catch (e) { toast(e.message, true); }
+  finally { renderControls(); refreshFeed(); }
+}
+
+// ---------------------------------------------------------------- 事件
+
+document.querySelectorAll(".mode").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
+$("runtime").addEventListener("change", async () => { $("agent").value = ""; await loadModels(); schedulePreview(); });
+$("model").addEventListener("change", () => { fillEfforts(); schedulePreview(); });
+$("live").addEventListener("change", onLive);
+$("hudMod").addEventListener("change", () => { ui.hudTouched = true; onLive(); });
+$("study").addEventListener("change", () => { $("study").dataset.touched = "1"; });
+$("save").addEventListener("change", onSaveChange);
+$("setup").addEventListener("input", schedulePreview);
+$("setup").addEventListener("change", schedulePreview);
+$("setup").addEventListener("submit", startRun);
+document.querySelectorAll("[data-preset]").forEach(b => b.addEventListener("click", () => {
+  const p = b.dataset.preset, first = ui.chapters[0] ?? 0;
+  ui.chapters = p === "formal" ? [0, 1, 2] : p === "one" ? [first] : p === "all" ? ui.options.chapters.map(c => c.id) : [];
+  buildRoute(); schedulePreview();
+}));
+$("pauseToggle").addEventListener("click", () => sendControl(ui.control && ui.control.paused ? "resume" : "pause"));
+$("liveEffort").addEventListener("change", (e) => sendControl("effort", e.target.value));
+$("liveCutscene").addEventListener("change", (e) => sendControl("cutscene_mode", e.target.value));
+$("fastToggle").addEventListener("click", () => sendControl("fast", ui.control && ui.control.fast ? "off" : "on"));
+$("stopRun").addEventListener("click", () => {
+  if (confirmTwice("stopRun", "再点一次确认：结束运行、保存录像并交还游戏控制")) sendControl("stop");
+});
+$("interruptRun").addEventListener("click", () => {
+  if (confirmTwice("interruptRun", "再点一次确认：中断运行，游戏保持冻结，之后可续跑")) sendControl("interrupt");
+});
+$("goalSave").addEventListener("click", () => {
+  const field = $("goalField").value, raw = $("goalValue").value.trim();
+  const conditions = [];
+  if (field === "map_complete") conditions.push({ field, op: "eq", value: true });
+  else if (raw) conditions.push(field === "room" ? { field, op: "eq", value: raw } : { field, op: field === "deaths" ? "gte" : "gte", value: Number(raw) });
+  const goal = { text: $("goalText").value.trim(), conditions, match: "all" };
+  sendControl("goal", JSON.stringify(goal));
+});
+$("compose").addEventListener("submit", sendMessage);
+$("message").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("compose").requestSubmit(); } });
+$("releaseGame").addEventListener("click", releaseGame);
+$("resumeLatest").addEventListener("click", () => resumeRun());
+$("launchDismiss").addEventListener("click", () => { $("launchBanner").hidden = true; ui.dismissedLaunch = ui.status && ui.status.orchestrator.launched_wall; });
+
+// 危险操作点两次：第一次只把按钮换成确认文字，3 秒内再点才执行
+const pending = {};
+function confirmTwice(id, text) {
+  const b = $(id);
+  if (pending[id]) { clearTimeout(pending[id].timer); b.textContent = pending[id].label; delete pending[id]; return true; }
+  pending[id] = { label: b.textContent, timer: setTimeout(() => { b.textContent = pending[id].label; delete pending[id]; }, 3000) };
+  b.textContent = text;
+  return false;
+}
+
+(async function boot() {
+  try { await loadOptions(); } catch (e) { toast("读取设置失败：" + e.message, true); }
+  await refreshRuns(); await refreshStatus(); await refreshRun(); await refreshFeed();
+  setInterval(refreshStatus, 1500);
+  setInterval(refreshRun, 700);
+  setInterval(refreshFeed, 1200);
+  setInterval(refreshRuns, 8000);
+  window.addEventListener("resize", buildRoute);
+})();
+</script>
+</body>
+</html>

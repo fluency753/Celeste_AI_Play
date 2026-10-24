@@ -74,6 +74,42 @@ internal static class ModHud {
 
     public static void NoteIdleDraw() => SinceIdleDraw.Restart();
 
+    private static readonly Stopwatch SinceReport = Stopwatch.StartNew();
+    private static readonly byte[] Text = new byte[64];
+    private static bool reportFailed;
+
+    /// <summary>每个节拍（最多每 0.25 秒一次）把桥接的状态写进共享内存，控制台不用连桥接（桥接只接受一个连接，
+    /// 连上会顶掉主控）就能看到：心跳、是否接管、锁步、帧号、OBS 插件、录像音频、版本、场景。</summary>
+    public static void ReportStatus(bool active, bool lockstep, long frame, bool clock, bool recording) {
+        if (SinceReport.ElapsedMilliseconds < 250 && SinceReport.ElapsedMilliseconds > 0) return;
+        MemoryMappedViewAccessor? v = View;
+        if (v == null) return;
+        SinceReport.Restart();
+        try {
+            v.Write(2064, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            v.Write(2072, active ? 1 : 0);
+            v.Write(2076, lockstep ? 1 : 0);
+            v.Write(2080, frame);
+            v.Write(2088, clock ? 1 : 0);
+            v.Write(2092, recording ? 1 : 0);
+            WriteText(v, 2096, 32, Bridge.Version);
+            string scene = Engine.Scene?.GetType().Name ?? "none";
+            if (Engine.Scene is global::Celeste.Level level)
+                scene = $"Level {level.Session.Area.SID} {level.Session.Area.Mode} {level.Session.Level}";
+            WriteText(v, 2128, 64, scene);
+        } catch (Exception ex) {
+            if (!reportFailed) Log.Warn($"bridge status report failed: {ex.Message}");
+            reportFailed = true;
+        }
+    }
+
+    private static void WriteText(MemoryMappedViewAccessor v, long offset, int size, string text) {
+        Array.Clear(Text);
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        Array.Copy(bytes, Text, Math.Min(bytes.Length, Math.Min(size, Text.Length) - 1));
+        v.WriteArray(offset, Text, 0, size);
+    }
+
     /// <summary>把共享内存里的新卡片读进纹理（顺序锁：写到一半的不要）。</summary>
     private static void Upload(MemoryMappedViewAccessor v, GraphicsDevice device) {
         long seq = v.ReadInt64(8);

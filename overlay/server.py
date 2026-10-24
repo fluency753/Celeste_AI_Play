@@ -2,6 +2,8 @@
 
 - GET /hud         HUD 页面（OBS 浏览器源与置顶窗口用同一个页面）
 - GET /hud/state   当前运行的统计（metrics.json）、HUD 配置与服务器时间
+- GET /console     控制台：选模式、开关、模型与推理强度，启动 / 续跑 / 暂停 / 中断运行，与沙箱里的智能体对话
+- /api/console/*   控制台的后端（overlay/console_api.py）
 
 默认显示最近一次运行（runs/latest.txt 指向的目录），每次请求都重新读取，所以 OBS 浏览器源可以一直开着，
 换一局运行也不用刷新。主控运行时会在进程内自动启动它（端口被占用时说明已经有一个在跑，直接复用）。
@@ -28,6 +30,7 @@ from orchestrator.control import RunControl
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PAGE = Path(__file__).resolve().parent / "hud.html"
+CONSOLE_PAGE = Path(__file__).resolve().parent / "console.html"
 CONFIG = REPO_ROOT / "configs" / "hud.json"
 LOCAL_CONFIG = REPO_ROOT / "configs" / "local.hud.json"   # 本机覆盖（不入库）
 DEFAULT_PORT = 47790
@@ -105,6 +108,19 @@ def make_handler(pinned: Path | None):
             path = self.path.split("?", 1)[0]
             if path in ("/", "/hud", "/hud/"):
                 self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+            elif path in ("/console", "/console/"):
+                self._send(200, CONSOLE_PAGE.read_bytes(), "text/html; charset=utf-8")
+            elif path.startswith("/api/console/"):
+                from . import console_api
+                try:
+                    handler = {"/api/console/status": console_api.status, "/api/console/options": console_api.options,
+                               "/api/console/runs": console_api.runs}.get(path)
+                    if handler is None:
+                        self._send(404, b"not found", "text/plain")
+                        return
+                    self._json(200, handler())
+                except Exception as exc:  # noqa: BLE001（控制台的查询出错时把原因交给页面）
+                    self._json(500, {"error": str(exc)})
             elif path == '/api/saves':
                 from orchestrator.saves import inventory, supports_unicode
                 try:
@@ -158,27 +174,59 @@ def make_handler(pinned: Path | None):
                            "application/json; charset=utf-8")
             elif path == "/hud/history":
                 run_dir = current_run(pinned)
+                from urllib.parse import parse_qs
+                query = parse_qs(urlparse(self.path).query)
+                limit = int(query["limit"][0]) if query.get("limit", [""])[0].isdigit() else 12
                 payload = {"run": str(run_dir) if run_dir else None,
-                           "items": read_history(run_dir, read_metrics(run_dir))}
+                           "items": read_history(run_dir, read_metrics(run_dir), limit)}
                 self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
             else:
                 self._send(404, b"not found", "text/plain")
 
+        def _json(self, code: int, payload) -> None:
+            self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+
+        def _body(self) -> dict:
+            """控制请求：只接受本机页面发来的 JSON 对象。"""
+            origin = self.headers.get("Origin")
+            if origin and (urlparse(origin).scheme != "http" or urlparse(origin).hostname not in {"127.0.0.1", "localhost"}):
+                raise ValueError("只接受本机控制页面")
+            if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                raise ValueError("请求必须是 JSON")
+            length = int(self.headers.get("Content-Length", 0))
+            if not 0 < length <= 20000:
+                raise ValueError("请求大小无效")
+            data = json.loads(self.rfile.read(length))
+            if not isinstance(data, dict):
+                raise ValueError("请求必须是 JSON 对象")
+            return data
+
         def do_POST(self):
+            if self.path.startswith("/api/console/"):
+                from . import console_api
+                try:
+                    data = self._body()
+                    if pinned is not None:
+                        raise ValueError("固定预览模式的 HUD 服务不提供控制台操作")
+                    with _wake_lock:
+                        if self.path == "/api/console/start":
+                            result = console_api.start(data.get("options"))
+                        elif self.path == "/api/console/preview":
+                            result = console_api.preview(data.get("options"))
+                        elif self.path == "/api/console/resume":
+                            result = console_api.resume(str(data.get("run", "")), bool(data.get("fresh_session")))
+                        elif self.path == "/api/console/release":
+                            result = console_api.release()
+                        else:
+                            raise ValueError("未知控制台接口")
+                    self._json(200, result)
+                except (ValueError, TypeError, RuntimeError, OSError, KeyError) as exc:
+                    self._json(400, {"error": str(exc)})
+                return
             try:
                 if self.path != "/api/control":
                     raise ValueError("未知控制接口")
-                origin = self.headers.get("Origin")
-                if origin and (urlparse(origin).scheme != "http" or urlparse(origin).hostname not in {"127.0.0.1", "localhost"}):
-                    raise ValueError("只接受本机控制页面")
-                if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
-                    raise ValueError("请求必须是 JSON")
-                length = int(self.headers.get("Content-Length", 0))
-                if not 0 < length <= 20000:
-                    raise ValueError("请求大小无效")
-                data = json.loads(self.rfile.read(length))
-                if not isinstance(data, dict):
-                    raise ValueError("请求必须是 JSON 对象")
+                data = self._body()
                 directory = current_run(pinned)
                 if directory is None or data.get("run") != str(directory):
                     raise ValueError("当前运行已变化，请刷新后重试")
@@ -227,7 +275,10 @@ def make_handler(pinned: Path | None):
                 if data.get('kind') == 'effort':
                     if not control.snapshot().get('effort_control'):
                         raise ValueError('当前主控还不支持手动推理强度，请更新主控后重试')
-                    if data.get('text') != 'auto':
+                    # 原生 GPT 的档位按 Codex 模型目录预先核对；其他执行器由主控按所选模型声明的档位核对
+                    engine = (json.loads((directory / 'run_state.json').read_text(encoding='utf-8'))
+                              if (directory / 'run_state.json').exists() else {}).get('engine', 'codex')
+                    if data.get('text') != 'auto' and engine == 'codex':
                         from orchestrator.model_catalog import resolve_selection
                         resolve_selection((read_metrics(directory) or {}).get('model'),data.get('text'))
                 if data.get('kind')=='cutscene_mode' and not control.snapshot().get('cutscene_control'):

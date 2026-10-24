@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.13.0";
+    public const string Version = "0.13.1";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -45,6 +45,7 @@ internal static class Bridge {
     // ---- 每个节拍的入口 ----
 
     public static void Tick(Action runOriginal) {
+        ModHud.ReportStatus(Active, lockstepEngaged, Frame, ClockServer.Connected, RecordingAudio.Enabled);
         DrainInbox();
         FlushPendingAck();
         UpdateLoopMode();

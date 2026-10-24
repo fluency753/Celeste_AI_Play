@@ -42,6 +42,9 @@ OFF_TIMER_BASE, OFF_TIMER_EXTRA = 48, 56
 OFF_GLYPHS_N, OFF_MARGIN_RIGHT, OFF_MARGIN_TOP = 64, 68, 72
 OFF_GLYPHS = 80
 OFF_HEARTBEAT, OFF_VIEW_W, OFF_VIEW_H = 2048, 2056, 2060
+# 桥接写的状态（控制台读，不用连桥接）：心跳、接管、锁步、帧号、OBS 插件、录像音频、版本、场景
+OFF_BRIDGE_BEAT, OFF_BRIDGE_ACTIVE, OFF_BRIDGE_LOCKSTEP, OFF_BRIDGE_FRAME = 2064, 2072, 2076, 2080
+OFF_BRIDGE_CLOCK, OFF_BRIDGE_RECORDING, OFF_BRIDGE_VERSION, OFF_BRIDGE_SCENE = 2088, 2092, 2096, 2128
 
 DESIGN_WIDTH = 350            # 旧版设计稿：1080p 下卡片页面宽 350 像素（游戏宽 1920 的约 18%）
 DESIGN_VIEW = 1920
@@ -684,6 +687,33 @@ class SharedHud:
 
 def mapping_name(bridge_port: int) -> str:
     return f"Local\\CelesteAIHud-{bridge_port}"
+
+
+_status_maps: dict[int, object] = {}
+
+
+def bridge_status(bridge_port: int = 47774, buffer=None) -> dict:
+    """桥接写在共享内存里的状态。桥接（0.13.1 起）每 0.25 秒写一次；3 秒没更新就当游戏没在运行。
+    只读不写：控制台用它看游戏状态，不连桥接（桥接只接受一个连接，连上会顶掉主控）。"""
+    if buffer is None:
+        if sys.platform != "win32":
+            return {"running": False, "reason": "只在 Windows 上读取"}
+        if bridge_port not in _status_maps:
+            import mmap
+            _status_maps[bridge_port] = mmap.mmap(-1, MAPPING_SIZE, tagname=mapping_name(bridge_port))
+        buffer = _status_maps[bridge_port]
+    beat = struct.unpack_from("<q", buffer, OFF_BRIDGE_BEAT)[0]
+    if beat <= 0:
+        return {"running": False, "reason": "没有收到桥接的状态（游戏没开，或桥接早于 0.13.1）"}
+    age = time.time() - beat / 1000
+    text = lambda off, n: bytes(buffer[off:off + n]).split(b"\0", 1)[0].decode("utf-8", errors="replace")
+    return {"running": age < 3, "age_s": round(age, 1),
+            "active": struct.unpack_from("<i", buffer, OFF_BRIDGE_ACTIVE)[0] == 1,
+            "lockstep": struct.unpack_from("<i", buffer, OFF_BRIDGE_LOCKSTEP)[0] == 1,
+            "frame": struct.unpack_from("<q", buffer, OFF_BRIDGE_FRAME)[0],
+            "obs_plugin": struct.unpack_from("<i", buffer, OFF_BRIDGE_CLOCK)[0] == 1,
+            "recording_audio": struct.unpack_from("<i", buffer, OFF_BRIDGE_RECORDING)[0] == 1,
+            "version": text(OFF_BRIDGE_VERSION, 32), "scene": text(OFF_BRIDGE_SCENE, 64)}
 
 
 # ---------------------------------------------------------------- 主控里的线程

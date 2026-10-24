@@ -73,6 +73,7 @@ def _strip_images(value):
 
 class ClaudeRunner(SessionControls):
     capabilities = RuntimeCapabilities()
+    supports_interrupt = True        # 控制台"中断"：结束运行、游戏保持冻结、可续跑
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
                  token: str, container: str | None = None, study: KbStudy | None = None,
                  session_id: str | None = None, resume: bool = False, resume_note: str | None = None,
@@ -333,7 +334,7 @@ class ClaudeRunner(SessionControls):
         started = time.monotonic()
         try:
             if not await self._next_user_turn(first):
-                self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
+                self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                 return True
             while True:
                 if reader.done():
@@ -366,6 +367,8 @@ class ClaudeRunner(SessionControls):
                         if self.session.done:
                             self.stop_reason = self.session.done_reason
                             return True
+                        if self.stop_requested and self.stop_reason and not self.turn_active:
+                            return True       # 控制台中断：这一轮已经停下
                         continue
                 if self.quota_until is not None and not self.stop_reason:
                     return False
@@ -396,7 +399,7 @@ class ClaudeRunner(SessionControls):
                 note = await self._switch_effort() if self.metrics.state.effort_pending else ""
                 next_prompt = self.study.reminder() if self.study is not None and not self.study.ready() else CONTINUE_PROMPT
                 if not await self._next_user_turn(note + next_prompt):
-                    self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
+                    self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                     return True
         finally:
             await self._shutdown(reader)
