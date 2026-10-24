@@ -6,6 +6,7 @@
      证明 OBS 采到的正是那一帧，而不是上一帧或下一帧；
   3. 声音：audio.wav 的长度正好是帧数 × 每帧样本数；每段动作开头（声音从暂停恢复的那一刻）
      在 WAV 里出现的位置给出声音相对画面的延迟，建议的 audio_offset_ms 写进 configs/local.recording.json；
+     每段动作最后一帧的末尾不该有超过淡出长度（2 毫秒）的静音（声音暂停得太早会截掉一截音乐）；
   4. gameplay.mkv 合成成功，画面与声音时长一致。
 
 前提：游戏开着（桥接 0.8.5 以上），test 存档停在关卡里、Madeline 可操作并站在平地上（建议 1A 房间 6）；
@@ -104,6 +105,30 @@ def wav_onsets(path: Path, starts: list[int], samples_per_frame: int, threshold:
     return out
 
 
+def wav_tails(path: Path, ends: list[int], samples_per_frame: int, threshold: float) -> list[float | None]:
+    """每段动作最后一帧末尾连续静音的长度（毫秒）。这一帧前 11 毫秒本来就没声音时记 None（无从判断）。
+    插件在接缝前淡出 2 毫秒，所以 2 毫秒以内算正常；更长说明声音暂停得太早，截掉了这一帧的一截音乐。"""
+    data = path.read_bytes()
+    pos = data.find(b"data")
+    samples = array.array("f")
+    samples.frombytes(data[pos + 8:pos + 8 + ((len(data) - pos - 8) // 8) * 8])
+    rate = 48000
+    head = samples_per_frame * 11 // 16
+    out: list[float | None] = []
+    for end in ends:
+        first = end * samples_per_frame
+        if (first + samples_per_frame) * 2 > len(samples):
+            out.append(None)
+            continue
+        loud = [i for i in range(first, first + samples_per_frame)
+                if abs(samples[2 * i]) > threshold or abs(samples[2 * i + 1]) > threshold]
+        if not loud or loud[0] >= first + head:
+            out.append(None)
+            continue
+        out.append((first + samples_per_frame - 1 - loud[-1]) * 1000.0 / rate)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--save", default="test")
@@ -199,6 +224,14 @@ def main() -> int:
     measured = [o for o in onsets if o is not None]
     print(f"  每段动作开头声音恢复的位置（毫秒，相对第一帧开头；桥接 0.11.3 起应在 0 附近）："
           f"{[None if o is None else round(o, 1) for o in onsets]}", flush=True)
+    ends = [index_of[b] for a, b in acts if b in index_of]
+    tails = wav_tails(wav_path, ends, spf, args.threshold) if wav_path.exists() else []
+    judged = [t for t in tails if t is not None]
+    print(f"  每段动作最后一帧末尾的静音（毫秒；插件淡出 2 毫秒以内算正常，桥接 0.11.4 起应都在 3 以内）："
+          f"{[None if t is None else round(t, 1) for t in tails]}", flush=True)
+    if judged:
+        check(all(t <= 3.0 for t in judged), "暂停前最后一帧的音乐没有被截断",
+              f"超过 3 毫秒的 {sum(1 for t in judged if t > 3.0)}/{len(judged)} 段，最长 {max(judged):.1f} ms")
     segments = []
     seg_path = rec_dir / "segments.csv"
     if seg_path.exists():
@@ -224,6 +257,7 @@ def main() -> int:
     kinds = {s.get("codec_type"): s for s in info.get("streams") or []}
     check({"video", "audio"} <= set(kinds), "gameplay.mkv 含画面与声音", f"{sorted(kinds)}")
     summary = {"acts": acts, "expected": expected, "rows": len(rows), "gaps": gaps[:50], "onsets_ms": onsets,
+               "tails_ms": tails,
                "recording": result}
     (run_dir / "m6_check.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n结果：{'全部通过' if FAILED == 0 else f'{FAILED} 项不通过'}；目录 {rec_dir}", flush=True)

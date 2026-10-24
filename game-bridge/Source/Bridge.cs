@@ -20,7 +20,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.11.3";
+    public const string Version = "0.11.4";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -110,6 +110,9 @@ internal static class Bridge {
     private enum AudioMode { Playing, Frozen, MusicOnly }
     private static AudioMode audioMode = AudioMode.Playing;
     private static bool sfxPausedByUs;
+    /// <summary>停住后第几个节拍暂停声音（见 LockstepTick）；idleTokens 是自上一帧以来没有推进的节拍数。</summary>
+    private const int FreezeAfterIdleTokens = 2;
+    private static int idleTokens;
     // 规划回放时只放音乐：音效、界面音效与音乐里的短促音效（stings）暂停
     private static readonly string[] SfxBuses = { "bus:/gameplay_sfx", "bus:/ui_sfx", "bus:/music/stings" };
 
@@ -125,12 +128,16 @@ internal static class Bridge {
         }
         if (!wantsFrame) {
             ClockServer.Send($"N {token}");
-            // 游戏一停就暂停声音：放在这个节拍的 Audio.Update 之前，正好在上一帧的 1/60 秒结束时生效，
-            // 录像里的音乐在暂停与继续之间不丢一截（之前等 60 毫秒才暂停，每个接缝丢约 50 毫秒）
-            SetAudio(AudioMode.Frozen);
+            // 游戏停住后的第 FreezeAfterIdleTokens 个节拍暂停声音（放在这个节拍的 Audio.Update 之前）。
+            // 第一个节拍就暂停时，暂停正好卡在上一帧那 1/60 秒的末尾，FMOD 按混音块生效有十几毫秒的抖动，
+            // 约四分之一的接缝里上一帧末尾被截成静音（实测 3–19 毫秒，听得出断口）；晚一个节拍留出余量，
+            // 代价是每个接缝跳过约一帧长度的音乐（接缝两边有 2 毫秒淡出淡入，听不出来）。
+            // 更早的做法是等 60 毫秒才暂停，每个接缝丢约 50 毫秒
+            if (++idleTokens >= FreezeAfterIdleTokens) SetAudio(AudioMode.Frozen);
             HaltWithoutDrawing(runOriginal);
             return;
         }
+        idleTokens = 0;
         // OBS 的游戏采集钩子最多每 1/120 秒拷贝一次画面，离上一次呈现太近的那次呈现不会被拷贝：
         // 停住时不重画（见 HaltWithoutDrawing），推进前再确认离上一次呈现已超过这个间隔
         WaitSincePresent(MinPresentGapMs);
@@ -232,7 +239,7 @@ internal static class Bridge {
     }
 
     /// <summary>游戏冻结时声音也冻结：超过 60 毫秒没有推进就暂停 FMOD 主总线，推进时立即恢复。
-    /// 录制（锁步）时更精确：停住后的第一个节拍就暂停、推进前恢复（见 LockstepTick），这里只是兜底。
+    /// 录制（锁步）时更精确：停住后的第二个节拍暂停、推进前恢复（见 LockstepTick），这里只是兜底。
     /// 规划回放的帧里音乐照常播放（音效暂停），录像里的音乐与之后真实执行时的音乐连在一起。</summary>
     private static void UpdateAudio(bool advanced, bool replayed) {
         if (advanced) {
