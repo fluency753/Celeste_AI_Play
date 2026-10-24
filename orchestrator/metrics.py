@@ -46,6 +46,9 @@ class MetricsState:
     play_game_s: float = 0.0
     auto_game_s: float = 0.0
     decisions: int = 0
+    decision_wait_s: float = 0.0      # 两次 act 之间无工具等待的累计；含请求、推理、输出与压缩
+    turn_fast_requested: bool | None = None
+    turn_service_tier_requested: str | None = None  # 请求值，不代表服务端确认的实际档位
     frames_played: int = 0
     frames_auto: int = 0
     deaths: int = 0
@@ -74,7 +77,7 @@ class MetricsState:
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）
     sim_energy: dict | None = None    # 后台限额模拟体力；None 表示本局未开启
     sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数（全程累计，写进总结）
-    sim_round_rollouts: int = 0       # 当前这次模拟器调用推演的路线条数（HUD 显示；这一轮回放画完清零）
+    sim_round_rollouts: int = 0       # 本轮回放的临时路线数，画完清零；累计显示使用 sim_rollouts
     sim_best_frames: int = 0          # 当前房间里推演出的最快出房帧数，从进入房间的那一帧算起（0 = 还没有；换房间清零）
     replan_s: float = 0.0             # 重算程序用时（已包含在工具时间里）
     study_s: float = 0.0              # 准备阶段（读知识库等）用时，不计入 elapsed_s
@@ -108,6 +111,8 @@ class MetricsState:
 class Metrics:
     def __init__(self, path: Path, agent: str, model: str, effort: str, budget_s: float, study: bool = False):
         self._path = path
+        from .decision_timing import DecisionTiming
+        self.timing = DecisionTiming(path.parent / "decision_timing.jsonl")
         self._lock = threading.Lock()
         self._t0 = time.monotonic()
         self._offset = 0.0              # 续跑时上一段运行已用的现实用时
@@ -172,17 +177,40 @@ class Metrics:
             self._write_locked()
             return waited
 
-    def turn_begin(self) -> None:
+    def turn_begin(self, *, fast: bool | None = None, service_tier: str | None = None,
+                   effort: str | None = None, runtime: str | None = None) -> None:
         """主控给智能体发出一条消息：一轮开始。"""
         with self._lock:
             self._flush_locked()
+            self.state.turn_fast_requested = fast
+            self.state.turn_service_tier_requested = service_tier
+            self.timing.begin(self.timing.clock(), self.state.thinking_s,
+                              runtime=runtime, agent=self.state.agent, model=self.state.model,
+                              effort=effort or self.state.effort,
+                              fast_requested=fast, service_tier_requested=service_tier)
             self._in_turn = True
             self._write_locked()
+
+    def turn_acknowledged(self, turn_id: str) -> None:
+        with self._lock:
+            self.timing.acknowledge(self.timing.clock(), turn_id)
+
+    def decision_begin(self) -> None:
+        with self._lock:
+            self._flush_locked()
+            self.state.decision_wait_s = self.timing.decision_begin(self.timing.clock(), self.state.thinking_s)
+            self._write_locked()
+
+    def decision_end(self, result: dict | None) -> None:
+        with self._lock:
+            self._flush_locked()
+            self.timing.decision_end(self.timing.clock(), self.state.thinking_s, result)
 
     def turn_end(self) -> None:
         """Claude Code 报告这一轮结束（或进程退出）。"""
         with self._lock:
             self._flush_locked()
+            self.timing.end(self.timing.clock())
             self._in_turn = False
             self._tools.clear()
             self._tool_labels.clear()
@@ -208,6 +236,8 @@ class Metrics:
             if tool_id in self._tools:
                 return
             self._flush_locked()
+            self.timing.tool_begin(tool_id, label, game_tool, self.timing.clock(),
+                                   self.state.thinking_s, self.playing)
             self._tools.add(tool_id)
             if label:
                 self._tool_labels[tool_id] = label
@@ -223,6 +253,7 @@ class Metrics:
             if tool_id not in self._tools:
                 return
             self._flush_locked()
+            self.timing.tool_end(tool_id, self.timing.clock(), self.state.thinking_s)
             self._tools.discard(tool_id)
             self._tool_labels.pop(tool_id, None)
             self.state.tool_call = self._tool_summary()
@@ -272,6 +303,7 @@ class Metrics:
         """等待额度重置：现实用时（或准备时间）停止走表。"""
         with self._lock:
             self._flush_locked()
+            self.timing.pause()
             self._in_turn = False
             self._tools.clear()
             if self._pause_start is None:
@@ -288,6 +320,7 @@ class Metrics:
         with self._lock:
             if self._pause_start is None:
                 return 0.0
+            self.timing.resume()
             waited = time.monotonic() - self._pause_start
             self._paused += waited
             self._pause_start = None

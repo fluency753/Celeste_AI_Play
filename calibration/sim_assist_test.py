@@ -122,6 +122,11 @@ class SimEnergyTests(unittest.TestCase):
         self.assertEqual(int(index.start[0]), 10)
         self.assertEqual(int(index.stop[0]), 1)
 
+    def test_partial_replay_failure_cannot_be_recounted_as_legacy(self):
+        with self.assertRaises(ValueError):
+            write_replay(self.root, [{"frames": [[1, 2, 3]]}, {"frames": [[2, "bad", 3]]}], 1)
+        self.assertEqual(list((self.root / "game/simlog").glob("*.bin")), [])
+
 
 class BrokerTests(unittest.TestCase):
     def setUp(self):
@@ -142,6 +147,68 @@ class BrokerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.session.simulate({"candidates": [["6000,R"]]})
         self.assertEqual(self.calls, [])
+
+    def test_mcp_predictions_count_once_and_replay_without_next_action(self):
+        import asyncio
+        from orchestrator.playback import Playback
+        from orchestrator.server import build_server
+        for enabled in (True, False):
+            with self.subTest(playback=enabled):
+                session = self.session
+                session.cfg.playback = enabled
+                session.workspace = session.run_dir / str(enabled)
+                session.metrics.update(sim_calls=0, sim_rollouts=0)
+                session.sim_energy = SimEnergy(session.run_dir / (str(enabled) + "-energy.json"))
+                playback = Playback(session.cfg, session, session.metrics, None, log=lambda _: None)
+                session.playback = playback
+                prediction = {"info": {"frame": 1}, "results": [
+                    {"stop": "done", "frames": [[2, 2, 3], [3, 4, 5]]},
+                    {"stop": "death", "frames": [[2, 2, 3], [3, 5, 5]]}]}
+                server = build_server(session)
+                try:
+                    with patch("orchestrator.sim_assist.run_predictions", return_value=prediction), \
+                         patch.object(playback, "_call", return_value={}) as replay:
+                        asyncio.run(server.call_tool("simulate", {"candidates": [["20,R"], ["20,L"]]}))
+                        # drain waits for the collector; no act or Bash result needed to submit it.
+                        playback.drain()
+                        self.assertEqual(session.metrics.state.sim_calls, 1)
+                        self.assertEqual(session.metrics.state.sim_rollouts, 2)
+                        self.assertEqual(replay.call_count, 1 if enabled else 0)
+                        self.assertEqual(session.metrics.state.sim_round_rollouts, 0)
+                        asyncio.run(server.call_tool("simulate", {}))
+                        playback.drain()
+                        self.assertEqual(session.metrics.state.sim_calls, 1)
+                        self.assertEqual(session.metrics.state.sim_rollouts, 2)
+                finally:
+                    playback.close()
+                    session.playback = None
+
+    def test_visualization_failure_keeps_success_count_and_spent_energy(self):
+        self.session.workspace = self.session.run_dir / "workspace"
+        self.session.playback = SimpleNamespace(collect_prediction=lambda *a: (_ for _ in ()).throw(OSError("disk")))
+        prediction = {"info": {"frame": 1}, "results": [{"stop": "done", "frames": []}]}
+        with patch("orchestrator.sim_assist.run_predictions", return_value=prediction):
+            result = self.session.simulate({"candidates": [["60,R"]]})
+        self.assertIn("replay_warning", result)
+        self.assertEqual(self.session.metrics.state.sim_calls, 1)
+        self.assertEqual(self.session.metrics.state.sim_rollouts, 1)
+        self.assertEqual(result["energy"]["balance"], 27)
+
+    def test_legacy_logs_are_counted_with_playback_disabled(self):
+        from orchestrator.playback import Playback
+        session = self.session
+        session.cfg.playback = False
+        session.workspace = session.run_dir / "workspace"
+        playback = Playback(session.cfg, session, session.metrics, None, log=lambda _: None)
+        try:
+            write_replay(session.workspace, [{"stop": "done", "frames": [[1, 2, 3], [2, 3, 3]]}], 0)
+            playback.drain()
+            playback.drain()
+            self.assertEqual(session.metrics.state.sim_calls, 1)
+            self.assertEqual(session.metrics.state.sim_rollouts, 1)
+            self.assertEqual(playback.rounds, [])
+        finally:
+            playback.close()
 
     def test_infrastructure_failure_refunds_but_prediction_death_costs(self):
         with patch("orchestrator.sim_assist.run_predictions", side_effect=RuntimeError("worker down")):

@@ -494,7 +494,7 @@ class ClaudeRunner(SessionControls):
         self.turn_done.clear()
         self._tool_calls_this_turn = 0
         await self._write(text)
-        self.metrics.turn_begin()
+        self.metrics.turn_begin(runtime="claude")
         self.metrics.update(status=self._idle_status())
 
     async def _shutdown(self, reader: asyncio.Task) -> None:

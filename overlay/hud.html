@@ -197,7 +197,7 @@
     <div class="stat"><span class="k">知识库读取</span><span class="v num" id="study">—</span></div>
     <div class="stat"><span class="k">死亡</span><span class="v num" id="deaths">0 次</span></div>
     <div class="stat"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0 次</span></div>
-    <div class="stat"><span class="k">推演路径</span><span class="v num" id="simRuns">0 条</span></div>
+    <div class="stat"><span class="k">累计推演</span><span class="v num" id="simRuns">0 条</span></div>
     <div class="stat"><span class="k">推演最速</span><span class="v num" id="simBest">—</span></div>
     <div class="stat wide hidden" id="simEnergyBox"><span class="k">模拟体力</span><span class="v num" id="simEnergy">—</span></div>
     <div class="stat wide"><span class="k">调用工具</span><span class="v call" id="toolCall">—</span></div>
@@ -241,7 +241,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 45;
+const PAGE_VERSION = 46;
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -545,7 +545,7 @@ function render() {
   $("simEnergyBox").classList.toggle("hidden", !energy);
   setText($("simEnergy"), energy ? `${energy.balance} / ${energy.capacity}` : "—");
   $("simEnergyBox").title = energy ? energy.rules : "";
-  const runs = m.sim_round_rollouts || 0;
+  const runs = m.sim_rollouts || 0;
   setText($("simRuns"), (runs >= 10000 ? `${(runs / 10000).toFixed(runs >= 1e6 ? 0 : 1)}万` : runs.toLocaleString("en-US")) + " 条");
   const best = m.sim_best_frames || 0;
   setText($("simBest"), best > 0 ? `${(best / 60).toFixed(3)}s` : "—");

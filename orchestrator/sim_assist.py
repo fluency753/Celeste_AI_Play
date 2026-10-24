@@ -15,7 +15,7 @@ from .config import find_docker_exe
 RULES = ("体力上限100，初始40；真实操作每60个移动帧恢复1点，每分钟最多恢复20点；"
          "首次进入新房间奖励15点（起始房间不奖励），死亡/等待不恢复。"
          "每次花费8+向上取整(总预测帧数/12)+4×额外候选数；最多6条、每条180帧、合计600帧。")
-INSTRUCTIONS = ("\n\n# 有限模拟辅助\n卡住后可借助短路线预测，仍以真实尝试为主。" + RULES +
+INSTRUCTIONS = ("\n\n# 有限模拟辅助\n几何核验后仍有路线歧义，或第一次受阻时，就可主动用少量不同的短路线验证，不必等待连续失败。仍以真实尝试为主。" + RULES +
                 '\n调用 simulate 工具，参数为 {"candidates":[["30,R","1,R,J","29,R,J"]]}。'
                 '省略 candidates 查询体力不扣费。只能从游戏当前帧预测；不会推进真实游戏。'
                 '结果包含逐帧位置、事件和近似/未模拟实体信息；不保证未知机制完全准确。'
@@ -150,11 +150,22 @@ def write_replay(workspace, predictions, start_frame):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module._LOG_DIR = str(workspace / "game" / "simlog")
+    (workspace / "game" / "simlog").mkdir(parents=True, exist_ok=True)
     log = module._Log()
+    path = None
     try:
         for result in predictions:
             points = [(r[1], r[2]) for r in result.get("frames", []) if len(r) >= 3 and r[1] is not None]
             stop = result.get("stop")
             log.write(points, "exit" if stop == "room" else "death" if stop == "death" else "open", start_frame)
-    finally:
+    except Exception:
+        path = Path(log.file.name) if log.file else None
         log.close()
+        if path:
+            path.unlink(missing_ok=True)  # partial files must not be recounted as legacy predictions
+        raise
+    finally:
+        if log.file:
+            path = Path(log.file.name)
+        log.close()
+    return [path] if path else []

@@ -10,6 +10,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from .game_session import ActError, GameSession
 from .kb_study import KbStudy
 from .observation import describe_attempts, describe_obs, describe_step, room_json, upscale_png
+from .exploration import GEOMETRY, action_hint
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图、整个房间的字符地图与精确数据（JSON；房间信息以精确数据为准，截图仅作参考），其余时候只给文字状态与画面附近的信息。
 
@@ -148,6 +149,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     content.append(Image(data=upscale_png(image), format="png"))
                 content.append(describe_obs(obs, full_room=True, effort=header_line())
                                + "\n\n" + ROOM_JSON_HEADER + room_json(obs)
+                               + ("\n" + GEOMETRY if session.cfg.knowledge_profile == "explore" else "")
                                + ("\n" + ws_note if session.workspace else ""))
                 return content
             finally:
@@ -168,7 +170,15 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             begin()
             try:
                 deaths_before = metrics.state.deaths
-                outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file)
+                before = getattr(session, "last_obs", None)
+                metrics.decision_begin()
+                decision_wait = getattr(metrics.state, "decision_wait_s", 0)
+                result = None
+                try:
+                    outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file)
+                    result = outcome.result
+                finally:
+                    metrics.decision_end(result)
                 parts = [describe_step(outcome.result)]
                 if gate is not None:
                     gate.on_death(metrics.state.deaths - deaths_before)  # 在游戏里死了：补规划轮次
@@ -186,6 +196,12 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line()))
                 if new_room:
                     parts.append(ROOM_JSON_HEADER + room_json(outcome.obs))
+                if session.cfg.knowledge_profile == "explore" and not session.done:
+                    if new_room:
+                        parts.append(GEOMETRY)
+                    hint = action_hint(before, outcome.obs, outcome.result, inputs, decision_wait)
+                    if hint:
+                        parts.append(hint)
                 if session.workspace:
                     parts.append(ws_note)
                 content: list = []

@@ -392,15 +392,17 @@ class CodexRunner(SessionControls):
                 self.turn_result = None
                 self.turns += 1
                 self.message_text.clear()
-                self.metrics.turn_begin()
                 self.turn_active, self.turn_id = True, None
                 pending = self.metrics.state.effort_pending
                 effort = pending or self.metrics.state.effort
                 self.turn_fast = self.fast_mode
+                tier = "priority" if self.turn_fast else "default"
+                self.metrics.turn_begin(fast=self.turn_fast, service_tier=tier, effort=effort, runtime="codex")
                 response = await self.rpc.request("turn/start", {"threadId": self.session_id, "effort": effort,
-                    "serviceTierForTurn": "priority" if self.turn_fast else "default",
+                    "serviceTierForTurn": tier,
                     "input": [{"type": "text", "text": message}]})
                 self.turn_id = response["turn"]["id"]
+                self.metrics.turn_acknowledged(self.turn_id)
                 for row in assigned:
                     self.control.mark(row["id"], "submitted", "已提交给当前 agent 会话")
                 self._record_turn_effort(effort,pending)

@@ -380,7 +380,22 @@ class Playback:
             sources, moved = self._take(files)
         with self._cv:
             self._backlog += 1
-        self._jobs.put((label, sources, moved))
+        self._jobs.put((label, sources, moved, True))
+
+    def collect_prediction(self, predictions: list[dict], start_frame: int) -> None:
+        """Collect native predictions immediately; GameSession already counted/charged them."""
+        if not self.collect:
+            return
+        from .sim_assist import write_replay
+        # Claim precisely these files before a concurrent Bash collector can see them.
+        with self._submit_lock:
+            paths = write_replay(self.session.workspace, predictions, start_frame)
+            if not paths:
+                return
+            sources, moved = self._take(paths)
+        with self._cv:
+            self._backlog += 1
+        self._jobs.put(("短路线模拟", sources, moved, False))
 
     def _take(self, files: list[Path]) -> tuple[list, list[Path]]:
         """把这一轮的日志移出工作区（智能体看不到，也不会被它的下一轮混进来）；移不动的读成字节再删。"""
@@ -427,9 +442,9 @@ class Playback:
             job = self._jobs.get()
             if job is None:
                 return
-            label, sources, moved = job
+            label, sources, moved, account = job
             try:
-                self._play_round(label, sources, moved)
+                self._play_round(label, sources, moved, account)
             except Exception as exc:  # 回放出问题不影响游玩
                 self.log(f"[playback] 回放失败：{exc}")
             finally:
@@ -437,7 +452,7 @@ class Playback:
                     self._backlog -= 1
                     self._cv.notify_all()
 
-    def _play_round(self, label: str, sources: list, moved: list[Path]) -> None:
+    def _play_round(self, label: str, sources: list, moved: list[Path], account: bool = True) -> None:
         t0 = time.monotonic()
         try:
             rd = self._digest(read_logs(sources), label)
@@ -446,11 +461,13 @@ class Playback:
         if rd is None:
             return
         with self._cv:
-            self.rounds.append(rd)
+            if self.enabled:
+                self.rounds.append(rd)
             number = len(self.rounds)
         self.log(f"[playback] 第 {number} 轮：推演 {rd.rollouts} 条，挑出 {len(rd.tracks)} 条（{time.monotonic() - t0:.1f} 秒）")
         # HUD：这次调用推演的路线条数（这一轮画完清零）与当前房间推演出的最快出房帧数；总条数另记
-        self.metrics.add(sim_rollouts=rd.rollouts)
+        if account:
+            self.metrics.add(sim_rollouts=rd.rollouts)
         self.metrics.update(sim_round_rollouts=rd.rollouts)
         if rd.best_exit:
             current = self.metrics.state.sim_best_frames
@@ -541,7 +558,7 @@ class Playback:
 
     def drain(self, timeout: float = 600.0) -> None:
         """act 执行之前调用（不持有游戏连接的锁）：等输出流里还没收尾的轮次，把排队的轮次放完。"""
-        if not self.enabled:
+        if not self.collect:
             return
         deadline = time.monotonic() + 2.0
         while any(m.pending for m in list(self._msgs.values())) and time.monotonic() < deadline:

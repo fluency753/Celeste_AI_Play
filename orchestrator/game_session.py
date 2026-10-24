@@ -326,7 +326,7 @@ class GameSession:
     # ---- 动作 ----
 
     def simulate(self, request: dict) -> dict:
-        from .sim_assist import validate_request, run_predictions, write_replay
+        from .sim_assist import validate_request, run_predictions
         if not self.sim_energy:
             raise ActError("本局未开启限额模拟辅助")
         if self.done or self.goals.stop_motion.is_set():
@@ -350,16 +350,16 @@ class GameSession:
                 raise
             self.sim_energy.finish(ident)
         result.update(receipt=ident, cost=cost, energy=self.sim_energy.snapshot(), candidates=candidates)
+        # Successful predictions count immediately, independently of visualization and runtime.
+        self.metrics.add(sim_calls=1, sim_rollouts=len(candidates))
         if self.workspace:
-            (self.workspace / "game" / "sim_assist").mkdir(parents=True, exist_ok=True)
-            self._write_json("game/sim_assist/latest.json", result)
             try:
-                write_replay(self.workspace, result["results"], result["info"].get("frame", 0))
-            except (OSError, ValueError, OverflowError):
+                (self.workspace / "game" / "sim_assist").mkdir(parents=True, exist_ok=True)
+                self._write_json("game/sim_assist/latest.json", result)
+                if self.playback:
+                    self.playback.collect_prediction(result["results"], result["info"].get("frame", 0))
+            except Exception:  # optional visualization must not turn a successful prediction into failure
                 result["replay_warning"] = "本次预测已完成，但轨迹回放记录失败"
-        # Playback accounts for logged rollouts. When disabled it still collects logs for metrics.
-        if not self.playback:
-            self.metrics.add(sim_calls=1, sim_rollouts=len(candidates))
         # Keep ordinary replies short; frame-by-frame details remain available on demand.
         summary = {k: v for k, v in result.items() if k != "results"}
         summary["results"] = [{"stop": r.get("stop"), "detail": r.get("detail"),
@@ -528,6 +528,9 @@ class GameSession:
         self._decisions_log.write(json.dumps({
             "i": self.decision_index, "attempt": attempt, "t": round(self.metrics.elapsed(), 3),
             "effort": self.metrics.state.effort, "thought": thought,
+            "fast_requested": self.metrics.state.turn_fast_requested,
+            "service_tier_requested": self.metrics.state.turn_service_tier_requested,
+            "decision_wait_s": round(self.metrics.state.decision_wait_s, 3) if attempt == 0 else None,
             "inputs": plan.inputs, "plan_file": plan_file, "stop_on": stop, "stop": result["stop"],
             "consumed": result["consumed"], "planned": result["planned"], "events": result["events"],
             "deviation": result.get("deviation"), "game_s": round(game_s, 3),
