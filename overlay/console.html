@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   /* 控制台：与 HUD 同一套颜色（夜晚的山、Madeline 的发色）。
-     红 = 能冲刺 / 运行中，蓝 = 冲刺用完 / 暂停与冻结，金 = 规划回放与录制，绿 = 正在推进游戏。 */
+     红 = 能冲刺 / 运行中，蓝 = 冲刺用完 / 暂停与冻结，金 = 规划回放与录制、改过的参数，绿 = 正在推进游戏。 */
   :root {
     --bg: #141729;
     --panel: #1B1F36;
@@ -38,16 +38,22 @@
   button, input, select, textarea { font: inherit; color: inherit; }
   :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
   [hidden] { display: none !important; }
+  a { color: var(--blue); }
 
-  /* 顶栏：标题与三盏状态灯（游戏、OBS、主控） */
+  /* 顶栏：标题、四个页面、三盏状态灯（游戏、OBS、主控） */
   header {
-    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
-    padding: 12px 22px; background: rgba(20, 23, 41, 0.94); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px 18px; flex-wrap: wrap;
+    padding: 0 22px; min-height: 56px; background: rgba(20, 23, 41, 0.94); border-bottom: 1px solid var(--line);
     backdrop-filter: blur(6px);
   }
   h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.01em; white-space: nowrap; }
   h1 small { font-family: "Noto Sans SC", "Microsoft YaHei UI", sans-serif; font-size: 15px; font-weight: 500; color: var(--muted); margin-left: 6px; }
-  .lights { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; }
+  .tabs { display: flex; gap: 2px; align-self: stretch; }
+  .tab { position: relative; background: none; border: 0; padding: 0 13px; color: var(--muted); cursor: pointer; font-weight: 500; font-size: 14.5px; }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { color: var(--text); }
+  .tab[aria-selected="true"]::after { content: ""; position: absolute; left: 11px; right: 11px; bottom: -1px; height: 3px; border-radius: 2px 2px 0 0; background: var(--red); }
+  .lights { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; justify-content: flex-end; padding: 10px 0; }
   .light { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px 4px 9px; border-radius: 999px;
            background: var(--panel); border: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
   .light i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
@@ -63,28 +69,36 @@
   .banner.error { background: rgba(224, 71, 91, 0.10); border-color: rgba(224, 71, 91, 0.4); }
   .banner pre { flex-basis: 100%; margin: 4px 0 0; max-height: 180px; overflow: auto; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
 
-  main { display: grid; grid-template-columns: minmax(360px, 1.05fr) minmax(340px, 1fr) minmax(320px, 0.95fr);
-         gap: 18px; padding: 18px 22px 28px; align-items: start; }
-  @media (max-width: 1240px) { main { grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr); } #chatPane { grid-column: 2; } #runPane { grid-row: span 2; } }
-  @media (max-width: 860px) { main { grid-template-columns: 1fr; padding: 14px 12px 24px; } #chatPane { grid-column: auto; } header { padding: 10px 12px; } .banner { margin: 12px 12px 0; } }
+  main.page { display: grid; gap: 18px; padding: 18px 22px 28px; align-items: start; }
+  #page-run { grid-template-columns: minmax(360px, 1.05fr) minmax(340px, 1fr) minmax(320px, 0.95fr); }
+  #page-saves { grid-template-columns: minmax(340px, 0.9fr) minmax(420px, 1.25fr); }
+  #page-kb { grid-template-columns: minmax(320px, 0.8fr) minmax(460px, 1.6fr); }
+  #page-about { grid-template-columns: minmax(360px, 1fr) minmax(380px, 1.1fr); }
+  @media (max-width: 1240px) { #page-run { grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr); } #chatPane { grid-column: 2; } #runPane { grid-row: span 2; } }
+  @media (max-width: 960px) { #page-saves, #page-kb, #page-about { grid-template-columns: 1fr; } }
+  @media (max-width: 860px) { #page-run { grid-template-columns: 1fr; } main.page { padding: 14px 12px 24px; } #chatPane { grid-column: auto; }
+                              header { padding: 0 12px; } .banner { margin: 12px 12px 0; } .lights { justify-content: flex-start; } }
 
   section.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 20px; min-width: 0; }
-  .pane > h2 { margin: 0 0 14px; font-size: 17px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; }
+  .pane > h2 { margin: 0 0 14px; font-size: 17px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .pane > h2 .aside { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .stack { display: grid; gap: 18px; min-width: 0; }
   fieldset { border: 0; margin: 0 0 18px; padding: 0; min-width: 0; }
   fieldset:disabled { opacity: 0.55; }
   legend { padding: 0; margin-bottom: 8px; font-weight: 500; color: var(--text); }
   .hint { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .row.three { grid-template-columns: 1.3fr 1fr 0.8fr; }
+  .row.thirds { grid-template-columns: 1fr 1fr 1fr; }
   label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); min-width: 0; }
   input[type=text], input[type=number], select, textarea {
     width: 100%; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 9px; color: var(--text);
   }
+  input::placeholder, textarea::placeholder { color: #66708C; }
   select:disabled, input:disabled { opacity: 0.6; }
   textarea { resize: vertical; min-height: 64px; }
 
-  /* 模式：两张并排的选择卡，选中的那张左边一道红线 */
+  /* 模式与地图：并排的选择卡，选中的那张左边一道红线 */
   .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .mode { position: relative; text-align: left; padding: 11px 12px 11px 16px; border-radius: var(--radius); cursor: pointer;
           background: var(--bg); border: 1px solid var(--line-strong); }
@@ -92,10 +106,14 @@
   .mode span { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
   .mode[aria-checked="true"] { border-color: rgba(224, 71, 91, 0.6); background: rgba(224, 71, 91, 0.08); }
   .mode[aria-checked="true"]::before { content: ""; position: absolute; left: 6px; top: 11px; bottom: 11px; width: 3px; border-radius: 2px; background: var(--red); }
+  .mode:disabled { cursor: not-allowed; opacity: 0.5; }
+  .segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+  .segmented button { background: transparent; border: 0; padding: 4px 14px; cursor: pointer; color: var(--muted); }
+  .segmented button[aria-checked="true"] { background: rgba(224, 71, 91, 0.16); color: var(--text); }
 
   /* 开关：一行一个，左边说明，右边拨杆 */
   .switches { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
-  @media (max-width: 520px) { .switches, .row, .row.three, .modes { grid-template-columns: 1fr; } }
+  @media (max-width: 520px) { .switches, .row, .row.three, .row.thirds, .modes { grid-template-columns: 1fr; } }
   .switch { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
   .switch .text b { display: block; font-weight: 500; }
   .switch .text span { display: block; font-size: 12px; color: var(--muted); line-height: 1.4; }
@@ -107,22 +125,40 @@
   .switch.wide { grid-column: 1 / -1; }
 
   /* 章节：一条往上爬的路线，选中的章节点亮、相邻选中的点之间连成红线 */
-  .route { position: relative; height: 128px; margin: 4px 0 6px; }
+  .route { position: relative; height: 200px; margin: 4px 0 10px; }
   .route svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  .route button { position: absolute; transform: translate(-50%, -50%); width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
-                  background: var(--bg); border: 2px solid #4A5170; font: 600 13px "Barlow Semi Condensed", "Bahnschrift", sans-serif; color: var(--muted); }
+  .route button { position: absolute; transform: translate(-50%, -50%); width: 40px; height: 40px; border-radius: 50%; cursor: pointer;
+                  background: var(--bg); border: 2px solid #4A5170; font: 600 14px "Barlow Semi Condensed", "Bahnschrift", sans-serif; color: var(--muted); }
   .route button[aria-pressed="true"] { background: var(--red); border-color: var(--red); color: #fff; }
   .route button.current { box-shadow: 0 0 0 4px rgba(91, 192, 235, 0.45); }
   .presets { display: flex; gap: 6px; flex-wrap: wrap; }
   .chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: transparent; cursor: pointer; font-size: 12.5px; color: var(--muted); }
   .chip:hover { color: var(--text); border-color: var(--muted); }
+  .chip:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* 运行页里"存档与章节""知识库"的摘要 */
+  .summary { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; display: grid; gap: 3px; }
+  .summary div { display: grid; grid-template-columns: 64px 1fr; gap: 8px; font-size: 13px; }
+  .summary div span:first-child { color: var(--muted); }
+  .summary .go { justify-self: start; margin-top: 4px; }
 
   details.more { border-top: 1px solid var(--line); padding-top: 10px; margin-bottom: 14px; }
   details.more summary { cursor: pointer; color: var(--muted); }
+  details.more summary b { color: var(--gold); font-weight: 500; }
   details.more[open] summary { margin-bottom: 10px; }
+  .group-title { margin: 14px 0 6px; font-size: 13px; font-weight: 700; color: var(--text); }
+  .group-title:first-of-type { margin-top: 4px; }
+
+  /* 可调参数：每行 名称 | 数值 | 单位；改过的数值框是金色边 */
+  .tune-row { display: grid; grid-template-columns: 1fr 96px 34px; gap: 8px; align-items: center; padding: 3px 0; font-size: 13px; }
+  .tune-row label { color: var(--text); min-width: 0; }
+  .tune-row label small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.35; }
+  .tune-row input { padding: 4px 7px; text-align: right; }
+  .tune-row input.changed { border-color: var(--gold); }
+  .tune-row .unit { color: var(--muted); font-size: 12px; }
 
   .command { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; font: 12px/1.5 Consolas, "Cascadia Mono", monospace;
-             color: #B9C3DD; white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow: auto; }
+             color: #B9C3DD; white-space: pre-wrap; word-break: break-all; max-height: 140px; overflow: auto; }
   .command.invalid { color: var(--warn); font-family: inherit; font-size: 13px; }
   .launch { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
   .launch .note { color: var(--muted); font-size: 12.5px; flex: 1; min-width: 160px; }
@@ -162,12 +198,13 @@
   .runs .title { font-weight: 500; overflow-wrap: anywhere; }
   .runs .meta { grid-column: 1; color: var(--muted); font-size: 12.5px; }
   .runs .side { grid-row: 1 / span 2; grid-column: 2; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-  .tag { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-strong); color: var(--muted); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
   .tag.ok { color: var(--green); border-color: rgba(76, 195, 138, 0.5); }
   .tag.frozen { color: var(--blue); border-color: rgba(91, 192, 235, 0.5); }
+  .tag.gold { color: var(--gold); border-color: rgba(242, 193, 78, 0.5); }
 
   /* 对话：解说、尝试、你的消息与智能体的回复，按时间排在一条线上 */
-  #chatPane { display: flex; flex-direction: column; max-height: calc(100vh - 110px); position: sticky; top: 76px; }
+  #chatPane { display: flex; flex-direction: column; max-height: calc(100vh - 100px); position: sticky; top: 72px; }
   @media (max-width: 860px) { #chatPane { position: static; max-height: none; } }
   .feed { flex: 1; overflow-y: auto; min-height: 220px; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
   .msg { padding: 8px 11px; border-radius: 10px; background: rgba(150, 173, 225, 0.08); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -181,6 +218,53 @@
   a.link { color: var(--muted); text-decoration: none; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line-strong); font-size: 13px; white-space: nowrap; }
   a.link:hover { color: var(--text); border-color: var(--muted); }
   .delivery { color: var(--muted); font-size: 12.5px; }
+
+  /* 知识库页 */
+  .kb-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .kb-count { color: var(--muted); font-size: 13px; flex: 1; min-width: 140px; }
+  .kb-group { margin-top: 12px; }
+  .kb-group h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 13px; font-weight: 700; }
+  .kb-group h3 .chip { margin-left: auto; }
+  .kb-item { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 6px; }
+  .kb-item:hover { background: rgba(236, 239, 248, 0.04); }
+  .kb-item.open { background: rgba(224, 71, 91, 0.10); }
+  .kb-item input { width: 16px; height: 16px; accent-color: var(--red); margin: 0; }
+  .kb-item button.name { background: none; border: 0; text-align: left; cursor: pointer; padding: 0; min-width: 0; overflow-wrap: anywhere; }
+  .kb-item.denied button.name { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(143, 154, 179, 0.6); }
+  .kb-item .size { color: var(--muted); font-size: 12px; white-space: nowrap; display: flex; gap: 6px; align-items: center; }
+  .editor-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .editor-head .path { font: 13px Consolas, "Cascadia Mono", monospace; color: var(--muted); flex: 1; min-width: 160px; overflow-wrap: anywhere; }
+  textarea.code { font: 12.5px/1.6 Consolas, "Cascadia Mono", monospace; min-height: 62vh; tab-size: 2; white-space: pre-wrap; }
+  .md { line-height: 1.7; overflow-wrap: anywhere; }
+  .md h1, .md h2, .md h3, .md h4 { margin: 1.1em 0 0.4em; line-height: 1.35; }
+  .md h1 { font-size: 20px; } .md h2 { font-size: 17px; } .md h3 { font-size: 15px; } .md h4 { font-size: 14px; }
+  .md p { margin: 0.5em 0; }
+  .md ul, .md ol { margin: 0.4em 0; padding-left: 1.4em; }
+  .md li { margin: 0.15em 0; }
+  .md code { font: 12.5px Consolas, "Cascadia Mono", monospace; background: rgba(150, 173, 225, 0.12); padding: 0 4px; border-radius: 4px; }
+  .md pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md table { border-collapse: collapse; margin: 0.6em 0; font-size: 13px; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--line-strong); padding: 4px 8px; text-align: left; vertical-align: top; }
+  .md th { background: rgba(150, 173, 225, 0.08); }
+  .md blockquote { margin: 0.6em 0; padding: 4px 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+  .preview { min-height: 62vh; max-height: 75vh; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 16px; }
+
+  /* 关于页 */
+  .about-title { font: 700 30px/1.15 "Barlow Semi Condensed", "Bahnschrift", sans-serif; margin: 0; letter-spacing: 0.01em; }
+  .version { color: var(--muted); margin: 6px 0 14px; }
+  .version b { color: var(--text); font-weight: 500; }
+  .authors { font-size: 15px; margin: 0 0 14px; }
+  .authors a { color: var(--blue); text-decoration: none; font-weight: 500; }
+  .authors a:hover { text-decoration: underline; }
+  .env { display: grid; gap: 0; }
+  .env-row { display: grid; grid-template-columns: 12px 112px 1fr; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; align-items: baseline; }
+  .env-row i { width: 8px; height: 8px; border-radius: 50%; background: #4A5170; align-self: center; }
+  .env-row i.ok { background: var(--green); }
+  .env-row span:nth-of-type(1) { color: var(--muted); }
+  .env-row small { display: block; color: var(--muted); }
+  .scroll { max-height: 70vh; overflow: auto; padding-right: 6px; }
+
   .toast { position: fixed; right: 22px; bottom: 22px; max-width: 420px; padding: 10px 14px; border-radius: 10px; background: var(--raised);
            border: 1px solid var(--line-strong); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); z-index: 20; }
   .toast.error { border-color: rgba(224, 71, 91, 0.6); }
@@ -190,6 +274,12 @@
 <body>
 <header>
   <h1>Celeste AI<small>控制台</small></h1>
+  <nav class="tabs" role="tablist" aria-label="控制台页面">
+    <button class="tab" role="tab" type="button" data-page="run" aria-selected="true">运行</button>
+    <button class="tab" role="tab" type="button" data-page="saves" aria-selected="false">存档与章节</button>
+    <button class="tab" role="tab" type="button" data-page="kb" aria-selected="false">知识库</button>
+    <button class="tab" role="tab" type="button" data-page="about" aria-selected="false">关于</button>
+  </nav>
   <div class="lights" role="status" aria-live="polite">
     <span class="light off" id="lightGame"><i></i>游戏 <span class="detail" id="gameDetail">未连接</span></span>
     <span class="light off" id="lightObs"><i></i>OBS <span class="detail" id="obsDetail">—</span></span>
@@ -211,8 +301,8 @@
   <pre id="launchLog"></pre>
 </div>
 
-<main>
-  <!-- 新运行 -->
+<!-- ============================================================ 第一页：运行 -->
+<main class="page" id="page-run" role="tabpanel" aria-label="运行">
   <section class="pane" id="setupPane" aria-labelledby="setupTitle">
     <h2 id="setupTitle">新运行 <span class="aside" id="setupAside">设置好之后开始；同一时间只能有一次运行</span></h2>
     <form id="setup" autocomplete="off">
@@ -239,7 +329,7 @@
             <b>探索</b><span>新手式探索与学习。只有基本操作与工具说明，可用限额短路线预测。</span></button>
         </div>
         <div class="switches" style="margin-top:8px">
-          <label class="switch wide"><span class="text"><b>直播</b><span>观众实时观看：解说更勤（10 秒），可按要求退出关卡，HUD 默认用可交互的网页形式；不改变速通目标</span></span><input type="checkbox" id="live"></label>
+          <label class="switch wide"><span class="text"><b>直播</b><span id="liveNote">观众实时观看：解说更勤，可按要求退出关卡，HUD 默认用可交互的网页形式；不改变速通目标</span></span><input type="checkbox" id="live"></label>
         </div>
       </fieldset>
 
@@ -257,35 +347,94 @@
         </div>
       </fieldset>
 
-      <fieldset>
-        <legend>存档与章节</legend>
+      <fieldset id="fsExplore" hidden>
+        <legend>探索：规划程序</legend>
         <div class="row">
-          <label class="field">存档<select id="save"></select></label>
-          <label class="field" id="newSaveField" hidden>新存档名<input type="text" id="newSave" maxlength="20" placeholder="1～20 个字符"></label>
+          <label class="field">单次最长（秒）<input type="number" id="exploreSeconds" min="1" max="600" step="1" placeholder="15"></label>
+          <label class="field">两次 act 之间最多运行（次）<input type="number" id="exploreRuns" min="1" max="100" step="1" placeholder="不限"></label>
         </div>
-        <p class="hint"><span id="saveNote">新存档放在现有最新存档的下一个槽位，只能从序章开始。</span>
-          <button type="button" class="chip" id="refreshSaves">刷新存档列表</button></p>
-        <div class="route" id="route" aria-label="要依次通关的章节"></div>
-        <div class="presets">
-          <button type="button" class="chip" data-preset="formal">序章 → 2A</button>
-          <button type="button" class="chip" data-preset="one">只玩一章</button>
-          <button type="button" class="chip" data-preset="all">全部章节</button>
-          <button type="button" class="chip" data-preset="clear">清空</button>
-        </div>
-        <p class="hint" id="routeNote"></p>
+        <p class="hint">智能体写的规划程序（Bash）超过时长就被结束；次数用完后要先做一次真实尝试才能再运行。空着用默认值（15 秒、不限次数），提示词里的数字跟着变。</p>
       </fieldset>
 
-      <details class="more">
-        <summary>更多设置</summary>
-        <div class="switches">
-          <label class="switch"><span class="text"><b>限制规划轮次</b><span>按章节记账，用完就不能再推演</span></span><input type="checkbox" id="limitPlanning"></label>
-          <label class="switch"><span class="text"><b>额度用完时等待</b><span>游戏冻结，额度重置后接着玩</span></span><input type="checkbox" id="quotaWait" checked></label>
-          <label class="switch"><span class="text"><b>思考时继续放音乐</b><span>直播用；关时游戏冻结，声音一起暂停</span></span><input type="checkbox" id="continuousMusic"></label>
-          <label class="switch"><span class="text"><b>结束后保留 OBS</b><span>直播时让推流接着开</span></span><input type="checkbox" id="keepObs"></label>
+      <fieldset>
+        <legend>存档、章节与知识库</legend>
+        <div class="summary">
+          <div><span>地图</span><span id="sumMap">蔚蓝官方章节</span></div>
+          <div><span>存档</span><span id="sumSave">—</span></div>
+          <div><span>章节</span><span id="sumChapters">—</span></div>
+          <div><span>知识库</span><span id="sumKb">—</span></div>
+          <div class="presets go">
+            <button type="button" class="chip" data-goto="saves">修改存档与章节</button>
+            <button type="button" class="chip" data-goto="kb">查看知识库与阅读权限</button>
+          </div>
         </div>
-        <div class="row" style="margin-top:10px">
+      </fieldset>
+
+      <details class="more" id="moreBox">
+        <summary>更多设置</summary>
+        <div class="group-title">时间与额度</div>
+        <div class="switches">
+          <label class="switch wide"><span class="text"><b>额度用完时等待</b><span>游戏冻结，额度重置后接着同一个会话（Max 订阅）</span></span><input type="checkbox" id="quotaWait" checked></label>
+        </div>
+        <div class="row thirds" style="margin-top:8px">
+          <label class="field">准备阶段上限（分钟）<input type="number" id="studyMinutes" min="1" max="600" placeholder="60"></label>
+          <label class="field">额度等待上限（小时）<input type="number" id="quotaHours" min="0.1" max="240" step="0.1" placeholder="24"></label>
+          <label class="field">用量到多少提前暂停<input type="number" id="maxUsage" min="0.01" max="1" step="0.01" placeholder="不设（0～1）"></label>
+        </div>
+
+        <div class="group-title">规划轮次（只用于速通开模拟器）</div>
+        <div class="switches">
+          <label class="switch wide"><span class="text"><b>限制规划轮次</b><span>按章节记账，用完就不能再推演；自动重试随之关闭</span></span><input type="checkbox" id="limitPlanning"></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="field">一屏大的房间存入几轮<input type="number" id="roundsPerRoom" min="1" max="100" placeholder="3"></label>
+          <label class="field">长、高每变成几倍轮次乘几<input type="number" id="roomScale" min="1" max="10" step="0.1" placeholder="2"></label>
+        </div>
+
+        <div class="group-title">录像与声音</div>
+        <div class="switches">
+          <label class="switch"><span class="text"><b>思考时继续放音乐</b><span>直播用；关时声音随游戏冻结</span></span><input type="checkbox" id="continuousMusic"></label>
+          <label class="switch"><span class="text"><b>结束后保留 OBS</b><span>直播时让推流接着开</span></span><input type="checkbox" id="keepObs"></label>
+          <label class="switch wide"><span class="text"><b>画帧号条码</b><span>录像左下角画帧号，只用于校准</span></span><input type="checkbox" id="recordMarker"></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="field">ffmpeg 路径<input type="text" id="ffmpeg" placeholder="默认：录制配置 → PATH"></label>
+          <label class="field">声音偏移（毫秒）<input type="number" id="audioOffset" min="-2000" max="2000" placeholder="默认用校准结果"></label>
+        </div>
+        <label class="field" style="margin-top:8px">视频编码参数<input type="text" id="videoArgs" placeholder="默认见 configs/recording.json，例如 -c:v h264_nvenc -preset p5"></label>
+
+        <div class="group-title">HUD</div>
+        <div class="switches">
+          <label class="switch"><span class="text"><b>网页 HUD 窗口</b><span>用网页 HUD 时在屏幕上打开</span></span><input type="checkbox" id="hudWindow" checked></label>
+          <label class="switch"><span class="text"><b>HUD 服务</b><span>关掉后主控不启动 HUD 服务</span></span><input type="checkbox" id="hudService" checked></label>
+        </div>
+
+        <div class="group-title">调试与端口</div>
+        <div class="row">
+          <label class="field">运行方式<select id="runMode"><option value="container">Docker 容器（默认）</option><option value="host">本机（只有游戏工具，没有沙箱）</option></select></label>
           <label class="field">上下文自动压缩窗口<input type="text" id="autocompact" placeholder="默认，或 auto / 100000～1000000"></label>
         </div>
+        <div class="row" style="margin-top:8px">
+          <label class="field">动作推进速度<input type="number" id="playSpeed" min="1" max="20" placeholder="1（实时）"></label>
+          <label class="field">转场与剧情推进速度<input type="number" id="autoSpeed" min="1" max="20" placeholder="1（与原版一致）"></label>
+        </div>
+        <div class="switches" style="margin-top:6px">
+          <label class="switch"><span class="text"><b>已在关卡里时跳过进档</b><span>不走菜单宏</span></span><input type="checkbox" id="skipEnter"></label>
+          <label class="switch"><span class="text"><b>不启动智能体</b><span>只开游戏工具服务，手动调试</span></span><input type="checkbox" id="noAgent"></label>
+        </div>
+        <div class="row thirds" style="margin-top:8px">
+          <label class="field">桥接端口<input type="number" id="bridgePort" min="1024" max="65535" placeholder="47774"></label>
+          <label class="field">游戏工具端口<input type="number" id="mcpPort" min="1024" max="65535" placeholder="47780"></label>
+          <label class="field">HUD 端口<input type="number" id="hudPort" min="1024" max="65535" placeholder="47790"></label>
+        </div>
+        <p class="hint">推进速度大于 1 是快进，只用于调试，录像会失真。</p>
+      </details>
+
+      <details class="more" id="tuneBox">
+        <summary>可调参数 <span id="tuneCount"></span></summary>
+        <p class="hint" style="margin:0 0 6px">原本写在主控里的数值。空着就是默认值（灰色占位）；改过的数值框是金色边。提示词与工具说明里提到的数字跟着变。</p>
+        <div id="tuneList"></div>
+        <div class="presets" style="margin-top:10px"><button type="button" class="chip" id="tuneReset">全部恢复默认</button></div>
       </details>
 
       <div class="command" id="command" aria-live="polite">—</div>
@@ -296,10 +445,9 @@
     </form>
   </section>
 
-  <!-- 当前运行 -->
   <section class="pane" id="runPane" aria-labelledby="runTitle">
     <h2 id="runTitle">当前运行 <span class="aside" id="runAside"></span></h2>
-    <div id="runIdle" class="empty"><b>没有正在进行的运行</b>在左边设置好后点“开始运行”，或续跑下面一次停下时保持冻结的运行。</div>
+    <div id="runIdle" class="empty"><b>没有正在进行的运行</b>在左边设置好后点"开始运行"，或续跑下面一次停下时保持冻结的运行。</div>
     <div id="runLive" hidden>
       <div class="run-head">
         <span class="who" id="runName">—</span>
@@ -346,7 +494,6 @@
     <ul class="runs" id="runs"></ul>
   </section>
 
-  <!-- 对话 -->
   <section class="pane" id="chatPane" aria-labelledby="chatTitle">
     <h2 id="chatTitle">对话 <span class="aside" id="chatAside">解说、尝试、你的消息与智能体的回复</span></h2>
     <div class="feed" id="feed" aria-live="polite"></div>
@@ -357,6 +504,110 @@
         <button class="btn" type="submit" id="send" disabled>发送</button>
       </div>
     </form>
+  </section>
+</main>
+
+<!-- ============================================================ 第二页：存档与章节 -->
+<main class="page" id="page-saves" role="tabpanel" aria-label="存档与章节" hidden>
+  <div class="stack">
+    <section class="pane" aria-labelledby="mapTitle">
+      <h2 id="mapTitle">地图</h2>
+      <div class="modes" role="radiogroup" aria-label="地图" id="maps"></div>
+      <p class="hint">目前只支持蔚蓝的官方章节；以后会加入 MOD 地图。</p>
+    </section>
+
+    <section class="pane" aria-labelledby="gameTitle">
+      <h2 id="gameTitle">游戏位置</h2>
+      <label class="field">《蔚蓝》的安装目录（含 Celeste.exe 的那一层）
+        <input type="text" id="celesteDir" spellcheck="false" placeholder="例如 C:\Program Files (x86)\Steam\steamapps\common\Celeste"></label>
+      <div class="launch" style="margin-top:8px">
+        <button class="btn" type="button" id="saveGameDir">保存</button>
+        <span class="note" id="gameDirNote">空着时自动查找：正在运行的游戏、Steam 库、部署向导记下的位置。</span>
+      </div>
+    </section>
+
+    <section class="pane" aria-labelledby="saveTitle">
+      <h2 id="saveTitle">存档</h2>
+      <div class="row">
+        <label class="field">存档<select id="save"></select></label>
+        <label class="field" id="newSaveField" hidden>新存档名<input type="text" id="newSave" maxlength="20" placeholder="1～20 个字符"></label>
+      </div>
+      <p class="hint"><span id="saveNote">新存档放在现有最新存档的下一个槽位，只能从序章开始。</span></p>
+      <div class="presets" style="margin-top:8px"><button type="button" class="chip" id="refreshSaves">刷新存档列表</button></div>
+    </section>
+  </div>
+
+  <section class="pane" aria-labelledby="chapterTitle">
+    <h2 id="chapterTitle">章节 <span class="aside">点选要依次通关的章节</span></h2>
+    <div class="route" id="route" aria-label="要依次通关的章节"></div>
+    <div class="presets">
+      <button type="button" class="chip" data-preset="formal">序章 → 2A</button>
+      <button type="button" class="chip" data-preset="one">只玩一章</button>
+      <button type="button" class="chip" data-preset="all">全部章节</button>
+      <button type="button" class="chip" data-preset="clear">清空</button>
+    </div>
+    <p class="hint" id="routeNote"></p>
+    <div class="presets" style="margin-top:14px"><button type="button" class="chip" data-goto="run">回到运行页开始</button></div>
+  </section>
+</main>
+
+<!-- ============================================================ 第三页：知识库 -->
+<main class="page" id="page-kb" role="tabpanel" aria-label="知识库" hidden>
+  <section class="pane" aria-labelledby="kbTitle">
+    <h2 id="kbTitle">知识库 <span class="aside" id="kbRoot"></span></h2>
+    <div class="kb-head">
+      <div class="segmented" role="radiogroup" aria-label="按哪种游玩模式显示">
+        <button type="button" role="radio" data-kbmode="speedrun" aria-checked="true">速通</button>
+        <button type="button" role="radio" data-kbmode="explore" aria-checked="false">探索</button>
+      </div>
+      <span class="kb-count" id="kbCount"></span>
+    </div>
+    <p class="hint" style="margin-top:0">勾选的文件智能体能读到（挂进容器的 /kb）；取消勾选的不挂进去，准备阶段也不要求读。"必读"是准备阶段要求从头读完的文件。与运行页的游玩模式同步。</p>
+    <div class="presets" style="margin-top:8px"><button type="button" class="chip" id="kbAllowAll">全部可读</button></div>
+    <div id="kbList"></div>
+  </section>
+
+  <section class="pane" aria-labelledby="kbEditorTitle">
+    <h2 id="kbEditorTitle">查看与编辑</h2>
+    <div id="kbEmpty" class="empty"><b>从左边选一个文件</b>文本文件可以直接编辑；保存后下一次运行生效。</div>
+    <div id="kbEditor" hidden>
+      <div class="editor-head">
+        <span class="path" id="kbPath"></span>
+        <div class="segmented" role="radiogroup" aria-label="查看方式">
+          <button type="button" role="radio" data-view="edit" aria-checked="true">编辑</button>
+          <button type="button" role="radio" data-view="preview" aria-checked="false">预览</button>
+        </div>
+        <button class="btn small" type="button" id="kbRevert" disabled>放弃修改</button>
+        <button class="btn small primary" type="button" id="kbSave" disabled>保存</button>
+      </div>
+      <textarea class="code" id="kbText" spellcheck="false"></textarea>
+      <div class="preview md" id="kbPreview" hidden></div>
+      <p class="hint" id="kbStatus"></p>
+    </div>
+  </section>
+</main>
+
+<!-- ============================================================ 第四页：关于 -->
+<main class="page" id="page-about" role="tabpanel" aria-label="关于" hidden>
+  <div class="stack">
+    <section class="pane">
+      <p class="about-title">Celeste AI Play</p>
+      <p class="version" id="aboutVersion">读取中…</p>
+      <p class="authors">作者：<a id="authorFluency" href="https://space.bilibili.com/490510003" target="_blank" rel="noopener">Fluency</a>、<a id="authorPig" href="https://space.bilibili.com/384651096" target="_blank" rel="noopener">Mechanic Pig</a></p>
+      <p style="margin:0">项目地址：<a id="githubLink" href="https://github.com/fluency753/Celeste_AI_Play" target="_blank" rel="noopener">github.com/fluency753/Celeste_AI_Play</a></p>
+    </section>
+    <section class="pane" aria-labelledby="envTitle">
+      <h2 id="envTitle">当前环境 <button class="chip" type="button" id="aboutRefresh">重新检查</button></h2>
+      <div class="env" id="envList"></div>
+    </section>
+    <section class="pane" aria-labelledby="todoTitle">
+      <h2 id="todoTitle">待办</h2>
+      <div class="md" id="todo"></div>
+    </section>
+  </div>
+  <section class="pane" aria-labelledby="changelogTitle">
+    <h2 id="changelogTitle">更新记录</h2>
+    <div class="md scroll" id="changelog"></div>
   </section>
 </main>
 
@@ -373,9 +624,11 @@ const STATUS = {
   stopped: ["已结束", "var(--muted)"],
 };
 const SHORT = ["序", "1A", "2A", "3A", "4A", "5A", "6A", "7A", "终", "8A", "9"];
+const EXPLORE_KEYS = ["explore_program_s", "explore_program_runs"];   // 在"探索：规划程序"一栏单独显示
 
 const ui = { options: null, status: null, control: null, controlRun: null, hud: null, runs: [], models: [],
-             chapters: [0], mode: "speedrun", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "" };
+             chapters: [0], mode: "speedrun", map: "celeste", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "",
+             tune: {}, kb: {}, kbFile: null, kbView: "edit", page: "run", aboutLoaded: false };
 
 async function getJSON(path) {
   const res = await fetch(path, { cache: "no-store" });
@@ -398,9 +651,104 @@ function toast(text, error = false) {
 const pad = (n, w = 2) => String(Math.floor(n)).padStart(w, "0");
 const clock = (s) => { s = Math.max(0, s); return `${Math.floor(s / 3600)}:${pad(s / 60 % 60)}:${pad(s % 60)}`; };
 const tokens = (n) => !n ? "0" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? Math.round(n / 1000) + "k" : (n / 1000).toFixed(1) + "k";
+const bytes = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B";
 function ticksText(ticks) {
   const ms = Math.max(0, Math.floor((ticks || 0) / 1e4));
   return `${Math.floor(ms / 3600000)}:${pad(ms / 60000 % 60)}:${pad(ms / 1000 % 60)}.${pad(ms % 1000, 3)}`;
+}
+function store(key, value) { try { localStorage.setItem("celesteConsole." + key, value); } catch (e) { /* 浏览器存储不可用时不记 */ } }
+function recall(key) { try { return localStorage.getItem("celesteConsole." + key); } catch (e) { return null; } }
+
+// ---------------------------------------------------------------- 页面切换
+
+function showPage(page) {
+  if (!["run", "saves", "kb", "about"].includes(page)) page = "run";
+  ui.page = page;
+  document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.page === page)));
+  document.querySelectorAll("main.page").forEach(m => { m.hidden = m.id !== "page-" + page; });
+  store("page", page);
+  if (location.hash !== "#" + page) history.replaceState(null, "", "#" + page);
+  if (page === "saves") buildRoute();
+  if (page === "kb") loadKb(ui.mode);
+  if (page === "about" && !ui.aboutLoaded) loadAbout();
+}
+
+// ---------------------------------------------------------------- 简单的 Markdown（更新记录、待办、知识库预览）
+
+function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function inline(text, base = "") {
+  let s = escapeHtml(text);
+  const codes = [];
+  s = s.replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+  s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => {
+    const safe = /^(https?:\/\/|#|[\w./-]+$)/.test(url) && !/^javascript:/i.test(url);
+    const href = base && !/^(https?:|#)/.test(url) ? base + url.replace(/^\.\//, "") : url;
+    return safe ? `<a href="${href}" target="_blank" rel="noopener">${label}</a>` : label;
+  });
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[Number(i)]}</code>`);
+  return s;
+}
+function markdown(src, base = "") {
+  const inline_ = (t) => inline(t, base);
+  const lines = (src || "").replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let i = 0;
+  const listStack = [];
+  const closeLists = (depth = 0) => { while (listStack.length > depth) out.push(`</${listStack.pop().tag}>`); };
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^```/.test(line)) {
+      closeLists();
+      const body = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]);
+      i++;
+      out.push(`<pre><code>${escapeHtml(body.join("\n"))}</code></pre>`);
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) { closeLists(); const level = Math.min(4, heading[1].length); out.push(`<h${level}>${inline_(heading[2])}</h${level}>`); i++; continue; }
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+      closeLists();
+      const cells = (l) => l.trim().replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map(c => inline_(c.trim().replace(/\\\|/g, "|")));
+      const head = cells(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
+      out.push("<table><thead><tr>" + head.map(c => `<th>${c}</th>`).join("") + "</tr></thead><tbody>"
+               + rows.map(r => "<tr>" + r.map(c => `<td>${c}</td>`).join("") + "</tr>").join("") + "</tbody></table>");
+      continue;
+    }
+    const item = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+    if (item) {
+      const depth = Math.floor(item[1].replace(/\t/g, "  ").length / 2) + 1;
+      const tag = /\d/.test(item[2]) ? "ol" : "ul";
+      while (listStack.length > depth) out.push(`</${listStack.pop().tag}>`);
+      while (listStack.length < depth) { listStack.push({ tag }); out.push(`<${tag}>`); }
+      let text = item[3];
+      i++;
+      while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !/^\s*([-*]|\d+\.)\s+/.test(lines[i])) text += " " + lines[i++].trim();
+      out.push(`<li>${inline_(text)}</li>`);
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      closeLists();
+      const body = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) body.push(lines[i++].replace(/^>\s?/, ""));
+      out.push(`<blockquote>${inline_(body.join(" "))}</blockquote>`);
+      continue;
+    }
+    if (!line.trim()) { closeLists(); i++; continue; }
+    closeLists();
+    const para = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|```|>|\s*([-*]|\d+\.)\s|\s*\|)/.test(lines[i])) para.push(lines[i++]);
+    out.push(`<p>${inline_(para.join(" "))}</p>`);
+  }
+  closeLists();
+  return out.join("\n");
 }
 
 // ---------------------------------------------------------------- 新运行：选项与表单
@@ -414,12 +762,17 @@ async function loadOptions() {
   $("maxMinutes").value = d.max_minutes;
   $("agent").value = (o.deploy && o.deploy.agent) || "";
   fillSaves();
+  fillMaps();
+  fillGameDir();
   ui.chapters = [0];
   buildRoute();
   $("simNote").textContent = o.sim_available ? "逐帧精确地推演路线" : "没有安装预置模拟器（sim/dist）";
   $("sim").disabled = !o.sim_available; if (!o.sim_available) $("sim").checked = false;
   $("simAssistNote").textContent = o.sim_available ? "按体力额度预测短路线" : "没有安装预置模拟器（sim/dist）";
   $("simAssist").disabled = !o.sim_available; if (!o.sim_available) $("simAssist").checked = false;
+  buildTunables();
+  await Promise.all(["speedrun", "explore"].map(m => loadKbList(m).catch(() => null)));
+  updateSummary();
   await loadModels();
   schedulePreview();
 }
@@ -441,10 +794,41 @@ async function refreshSaves() {
   button.disabled = true;
   try {
     const o = await getJSON("/api/console/options");
-    ui.options.saves = o.saves; ui.options.saves_error = o.saves_error;
-    fillSaves(); schedulePreview();
+    ui.options.saves = o.saves; ui.options.saves_error = o.saves_error; ui.options.game = o.game;
+    fillSaves(); fillGameDir(); schedulePreview();
   } catch (e) { toast("读取存档列表失败：" + e.message, true); }
   finally { button.disabled = false; }
+}
+
+function fillMaps() {
+  const host = $("maps");
+  host.replaceChildren(...(ui.options.maps || []).map(m => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "mode"; b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(m.id === ui.map)); b.disabled = !m.enabled;
+    b.innerHTML = `<b></b><span></span>`;
+    b.querySelector("b").textContent = m.label;
+    b.querySelector("span").textContent = m.enabled ? "序章到第九章的 A 面" : (m.note || "暂不支持");
+    b.addEventListener("click", () => { ui.map = m.id; fillMaps(); updateSummary(); schedulePreview(); });
+    return b;
+  }));
+}
+
+function fillGameDir() {
+  const prefs = ui.options.prefs || {}, game = ui.options.game || {};
+  if (document.activeElement !== $("celesteDir")) $("celesteDir").value = prefs.celeste_dir || "";
+  if (game.path && !prefs.celeste_dir) $("celesteDir").placeholder = game.path;
+  $("gameDirNote").textContent = game.path
+    ? `现在用的：${game.path}（${game.source_name}）${game.everest ? "" : "；这个目录里没有 Everest"}`
+    : "还没找到游戏：填写安装目录，或先启动游戏再点「刷新存档列表」。";
+}
+
+async function saveGameDir() {
+  try {
+    ui.options.prefs = await postJSON("/api/console/prefs", { celeste_dir: $("celesteDir").value.trim() });
+    toast($("celesteDir").value.trim() ? "已记住游戏位置。" : "已清除，改为自动查找。");
+    await refreshSaves();
+  } catch (e) { toast(e.message, true); }
 }
 
 async function loadModels() {
@@ -483,10 +867,18 @@ function suggestAgent() {
 
 function setMode(mode) {
   ui.mode = mode;
-  document.querySelectorAll(".mode").forEach(b => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
+  document.querySelectorAll(".mode[data-mode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
+  document.querySelectorAll("[data-kbmode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.kbmode === mode)));
   $("rowSim").hidden = mode !== "speedrun";
   $("rowSimAssist").hidden = mode !== "explore";
+  $("fsExplore").hidden = mode !== "explore";
+  $("liveNote").textContent = mode === "explore"
+    ? "观众实时观看：解说更勤，每次决策约 10～20 秒，可按要求退出关卡；HUD 默认用可交互的网页形式"
+    : "观众实时观看：解说更勤，可按要求退出关卡，HUD 默认用可交互的网页形式；不改变速通目标";
   if (mode === "explore" && !$("study").dataset.touched) $("study").checked = true;
+  buildTunables();
+  updateSummary();
+  if (ui.page === "kb") loadKb(mode);
   schedulePreview();
 }
 
@@ -500,6 +892,7 @@ function onSaveChange() {
   const isNew = $("save").value === "new";
   $("newSaveField").hidden = !isNew;
   if (isNew && ui.chapters[0] !== 0) { ui.chapters = [0, ...ui.chapters.filter(c => c !== 0)]; buildRoute(); }
+  updateSummary();
   schedulePreview();
 }
 
@@ -511,7 +904,7 @@ function buildRoute() {
   host.appendChild(svg);
   const points = chapters.map((c, i) => {
     const x = 5 + i * (90 / Math.max(1, chapters.length - 1));
-    const y = 82 - Math.min(62, i * 6.2) - (i % 2 ? 5 : 0);
+    const y = 84 - Math.min(66, i * 6.6) - (i % 2 ? 5 : 0);
     return { c, x, y };
   });
   const line = (a, b, color, width) => {
@@ -530,17 +923,23 @@ function buildRoute() {
     b.type = "button"; b.textContent = SHORT[p.c.id] || String(p.c.id);
     b.title = p.c.label; b.setAttribute("aria-label", p.c.label);
     b.setAttribute("aria-pressed", String(ui.chapters.includes(p.c.id)));
-    b.classList.toggle("current", current === p.c.id);
+    b.classList.toggle("current", running() && current === p.c.id);
     b.style.left = p.x + "%"; b.style.top = p.y + "%";
     b.addEventListener("click", () => {
       ui.chapters = ui.chapters.includes(p.c.id) ? ui.chapters.filter(c => c !== p.c.id) : [...ui.chapters, p.c.id].sort((a, b) => a - b);
-      buildRoute(); schedulePreview();
+      buildRoute(); updateSummary(); schedulePreview();
     });
     host.appendChild(b);
   }
+  $("routeNote").textContent = chapterText(true);
+}
+
+function chapterText(long) {
+  const chapters = (ui.options && ui.options.chapters) || [];
   const names = ui.chapters.map(id => (chapters.find(c => c.id === id) || {}).label || id);
-  $("routeNote").textContent = !ui.chapters.length ? "点选要依次通关的章节。"
-    : ui.chapters.length === 1 ? `只玩 ${names[0]}。` : `依次通关：${names.join("、")}；一章通关后主控自动进入下一章。`;
+  if (!ui.chapters.length) return "点选要依次通关的章节。";
+  if (ui.chapters.length === 1) return long ? `只玩 ${names[0]}。` : names[0];
+  return long ? `依次通关：${names.join("、")}；一章通关后主控自动进入下一章。` : names.join(" → ");
 }
 
 function currentChapterId() {
@@ -552,12 +951,86 @@ function currentChapterId() {
   return i >= 0 ? i : null;
 }
 
+function updateSummary() {
+  if (!ui.options) return;
+  const map = (ui.options.maps || []).find(m => m.id === ui.map);
+  $("sumMap").textContent = map ? map.label : "—";
+  const saveValue = $("save").value;
+  const existing = (ui.options.saves || []).find(s => `slot:${s.slot}` === saveValue);
+  $("sumSave").textContent = saveValue === "new" ? `新建：${$("newSave").value.trim() || "（还没填名字）"}`
+    : existing ? `${existing.name}（槽位 ${existing.slot}）` : (ui.options.saves_error ? "读不到存档列表" : "—");
+  $("sumChapters").textContent = ui.chapters.length ? chapterText(false) : "还没选";
+  const list = ui.kb[ui.mode];
+  if (list) {
+    const deny = kbDeny(ui.mode);
+    $("sumKb").textContent = deny.length ? `${list.documents.length - deny.length} / ${list.documents.length} 个文件可读（${deny.length} 个不给看）`
+                                         : `全部 ${list.documents.length} 个文件可读`;
+  }
+}
+
+// ---------------------------------------------------------------- 可调参数
+
+function buildTunables() {
+  const o = ui.options;
+  if (!o) return;
+  const host = $("tuneList");
+  host.replaceChildren();
+  for (const group of o.tunable_groups) {
+    const items = o.tunables.filter(t => t.group === group && t.modes.includes(ui.mode) && !EXPLORE_KEYS.includes(t.key));
+    if (!items.length) continue;
+    const title = document.createElement("div"); title.className = "group-title"; title.textContent = group;
+    host.appendChild(title);
+    for (const t of items) {
+      const row = document.createElement("div"); row.className = "tune-row";
+      const label = document.createElement("label");
+      label.htmlFor = "tune-" + t.key;
+      label.textContent = t.label;
+      if (t.note) label.appendChild(Object.assign(document.createElement("small"), { textContent: t.note }));
+      label.title = `${t.key}，默认 ${t.default ?? "不限"}，范围 ${t.low}～${t.high}`;
+      const input = document.createElement("input");
+      input.type = "number"; input.id = "tune-" + t.key; input.min = t.low; input.max = t.high;
+      input.step = t.kind === "int" ? "1" : "any";
+      input.placeholder = t.default == null ? "不限" : String(t.default);
+      input.value = ui.tune[t.key] ?? "";
+      input.classList.toggle("changed", ui.tune[t.key] != null && ui.tune[t.key] !== "");
+      input.addEventListener("input", () => {
+        if (input.value === "") delete ui.tune[t.key]; else ui.tune[t.key] = Number(input.value);
+        input.classList.toggle("changed", input.value !== "");
+        tuneCount(); schedulePreview();
+      });
+      row.append(label, input, Object.assign(document.createElement("span"), { className: "unit", textContent: t.unit }));
+      host.appendChild(row);
+    }
+  }
+  $("exploreSeconds").value = ui.tune.explore_program_s ?? "";
+  $("exploreRuns").value = ui.tune.explore_program_runs ?? "";
+  tuneCount();
+}
+function tuneCount() {
+  const n = Object.keys(ui.tune).filter(k => !EXPLORE_KEYS.includes(k)).length;
+  $("tuneCount").innerHTML = n ? `<b>已改 ${n} 项</b>` : "";
+}
+
+function numberOrNull(id) { const v = $(id).value.trim(); return v === "" ? null : Number(v); }
+function withDefault(id, key) { const v = numberOrNull(id); return v == null ? ui.options.defaults[key] : v; }
+
 function formOptions() {
   const [engine, provider] = ($("runtime").value || "claude:anthropic").split(":");
   const saveValue = $("save").value;
   const existing = (ui.options.saves || []).find(s => `slot:${s.slot}` === saveValue);
   const save = saveValue === "new" ? { name: $("newSave").value.trim(), slot: null, create: true }
                                    : { name: existing ? existing.name : "", slot: existing ? existing.slot : null, create: false };
+  const tune = {};
+  for (const [k, v] of Object.entries(ui.tune)) {
+    if (EXPLORE_KEYS.includes(k)) continue;
+    const t = ui.options.tunables.find(x => x.key === k);
+    if (t && t.modes.includes(ui.mode)) tune[k] = v;
+  }
+  if (ui.mode === "explore") {
+    const s = numberOrNull("exploreSeconds"), r = numberOrNull("exploreRuns");
+    if (s != null) tune.explore_program_s = s;
+    if (r != null) tune.explore_program_runs = r;
+  }
   const options = {
     engine, provider, model: $("model").value, effort: $("effort").value, agent: $("agent").value.trim(),
     mode: ui.mode, live: $("live").checked, sim: $("sim").checked, sim_assist: $("simAssist").checked,
@@ -565,7 +1038,17 @@ function formOptions() {
     study: $("study").checked, limit_planning: $("limitPlanning").checked, quota_wait: $("quotaWait").checked,
     keep_obs_open: $("keepObs").checked, start_paused: $("startPaused").checked,
     cutscene_mode: $("cutsceneAgent").checked ? "agent" : "auto", chapters: ui.chapters, save,
-    max_minutes: Number($("maxMinutes").value), autocompact: $("autocompact").value.trim(),
+    max_minutes: Number($("maxMinutes").value), autocompact: $("autocompact").value.trim(), map: ui.map,
+    runtime: $("runMode").value, study_minutes: withDefault("studyMinutes", "study_minutes"),
+    max_usage: numberOrNull("maxUsage"), quota_wait_max_hours: withDefault("quotaHours", "quota_wait_max_hours"),
+    play_speed: withDefault("playSpeed", "play_speed"), auto_speed: withDefault("autoSpeed", "auto_speed"),
+    rounds_per_room: withDefault("roundsPerRoom", "rounds_per_room"), room_scale: withDefault("roomScale", "room_scale"),
+    record_marker: $("recordMarker").checked, skip_enter: $("skipEnter").checked, no_agent: $("noAgent").checked,
+    hud_window: $("hudWindow").checked, hud: $("hudService").checked,
+    bridge_port: withDefault("bridgePort", "bridge_port"), mcp_port: withDefault("mcpPort", "mcp_port"),
+    hud_port: withDefault("hudPort", "hud_port"), ffmpeg: $("ffmpeg").value.trim(),
+    record_video_args: $("videoArgs").value.trim(), audio_offset_ms: numberOrNull("audioOffset"),
+    tune, kb_deny: kbDeny(ui.mode),
   };
   if ($("continuousMusic").checked) options.continuous_music = true;
   return options;
@@ -590,19 +1073,18 @@ function running() { return !!(ui.status && ui.status.orchestrator && ui.status.
 function updateStartButton() {
   const busy = running();
   $("start").disabled = !ui.previewOk || busy;
-  $("startNote").textContent = busy ? "已有主控在运行：等它结束、或在右边停止 / 中断后再开新的运行。"
+  $("startNote").textContent = busy ? "已有主控在运行：等它结束、或在中间一栏停止 / 中断后再开新的运行。"
     : "开始后主控在后台启动：检查游戏与 OBS、进入存档，然后交给智能体。";
-  document.querySelectorAll("#setup fieldset").forEach(f => { f.disabled = busy; });
+  $("kbSave").title = busy ? "有主控在运行时不能保存" : "";
 }
 
 async function startRun(event) {
   event.preventDefault();
   $("start").disabled = true;
   try {
-    const result = await postJSON("/api/console/start", { options: formOptions() });
+    await postJSON("/api/console/start", { options: formOptions() });
     toast("已启动主控：正在检查游戏与 OBS、进入存档。");
     $("launchBanner").hidden = true;
-    ui.launchWall = Date.now();
     await refreshStatus();
   } catch (e) {
     toast(e.message, true); updateStartButton();
@@ -615,17 +1097,16 @@ async function refreshStatus() {
   try { ui.status = await getJSON("/api/console/status"); } catch (e) { return; }
   const s = ui.status, g = s.game || {}, orch = s.orchestrator || {};
   const light = (id, cls, detailId, text) => { $(id).className = "light " + cls; $(detailId).textContent = text; };
-  if (!g.running) light("lightGame", "off", "gameDetail", g.reason ? "未运行" : "未运行");
+  if (!g.running) light("lightGame", "off", "gameDetail", "未运行");
   else {
     const scene = (g.scene || "").replace(/^Level Celeste\//, "").replace(/ Normal /, " ");
     light("lightGame", g.active ? (orch.running ? "active" : "frozen") : "on", "gameDetail",
           `${g.version || ""} · ${g.active ? (orch.running ? "主控接管中" : "冻结中") : "正常运行"}${scene ? " · " + scene : ""}`);
   }
-  light("lightObs", s.obs.running ? "on" : s.obs.running === false ? "off" : "off", "obsDetail",
+  light("lightObs", s.obs.running ? "on" : "off", "obsDetail",
         s.obs.running ? (g.lockstep ? "锁步录制中" : "运行中") : s.obs.running === false ? "没在运行" : "—");
   const runName = s.run && s.run.state && s.run.state.agent;
   light("lightRun", orch.running ? "active" : "off", "runDetail", orch.running ? `运行中 · ${runName || "启动中"}` : "空闲");
-  // 冻结提示
   const frozen = g.running && g.active && !orch.running;
   $("frozenBanner").hidden = !frozen;
   const resumable = ui.runs.find(r => r.resumable);
@@ -633,7 +1114,6 @@ async function refreshStatus() {
   if (frozen) $("frozenText").textContent = resumable
     ? `游戏冻结在 ${resumable.agent} 停下的地方（章节计时不走）。可以续跑这次运行，或交还控制让游戏恢复正常。`
     : "游戏被接管、停在当前帧（章节计时不走），没有主控在运行。不续跑时交还控制，游戏恢复正常运行。";
-  // 启动失败
   if (orch.failed && orch.launched_wall && ui.dismissedLaunch !== orch.launched_wall
       && Date.now() / 1000 - orch.launched_wall < 3600) {
     $("launchBanner").hidden = false;
@@ -641,6 +1121,7 @@ async function refreshStatus() {
     $("launchLog").textContent = orch.log_tail || "";
   }
   updateStartButton();
+  updateKbSave();
 }
 
 async function refreshRuns() {
@@ -804,24 +1285,188 @@ async function sendMessage(event) {
   finally { renderControls(); refreshFeed(); }
 }
 
+// ---------------------------------------------------------------- 知识库页
+
+function kbDeny(mode) {
+  const list = ui.kb[mode];
+  return list ? list.deny.slice() : ((ui.options && ui.options.prefs && ui.options.prefs.kb_deny[mode]) || []);
+}
+
+async function loadKbList(mode) {
+  ui.kb[mode] = await getJSON(`/api/console/kb?mode=${mode}`);
+  return ui.kb[mode];
+}
+
+async function loadKb(mode) {
+  try { await loadKbList(mode); } catch (e) { toast("读取知识库失败：" + e.message, true); return; }
+  renderKb();
+}
+
+function renderKb() {
+  const list = ui.kb[ui.mode];
+  if (!list) return;
+  const deny = new Set(list.deny);
+  $("kbRoot").textContent = `${list.root}/ → 容器里的 /kb`;
+  const required = list.documents.filter(d => d.required);
+  $("kbCount").textContent = `${list.documents.length - deny.size} / ${list.documents.length} 个文件可读，其中必读 ${required.filter(d => !deny.has(d.path)).length} 个`
+    + (list.sim_readme ? "；开模拟器时另有 /sim/README.md" : "");
+  const groups = [];
+  for (const d of list.documents) {
+    let g = groups.find(x => x.name === d.group);
+    if (!g) groups.push(g = { name: d.group, docs: [] });
+    g.docs.push(d);
+  }
+  $("kbList").replaceChildren(...groups.map(g => {
+    const wrap = document.createElement("div"); wrap.className = "kb-group";
+    const h = document.createElement("h3"); h.textContent = g.name;
+    const allowed = g.docs.filter(d => !deny.has(d.path)).length;
+    h.appendChild(Object.assign(document.createElement("span"), { className: "tag", textContent: `${allowed}/${g.docs.length}` }));
+    const toggle = document.createElement("button");
+    toggle.type = "button"; toggle.className = "chip"; toggle.textContent = allowed === g.docs.length ? "全部取消" : "全部可读";
+    toggle.addEventListener("click", () => setDeny(g.docs.map(d => d.path), allowed === g.docs.length));
+    h.appendChild(toggle);
+    wrap.appendChild(h);
+    for (const d of g.docs) {
+      const row = document.createElement("div");
+      row.className = "kb-item" + (deny.has(d.path) ? " denied" : "") + (ui.kbFile && ui.kbFile.mode === ui.mode && ui.kbFile.path === d.path ? " open" : "");
+      const box = document.createElement("input");
+      box.type = "checkbox"; box.checked = !deny.has(d.path); box.title = "智能体能不能读这个文件";
+      box.setAttribute("aria-label", `${d.path} 可读`);
+      box.addEventListener("change", () => setDeny([d.path], !box.checked));
+      const name = document.createElement("button");
+      name.type = "button"; name.className = "name"; name.textContent = d.path;
+      name.addEventListener("click", () => openKbFile(ui.mode, d.path));
+      const size = document.createElement("span"); size.className = "size";
+      if (d.required) size.appendChild(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "必读" }));
+      if (d.local_only) size.appendChild(Object.assign(document.createElement("span"), { className: "tag", textContent: "本机" }));
+      size.appendChild(document.createTextNode(bytes(d.size)));
+      row.append(box, name, size);
+      wrap.appendChild(row);
+    }
+    return wrap;
+  }));
+  if (!list.documents.length) $("kbList").replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "这个模式的知识库目录是空的。" }));
+}
+
+async function setDeny(paths, denied) {
+  const list = ui.kb[ui.mode];
+  const deny = new Set(list.deny);
+  for (const p of paths) { if (denied) deny.add(p); else deny.delete(p); }
+  try {
+    const prefs = await postJSON("/api/console/prefs", { kb_deny: { [ui.mode]: [...deny].sort() } });
+    ui.options.prefs = prefs;
+    list.deny = prefs.kb_deny[ui.mode] || [];
+    renderKb(); updateSummary(); schedulePreview();
+  } catch (e) { toast(e.message, true); renderKb(); }
+}
+
+async function openKbFile(mode, path) {
+  if (ui.kbFile && ui.kbFile.dirty && !confirm("当前文件的修改还没保存，放弃修改并打开另一个文件？")) return;
+  try {
+    const doc = await getJSON(`/api/console/kb/file?mode=${mode}&path=${encodeURIComponent(path)}`);
+    ui.kbFile = { mode, path, text: doc.text, mtime: doc.mtime, editable: doc.editable, dirty: false };
+    $("kbEmpty").hidden = true; $("kbEditor").hidden = false;
+    $("kbPath").textContent = "/kb/" + path;
+    const text = $("kbText");
+    text.value = doc.text ?? "";
+    text.readOnly = !doc.editable;
+    $("kbStatus").textContent = doc.text == null ? "这不是文本文件，不能在这里查看或编辑。"
+      : !doc.editable ? (doc.truncated ? "文件太大，只显示开头，不能在这里编辑。" : "只读。") : "";
+    setKbView(doc.text == null ? "edit" : ui.kbView);
+    renderKb(); updateKbSave();
+  } catch (e) { toast(e.message, true); }
+}
+
+function setKbView(view) {
+  ui.kbView = view;
+  document.querySelectorAll("[data-view]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.view === view)));
+  $("kbText").hidden = view !== "edit";
+  $("kbPreview").hidden = view !== "preview";
+  if (view === "preview") $("kbPreview").innerHTML = markdown($("kbText").value);
+}
+
+function updateKbSave() {
+  const f = ui.kbFile;
+  $("kbSave").disabled = !f || !f.editable || !f.dirty || running();
+  $("kbRevert").disabled = !f || !f.dirty;
+}
+
+async function saveKbFile() {
+  const f = ui.kbFile;
+  if (!f) return;
+  try {
+    const result = await postJSON("/api/console/kb/file", { mode: f.mode, path: f.path, text: $("kbText").value, mtime: f.mtime });
+    f.mtime = result.mtime; f.text = $("kbText").value; f.dirty = false;
+    $("kbStatus").textContent = `已保存（${bytes(result.size)}）。下一次运行生效。`;
+    updateKbSave();
+    loadKbList(f.mode).then(renderKb).catch(() => null);
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------------------------------------------------------------- 关于页
+
+async function loadAbout() {
+  ui.aboutLoaded = true;
+  $("envList").replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "检查中…" }));
+  let a;
+  try { a = await getJSON("/api/console/about"); } catch (e) { toast("读取失败：" + e.message, true); ui.aboutLoaded = false; return; }
+  const v = a.version || {};
+  $("aboutVersion").innerHTML = "";
+  const parts = [];
+  if (v.commit) parts.push(`版本 <b>${escapeHtml(v.commit)}</b>（${escapeHtml(v.date || "")}）`);
+  if (v.bridge) parts.push(`桥接 Mod <b>${escapeHtml(v.bridge)}</b>`);
+  $("aboutVersion").innerHTML = parts.join("，") || "版本信息不可用（没有 git）";
+  if (v.subject) $("aboutVersion").title = "最近一次提交：" + v.subject;
+  $("githubLink").href = a.github; $("githubLink").textContent = a.github.replace(/^https:\/\//, "");
+  $("envList").replaceChildren(...a.environment.map(row => {
+    const div = document.createElement("div"); div.className = "env-row";
+    const dot = document.createElement("i"); if (row.ok) dot.className = "ok";
+    const name = document.createElement("span"); name.textContent = row.name;
+    const value = document.createElement("span"); value.textContent = row.value;
+    if (row.note) value.appendChild(Object.assign(document.createElement("small"), { textContent: row.note }));
+    div.append(dot, name, value);
+    return div;
+  }));
+  const base = a.github + "/blob/main/";
+  $("todo").innerHTML = markdown(a.todo.replace(/^# .*\n/, ""), base) || "<p class='hint'>没有 TODO.md。</p>";
+  $("changelog").innerHTML = markdown(a.changelog.replace(/^# .*\n/, ""), base) || "<p class='hint'>没有 CHANGELOG.md。</p>";
+}
+
 // ---------------------------------------------------------------- 事件
 
-document.querySelectorAll(".mode").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => showPage(t.dataset.page)));
+document.querySelectorAll("[data-goto]").forEach(b => b.addEventListener("click", () => showPage(b.dataset.goto)));
+document.querySelectorAll(".mode[data-mode]").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
+document.querySelectorAll("[data-kbmode]").forEach(b => b.addEventListener("click", () => setMode(b.dataset.kbmode)));
+document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => setKbView(b.dataset.view)));
 $("runtime").addEventListener("change", async () => { $("agent").value = ""; await loadModels(); schedulePreview(); });
 $("model").addEventListener("change", () => { fillEfforts(); schedulePreview(); });
 $("live").addEventListener("change", onLive);
 $("hudMod").addEventListener("change", () => { ui.hudTouched = true; onLive(); });
 $("study").addEventListener("change", () => { $("study").dataset.touched = "1"; });
 $("save").addEventListener("change", onSaveChange);
+$("newSave").addEventListener("input", () => { updateSummary(); schedulePreview(); });
 $("refreshSaves").addEventListener("click", refreshSaves);
+$("saveGameDir").addEventListener("click", saveGameDir);
+$("celesteDir").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveGameDir(); } });
 $("setup").addEventListener("input", schedulePreview);
 $("setup").addEventListener("change", schedulePreview);
 $("setup").addEventListener("submit", startRun);
+$("tuneReset").addEventListener("click", () => {
+  for (const k of Object.keys(ui.tune)) if (!EXPLORE_KEYS.includes(k)) delete ui.tune[k];
+  buildTunables(); schedulePreview();
+});
 document.querySelectorAll("[data-preset]").forEach(b => b.addEventListener("click", () => {
   const p = b.dataset.preset, first = ui.chapters[0] ?? 0;
   ui.chapters = p === "formal" ? [0, 1, 2] : p === "one" ? [first] : p === "all" ? ui.options.chapters.map(c => c.id) : [];
-  buildRoute(); schedulePreview();
+  buildRoute(); updateSummary(); schedulePreview();
 }));
+$("kbAllowAll").addEventListener("click", () => { const list = ui.kb[ui.mode]; if (list) setDeny(list.deny.slice(), false); });
+$("kbText").addEventListener("input", () => { if (ui.kbFile) { ui.kbFile.dirty = $("kbText").value !== (ui.kbFile.text ?? ""); updateKbSave(); } });
+$("kbText").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); if (!$("kbSave").disabled) saveKbFile(); } });
+$("kbSave").addEventListener("click", saveKbFile);
+$("kbRevert").addEventListener("click", () => { if (ui.kbFile) { $("kbText").value = ui.kbFile.text ?? ""; ui.kbFile.dirty = false; updateKbSave(); setKbView(ui.kbView); } });
+$("aboutRefresh").addEventListener("click", loadAbout);
 $("pauseToggle").addEventListener("click", () => sendControl(ui.control && ui.control.paused ? "resume" : "pause"));
 $("liveEffort").addEventListener("change", (e) => sendControl("effort", e.target.value));
 $("liveCutscene").addEventListener("change", (e) => sendControl("cutscene_mode", e.target.value));
@@ -836,7 +1481,7 @@ $("goalSave").addEventListener("click", () => {
   const field = $("goalField").value, raw = $("goalValue").value.trim();
   const conditions = [];
   if (field === "map_complete") conditions.push({ field, op: "eq", value: true });
-  else if (raw) conditions.push(field === "room" ? { field, op: "eq", value: raw } : { field, op: field === "deaths" ? "gte" : "gte", value: Number(raw) });
+  else if (raw) conditions.push(field === "room" ? { field, op: "eq", value: raw } : { field, op: "gte", value: Number(raw) });
   const goal = { text: $("goalText").value.trim(), conditions, match: "all" };
   sendControl("goal", JSON.stringify(goal));
 });
@@ -845,6 +1490,7 @@ $("message").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.sh
 $("releaseGame").addEventListener("click", releaseGame);
 $("resumeLatest").addEventListener("click", () => resumeRun());
 $("launchDismiss").addEventListener("click", () => { $("launchBanner").hidden = true; ui.dismissedLaunch = ui.status && ui.status.orchestrator.launched_wall; });
+window.addEventListener("beforeunload", (e) => { if (ui.kbFile && ui.kbFile.dirty) { e.preventDefault(); e.returnValue = ""; } });
 
 // 危险操作点两次：第一次只把按钮换成确认文字，3 秒内再点才执行
 const pending = {};
@@ -858,12 +1504,13 @@ function confirmTwice(id, text) {
 
 (async function boot() {
   try { await loadOptions(); } catch (e) { toast("读取设置失败：" + e.message, true); }
+  showPage((location.hash || "").slice(1) || recall("page") || "run");
   await refreshRuns(); await refreshStatus(); await refreshRun(); await refreshFeed();
   setInterval(refreshStatus, 1500);
   setInterval(refreshRun, 700);
   setInterval(refreshFeed, 1200);
   setInterval(refreshRuns, 8000);
-  window.addEventListener("resize", buildRoute);
+  window.addEventListener("resize", () => { if (ui.page === "saves") buildRoute(); });
 })();
 </script>
 </body>

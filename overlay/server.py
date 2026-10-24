@@ -94,12 +94,13 @@ def make_handler(pinned: Path | None):
         def log_message(self, fmt, *args):  # 安静运行
             pass
 
-        def _send(self, code: int, body: bytes, ctype: str) -> None:
+        def _send(self, code: int, body: bytes, ctype: str, cors: bool = True) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Cache-Control", "no-store")
-            # OBS 浏览器源用本地文件打开页面时，页面来自另一个源，需要允许它跨源取数据
-            self.send_header("Access-Control-Allow-Origin", "*")
+            # OBS 浏览器源用本地文件打开页面时，页面来自另一个源，需要允许它跨源取数据（控制台的接口不需要，也不允许）
+            if cors:
+                self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -111,16 +112,24 @@ def make_handler(pinned: Path | None):
             elif path in ("/console", "/console/"):
                 self._send(200, CONSOLE_PAGE.read_bytes(), "text/html; charset=utf-8")
             elif path.startswith("/api/console/"):
+                from urllib.parse import parse_qs
                 from . import console_api
+                query = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
                 try:
                     handler = {"/api/console/status": console_api.status, "/api/console/options": console_api.options,
-                               "/api/console/runs": console_api.runs}.get(path)
+                               "/api/console/runs": console_api.runs, "/api/console/about": console_api.about,
+                               "/api/console/prefs": console_api.load_prefs,
+                               "/api/console/kb": lambda: console_api.kb_list(query.get("mode", "speedrun")),
+                               "/api/console/kb/file": lambda: console_api.kb_read(query.get("mode", "speedrun"),
+                                                                                   query.get("path", ""))}.get(path)
                     if handler is None:
-                        self._send(404, b"not found", "text/plain")
+                        self._send(404, b"not found", "text/plain", cors=False)
                         return
-                    self._json(200, handler())
+                    self._json(200, handler(), cors=False)
+                except ValueError as exc:
+                    self._json(400, {"error": str(exc)}, cors=False)
                 except Exception as exc:  # noqa: BLE001（控制台的查询出错时把原因交给页面）
-                    self._json(500, {"error": str(exc)})
+                    self._json(500, {"error": str(exc)}, cors=False)
             elif path == '/api/saves':
                 from orchestrator.saves import inventory, supports_unicode
                 try:
@@ -183,10 +192,11 @@ def make_handler(pinned: Path | None):
             else:
                 self._send(404, b"not found", "text/plain")
 
-        def _json(self, code: int, payload) -> None:
-            self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+        def _json(self, code: int, payload, cors: bool = True) -> None:
+            self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8",
+                       cors=cors)
 
-        def _body(self) -> dict:
+        def _body(self, limit: int = 20000) -> dict:
             """控制请求：只接受本机页面发来的 JSON 对象。"""
             origin = self.headers.get("Origin")
             if origin and (urlparse(origin).scheme != "http" or urlparse(origin).hostname not in {"127.0.0.1", "localhost"}):
@@ -194,7 +204,7 @@ def make_handler(pinned: Path | None):
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 raise ValueError("请求必须是 JSON")
             length = int(self.headers.get("Content-Length", 0))
-            if not 0 < length <= 20000:
+            if not 0 < length <= limit:
                 raise ValueError("请求大小无效")
             data = json.loads(self.rfile.read(length))
             if not isinstance(data, dict):
@@ -205,7 +215,7 @@ def make_handler(pinned: Path | None):
             if self.path.startswith("/api/console/"):
                 from . import console_api
                 try:
-                    data = self._body()
+                    data = self._body(3_500_000 if self.path == "/api/console/kb/file" else 60000)
                     if pinned is not None:
                         raise ValueError("固定预览模式的 HUD 服务不提供控制台操作")
                     with _wake_lock:
@@ -217,11 +227,16 @@ def make_handler(pinned: Path | None):
                             result = console_api.resume(str(data.get("run", "")), bool(data.get("fresh_session")))
                         elif self.path == "/api/console/release":
                             result = console_api.release()
+                        elif self.path == "/api/console/prefs":
+                            result = console_api.save_prefs(data)
+                        elif self.path == "/api/console/kb/file":
+                            result = console_api.kb_write(str(data.get("mode", "")), str(data.get("path", "")),
+                                                          data.get("text"), data.get("mtime"))
                         else:
                             raise ValueError("未知控制台接口")
-                    self._json(200, result)
+                    self._json(200, result, cors=False)
                 except (ValueError, TypeError, RuntimeError, OSError, KeyError) as exc:
-                    self._json(400, {"error": str(exc)})
+                    self._json(400, {"error": str(exc)}, cors=False)
                 return
             try:
                 if self.path != "/api/control":

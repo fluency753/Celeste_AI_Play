@@ -112,9 +112,11 @@ def status() -> dict:
 
 
 def options() -> dict:
-    from orchestrator.launch_options import DEFAULTS
+    from orchestrator.gamepaths import celeste_dir_info
+    from orchestrator.launch_options import DEFAULTS, MAPS
     from orchestrator.play_scope import sim_available
     from orchestrator.runtimes import configured_runtimes
+    from orchestrator.tuning import GROUPS, catalog
     saves, saves_error = [], None
     try:
         from orchestrator.saves import inventory
@@ -125,7 +127,175 @@ def options() -> dict:
     return {"runtimes": configured_runtimes(), "chapters": [{"id": i, "label": CHAPTER_LABELS.get(i, sid)}
                                                            for i, sid in sorted(CHAPTER_SIDS.items())],
             "saves": saves, "saves_error": saves_error, "sim_available": sim_available(REPO_ROOT),
-            "defaults": {**DEFAULTS, "hud_mod": None}, "deploy": {k: deploy.get(k) for k in ("agent", "save", "chapters")}}
+            "defaults": {**DEFAULTS, "hud_mod": None}, "deploy": {k: deploy.get(k) for k in ("agent", "save", "chapters")},
+            "maps": [{"id": k, "label": v, "enabled": True} for k, v in MAPS.items()]
+                    + [{"id": "mod", "label": "MOD 地图", "enabled": False, "note": "以后支持"}],
+            "tunables": catalog(), "tunable_groups": list(GROUPS), "prefs": load_prefs(), "game": celeste_dir_info()}
+
+
+# ---------------------------------------------------------------- 控制台的本机设置（configs/local.console.json，不入库）
+
+PREFS = REPO_ROOT / "configs" / "local.console.json"
+
+
+def load_prefs() -> dict:
+    data = _read_json(PREFS)
+    deny = data.get("kb_deny") if isinstance(data.get("kb_deny"), dict) else {}
+    return {"celeste_dir": data.get("celeste_dir") or "",
+            "kb_deny": {mode: list(deny.get(mode) or []) for mode in ("speedrun", "explore")}}
+
+
+def save_prefs(update: dict) -> dict:
+    """保存控制台的本机设置：游戏位置（空 = 自动查找）与各模式不给智能体看的知识库文件。"""
+    from orchestrator.gamepaths import is_game_dir
+    from orchestrator.kb_access import normalize_deny
+    if not isinstance(update, dict) or set(update) - {"celeste_dir", "kb_deny"}:
+        raise ValueError("设置无效")
+    data = _read_json(PREFS)
+    if "celeste_dir" in update:
+        value = update["celeste_dir"]
+        if not isinstance(value, str) or len(value) > 400 or any(c in value for c in "\r\n\0"):
+            raise ValueError("游戏位置格式无效")
+        value = value.strip().strip('"')
+        if value and not is_game_dir(value):
+            raise ValueError(f"{value} 里没有 Celeste.exe：请填《蔚蓝》的安装目录（含 Celeste.exe 的那一层）")
+        data["celeste_dir"] = str(Path(value)) if value else ""
+    if "kb_deny" in update:
+        deny = update["kb_deny"]
+        if not isinstance(deny, dict) or set(deny) - {"speedrun", "explore"}:
+            raise ValueError("知识库权限设置无效")
+        current = data.get("kb_deny") if isinstance(data.get("kb_deny"), dict) else {}
+        for mode, files in deny.items():
+            current[mode] = normalize_deny(mode, files)
+        data["kb_deny"] = current
+    PREFS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PREFS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(PREFS)
+    return load_prefs()
+
+
+# ---------------------------------------------------------------- 知识库页
+
+def kb_list(mode: str) -> dict:
+    from orchestrator.kb_access import documents, root_of
+    root = root_of(mode)
+    docs = documents(mode)
+    known = {d["path"] for d in docs}
+    deny = [x for x in load_prefs()["kb_deny"].get(mode, []) if x in known]
+    sim_readme = REPO_ROOT / "sim" / "dist" / "README.md"
+    return {"mode": mode, "root": root.relative_to(REPO_ROOT).as_posix(), "documents": docs, "deny": deny,
+            "sim_readme": mode == "speedrun" and sim_readme.is_file()}
+
+
+def kb_read(mode: str, path: str) -> dict:
+    from orchestrator.kb_access import read_document
+    return read_document(mode, path)
+
+
+def kb_write(mode: str, path: str, text: str, mtime=None) -> dict:
+    from orchestrator.kb_access import write_document
+    if orchestrator_status()["running"]:
+        raise ValueError("有主控在运行：知识库正挂在智能体的容器里，等运行结束再保存修改")
+    return write_document(mode, path, text, mtime)
+
+
+# ---------------------------------------------------------------- 关于页
+
+GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
+AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
+           {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
+
+
+def _run(args: list[str], timeout: float = 5) -> str:
+    import subprocess
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                timeout=timeout, cwd=REPO_ROOT,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _bridge_source_version() -> str | None:
+    import re
+    try:
+        text = (REPO_ROOT / "game-bridge" / "Source" / "Bridge.cs").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'Version\s*=\s*"([^"]+)"', text)
+    return match.group(1) if match else None
+
+
+def about() -> dict:
+    """版本、环境、项目地址、作者、更新记录与待办。"""
+    import platform
+    import re
+    import shutil
+    from orchestrator.gamepaths import celeste_dir_info
+    git = _run(["git", "log", "-1", "--format=%h|%cs|%s"])
+    commit, date, subject = (git.split("|", 2) + ["", "", ""])[:3] if git else ("", "", "")
+    game = celeste_dir_info()
+    installed = None
+    if game.get("path"):
+        try:
+            manifest = (Path(game["path"]) / "Mods" / "CelesteAIBridge" / "everest.yaml").read_text(encoding="utf-8-sig")
+            found = re.search(r"Version:\s*([\d.]+)", manifest)
+            installed = found.group(1) if found else None
+        except OSError:
+            pass
+    status_ = game_status()
+    obs_dir, plugin = None, False
+    try:
+        from tools.obs_setup import find_obs_dir
+        obs_dir = find_obs_dir(None)
+        plugin = (obs_dir / "obs-plugins" / "64bit" / "celeste-lockstep.dll").is_file()
+    except (SystemExit, Exception):  # noqa: BLE001
+        obs_dir = None
+    docker = ""
+    try:
+        from orchestrator.config import find_docker_exe
+        docker = _run([find_docker_exe(), "--version"])
+    except (FileNotFoundError, OSError):
+        docker = ""
+    sim_version = ""
+    try:
+        sim_version = (REPO_ROOT / "sim" / "dist" / "VERSION").read_text(encoding="utf-8").strip()[:80]
+    except OSError:
+        pass
+    reference = REPO_ROOT / "kb" / "reference"
+
+    def read(name: str) -> str:
+        try:
+            return (REPO_ROOT / name).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+    return {
+        "project": "Celeste AI Play", "github": GITHUB, "authors": AUTHORS,
+        "version": {"commit": commit, "date": date, "subject": subject, "bridge": _bridge_source_version()},
+        "environment": [
+            {"name": "系统", "value": platform.platform()},
+            {"name": "Python", "value": platform.python_version()},
+            {"name": "游戏目录", "value": game.get("path") or "没找到",
+             "note": game.get("source_name") or "在「存档与章节」页填写", "ok": bool(game.get("path"))},
+            {"name": "Everest", "value": "已安装" if game.get("everest") else "没找到", "ok": bool(game.get("everest"))},
+            {"name": "桥接 Mod", "value": f"游戏里已装 {installed}" if installed else "没装到游戏里",
+             "note": ("游戏运行中，已加载 " + status_["version"]) if status_.get("running") and status_.get("version") else
+                     "游戏没在运行", "ok": bool(installed) and installed == _bridge_source_version()},
+            {"name": "预置模拟器", "value": sim_version or ("已安装" if (REPO_ROOT / "sim" / "dist" / "celeste-sim").is_file() else "没有"),
+             "note": "只在本机，不入库", "ok": (REPO_ROOT / "sim" / "dist" / "celeste-sim").is_file()},
+            {"name": "知识库参考资料", "value": (f"{sum(1 for p in reference.rglob('*') if p.is_file())} 个文件"
+                                          if reference.is_dir() else "没有"), "note": "kb/reference，只在本机",
+             "ok": reference.is_dir()},
+            {"name": "Docker", "value": docker or "没找到", "ok": bool(docker)},
+            {"name": "OBS", "value": str(obs_dir) if obs_dir else "没找到",
+             "note": "锁步插件已安装" if plugin else ("锁步插件没装" if obs_dir else ""), "ok": bool(obs_dir and plugin)},
+            {"name": "Codex CLI", "value": "已安装" if shutil.which("codex") else "没找到", "note": "原生 GPT 执行器用",
+             "ok": bool(shutil.which("codex"))},
+        ],
+        "changelog": read("CHANGELOG.md"), "todo": read("TODO.md"),
+    }
 
 
 def runs(limit: int = 40) -> list[dict]:

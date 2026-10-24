@@ -2,6 +2,7 @@
 
     python -m overlay.console              # 打开 http://127.0.0.1:47790/console
     python -m overlay.console --browser    # 用默认浏览器打开
+    CelesteAIConsole.exe                   # 仓库根目录的启动器（Windows），等同第一行；控制台已经开着时把窗口提到前面
 
 控制台的数据来自 HUD 服务。没有 HUD 服务在运行时，这里把它作为独立的后台进程启动（Windows 用
 orchestrator/background.py 的独立宿主），关掉控制台窗口不会让正在进行的运行失去 HUD；窗口开着时每几秒检查一次，
@@ -109,5 +110,28 @@ def main() -> int:
     return 0
 
 
+def _show_error(text: str) -> None:
+    """没有控制台窗口时（用 pythonw 或启动器 CelesteAIConsole.exe 打开）用对话框显示错误。"""
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, TITLE, 0x10)
+    else:
+        print(text, file=sys.stderr)
+
+
+def run() -> int:
+    if sys.stderr is not None and sys.stdout is not None:
+        return main()
+    try:                          # pythonw：没有标准输出，出错时弹对话框
+        return main()
+    except SystemExit as exc:
+        if exc.code not in (None, 0):
+            _show_error(str(exc.code))
+        return 0 if exc.code in (None, 0) else 1
+    except Exception as exc:  # noqa: BLE001
+        _show_error(f"控制台没能打开：{exc}")
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())
