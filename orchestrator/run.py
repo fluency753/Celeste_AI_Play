@@ -5,7 +5,7 @@
     python -m orchestrator.run --agent dev-opus --save test --model opus --max-minutes 20 --effort medium
     python -m orchestrator.run --agent dev --save test --no-agent      # 只启动工具服务，用于手动调试
     python -m orchestrator.run --agent opus5.5 --save opus5.5 --record # 同时用 OBS 录制（先 python tools/obs_setup.py launch）
-    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --sim --record   # 正式挑战
+    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --record   # 正式挑战（默认开预置模拟器）
     python -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs/opus5.5/<时间戳> --record     # 中断后续跑
 """
 from __future__ import annotations
@@ -61,7 +61,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--autocompact", help="上下文自动压缩的窗口大小：auto，或 100000~1000000 的 token 数（默认用 Claude Code 的设置）")
     ap.add_argument("--no-study", action="store_true", help="跳过开始前的读知识库阶段（调试用）")
     ap.add_argument("--study-minutes", type=float, default=60.0,
-                    help="准备阶段（读知识库、写笔记）的上限分钟数，不计入现实用时；到时自动开始计时")
+                    help="准备阶段（读知识库、写笔记）的上限分钟数，不计入现实用时；到时自动开放游戏工具")
     ap.add_argument("--max-usage", type=float, default=None,
                     help="可选：Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）就提前暂停智能体、等额度重置后接着玩；"
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
@@ -75,7 +75,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--room-scale", type=float, default=2.0,
                     help="房间的长、高每变成这么多倍，存入的轮次乘这么多（默认 2，即与面积成正比），向上取整")
     ap.add_argument("--no-playback", action="store_true",
-                    help="不把模拟器推演过的路线画进游戏（规划回放；只在 --sim 时有）")
+                    help="不把模拟器推演过的路线画进游戏（规划回放；只在开模拟器时有）")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
     ap.add_argument("--no-hud-window", action="store_true",
                     help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
@@ -85,8 +85,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--ffmpeg", help="ffmpeg 路径（默认：configs/local.recording.json → PATH → winget 安装位置）")
     ap.add_argument("--record-video-args", help="ffmpeg 视频编码参数（默认见 configs/recording.json）")
     ap.add_argument("--audio-offset-ms", type=float, help="声音相对画面的偏移毫秒数（默认用校准结果，见 configs/local.recording.json）")
-    ap.add_argument("--sim", action="store_true",
-                    help="开放预置模拟器：本机 sim/dist 只读挂到容器的 /sim，每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
+    ap.add_argument("--sim", dest="sim", action="store_true", default=None,
+                    help="开放预置模拟器（容器运行方式下默认开启，写不写都一样）：本机 sim/dist 只读挂到容器的 /sim，"
+                         "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
+    ap.add_argument("--no-sim", dest="sim", action="store_false",
+                    help="不开放预置模拟器：智能体照知识库自己写模拟器，提示词用不带模拟器的做法（按段规划、按段执行；之前的配置）")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     ap.add_argument("--no-quota-wait", action="store_true",
@@ -110,7 +113,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if not any(a == "--effort" or a.startswith("--effort=") for a in sys.argv):
             # 推理强度沿用中断时生效的那个（智能体可能用 set_effort 调整过），而不是开局的值
             args.effort = previous["metrics"].get("effort") or args.effort
-        args.sim = args.sim or state["sim"]
+        if args.sim is None:
+            args.sim = bool(state["sim"])
         args.skip_enter = True
         args.no_study = True
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort, provider=args.provider,
@@ -130,6 +134,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.quota_wait = not args.no_quota_wait
     cfg.quota_wait_cap_s = args.quota_wait_cap_seconds
     cfg.quota_wait_max_h = args.quota_wait_max_hours
+    if args.sim is None:
+        args.sim = args.runtime == "container"    # 默认开预置模拟器；本机运行方式没有模拟器
     cfg.sim = args.sim
     cfg.pause_limit = bool(args.limit_planning) and not args.free_planning
     cfg.rounds_per_room = max(1, args.rounds_per_room)
@@ -148,11 +154,14 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             raise SystemExit("这次运行的章节已经全部通关，不需要续跑")
         cfg.chapters = remaining or None
         cfg.chapter = remaining[0] if remaining else None
+    if cfg.pause_limit and not cfg.sim:
+        raise SystemExit("--limit-planning 只用于开模拟器的版本（关模拟器的版本不限制思考与调用）")
     if cfg.sim:
         if cfg.runtime != "container":
-            raise SystemExit("--sim 只能用于容器运行方式")
+            raise SystemExit("预置模拟器只能用于容器运行方式（本机运行方式请加 --no-sim）")
         if not (cfg.sim_dir / "celeste-sim").is_file():
-            raise SystemExit(f"找不到预置模拟器：{cfg.sim_dir / 'celeste-sim'}（模拟器只在本机，见使用说明的预置模拟器一节）")
+            raise SystemExit(f"找不到预置模拟器：{cfg.sim_dir / 'celeste-sim'}（模拟器只在本机，见使用说明的预置模拟器一节；"
+                             "没有模拟器时用 --no-sim 运行关模拟器的版本）")
     return cfg, args
 
 

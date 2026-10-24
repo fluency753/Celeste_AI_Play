@@ -98,9 +98,6 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     def finish() -> None:
         metrics.update(status="thinking")
 
-    def clock_text() -> tuple[float, float]:
-        return metrics.elapsed(), metrics.state.budget_s
-
     def header_line() -> str:
         line = effort_line(metrics)
         if gate is not None and gate.enabled:
@@ -126,7 +123,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 content: list = []
                 if image and session.cfg.images:
                     content.append(Image(data=upscale_png(image), format="png"))
-                content.append(describe_obs(obs, *clock_text(), full_room=True, effort=header_line())
+                content.append(describe_obs(obs, full_room=True, effort=header_line())
                                + "\n\n整个房间的精确数据（像素坐标）：\n" + room_json(obs)
                                + ("\n" + ws_note if session.workspace else ""))
                 return content
@@ -163,7 +160,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
                     parts.append("【进入新房间】下面是新房间的截图、整个房间的字符地图，以及整个房间的精确数据（JSON）。")
-                parts.append(describe_obs(outcome.obs, *clock_text(), full_room=new_room, effort=header_line()))
+                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line()))
                 if new_room:
                     parts.append("整个房间的精确数据（像素坐标）：\n" + room_json(outcome.obs))
                 if session.workspace:

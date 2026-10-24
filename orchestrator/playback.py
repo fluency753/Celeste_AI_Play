@@ -81,13 +81,18 @@ class LogIndex:
     src: np.ndarray         # 每条记录在哪个来源里（sources 的下标）
     off: np.ndarray         # 增量部分在来源里的字节位置
     sources: list           # 来源：Path（按需读取）或 bytes
+    start: np.ndarray | None = None   # 每条推演的起点帧号（快照或检查点那一帧）；终点帧 = start + npts
 
     def __len__(self) -> int:
         return len(self.t)
 
     def subset(self, idx) -> "LogIndex":
         return LogIndex(self.t[idx], self.stop[idx], self.npts[idx], self.hashes[idx], self.first[idx], self.end[idx],
-                        self.sig[idx], self.src[idx], self.off[idx], self.sources)
+                        self.sig[idx], self.src[idx], self.off[idx], self.sources, self.ends_at()[idx] - self.npts[idx])
+
+    def ends_at(self) -> np.ndarray:
+        """每条推演最后一帧的帧号。从检查点（路线中途）出发的推演帧数少，比快慢要比终点帧号，不能只比帧数。"""
+        return (self.start if self.start is not None else np.zeros(len(self.t), dtype=np.int64)) + self.npts
 
     def _read(self, s: int, off: int, size: int) -> bytes:
         src = self.sources[s]
@@ -151,7 +156,8 @@ def read_logs(sources: list) -> LogIndex:
     hashes = np.array([r[4] for r in rows], dtype=np.uint64)
     loc = np.array(where, dtype=np.int64)
     return LogIndex(arr[order, 0], arr[order, 2].astype(int), arr[order, 3].astype(int), hashes[order],
-                    first[order], end[order], sig[order], loc[order, 0], loc[order, 1], kept)
+                    first[order], end[order], sig[order], loc[order, 0], loc[order, 1], kept,
+                    arr[order, 1].astype(np.int64))
 
 
 def select(log: LogIndex, k: int, ref: tuple[float, float] | None = None) -> list[tuple[int, int]]:
@@ -171,7 +177,7 @@ def select(log: LogIndex, k: int, ref: tuple[float, float] | None = None) -> lis
         chosen[best] = KIND_BEST
     exits = np.flatnonzero(log.stop == 2)
     if len(exits):
-        fastest = exits[np.argsort(log.npts[exits], kind="stable")]
+        fastest = exits[np.argsort(log.ends_at()[exits], kind="stable")]
         gates: dict[tuple[int, int], int] = {}
         for i in fastest:     # 每个出口位置（32 像素一格）先留最快的一条，再按快慢补
             gates.setdefault(tuple(np.floor(log.end[i] / 32).astype(int)), int(i))
@@ -179,7 +185,7 @@ def select(log: LogIndex, k: int, ref: tuple[float, float] | None = None) -> lis
         for i in list(gates.values()) + [int(i) for i in fastest]:
             if added >= cap or len(chosen) >= k:
                 break
-            key = (int(log.npts[i]), int(round(log.end[i, 0])), int(round(log.end[i, 1])))
+            key = (int(log.ends_at()[i]), int(round(log.end[i, 0])), int(round(log.end[i, 1])))
             if i in chosen or key in seen:     # 同样帧数、同一终点的出口路线几乎重合，只画一条
                 continue
             seen.add(key)
@@ -237,7 +243,7 @@ def _best(log: LogIndex, ref=None) -> int | None:
     away = exits[np.hypot(*(log.end[exits] - log.first[exits]).T) > BACKTRACK_PX]
     if not len(away):
         return None
-    return int(away[np.argmin(log.npts[away])])
+    return int(away[np.argmin(log.ends_at()[away])])
 
 
 def simplify(path: np.ndarray, tol: float = 0.3) -> list[int]:
@@ -521,7 +527,13 @@ class Playback:
         tracks = [Track(kind, log.path(i), int(log.stop[i]), i) for i, kind in select(log, k)]
         exits = np.flatnonzero(log.stop == 2)
         away = exits[np.hypot(*(log.end[exits] - log.first[exits]).T) > BACKTRACK_PX] if len(exits) else exits
-        best_exit = int(log.npts[away].min()) if len(away) else 0
+        # 最快出房用时：从进入这个房间的那一帧算起（推演可能从房间中途的检查点或停下的地方出发）
+        entry = getattr(self.session, "room_entry_frame", None)
+        if len(away):
+            ends = log.ends_at()[away]
+            best_exit = int(ends.min() - entry) if entry is not None else int(log.npts[away].min())
+        else:
+            best_exit = 0
         return Round(label, n, tracks, best_exit=best_exit)
 
     # ---- 执行前：等排队的轮次放完，画最终路线 ----

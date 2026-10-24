@@ -42,39 +42,33 @@ CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
 
-SUGGEST_SIM = (
-    '建议：**直接用预置模拟器**（见下文"预置模拟器"），不要自己再写一个模拟器。你的程序主要写搜索与规划：在观测给出的房间几何上'
-    '以"到达出口所需帧数最少"为目标自动规划按键序列（把各种高级技巧作为宏动作纳入搜索），生成计划文件后交给 `act` 执行。'
-    '**针对具体的房间结构设计搜索**：根据地形、尖刺、平台、实体与出口的位置，为这个房间定制剪枝条件（例如提前剪掉注定掉坑、'
-    '撞上尖刺、离出口越来越远或明显比已知路线慢的分支）与引导条件（例如中间目标点、先上某个平台再去出口、按离出口的距离或'
-    '预计剩余帧数排序），用什么算法（A*、广度优先、束搜索、随机或进化搜索……）也由你决定，还可以根据上一次搜索的结果调整方向。'
-    '把模拟器预测的轨迹写进计划的 `expect`，实际偏离时会在那一帧停下。写好的搜索程序要在后面的房间和章节反复使用，'
-    '按房间改剪枝与引导条件。Bash 单条命令有运行时间上限，长的搜索要自己设时限。')
-SUGGEST_OWN = (
-    '建议：照知识库写一个与游戏逐帧一致的 Madeline 模拟器，再写搜索程序，在观测给出的房间几何上以"到达出口所需帧数最少"'
-    '为目标自动规划按键序列（把各种高级技巧作为宏动作纳入搜索），生成计划文件后交给 `act` 执行。针对具体的房间结构设计搜索的'
-    '剪枝条件与引导条件，算法也由你决定；把模拟器预测的轨迹写进计划的 `expect`，实际偏离时会在那一帧停下。执行后用 '
-    '`last_act.json` 的实际轨迹对照模拟结果，修正程序。模拟器准确，就能打出帧级精确的高速路线，这正是降低章节计时的关键。'
-    '写好的程序要在后面的房间和章节反复使用。Bash 单条命令有运行时间上限，长的搜索要自己设时限。')
-
-
 def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None, pause_limit: bool = False,
                    rounds_per_room: int = 3, death_bonus: int = 1, playback: bool = False) -> str:
-    extra = "container_zh.md" if runtime == "container" else "host_zh.md"
-    text = ((PROMPTS / "system_zh.md").read_text(encoding="utf-8") + "\n\n"
-            + (PROMPTS / extra).read_text(encoding="utf-8").replace("{suggest}", SUGGEST_SIM if sim else SUGGEST_OWN))
-    if sim and runtime == "container":
-        text += "\n\n" + (PROMPTS / "sim_zh.md").read_text(encoding="utf-8")
-    if runtime == "container":
+    """系统提示词。按预置模拟器的开关分成两个版本（目标都是以最短的章节计时通关）：
+    - 开模拟器（默认，容器运行方式）：智能体可以随意调用 /sim 寻找并优化路线；提示词里写明做法、建议的工作方式、
+      物理参数简表、规划与优化的要求、自动重试与规划回放（system_sim、container_sim、sim、free/pause、retry、playback）；
+    - 关模拟器（--no-sim，或本机运行方式）：不教怎么玩，只写目标、规则（不得调用或破解模拟器、不读游戏程序）与工具接口，
+      其余由智能体自己决定（system_nosim、container_nosim）。"""
+    interface = (PROMPTS / "interface_zh.md").read_text(encoding="utf-8")
+
+    def part(name: str) -> str:
+        return (PROMPTS / name).read_text(encoding="utf-8")
+
+    if not (sim and runtime == "container"):
+        text = part("system_nosim_zh.md").replace("{interface}", interface)
+        text += "\n\n" + part("container_nosim_zh.md" if runtime == "container" else "host_zh.md")
+    else:
+        text = part("system_sim_zh.md").replace("{interface}", interface)
+        text += "\n\n" + part("container_sim_zh.md") + "\n\n" + part("sim_zh.md")
         # 默认不限制思考与调用（free_zh.md，可以把规划程序写成自动重试命令）；--limit-planning 时按章节记账（pause_zh.md）
         if pause_limit:
-            text += "\n\n" + (PROMPTS / "pause_zh.md").read_text(encoding="utf-8").replace(
+            text += "\n\n" + part("pause_zh.md").replace(
                 "{rounds4}", str(rounds_per_room * 4)).replace("{rounds}", str(rounds_per_room)).replace("{death}", str(death_bonus))
         else:
-            text += "\n\n" + (PROMPTS / "free_zh.md").read_text(encoding="utf-8")
-            text += "\n\n" + (PROMPTS / "retry_zh.md").read_text(encoding="utf-8")
-        if playback and sim:
-            text += "\n\n" + (PROMPTS / "playback_zh.md").read_text(encoding="utf-8")
+            text += "\n\n" + part("free_zh.md")
+            text += "\n\n" + part("retry_zh.md")
+        if playback:
+            text += "\n\n" + part("playback_zh.md")
     if chapters and len(chapters) > 1:
         names = " → ".join(chapter_name_by_id(c) for c in chapters)
         text += ("\n\n# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
@@ -93,11 +87,11 @@ def study_prompt(study: KbStudy, sim: bool = False) -> str:
         "要求：每个文件都读到最后一行。文件长时 Read 会按长度截断，看到截断就用 offset 与 limit 接着读，"
         "不要只读开头，也不要用 Grep 或 Bash 代替阅读。草莓酱文本的中文版（*_zh.md）与英文版是同一内容的翻译，可以不读。"
         "主控会核对你读过的行，读完之前 observe 与 act 不会执行。\n\n"
-        "读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些程序"
-        + ("（搜索与规划；模拟器直接用 /sim 预置的）。" if sim else "（模拟器、搜索）。") +
-        "把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
-        f"这个准备阶段（读知识库、写笔记、写程序）不计入现实用时，上限 {study.minutes:g} 分钟，到时自动开始计时；"
-        "从你第一次成功调用 observe 或 act 起开始计时。游戏在你思考期间一直暂停，章节计时只算游戏真正推进的帧。"
+        + ("读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些搜索与规划程序"
+           "（模拟器直接用 /sim 预置的）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
+           if sim else "读完后调用 observe 开始游玩。\n") +
+        f"准备阶段最多 {study.minutes:g} 分钟，到时游戏工具自动开放。"
+        "游戏在你思考期间一直暂停，章节计时只算游戏真正推进的帧。"
     )
 CONTINUE_PROMPT = "本章还没有通关，请继续调用 act 游玩。"
 
@@ -105,7 +99,7 @@ CONTINUE_PROMPT = "本章还没有通关，请继续调用 act 游玩。"
 def resume_prompt(reason: str, minutes: float, study_note: str | None = None) -> str:
     """Claude Code 进程被结束后，用 --resume 接着同一个会话时发出的第一条消息。"""
     text = (f"（系统）{reason}，你的上一轮在中途被结束，暂停了约 {minutes:.0f} 分钟，现在接着同一个会话继续。"
-            "这段时间游戏一直冻结，章节计时与现实用时都没有走；但如果被结束时有一个 act 正在执行，它已经执行完了，"
+            "这段时间游戏一直冻结，章节计时没有走；但如果被结束时有一个 act 正在执行，它已经执行完了，"
             "结果没能送回给你。")
     if study_note:
         return text + "准备阶段还没有结束：\n" + study_note

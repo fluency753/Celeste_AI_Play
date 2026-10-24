@@ -2,13 +2,15 @@
 
 流程：主控接管游戏后 start()：桥接把录制指令转给 OBS 插件，插件建录制输出并打开锁步——之后 OBS 每个视频
 节拍向桥接要一帧，桥接推进一帧、画到屏幕上再回复，插件只把这些帧交给 ffmpeg；智能体思考、桥接空闲时不写。
-结束时 stop()：插件关锁步、等 ffmpeg 编完，把画面与声音合成 gameplay.mkv。
+结束时 stop()：插件关锁步、等 ffmpeg 编完，把画面与声音合成 gameplay.mkv（完整版，含规划回放）；
+主控再从完整版里去掉规划回放的帧，生成只有真实游玩帧的 gameplay_pure.mkv（纯享版，见 purecut.py）。
 
 前提：OBS 已用 tools/obs_setup.py 启动（CelesteAI 配置文件与场景集合），装了 celeste-lockstep 插件，
 插件已经连上桥接的时钟端口（hello 的 clock.connected）。
 
 输出目录（runs/<智能体>/<时间>/recording/）：
-    gameplay.mkv   成片（画面 + 声音）
+    gameplay.mkv   成片完整版（画面 + 声音，含规划回放）
+    gameplay_pure.mkv  成片纯享版（只有真实游玩的帧）
     video.mkv      只有画面
     audio.wav      只有声音（32 位浮点立体声，每个游玩帧 1/60 秒）
     frames.csv     每个成片帧对应的游戏帧号、章节计时与 OBS 时间戳（对账用）
@@ -27,6 +29,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import gamewindow
+from .purecut import make_pure
 from .config import REPO_ROOT
 
 CONFIG = REPO_ROOT / "configs" / "recording.json"
@@ -215,6 +218,9 @@ class Recorder:
             "options": {"video_args": self.opts.video_args, "audio_offset_ms": self.opts.audio_offset_ms,
                         "marker": self.opts.marker},
         }
+        if result["state"] == "finished" and "gameplay.mkv" in files:
+            self.log("[record] 生成纯享版（去掉规划回放的帧）……")
+            result["pure"] = make_pure(directory, self.opts.ffmpeg, self.opts.video_args, self.log)
         self.result = result
         try:
             (directory / "recording.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -226,4 +232,7 @@ class Recorder:
                  f"其中规划回放 {check.get('replay_frames') or 0} 帧（补帧 {check.get('replay_filled') or 0}），缺帧 {check.get('missing_frames')}，重复 {check.get('repeats')}"
                  + (f"，错误：{result['error']}" if result["error"] else "")
                  + (f"；成片 {directory / 'gameplay.mkv'}" if "gameplay.mkv" in files else ""))
+        pure = result.get("pure") or {}
+        if pure.get("state") == "finished":
+            self.log(f"[record] 纯享版：{pure['frames']} 帧（{pure['seconds']:.1f} 秒，去掉规划回放 {pure['removed']} 帧）；{pure['file']}")
         return result

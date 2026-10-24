@@ -161,6 +161,7 @@ class GameSession:
         self.before_advance = None          # 每次推进游戏前调用（录制时：确认游戏窗口没有最小化）
         self.playback = None                # 规划回放（playback.Playback）：每次执行计划之前把推演过的路线画进游戏
         self.last_obs: dict | None = None   # 最近一次观测（回放用房间边界）
+        self.room_entry_frame: int | None = None   # 进入当前房间的那一帧（HUD 的推演最速从这里算起）
         self._last_positions: dict = {}
         self._last_room = None
         # 依次通关多章：当前章节完成后，主控自动进入队列里的下一章
@@ -602,6 +603,7 @@ class GameSession:
         player = obs.get("player") or {}
         if (level.get("sid"), level.get("room")) != (self.metrics.state.chapter, self.metrics.state.room):
             self.metrics.update(sim_best_frames=0)   # HUD 的"推演最快"只看当前房间
+            self.room_entry_frame = obs.get("frame")   # 进入这个房间的那一帧（推演最速从这里算起）
         self.metrics.update(
             chapter=level.get("sid", self.metrics.state.chapter),
             room=level.get("room", self.metrics.state.room),

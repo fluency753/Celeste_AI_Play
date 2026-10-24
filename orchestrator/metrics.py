@@ -64,7 +64,7 @@ class MetricsState:
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）
     sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数（全程累计，写进总结）
     sim_round_rollouts: int = 0       # 当前这次模拟器调用推演的路线条数（HUD 显示；这一轮回放画完清零）
-    sim_best_frames: int = 0          # 当前房间里推演出的最快出房帧数（0 = 还没有；换房间清零）
+    sim_best_frames: int = 0          # 当前房间里推演出的最快出房帧数，从进入房间的那一帧算起（0 = 还没有；换房间清零）
     replan_s: float = 0.0             # 重算程序用时（已包含在工具时间里）
     study_s: float = 0.0              # 准备阶段（读知识库等）用时，不计入 elapsed_s
     kb_progress: float | None = None  # 知识库已读比例（0~1）；None = 没有准备阶段
