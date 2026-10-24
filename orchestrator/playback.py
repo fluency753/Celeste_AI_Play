@@ -4,7 +4,8 @@
 记成一条二进制记录（格式见 read_logs）：时刻、开始帧、结果（按键用完 / 死亡 / 换房间 / 剧情 / 不支持）、
 帧数、按键序列的哈希、起点与终点、8 个点的形状摘要，以及每一帧的位置。主控按 Claude Code 输出流里的
 消息分轮：一条带工具调用的消息的全部工具返回之后，把这期间写出的记录文件移出工作区（运行目录的 playback/pending/），
-交给回放线程。准备阶段的推演不回放。
+交给回放线程。准备阶段（第一次执行游戏工具之前）的推演也回放：智能体常在准备阶段就开始规划第一个房间，
+之前不画，录像里每章第一个房间（序章）看不到绘制过程；限制规划轮次时准备阶段照旧不扣轮次。
 
 逐轮回放：回放线程只把表头读进内存，挑好要画的路线，马上把这一轮画进游戏（智能体同时在想下一轮；下一轮先结束时排队，
 录像里一轮接一轮），放完删掉这一轮的记录文件。一轮放完，这一轮的线变成淡灰留在画面上，直到真实执行开始。
@@ -363,14 +364,11 @@ class Playback:
         """一条消息的工具全部返回：调用了模拟器就扣一轮规划轮次，并把这期间的记录文件移出工作区、交给回放线程。"""
         with self._submit_lock:
             files = sorted(self.dir.glob("*.bin"))
-            if started and (files or cli):
+            if files or cli:
                 self.metrics.add(sim_calls=1)
-                if self.gate is not None:
+                if started and self.gate is not None:   # 准备阶段不扣轮次（只在限制规划轮次时有）
                     self.gate.charge(label)
             if not files:
-                return
-            if not started:   # 准备阶段的推演：不记账，不画
-                self._delete(files)
                 return
             sources, moved = self._take(files)
         with self._cv:
@@ -533,11 +531,11 @@ class Playback:
         if not self.enabled:
             return
         deadline = time.monotonic() + 2.0
-        while any(m.started and m.pending for m in list(self._msgs.values())) and time.monotonic() < deadline:
+        while any(m.pending for m in list(self._msgs.values())) and time.monotonic() < deadline:
             time.sleep(0.05)   # 上一轮的工具结果可能还没从输出流读到
         if any(self.dir.glob("*.bin")):   # 输出流里还没收尾的那一轮：直接收进来（之后读到它的结果时不再重复记账）
             try:
-                stale = [mid for mid, m in list(self._msgs.items()) if m.started]
+                stale = list(self._msgs)
                 label = next((self._msgs[mid].label for mid in reversed(stale) if self._msgs[mid].label), "")
                 for mid in stale:
                     self._msgs.pop(mid, None)
@@ -546,7 +544,7 @@ class Playback:
                         self._tool_msg.pop(tid, None)
             except (RuntimeError, KeyError):
                 label = ""
-            self._submit(label, True)
+            self._submit(label, bool(self.gate is not None and self.gate.started))
         with self._cv:
             self._cv.wait_for(lambda: self._backlog <= 0, timeout=timeout)
 
