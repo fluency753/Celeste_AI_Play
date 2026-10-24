@@ -98,8 +98,11 @@ internal static class RecordingAudio {
                     foreach (EventDescription desc in events) {
                         if (desc.getInstanceList(out EventInstance[] instances) != RESULT.OK) continue;
                         foreach (EventInstance instance in instances) {
-                            if (instance.getPlaybackState(out PLAYBACK_STATE state) == RESULT.OK && state != PLAYBACK_STATE.STOPPED)
-                                foreach (Mixer mixer in Mixers) mixer.MirrorStart(instance, seed: true);
+                            if (instance.getPlaybackState(out PLAYBACK_STATE state) != RESULT.OK || state == PLAYBACK_STATE.STOPPED) continue;
+                            foreach (Mixer mixer in Mixers) mixer.MirrorStart(instance, seed: true);
+                            desc.getPath(out string path);
+                            instance.getTimelinePosition(out int position);
+                            Log.Info($"recording audio: mirroring {path} ({state}, {position} ms)");
                         }
                     }
                 }
