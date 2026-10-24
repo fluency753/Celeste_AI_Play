@@ -30,7 +30,7 @@ OBS_DECLARE_MODULE()
 #define WAIT_MS 10
 #define KEEP_RING 1024
 #define AUDIO_RING_SECONDS 6
-/* 声音对齐：桥接在游戏停住超过 60 毫秒时暂停全部声音、推进时恢复，所以每段动作开头的声音都是
+/* 声音对齐：录制（锁步）时桥接在游戏停住后的第一个节拍就暂停全部声音、推进前恢复，所以每段动作开头的声音都是
  * "完全静音 → 有声"的一条边。两个保留帧相隔超过 SEG_GAP_NS 就算新的一段，在预计位置附近找这条边，
  * 量出这一刻采集管线的延迟（OBS 的音频缓冲会在录制中途变化），取最近几次的中位数用于这一段。 */
 #define SEG_GAP_NS 100000000ULL      /* 100 ms */
@@ -234,7 +234,11 @@ struct pend {
 	uint64_t ts;  /* 视频帧时间戳 */
 	uint32_t seg; /* 所在的段 */
 	long long index;
+	bool fade_in; /* 声音从暂停恢复后的第一帧：开头淡入几毫秒（去掉接缝处的爆音） */
 };
+
+/* 暂停与恢复的接缝处各淡出、淡入 2 毫秒（48 kHz 下 96 个样本）：音乐内容是接上的，只去掉波形突变的爆音 */
+#define SEAM_FADE_MS 2
 
 enum seg_state { SEG_UNKNOWN, SEG_MEASURED, SEG_FALLBACK };
 
@@ -259,6 +263,12 @@ struct gp_output {
 	uint64_t wav_frames;
 	long long written;
 	long long filled;    /* 回放帧跟不上节拍时补的帧数 */
+	float *last_buf;     /* 最近写进 WAV 的那一帧声音（接缝处要回头淡出时用） */
+	uint32_t last_cap;
+	long long last_pos;  /* 它在 WAV 文件里的位置（字节） */
+	long long last_index;
+	bool last_valid;
+	long long fade_out_index; /* 这一帧写出时结尾淡出（它之后是一段暂停）；-1 表示没有 */
 	uint64_t prev_ts;    /* 上一个写出的保留帧（视频锁内） */
 	long long prev_ticks;
 	bool failed;
@@ -320,6 +330,9 @@ static void free_audio(struct gp_output *o)
 	bfree(o->chunks);
 	bfree(o->pending);
 	bfree(o->segs);
+	bfree(o->last_buf);
+	o->last_buf = NULL;
+	o->last_cap = 0;
 	o->chunks = NULL;
 	o->pending = NULL;
 	o->segs = NULL;
@@ -435,6 +448,9 @@ static bool gp_start(void *data)
 	o->filled = 0;
 	o->prev_ts = 0;
 	o->prev_ticks = 0;
+	o->last_valid = false;
+	o->last_index = -1;
+	o->fade_out_index = -1;
 	CreateDirectoryA(o->dir, NULL);
 
 	struct video_scale_info vsi = {VIDEO_FORMAT_NV12, o->width, o->height, VIDEO_RANGE_PARTIAL, VIDEO_CS_709};
@@ -473,8 +489,35 @@ static bool gp_start(void *data)
 	return true;
 }
 
+static void apply_fade(float *buf, uint32_t n, uint32_t fade, bool in)
+{
+	if (fade > n)
+		fade = n;
+	for (uint32_t k = 0; k < fade; k++) {
+		float g = (float)(k + 1) / (float)(fade + 1);
+		uint32_t i = in ? k : n - 1 - k;
+		buf[i * 2] *= g;
+		buf[i * 2 + 1] *= g;
+	}
+}
+
+/* 已经写出的上一帧结尾淡出：回到它在 WAV 里的位置重写 */
+static void fade_out_last(struct gp_output *o)
+{
+	if (!o->wav || !o->last_valid)
+		return;
+	uint32_t n = (uint32_t)((uint64_t)o->rate * o->fps_den / o->fps_num);
+	apply_fade(o->last_buf, n, o->rate * SEAM_FADE_MS / 1000, false);
+	long long cur = _ftelli64(o->wav);
+	if (_fseeki64(o->wav, o->last_pos, SEEK_SET) == 0) {
+		fwrite(o->last_buf, sizeof(float), (size_t)n * 2, o->wav);
+		_fseeki64(o->wav, cur, SEEK_SET);
+	}
+	o->last_valid = false;
+}
+
 /* 把 [t, t + 1/fps) 的音频写进 WAV；没有数据的部分补静音 */
-static void write_audio_interval(struct gp_output *o, uint64_t t)
+static void write_audio_interval(struct gp_output *o, uint64_t t, long long index, bool fade_in)
 {
 	if (!o->wav)
 		return;
@@ -502,8 +545,25 @@ static void write_audio_interval(struct gp_output *o, uint64_t t)
 			buf[k * 2 + 1] = c->data[idx * 2 + 1];
 		}
 	}
+	uint32_t fade = o->rate * SEAM_FADE_MS / 1000;
+	bool faded_out = false;
+	if (fade_in)
+		apply_fade(buf, n, fade, true);
+	if (index == o->fade_out_index) {
+		apply_fade(buf, n, fade, false);
+		o->fade_out_index = -1;
+		faded_out = true;
+	}
+	o->last_pos = _ftelli64(o->wav);
 	fwrite(buf, sizeof(float), (size_t)n * 2, o->wav);
 	o->wav_frames += n;
+	if (o->last_cap < n * 2) {
+		o->last_buf = brealloc(o->last_buf, (size_t)n * 2 * sizeof(float));
+		o->last_cap = n * 2;
+	}
+	memcpy(o->last_buf, buf, (size_t)n * 2 * sizeof(float));
+	o->last_index = index;
+	o->last_valid = !faded_out; /* 已经淡出过的不再淡出 */
 	bfree(buf);
 }
 
@@ -557,8 +617,9 @@ static int cmp_double(const void *a, const void *b)
 /* 确定一段的声音偏移；声音还没到齐时返回 false（等下一次） */
 static bool resolve_segment(struct gp_output *o, struct segment *sg, uint32_t seg_index, bool force)
 {
-	/* 恢复声音的指令在这一段第二帧的更新里生效：边应该对齐到第二帧的开头 */
-	int64_t target = (int64_t)sg->start_ts + (int64_t)o->frame_ns;
+	/* 桥接在这一段第一帧推进之前恢复声音，指令在第一帧的 Audio.Update 里生效：边应该对齐到第一帧的开头
+	 * （之前在第一帧之后才恢复、对齐到第二帧，每段开头都有一帧静音） */
+	int64_t target = (int64_t)sg->start_ts;
 	int64_t center = target + (int64_t)o->cur_offset_ns;
 	uint64_t onset = 0;
 	int r = find_onset(o, center - ONSET_WINDOW_NS, center + ONSET_WINDOW_NS, &onset);
@@ -606,7 +667,7 @@ static void flush_pending(struct gp_output *o, bool force)
 			t = 0;
 		if (!force && (uint64_t)t + o->frame_ns > end)
 			break;
-		write_audio_interval(o, (uint64_t)t);
+		write_audio_interval(o, (uint64_t)t, p->index, p->fade_in);
 		done++;
 	}
 	if (done) {
@@ -707,6 +768,14 @@ static void gp_raw_video(void *data, struct video_data *frame)
 	}
 	for (int j = 0; j < copies; j++) {
 		uint64_t ts = stamps[j];
+		/* 和上一个保留帧之间隔了一个节拍以上：声音在这中间暂停过，接缝两边各淡出、淡入一点 */
+		bool seam = o->nsegs > 0 && ts - o->last_frame_ts > o->frame_ns * 3 / 2;
+		if (seam) {
+			if (o->last_valid && o->last_index == first + j - 1)
+				fade_out_last(o);
+			else
+				o->fade_out_index = first + j - 1;
+		}
 		if (o->nsegs == 0 || ts - o->last_frame_ts > SEG_GAP_NS) {
 			if (o->nsegs == o->segcap) {
 				o->segcap = o->segcap ? o->segcap * 2 : 64;
@@ -726,6 +795,7 @@ static void gp_raw_video(void *data, struct video_data *frame)
 		o->pending[o->npending].ts = ts;
 		o->pending[o->npending].seg = (uint32_t)(o->nsegs - 1);
 		o->pending[o->npending].index = first + j;
+		o->pending[o->npending].fade_in = seam;
 		o->npending++;
 	}
 	flush_pending(o, false);

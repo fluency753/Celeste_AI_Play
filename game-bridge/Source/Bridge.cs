@@ -20,7 +20,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.11.2";
+    public const string Version = "0.11.3";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -125,6 +125,9 @@ internal static class Bridge {
         }
         if (!wantsFrame) {
             ClockServer.Send($"N {token}");
+            // 游戏一停就暂停声音：放在这个节拍的 Audio.Update 之前，正好在上一帧的 1/60 秒结束时生效，
+            // 录像里的音乐在暂停与继续之间不丢一截（之前等 60 毫秒才暂停，每个接缝丢约 50 毫秒）
+            SetAudio(AudioMode.Frozen);
             HaltWithoutDrawing(runOriginal);
             return;
         }
@@ -132,13 +135,18 @@ internal static class Bridge {
         // 停住时不重画（见 HaltWithoutDrawing），推进前再确认离上一次呈现已超过这个间隔
         WaitSincePresent(MinPresentGapMs);
         if (job == null && Playback.Running && !IsLoading()) {
-            // 规划回放的一帧：不推进游戏，只重画；回复里章节计时记为 -1，录像对账时与游玩帧分开
+            // 规划回放的一帧：不推进游戏，只重画；回复里章节计时记为 -1，录像对账时与游玩帧分开。
+            // 声音在这一帧的 Audio.Update 之前恢复（只放音乐），从这一帧开头就有声音
+            SetAudio(AudioMode.MusicOnly);
             Halt(runOriginal);
             if (Engine.Scene is Level level) Playback.Step(level);
             pendingAck = token;
             pendingAckReplay = true;
             return;
         }
+        // 推进之前恢复声音：恢复的指令在这一帧的 Audio.Update 里生效，这一段从第一帧开头就有声音
+        //（之前在推进之后才恢复，要到第二帧才有声音，每段开头多一帧静音）
+        SetAudio(AudioMode.Playing);
         if (IsLoading()) {
             AdvanceFrame(runOriginal, InputFrame.Neutral);
             if (job != null) job.LoadingFrames++;
@@ -224,6 +232,7 @@ internal static class Bridge {
     }
 
     /// <summary>游戏冻结时声音也冻结：超过 60 毫秒没有推进就暂停 FMOD 主总线，推进时立即恢复。
+    /// 录制（锁步）时更精确：停住后的第一个节拍就暂停、推进前恢复（见 LockstepTick），这里只是兜底。
     /// 规划回放的帧里音乐照常播放（音效暂停），录像里的音乐与之后真实执行时的音乐连在一起。</summary>
     private static void UpdateAudio(bool advanced, bool replayed) {
         if (advanced) {

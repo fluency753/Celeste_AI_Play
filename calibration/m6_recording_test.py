@@ -197,7 +197,7 @@ def main() -> int:
     starts = [index_of[a + 1] for a, b in acts if (a + 1) in index_of]
     onsets = wav_onsets(wav_path, starts, spf, args.threshold) if wav_path.exists() else []
     measured = [o for o in onsets if o is not None]
-    print(f"  每段动作开头声音恢复的位置（毫秒，相对第一帧开头；应在第二帧开头 16.7 附近）："
+    print(f"  每段动作开头声音恢复的位置（毫秒，相对第一帧开头；桥接 0.11.3 起应在 0 附近）："
           f"{[None if o is None else round(o, 1) for o in onsets]}", flush=True)
     segments = []
     seg_path = rec_dir / "segments.csv"
@@ -211,9 +211,9 @@ def main() -> int:
               else f"  插件分段 {len(segments)} 段，都没量到声音延迟", flush=True)
         check(len(latencies) >= len(acts) - 1, "每段动作开头都量到了声音延迟", f"{len(latencies)} / {len(acts)}")
     if measured:
-        error = [o - 1000.0 / 60 for o in measured]
+        error = list(measured)
         worst = max(error, key=abs)
-        print(f"  相对第二帧开头的误差：中位数 {statistics.median(error):+.1f} ms，最大 {worst:+.1f} ms", flush=True)
+        print(f"  相对第一帧开头的误差：中位数 {statistics.median(error):+.1f} ms，最大 {worst:+.1f} ms", flush=True)
         check(abs(statistics.median(error)) <= 4 and abs(worst) <= 1000.0 / 60, "声音与画面对齐（误差不超过一帧）",
               f"中位数 {statistics.median(error):+.1f} ms，最大 {worst:+.1f} ms")
     if latencies:
