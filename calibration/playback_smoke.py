@@ -16,6 +16,31 @@ from orchestrator.playback import Playback
 from orchestrator.recording import Recorder, options_from
 
 
+def check_tracks(directory: Path, recording: dict) -> dict:
+    """独立游戏音频（game_nrt）的两条音轨：完整版每个成片帧 800 个样本、回放帧里有音乐；纯享版只有游玩帧、纯享版用它。"""
+    if (recording.get("options") or {}).get("audio_source") != "game_nrt":
+        return {"audio_source": (recording.get("options") or {}).get("audio_source")}
+    import numpy as np
+    from orchestrator.purecut import _wav_data, read_ticks
+
+    def wav(name: str):
+        offset, size = _wav_data(directory / name)
+        return np.fromfile(directory / name, dtype="<f4", offset=offset, count=size // 4).reshape(-1, 800, 2)
+
+    ticks = np.array(read_ticks(directory / "frames.csv"))
+    full, play = wav("audio.wav"), wav("audio_play.wav")
+    assert len(full) == len(ticks), f"完整版音轨 {len(full)} 帧，成片 {len(ticks)} 帧"
+    assert len(play) == int((ticks >= 0).sum()), f"纯享版音轨 {len(play)} 帧，游玩帧 {(ticks >= 0).sum()}"
+    replay = full[ticks < 0]
+    rms = lambda blocks: float(np.sqrt(np.mean(np.square(blocks)))) if blocks.size else 0.0
+    silent = int((np.abs(replay).max(axis=(1, 2)) == 0).sum()) if replay.size else 0
+    assert rms(replay) > 1e-4, "完整版音轨的规划回放帧里没有音乐"
+    assert silent == 0, f"完整版音轨有 {silent} 个回放帧是静音"
+    assert recording["pure"].get("audio") == "audio_play.wav", recording["pure"]
+    return {"full_frames": len(full), "play_frames": len(play), "replay_frames": int((ticks < 0).sum()),
+            "replay_rms": round(rms(replay), 5), "play_rms": round(rms(play), 5), "pure_audio": recording["pure"]["audio"]}
+
+
 def main() -> None:
     cfg = RunConfig(agent="dev-sim", save="test", model="playback-check")
     cfg.sim = True
@@ -60,10 +85,11 @@ sim.close()
         assert check["missing_frames"] == 0 and check["repeats"] == 0, check
         assert recording["pure"]["state"] == "finished", recording["pure"]
         assert recording["pure"]["frames"] == 20, recording["pure"]
+        audio = check_tracks(Path(recording["dir"]), recording)
         summary = {"playback": True, "rollouts": metrics.state.sim_rollouts,
-                   "game_unchanged_during_playback": True, "recording": recording}
+                   "game_unchanged_during_playback": True, "audio": audio, "recording": recording}
         (run_dir / "check.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"PASS: 6 条推演、回放不推进游戏、录像含回放、纯享版仅 20 帧；{run_dir}", flush=True)
+        print(f"PASS: 6 条推演、回放不推进游戏、录像含回放、纯享版仅 20 帧；声音 {json.dumps(audio, ensure_ascii=False)}；{run_dir}", flush=True)
     finally:
         if recorder.started:
             recorder.stop()
