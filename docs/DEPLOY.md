@@ -269,24 +269,22 @@ winget install Gyan.FFmpeg
 .\start_local.ps1 -Resume runs\<标签>\<时间戳>       # 续跑一次中断的运行
 ```
 
-开跑前：Docker Desktop 在运行；游戏开着（用只启用 CelesteAIBridge 的配置），停在标题画面或任意菜单即可（菜单宏会自己进存档）；录制时脚本会自己启动和关闭 OBS。
+开跑前：Docker Desktop 在运行；游戏开着（用只启用 CelesteAIBridge 的配置），停在标题画面或任意菜单即可（菜单宏会自己进存档）；录屏开着时主控会自己启动 OBS、结束时关掉它。
 
 ### 5.2 直接用命令
 
 ```powershell
-# 录制时先启动 OBS
-.\.venv\Scripts\python.exe tools\obs_setup.py launch
-# 正式挑战（Anthropic Opus，开模拟器、实时展示、规划回放都是默认开启）
-.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --record --max-minutes 600
+# 正式挑战（Anthropic Opus；开模拟器、实时展示、规划回放、OBS 录屏都是默认开启，OBS 由主控自己启动和关闭）
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --max-minutes 600
 # DeepSeek
-.\.venv\Scripts\python.exe -m orchestrator.run --agent dsflash --save dsflash --provider deepseek --model deepseek-flash --chapters 0,1,2 --record --max-minutes 600
+.\.venv\Scripts\python.exe -m orchestrator.run --agent dsflash --save dsflash --provider deepseek --model deepseek-flash --chapters 0,1,2 --max-minutes 600
 # 关模拟器的版本
-.\.venv\Scripts\python.exe -m orchestrator.run --agent opus-nosim --save <存档> --model opus --chapters 0,1,2 --no-sim --record
-# 结束后
-.\.venv\Scripts\python.exe tools\obs_setup.py stop
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus-nosim --save <存档> --model opus --chapters 0,1,2 --no-sim
+# 不录屏的试跑
+.\.venv\Scripts\python.exe -m orchestrator.run --agent dev-opus --save test --model opus --chapter 0 --max-minutes 30 --no-record
 ```
 
-主控依次：（录制时）退回选档页、开始录制；用菜单宏进入存档的章节并跳过开场；核对存档名、备份存档；启动游戏工具服务（`127.0.0.1:47780`）与 HUD（`http://127.0.0.1:47790/hud`）；创建或复用容器 `celeste-agent-<标签>` 并启动 Claude Code。智能体先读完知识库（准备阶段），之后游玩；一章通关后自动进入下一章。
+主控依次：（录屏时）OBS 没开就启动它、退回选档页、开始录制；用菜单宏进入存档的章节并跳过开场；核对存档名、备份存档；启动游戏工具服务（`127.0.0.1:47780`）与 HUD（`http://127.0.0.1:47790/hud`）；创建或复用容器 `celeste-agent-<标签>` 并启动 Claude Code。智能体先读完知识库（准备阶段），之后游玩；一章通关后自动进入下一章。
 
 ### 5.3 查看与结束
 
@@ -311,7 +309,7 @@ winget install Gyan.FFmpeg
 | `--sim` / `--no-sim` | 开 | 预置模拟器开关，把项目分成两个版本：开时智能体可以随意调用模拟器寻找并优化路线（提示词写明做法）；关时不能调用模拟器，提示词只写目标、规则与工具接口，不教打法 |
 | `--live` / `--no-live` | 开 | 实时展示：智能体思考期间用 `narrate` 随时更新 HUD 上的思考，运行程序期间用 `show.status()` 报告进度（HUD 工具栏实时显示）；思考状态累计满半分钟没有更新时，在智能体下一次调用工具时提醒它（`RunConfig.live_remind_s`）；关时 HUD 的思考只在每次 `act` 时更新 |
 | `--no-playback` | 关（即默认回放） | 关闭规划回放（开模拟器时画 `/sim` 的推演，关模拟器时画智能体用 `show.trajectory()` 记下的轨迹） |
-| `--record` | 关 | OBS 锁步录制（先 `obs_setup.py launch`）；生成完整版与纯享版 |
+| `--record` / `--no-record` | 开 | OBS 录屏开关：开时 OBS 没在运行就由主控自己启动（专用配置、最小化到托盘），锁步录制完整版与纯享版，结束时关掉它启动的 OBS；OBS 已经开着就直接用、结束时不关；`--no-record` 不启动也不调用 OBS |
 | `--limit-planning` | 关 | 限制规划轮次（按章节记账，只用于开模拟器的版本）；`--rounds-per-room`（默认 3）、`--room-scale`（默认 2）调整轮次 |
 | `--no-study` | 关 | 跳过准备阶段（不读知识库，调试用） |
 | `--study-minutes` | 60 | 准备阶段上限，到时自动开放游戏工具 |
@@ -457,7 +455,7 @@ OpenAI 的接口不是 Anthropic 格式，Claude Code 不能直接调用，所�
 | `game-bridge\`（桥接版本号变了） | 关游戏，`.\tools\deploy_bridge.ps1 -CelesteDir ...` |
 | `agent-container\` | `docker build -t celeste-agent:0.1 agent-container`（容器会自动重建） |
 | `obs-plugin\` 或 OBS 更新了 | 关 OBS，`tools\build_obs_plugin.py --obs-dir ...`，重跑录制校准 |
-| `overlay\hud.html` | `tools\obs_setup.py stop` 再 `launch`（OBS 浏览器源不会自动刷新）；关掉旧的 HUD 窗口 |
+| `overlay\hud.html` | 关掉开着的 OBS（`tools\obs_setup.py stop`），下次运行时主控会重新启动它（OBS 浏览器源不会自动刷新）；关掉旧的 HUD 窗口 |
 | `requirements.txt` | `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` |
 
 **迁移到另一台电脑**：按本文重新部署；要带走的本机内容有 `workspaces\`（智能体的程序与笔记）、`runs\`（运行记录与录像）、`sim\dist`（预置模拟器）、`kb\reference`（可以重新生成）、`configs\local*`（路径要按新电脑改）、`.env`（令牌可以重新生成）。

@@ -1,12 +1,14 @@
 """主控入口：进入存档 → 接管游戏 → 启动游戏工具服务 → 启动智能体 → 收尾。
 
 用法（在仓库根目录）：
-    python -m orchestrator.run --agent dev-opus --save test --model opus
-    python -m orchestrator.run --agent dev-opus --save test --model opus --max-minutes 20 --effort medium
-    python -m orchestrator.run --agent dev --save test --no-agent      # 只启动工具服务，用于手动调试
-    python -m orchestrator.run --agent opus5.5 --save opus5.5 --record # 同时用 OBS 录制（先 python tools/obs_setup.py launch）
-    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --record   # 正式挑战（默认开预置模拟器）
-    python -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs/opus5.5/<时间戳> --record     # 中断后续跑
+    python -m orchestrator.run --agent dev-opus --save test --model opus --no-record
+    python -m orchestrator.run --agent dev-opus --save test --model opus --max-minutes 20 --effort medium --no-record
+    python -m orchestrator.run --agent dev --save test --no-agent --no-record   # 只启动工具服务，用于手动调试
+    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2   # 正式挑战（默认开预置模拟器、实时展示与 OBS 录屏）
+    python -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs/opus5.5/<时间戳>     # 中断后续跑（沿用原来的开关）
+
+OBS 录屏默认开启：OBS 没在运行时主控自己启动它（专用配置文件与场景集合，最小化到托盘），结束时关掉它；
+OBS 已经开着就直接用、结束时不关。--no-record 关闭录屏，不启动也不调用 OBS。
 """
 from __future__ import annotations
 
@@ -80,8 +82,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
     ap.add_argument("--no-hud-window", action="store_true",
                     help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
-    ap.add_argument("--record", action="store_true",
-                    help="用 OBS 锁步录制：只录游戏真正推进的帧，成片在日志目录的 recording/ 下（需要先启动 OBS）")
+    ap.add_argument("--record", dest="record", action="store_true", default=None,
+                    help="OBS 录屏（默认开启，写不写都一样）：OBS 没在运行时主控自己启动它，用锁步插件只录游戏真正推进的帧"
+                         "（和规划回放帧），成片（完整版与纯享版）在日志目录的 recording/ 下；结束时关掉主控启动的 OBS")
+    ap.add_argument("--no-record", dest="record", action="store_false",
+                    help="关闭 OBS 录屏：不启动、不调用 OBS，也不录制")
     ap.add_argument("--record-marker", action="store_true", help="录制时在画面左下角画帧号条码（只用于校准）")
     ap.add_argument("--ffmpeg", help="ffmpeg 路径（默认：configs/local.recording.json → PATH → winget 安装位置）")
     ap.add_argument("--record-video-args", help="ffmpeg 视频编码参数（默认见 configs/recording.json）")
@@ -124,6 +129,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             args.sim = bool(state["sim"])
         if args.live is None:
             args.live = bool(state.get("live", True))
+        if args.record is None:
+            args.record = bool(state.get("record", True))
         args.skip_enter = True
         args.no_study = True
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort, provider=args.provider,
@@ -151,6 +158,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.room_scale = max(1.0, args.room_scale)
     cfg.playback = not args.no_playback
     cfg.live = args.live is not False     # 默认开启
+    args.record = args.record is not False  # 默认开启
+    cfg.record = args.record
     cfg.provider_info = load_provider(cfg.provider)
     check_provider(cfg.provider_info)
     if cfg.third_party and cfg.runtime != "container":
@@ -194,7 +203,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
     state = {"agent": cfg.agent, "save": cfg.save, "model": cfg.model, "provider": cfg.provider,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes,
-             "runtime": cfg.runtime, "sim": cfg.sim, "live": cfg.live, "all_chapters": all_chapters, "session_id": session_id,
+             "runtime": cfg.runtime, "sim": cfg.sim, "live": cfg.live, "record": cfg.record, "all_chapters": all_chapters, "session_id": session_id,
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -284,6 +293,32 @@ def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | No
         return JSONResponse({"decision": "allow" if allow else "deny", "reason": reason, "context": context})
 
     app.router.routes.insert(0, Route("/gate", endpoint, methods=["POST"]))
+
+
+def ensure_obs() -> bool:
+    """OBS 录屏开着时调用：OBS 没在运行就用专用的配置文件与场景集合启动它（最小化到托盘，等锁步插件连上桥接），
+    返回 True 表示是主控启动的（结束时由主控关掉）；OBS 已经在运行就直接用，返回 False。"""
+    from tools import obs_setup  # noqa: WPS433（延迟导入：不录屏时不碰 OBS）
+    if obs_setup.obs_running():
+        print("[record] OBS 已经在运行，直接使用（需要是 CelesteAI 配置文件与场景集合；改过 HUD 页面时先关掉它，"
+              "让主控重新启动）；结束时不关闭", flush=True)
+        return False
+    try:
+        obs_dir = obs_setup.find_obs_dir(None)
+    except SystemExit as exc:
+        raise SystemExit(f"{exc}。不录屏时加 --no-record") from None
+    print("[record] 启动 OBS（专用配置文件与场景集合，最小化到托盘）…", flush=True)
+    obs_setup.launch(obs_setup.load_config(), obs_dir, minimized=True)
+    return True
+
+
+def close_obs() -> None:
+    """关掉主控启动的 OBS，并把 OBS 下次打开时选中的配置还原成原来的。"""
+    from tools import obs_setup  # noqa: WPS433
+    try:
+        obs_setup.stop(wait=60.0)
+    except SystemExit as exc:
+        print(f"[record] {exc}", flush=True)
 
 
 def write_placeholder_metrics(run_dir: Path, cfg: RunConfig) -> None:
@@ -528,7 +563,10 @@ def main() -> int:
     run_dir = make_run_dir(cfg.agent)
     print(f"[run] 日志目录：{run_dir}", flush=True)
     recorder = None
+    obs_launched = False
     try:
+        if args.record:
+            obs_launched = ensure_obs()
         if previous:
             check_resume_position(cfg)
         elif not cfg.skip_enter:
@@ -550,14 +588,18 @@ def main() -> int:
         print(f"[record] {exc}", flush=True)
         return 2
     finally:
-        if recorder is not None and recorder.started:  # 没走到主控的收尾（例如启动阶段出错）：在这里停止录制
-            from tools.bridge_client import BridgeClient  # noqa: WPS433
-            client = BridgeClient(port=cfg.bridge_port, timeout=120)
-            try:
-                recorder.call = client.call
-                recorder.stop()
-            finally:
-                client.close()
+        try:
+            if recorder is not None and recorder.started:  # 没走到主控的收尾（例如启动阶段出错）：在这里停止录制
+                from tools.bridge_client import BridgeClient  # noqa: WPS433
+                client = BridgeClient(port=cfg.bridge_port, timeout=120)
+                try:
+                    recorder.call = client.call
+                    recorder.stop()
+                finally:
+                    client.close()
+        finally:
+            if obs_launched:   # 录完（成片与纯享版都已写好）再关掉主控启动的 OBS
+                close_obs()
     print(f"[run] 结束：{summary['stop_reason']}；决策 {summary['decisions']} 次，死亡 {summary['deaths']} 次，"
           f"用时 {summary['elapsed_s']:.0f} 秒（思考 {summary['thinking_s']:.0f}，工具 {summary['tool_s']:.0f}，"
           f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）"

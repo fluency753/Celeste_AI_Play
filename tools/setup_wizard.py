@@ -505,7 +505,7 @@ def step_recording(a: Answers) -> None:
     (ok if plugin and plugin.exists() else bad)("OBS 锁步插件 celeste-lockstep")
     if CHECK_ONLY:
         return
-    a["record"] = ask_yes("要录制（--record）吗？", default=a.get("record", True))
+    a["record"] = ask_yes("要用 OBS 录屏吗（不录屏时运行加 --no-record，不需要装 OBS）？", default=a.get("record", True))
     if not a["record"]:
         return
     if not obs:
@@ -623,7 +623,7 @@ def step_switches(a: Answers) -> None:
         note("没有预置模拟器：用关模拟器的版本（--no-sim）")
     a["live"] = ask_yes("实时展示（智能体思考期间随时更新 HUD 上的思考，运行程序时报告进度）？", a.get("live", True))
     a["playback"] = ask_yes("规划回放（把推演过的路线画进游戏给观众看）？", a.get("playback", True))
-    a["record"] = ask_yes("录制（OBS 锁步录制，完整版与纯享版）？", a.get("record", True))
+    a["record"] = ask_yes("OBS 录屏（主控自己启动 OBS 锁步录制，生成完整版与纯享版；结束时关掉它）？", a.get("record", True))
     a["study"] = ask_yes("开局先读完知识库（准备阶段）？", a.get("study", True))
     a["limit_planning"] = sim_ok and a["sim"] and ask_yes("限制规划轮次（一般不开）？", a.get("limit_planning", False))
     a["hud_window"] = ask_yes("在屏幕上打开置顶 HUD 窗口？", a.get("hud_window", True))
@@ -637,7 +637,7 @@ def launcher_args(a: Answers, save: str, chapters: str, minutes: str) -> list[st
     args += [] if a.get("sim") else ["--no-sim"]
     args += [] if a.get("live", True) else ["--no-live"]
     args += [] if a.get("playback", True) else ["--no-playback"]
-    args += ["--record"] if a.get("record") else []
+    args += [] if a.get("record", True) else ["--no-record"]
     args += [] if a.get("study", True) else ["--no-study"]
     args += ["--limit-planning"] if a.get("limit_planning") else []
     args += [] if a.get("hud_window", True) else ["--no-hud-window"]
@@ -652,7 +652,6 @@ def write_launcher(a: Answers) -> None:
     formal = launcher_args(a, a.get("save", "opus5.5"), a.get("chapters", "0,1,2"), a.get("max_minutes", 600))
     # 试跑用单独的标签（dev-<标签>）：正式挑战的工作区保持干净；想把试跑写的程序带进正式挑战，就把两个标签改成一样
     trial = launcher_args({**a, "agent": "dev-" + a["agent"]}, a.get("test_save", "test"), a.get("chapters", "0,1,2").split(",")[0], 30)
-    record = bool(a.get("record"))
     text = f"""\ufeff# 由 tools/setup_wizard.py 生成（本机文件，不入库）。重新运行向导会覆盖它；也可以直接改下面的参数。
 # 用法：.\\start_local.ps1          正式挑战（存档 {a.get('save')}）
 #       .\\start_local.ps1 -Trial   在调试存档 {a.get('test_save')} 上试跑 30 分钟
@@ -665,10 +664,9 @@ $env:PYTHONIOENCODING = "utf-8"
 $formal = @({', '.join(ps_quote(x) for x in formal)})
 $trial = @({', '.join(ps_quote(x) for x in trial)})
 $args2 = if ($Trial) {{ $trial }} else {{ $formal }}
-if ($Resume) {{ $args2 = @('--agent', {ps_quote(a['agent'])}, '--save', {ps_quote(a.get('save', ''))}, '--resume', $Resume){' + @("--record")' if record else ''} }}
-{'& $py tools\\obs_setup.py launch' if record else '# 不录制：不启动 OBS'}
+if ($Resume) {{ $args2 = @('--agent', {ps_quote(a['agent'])}, '--save', {ps_quote(a.get('save', ''))}, '--resume', $Resume) }}
+# OBS 录屏由主控自己处理（开着时启动 OBS、结束时关掉）；续跑沿用原运行的开关
 & $py -X utf8 -m orchestrator.run @args2
-{'& $py tools\\obs_setup.py stop' if record else ''}
 """
     LAUNCHER.write_text(text, encoding="utf-8")
     ok(f"启动脚本已生成：{LAUNCHER}")

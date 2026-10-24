@@ -189,7 +189,7 @@ docker build -t celeste-agent:0.1 agent-container
 | `--room-scale` | 2 | 房间的长、高每变成这么多倍，存入的轮次乘这么多，向上取整（2 = 与房间面积成正比） |
 | `--limit-planning` | 关 | 打开规划轮次的限制（见下文"规划轮次"），自动重试随之关闭；默认不限制思考与模拟器调用。只用于开模拟器的版本 |
 | `--no-playback` | 关 | 关闭规划回放（默认开启：开模拟器时画 `/sim` 的推演，关模拟器时画智能体用 `show.trajectory()` 交来的轨迹，见下文"规划回放"） |
-| `--record` | 关 | 用 OBS 锁步录制，见 4.4 节 |
+| `--record` / `--no-record` | 开 | OBS 录屏开关（2026-10-24 起默认开启，见 4.4 节）：开时 OBS 没在运行就由主控自己启动（专用配置文件与场景集合、最小化到托盘），锁步录制完整版与纯享版，结束时关掉它启动的 OBS；OBS 已经开着就直接用、结束时不关。`--no-record` 不启动也不调用 OBS。续跑沿用原运行的设置 |
 | `--no-hud-window` | 关 | 不在屏幕上打开置顶 HUD 窗口（默认运行时自动打开，见 4.2 节） |
 | `--resume` / `--fresh-session` | 无 / 关 | 续跑一次中断的运行，见 4.8 节 |
 | `--chapter` | 选章页当前章节 | 菜单宏进入的章节：0 序章、1 被遗弃之城、2 旧址 |
@@ -376,13 +376,13 @@ M5 验收（2026-10-23，桥接 0.7.0）：`python calibration\m5_hud_demo.py` �
 **每次录制**
 
 ```powershell
-# 1. 启动游戏（桥接 0.8.5 以上；当前版本 0.11.4），再启动 OBS：自动建好专用的配置文件与场景集合 CelesteAI 并最小化到托盘
-.\.venv\Scripts\python.exe tools\obs_setup.py launch
-# 2. 运行主控时加 --record
-.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --record
-# 3. 结束后关闭 OBS，并把 OBS 下次打开时选中的配置还原成你原来的
-.\.venv\Scripts\python.exe tools\obs_setup.py stop
+# 启动游戏（桥接 0.8.5 以上；当前版本 0.11.4）后直接运行主控：录屏默认开启
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus
+# 不录屏
+.\.venv\Scripts\python.exe -m orchestrator.run --agent dev-opus --save test --model opus --no-record
 ```
+
+- **录屏开关**（2026-10-24）：`--record`（默认）时主控在开局前检查 OBS：没在运行就调用 `tools\obs_setup.py` 的启动流程（自动建好专用的配置文件与场景集合 CelesteAI、记下你原来选中的配置、最小化到托盘、等锁步插件连上桥接），结束时（通关、预算用完、中断或出错，都在成片与纯享版写好之后）关掉 OBS，并把 OBS 下次打开时选中的配置还原成你原来的；OBS 已经开着时直接用（要是 CelesteAI 配置），结束时不关。`--no-record` 时不启动、不调用 OBS。手动管理 OBS 的命令照旧可用：`tools\obs_setup.py launch` / `stop` / `status`。改了 `overlay\hud.html` 或 HUD 尺寸后，先关掉开着的 OBS，让主控下次重新启动它（OBS 的浏览器源不会自动刷新）。
 
 - `obs_setup.py` 不动你自己的配置文件与场景：CelesteAI 配置文件是 1920×1080、60 fps、NV12、48 kHz；场景里只有游戏采集、应用音频捕获（只录 Celeste.exe）与 HUD 浏览器源，没有桌面音频和麦克风。场景集合已存在时不改动（你在 OBS 里的调整会保留），只把 HUD 浏览器源的宽高同步成 `configs\recording.json` 里的值（HUD 加高后旧场景会切掉卡片底部；OBS 运行时不改，`stop` 之后再 `launch` 即可）；`setup --reset` 重建（原来的先备份）。`status` 查看插件是否加载、是否连上桥接。
 - **开局也录进去**：主控先把游戏退回选档页（这一步不录、快速完成），从选档页开始录制，再按正常速度选存档、进地图、选章节、进关卡、用暂停菜单跳过开场剧情，所以录像从选档页开始。HUD 在这段时间显示智能体名称、推理强度与"等待"，计时都是 0。`--resume` 续跑与 `--skip-enter` 时没有开局，接管游戏后开始录制。
@@ -458,11 +458,11 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC）：校�
    - 在 Claude Code 里用 `/usage` 看一下余量。额度用完时主控会让游戏冻结、等额度重置后接着玩（不计时，见 4.8 节），所以余量不足不会毁掉成绩，只会拉长现实时间；Fable 占每周额度更多。注意运行期间同一账号的其他会话也会被用完的额度挡住。
    - 启动 Docker Desktop；建议重启一次游戏（AIPlay 配置，只启用 CelesteAIBridge），停在标题画面即可。游戏停在别的存档或章节里也可以，菜单宏会先退回选档页。
    - 确认本机有预置模拟器 `sim\dist\celeste-sim`（见 4.5 节）。
-2. **启动 OBS**：`.\.venv\Scripts\python.exe tools\obs_setup.py launch`
+2. OBS 不用手动启动：录屏默认开启，主控会自己启动 OBS、结束时关掉（见 4.4 节）。
 3. **启动主控**（Opus 5.5）：
 
    ```powershell
-   .\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --sim --record --max-minutes 600
+   .\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --max-minutes 600
    ```
 
    Fable 5.1 把前三个参数换成 `--agent fable5.1 --save fable5.1 --model fable`，其余相同。`--max-minutes` 是现实用时上限（不含准备阶段与等待额度的时间），按需要放宽。
@@ -479,7 +479,7 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC）：校�
 **中断续跑**：没通关就停下的运行（时间预算用完、主控报错、Ctrl+C）不交还游戏控制，游戏冻结在原处——游戏在暂停菜单里章节计时也照样会走，所以不能靠暂停菜单。用同样的 `--agent`、`--save` 加 `--resume <运行目录>` 续跑：
 
 ```powershell
-.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs\opus5.5\20261023-120000 --record
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs\opus5.5\20261023-120000
 ```
 
 - 模型、章节、`--sim`、时间预算沿用原运行，推理强度沿用中断时生效的那个（这些都可以显式改，例如加大 `--max-minutes`）；不跑准备阶段。
@@ -509,7 +509,7 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC）：校�
 **运行**（DeepSeek V4.1 Flash；存档要先在游戏里建好，和 opus5.5、fable5.1 一样）：
 
 ```powershell
-.\.venv\Scripts\python.exe -m orchestrator.run --agent deepseek-flash --save <存档名> --provider deepseek --model deepseek-flash --chapters 0,1,2 --sim --record --max-minutes 600
+.\.venv\Scripts\python.exe -m orchestrator.run --agent deepseek-flash --save <存档名> --provider deepseek --model deepseek-flash --chapters 0,1,2 --max-minutes 600
 ```
 
 - 模型名：`deepseek-flash`（DeepSeek 官方接口里这个名字目前指向 V4.1 Flash 1017）、`deepseek-v4-pro`。主控在模型名后加 `[1m]`，让 Claude Code 按 100 万 token 的上下文压缩（压缩窗口 786432 token），Claude Code 的各个模型槽位与子智能体都指向这个模型，与 DeepSeek 文档里的 Claude Code 配置一致。HUD 显示的名字在 `configs\hud.json` 的 `names` 里。
@@ -542,7 +542,7 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC）：校�
 | summary.json | 结束时的汇总与结束原因 | 已实现 |
 | system_prompt.md | 本次运行发给智能体的完整提示词 | 已实现 |
 | claude_stderr.log、mcp.json、agent_cwd/ | Claude Code 的错误输出；本机方式下的工具服务配置与空工作目录 | 已实现 |
-| recording/ | OBS 锁步录制的成片 gameplay.mkv 与对账文件（见 4.4 节） | 已实现（加 `--record`） |
+| recording/ | OBS 锁步录制的成片 gameplay.mkv、纯享版 gameplay_pure.mkv 与对账文件（见 4.4 节） | 已实现（录屏默认开启，`--no-record` 关闭） |
 | inputs.tas | 回放用的逐帧按键与系统事件 | 未实现 |
 | manifest.json | 版本、配置与哈希 | 未实现 |
 
