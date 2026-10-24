@@ -50,7 +50,7 @@ class MetricsState:
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）
     retries: int = 0                  # 自动重试次数（重算程序运行次数，不唤醒大模型）
     pause_denials: int = 0            # 规划轮次用完后被拒绝的工具调用次数（见 pausegate.py）
-    plan_rounds_left: int | None = None  # 本章还剩的规划轮次；None = 不限（--free-planning）
+    plan_rounds_left: int | None = None  # 本章还剩的规划轮次（--limit-planning 时）；None = 不限（默认）
     plan_rounds_used: int = 0         # 用掉的规划轮次（准备阶段不算）
     replaying: bool = False           # 规划回放正在画面上播放（与智能体的思考同时进行，不改 status）
     replay_round: int = 0             # 正在回放这次规划的第几轮（0 = 执行前画最终路线）

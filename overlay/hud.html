@@ -132,7 +132,6 @@
     <div class="stat"><span class="k">压缩</span><span class="v num" id="compact">0</span></div>
     <div class="stat"><span class="k">知识库读取</span><span class="v num" id="study">—</span></div>
     <div class="stat"><span class="k">死亡</span><span class="v num" id="deaths">0 次</span></div>
-    <div class="stat" id="roundsRow"><span class="k">规划剩余</span><span class="v num" id="rounds">—</span></div>
     <div class="stat"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0 次</span></div>
     <div class="stat"><span class="k">推演路径</span><span class="v num" id="simRuns">0 条</span></div>
     <div class="stat"><span class="k">推演最速</span><span class="v num" id="simBest">—</span></div>
@@ -293,8 +292,7 @@ function render() {
   $("ctx").classList.toggle("warn", ctx / limit >= 0.9);
   $("compact").textContent = String(m.compactions || 0);
 
-  // 规划轮次（本章剩余）与死亡次数；不限制规划轮次时显示"不限"
-  $("rounds").textContent = m.plan_rounds_left == null ? "不限" : `${m.plan_rounds_left} 轮`;
+  // 死亡次数
   $("deaths").textContent = `${m.deaths || 0} 次`;
 
   // 预置模拟器：调用次数（调用了模拟器的消息数）、当前这次调用推演的路线条数（这一轮回放画完清零）、

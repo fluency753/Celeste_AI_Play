@@ -89,8 +89,14 @@ def solid_rects(tiles: dict | None) -> list[list[int]]:
     return sorted(rects, key=lambda q: (q[1], q[0]))
 
 
+# 相邻房间与本房间的边界之间可能隔着几个像素（1A 开头几个房间上下相隔 4 像素）。游戏换房时在 Madeline 中心外侧
+# 8 像素（左右）或 12 像素（上下）处找房间（Level.EnforceBounds）：左右隔得开约 4 像素，向上最多约 19 像素
+# （Madeline 最多出界 24 像素），向下约 6 像素以上（一直往下掉）。按这个容差把隔开的房间也算作出口。
+SIDE_GAP, UP_GAP, DOWN_GAP = 4, 19, 16
+
+
 def room_exits(level: dict, neighbors: list[dict] | None) -> list[dict]:
-    """相邻房间与当前房间共用的边界段，就是可能的出口（是否被地形挡住要看地形）。"""
+    """与相邻房间正对着的边界段，就是可能的出口（是否被地形挡住要看地形）。"""
     if not neighbors or not level.get("bounds"):
         return []
     bx, by, bw, bh = level["bounds"]
@@ -99,13 +105,13 @@ def room_exits(level: dict, neighbors: list[dict] | None) -> list[dict]:
         nx, ny, nw, nh = n["bounds"]
         y0, y1 = max(by, ny), min(by + bh, ny + nh)
         x0, x1 = max(bx, nx), min(bx + bw, nx + nw)
-        if nx + nw == bx and y1 > y0:
+        if 0 <= bx - (nx + nw) <= SIDE_GAP and y1 > y0:
             out.append({"side": "left", "x": bx, "y": [y0, y1], "room": n["room"]})
-        elif nx == bx + bw and y1 > y0:
+        elif 0 <= nx - (bx + bw) <= SIDE_GAP and y1 > y0:
             out.append({"side": "right", "x": bx + bw, "y": [y0, y1], "room": n["room"]})
-        elif ny + nh == by and x1 > x0:
+        elif 0 <= by - (ny + nh) <= UP_GAP and x1 > x0:
             out.append({"side": "top", "y": by, "x": [x0, x1], "room": n["room"]})
-        elif ny == by + bh and x1 > x0:
+        elif 0 <= ny - (by + bh) <= DOWN_GAP and x1 > x0:
             out.append({"side": "bottom", "y": by + bh, "x": [x0, x1], "room": n["room"]})
     return out
 
@@ -192,9 +198,10 @@ def room_json(obs: dict) -> str:
     return "\n".join(lines)
 
 
-# 与操作无关的触发器（镜头、音乐、光照等），在给智能体看的数据里省略（工作区文件里保留全部）
+# 与操作无关的触发器（镜头、音乐、光照等），在给智能体看的数据里省略（工作区文件里保留全部）。
+# 风的触发器（WindTrigger、WindAttackTrigger）会改变风向、影响移动，不省略
 COSMETIC_TRIGGERS = ("Camera", "Music", "Ambience", "Light", "Bloom", "Rumble", "Sound", "Altmusic", "Minitext",
-                     "Lookout", "Spawn", "Wind")
+                     "Lookout", "Spawn")
 
 
 def crop_to_view(obs: dict, margin: int = 16) -> tuple[list[dict], dict | None]:

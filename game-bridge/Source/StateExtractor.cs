@@ -331,11 +331,15 @@ internal static class StateExtractor {
         w.WriteEndObject();
     }
 
+    private const int NeighborGap = 24;
+
     /// <summary>整房间模式的附加信息：相邻房间（用来确定出口）、重生点、触发器。</summary>
+    /// <remarks>相邻房间与本房间之间可能隔着几个像素（1A 开头几个房间上下相隔 4 像素）：游戏换房时是在 Madeline
+    /// 中心外侧 8（左右）或 12（上下）像素处找房间（Level.EnforceBounds），所以这里把边界外扩 24 像素找。</remarks>
     private static void WriteRoomExtras(Utf8JsonWriter w, Level level) {
         Session session = level.Session;
         Rectangle b = level.Bounds;
-        Rectangle touch = new(b.X - 1, b.Y - 1, b.Width + 2, b.Height + 2);
+        Rectangle touch = new(b.X - NeighborGap, b.Y - NeighborGap, b.Width + 2 * NeighborGap, b.Height + 2 * NeighborGap);
         w.WriteStartArray("neighbors");
         foreach (LevelData data in session.MapData.Levels) {
             if (data.Name == session.Level || !data.Bounds.Intersects(touch)) continue;

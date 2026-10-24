@@ -177,6 +177,7 @@
 
 ### BirdNPC（教学小鸟）
 - 没有碰撞效果，只显示教学提示与剧情。序章结尾的冲刺教学见 `player_physics.md` §11（StBirdDashTutorial）。
+- **冲刺教学模式（`mode` 为 DashingTutorial）会自动开始剧情**：小鸟出现约 1 秒后，每帧检查 Madeline：x 大于"小鸟的起始位置 x − 92"，并且 y 在"起始位置 y − 20"到"起始位置 y − 10"之间（不含两端，也就是比起始位置高 10～20 像素，一般要在空中）时，开始序章结尾的剧情（之后由系统处理）。起始位置是小鸟在地图里的位置（字段 `StartPosition`），不是它现在显示的位置。
 
 ---
 
@@ -191,15 +192,22 @@
 ## 7. 可交互物与装饰
 
 - **Lookout**（望远镜）、**NPC**（各类 NPC）、**Payphone**、**Memorial**（纪念碑）、**Bonfire**、**Checkpoint**、告示等：没有阻挡效果。可交互的对象在 Madeline 处于其范围内时，按交互键 `T` 会进入剧情/观察（此时起跳与冲刺不触发）。
+- **会按 Madeline 的位置自动开始剧情的 NPC**：它们不是触发器，不在 `triggers` 里，而是在 `entities` 里（位置见实体的坐标）；条件满足的那一帧开始剧情（Madeline 变为不可控，系统跳过剧情；剧情期间章节计时照常走，跳过也要花时间）。有的剧情结束后还在同一个房间接着玩。预置模拟器会在同一帧以 `cutscene` 停下（`detail` 为 `npc:类型名`）。条件（x、y 指 Madeline 的位置，NPC 的 x、y 指它的实体坐标）：
+  - **NPC00_Granny**（序章的老奶奶）：Madeline 站在地面上，x ≥ 房间左边界 + 96 且 x ≤ 老奶奶 x + 16，与老奶奶的 y 相差不到 4，并且面朝她（她在右边时面朝右）。会话里已有标记 `granny`（对话过）时不再触发。
+  - **BirdNPC** 冲刺教学模式（序章结尾）：见 §5。
+  - **DreamMirror**（2A 的镜子）：Madeline 先碰到镜子的判定范围（实体碰撞箱）；碰到后范围左右各加宽 16 像素，等她离开加宽后的范围时开始剧情。镜子已碎（会话里已有梦境冲刺能力）时不触发。
+  - 第 3 章以后（本次不涉及，仅供参考）：NPC03_Oshiro_Hallway1/2（x > 他的 x − 60）、NPC03_Theo_Escaping（x > 他的 x − 100）、NPC04_Granny（x > 她的 x − 40）、NPC04_Theo（x > 缆车左边 − 16）、NPC05_Theo_Mirror（x > 他的 x − 64）、NPC06_Badeline_Crying（x > 她的 x − 32）、NPC06_Granny（x > 她的 x − 60）、NPC06_Granny_Ending（站到地面上）、NPC03_Oshiro_Breakdown、NPC03_Oshiro_Cluttter 等。
 - **FlutterBird**、**HangingLamp**、**LightBeam**、**Wire**、漂浮碎屑、梦境镜子等：纯装饰，不影响移动（未逐一核实）。
 - 观测只列出有碰撞箱的实体；装饰类出现在 `entities` 里时一般归入 `other` 或 `interactive`，可忽略。
 
-## 8. 触发器（不在观测里，但影响规则）
+## 8. 触发器（观测的 `triggers` 里，只有类型与范围）
 
 - **ChangeRespawnTrigger**：Madeline 进入时，若其目标点没有实心物，就把重生点改为该点。
 - **RespawnTargetTrigger**：换房完成时若 Madeline 站在其中，重生点取它指定的目标附近的出生点。
-- **EventTrigger / 剧情触发器**：进入后开始剧情（Madeline 变为 StDummy，不可控），主控会按"暂停 → 跳过剧情"处理。
-- 相机、音乐类触发器不影响物理。
+- **EventTrigger / 剧情触发器**：进入后开始剧情（Madeline 变为 StDummy，不可控），主控会按"暂停 → 跳过剧情"处理。章节结尾的剧情（例如 1A、2A 的终点）就是这种触发器。
+- **WindTrigger 等风的触发器**：进入后改变房间的风向与风力，影响移动（本次的三章没有风）。
+- 相机、音乐、光照类触发器不影响物理，给你的文字里省略，工作区文件里保留。
+- 注意：序章的两段剧情（老奶奶、结尾的鸟）与 2A 的镜子不是触发器，而是 NPC 自己判断的，见 §7。
 
 ---
 

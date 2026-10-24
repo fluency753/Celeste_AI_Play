@@ -66,15 +66,16 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="可选：Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）就提前暂停智能体、等额度重置后接着玩；"
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
-    ap.add_argument("--free-planning", action="store_true",
-                    help="不限制规划轮次（默认：按章节记账，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮；"
-                         "自动重试关闭），也不播规划回放")
+    ap.add_argument("--limit-planning", action="store_true",
+                    help="限制规划轮次：按章节记账，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮，"
+                         "只有调用模拟器的消息占一轮，用完后不能再跑模拟器；自动重试关闭。默认不限制思考与调用")
+    ap.add_argument("--free-planning", action="store_true", help=argparse.SUPPRESS)  # 旧开关：现在不限制就是默认
     ap.add_argument("--rounds-per-room", type=int, default=3,
-                    help="一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 3，至少 3）；大房间按 --room-scale 放大")
+                    help="（--limit-planning 时）一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 3，至少 3）；大房间按 --room-scale 放大")
     ap.add_argument("--room-scale", type=float, default=2.0,
                     help="房间的长、高每变成这么多倍，存入的轮次乘这么多（默认 2，即与面积成正比），向上取整")
     ap.add_argument("--no-playback", action="store_true",
-                    help="执行前不把模拟器推演过的路线画进游戏（规划回放；只在 --sim 且限制规划轮次时有）")
+                    help="不把模拟器推演过的路线画进游戏（规划回放；只在 --sim 时有）")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
     ap.add_argument("--no-hud-window", action="store_true",
                     help="不在屏幕上打开置顶 HUD 窗口（默认打开：贴在游戏窗口右上角，点击穿透、不抢焦点；录像里的 HUD 不受影响）")
@@ -130,7 +131,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.quota_wait_cap_s = args.quota_wait_cap_seconds
     cfg.quota_wait_max_h = args.quota_wait_max_hours
     cfg.sim = args.sim
-    cfg.pause_limit = not args.free_planning
+    cfg.pause_limit = bool(args.limit_planning) and not args.free_planning
     cfg.rounds_per_room = max(1, args.rounds_per_room)
     cfg.room_scale = max(1.0, args.room_scale)
     cfg.playback = not args.no_playback

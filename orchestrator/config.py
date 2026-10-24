@@ -136,7 +136,7 @@ class RunConfig:
     quota_wait: bool = True          # 额度用完（或到 max_usage）时等重置后接着同一个会话；False 则直接停止
     quota_wait_max_h: float = 24.0   # 重置还要等更久时直接停止
     quota_wait_cap_s: float | None = None  # 只用于测试：等待额度的最长秒数
-    pause_limit: bool = True         # 限制规划轮次（按章节记账，见 pausegate.py）；自动重试关闭
+    pause_limit: bool = False        # 限制规划轮次（--limit-planning；按章节记账，见 pausegate.py，自动重试关闭）；默认不限制思考与调用
     rounds_per_room: int = 3         # 一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次；大房间按 room_scale 放大
     room_scale: float = 2.0          # 房间的长、高每变成这么多倍，存入的轮次乘这么多（2 = 与面积成正比），向上取整
     death_bonus: int = 1             # 在游戏里死亡一次补的规划轮次

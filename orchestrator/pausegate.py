@@ -65,6 +65,8 @@ class PauseGate:
         self.room_scale = room_scale          # 房间的长、高每变成这么多倍，存入的轮次乘这么多
         self.last_deposit = 0                 # 最近进入的新房间存入了几轮
         self.state_path = state_path          # 工作区里的 game/rounds.json：智能体随时可读的剩余轮次（/sim 也据此在输出末尾提示）
+        if not enabled:
+            self._publish()                   # 不限制时也写一次（limited=false），免得工作区里留着上次运行的轮次
 
     # ---- 记账 ----
 

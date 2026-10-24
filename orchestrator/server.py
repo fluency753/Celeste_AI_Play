@@ -63,7 +63,7 @@ NO_RETRY_NOTE = ("\n本次运行限制规划轮次：本章每进入一个没来
 RULE_SIM = ("只有调用了模拟器的消息占一轮，其他工具不占；任何时候（任何位置、任何一帧停下时）都可以调用模拟器，只要还有剩余轮次。"
             "剩余轮数也写在每次调用模拟器的输出末尾，随时可读 /workspace/game/rounds.json。用完后 Bash 被拒绝（模拟器只能通过它调用），请直接 act。")
 RULE_ALL = "act 与 set_effort 以外的工具每条消息占一轮，用完后只能 act。"
-PLAYBACK_NOTE = "每一轮规划在模拟器里推演过的路线，系统会在下一轮之前画进游戏给观众看（不推进游戏、不计入章节计时）。"
+PLAYBACK_NOTE = "每一轮规划（一条调用了模拟器的消息）在模拟器里推演过的路线，系统会在下一轮之前画进游戏给观众看（不推进游戏、不计入章节计时）。"
 
 
 def build_server(session: GameSession, study: KbStudy | None = None, gate=None) -> MCPServer:
@@ -136,7 +136,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     rule = RULE_SIM if session.cfg.sim else RULE_ALL
     act_description = ACT_DESCRIPTION + (NO_RETRY_NOTE.format(n=session.cfg.rounds_per_room, d=session.cfg.death_bonus, rule=rule)
                                          if session.cfg.pause_limit else "")
-    if session.cfg.pause_limit and session.cfg.playback and session.cfg.sim:
+    if session.cfg.playback and session.cfg.sim:
         act_description += PLAYBACK_NOTE
 
     @server.tool(name="act", description=act_description, structured_output=False)

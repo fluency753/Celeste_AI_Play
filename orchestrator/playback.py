@@ -306,8 +306,9 @@ class Playback:
         self.metrics = metrics
         self.gate = gate
         self.log = log
-        # collect：收集推演记录（规划轮次按"调用了模拟器的消息"记账，也靠它）；enabled：画进游戏（规划回放）
-        self.collect = bool(cfg.sim and cfg.pause_limit and session.workspace is not None)
+        # collect：收集推演记录（HUD 的模拟器调用与推演统计、限制规划轮次时按"调用了模拟器的消息"记账，都靠它）；
+        # enabled：画进游戏（规划回放）
+        self.collect = bool(cfg.sim and session.workspace is not None)
         self.enabled = bool(self.collect and cfg.playback)
         self.dir = session.workspace / "game" / "simlog" if session.workspace is not None else None
         self.archive = session.run_dir / "playback"
