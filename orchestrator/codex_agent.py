@@ -335,6 +335,15 @@ class CodexRunner(SessionControls):
             if self.fast_mode is None:
                 self.fast_mode = result.get("serviceTier") in {"priority", "fast"}
             self.metrics.update(model=result["model"], effort=result.get("reasoningEffort") or self.cfg.effort)
+            # Live controls must not use the catalog currently being browsed for
+            # a different, new conversation in the HUD.
+            if self.control:
+                from .model_catalog import load_models
+                try:
+                    catalog = await asyncio.to_thread(load_models)
+                    self.runtime_efforts = next((m['efforts'] for m in catalog['models'] if m['id'] == result['model']), [])
+                except (RuntimeError, OSError, ValueError, TimeoutError):
+                    self.runtime_efforts = []
             if self.manual_effort and self.manual_effort != self.metrics.state.effort:
                 self.metrics.request_effort(self.manual_effort,'恢复用户的手动推理强度设置')
             (self.run_dir / "codex_session.json").write_text(json.dumps({
@@ -417,6 +426,7 @@ class CodexRunner(SessionControls):
                     self.name_result = parse_name(self.naming_reply)
                     return '存档命名完成'
                 if self.prepare_only and self.study and self.study.complete():
+                    self.completed_preparation = True
                     return "知识库准备完成"
                 message = ("继续准备，尚未完整读完的行必须用 celeste_read 阅读。" if self.study and not self.study.complete()
                            else "继续调用游戏工具完成本次章节；先更新一句公开解说。")

@@ -28,10 +28,9 @@ from pathlib import Path
 
 import uvicorn
 
-from .agent import ClaudeRunner
 from .prompting import resume_prompt
-from .config import (CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, load_api_key, load_dotenv,
-                     load_provider)
+from .runtimes import RUNTIMES, runtime
+from .config import CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id
 from .container import ensure_container
 from .game_session import GameSession
 from .kb_study import KbStudy
@@ -46,9 +45,9 @@ from .server import LIVE_REMINDER, TRANSPORT_SECURITY, build_server
 def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--agent", required=True, help="智能体标签，用于日志目录与独立配置目录，如 opus5.5、dev-opus")
-    ap.add_argument("--engine", choices=["claude", "codex"], default=None,
+    ap.add_argument("--engine", choices=list(RUNTIMES), default=None,
                     help="独立执行器：claude（原有）、codex（原生 GPT，复用 Codex 登录）")
-    ap.add_argument("--prepared", help="复用 codex_prepare 完成的全库准备与独立线程（校验知识库未变化）")
+    ap.add_argument("--prepared", help="复用 preparation 完成的知识库准备与独立会话（校验知识库未变化）")
     ap.add_argument("--start-paused", action="store_true", help="原生 GPT 启动后保持暂停，可先聊天再点继续")
     ap.add_argument("--knowledge", choices=["explore", "full"], default=None,
                     help="原生 GPT 默认 explore：新手探索；full 保留原有速通资料")
@@ -184,18 +183,24 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         raise SystemExit('--create-save 只可从序章新开一局，不能与续跑或跳过进档合用')
     cfg.runtime = args.runtime
     cfg.engine = args.engine or (previous["state"].get("engine", "claude") if previous else "claude")
+    adapter = runtime(cfg.engine)
     cfg.knowledge_profile = args.knowledge or (previous["state"].get("knowledge_profile", "full") if previous
-                                             else "explore" if cfg.engine == "codex" else "full")
+                                             else adapter.default_knowledge)
     if previous and cfg.knowledge_profile != previous["state"].get("knowledge_profile", "full"):
         raise SystemExit("不能通过 --resume 改变知识范围；请新建准备会话，避免继承已有攻略知识")
-    if cfg.engine == "codex":
-        cfg.provider = "codex"
-        if not any(a == "--model" or a.startswith("--model=") for a in sys.argv) and not previous:
-            cfg.model = ""  # 由 Codex 已登录配置选择；thread/start 回传真实模型后才显示
-        if not any(a == "--effort" or a.startswith("--effort=") for a in sys.argv) and not previous:
-            cfg.effort = "medium"
-    if args.prepared and (cfg.engine != "codex" or args.no_study or previous):
-        raise SystemExit("--prepared 只用于原生 Codex 新开一局，不能与 --no-study 或 --resume 合用")
+    if not any(a == '--model' or a.startswith('--model=') for a in sys.argv) and not previous:
+        cfg.model = adapter.default_model
+    if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv) and not previous:
+        cfg.effort = adapter.default_effort
+    adapter.configure(cfg, cfg.provider)
+    if args.prepared and (args.no_study or previous):
+        raise SystemExit("--prepared 只用于已准备会话新开一局，不能与 --no-study 或 --resume 合用")
+    if args.prepared:
+        prepared_metadata = json.loads((Path(args.prepared)/'prepare_summary.json').read_text(encoding='utf-8'))
+        if not any(a == '--model' or a.startswith('--model=') for a in sys.argv):
+            cfg.model = prepared_metadata.get('requested_model') or prepared_metadata['metrics']['model']
+        if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv):
+            cfg.effort = prepared_metadata['metrics']['effort']
     cfg.autocompact = args.autocompact
     cfg.study = not args.no_study
     cfg.study_minutes = args.study_minutes
@@ -225,9 +230,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     from .recording import load_config
     cfg.continuous_music = bool(load_config().get("continuous_music", False) if args.continuous_music is None
                                else args.continuous_music)
-    cfg.provider_info = ({"label": "Codex（ChatGPT 登录）", "images": True, "allowed_domains": ["api.openai.com"]}
-                         if cfg.engine == "codex" else load_provider(cfg.provider))
-    if not args.no_agent and cfg.engine != "codex":
+    if not args.no_agent and adapter.mcp:
         check_provider(cfg.provider_info)
     if cfg.third_party and cfg.runtime != "container" and not args.no_agent:
         raise SystemExit("第三方模型提供方只支持容器运行方式")
@@ -268,7 +271,7 @@ def load_previous(path: str) -> dict:
 def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None) -> None:
     """记下续跑需要的设置与 Claude Code 会话编号。"""
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
-    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine,
+    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "record": cfg.record, "playback": cfg.playback, "all_chapters": all_chapters, "session_id": session_id,
              "resumed_from": str(previous["dir"]) if previous else None}
@@ -288,16 +291,6 @@ def check_provider(info: dict) -> None:
                 pass
         except Exception as exc:  # noqa: BLE001
             raise SystemExit(f"连不上 {info.get('name')} 的接口转换网关（{url}）：{exc}。先按 docs/DEPLOY.md 的说明在本机启动网关")
-
-
-def load_token(cfg: RunConfig) -> str:
-    """Anthropic：Max 订阅令牌（.env）；第三方提供方：本机保存的 API 密钥。都只在内存里，不打印、不写文件。"""
-    if cfg.third_party:
-        return load_api_key(cfg.provider_info or {})
-    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or load_dotenv(REPO_ROOT / ".env").get("CLAUDE_CODE_OAUTH_TOKEN", "")
-    if not token:
-        raise SystemExit("缺少 CLAUDE_CODE_OAUTH_TOKEN：请按使用说明 2.1 节运行 claude setup-token，并写入仓库根目录的 .env")
-    return token
 
 
 def make_run_dir(agent: str) -> Path:
@@ -353,7 +346,7 @@ def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | No
         except ValueError:
             data = {}
         tool_name = str(data.get("tool_name") or "")
-        guard = getattr(session, 'control_guard', None)
+        guard = getattr(session, 'program_guard', getattr(session, 'control_guard', None))
         if tool_name == 'Bash' and guard and (reason := guard()):
             return JSONResponse({'decision': 'deny', 'reason': reason, 'context': ''})
         allow, reason = await gate.decide(tool_name, data.get("tool_use_id"))
@@ -508,7 +501,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
             print("[run] 提示：kb/reference/ 不存在，准备阶段只读知识库本身（见使用说明 2.5 节生成参考资料原文）", flush=True)
     prepared = None
     if args.prepared:
-        from .codex_prepared import load_preparation
+        from .prepared import load_preparation
         prepared = load_preparation(args.prepared, cfg, study)
     metrics = Metrics(run_dir / "metrics.json", cfg.agent, cfg.model, cfg.effort, cfg.budget_seconds,
                       study=study is not None)
@@ -652,17 +645,11 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 else:
                     note = ("（系统）主控中断后续跑，这是一个新的会话：之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。"
                             "上次退出后已交还游戏控制，游戏状态可能发生变化。先看 /workspace/notes.md，再调用 observe 核对当前状态后继续。")
-            if cfg.engine == "codex":
-                from .codex_agent import CodexRunner
-                runner = CodexRunner(cfg, run_dir, session, metrics, container, study, game_server=server,
-                                     session_id=session_id, resume=resumed_session is not None, resume_note=note,
-                                     gate=gate, playback=playback if playback.collect else None,
-                                     start_paused=args.start_paused)
-            else:
-                runner = ClaudeRunner(cfg, run_dir, session, metrics, token or "", container, study,
-                                      session_id=session_id, resume=resumed_session is not None, resume_note=note,
-                                      gate=gate, playback=playback if playback.collect else None,
-                                      start_paused=args.start_paused)
+            from .runtimes import runtime
+            runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
+                game_server=server, token=token, session_id=session_id,
+                resume=resumed_session is not None, resume_note=note,
+                gate=gate, playback=playback if playback.collect else None, start_paused=args.start_paused)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()
@@ -715,7 +702,7 @@ def main() -> int:
         validate_selection(cfg.save, True, cfg.chapter)
     if args.prepared:
         # 在选档、录制或连接游戏前验证，错误的准备目录不能导致游戏动作。
-        from .codex_prepared import load_preparation
+        from .prepared import load_preparation
         preparation_study = KbStudy(cfg.kb_dir, cfg.study_minutes,
                                     {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None)
         load_preparation(args.prepared, cfg, preparation_study)
@@ -724,7 +711,8 @@ def main() -> int:
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
     from .bridge_requirements import preflight_bridge
     preflight_bridge(cfg.bridge_port)
-    token = None if args.no_agent or cfg.engine == "codex" else load_token(cfg)
+    from .runtimes import runtime
+    token = None if args.no_agent else runtime(cfg.engine).token(cfg)
     run_dir = make_run_dir(cfg.agent)
     print(f"[run] 日志目录：{run_dir}", flush=True)
     recorder = None

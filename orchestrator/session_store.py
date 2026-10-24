@@ -1,6 +1,13 @@
-"""Idle HUD storage is not an agent conversation or a completed game run."""
+"""Persistent session JSON and the HUD empty startup state."""
 import json
 from pathlib import Path
+
+
+def write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    temporary.replace(path)
 
 
 def idle_anchor(root: Path) -> Path:

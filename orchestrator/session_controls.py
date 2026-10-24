@@ -23,9 +23,15 @@ class RuntimeCapabilities:
 class SessionControls:
     capabilities = RuntimeCapabilities()
 
+    def close_events(self):
+        events = getattr(self, '_events', None)
+        if events and not events.closed:
+            events.close()
+
     def _init_controls(self, *, disabled=False, start_paused=False):
         if self.metrics.state.tool_calls is None:
             self.metrics.update(tool_calls=0)
+        self.completed_preparation = False
         self.control = None if disabled else RunControl(self.run_dir)
         self.fast_mode = self.control.fast_preference() if self.control else None
         self.manual_effort = self.control.effort_preference() if self.control else None
@@ -40,6 +46,7 @@ class SessionControls:
         self.heartbeat_task, self.pausing = None, False
         if self.session is not None:
             self.session.control_guard = self._game_guard
+            self.session.program_guard = self._program_guard
             self.session.effort_policy = self._agent_effort_policy
 
     async def _agent_effort_policy(self, value):
@@ -61,11 +68,18 @@ class SessionControls:
                 role='system', kind='系统')
 
     def _game_guard(self):
+        if getattr(self, 'prepare_only', False):
+            return '本次仅准备知识库，不允许操作游戏。'
         if self.paused or self.chat_only:
             return '用户已暂停试玩，不能执行游戏操作。'
         if self.session.done or self.goal_finishing:
             return '本次试玩已结束，不能执行游戏操作。'
         return None
+
+    def _program_guard(self):
+        # Preparation can organize notes in the sandbox; the MCP game gate is
+        # still closed. Idle chat and user-paused play cannot run planners.
+        return None if getattr(self, 'prepare_only', False) else self._game_guard()
 
     async def _heartbeat(self):
         while True:
@@ -192,7 +206,7 @@ class SessionControls:
     def _effort_status(self):
         return {'effort_control':True,'effort':self.metrics.state.effort,
                 'effort_pending':self.metrics.state.effort_pending,'effort_manual':self.manual_effort,
-                'effort_levels':self.capabilities.effort_levels}
+                'effort_levels':getattr(self, 'runtime_efforts', self.capabilities.effort_levels)}
 
     def _cutscene_status(self):
         return {'cutscene_control':True,'cutscene_mode':self.control.cutscene_preference() or self.cfg.cutscene_mode}

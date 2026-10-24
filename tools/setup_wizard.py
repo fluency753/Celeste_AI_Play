@@ -401,6 +401,10 @@ def step_platform(a: Answers) -> None:
     previous = a.get("model") if a.get("provider_prev") == provider else None
     a["model"] = ask("模型名（Anthropic 用别名 opus、fable、haiku；第三方用它自己的模型名）",
                      previous or defaults.get(provider))
+    models = list(info.get('models') or [])
+    if not any(row.get('id') == a['model'] for row in models):
+        models.append({'id':a['model'], 'efforts':['low','medium','high']})
+        merge_json(LOCAL_PROVIDERS, {provider:{'models':models}})
     a["provider_prev"] = provider
 
 

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mcp.server.mcpserver import Image, MCPServer
 from orchestrator.codex_agent import CodexRunner
-from orchestrator.codex_prepared import load_preparation
+from orchestrator.prepared import load_preparation
 from orchestrator.config import REPO_ROOT, RunConfig
 from orchestrator.container import ensure_container
 from orchestrator.kb_study import KbStudy

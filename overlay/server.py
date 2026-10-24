@@ -112,11 +112,12 @@ def make_handler(pinned: Path | None):
                 except ValueError as exc:
                     self._send(503, json.dumps({'saves': [], 'error': str(exc)}, ensure_ascii=False).encode('utf-8'), 'application/json')
             elif path == '/api/models':
-                from orchestrator.model_catalog import load_models
+                from orchestrator.runtimes import runtime
                 try:
                     from urllib.parse import parse_qs
-                    refresh = parse_qs(urlparse(self.path).query).get('refresh') == ['1']
-                    payload = load_models(refresh=refresh)
+                    query = parse_qs(urlparse(self.path).query)
+                    refresh = query.get('refresh') == ['1']
+                    payload = runtime(query.get('engine',['codex'])[0]).models(query.get('provider',[None])[0], refresh=refresh)
                     self._send(200, json.dumps(payload, ensure_ascii=False).encode('utf-8'), 'application/json')
                 except (RuntimeError, OSError, ValueError, TimeoutError) as exc:
                     self._send(503, json.dumps({'models': [], 'error': '无法读取模型列表：' + str(exc)}, ensure_ascii=False).encode('utf-8'), 'application/json')
@@ -128,10 +129,14 @@ def make_handler(pinned: Path | None):
                 from orchestrator.chat import can_wake
                 payload["can_wake"] = can_wake(directory)
                 payload["waking"] = waking(directory) if directory and not payload["control"]["connected"] else False
-                from orchestrator.conversations import catalog, read_json
-                payload["sessions"] = [{k: record[k] for k in ("id", "label", "model")}
+                from orchestrator.conversations import catalog, read_json, session_key
+                payload["sessions"] = [{"id":record["key"], "label":record["label"], "model":record["model"]}
                                        for record in catalog(anchor_run(pinned))]
-                payload["selected_session"] = read_json(directory / "run_state.json").get("session_id") if directory else None
+                selected = read_json(directory / "run_state.json") if directory else {}
+                payload["selected_session"] = session_key(selected) if selected.get("session_id") else None
+                from orchestrator.runtimes import configured_runtimes
+                payload["runtimes"] = configured_runtimes()
+                payload["runtime"] = selected.get("engine", "codex") + ":" + selected.get("provider", "codex" if selected.get("engine", "codex") == "codex" else "anthropic")
                 payload['save'] = read_json(directory / 'run_state.json').get('save') if directory else None
                 payload['save_slot'] = read_json(directory / 'run_state.json').get('save_slot') if directory else None
                 from orchestrator.session_actions import operation_status

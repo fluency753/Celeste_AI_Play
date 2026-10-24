@@ -63,7 +63,22 @@ HUD 读取当前运行的 metrics.json、control.sqlite3 和 public_events.jsonl
 - simulate 为公共 MCP 工具（Codex 映射为 celeste_simulate），与 observe/act/cutscene/exit_level 使用相同的阶段与暂停门禁；体力、预测上限和退款规则不因执行器改变。省略 candidates 只查询体力。
 - orchestrator/telemetry.py：写入两种执行器共用的公开事件；HUD 用同一气泡历史显示消息和压缩状态。旧录像目录没有公共事件文件时，仍可读取原 Codex 公开事件；它只用于已有录像历史。
 
-HUD 的新建、准备、取名和结束后唤醒会话目前仍由 Codex 专用适配器实现；本次没有宣称这些 CLI 生命周期已支持 Claude。Claude 可通过 orchestrator.run 启动，运行中复用上述 HUD 控制。增加其他执行器时复用公共层，并显式实现所支持的生命周期与模型目录接口。
+HUD 的新建、准备、取玩家名、切换、断开、重新唤醒和开始试玩均经 orchestrator/runtimes.py 的执行器接口调度，支持 Codex 与 Claude Code，包括通过 Claude Code 使用的 Anthropic 兼容提供方。后台 preparation 与 chat 为通用入口，不再通过 Codex 专用模块启动；orchestrator/lifecycle.py 根据执行器是否需要 MCP，托管不建立游戏连接的准备和聊天环境。
+
+会话管理中先选择“执行器与提供方”，再选择模型和推理强度，点击“新建并准备”。Codex 模型来自其公开模型目录；Claude Code 的模型来自 configs/providers.json 与本机 configs/local.providers.json 的 models 配置，界面会标明来源，不冒充在线发现。部署向导填写的新模型会加入提供方配置。models 每项支持 id、label、efforts、default_effort；自定义平台未配置列表时会给出错误，不把其他执行器的列表作为回退。认证或模型校验失败不会先断开当前会话。
+
+准备证明保存 engine、provider、runtime、requested_model、会话 ID、文件摘要和真实读取覆盖。开始试玩校验身份、运行环境和知识范围；准备超时不会放开游戏工具。聊天与取名沿用原会话 ID、工作区及模型选择；HUD 展示服务返回的实际模型名。列表身份由执行器、提供方和会话 ID 共同决定，避免跨执行器 ID 相同导致历史混用。已有 Codex 准备证明按旧格式识别，仍要通过摘要与工具校验。
+
+通用 CLI 示例（准备和聊天不会连接游戏或开始录制）：
+
+```powershell
+.\.venv\Scripts\python.exe -m orchestrator.preparation --engine claude --provider anthropic --agent claude-live --model opus --effort high --knowledge explore
+.\.venv\Scripts\python.exe -m orchestrator.chat --run runs\claude-live\<准备目录>
+```
+
+普通 CLI 准备完成后会写入 ready 状态；HUD 管理的准备由后台监控建立并接入该状态。开始试玩使用 --prepared，并显式选择存档、章节范围。未显式覆盖模型和强度时沿用准备结果。start_gpt.ps1 作为 Codex 快捷入口保留，内部调用同一通用模块。
+
+增加其他执行器时在 RUNTIMES 注册适配器，提供配置、凭据、模型目录与选择校验、runner 工厂和提供方列表；通过 mcp、fast、默认模型/强度/知识范围等能力配置接入公共生命周期，不需要为 HUD 或后台宿主复制一套流程。
 
 清理：移除 --codex-thread 与聊天日志读取器、内置 openai 转换网关预设及专用部署向导。自定义 Anthropic 兼容平台、域名/宿主端口限制仍保留。移除 Bash 专用的 game exit、game story、simulate 拦截和旧菜单命名回退；桥接最低要求 0.12.4，启动前只读检查，失败不会录制或选择存档。桥接 0.12.5 移除 name_new_save，创建只使用 create_save。
 
@@ -73,7 +88,7 @@ Codex 恢复时检查该线程实际持久化的动态工具。旧线程如果�
 
 start_gpt.ps1 不再默认选择 test；新试玩须显式传 -Save，并指定已有 -SaveSlot，或 -CreateSave 从序章新建。-Resume 直接沿用原存档，拒绝额外的存档参数。HUD 中新建存档留空名称仍由 agent 自主取玩家名。
 
-验证使用 calibration/runtime_controls_test.py、agent_control_test.py、sim_assist_test.py、connectivity_test.py、session_bootstrap_test.py、play_scope_test.py 与全量 calibration 回归；均不启动付费模型或推进真实游戏。本轮最终 174 项全部通过；桥接 Release 构建零警告、零错误，剧情文字独立检查通过，HUD JavaScript 与启动 PowerShell 语法检查通过。未重启现有服务或进行新的真实模型试玩。
+验证使用 calibration/runtime_controls_test.py、agent_control_test.py、sim_assist_test.py、connectivity_test.py、session_bootstrap_test.py、play_scope_test.py 与全量 calibration 回归；均不启动付费模型或推进真实游戏。上一轮 174 项全部通过；桥接 Release 构建零警告、零错误，剧情文字独立检查通过，HUD JavaScript 与启动 PowerShell 语法检查通过。未重启现有服务或进行新的真实模型试玩。
 
 ## 提示词与知识库
 
@@ -282,3 +297,7 @@ HUD 底部「剧情」下拉框提供「自动跳过」和「agent决定」，�
 命名提示说明的是“玩家角色名”，同时作为存档显示名并用于游戏角色的对话称呼；不给定语言、风格或示例名，也不会改名已有档案。
 
 实际复用测试档槽位11「向山而行」验收：新会话自行调用 `celeste_exit_level` 成功，结束原因 `agent 退出关卡`，completed=false，最终Overworld；无游玩移动动作，无新增主存档，其他11个主存档哈希未变。录像430帧约7.17秒，无缺帧无重复，结束后恢复正常游戏运行。证据 `runs/gpt-hud-75b8aac53c/20261024-233403/agent_exit_acceptance.json`，并包含SDK记录的真实工具调用事件。之前测试由主控退出，未覆盖agent退出；本次补齐了这一环。
+
+本轮生命周期联调使用真实 stdio 子进程替代模型服务，覆盖 Claude 准备读取证明、聊天、断开、再唤醒、取名，以及模型和会话 ID 延续；未发起付费模型请求，也未推进真实游戏。
+
+生命周期通用化最终验证：182 项 calibration 回归通过；HUD JavaScript、Python 编译与 PowerShell 语法检查通过。提供方模型选择、身份隔离、超时准备拒绝恢复均已覆盖。本轮没有重启现有 HUD/agent/OBS 后台，需重新启动 HUD 服务后加载新的执行器选择接口。

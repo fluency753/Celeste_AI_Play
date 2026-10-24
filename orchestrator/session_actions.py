@@ -10,18 +10,13 @@ from .background import launch
 from .chat import can_wake
 from .config import REPO_ROOT, RunConfig
 from .control import RunControl
+from .runtimes import runtime, config_from_state
+from .session_store import write_json
 from .conversations import read_json, release_chat, start_chat, prepare_target
 
 _lock = threading.RLock()
 _monitors = set()
 BUSY = {"preparing", "connecting", "starting", "naming"}
-
-
-def write_json(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
-    temporary.replace(path)
 
 
 def require_idle(current):
@@ -113,13 +108,18 @@ def _finish(anchor, operation):
         if not prepared.get('kb_study', {}).get('complete') or prepared.get('quick_check') or not prepared.get('session_id'):
             raise ValueError('准备未完成，未切换原会话')
         metrics = prepared['metrics']
-        state = {'engine': 'codex', 'provider': 'codex', 'agent': operation['agent'], 'save': '',
-                 'model': metrics['model'], 'effort': metrics['effort'], 'session_id': prepared['session_id'],
+        engine = operation.get('engine', 'codex')
+        provider = operation.get('provider', 'codex')
+        if prepared.get('engine', 'codex') != engine or prepared.get('provider', 'codex') != provider:
+            raise ValueError('准备结果的执行器身份与本次请求不一致')
+        state = {'engine': engine, 'provider': provider, 'agent': operation['agent'], 'save': '',
+                 'model': metrics['model'], 'requested_model':prepared.get('requested_model', metrics['model']), 'effort': metrics['effort'], 'session_id': prepared['session_id'],
                  'knowledge_profile': 'explore', 'session_kind': 'ready', 'session_name': operation['name'],
                  'prepared_dir': str(directory), 'runtime': 'container', 'sim': False, 'sim_assist': False,
                  'max_minutes': 240}
         write_json(directory / 'run_state.json', state)
-        RunControl(directory).set_fast(operation['fast'])
+        if runtime(engine).fast:
+            RunControl(directory).set_fast(operation['fast'])
         RunControl(directory).set_cutscene_mode(operation.get('cutscene_mode','auto'))
         operation['status'] = 'connecting'
         store_operation(anchor, operation)
@@ -150,31 +150,38 @@ def create_session(anchor, current, options):
     require_idle(current)
     if operation_status(anchor).get('status') in BUSY:
         raise ValueError('已有会话操作正在进行')
-    if not isinstance(options, dict) or set(options) - {'name', 'model', 'effort'}:
+    if not isinstance(options, dict) or set(options) - {'name', 'model', 'effort', 'engine', 'provider'}:
         raise ValueError('新会话参数无效')
     name, model, effort = options.get('name', ''), options.get('model', ''), options.get('effort', 'high')
     if not all(isinstance(value, str) for value in (name, model, effort)):
         raise ValueError('名称、模型和推理强度须为文字')
     name, model = name.strip(), model.strip()
-    if len(name) > 60 or not re.fullmatch(r'[A-Za-z0-9._-]{0,100}', model) or effort not in {'low','medium','high','xhigh','max'}:
+    if len(name) > 60 or not re.fullmatch(r'[A-Za-z0-9._:/-]{0,100}', model) or effort not in {'low','medium','high','xhigh','max'}:
         raise ValueError('名称最多60字，模型须为模型标识，推理强度须为有效档位')
-    from .model_catalog import resolve_selection
-    model, effort = resolve_selection(model, effort)
+    engine = options.get('engine', 'codex')
+    provider = options.get('provider', 'codex' if engine == 'codex' else 'anthropic')
+    if not isinstance(engine,str) or not isinstance(provider,str):
+        raise ValueError('执行器和提供方参数无效')
+    adapter = runtime(engine)
+    cfg = adapter.configure(RunConfig(agent='pending',save='',model=model), provider)
+    model, effort = adapter.resolve(model, effort, cfg.provider)
+    adapter.token(cfg)
     ident = uuid.uuid4().hex[:10]
-    agent = 'gpt-hud-' + ident
+    agent = engine + '-hud-' + ident
     stamp = time.strftime('%Y%m%d-%H%M%S')
     directory = REPO_ROOT / 'runs' / agent / stamp
     fast = RunControl(current).fast_preference()
     operation = {'id': ident, 'kind': 'new', 'status': 'preparing', 'previous': str(current),
                  'directory': str(directory), 'agent': agent, 'name': name or '新会话 ' + time.strftime('%H:%M'),
-                 'fast': bool(fast)}
+                 'fast': bool(fast) if adapter.fast else False, 'engine':engine, 'provider':cfg.provider}
     operation['cutscene_mode']=RunControl(current).cutscene_preference() or read_json(current/'run_state.json').get('cutscene_mode','auto')
     release_chat(current)
     try:
-        host, _ = launch(['--agent', agent, '--knowledge', 'explore', '--model', model, '--effort', effort,
+        host, _ = launch(['--engine',engine,'--provider',cfg.provider,'--agent', agent, '--knowledge', 'explore', '--model', model, '--effort', effort,
                           '--output', str(directory), '--hud-managed', '--fast', 'on' if fast else 'off'], service='prepare')
     except Exception:
-        start_chat(current)
+        if can_wake(current):
+            start_chat(current)
         raise
     operation['host'] = str(host)
     store_operation(anchor, operation, new=True)
@@ -220,8 +227,10 @@ def play_session(anchor, current, options):
     directory = Path(state['prepared_dir']).resolve()
     if (REPO_ROOT / 'runs').resolve() not in directory.parents:
         raise ValueError('准备目录不属于本项目')
-    cfg = RunConfig(agent=state['agent'], save=save, model=state['model'], knowledge_profile='explore')
-    from .codex_prepared import load_preparation
+    cfg = config_from_state(state)
+    cfg.save = save
+    runtime(cfg.engine).token(cfg)
+    from .prepared import load_preparation
     from .kb_study import KbStudy
     load_preparation(str(directory), cfg, KbStudy(cfg.kb_dir, 60))
     # Chat may have been forked when a desktop client owned the preparation thread.
@@ -238,7 +247,8 @@ def play_session(anchor, current, options):
         else:
             host, _ = _launch_play(current, options)
     except Exception:
-        start_chat(current)
+        if can_wake(current):
+            start_chat(current)
         raise
     operation['host'] = str(host)
     store_operation(anchor, operation, new=True)
@@ -259,7 +269,8 @@ def _launch_play(current, options):
     RunControl(directory).set_effort(manual_effort)
     mode=RunControl(current).cutscene_preference() or state.get('cutscene_mode','auto')
     RunControl(directory).set_cutscene_mode(mode)
-    return launch(['--engine','codex','--agent',state['agent'],'--save',options['save'],'--knowledge','explore',
+    return launch(['--engine',state['engine'],'--provider',state['provider'],'--model',state.get('requested_model') or state['model'],
+                          '--agent',state['agent'],'--save',options['save'],'--knowledge',state.get('knowledge_profile','explore'),
                           '--scope',options.get('scope','chapter'),
                           '--sim-assist' if options.get('sim_assist',False) else '--no-sim-assist',
                           '--prepared',str(directory),'--chapter',str(options['chapter']), '--effort',manual_effort or read_json(current/'metrics.json').get('effort',state['effort']),

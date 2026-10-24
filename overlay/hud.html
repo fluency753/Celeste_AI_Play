@@ -209,8 +209,9 @@
     <select id="sessionSelect" aria-label="独立 agent 会话" title="选择本项目的 agent 会话；试玩结束后可切换聊天" disabled><option>正在读取会话…</option></select>
     <details id="sessionPanel">
       <summary>会话管理</summary>
+      <select id="sessionRuntime" aria-label="新会话执行器与提供方"><option value="codex:codex">Codex</option></select>
       <input id="sessionName" aria-label="新会话名称" placeholder="新会话名称（可选）" maxlength="60">
-      <div class="control-buttons"><select id="sessionModel" aria-label="新会话模型" disabled><option value="">正在读取模型…</option></select><button id="sessionModelRefresh" type="button" title="重新读取 Codex 返回的模型列表">刷新</button></div>
+      <div class="control-buttons"><select id="sessionModel" aria-label="新会话模型" disabled><option value="">正在读取模型…</option></select><button id="sessionModelRefresh" type="button" title="重新读取所选执行器的模型列表">刷新</button></div>
       <div id="modelChoiceStatus" role="status"></div>
       <div class="control-buttons"><label>推理 <select id="sessionEffort" disabled><option value="">读取中…</option></select></label><button id="sessionNew" type="button" title="新建独立会话并准备入门资料，完成后可聊天或开始试玩">新建并准备</button><button id="sessionDisconnect" type="button">断开会话</button></div>
       <select id="sessionSave" aria-label="选择游戏存档"><option value="">选择存档…</option><option value="new">新建独立存档</option></select>
@@ -228,7 +229,7 @@
       <div class="control-buttons"><button id="goalSave" type="button">更新目标</button><button id="goalClear" type="button">清除目标</button><button id="goalStop" type="button" title="取消正在执行的动作，结束试玩并保存录像">立即停止并保存</button></div>
       <div id="goalStatus" role="status"></div>
     </details>
-    <textarea id="agentInput" aria-label="给独立 agent 的提示" placeholder="给 GPT 发提示… Enter 发送，Shift+Enter 换行" maxlength="4000"></textarea>
+    <textarea id="agentInput" aria-label="给独立 agent 的提示" placeholder="给 agent 发提示… Enter 发送，Shift+Enter 换行" maxlength="4000"></textarea>
     <div class="control-buttons" style="flex-wrap:wrap"><button id="togglePlay" type="button" disabled>暂停</button><button id="toggleFast" type="button" aria-pressed="false" title="切换独立 agent 的 Fast 模式，下一轮生效" disabled>Fast：—</button><select id="liveEffort" aria-label="当前会话推理强度" title="手动固定推理强度，下一轮生效；自动表示由 agent 调整" disabled><option value="auto">推理：自动</option></select><select id="cutsceneMode" aria-label="剧情处理模式" title="可在开始前和游玩中切换；agent决定时自行观看、推进、选择或跳过" disabled><option value="auto">剧情：自动跳过</option><option value="agent">剧情：agent决定</option></select><button id="agentSend" type="submit" disabled>发送</button></div>
     <div id="controlStatus" role="status">正在连接主控…</div>
   </form>
@@ -240,7 +241,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 44;
+const PAGE_VERSION = 45;
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -671,7 +672,8 @@ async function loadSaveChoices() {
 $('sessionSave').onchange=()=>{updateSaveChoice();pollControl();};
 $('sessionSaveName').oninput=()=>pollControl();
 $('sessionPanel').addEventListener('toggle',()=>{if($('sessionPanel').open)loadSaveChoices();});
-let modelCatalog={models:[]}, modelsLoading=false, modelCatalogError='';
+let modelCatalog={models:[]}, modelsLoading=false, modelCatalogError='', modelRequest=0;
+function chosenRuntime(){ const [engine,provider]=$('sessionRuntime').value.split(':');return controlData?.runtimes?{engine,provider}:{}; }
 let liveEffortSignature='',changingEffort=false;
 function syncLiveEffort(data,busy) {
   const c=data.control,model=modelCatalog.models.find(item=>item.id===data.model);
@@ -701,13 +703,14 @@ function updateModelEfforts() {
   }
 }
 async function loadModelChoices(refresh=false) {
-  if(modelsLoading) return;
+  const requestId=++modelRequest;
   modelsLoading=true; modelCatalogError='';
   await pollControl();
   if(!state) await poll(); // 首次加载先取得当前推理强度，避免快速缓存响应把既有选择重置。
   try {
-    const response=await fetch(MODELS_URL+(refresh?'?refresh=1':''),{cache:'no-store'});
+    const response=await fetch(MODELS_URL+'?'+new URLSearchParams({...chosenRuntime(),refresh:refresh?'1':'0'}),{cache:'no-store'});
     const data=await response.json();
+    if(requestId!==modelRequest)return;
     if(!response.ok || !data.models?.length) throw Error(data.error || '没有可选模型，请刷新重试。');
     const previous=$('sessionModel').value;
     modelCatalog=data;
@@ -717,9 +720,10 @@ async function loadModelChoices(refresh=false) {
     const ids=data.models.map(item=>item.id);
     $('sessionModel').value=ids.includes(previous)?previous:ids.includes(controlData?.model)?controlData.model:data.default_model;
     updateModelEfforts();
-  } catch(error){modelCatalogError=error.message;}
-  finally {modelsLoading=false;$('modelChoiceStatus').textContent=modelCatalogError;await pollControl();}
+  } catch(error){if(requestId===modelRequest)modelCatalogError=error.message;}
+  finally {if(requestId===modelRequest){modelsLoading=false;$('modelChoiceStatus').textContent=modelCatalogError || (modelCatalog.source==='provider_config'?'模型列表来自本机提供方配置。':'');await pollControl();}}
 }
+$('sessionRuntime').onchange=()=>{modelCatalog={models:[]};$('sessionModel').replaceChildren();$('sessionEffort').replaceChildren();loadModelChoices();};
 $('sessionModel').onchange=()=>{updateModelEfforts();pollControl();};
 $('sessionModelRefresh').onclick=()=>loadModelChoices(true);
 async function pollControl() {
@@ -728,6 +732,15 @@ async function pollControl() {
     const response = await fetch(CONTROL_URL, {cache:'no-store'});
     if (!response.ok) throw Error('主控暂未连接');
     controlData = await response.json();
+    const runtimeSelect=$('sessionRuntime'), runtimeOptions=controlData.runtimes || [{id:'codex:codex',label:'Codex'}];
+    runtimeSelect.hidden=!controlData.runtimes;
+    const runtimeSignature=JSON.stringify(runtimeOptions);
+    if(runtimeSelect.dataset.options!==runtimeSignature){
+      const previous=runtimeSelect.dataset.options?runtimeSelect.value:controlData.runtime;
+      runtimeSelect.dataset.options=runtimeSignature;
+      runtimeSelect.replaceChildren(...runtimeOptions.map(item=>{const o=document.createElement('option');o.value=item.id;o.textContent=item.label;return o;}));
+      if(runtimeOptions.some(item=>item.id===previous))runtimeSelect.value=previous;
+    }
     const c = controlData.control;
     renderGoal(c);
     const sessions = controlData.sessions || [];
@@ -809,7 +822,7 @@ async function sessionAction(kind, options) {
   lifecycleBusy=false;
   await pollControl();
 }
-$('sessionNew').onclick=()=>sessionAction('new_session',{name:$('sessionName').value,model:$('sessionModel').value,effort:$('sessionEffort').value});
+$('sessionNew').onclick=()=>sessionAction('new_session',{...chosenRuntime(),name:$('sessionName').value,model:$('sessionModel').value,effort:$('sessionEffort').value});
 $('sessionDisconnect').onclick=()=>sessionAction('disconnect');
 $('sessionPlay').onclick=()=>{
   const raw=$('sessionChapter').value.trim(), chapter=Number(raw);

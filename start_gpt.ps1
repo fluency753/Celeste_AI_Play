@@ -21,12 +21,12 @@ $env:PYTHONIOENCODING = 'utf-8'
 $extra = @('--effort', $Effort, '--knowledge', $Knowledge)
 if ($Model) { $extra += @('--model', $Model) }
 if (-not $Play) {
-    & $py -X utf8 -m orchestrator.codex_prepare --agent gpt-native @extra
+    & $py -X utf8 -m orchestrator.preparation --agent gpt-native @extra
 } else {
     if ($Resume -and $Prepared) { throw '-Resume 和 -Prepared 不能同时使用。' }
     if (-not $Resume -and -not $Prepared) { throw '请用 -Prepared 指定准备目录，或用 -Resume 指定续跑目录。' }
     if (-not $Resume) {
-        & $py -X utf8 -m orchestrator.codex_prepared $Prepared --agent gpt-native --knowledge $Knowledge
+        & $py -X utf8 -m orchestrator.prepared $Prepared --agent gpt-native --knowledge $Knowledge
         if ($LASTEXITCODE -ne 0) { throw '准备会话校验失败；游戏、HUD 和 OBS 未改动。' }
     }
     $chapterArgs = if ($Chapters) { @('--chapters', $Chapters) } else { @('--chapter', $Chapter) }

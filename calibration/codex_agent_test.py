@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mcp.types import CallToolResult
 from orchestrator.codex_agent import CodexRunner, public_event
-from orchestrator.codex_prepared import load_preparation
+from orchestrator.prepared import load_preparation
 from orchestrator.config import RunConfig
 from orchestrator.kb_study import KbStudy
 from orchestrator.metrics import Metrics
@@ -194,7 +194,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         from orchestrator.run import run_async
         manifest = self.preparation()
         args = SimpleNamespace(no_agent=False, prepared=str(self.root), no_hud=True, no_hud_window=True)
-        with patch("orchestrator.codex_prepared.load_preparation", return_value=manifest), \
+        with patch("orchestrator.prepared.load_preparation", return_value=manifest), \
              patch("orchestrator.run._run_session", new_callable=AsyncMock, return_value={}) as run:
             await run_async(self.cfg, args, self.root, None)
         self.assertIs(run.call_args.args[-1], manifest)

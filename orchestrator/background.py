@@ -88,7 +88,7 @@ def worker(manifest):
         if data.get("probe"):
             command = [sys.executable, "-c", "import time; time.sleep(12)"]
         else:
-            module = {"play": "orchestrator.run", "chat": "orchestrator.chat", "prepare": "orchestrator.codex_prepare", "hud": "overlay.server",
+            module = {"play": "orchestrator.run", "chat": "orchestrator.chat", "prepare": "orchestrator.preparation", "hud": "overlay.server",
                       "hud-window": "overlay.window"}[data.get("service", "play")]
             command = [sys.executable, "-X", "utf8", "-m", module, *data["arguments"]]
         with (directory / "output.log").open("ab", buffering=0) as output:

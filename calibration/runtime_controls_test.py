@@ -133,6 +133,13 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Read'})))
         self.assertEqual(json.loads(response.body)['decision'], 'allow')
 
+    async def test_preparation_can_organize_notes_but_cannot_use_game_tools(self):
+        self.runner.prepare_only = True
+        self.assertIsNone(self.session.program_guard())
+        self.assertIn('仅准备', self.session.control_guard())
+        result = await self.server.call_tool('simulate', {'candidates': [['60,R']]})
+        self.assertIn('仅准备', result.content[0].text)
+
     async def test_stop_and_goals_use_shared_controller(self):
         self.controls()
         goal = self.runner.control.enqueue('goal', json.dumps({'text': '观察左边', 'conditions': []}))

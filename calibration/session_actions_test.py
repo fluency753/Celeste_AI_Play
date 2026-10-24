@@ -12,6 +12,46 @@ from orchestrator.session_actions import create_session, disconnect, play_sessio
 
 
 class SessionActionTests(unittest.TestCase):
+    def test_claude_creation_dispatches_provider_without_codex_catalog(self):
+        with patch('orchestrator.session_actions.release_chat'), \
+             patch('orchestrator.session_actions.launch',return_value=(self.root/'host',{})) as launch, \
+             patch('orchestrator.session_actions._monitor'), \
+             patch('orchestrator.runtimes.Runtime.token',return_value='stub'), \
+             patch('orchestrator.model_catalog.load_models') as codex_catalog:
+            create_session(self.anchor,self.anchor,{'engine':'claude','provider':'anthropic',
+                           'model':'opus','effort':'high','name':'Claude测试'})
+        args = launch.call_args.args[0]
+        self.assertEqual(args[args.index('--engine')+1],'claude')
+        self.assertEqual(args[args.index('--provider')+1],'anthropic')
+        self.assertEqual(args[args.index('--model')+1],'opus')
+        codex_catalog.assert_not_called()
+
+    def test_invalid_claude_model_keeps_current_host(self):
+        with patch('orchestrator.session_actions.release_chat') as release:
+            with self.assertRaises(ValueError):
+                create_session(self.anchor,self.anchor,{'engine':'claude','provider':'anthropic',
+                               'model':'a-typo','effort':'high'})
+        release.assert_not_called()
+
+    def test_prepared_claude_connects_and_play_command_keeps_engine_provider_and_model(self):
+        from orchestrator.session_actions import _launch_play
+        operation = self.operation()
+        operation.update(engine='claude',provider='anthropic')
+        directory = Path(operation['directory'])
+        proof = read_json(directory/'prepare_summary.json')
+        proof.update(engine='claude',provider='anthropic',game_tools_registered=True,requested_model='opus')
+        write_json(directory/'prepare_summary.json',proof)
+        with patch('orchestrator.session_actions.start_chat'),patch('orchestrator.session_actions.launch') as launch:
+            _finish(self.anchor,operation)
+            target = selected_run(self.anchor)
+            self.assertTrue(can_wake(target))
+            state = read_json(target/'run_state.json')
+            self.assertEqual(state['engine'],'claude')
+            _launch_play(target,{'save':'new','create_save':True,'chapter':0})
+        args = launch.call_args.args[0]
+        self.assertEqual(args[args.index('--engine')+1],'claude')
+        self.assertEqual(args[args.index('--provider')+1],'anthropic')
+        self.assertEqual(args[args.index('--model')+1],'opus')
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
@@ -54,7 +94,7 @@ class SessionActionTests(unittest.TestCase):
         release.assert_called_once_with(self.anchor)
         arguments = launch.call_args.args[0]
         self.assertEqual(launch.call_args.kwargs['service'], 'prepare')
-        self.assertTrue(arguments[1].startswith('gpt-hud-'))
+        self.assertTrue(arguments[arguments.index('--agent')+1].startswith('codex-hud-'))
         self.assertEqual(arguments[arguments.index('--fast')+1], 'off')
         self.assertIn('--hud-managed', arguments)
 
@@ -152,7 +192,7 @@ class SessionActionTests(unittest.TestCase):
              patch('orchestrator.session_actions.release_chat') as release, \
              patch('orchestrator.session_actions.launch', return_value=(self.root / 'play-host', {})) as launch, \
              patch('orchestrator.session_actions._monitor'), \
-             patch('orchestrator.codex_prepared.load_preparation'):
+             patch('orchestrator.prepared.load_preparation'):
             play_session(self.anchor, current, {'chapter':1,'save':'test','create_save':False,'save_slot':0})
         release.assert_called_once_with(current)
         arguments = launch.call_args.args[0]
@@ -171,7 +211,7 @@ class SessionActionTests(unittest.TestCase):
         self.assertEqual(read_json(current/'run_state.json')['save'], '')
         with patch('orchestrator.session_actions.release_chat'), \
              patch('orchestrator.session_actions.launch', return_value=(self.root/'host2',{})) as launch, \
-             patch('orchestrator.session_actions._monitor'),patch('orchestrator.codex_prepared.load_preparation'):
+             patch('orchestrator.session_actions._monitor'),patch('orchestrator.prepared.load_preparation'):
             play_session(self.anchor,current,{'chapter':0,'save':'小雪','create_save':True,'save_slot':None})
         arguments=launch.call_args.args[0]
         self.assertIn('--create-save',arguments)
@@ -196,7 +236,7 @@ class SessionActionTests(unittest.TestCase):
         current=selected_run(self.anchor)
         with patch('orchestrator.session_actions.release_chat'), \
              patch('orchestrator.session_actions.launch',return_value=(self.root/'namer',{})) as launch, \
-             patch('orchestrator.session_actions._monitor'),patch('orchestrator.codex_prepared.load_preparation'):
+             patch('orchestrator.session_actions._monitor'),patch('orchestrator.prepared.load_preparation'):
             status=play_session(self.anchor,current,{'chapter':0,'save':'','create_save':True,'save_slot':None})
         self.assertEqual(status['status'],'naming')
         self.assertEqual(launch.call_args.kwargs,{'service':'chat'})

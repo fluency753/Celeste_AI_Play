@@ -21,7 +21,7 @@ class ConversationTests(unittest.TestCase):
     def make_run(self, name, ident, **metrics):
         directory = self.root / "runs" / "gpt-native" / name
         directory.mkdir(parents=True)
-        (directory / "run_state.json").write_text(json.dumps({"engine":"codex", "session_id":ident,
+        (directory / "run_state.json").write_text(json.dumps({"engine":"codex", "agent":name, "session_id":ident,
             "model":"model", "effort":"high", "knowledge_profile":"explore"}))
         (directory / "summary.json").write_text(json.dumps({"completed":True}))
         (directory / "metrics.json").write_text(json.dumps({"context_tokens":1000, **metrics}))
@@ -34,6 +34,20 @@ class ConversationTests(unittest.TestCase):
         self.make_run("duplicate", "active")
         result = catalog(self.anchor, self.root / "runs", archived)
         self.assertEqual([record["id"] for record in result], ["active"])
+
+    def test_same_id_across_engines_does_not_collide_or_share_chat_history(self):
+        from orchestrator.conversations import session_key
+        state = json.loads((self.source/'run_state.json').read_text())
+        state.update(engine='claude',provider='anthropic',session_id='active')
+        (self.source/'run_state.json').write_text(json.dumps(state))
+        records = catalog(self.anchor,self.root/'runs',self.root/'archive')
+        self.assertEqual(len(records),2)
+        self.assertEqual(len({r['key'] for r in records}),2)
+        target = prepare_target(self.anchor,next(r for r in records if r['engine']=='claude'))
+        selected = json.loads((target/'run_state.json').read_text())
+        self.assertEqual(session_key(selected),'claude:anthropic:active')
+        self.assertEqual(selected['provider'],'anthropic')
+        self.assertNotEqual(target,self.anchor)
 
     def test_selection_cannot_escape_chat_directory(self):
         (self.anchor / "hud_session.json").write_text(json.dumps({"relative":"../old"}))
