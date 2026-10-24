@@ -59,6 +59,17 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.metrics.state.effort,'high')
         self.assertIsNone(self.metrics.state.effort_pending)
 
+    async def test_codex_catalog_effort_is_not_blocked_by_shared_controls(self):
+        self.runner.turn_active=False;self.runner.turn_id=None
+        with patch('orchestrator.model_catalog.load_models',return_value={
+            'default_model':'model', 'models':[{'id':'model', 'efforts':['minimal','ultra']}]}):
+            self.runner.control.enqueue('effort','ultra')
+            self.task=asyncio.create_task(self.runner._controls())
+            await self.wait_for(lambda:self.runner.manual_effort=='ultra')
+        self.assertEqual(self.metrics.state.effort_pending,'ultra')
+        self.assertEqual(RunControl(self.root).effort_preference(),'ultra')
+        self.runner.rpc.request.assert_not_called()
+
     async def test_active_effort_change_steers_without_interrupting_or_waiting_for_action(self):
         with patch('orchestrator.model_catalog.resolve_selection',return_value=('model','low')):
             async with self.runner.action_lock:

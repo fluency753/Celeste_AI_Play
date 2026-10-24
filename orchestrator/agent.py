@@ -39,7 +39,7 @@ GAME_TOOLS = ['mcp__celeste__' + name for name in
               ('observe', 'act', 'set_effort', 'cutscene', 'exit_level', 'simulate')]
 NARRATE_TOOL = "mcp__celeste__narrate"   # 实时展示开着时才有：更新 HUD 上的思考语句（算思考时间，不算工具）
 # /effort 命令成功时 Claude Code 的回复，例如 "Set effort level to low (this session only): ..."
-EFFORT_OK = re.compile(r"^Set effort level to (\w+)")
+EFFORT_OK = re.compile(r"^Set effort level to ([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\s|$)")
 # 额度用完时 Claude Code 给出的提示（没收到 rejected 限额事件时的后备判断），例如
 # "Claude AI usage limit reached|1792766400"、"You've hit your limit · resets 3pm"
 LIMIT_TEXT = re.compile(r"usage limit|hit your (?:usage )?limit|rate[ _]limit", re.I)
@@ -73,16 +73,16 @@ def _strip_images(value):
 
 
 class ClaudeRunner(SessionControls):
-    capabilities = RuntimeCapabilities(effort_levels=('low', 'medium', 'high', 'max'))
+    capabilities = RuntimeCapabilities()
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
                  token: str, container: str | None = None, study: KbStudy | None = None,
                  session_id: str | None = None, resume: bool = False, resume_note: str | None = None,
                  gate=None, playback=None, start_paused=False, prepare_only=False, chat_only=False, naming_only=False):
         """resume=True：用 --resume 接着 session_id 这个已有的会话（续跑）；resume_note 不为空时代替开局的第一条消息。"""
         self.cfg = cfg
+        from .efforts import normalize_efforts
         selected = next((m for m in (cfg.provider_info or {}).get('models', []) if m.get('id') == cfg.model), None)
-        if selected:
-            self.capabilities = RuntimeCapabilities(effort_levels=tuple(selected.get('efforts', ('low','medium','high'))))
+        self.capabilities = RuntimeCapabilities(effort_levels=tuple(normalize_efforts((selected or {}).get('efforts'))))
         self.study = study
         self.gate = gate                         # 规划轮次（pausegate.PauseGate），按输出流里的消息分组
         self.playback = playback                 # 规划回放（playback.Playback）：按输出流里的消息把模拟器推演分轮
@@ -117,7 +117,7 @@ class ClaudeRunner(SessionControls):
 
     async def _validate_effort(self, value):
         if value not in self.capabilities.effort_levels:
-            raise ValueError('Claude 执行器支持 low、medium、high、max；不支持 xhigh')
+            raise ValueError('当前模型可选推理强度：' + ('、'.join(self.capabilities.effort_levels) or '能力列表尚未配置'))
 
     async def _interrupt_user(self):
         if not self.turn_active or self.user_interrupted or self.turn_done.is_set():

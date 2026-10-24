@@ -5,6 +5,7 @@ import os
 import re
 
 from .config import REPO_ROOT, RunConfig, load_provider, load_api_key, load_dotenv
+from .efforts import normalize_efforts
 
 
 @dataclass(frozen=True)
@@ -66,10 +67,11 @@ class Runtime:
         for row in rows:
             if not isinstance(row, dict) or not re.fullmatch(r'[A-Za-z0-9._:/-]{1,100}', str(row.get('id', ''))):
                 continue
-            efforts = [e for e in row.get('efforts', ['low', 'medium', 'high']) if e in {'low','medium','high','max'}]
+            efforts = normalize_efforts(row.get('efforts'))
             if efforts:
                 models.append({'id':row['id'], 'label':row.get('label', row['id']), 'description':row.get('description',''),
-                               'efforts':efforts, 'default_effort':row.get('default_effort') if row.get('default_effort') in efforts else 'high' if 'high' in efforts else efforts[0]})
+                               'efforts':efforts, 'default_effort':row.get('default_effort') if row.get('default_effort') in efforts
+                               else self.default_effort if self.default_effort in efforts else efforts[0]})
         if not models:
             raise ValueError('该提供方未配置模型列表，请在 configs/local.providers.json 的 models 中添加模型。')
         return {'models':models, 'default_model':models[0]['id'], 'source':'provider_config'}

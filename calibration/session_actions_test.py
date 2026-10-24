@@ -108,6 +108,16 @@ class SessionActionTests(unittest.TestCase):
             unrelated=self.root/'runs/another/20261024-030303'
             self.assertEqual(operation_status(unrelated),{})
 
+    def test_new_session_accepts_catalog_declared_effort(self):
+        with patch('orchestrator.model_catalog.load_models',return_value={
+                'default_model':'gpt-test', 'models':[{'id':'gpt-test','efforts':['minimal','ultra']}]}), \
+             patch('orchestrator.session_actions.release_chat'), \
+             patch('orchestrator.session_actions.launch',return_value=(self.root/'host',{})) as launch, \
+             patch('orchestrator.session_actions._monitor'):
+            create_session(self.anchor,self.anchor,{'model':'gpt-test','effort':'ultra'})
+        args=launch.call_args.args[0]
+        self.assertEqual(args[args.index('--effort')+1], 'ultra')
+
     def test_invalid_options_never_release_current_session(self):
         with patch('orchestrator.session_actions.release_chat') as release:
             for options in ({'name':None}, {'model':'bad; command'}, {'effort':'unknown'}, {'extra':True}):

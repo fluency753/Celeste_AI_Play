@@ -403,7 +403,14 @@ def step_platform(a: Answers) -> None:
                      previous or defaults.get(provider))
     models = list(info.get('models') or [])
     if not any(row.get('id') == a['model'] for row in models):
-        models.append({'id':a['model'], 'efforts':['low','medium','high']})
+        from orchestrator.efforts import normalize_efforts
+        while True:
+            values = re.split(r'[,，\s]+', ask('该模型支持的推理强度标识（按提供方文档，逗号分隔）'))
+            efforts = normalize_efforts(values)
+            if efforts and len(efforts) == len(set(values)):
+                break
+            bad('请输入有效的模型档位标识')
+        models.append({'id':a['model'], 'efforts':efforts})
         merge_json(LOCAL_PROVIDERS, {provider:{'models':models}})
     a["provider_prev"] = provider
 
@@ -605,7 +612,13 @@ def step_switches(a: Answers) -> None:
                      a.get("agent") or (a.get("model") or "agent").replace("/", "-"))
     a["chapters"] = ask("依次通关的章节（逗号分隔：0 序章、1 1A、2 2A……）", a.get("chapters", "0,1,2"))
     a["max_minutes"] = ask("现实时间上限（分钟；只是安全上限，不显示给智能体）", str(a.get("max_minutes", 600)))
-    a["effort"] = choose("开局的推理强度", [(x, x) for x in ("low", "medium", "high", "xhigh", "max")], a.get("effort", "high"))
+    from orchestrator.runtimes import runtime
+    catalog = runtime(a.get('engine', 'claude')).models(a.get('provider', 'anthropic'))
+    selected = next((row for row in catalog['models'] if row['id'] == a.get('model')), None)
+    if not selected:
+        raise RuntimeError('当前模型未声明推理强度，请先完成 platform 步骤')
+    default = a.get('effort') if a.get('effort') in selected['efforts'] else selected['default_effort']
+    a["effort"] = choose("开局的推理强度", [(x, x) for x in selected['efforts']], default)
     if sim_ok:
         a["sim"] = ask_yes("开模拟器的版本（智能体可以随意调用预置模拟器）？否 = 关模拟器的版本", a.get("sim", True))
     else:

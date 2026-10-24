@@ -74,8 +74,6 @@
   .meter { display: inline-flex; align-items: flex-end; gap: calc(2 * var(--px)); height: calc(12 * var(--px)); }
   .meter i { display: block; width: calc(3 * var(--px)); border-radius: calc(1 * var(--px));
              background: rgba(255, 255, 255, 0.16); transition: background-color 200ms linear; }
-  .meter i:nth-child(1) { height: 36%; } .meter i:nth-child(2) { height: 52%; } .meter i:nth-child(3) { height: 68%; }
-  .meter i:nth-child(4) { height: 84%; } .meter i:nth-child(5) { height: 100%; }
   .meter i.on { background: var(--effort, #7FA6F5); }
   #effort { color: var(--effort, #7FA6F5); }
   .pending { color: var(--pending, #F5B841); animation: breathe 1.6s ease-in-out infinite; }
@@ -181,7 +179,7 @@
     <div class="effort hidden" id="effortBox">
       <div class="lbl">推理强度</div>
       <div class="effort-val num">
-        <span class="meter" id="effortMeter"><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="meter" id="effortMeter"></span>
         <span id="effort"></span><span class="pending" id="effortPending"></span>
       </div>
     </div>
@@ -241,7 +239,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 47;
+const PAGE_VERSION = 48;
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -265,7 +263,6 @@ const STATUS = {
   stopped:   ["已结束", "idle", false],
 };
 // 推理强度：显示执行器实际确认的档位，显示英文档位名（configs/hud.json 的 effort_names 可覆盖）
-const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 let state = null, config = null, offset = 0, shownThought = null;
 let historyRun = null, historySignature = "", historyReady = false, followHistory = true;
 let historyEndpoint = null;
@@ -498,14 +495,24 @@ function render() {
 
   // 推理强度：当前生效的档位（英文）；申请了切换、还没生效时，后面跟一个呼吸闪烁的"→ 目标档位"
   const box = $("effortBox");
-  const level = EFFORT_LEVELS.indexOf(m.effort);
-  box.classList.toggle("hidden", level < 0);
-  if (level >= 0) {
+  const levels = controlData?.model === m.model ? (controlData.control?.effort_levels || []) : [];
+  const level = levels.indexOf(m.effort);
+  const meter = $("effortMeter");
+  if (meter.children.length !== levels.length) {
+    meter.replaceChildren(...levels.map((_, i) => {
+      const bar = document.createElement('i');
+      bar.style.height = `${36 + 64 * (levels.length === 1 ? 1 : i / (levels.length - 1))}%`;
+      return bar;
+    }));
+  }
+  meter.style.display = level < 0 ? 'none' : '';
+  box.classList.toggle("hidden", !m.effort);
+  if (m.effort) {
     const names = (config && config.effort_names) || {};
     $("effort").textContent = names[m.effort] || m.effort;
     const pending = m.effort_pending && m.effort_pending !== m.effort ? (names[m.effort_pending] || m.effort_pending) : "";
     $("effortPending").textContent = pending ? `→ ${pending}` : "";
-    box.style.setProperty("--effort", level >= 3 ? (c.effort_high || "#F5B841") : (c.effort || "#7FA6F5"));
+    box.style.setProperty("--effort", level >= 0 && levels.length > 1 && level / (levels.length - 1) >= .75 ? (c.effort_high || "#F5B841") : (c.effort || "#7FA6F5"));
     box.style.setProperty("--pending", c.thinking || "#F5B841");
     $("effortMeter").querySelectorAll("i").forEach((el, i) => el.classList.toggle("on", i <= level));
   }

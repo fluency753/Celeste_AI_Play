@@ -65,7 +65,9 @@ HUD 读取当前运行的 metrics.json、control.sqlite3 和 public_events.jsonl
 
 HUD 的新建、准备、取玩家名、切换、断开、重新唤醒和开始试玩均经 orchestrator/runtimes.py 的执行器接口调度，支持 Codex 与 Claude Code，包括通过 Claude Code 使用的 Anthropic 兼容提供方。后台 preparation 与 chat 为通用入口，不再通过 Codex 专用模块启动；orchestrator/lifecycle.py 根据执行器是否需要 MCP，托管不建立游戏连接的准备和聊天环境。
 
-会话管理中先选择“执行器与提供方”，再选择模型和推理强度，点击“新建并准备”。Codex 模型来自其公开模型目录；Claude Code 的模型来自 configs/providers.json 与本机 configs/local.providers.json 的 models 配置，界面会标明来源，不冒充在线发现。部署向导填写的新模型会加入提供方配置。models 每项支持 id、label、efforts、default_effort；自定义平台未配置列表时会给出错误，不把其他执行器的列表作为回退。认证或模型校验失败不会先断开当前会话。
+会话管理中先选择“执行器与提供方”，再选择模型和推理强度，点击“新建并准备”。Codex 模型来自其公开模型目录；Claude Code 的模型来自 configs/providers.json 与本机 configs/local.providers.json 的 models 配置，界面会标明来源，不冒充在线发现。部署向导填写的新模型会加入提供方配置，并要求声明该模型实际支持的推理档位。models 每项支持 id、label、efforts、default_effort；自定义平台未配置列表时会给出错误，不把其他执行器的列表作为回退。认证或模型校验失败不会先断开当前会话。
+
+推理档位没有全局固定名单：Codex 完整保留模型目录返回的 supportedReasoningEfforts，其他提供方完整保留模型配置的 efforts。创建会话、手动切换和 agent 的 set_effort 按当前模型能力校验；HUD 文字与档位条随该列表显示。能力列表缺失时不猜测档位；配置声明也不能绕过底层执行器的实际支持，切换仍需执行器确认后才记为生效。
 
 准备证明保存 engine、provider、runtime、requested_model、会话 ID、文件摘要和真实读取覆盖。开始试玩校验身份、运行环境和知识范围；准备超时不会放开游戏工具。聊天与取名沿用原会话 ID、工作区及模型选择；HUD 展示服务返回的实际模型名。列表身份由执行器、提供方和会话 ID 共同决定，避免跨执行器 ID 相同导致历史混用。已有 Codex 准备证明按旧格式识别，仍要通过摘要与工具校验。
 

@@ -28,6 +28,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         self.cfg = RunConfig(agent='test', save='test', model='sonnet', runtime='host',
                              knowledge_profile='explore', sim=False, sim_assist=True)
+        self.cfg.provider_info = {'models': [{'id':'sonnet', 'efforts':['low', 'medium', 'high', 'ultra', 'adaptive-high']}]}
         self.metrics = Metrics(self.root / 'metrics.json', 'test', 'sonnet', 'medium', 100)
         self.session = SimpleNamespace(cfg=self.cfg, metrics=self.metrics, workspace=None,
             done=False, done_reason='目标达成', goals=GoalManager(self.root),
@@ -173,6 +174,18 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: self.action(auto)['status'] == 'submitted')
         await self.server.call_tool('set_effort', {'level': 'low'})
         self.assertEqual(self.metrics.state.effort_pending, 'low')
+
+    async def test_provider_declared_effort_passes_controls_preferences_and_mcp(self):
+        self.controls()
+        ident = self.runner.control.enqueue('effort', 'ultra')
+        await self.until(lambda: self.action(ident)['status'] == 'submitted')
+        self.assertEqual(self.runner.control.effort_preference(), 'ultra')
+        self.assertIn('ultra', self.runner._effort_status()['effort_levels'])
+        ident = self.runner.control.enqueue('effort', 'auto')
+        await self.until(lambda: self.action(ident)['status'] == 'submitted')
+        result = await self.server.call_tool('set_effort', {'level': 'adaptive-high'})
+        self.assertIn('已登记', result.content[0].text)
+        self.assertEqual(self.metrics.state.effort_pending, 'adaptive-high')
 
     async def test_claude_public_messages_and_compaction_reach_history_on_cold_load(self):
         self.runner._handle({'type': 'assistant', 'message': {'id': 'm1', 'content': [

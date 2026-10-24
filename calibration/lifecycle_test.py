@@ -123,6 +123,17 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RuntimeCatalogTests(unittest.TestCase):
+    def test_provider_efforts_are_preserved_without_inventing_missing_capabilities(self):
+        provider = {'models':[{'id':'future', 'efforts':['minimal','ultra','adaptive-high','ultra'],
+                               'default_effort':'adaptive-high'}, {'id':'unknown'}]}
+        with patch('orchestrator.runtimes.load_provider',return_value=provider):
+            data = runtime('claude').models('custom')
+            self.assertEqual(data['models'][0]['efforts'], ['minimal','ultra','adaptive-high'])
+            self.assertEqual(data['models'][0]['default_effort'], 'adaptive-high')
+            self.assertEqual([m['id'] for m in data['models']], ['future'])
+            self.assertEqual(runtime('claude').resolve('future','ultra','custom'), ('future','ultra'))
+            with self.assertRaises(ValueError): runtime('claude').resolve('future','high','custom')
+
     def test_model_choices_are_per_provider_and_do_not_expose_credentials(self):
         provider = {'models':[{'id':'custom/model','efforts':['medium'],'token':'SECRET'}],
                     'api_key':'SECRET', 'key_file':'private-path'}

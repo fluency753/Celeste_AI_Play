@@ -156,7 +156,8 @@ def create_session(anchor, current, options):
     if not all(isinstance(value, str) for value in (name, model, effort)):
         raise ValueError('名称、模型和推理强度须为文字')
     name, model = name.strip(), model.strip()
-    if len(name) > 60 or not re.fullmatch(r'[A-Za-z0-9._:/-]{0,100}', model) or effort not in {'low','medium','high','xhigh','max'}:
+    from .efforts import valid_effort
+    if len(name) > 60 or not re.fullmatch(r'[A-Za-z0-9._:/-]{0,100}', model) or not valid_effort(effort):
         raise ValueError('名称最多60字，模型须为模型标识，推理强度须为有效档位')
     engine = options.get('engine', 'codex')
     provider = options.get('provider', 'codex' if engine == 'codex' else 'anthropic')

@@ -3,6 +3,7 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
+from .efforts import valid_effort
 
 
 class RunControl:
@@ -38,7 +39,7 @@ class RunControl:
             validate_goal(json.loads(text))
         if kind == "fast" and text not in {"on", "off"}:
             raise ValueError("Fast 模式须为 on 或 off")
-        if kind == 'effort' and text not in {'auto','low','medium','high','xhigh','max'}:
+        if kind == 'effort' and not valid_effort(text):
             raise ValueError('推理强度须为自动或有效档位')
         if kind == "message" and not 1 <= len(text) <= 4000:
             raise ValueError("提示须为 1–4000 个字符")
@@ -59,10 +60,10 @@ class RunControl:
         with self._db() as db:
             row=db.execute("SELECT data FROM preferences WHERE key='effort'").fetchone()
             value=json.loads(row[0]) if row else None
-            return value if value in {'low','medium','high','xhigh','max'} else None
+            return value if valid_effort(value) else None
 
     def set_effort(self, level):
-        if level not in {None,'low','medium','high','xhigh','max'}:
+        if level is not None and not valid_effort(level):
             raise ValueError('无效的手动推理强度')
         with self._db() as db:
             db.execute("INSERT OR REPLACE INTO preferences VALUES('effort',?)",(json.dumps(level),))

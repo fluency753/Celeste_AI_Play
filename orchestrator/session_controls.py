@@ -48,6 +48,7 @@ class SessionControls:
             self.session.control_guard = self._game_guard
             self.session.program_guard = self._program_guard
             self.session.effort_policy = self._agent_effort_policy
+            self.session.effort_levels = lambda: self._effort_status()['effort_levels'] or []
 
     async def _agent_effort_policy(self, value):
         if self.manual_effort and value != self.manual_effort:

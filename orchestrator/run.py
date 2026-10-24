@@ -60,7 +60,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--provider", default="anthropic",
                     help="模型提供方（configs/providers.json）：anthropic（默认，Max 订阅）、deepseek 等。"
                          "第三方提供方的 API 密钥只从本机读取（configs/local.providers.json 的 key_file，或环境变量）")
-    ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
+    ap.add_argument("--effort", default="high", help="推理强度标识，支持的档位由所选模型决定")
     ap.add_argument("--max-minutes", type=float, default=240.0, help="现实时间上限（分钟）；目标以游戏内计时为主，这里只防止无限运行")
     ap.add_argument("--bridge-port", type=int, default=47774)
     ap.add_argument("--mcp-port", type=int, default=47780)

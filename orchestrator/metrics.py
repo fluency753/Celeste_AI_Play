@@ -33,7 +33,7 @@ class MetricsState:
     chat_thread_id: str | None = None
     agent: str = ""
     model: str = ""
-    effort: str = ""                  # 当前生效的推理强度（low / medium / high / xhigh / max）
+    effort: str = ""                  # 当前生效的推理强度标识（由模型能力列表决定）
     effort_pending: str | None = None  # 智能体用 set_effort 申请、本轮结束后才生效的强度
     effort_changes: int = 0           # 推理强度实际切换的次数
     effort_log: list | None = None    # 每次切换：[{"t": 现实用时, "from", "to", "chapter", "room", "reason"}, ...]

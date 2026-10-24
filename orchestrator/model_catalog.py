@@ -7,9 +7,8 @@ import time
 
 from .config import REPO_ROOT
 from .codex_rpc import CodexRPC
+from .efforts import normalize_efforts
 
-# Current game runner/CLI supported efforts; offer only the intersection with each model.
-EFFORTS = {'low', 'medium', 'high', 'xhigh', 'max'}
 _lock = threading.Lock()
 _cached = None
 _loaded = 0.0
@@ -27,8 +26,8 @@ def normalize_models(rows):
             continue
         if row.get('inputModalities') and 'image' not in row['inputModalities']:
             continue
-        efforts = list(dict.fromkeys(e.get('reasoningEffort') for e in (row.get('supportedReasoningEfforts') or [])
-                                    if isinstance(e, dict) and e.get('reasoningEffort') in EFFORTS))
+        efforts = normalize_efforts([e.get('reasoningEffort') for e in (row.get('supportedReasoningEfforts') or [])
+                                     if isinstance(e, dict)])
         if not efforts:
             continue
         default_effort = row.get('defaultReasoningEffort')

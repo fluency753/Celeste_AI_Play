@@ -11,6 +11,7 @@ from .game_session import ActError, GameSession
 from .kb_study import KbStudy
 from .observation import describe_attempts, describe_obs, describe_step, room_json, upscale_png
 from .exploration import GEOMETRY, action_hint
+from .efforts import valid_effort
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图、整个房间的字符地图与精确数据（JSON；房间信息以精确数据为准，截图仅作参考），其余时候只给文字状态与画面附近的信息。
 
@@ -38,9 +39,7 @@ OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图，以及整个
 # 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
 ROOM_JSON_HEADER = "整个房间的精确数据（像素坐标；房间信息以此为准，截图与字符地图仅作参考）：\n"
 
-EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
-
-SET_EFFORT_DESCRIPTION = """调整你自己的推理强度：low、medium、high、xhigh、max（由低到高；默认 high，当前值在观测头部）。
+SET_EFFORT_DESCRIPTION = """调整你自己的推理强度：传入当前模型能力列表中的档位标识，当前值与可选档位见观测头部。
 强度越高，每次思考越深入，但每次决策更慢、消耗的额度更多；简单的房间可以调低，需要精确规划的难房间可以调高。
 切换在本轮结束后生效：调用后直接结束本轮（回复一句话，不再调用工具），系统会立即切换，并发消息让你接着玩。
 不推进游戏，也不消耗游戏帧。reason：一句话说明为什么调整（记入日志）。"""
@@ -121,6 +120,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     def header_line() -> str:
         line = effort_line(metrics)
+        levels = getattr(session, 'effort_levels', lambda: [])()
+        if levels:
+            line += "\n可选推理强度：" + "、".join(levels)
         energy = getattr(metrics.state, "sim_energy", None)
         if energy:
             line += f"\n模拟体力：{energy['balance']}/{energy['capacity']}（预测花费体力，真实操作和首次到新房间补充）"
@@ -265,10 +267,12 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
     async def set_effort(level: str, reason: str = "") -> list:
         # 不推进游戏、不受准备阶段限制，也不开始计现实用时；耗时可以忽略
-        level = (level or "").strip().lower()
-        if level not in EFFORT_LEVELS:
-            return [f"无效的推理强度 {level!r}：只能是 {'、'.join(EFFORT_LEVELS)}。"]
+        level = (level or "").strip()
+        if not valid_effort(level):
+            return ["推理强度标识格式无效。"]
         policy = getattr(session, 'effort_policy', None)
+        if not policy:
+            return ["尚未连接可核验模型能力的 agent，不能调整推理强度。"]
         if policy:
             try:
                 await policy(level)

@@ -14,13 +14,16 @@ def model(ident, **extra):
 
 
 class ModelTests(unittest.TestCase):
-    def test_catalog_filters_hidden_incompatible_models_and_unsupported_efforts(self):
+    def test_catalog_keeps_model_declared_efforts_and_filters_invalid_entries(self):
         result=normalize_models([model('one',isDefault=True),model('hidden',hidden=True),
-            model('text-only',inputModalities=['text']),model('unknown-effort',supportedReasoningEfforts=[{'reasoningEffort':'future'}]),
+            model('text-only',inputModalities=['text']),model('future-model',supportedReasoningEfforts=[
+                {'reasoningEffort':'ultra'}, {'reasoningEffort':'minimal'}, {'reasoningEffort':'future'},
+                {'reasoningEffort':'ultra'}, {'reasoningEffort':None}, {'reasoningEffort':'bad\nvalue'}]),
             model('one'),None])
-        self.assertEqual([item['id'] for item in result['models']],['one'])
+        self.assertEqual([item['id'] for item in result['models']],['one', 'future-model'])
         self.assertEqual(result['default_model'],'one')
         self.assertEqual(result['models'][0]['efforts'],['low','high'])
+        self.assertEqual(result['models'][1]['efforts'],['ultra','minimal','future'])
 
     def test_empty_catalog_is_an_error_instead_of_guessed_model_names(self):
         with self.assertRaises(RuntimeError):normalize_models([])
