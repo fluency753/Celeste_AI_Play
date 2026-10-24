@@ -21,8 +21,8 @@ class RecordingAudioTests(unittest.TestCase):
     @patch("orchestrator.recording.gamewindow.ensure_visible")
     def test_new_mode_is_forwarded_and_keeps_live_music_enabled(self, _visible):
         with tempfile.TemporaryDirectory() as folder:
-            call = Mock(return_value={"record_audio_nrt": True, "clock": {
-                "connected": True, "lockstep": True, "plugin": {"state": "recording", "audio_nrt": True}}})
+            call = Mock(return_value={"record_audio_nrt": True, "record_audio_tracks": 2, "clock": {
+                "connected": True, "lockstep": True, "plugin": {"state": "recording", "audio_nrt": True, "audio_tracks": 2}}})
             recorder = self.recorder(folder, call)
             recorder.opts.continuous_music = True
             recorder.start()
@@ -34,8 +34,8 @@ class RecordingAudioTests(unittest.TestCase):
     @patch("orchestrator.recording.gamewindow.ensure_visible")
     def test_plugin_failure_releases_secondary_mixer(self, _visible):
         with tempfile.TemporaryDirectory() as folder:
-            call = Mock(return_value={"record_audio_nrt": True, "clock": {
-                "connected": True, "plugin": {"state": "failed", "error": "mapping unavailable", "audio_nrt": True}}})
+            call = Mock(return_value={"record_audio_nrt": True, "record_audio_tracks": 2, "clock": {
+                "connected": True, "plugin": {"state": "failed", "error": "mapping unavailable", "audio_nrt": True, "audio_tracks": 2}}})
             with self.assertRaisesRegex(RecordingError, "mapping unavailable"):
                 self.recorder(folder, call).start()
             call.assert_called_with("record", action="stop")
@@ -65,10 +65,67 @@ class RecordingAudioTests(unittest.TestCase):
 
     def test_old_plugin_is_rejected_before_starting_secondary_mixer(self):
         with tempfile.TemporaryDirectory() as folder:
-            call = Mock(return_value={"record_audio_nrt": True, "clock": {"connected": True, "plugin": {}}})
+            call = Mock(return_value={"record_audio_nrt": True, "record_audio_tracks": 2, "clock": {"connected": True, "plugin": {}}})
             with self.assertRaisesRegex(RecordingError, "更新插件"):
                 self.recorder(folder, call).start()
             call.assert_called_once_with("hello")
+
+    def test_single_track_bridge_or_plugin_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            old_bridge = Mock(return_value={"record_audio_nrt": True, "clock": {
+                "connected": True, "plugin": {"audio_nrt": True, "audio_tracks": 2}}})
+            with self.assertRaisesRegex(RecordingError, "更新桥接"):
+                self.recorder(folder, old_bridge).start()
+            old_plugin = Mock(return_value={"record_audio_nrt": True, "record_audio_tracks": 2, "clock": {
+                "connected": True, "plugin": {"audio_nrt": True}}})
+            with self.assertRaisesRegex(RecordingError, "更新插件"):
+                self.recorder(folder, old_plugin).start()
+            old_plugin.assert_called_once_with("hello")
+
+
+class PureCutAudioTests(unittest.TestCase):
+    """纯享版声音：有纯享版音轨 audio_play.wav 时直接用（音乐连贯），没有时从 audio.wav 裁剪。"""
+
+    def _write(self, folder, ticks, play_frames):
+        import numpy as np
+        from orchestrator.purecut import _wav_header
+        folder = Path(folder)
+        (folder / "frames.csv").write_text("index,game_frame,chapter_ticks,obs_ts_ns\n" + "".join(
+            f"{i},{i},{t},{i}\n" for i, t in enumerate(ticks)), encoding="utf-8")
+        full = np.arange(len(ticks) * 800 * 2, dtype="<f4")
+        (folder / "audio.wav").write_bytes(_wav_header(full.nbytes) + full.tobytes())
+        if play_frames is not None:
+            play = -np.arange(play_frames * 800 * 2, dtype="<f4")
+            (folder / "audio_play.wav").write_bytes(_wav_header(play.nbytes) + play.tobytes())
+        (folder / "video.mkv").touch()
+
+    def _make(self, folder):
+        from orchestrator import purecut
+        used = []
+        def run(cmd, log_path):
+            if "-map" in cmd:
+                used.append(Path(cmd[cmd.index("-i", cmd.index("-i") + 1) + 1]).name)
+        with patch.object(purecut, "_run", side_effect=run):
+            return purecut.make_pure(Path(folder), "ffmpeg", "", log=lambda _: None), used
+
+    def test_play_track_is_used_when_it_matches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self._write(folder, [0, 1, -1, -1, 2, 3], play_frames=4)
+            result, used = self._make(folder)
+            self.assertEqual(result["audio"], "audio_play.wav")
+            self.assertEqual(used, ["audio_play.wav"])
+            self.assertFalse((Path(folder) / "audio_pure_cut.wav").exists())
+
+    def test_falls_back_to_cutting_the_full_track(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self._write(folder, [0, 1, -1, -1, 2, 3], play_frames=None)
+            result, used = self._make(folder)
+            self.assertEqual(result["audio"], "audio.wav 裁剪")
+            self.assertEqual(used, ["audio_pure_cut.wav"])
+        with tempfile.TemporaryDirectory() as folder:   # 长度对不上也不用它
+            self._write(folder, [0, 1, -1, -1, 2, 3], play_frames=5)
+            result, used = self._make(folder)
+            self.assertEqual(used, ["audio_pure_cut.wav"])
 
 
 if __name__ == "__main__":

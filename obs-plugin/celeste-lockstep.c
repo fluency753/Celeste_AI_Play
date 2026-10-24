@@ -143,7 +143,7 @@ static void send_status(void)
 	json_escape(err, sizeof(err), rec.error);
 	ReleaseSRWLockShared(&rec.lock);
 	send_line("S {\"state\":\"%s\",\"recording\":%s,\"frames\":%lld,\"tokens\":%lld,\"kept\":%lld,\"late\":%lld,"
-		  "\"dir\":\"%s\",\"error\":\"%s\",\"audio_nrt\":true}",
+		  "\"dir\":\"%s\",\"error\":\"%s\",\"audio_nrt\":true,\"audio_tracks\":2}",
 		  rec_state_names[state], state == REC_RECORDING ? "true" : "false", frames, g.tokens, g.kept, g.late_ticks,
 		  dir, err);
 }
@@ -254,6 +254,9 @@ struct segment {
 	double measured_ns;  /* 这一段量到的延迟（没量到时为 NAN） */
 };
 
+/* 独立游戏音频的共享内存槽：64 字节头 + 完整版音轨 800×2 浮点 + 纯享版音轨 800×2 浮点 */
+#define AUDIO_SLOT_SIZE (64 + 2 * 800 * 2 * 4)
+
 struct gp_output {
 	obs_output_t *output;
 	char dir[MAX_PATH];
@@ -269,6 +272,8 @@ struct gp_output {
 	HANDLE proc, stdin_wr;
 	FILE *wav, *csv;
 	uint64_t wav_frames;
+	FILE *play_wav;      /* 独立游戏音频的纯享版音轨：只有真实游玩帧（audio_play.wav） */
+	uint64_t play_frames;
 	long long written;
 	long long filled;    /* 回放帧跟不上节拍时补的帧数 */
 	float *last_buf;     /* 最近写进 WAV 的那一帧声音（接缝处要回头淡出时用） */
@@ -432,6 +437,10 @@ static bool start_failed(struct gp_output *o, const char *msg)
 		fclose(o->wav);
 		o->wav = NULL;
 	}
+	if (o->play_wav) {
+		fclose(o->play_wav);
+		o->play_wav = NULL;
+	}
 	if (o->csv) {
 		fclose(o->csv);
 		o->csv = NULL;
@@ -464,8 +473,9 @@ static bool gp_start(void *data)
 		if (o->audio_mapping)
 			o->audio_view = MapViewOfFile(o->audio_mapping, FILE_MAP_READ, 0, 0, 0);
 		const int32_t *h = (const int32_t *)o->audio_view;
-		if (!h || h[0] != 0x43414941 || h[1] != 1 || h[2] != 48000 || h[3] != 2 ||
-		    h[4] != 800 || h[5] != 1024 || h[6] != 6464)
+		/* 共享内存第 2 版：每槽两段 PCM，完整版音轨（回放帧里只放音乐）与纯享版音轨（只随真实游玩帧推进） */
+		if (!h || h[0] != 0x43414941 || h[1] != 2 || h[2] != 48000 || h[3] != 2 ||
+		    h[4] != 800 || h[5] != 1024 || h[6] != AUDIO_SLOT_SIZE || h[7] != 2)
 			return start_failed(o, "independent game audio is unavailable (update the bridge and OBS plugin)");
 	}
 	o->frame_ns = (uint64_t)(1000000000.0 * ovi.fps_den / ovi.fps_num + 0.5);
@@ -493,6 +503,15 @@ static bool gp_start(void *data)
 		return start_failed(o, "cannot start ffmpeg (check the ffmpeg path)");
 	snprintf(path, sizeof(path), "%s\\audio.wav", o->dir);
 	o->wav = fopen(path, "wb");
+	o->wav_frames = 0;
+	o->play_frames = 0;
+	if (o->game_audio) {
+		snprintf(path, sizeof(path), "%s\\audio_play.wav", o->dir);
+		o->play_wav = fopen(path, "wb");
+		if (!o->play_wav)
+			return start_failed(o, "cannot create output files (does the directory exist?)");
+		write_wav_header(o->play_wav, o->rate, 0);
+	}
 	snprintf(path, sizeof(path), "%s\\frames.csv", o->dir);
 	o->csv = fopen(path, "w");
 	snprintf(path, sizeof(path), "%s\\segments.csv", o->dir);
@@ -779,16 +798,19 @@ static void gp_raw_video(void *data, struct video_data *frame)
 		ReleaseSRWLockExclusive(&o->vlock);
 		return;
 	}
-	float pcm[1600];
+	float pcm[1600], play_pcm[1600];
+	int32_t replay = 0;
 	if (o->game_audio) {
-		const uint8_t *slot = o->audio_view + 64 + (token % 1024) * 6464;
+		const uint8_t *slot = o->audio_view + 64 + (token % 1024) * AUDIO_SLOT_SIZE;
 		long long before = *(volatile const long long *)slot;
 		MemoryBarrier();
 		int32_t error = *(const int32_t *)(slot + 8);
+		replay = *(const int32_t *)(slot + 12);
 		memcpy(pcm, slot + 64, sizeof(pcm));
+		memcpy(play_pcm, slot + 64 + sizeof(pcm), sizeof(play_pcm));
 		MemoryBarrier();
 		long long after = *(volatile const long long *)slot;
-		if (before != token || after != token || error) {
+		if (before != token || after != token || error || (replay != 0) != (ticks == -1)) {
 			set_error(o, "independent audio frame missing or failed; refusing to substitute live music");
 			rec_set(REC_FAILED, o->written, o->error);
 			ReleaseSRWLockExclusive(&o->vlock);
@@ -797,9 +819,10 @@ static void gp_raw_video(void *data, struct video_data *frame)
 	}
 	/* 规划回放帧（章节计时 -1）跟不上节拍时（一帧要画很多线），中间漏掉的节拍用这一帧补上：回放时音乐一直在放，
 	 * 不补的话漏掉那几个节拍的声音会被跳过，录像里的音乐听起来像加速。补的帧章节计时记为 -2。游玩帧不补，
-	 * 成片里的游玩帧数仍然等于游戏推进的帧数。 */
+	 * 成片里的游玩帧数仍然等于游戏推进的帧数。
+	 * 独立游戏音频不补：每个回放帧正好混出 1/60 秒音乐，声音按帧生成，与墙钟无关（补帧只能重复同一块声音）。 */
 	int fill = 0;
-	if (ticks == -1 && o->prev_ticks == -1 && o->written > 0 && frame->timestamp > o->prev_ts &&
+	if (!o->game_audio && ticks == -1 && o->prev_ticks == -1 && o->written > 0 && frame->timestamp > o->prev_ts &&
 	    frame->timestamp - o->prev_ts <= SEG_GAP_NS) {
 		long long k = (long long)((frame->timestamp - o->prev_ts + o->frame_ns / 2) / o->frame_ns) - 1;
 		if (k > 0)
@@ -820,12 +843,15 @@ static void gp_raw_video(void *data, struct video_data *frame)
 			(unsigned long long)ts);
 		o->written++;
 		if (o->game_audio) {
-			if (fwrite(pcm, sizeof(float), 1600, o->wav) != 1600) {
+			if (fwrite(pcm, sizeof(float), 1600, o->wav) != 1600 ||
+			    (!replay && fwrite(play_pcm, sizeof(float), 1600, o->play_wav) != 1600)) {
 				set_error(o, "cannot write independent audio frame");
 				ReleaseSRWLockExclusive(&o->vlock);
 				return;
 			}
 			o->wav_frames += 800;
+			if (!replay)
+				o->play_frames += 800;
 		}
 		stamps[copies++] = ts;
 	}
@@ -971,6 +997,11 @@ static void gp_stop(void *data, uint64_t ts)
 		write_wav_header(o->wav, o->rate, o->wav_frames);
 		fclose(o->wav);
 		o->wav = NULL;
+	}
+	if (o->play_wav) {
+		write_wav_header(o->play_wav, o->rate, o->play_frames);
+		fclose(o->play_wav);
+		o->play_wav = NULL;
 	}
 	ReleaseSRWLockExclusive(&o->alock);
 	if (o->csv) {

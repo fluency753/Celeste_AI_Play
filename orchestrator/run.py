@@ -563,9 +563,17 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
         session.close(release=not keep)
         if cfg is not None:
             cfg._game_released = had_connection and not keep
-        if result is not None:
-            result['game_released'] = not keep
-            (run_dir / 'summary.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+        # Ctrl+C 时 _run_connected_session 在自己的 finally 里写了 summary.json 但没有返回值：从文件补上，
+        # 否则续跑时以为上次交还了控制（_previous_kept_frozen）
+        final = result
+        if final is None and (run_dir / 'summary.json').exists():
+            try:
+                final = json.loads((run_dir / 'summary.json').read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                final = None
+        if final is not None:
+            final['game_released'] = not keep
+            (run_dir / 'summary.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8')
         if keep:
             print('[run] 游戏保持冻结在当前帧（章节计时不走）：可以用 --resume 续跑；'
                   '不续跑时用 python tools\\bridge_client.py deactivate 交还控制', flush=True)

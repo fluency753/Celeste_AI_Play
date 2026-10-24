@@ -12,7 +12,8 @@
     gameplay.mkv   成片完整版（画面 + 声音，含规划回放）
     gameplay_pure.mkv  成片纯享版（只有真实游玩的帧）
     video.mkv      只有画面
-    audio.wav      只有声音（32 位浮点立体声，每个游玩帧 1/60 秒）
+    audio.wav      只有声音（32 位浮点立体声，每个成片帧 1/60 秒；独立游戏音频时规划回放帧里音乐继续、音效暂停）
+    audio_play.wav 纯享版音轨（独立游戏音频才有：只随真实游玩帧推进，纯享版直接用它）
     frames.csv     每个成片帧对应的游戏帧号、章节计时与 OBS 时间戳（对账用）
     segments.csv   连续推进的各段与每段开头量到的声音延迟（声音按它对齐）
     ffmpeg_*.log   ffmpeg 的输出
@@ -34,6 +35,7 @@ from .config import REPO_ROOT
 
 CONFIG = REPO_ROOT / "configs" / "recording.json"
 LOCAL_CONFIG = REPO_ROOT / "configs" / "local.recording.json"   # 本机覆盖（不入库）
+AUDIO_TRACKS = 2   # 独立游戏音频（game_nrt）的音轨数：完整版 audio.wav 与纯享版 audio_play.wav
 
 
 class RecordingError(RuntimeError):
@@ -172,10 +174,12 @@ class Recorder:
         clock = hello.get("clock") or {}
         if self.opts.audio_source not in ("obs_mix", "game_nrt"):
             raise RecordingError(f"未知录音来源：{self.opts.audio_source}")
-        if self.opts.audio_source == "game_nrt" and not hello.get("record_audio_nrt"):
-            raise RecordingError("独立录像音频需要更新桥接 Mod 和 OBS 锁步插件（桥接 0.12.0 起支持）")
-        if self.opts.audio_source == "game_nrt" and not (clock.get("plugin") or {}).get("audio_nrt"):
-            raise RecordingError("OBS 锁步插件尚不支持独立录像音频，请更新插件并重启 OBS")
+        if self.opts.audio_source == "game_nrt" and (not hello.get("record_audio_nrt")
+                                                      or hello.get("record_audio_tracks") != AUDIO_TRACKS):
+            raise RecordingError("独立录像音频需要更新桥接 Mod 和 OBS 锁步插件（完整版与纯享版两条音轨：桥接 0.12.7 起支持）")
+        if self.opts.audio_source == "game_nrt" and (not (clock.get("plugin") or {}).get("audio_nrt")
+                                                      or (clock.get("plugin") or {}).get("audio_tracks") != AUDIO_TRACKS):
+            raise RecordingError("OBS 锁步插件尚不支持独立录像音频的两条音轨，请更新插件并重启 OBS")
         if not clock.get("connected"):
             raise RecordingError("OBS 插件没有连上桥接的时钟端口：先运行 python tools/obs_setup.py launch 启动 OBS"
                                  "（插件构建见使用说明 4.4 节）")
@@ -238,7 +242,9 @@ class Recorder:
             "dir": str(directory),
             "files": files,
             "check": analyze_frames(directory / "frames.csv"),
-            "audio_sync": ({"method": "game_nrt", "sample_rate": 48000, "samples_per_frame": 800}
+            "audio_sync": ({"method": "game_nrt", "sample_rate": 48000, "samples_per_frame": 800,
+                            "tracks": {"audio.wav": "完整版：规划回放帧里音乐继续（音效暂停）",
+                                       "audio_play.wav": "纯享版：只随真实游玩帧推进"}}
                            if self.opts.audio_source == "game_nrt" else analyze_segments(directory / "segments.csv")),
             "options": {"video_args": self.opts.video_args, "audio_offset_ms": self.opts.audio_offset_ms,
                         "marker": self.opts.marker, "continuous_music": self.opts.continuous_music,

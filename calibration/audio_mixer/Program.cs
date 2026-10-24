@@ -14,10 +14,22 @@ RecordingAudio.Load();
 try {
 RecordingAudio.Start(live,Path.Combine(game,"Content","FMOD","Desktop"),47876);
 using var map=MemoryMappedFile.OpenExisting(@"Local\CelesteAIRecordAudio-47876"); using var view=map.CreateViewAccessor();
-double energy=0;
-// Optional second argument exports the continuous PCM for tools/check_recording_audio.py.
+const int Block=6400, Slot=64+2*Block;
+if(view.ReadInt32(4)!=2||view.ReadInt32(24)!=Slot||view.ReadInt32(28)!=2)throw new Exception("Unexpected shared memory layout");
+float[] ReadBlock(long token,int track){var bytes=new byte[Block];view.ReadArray(64L+token%1024*Slot+64+track*Block,bytes,0,Block);var pcm=new float[1600];Buffer.BlockCopy(bytes,0,pcm,0,Block);return pcm;}
+double Energy(float[] pcm)=>pcm.Sum(x=>(double)x*x);
+var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static;
+object Mixer(string name)=>typeof(RecordingAudio).GetField(name,flags)!.GetValue(null)!;
+FMOD.Studio.EventInstance CopyOf(string mixer,FMOD.Studio.EventInstance live){
+    var pairs=(System.Collections.IDictionary)Mixer(mixer).GetType().GetField("Pairs")!.GetValue(Mixer(mixer))!;
+    var pair=pairs[live.getRaw()]!; return (FMOD.Studio.EventInstance)pair.GetType().GetProperty("Copy")!.GetValue(pair)!;}
+double energy=0, playEnergy=0;
+// Optional second argument exports the continuous PCM (full track) for tools/check_recording_audio.py.
 using var capturedPcm = args.Length > 1 ? new MemoryStream() : null;
-for(int i=1;i<=120;i++) { live.update(); RecordingAudio.Advance(); RecordingAudio.Publish(i,false); var bytes=new byte[6400]; view.ReadArray(64L+i*6464+64,bytes,0,6400);var pcm=new float[1600];Buffer.BlockCopy(bytes,0,pcm,0,6400);energy+=pcm.Sum(x=>(double)x*x); capturedPcm?.Write(bytes); }
+for(int i=1;i<=120;i++) { live.update(); RecordingAudio.Advance(); RecordingAudio.Publish(i,false);
+    var pcm=ReadBlock(i,0); energy+=Energy(pcm); playEnergy+=Energy(ReadBlock(i,1));
+    if(view.ReadInt32(64L+i*Slot+12)!=0)throw new Exception("Real frame marked as replay");
+    var bytes=new byte[Block];Buffer.BlockCopy(pcm,0,bytes,0,Block);capturedPcm?.Write(bytes); }
 if (capturedPcm != null) {
     using var wav = new BinaryWriter(File.Create(args[1]));
     var pcm = capturedPcm.ToArray();
@@ -28,28 +40,41 @@ if (capturedPcm != null) {
     wav.Write(System.Text.Encoding.ASCII.GetBytes("data")); wav.Write(pcm.Length); wav.Write(pcm);
     Console.WriteLine("PCM WAV: " + args[1]);
 }
-Console.WriteLine($"ERROR={RecordingAudio.Error ?? "none"} ENERGY={energy}");
-var pairs=(System.Collections.IDictionary)typeof(RecordingAudio).GetField("Pairs",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static)!.GetValue(null)!;
-var pair=pairs[music.getRaw()]!; var copy=(FMOD.Studio.EventInstance)pair.GetType().GetProperty("Copy")!.GetValue(pair)!;
-copy.getTimelinePosition(out var before);
+Console.WriteLine($"ERROR={RecordingAudio.Error ?? "none"} ENERGY full={energy} play={playEnergy}");
+var copy=CopyOf("play",music); var fullCopy=CopyOf("full",music);
+copy.getTimelinePosition(out var before); fullCopy.getTimelinePosition(out var fullBefore);
 for(int i=0;i<120;i++)live.update();
 copy.getTimelinePosition(out var after);music.getTimelinePosition(out var livePos);
-Console.WriteLine($"INDEPENDENCE before={before} after={after} live={livePos}");
-RecordingAudio.Publish(121,true);var silence=new byte[6400];view.ReadArray(64L+121*6464+64,silence,0,6400);Console.WriteLine($"REPLAY SILENT={silence.All(x=>x==0)}");
-if(RecordingAudio.Error!=null||energy<=0||before!=after||silence.Any(x=>x!=0))throw new Exception("Acceptance failed");
+Console.WriteLine($"INDEPENDENCE before={before} after={after} full={fullBefore} live={livePos}");
+if(RecordingAudio.Error!=null||energy<=0||playEnergy<=0||before!=after)throw new Exception("Acceptance failed");
+// Planning replay: the full track keeps the music going (SFX buses paused, as in the live game); the play track does not advance.
+foreach(var bus in new[]{"bus:/gameplay_sfx","bus:/ui_sfx","bus:/music/stings"}) if(live.getBus(bus,out var b)==FMOD.RESULT.OK)b.setPaused(true);
+double replayEnergy=0, replayPlay=0;
+for(int i=121;i<=180;i++){ RecordingAudio.AdvanceReplay(); RecordingAudio.Publish(i,true);
+    replayEnergy+=Energy(ReadBlock(i,0)); replayPlay+=Energy(ReadBlock(i,1));
+    if(view.ReadInt32(64L+i*Slot+12)!=1)throw new Exception("Replay frame not marked"); }
+copy.getTimelinePosition(out var afterReplay); fullCopy.getTimelinePosition(out var fullAfterReplay);
+var fullStudio=(FMOD.Studio.System)Mixer("full").GetType().GetField("studio",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(Mixer("full"))!;
+bool sfxPaused = fullStudio.getBus("bus:/ui_sfx",out var copyBus)!=FMOD.RESULT.OK || (copyBus.getPaused(out var p)==FMOD.RESULT.OK && p);
+Console.WriteLine($"REPLAY full energy={replayEnergy} play energy={replayPlay} full {fullBefore}->{fullAfterReplay} ms, play {after}->{afterReplay} ms, sfx paused={sfxPaused}");
+if(replayEnergy<=0||replayPlay!=0||afterReplay!=after||fullAfterReplay-fullBefore<900||!sfxPaused||RecordingAudio.ReplayFrames!=60)throw new Exception("Replay tracks failed");
+foreach(var bus in new[]{"bus:/gameplay_sfx","bus:/ui_sfx","bus:/music/stings"}) if(live.getBus(bus,out var b)==FMOD.RESULT.OK)b.setPaused(false);
+// A replay token published without a rendered block must be silence, never a repeated block.
+RecordingAudio.Publish(181,true); if(Energy(ReadBlock(181,0))!=0)throw new Exception("Stale block was repeated");
 // New one-shot events must be copied even when the game immediately releases them.
 Check(live.getEvent("event:/ui/main/button_select",out var uiDesc));
 Check(uiDesc.createInstance(out var sound));Check(sound.start());Check(sound.release());
-if (!pairs.Contains(sound.getRaw()))throw new Exception("Released one-shot was not mirrored");
+foreach(var m in new[]{"full","play"}){var pairs=(System.Collections.IDictionary)Mixer(m).GetType().GetField("Pairs")!.GetValue(Mixer(m))!;
+    if (!pairs.Contains(sound.getRaw()))throw new Exception("Released one-shot was not mirrored in "+m);}
 Check(music.setVolume(0.25f));RecordingAudio.Advance();copy.getVolume(out var copiedVolume,out _);
 if(Math.Abs(copiedVolume-0.25f)>0.001f)throw new Exception("Volume was not mirrored");
 // Stale ring entries must carry the new token, allowing OBS to reject old captures.
 RecordingAudio.Publish(1025,false);
-if(view.ReadInt64(64+6464)!=1025)throw new Exception("Ring slot did not commit the new token");
+if(view.ReadInt64(64+Slot)!=1025)throw new Exception("Ring slot did not commit the new token");
 Check(music.stop(FMOD.Studio.STOP_MODE.IMMEDIATE));RecordingAudio.Advance();
-copy.getPlaybackState(out var stopped);
-if(stopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED)throw new Exception("Music stop was not mirrored");
-Console.WriteLine("PASS: PCM, independent timelines, replay silence, one-shots, volume, stop and ring wrap");
+copy.getPlaybackState(out var stopped); fullCopy.getPlaybackState(out var fullStopped);
+if(stopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED||fullStopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED)throw new Exception("Music stop was not mirrored");
+Console.WriteLine("PASS: PCM on both tracks, independent timelines, replay music on the full track only, one-shots, volume, stop and ring wrap");
 } finally {RecordingAudio.Unload();live.release();}
 if(RecordingAudio.Error!=null)throw new Exception("Mixer shutdown produced a false frame error: "+RecordingAudio.Error);
 namespace CelesteAI.Bridge { static class Log {public static void Info(string s)=>Console.WriteLine(s); public static void Error(string s)=>Console.WriteLine(s);} }

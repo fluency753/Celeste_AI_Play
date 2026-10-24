@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "0.12.6";
+    public const string Version = "0.12.7";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -150,6 +150,8 @@ internal static class Bridge {
             SetAudio(AudioMode.MusicOnly);
             Halt(runOriginal);
             if (Engine.Scene is Level level) Playback.Step(level);
+            // 录像声音：完整版音轨跟着这一帧推进（只放音乐），纯享版音轨不推进（见 RecordingAudio）
+            RecordingAudio.AdvanceReplay();
             pendingAck = token;
             pendingAckReplay = true;
             return;
@@ -244,7 +246,8 @@ internal static class Bridge {
 
     /// <summary>游戏冻结时声音也冻结：超过 60 毫秒没有推进就暂停 FMOD 主总线，推进时立即恢复。
     /// 录制（锁步）时更精确：停住后的第二个节拍暂停、推进前恢复（见 LockstepTick），这里只是兜底。
-    /// 规划回放的帧里音乐照常播放（音效暂停），录像里的音乐与之后真实执行时的音乐连在一起。</summary>
+    /// 规划回放的帧里音乐照常播放（音效暂停）。录像声音另有两条独立音轨（RecordingAudio）：完整版音轨在回放帧里
+    /// 同样只放音乐、随帧推进；纯享版音轨只随真实游玩帧推进，去掉回放之后音乐依然连贯。</summary>
     private static void UpdateAudio(bool advanced, bool replayed) {
         if (advanced) {
             SinceAdvance.Restart();
@@ -415,15 +418,19 @@ internal static class Bridge {
                     w.WriteBoolean("continuous_music", continuousMusic);
                     w.WriteString("audio_mode", audioMode.ToString());
                     w.WriteBoolean("record_audio_nrt", true);
+                    w.WriteNumber("record_audio_tracks", RecordingAudio.TrackCount);
                     w.WriteBoolean("create_save", true);
                     w.WriteBoolean("dialog_choices", true);
                     w.WriteBoolean("story_text", true);
                     w.WriteBoolean("record_audio_active", RecordingAudio.Enabled);
                     w.WriteNumber("record_audio_frames", RecordingAudio.RenderedFrames);
+                    w.WriteNumber("record_audio_replay_frames", RecordingAudio.ReplayFrames);
                     if (Audio.CurrentMusicEventInstance is { } music && music.getTimelinePosition(out int musicPosition) == FMOD.RESULT.OK) {
                         w.WriteNumber("live_music_ms", musicPosition);
                         if (RecordingAudio.PositionFor(music) is { } recordingPosition)
                             w.WriteNumber("record_music_ms", recordingPosition);
+                        if (RecordingAudio.FullPositionFor(music) is { } fullPosition)
+                            w.WriteNumber("record_music_full_ms", fullPosition);
                     }
                     if (RecordingAudio.Error != null) w.WriteString("record_audio_error", RecordingAudio.Error);
                     w.WriteStartObject("clock");
@@ -449,6 +456,9 @@ internal static class Bridge {
                     using JsonDocument plugin = JsonDocument.Parse(ClockServer.PluginStatus ?? "{}");
                     if (!plugin.RootElement.TryGetProperty("audio_nrt", out JsonElement capability) || capability.ValueKind != JsonValueKind.True)
                         throw new InvalidOperationException("Update the OBS lockstep plugin for independent recording audio");
+                    if (!plugin.RootElement.TryGetProperty("audio_tracks", out JsonElement tracks) || tracks.ValueKind != JsonValueKind.Number ||
+                        tracks.GetInt32() != RecordingAudio.TrackCount)
+                        throw new InvalidOperationException("Update the OBS lockstep plugin for two-track recording audio");
                     RecordingAudio.Start(Audio.System, Path.Combine(Engine.ContentDirectory, "FMOD", "Desktop"), BridgeModule.Settings.ClockPort);
                 }
                 else if (recordAction == "stop") RecordingAudio.Stop();

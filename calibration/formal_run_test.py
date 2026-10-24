@@ -1,13 +1,18 @@
 """Claude 执行器的速通正式运行保持原有行为：提示词、观测、推理档位与停下时冻结游戏。"""
+import asyncio
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from orchestrator.config import REPO_ROOT, RunConfig
 from orchestrator.modes import KNOWLEDGE_OF_MODE, game_tools, remind_seconds
 from orchestrator.observation import describe_obs
 from orchestrator.prompting import play_prompt
-from orchestrator.run import _keeps_game_frozen
+from orchestrator import run as run_module
+from orchestrator.run import _keeps_game_frozen, _previous_kept_frozen
 
 
 def _observation():
@@ -93,6 +98,33 @@ class FormalRunTest(unittest.TestCase):
         self.assertFalse(_keeps_game_frozen(claude, args, SimpleNamespace(done=True)))
         self.assertFalse(_keeps_game_frozen(SimpleNamespace(engine="codex"), args, SimpleNamespace(done=False)))
         self.assertFalse(_keeps_game_frozen(claude, SimpleNamespace(no_agent=True), SimpleNamespace(done=False)))
+
+    def test_interrupted_run_records_frozen_game_in_summary(self):
+        """Ctrl+C：summary.json 在会话自己的 finally 里写出、没有返回值，仍要记下游戏保持冻结，续跑才知道。"""
+        with tempfile.TemporaryDirectory() as folder:
+            run_dir = Path(folder)
+            cfg = SimpleNamespace(_keep_frozen=False)
+
+            class FakeSession:
+                def __init__(self, *args):
+                    self.client = object()
+
+                def close(self, release):
+                    self.released = release
+
+            async def interrupted(*args, **kwargs):
+                (run_dir / "summary.json").write_text('{"stop_reason": "中断"}', encoding="utf-8")
+                cfg._keep_frozen = True
+                raise RuntimeError("interrupted")
+
+            with patch.object(run_module, "GameSession", FakeSession), \
+                 patch.object(run_module, "_run_connected_session", interrupted):
+                with self.assertRaises(RuntimeError):
+                    asyncio.run(run_module._run_session(cfg, SimpleNamespace(), run_dir, None, None, None, None))
+            summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertIs(summary["game_released"], False)
+            self.assertEqual(summary["stop_reason"], "中断")
+            self.assertTrue(_previous_kept_frozen({"dir": run_dir}))
 
 
 if __name__ == "__main__":

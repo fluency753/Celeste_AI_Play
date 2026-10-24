@@ -4,7 +4,9 @@
 路线画进画面；frames.csv 里章节计时记 -1，回放跟不上节拍时插件补的帧记 -2）。纯享版 gameplay_pure.mkv 只留章节计时
 不小于 0 的帧：
 - 画面：按 frames.csv 的行号（就是 video.mkv 的帧序号）挑帧，重新编码（编码参数与录制相同）；
-- 声音：audio.wav 里每个成片帧正好 1/60 秒（800 个样本），按同样的行号裁剪；去掉回放之后，前后两段游玩之间的音乐
+- 声音：独立游戏音频（game_nrt）录制时插件另写了一条纯享版音轨 audio_play.wav：它只随真实游玩帧推进，每个游玩帧
+  正好 800 个样本，直接使用，音乐是连贯的（完整版 audio.wav 的音乐在回放帧里继续播放，与它不同步）。
+  没有这条音轨时（obs_mix 录制、旧录像），从 audio.wav 按同样的行号裁剪：去掉回放之后，前后两段游玩之间的音乐
   不再连续，接缝处前一段结尾淡出、后一段开头淡入各 5 毫秒，去掉爆音。
 
 录制结束时主控自动生成；已有的录像可以用 python tools/make_pure.py <recording 目录> 补生成。
@@ -104,6 +106,15 @@ def cut_audio(src: Path, dst: Path, ranges: list[tuple[int, int]]) -> int:
     return frames_out
 
 
+def play_track(directory: Path, kept: int) -> Path | None:
+    """纯享版音轨 audio_play.wav（每个真实游玩帧 800 个样本）；没有，或帧数与游玩帧数对不上时返回 None。"""
+    path = Path(directory) / "audio_play.wav"
+    if not path.exists():
+        return None
+    _, size = _wav_data(path)
+    return path if size == kept * SAMPLES_PER_FRAME * 8 else None
+
+
 def _run(cmd: list[str], log_path: Path) -> None:
     with open(log_path, "ab") as log:
         log.write(("\n$ " + " ".join(cmd) + "\n").encode("utf-8"))
@@ -126,6 +137,10 @@ def make_pure(directory: Path, ffmpeg: str, video_args: str, log: Callable[[str]
                "segments": len(ranges)}
     if kept == 0:
         return {**summary, "state": "skipped", "reason": "没有真实游玩的帧"}
+    track = play_track(directory, kept)
+    if (directory / "audio_play.wav").exists() and track is None:
+        log("[record] audio_play.wav 的长度与游玩帧数对不上，纯享版改从 audio.wav 裁剪")
+    summary["audio"] = "audio_play.wav" if track else "audio.wav 裁剪"
     if kept == len(ticks):            # 没有规划回放：纯享版与完整版相同
         if out.exists():
             out.unlink()
@@ -135,7 +150,7 @@ def make_pure(directory: Path, ffmpeg: str, video_args: str, log: Callable[[str]
             shutil.copyfile(directory / "gameplay.mkv", out)
         return {**summary, "state": "finished", "same_as_full": True}
 
-    video_tmp, audio_tmp, script = directory / "video_pure.mkv", directory / "audio_pure.wav", directory / "pure_select.txt"
+    video_tmp, audio_tmp, script = directory / "video_pure.mkv", directory / "audio_pure_cut.wav", directory / "pure_select.txt"
     log_path = directory / "ffmpeg_pure.log"
     try:
         # 画面：select 按帧序号挑出各段游玩，时间戳重排成连续的 60 帧/秒
@@ -147,8 +162,9 @@ def make_pure(directory: Path, ffmpeg: str, video_args: str, log: Callable[[str]
             _run(head + ["-/filter:v", str(script)] + tail, log_path)
         except RuntimeError:
             _run(head + ["-filter_script:v", str(script)] + tail, log_path)
-        cut_audio(directory / "audio.wav", audio_tmp, ranges)
-        _run([ffmpeg, "-hide_banner", "-loglevel", "warning", "-y", "-i", str(video_tmp), "-i", str(audio_tmp),
+        if track is None:
+            cut_audio(directory / "audio.wav", audio_tmp, ranges)
+        _run([ffmpeg, "-hide_banner", "-loglevel", "warning", "-y", "-i", str(video_tmp), "-i", str(track or audio_tmp),
               "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", "-shortest", str(out)], log_path)
     except Exception as exc:  # 纯享版失败不影响完整版
         log(f"[record] 纯享版生成失败：{exc}")
