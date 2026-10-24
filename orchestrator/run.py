@@ -67,9 +67,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--free-planning", action="store_true",
-                    help="不限制规划轮次（默认：按章节记账，每进入一个没来过的房间存入 --rounds-per-room 轮，死亡补 1 轮；"
+                    help="不限制规划轮次（默认：按章节记账，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮；"
                          "自动重试关闭），也不播规划回放")
-    ap.add_argument("--rounds-per-room", type=int, default=5, help="每进入本章一个没来过的房间存入的规划轮次（默认 5）")
+    ap.add_argument("--rounds-per-room", type=int, default=5,
+                    help="一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 5）；大房间按 --room-scale 放大")
+    ap.add_argument("--room-scale", type=float, default=2.0,
+                    help="房间的长、高每变成这么多倍，存入的轮次乘这么多（默认 2，即与面积成正比），向上取整")
     ap.add_argument("--no-playback", action="store_true",
                     help="执行前不把模拟器推演过的路线画进游戏（规划回放；只在 --sim 且限制规划轮次时有）")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
@@ -129,6 +132,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.sim = args.sim
     cfg.pause_limit = not args.free_planning
     cfg.rounds_per_room = max(1, args.rounds_per_room)
+    cfg.room_scale = max(1.0, args.room_scale)
     cfg.playback = not args.no_playback
     cfg.provider_info = load_provider(cfg.provider)
     if cfg.third_party and cfg.runtime != "container":
@@ -387,7 +391,8 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
     gate = PauseGate(metrics, enabled=cfg.pause_limit and cfg.runtime == "container",
                      log=lambda m: print(m, flush=True), rounds_per_room=cfg.rounds_per_room,
                      death_bonus=cfg.death_bonus, started=previous is not None, sim_only=cfg.sim,
-                     state_path=cfg.workspace_dir / "game" / "rounds.json" if cfg.runtime == "container" else None)
+                     state_path=cfg.workspace_dir / "game" / "rounds.json" if cfg.runtime == "container" else None,
+                     room_scale=cfg.room_scale)
     playback = Playback(cfg, session, metrics, gate, log=lambda m: print(m, flush=True))
     if playback.collect:
         session.playback = playback

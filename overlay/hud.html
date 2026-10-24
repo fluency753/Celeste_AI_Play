@@ -128,11 +128,11 @@
     <div class="stat"><span class="k">工具</span><span class="v num" id="tool">0:00:00</span></div>
     <div class="stat"><span class="k">压缩</span><span class="v num" id="compact">0</span></div>
     <div class="stat"><span class="k">知识库读取</span><span class="v num" id="study">—</span></div>
-    <div class="stat"><span class="k">死亡</span><span class="v num" id="deaths">0</span></div>
+    <div class="stat"><span class="k">死亡</span><span class="v num" id="deaths">0 次</span></div>
     <div class="stat" id="roundsRow"><span class="k">规划剩余</span><span class="v num" id="rounds">—</span></div>
-    <div class="stat"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0</span></div>
-    <div class="stat"><span class="k">推演路径</span><span class="v num" id="simRuns">0</span></div>
-    <div class="stat"><span class="k">推演最快</span><span class="v num" id="simBest">—</span></div>
+    <div class="stat"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0 次</span></div>
+    <div class="stat"><span class="k">推演路径</span><span class="v num" id="simRuns">0 条</span></div>
+    <div class="stat"><span class="k">推演最速</span><span class="v num" id="simBest">—</span></div>
   </div>
   <div class="rule"></div>
   <div class="thought" id="thought"></div>
@@ -291,12 +291,13 @@ function render() {
 
   // 规划轮次（本章剩余）与死亡次数；不限制规划轮次时显示"不限"
   $("rounds").textContent = m.plan_rounds_left == null ? "不限" : `${m.plan_rounds_left} 轮`;
-  $("deaths").textContent = String(m.deaths || 0);
+  $("deaths").textContent = `${m.deaths || 0} 次`;
 
-  // 预置模拟器：调用次数（调用了模拟器的消息数）、推演过的路线总条数、当前房间里推演出的最快出房用时（换房间清零）
-  $("simCalls").textContent = String(m.sim_calls || 0);
-  const runs = m.sim_rollouts || 0;
-  $("simRuns").textContent = runs >= 10000 ? `${(runs / 10000).toFixed(runs >= 1e6 ? 0 : 1)}万` : runs.toLocaleString("en-US");
+  // 预置模拟器：调用次数（调用了模拟器的消息数）、当前这次调用推演的路线条数（这一轮回放画完清零）、
+  // 当前房间里推演出的最快出房用时（换房间清零）
+  $("simCalls").textContent = `${m.sim_calls || 0} 次`;
+  const runs = m.sim_round_rollouts || 0;
+  $("simRuns").textContent = (runs >= 10000 ? `${(runs / 10000).toFixed(runs >= 1e6 ? 0 : 1)}万` : runs.toLocaleString("en-US")) + " 条";
   const best = m.sim_best_frames || 0;
   $("simBest").textContent = best > 0 ? `${(best / 60).toFixed(3)}s` : "—";
   $("simBest").classList.toggle("dim", best <= 0);

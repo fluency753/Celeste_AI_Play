@@ -7,6 +7,9 @@
 
 怎么做：容器的托管配置里登记了 PreToolUse 钩子（agent-container/celeste-gate.py），Claude Code 每次调用
 工具之前都会问主控的 /gate。规则：
+- 每个房间存入的轮次按房间大小算：以一屏大小（320×180，1A 第一个房间那么大）存入 rounds_per_room 轮为基准，房间的长、
+  高每变成 room_scale 倍（默认 2），轮次就乘 room_scale，向上取整——即 ceil(rounds_per_room × (宽/320)^k × (高/180)^k)，
+  k = log2(room_scale)；默认 k = 1，与面积成正比（两倍长、两倍高的房间 20 轮）。
 - 准备阶段（游戏工具还没有真正执行过）不受限制。注意不能看 metrics.playing：有准备阶段时，
   第一次游戏工具的钩子先于它开始计时。
 - 开放了预置模拟器（sim_only）时，只有调用了模拟器的消息占一轮：一条消息的工具全部返回后，这期间 /sim 写出了
@@ -21,15 +24,31 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from pathlib import Path
+
+SCREEN_W, SCREEN_H = 320, 180     # 一屏：1A 第一个房间的大小，房间轮次的基准
+
+
+def room_rounds(base: int, bounds, scale: float = 2.0) -> int:
+    """一个房间存入的规划轮次：一屏大小的房间 base 轮，长、高每变成 scale 倍轮次乘 scale，向上取整，至少 1 轮。"""
+    try:
+        w, h = float(bounds[2]), float(bounds[3])
+    except (TypeError, IndexError, ValueError):
+        return base
+    if w <= 0 or h <= 0:
+        return base
+    k = math.log2(scale) if scale > 0 else 1.0
+    return max(1, math.ceil(base * (w / SCREEN_W) ** k * (h / SCREEN_H) ** k - 1e-9))
 
 EXEMPT = {"mcp__celeste__act", "mcp__celeste__set_effort"}
 
 
 class PauseGate:
     def __init__(self, metrics, enabled: bool = True, log=print, rounds_per_room: int = 5, death_bonus: int = 1,
-                 started: bool = False, sim_only: bool = False, state_path: Path | None = None):
+                 started: bool = False, sim_only: bool = False, state_path: Path | None = None,
+                 room_scale: float = 2.0):
         self.metrics = metrics
         self.enabled = enabled
         self.log = log
@@ -43,6 +62,8 @@ class PauseGate:
         self._visited: set[str] = set()
         self.rounds_used = 0
         self.sim_only = sim_only              # 只有调用模拟器的消息占轮次（由 playback.py 在一轮结束后扣）
+        self.room_scale = room_scale          # 房间的长、高每变成这么多倍，存入的轮次乘这么多
+        self.last_deposit = 0                 # 最近进入的新房间存入了几轮
         self.state_path = state_path          # 工作区里的 game/rounds.json：智能体随时可读的剩余轮次（/sim 也据此在输出末尾提示）
 
     # ---- 记账 ----
@@ -52,7 +73,8 @@ class PauseGate:
         if self.state_path is None:
             return
         state = {"limited": self.enabled and self._started, "left": self.bank, "used": self.rounds_used,
-                 "per_room": self.rounds_per_room, "death_bonus": self.death_bonus, "sim_only": self.sim_only,
+                 "this_room_deposit": self.last_deposit, "per_screen": self.rounds_per_room,
+                 "room_scale": self.room_scale, "death_bonus": self.death_bonus, "sim_only": self.sim_only,
                  "chapter": self._chapter, "rooms_seen": len(self._visited), "updated": time.time()}
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,8 +94,8 @@ class PauseGate:
             self._started = True
             self._publish()
 
-    def on_room(self, chapter: str | None, room: str | None) -> bool:
-        """每次观测之后调用：进入本章没来过的房间就存入轮次。返回是否存入。"""
+    def on_room(self, chapter: str | None, room: str | None, bounds=None) -> bool:
+        """每次观测之后调用：进入本章没来过的房间就按房间大小存入轮次。返回是否存入。"""
         if not self.enabled or not room:
             return False
         if chapter != self._chapter:
@@ -83,7 +105,8 @@ class PauseGate:
         if room in self._visited:
             return False
         self._visited.add(room)
-        self.bank += self.rounds_per_room
+        self.last_deposit = room_rounds(self.rounds_per_room, bounds, self.room_scale)
+        self.bank += self.last_deposit
         self._publish()
         return True
 
@@ -106,15 +129,15 @@ class PauseGate:
         if not self.enabled:
             return ""
         if self.sim_only:
-            return (f"规划轮次：剩余 {self.bank} 轮（本章每进入一个没来过的房间 +{self.rounds_per_room}，"
-                    f"在游戏里死亡 +{self.death_bonus}；只有调用模拟器的消息占一轮，同一条消息里并行的几次调用算一轮，"
-                    f"其他工具不占轮次）")
+            return (f"规划轮次：剩余 {self.bank} 轮（这个房间存入了 {self.last_deposit} 轮：按房间大小，一屏大小的房间 "
+                    f"{self.rounds_per_room} 轮，长、高每加倍轮次翻倍；在游戏里死亡 +{self.death_bonus}；没用完的留给本章后面的房间；"
+                    f"只有调用模拟器的消息占一轮，同一条消息里并行的几次调用算一轮，其他工具不占轮次）")
         return (f"规划轮次：剩余 {self.bank} 轮（本章每进入一个没来过的房间 +{self.rounds_per_room}，"
                 f"在游戏里死亡 +{self.death_bonus}；同一条消息里并行的工具调用算一轮，act 与 set_effort 不占轮次）")
 
     def deny_reason(self) -> str:
         if self.sim_only:
-            return (f"本章的规划轮次已经用完（每进入一个没来过的房间存入 {self.rounds_per_room} 轮，在游戏里死亡补 "
+            return (f"本章的规划轮次已经用完（每进入一个没来过的房间按房间大小存入轮次，在游戏里死亡补 "
                     f"{self.death_bonus} 轮）。模拟器只能通过 Bash 调用，所以 Bash 暂时不能用；Read、Write、Edit、Glob、Grep "
                     "与 observe 照常可用。请直接调用 act 执行目前最好的路线。")
         return (f"本章的规划轮次已经用完（每进入一个没来过的房间存入 {self.rounds_per_room} 轮，在游戏里死亡补 "

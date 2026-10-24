@@ -137,7 +137,8 @@ class RunConfig:
     quota_wait_max_h: float = 24.0   # 重置还要等更久时直接停止
     quota_wait_cap_s: float | None = None  # 只用于测试：等待额度的最长秒数
     pause_limit: bool = True         # 限制规划轮次（按章节记账，见 pausegate.py）；自动重试关闭
-    rounds_per_room: int = 5         # 每进入本章一个没来过的房间存入的规划轮次
+    rounds_per_room: int = 5         # 一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次；大房间按 room_scale 放大
+    room_scale: float = 2.0          # 房间的长、高每变成这么多倍，存入的轮次乘这么多（2 = 与面积成正比），向上取整
     death_bonus: int = 1             # 在游戏里死亡一次补的规划轮次
     playback: bool = True            # 执行前把这次规划里模拟器推演过的路线画进游戏（规划回放，见 playback.py）
     playback_ratio: int = 100        # 每多少条推演画一条路线（线条数随推演条数等比增长）

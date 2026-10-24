@@ -68,7 +68,8 @@ def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None =
     if runtime == "container":
         # 每次暂停只允许一轮工具（自动重试关闭），或者不限制（可以把规划程序写成自动重试命令）
         text += "\n\n" + (PROMPTS / ("pause_zh.md" if pause_limit else "retry_zh.md")).read_text(
-            encoding="utf-8").replace("{rounds}", str(rounds_per_room)).replace("{death}", str(death_bonus))
+            encoding="utf-8").replace("{rounds4}", str(rounds_per_room * 4)).replace("{rounds}", str(rounds_per_room)).replace(
+            "{death}", str(death_bonus))
         if pause_limit and playback and sim:
             text += "\n\n" + (PROMPTS / "playback_zh.md").read_text(encoding="utf-8")
     if chapters and len(chapters) > 1:

@@ -438,13 +438,15 @@ class Playback:
             self.rounds.append(rd)
             number = len(self.rounds)
         self.log(f"[playback] 第 {number} 轮：推演 {rd.rollouts} 条，挑出 {len(rd.tracks)} 条（{time.monotonic() - t0:.1f} 秒）")
-        # HUD：推演路线总条数与当前房间推演出的最快出房帧数
+        # HUD：这次调用推演的路线条数（这一轮画完清零）与当前房间推演出的最快出房帧数；总条数另记
         self.metrics.add(sim_rollouts=rd.rollouts)
+        self.metrics.update(sim_round_rollouts=rd.rollouts)
         if rd.best_exit:
             current = self.metrics.state.sim_best_frames
             if not current or rd.best_exit < current:
                 self.metrics.update(sim_best_frames=rd.best_exit)
         if not self.enabled or not rd.tracks:
+            self.metrics.update(sim_round_rollouts=0)
             return
         speed = float(self.cfg.playback_speed)
         stagger = int(self.cfg.playback_stagger_s * 60)
@@ -455,7 +457,10 @@ class Playback:
             factor = seg["frames"] / cap
             seg = build_segment(rd.tracks, speed * factor, max(15, int(stagger / factor)), recolor * factor)
         seg["camera"] = "keep"
-        reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=rd.rollouts)
+        try:
+            reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=rd.rollouts)
+        finally:
+            self.metrics.update(sim_round_rollouts=0)   # 这一轮画完：HUD 的"推演路径"清零
         record = {"t": time.time(), "decision": self.session.decision_index + 1, "round": number, "label": rd.label,
                   "rollouts": rd.rollouts, "frames": seg["frames"], "speed": seg["speed"], "dim": seg["dim"],
                   "skipped": (reply or {}).get("skipped"),
@@ -573,9 +578,15 @@ def build_segment(tracks: list[Track], speed: float, stagger: int, recolor: floa
     frames = int(math.ceil(max(settled(d, t) for d, t in zip(delays, tracks)))) + hold
     best_i = next((i for i, t in enumerate(tracks) if t.kind == KIND_BEST), 0)
     best, best_delay = tracks[best_i].path, delays[best_i]
+    # 镜头目标：金色路线延伸时跟着它的前端；走到头之后跟着变金的那一点从终点往回移，回到起点后停住
+    last = len(best) - 1
     focus = []
     for f in range(0, frames + 1, 4):
-        j = min(len(best) - 1, int(max(0.0, (f - best_delay) * speed)))
+        t = max(0.0, f - best_delay)
+        if t * speed <= last:
+            j = int(t * speed)
+        else:
+            j = max(0, int(last - (t - last / speed) * recolor))
         focus += [round(float(best[j, 0]), 1), round(float(best[j, 1]), 1)]
     out = [{"p": encode_path(t.path), "n": len(t.path), "k": t.kind, "d": delays[i]} for i, t in enumerate(tracks)]
     # 线多时整体调淡（淡色线叠在一起会发亮）：60 条以内不变，之后按 sqrt 变淡，最低 0.4 倍

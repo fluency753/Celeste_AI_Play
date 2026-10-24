@@ -57,11 +57,11 @@ TRANSPORT_SECURITY = TransportSecuritySettings(
 )
 
 
-NO_RETRY_NOTE = ("\n本次运行限制规划轮次（平均每个房间 {n} 轮）：本章每进入一个没来过的房间存入 {n} 轮，在游戏里死亡补 {d} 轮，"
-                 "没用完的留给本章后面的房间；剩余轮数写在观测头部。{rule}"
+NO_RETRY_NOTE = ("\n本次运行限制规划轮次：本章每进入一个没来过的房间按房间大小存入轮次（一屏大小的房间 {n} 轮，房间的长、高每加倍"
+                 "轮次翻倍，向上取整），在游戏里死亡补 {d} 轮，没用完的留给本章后面的房间；剩余轮数写在观测头部。{rule}"
                  "自动重试关闭：计划文件里的 retry 会被忽略。")
-RULE_SIM = ("只有调用了模拟器的消息占一轮，其他工具不占；剩余轮数也写在每次调用模拟器的输出末尾，随时可读 "
-            "/workspace/game/rounds.json。用完后 Bash 被拒绝（模拟器只能通过它调用），请直接 act。")
+RULE_SIM = ("只有调用了模拟器的消息占一轮，其他工具不占；任何时候（任何位置、任何一帧停下时）都可以调用模拟器，只要还有剩余轮次。"
+            "剩余轮数也写在每次调用模拟器的输出末尾，随时可读 /workspace/game/rounds.json。用完后 Bash 被拒绝（模拟器只能通过它调用），请直接 act。")
 RULE_ALL = "act 与 set_effort 以外的工具每条消息占一轮，用完后只能 act。"
 PLAYBACK_NOTE = "每一轮规划在模拟器里推演过的路线，系统会在下一轮之前画进游戏给观众看（不推进游戏、不计入章节计时）。"
 
@@ -111,7 +111,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         """规划轮次：进入本章没来过的房间就存入轮次。"""
         if gate is not None:
             level = obs.get("level") or {}
-            gate.on_room(level.get("sid"), level.get("room"))
+            gate.on_room(level.get("sid"), level.get("room"), level.get("bounds"))
 
     @server.tool(name="observe", description=OBSERVE_DESCRIPTION, structured_output=False)
     async def observe() -> list:

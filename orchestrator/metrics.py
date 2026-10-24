@@ -61,7 +61,8 @@ class MetricsState:
     replay_s: float = 0.0             # 规划回放用时（游戏不推进；逐轮回放与智能体的思考、工具同时进行，照常计入它们）
     replay_act_s: float = 0.0         # 其中执行前在 act 里把镜头送回 Madeline 的用时（和游戏推进时间一样不计入工具时间）
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）
-    sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数
+    sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数（全程累计，写进总结）
+    sim_round_rollouts: int = 0       # 当前这次模拟器调用推演的路线条数（HUD 显示；这一轮回放画完清零）
     sim_best_frames: int = 0          # 当前房间里推演出的最快出房帧数（0 = 还没有；换房间清零）
     replan_s: float = 0.0             # 重算程序用时（已包含在工具时间里）
     study_s: float = 0.0              # 准备阶段（读知识库等）用时，不计入 elapsed_s
