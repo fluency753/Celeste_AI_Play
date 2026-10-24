@@ -236,8 +236,12 @@ def find_dotnet(a: Answers) -> str | None:
     candidates = [shutil.which("dotnet")]
     if custom:
         candidates.insert(0, str(Path(custom) / "dotnet.exe"))
+    if os.environ.get("DOTNET_ROOT"):
+        candidates.append(str(Path(os.environ["DOTNET_ROOT"]) / "dotnet.exe"))
     candidates.append(str(Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "dotnet" / "dotnet.exe"))
     candidates.append(str(Path.home() / ".dotnet" / "dotnet.exe"))
+    if os.environ.get("LOCALAPPDATA"):
+        candidates.append(str(Path(os.environ["LOCALAPPDATA"]) / "Microsoft" / "dotnet" / "dotnet.exe"))
     for exe in candidates:
         if exe and Path(exe).exists():
             sdks = run([exe, "--list-sdks"], capture=True).stdout or ""
@@ -254,6 +258,7 @@ def step_dotnet(a: Answers) -> None:
         return
     bad(".NET 8 SDK（编译桥接 Mod 用）")
     if CHECK_ONLY:
+        say("  装在别处（不在 PATH 里）时运行 setup.ps1 -Only dotnet，填 dotnet.exe 所在目录")
         return
     if winget_install("Microsoft.DotNet.SDK.8", ".NET 8 SDK") and (exe := find_dotnet(a)):
         ok(f".NET 8 SDK（{exe}）")
@@ -574,13 +579,13 @@ def step_kb(a: Answers) -> None:
 def save_names(game: Path) -> dict[int, str]:
     """读游戏存档里的名字（只读）。"""
     names = {}
-    for f in sorted((game / "Saves").glob("*.celeste")):
+    for f in (game / "Saves").glob("*.celeste"):
         if not f.stem.isdigit():
             continue
         match = re.search(r"<Name>(.*?)</Name>", f.read_text(encoding="utf-8", errors="ignore"))
         if match:
             names[int(f.stem)] = match.group(1)
-    return names
+    return dict(sorted(names.items()))
 
 
 def step_saves(a: Answers) -> None:
