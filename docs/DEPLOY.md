@@ -411,13 +411,15 @@ OpenAI 的接口不是 Anthropic 格式，Claude Code 不能直接调用，所�
          api_key: os.environ/OPENAI_API_KEY
    ```
 
-3. 启动网关（默认监听 0.0.0.0:4000；Windows 防火墙询问时允许专用网络，容器经 `host.docker.internal` 访问它）：
+3. 启动网关。只监听本机回环地址即可：Docker Desktop 把容器里对 `host.docker.internal` 的连接转到宿主机的 127.0.0.1（主控的游戏工具端口也是这样连的），这样不会弹出 Windows 防火墙询问，局域网里的其他机器也连不上网关：
 
    ```powershell
    $env:OPENAI_API_KEY = "<OpenAI 密钥>"
    $env:LITELLM_MASTER_KEY = "sk-<一串随机字符>"
-   litellm --config litellm.yaml
+   litellm --config litellm.yaml --host 127.0.0.1 --port 4000
    ```
+
+   2026-10-24 在作者本机核对过防火墙（用一个只监听 127.0.0.1:4000 的临时网页服务代替网关）：按 `openai` 的配置建的容器能访问 `host.docker.internal:4000`，连不上宿主机的其他端口，解析不到 api.openai.com、api.anthropic.com 等任何域名，Anthropic 的地址段也被拒绝。
 
 4. 把网关访问密钥（`LITELLM_MASTER_KEY` 的值）存成本机文件，写进 `configs\local.providers.json`（端口改了的话一并改）：
 
