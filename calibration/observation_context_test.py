@@ -22,7 +22,7 @@ class ObservationContextTest(unittest.TestCase):
         self.assertIn("Spring#1", text)
         self.assertNotIn("Strawberry#2", text)
         observation["tiles"]["rows"][0] = "....."
-        self.assertEqual(terrain_regions(observation), [])
+        self.assertIn('当前碰撞箱无法接近', '\n'.join(terrain_regions(observation)))
         observation["tiles"]["scope"] = "view"
         self.assertEqual(terrain_regions(observation), [])
 

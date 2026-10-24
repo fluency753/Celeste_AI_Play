@@ -65,9 +65,12 @@ def anchor_run(pinned: Path | None) -> Path | None:
     if pinned is not None:
         return pinned
     try:
-        return Path((REPO_ROOT / "runs" / "latest.txt").read_text(encoding="utf-8").strip())
+        value=(REPO_ROOT / 'runs/latest.txt').read_text(encoding='utf-8').strip()
+        if value and Path(value).is_dir():return Path(value)
     except OSError:
-        return None
+        pass
+    from orchestrator.session_store import idle_anchor
+    return idle_anchor(REPO_ROOT)
 
 
 def current_run(pinned: Path | None) -> Path | None:
@@ -136,6 +139,10 @@ def make_handler(pinned: Path | None, chat_thread: str | None = None):
                 payload["operation"] = operation_status(anchor_run(pinned))
                 payload["ready_to_play"] = bool(directory and read_json(directory / 'run_state.json').get('session_kind') == 'ready')
                 payload['session_management'] = pinned is None
+                idle=bool(directory and read_json(directory/'run_state.json').get('session_kind') in {'idle','standby'})
+                payload['can_create_session']=payload['can_wake'] or idle
+                from orchestrator.play_scope import sim_available
+                payload['sim_available']=sim_available(REPO_ROOT)
                 self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json")
             elif path == "/hud/state":
                 run_dir = current_run(pinned)

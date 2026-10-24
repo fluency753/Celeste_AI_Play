@@ -124,10 +124,10 @@ def prepare_target(anchor, record):
                          effort=previous.get("effort", state["effort"]),
                          conversation_origin=source.name,
                          knowledge_profile=state.get("knowledge_profile", "explore"))
-    for key in ("agent", "save", "session_kind", "session_name", "prepared_dir"):
+    for key in ("engine", "provider", "agent", "save", "save_slot", "session_kind", "session_name", "prepared_dir"):
         if key in state:
             current_state[key] = state[key]
-        elif key in {"session_kind", "session_name", "prepared_dir"}:
+        elif key in {"save_slot", "session_kind", "session_name", "prepared_dir"}:
             current_state.pop(key, None)
     for key in ("context_tokens", "context_window", "tool_calls", "compactions", "output_tokens", "thinking_tokens", "effort", "kb_progress", "study_s"):
         if key in previous:
@@ -135,7 +135,8 @@ def prepare_target(anchor, record):
     metrics["model"] = state["model"]
     (target / "run_state.json").write_text(json.dumps(current_state, ensure_ascii=False), encoding="utf-8")
     (target / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False), encoding="utf-8")
-    shutil.copy2(anchor / "summary.json", target / "summary.json")
+    if (source / 'summary.json').exists():
+        shutil.copy2(source / 'summary.json', target / 'summary.json')
     for name in ("codex_events.jsonl", "decisions.jsonl", "prepare_summary.json"):
         if (source / name).exists():
             shutil.copy2(source / name, target / name)

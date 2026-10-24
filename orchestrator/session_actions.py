@@ -26,6 +26,8 @@ def write_json(path, data):
 
 def require_idle(current):
     control = RunControl(current).snapshot()
+    if not control.get('connected') and read_json(current/'run_state.json').get('session_kind') in {'idle','standby'}:
+        return
     if not can_wake(current) or (control.get('connected') and not control.get('chat_only')):
         raise ValueError('请先停止试玩并保存录像，再管理会话')
     if control.get('connected') and control.get('phase') == 'chatting':
@@ -114,7 +116,7 @@ def _finish(anchor, operation):
         state = {'engine': 'codex', 'provider': 'codex', 'agent': operation['agent'], 'save': '',
                  'model': metrics['model'], 'effort': metrics['effort'], 'session_id': prepared['session_id'],
                  'knowledge_profile': 'explore', 'session_kind': 'ready', 'session_name': operation['name'],
-                 'prepared_dir': str(directory), 'runtime': 'container', 'sim': False, 'sim_assist': True,
+                 'prepared_dir': str(directory), 'runtime': 'container', 'sim': False, 'sim_assist': False,
                  'max_minutes': 240}
         write_json(directory / 'run_state.json', state)
         RunControl(directory).set_fast(operation['fast'])
@@ -133,10 +135,11 @@ def _finish(anchor, operation):
             path = latest.read_text(encoding='utf-8').strip() if latest.exists() else ''
             if path and path != operation['latest_before'] and read_json(Path(path) / 'run_state.json').get('agent') == operation['agent']:
                 latest.write_text(operation['latest_before'], encoding='utf-8')
-        try:
-            start_chat(previous)
-        except Exception as restore:
-            operation['error'] += f'；原会话可稍后手动唤起：{restore}'
+        if read_json(previous/'run_state.json').get('session_id'):
+            try:
+                start_chat(previous)
+            except Exception as restore:
+                operation['error'] += f'；原会话可稍后手动唤起：{restore}'
     finally:
         store_operation(anchor, operation)
         with _lock:
@@ -193,10 +196,15 @@ def play_session(anchor, current, options):
     state = read_json(current / 'run_state.json')
     if state.get('session_kind') != 'ready':
         raise ValueError('请先新建并准备会话；旧试玩请使用续跑入口')
-    if not isinstance(options, dict) or set(options) != {'chapter','save','create_save','save_slot'}:
+    if (not isinstance(options, dict) or not {'chapter','save','create_save','save_slot'} <= set(options)
+            or set(options)-{'chapter','save','create_save','save_slot','scope','sim_assist'}):
         raise ValueError('请显式选择存档及是否新建')
-    if type(options['chapter']) is not int or not 0 <= options['chapter'] <= 9:
-        raise ValueError('章节必须是0～9的整数（A面）')
+    from .play_scope import chapter_sequence,sim_available
+    chapter_sequence(options['chapter'],options.get('scope','chapter'))
+    if type(options.get('sim_assist',False)) is not bool:
+        raise ValueError('模拟辅助须为开或关')
+    if options.get('sim_assist') and not sim_available(REPO_ROOT):
+        raise ValueError('未安装模拟器，可关闭有限模拟辅助后开始')
     from .saves import validate_selection
     if not options['create_save'] and type(options['save_slot']) is not int:
         raise ValueError('请选择已有存档的槽位')
@@ -252,6 +260,8 @@ def _launch_play(current, options):
     mode=RunControl(current).cutscene_preference() or state.get('cutscene_mode','auto')
     RunControl(directory).set_cutscene_mode(mode)
     return launch(['--engine','codex','--agent',state['agent'],'--save',options['save'],'--knowledge','explore',
+                          '--scope',options.get('scope','chapter'),
+                          '--sim-assist' if options.get('sim_assist',False) else '--no-sim-assist',
                           '--prepared',str(directory),'--chapter',str(options['chapter']), '--effort',manual_effort or read_json(current/'metrics.json').get('effort',state['effort']),
                           '--keep-obs-open','--playback','--continuous-music','--start-paused','--cutscene-mode',mode] +
                          (['--create-save'] if options['create_save'] else ['--save-slot',str(options['save_slot'])]))

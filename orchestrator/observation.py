@@ -11,6 +11,7 @@ from collections import deque
 from PIL import Image as PILImage
 
 from .config import CHAPTER_NAMES
+from .connectivity import static_connectivity
 
 STOP_TEXT = {
     "done": "按键全部执行完",
@@ -169,46 +170,19 @@ def compact_entity(entity: dict) -> dict:
 
 
 def terrain_regions(obs: dict) -> list[str]:
-    """仅判断房间内空格是否被静态地形隔断，不计算跳跃路线或物理可达性。"""
-    tiles, level = obs.get("tiles") or {}, obs.get("level") or {}
-    player = obs.get("player") or {}
-    if tiles.get("scope") != "room" or not tiles.get("rows") or not level.get("bounds") or not player.get("hitbox"):
-        return []
-    ox, oy = tiles["origin"]
-    cell = tiles.get("cell", 8)
-    bx, by, bw, bh = level["bounds"]
-    free = {(c, r) for r, row in enumerate(tiles["rows"]) for c, value in enumerate(row)
-            if value != "#" and bx <= ox + c * cell < bx + bw and by <= oy + r * cell < by + bh}
-    components, count = {}, 0
-    while free:
-        count += 1
-        start = free.pop()
-        queue = deque([start])
-        components[start] = count
-        while queue:
-            c, r = queue.popleft()
-            for neighbor in ((c-1, r), (c+1, r), (c, r-1), (c, r+1)):
-                if neighbor in free:
-                    free.remove(neighbor)
-                    components[neighbor] = count
-                    queue.append(neighbor)
-    def region(rect):
-        x, y, w, h = rect
-        return components.get((math.floor((x+w/2-ox)/cell), math.floor((y+h/2-oy)/cell)))
-    current = region(player["hitbox"])
-    if count < 2 or current is None:
-        return []
-    separated = []
-    for entity in obs.get("entities", []):
-        if entity.get("cat") not in {"collectible", "spring", "refill"}:
-            continue
-        other = region([entity[k] for k in ("x", "y", "w", "h")])
-        if other is not None and other != current:
-            separated.append(f"{entity['type']}#{entity.get('id', '?')}")
-    lines = [f"静态地形检查（按 8×8 字符图）：本房间空区被 # 地形分成 {count} 块；不能把同房间内的物体都当成有直通路径。"]
-    if separated:
-        lines.append("与当前碰撞箱所在空区隔开的物体：" + "、".join(separated) + "。不要反复朝隔墙方向移动，需寻找实际开口或其他入口。")
-    lines.append("此检查只看静态地形连通性，忽略危险、动态物体和动作能力；同一区域也不代表当前能跳到。")
+    """Report static barriers for both observed objects and actual exit openings."""
+    data=static_connectivity(obs)
+    if not data:return []
+    separated=[f"{e['type']}#{e['id']}" for e in data['entities'] if e['relation']=='separated']
+    exits=[e for e in data['exits'] if e['relation']!='connected']
+    narrow=[f"{e['type']}#{e['id']}" for e in data['entities'] if e['relation']=='narrow']
+    if data['regions']<2 and not separated and not exits and not narrow:return []
+    lines=[f"静态地形检查：空区分成{data['regions']}块；按实际地形和当前碰撞箱核对，连通不等于能跳到。"]
+    if separated:lines.append('隔开当前空区的物体：'+'、'.join(separated)+'；需找实际开口或其他入口，不要隔墙硬冲。')
+    labels={'blocked':'邻接边界上没有实际开口','separated':'实际开口与当前区域被静态墙隔断，不能在本房间内直达','narrow':'当前碰撞箱无法通过，改变姿态后的通路尚未验证'}
+    for e in exits:lines.append(f"出口 {e.get('room')}（{e['side']}）：{labels[e['relation']]}。")
+    if narrow:lines.append('当前碰撞箱无法接近：'+'、'.join(narrow)+'；不排除改变姿态或其他入口。')
+    lines.append(data['limitations'])
     return lines
 
 
@@ -230,6 +204,8 @@ def room_json(obs: dict) -> str:
         data['dialog']={key:level.get(key) for key in ('dialogOpen','dialogWaiting','dialogChoices','dialogChoiceIndex','dialogChoiceReady')}
     if obs.get('story'):
         data['story']=obs['story']
+    connectivity=static_connectivity(obs)
+    if connectivity:data['connectivity']=connectivity
     lines = ["{"]
     keys = list(data)
     for i, key in enumerate(keys):

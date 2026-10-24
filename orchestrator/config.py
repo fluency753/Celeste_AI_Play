@@ -17,7 +17,7 @@ CHAPTER_NAMES = {
 # 章节编号（菜单宏与 --chapters 用的地图编号）→ 章节 SID
 CHAPTER_SIDS = {i:'Celeste/'+name for i,name in enumerate([
     '0-Intro','1-ForsakenCity','2-OldSite','3-CelestialResort','4-GoldenRidge',
-    '5-MirrorTemple','6-Reflection','7-Summit','8-Epilogue','9-Core'])}
+    '5-MirrorTemple','6-Reflection','7-Summit','8-Epilogue','9-Core','LostLevels'])}
 
 
 def chapter_name(sid: str) -> str:
@@ -130,6 +130,7 @@ class RunConfig:
     create_save: bool = False       # 显式新建空存档；只用于首次进档，不用于续跑或换章
     save_slot: int | None = None    # 存档身份由槽位决定，名称可以重复
     cutscene_mode: str = 'auto'     # auto 自动跳过；agent 自行决定观看、推进或跳过
+    play_scope: str = 'chapter'     # independent of the user's dynamic stop goal
     chapter: int | None = None      # 菜单宏进入的章节编号；None = 选章页当前章节
     chapters: list[int] | None = None  # 依次通关的章节（如 [0, 1, 2]）：一章完成后主控自动进入下一章，智能体接着玩
     runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具（M2 的过渡方式）

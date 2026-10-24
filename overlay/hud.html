@@ -216,7 +216,8 @@
       <select id="sessionSave" aria-label="选择游戏存档"><option value="">选择存档…</option><option value="new">新建独立存档</option></select>
       <input id="sessionSaveName" aria-label="新存档名" placeholder="新存档名（留空由 agent 取名）" maxlength="20" hidden>
       <div id="sessionSaveStatus" role="status" hidden></div>
-      <div class="control-buttons"><label>A面章节 <input id="sessionChapter" type="number" min="0" max="9" value="0" style="width:3.5em"></label><button id="sessionPlay" type="button" title="进入所选存档和章节后保持暂停，点击继续才开始操作">开始试玩</button></div>
+      <div class="control-buttons"><label>起始A面 <input id="sessionChapter" type="number" min="0" max="10" value="0" style="width:3.5em"></label><select id="sessionScope" aria-label="试玩范围"><option value="campaign">顺序游玩</option><option value="chapter">仅这一章</option></select><button id="sessionPlay" type="button" title="进入所选存档和章节后保持暂停，点击继续才开始操作">开始试玩</button></div>
+      <label><input id="sessionSimAssist" type="checkbox" disabled>有限模拟辅助<span id="simAvailability">（检查安装状态…）</span></label>
       <div id="sessionOperation" role="status" hidden></div>
     </details>
     <details id="goalPanel">
@@ -764,7 +765,7 @@ async function pollControl() {
     const pendingStory=(c.actions || []).find(a=>a.kind==='cutscene_mode' && ['queued','waiting'].includes(a.status));
     $('cutsceneMode').value=pendingStory?.text || c.cutscene_mode || 'auto';
     $('cutsceneMode').disabled=!c.connected || !c.cutscene_control || busy || !!pendingStory;
-    const manageable = controlData.session_management && controlData.can_wake && c.phase !== 'chatting' && !switchingSession && !controlData.waking && !busy;
+    const manageable = controlData.session_management && (controlData.can_create_session || controlData.can_wake) && c.phase !== 'chatting' && !switchingSession && !controlData.waking && !busy;
     const selectedModel=modelCatalog.models.find(item=>item.id===$('sessionModel').value);
     $('sessionNew').disabled = !manageable || modelsLoading || !!modelCatalogError || !selectedModel?.efforts.includes($('sessionEffort').value);
     $('sessionDisconnect').disabled = !manageable || !c.connected;
@@ -772,6 +773,10 @@ async function pollControl() {
     $('sessionPlay').disabled = !manageable || !controlData.ready_to_play || savesLoading || !!savesError || !save || (!save.create_save && !save.save);
     for (const id of ['sessionName','sessionModel','sessionEffort','sessionChapter']) $(id).disabled=busy;
     for(const id of ['sessionSave','sessionSaveName'])$(id).disabled=busy || !manageable;
+    $('sessionScope').disabled=busy || !manageable;
+    $('sessionSimAssist').disabled=busy || !manageable || !controlData.sim_available;
+    if(!controlData.sim_available)$('sessionSimAssist').checked=false;
+    $('simAvailability').textContent=controlData.sim_available ? '' : '（未安装，可关闭此项直接试玩）';
     $('sessionModel').disabled=busy || modelsLoading || !modelCatalog.models.length;
     $('sessionEffort').disabled=busy || modelsLoading || !selectedModel;
     $('sessionModelRefresh').disabled=busy || modelsLoading;
@@ -806,13 +811,13 @@ $('sessionNew').onclick=()=>sessionAction('new_session',{name:$('sessionName').v
 $('sessionDisconnect').onclick=()=>sessionAction('disconnect');
 $('sessionPlay').onclick=()=>{
   const raw=$('sessionChapter').value.trim(), chapter=Number(raw);
-  if(!raw || !Number.isInteger(chapter) || chapter<0 || chapter>9){
-    lifecycleError='请填写0～9的A面章节编号（0为序章）。'; pollControl(); return;
+  if(!raw || !Number.isInteger(chapter) || chapter<0 || chapter>10){
+    lifecycleError='请填写0～10的A面章节编号（0为序章）。'; pollControl(); return;
   }
   const choice=selectedSave();
   if(!choice || (!choice.create_save && !choice.save)){lifecycleError='请显式选择存档。';pollControl();return;}
   if(choice.create_save && chapter!==0){lifecycleError='新存档须从序章（0）开始。';pollControl();return;}
-  sessionAction('play_session',{chapter,...choice});
+  sessionAction('play_session',{chapter,...choice,scope:$('sessionScope').value,sim_assist:$('sessionSimAssist').checked});
 };
 async function sendControl(kind, text='') {
   if (!controlData) return false;

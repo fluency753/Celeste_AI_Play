@@ -39,6 +39,18 @@ class ConversationTests(unittest.TestCase):
         (self.anchor / "hud_session.json").write_text(json.dumps({"relative":"../old"}))
         self.assertEqual(selected_run(self.anchor), self.anchor)
 
+    def test_switch_preserves_save_name_and_slot_as_one_identity(self):
+        for folder,name,slot in [(self.anchor,'live',12),(self.source,'older',3)]:
+            path=folder/'run_state.json';state=json.loads(path.read_text());state.update(save=name,save_slot=slot);path.write_text(json.dumps(state))
+        target=prepare_target(self.anchor,{'directory':str(self.source),'id':'older'})
+        state=json.loads((target/'run_state.json').read_text())
+        self.assertEqual((state['save'],state['save_slot']),('older',3))
+
+    def test_missing_source_slot_never_inherits_another_saves_slot(self):
+        path=self.anchor/'run_state.json';state=json.loads(path.read_text());state['save_slot']=12;path.write_text(json.dumps(state))
+        target=prepare_target(self.anchor,{'directory':str(self.source),'id':'older'})
+        self.assertNotIn('save_slot',json.loads((target/'run_state.json').read_text()))
+
     def test_recovered_conversation_replaces_occupied_source_in_picker(self):
         target = prepare_target(self.anchor, {"directory":str(self.source), "id":"older"})
         state = json.loads((target / "run_state.json").read_text())

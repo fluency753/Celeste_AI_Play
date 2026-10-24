@@ -54,6 +54,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--save", required=True, help="游戏内存档名，如 test、opus5.5、fable5.1")
     ap.add_argument("--save-slot", type=int, help="已有存档的槽位编号；同名存档通过槽位区分")
     ap.add_argument('--cutscene-mode',choices=['auto','agent'],default=None,help='剧情：auto主控自动跳过；agent自行观看、推进或跳过')
+    ap.add_argument('--scope',choices=['chapter','campaign'],default=None,help='单章或按官方章节顺序游玩；独立于停止目标')
     ap.add_argument("--create-save", action="store_true", help="显式在空槽位新建独立存档，只允许从序章开始；名称允许重复")
     ap.add_argument("--model", default="opus", help="Claude Code 模型别名：opus / fable 等（默认 opus）；第三方提供方写它的模型名")
     ap.add_argument("--provider", default="anthropic",
@@ -160,6 +161,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
     cfg.chapter = args.chapter
+    cfg.play_scope=args.scope or (previous['state'].get('play_scope','chapter') if previous else 'chapter')
     cfg.create_save = args.create_save
     cfg.cutscene_mode = args.cutscene_mode or (previous['state'].get('cutscene_mode','auto') if previous else 'auto')
     if previous and args.cutscene_mode is None:
@@ -173,6 +175,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if not cfg.chapters:
             raise SystemExit("--chapters 至少要给一个章节编号")
         cfg.chapter = cfg.chapters[0]
+    elif cfg.play_scope=='campaign' and not previous:
+        from .play_scope import chapter_sequence
+        cfg.chapters=chapter_sequence(cfg.chapter if cfg.chapter is not None else 0,'campaign')
+        cfg.chapter=cfg.chapters[0]
     if args.create_save and (args.resume or args.skip_enter or cfg.chapter != 0):
         raise SystemExit('--create-save 只可从序章新开一局，不能与续跑或跳过进档合用')
     cfg.runtime = args.runtime
@@ -204,7 +210,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         raise SystemExit("新手探索不提供精确模拟器；需要原有速通模式时明确选择 --knowledge full")
     cfg.sim = args.sim
     cfg.sim_assist = (bool(previous["state"].get("sim_assist", False)) if previous else
-                      cfg.engine == "codex" and cfg.knowledge_profile == "explore") if args.sim_assist is None else args.sim_assist
+                      cfg.engine == "codex" and cfg.knowledge_profile == "explore" and cfg.runtime == 'container'
+                      and (cfg.sim_dir / 'celeste-sim').is_file()) if args.sim_assist is None else args.sim_assist
     if cfg.sim_assist and (cfg.sim or cfg.engine != "codex" or cfg.runtime != "container"):
         raise SystemExit("限额模拟辅助仅支持原生 GPT 容器模式，不能同时开放无限制 --sim")
     if cfg.sim_assist and not (cfg.sim_dir / "celeste-sim").is_file():
@@ -262,7 +269,7 @@ def load_previous(path: str) -> dict:
 def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None) -> None:
     """记下续跑需要的设置与 Claude Code 会话编号。"""
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
-    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine,
+    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "record": cfg.record, "playback": cfg.playback, "all_chapters": all_chapters, "session_id": session_id,
              "resumed_from": str(previous["dir"]) if previous else None}
