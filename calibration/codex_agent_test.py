@@ -161,7 +161,8 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     def test_resumed_session_reports_missing_dynamic_tools_without_bash_fallback(self):
         path = self.root / 'thread.jsonl'
-        tools = ['celeste_observe', 'celeste_act', 'celeste_cutscene', 'celeste_exit_level']
+        tools = ['celeste_observe', 'celeste_act', 'celeste_cutscene', 'celeste_exit_level',
+                 'celeste_narrate', 'celeste_set_effort', 'celeste_stop_run']
         path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
         self.runner._validate_resumed_tools({'path': str(path)})
         self.cfg.sim_assist = True
@@ -170,6 +171,18 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         tools.append('celeste_simulate')
         path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
         self.runner._validate_resumed_tools({'path': str(path)})
+
+    def test_resume_does_not_require_tools_disabled_by_play_mode(self):
+        self.cfg.live = False
+        self.cfg.mode = 'speedrun'
+        self.cfg.cutscene_mode = 'auto'
+        path = self.root / 'thread.jsonl'
+        tools = ['celeste_observe', 'celeste_act', 'celeste_narrate', 'celeste_set_effort', 'celeste_stop_run']
+        path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
+        self.runner._validate_resumed_tools({'path': str(path)})
+        self.cfg.live = True
+        with self.assertRaisesRegex(RuntimeError, 'celeste_exit_level'):
+            self.runner._validate_resumed_tools({'path': str(path)})
 
     async def test_bash_has_hard_time_limit(self):
         # 探索模式：单次规划程序的上限（explore_program_s，默认 15 秒，与提示词一致）；速通模式：Bash 最长时长 bash_max_s

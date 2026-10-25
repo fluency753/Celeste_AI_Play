@@ -321,13 +321,13 @@ class CodexRunner(SessionControls):
         with Path(path).open(encoding='utf-8') as stream:
             meta = json.loads(stream.readline())
         names = {tool['name'] for tool in meta.get('payload', {}).get('dynamic_tools', [])}
-        required = {'celeste_observe', 'celeste_act', 'celeste_exit_level', 'celeste_cutscene'}
-        if self.cfg.sim_assist:
-            required.add('celeste_simulate')
+        from .modes import game_tools
+        required = {'celeste_' + name for name in game_tools(self.cfg)}
         missing = required - names
         if missing:
             raise RuntimeError('旧会话缺少正式游戏工具：' + ', '.join(sorted(missing))
-                               + '。请新建准备会话；仅缺模拟工具时也可关闭限额模拟辅助后重试。')
+                               + '。停止宿主后运行 python tools/sync_session_env.py --run "'
+                               + str(self.run_dir) + '" --apply 同步旧会话环境，再续跑。')
 
     async def run(self):
         self.run_dir.mkdir(parents=True, exist_ok=True)
