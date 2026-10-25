@@ -95,6 +95,12 @@ entities.entities.Add(player);
 Check("",StoryText.InputNode(level) ?? "");
 tutorial.Scale=1;
 Check("tutorial",StoryText.InputNode(level)!);
+level.InCutscene=false;
+player.StateMachine.State=Player.StIntroRespawn;
+Check("",StoryText.InputNode(level) ?? ""); // an ambient bird (1A climbing) during respawn is not an input node
+player.StateMachine.State=Player.StDummy;
+Check("tutorial",StoryText.InputNode(level)!); // a dummy waiting on the tutorial still is
+level.InCutscene=true;
 player.StateMachine.State=Player.StNormal;
 Check("",StoryText.InputNode(level) ?? ""); // a hint never blocks otherwise normal movement
 player.StateMachine.State=Player.StDummy;

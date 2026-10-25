@@ -202,6 +202,7 @@ class GameSession:
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
         reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music)
         obs = reply["obs"]
+        self.story_input_supported = 'storyInput' in obs   # 桥接 1.0.3 起才有；中途把剧情切给智能体时也要检查
         if self.cfg.cutscene_mode == 'agent' and 'storyInput' not in obs:
             raise RuntimeError('剧情自动推进需要新版桥接的 storyInput，请更新桥接 Mod 并重启游戏')
         self._pending_complete = bool((obs.get('level') or {}).get('completed'))
@@ -246,16 +247,24 @@ class GameSession:
             return self.client.call(cmd, **args)
 
     def observe(self) -> tuple[dict, str | None]:
+        """当前观测。剧情交给智能体时，若剧情还没到输入节点，先自动播放到节点（与 act 之后相同：检查停止目标，
+        章节通关时进入下一章）；主控的说明放在 observe_notes 里，由 observe 工具一并返回。"""
+        notes: list = []
         with self.lock:
             reply = self.client.call("observe", image=True, scope="room", fields=True)
-            if self.cfg.cutscene_mode == 'agent' and story_pending(reply['obs']):
-                obs, image, _, _ = self._auto_advance(enrich_obs(reply['obs']), reply.get('image'))
-                reply = {'obs': obs, 'image': image}
+            obs, image = enrich_obs(reply["obs"]), reply.get("image")
+            if self.cfg.cutscene_mode == 'agent' and story_pending(obs) and not self.done:
+                obs, image, _, notes = self._auto_advance(obs, image)
+                self.goals.check(self.goal_values(obs))
+                if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
+                    obs, image, more = self._enter_next_chapter()
+                    notes = [*notes, *more]
             self._write_sim_state()
-        obs = self._track_motion(enrich_obs(reply["obs"]))
+        self.observe_notes = [str(n) for n in notes]
+        obs = self._track_motion(enrich_obs(obs))
         self._update_metrics_from_obs(obs)
         self._write_workspace(obs)
-        return obs, reply.get("image")
+        return obs, image
 
     def _track_motion(self, obs: dict) -> dict:
         """与上一次暂停时比较，给移动过的实体标上位移 moved = [dx, dy]（同一房间内按编号对照）。"""
@@ -401,7 +410,8 @@ class GameSession:
             raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
         if ((self.last_obs or {}).get('level') or {}).get('dialogChoices'):
             raise ActError('当前有对话选项，请使用cutscene的choose动作明确选择')
-        if story_input(self.last_obs or {}) in {'dialogue','postcard'} and not (self.last_obs or {}).get('controllable'):
+        if (self.cfg.cutscene_mode == 'agent' and story_input(self.last_obs or {}) in {'dialogue','postcard'}
+                and not (self.last_obs or {}).get('controllable')):
             raise ActError('当前对白已等待确认，请使用 cutscene 的 advance 或 skip；教学节点才用 act')
         if plan_file:
             if inputs:
@@ -414,13 +424,14 @@ class GameSession:
             raise ActError("thought 不能为空：用一两句话说明这段操作的意图")
         if len(thought) > self.cfg.thought_max_chars:
             raise ActError(f"thought 太长，请压缩到一两句话（{self.cfg.thought_max_chars} 字以内）")
-        stop = self._stop_list(stop_on or plan.stop_on)
+        forced: list[str] = []          # 剧情交给智能体时强制加的截断条件（自动重试重算计划后也保留）
         if self.cfg.cutscene_mode == 'agent':
-            stop.append('story_input')
+            forced.append('story_input')
             if (self.last_obs or {}).get('controllable'):
-                stop.append('uncontrollable')
+                forced.append('uncontrollable')
             elif story_input(self.last_obs or {}) == 'tutorial':
-                stop.append('controllable')
+                forced.append('controllable')
+        stop = self._stop_list(stop_on or plan.stop_on, forced)
         frames = self._check_plan(plan)
         pre_notes: list[str] = []
         if plan.retry and self.cfg.pause_limit:
@@ -480,7 +491,7 @@ class GameSession:
                     record["error"] = "重算程序没有改动计划文件"
                     break
                 frames = self._check_plan(new_plan)
-                new_stop = self._stop_list(stop_on or new_plan.stop_on)
+                new_stop = self._stop_list(stop_on or new_plan.stop_on, forced)
             except ActError as err:
                 record["error"] = f"重算后的计划不合法：{err}"
                 break
@@ -488,12 +499,12 @@ class GameSession:
             plan, stop = replace(new_plan, retry=retry), new_stop
         return ActOutcome(result, obs, image, total_game_s, total_auto, notes, attempts)
 
-    def _stop_list(self, stop_on: list[str] | None) -> list[str]:
+    def _stop_list(self, stop_on: list[str] | None, forced: list[str] = ()) -> list[str]:
         stop = list(stop_on) if stop_on else list(DEFAULT_STOP_ON)
         bad = [s for s in stop if s not in VALID_STOP_ON]
         if bad:
             raise ActError(f"未知的截断条件 {bad}；可用：{sorted(VALID_STOP_ON)}")
-        for must in ("death", "complete"):
+        for must in ("death", "complete", *forced):
             if must not in stop:
                 stop.append(must)
         return stop
@@ -527,6 +538,7 @@ class GameSession:
         with self.lock:
             if self.goals.stop_motion.is_set():
                 raise ActError("已请求停止，本次动作未执行")
+            resumed = self._resume_auto_handling() if attempt == 0 else []
             t0 = time.monotonic()
             reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
                                      scope="room", fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
@@ -544,7 +556,7 @@ class GameSession:
             self.metrics.add(play_game_s=game_s, frames_played=result["consumed"],
                              decisions=1 if attempt == 0 else 0)
 
-            auto_frames, notes = 0, []
+            auto_frames, notes = 0, list(resumed)
             if not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
                     or story_pending(obs)):
                 obs, image, auto_frames, notes = self._auto_advance(obs, image)
@@ -578,6 +590,29 @@ class GameSession:
 
     # ---- 非可控段：按剧情模式交接，自动处理转场、死亡与重生 ----
 
+    def _resume_auto_handling(self) -> list[str]:
+        """（调用方持有连接锁）自动跳过剧情时，上一次的自动推进可能被用户暂停打断，游戏停在转场、剧情或对白中途：
+        先接着自动推进到可操作，再执行智能体的按键，不把按键落在剧情上。推进后仍不可操作（又被暂停）就不执行这次动作。"""
+        last = self.last_obs or {}
+        if self.cfg.cutscene_mode != 'auto' or not last or last.get('controllable'):
+            return []
+        obs = enrich_obs(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
+        if obs.get('scene') != 'Level' or obs.get('controllable'):
+            return []
+        obs, _, _, notes = self._auto_advance(obs, None)
+        self.last_obs = obs
+        if self.done:
+            raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
+        if self.chapter_finished:
+            if not self.goals.stop_motion.is_set():
+                self.last_obs, _, more = self._enter_next_chapter()
+                notes = [*notes, *more]
+            raise ActError('执行前主控接着推进了上次被打断的转场或剧情，章节已通关：' + '；'.join(map(str, notes))
+                           + '。这次动作没有执行，请先 observe 再操作。')
+        if not obs.get('controllable'):
+            raise ActError('游戏还在转场或剧情中，主控的自动推进被打断（' + '；'.join(map(str, notes)) + '），这次动作没有执行；稍后再试')
+        return ['执行前，主控先接着自动推进了上次被打断的转场或剧情', *notes]
+
     def _auto_advance(self, obs: dict, image: str | None):
         """非可控段一律按正常速度推进（与原版一致，录像里不快进）。
         auto模式跳过剧情；agent模式只在实际输入节点或恢复角色控制时交回。"""
@@ -601,6 +636,7 @@ class GameSession:
                 if not history or entry != history[-1]:
                     history.append(entry)
         skip_tries = 0  # 本段剧情已尝试跳过的次数
+        menu_closes = 0  # 自动跳过剧情时关掉残留暂停菜单的次数
         self.metrics.update(status="auto")
         self._before_advance()
         t0 = time.monotonic()
@@ -620,6 +656,14 @@ class GameSession:
                 notes.append('用户已暂停，主控停止自动播放。')
                 break
             if (obs.get('level') or {}).get('paused') or obs.get('pauseMenu'):
+                if self.cfg.cutscene_mode == 'auto' and menu_closes < 3:
+                    # 自动跳过剧情时暂停菜单只会是跳过剧情留下的（智能体按不了暂停键）：关掉后接着推进
+                    menu_closes += 1
+                    reply = self.client.call("step", inputs=["1,B", "20"], stop_on=[], speed=self.cfg.auto_speed,
+                                             image=False, entities=False, tiles=False)
+                    log_step(["1,B", "20"], reply["result"])
+                    obs = reply["obs"]
+                    continue
                 notes.append('游戏暂停菜单已打开，主控停止自动播放。')
                 break
             scene = obs.get("scene")
@@ -809,20 +853,23 @@ class GameSession:
             return obs,reply.get('image'),info
 
     def stop_run(self, reason: str) -> dict:
-        """End a blocked run without pretending completion or navigating the game."""
-        reason = reason.strip()
+        """智能体报告任务阻塞：不算通关、不操作游戏，主控把试玩暂停（游戏保持冻结），等用户处理后继续或停止。
+        暂停由 HUD 控制器提供（request_pause）；没有控制器时（例如测试）只记下报告。"""
+        reason = " ".join((reason or "").split())
         if not reason:
-            raise ActError('停止试玩必须说明阻塞原因')
+            raise ActError('报告任务阻塞必须说明原因')
+        if len(reason) > 200:
+            raise ActError('阻塞原因请压缩到 200 字以内')
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
                 raise ActError('本次试玩已结束或正在按目标收尾')
-            self.end_scene = (self.last_obs or {}).get('scene')
-            self.chapter_queue = []
-            self.agent_stop = {'reason': reason, 'source': 'agent'}
+            reports = list((self.agent_stop or {}).get('reports') or [])
+            reports.append({'reason': reason, 'wall': time.time(), 'decision': self.decision_index})
+            self.agent_stop = {'reason': reason, 'source': 'agent', 'reports': reports}
             (self.run_dir/'agent_stop.json').write_text(json.dumps(self.agent_stop,ensure_ascii=False,indent=2),encoding='utf-8')
-            self._mark_done('任务阻塞：' + reason)
-            self.metrics.update(status='stopped')
-            return {**self.agent_stop, 'finished': True, 'completed': False}
+        pause = getattr(self, 'request_pause', None)
+        paused = bool(pause and pause(reason))
+        return {'reason': reason, 'source': 'agent', 'paused': paused, 'finished': False, 'completed': False}
 
     def exit_level(self, reason: str) -> dict:
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 120:

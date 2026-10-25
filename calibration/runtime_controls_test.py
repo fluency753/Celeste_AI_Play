@@ -96,6 +96,19 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.runner.paused)
         self.assertEqual(self.action(ident)['status'], 'submitted')
 
+    async def test_agent_blockage_report_pauses_until_user_resumes(self):
+        # stop_run 报告任务阻塞：与 HUD 暂停相同（游戏工具被挡住、游戏保持冻结），用户点继续后恢复
+        self.assertTrue(self.session.request_pause('桥接持续报错'))
+        self.assertTrue(self.runner.paused)
+        self.assertEqual(self.metrics.state.status, 'paused')
+        self.assertIn('暂停', self.runner._game_guard())
+        self.assertFalse(self.session.done)
+        ident = self.runner.control.enqueue('resume')
+        self.controls()
+        await self.until(lambda: self.action(ident)['status'] == 'submitted')
+        self.assertFalse(self.runner.paused)
+        self.assertIsNone(self.runner._game_guard())
+
     async def test_pause_waits_for_mcp_call_then_blocks_next_simulation(self):
         entered, release = threading.Event(), threading.Event()
         def simulate(data):

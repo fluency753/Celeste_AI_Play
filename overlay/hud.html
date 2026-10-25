@@ -240,7 +240,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 53;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 54;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -366,8 +366,12 @@ async function poll() {
     if (!config || JSON.stringify(config) !== JSON.stringify(data.config)) { config = data.config; applyColors(); applyObsLayout(); }
     // 切换会话或数据暂时不可用时保留上次画面，避免整个卡片闪空。
     if (data.metrics) state = data.metrics;
+    // 新的思考语句一出现就取一次历史（不等 0.75 秒一次的轮询）：动作开始前只等 thought_lead_s（默认 0.4 秒）
+    const thoughtKey = state ? JSON.stringify([state.thought, state.thought_updated_wall]) : null;
+    if (thoughtKey !== lastThoughtKey) { lastThoughtKey = thoughtKey; pollHistory(); }
   } catch (e) { /* 主控未启动时保持上一帧 */ }
 }
+let lastThoughtKey = null, historyInflight = false;
 
 function thoughtEntry(item) {
   const entry = document.createElement("div");
@@ -427,6 +431,8 @@ function applyThoughts(first) {
 }
 
 async function pollHistory() {
+  if (historyInflight) return;
+  historyInflight = true;
   try {
     const url = historyEndpoint || (config && config.history_url) || STATE_URL.replace(/\/state$/, "/history");
     let response = await fetch(url, {cache: "no-store"});
@@ -446,6 +452,7 @@ async function pollHistory() {
     applyThoughts(first);
     historyReady = items.length > 0; historyRun = data.run;
   } catch (error) { /* 历史服务短暂离线时保留已有内容 */ }
+  finally { historyInflight = false; }
 }
 
 $("thought").addEventListener("scroll", () => {

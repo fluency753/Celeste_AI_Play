@@ -24,8 +24,11 @@ internal static class StoryText {
                 return DialogueReady(box) ? "dialogue" : null;
             var tutorial = level.Entities.FindFirst<BirdTutorialGui>();
             var player = level.Entities.FindFirst<Player>();
+            // Only a tutorial that a cutscene is waiting on is an input node. Ambient birds (1A climbing)
+            // stay open during respawn and room transitions, when the player is briefly not controllable.
             if (tutorial is { Visible: true, Open: true, Scale: >= 0.999f } && tutorial.controls.Count > 0
-                && player != null && !PlayerControl.IsControllable(level, player))
+                && player != null && !PlayerControl.IsControllable(level, player)
+                && (level.InCutscene || player.StateMachine.State == Player.StDummy))
                 return "tutorial";
         } else if (scene is LevelEnter enter && enter.postcard is { Visible: true, alpha: >= 0.999f, buttonEase: > 0f }) {
             return "postcard";

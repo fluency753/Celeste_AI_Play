@@ -18,7 +18,7 @@ TOOL_NOTES = {
     "act": "推进若干帧",
     "narrate": "思考期间更新观众看到的思考，不推进游戏",
     "set_effort": "调整你自己的推理强度",
-    "stop_run": "任务阻塞时说明原因，请求主控停止试玩并保存录像、释放游戏",
+    "stop_run": "任务阻塞时说明原因报告给用户，主控暂停试玩等用户处理",
     "exit_level": "用户要求退出时保存并退出关卡",
     "cutscene": "在主控交回的输入节点推进、选择或跳过剧情",
     "simulate": "花模拟体力预测短路线",
@@ -195,7 +195,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
         from .sim_assist import AssistRules
         parts.append(PromptPart("有限模拟辅助（开了限额预测时自动加）",
                                 AssistRules.of(cfg).instructions().lstrip("\n"), None, "\n\n"))
-    parts.append(PromptPart("任务阻塞处理", "任务因工具故障、缺少必要能力等无法继续时，调用 stop_run(reason=明确的阻塞原因)，请求主控停止本次试玩并保存录像、释放游戏，然后结束本轮等待用户。不要无限重试失败工具，也不要把阻塞当作通关；普通死亡和仍可尝试的难点继续正常游玩。", None, "\n\n"))
+    parts.append(PromptPart("任务阻塞处理", "任务因工具故障、缺少必要能力等无法继续时，调用 stop_run(reason=明确的阻塞原因) 报告给用户：主控暂停试玩、游戏保持冻结，由用户决定继续还是停止；然后结束本轮等待用户。不要无限重试失败工具，也不要把阻塞当作通关；普通死亡和仍可尝试的难点继续正常游玩。", None, "\n\n"))
     for part in parts:
         part.text = fill(part.text, cfg)
     return parts

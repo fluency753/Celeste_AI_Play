@@ -47,6 +47,7 @@ class SessionControls:
         self.heartbeat_task, self.pausing = None, False
         if self.session is not None:
             self.session.control_guard = self._game_guard
+            self.session.request_pause = self._agent_pause
             self.session.program_guard = self._program_guard
             self.session.effort_policy = self._agent_effort_policy
             self.session.effort_levels = lambda: self._effort_status()['effort_levels'] or []
@@ -79,6 +80,18 @@ class SessionControls:
         if self.stop_requested and not self.chat_only:
             return '用户已中断本次运行，不能再执行游戏操作。'
         return None
+
+    def _agent_pause(self, reason):
+        """智能体用 stop_run 报告任务阻塞（在工具线程里调用）：与用户在 HUD 暂停相同，试玩暂停、游戏保持冻结，
+        由用户在 HUD 继续或停止；只是不打断当前轮（工具结果已让智能体结束本轮）。"""
+        if getattr(self, 'prepare_only', False) or self.chat_only:
+            return False
+        self.paused = True
+        if self.pause_at is None:
+            self.pause_at = time.monotonic()
+            self.metrics.pause()
+        self.metrics.update(status='paused')
+        return True
 
     def _program_guard(self):
         # Preparation can organize notes in the sandbox; the MCP game gate is
@@ -159,6 +172,8 @@ class SessionControls:
                         elif row['kind']=='cutscene_mode':
                             if row['text'] == 'agent' and not getattr(self.session, 'cutscene_tool', True):
                                 raise ValueError('本次运行没有开放剧情工具，剧情由主控自动跳过')
+                            if row['text'] == 'agent' and not getattr(self.session, 'story_input_supported', True):
+                                raise ValueError('剧情交给智能体需要桥接 Mod 1.0.4 或更新版本（按输入节点交接剧情），请更新桥接后重启游戏')
                             self.cfg.cutscene_mode=row['text']
                             self.control.set_cutscene_mode(row['text'])
                             self.control.mark(row['id'],'submitted','剧情模式已更新，当前菜单操作完成后生效')

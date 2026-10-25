@@ -71,7 +71,9 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
             if elsewhere and (obs.get("controllable") or level.get("paused")):
                 obs = leave_level_by_pause_menu(c)  # 在别的存档或别的章节里：先返回地图
                 continue
-            if obs.get("controllable"):
+            # 桥接 1.0.3 起"可操作"只看角色的真实状态，剧情刚开始的几帧也算可操作：自动跳过剧情时先试着跳过再交出
+            if obs.get("controllable") and (cutscene_mode == 'agent' or not level.get("inCutscene")
+                                            or level.get("skippingCutscene") or level["room"] in tried_skip):
                 return obs
             if level["inCutscene"] and not level["skippingCutscene"] and level["room"] not in tried_skip:
                 tried_skip.add(level["room"])

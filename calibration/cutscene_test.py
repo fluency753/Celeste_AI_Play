@@ -48,19 +48,24 @@ class CutsceneTests(unittest.TestCase):
         self.s.client=SceneClient(dialog());self.s.last_obs=dialog()
     def tearDown(self):self.s.close();self.temp.cleanup()
 
-    def test_stop_run_reports_blockage_without_game_inputs_or_completion(self):
+    def test_stop_run_reports_blockage_and_pauses_without_ending(self):
         import asyncio,json
         from orchestrator.server import build_server
-        self.s.control_guard=lambda: '用户已暂停'
+        self.s.control_guard=lambda: '用户已暂停试玩，不能执行游戏操作。'
+        self.s.request_pause=Mock(return_value=True)
         server=build_server(self.s,study=Mock(ready=Mock(return_value=False)))
         result=asyncio.run(server.call_tool('stop_run',{'reason':'游戏动作持续报桥接协议错误'}))
-        self.assertIn('主控已接受',result.content[0].text)
-        self.assertTrue(self.s.done)
+        self.assertIn('主控已把试玩暂停',result.content[0].text)
+        self.s.request_pause.assert_called_once_with('游戏动作持续报桥接协议错误')
+        self.assertFalse(self.s.done)                      # 不结束运行：游戏保持冻结，等用户继续或停止
         self.assertFalse(self.s.user_stopped)
-        self.assertIn('协议错误',self.s.done_reason)
         self.assertEqual(self.s.client.steps,[])
-        self.assertEqual(json.loads((self.path/'agent_stop.json').read_text(encoding='utf-8'))['source'],'agent')
-        with self.assertRaises(ActError):self.s.act(['1,R'],'继续移动',None)
+        report=json.loads((self.path/'agent_stop.json').read_text(encoding='utf-8'))
+        self.assertEqual((report['source'],len(report['reports'])),('agent',1))
+        blocked=asyncio.run(server.call_tool('act',{'inputs':['1,R'],'thought':'继续移动'}))
+        self.assertIn('用户已暂停',blocked.content[0].text)  # 暂停期间游戏工具不执行
+        self.assertEqual(self.s.client.steps,[])
+        with self.assertRaises(ActError):self.s.stop_run('原因'*150)   # 原因限 200 字
 
     def test_stop_run_requires_reason_and_preserves_existing_completion(self):
         with self.assertRaises(ActError):self.s.stop_run('  ')
@@ -165,6 +170,16 @@ class CutsceneTests(unittest.TestCase):
             self.assertEqual(enter_save(client,'player',chapter=0,save_slot=1,cutscene_mode='agent'),obs)
         skip.assert_not_called();step.assert_not_called()
 
+    def test_auto_entry_skips_cutscene_that_starts_while_player_state_is_normal(self):
+        # 桥接 1.0.3 起剧情的头几帧也算可操作：自动跳过剧情时，进章节先跳过剧情，再交给智能体
+        start={'scene':'Level','controllable':True,'save':{'name':'player','slot':1},
+               'level':{'sid':'Celeste/2-OldSite','room':'start','inCutscene':True,'skippingCutscene':False}}
+        end=copy.deepcopy(start);end['level']['inCutscene']=False
+        client=Mock();client.call.return_value={'obs':start}
+        with patch('tools.enter_save.skip_by_pause_menu',return_value=(True,end,0,'skipped')) as skip:
+            self.assertEqual(enter_save(client,'player',chapter=2,save_slot=1,cutscene_mode='auto'),end)
+        skip.assert_called_once()
+
     def test_session_connect_accepts_intro_only_in_agent_mode(self):
         client=SceneClient({'scene':'IntroVignette','save':{'name':'player','slot':1}})
         self.s.cfg.chapter=0;self.s.cfg.save_slot=1
@@ -261,6 +276,47 @@ class StoryFlowTests(unittest.TestCase):
         with patch('orchestrator.game_session.skip_by_pause_menu',return_value=(True,end,0,'skipped')) as skip:
             self.s._auto_advance(obs,None)
         skip.assert_called_once()
+
+    def test_auto_mode_does_not_reject_act_at_dialogue_node(self):
+        # 自动跳过剧情（速通、非直播时没有剧情工具）：停在对白上时不拒绝 act，由主控接着自动推进
+        self.s.cfg.cutscene_mode='auto';self.s.last_obs=dialog()
+        with patch.object(self.s,'_execute',return_value=({'stop':'done','consumed':1,'planned':1},self.s.last_obs,None,0,0,[])) as execute:
+            self.s.act(['1,R'],'继续移动',None)
+        execute.assert_called_once()
+
+    def test_auto_mode_resumes_interrupted_story_before_agent_inputs(self):
+        self.s.cfg.cutscene_mode='auto';self.s.last_obs=dialog()
+        with patch('orchestrator.game_session.skip_by_pause_menu',return_value=(False,dialog(),0,'no_skip')):
+            notes=self.s._resume_auto_handling()
+        self.assertEqual(self.s.client.steps[-1],['1,C','29'])   # 主控确认对白，没有落下智能体的按键
+        self.assertTrue(self.s.last_obs['controllable'])
+        self.assertIn('执行前',notes[0])
+
+    def test_auto_mode_does_not_run_inputs_when_paused_again(self):
+        self.s.cfg.cutscene_mode='auto';self.s.last_obs=dialog()
+        self.s.control_guard=lambda:'用户已暂停'
+        with self.assertRaisesRegex(ActError,'没有执行'):
+            self.s._resume_auto_handling()
+        self.assertEqual(self.s.client.steps,[])
+
+    def test_auto_mode_closes_leftover_pause_menu(self):
+        self.s.cfg.cutscene_mode='auto'
+        obs=dialog();obs['level'].update(dialogWaiting=False,dialogOpen=False,inCutscene=False,paused=True);obs['storyInput']=None
+        class Menu(SceneClient):
+            def call(self,cmd,**args):
+                reply=super().call(cmd,**args)
+                if cmd=='step' and any(',B' in x for x in args['inputs']):
+                    self.obs['level']['paused']=False;self.obs['controllable']=True
+                    reply['obs']=copy.deepcopy(self.obs)
+                return reply
+        self.s.client=Menu(obs)
+        result=self.s._auto_advance(obs,None)
+        self.assertEqual(self.s.client.steps,[['1,B','20']])
+        self.assertTrue(result[0]['controllable'])
+
+    def test_agent_mode_observe_returns_host_notes(self):
+        obs,_=self.s.observe()
+        self.assertTrue(any('advance' in n for n in self.s.observe_notes))
 
     def test_native_pause_menu_does_not_get_neutral_frames(self):
         obs=dialog();obs['level'].update(dialogWaiting=False,paused=True);obs['storyInput']=None
