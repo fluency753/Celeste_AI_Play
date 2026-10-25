@@ -40,6 +40,7 @@ MAX_RETRY_TIMEOUT_S = 60.0
 # 思考僵直（探索模式 --stiffness）：冻结期间的思考与工具时间按比例变成下一次 act 前的僵直，期间保持上一帧的按键
 STIFF_STOP_ON = ["death", "room", "complete", "uncontrollable"]   # 死亡（立即松开所有按键）、换房间、通关、进入剧情时僵直结束，这次的按键不执行
 STIFF_MAX_FRAMES = 60 * 60 * 10                 # 与桥接单次推进的上限相同
+TAS_HELD_LETTERS = set("LRUDJKXCZVGH")          # TAS 格式里可以"按住"的游玩按键（暂停 S、重试 Q、日志 N、确认 O 不算）
 
 
 def held_keys(inputs, consumed: int) -> str | None:
@@ -264,10 +265,10 @@ class GameSession:
         self.entry_guard_supported = self.client.call('hello').get('entry_guard') is True
         self.client.step_options = self._step_options
         self.client.after_step = self._remember_held_input
-        self._restore_held_input()
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
         reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music)
         obs = reply["obs"]
+        self._restore_held_input(obs.get("frame"))
         self.story_input_supported = 'storyInput' in obs   # 桥接 1.0.3 起才有；中途把剧情切给智能体时也要检查
         if not self.cfg.checkpoints:       # 没有 configs/checkpoints.json：用桥接的检查点表（控制台按段调整要用）
             try:
@@ -334,28 +335,40 @@ class GameSession:
         if keys is None:
             return
         fmt = args.get("input_format") or "celeste_ai"
-        if ((reply or {}).get("obs") or {}).get("scene", "Level") != "Level":
-            keys, fmt = "", "celeste_ai"
+        obs = (reply or {}).get("obs") or {}
+        # 与 expand_inputs 一样规范写法（"+" 分隔、大小写），再只留游玩按键
+        tokens = [k.strip().upper() for k in keys.replace("+", ",").split(",") if k.strip()]
+        if obs.get("scene", "Level") != "Level":
+            tokens, fmt = [], "celeste_ai"
         elif fmt == "celeste_ai":
-            keys = ",".join(k for k in keys.split(",") if k.startswith("A:") or set(k) <= AGENT_LETTERS)
-        held = (keys, fmt)
-        if held != getattr(self, "_held_input", None):
-            self._held_input = held
-            try:
-                (self.run_dir / "held_input.json").write_text(json.dumps({"keys": keys, "input_format": fmt}), encoding="utf-8")
-            except OSError:
-                pass
+            tokens = [k for k in tokens if k.startswith("A:") or set(k) <= AGENT_LETTERS]
+        else:
+            tokens = [k for k in tokens if set(k) <= TAS_HELD_LETTERS]
+        self._set_held_input((",".join(tokens), fmt), obs.get("frame"))
 
-    def _restore_held_input(self) -> None:
-        """续跑：接上上一段运行最后按住的键（保持冻结结束时桥接仍按着它）。"""
+    def _set_held_input(self, held: tuple[str, str], frame) -> None:
+        """记下并存进运行目录（带当时的帧号，续跑时用来确认游戏停在同一帧）。"""
+        self._held_input = held
+        try:
+            (self.run_dir / "held_input.json").write_text(
+                json.dumps({"keys": held[0], "input_format": held[1], "frame": frame}), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _restore_held_input(self, frame) -> None:
+        """续跑：上一段运行保持冻结结束、游戏还停在它最后推进到的那一帧时，接上那时按住的键（桥接仍按着它）。
+        交还过控制、或续跑前主控用菜单宏推进过游戏时帧号对不上，按空帧算。"""
         previous = getattr(getattr(getattr(self, "metrics", None), "state", None), "resumed_from", None)
         if not previous:
             return
         try:
+            summary = json.loads((Path(previous) / "summary.json").read_text(encoding="utf-8"))
             data = json.loads((Path(previous) / "held_input.json").read_text(encoding="utf-8"))
-            self._held_input = (str(data.get("keys") or ""), str(data.get("input_format") or "celeste_ai"))
-        except (OSError, ValueError, AttributeError):
-            pass
+        except (OSError, ValueError):
+            return
+        if summary.get("game_released") is not False or data.get("frame") is None or data.get("frame") != frame:
+            return
+        self._set_held_input((str(data.get("keys") or ""), str(data.get("input_format") or "celeste_ai")), frame)
 
     def stiffness_enabled(self) -> bool:
         return bool(getattr(self.cfg, "stiffness", False)) and is_explore(self.cfg)
@@ -401,7 +414,7 @@ class GameSession:
             return {}
         spent = f"这次冻结思考 {minutes_text(stats.get('think_s', 0))}、运行工具 {minutes_text(stats.get('tool_s', 0))}"
         if stats["frames"] <= 0:
-            return {"note": f"思考僵直：{spent}，都没满 {self._unit_text()}，这次不僵直。"}
+            return {"note": f"思考僵直：{spent}，按规则这次不僵直（思考、工具时间各自满 {self._unit_text()}才计）。"}
         last = self.last_obs or {}
         if last.get("scene") != "Level" or not last.get("controllable") or story_pending(last):
             self._start_freeze()

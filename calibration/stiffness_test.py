@@ -228,25 +228,40 @@ class StiffnessReviewTests(unittest.TestCase):
         self.assertNotIn(["20,J"], [step["inputs"] for step in self.s.client.steps])
         self.assertEqual(len(outcome.attempts), 1)
 
-    def test_held_input_ignores_menu_keys_and_other_scenes_and_survives_resume(self):
-        level = {"result": {"consumed": 6}, "obs": {"scene": "Level"}}
-        self.s._remember_held_input({"inputs": ["6,R,G"]}, level)
-        self.assertEqual(self.s._held_input, ("R,G", "celeste_ai"))
-        self.s._remember_held_input({"inputs": ["1,C"]}, {"result": {"consumed": 1}, "obs": {"scene": "Level"}})
-        self.assertEqual(self.s._held_input, ("", "celeste_ai"))       # 确认键不算按住
-        self.s._remember_held_input({"inputs": ["3,A:45,J"]}, {"result": {"consumed": 3}, "obs": {"scene": "Level"}})
-        self.assertEqual(self.s._held_input, ("A:45,J", "celeste_ai"))
-        self.s._remember_held_input({"inputs": ["10,R"]}, {"result": {"consumed": 10}, "obs": {"scene": "Overworld"}})
-        self.assertEqual(self.s._held_input, ("", "celeste_ai"))       # 关卡以外按空帧算
-        self.s._remember_held_input({"inputs": ["6,R,G"]}, level)
-        later = self.root / "later"
-        later.mkdir()
+    def test_held_input_ignores_menu_keys_and_other_scenes(self):
+        def step(inputs, consumed, scene="Level", fmt=None):
+            args = {"inputs": inputs, **({"input_format": fmt} if fmt else {})}
+            self.s._remember_held_input(args, {"result": {"consumed": consumed}, "obs": {"scene": scene, "frame": 7}})
+            return self.s._held_input
+        self.assertEqual(step(["6,R,G"], 6), ("R,G", "celeste_ai"))
+        self.assertEqual(step(["10,R+G"], 10), ("R,G", "celeste_ai"))      # 与 expand_inputs 一样的写法
+        self.assertEqual(step(["10,r,g"], 10), ("R,G", "celeste_ai"))
+        self.assertEqual(step(["10,a:45,j"], 10), ("A:45,J", "celeste_ai"))
+        self.assertEqual(step(["1,C"], 1), ("", "celeste_ai"))             # 确认键不算按住
+        self.assertEqual(step(["10,R"], 10, scene="Overworld"), ("", "celeste_ai"))   # 关卡以外按空帧算
+        self.assertEqual(step(["4,R,S,Q,O,C"], 4, fmt="celeste_tas"), ("R,C", "celeste_tas"))  # TAS 的 C 是第二冲刺
+        saved = json.loads((self.root / "held_input.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved, {"keys": "R,C", "input_format": "celeste_tas", "frame": 7})
+
+    def resumed_session(self, released, frame):
+        self.s._remember_held_input({"inputs": ["6,R,G"]}, {"result": {"consumed": 6}, "obs": {"scene": "Level", "frame": 500}})
+        (self.root / "summary.json").write_text(json.dumps({"game_released": released}), encoding="utf-8")
+        later = Path(tempfile.mkdtemp(dir=self.root))
         metrics = Metrics(later / "metrics.json", "test", "test", "high", 600)
         metrics.state.resumed_from = str(self.root)
         resumed = GameSession(self.cfg, later, metrics)
         self.addCleanup(resumed.close)
-        resumed._restore_held_input()
+        resumed._restore_held_input(frame)
+        return resumed, later
+
+    def test_resume_restores_held_keys_only_when_still_frozen_on_the_same_frame(self):
+        resumed, later = self.resumed_session(False, 500)
         self.assertEqual(resumed._held_input, ("R,G", "celeste_ai"))
+        self.assertEqual(json.loads((later / "held_input.json").read_text(encoding="utf-8"))["keys"], "R,G")  # 立即接着存
+        for released, frame in ((True, 500), (False, 530)):       # 交还过控制；续跑前菜单宏推进过
+            with self.subTest(released=released, frame=frame):
+                resumed, _ = self.resumed_session(released, frame)
+                self.assertEqual(resumed._held_input, ("", "celeste_ai"))
 
     def test_bridge_refusal_does_not_block_every_later_act(self):
         self.s._freeze_base = (0.0, 0.0, 0.0)
@@ -369,5 +384,5 @@ class StiffnessToolTextTests(unittest.TestCase):
         self.assertNotIn("目前不会僵直", text)     # act 的结果不再附上刚重置的冻结
         counters[:] = [160.0, 310.0, 0.0]
         text = asyncio.run(server.call_tool("act", {"inputs": ["5,R"], "thought": "往右走"})).content[-1].text
-        self.assertIn("都没满 2.5 分钟，这次不僵直", text)       # 没到门槛也告诉智能体这次冻结的时间
+        self.assertIn("按规则这次不僵直（思考、工具时间各自满 2.5 分钟才计）", text)   # 没到门槛也告诉智能体这次冻结的时间
         self.assertEqual(session.client.steps[0]["inputs"], ["90"])
