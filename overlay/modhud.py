@@ -338,10 +338,16 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     pending_text = f"→ {effort_names.get(pending, pending)}" if pending and pending != effort else ""
     effort_color = colors.get("effort_high", "#F5B841") if level >= 3 else colors.get("effort", "#7FA6F5")
 
-    thinking = m.get("thinking_s") or 0
+    # 进入新的一章后各项从 0 起算（知识库、上下文与压缩次数不清零）：显示 累计值 − 进入本章时的值
+    base = m.get("chapter_base") or {}
+
+    def since(key):
+        return max(0, (m.get(key) or 0) - (base.get(key) or 0))
+
+    thinking = since("thinking_s")
     if counting and not ended and m.get("status") in ("thinking", "compacting") and (m.get("thinking_since_wall") or 0) > 0:
         thinking += max(0.0, now - m["thinking_since_wall"])
-    tool = m.get("tool_s") or 0
+    tool = since("tool_s")
     if counting and not ended and m.get("status") == "tool" and (m.get("thinking_since_wall") or 0) > 0:
         tool += max(0.0, now - m["thinking_since_wall"])
     if m.get("status") == "retrying" and (m.get("phase_since_wall") or 0) > 0:
@@ -360,10 +366,10 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     stats = [
         ("思考", clock(thinking), ""), ("上下文", tokens_text(ctx), "warn" if ctx / limit >= 0.9 else ""),
         ("工具", clock(tool), ""), ("压缩", str(m.get("compactions") or 0), ""),
-        ("知识库读取", clock(study) if studied else "—", "" if studied else "dim"), ("死亡", f"{m.get('deaths') or 0} 次", ""),
+        ("知识库读取", clock(study) if studied else "—", "" if studied else "dim"), ("死亡", f"{since('deaths')} 次", ""),
     ]
     if m.get("sim_stats", True):             # 探索模式关掉限额预测时智能体不能推演，这几栏不显示
-        stats += [("模拟器调用", f"{m.get('sim_calls') or 0} 次", ""), ("推演路径", runs_text, ""),
+        stats += [("模拟器调用", f"{since('sim_calls')} 次", ""), ("推演路径", runs_text, ""),
                   ("推演最速", f"{best / 60:.3f}s" if best > 0 else "—", "" if best > 0 else "dim")]
     energy = m.get("sim_energy")
     if energy is not None and m.get("sim_stats", True):   # 探索模式的限额短路线预测：只显示余额 / 上限（规则说明不上 HUD）
@@ -396,7 +402,7 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
         effort=effort_names.get(effort, effort) if level >= 0 else None, effort_level=level,
         effort_pending=pending_text, effort_color=effort_color, stats=tuple(stats), tool_call=call,
         history=tuple(entries), meta=meta,
-        timer_base=int(m.get("completed_ticks") or 0), timer_extra=int(m.get("chapter_time_ticks") or 0),
+        timer_base=0 if base else int(m.get("completed_ticks") or 0), timer_extra=int(m.get("chapter_time_ticks") or 0),
         timer_live=not chapter_done)
 
 

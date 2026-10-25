@@ -91,6 +91,7 @@ class MetricsState:
     chapter_time_ticks: int = 0
     completed_ticks: int = 0          # 本次运行里已经通关的章节的计时之和（依次通关多章时，总计时 = 它 + 当前章节计时）
     splits: list | None = None        # 已完成各截的成绩：[{"chapter": sid, "ticks": n, "deaths": n}, ...]；按段通关时另有 from/to（起止检查点，to 为 null = 通关）
+    chapter_base: dict | None = None  # 进入当前章节那一刻的各项累计值（HUD 显示本章的值 = 累计值 − 它）；None = 还没换过章
     piece_done: bool | None = None    # 当前这一截已完成、成绩已计入 completed_ticks（换到下一截之前，HUD 不再把当前计时加进总计时）
     dashes: int = 0
     max_dashes: int = 0
@@ -343,7 +344,11 @@ class Metrics:
                 "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "context_tokens",
                 "effort_pending", "effort_changes", "effort_log", "pause_denials", "plan_rounds_used", "replays", "replay_s", "replay_act_s",
-                "sim_calls", "sim_rollouts", "tool_calls", "context_window")
+                "sim_calls", "sim_rollouts", "tool_calls", "context_window", "chapter_base")
+    # 进入新的一章时 HUD 清零的累计值（知识库、上下文与压缩次数不清零；章节计时本来就从 0 开始）
+    CHAPTER_COUNTERS = ("thinking_s", "tool_s", "deaths", "decisions", "tool_calls", "sim_calls", "sim_rollouts",
+                        "retries", "frames_played", "frames_auto", "play_game_s", "auto_game_s", "narrates",
+                        "output_tokens", "thinking_tokens", "replays", "replay_s", "elapsed_s")
 
     def restore(self, previous: dict, resumed_from: str) -> None:
         """续跑：接着上一段运行的统计累计（现实用时从上一段的值接着走）。"""
@@ -372,6 +377,12 @@ class Metrics:
                 self.state.phase_since_wall = now
             if "chapter_time_ticks" in changes and changes["chapter_time_ticks"] != self.state.chapter_time_ticks:
                 self.state.chapter_time_wall = now
+            new_chapter = changes.get("chapter")
+            if new_chapter and self.state.chapter and new_chapter != self.state.chapter:
+                # 进入新的一章：记下这一刻的累计值，HUD 从这里起显示本章的值（统计与总结仍是整次运行的累计）
+                self.state.elapsed_s = self.elapsed()
+                self.state.chapter_base = {"chapter": new_chapter,
+                                           **{k: getattr(self.state, k) for k in self.CHAPTER_COUNTERS}}
             for key, value in changes.items():
                 setattr(self.state, key, value)
             self._write_locked()

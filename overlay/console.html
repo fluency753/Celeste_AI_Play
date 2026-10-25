@@ -1360,16 +1360,18 @@ function renderRun(m) {
   const chapter = (cfg.chapters || {})[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
   $("runWhere").replaceChildren(document.createTextNode(chapter || ""), Object.assign(document.createElement("small"), { textContent: m.room || "" }));
   const done = m.piece_done != null ? !!m.piece_done : (m.splits || []).some(s => s.chapter === m.chapter);
-  const ticks = (m.completed_ticks || 0) + (done ? 0 : (m.chapter_time_ticks || 0));
+  const base = m.chapter_base || {};       // 进入新的一章后从 0 起算（与 HUD 相同）
+  const since = (key) => Math.max(0, (m[key] || 0) - (base[key] || 0));
+  const ticks = m.chapter_base ? (m.chapter_time_ticks || 0) : (m.completed_ticks || 0) + (done ? 0 : (m.chapter_time_ticks || 0));
   const t = ticksText(ticks);
   $("runClock").replaceChildren(document.createTextNode(t.slice(0, -4)), Object.assign(document.createElement("small"), { textContent: t.slice(-4) }));
   $("runMode").textContent = [m.play_mode, m.hud_mod ? "游戏内 HUD" : "网页 HUD"].filter(Boolean).join(" · ");
   const now = Date.now() / 1000 + ((ui.hud.now || Date.now() / 1000) - Date.now() / 1000);
-  let thinking = m.thinking_s || 0, tool = m.tool_s || 0;
+  let thinking = since("thinking_s"), tool = since("tool_s");
   if (["thinking", "compacting"].includes(m.status) && m.thinking_since_wall > 0) thinking += Math.max(0, now - m.thinking_since_wall);
   if (m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
-  $("mDeaths").textContent = m.deaths || 0;
-  $("mDecisions").textContent = m.decisions || 0;
+  $("mDeaths").textContent = since("deaths");
+  $("mDecisions").textContent = since("decisions");
   $("mEffort").textContent = m.effort_pending && m.effort_pending !== m.effort ? `${m.effort} → ${m.effort_pending}` : (m.effort || "—");
   $("mThinking").textContent = clock(thinking);
   $("mTool").textContent = clock(tool);

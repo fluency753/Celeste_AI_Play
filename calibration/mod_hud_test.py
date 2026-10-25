@@ -47,6 +47,34 @@ class ViewModelTests(unittest.TestCase):
         self.assertTrue(vm.history[-1].latest and not vm.history[0].latest)
         self.assertEqual((vm.timer_base, vm.timer_extra, vm.timer_live), (500_000_000, 123_456_789, True))
 
+    def test_new_chapter_resets_stats_except_kb_context_and_compactions(self):
+        # 进入新的一章后：思考、工具、死亡、模拟器调用与章节计时从 0 起算；上下文、压缩次数、知识库读取不清零
+        now = time.time()
+        base = {"chapter": "Celeste/2-OldSite", "thinking_s": 60.0, "tool_s": 20.0, "deaths": 2, "sim_calls": 4}
+        m = metrics(now, chapter="Celeste/2-OldSite", chapter_base=base, study_s=300.0, piece_done=False)
+        vm = view_model(m, CONFIG, [], now)
+        stats = {k: v for k, v, _ in vm.stats}
+        self.assertEqual(stats["思考"], "0:01:00")                     # 100 − 60 秒 + 正在思考的 20 秒
+        self.assertEqual((stats["工具"], stats["死亡"], stats["模拟器调用"]), ("0:00:30", "1 次", "0 次"))
+        self.assertEqual((stats["上下文"], stats["压缩"], stats["知识库读取"]), ("950k", "2", "0:05:00"))
+        self.assertEqual((vm.timer_base, vm.timer_extra, vm.timer_live), (0, 123_456_789, True))
+
+    def test_metrics_record_chapter_base_on_chapter_change(self):
+        from orchestrator.metrics import Metrics
+        with tempfile.TemporaryDirectory() as d:
+            mt = Metrics(Path(d) / "metrics.json", "a", "opus", "high", 600)
+            mt.update(chapter="Celeste/1-ForsakenCity")
+            self.assertIsNone(mt.state.chapter_base)                       # 第一章：不用基准
+            mt.add(deaths=3, decisions=5, thinking_s=40.0)
+            mt.update(chapter="Celeste/1-ForsakenCity", compactions=1)
+            self.assertIsNone(mt.state.chapter_base)
+            mt.update(chapter="Celeste/2-OldSite")
+            base = mt.state.chapter_base
+            self.assertEqual((base["chapter"], base["deaths"], base["decisions"], base["thinking_s"]),
+                             ("Celeste/2-OldSite", 3, 5, 40.0))
+            self.assertNotIn("compactions", base)
+            self.assertNotIn("context_tokens", base)
+
     def test_sim_energy_shows_balance_only(self):
         now = time.time()
         energy = {"balance": 37, "capacity": 100, "rules": "体力上限100……4×额外候选数；最多6条、每条180帧"}
