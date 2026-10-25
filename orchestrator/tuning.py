@@ -32,9 +32,6 @@ GROUPS = ("执行与解说", "规划回放", "速通：程序与规划", "探索
 TUNABLES: tuple[Tunable, ...] = (
     Tunable("max_frames_per_act", "单次 act 最多推进的帧数", "执行与解说", int, 600, 60, 3600, "帧",
             "提示词与 act 的说明里的上限跟着变（探索模式用\"探索：规划程序\"里的那一项）", ("speedrun",)),
-    Tunable("agent_cpus", "智能体程序最多用几个 CPU 核", "执行与解说", int, None, 1, HOST_CPUS, "核",
-            f"空着 = 不限（本机共 {HOST_CPUS} 核）；容器运行方式按这个数限制智能体容器能用的核（容器里 nproc 显示的就是它），"
-            "探索模式的提示词里也写明", optional=True),
     Tunable("thought_max_chars", "思考语句最长字数", "执行与解说", int, 120, 20, 400, "字",
             "act 的 thought 与 narrate 的长度上限"),
     Tunable("thought_lead_s", "动作前等 HUD 换上新思考", "执行与解说", float, 0.4, 0, 3, "秒",
@@ -64,6 +61,9 @@ TUNABLES: tuple[Tunable, ...] = (
             "超时就被结束；提示词里的上限跟着变。空着 = 不限时（仍受整次运行的现实时间上限约束）", ("explore",), optional=True),
     Tunable("explore_program_runs", "两次 act 之间最多运行几次", "探索：规划程序", int, None, 1, 100, "次",
             "空着 = 不限", ("explore",), optional=True),
+    Tunable("agent_cpus", "自写程序最多用几个 CPU 核", "探索：规划程序", int, HOST_CPUS, 1, HOST_CPUS, "核",
+            f"默认是本机的核数（{HOST_CPUS}）；探索模式的提示词写明最多可以用几个核，容器运行方式同时按它限制智能体容器能用的核",
+            ("explore",)),
     Tunable("explore_act_frames", "单次 act 最多推进的帧数", "探索：规划程序", int, 300, 30, 3600, "帧",
             "探索模式用这一项；提示词与 act 的说明里的上限跟着变", ("explore",)),
     Tunable("explore_search_frames", "自写模拟器与搜索程序每次最多推演", "探索：规划程序", int, 300, 1, 36000, "帧",

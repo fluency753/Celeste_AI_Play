@@ -75,7 +75,7 @@ def _create(cfg: RunConfig, name: str) -> None:
 
 
 def apply_cpu_limit(cfg: RunConfig, name: str, log=print) -> None:
-    """按可调参数 agent_cpus 限制容器能用的 CPU 核（cpuset，容器里 nproc 显示的就是这个数）；不限时用 Docker 的全部核。
+    """探索模式：按可调参数 agent_cpus 限制容器能用的 CPU 核（cpuset，容器里 nproc 显示的就是这个数）；为空时用 Docker 的全部核。
     每次运行都重新设置（docker update 对运行中的容器生效），复用的容器也跟着这次的设置。"""
     info = docker("info", "--format", "{{.NCPU}}", check=False)
     try:
@@ -119,7 +119,8 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
         log(f"[container] 创建 {name}（工作区 {cfg.workspace_dir}）")
         _create(cfg, name)
 
-    apply_cpu_limit(cfg, name, log)
+    if cfg.knowledge_profile == "explore" or getattr(cfg, "mode", None) == "explore":
+        apply_cpu_limit(cfg, name, log)       # 只在探索模式（提示词里写明最多可以用几个核）
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if docker("exec", name, "test", "-f", "/run/firewall-ready", check=False).returncode == 0:

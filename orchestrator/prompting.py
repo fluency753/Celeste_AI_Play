@@ -48,8 +48,8 @@ def explore_program_rule(cfg) -> str:
 
 
 def cpu_rule(cfg) -> str:
-    """提示词里最多可以用几个 CPU 核的一句：容器实际能用的核数（apply_cpu_limit 设置后），
-    否则是可调参数 agent_cpus，不限时是本机的核数。"""
+    """探索模式提示词里最多可以用几个 CPU 核的一句：容器实际能用的核数（apply_cpu_limit 设置后），
+    否则是可调参数 agent_cpus（默认本机的核数）。"""
     from .tuning import HOST_CPUS
     cpus = getattr(cfg, "agent_cpus_effective", None) or getattr(cfg, "agent_cpus", None) or HOST_CPUS
     return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"

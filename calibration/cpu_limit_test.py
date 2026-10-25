@@ -14,6 +14,7 @@ def done(stdout="", code=0):
 class CpuLimitTests(unittest.TestCase):
     def run_with(self, cpus, ncpu="8"):
         cfg = RunConfig(agent="a", save="s", model="opus")
+        cfg.mode = "explore"
         cfg.agent_cpus = cpus
         calls = []
 
