@@ -237,6 +237,8 @@ def prompt_parts(cfg) -> list[PromptPart]:
     else:
         parts = _speedrun_parts(cfg)
     parts += _file_parts("room_analysis_zh.md")
+    if getattr(cfg, "runtime", "container") == "container":
+        parts += _file_parts("program_batches_zh.md")
     if has_cutscene_tool(cfg):
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
                                 f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式由主控自动播放到输入节点，无需wait；"

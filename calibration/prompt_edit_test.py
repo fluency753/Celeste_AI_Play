@@ -18,6 +18,14 @@ def cfg(**kw):
 
 
 class PromptPartsTests(unittest.TestCase):
+    def test_program_batches_are_shared_by_container_executors_and_modes(self):
+        for mode, engine, live, limited in itertools.product(('explore','speedrun'),('codex','claude'),(False,True),(False,True)):
+            c=cfg(mode=mode,engine=engine,runtime='container',live=live,pause_limit=limited)
+            shared=[p for p in prompt_parts(c) if p.source=='program_batches_zh.md']
+            self.assertEqual(len(shared),1)
+            self.assertIn(shared[0].text,play_prompt(c))
+        self.assertNotIn('program_batches_zh.md',[p.source for p in prompt_parts(cfg(mode='speedrun',runtime='host',sim=False))])
+
     def test_room_analysis_is_shared_across_modes_and_executors(self):
         for mode,engine,sim in itertools.product(('explore','speedrun'),('codex','claude'),(False,True)):
             c = cfg(mode=mode,engine=engine,sim=sim and mode=='speedrun')
