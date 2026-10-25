@@ -17,6 +17,7 @@ from .sandbox import run_program
 from .goals import GoalManager
 from .modes import act_frame_cap
 from .thought import thought_problem
+from .workspace_files import tas
 from .segments import Piece, checkpoint_name, checkpoint_room, chapters_of, piece_label, pieces_of, segments_of, split_segments, validate_segments
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -53,6 +54,8 @@ class PlanSpec:
     stop_on: list[str] | None = None
     retry: RetrySpec | None = None
     text: str = ""          # 计划文件原文，用来判断重算程序有没有改动计划
+    input_format: str = 'celeste_ai'
+    input_source: dict | None = None
 
 
 def _number(value) -> bool:
@@ -102,7 +105,16 @@ def parse_plan(data, text: str = "", max_retries: int = MAX_RETRIES,
         if not isinstance(on, list) or not on or not set(on) <= RETRY_REASONS:
             raise ActError(f'"retry.on" 必须是 {sorted(RETRY_REASONS)} 的非空子集')
         retry = RetrySpec(raw["command"].strip(), count, float(timeout_s), tuple(on))
-    return PlanSpec(list(inputs), expect, float(tolerance), stop_on, retry, text)
+    try:input_format = tas.check_format(data.get('input_format', 'celeste_ai'))
+    except ValueError as exc:raise ActError(str(exc)) from exc
+    source = data.get('input_source')
+    if source is not None:
+        if not isinstance(source, dict) or any(type(source.get(k)) is not int or source[k] < 0 for k in ('offset','total')):
+            raise ActError('input_source requires nonnegative integer offset/total')
+        locations = source.get('locations')
+        if not isinstance(locations, list) or any(not isinstance(row,list) or len(row)!=2 or any(type(v) is not int or v<0 for v in row) for row in locations):
+            raise ActError('input_source.locations requires [line, frame_offset] rows')
+    return PlanSpec(list(inputs), expect, float(tolerance), stop_on, retry, text, input_format, source)
 
 
 class ActError(ValueError):
@@ -183,6 +195,7 @@ class GameSession:
         self.room_entry_frame: int | None = None   # 进入当前房间的那一帧（HUD 的推演最速从这里算起）
         self._last_positions: dict = {}
         self._last_room = None
+        self._input_formats = None
         # 依次通关多章或按段通关（segments.py）：当前这一截完成后，主控自动换到队列里的下一截。
         # 队列里的每一项是 Piece（整章也可以直接写章节编号）；chapter_finished = 这一截已完成、正在等着换过去
         plan = list(cfg.plan) if cfg.plan else [Piece(c) for c in (cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else []))]
@@ -212,6 +225,7 @@ class GameSession:
             (self.workspace / "game" / "rooms").mkdir(parents=True, exist_ok=True)
             # 给观众看的展示接口（HUD 进度、轨迹记录），每次运行都换成主控这一版；上次运行留下的进度清掉
             shutil.copyfile(REPO_ROOT / "orchestrator" / "workspace_files" / "show.py", self.workspace / "game" / "show.py")
+            shutil.copyfile(REPO_ROOT / "orchestrator" / "workspace_files" / "tas.py", self.workspace / "game" / "tas.py")
             (self.workspace / "game" / "hud_status.json").unlink(missing_ok=True)
 
     # ---- 连接与观测 ----
@@ -288,7 +302,7 @@ class GameSession:
             reply = self.client.call("observe", image=True, scope="room", fields=True)
             obs, image = enrich_obs(reply["obs"]), reply.get("image")
             self._commit_completion(obs)
-            if self.cfg.cutscene_mode == 'agent' and story_pending(obs) and not self.done:
+            if self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas' and story_pending(obs) and not self.done:
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
@@ -426,6 +440,7 @@ class GameSession:
 
     def simulate(self, request: dict) -> dict:
         from .sim_assist import validate_request, run_predictions
+        if not isinstance(request, dict):raise ActError('模拟请求必须是对象')
         if not self.sim_energy:
             raise ActError("本局未开启限额模拟辅助")
         if self.done or self.goals.stop_motion.is_set():
@@ -434,6 +449,18 @@ class GameSession:
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
                 raise ActError("试玩已结束，不能继续预测")
+            original_format = request.get('input_format', 'celeste_ai')
+            try:tas.check_format(original_format)
+            except ValueError as exc:raise ActError(str(exc)) from exc
+            if original_format == 'celeste_tas':
+                if set(request) != {'candidates','input_format'}:raise ActError('未知的模拟参数')
+                raw_candidates=request['candidates']
+                if not isinstance(raw_candidates,list) or not 1 <= len(raw_candidates) <= self.assist_rules.max_candidates:
+                    raise ActError('TAS模拟候选数量超出限制')
+                try:request = {'candidates':[tas.to_sim(plan,self.assist_rules.max_frames) for plan in raw_candidates]}
+                except (TypeError, ValueError) as exc:raise ActError(str(exc)) from exc
+            elif 'input_format' in request:
+                request = {key:value for key,value in request.items() if key != 'input_format'}
             candidates, cost = validate_request(request, self.assist_rules)
             directory = self.run_dir / "sim_private"
             directory.mkdir(exist_ok=True)
@@ -448,7 +475,8 @@ class GameSession:
                 self.metrics.update(sim_energy=self.sim_energy.snapshot())
                 raise
             self.sim_energy.finish(ident)
-        result.update(receipt=ident, cost=cost, energy=self.sim_energy.snapshot(), candidates=candidates)
+        result.update(receipt=ident, cost=cost, energy=self.sim_energy.snapshot(), candidates=candidates,
+                      input_format='celeste_ai', requested_input_format=original_format)
         # Successful predictions count immediately, independently of visualization and runtime.
         self.metrics.add(sim_calls=1, sim_rollouts=len(candidates))
         if self.workspace:
@@ -482,7 +510,7 @@ class GameSession:
         return None
 
     def act(self, inputs: list[str] | None, thought: str, stop_on: list[str] | None,
-            plan_file: str | None = None) -> ActOutcome:
+            plan_file: str | None = None, input_format: str | None = None) -> ActOutcome:
         self.programs_since_act = 0
         if self.done:
             raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
@@ -492,6 +520,12 @@ class GameSession:
             plan = self.resolve_plan_file(plan_file)
         else:
             plan = PlanSpec(inputs=inputs) if isinstance(inputs, list) else PlanSpec(inputs=[])
+        if input_format is not None:
+            try:tas.check_format(input_format)
+            except ValueError as exc:raise ActError(str(exc)) from exc
+            if plan_file and isinstance(json.loads(plan.text), dict) and 'input_format' in json.loads(plan.text) and plan.input_format != input_format:
+                raise ActError('input_format 与计划文件声明不一致')
+            plan = replace(plan, input_format=input_format)
         thought = (thought or "").strip()
         if not thought:
             raise ActError("thought 不能为空：用一两句话说明这段操作的意图")
@@ -561,6 +595,8 @@ class GameSession:
                 break
             try:
                 new_plan = self.resolve_plan_file(plan_file)
+                if new_plan.input_format != plan.input_format:
+                    raise ActError('重试计划不能改变 input_format')
                 if new_plan.text == plan.text:
                     record["error"] = "重算程序没有改动计划文件"
                     break
@@ -589,8 +625,18 @@ class GameSession:
         return stop
 
     def _check_plan(self, plan: PlanSpec) -> list[str]:
-        allowed = LETTERS if self.cfg.cutscene_mode == 'agent' else AGENT_LETTERS
-        frames = expand_inputs(plan.inputs, act_frame_cap(self.cfg), allowed)
+        if plan.input_format == 'celeste_tas':
+            if self.cfg.cutscene_mode != 'agent':raise ActError('TAS输入须使用agent剧情模式，避免主控额外输入改变时序')
+            try:frames = tas.expand(plan.inputs, act_frame_cap(self.cfg))
+            except ValueError as exc:raise ActError(str(exc)) from exc
+            with self.lock:
+                if self._input_formats is None:self._input_formats = self.client.call('hello').get('input_formats', ['celeste_ai'])
+            if 'celeste_tas' not in self._input_formats:raise ActError('TAS输入需要桥接1.0.20或更新版本')
+        else:
+            allowed = LETTERS if self.cfg.cutscene_mode == 'agent' else AGENT_LETTERS
+            frames = expand_inputs(plan.inputs, act_frame_cap(self.cfg), allowed)
+        if plan.input_source is not None and (len(plan.input_source['locations']) != len(frames) or plan.input_source['offset'] + len(frames) > plan.input_source['total']):
+            raise ActError('input_source与本次实际计划帧数不一致')
         if plan.expect is not None and len(plan.expect) > len(frames):
             raise ActError(f'"expect" 有 {len(plan.expect)} 帧，比按键的 {len(frames)} 帧还多')
         return frames
@@ -611,6 +657,7 @@ class GameSession:
             pass
         self.metrics.update(status="executing")
         extra = {"expect": plan.expect, "tolerance": plan.tolerance} if plan.expect else {}
+        if plan.input_format != 'celeste_ai':extra['input_format'] = plan.input_format
         self._before_advance()
         # HUD 每 0.1 秒取一次数据、淡入 0.2 秒：等它换上这段动作的思考语句再推进，
         # 录像里新语句就和这段动作的第一帧同时出现（游戏冻结时录像不写帧，这段等待不进录像）
@@ -625,11 +672,23 @@ class GameSession:
                                      on_event=self._on_progress, **self._stop_rooms(), **extra)
             game_s = time.monotonic() - t0
             result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
+            result['input_format'] = plan.input_format
+            if plan.input_format == 'celeste_tas':
+                used = result['consumed']
+                source = plan.input_source or {}
+                offset = source.get('offset', 0)
+                result['input_cursor'] = {'source':source.get('path'), 'sha256':source.get('sha256'),
+                                          'start':offset, 'next':offset + used, 'total':source.get('total',len(frames)),
+                                          'source_lines':[source.get('start_line'),source.get('end_line')]}
+                locations = source.get('locations') or []
+                if used < len(locations):result['input_cursor']['next_location'] = locations[used]
+                elif source.get('following_location'):result['input_cursor']['next_location'] = source['following_location']
+                result['remaining_inputs'] = tas.compress(frames[used:])
             if self.sim_energy:
                 from .sim_assist import moving_frames
                 previous = (self.last_obs or {}).get("player") or {}
                 self.sim_energy.reward(moving_frames=moving_frames(result.get("trajectory") or [], previous.get("pos")))
-            self._log_frames(result, frames, thought, auto=False)
+            self._log_frames(result, frames, thought, auto=False, input_format=plan.input_format)
             self._handle_events(result)
             self._commit_completion(obs)
             self._note_obs_room(obs)
@@ -638,7 +697,7 @@ class GameSession:
                              decisions=1 if attempt == 0 else 0)
 
             auto_frames, notes = 0, list(resumed)
-            if not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
+            if plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
                     or story_pending(obs)):
                 obs, image, auto_frames, notes = self._auto_advance(obs, image)
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
@@ -653,6 +712,7 @@ class GameSession:
         self._write_workspace(obs, {
             "decision": self.decision_index, "attempt": attempt, "thought": thought, "inputs": plan.inputs,
             "plan_file": plan_file, "stop_on": stop, "tolerance": plan.tolerance if plan.expect else None,
+            "input_format":plan.input_format, "input_source":plan.input_source,
             "result": result, "auto_frames": auto_frames, "auto_notes": notes,
         })
         self._decisions_log.write(json.dumps({
@@ -662,6 +722,7 @@ class GameSession:
             "service_tier_requested": self.metrics.state.turn_service_tier_requested,
             "decision_wait_s": round(self.metrics.state.decision_wait_s, 3) if attempt == 0 else None,
             "inputs": plan.inputs, "plan_file": plan_file, "stop_on": stop, "stop": result["stop"],
+            "input_format":plan.input_format, "input_cursor":result.get('input_cursor'),
             "consumed": result["consumed"], "planned": result["planned"], "events": result["events"],
             "deviation": result.get("deviation"), "game_s": round(game_s, 3),
             "auto_frames": auto_frames, "auto_notes": notes,
@@ -1366,11 +1427,11 @@ class GameSession:
             self.done_reason = reason
             self.metrics.update(status="done")
 
-    def _log_frames(self, result: dict, frames: list[str], thought: str, auto: bool) -> None:
+    def _log_frames(self, result: dict, frames: list[str], thought: str, auto: bool, input_format: str = 'celeste_ai') -> None:
         traj = result.get("trajectory") or []
         for i, row in enumerate(traj):
             rec = {"f": row[0], "keys": frames[i] if i < len(frames) else "", "auto": auto,
-                   "thought": thought, "decision": self.decision_index}
+                   "thought": thought, "decision": self.decision_index, "input_format":input_format}
             if len(row) >= 8 and row[1] is not None:
                 rec.update(x=row[1], y=row[2], vx=row[3], vy=row[4], st=row[5], dash=row[6], gnd=row[7])
             self._frames_log.write(json.dumps(rec, ensure_ascii=False) + "\n")

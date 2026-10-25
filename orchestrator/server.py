@@ -19,6 +19,7 @@ from .prompting import fill
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图、整个房间的字符地图与精确数据（JSON；房间信息以精确数据为准，截图仅作参考），其余时候只给文字状态与画面附近的信息。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
+input_format：省略为 celeste_ai；显式 celeste_tas 使用 TAS 离散按键 J/K 双跳、X/C 双冲刺、Z/V 双蹲冲、G/H 双抓、S 暂停、Q 重试、N 日志、O 确认，并保留兼用绑定。须 agent 剧情模式与桥接1.0.20。TAS执行和观察不自动补帧；不支持的模拟或脚本命令明确报错。
   按键：L R U D 方向，J 跳，X 冲刺，Z crouch dash，G 抓墙，T 交互；K、Y、V 是第二个跳、冲刺、crouch dash 键
   （按住 J 时按下 K 也算一次新的"按下"，可以在相邻两帧各跳一次）；A:角度 表示摇杆角度（0 右、90 上）。
   agent 剧情模式还可用 C 确认、B 返回、P 暂停、N 日志，直接操作菜单、对白、重试与结算。
@@ -27,13 +28,14 @@ plan_file：（有工作区时可用）工作区里的计划文件路径，与 i
   {"inputs": [...], "expect": [[x, y], [x, y, "Dash"], null, ...], "tolerance": 0.5,
    "stop_on": [...], "retry": {"command": "python3 planner.py", "max": 3, "timeout_s": 20, "on": ["death", "deviate"]}}
   expect 是每帧推进后 Madeline 的预期位置（与轨迹 x、y 同一口径，可附状态名），偏差超过 tolerance 像素就停下（deviate）。
+  JSON也可声明input_format，旧会话工具没有同名参数时使用此方式。/workspace/game/tas.py 可把显式选定的TAS输入行切成有来源游标的JSON计划；动作返回input_cursor与remaining_inputs，按实际consumed继续，不自动执行剩余输入。
   retry：死亡、偏离（或 "done"：按键用完仍在本房间）时，主控在零网络沙箱里运行 command（工作目录 /workspace），
   它应读取 /workspace/game/ 下的最新数据并改写同一个计划文件，主控接着执行，最多 max 次，不唤醒你。格式详见 /kb/game_data.md。
 thought：一两句中文{thought_brief}，会显示给观众。只写你对当前房间或这一段的分析与判断（难点在哪、怎么取舍、打算怎么过），
   不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。{thought_mood_short}
 stop_on：提前停下的条件，可选 death room uncontrollable controllable land refill complete story_input；
   默认 ["death", "room", "complete"]，death 总会生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。
-死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控自动播放到实际输入节点或恢复控制。读取storyInput与story，教学用act，不需wait；inCutscene标记本身不表示角色失控。"""
+celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控自动播放到实际输入节点或恢复控制。celeste_tas格式下不自动补这些帧，由明确输入推进。读取storyInput与story；inCutscene标记本身不表示角色失控。"""
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json）"
 SIM_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
@@ -179,7 +181,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     @server.tool(name="act", description=fill(act_description, session.cfg), structured_output=False)
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
-                  stop_on: list[str] | None = None) -> list:
+                  stop_on: list[str] | None = None, input_format: str | None = None) -> list:
         async with call_lock:
             if (note := gated()) is not None:
                 return [note]
@@ -189,7 +191,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 metrics.decision_begin()
                 result = None
                 try:
-                    outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file)
+                    options = {'input_format':input_format} if input_format is not None else {}
+                    outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file, **options)
                     result = outcome.result
                 finally:
                     metrics.decision_end(result)
@@ -261,7 +264,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             return result
 
     @optional_tool(tool_simulate, name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)
-    async def simulate(candidates: list[list[str]] | None = None) -> list:
+    async def simulate(candidates: list[list[str]] | None = None, input_format: str = 'celeste_ai') -> list:
         async with call_lock:
             if (note := gated()) is not None:
                 return [note]
@@ -271,7 +274,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 result = session.sim_energy.snapshot()
             else:
                 begin()
-                result = await asyncio.to_thread(session.simulate, {'candidates': candidates})
+                request = {'candidates':candidates}
+                if input_format != 'celeste_ai':request['input_format'] = input_format
+                result = await asyncio.to_thread(session.simulate, request)
             return [json.dumps(result, ensure_ascii=False)]
 
     # narrate 在所有模式都有：思考期间更新 HUD 的思考语句

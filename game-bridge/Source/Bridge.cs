@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.0.19";
+    public const string Version = "1.0.20";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -434,6 +434,12 @@ internal static class Bridge {
             case "hello":
                 IpcServer.Send(Reply.Ok(req.Id, w => {
                     w.WriteString("bridge", Version);
+                    w.WriteStartArray("input_formats");
+                    w.WriteStringValue("celeste_ai"); w.WriteStringValue("celeste_tas");
+                    w.WriteEndArray();
+                    w.WriteString("tas_keys", "LRUDJKXCZVGHSQNO");
+                    w.WriteBoolean("tas_analog", false);
+                    w.WriteBoolean("tas_script_commands", false);
                     w.WriteString("everest", Everest.VersionString);
                     w.WriteBoolean("active", Active);
                     w.WriteBoolean("frozen", Frozen);
@@ -849,8 +855,9 @@ internal static class Bridge {
             return;
         }
 
-        Playback.EndOverlay(); // 真实执行开始：规划回放的历史线清掉，镜头还给游戏
-        List<InputFrame> plan = StepJob.ParsePlan(inputs, MaxPlanFrames);
+        string inputFormat = GetString(a, "input_format", "celeste_ai");
+        List<InputFrame> plan = StepJob.ParsePlan(inputs, MaxPlanFrames, inputFormat);
+        InputFrame.ValidateTransition(CurrentInput, inputFormat == "celeste_tas");
         List<StepJob.ExpectRow?>? expect = StepJob.ParseExpect(a, MaxPlanFrames);
         float tolerance = a.TryGetProperty("tolerance", out JsonElement tol) && tol.ValueKind == JsonValueKind.Number
             ? Math.Max(0f, tol.GetSingle()) : 1f;
@@ -862,6 +869,7 @@ internal static class Bridge {
             ? sr.EnumerateArray().Select(e => e.GetString() ?? "").Where(x => x.Length > 0).ToList()
             : new List<string>();
 
+        Playback.EndOverlay(); // 校验通过后才清理规划回放
         job = new StepJob(
             id, plan, stopOn,
             framesPerTick: GetInt(a, "speed", 1),
@@ -873,7 +881,7 @@ internal static class Bridge {
             expect: expect,
             tolerance: tolerance,
             progressEvery: GetInt(a, "progress", 0),
-            stopRooms: stopRooms);
+            stopRooms: stopRooms, inputFormat: inputFormat);
 
         if (job.Finished) {
             FinishJob(); // 空计划：直接回报当前帧

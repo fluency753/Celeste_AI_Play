@@ -140,7 +140,8 @@ internal static class SimState {
     private static void WriteInput(Utf8JsonWriter w) {
         w.WriteStartObject("input");
         // 上一帧写入的按键：模拟器的第一帧据此判断"新按下"
-        w.WriteString("held", Bridge.CurrentInput.ToString());
+        w.WriteString("held", Bridge.CurrentInput.ToSimulatorString());
+        w.WriteString("input_format", Bridge.CurrentInput.Tas ? "celeste_tas" : "celeste_ai");
         w.WriteStartObject("virtual");
         var c = new Ctx();
         foreach ((string name, VirtualInput? input) in new (string, VirtualInput?)[] {

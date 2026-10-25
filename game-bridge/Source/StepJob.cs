@@ -21,6 +21,7 @@ internal sealed class StepJob {
     public readonly record struct ExpectRow(float X, float Y, string? State);
 
     public readonly long RequestId;
+    public readonly string InputFormat;
     public readonly int FramesPerTick;
     public readonly bool WantImage;
     public readonly string Buffer;
@@ -57,8 +58,10 @@ internal sealed class StepJob {
 
     public StepJob(long requestId, List<InputFrame> plan, IEnumerable<string> stopOn, int framesPerTick,
         bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false,
-        List<ExpectRow?>? expect = null, float tolerance = 1f, int progressEvery = 0, IEnumerable<string>? stopRooms = null) {
+        List<ExpectRow?>? expect = null, float tolerance = 1f, int progressEvery = 0, IEnumerable<string>? stopRooms = null,
+        string inputFormat = "celeste_ai") {
         RequestId = requestId;
+        InputFormat = inputFormat;
         this.progressEvery = Math.Max(0, progressEvery);
         this.expect = expect is { Count: > 0 } ? expect : null;
         this.tolerance = tolerance;
@@ -221,6 +224,7 @@ internal sealed class StepJob {
     }
 
     public void WriteResult(Utf8JsonWriter w) {
+        w.WriteString("input_format", InputFormat);
         w.WriteString("stop", StopReason ?? "running");
         w.WriteNumber("consumed", index);
         w.WriteNumber("planned", plan.Count);
@@ -304,7 +308,8 @@ internal sealed class StepJob {
     /// <summary>
     /// 解析 inputs：数组元素可以是 "6,R,J"（前面的数字是帧数）或 {"n":6,"keys":"R,J"}。
     /// </summary>
-    public static List<InputFrame> ParsePlan(JsonElement inputs, int maxFrames) {
+    public static List<InputFrame> ParsePlan(JsonElement inputs, int maxFrames, string inputFormat = "celeste_ai") {
+        if (inputFormat is not ("celeste_ai" or "celeste_tas")) throw new FormatException("unknown input_format");
         var result = new List<InputFrame>();
         if (inputs.ValueKind != JsonValueKind.Array) {
             throw new FormatException("inputs must be an array");
@@ -327,7 +332,7 @@ internal sealed class StepJob {
                 throw new FormatException("each segment must be a string or an object");
             }
             if (n < 0) throw new FormatException("frame count must be >= 0");
-            InputFrame frame = InputFrame.Parse(keys);
+            InputFrame frame = inputFormat == "celeste_tas" ? InputFrame.ParseTas(keys) : InputFrame.Parse(keys);
             for (int i = 0; i < n; i++) {
                 result.Add(frame);
                 if (result.Count > maxFrames) {

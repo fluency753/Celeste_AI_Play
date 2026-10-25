@@ -34,6 +34,12 @@ internal static class InputInjector {
     private const Keys BackKey = Keys.NumPad1;
     private const Keys PauseKey = Keys.NumPad2;
     private const Keys JournalKey = Keys.NumPad3;
+    // These independent channels preserve TAS shared bindings without making
+    // native J confirm menus or native X cancel them.
+    private const Keys TasJump = Keys.F13, TasJump2 = Keys.F14;
+    private const Keys TasDash = Keys.F15, TasDash2 = Keys.F16;
+    private const Keys TasGrab = Keys.F17, TasGrab2 = Keys.F18;
+    private const Keys TasJournal = Keys.F19, TasPause = Keys.F20, TasRestart = Keys.F21;
 
     private static bool installed;
     private static GrabModes origGrabMode;
@@ -57,23 +63,7 @@ internal static class InputInjector {
         foreach (FieldInfo f in bindingFields) {
             f.SetValue(settings, new Binding());
         }
-        Set(settings, "Left", Buttons.DPadLeft, Buttons.LeftThumbstickLeft);
-        Set(settings, "Right", Buttons.DPadRight, Buttons.LeftThumbstickRight);
-        Set(settings, "Up", Buttons.DPadUp, Buttons.LeftThumbstickUp);
-        Set(settings, "Down", Buttons.DPadDown, Buttons.LeftThumbstickDown);
-        Set(settings, "MenuLeft", Buttons.DPadLeft, Buttons.LeftThumbstickLeft);
-        Set(settings, "MenuRight", Buttons.DPadRight, Buttons.LeftThumbstickRight);
-        Set(settings, "MenuUp", Buttons.DPadUp, Buttons.LeftThumbstickUp);
-        Set(settings, "MenuDown", Buttons.DPadDown, Buttons.LeftThumbstickDown);
-        Set(settings, "Jump", JumpButton, Jump2Button);
-        Set(settings, "Dash", DashButton, Dash2Button);
-        Set(settings, "Grab", GrabButton);
-        Set(settings, "Talk", TalkButton);
-        Set(settings, "DemoDash", CrouchDashButton, CrouchDash2Button);
-        SetKey(settings, "Confirm", ConfirmKey);
-        SetKey(settings, "Cancel", BackKey);
-        SetKey(settings, "Pause", PauseKey);
-        SetKey(settings, "Journal", JournalKey);
+        ConfigureBindings(settings);
 
         GameInput.Initialize();
 
@@ -122,6 +112,36 @@ internal static class InputInjector {
         Log.Info("input bindings restored");
     }
 
+    internal static void ConfigureBindings(CelesteSettings settings) {
+        Set(settings, "Left", Buttons.DPadLeft, Buttons.LeftThumbstickLeft);
+        Set(settings, "Right", Buttons.DPadRight, Buttons.LeftThumbstickRight);
+        Set(settings, "Up", Buttons.DPadUp, Buttons.LeftThumbstickUp);
+        Set(settings, "Down", Buttons.DPadDown, Buttons.LeftThumbstickDown);
+        Set(settings, "MenuLeft", Buttons.DPadLeft, Buttons.LeftThumbstickLeft);
+        Set(settings, "MenuRight", Buttons.DPadRight, Buttons.LeftThumbstickRight);
+        Set(settings, "MenuUp", Buttons.DPadUp, Buttons.LeftThumbstickUp);
+        Set(settings, "MenuDown", Buttons.DPadDown, Buttons.LeftThumbstickDown);
+        Set(settings, "Jump", JumpButton, Jump2Button);
+        Set(settings, "Dash", DashButton, Dash2Button);
+        Set(settings, "Grab", GrabButton);
+        Set(settings, "Talk", TalkButton);
+        Set(settings, "DemoDash", CrouchDashButton, CrouchDash2Button);
+        SetKey(settings, "Confirm", ConfirmKey);
+        SetKey(settings, "Cancel", BackKey);
+        SetKey(settings, "Pause", PauseKey);
+        SetKey(settings, "Journal", JournalKey);
+        AddKeys(settings, "Jump", TasJump, TasJump2);
+        AddKeys(settings, "Dash", TasDash, TasDash2);
+        AddKeys(settings, "Grab", TasGrab, TasGrab2);
+        AddKeys(settings, "Talk", TasDash, TasJournal);
+        AddKeys(settings, "Confirm", TasJump);
+        AddKeys(settings, "Cancel", TasDash, TasDash2);
+        AddKeys(settings, "Pause", TasPause);
+        AddKeys(settings, "Journal", TasJournal);
+        SetKey(settings, "QuickRestart", TasRestart);
+
+    }
+
     /// <summary>写入一帧的合成输入并更新所有虚拟按键（含缓冲计时）。</summary>
     public static void Feed(InputFrame input) {
         GamePadDPad dpad;
@@ -139,13 +159,13 @@ internal static class InputInjector {
         }
 
         Buttons buttons = 0;
-        if (input.Has(Act.Jump)) buttons |= JumpButton;
-        if (input.Has(Act.Dash)) buttons |= DashButton;
-        if (input.Has(Act.Grab)) buttons |= GrabButton;
+        if (!input.Tas && input.Has(Act.Jump)) buttons |= JumpButton;
+        if (!input.Tas && input.Has(Act.Dash)) buttons |= DashButton;
+        if (!input.Tas && input.Has(Act.Grab)) buttons |= GrabButton;
         if (input.Has(Act.Talk)) buttons |= TalkButton;
         if (input.Has(Act.CrouchDash)) buttons |= CrouchDashButton;
-        if (input.Has(Act.Jump2)) buttons |= Jump2Button;
-        if (input.Has(Act.Dash2)) buttons |= Dash2Button;
+        if (!input.Tas && input.Has(Act.Jump2)) buttons |= Jump2Button;
+        if (!input.Tas && input.Has(Act.Dash2)) buttons |= Dash2Button;
         if (input.Has(Act.CrouchDash2)) buttons |= CrouchDash2Button;
         if (input.AngleDeg == null) {
             if (input.Has(Act.Up)) buttons |= Buttons.DPadUp;
@@ -167,8 +187,17 @@ internal static class InputInjector {
         var keys = new List<Keys>(4);
         if (input.Has(Act.Confirm)) keys.Add(ConfirmKey);
         if (input.Has(Act.Back)) keys.Add(BackKey);
-        if (input.Has(Act.Pause)) keys.Add(PauseKey);
-        if (input.Has(Act.Journal)) keys.Add(JournalKey);
+        if (input.Has(Act.Pause)) keys.Add(input.Tas ? TasPause : PauseKey);
+        if (input.Has(Act.Journal)) keys.Add(input.Tas ? TasJournal : JournalKey);
+        if (input.Tas) {
+            if (input.Has(Act.Jump)) keys.Add(TasJump);
+            if (input.Has(Act.Jump2)) keys.Add(TasJump2);
+            if (input.Has(Act.Dash)) keys.Add(TasDash);
+            if (input.Has(Act.Dash2)) keys.Add(TasDash2);
+            if (input.Has(Act.Grab)) keys.Add(TasGrab);
+            if (input.Has(Act.Grab2)) keys.Add(TasGrab2);
+            if (input.Has(Act.Restart)) keys.Add(TasRestart);
+        }
         MInput.Keyboard.PreviousState = MInput.Keyboard.CurrentState;
         MInput.Keyboard.CurrentState = new KeyboardState(keys.ToArray());
 
@@ -185,6 +214,12 @@ internal static class InputInjector {
         var binding = new Binding();
         binding.Add(keys);
         SetField(settings, field, binding);
+    }
+
+    private static void AddKeys(CelesteSettings settings, string field, params Keys[] keys) {
+        var binding = (Binding?)typeof(CelesteSettings).GetField(field)?.GetValue(settings);
+        if (binding == null) throw new InvalidOperationException($"Missing TAS binding {field}");
+        binding.Add(keys);
     }
 
     private static void SetField(CelesteSettings settings, string field, Binding binding) {

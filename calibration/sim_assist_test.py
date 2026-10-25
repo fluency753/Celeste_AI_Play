@@ -159,6 +159,19 @@ class BrokerTests(unittest.TestCase):
             self.session.simulate({"candidates": [["6000,R"]]})
         self.assertEqual(self.calls, [])
 
+    def test_tas_conversion_precedes_billing_and_cannot_silently_drop_menu_actions(self):
+        before=self.session.sim_energy.snapshot()
+        for inputs in (['1,S'],['1,Q'],['1,H'],['9999,J']):
+            with self.assertRaises(ValueError):self.session.simulate({'input_format':'celeste_tas','candidates':[inputs]})
+        self.assertEqual(self.calls,[])
+        self.assertEqual(self.session.sim_energy.snapshot(),before)
+        prediction={'info':{'frame':1},'results':[{'stop':'done','frames':[]} ]}
+        with patch('orchestrator.sim_assist.run_predictions',return_value=prediction) as run:
+            result=self.session.simulate({'input_format':'celeste_tas','candidates':[['1,J','1,K','1,C']]})
+        self.assertEqual(run.call_args.args[2],[['1,J','1,K','1,Y']])
+        self.assertEqual(result['requested_input_format'],'celeste_tas')
+        self.assertEqual(result['input_format'],'celeste_ai')
+
     def test_mcp_predictions_count_once_and_replay_without_next_action(self):
         import asyncio
         from orchestrator.playback import Playback

@@ -7,7 +7,7 @@ namespace CelesteAI.Bridge;
 
 /// <summary>一帧内按住的动作。游戏内动作走手柄，菜单动作走键盘，彼此不冲突。</summary>
 [Flags]
-public enum Act : ushort {
+public enum Act : uint {
     None = 0,
     Left = 1 << 0,
     Right = 1 << 1,
@@ -26,6 +26,8 @@ public enum Act : ushort {
     Jump2 = 1 << 13,
     Dash2 = 1 << 14,
     CrouchDash2 = 1 << 15,
+    Grab2 = 1 << 16,
+    Restart = 1 << 17,
 }
 
 /// <summary>
@@ -39,13 +41,20 @@ public readonly struct InputFrame : IEquatable<InputFrame> {
 
     public readonly Act Actions;
     public readonly float? AngleDeg;
+    public readonly bool Tas;
 
-    public InputFrame(Act actions, float? angleDeg) {
+    public InputFrame(Act actions, float? angleDeg, bool tas = false) {
         Actions = actions;
         AngleDeg = angleDeg;
+        Tas = tas;
     }
 
     public bool Has(Act a) => (Actions & a) != 0;
+
+    public static void ValidateTransition(InputFrame previous, bool tas) {
+        if (previous.Tas != tas && (previous.Actions != Act.None || previous.AngleDeg != null))
+            throw new InvalidOperationException("input_format change requires an explicit neutral frame in the previous format");
+    }
 
     private static readonly Dictionary<char, Act> Letters = new() {
         ['L'] = Act.Left, ['R'] = Act.Right, ['U'] = Act.Up, ['D'] = Act.Down,
@@ -80,6 +89,31 @@ public readonly struct InputFrame : IEquatable<InputFrame> {
         return new InputFrame(acts, angle);
     }
 
+    // Digital CelesteTAS inputs. Their shared menu bindings are installed on
+    // separate physical channels, so native inputs retain their old meaning.
+    public static InputFrame ParseTas(string? text) {
+        Act acts = Act.None;
+        foreach (string raw in (text ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)) {
+            string key = raw.Trim().ToUpperInvariant();
+            if (key.Length != 1) throw new FormatException($"unsupported TAS input '{raw}'");
+            acts |= key[0] switch {
+                'L' => Act.Left, 'R' => Act.Right, 'U' => Act.Up, 'D' => Act.Down,
+                'J' => Act.Jump, 'K' => Act.Jump2, 'X' => Act.Dash, 'C' => Act.Dash2,
+                'Z' => Act.CrouchDash, 'V' => Act.CrouchDash2, 'G' => Act.Grab, 'H' => Act.Grab2,
+                'S' => Act.Pause, 'Q' => Act.Restart, 'N' => Act.Journal, 'O' => Act.Confirm,
+                _ => throw new FormatException($"unsupported TAS input '{raw}'; analog/custom bindings are not implemented"),
+            };
+        }
+        return new InputFrame(acts, null, tas: true);
+    }
+
+    public string ToSimulatorString() {
+        // The simulator consumes native gameplay letters, not TAS letters.
+        if (Tas && (Actions & (Act.Confirm | Act.Back | Act.Pause | Act.Journal | Act.Restart | Act.Grab2)) != 0)
+            throw new NotSupportedException("Simulator cannot export a TAS modal/secondary-grab input state; advance explicitly to a gameplay state first");
+        return new InputFrame(Actions | (Tas && Has(Act.Dash) ? Act.Talk : Act.None), AngleDeg).ToString();
+    }
+
     public override string ToString() {
         var sb = new StringBuilder();
         foreach (var (letter, act) in Letters) {
@@ -95,7 +129,7 @@ public readonly struct InputFrame : IEquatable<InputFrame> {
         return sb.ToString();
     }
 
-    public bool Equals(InputFrame other) => Actions == other.Actions && Nullable.Equals(AngleDeg, other.AngleDeg);
+    public bool Equals(InputFrame other) => Actions == other.Actions && Nullable.Equals(AngleDeg, other.AngleDeg) && Tas == other.Tas;
     public override bool Equals(object? obj) => obj is InputFrame f && Equals(f);
-    public override int GetHashCode() => HashCode.Combine(Actions, AngleDeg);
+    public override int GetHashCode() => HashCode.Combine(Actions, AngleDeg, Tas);
 }

@@ -60,6 +60,7 @@ internal static class StateExtractor {
         w.WriteNumber("frame", Bridge.Frame);
         w.WriteBoolean("frozen", Bridge.Frozen);
         w.WriteString("scene", Engine.Scene?.GetType().Name ?? "none");
+        w.WriteString("input_format", Bridge.CurrentInput.Tas ? "celeste_tas" : "celeste_ai");
         StoryText.Write(w, Engine.Scene);
         w.WriteString("storyInput", StoryText.InputNode(Engine.Scene));
 

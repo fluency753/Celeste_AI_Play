@@ -386,6 +386,9 @@ def describe_attempts(attempts: list[dict]) -> str:
 def describe_step(result: dict, max_rows: int = 30) -> str:
     stop = result.get("stop", "?")
     lines = [f"执行了 {result['consumed']}/{result['planned']} 帧，停止原因：{STOP_TEXT.get(stop, stop)}"]
+    if result.get('input_cursor'):
+        lines.append('TAS输入游标（按实际消耗帧推进）：' + json.dumps(result['input_cursor'], ensure_ascii=False))
+        lines.append('本次未执行的输入：' + json.dumps(result.get('remaining_inputs', []), ensure_ascii=False))
     if result.get("expectFrames"):
         lines.append(f"预期轨迹：对照了前 {result['expectFrames']} 帧，容差 {result.get('tolerance', 1):g} 像素")
     if result.get("deviation"):
