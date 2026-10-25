@@ -12,9 +12,41 @@ def remind_text(seconds: float) -> str:
     return "半分钟" if seconds == 30 else f"{seconds:g} 秒"
 
 
+# 速通模式的系统提示词里逐个列出本次注册的游戏工具（随直播、剧情、限额预测等设置变化，见 modes.game_tools）
+TOOL_NOTES = {
+    "observe": "查看当前帧，不推进游戏",
+    "act": "推进若干帧",
+    "narrate": "思考期间更新观众看到的思考，不推进游戏",
+    "set_effort": "调整你自己的推理强度",
+    "exit_level": "用户要求退出时保存并退出关卡",
+    "cutscene": "剧情交给你处理时观看、推进、选择或跳过剧情",
+    "simulate": "花模拟体力预测短路线",
+}
+CN_COUNT = {1: "一", 2: "两", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九"}
+
+
+def game_tool_list(cfg) -> str:
+    items = [f"`{name}`（{TOOL_NOTES.get(name, '见工具说明')}）" for name in game_tools(cfg)]
+    listed = items[0] if len(items) == 1 else "、".join(items[:-1]) + "和 " + items[-1]
+    return f"游戏工具有{CN_COUNT.get(len(items), str(len(items)))}个：{listed}。"
+
+
+def auto_handling(cfg) -> str:
+    """interface_zh.md 里"系统自动处理的部分"：没有剧情工具时剧情一律自动跳过；有剧情工具时按当前剧情模式处理。"""
+    if has_cutscene_tool(cfg):
+        return ("屏幕转场、死亡动画与重生由系统自动推进。剧情按当前的剧情模式处理：auto 时系统自动推进并跳过；"
+                "agent 时 `act` 可能停在剧情中，由你用 `cutscene` 工具观看、推进、选择或跳过。")
+    return "剧情对话、屏幕转场、死亡动画与重生都由系统自动推进并跳过，`act` 返回时 Madeline 已经可以操作。"
+
+
 def fill(text: str, cfg) -> str:
-    """把提示词里可调参数的占位符换成本次的值（orchestrator/tuning.py；默认值下与原来的文字完全相同）。"""
+    """把提示词里的占位符换成本次的值：可调参数（orchestrator/tuning.py；默认值下与原来的文字完全相同），
+    以及随设置变化的游戏工具清单与剧情处理说明。"""
     from .tuning import seconds_text
+    if "{game_tool_list}" in text:
+        text = text.replace("{game_tool_list}", game_tool_list(cfg))
+    if "{auto_handling}" in text:
+        text = text.replace("{auto_handling}", auto_handling(cfg))
     values = {
         "{act_max_frames}": str(getattr(cfg, "max_frames_per_act", 600)),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),

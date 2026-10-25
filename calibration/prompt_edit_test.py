@@ -30,6 +30,20 @@ class PromptPartsTests(unittest.TestCase):
                 if p.source:
                     self.assertTrue((prompting.PROMPTS / p.source).is_file(), p.source)
 
+    def test_tool_list_matches_registered_tools(self):
+        from orchestrator.modes import game_tools
+        for kw in (dict(sim=True), dict(sim=False), dict(sim=True, live=True), dict(cutscene_mode="agent"),
+                   dict(sim=False, runtime="host")):
+            c = cfg(mode="speedrun", runtime=kw.pop("runtime", "container"), **kw)
+            text = play_prompt(c)
+            line = next(l for l in text.splitlines() if l.startswith("游戏工具有"))
+            names = game_tools(c)
+            self.assertEqual(line.count("`") // 2, len(names), line)
+            for name in names:
+                self.assertIn(f"`{name}`", line)
+            auto = "act` 返回时 Madeline 已经可以操作" in text
+            self.assertEqual(auto, "cutscene" not in names)      # 有剧情工具时不再说"剧情一律自动跳过"
+
     def test_interface_is_spliced_in(self):
         parts = prompt_parts(cfg(mode="speedrun", sim=True, runtime="container"))
         sources = [p.source for p in parts]
