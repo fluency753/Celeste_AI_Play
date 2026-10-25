@@ -45,6 +45,9 @@ def main() -> int:
         for d in decisions:
             if session.done:
                 break
+            stiffness = d.get("stiffness") or {}
+            # 原运行开了思考僵直：在这次动作前按记录的帧数与按键重放僵直
+            session.replay_stiffness = stiffness if stiffness.get("frames") else None
             try:
                 out = session.act(d["inputs"], d["thought"], d.get("stop_on"))
             except ActError as err:

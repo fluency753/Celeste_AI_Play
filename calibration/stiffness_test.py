@@ -4,12 +4,14 @@
 import copy
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from orchestrator.config import RunConfig
-from orchestrator.game_session import GameSession, held_keys
+from orchestrator.game_session import GameSession, PlanSpec, RetrySpec, held_keys
 from orchestrator.launch_options import build, config_for
 from orchestrator.metrics import Metrics
 from orchestrator.prompting import play_prompt
@@ -26,8 +28,8 @@ def level_obs(room="a", controllable=True, dead=False):
 
 class StepClient:
     """按顺序回放预先写好的 step 结果；observe 返回当前观测。"""
-    def __init__(self, results, make=None):
-        self.make = make or level_obs
+    def __init__(self, results, make=None, delay=0.0):
+        self.make, self.delay = make or level_obs, delay
         self.results, self.steps, self.obs = list(results), [], self.make()
 
     def call(self, cmd, **args):
@@ -35,6 +37,8 @@ class StepClient:
             return {"obs": copy.deepcopy(self.obs)}
         if cmd == "step":
             self.steps.append({k: args[k] for k in ("inputs", "stop_on") if k in args})
+            if self.delay and len(self.steps) == 1:
+                time.sleep(self.delay)             # 第一次推进（僵直）在现实里花的时间
             planned = sum(int(str(s).split(",")[0]) for s in args["inputs"])
             stop, consumed, obs, events = self.results.pop(0) if self.results else ("done", planned, self.make(), [])
             self.obs = obs
@@ -113,7 +117,7 @@ class StiffnessTests(unittest.TestCase):
         self.freeze(300, 150)                      # 0.6 + 0.6 = 1.2 秒 = 72 帧
         self.s.client = StepClient([])
         outcome = self.s.act(["150,L"], "往左走到平台边", None)   # 150 帧正好是 act 上限，僵直不占它
-        self.assertEqual(self.s.client.steps[0], {"inputs": ["72,R,G"], "stop_on": ["death", "room", "complete"]})
+        self.assertEqual(self.s.client.steps[0], {"inputs": ["72,R,G"], "stop_on": ["death", "room", "complete", "uncontrollable"]})
         self.assertEqual(self.s.client.steps[1]["inputs"], ["150,L"])
         self.assertEqual((outcome.result["consumed"], outcome.result["stiffness"]["frames"]), (150, 72))
         self.assertTrue(any("按住上一帧的按键（R,G）僵直了 72 帧" in n for n in outcome.auto_notes))
@@ -180,6 +184,132 @@ class StiffnessTests(unittest.TestCase):
         self.assertEqual(self.s.freeze_stats()["frames"], 18)
 
 
+class StiffnessReviewTests(unittest.TestCase):
+    """独立审查发现的问题的回归。"""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.cfg = RunConfig(agent="test", save="test", model="test", runtime="host", mode="explore",
+                             knowledge_profile="explore", chapter=4, stiffness=True, thought_lead_s=0)
+        self.s = GameSession(self.cfg, self.root, Metrics(self.root / "metrics.json", "test", "test", "high", 600))
+        self.s.last_obs = level_obs()
+
+    def tearDown(self):
+        self.s.close()
+        self.temp.cleanup()
+
+    def test_stiffness_game_time_is_not_counted_as_tool_time(self):
+        m = self.s.metrics
+        self.s.cfg.stiff_unit_s, self.s.cfg.stiff_think_s = 0.01, 0.2
+        m.turn_begin()
+        self.s._start_freeze()
+        time.sleep(0.05)                           # 思考 0.05 秒 → 1 秒僵直
+        m.tool_begin("act", game_tool=True)
+        before = m.freeze_counters()[1]
+        self.s.client = StepClient([], delay=0.3)
+        self.s.act(["5,R"], "往右走", None)
+        m.tool_end("act")
+        self.assertGreater(m.state.auto_game_s, 0.25)
+        self.assertLess(m.freeze_counters()[1] - before, 0.15)    # 僵直的 0.3 秒是游戏推进，不算工具时间
+
+    def test_retry_never_runs_the_plan_after_an_interrupted_stiffness(self):
+        self.s.container, self.s.workspace = "container", self.root
+        plan = PlanSpec(inputs=["20,J"], retry=RetrySpec("python3 planner.py", 3, 10.0, ("death",)), text="{}")
+        self.s.resolve_plan_file = lambda path: plan
+        self.s._plan_path = lambda path: self.root / "plan.json"
+        self.s._freeze_base = (0.0, 0.0, 0.0)
+        self.s.metrics.freeze_counters = lambda: (0.0, 750.0, 0.0)
+        self.s._held_input = ("R", "celeste_ai")
+        died = ("death", 40, level_obs(dead=True), [{"type": "death", "frame": 140}])
+        self.s.client = StepClient([died, ("controllable", None, level_obs(), [])])
+        with patch("orchestrator.game_session.run_program") as program:
+            outcome = self.s.act(None, "跳上去", None, plan_file="plan.json")
+        program.assert_not_called()
+        self.assertNotIn(["20,J"], [step["inputs"] for step in self.s.client.steps])
+        self.assertEqual(len(outcome.attempts), 1)
+
+    def test_held_input_ignores_menu_keys_and_other_scenes_and_survives_resume(self):
+        level = {"result": {"consumed": 6}, "obs": {"scene": "Level"}}
+        self.s._remember_held_input({"inputs": ["6,R,G"]}, level)
+        self.assertEqual(self.s._held_input, ("R,G", "celeste_ai"))
+        self.s._remember_held_input({"inputs": ["1,C"]}, {"result": {"consumed": 1}, "obs": {"scene": "Level"}})
+        self.assertEqual(self.s._held_input, ("", "celeste_ai"))       # 确认键不算按住
+        self.s._remember_held_input({"inputs": ["3,A:45,J"]}, {"result": {"consumed": 3}, "obs": {"scene": "Level"}})
+        self.assertEqual(self.s._held_input, ("A:45,J", "celeste_ai"))
+        self.s._remember_held_input({"inputs": ["10,R"]}, {"result": {"consumed": 10}, "obs": {"scene": "Overworld"}})
+        self.assertEqual(self.s._held_input, ("", "celeste_ai"))       # 关卡以外按空帧算
+        self.s._remember_held_input({"inputs": ["6,R,G"]}, level)
+        later = self.root / "later"
+        later.mkdir()
+        metrics = Metrics(later / "metrics.json", "test", "test", "high", 600)
+        metrics.state.resumed_from = str(self.root)
+        resumed = GameSession(self.cfg, later, metrics)
+        self.addCleanup(resumed.close)
+        resumed._restore_held_input()
+        self.assertEqual(resumed._held_input, ("R,G", "celeste_ai"))
+
+    def test_bridge_refusal_does_not_block_every_later_act(self):
+        self.s._freeze_base = (0.0, 0.0, 0.0)
+        self.s.metrics.freeze_counters = lambda: (300.0, 0.0, 0.0)
+        client = StepClient([])
+        client.call = Mock(side_effect=RuntimeError("step failed: input_format change requires an explicit neutral frame"))
+        self.s.client = client
+        with self.assertRaises(RuntimeError):
+            self.s.act(["5,R"], "往右走", None)
+        self.assertEqual(self.s._freeze_base, (300.0, 0.0, 0.0))     # 已重置：下一次不会再为同一段冻结僵直
+        self.s.client = StepClient([])
+
+    def test_agent_mode_stops_at_story_and_ignores_the_registered_completion(self):
+        self.s.cfg.cutscene_mode = "agent"
+        self.s._pending_complete = True
+        self.s._freeze_base = (0.0, 0.0, 0.0)
+        self.s.metrics.freeze_counters = lambda: (300.0, 0.0, 0.0)
+        self.s.client = StepClient([])
+        self.s.act(["5,R"], "往右走", None)
+        self.assertEqual(self.s.client.steps[0]["stop_on"], ["death", "room", "uncontrollable", "story_input"])
+
+    def test_stop_request_during_stiffness_skips_the_plan(self):
+        self.s._freeze_base = (0.0, 0.0, 0.0)
+        self.s.metrics.freeze_counters = lambda: (300.0, 0.0, 0.0)
+        self.s.client = StepClient([])
+        original = self.s.goals.check
+        def check(values):
+            original(values)
+            self.s.goals.stop_motion.set()
+        self.s.goals.check = check
+        outcome = self.s.act(["5,R"], "往右走", None)
+        self.assertEqual(len(self.s.client.steps), 1)
+        self.assertTrue(any("主控已请求停止" in n for n in outcome.auto_notes))
+
+    def test_codex_compaction_time_is_recorded(self):
+        from orchestrator.codex_agent import CodexRunner
+        runner = CodexRunner.__new__(CodexRunner)
+        runner._events, runner.control, runner.compacted, runner.paused, runner.chat_only = None, None, set(), False, False
+        runner.metrics = self.s.metrics
+        runner._public_compaction = lambda *a, **k: None
+        runner._event("item/started", {"item": {"type": "contextCompaction", "id": "c"}})
+        time.sleep(0.05)
+        runner._event("item/completed", {"item": {"type": "contextCompaction", "id": "c"}})
+        self.assertGreater(self.s.metrics.state.compact_s, 0.04)
+        self.assertEqual(self.s.metrics.state.compactions, 1)
+
+    def test_decisions_record_the_stiffness_for_replay(self):
+        self.s._freeze_base = (0.0, 0.0, 0.0)
+        self.s.metrics.freeze_counters = lambda: (300.0, 0.0, 0.0)
+        self.s._held_input = ("L", "celeste_ai")
+        self.s.client = StepClient([])
+        self.s.act(["5,R"], "往右走", None)
+        self.s._decisions_log.flush()
+        record = json.loads((self.root / "decisions.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual((record["stiffness"]["frames"], record["stiffness"]["keys"]), (36, "L"))
+        # 重放：不开僵直的会话按记录僵直
+        self.s.cfg.stiffness = False
+        self.s.replay_stiffness = record["stiffness"]
+        self.s.client = StepClient([])
+        self.s.act(["5,R"], "往右走", None)
+        self.assertEqual(self.s.client.steps[0]["inputs"], ["36,L"])
+
+
 class StiffnessSettingsTests(unittest.TestCase):
     def test_prompt_mentions_the_rule_only_when_enabled(self):
         cfg = RunConfig(agent="t", save="t", model="m", mode="explore", knowledge_profile="explore", chapter=4)
@@ -235,6 +365,9 @@ class StiffnessToolTextTests(unittest.TestCase):
         text = asyncio.run(server.call_tool("observe", {})).content[-1].text
         self.assertIn("思考 2.5 分钟、运行工具 5.0 分钟，下一次 act 执行前预计僵直 1.5 秒（90 帧）", text)
         text = asyncio.run(server.call_tool("act", {"inputs": ["5,R"], "thought": "往右走"})).content[-1].text
-        self.assertIn("僵直了 90 帧（1.5 秒）", text)
-        self.assertIn("目前不会僵直", text)        # 动作结束后新的冻结从头算
+        self.assertIn("这次冻结思考 2.5 分钟、运行工具 5.0 分钟，执行你的按键之前先（上一帧没有按键）僵直了 90 帧（1.5 秒）", text)
+        self.assertNotIn("目前不会僵直", text)     # act 的结果不再附上刚重置的冻结
+        counters[:] = [160.0, 310.0, 0.0]
+        text = asyncio.run(server.call_tool("act", {"inputs": ["5,R"], "thought": "往右走"})).content[-1].text
+        self.assertIn("都没满 2.5 分钟，这次不僵直", text)       # 没到门槛也告诉智能体这次冻结的时间
         self.assertEqual(session.client.steps[0]["inputs"], ["90"])

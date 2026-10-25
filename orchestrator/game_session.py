@@ -38,7 +38,7 @@ MAX_RETRIES = 5
 MAX_RETRY_TIMEOUT_S = 60.0
 
 # 思考僵直（探索模式 --stiffness）：冻结期间的思考与工具时间按比例变成下一次 act 前的僵直，期间保持上一帧的按键
-STIFF_STOP_ON = ["death", "room", "complete"]   # 死亡（立即松开所有按键）、换房间、通关时僵直结束，这次的按键不执行
+STIFF_STOP_ON = ["death", "room", "complete", "uncontrollable"]   # 死亡（立即松开所有按键）、换房间、通关、进入剧情时僵直结束，这次的按键不执行
 STIFF_MAX_FRAMES = 60 * 60 * 10                 # 与桥接单次推进的上限相同
 
 
@@ -224,6 +224,7 @@ class GameSession:
         self._input_formats = None
         self._held_input = ("", "celeste_ai")   # 最近一次真正喂给游戏的那一帧按键与格式（思考僵直时保持它）
         self._freeze_base: tuple[float, float, float] | None = None   # 这次冻结开始时的（思考、工具、压缩）累计
+        self.replay_stiffness: dict | None = None   # 重放（orchestrator/replay.py）：下一次 act 前按记录僵直
         # 依次通关多章或按段通关（segments.py）：当前这一截完成后，主控自动换到队列里的下一截。
         # 队列里的每一项是 Piece（整章也可以直接写章节编号）；chapter_finished = 这一截已完成、正在等着换过去
         plan = list(cfg.plan) if cfg.plan else [Piece(c) for c in (cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else []))]
@@ -263,6 +264,7 @@ class GameSession:
         self.entry_guard_supported = self.client.call('hello').get('entry_guard') is True
         self.client.step_options = self._step_options
         self.client.after_step = self._remember_held_input
+        self._restore_held_input()
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
         reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music)
         obs = reply["obs"]
@@ -323,13 +325,37 @@ class GameSession:
     # ---- 思考僵直（探索模式 --stiffness） ----
 
     def _remember_held_input(self, args: dict, reply: dict) -> None:
-        """桥接每次推进之后：记下最后真正喂给游戏的那一帧按键（主控的自动推进也算）。"""
+        """桥接每次推进之后：记下最后真正喂给游戏的那一帧按键（主控的自动推进也算），并存进运行目录供续跑接上。
+        停在关卡以外（菜单、加载）时按空帧算；本项目格式只保留游玩按键（确认、返回、暂停、日志不算按住）。"""
         consumed = int(((reply or {}).get("result") or {}).get("consumed") or 0)
         if consumed <= 0:
             return
         keys = held_keys(args.get("inputs"), consumed)
-        if keys is not None:
-            self._held_input = (keys, args.get("input_format") or "celeste_ai")
+        if keys is None:
+            return
+        fmt = args.get("input_format") or "celeste_ai"
+        if ((reply or {}).get("obs") or {}).get("scene", "Level") != "Level":
+            keys, fmt = "", "celeste_ai"
+        elif fmt == "celeste_ai":
+            keys = ",".join(k for k in keys.split(",") if k.startswith("A:") or set(k) <= AGENT_LETTERS)
+        held = (keys, fmt)
+        if held != getattr(self, "_held_input", None):
+            self._held_input = held
+            try:
+                (self.run_dir / "held_input.json").write_text(json.dumps({"keys": keys, "input_format": fmt}), encoding="utf-8")
+            except OSError:
+                pass
+
+    def _restore_held_input(self) -> None:
+        """续跑：接上上一段运行最后按住的键（保持冻结结束时桥接仍按着它）。"""
+        previous = getattr(getattr(getattr(self, "metrics", None), "state", None), "resumed_from", None)
+        if not previous:
+            return
+        try:
+            data = json.loads((Path(previous) / "held_input.json").read_text(encoding="utf-8"))
+            self._held_input = (str(data.get("keys") or ""), str(data.get("input_format") or "celeste_ai"))
+        except (OSError, ValueError, AttributeError):
+            pass
 
     def stiffness_enabled(self) -> bool:
         return bool(getattr(self.cfg, "stiffness", False)) and is_explore(self.cfg)
@@ -338,10 +364,14 @@ class GameSession:
         if self.stiffness_enabled():
             self._freeze_base = self.metrics.freeze_counters()
 
+    def _unit_text(self) -> str:
+        unit = float(getattr(self.cfg, "stiff_unit_s", 150.0))
+        return f"{unit / 60:g} 分钟" if unit >= 60 and (unit * 2) % 60 == 0 else f"{unit:g} 秒"
+
     def freeze_stats(self) -> dict | None:
         """这次冻结到此刻的思考、工具时间与按规则应僵直多久：思考、工具时间各自满一个计时单位才算，之后按比例。
-        上下文压缩（算在思考时间里）不算；用户暂停与等待额度本来就不计入思考与工具时间。"""
-        if not self.stiffness_enabled() or self._freeze_base is None:
+        上下文压缩（算在思考时间里）扣掉；用户暂停与等待额度本来就不计入思考与工具时间。"""
+        if not self.stiffness_enabled() or getattr(self, "_freeze_base", None) is None:
             return None
         think, tool, compact = self.metrics.freeze_counters()
         base_think, base_tool, base_compact = self._freeze_base
@@ -355,7 +385,7 @@ class GameSession:
                 "frames": frames}
 
     def freeze_line(self) -> str:
-        """observe 与 act 返回开头的一行：这次冻结已累计的时间与预计僵直。"""
+        """observe 返回开头的一行：这次冻结已累计的时间与预计僵直。"""
         stats = self.freeze_stats()
         if stats is None:
             return ""
@@ -363,39 +393,56 @@ class GameSession:
                 else "目前不会僵直")
         return f"思考僵直：这次冻结已思考 {minutes_text(stats['think_s'])}、运行工具 {minutes_text(stats['tool_s'])}，{tail}。"
 
-    def _stiffen(self) -> dict:
+    def _stiffen(self, stats: dict | None) -> dict:
         """（调用方持有连接锁）按这次冻结的时间先让角色僵直：保持上一帧的按键推进若干帧，不计入 act 的帧数上限。
-        死亡（立刻松开所有按键）、换房间或通关时停下，interrupted=True 表示这次的按键不执行。"""
-        stats = self.freeze_stats()
-        if stats is None or stats["frames"] <= 0:
+        死亡（立刻松开所有按键）、换房间、通关、进入剧情或主控请求停止时停下，interrupted=True 表示这次的按键不执行。
+        stats 在智能体调用 act 时算好（不含等规划回放放完的时间）；重放时直接给出记录里的僵直。"""
+        if not stats:
             return {}
-        spent = f"这次冻结思考 {minutes_text(stats['think_s'])}、运行工具 {minutes_text(stats['tool_s'])}"
+        spent = f"这次冻结思考 {minutes_text(stats.get('think_s', 0))}、运行工具 {minutes_text(stats.get('tool_s', 0))}"
+        if stats["frames"] <= 0:
+            return {"note": f"思考僵直：{spent}，都没满 {self._unit_text()}，这次不僵直。"}
         last = self.last_obs or {}
         if last.get("scene") != "Level" or not last.get("controllable") or story_pending(last):
+            self._start_freeze()
             return {"note": f"思考僵直：{spent}，按规则应僵直 {stats['seconds']:g} 秒；角色当前不可操作，这次不僵直。"}
-        keys, fmt = self._held_input
+        keys, fmt = (stats["keys"], stats.get("input_format", "celeste_ai")) if "keys" in stats else self._held_input
+        stops = list(STIFF_STOP_ON)
+        if self.cfg.cutscene_mode == "agent":
+            stops.append("story_input")
+            if self._pending_complete:     # 已登记通关后 complete 每帧都在，不能用它截断（与 _stop_list 相同）
+                stops.remove("complete")
         extra = {"input_format": fmt} if fmt != "celeste_ai" else {}
         self.metrics.update(status="executing")
         t0 = time.monotonic()
-        reply = self.client.call("step", inputs=[f"{stats['frames']},{keys}" if keys else str(stats["frames"])],
-                                 stop_on=list(STIFF_STOP_ON), speed=self.cfg.play_speed, image=True, scope="room",
-                                 fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
-                                 on_event=self._on_progress, **self._stop_rooms(), **extra)
+        try:
+            reply = self.client.call("step", inputs=[f"{stats['frames']},{keys}" if keys else str(stats["frames"])],
+                                     stop_on=stops, speed=self.cfg.play_speed, image=True, scope="room",
+                                     fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
+                                     on_event=self._on_progress, **self._stop_rooms(), **extra)
+        except Exception:
+            self._start_freeze()           # 不为同一段冻结反复尝试（例如桥接拒绝了按键格式），下一次 act 照常执行
+            raise
         game_s = time.monotonic() - t0
-        self._start_freeze()               # 僵直已经执行：即使后面的按键出错，也不会再为同一段冻结僵直一次
         result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
         used = int(result.get("consumed") or 0)
+        # 先记游戏推进时间再重置冻结：僵直这段不能算进工具时间
+        self.metrics.add(auto_game_s=game_s, stiff_frames=used, stiff_s=used / 60)
+        self._start_freeze()               # 僵直已经执行：即使后面的按键出错，也不会再为同一段冻结僵直一次
         self._log_frames(result, [keys] * used, "思考僵直", auto=True, input_format=fmt)
         self._handle_events(result)
         self._commit_completion(obs)
         self._note_obs_room(obs)
-        self.metrics.add(auto_game_s=game_s, stiff_frames=used, stiff_s=used / 60)
+        self.goals.check(self.goal_values(obs))
         held = f"按住上一帧的按键（{keys}）" if keys else "（上一帧没有按键）"
-        info = {**stats, "keys": keys, "consumed": used, "stop": result.get("stop")}
         stop = result.get("stop")
-        if stop == "done":
+        info = {**{k: stats.get(k) for k in ("think_s", "tool_s", "seconds", "frames")},
+                "keys": keys, "input_format": fmt, "consumed": used, "stop": stop}
+        if stop == "done" and not self.goals.stop_motion.is_set() and not self.done:
             return {"info": info, "note": f"思考僵直：{spent}，执行你的按键之前先{held}僵直了 {used} 帧（{used / 60:g} 秒）。"}
-        why = {"death": "死亡，已立刻松开所有按键", "room": "进入了别的房间", "complete": "通关"}.get(stop, f"停下（{stop}）")
+        why = ("主控已请求停止" if stop == "done" else
+               {"death": "死亡，已立刻松开所有按键", "room": "进入了别的房间", "complete": "通关",
+                "uncontrollable": "角色失去控制（剧情或转场）", "story_input": "遇到剧情输入节点"}.get(stop, f"停下（{stop}）"))
         return {"info": info, "interrupted": True, "result": result, "obs": obs, "image": image,
                 "note": f"思考僵直：{spent}，先{held}僵直，第 {used} 帧{why}；这次 act 的按键没有执行。"}
 
@@ -422,7 +469,7 @@ class GameSession:
         """当前观测。剧情交给智能体时，若剧情还没到输入节点，先自动播放到节点（与 act 之后相同：检查停止目标，
         章节通关时进入下一章）；主控的说明放在 observe_notes 里，由 observe 工具一并返回。"""
         notes: list = []
-        if self._freeze_base is None:
+        if getattr(self, "_freeze_base", None) is None:
             self._start_freeze()           # 本次运行第一次调用游戏工具：第一次冻结从这里算起（不算准备阶段）
         with self.lock:
             reply = self.client.call("observe", image=True, scope="room", fields=True)
@@ -679,6 +726,8 @@ class GameSession:
             rel = self._plan_path(plan_file).relative_to(self.workspace.resolve())
             plan_path = "/workspace/" + rel.as_posix()   # 容器里看到的路径
 
+        # 冻结在智能体调用 act 时结束：先算好僵直（不含等规划回放放完、等 HUD 换思考的时间）
+        stiff_stats, self.replay_stiffness = (getattr(self, 'replay_stiffness', None) or self.freeze_stats()), None
         self.decision_index += 1
         start_room = self.metrics.state.room
         attempts: list[dict] = []
@@ -687,7 +736,7 @@ class GameSession:
         while True:
             label = thought if attempt == 0 else f"{thought}（自动重试 {attempt}）"
             result, obs, image, game_s, auto_frames, auto_notes = self._execute(
-                plan, frames, label, stop, plan_file, attempt)
+                plan, frames, label, stop, plan_file, attempt, stiff_stats)
             total_game_s += game_s
             total_auto += auto_frames
             notes.extend(auto_notes)
@@ -696,6 +745,8 @@ class GameSession:
                              "deviation": result.get("deviation")})
             retry = plan.retry
             reason = result["stop"]
+            if result.get("stiffness_interrupted"):
+                break                      # 僵直被死亡、换房等打断：这次 act 的按键（含自动重试）都不执行
             if (self.done or retry is None or attempt >= retry.max or reason not in retry.on
                     or not obs.get("controllable") or (obs.get("level") or {}).get("room") != start_room):
                 break
@@ -769,7 +820,7 @@ class GameSession:
         return frames
 
     def _execute(self, plan: PlanSpec, frames: list[str], thought: str, stop: list[str], plan_file: str | None,
-                 attempt: int):
+                 attempt: int, stiff_stats: dict | None = None):
         """执行一次计划：推进游戏、自动推进非可控段、记录日志与工作区数据。"""
         if attempt == 0 and self.playback is not None:
             # 规划回放（游戏不推进）：先等排队的轮次放完（不持有连接锁，回放线程要用），再把镜头送回 Madeline
@@ -793,14 +844,16 @@ class GameSession:
             if self.goals.stop_motion.is_set():
                 raise ActError("已请求停止，本次动作未执行")
             resumed = self._resume_auto_handling() if attempt == 0 else []
-            stiff = self._stiffen() if attempt == 0 else {}
+            stiff = self._stiffen(stiff_stats) if attempt == 0 else {}
             if stiff.get("note"):
                 resumed = [*resumed, stiff["note"]]
             skipped = bool(stiff.get("interrupted"))
             if skipped:
                 # 僵直期间死亡、换房或通关：这次的按键不执行，把僵直这一段的结果交给智能体（事件已在僵直时处理）
                 game_s, obs, image = 0.0, stiff["obs"], stiff["image"]
-                result = {**stiff["result"], "consumed": 0, "planned": len(frames), "deviation": None}
+                # consumed 是你的按键执行了几帧（0）；trajectory 与 events 是僵直这一段的
+                result = {**stiff["result"], "consumed": 0, "planned": len(frames), "deviation": None,
+                          "stiffness_interrupted": True}
             else:
                 t0 = time.monotonic()
                 reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
@@ -810,7 +863,7 @@ class GameSession:
                 result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
             if stiff.get("info"):
                 result["stiffness"] = stiff["info"]
-            result['input_format'] = plan.input_format
+            result['input_format'] = stiff["info"]["input_format"] if skipped else plan.input_format
             if plan.input_format == 'celeste_tas':
                 used = result['consumed']
                 source = plan.input_source or {}
@@ -867,6 +920,7 @@ class GameSession:
             "decision_wait_s": round(self.metrics.state.decision_wait_s, 3) if attempt == 0 else None,
             "inputs": plan.inputs, "plan_file": plan_file, "stop_on": stop, "stop": result["stop"],
             "input_format":plan.input_format, "input_cursor":result.get('input_cursor'),
+            "stiffness": result.get("stiffness"),
             "consumed": result["consumed"], "planned": result["planned"], "events": result["events"],
             "deviation": result.get("deviation"), "game_s": round(game_s, 3),
             "auto_frames": auto_frames, "auto_notes": notes,

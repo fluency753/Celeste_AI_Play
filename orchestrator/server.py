@@ -133,7 +133,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     def finish() -> None:
         metrics.update(status="thinking")
 
-    def header_line() -> str:
+    def header_line(freeze: bool = True) -> str:
         line = effort_line(metrics)
         levels = getattr(session, 'effort_levels', lambda: [])()
         if levels:
@@ -143,9 +143,10 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             line += f"\n模拟体力：{energy['balance']}/{energy['capacity']}（预测花费体力，真实操作和首次到新房间补充）"
         if gate is not None and gate.enabled:
             line += "\n" + gate.status_line()
-        freeze = getattr(session, "freeze_line", lambda: "")()   # 探索模式开了思考僵直：这次冻结已累计的时间与预计僵直
-        if freeze:
-            line += "\n" + freeze
+        # 探索模式开了思考僵直：这次冻结已累计的时间与预计僵直（act 的结果里另有这次冻结的说明，不再重复）
+        text = getattr(session, "freeze_line", lambda: "")() if freeze else ""
+        if text:
+            line += "\n" + text
         return line
 
     def credit(obs: dict) -> None:
@@ -213,7 +214,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
                     parts.append("【进入新房间】下面是新房间的截图、整个房间的字符地图，以及整个房间的精确数据（JSON）。房间信息以精确数据为准，截图仅作参考。")
-                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(), explore=explore))
+                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(freeze=False), explore=explore))
                 if new_room:
                     parts.append(ROOM_JSON_HEADER + room_json(outcome.obs))
                 if session.workspace:
