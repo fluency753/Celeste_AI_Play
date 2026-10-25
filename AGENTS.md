@@ -20,6 +20,10 @@
 - `dotnet run --project calibration/story_text "-p:CelestePrefix=<游戏目录>"`：运行原生剧情检查。
 - `python tools/build_obs_plugin.py --no-install`：仅构建 OBS 插件，不安装。
 
+## 命令执行规范
+
+状态查询、构建、部署和启动分别执行，按依赖顺序检查结果。不要把不相关的操作塞进同一条复杂 PowerShell 命令，尤其不要混合 HTTP 状态查询与 `Start-Process` 等启动操作。确需组合的步骤应服务于同一项明确操作，失败后停止后续依赖步骤。
+
 ## 编码与命名规范
 
 Python、C# 使用四空格缩进，具体写法遵循相邻代码。Python 函数与模块使用 `snake_case`，C# 类型与方法使用 `PascalCase`。保留文件编码及 `.gitattributes` 指定的换行，避免无关格式修改。仓库尚未统一配置格式化或静态检查工具。
