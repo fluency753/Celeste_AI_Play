@@ -57,6 +57,12 @@ class ResumePositionTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.check(level(save='other'),cutscene_mode='agent',resume_pending=True)
 
+    def test_agent_can_start_from_loaded_save_map_without_selecting_chapter(self):
+        obs={'scene':'Overworld','save':{'name':'opus5.5','slot':8},'menu':{'current':'OuiChapterSelect','area':7}}
+        self.assertTrue(self.check(obs,cutscene_mode='agent')[0])
+        obs['save']['slot']=9
+        self.assertFalse(self.check(obs,cutscene_mode='agent')[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,7 +39,8 @@ def area_id(sid: str | None) -> int | None:
 
 def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None,
                menu_speed: int = 4, should_stop=None, create_if_missing: bool = False,
-               save_slot: int | None = None, cutscene_mode: str = 'auto', checkpoint: int = 0) -> dict:
+               save_slot: int | None = None, cutscene_mode: str = 'auto', checkpoint: int = 0,
+               stop_at_chapter_select: bool = False) -> dict:
     """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。
     也可以从通关之后接着用：结算画面、回到地图、选下一章、进入，一路处理到可操作的第一帧。
     checkpoint > 0（按段通关）：载入存档后，在关卡里或选章地图上用桥接的 enter_checkpoint 直接进入这一章的
@@ -49,6 +50,8 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
         raise RuntimeError("新建存档需要 CelesteAIBridge 0.12.4 或更新版本，请更新桥接 Mod。")
     if checkpoint and chapter is None:
         raise ValueError("进入检查点需要指定章节")
+    if stop_at_chapter_select and (chapter is not None or checkpoint):
+        raise ValueError('仅进入存档时不指定章节或检查点，由智能体自行导航')
     obs = c.call("activate", entities=False, tiles=False)["obs"]
     teleport = bool(checkpoint)     # 还要传送到检查点
     if teleport and not c.call("hello").get("checkpoints"):
@@ -74,14 +77,14 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
             teleport = False
             obs = step(c, ["10"], speed=menu_speed)["obs"]  # 开始载入：之后按下面的流程等到可操作
             continue
-        if cutscene_mode == 'agent' and not wrong_save and not teleport and story_pending(obs):
+        if cutscene_mode == 'agent' and not stop_at_chapter_select and not wrong_save and not teleport and story_pending(obs):
             if scene != 'Level' or chapter is None or area_id((obs.get('level') or {}).get('sid')) == chapter:
                 return obs
 
         # 进入关卡之后的部分会被录像：一律按正常速度推进，剧情用暂停菜单跳过
         if scene == "Level":
             level = obs["level"]
-            elsewhere = wrong_save or (chapter is not None and area_id(level.get("sid")) != chapter)
+            elsewhere = stop_at_chapter_select or wrong_save or (chapter is not None and area_id(level.get("sid")) != chapter)
             if elsewhere and (obs.get("controllable") or level.get("paused")):
                 obs = leave_level_by_pause_menu(c)  # 在别的存档或别的章节里：先返回地图
                 continue
@@ -129,6 +132,11 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
             continue
 
         current = menu.get("current")
+        if stop_at_chapter_select and not wrong_save and current == 'OuiChapterSelect':
+            return obs
+        if stop_at_chapter_select and not wrong_save and current == 'OuiChapterPanel':
+            obs = press(c, 'B', settle=30)['obs']
+            continue
         if wrong_save and current in ("OuiChapterSelect", "OuiChapterPanel"):
             obs = press(c, "B", settle=30)["obs"]  # 别的存档的地图：退回主菜单，再从选档页选
         elif current == "OuiChapterSelect" and chapter is not None and menu.get("area", chapter) != chapter:

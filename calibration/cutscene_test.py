@@ -242,6 +242,25 @@ class CutsceneTests(unittest.TestCase):
             self.assertEqual(enter_save(client,'player',chapter=0,save_slot=1,cutscene_mode='agent'),obs)
         skip.assert_not_called();step.assert_not_called()
 
+    def test_save_only_entry_and_agent_connection_do_not_select_chapter(self):
+        obs={'scene':'Overworld','storyInput':None,'save':{'name':'player','slot':1},
+             'menu':{'current':'OuiChapterSelect','area':7}}
+        client=SceneClient(obs)
+        self.assertEqual(enter_save(client,'player',save_slot=1,stop_at_chapter_select=True),obs)
+        with patch('orchestrator.game_session.BridgeClient',return_value=client):
+            self.s.connect()
+        self.assertEqual(client.steps,[]);self.assertFalse(self.s.done)
+
+    def test_save_only_entry_backs_out_of_chapter_panel_without_confirming(self):
+        selected={'scene':'Overworld','storyInput':None,'save':{'name':'player','slot':1},
+                  'menu':{'current':'OuiChapterSelect','area':7}}
+        panel=copy.deepcopy(selected);panel['menu']['current']='OuiChapterPanel'
+        client=ScriptClient([panel,selected])
+        self.assertEqual(enter_save(client,'player',save_slot=1,stop_at_chapter_select=True),selected)
+        self.assertEqual(client.steps,[['1,B','30']])
+        with self.assertRaises(ValueError):
+            enter_save(client,'player',chapter=1,stop_at_chapter_select=True)
+
     def test_auto_entry_skips_cutscene_that_starts_while_player_state_is_normal(self):
         # 桥接 1.0.3 起剧情的头几帧也算可操作：自动跳过剧情时，进章节先跳过剧情，再交给智能体
         start={'scene':'Level','controllable':True,'save':{'name':'player','slot':1},

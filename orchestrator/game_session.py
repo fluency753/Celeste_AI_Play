@@ -243,7 +243,8 @@ class GameSession:
             if chapter is not None:
                 self.piece = Piece(chapter)
         if obs.get("scene") != "Level" and not (self.cfg.cutscene_mode == 'agent' and (
-                story_pending(obs) or ((self._pending_complete or self.chapter_finished) and obs.get('scene') in END_SCENES))):
+                story_pending(obs) or ((self._pending_complete or self.chapter_finished) and obs.get('scene') in END_SCENES)
+                or (obs.get('scene') == 'Overworld' and (obs.get('menu') or {}).get('current') in {'OuiChapterSelect','OuiChapterPanel'}))):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
         self.cfg.save_slot = slot
         self.start_sid = (obs.get('level') or {}).get('sid') or CHAPTER_SIDS.get(self.cfg.chapter) or self.metrics.state.chapter

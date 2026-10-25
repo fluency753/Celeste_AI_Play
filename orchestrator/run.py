@@ -572,6 +572,8 @@ def check_resume_position(cfg: RunConfig) -> bool:
         from tools.cutscene import story_pending
         if cfg.cutscene_mode == 'agent' and right_save and story_pending(obs):
             return True
+        if cfg.cutscene_mode == 'agent' and right_save and obs.get('scene') == 'Overworld' and (obs.get('menu') or {}).get('current') in {'OuiChapterSelect','OuiChapterPanel'}:
+            return True
         if cfg.cutscene_mode == 'agent' and right_save and cfg.resume_completion_pending and obs.get('scene') in {'AreaComplete','LevelExit','OverworldLoader','Overworld'}:
             return True
         if cfg.chapter is None:
