@@ -1,17 +1,19 @@
 """Read-only save inventory and explicit selection validation. Never edits game saves."""
-import re
 import xml.etree.ElementTree as ET
 
 from .gamepaths import celeste_dir
 
 
 def supports_unicode():
-    try:
-        manifest = (celeste_dir() / 'Mods/CelesteAIBridge/everest.yaml').read_text(encoding='utf-8-sig')
-        version = re.search(r'\bVersion:\s*(\d+)\.(\d+)\.(\d+)', manifest)
-        return bool(version and tuple(map(int, version.groups())) >= (0, 12, 1))
-    except (OSError, KeyError, TypeError, ValueError):
-        return False
+    # 能写入 Unicode 不代表当前游戏字体能显示。保留清单 API 的能力字段。
+    return False
+
+
+def validate_new_name(name):
+    if (not isinstance(name, str) or not name.strip() or len(name.strip()) > 20
+            or not name.isascii() or not name.isprintable()):
+        raise ValueError('新存档名须为1～20个可打印 ASCII 字符；中文名请使用拼音，避免游戏字体缺字')
+    return name.strip()
 
 
 def inventory():
@@ -39,10 +41,8 @@ def validate_selection(name, create, chapter, slot=None):
     if not isinstance(name, str) or not name.strip() or type(create) is not bool:
         raise ValueError('请显式选择已有存档，或选择新建并填写存档名')
     name = name.strip()
-    if create and (len(name) > 20 or not name.isprintable() or any(ord(c) > 0xffff for c in name)):
-        raise ValueError('新存档名须为1～20个可显示字符，支持中文')
-    if create and not name.isascii() and not supports_unicode():
-        raise ValueError('中文新档名需要安装桥接0.12.1并重启游戏；当前可用英文新档名')
+    if create:
+        name = validate_new_name(name)
     if create:
         if chapter != 0:
             raise ValueError('新存档必须从序章（0）开始')

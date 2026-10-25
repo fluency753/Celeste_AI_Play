@@ -42,10 +42,9 @@ class SaveCatalogTests(unittest.TestCase):
                         self.assertEqual(gamepaths.celeste_dir(),game)
 
     def test_selection_is_explicit_and_never_overwrites_existing_names(self):
-        with patch('orchestrator.saves.inventory',return_value=[{'slot':10,'name':'test'}]), \
-             patch('orchestrator.saves.supports_unicode',return_value=True):
+        with patch('orchestrator.saves.inventory',return_value=[{'slot':10,'name':'test'}]):
             self.assertEqual(validate_selection('test',False,1),'test')
-            self.assertEqual(validate_selection(' 小雪 ',True,0),'小雪')
+            self.assertEqual(validate_selection(' Xiaoxue ',True,0),'Xiaoxue')
             self.assertEqual(validate_selection('test',True,0),'test')
             for args in [('',False,0),('missing',False,0),('小雪',True,1),
                          ('a\nb',True,0),('a'*21,True,0),('test',None,0)]:
@@ -57,9 +56,13 @@ class SaveCatalogTests(unittest.TestCase):
             self.assertEqual(validate_selection('same',False,0,1),'same')
             with self.assertRaises(ValueError):validate_selection('same',False,0,2)
 
-    def test_old_bridge_rejects_chinese_name_before_game_start(self):
-        with patch('orchestrator.saves.supports_unicode',return_value=False):
-            with self.assertRaisesRegex(ValueError,'桥接0.12.1'):validate_selection('小雪',True,0)
+    def test_unicode_writing_capability_does_not_prove_font_support(self):
+        with patch('orchestrator.saves.supports_unicode',return_value=True):
+            with self.assertRaisesRegex(ValueError,'ASCII'):validate_selection('小雪',True,0)
+
+    def test_existing_unicode_save_is_still_selectable(self):
+        with patch('orchestrator.saves.inventory',return_value=[{'slot':12,'name':'小岚'}]):
+            self.assertEqual(validate_selection('小岚',False,2,12),'小岚')
 
 
 class SaveMenuTests(unittest.TestCase):

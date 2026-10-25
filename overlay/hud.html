@@ -220,7 +220,7 @@
       <div id="modelChoiceStatus" role="status"></div>
       <div class="control-buttons"><label>推理 <select id="sessionEffort" disabled><option value="">读取中…</option></select></label><button id="sessionNew" type="button" title="新建独立会话并准备入门资料，完成后可聊天或开始试玩">新建并准备</button><button id="sessionDisconnect" type="button">断开会话</button></div>
       <select id="sessionSave" aria-label="选择游戏存档"><option value="">选择存档…</option><option value="new">新建独立存档</option></select>
-      <input id="sessionSaveName" aria-label="新存档名" placeholder="新存档名（留空由 agent 取名）" maxlength="20" hidden>
+      <input id="sessionSaveName" aria-label="新存档名" placeholder="ASCII 玩家名（留空由 agent 取名）" maxlength="20" hidden>
       <div id="sessionSaveStatus" role="status" hidden></div>
       <div class="control-buttons"><label>起始A面 <input id="sessionChapter" type="number" min="0" max="10" value="0" style="width:3.5em"></label><select id="sessionScope" aria-label="试玩范围"><option value="campaign">顺序游玩</option><option value="chapter">仅这一章</option></select><button id="sessionPlay" type="button" title="进入所选存档和章节后保持暂停，点击继续才开始操作">开始试玩</button></div>
       <label><input id="sessionSimAssist" type="checkbox" disabled>有限模拟辅助<span id="simAvailability">（检查安装状态…）</span></label>

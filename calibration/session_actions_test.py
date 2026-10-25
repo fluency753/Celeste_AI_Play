@@ -225,10 +225,10 @@ class SessionActionTests(unittest.TestCase):
         with patch('orchestrator.session_actions.release_chat'), \
              patch('orchestrator.session_actions.launch', return_value=(self.root/'host2',{})) as launch, \
              patch('orchestrator.session_actions._monitor'),patch('orchestrator.prepared.load_preparation'):
-            play_session(self.anchor,current,{'chapter':0,'save':'小雪','create_save':True,'save_slot':None})
+            play_session(self.anchor,current,{'chapter':0,'save':'Xiaoxue','create_save':True,'save_slot':None})
         arguments=launch.call_args.args[0]
         self.assertIn('--create-save',arguments)
-        self.assertEqual(arguments[arguments.index('--save')+1],'小雪')
+        self.assertEqual(arguments[arguments.index('--save')+1],'Xiaoxue')
         self.assertEqual(len(list((self.root/'game/Saves').iterdir())),1)
 
     def test_missing_selection_or_invalid_slot_keeps_chat_connected(self):
