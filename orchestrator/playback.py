@@ -312,6 +312,12 @@ class _Msg:
     tail: object = field(default_factory=lambda: RecordTail(MAGIC, HEADER))
 
 
+@dataclass
+class _PreviewCompletion:
+    keys: tuple[str, ...]
+    offsets: list[int]  # 每个已收走来源中，增量读取器消费到的位置
+
+
 class Playback:
     def __init__(self, cfg, session, metrics, gate, log=print):
         self.cfg = cfg
@@ -396,7 +402,7 @@ class Playback:
         for key, _ in ready:
             del self._msgs[key]
         self._submit(msg.label, any(other.started for _, other in ready), any(other.cli for _, other in ready),
-                     skip_render=tuple(key for key, other in ready if other.previewed))
+                     previews=tuple((key, other.tail) for key, other in ready if other.previewed))
 
     def _stream(self):
         while not self._stream_stop.wait(max(.1, getattr(self.cfg, 'playback_stream_interval_s', 1))):
@@ -429,7 +435,7 @@ class Playback:
                 self._backlog += 1
             self._jobs.put(('preview', mid))
 
-    def _submit(self, label: str, started: bool, cli: bool = False, skip_render=False) -> None:
+    def _submit(self, label: str, started: bool, cli: bool = False, previews=()) -> None:
         """一条消息的工具全部返回：调用了模拟器就扣一轮规划轮次，并把这期间的记录文件移出工作区、交给回放线程。"""
         with self._submit_lock:
             files = sorted(self.dir.glob("*.bin"))
@@ -439,10 +445,11 @@ class Playback:
                     self.gate.charge(label)
             if not files:
                 return
-            sources, moved = self._take(files)
+            sources, moved, offsets = self._take(files, tuple(tail for _, tail in previews))
+            completion = _PreviewCompletion(tuple(key for key, _ in previews), offsets) if previews else None
         with self._cv:
             self._backlog += 1
-        self._jobs.put((label, sources, moved, True, skip_render))
+        self._jobs.put((label, sources, moved, True, completion))
 
     def collect_prediction(self, predictions: list[dict], start_frame: int) -> None:
         """Collect native predictions immediately; GameSession already counted/charged them."""
@@ -454,29 +461,41 @@ class Playback:
             paths = write_replay(self.session.workspace, predictions, start_frame)
             if not paths:
                 return
-            sources, moved = self._take(paths)
+            sources, moved, _ = self._take(paths)
         with self._cv:
             self._backlog += 1
         self._jobs.put(("短路线模拟", sources, moved, False, False))
 
-    def _take(self, files: list[Path]) -> tuple[list, list[Path]]:
-        """把这一轮的日志移出工作区（智能体看不到，也不会被它的下一轮混进来）；移不动的读成字节再删。"""
+    def _take(self, files: list[Path], tails=()) -> tuple[list, list[Path], list[int]]:
+        """收走本轮日志，返回来源、待删除文件和各来源的已读偏移；移动失败时保留字节来源。"""
         self.pending.mkdir(parents=True, exist_ok=True)
-        sources, moved = [], []
+        sources, moved, offsets = [], [], []
         for path in files:
+            offset = len(MAGIC)
+            try:
+                stat = path.stat()
+                identity = (stat.st_dev, stat.st_ino)
+                for tail in tails:
+                    previous, end = tail.offsets.get(path, (None, len(MAGIC)))
+                    if previous == identity and end <= stat.st_size:
+                        offset = max(offset, end)
+            except OSError:
+                pass
             self._seq += 1
             dest = self.pending / f"{self._seq:06d}-{path.name}"
             try:
                 os.replace(path, dest)
                 sources.append(dest)
                 moved.append(dest)
+                offsets.append(offset)
             except OSError:
                 try:
                     sources.append(path.read_bytes())
+                    offsets.append(offset)
                 except OSError:
                     pass
                 path.unlink(missing_ok=True)
-        return sources, moved
+        return sources, moved, offsets
 
     @staticmethod
     def _delete(files: list[Path]) -> None:
@@ -487,7 +506,7 @@ class Playback:
                 pass
 
     def close(self) -> None:
-        """运行结束：停掉回放线程，删掉还没用完的日志。"""
+        """停止预览并等待收尾；超时不删除存活线程仍持有的日志。"""
         self._stream_stop.set()
         self.enabled = False
         if self._streamer is not None:
@@ -496,10 +515,13 @@ class Playback:
         if self._worker is not None:
             self._jobs.put(None)
             self._worker.join(timeout=10)
-            self._worker = None
+            if self._worker.is_alive():
+                self.log('[playback] 回放线程仍在收尾，保留其日志，由线程完成后清理')
+            else:
+                self._worker = None
         with self._cv:
             self.rounds = []
-        if self.collect and self.pending.exists():
+        if self._worker is None and self.collect and self.pending.exists():
             self._delete(list(self.pending.glob("*.bin")))
 
     # ---- 回放线程：逐轮读、挑、画 ----
@@ -514,15 +536,17 @@ class Playback:
                     with self._submit_lock:
                         label, sources = self._live_pending.pop(job[1])
                     if not self._stream_stop.is_set():
+                        previous = self._preview_success.get(job[1], True)
                         self._preview_success[job[1]] = False
-                        self._preview_success[job[1]] = bool(self._play_round(label, sources, [], False, preview=True))
+                        success = bool(self._play_round(label, sources, [], False, preview=True))
+                        self._preview_success[job[1]] = previous and success
                 else:
-                    label, sources, moved, account, skip_render = job
-                    if isinstance(skip_render, tuple):
-                        keys = skip_render
-                        results = [self._preview_success.pop(key, False) for key in keys]
-                        skip_render = bool(keys) and all(results)
-                    self._play_round(label, sources, moved, account, skip_render=skip_render)
+                    label, sources, moved, account, completion = job
+                    if isinstance(completion, _PreviewCompletion):
+                        results = [self._preview_success.pop(key, False) for key in completion.keys]
+                        self._finish_previewed_round(label, sources, moved, account, completion.offsets, all(results))
+                    else:
+                        self._play_round(label, sources, moved, account)
             except Exception as exc:  # 回放出问题不影响游玩
                 self.log(f"[playback] 回放失败：{exc}")
             finally:
@@ -530,15 +554,57 @@ class Playback:
                     self._backlog -= 1
                     self._cv.notify_all()
 
+    def _finish_previewed_round(self, label, sources, moved, account, offsets, success):
+        """补画已收走日志的未读尾部；文件保留到补画和最终记账都完成。"""
+        try:
+            full = read_logs(sources)
+            if self.enabled:
+                # read_logs may omit invalid/unreadable sources; use source
+                # identity rather than assuming its source indexes are unchanged.
+                end_by_source = {id(source):end for source, end in zip(sources, offsets)}
+                ends = np.asarray([end_by_source[id(kept)] for kept in full.sources], dtype=np.int64)
+                unread = (np.flatnonzero(full.off - HEADER.size >= ends[full.src]) if success
+                          else np.arange(len(full)))
+                try:
+                    success = True
+                    for batch in self._remaining_batches(full, unread):
+                        if not self.enabled or not self._play_round(label, [], [], False, preview=True, log=batch):
+                            success = False
+                            break
+                except Exception as exc:
+                    self.log(f'[playback] 尾部补画失败，回退最终回放：{exc}')
+                    success = False
+            self._play_round(label, [], [], account, skip_render=success, log=full)
+        finally:
+            self._delete(moved)
+
+    def _remaining_batches(self, log, indexes, budget=8 * 1024 * 1024):
+        batch, size = [], len(MAGIC)
+        for index in indexes:
+            cost = HEADER.size + 4 * max(0, int(log.npts[index]) - 1)
+            if cost + len(MAGIC) > budget:
+                self.log(f'[playback] 尾部补画略过超出 {budget} 字节上限的单条路线：{cost} 字节；保留完整计数')
+                continue
+            if batch and size + cost > budget:
+                yield log.subset(np.asarray(batch))
+                batch, size = [], len(MAGIC)
+            batch.append(index)
+            size += cost
+        if batch:
+            yield log.subset(np.asarray(batch))
+
     def _play_round(self, label: str, sources: list, moved: list[Path], account: bool = True,
-                    preview=False, skip_render=False) -> None:
+                    preview=False, skip_render=False, log=None) -> bool | None:
         t0 = time.monotonic()
         try:
-            rd = self._digest(read_logs(sources), label, all_tracks=preview and not self._stream_sample)
+            rd = self._digest(read_logs(sources) if log is None else log, label,
+                              all_tracks=preview and not self._stream_sample)
         finally:
             self._delete(moved)   # 挑好的路线已经解出逐帧位置，记录文件用完就删
         if rd is None:
-            return
+            # A batch outside the observed room has nothing to draw. It still
+            # completed normally; do not abort subsequent eligible tail batches.
+            return True if preview else None
         with self._cv:
             if self.enabled and not preview:
                 self.rounds.append(rd)
@@ -557,7 +623,8 @@ class Playback:
             self.metrics.update(sim_round_rollouts=0)
             self._archive({'t':time.time(),'round':number,'label':label,'rollouts':rd.rollouts,
                            'search_completed':True,'previewed':True})
-            # Preserve the final best candidate even if the last log tail exceeded a preview budget.
+            # Ordinary unread routes were rendered before final accounting;
+            # emphasize the best candidate once more at the end.
             best = [track for track in rd.tracks if track.kind == KIND_BEST]
             if not best:
                 return
@@ -691,17 +758,16 @@ class Playback:
         while any(m.pending for m in list(self._msgs.values())) and time.monotonic() < deadline:
             time.sleep(0.05)   # 上一轮的工具结果可能还没从输出流读到
         if any(self.dir.glob("*.bin")):   # 输出流里还没收尾的那一轮：直接收进来（之后读到它的结果时不再重复记账）
-            try:
-                stale = list(self._msgs)
-                label = next((self._msgs[mid].label for mid in reversed(stale) if self._msgs[mid].label), "")
-                for mid in stale:
+            with self._submit_lock:
+                stale = list(self._msgs.items())
+                label = next((msg.label for _, msg in reversed(stale) if msg.label), "")
+                previews = tuple((mid, msg.tail) for mid, msg in stale if msg.previewed)
+                for mid, _ in stale:
                     self._msgs.pop(mid, None)
                 for tid, mid in list(self._tool_msg.items()):
-                    if mid in stale:
+                    if mid not in self._msgs:
                         self._tool_msg.pop(tid, None)
-            except (RuntimeError, KeyError):
-                label = ""
-            self._submit(label, bool(self.gate is not None and self.gate.started))
+                self._submit(label, bool(self.gate is not None and self.gate.started), previews=previews)
         with self._cv:
             if not self._cv.wait_for(lambda: self._backlog <= 0, timeout=timeout):
                 raise TimeoutError('规划回放尚未排空，不能提前执行游戏')

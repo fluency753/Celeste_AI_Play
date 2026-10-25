@@ -3,8 +3,9 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from contextlib import contextmanager
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from orchestrator.config import RunConfig
 from orchestrator.metrics import Metrics
@@ -13,7 +14,18 @@ from orchestrator.rollout_tail import RecordTail
 
 
 def record(index):
-    return HEADER.pack(float(index),0,0,2,index,0,0,index*8,0,*([0]*16)) + b'\x08\0\0\0'
+    return HEADER.pack(float(index),0,0,2,index,index*8,0,index*8+8,0,*([0]*16)) + b'\x08\0\0\0'
+
+
+@contextmanager
+def small_preview_batches():
+    read, batches = RecordTail.read, Playback._remaining_batches
+    def bounded_read(tail, paths, **kwargs):
+        return read(tail, paths, budget=200, **kwargs)
+    def bounded_batches(playback, log, indexes):
+        return batches(playback, log, indexes, budget=200)
+    with patch.object(RecordTail,'read',bounded_read), patch.object(Playback,'_remaining_batches',bounded_batches):
+        yield
 
 
 class StreamTests(unittest.TestCase):
@@ -211,3 +223,142 @@ class StreamTests(unittest.TestCase):
         self.playback.note_tool_result('call');self.wait()
         self.assertEqual(self.playback._call.call_count,2)
         self.assertEqual(self.metrics.state.sim_rollouts,1)
+
+    def drawn_starts(self):
+        return [int(track['p'][1]) for call in self.playback._call.call_args_list for track in call.args[0]['tracks']]
+
+    def test_finish_renders_every_unread_batch_without_repeating_successful_prefix(self):
+        self.start()
+        self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(1,7)))
+        with small_preview_batches():
+            self.poll();self.wait()
+            self.assertEqual(self.drawn_starts(),[1,2])
+            self.playback.note_tool_result('call');self.wait()
+        self.assertEqual(self.drawn_starts(),list(range(1,7)))
+        self.assertTrue(all(len(call.args[0]['tracks'])<=2 for call in self.playback._call.call_args_list))
+        self.assertEqual(self.metrics.state.sim_calls,1)
+        self.assertEqual(self.metrics.state.sim_rollouts,6)
+        self.gate.charge.assert_called_once()
+        self.assertEqual(len(self.playback.rounds),1)
+        self.assertFalse(self.file.exists())
+        self.assertEqual(list(self.playback.pending.glob('*.bin')),[])
+
+    def test_tool_finish_without_prior_poll_still_renders_the_entire_log(self):
+        self.start()
+        self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(1,7)))
+        with small_preview_batches():
+            self.playback.note_tool_result('call');self.wait()
+        self.assertEqual(self.drawn_starts(),list(range(1,7)))
+        self.assertEqual(self.metrics.state.sim_rollouts,6)
+
+    def test_default_budget_finishes_a_log_larger_than_eight_mib(self):
+        self.start()
+        points = 200000
+        with self.file.open('wb') as stream:
+            stream.write(MAGIC)
+            for index in range(1,13):
+                stream.write(HEADER.pack(float(index),0,0,points,index,index*8,0,index*8,0,*([0]*16)))
+                stream.write(bytes(4*(points-1)))
+        self.assertGreater(self.file.stat().st_size,8*1024*1024)
+        self.playback.note_tool_result('call');self.wait()
+        self.assertEqual(self.drawn_starts(),list(range(1,13)))
+        self.assertGreater(self.playback._call.call_count,1)
+        self.assertEqual(self.metrics.state.sim_rollouts,12)
+        self.gate.charge.assert_called_once()
+
+    def test_finish_handles_bytes_fallback_and_invalid_sources(self):
+        self.start()
+        self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(1,7)))
+        (self.playback.dir/'bad.bin').write_bytes(b'not a rollout log')
+        with small_preview_batches(), patch('orchestrator.playback.os.replace',side_effect=OSError('locked')):
+            self.playback.note_tool_result('call');self.wait()
+        self.assertEqual(self.drawn_starts(),list(range(1,7)))
+        self.assertEqual(self.metrics.state.sim_rollouts,6)
+
+    def test_finish_preserves_offsets_for_multiple_mixed_sources(self):
+        import os
+        self.start()
+        first = self.playback.dir/'a.bin'
+        first.write_bytes(MAGIC+b''.join(record(i) for i in range(1,4)))
+        self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(4,7)))
+        replace = os.replace
+        def locked_first(source,dest):
+            if source == first:
+                raise OSError('locked')
+            return replace(source,dest)
+        with small_preview_batches(), patch('orchestrator.playback.os.replace',side_effect=locked_first):
+            self.poll();self.wait()
+            self.playback.note_tool_result('call');self.wait()
+        self.assertEqual(self.drawn_starts(),list(range(1,7)))
+        self.assertEqual(self.metrics.state.sim_rollouts,6)
+        self.assertEqual(list(self.playback.pending.glob('*.bin')),[])
+
+    def test_room_filtered_batch_does_not_skip_later_eligible_routes(self):
+        self.start()
+        with self.file.open('wb') as stream:
+            stream.write(MAGIC)
+            for index in range(1,61):
+                if index in (3,4):
+                    stream.write(HEADER.pack(float(index),0,0,2,index,20000*8,0,20001*8,0,*([0]*16))
+                                 + b'\x08\0\0\0')
+                else:
+                    stream.write(record(index))
+        with small_preview_batches():
+            self.playback.note_tool_result('call');self.wait()
+        self.assertEqual(self.drawn_starts(),[i for i in range(1,61) if i not in (3,4)])
+        self.assertEqual(self.metrics.state.sim_rollouts,58)
+        self.gate.charge.assert_called_once()
+
+    def test_finish_ignores_incomplete_record_after_all_complete_routes(self):
+        self.start()
+        self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(1,6))+record(6)[:10])
+        with small_preview_batches():
+            self.playback.note_tool_result('call');self.wait()
+        self.assertEqual(self.drawn_starts(),list(range(1,6)))
+        self.assertEqual(self.metrics.state.sim_rollouts,5)
+
+    def test_failed_earlier_preview_is_not_hidden_by_a_later_success(self):
+        self.start();self.file.write_bytes(MAGIC+record(1))
+        self.playback._call.return_value = None
+        self.poll();self.wait()
+        self.playback._call.return_value = {}
+        with self.file.open('ab') as stream: stream.write(record(2))
+        self.poll();self.wait()
+        self.playback.note_tool_result('call');self.wait()
+        self.assertEqual(self.drawn_starts(),[1,2,1,2])
+        self.assertEqual(self.metrics.state.sim_rollouts,2)
+
+    def test_drain_fallback_also_completes_unread_tail(self):
+        self.start();self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(1,7)))
+        with small_preview_batches():
+            self.poll();self.wait()
+            with self.playback._submit_lock:
+                self.playback._msgs['message'].pending.clear()  # tool ended, result notification not yet collected
+            self.playback.drain(timeout=3)
+        self.assertEqual(self.drawn_starts(),list(range(1,7)))
+        self.assertEqual(self.metrics.state.sim_rollouts,6)
+
+    def test_close_timeout_preserves_worker_sources_until_final_accounting(self):
+        entered, release = threading.Event(),threading.Event()
+        self.start();self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(1,7)))
+        worker = self.playback._worker
+        def render(segment,**kwargs):
+            if int(segment['tracks'][0]['p'][1]) == 5:
+                entered.set();release.wait(3)
+            return {}
+        self.playback._call.side_effect = render
+        try:
+            with small_preview_batches():
+                self.poll();self.wait()
+                self.playback.note_tool_result('call')
+                self.assertTrue(entered.wait(2))
+                with patch.object(worker,'join',return_value=None):
+                    self.playback.close()
+                self.assertIs(self.playback._worker,worker)
+                self.assertTrue(list(self.playback.pending.glob('*.bin')))
+                release.set();worker.join(3)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(self.metrics.state.sim_rollouts,6)
+            self.assertEqual(list(self.playback.pending.glob('*.bin')),[])
+        finally:
+            release.set();worker.join(3)
