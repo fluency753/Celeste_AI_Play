@@ -100,10 +100,11 @@ def read_document(mode: str, rel: str) -> dict:
     if path.suffix.lower() not in TEXT_SUFFIXES:
         return {"path": rel, "editable": False, "text": None, "size": path.stat().st_size}
     data = path.read_bytes()
+    text = (data[:200000] if len(data) > MAX_EDIT_BYTES else data).decode("utf-8", errors="replace").replace("\r\n", "\n")
     if len(data) > MAX_EDIT_BYTES:
-        return {"path": rel, "editable": False, "text": data[:200000].decode("utf-8", errors="replace"),
+        return {"path": rel, "editable": False, "text": text,
                 "size": len(data), "truncated": True}
-    return {"path": rel, "editable": True, "text": data.decode("utf-8", errors="replace"), "size": len(data),
+    return {"path": rel, "editable": True, "text": text, "size": len(data),
             "mtime": path.stat().st_mtime}
 
 

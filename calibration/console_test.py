@@ -113,7 +113,8 @@ class ConsoleRunsTests(unittest.TestCase):
             (root / "runs" / "latest.txt").write_text(str(run), encoding="utf-8")
             (run / "metrics.json").write_text(json.dumps({"written_wall": time.time()}), encoding="utf-8")
             with patch.object(console_api, "REPO_ROOT", root), patch.object(console_api, "_port_open", return_value=False), \
-                 patch.object(console_api, "LAUNCH_RECORD", root / "none.json"):
+                 patch.object(console_api, "LAUNCH_RECORD", root / "none.json"), \
+                 patch.object(console_api, "_mutex_exists", return_value=False):
                 self.assertTrue(console_api.orchestrator_status()["running"])
                 (run / "summary.json").write_text("{}", encoding="utf-8")
                 self.assertFalse(console_api.orchestrator_status()["running"])
@@ -135,7 +136,8 @@ class LaunchFailureTests(unittest.TestCase):
             record = root / "launch.json"
             record.write_text(json.dumps({"host": str(host), "latest_before": str(old), "wall": time.time()}), encoding="utf-8")
             with patch.object(console_api, "REPO_ROOT", root), patch.object(console_api, "LAUNCH_RECORD", record), \
-                 patch.object(console_api, "_port_open", return_value=False):
+                 patch.object(console_api, "_port_open", return_value=False), \
+                 patch.object(console_api, "_mutex_exists", return_value=False):
                 (root / "runs" / "latest.txt").write_text(str(old), encoding="utf-8")
                 status = console_api.orchestrator_status()
                 self.assertTrue(status["failed"])                 # 没开出新的运行就退出了

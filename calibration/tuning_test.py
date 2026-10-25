@@ -167,6 +167,7 @@ class KbAccessTests(unittest.TestCase):
             kb_access.normalize_deny("explore", ["techniques.md"])
 
     def test_read_write_stays_inside_kb(self):
+        (self.root / "kb/explore/tools.md").write_bytes(b"d\r\n")
         doc = kb_access.read_document("explore", "tools.md")
         self.assertEqual(doc["text"], "d\n")
         kb_access.write_document("explore", "tools.md", "new\r\n", doc["mtime"])
