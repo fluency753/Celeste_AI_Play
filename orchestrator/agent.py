@@ -154,8 +154,9 @@ class ClaudeRunner(SessionControls):
 
     async def _next_user_turn(self, fallback):
         while self.paused and not self.pending_messages:
-            if self.metrics.state.status != 'paused':
-                self.metrics.update(status='paused')
+            idle = 'chat_idle' if self.chat_only else 'paused'
+            if self.metrics.state.status != idle:
+                self.metrics.update(status=idle)
             if self.session.done or self.stop_requested:
                 return False
             if self.control_task and self.control_task.done():
@@ -165,7 +166,11 @@ class ClaudeRunner(SessionControls):
             return False
         rows, self.pending_messages = self.pending_messages, []
         text = '\n'.join(row['text'] for row in rows) if rows else fallback
-        if self.paused and getattr(self, 'allow_programs', False):
+        if self.chat_only:
+            text += ('\n当前仅聊天，可以按要求修改、运行工作区程序；不连接或操作游戏。'
+                     if getattr(self, 'allow_programs', False) else
+                     '\n当前仅聊天，可以按要求读取、整理工作区笔记；不连接或操作游戏。')
+        elif self.paused and getattr(self, 'allow_programs', False):
             text += '\n试玩仍处于暂停状态：不调用游戏操作；可以按用户的要求修改、运行工作区里的程序，完成后回复并结束本轮。'
         elif self.paused:
             text += '\n试玩仍处于暂停状态。只回复用户，不调用游戏操作，回复后结束本轮。'
@@ -306,7 +311,7 @@ class ClaudeRunner(SessionControls):
         if self.paused:
             self.pause_at = time.monotonic()
             self.metrics.pause()
-            self.metrics.update(status='paused')
+            self.metrics.update(status='chat_idle' if self.chat_only else 'paused')
         if self.control:
             self.control_task = asyncio.create_task(self._controls())
             self.heartbeat_task = asyncio.create_task(self._heartbeat())
@@ -526,7 +531,7 @@ class ClaudeRunner(SessionControls):
         self.turn_done.clear()
         self._tool_calls_this_turn = 0
         await self._write(text)
-        self.metrics.turn_begin(runtime="claude")
+        self._begin_model_turn(runtime="claude")
         self.metrics.update(status=self._idle_status())
 
     async def _shutdown(self, reader: asyncio.Task) -> None:
@@ -743,5 +748,5 @@ class ClaudeRunner(SessionControls):
                              thinking_tokens=(usage.get("output_tokens_details") or {}).get("thinking_tokens", 0))
             print(f"[agent] 第 {self.turns} 轮结束：{subtype} is_error={event.get('is_error')} "
                   f"输出 {usage.get('output_tokens', 0)} token", flush=True)
-            self.metrics.turn_end()
+            self._end_model_turn()
             self._turn_done.set()

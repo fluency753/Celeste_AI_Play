@@ -23,6 +23,20 @@ class RuntimeCapabilities:
 class SessionControls:
     capabilities = RuntimeCapabilities()
 
+    def _begin_model_turn(self, **timing):
+        # Chat keeps the game gate closed while model work is independently active.
+        if self.chat_only:
+            self.metrics.resume(quota=False)
+        self.metrics.turn_begin(**timing)
+        if self.chat_only:
+            self.metrics.update(status='thinking')
+
+    def _end_model_turn(self):
+        self.metrics.turn_end()
+        if self.chat_only and not getattr(self, 'quota_until', None):
+            self.metrics.pause()
+            self.metrics.update(status='chat_idle')
+
     def close_events(self):
         events = getattr(self, '_events', None)
         if events and not events.closed:
@@ -254,7 +268,7 @@ class SessionControls:
                         # 提交期间先移出待启动队列，避免轮次结束时被重复带入下一轮。
                         self.pending_messages.remove(row)
                         try:
-                            text = row["text"] + ("\n（试玩仍处于用户暂停状态。只回复，不调用游戏操作，回复后结束本轮。）" if self.paused else "")
+                            text = row["text"] + ("\n（试玩仍处于用户暂停状态。只回复，不调用游戏操作，回复后结束本轮。）" if self.paused and not self.chat_only else "")
                             if not self.capabilities.live_steering:
                                 raise RuntimeError('执行器不支持向活动轮追加输入')
                             await self._steer_user(text)

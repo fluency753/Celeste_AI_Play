@@ -138,6 +138,8 @@ class CodexRunner(SessionControls):
                 elif item.get("id") not in self.compacted:
                     self.compacted.add(item.get("id"))
                     self.metrics.add(compactions=1)
+                    if self.metrics.state.status == 'compacting' and (self.chat_only or not self.paused):
+                        self.metrics.update(status='tool' if self.metrics.tools_running else 'thinking')
             elif item.get("type") in ("commandExecution", "fileChange", "mcpToolCall", "collabToolCall"):
                 self.fatal = f"独立游戏执行器出现未允许的宿主工具：{item['type']}，已停止"
                 self.turn_done.set()
@@ -414,7 +416,7 @@ class CodexRunner(SessionControls):
                 self.pending_messages.clear()
                 if assigned:
                     message = "\n\n".join(row["text"] for row in assigned)
-                if self.paused:
+                if self.paused and not self.chat_only:
                     message += "\n（用户已暂停试玩。只能回复用户，不调用 observe、act 或 Bash；回复后结束本轮，等待用户继续。）"
                 self.turn_done.clear()
                 self.turn_result = None
@@ -425,7 +427,7 @@ class CodexRunner(SessionControls):
                 effort = pending or self.metrics.state.effort
                 self.turn_fast = self.fast_mode
                 tier = "priority" if self.turn_fast else "default"
-                self.metrics.turn_begin(fast=self.turn_fast, service_tier=tier, effort=effort, runtime="codex")
+                self._begin_model_turn(fast=self.turn_fast, service_tier=tier, effort=effort, runtime="codex")
                 response = await self.rpc.request("turn/start", {"threadId": self.session_id, "effort": effort,
                     "serviceTierForTurn": tier,
                     "input": [{"type": "text", "text": message}]})
@@ -445,7 +447,7 @@ class CodexRunner(SessionControls):
                         await self.rpc.request("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id})
                         return "现实时间预算用完"
                     await asyncio.sleep(0.1)
-                self.metrics.turn_end()
+                self._end_model_turn()
                 self.turn_active, self.turn_id = False, None
                 if self.fatal:
                     raise RuntimeError(self.fatal)
@@ -474,7 +476,7 @@ class CodexRunner(SessionControls):
                 await asyncio.gather(self.control_task, return_exceptions=True)
             if self.control:
                 self.control.heartbeat(paused=self.paused, stopped=True, session_id=self.session_id)
-            self.metrics.turn_end()
+            self._end_model_turn()
             await self.rpc.close()
             if self._events:
                 self._events.close()
