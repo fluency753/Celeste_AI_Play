@@ -11,6 +11,7 @@ from PIL import Image as PILImage
 
 from .config import CHAPTER_NAMES
 from .connectivity import static_connectivity
+from .clearance import clearance_text
 
 STOP_TEXT = {
     "done": "按键全部执行完",
@@ -322,6 +323,7 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     # 静态地形检查与收集品清单只给新手探索模式：速通模式下这相当于主控替智能体做路线分析
     collectibles = [compact_entity(e) for e in entities if e.get("cat") == "collectible"] if explore else []
     if explore:
+        lines.extend(clearance_text(obs))
         lines.extend(terrain_regions(obs))
     if collectibles:
         lines.append("当前观测中的收集品（是否能接近需结合地形确认）：")
