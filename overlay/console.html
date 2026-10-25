@@ -619,6 +619,12 @@
 <main class="page" id="page-prompts" role="tabpanel" aria-label="提示词" hidden>
   <section class="pane" aria-labelledby="promptTitle">
     <h2 id="promptTitle">提示词 <span class="aside">按运行页的当前设置生成</span></h2>
+    <div class="kb-head">
+      <div class="segmented" role="radiogroup" aria-label="游玩模式（与运行页同步）">
+        <button type="button" role="radio" data-pmode="speedrun" aria-checked="true">速通</button>
+        <button type="button" role="radio" data-pmode="explore" aria-checked="false">探索</button>
+      </div>
+    </div>
     <p class="hint" id="promptWhat" style="margin-top:0">—</p>
     <div class="pbar" id="promptBar" role="img" aria-label="这一版由哪些部分组成，按长度"></div>
     <div class="plist" id="promptParts"></div>
@@ -937,6 +943,7 @@ function setMode(mode) {
   ui.mode = mode;
   document.querySelectorAll(".mode[data-mode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
   document.querySelectorAll("[data-kbmode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.kbmode === mode)));
+  document.querySelectorAll("[data-pmode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.pmode === mode)));
   $("rowSim").hidden = mode !== "speedrun";
   $("rowSimAssist").hidden = mode !== "explore";
   $("fsExplore").hidden = mode !== "explore";
@@ -1497,7 +1504,18 @@ function promptOptions() { return formOptions(); }
 async function loadPromptPreview() {
   let data;
   try { data = await postJSON("/api/console/prompt/preview", { options: promptOptions() }); }
-  catch (e) { $("promptWhat").textContent = "生成不了：" + e.message; return; }
+  catch (e) {
+    ui.prompt = null;
+    $("promptWhat").textContent = "按当前设置生成不了提示词：" + e.message + "（到运行页改好设置后会自动刷新）";
+    $("promptWhat").classList.add("warn");
+    $("promptBar").replaceChildren(); $("promptParts").replaceChildren(); $("promptPreview").replaceChildren();
+    $("promptExecutor").textContent = "";
+    return;
+  }
+  $("promptWhat").classList.remove("warn");
+  if (ui.promptFile && !data.parts.some(part => part.source === ui.promptFile.name)) {
+    $("promptStatus").textContent = `这个文件不在当前设置（${promptOptions().mode === "explore" ? "探索" : "速通"}模式）的提示词里；点"返回预览"看当前这一版。`;
+  }
   ui.prompt = data;
   const o = promptOptions();
   const bits = [o.mode === "explore" ? "探索" : "速通"];
@@ -1670,6 +1688,10 @@ document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () =>
 document.querySelectorAll("[data-goto]").forEach(b => b.addEventListener("click", () => showPage(b.dataset.goto)));
 document.querySelectorAll(".mode[data-mode]").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
 document.querySelectorAll("[data-kbmode]").forEach(b => b.addEventListener("click", () => setMode(b.dataset.kbmode)));
+document.querySelectorAll("[data-pmode]").forEach(b => b.addEventListener("click", () => {
+  if (ui.promptFile && !closePromptEditor()) return;   // 换模式时回到全文预览（有没保存的修改时先确认）
+  setMode(b.dataset.pmode);
+}));
 document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => setKbView(b.dataset.view)));
 $("runtime").addEventListener("change", async () => { $("agent").value = ""; await loadModels(); schedulePreview(); });
 $("model").addEventListener("change", () => { fillEfforts(); schedulePreview(); });
