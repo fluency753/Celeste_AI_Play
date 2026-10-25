@@ -214,7 +214,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if session.cfg.knowledge_profile == "explore" and not session.done:
                     if new_room:
                         parts.append(GEOMETRY)
-                    hint = action_hint(before, outcome.obs, outcome.result, inputs, decision_wait)
+                    hint = action_hint(before, outcome.obs, outcome.result, inputs,
+                                       decision_wait if session.cfg.live else 0)
                     if hint:
                         parts.append(hint)
                 if session.workspace:

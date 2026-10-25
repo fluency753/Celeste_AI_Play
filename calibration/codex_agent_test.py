@@ -192,7 +192,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.cfg.kb_dir.name, "explore")
         self.assertNotIn("reference", str(self.cfg.kb_dir))
         study = KbStudy(self.cfg.kb_dir, 10)
-        self.assertEqual(set(study.files), {"README.md", "tools.md"})
+        self.assertEqual(set(study.files), {"README.md", "basics.md", "data.md", "tools.md"})
         data = self.preparation()
         (self.root / "prepare_summary.json").write_text(json.dumps(data), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "知识范围不同"):

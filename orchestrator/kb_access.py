@@ -40,7 +40,7 @@ def _files(root: Path) -> list[Path]:
 
 def _group(rel: str, mode: str = SPEEDRUN) -> str:
     if mode == EXPLORE:
-        return "按需帮助" if rel.startswith("help/") else "入门资料"
+        return "操作提示（选读）" if rel.startswith("help/") else "入门资料"
     if rel.startswith("reference/community/"):
         return "社区资料"
     if rel.startswith("reference/celeste_wiki/"):
@@ -52,7 +52,7 @@ def _group(rel: str, mode: str = SPEEDRUN) -> str:
     if rel.startswith("explore/"):
         return "探索模式入门资料"
     if rel.startswith("help/"):
-        return "按需帮助"
+        return "操作提示（选读）"
     return "知识库正文"
 
 

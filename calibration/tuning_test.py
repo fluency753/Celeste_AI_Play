@@ -155,7 +155,7 @@ class KbAccessTests(unittest.TestCase):
         self.assertFalse(speed["explore/tools.md"]["required"])
         explore = {d["path"]: d for d in kb_access.documents("explore")}
         self.assertEqual(set(explore), {"README.md", "tools.md", "help/controls.md"})
-        self.assertEqual(explore["help/controls.md"]["group"], "按需帮助")
+        self.assertEqual(explore["help/controls.md"]["group"], "操作提示（选读）")
         with self.assertRaises(ValueError):
             kb_access.normalize_deny("explore", ["techniques.md"])
 
