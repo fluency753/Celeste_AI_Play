@@ -30,6 +30,9 @@ internal static class RecordingAudio {
     public const int TrackCount = Tracks;
     private static readonly object Gate = new();
     private static readonly List<Hook> Hooks = new();
+    // getPaused includes inherited bus pauses. Preserve explicit requests even while
+    // recording is stopped; seeding inherited pauses as local pauses makes them stick.
+    private static readonly Dictionary<IntPtr, bool> BusPauses = new();
     private sealed record Pair(EventInstance Source, EventInstance Copy, bool OneShot, bool Snapshot, string Path, long CreatedFrame) {
         public bool Released, OrphanRetired, StopRequested;
     }
@@ -93,6 +96,7 @@ internal static class RecordingAudio {
         Stop();
         foreach (Hook hook in Hooks) hook.Dispose();
         Hooks.Clear();
+        lock (Gate) BusPauses.Clear();
     }
 
     private static void Check(RESULT result) {
@@ -412,7 +416,21 @@ internal static class RecordingAudio {
                     if (bus.getID(out Guid id) != RESULT.OK || studio.getBusByID(id, out Bus copy) != RESULT.OK) continue;
                     if (bus.getVolume(out float volume, out _) == RESULT.OK) copy.setVolume(volume);
                     if (bus.getMute(out bool mute) == RESULT.OK) copy.setMute(mute);
-                    if (bus.getPaused(out bool paused) == RESULT.OK) copy.setPaused(paused);
+                    if (bus.getPaused(out bool paused) == RESULT.OK) {
+                        if (BusPauses.TryGetValue(bus.getRaw(), out bool requested)) paused = requested;
+                        else if (paused && bus.getPath(out string path) == RESULT.OK) {
+                            // Before hooks were installed, only effective state is available.
+                            // Assign inherited pause to its ancestor rather than every child.
+                            while (path.LastIndexOf('/') > "bus:".Length) {
+                                path = path.Substring(0, path.LastIndexOf('/'));
+                                if (live.getBus(path, out Bus parent) == RESULT.OK &&
+                                    parent.getPaused(out bool parentPaused) == RESULT.OK && parentPaused) { paused = false; break; }
+                            }
+                            if (paused && path != "bus:/" && live.getBus("bus:/", out Bus root) == RESULT.OK &&
+                                root.getPaused(out bool rootPaused) == RESULT.OK && rootPaused) paused = false;
+                        }
+                        copy.setPaused(paused);
+                    }
                 }
             }
         }
@@ -525,6 +543,7 @@ internal static class RecordingAudio {
     }
     private static RESULT OnBusPause(BusPauseCall orig, Bus self, bool paused) {
         RESULT result = orig(self, paused);
+        if (result == RESULT.OK && !copying) { lock (Gate) BusPauses[self.getRaw()] = paused; }
         if (result == RESULT.OK) Mirror(m => m.PauseBus(self, paused));
         return result;
     }

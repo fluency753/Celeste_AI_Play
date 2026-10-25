@@ -21,7 +21,7 @@ Check(seededDesc.createInstance(out var seededOneShot)); Check(seededOneShot.sta
 RecordingAudio.Load();
 try {
 RecordingAudio.Start(live,Path.Combine(game,"Content","FMOD","Desktop"),47876);
-if (Environment.GetEnvironmentVariable("LIFECYCLE_ONLY") == "1") { LifecycleChecks.Run(live, music); return; }
+if (Environment.GetEnvironmentVariable("LIFECYCLE_ONLY") == "1") { RestartChecks.Run(live, game, music); LifecycleChecks.Run(live, music); return; }
 if (!asyncSource) {
     var startupMixer=typeof(RecordingAudio).GetField("full",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static)!.GetValue(null)!;
     var startupPairs=(System.Collections.IDictionary)startupMixer.GetType().GetField("Pairs")!.GetValue(startupMixer)!;
@@ -108,6 +108,7 @@ if(view.ReadInt64(64+Slot)!=1025)throw new Exception("Ring slot did not commit t
 Check(music.stop(FMOD.Studio.STOP_MODE.IMMEDIATE));RecordingAudio.Advance();
 copy.getPlaybackState(out var stopped); fullCopy.getPlaybackState(out var fullStopped);
 if(stopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED||fullStopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED)throw new Exception("Music stop was not mirrored");
+RestartChecks.Run(live, game, music);
 LifecycleChecks.Run(live, music);
 Console.WriteLine("PASS: PCM on both tracks, independent timelines, replay music on the full track only, one-shots, volume, stop and ring wrap");
 } finally {RecordingAudio.Unload();live.release();}
