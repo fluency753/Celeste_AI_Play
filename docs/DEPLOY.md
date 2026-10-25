@@ -412,7 +412,7 @@ winget install Gyan.FFmpeg
 | `python -m orchestrator.replay <运行目录>` | 不调用模型，按记录重放一次运行的决策 | `--save`、`--chapter` |
 | `python -m orchestrator.preparation` | 只准备会话（读知识库、建会话，不连游戏） | `--engine`、`--provider`、`--agent`、`--knowledge`、`--model`、`--effort` |
 | `python -m orchestrator.chat --run <运行目录>` | 运行结束后接着和同一个会话聊天（不连游戏） | — |
-| `python -m orchestrator.chat --run <运行目录> --allow-programs` | 整理工作区：同上，container 方式的 Codex／Claude 均可在零网络沙箱里用 Bash 修改、运行自己写的程序，游戏工具仍关闭；host 旧会话不支持此开关，会在启动前报错 | `--sim`：挂载只读模拟器，用保存快照离线验证；须同时开启 `--allow-programs` |
+| `python -m orchestrator.chat --run <运行目录> --allow-programs` | 整理工作区：Codex（含 host 方式）及 container 方式的 Claude 可在零网络容器沙箱里修改、运行工作区程序，游戏工具仍关闭；host Claude 不支持，会在启动前报错 | `--sim`：挂载只读模拟器，用保存快照离线验证；须同时开启 `--allow-programs` |
 | `python -m orchestrator.background -- <主控参数>` | 用独立后台宿主启动主控 | — |
 | `python -m overlay.server` / `python -m overlay.window` | 单独启动 HUD 服务（默认跟随 `runs\latest.txt` 指向的运行）/ HUD 窗口 | `--port`、`--run`；`--url` |
 | `python -m overlay.console` | 控制台（5.3 节） | `--port`、`--browser`、`--restart-service` |

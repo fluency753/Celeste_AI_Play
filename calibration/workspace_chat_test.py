@@ -12,13 +12,42 @@ from orchestrator.metrics import Metrics
 
 
 class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_host_codex_chat_routes_programs_through_its_container(self):
+        from orchestrator.codex_agent import CodexRunner
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'run_state.json').write_text(json.dumps({'agent':'test','save':'test','model':'model',
+                'effort':'medium','engine':'codex','runtime':'host','session_id':'original'}))
+            (root/'summary.json').write_text('{"completed":true}')
+            Metrics(root/'metrics.json','test','model','medium',600)
+            received = {}
+            @asynccontextmanager
+            async def host(cfg,directory,metrics,container,**options):
+                runner = CodexRunner(cfg,directory,None,metrics,container,**options)
+                async def run():
+                    received['reply'] = await runner._request('item/tool/call',{'tool':'celeste_bash',
+                        'callId':'offline','arguments':{'command':'echo OK','description':'离线验证'}})
+                runner.run = run
+                try:
+                    yield runner
+                finally:
+                    runner.close_events()
+            fake = SimpleNamespace(returncode=0,stdout='OK',stderr='',seconds=.01,timed_out=False)
+            with patch('orchestrator.chat.ensure_container',return_value='offline-container'), \
+                 patch('orchestrator.chat.host_runner',host), \
+                 patch('orchestrator.codex_agent.run_program',return_value=fake) as program:
+                await chat(root,allow_programs=True,sim=True)
+            self.assertTrue(received['reply']['success'])
+            self.assertEqual(program.call_args.args[0],'offline-container')
+
     async def test_explicit_offline_sim_is_available_for_both_runtimes(self):
-        for engine in ('codex', 'claude'):
-            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as tmp:
+        for engine, execution in (('codex','container'), ('codex','host'), ('claude','container')):
+            with self.subTest(engine=engine, runtime=execution), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 state = {'agent': 'test', 'save': 'test', 'model': 'model', 'effort': 'medium',
                          'engine': engine, 'provider': 'codex' if engine == 'codex' else 'anthropic',
-                         'session_id': 'original', 'mode': 'speedrun', 'knowledge_profile': 'full'}
+                         'session_id': 'original', 'mode': 'speedrun', 'knowledge_profile': 'full',
+                         'runtime':execution}
                 (root / 'run_state.json').write_text(json.dumps(state))
                 (root / 'summary.json').write_text('{"completed":true}')
                 Metrics(root / 'metrics.json', 'test', 'model', 'medium', 600)
@@ -51,8 +80,8 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                 await chat(Path('unused'), name_request='name', allow_programs=True, sim=True)
             container.assert_not_called()
 
-    async def test_host_program_access_is_rejected_before_any_external_side_effect(self):
-        for engine in ('codex', 'claude'):
+    async def test_host_claude_program_access_is_rejected_before_any_external_side_effect(self):
+        for engine in ('claude',):
             for sim in (False, True):
                 with self.subTest(engine=engine, sim=sim), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)

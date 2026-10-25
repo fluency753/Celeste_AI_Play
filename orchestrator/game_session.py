@@ -1267,7 +1267,7 @@ class GameSession:
 
         split = (self.metrics.state.splits or [])[-1]
         previous = self.piece
-        piece = Piece.of(self.chapter_queue.pop(0))
+        piece = Piece.of(self.chapter_queue[0])
         self._before_advance()
         self.metrics.update(status="auto", thought="")
         t0 = time.monotonic()
@@ -1277,14 +1277,16 @@ class GameSession:
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         reply = self.client.call("observe", image=True, scope="room", fields=True)
         obs, image = enrich_obs(reply["obs"]), reply.get("image")
-        self.chapter_finished = False
         level = obs.get("level") or {}
         entered = bool(level) and level.get("sid") == CHAPTER_SIDS.get(piece.chapter) and (
             piece.start == 0 or str(level.get("room")) == str(checkpoint_room(self._table, piece.chapter, piece.start)))
         if self.goals.stop_motion.is_set() and not entered:
-            self.chapter_queue.insert(0, piece)            # 还没进入下一截：停在当前帧，续跑时再换过去
             self.chapter_finished = True
             return obs, image, ["用户停止了自动换图，游戏保持在当前帧。"]
+        if not entered:
+            raise ActError('自动换图尚未进入目标章节，保留当前计划以便续跑')
+        self.chapter_queue.pop(0)  # 确认进入前，队首仍是菜单输入必须遵守的目标。
+        self.chapter_finished = False
         self.piece, self.segment_index = piece, piece.start
         self.start_sid = level.get("sid", self.start_sid)
         self.metrics.update(chapter=level.get("sid", ""), room=level.get("room", ""), piece_done=False,

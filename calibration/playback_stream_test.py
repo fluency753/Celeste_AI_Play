@@ -90,6 +90,44 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(tail.read([self.file],budget=65536,on_skip=skipped.append),[MAGIC+record(3)])
         self.assertEqual(len(skipped),1)
 
+    def test_total_read_budget_is_shared_across_large_records_and_polls(self):
+        tail = RecordTail(MAGIC,HEADER)
+        points = 262144
+        paths = [self.playback.dir/f'large-{i}.bin' for i in range(16)]
+        for i,path in enumerate(paths):
+            path.write_bytes(MAGIC + HEADER.pack(float(i),0,0,points,i,0,0,8,0,*([0]*16))
+                             + bytes(4*(points-1)))
+        seen = []
+        for _ in range(20):
+            chunks = tail.read(paths)
+            self.assertLessEqual(sum(map(len,chunks)),8*1024*1024)
+            seen.extend(int(HEADER.unpack_from(chunk,len(MAGIC))[0]) for chunk in chunks)
+            if len(seen) == len(paths): break
+        self.assertEqual(sorted(seen),list(range(16)))
+        self.assertEqual(tail.read(paths),[])
+
+    def test_deferred_file_gets_budget_before_an_earlier_writer_grows(self):
+        tail = RecordTail(MAGIC,HEADER)
+        paths = [self.playback.dir/f'fair-{i}.bin' for i in range(3)]
+        for i,path in enumerate(paths): path.write_bytes(MAGIC+record(i+1))
+        first = tail.read(paths,budget=200)
+        self.assertEqual(first,[MAGIC+record(1),MAGIC+record(2)])
+        with paths[0].open('ab') as stream: stream.write(record(4))
+        second = tail.read(paths,budget=200)
+        self.assertEqual(second[0],MAGIC+record(3))
+        self.assertLessEqual(sum(map(len,second)),200)
+
+    def test_deferred_file_priority_survives_new_log_files(self):
+        tail = RecordTail(MAGIC,HEADER)
+        paths = [self.playback.dir/f'fair-{i}.bin' for i in range(3)]
+        for i,path in enumerate(paths): path.write_bytes(MAGIC+record(i+1))
+        self.assertEqual(len(tail.read(paths,budget=200)),2)
+        added = self.playback.dir/'fair--new.bin'
+        added.write_bytes(MAGIC+record(99))
+        with paths[1].open('ab') as stream: stream.write(record(4)+record(5))
+        second = tail.read(sorted([added,*paths]),budget=200)
+        self.assertEqual(second[0],MAGIC+record(3))
+
     def test_previews_arrive_before_result_and_account_only_once(self):
         self.start()
         self.file.write_bytes(MAGIC+record(1))
