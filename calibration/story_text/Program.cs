@@ -190,3 +190,36 @@ using (var buffer = new MemoryStream()) {
 hazard.Collider = null;
 if (EntityGeometry.Include(hazard)) throw new Exception("Colliderless entity included");
 Console.WriteLine("PASS: dormant entities and mixed circle/rectangle collider geometry retained");
+
+System.Text.Json.JsonDocument UiSnapshot(Monocle.Scene scene) {
+    using var buffer = new MemoryStream();
+    using (var writer = new System.Text.Json.Utf8JsonWriter(buffer)) {
+        writer.WriteStartObject(); StoryText.WriteUi(writer, scene); writer.WriteEndObject();
+    }
+    return System.Text.Json.JsonDocument.Parse(buffer.ToArray());
+}
+var poem = (Poem)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Poem));
+poem.Visible = true; poem.Alpha = .5f; poem.TextAlpha = 1f; poem.text = "已显示的诗句";
+level.Frozen = true; entities.entities.Add(poem);
+using (var snapshot = UiSnapshot(level)) {
+    var ui = snapshot.RootElement.GetProperty("ui");
+    Check("Poem", ui.GetProperty("type").GetString()!);
+    Check("已显示的诗句", ui.GetProperty("text").GetString()!);
+    if (ui.TryGetProperty("confirmReady", out _)) throw new Exception("Poem visibility was mistaken for input readiness");
+}
+poem.TextAlpha = 0;
+using (var snapshot = UiSnapshot(level)) {
+    if (snapshot.RootElement.GetProperty("ui").TryGetProperty("text", out _)) throw new Exception("Hidden poem text leaked");
+}
+poem.Alpha = 0;
+using (var snapshot = UiSnapshot(level)) {
+    if (snapshot.RootElement.TryGetProperty("ui", out _)) throw new Exception("Hidden Poem reported");
+}
+var resultsScreen = (AreaComplete)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AreaComplete));
+foreach (var flags in new[] { (false, true), (true, true), (true, false) }) {
+    resultsScreen.finishedSlide = flags.Item1; resultsScreen.canConfirm = flags.Item2;
+    using var snapshot = UiSnapshot(resultsScreen);
+    if (snapshot.RootElement.GetProperty("ui").GetProperty("confirmReady").GetBoolean() != (flags.Item1 && flags.Item2))
+        throw new Exception("AreaComplete readiness does not match the native confirm guard");
+}
+Console.WriteLine("PASS: frozen Poem visibility/text and native AreaComplete confirmation readiness observed without inputs");

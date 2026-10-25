@@ -200,6 +200,14 @@ class ResumeExtensionTests(unittest.TestCase):
              patch.object(sys, "argv", ["run", "--agent", "a", "--save", "s", *argv]):
             return parse_args()
 
+    def test_resume_retains_unconfirmed_completion_until_agent_returns_to_map(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            run=self.make_run(root,[[7,0,None]],[],{'completion_pending':True,'cutscene_mode':'agent'})
+            cfg,_=self.parse(root,'--resume',str(run))
+            self.assertTrue(cfg.resume_completion_pending)
+            self.assertEqual(cfg.chapters,[7])
+
     def test_completed_plan_can_continue_with_next_chapter(self):
         from orchestrator.run import write_run_state
         done = [{"chapter": "Celeste/0-Intro"}, {"chapter": "Celeste/1-ForsakenCity"}, {"chapter": "Celeste/2-OldSite"}]

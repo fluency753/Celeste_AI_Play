@@ -24,8 +24,7 @@ from bridge_client import BridgeClient  # noqa: E402
 from cutscene import skip_by_pause_menu, leave_level_by_pause_menu, story_pending, story_input  # noqa: E402
 
 LETTERS = set("LRUDJXZGTKYVCBPN")    # 桥接认识的全部按键
-AGENT_LETTERS = set("LRUDJXZGTKYV")  # 智能体只能用游玩按键；暂停、确认、返回等菜单键由主控使用
-AGENT_KEYS_TEXT = "L R U D J X Z G T K Y V，以及 A:角度"
+AGENT_LETTERS = set("LRUDJXZGTKYV")  # 自动剧情模式的游玩按键；agent 模式开放桥接的全部按键
 DEFAULT_STOP_ON = ["death", "room", "complete"]
 VALID_STOP_ON = {"death", "room", "uncontrollable", "controllable", "land", "refill", "complete", "story_input"}
 END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
@@ -144,7 +143,7 @@ def expand_inputs(inputs: list[str], max_frames: int, allowed: set[str] = AGENT_
                 except ValueError as exc:
                     raise ActError(f"角度写法错误：{t}") from exc
             elif not set(t) <= allowed:
-                raise ActError(f"未知按键 {t!r}；可用：{AGENT_KEYS_TEXT}")
+                raise ActError(f"未知按键 {t!r}；可用：{' '.join(sorted(allowed))}，以及 A:角度")
         frames.extend([",".join(tokens)] * n)
         if len(frames) > max_frames:
             raise ActError(f"一次最多推进 {max_frames} 帧，请拆成多次 act")
@@ -193,8 +192,11 @@ class GameSession:
         if self.piece is not None and cfg.resume_segment is not None:
             self.segment_index = max(self.piece.start, cfg.resume_segment)   # 续跑：上次已经走到的段
         self.metrics.update(piece_done=False)
-        self.chapter_finished = False
-        self._pending_complete = False
+        self.chapter_finished = cfg.cutscene_mode == 'agent' and cfg.resume_pending
+        if self.chapter_finished:
+            self.chapter_queue, self.piece = plan, None
+        self._agent_previous_sid = self.metrics.state.chapter
+        self._pending_complete = cfg.resume_completion_pending
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
         self._decisions_log = open(run_dir / "decisions.jsonl", "a", encoding="utf-8")
         # 容器方式下，观测与轨迹同时写进智能体的工作区，供它自写的程序读取
@@ -229,22 +231,23 @@ class GameSession:
                 pass
         if self.cfg.cutscene_mode == 'agent' and 'storyInput' not in obs:
             raise RuntimeError('剧情自动推进需要新版桥接的 storyInput，请更新桥接 Mod 并重启游戏')
-        self._pending_complete = bool((obs.get('level') or {}).get('completed'))
-        if self.piece is None:        # 没指定章节（进入选章页当前选中的章节）：按游戏里的章节整章玩
-            chapter = next((i for i, s in CHAPTER_SIDS.items() if s == (obs.get('level') or {}).get('sid')), None)
-            if chapter is not None:
-                self.piece = Piece(chapter)
-        if obs.get("scene") != "Level" and not (self.cfg.cutscene_mode == 'agent' and story_pending(obs)):
-            raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
         save = (obs.get("save") or {}).get("name")
         if save != self.cfg.save:
             raise RuntimeError(f"当前存档是 {save!r}，与配置的 {self.cfg.save!r} 不一致，拒绝开始")
         slot = (obs.get('save') or {}).get('slot')
         if self.cfg.save_slot is not None and slot != self.cfg.save_slot:
             raise RuntimeError(f'当前存档槽位 {slot} 与指定槽位 {self.cfg.save_slot} 不一致')
+        self._pending_complete |= bool((obs.get('level') or {}).get('completed'))
+        if self.piece is None and not self.chapter_finished:        # 没指定章节（进入选章页当前选中的章节）：按游戏里的章节整章玩
+            chapter = next((i for i, s in CHAPTER_SIDS.items() if s == (obs.get('level') or {}).get('sid')), None)
+            if chapter is not None:
+                self.piece = Piece(chapter)
+        if obs.get("scene") != "Level" and not (self.cfg.cutscene_mode == 'agent' and (
+                story_pending(obs) or ((self._pending_complete or self.chapter_finished) and obs.get('scene') in END_SCENES))):
+            raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
         self.cfg.save_slot = slot
         self.start_sid = (obs.get('level') or {}).get('sid') or CHAPTER_SIDS.get(self.cfg.chapter) or self.metrics.state.chapter
-        if self.start_sid:self.metrics.update(chapter=self.start_sid,chapter_side=(obs.get('level') or {}).get('side','A'))
+        if self.start_sid:self.metrics.update(chapter=self.start_sid,chapter_side=(obs.get('level') or {}).get('side',self.metrics.state.chapter_side))
         self._update_metrics_from_obs(obs)
         if self.workspace:
             # 上一次运行留下的观测与动作记录已经过时：先换成当前这一帧，避免智能体在准备阶段读到旧数据
@@ -253,6 +256,8 @@ class GameSession:
             reply = self.client.call("observe", image=False, scope="room", fields=True)
             self._write_workspace(self._track_motion(enrich_obs(reply["obs"])))
             self._write_sim_state()
+        if self._pending_complete:
+            self._persist_completion_pending()
         return obs
 
     def close(self, release: bool = True) -> None:
@@ -281,12 +286,13 @@ class GameSession:
         with self.lock:
             reply = self.client.call("observe", image=True, scope="room", fields=True)
             obs, image = enrich_obs(reply["obs"]), reply.get("image")
+            self._commit_completion(obs)
             if self.cfg.cutscene_mode == 'agent' and story_pending(obs) and not self.done:
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
-                if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
-                    obs, image, more = self._enter_next_chapter()
-                    notes = [*notes, *more]
+            if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
+                obs, image, more = self._enter_next_chapter()
+                notes = [*notes, *more]
             self._write_sim_state()
         self.observe_notes = [str(n) for n in notes]
         obs = self._track_motion(enrich_obs(obs))
@@ -479,11 +485,6 @@ class GameSession:
         self.programs_since_act = 0
         if self.done:
             raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
-        if ((self.last_obs or {}).get('level') or {}).get('dialogChoices'):
-            raise ActError('当前有对话选项，请使用cutscene的choose动作明确选择')
-        if (self.cfg.cutscene_mode == 'agent' and story_input(self.last_obs or {}) in {'dialogue','postcard'}
-                and not (self.last_obs or {}).get('controllable')):
-            raise ActError('当前对白已等待确认，请使用 cutscene 的 advance 或 skip；教学节点才用 act')
         if plan_file:
             if inputs:
                 raise ActError("inputs 与 plan_file 只能二选一")
@@ -576,13 +577,19 @@ class GameSession:
         bad = [s for s in stop if s not in VALID_STOP_ON]
         if bad:
             raise ActError(f"未知的截断条件 {bad}；可用：{sorted(VALID_STOP_ON)}")
-        for must in ("death", "complete", *forced):
+        # Completed remains true throughout the heart prompt and results. Once
+        # reported, it must not truncate every subsequent agent confirmation.
+        ending = self.cfg.cutscene_mode == 'agent' and self._pending_complete
+        if ending:
+            stop = [item for item in stop if item != 'complete']
+        for must in ("death", *(("complete",) if not ending else ()), *forced):
             if must not in stop:
                 stop.append(must)
         return stop
 
     def _check_plan(self, plan: PlanSpec) -> list[str]:
-        frames = expand_inputs(plan.inputs, act_frame_cap(self.cfg))
+        allowed = LETTERS if self.cfg.cutscene_mode == 'agent' else AGENT_LETTERS
+        frames = expand_inputs(plan.inputs, act_frame_cap(self.cfg), allowed)
         if plan.expect is not None and len(plan.expect) > len(frames):
             raise ActError(f'"expect" 有 {len(plan.expect)} 帧，比按键的 {len(frames)} 帧还多')
         return frames
@@ -750,6 +757,9 @@ class GameSession:
                 break
             self._commit_completion(obs)
             if self.done or self.chapter_finished:break
+            if self.cfg.cutscene_mode == 'agent' and (self._pending_complete or scene in END_SCENES) and not story_pending(obs):
+                notes.append('结尾或结算由你操作：观察当前界面，用 act 发送确认 C、返回 B 或所需的空帧；回到选章地图才算完成。')
+                break
             if scene in END_SCENES:
                 self._mark_done(f"离开关卡（{scene}）")
                 break
@@ -834,9 +844,12 @@ class GameSession:
         observation = obs if obs is not None else self.last_obs or {}
         level = observation.get("level") or {}
         sid = level.get("sid", self.metrics.state.chapter)
-        side = level.get("side", "A")
+        side = level.get("side", getattr(self.metrics.state, "chapter_side", "A"))
+        complete = bool(level.get("completed")) and not story_pending(observation)
+        if self.cfg.cutscene_mode == 'agent':
+            complete = self._pending_complete and self._at_chapter_select(observation)
         values = {"room": level.get("room", self.metrics.state.room), "map": f"{sid}:{side}", "side": side,
-                "map_complete": bool(level.get("completed")) and not story_pending(observation), "deaths": level.get("deaths", 0),
+                "map_complete": complete, "deaths": level.get("deaths", 0),
                 "frame": observation.get("frame", 0), "elapsed": self.metrics.elapsed(),
                 "dead": bool((observation.get("player") or {}).get("dead"))}
         if obs is None:
@@ -846,7 +859,7 @@ class GameSession:
 
     def finish_user_stop(self):
         self.user_stopped = True
-        if not self.goals.immediate and (self._pending_complete or
+        if not self.goals.immediate and (self.cfg.cutscene_mode != 'agent' or self._at_chapter_select(self.last_obs or {})) and (self._pending_complete or
                 bool(((self.last_obs or {}).get('level') or {}).get('completed'))):
             self.chapter_queue.clear()
             self._pending_complete=False
@@ -976,13 +989,39 @@ class GameSession:
             if e["type"] == "death":
                 self.metrics.add(deaths=1)
             elif e["type"] == "complete":
-                if self.cfg.cutscene_mode == 'agent':self._pending_complete=True
+                if self.cfg.cutscene_mode == 'agent':
+                    if not self._pending_complete:
+                        self._pending_complete=True
+                        self._persist_completion_pending()
                 else:self._chapter_complete()
 
     def _commit_completion(self, obs):
-        if self._pending_complete and not story_pending(obs):
+        if self.cfg.cutscene_mode == 'agent' and not self._pending_complete and (obs.get('level') or {}).get('completed'):
+            self._pending_complete = True
+            self._persist_completion_pending()
+        ready = self._at_chapter_select(obs) if self.cfg.cutscene_mode == 'agent' else not story_pending(obs)
+        if self._pending_complete and ready:
+            self.end_scene = obs.get('scene')
             self._pending_complete=False
             self._chapter_complete()
+            self._persist_completion_pending()
+
+    def _persist_completion_pending(self):
+        path = self.run_dir / 'run_state.json'
+        if not path.exists():return
+        try:
+            state = json.loads(path.read_text(encoding='utf-8'))
+            state['completion_pending'] = self._pending_complete
+            temporary = path.with_suffix('.tmp')
+            temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+            temporary.replace(path)
+        except (OSError, ValueError) as exc:
+            print(f'[run] 未能保存待确认结算状态：{exc}', flush=True)
+
+    @staticmethod
+    def _at_chapter_select(obs):
+        menu = obs.get('menu') or {}
+        return obs.get('scene') == 'Overworld' and menu.get('current') == 'OuiChapterSelect' and not menu.get('next')
 
     def _chapter_complete(self) -> None:
         """当前章节通关：记下分段成绩；还有下一章就等进入下一章，否则本次运行完成。"""
@@ -997,6 +1036,7 @@ class GameSession:
         self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range())
         if self.chapter_queue:
             self.chapter_finished = True
+            self._agent_left_piece = False
             self._save_chapter_plan()
         else:
             self._mark_done("章节完成")
@@ -1004,6 +1044,12 @@ class GameSession:
     def finish_at_results(self) -> None:
         """最终章走完片尾，展示并确认结算，停在选章地图，不进入下一章。"""
         if not self.done or self.done_reason != "章节完成" or self.chapter_queue:
+            return
+        if self.cfg.cutscene_mode == 'agent':
+            # Cleanup observes the outcome; it never supplies the agent's missing
+            # heart/results/menu inputs, including after an interrupted ending.
+            if self.end_scene != 'Overworld':
+                raise RuntimeError('智能体尚未自行返回选章地图，主控不会代按结算')
             return
         with self.lock:
             if self.goals.immediate:
@@ -1097,6 +1143,7 @@ class GameSession:
         print(f"[run] {piece_label(self.piece, self._table)}完成：章节计时 {fmt_ticks(st.chapter_time_ticks)}", flush=True)
         if self.chapter_queue:
             self.chapter_finished = True
+            self._agent_left_piece = False
             self._save_chapter_plan()
         else:
             self._mark_done("分段完成")
@@ -1104,6 +1151,11 @@ class GameSession:
     def finish_at_checkpoint(self) -> None:
         """最后一截在检查点结束（不是章节结尾）：用暂停菜单返回地图，不让游戏在关卡里无人看管地继续运行。"""
         if not self.done or self.done_reason != "分段完成" or self.chapter_queue:
+            return
+        if self.cfg.cutscene_mode == 'agent':
+            # Reaching a user-selected checkpoint is itself the stopping target.
+            # Do not add an unrequested pause/menu navigation during cleanup.
+            self.end_scene = (self.last_obs or {}).get('scene')
             return
         with self.lock:
             if self.goals.immediate:
@@ -1126,6 +1178,8 @@ class GameSession:
         """（调用方持有连接锁）换到计划里的下一截，停在可操作的第一帧：上一截在章节结尾结束时走完结算画面、
         回到地图再进入下一章（下一截从章节开头开始时走菜单，否则在地图上直接进入它的起点检查点）；
         上一截在检查点结束时，下一截在别的章节的开头就用暂停菜单返回地图再走菜单，否则直接传送到它的起点检查点。"""
+        if self.cfg.cutscene_mode == 'agent':
+            return self._observe_next_chapter()
         from enter_save import enter_save  # noqa: WPS433（tools 目录已在 sys.path 里）
 
         split = (self.metrics.state.splits or [])[-1]
@@ -1163,6 +1217,32 @@ class GameSession:
         note += f"之后还有：{remaining}。" if remaining else "这是本次的最后一截。"
         return obs, image, [note]
 
+    def _observe_next_chapter(self):
+        """Agent owns menu navigation; only commit the configured next piece once observed."""
+        reply = self.client.call('observe', image=True, scope='room', fields=True)
+        obs, image = enrich_obs(reply['obs']), reply.get('image')
+        piece = Piece.of(self.chapter_queue[0])
+        level = obs.get('level') or {}
+        if obs.get('scene') != 'Level':
+            self._agent_left_piece = True
+        start_room = checkpoint_room(self._table, piece.chapter, piece.start)
+        same_chapter = (self.piece.chapter == piece.chapter if self.piece else
+                        self._agent_previous_sid == CHAPTER_SIDS.get(piece.chapter))
+        entered = obs.get('scene') == 'Level' and not level.get('completed') and level.get('sid') == CHAPTER_SIDS.get(piece.chapter) and (
+            (piece.start == 0 and not same_chapter) or str(level.get('room')) == str(start_room))
+        if same_chapter and piece.start == 0 and not getattr(self, '_agent_left_piece', False):
+            entered = False
+        if not entered:
+            return obs, image, [f'上一段已完成。接下来请自行通过菜单进入{self._piece_place(piece)}；主控不会代按、跳过结算或传送。']
+        self.chapter_queue.pop(0)
+        self.chapter_finished = False
+        self.piece, self.segment_index = piece, piece.start
+        self.start_sid = level['sid']
+        self.metrics.update(chapter=level['sid'], room=level.get('room', ''), piece_done=False,
+                            chapter_time_ticks=level.get('chapterTimeTicks', 0))
+        self._save_chapter_plan()
+        return obs, image, [f'已确认你进入{self._piece_place(piece)}。{self._piece_goal(piece)}']
+
     def _piece_place(self, piece: Piece) -> str:
         if piece.start == 0:
             return chapter_name_by_id(piece.chapter)
@@ -1176,7 +1256,7 @@ class GameSession:
             return "这一截到章节通关为止。"
         room = checkpoint_room(self._table, piece.chapter, piece.end)
         return (f"这一截的终点是检查点“{checkpoint_name(self._table, piece.chapter, piece.end)}”："
-                f"进入房间 {room} 即完成，之后由系统接管。")
+                f"进入房间 {room} 即完成。")
 
     # ---------------------------------------------------------------- 运行中调整要通关的范围（控制台）
 

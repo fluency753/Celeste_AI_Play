@@ -121,11 +121,34 @@ class CutsceneTests(unittest.TestCase):
         self.assertNotIn('uncontrollable',execute.call_args.args[3])
         self.assertIn('controllable',execute.call_args.args[3])
 
-    def test_regular_act_cannot_select_dialogue_options(self):
+    def test_agent_can_explicitly_navigate_dialogue_options_with_raw_inputs(self):
         self.s.last_obs=dialog(True)
-        with patch.object(self.s,'_execute') as execute,self.assertRaisesRegex(ActError,'choose'):
+        with patch.object(self.s,'_execute',return_value=({'stop':'done','consumed':1,'planned':1},self.s.last_obs,None,0,0,[])) as execute:
             self.s.act(['1,D'],'尝试移动选项',None)
-        execute.assert_not_called()
+        execute.assert_called_once()
+
+    def test_agent_has_all_bridge_menu_keys_but_auto_mode_keeps_play_inputs(self):
+        from orchestrator.game_session import PlanSpec
+        self.assertEqual(self.s._check_plan(PlanSpec(['1,C','1,B','1,P','1,N'])),['C','B','P','N'])
+        self.s.cfg.cutscene_mode='auto'
+        with self.assertRaises(ActError):self.s._check_plan(PlanSpec(['1,P']))
+
+    def test_next_chapter_navigation_is_observed_without_menu_macro(self):
+        from orchestrator.segments import Piece
+        self.s.chapter_finished=True;self.s.chapter_queue=[Piece(1)];self.s.piece=Piece(0)
+        self.s.client=SceneClient({'scene':'Overworld','menu':{'current':'OuiChapterSelect'}})
+        with patch('tools.enter_save.enter_save') as macro:
+            obs,_,notes=self.s._enter_next_chapter()
+            self.assertTrue(self.s.chapter_finished);self.assertIn('自行',notes[0])
+            self.s.client.obs={'scene':'Level','level':{'sid':'Celeste/1-ForsakenCity','room':'1'}}
+            self.s._enter_next_chapter()
+        self.assertFalse(self.s.chapter_finished);self.assertEqual(self.s.chapter_queue,[])
+        self.assertEqual(self.s.client.steps,[]);macro.assert_not_called()
+
+    def test_agent_checkpoint_cleanup_does_not_exit_or_send_inputs(self):
+        self.s.done=True;self.s.done_reason='分段完成';self.s.last_obs={'scene':'Level'}
+        self.s.finish_at_checkpoint()
+        self.assertEqual(self.s.client.steps,[]);self.assertEqual(self.s.end_scene,'Level')
 
     def test_choose_moves_to_explicit_index_before_confirm(self):
         self.s.client=SceneClient(dialog(True))
@@ -153,15 +176,64 @@ class CutsceneTests(unittest.TestCase):
         self.s._commit_completion(dialog())
         self.assertFalse(self.s.done)
         self.s._commit_completion({'scene':'AreaComplete'})
+        self.assertFalse(self.s.done)
+        self.s._commit_completion({'scene':'Overworld','menu':{'current':'OuiChapterPanel'}})
+        self.assertFalse(self.s.done)
+        self.s._commit_completion({'scene':'Overworld','menu':{'current':'OuiChapterSelect'}})
         self.assertTrue(self.s.done)
 
-    def test_story_completion_continues_to_next_chapter_when_queued(self):
+    def test_story_completion_does_not_enter_next_chapter_before_agent_returns_to_map(self):
         self.s.chapter_queue=[1]
         self.s._handle_events({'events':[{'type':'complete'}]})
         with patch.object(self.s,'_enter_next_chapter',return_value=(dialog(),None,[])) as next_chapter:
             self.s.cutscene('advance')
-        next_chapter.assert_called_once()
+        next_chapter.assert_not_called()
         self.assertFalse(self.s.done)
+
+    def test_agent_heart_prompt_and_results_never_receive_automatic_inputs(self):
+        self.s._pending_complete=True
+        for obs in ({'scene':'Level','level':{'completed':True,'frozen':True}},
+                    {'scene':'AreaComplete'}, {'scene':'LevelExit'},
+                    {'scene':'Overworld','menu':{'current':'OuiChapterPanel'}}):
+            with self.subTest(scene=obs['scene']):
+                _,_,frames,notes=self.s._auto_advance(obs,None)
+                self.assertEqual(frames,0);self.assertFalse(self.s.done)
+                self.assertIn('由你操作',notes[0])
+        self.assertEqual(self.s.client.steps,[])
+
+    def test_agent_completed_flag_does_not_truncate_later_result_inputs(self):
+        self.s._pending_complete=True
+        self.s.last_obs={'scene':'Level','level':{'completed':True,'frozen':True}}
+        with patch.object(self.s,'_execute',return_value=({'stop':'done','consumed':30,'planned':30},self.s.last_obs,None,0,0,[])) as execute:
+            self.s.act(['1,C','29'],'确认吃心界面并播放后续动画',None)
+        self.assertNotIn('complete',execute.call_args.args[3])
+        self.assertIn('death',execute.call_args.args[3])
+
+    def test_agent_explicit_inputs_drive_entire_heart_to_map_flow(self):
+        poem={'scene':'Level','level':{'completed':True,'frozen':True}}
+        states=[{'scene':'LevelExit'}, {'scene':'AreaComplete'},
+                {'scene':'Overworld','menu':{'current':'OuiChapterPanel'}},
+                {'scene':'Overworld','menu':{'current':'OuiChapterSelect'}}]
+        self.s.last_obs=poem;self.s._pending_complete=True
+        self.s.cfg.thought_lead_s=0
+        sent=[]
+        def call(cmd,**args):
+            if cmd=='deactivate':return {}
+            self.assertEqual(cmd,'step')
+            self.assertNotIn('complete',args['stop_on'])
+            sent.append(args['inputs'])
+            count=sum(int(item.split(',')[0]) for item in args['inputs'])
+            return {'obs':states.pop(0),'result':{'consumed':count,'planned':count,'stop':'done','events':[]}}
+        self.s.client=Mock(call=call)
+        with patch.object(self.s,'_write_sim_state'),patch.object(self.s,'_update_metrics_from_obs'):
+            for inputs in (['1,C','29'], ['60'], ['1,C','29'], ['1,B','29']):
+                outcome=self.s.act(inputs,'根据当前界面操作并查看后续结算',None)
+                self.assertEqual(outcome.auto_frames,0)
+                self.assertEqual(self.s.done,not states)
+        self.assertEqual(sent,[['1,C','29'],['60'],['1,C','29'],['1,B','29']])
+        self.s.finish_at_results()
+        self.assertEqual(len(sent),4)
+        self.assertEqual(self.s.end_scene,'Overworld')
 
     def test_entry_hands_intro_to_agent_without_skip_or_inputs(self):
         obs={'scene':'IntroVignette','save':{'name':'player','slot':1}}
@@ -194,6 +266,19 @@ class CutsceneTests(unittest.TestCase):
             self.s.connect()
         self.assertTrue(self.s._pending_complete)
         self.assertFalse(self.s.done)
+
+    def test_resume_at_results_preserves_pending_completion_and_side(self):
+        import json
+        self.s.cfg.resume_completion_pending=True
+        self.s._pending_complete=True
+        self.s.metrics.update(chapter_side='C')
+        (self.path/'run_state.json').write_text('{}',encoding='utf-8')
+        obs={'scene':'AreaComplete','storyInput':None,'save':{'name':'player','slot':1}}
+        with patch('orchestrator.game_session.BridgeClient',return_value=SceneClient(obs)):
+            self.s.connect()
+        self.assertTrue(self.s._pending_complete);self.assertFalse(self.s.done)
+        self.assertEqual(self.s.metrics.state.chapter_side,'C')
+        self.assertTrue(json.loads((self.path/'run_state.json').read_text())['completion_pending'])
 
 
 class ScriptClient(SceneClient):

@@ -301,10 +301,13 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         state = previous["state"]
         if (args.agent, args.save) != (state["agent"], state["save"]):
             raise SystemExit(f"--resume 的运行是 --agent {state['agent']} --save {state['save']}，与这次给的不一致")
+        cfg.resume_completion_pending = bool(state.get('completion_pending'))
         done = len(previous["metrics"].get("splits") or [])
         # 原计划已经全部完成时，--chapters / --segments 追加接下来要玩的部分：同一会话、设置与统计接着算
         from .segments import Piece, chapters_of
         extension = (list(cfg.plan) if args.segments else [Piece(c) for c in cfg.chapters] if args.chapters else None)
+        if extension is not None:
+            cfg.resume_completion_pending = False
         if extension is not None and args.chapter is not None:
             raise SystemExit("续跑追加章节用 --chapters 或 --segments，不用 --chapter")
         if state.get("plan_pieces"):
@@ -389,7 +392,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
-             "piece_pending": False, "session_id": session_id,
+             "piece_pending": False, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -552,6 +555,8 @@ def check_resume_position(cfg: RunConfig) -> bool:
         sid = (obs.get("level") or {}).get("sid")
         want = CHAPTER_SIDS.get(cfg.chapter) if cfg.chapter is not None else sid
         if cfg.resume_pending:
+            if cfg.cutscene_mode == 'agent' and right_save:
+                return True  # retain agent-owned navigation, including the previous chapter's menu
             # 上次在两截之间中断（这一截已完成、还没换过去）：先进入下一截的起点
             print(f"[run] 续跑：上次停在两截之间，进入{chapter_name_by_id(cfg.chapter)}第 {first_checkpoint(cfg)} 个检查点", flush=True)
             if obs.get("scene") == "Level" and not right_save:
@@ -566,6 +571,8 @@ def check_resume_position(cfg: RunConfig) -> bool:
             return True
         from tools.cutscene import story_pending
         if cfg.cutscene_mode == 'agent' and right_save and story_pending(obs):
+            return True
+        if cfg.cutscene_mode == 'agent' and right_save and cfg.resume_completion_pending and obs.get('scene') in {'AreaComplete','LevelExit','OverworldLoader','Overworld'}:
             return True
         if cfg.chapter is None:
             raise SystemExit(f"游戏当前不在关卡里（{obs.get('scene')}），无法续跑")

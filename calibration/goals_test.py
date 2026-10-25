@@ -79,7 +79,7 @@ class GoalTests(unittest.TestCase):
                                         elapsed=lambda:10, update=Mock(), add_split=Mock(),add=Mock())
         session.client=SimpleNamespace(cancel_pending=Mock())
         session.chapter_queue=[2];session.chapter_finished=False;session._pending_complete=False
-        session.cfg=SimpleNamespace(auto_speed=1)
+        session.cfg=SimpleNamespace(auto_speed=1,cutscene_mode='auto')
         return session
 
     def test_running_action_cancel_uses_progress_and_is_sent_once(self):
@@ -121,6 +121,24 @@ class GoalTests(unittest.TestCase):
         session=self.session();session._pending_complete=True;self.goal.immediate=True
         session.finish_user_stop()
         self.assertNotEqual(session.done_reason,'章节完成')
+
+    def test_agent_map_goal_waits_for_chapter_select_and_preserves_c_side(self):
+        session=self.session();session.cfg.cutscene_mode='agent';session._pending_complete=True
+        session.metrics.state.chapter_side='C'
+        for obs in ({'scene':'Level','level':{'completed':True}}, {'scene':'AreaComplete'},
+                    {'scene':'Overworld','menu':{'current':'OuiChapterPanel'}},
+                    {'scene':'Overworld','menu':{'current':'OuiChapterSelect','next':'OuiChapterPanel'}}):
+            self.assertFalse(session.goal_values(obs)['map_complete'])
+        values=session.goal_values({'scene':'Overworld','menu':{'current':'OuiChapterSelect'}})
+        self.assertTrue(values['map_complete']);self.assertEqual(values['side'],'C')
+
+    def test_agent_results_cleanup_never_supplies_inputs(self):
+        session=self.session();session.cfg.cutscene_mode='agent';session.done=True
+        session.done_reason='章节完成';session.chapter_queue=[];session.end_scene='Level'
+        session.client.call=Mock()
+        with self.assertRaisesRegex(RuntimeError,'不会代按'):session.finish_at_results()
+        session.end_scene='Overworld';session.finish_at_results()
+        session.client.call.assert_not_called()
 
     def test_results_are_displayed_then_confirmed_and_no_confirm_is_sent_on_map(self):
         session=self.session();session.done=True;session.done_reason='章节完成';session.chapter_queue=[]

@@ -223,11 +223,13 @@ def plan_is_partial(pieces) -> bool:
     return any(not Piece.of(p).whole() for p in pieces or [])
 
 
-def describe_plan(pieces, table: dict, speedrun: bool = True) -> str:
+def describe_plan(pieces, table: dict, speedrun: bool = True, agent_navigation: bool = False) -> str:
     """按段通关时提示词里的"本次范围"一节。"""
     items = "；".join(describe_piece(p, table) for p in pieces)
     handover = ("每一截完成后由系统接管：下一截不紧接着时，系统直接把你送到下一截的起点（新的计时从 0 开始）；"
                 "最后一截完成后本次运行结束。")
+    if agent_navigation:
+        handover = "每一截完成后，你按已配置的下一目标自行导航，主控只核对章节和起点，不代按或传送；最后一截完成后本次运行结束。"
     if speedrun:
         return f"本次要依次完成：{items}。{handover}评价指标是各截计时之和。"
     return f"本次指定范围（依次完成）：{items}。{handover}"

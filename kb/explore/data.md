@@ -32,9 +32,10 @@
 
 - `inputs` 是按顺序执行的按键段，每段写作 `"帧数,按键,按键..."`。只写帧数表示这些帧什么都不按，例如 `"5"`。一次 `act` 的帧数上限见 `act` 的工具说明。
 - 按键：方向 `L` `R` `U` `D`，跳 `J`，冲刺 `X`，crouch dash `Z`（以下蹲姿态冲刺），抓墙 `G`，交互 `T`；`K`、`Y`、`V` 是第二个跳、冲刺、crouch dash 键。
+- agent 剧情模式下，`C` 确认、`B` 返回、`P` 暂停、`N` 日志；`menu`／`pauseMenu` 报告菜单状态，`ui` 报告 Poem 显示或结算 `confirmReady`。旧桥接可能没有 `ui`。
 - 跳和冲刺是"按下"触发的：一直按住只算一次。要再按一次，中间至少松开 1 帧；或者换第二个键（按住 J 时按下 K 也算一次新的按下）。
 - 跳和冲刺有约 5 帧的输入缓冲：提前几帧按下并按住，到能起跳或冲刺的那一帧会自动生效。
-- `stop_on`（可选）：`death` 死亡、`room` 换房间、`land` 落地（起跳前站在地上的那一帧不算，离地后再落地才触发）、`refill` 冲刺恢复、`uncontrollable` 失去控制、`complete` 通关；默认 `["death", "room", "complete"]`，其中 death 与 complete 总会生效。触发后立即停下，剩余按键不执行。
+- `stop_on`（可选）：`death` 死亡、`room` 换房间、`land` 落地（起跳前站在地上的那一帧不算，离地后再落地才触发）、`refill` 冲刺恢复、`uncontrollable` 失去控制、`complete` 通关；默认 `["death", "room", "complete"]`。death 总会生效；agent 模式已登记通关后，不再用 complete 反复截断结算输入。触发后立即停下，剩余按键不执行。
 - `plan_file`：把按键段写进工作区里的 JSON 文件，调用 `act` 时传 `plan_file`（工作区里的路径）代替 `inputs`。文件也可以写成对象 `{"inputs": [...], "expect": [...], "tolerance": 1}`：`expect` 每帧一项，是这一帧推进之后 Madeline 的预期位置 `[x, y]`（`null` 表示这一帧不检查），实际与预期相差超过 `tolerance` 像素就在那一帧停下（`deviate`）。
 - 返回内容：实际执行了多少帧、停止原因、事件、取样轨迹（帧, x, y, vx, vy, 状态, 冲刺数, 是否着地），以及新的观测。
 

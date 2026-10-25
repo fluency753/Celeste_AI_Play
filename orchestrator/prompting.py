@@ -36,7 +36,9 @@ def auto_handling(cfg) -> str:
     """interface_zh.md 里"系统自动处理的部分"：没有剧情工具时剧情一律自动跳过；有剧情工具时按当前剧情模式处理。"""
     if has_cutscene_tool(cfg):
         return ("屏幕转场、死亡动画与重生由系统自动推进。剧情按当前的剧情模式处理：auto 时系统自动推进并跳过；"
-                "agent 时主控自动播放到需要输入的节点；对白用 `cutscene` 推进，分支明确选择，教学用 `act`，无需 wait。剧情标记不等于失控，角色可操作时继续用 `act`。")
+                "agent 时主控自动播放到需要输入的节点；对白用 `cutscene` 推进，分支明确选择，教学用 `act`，无需 wait。剧情标记不等于失控，角色可操作时继续用 `act`。"
+                "agent 模式下，吃心提示、结算确认及返回选章地图都由你观察界面后用 act 操作：C 确认、B 返回，纯帧数推进动画。"
+                "complete 事件或 completed=true 只是游戏登记了成绩，不是任务结束；回到选章地图后主控才确认章节完成，不会代按结算。")
     return "剧情对话、屏幕转场、死亡动画与重生都由系统自动推进并跳过，`act` 返回时 Madeline 已经可以操作。"
 
 
@@ -205,13 +207,14 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
     from .segments import describe_plan, plan_is_partial
     if plan_is_partial(getattr(cfg, "plan", None)):
         parts.append(PromptPart("本次的范围（按段通关时自动加）",
-                                "# 本次的范围\n\n" + describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {})
+                                "# 本次的范围\n\n" + describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, agent_navigation=cfg.cutscene_mode == 'agent')
                                 + "之前写的程序与笔记都在工作区里，可以继续用。", None, "\n\n"))
     elif cfg.chapters and len(cfg.chapters) > 1:
         names = " → ".join(chapter_name_by_id(c) for c in cfg.chapters)
         parts.append(PromptPart("本次的章节（多章时自动加）",
                                 "# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
-                                "一章通关后系统自动进入下一章，你接着玩；之前写的程序与笔记都在工作区里，可以继续用。", None, "\n\n"))
+                                + ("一章结算并返回选章地图后，按主控报告的下一目标自行导航；主控只核对章节和起点。" if cfg.cutscene_mode == 'agent' else "一章通关后系统自动进入下一章，你接着玩。")
+                                + "之前写的程序与笔记都在工作区里，可以继续用。", None, "\n\n"))
     return parts
 
 
@@ -229,7 +232,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
         from .segments import describe_plan, plan_is_partial
         if plan_is_partial(getattr(cfg, "plan", None)):
             parts.append(PromptPart("本次指定范围（按段通关时自动加）",
-                                    describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, speedrun=False)
+                                    describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, speedrun=False, agent_navigation=cfg.cutscene_mode == 'agent')
                                     + "不得自行扩展。", None, "\n"))
         elif chapters:
             parts.append(PromptPart("本次指定章节（自动加）", "本次指定章节：" + "、".join(chapter_name_by_id(c) for c in chapters)
@@ -237,12 +240,14 @@ def prompt_parts(cfg) -> list[PromptPart]:
     else:
         parts = _speedrun_parts(cfg)
     parts += _file_parts("room_analysis_zh.md")
+    if cfg.cutscene_mode == 'agent':
+        parts += _file_parts("agent_controls_zh.md")
     if getattr(cfg, "runtime", "container") == "container":
         parts += _file_parts("program_batches_zh.md")
     if has_cutscene_tool(cfg):
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
                                 f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式由主控自动播放到输入节点，无需wait；"
-                                "用advance/choose/skip决定，教学用act。遇到分支必须明确choose，不得用advance代选。", None, "\n"))
+                                "用advance/choose/skip或act明确输入，教学用act。分支须先读选项后自行选择，不得用advance代选。", None, "\n"))
     if is_explore(cfg) and getattr(cfg, "explore_program_runs", None):
         parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",
                                 f"两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。",

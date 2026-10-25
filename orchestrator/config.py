@@ -144,6 +144,7 @@ class RunConfig:
     plan: list | None = None           # 按段通关（--segments）：依次要玩的各截（segments.Piece）；None = 按 chapters 整章
     checkpoints: dict = field(default_factory=dict)  # 检查点表（segments.load_table / 桥接 areas）
     resume_pending: bool = False       # 续跑：上次在两截之间中断（这一截已完成、还没换到下一截）
+    resume_completion_pending: bool = False  # agent 尚未自行确认结算、返回选章地图
     resume_segment: int | None = None  # 续跑：上次在当前这一截里已经走到的段
     runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具
     image: str = "celeste-agent:0.1"

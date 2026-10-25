@@ -48,6 +48,15 @@ class ResumePositionTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.check(obs)
 
+    def test_agent_ending_and_between_piece_navigation_do_not_trigger_entry_macro(self):
+        for scene in ('AreaComplete','LevelExit','OverworldLoader','Overworld'):
+            obs={'scene':scene,'save':{'name':'opus5.5','slot':8}}
+            self.assertTrue(self.check(obs,cutscene_mode='agent',resume_completion_pending=True)[0])
+        # The previous chapter can still be on screen when the next target is queued.
+        self.assertTrue(self.check(level(sid='Celeste/1-ForsakenCity'),cutscene_mode='agent',resume_pending=True)[0])
+        with self.assertRaises(SystemExit):
+            self.check(level(save='other'),cutscene_mode='agent',resume_pending=True)
+
 
 if __name__ == "__main__":
     unittest.main()

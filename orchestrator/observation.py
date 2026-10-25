@@ -254,11 +254,19 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     if effort:
         head += f" · {effort}"
     lines.append(head)
+    if (level or {}).get('completed'):
+        lines.append('游戏已登记通关成绩，但吃心提示、片尾或结算可能仍未确认；这不等于已返回选章地图。')
+    if obs.get('menu'):
+        lines.append('当前菜单：' + json.dumps(obs['menu'], ensure_ascii=False))
+    if obs.get('ui'):
+        lines.append('当前界面：' + json.dumps(obs['ui'], ensure_ascii=False))
+    if obs.get('pauseMenu'):
+        lines.append('暂停菜单：' + json.dumps(obs['pauseMenu'], ensure_ascii=False))
     for previous in obs.get('storyPlayback') or []:
         lines.append('刚才由主控自动播放的文字：'+previous['text'])
     node = obs.get('storyInput')
     if node:
-        lines.append('当前剧情输入节点：'+node+'；主控已停止自动播放，教学请用 act，完整对白用 advance，选项用 choose。')
+        lines.append('当前剧情输入节点：'+node+'；主控已停止自动播放，教学用 act；对白和选项可明确用 act 输入，或调用 advance / choose。')
     elif obs.get('controllable') and (level or {}).get('inCutscene'):
         lines.append('虽然有剧情标记，角色当前仍可操作，请继续用 act；不需要等待或确认。')
     for story in obs.get('story') or []:
@@ -270,7 +278,7 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         if story.get('controls'):
             lines.append('当前教学按键：'+json.dumps(story['controls'],ensure_ascii=False))
     if (level or {}).get('dialogChoices'):
-        lines.append('当前需要选择对话选项；advance不会代选，请用cutscene(action="choose", choice=index)：')
+        lines.append('当前需要选择对话选项；先读选项后自行用act操作，或调用cutscene(action="choose", choice=index)；advance不会代选：')
         for option in level['dialogChoices']:
             lines.append(f"  {option['index']}: {option['text']}" + ('（当前选中）' if option.get('selected') else ''))
 

@@ -21,6 +21,7 @@ ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进�
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
   按键：L R U D 方向，J 跳，X 冲刺，Z crouch dash，G 抓墙，T 交互；K、Y、V 是第二个跳、冲刺、crouch dash 键
   （按住 J 时按下 K 也算一次新的"按下"，可以在相邻两帧各跳一次）；A:角度 表示摇杆角度（0 右、90 上）。
+  agent 剧情模式还可用 C 确认、B 返回、P 暂停、N 日志，直接操作菜单、对白、重试与结算。
   只写帧数表示这些帧不按任何键，例如 "5"。一次最多 {act_max_frames} 帧。
 plan_file：（有工作区时可用）工作区里的计划文件路径，与 inputs 二选一。内容是按键段数组，或对象：
   {"inputs": [...], "expect": [[x, y], [x, y, "Dash"], null, ...], "tolerance": 0.5,
@@ -31,7 +32,7 @@ plan_file：（有工作区时可用）工作区里的计划文件路径，与 i
 thought：一两句中文{thought_brief}，会显示给观众。只写你对当前房间或这一段的分析与判断（难点在哪、怎么取舍、打算怎么过），
   不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。{thought_mood_short}
 stop_on：提前停下的条件，可选 death room uncontrollable controllable land refill complete story_input；
-  默认 ["death", "room", "complete"]，death 与 complete 总会生效。
+  默认 ["death", "room", "complete"]，death 总会生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。
 死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控自动播放到实际输入节点或恢复控制。读取storyInput与story，教学用act，不需wait；inCutscene标记本身不表示角色失控。"""
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json）"

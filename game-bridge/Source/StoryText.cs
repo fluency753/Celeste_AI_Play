@@ -108,6 +108,25 @@ internal static class StoryText {
             Entry(w, "postcard", ReadPage(card.text, 0, card.alpha));
         }
         w.WriteEndArray();
+        WriteUi(w, scene);
+    }
+
+    // UI observation supplies facts only. It does not press keys or assume a
+    // visible/fading Poem is already accepting confirmation (fake hearts differ).
+    internal static void WriteUi(Utf8JsonWriter w, Scene? scene) {
+        if (scene is Level level && level.Entities.FindFirst<Poem>() is { Visible: true, Alpha: > 0f } poem) {
+            w.WriteStartObject("ui");
+            w.WriteString("type", "Poem");
+            w.WriteNumber("alpha", poem.Alpha);
+            w.WriteNumber("textAlpha", poem.TextAlpha);
+            if (poem.TextAlpha > 0f && !string.IsNullOrEmpty(poem.text)) w.WriteString("text", poem.text);
+            w.WriteEndObject();
+        } else if (scene is AreaComplete results) {
+            w.WriteStartObject("ui");
+            w.WriteString("type", "AreaComplete");
+            w.WriteBoolean("confirmReady", results.finishedSlide && results.canConfirm);
+            w.WriteEndObject();
+        }
     }
 
     private static void Entry(Utf8JsonWriter w, string kind, string text, bool waiting = false,
