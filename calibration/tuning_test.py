@@ -63,7 +63,10 @@ class TunableTests(unittest.TestCase):
         text = play_prompt(explore)
         self.assertIn("单次规划程序最多 40 秒", text)
         self.assertIn("两次 act 之间最多运行 2 次规划程序", text)
-        for placeholder in ("{act_max_frames}", "{bash_default}", "{explore_program}", "{remind}", "{playback_ratio}"):
+        tuning.apply(explore, {"explore_program_s": None})
+        self.assertIn("单次规划程序不限时长；", play_prompt(explore))
+        for placeholder in ("{act_max_frames}", "{bash_default}", "{explore_program}", "{explore_program_rule}", "{remind}",
+                            "{playback_ratio}"):
             self.assertNotIn(placeholder, changed + text)
 
     def test_retry_limits(self):
@@ -99,6 +102,10 @@ class TunableTests(unittest.TestCase):
         self.assertEqual(bash_limits_ms(cfg()), (300000, 600000))
         self.assertEqual(bash_limits_ms(cfg(mode="explore")), (15000, 15000))
         self.assertEqual(program_cap(cfg(mode="explore", explore_program_s=30)), 30)
+        # 不限时：上限放到 24 小时，实际由整次运行的现实时间上限约束
+        self.assertEqual(bash_limits_ms(cfg(mode="explore", explore_program_s=None)), (86400000, 86400000))
+        self.assertEqual(program_cap(cfg(mode="explore", explore_program_s=None)), 86400)
+        self.assertIsNone(tuning.parse_pairs(["explore_program_s=none"])["explore_program_s"])
 
     def test_run_args(self):
         from orchestrator.run import parse_args

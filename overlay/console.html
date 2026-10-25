@@ -199,6 +199,7 @@
   .runs .title { font-weight: 500; overflow-wrap: anywhere; }
   .runs .meta { grid-column: 1; color: var(--muted); font-size: 12.5px; }
   .runs .side { grid-row: 1 / span 2; grid-column: 2; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .inline-check { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
   .tag { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
   .tag.ok { color: var(--green); border-color: rgba(76, 195, 138, 0.5); }
   .tag.frozen { color: var(--blue); border-color: rgba(91, 192, 235, 0.5); }
@@ -375,10 +376,11 @@
       <fieldset id="fsExplore" hidden>
         <legend>探索：规划程序</legend>
         <div class="row">
-          <label class="field">单次最长（秒）<input type="number" id="exploreSeconds" min="1" max="600" step="1" placeholder="15"></label>
+          <label class="field">单次最长（秒）<input type="number" id="exploreSeconds" min="1" max="600" step="1" placeholder="15">
+            <span class="inline-check"><input type="checkbox" id="exploreUnlimited"> 不限时</span></label>
           <label class="field">两次 act 之间最多运行（次）<input type="number" id="exploreRuns" min="1" max="100" step="1" placeholder="不限"></label>
         </div>
-        <p class="hint">智能体写的规划程序（Bash）超过时长就被结束；次数用完后要先做一次真实尝试才能再运行。空着用默认值（15 秒、不限次数），提示词里的数字跟着变。</p>
+        <p class="hint">智能体写的规划程序（Bash）超过时长就被结束；次数用完后要先做一次真实尝试才能再运行。空着用默认值（15 秒、不限次数），提示词里的数字跟着变。勾选"不限时"时程序可以一直运行，只受整次运行的现实时间上限约束。</p>
       </fieldset>
 
       <fieldset>
@@ -1069,6 +1071,8 @@ function buildTunables() {
     }
   }
   $("exploreSeconds").value = ui.tune.explore_program_s ?? "";
+  $("exploreUnlimited").checked = ui.tune.explore_program_s === null;
+  $("exploreSeconds").disabled = $("exploreUnlimited").checked;
   $("exploreRuns").value = ui.tune.explore_program_runs ?? "";
   tuneCount();
 }
@@ -1094,7 +1098,8 @@ function formOptions() {
   }
   if (ui.mode === "explore") {
     const s = numberOrNull("exploreSeconds"), r = numberOrNull("exploreRuns");
-    if (s != null) tune.explore_program_s = s;
+    if ($("exploreUnlimited").checked) tune.explore_program_s = null;      // 不限时
+    else if (s != null) tune.explore_program_s = s;
     if (r != null) tune.explore_program_runs = r;
   }
   const options = {
@@ -1676,6 +1681,7 @@ $("refreshSaves").addEventListener("click", refreshSaves);
 $("saveGameDir").addEventListener("click", saveGameDir);
 $("celesteDir").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveGameDir(); } });
 $("setup").addEventListener("input", schedulePreview);
+$("exploreUnlimited").addEventListener("change", () => { $("exploreSeconds").disabled = $("exploreUnlimited").checked; });
 $("setup").addEventListener("change", schedulePreview);
 $("setup").addEventListener("submit", startRun);
 $("tuneReset").addEventListener("click", () => {

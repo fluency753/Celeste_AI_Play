@@ -51,7 +51,10 @@ class ViewModelTests(unittest.TestCase):
         now = time.time()
         energy = {"balance": 37, "capacity": 100, "rules": "体力上限100……4×额外候选数；最多6条、每条180帧"}
         stats = {k: v for k, v, _ in view_model(metrics(now, sim_energy=energy), CONFIG, [], now).stats}
-        self.assertEqual(stats["模拟体力"], "37 / 100")                 # 规则说明只在网页 HUD 的悬停提示里
+        self.assertEqual(stats["推演额度"], "37 / 100")                 # 规则说明只在网页 HUD 的悬停提示里
+        hidden = {k for k, _, _ in view_model(metrics(now, sim_stats=False), CONFIG, [], now).stats}
+        self.assertFalse(hidden & {"模拟器调用", "推演路径", "推演最速", "推演额度"})   # 不能推演时这几栏不显示
+        self.assertIn("死亡", hidden)
 
     def test_chapter_done_stops_live_timer_and_replay_meta(self):
         now = time.time()

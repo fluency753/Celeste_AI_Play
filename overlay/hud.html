@@ -68,7 +68,7 @@
   .timer .ms { font-size: 0.62em; color: #C9D0DE; }
   .effort { text-align: right; white-space: nowrap; }
   .effort.hidden { display: none; }
-  .stat.hidden { display: none; }   /* 没有数据的行（数据来源、模拟体力等）不显示 */
+  .stat.hidden { display: none; }   /* 没有数据的行（数据来源、推演额度等）不显示 */
   .effort .lbl { font-size: calc(12 * var(--px)); color: var(--label); line-height: 1.3; }
   .effort-val { display: flex; align-items: center; justify-content: flex-end; gap: calc(6 * var(--px));
                 font-size: calc(18 * var(--px)); line-height: 1.2; }
@@ -195,10 +195,10 @@
     <div class="stat hidden" id="chatCallsBox"><span class="k" id="toolCountLabel">聊天工具调用</span><span class="v num" id="chatCalls">—</span></div>
     <div class="stat"><span class="k">知识库读取</span><span class="v num" id="study">—</span></div>
     <div class="stat"><span class="k">死亡</span><span class="v num" id="deaths">0 次</span></div>
-    <div class="stat"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0 次</span></div>
-    <div class="stat"><span class="k">累计推演</span><span class="v num" id="simRuns">0 条</span></div>
-    <div class="stat"><span class="k">推演最速</span><span class="v num" id="simBest">—</span></div>
-    <div class="stat wide hidden" id="simEnergyBox"><span class="k">模拟体力</span><span class="v num" id="simEnergy">—</span></div>
+    <div class="stat" id="simCallsBox"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0 次</span></div>
+    <div class="stat" id="simRunsBox"><span class="k">累计推演</span><span class="v num" id="simRuns">0 条</span></div>
+    <div class="stat" id="simBestBox"><span class="k">推演最速</span><span class="v num" id="simBest">—</span></div>
+    <div class="stat wide hidden" id="simEnergyBox"><span class="k">推演额度</span><span class="v num" id="simEnergy">—</span></div>
     <div class="stat wide"><span class="k">调用工具</span><span class="v call" id="toolCall">—</span></div>
   </div>
   <div class="rule"></div>
@@ -240,7 +240,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 50;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 51;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -582,7 +582,9 @@ function render() {
   // 当前房间里推演出的最快出房用时（换房间清零）
   setText($("simCalls"), `${m.sim_calls || 0} 次`);
   const energy = m.sim_energy;
-  $("simEnergyBox").classList.toggle("hidden", !energy);
+  const simStats = m.sim_stats !== false;   // 探索模式关掉限额预测时智能体不能推演：推演相关的几栏都不显示
+  for (const id of ["simCallsBox", "simRunsBox", "simBestBox"]) $(id).classList.toggle("hidden", !simStats);
+  $("simEnergyBox").classList.toggle("hidden", !energy || !simStats);
   setText($("simEnergy"), energy ? `${energy.balance} / ${energy.capacity}` : "—");
   $("simEnergyBox").title = energy ? energy.rules : "";
   const runs = m.sim_rollouts || 0;

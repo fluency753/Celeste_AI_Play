@@ -713,7 +713,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         session.playback = playback
     live = None
     # narrate 与工具状态在所有模式都开（HUD 据 live 把思考放在主位）；直播模式另记 live_mode
-    metrics.update(live=True, live_mode=bool(cfg.live), play_mode=describe_mode(cfg), hud_mod=bool(cfg.hud_mod))
+    metrics.update(live=True, live_mode=bool(cfg.live), play_mode=describe_mode(cfg), hud_mod=bool(cfg.hud_mod),
+                   sim_stats=not (cfg.mode == "explore" and not cfg.sim_assist))
     print(f"[run] 模式：{describe_mode(cfg)}", flush=True)
     if (overrides := prompt_override_hashes()):
         print(f"[run] 提示词有本机修改（local/prompts）：{'、'.join(overrides)}", flush=True)

@@ -55,7 +55,7 @@ TUNABLES: tuple[Tunable, ...] = (
     Tunable("death_bonus", "死亡补的规划轮次", "速通：程序与规划", int, 1, 0, 20, "轮",
             "只在限制规划轮次时用", ("speedrun",)),
     Tunable("explore_program_s", "单次规划程序最长", "探索：规划程序", int, 15, 1, 600, "秒",
-            "超时就被结束；提示词里的上限跟着变", ("explore",)),
+            "超时就被结束；提示词里的上限跟着变。空着 = 不限时（仍受整次运行的现实时间上限约束）", ("explore",), optional=True),
     Tunable("explore_program_runs", "两次 act 之间最多运行几次", "探索：规划程序", int, None, 1, 100, "次",
             "空着 = 不限", ("explore",), optional=True),
     Tunable("assist_capacity", "体力上限", "探索：限额预测", int, 100, 1, 10000, "点", modes=("explore",)),

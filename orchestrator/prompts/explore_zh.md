@@ -19,6 +19,6 @@
 先阅读观测story中的当前可见对白、头像标识和教学提示，理解内容再行动。截图为游戏画面层，对话等界面文字由story单独提供；不能因截图中没有文字就忽略对白。
 游戏每秒 60 帧；思考时冻结。基本规则见 /kb/basics.md，坐标与观测数据的格式见 /kb/data.md，按键和工具约定见 /kb/tools.md。
 Read/Write/Bash 对应容器的文件读取、写入和断网命令；游戏工具为 {game_tools}，具体前缀见执行器工具映射。
-单次规划程序最多 {explore_program}；若有辅助程序，使用 /workspace/game/show.py 的 status() 报告真实进度。
+{explore_program_rule}若有辅助程序，使用 /workspace/game/show.py 的 status() 报告真实进度。
 思考期间用 narrate 简短说明观察、打算与发现，HUD 会立即显示；思考状态累计满 {remind} 没有更新时，系统会在你下一次调用工具时提醒。
 规划回放保持启用，仅播放实际提交的轨迹；不应为了回放而制造无意义的预测。

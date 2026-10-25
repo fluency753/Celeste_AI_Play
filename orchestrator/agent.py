@@ -72,10 +72,15 @@ def _strip_images(value):
 
 
 
+# 探索模式设成"不限时"时 Bash 的上限：24 小时，实际由整次运行的现实时间上限（--max-minutes）约束
+UNLIMITED_PROGRAM_S = 24 * 3600
+
+
 def bash_limits_ms(cfg) -> tuple[int, int]:
     """Claude Code 的 Bash 时长（毫秒）：(不写 timeout 时的上限, 写了 timeout 时的最长)。"""
     if getattr(cfg, "mode", "speedrun") == "explore":
-        cap = int(cfg.explore_program_s * 1000)
+        seconds = cfg.explore_program_s if cfg.explore_program_s is not None else UNLIMITED_PROGRAM_S
+        cap = int(seconds * 1000)
         return cap, cap
     return int(cfg.bash_default_s * 1000), int(cfg.bash_max_s * 1000)
 

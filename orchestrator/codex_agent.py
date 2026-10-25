@@ -50,7 +50,8 @@ def program_cap(cfg) -> float:
     """原生执行器里单次程序（celeste_bash）的最长秒数：探索模式用 explore_program_s（提示词里写的上限），
     速通模式用 Bash 最长时长 bash_max_s（与 Claude Code 的 Bash 相同）。"""
     if getattr(cfg, "mode", "speedrun") == "explore":
-        return float(cfg.explore_program_s)
+        from .agent import UNLIMITED_PROGRAM_S
+        return float(cfg.explore_program_s if cfg.explore_program_s is not None else UNLIMITED_PROGRAM_S)
     return float(cfg.bash_max_s)
 
 class CodexRunner(SessionControls):

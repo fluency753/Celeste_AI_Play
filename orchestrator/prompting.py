@@ -39,6 +39,13 @@ def auto_handling(cfg) -> str:
     return "剧情对话、屏幕转场、死亡动画与重生都由系统自动推进并跳过，`act` 返回时 Madeline 已经可以操作。"
 
 
+def explore_program_rule(cfg) -> str:
+    """探索模式提示词里单次程序时长的一句（explore_program_s 为 None 时不限时）。"""
+    from .tuning import seconds_text
+    seconds = getattr(cfg, "explore_program_s", 15)
+    return "单次规划程序不限时长；" if seconds is None else f"单次规划程序最多 {seconds_text(seconds)}；"
+
+
 def fill(text: str, cfg) -> str:
     """把提示词里的占位符换成本次的值：可调参数（orchestrator/tuning.py；默认值下与原来的文字完全相同），
     以及随设置变化的游戏工具清单与剧情处理说明。"""
@@ -51,7 +58,9 @@ def fill(text: str, cfg) -> str:
         "{act_max_frames}": str(getattr(cfg, "max_frames_per_act", 600)),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
         "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
-        "{explore_program}": seconds_text(getattr(cfg, "explore_program_s", 15)),
+        "{explore_program_rule}": explore_program_rule(cfg),
+        "{explore_program}": ("不限" if getattr(cfg, "explore_program_s", 15) is None
+                              else seconds_text(getattr(cfg, "explore_program_s", 15))),
         "{playback_ratio}": str(getattr(cfg, "playback_ratio", 100)),
         "{playback_min_tracks}": str(getattr(cfg, "playback_min_tracks", 40)),
         "{thought_max}": str(getattr(cfg, "thought_max_chars", 120)),

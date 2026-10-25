@@ -215,7 +215,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     if new_room:
                         parts.append(GEOMETRY)
                     hint = action_hint(before, outcome.obs, outcome.result, inputs,
-                                       decision_wait if session.cfg.live else 0)
+                                       decision_wait if session.cfg.live else 0, simulate=tool_simulate)
                     if hint:
                         parts.append(hint)
                 if session.workspace:

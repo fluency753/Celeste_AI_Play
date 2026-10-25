@@ -173,7 +173,7 @@ class RunConfig:
     bash_max_s: int = 600            # Bash 写了 timeout 时最多能到多久（速通模式）
     retry_max: int = 5               # 计划文件 retry.max 的上限
     retry_timeout_max_s: float = 60.0  # 计划文件 retry.timeout_s 的上限
-    explore_program_s: int = 15      # 探索模式：单次规划程序（Bash）最长秒数
+    explore_program_s: int | None = 15   # 探索模式：单次规划程序（Bash）最长秒数；None = 不限时
     explore_program_runs: int | None = None  # 探索模式：两次 act 之间最多运行几次规划程序；None = 不限
     assist_capacity: int = 100       # 探索模式的限额预测：体力上限
     assist_initial: int = 40         # 初始体力

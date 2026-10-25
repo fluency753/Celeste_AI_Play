@@ -3,8 +3,9 @@
 GEOMETRY = ("【几何核验】先用本次返回的精确 JSON 核对 player.hitbox、bounds、solids、实体和出口："
             "通路是否连通、开口是否容得下碰撞箱、下一落点是否安全。出口邻接不等于可达。"
             "截图只作补充，不凭视觉猜测墙后通路；已有数据不必重复 observe。")
-REPLAN = ("先核对碰撞箱与挡路地形，换一个可验证的假设再试。"
-          "若几何仍无法区分两种路线，且模拟体力足够，可 simulate 比较少量有区别的短路线；不重复预测同一受阻方向。")
+REPLAN = "先核对碰撞箱与挡路地形，换一个可验证的假设再试。"
+# 只在开了限额预测（有 simulate 工具）时附上
+REPLAN_SIMULATE = "若几何仍无法区分两种路线，且推演额度足够，可 simulate 比较少量有区别的短路线；不重复预测同一受阻方向。"
 
 
 def room_key(obs):
@@ -12,7 +13,7 @@ def room_key(obs):
     return level.get("sid"), level.get("mode"), level.get("room")
 
 
-def action_hint(before, after, result, inputs, decision_wait=0):
+def action_hint(before, after, result, inputs, decision_wait=0, simulate=False):
     """First failure is enough; no multi-death/stuck counter to delay intervention.
 
     The displacement check is deliberately conservative: a directional action that
@@ -36,4 +37,4 @@ def action_hint(before, after, result, inputs, decision_wait=0):
         reasons.append(f"上一次游戏工具前等待了 {decision_wait:.0f} 秒；这包含请求、输出和压缩，不能全归为思考")
     if not reasons:
         return ""
-    return "【立即复查】" + "；".join(reasons) + "。" + REPLAN
+    return "【立即复查】" + "；".join(reasons) + "。" + REPLAN + (REPLAN_SIMULATE if simulate else "")

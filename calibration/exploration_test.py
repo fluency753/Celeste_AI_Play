@@ -12,7 +12,8 @@ class ExplorationTests(unittest.TestCase):
     def test_first_blocked_action_triggers_without_retries(self):
         hint = action_hint(obs(), obs(1), {"consumed": 30, "stop": "done"}, ["30,R"])
         self.assertIn("可能受阻", hint)
-        self.assertIn("simulate", hint)
+        self.assertNotIn("simulate", hint)                 # 没开限额预测时不提 simulate
+        self.assertIn("simulate", action_hint(obs(), obs(1), {"consumed": 30, "stop": "done"}, ["30,R"], simulate=True))
 
     def test_first_death_triggers_even_after_respawn(self):
         self.assertIn("死亡", action_hint(obs(), obs(), {"stop": "death"}, ["30,R"]))

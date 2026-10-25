@@ -78,7 +78,8 @@ class MetricsState:
     narrates: int = 0                 # 实时展示：智能体调用 narrate 的次数
     narrate_reminders: int = 0        # 实时展示：思考状态累计半分钟没有 narrate、在下一次调用工具时提醒的次数
     sim_calls: int = 0                # 调用了预置模拟器的消息数（每条算一次，与规划轮次的记账相同）
-    sim_energy: dict | None = None    # 后台限额模拟体力；None 表示本局未开启
+    sim_energy: dict | None = None    # 后台限额模拟体力（HUD 上叫"推演额度"）；None 表示本局未开启
+    sim_stats: bool = True            # HUD 是否显示推演相关的几栏（模拟器调用、推演路径、推演最速）：探索模式关掉限额预测时智能体不能推演，不显示
     sim_rollouts: int = 0             # 预置模拟器推演过的路线总条数（全程累计，写进总结）
     sim_round_rollouts: int = 0       # 本轮回放的临时路线数，画完清零；累计显示使用 sim_rollouts
     sim_best_frames: int = 0          # 当前房间里推演出的最快出房帧数，从进入房间的那一帧算起（0 = 还没有；换房间清零）
