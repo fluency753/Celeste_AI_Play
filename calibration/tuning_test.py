@@ -93,6 +93,38 @@ class TunableTests(unittest.TestCase):
                             "{playback_ratio}"):
             self.assertNotIn(placeholder, changed + text)
 
+    def test_thought_brief_per_engine(self):
+        """Claude Code 执行器的提示词与工具说明都要求思考语句尽量简短、不超过 30 字；Codex 执行器不加，工具说明照旧。"""
+        import asyncio
+        from types import SimpleNamespace
+        from orchestrator.metrics import Metrics
+        from orchestrator.server import build_server
+        rule = "思考语句尽量简短，不超过 30 字。"
+
+        def descriptions(c):
+            with tempfile.TemporaryDirectory() as d:
+                metrics = Metrics(Path(d) / "metrics.json", "a", "opus", "high", 600)
+                server = build_server(SimpleNamespace(cfg=c, metrics=metrics, workspace=None))
+                return {t.name: t.description for t in asyncio.run(server.list_tools())}
+
+        for kw in (dict(mode="explore", knowledge_profile="explore", chapter=1),
+                   dict(mode="speedrun", knowledge_profile="full", sim=True, runtime="container"),
+                   dict(mode="speedrun", knowledge_profile="full", sim=False, runtime="container")):
+            claude, codex = cfg(**kw), cfg(engine="codex", **kw)
+            self.assertEqual(play_prompt(claude).count(rule), 1, kw)
+            self.assertNotIn("不超过 30 字", play_prompt(codex), kw)
+            for c in (claude, codex):
+                self.assertNotIn("{thought_brief", play_prompt(c))
+        tools = descriptions(cfg(mode="explore", knowledge_profile="explore", chapter=1))
+        self.assertIn("thought：一两句中文（尽量简短，不超过 30 字），会显示给观众", tools["act"])
+        self.assertIn("thought：一两句中文（尽量简短，不超过 30 字），只写", tools["narrate"])
+        tools = descriptions(cfg(mode="explore", knowledge_profile="explore", chapter=1, engine="codex"))
+        self.assertIn("thought：一两句中文，会显示给观众", tools["act"])
+        self.assertIn("thought：一两句中文（120 字以内），只写", tools["narrate"])
+        # 硬上限比 30 还小时按硬上限写
+        self.assertIn("不超过 20 字", play_prompt(cfg(mode="explore", knowledge_profile="explore", chapter=1,
+                                                     thought_max_chars=20)))
+
     def test_retry_limits(self):
         plan = {"inputs": ["10,R"], "retry": {"command": "python3 p.py", "max": 7, "timeout_s": 90}}
         with self.assertRaises(ActError):

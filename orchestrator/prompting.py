@@ -63,6 +63,36 @@ def local_target_rule(cfg) -> str:
     return LOCAL_TARGET_RULE if getattr(cfg, "engine", "claude") == "codex" else ""
 
 
+THOUGHT_BRIEF_CHARS = 30
+
+
+def thought_brief_chars(cfg) -> int | None:
+    """Claude Code 执行器要求思考语句（act 的 thought 与 narrate）尽量简短、不超过 30 字（用户要求），
+    写在提示词与工具说明里，不另做检查；Codex 执行器不加（None）。工具退回的硬上限两种执行器都是 thought_max_chars，
+    比 30 还小时按它写。"""
+    if getattr(cfg, "engine", "claude") == "codex":
+        return None
+    return min(THOUGHT_BRIEF_CHARS, getattr(cfg, "thought_max_chars", 120))
+
+
+def thought_brief_rule(cfg) -> str:
+    """提示词里的一句（Codex 执行器为空）。"""
+    n = thought_brief_chars(cfg)
+    return "" if n is None else f"思考语句尽量简短，不超过 {n} 字。"
+
+
+def thought_brief(cfg) -> str:
+    """act 工具说明里 thought 后的括注（Codex 执行器为空）。"""
+    n = thought_brief_chars(cfg)
+    return "" if n is None else f"（尽量简短，不超过 {n} 字）"
+
+
+def thought_limit(cfg) -> str:
+    """narrate 工具说明里 thought 的字数：Claude Code 执行器写"尽量简短，不超过 30 字"，Codex 执行器照旧写硬上限。"""
+    n = thought_brief_chars(cfg)
+    return f"{getattr(cfg, 'thought_max_chars', 120)} 字以内" if n is None else f"尽量简短，不超过 {n} 字"
+
+
 def explore_search_rule(cfg) -> str:
     """探索模式提示词里自写模拟器与搜索程序推演帧数的一句（explore_search_frames 为 None 时不写）。"""
     frames = getattr(cfg, "explore_search_frames", 300)
@@ -85,6 +115,9 @@ def fill(text: str, cfg) -> str:
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
         "{local_target_rule}": local_target_rule(cfg),
+        "{thought_brief_rule}": thought_brief_rule(cfg),
+        "{thought_brief}": thought_brief(cfg),
+        "{thought_limit}": thought_limit(cfg),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
         "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
         "{explore_program_rule}": explore_program_rule(cfg),
