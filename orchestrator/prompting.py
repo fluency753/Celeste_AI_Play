@@ -55,6 +55,14 @@ def cpu_rule(cfg) -> str:
     return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"
 
 
+LOCAL_TARGET_RULE = "无法确认后半段时，先验证下一个局部目标，用短动作或限额模拟消除歧义，不必长时间推完整条路线。"
+
+
+def local_target_rule(cfg) -> str:
+    """探索模式粗路线约定的最后一句：只给原生 GPT（codex 执行器）；Claude Code 执行器的智能体不加（用户要求）。"""
+    return LOCAL_TARGET_RULE if getattr(cfg, "engine", "claude") == "codex" else ""
+
+
 def explore_search_rule(cfg) -> str:
     """探索模式提示词里自写模拟器与搜索程序推演帧数的一句（explore_search_frames 为 None 时不写）。"""
     frames = getattr(cfg, "explore_search_frames", 300)
@@ -76,6 +84,7 @@ def fill(text: str, cfg) -> str:
         "{act_max_frames}": str(act_frame_cap(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
+        "{local_target_rule}": local_target_rule(cfg),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
         "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
         "{explore_program_rule}": explore_program_rule(cfg),

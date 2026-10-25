@@ -211,6 +211,7 @@ PLACEHOLDERS = {
     "{interface}": "在这里插入 interface_zh.md（工具接口）",
     "{act_max_frames}": "单次 act 最多推进的帧数（可调参数：速通 max_frames_per_act，探索 explore_act_frames）",
     "{explore_search_rule}": "探索模式自写模拟器与搜索程序推演帧数的一句（可调参数 explore_search_frames；不限时为空）",
+    "{local_target_rule}": "探索模式粗路线约定的最后一句（\"无法确认后半段时，先验证下一个局部目标……\"）：只给 Codex 执行器，Claude Code 执行器为空",
     "{cpu_rule}": "探索模式最多可以用几个 CPU 核的一句（可调参数 agent_cpus，默认本机的核数；容器运行时不超过 Docker 实际能用的核数）",
     "{bash_default}": "Bash 不写 timeout 时的上限（可调参数 bash_default_s）",
     "{bash_max}": "Bash 最长时长（可调参数 bash_max_s）",
