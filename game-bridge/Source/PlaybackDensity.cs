@@ -17,6 +17,4 @@ internal readonly struct PlaybackDensity {
 
     public float Visibility(float age) => MathF.Pow(0.5f, Math.Max(0f, age) / HalfLife);
 
-    public int FadeFrames(int requested) => requested <= 0 ? 0
-        : Math.Max(1, (int)MathF.Round(requested * Math.Max(0.5f, MathF.Sqrt(HistoryRetention / 0.2f))));
 }

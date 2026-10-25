@@ -8,7 +8,7 @@
 之前不画，录像里每章第一个房间（序章）看不到绘制过程；限制规划轮次时准备阶段照旧不扣轮次。
 
 逐轮回放：回放线程只把表头读进内存，挑好要画的路线，马上把这一轮画进游戏（智能体同时在想下一轮；下一轮先结束时排队，
-录像里一轮接一轮），放完删掉这一轮的记录文件。一轮放完，这一轮的线变成淡灰留在画面上，直到真实执行开始。
+录像里一轮接一轮），放完删掉这一轮的记录文件。一轮放完保留最后的彩色画面；下一轮开始时旧线转成淡灰，真实执行开始时清理。
 智能体调用 act 时，主控先等排队的轮次放完（最后一轮变色传导完成），镜头回到 Madeline，开始真实执行，画面上的线全部清掉。
 
 挑哪些路线（select）：线条数随推演条数等比增长——每 playback_ratio 条（默认 100）推演画一条，至少 playback_min_tracks 条
@@ -487,7 +487,7 @@ class Playback:
                 break
             factor *= seg["frames"] / cap
             seg = build_segment(rd.tracks, speed * factor, max(1, int(stagger / factor)), recolor * factor,
-                                hold=max(1, int(18 / factor)), fade=max(1, int(8 / factor)))
+                                hold=max(1, int(18 / factor)), fade=0)
         seg["camera"] = "keep"
         try:
             reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=rd.rollouts)
@@ -615,7 +615,7 @@ class Playback:
 
 
 def build_segment(tracks: list[Track], speed: float, stagger: int, recolor: float = 4.0, hold: int = 18,
-                  fade: int = 8) -> dict:
+                  fade: int = 0) -> dict:
     """一轮的回放：路线按推演先后在 stagger 帧里陆续出场，每个画面帧推进 speed 帧游戏时间；延伸中一律绿色，
     走到头时死亡的从终点往起点变红、金色的变金（每个画面帧传导 recolor 帧）。所有线都画完、变完色之后再停 hold 帧。
     镜头先跟着伸得最远的绿线，金色路线走到头后跟着变金的那一点往回走；没有金色路线时，所有线画完后沿伸得最远的那条往回走。"""

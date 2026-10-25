@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../game-bridge/Source/PlaybackDensity.cs" Link="PlaybackDensity.cs" />
+    <Compile Include="../../game-bridge/Source/PlaybackTrailClock.cs" Link="PlaybackTrailClock.cs" />
   </ItemGroup>
 </Project>

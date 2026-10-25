@@ -14,7 +14,7 @@
         <GenerateDocumentationFile>false</GenerateDocumentationFile>
         <!-- Publicizer 生成的类型与原程序集同名，忽略重复类型警告 -->
         <NoWarn>$(NoWarn);CS0436</NoWarn>
-        <Version>1.0.16</Version>
+        <Version>1.0.17</Version>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(CelestePrefix)' == ''">
