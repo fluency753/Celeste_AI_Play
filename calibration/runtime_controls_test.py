@@ -220,6 +220,19 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('PRIVATE', json.dumps(history))
         self.assertEqual(history[0]['text'], '左边有个开口，先试一下。')
 
+    def test_woken_chat_has_its_own_time_budget(self):
+        """通关后唤起的聊天会话：整次运行的现实用时早已超过预算，也不能一开始就因"时间预算用完"被结束。"""
+        import time
+        budget = self.cfg.budget_seconds
+        self.metrics.start_play()
+        self.metrics._offset = budget + 6000            # 恢复的整次运行用时（例如 1A + 2A 已用约 5.7 小时）
+        started = time.monotonic()
+        self.assertLessEqual(self.runner._budget_remaining(started), 0)       # 试玩：按整次运行算
+        self.runner.chat_only = True
+        self.assertGreater(self.runner._budget_remaining(started), budget - 5)  # 唤起的会话：从这次开始算
+        self.runner.chat_only, self.runner.naming_only = False, True
+        self.assertGreater(self.runner._budget_remaining(started), budget - 5)
+
 
 class CommonContracts(unittest.TestCase):
     def test_explore_and_metered_prompts_are_engine_independent(self):

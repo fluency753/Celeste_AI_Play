@@ -380,7 +380,7 @@ class ClaudeRunner(SessionControls):
                     if not await self._wait_turn(min(remaining, 1.0)):
                         continue
                 else:
-                    remaining = self.cfg.budget_seconds - (time.monotonic()-started if self.naming_only else self.metrics.elapsed())
+                    remaining = self._budget_remaining(started)
                     if remaining <= 0:
                         self.stop_reason = "时间预算用完"
                         return True
@@ -494,6 +494,13 @@ class ClaudeRunner(SessionControls):
         self.quota_until = None
         print(f"[agent] 额度等待结束（{waited / 60:.0f} 分钟），恢复智能体", flush=True)
         return waited / 60.0
+
+    def _budget_remaining(self, started: float) -> float:
+        """现实用时预算还剩多少秒。试玩按整次运行的现实用时算（续跑接着算）；存档命名与通关后唤起的聊天会话
+        从这次会话开始算——唤起时整次运行往往早已超过预算，按整次运行算会让会话一开始就被结束（与 Codex 执行器一致）。"""
+        if self.naming_only or self.chat_only:
+            return self.cfg.budget_seconds - (time.monotonic() - started)
+        return self.cfg.budget_seconds - self.metrics.elapsed()
 
     async def _wait_turn(self, timeout: float) -> bool:
         """等这一轮结束；超时返回 False（这一轮仍在进行）。"""
