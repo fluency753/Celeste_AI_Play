@@ -62,7 +62,7 @@ STATUS = {
 }
 EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 DEFAULT_COLORS = {
-    "card": "rgba(16, 19, 34, 0.80)", "mod_card": "rgba(16, 19, 34, 0.60)", "border": "rgba(255, 255, 255, 0.10)",
+    "card": "rgba(16, 19, 34, 0.80)", "mod_card": "rgba(16, 19, 34, 0.45)", "border": "rgba(255, 255, 255, 0.10)",
     "text": "#F3F5FA",
     "label": "#8F9AB3", "warn": "#F08A3C", "dash0": "#5BC0EB", "dash1": "#E0475B", "dash2": "#F28AC4",
     "effort": "#7FA6F5", "effort_high": "#F5B841", "thinking": "#F5B841", "idle": "#8A93A6",
@@ -603,10 +603,12 @@ def _history(entries, width: float, px: float, text_c, label_c, rule_c, fs: floa
         else:
             fill = (127, 166, 245, 46) if e.latest else (150, 173, 225, 26)
         box = _rounded((int(box_w), h), int(9 * px), fill, rule_c, 1)
-        bd = ImageDraw.Draw(box)
+        words = Image.new("RGBA", box.size, (0, 0, 0, 0))     # 文字单独一层加阴影：底色很透时也看得清
+        bd = ImageDraw.Draw(words)
         draw_text(bd, pad_x, pad_y + tag_h * 0.5 + 11 * fs * 0.36, e.tag, tag_style)
         for j, line in enumerate(lines):
             draw_text(bd, pad_x, pad_y + tag_h + line_h * j + line_h * 0.5 + THOUGHT_SIZE * fs * 0.36, line, text_style)
+        box.alpha_composite(_with_shadow(words, px))
         blocks.append(box)
     total = int(sum(b.height for b in blocks) + gap * (len(blocks) + 1))
     column = Image.new("RGBA", (int(width), max(1, total)), (0, 0, 0, 0))
