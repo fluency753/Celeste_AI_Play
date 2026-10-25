@@ -57,6 +57,18 @@ def cpu_rule(cfg) -> str:
     return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"
 
 
+# 探索模式多核那句后面的并行要点：Claude Code 执行器用详细版本（用户要求），Codex 执行器用简短版本
+PARALLEL_RULE_SHORT = "避免大量进程通信，用相同输入核对并行与单核结果。"
+PARALLEL_RULE_DETAIL = ("并行时注意，主进程单核做的汇总与进程间传输容易成为瓶颈（搜得越深 CPU 占用越低）。"
+                        "以按层展开的搜索为例：去重只在主进程做，不要每层把越来越大的去重集合或完整状态发给各子进程；"
+                        "子进程把候选的分数、序号和去重键全部回传，不要各自先截取前几名；"
+                        "主进程选定保留的节点后，再由子进程从父节点重放生成。并行版本要用同样的输入与单核对比，确认结果完全一致。")
+
+
+def parallel_rule(cfg) -> str:
+    return PARALLEL_RULE_SHORT if getattr(cfg, "engine", "claude") == "codex" else PARALLEL_RULE_DETAIL
+
+
 # 思考语句的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
 THOUGHT_MOOD = ("思考语句的语气不必一直冷静理智，可以自然流露真实的情绪，比如找到好路线时的高兴、反复失败后的懊恼、"
                "面对难关时的紧张；但不要夸张，像正常人说话一样就好。")
@@ -107,6 +119,7 @@ def fill(text: str, cfg) -> str:
         "{act_max_frames}": str(act_frame_cap(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
+        "{parallel_rule}": parallel_rule(cfg),
         "{thought_brief_rule}": thought_brief_rule(cfg),
         "{thought_mood}": THOUGHT_MOOD,
         "{thought_mood_short}": THOUGHT_MOOD_SHORT,

@@ -85,6 +85,15 @@ class TunableTests(unittest.TestCase):
         self.assertNotIn("{cpu_rule}", play_prompt(explore))
         self.assertIn("实在拿不到才放弃", play_prompt(explore))          # 鼓励拿草莓
         self.assertIn("模拟器对象尽量只构造一次再复用", play_prompt(explore))   # /workspace 是主机挂载，读写慢
+        # 多核那句后面的并行要点：Claude Code 执行器是详细版本，Codex 执行器是简短的一句
+        self.assertIn("个核，用几个按实际环境决定；并行时注意，主进程单核做的汇总", play_prompt(explore))
+        self.assertIn("再由子进程从父节点重放生成。并行版本要用同样的输入与单核对比，确认结果完全一致。/workspace", play_prompt(explore))
+        self.assertNotIn("避免大量进程通信", play_prompt(explore))
+        explore.engine = "codex"
+        self.assertIn("个核，用几个按实际环境决定；避免大量进程通信，用相同输入核对并行与单核结果。/workspace", play_prompt(explore))
+        self.assertNotIn("去重只在主进程做", play_prompt(explore))
+        self.assertNotIn("{parallel_rule}", play_prompt(explore))
+        explore.engine = "claude"
         self.assertNotIn("不要求全收集", play_prompt(explore))
         for placeholder in ("{act_max_frames}", "{bash_default}", "{explore_program}", "{explore_program_rule}", "{remind}",
                             "{playback_ratio}"):
