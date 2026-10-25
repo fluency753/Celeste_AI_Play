@@ -1644,8 +1644,9 @@ async function loadAbout() {
   const v = a.version || {};
   $("aboutVersion").innerHTML = "";
   const parts = [];
-  if (v.commit) parts.push(`版本 <b>${escapeHtml(v.commit)}</b>（${escapeHtml(v.date || "")}）`);
+  if (v.console) parts.push(`控制台 <b>${escapeHtml(v.console)}</b>`);
   if (v.bridge) parts.push(`桥接 Mod <b>${escapeHtml(v.bridge)}</b>`);
+  if (v.commit) parts.push(`提交 <b>${escapeHtml(v.commit)}</b>（${escapeHtml(v.date || "")}）`);
   $("aboutVersion").innerHTML = parts.join("，") || "版本信息不可用（没有 git）";
   if (v.subject) $("aboutVersion").title = "最近一次提交：" + v.subject;
   $("githubLink").href = a.github; $("githubLink").textContent = a.github.replace(/^https:\/\//, "");

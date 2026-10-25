@@ -48,7 +48,8 @@ OFF_BRIDGE_CLOCK, OFF_BRIDGE_RECORDING, OFF_BRIDGE_VERSION, OFF_BRIDGE_SCENE = 2
 
 DESIGN_WIDTH = 350            # 旧版设计稿：1080p 下卡片页面宽 350 像素（游戏宽 1920 的约 18%）
 DESIGN_VIEW = 1920
-HISTORY_MAX = 230             # 思考语句历史一栏最高（设计像素）；放不下时最早的几条从上边裁掉
+HISTORY_MAX = 260             # 思考语句历史一栏最高（设计像素）；放不下时最早的几条从上边裁掉
+TEXT_SCALE = 1.15             # 文字相对旧版设计稿放大的倍数（章节计时那一行除外）；卡片宽度与间距不变
 TIMER_CHARS = "0123456789:."
 
 STATUS = {
@@ -426,6 +427,7 @@ def _with_shadow(layer: Image.Image, px: float, alpha: float = 0.5, dy: float = 
 def render(vm: ViewModel, width: int, colors: dict | None = None) -> Rendered:
     colors = {**DEFAULT_COLORS, **(colors or {})}
     px = width / DESIGN_WIDTH
+    fs = px * TEXT_SCALE                                     # 文字用的比例
     text_c, label_c = parse_color(colors["text"]), parse_color(colors["label"])
     warn_c = parse_color(colors["warn"])
     rule_c = parse_color(colors["border"])
@@ -439,16 +441,16 @@ def render(vm: ViewModel, width: int, colors: dict | None = None) -> Rendered:
     y = margin + pad_t
 
     # 第一行：名字 · 状态（圆点）· 章节与房间
-    lh = 15 * 1.35 * px
-    base = y + lh * 0.5 + 15 * px * 0.36
-    x = draw_text(d, left, base, vm.name, Style(15 * px, text_c, bold=True)) + 8 * px
+    lh = 15 * 1.35 * fs
+    base = y + lh * 0.5 + 15 * fs * 0.36
+    x = draw_text(d, left, base, vm.name, Style(15 * fs, text_c, bold=True)) + 8 * px
     dot = 7 * px
     dot_c = parse_color(vm.dot)
-    d.ellipse((x, base - 15 * px * 0.36 - dot / 2 + 0.5 * px, x + dot, base - 15 * px * 0.36 + dot / 2 + 0.5 * px), fill=dot_c)
+    d.ellipse((x, base - 15 * fs * 0.36 - dot / 2 + 0.5 * px, x + dot, base - 15 * fs * 0.36 + dot / 2 + 0.5 * px), fill=dot_c)
     x += dot + 5 * px
-    room_style, rm_style = Style(15 * px, text_c, bold=True), Style(15 * px, label_c)
+    room_style, rm_style = Style(15 * fs, text_c, bold=True), Style(15 * fs, label_c)
     room_w = text_width(vm.room, room_style) + ((4 * px + text_width(vm.room_id, rm_style)) if vm.room_id else 0)
-    status_style = Style(13 * px, label_c)
+    status_style = Style(13 * fs, label_c)
     status_room = right - room_w - 8 * px - x
     status = vm.status
     while status and text_width(status, status_style) > status_room:
@@ -463,7 +465,7 @@ def render(vm: ViewModel, width: int, colors: dict | None = None) -> Rendered:
 
     # 第二行：章节计时（桥接按当帧的游戏时间画）与推理强度
     y += 4 * px
-    timer_h = 36 * 1.05 * px
+    timer_h = 36 * 1.05 * px          # 章节计时与推理强度这一行保持原来的大小（放大后两者会挤在一起）
     timer_base = y + timer_h * 0.82
     timer_x, timer_y = left, timer_base
     if vm.effort is not None:
@@ -494,26 +496,26 @@ def render(vm: ViewModel, width: int, colors: dict | None = None) -> Rendered:
 
     # 统计：两列，最后一行"调用工具"占满一行（最多三行）
     y += 9 * px
-    col_gap = 22 * px
+    col_gap = 10 * px
     col_w = (inner - col_gap) / 2
-    row_h = 16 * 1.3 * px
-    stat_k, stat_v = Style(13 * px, label_c), Style(16 * px, text_c, num=True)
+    row_h = 16 * 1.3 * fs
+    stat_k, stat_v = Style(12.5 * fs, label_c), Style(16 * fs, text_c, num=True)   # 两列放得下最长的键与值
     for i, (k, v, tone) in enumerate(vm.stats):
         cx = left + (i % 2) * (col_w + col_gap)
         ry = y + (i // 2) * (row_h + 3 * px)
-        b = ry + row_h * 0.5 + 16 * px * 0.36
+        b = ry + row_h * 0.5 + 16 * fs * 0.36
         draw_text(d, cx, b, k, stat_k)
         color = warn_c if tone == "warn" else label_c if tone == "dim" else text_c
-        vs = Style(16 * px, color, num=True)
+        vs = Style(16 * fs, color, num=True)
         draw_text(d, cx + col_w - text_width(v, vs), b, v, vs)
     y += math.ceil(len(vm.stats) / 2) * (row_h + 3 * px)
-    call_style = Style(14 * px, text_c if vm.tool_call else label_c)
+    call_style = Style(14 * fs, text_c if vm.tool_call else label_c)
     call_text = vm.tool_call or "—"
     k_w = text_width("调用工具", stat_k) + 8 * px
     call_lines = clamp_lines(wrap(call_text, call_style, inner - k_w), 3, call_style, inner - k_w)
-    call_lh = 14 * 1.35 * px
-    b = y + max(row_h, call_lh) * 0.5 + 14 * px * 0.36
-    draw_text(d, left, y + row_h * 0.5 + 16 * px * 0.36, "调用工具", stat_k)
+    call_lh = 14 * 1.35 * fs
+    b = y + max(row_h, call_lh) * 0.5 + 14 * fs * 0.36
+    draw_text(d, left, y + row_h * 0.5 + 16 * fs * 0.36, "调用工具", stat_k)
     for j, line in enumerate(call_lines):
         lx = left + k_w if len(call_lines) > 1 else right - text_width(line, call_style)
         draw_text(d, lx, b + j * call_lh, line, call_style)
@@ -524,7 +526,7 @@ def render(vm: ViewModel, width: int, colors: dict | None = None) -> Rendered:
     # 思考语句历史：新版那样一条一个气泡，最新的在最下面高亮；放不下时最早的从上边裁掉
     if vm.history:
         y += 10 * px - 7 * px
-        hist = _history(vm.history, inner, px, text_c, label_c, rule_c)
+        hist = _history(vm.history, inner, px, text_c, label_c, rule_c, fs)
         limit = int(HISTORY_MAX * px)
         if hist.height > limit:
             hist = hist.crop((0, hist.height - limit, hist.width, hist.height))
@@ -537,12 +539,12 @@ def render(vm: ViewModel, width: int, colors: dict | None = None) -> Rendered:
         flat.alpha_composite(hist, (int(left), int(y)))
         y += hist.height
     if vm.meta:
-        meta_style = Style(13 * px, label_c)
+        meta_style = Style(13 * fs, label_c)
         lines = clamp_lines(wrap(vm.meta, meta_style, inner), 2, meta_style, inner)
         y += 4 * px
         for line in lines:
-            draw_text(d, left, y + 13 * 1.4 * px * 0.5 + 13 * px * 0.36, line, meta_style)
-            y += 13 * 1.4 * px
+            draw_text(d, left, y + 13 * 1.4 * fs * 0.5 + 13 * fs * 0.36, line, meta_style)
+            y += 13 * 1.4 * fs
     height = int(math.ceil(y + pad_b + margin))
 
     # 卡片：圆角底、描边、投影，左边的色条跟着 Madeline 的发色
@@ -562,14 +564,15 @@ def render(vm: ViewModel, width: int, colors: dict | None = None) -> Rendered:
     return Rendered(out, int(round(timer_x)), int(round(timer_y)))
 
 
-def _history(entries, width: float, px: float, text_c, label_c, rule_c) -> Image.Image:
-    text_style, tag_style = Style(15 * px, text_c), Style(11 * px, label_c)
+def _history(entries, width: float, px: float, text_c, label_c, rule_c, fs: float | None = None) -> Image.Image:
+    fs = fs or px
+    text_style, tag_style = Style(15 * fs, text_c), Style(11 * fs, label_c)
     blocks = []
     pad_x, pad_y, gap = 10 * px, 9 * px, 7 * px
     box_w = width - 3 * px
     for e in entries:
         lines = wrap(e.text, text_style, box_w - 2 * pad_x)
-        tag_h, line_h = 11 * 1.5 * px, 15 * 1.5 * px
+        tag_h, line_h = 11 * 1.5 * fs, 15 * 1.5 * fs
         h = int(pad_y * 2 + tag_h + line_h * len(lines))
         if e.role == "user":
             fill = (91, 145, 230, 61)
@@ -579,9 +582,9 @@ def _history(entries, width: float, px: float, text_c, label_c, rule_c) -> Image
             fill = (127, 166, 245, 46) if e.latest else (150, 173, 225, 26)
         box = _rounded((int(box_w), h), int(9 * px), fill, rule_c, 1)
         bd = ImageDraw.Draw(box)
-        draw_text(bd, pad_x, pad_y + tag_h * 0.5 + 11 * px * 0.36, e.tag, tag_style)
+        draw_text(bd, pad_x, pad_y + tag_h * 0.5 + 11 * fs * 0.36, e.tag, tag_style)
         for j, line in enumerate(lines):
-            draw_text(bd, pad_x, pad_y + tag_h + line_h * j + line_h * 0.5 + 15 * px * 0.36, line, text_style)
+            draw_text(bd, pad_x, pad_y + tag_h + line_h * j + line_h * 0.5 + 15 * fs * 0.36, line, text_style)
         blocks.append(box)
     total = int(sum(b.height for b in blocks) + gap * (len(blocks) + 1))
     column = Image.new("RGBA", (int(width), max(1, total)), (0, 0, 0, 0))
