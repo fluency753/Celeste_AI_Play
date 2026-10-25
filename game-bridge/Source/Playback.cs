@@ -104,6 +104,7 @@ internal static class Playback {
 
     public static string? Start(long id, JsonElement a, Level level) {
         if (running) return "a playback is already running";
+        PlaybackSpinners.Clear();
         Tracks.Clear();
         final = GetBool(a, "final", false);
         speed = Math.Clamp(GetFloat(a, "speed", 2f), 0.1f, 60f);
@@ -173,6 +174,7 @@ internal static class Playback {
             w.WriteNumber("render_max_ms", Math.Round(max, 2));
             w.WriteNumber("dim", dim);
             w.WriteNumber("fade_frames", fade);
+            w.WriteNumber("spinner_visual_peak", PlaybackSpinners.PeakCount);
             if (float.IsFinite(density.HalfLife)) w.WriteNumber("trail_half_life_frames", density.HalfLife);
         }));
     }
@@ -182,6 +184,7 @@ internal static class Playback {
         if (running) return;
         overlay = false;
         camValid = false;
+        PlaybackSpinners.Clear();
         History.Clear();
         historyDrawn = 0;
         historyClear = true;
@@ -300,6 +303,7 @@ internal static class Playback {
         Draw.SpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp,
             DepthStencilState.None, RasterizerState.CullNone, null, camera.Matrix);
         try {
+            if (Showing && Engine.Scene is Level level) PlaybackSpinners.DrawMissing(level);
             if (drawOverlay) {
                 if (layersReady && historyDrawn == History.Count) {
                     if (History.Count > 0) Draw.SpriteBatch.Draw(historyRt, new Vector2(area.X, area.Y), Color.White);

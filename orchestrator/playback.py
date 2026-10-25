@@ -497,6 +497,7 @@ class Playback:
                   "rollouts": rd.rollouts, "frames": seg["frames"], "speed": seg["speed"], "dim": (reply or {}).get("dim", seg["dim"]),
                   "fade_frames": (reply or {}).get("fade_frames", seg["fade"]),
                   "trail_half_life_frames": (reply or {}).get("trail_half_life_frames"),
+                  "spinner_visual_peak": (reply or {}).get("spinner_visual_peak"),
                   "skipped": (reply or {}).get("skipped"),
                   "render_avg_ms": (reply or {}).get("render_avg_ms"), "render_max_ms": (reply or {}).get("render_max_ms"),
                   "tracks": [{"kind": t.kind, "stop": STOPS.get(t.stop), "frames": len(t.path),
