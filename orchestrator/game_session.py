@@ -15,6 +15,7 @@ from .metrics import Metrics
 from .observation import enrich_obs, fmt_ticks
 from .sandbox import run_program
 from .goals import GoalManager
+from .modes import act_frame_cap
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
@@ -498,7 +499,7 @@ class GameSession:
         return stop
 
     def _check_plan(self, plan: PlanSpec) -> list[str]:
-        frames = expand_inputs(plan.inputs, self.cfg.max_frames_per_act)
+        frames = expand_inputs(plan.inputs, act_frame_cap(self.cfg))
         if plan.expect is not None and len(plan.expect) > len(frames):
             raise ActError(f'"expect" 有 {len(plan.expect)} 帧，比按键的 {len(frames)} 帧还多')
         return frames

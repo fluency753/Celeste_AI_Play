@@ -28,6 +28,13 @@ def is_explore(cfg) -> bool:
     return mode_of(cfg) == EXPLORE
 
 
+def act_frame_cap(cfg) -> int:
+    """单次 act 最多推进的帧数：探索模式用 explore_act_frames（默认 300），速通模式用 max_frames_per_act（默认 600）。"""
+    if is_explore(cfg):
+        return int(getattr(cfg, "explore_act_frames", 300))
+    return int(getattr(cfg, "max_frames_per_act", 600))
+
+
 def remind_seconds(live: bool) -> float:
     """解说计时：思考累计这么久没有 narrate 就在下一次工具调用时提醒。直播 10 秒，其余半分钟。"""
     return 10.0 if live else 30.0

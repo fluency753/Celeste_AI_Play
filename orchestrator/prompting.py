@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from .config import REPO_ROOT, chapter_name_by_id
 from .kb_study import KbStudy
-from .modes import game_tools, has_cutscene_tool, is_explore
+from .modes import act_frame_cap, game_tools, has_cutscene_tool, is_explore
 
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
@@ -47,6 +47,12 @@ def explore_program_rule(cfg) -> str:
     return "单次规划程序不限时长；" if seconds is None else f"单次规划程序最多 {seconds_text(seconds)}；"
 
 
+def explore_search_rule(cfg) -> str:
+    """探索模式提示词里自写模拟器与搜索程序推演帧数的一句（explore_search_frames 为 None 时不写）。"""
+    frames = getattr(cfg, "explore_search_frames", 300)
+    return "" if frames is None else f"自写的模拟器或搜索程序每次推演最多 {frames} 帧（从起始状态往后模拟的帧数）。"
+
+
 def fill(text: str, cfg) -> str:
     """把提示词里的占位符换成本次的值：可调参数（orchestrator/tuning.py；默认值下与原来的文字完全相同），
     以及随设置变化的游戏工具清单与剧情处理说明。"""
@@ -59,7 +65,8 @@ def fill(text: str, cfg) -> str:
     if "{auto_handling}" in text:
         text = text.replace("{auto_handling}", auto_handling(cfg))
     values = {
-        "{act_max_frames}": str(getattr(cfg, "max_frames_per_act", 600)),
+        "{act_max_frames}": str(act_frame_cap(cfg)),
+        "{explore_search_rule}": explore_search_rule(cfg),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
         "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
         "{explore_program_rule}": explore_program_rule(cfg),

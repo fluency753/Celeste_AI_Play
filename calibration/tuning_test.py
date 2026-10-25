@@ -65,6 +65,16 @@ class TunableTests(unittest.TestCase):
         self.assertIn("两次 act 之间最多运行 2 次规划程序", text)
         tuning.apply(explore, {"explore_program_s": None})
         self.assertIn("单次规划程序不限时长；", play_prompt(explore))
+        # 探索模式：act 单次上限与自写模拟器、搜索程序的推演帧数（默认都是 300 帧）
+        from orchestrator.modes import act_frame_cap
+        from orchestrator.prompting import fill
+        self.assertEqual((act_frame_cap(explore), act_frame_cap(speed)), (300, 900))
+        self.assertEqual(fill("一次最多 {act_max_frames} 帧", explore), "一次最多 300 帧")
+        self.assertIn("自写的模拟器或搜索程序每次推演最多 300 帧", play_prompt(explore))
+        tuning.apply(explore, {"explore_act_frames": 240, "explore_search_frames": None})
+        self.assertEqual(act_frame_cap(explore), 240)
+        self.assertNotIn("自写的模拟器或搜索程序每次推演", play_prompt(explore))
+        self.assertNotIn("{explore_search_rule}", play_prompt(explore))
         for placeholder in ("{act_max_frames}", "{bash_default}", "{explore_program}", "{explore_program_rule}", "{remind}",
                             "{playback_ratio}"):
             self.assertNotIn(placeholder, changed + text)

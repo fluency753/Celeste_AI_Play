@@ -28,7 +28,7 @@ GROUPS = ("执行与解说", "规划回放", "速通：程序与规划", "探索
 
 TUNABLES: tuple[Tunable, ...] = (
     Tunable("max_frames_per_act", "单次 act 最多推进的帧数", "执行与解说", int, 600, 60, 3600, "帧",
-            "提示词与 act 的说明里的上限跟着变"),
+            "提示词与 act 的说明里的上限跟着变（探索模式用\"探索：规划程序\"里的那一项）", ("speedrun",)),
     Tunable("thought_max_chars", "思考语句最长字数", "执行与解说", int, 120, 20, 400, "字",
             "act 的 thought 与 narrate 的长度上限"),
     Tunable("thought_lead_s", "动作前等 HUD 换上新思考", "执行与解说", float, 0.4, 0, 3, "秒",
@@ -58,6 +58,10 @@ TUNABLES: tuple[Tunable, ...] = (
             "超时就被结束；提示词里的上限跟着变。空着 = 不限时（仍受整次运行的现实时间上限约束）", ("explore",), optional=True),
     Tunable("explore_program_runs", "两次 act 之间最多运行几次", "探索：规划程序", int, None, 1, 100, "次",
             "空着 = 不限", ("explore",), optional=True),
+    Tunable("explore_act_frames", "单次 act 最多推进的帧数", "探索：规划程序", int, 300, 30, 3600, "帧",
+            "探索模式用这一项；提示词与 act 的说明里的上限跟着变", ("explore",)),
+    Tunable("explore_search_frames", "自写模拟器与搜索程序每次最多推演", "探索：规划程序", int, 300, 1, 36000, "帧",
+            "写进提示词，由智能体遵守（主控检查不了它自己程序里的推演帧数）；空着 = 不限", ("explore",), optional=True),
     Tunable("assist_capacity", "体力上限", "探索：限额预测", int, 100, 1, 10000, "点", modes=("explore",)),
     Tunable("assist_initial", "初始体力", "探索：限额预测", int, 40, 0, 10000, "点", modes=("explore",)),
     Tunable("assist_regen_frames", "每多少个移动帧恢复 1 点", "探索：限额预测", int, 60, 1, 3600, "帧", modes=("explore",)),

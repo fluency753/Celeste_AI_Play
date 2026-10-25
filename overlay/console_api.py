@@ -204,7 +204,8 @@ def kb_write(mode: str, path: str, text: str, mtime=None) -> dict:
 
 PLACEHOLDERS = {
     "{interface}": "在这里插入 interface_zh.md（工具接口）",
-    "{act_max_frames}": "单次 act 最多推进的帧数（可调参数 max_frames_per_act）",
+    "{act_max_frames}": "单次 act 最多推进的帧数（可调参数：速通 max_frames_per_act，探索 explore_act_frames）",
+    "{explore_search_rule}": "探索模式自写模拟器与搜索程序推演帧数的一句（可调参数 explore_search_frames；不限时为空）",
     "{bash_default}": "Bash 不写 timeout 时的上限（可调参数 bash_default_s）",
     "{bash_max}": "Bash 最长时长（可调参数 bash_max_s）",
     "{explore_program}": "探索模式单次规划程序最长（可调参数 explore_program_s；不限时写\"不限\"）",

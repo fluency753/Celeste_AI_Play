@@ -131,7 +131,7 @@ class RunConfig:
     bridge_port: int = 47774
     mcp_port: int = 47780
     max_minutes: float = 240.0      # 现实时间上限（宽松；主要指标是游戏内计时）
-    max_frames_per_act: int = 600   # 单次 act 最多推进的帧数
+    max_frames_per_act: int = 600   # 单次 act 最多推进的帧数（速通模式；探索模式用 explore_act_frames，见 modes.act_frame_cap）
     play_speed: int = 1             # 智能体动作块的推进速度（1 = 实时 60 帧/秒）
     auto_speed: int = 1             # 转场、剧情、重生等自动推进段的速度（1 = 与原版一致；大于 1 只用于调试）
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
@@ -183,6 +183,8 @@ class RunConfig:
     retry_timeout_max_s: float = 60.0  # 计划文件 retry.timeout_s 的上限
     explore_program_s: int | None = 15   # 探索模式：单次规划程序（Bash）最长秒数；None = 不限时
     explore_program_runs: int | None = None  # 探索模式：两次 act 之间最多运行几次规划程序；None = 不限
+    explore_act_frames: int = 300    # 探索模式：单次 act 最多推进的帧数
+    explore_search_frames: int | None = 300  # 探索模式：自写模拟器与搜索程序每次最多推演的帧数（只写进提示词）；None = 不限
     assist_capacity: int = 100       # 探索模式的限额预测：体力上限
     assist_initial: int = 40         # 初始体力
     assist_regen_frames: int = 60    # 真实操作每多少个移动帧恢复 1 点
