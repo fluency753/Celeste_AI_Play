@@ -1,7 +1,8 @@
 """通关后按需唤起原 agent 会话，仅聊天，不建立游戏桥接或录制连接。
 
 --allow-programs：整理工作区——仍然不碰游戏，但允许智能体在零网络沙箱里用 Bash 修改、运行自己写的程序
-（例如在下一章开始前按用户要求改模拟器与搜索程序）。只用于 Claude 执行器。"""
+（例如在下一章开始前按用户要求改模拟器与搜索程序）。
+配合 --sim 挂载只读模拟器，用保存的快照做离线验证；仍不连接游戏。"""
 import argparse
 import asyncio
 import json
@@ -32,7 +33,11 @@ def can_wake(directory):
         return False
 
 
-async def chat(directory, name_request=None, allow_programs=False):
+async def chat(directory, name_request=None, allow_programs=False, sim=False):
+    if sim and not allow_programs:
+        raise ValueError('离线模拟器需要同时开启 --allow-programs')
+    if name_request and (allow_programs or sim):
+        raise ValueError('存档命名不开放工作区程序或离线模拟器')
     if not can_wake(directory):
         raise ValueError("只能唤起已准备或已完成试玩的会话")
     state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
@@ -49,9 +54,7 @@ async def chat(directory, name_request=None, allow_programs=False):
     runtime(cfg.engine).token(cfg)
     from .control import RunControl
     cfg.cutscene_mode=RunControl(directory).cutscene_preference() or state.get('cutscene_mode','auto')
-    if allow_programs and cfg.engine != "claude":
-        raise ValueError("整理工作区（--allow-programs）只用于 Claude 执行器")
-    cfg.sim, cfg.live, cfg.chapters = False, True, []
+    cfg.sim, cfg.live, cfg.chapters = bool(sim), True, []
     if name_request:
         cfg.max_minutes = 3
     container = await asyncio.to_thread(ensure_container, cfg)
@@ -83,8 +86,10 @@ def main():
     parser.add_argument('--name-save', help=argparse.SUPPRESS)
     parser.add_argument("--allow-programs", action="store_true",
                         help="整理工作区：允许智能体在沙箱里用 Bash 修改、运行自己写的程序（仍然不碰游戏）")
+    parser.add_argument('--sim', action='store_true',
+                        help='配合 --allow-programs 挂载只读模拟器，以保存快照做离线验证')
     args = parser.parse_args()
-    asyncio.run(chat(args.run.resolve(), args.name_save, args.allow_programs))
+    asyncio.run(chat(args.run.resolve(), args.name_save, args.allow_programs, args.sim))
 
 
 if __name__ == "__main__":

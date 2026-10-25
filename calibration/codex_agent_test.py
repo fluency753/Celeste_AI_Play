@@ -132,6 +132,25 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         shell.assert_not_called()
         self.server.call_tool.assert_awaited_with('exit_level',{'reason':'按用户要求退出'})
 
+    async def test_workspace_chat_can_run_sandbox_programs_but_game_tools_stay_closed(self):
+        self.runner.chat_only = self.runner.paused = True
+        self.runner.allow_programs = True
+        with patch('orchestrator.codex_agent.run_program', return_value=ProgramResult(0, 'offline', '', .1, False)) as shell:
+            result = await self.runner._request('item/tool/call', {
+                'tool': 'celeste_bash', 'arguments': {'command': 'python offline.py'}})
+            self.assertTrue(result['success'])
+            shell.assert_called_once()
+            for name in ('celeste_act', 'celeste_observe', 'celeste_simulate', 'celeste_exit_level', 'celeste_cutscene'):
+                denied = await self.runner._request('item/tool/call', {'tool': name, 'arguments': {}})
+                self.assertFalse(denied['success'])
+            self.server.call_tool.assert_not_awaited()
+        self.runner.allow_programs = False
+        with patch('orchestrator.codex_agent.run_program') as shell:
+            denied = await self.runner._request('item/tool/call', {
+                'tool': 'celeste_bash', 'arguments': {'command': 'python offline.py'}})
+            self.assertFalse(denied['success'])
+            shell.assert_not_called()
+
     async def test_writer_conflict_forks_history_and_records_recovery(self):
         expected = {"thread": {"id": "recovered"}}
         self.runner.rpc.request = AsyncMock(side_effect=[

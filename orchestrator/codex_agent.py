@@ -175,13 +175,15 @@ class CodexRunner(SessionControls):
         detail = args.get("description") or args.get("path") or ""
         self.metrics.tool_begin(ident, game_tool=game, label=name + (" · " + detail if detail else ""))
         try:
+            workspace_program = (name == 'celeste_bash' and self.chat_only
+                                 and getattr(self, 'allow_programs', False))
             if name == 'celeste_set_effort' and self.manual_effort is not None:
                 raise ValueError(f'用户已手动固定推理强度为 {self.manual_effort}，请保留用户设置；恢复自动后才可自行调整。')
             if self.session is not None and hasattr(self.session, "goals") and self.session.goals.stop_motion.is_set() and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("停止目标已触发，正在保存录像，请结束本轮。")
-            if self.chat_only and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run"}:
+            if self.chat_only and not workspace_program and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run"}:
                 raise ValueError("本次试玩已经结束，当前只提供聊天，不连接或操作游戏。")
-            if self.paused and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
+            if self.paused and not workspace_program and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("用户已暂停试玩。请只回复用户，不推进游戏或运行规划；结束本轮并等待继续。")
             if self.gate and self.gate.enabled and name != "celeste_stop_run":
                 # app-server 的动态调用没有 Claude 消息 ID；每次调用独立记一轮。
@@ -340,8 +342,11 @@ class CodexRunner(SessionControls):
         if self.chat_only:
             prompt += (("\n\n# 试玩前聊天\n这是新会话，已完成入门资料准备，还没有开始试玩。" if getattr(self, "ready_to_play", False)
                         else "\n\n# 试玩结束后的聊天\n本次试玩已经结束。") +
-                       "现在仅回答用户的消息、复盘试玩，可以读取原工作区笔记；"
-                       "不调用游戏观察、动作或规划程序，不自行开始下一章。用户没有发消息时安静等待。")
+                       ("可以按用户要求用 Read/Write/Bash 整理工作区，在零网络沙箱里运行程序；"
+                        "若已挂载 /sim，可从显式保存的快照做离线模拟。"
+                        if getattr(self, 'allow_programs', False) else
+                        "现在仅回答用户的消息、复盘试玩，可以读取原工作区笔记；不运行规划程序。") +
+                       "不连接游戏，不调用游戏观察、动作或在线模拟工具，不自行开始下一章。用户没有发消息时安静等待。")
         (self.run_dir / ("chat_system_prompt.md" if self.chat_only else "system_prompt.md")).write_text(prompt, encoding="utf-8")
         started = time.monotonic()
         try:
