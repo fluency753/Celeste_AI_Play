@@ -7,6 +7,8 @@
 交给回放线程。准备阶段（第一次执行游戏工具之前）的推演也回放：智能体常在准备阶段就开始规划第一个房间，
 之前不画，录像里每章第一个房间（序章）看不到绘制过程；限制规划轮次时准备阶段照旧不扣轮次。
 
+搜索中增量预览读取已刷新的完整记录，不移动活动日志，默认全量绘制；仅在实测超帧预算时暂时抽样，内存保护会记录略过原因。更新按搜索合并，完成后统一计数扣次，不重复整批回放。日志中的search_preview是视觉更新，统计以完成记录为准，不能累加预览数量。
+
 逐轮回放：回放线程只把表头读进内存，挑好要画的路线，马上把这一轮画进游戏（智能体同时在想下一轮；下一轮先结束时排队，
 录像里一轮接一轮），放完删掉这一轮的记录文件。一轮放完保留最后的彩色画面；下一轮开始时旧线转成淡灰，真实执行开始时清理。
 智能体调用 act 时，主控先等排队的轮次放完（最后一轮变色传导完成），镜头回到 Madeline，开始真实执行，画面上的线全部清掉。
@@ -24,7 +26,7 @@
 所有轮次用同一个倍速（playback_speed，默认 3 倍）：路线按推演先后在 playback_stagger_s 秒里陆续从 Madeline
 身上长出来，延伸中一律淡绿色细线（线多时整体再调淡）；一条线走到头的那一帧定下结果：死亡的从死亡点往起点一路变成淡红，
 金色的一条从终点往起点一路变成实心金色（传导速度 playback_recolor，默认 8 倍速），其余的保持淡绿；只画线，不画角色。
-镜头先跟着伸得最远的绿线，变金时跟着变色点往回移；没有金色时画完沿最远的线回到起点；所有线变完色之后这一轮再转成淡灰。
+镜头先跟着伸得最远的绿线，变金时跟着变色点往回移；没有金色时画完沿最远的线回到起点；所有线变完色后保持当前颜色，下一轮开始才转成历史淡灰。
 进章节的圆圈转场还没放完时，回放帧先把转场放完，黑屏消失后再画线。
 录制时这些帧照常录进录像：音乐照常播放、音效暂停，frames.csv 里它们的章节计时记为 -1；画一帧跟不上节拍时，
 录制插件把漏掉的节拍补上（记为 -2），音乐保持原速。前几轮留下的淡灰线桥接缓存成一张图，不再每帧重画。
@@ -41,6 +43,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from .rollout_tail import RecordTail
 
 import numpy as np
 
@@ -304,6 +307,9 @@ class _Msg:
     label: str = ""
     started: bool = False
     cli: bool = False
+    program: bool = False
+    previewed: bool = False
+    tail: object = field(default_factory=lambda: RecordTail(MAGIC, HEADER))
 
 
 class Playback:
@@ -328,7 +334,13 @@ class Playback:
         self._jobs: "queue.Queue" = queue.Queue()
         self._cv = threading.Condition()
         self._backlog = 0                      # 还没放完的轮次
-        self._submit_lock = threading.Lock()
+        self._submit_lock = threading.RLock()
+        self._stream_stop = threading.Event()
+        self._streamer = None
+        self._live_pending = {}
+        self._preview_success = {}
+        self._stream_sample = False
+        self._stream_fast_updates = 0
         self._worker: threading.Thread | None = None
         if self.collect:
             self.dir.mkdir(parents=True, exist_ok=True)
@@ -337,10 +349,17 @@ class Playback:
         if self.collect:
             self._worker = threading.Thread(target=self._run, name="playback", daemon=True)
             self._worker.start()
+        if self.enabled and getattr(cfg, 'playback_stream_interval_s', 1) > 0:
+            self._streamer = threading.Thread(target=self._stream, name='playback-preview', daemon=True)
+            self._streamer.start()
 
     # ---- 从输出流分轮（在读输出流的线程里调用，只做轻活） ----
 
     def note_tool_use(self, message_id: str | None, tool_use_id: str, name: str, tool_input: dict | None) -> None:
+        with self._submit_lock:
+            self._note_tool_use(message_id, tool_use_id, name, tool_input)
+
+    def _note_tool_use(self, message_id, tool_use_id, name, tool_input):
         if not self.collect or name.startswith("mcp__celeste__"):
             return
         mid = message_id or tool_use_id
@@ -349,12 +368,17 @@ class Playback:
         msg.started = msg.started or bool(self.gate is not None and self.gate.started)
         self._tool_msg[tool_use_id] = mid
         if name == "Bash" and isinstance(tool_input, dict):
+            msg.program = True
             if not msg.label:
                 msg.label = str(tool_input.get("description") or "").strip()[:80]
             if "celeste-sim" in str(tool_input.get("command") or ""):
                 msg.cli = True     # 直接用命令行调用模拟器：没有推演记录，但同样占一轮
 
     def note_tool_result(self, tool_use_id: str) -> None:
+        with self._submit_lock:
+            self._note_tool_result(tool_use_id)
+
+    def _note_tool_result(self, tool_use_id):
         mid = self._tool_msg.pop(tool_use_id, None)
         if mid is None:
             return
@@ -364,10 +388,48 @@ class Playback:
         msg.pending.discard(tool_use_id)
         if msg.pending:
             return
-        del self._msgs[mid]
-        self._submit(msg.label, msg.started, msg.cli)
+        if any(other.program and other.pending for key, other in self._msgs.items() if key != mid):
+            # Do not move another still-running writer's files (including a Read finishing during Bash).
+            return
+        ready = [(key, other) for key, other in self._msgs.items() if not other.pending]
+        self._queue_preview(mid, msg)
+        for key, _ in ready:
+            del self._msgs[key]
+        self._submit(msg.label, any(other.started for _, other in ready), any(other.cli for _, other in ready),
+                     skip_render=tuple(key for key, other in ready if other.previewed))
 
-    def _submit(self, label: str, started: bool, cli: bool = False) -> None:
+    def _stream(self):
+        while not self._stream_stop.wait(max(.1, getattr(self.cfg, 'playback_stream_interval_s', 1))):
+            try:
+                with self._submit_lock:
+                    active = [(mid, msg) for mid, msg in self._msgs.items() if msg.program and msg.pending]
+                    # Shared log directory cannot attribute simultaneous programs reliably.
+                    if len(active) == 1:
+                        self._queue_preview(*active[0])
+            except Exception as exc:
+                self.log(f'[playback] 搜索中预览暂不可用：{exc}')
+
+    def _queue_preview(self, mid, msg):
+        if not self.enabled or not msg.program or getattr(self.cfg, 'playback_stream_interval_s', 1) <= 0:
+            return
+        sources = msg.tail.read(sorted(self.dir.glob('*.bin')))
+        if not sources:
+            return
+        previous = self._live_pending.get(mid)
+        chunks = (previous[1] if previous else []) + sources
+        # Backpressure: one queued update per search, retain recent complete chunks.
+        size = sum(map(len, chunks))
+        while len(chunks) > 1 and size > 8 * 1024 * 1024:
+            size -= len(chunks.pop(0))
+            self.log('[playback] 增量预览触发内存保护，略过较早的预览块；原日志仍用于完整计数与最终优选')
+        self._live_pending[mid] = (msg.label, chunks)
+        msg.previewed = True
+        if previous is None:
+            with self._cv:
+                self._backlog += 1
+            self._jobs.put(('preview', mid))
+
+    def _submit(self, label: str, started: bool, cli: bool = False, skip_render=False) -> None:
         """一条消息的工具全部返回：调用了模拟器就扣一轮规划轮次，并把这期间的记录文件移出工作区、交给回放线程。"""
         with self._submit_lock:
             files = sorted(self.dir.glob("*.bin"))
@@ -380,7 +442,7 @@ class Playback:
             sources, moved = self._take(files)
         with self._cv:
             self._backlog += 1
-        self._jobs.put((label, sources, moved, True))
+        self._jobs.put((label, sources, moved, True, skip_render))
 
     def collect_prediction(self, predictions: list[dict], start_frame: int) -> None:
         """Collect native predictions immediately; GameSession already counted/charged them."""
@@ -395,7 +457,7 @@ class Playback:
             sources, moved = self._take(paths)
         with self._cv:
             self._backlog += 1
-        self._jobs.put(("短路线模拟", sources, moved, False))
+        self._jobs.put(("短路线模拟", sources, moved, False, False))
 
     def _take(self, files: list[Path]) -> tuple[list, list[Path]]:
         """把这一轮的日志移出工作区（智能体看不到，也不会被它的下一轮混进来）；移不动的读成字节再删。"""
@@ -426,6 +488,11 @@ class Playback:
 
     def close(self) -> None:
         """运行结束：停掉回放线程，删掉还没用完的日志。"""
+        self._stream_stop.set()
+        self.enabled = False
+        if self._streamer is not None:
+            self._streamer.join(timeout=2)
+            self._streamer = None
         if self._worker is not None:
             self._jobs.put(None)
             self._worker.join(timeout=10)
@@ -442,9 +509,20 @@ class Playback:
             job = self._jobs.get()
             if job is None:
                 return
-            label, sources, moved, account = job
             try:
-                self._play_round(label, sources, moved, account)
+                if job[0] == 'preview' and len(job) == 2:
+                    with self._submit_lock:
+                        label, sources = self._live_pending.pop(job[1])
+                    if not self._stream_stop.is_set():
+                        self._preview_success[job[1]] = False
+                        self._preview_success[job[1]] = bool(self._play_round(label, sources, [], False, preview=True))
+                else:
+                    label, sources, moved, account, skip_render = job
+                    if isinstance(skip_render, tuple):
+                        keys = skip_render
+                        results = [self._preview_success.pop(key, False) for key in keys]
+                        skip_render = bool(keys) and all(results)
+                    self._play_round(label, sources, moved, account, skip_render=skip_render)
             except Exception as exc:  # 回放出问题不影响游玩
                 self.log(f"[playback] 回放失败：{exc}")
             finally:
@@ -452,19 +530,21 @@ class Playback:
                     self._backlog -= 1
                     self._cv.notify_all()
 
-    def _play_round(self, label: str, sources: list, moved: list[Path], account: bool = True) -> None:
+    def _play_round(self, label: str, sources: list, moved: list[Path], account: bool = True,
+                    preview=False, skip_render=False) -> None:
         t0 = time.monotonic()
         try:
-            rd = self._digest(read_logs(sources), label)
+            rd = self._digest(read_logs(sources), label, all_tracks=preview and not self._stream_sample)
         finally:
             self._delete(moved)   # 挑好的路线已经解出逐帧位置，记录文件用完就删
         if rd is None:
             return
         with self._cv:
-            if self.enabled:
+            if self.enabled and not preview:
                 self.rounds.append(rd)
-            number = len(self.rounds)
-        self.log(f"[playback] 第 {number} 轮：推演 {rd.rollouts} 条，挑出 {len(rd.tracks)} 条（{time.monotonic() - t0:.1f} 秒）")
+            number = len(self.rounds) + int(preview)
+        stage = '搜索中增量' if preview else f'第 {number} 轮'
+        self.log(f"[playback] {stage}：推演 {rd.rollouts} 条，绘制 {len(rd.tracks)} 条（{time.monotonic() - t0:.1f} 秒）")
         # HUD：这次调用推演的路线条数（这一轮画完清零）与当前房间推演出的最快出房帧数；总条数另记
         if account:
             self.metrics.add(sim_rollouts=rd.rollouts)
@@ -473,6 +553,15 @@ class Playback:
             current = self.metrics.state.sim_best_frames
             if not current or rd.best_exit < current:
                 self.metrics.update(sim_best_frames=rd.best_exit)
+        if skip_render:
+            self.metrics.update(sim_round_rollouts=0)
+            self._archive({'t':time.time(),'round':number,'label':label,'rollouts':rd.rollouts,
+                           'search_completed':True,'previewed':True})
+            # Preserve the final best candidate even if the last log tail exceeded a preview budget.
+            best = [track for track in rd.tracks if track.kind == KIND_BEST]
+            if not best:
+                return
+            rd.tracks = best
         if not self.enabled or not rd.tracks:
             self.metrics.update(sim_round_rollouts=0)
             return
@@ -481,6 +570,8 @@ class Playback:
         recolor = float(self.cfg.playback_recolor)
         seg = build_segment(rd.tracks, speed, stagger, recolor)
         cap = self.round_cap_frames()
+        if preview or skip_render:
+            cap = min(cap, max(1, round(getattr(self.cfg, 'playback_stream_clip_s', 1.5) * 60)))
         factor = 1.0
         for _ in range(8):        # 太长：这一轮整体按比例加速（出场间隔、停留与淡出也一起缩短），直到在上限内画完
             if seg["frames"] <= cap:
@@ -494,6 +585,8 @@ class Playback:
         finally:
             self.metrics.update(sim_round_rollouts=0)   # 这一轮画完：HUD 的"推演路径"清零
         record = {"t": time.time(), "decision": self.session.decision_index + 1, "round": number, "label": rd.label,
+                  "search_preview": preview,
+                  "preview_sampled": bool(preview and self._stream_sample),
                   "rollouts": rd.rollouts, "frames": seg["frames"], "speed": seg["speed"], "dim": (reply or {}).get("dim", seg["dim"]),
                   "fade_frames": (reply or {}).get("fade_frames", seg["fade"]),
                   "trail_half_life_frames": (reply or {}).get("trail_half_life_frames"),
@@ -503,6 +596,18 @@ class Playback:
                   "tracks": [{"kind": t.kind, "stop": STOPS.get(t.stop), "frames": len(t.path),
                               "end": [round(float(v), 1) for v in t.path[-1]]} for t in rd.tracks]}
         self._archive(record)
+        if preview and reply:
+            average = float(reply.get('render_avg_ms') or 0)
+            if average > 14:
+                if not self._stream_sample:
+                    self.log('[playback] 增量全量绘制超过帧预算，后续预览暂时按现有比例抽样')
+                self._stream_sample, self._stream_fast_updates = True, 0
+            elif self._stream_sample and 0 < average < 8:
+                self._stream_fast_updates += 1
+                if self._stream_fast_updates >= 3:
+                    self._stream_sample = False
+                    self.log('[playback] 增量预览渲染恢复余量，重新全量绘制')
+        return reply is not None and not reply.get('skipped')
 
     def round_cap_frames(self) -> int:
         """一轮回放最多画多少帧：playback_round_s（1A 第一间那样一屏大的房间）× 当前房间面积 / (320×180)。"""
@@ -512,7 +617,7 @@ class Playback:
 
     def _call(self, seg: dict, round_no: int, label: str, runs: int, in_act: bool = False) -> dict | None:
         """发一段回放给桥接并等它放完（持有游戏连接的锁）。HUD 在这期间显示"规划回放"。"""
-        self.metrics.update(replaying=True, replay_round=round_no, replay_rounds=len(self.rounds),
+        self.metrics.update(replaying=True, replay_round=round_no, replay_rounds=max(round_no,len(self.rounds)),
                             replay_label=label, replay_runs=runs)
         t0 = time.monotonic()
         reply = None
@@ -540,7 +645,7 @@ class Playback:
         except OSError:
             pass
 
-    def _digest(self, log: LogIndex, label: str) -> Round | None:
+    def _digest(self, log: LogIndex, label: str, all_tracks=False) -> Round | None:
         """一轮结束：只留当前房间里起步的推演，挑出要画的路线并解出它们的逐帧位置。"""
         if len(log) == 0:
             return None
@@ -554,7 +659,7 @@ class Playback:
         n = len(log)
         if n == 0:
             return None
-        k = max(self.cfg.playback_min_tracks, math.ceil(n / max(1, self.cfg.playback_ratio)))
+        k = n if all_tracks else max(self.cfg.playback_min_tracks, math.ceil(n / max(1, self.cfg.playback_ratio)))
         tracks = [Track(kind, log.path(i), int(log.stop[i]), i) for i, kind in select(log, k)]
         exits = np.flatnonzero(log.stop == 2)
         away = exits[np.hypot(*(log.end[exits] - log.first[exits]).T) > BACKTRACK_PX] if len(exits) else exits
@@ -573,6 +678,15 @@ class Playback:
         """act 执行之前调用（不持有游戏连接的锁）：等输出流里还没收尾的轮次，把排队的轮次放完。"""
         if not self.collect:
             return
+        program_deadline = time.monotonic() + timeout
+        while True:
+            with self._submit_lock:
+                active = any(msg.program and msg.pending for msg in self._msgs.values())
+            if not active:
+                break
+            if time.monotonic() >= program_deadline:
+                raise TimeoutError('搜索程序仍在写入轨迹，不能提前执行游戏或收走日志')
+            time.sleep(.05)
         deadline = time.monotonic() + 2.0
         while any(m.pending for m in list(self._msgs.values())) and time.monotonic() < deadline:
             time.sleep(0.05)   # 上一轮的工具结果可能还没从输出流读到
@@ -589,7 +703,8 @@ class Playback:
                 label = ""
             self._submit(label, bool(self.gate is not None and self.gate.started))
         with self._cv:
-            self._cv.wait_for(lambda: self._backlog <= 0, timeout=timeout)
+            if not self._cv.wait_for(lambda: self._backlog <= 0, timeout=timeout):
+                raise TimeoutError('规划回放尚未排空，不能提前执行游戏')
 
     def final(self) -> None:
         """GameSession 在执行一次计划之前调用（排队的轮次已经放完；游戏冻结着，调用方持有游戏连接的锁）：

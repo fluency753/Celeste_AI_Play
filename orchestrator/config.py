@@ -162,6 +162,8 @@ class RunConfig:
     playback: bool = True            # 执行前把这次规划里模拟器推演过的路线画进游戏（规划回放，见 playback.py）
     playback_ratio: int = 100        # 每多少条推演画一条路线（线条数随推演条数等比增长）
     playback_min_tracks: int = 40    # 每一轮至少画几条（推演少于这个数时全画）
+    playback_stream_interval_s: float = 1.0  # 搜索中预览的采样间隔；0关闭
+    playback_stream_clip_s: float = 1.5      # 单次增量预览时长上限，不按房间面积放大
     playback_speed: float = 3.0      # 回放倍速：每个画面帧推进几帧游戏时间（所有轮次相同）
     playback_recolor: float = 8.0    # 线走到头定下结果后（死亡变红、金色变金）从终点往起点变色的传导倍速
     playback_stagger_s: float = 0.8  # 一轮里各条路线按推演先后陆续出场的时间跨度（秒）

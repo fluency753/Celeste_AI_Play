@@ -43,6 +43,8 @@ TUNABLES: tuple[Tunable, ...] = (
             "思考累计这么久没有 narrate，就在下一次调用工具时提醒（不开直播）"),
     Tunable("remind_live_s", "解说提醒间隔（直播）", "执行与解说", float, 10, 3, 600, "秒", "直播模式用这个"),
     Tunable("playback_speed", "回放倍速", "规划回放", float, 3, 0.5, 20, "倍", "每个画面帧推进几帧推演"),
+    Tunable("playback_stream_interval_s", "搜索中预览采样间隔", "规划回放", float, 1, 0, 60, "秒", "读取已刷新完整轨迹，0关闭增量预览，不改变计费次数"),
+    Tunable("playback_stream_clip_s", "增量预览最长时长", "规划回放", float, 1.5, 0.1, 10, "秒", "更新合并避免积压，不按房间面积放大"),
     Tunable("playback_recolor", "变色传导倍速", "规划回放", float, 8, 1, 50, "倍",
             "线走到头后死亡变红、最快变金，从终点往起点传导"),
     Tunable("playback_round_s", "每轮最长时长", "规划回放", float, 1.5, 0.1, 60, "秒",
