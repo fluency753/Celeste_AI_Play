@@ -168,3 +168,25 @@ foreach (int invalidMode in new[] {-1,3}) {
     catch (ArgumentException) { }
 }
 Console.WriteLine("PASS: test room area selection preserves current side, legacy A and explicit C; invalid sides rejected");
+
+// 真实 Monocle 组合碰撞体：圆刺临时禁用时仍须报告，圆形和矩形都保留世界坐标。
+var hazard = new Monocle.Entity(new Vector2(100, 50)) {
+    Collidable = false,
+    Visible = false,
+    Collider = new Monocle.ColliderList(new Monocle.Circle(6), new Monocle.Hitbox(16, 4, -8, -3))
+};
+if (!EntityGeometry.Include(hazard)) throw new Exception("Dormant collider disappeared from observation");
+using (var buffer = new MemoryStream()) {
+    using (var writer = new System.Text.Json.Utf8JsonWriter(buffer)) EntityGeometry.Write(writer, hazard.Collider);
+    using var document = System.Text.Json.JsonDocument.Parse(buffer.ToArray());
+    var parts = document.RootElement.GetProperty("parts");
+    if (parts.GetArrayLength() != 2 || parts[0].GetProperty("shape").GetString() != "circle"
+        || parts[0].GetProperty("r").GetSingle() != 6 || parts[0].GetProperty("x").GetSingle() != 94
+        || parts[0].GetProperty("y").GetSingle() != 44
+        || parts[1].GetProperty("shape").GetString() != "rect"
+        || parts[1].GetProperty("x").GetSingle() != 92 || parts[1].GetProperty("y").GetSingle() != 47)
+        throw new Exception("Mixed collider geometry or world coordinates lost");
+}
+hazard.Collider = null;
+if (EntityGeometry.Include(hazard)) throw new Exception("Colliderless entity included");
+Console.WriteLine("PASS: dormant entities and mixed circle/rectangle collider geometry retained");

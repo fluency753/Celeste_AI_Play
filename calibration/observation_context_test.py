@@ -35,6 +35,14 @@ class ObservationContextTest(unittest.TestCase):
         self.assertIsNone(json.loads(room_json({}))['solids'])
         self.assertEqual(json.loads(room_json({'solids':[]}))['solids'],[])
 
+    def test_dormant_spinner_mixed_collider_reaches_full_room_json(self):
+        collider={'shape':'list','parts':[{'shape':'circle','x':94,'y':44,'w':12,'h':12,'r':6},
+                                          {'shape':'rect','x':92,'y':47,'w':16,'h':4}]}
+        entities=[{'id':i,'type':'CrystalStaticSpinner','cat':'hazard','collidable':False,
+                   'visible':False,'collider':collider} for i in range(668)]
+        result=json.loads(room_json({'entities':entities}))
+        self.assertEqual(result['entities'],entities)
+
     def test_room_json_keeps_entities_beyond_summary_display_limit(self):
         entities=[{'id':i,'type':'Solid','cat':'solid','x':i*8,'y':0,'w':8,'h':8,
                    'collidable':i%2==0,'shape':{'type':'list','parts':[[0,0,4,4]]}} for i in range(80)]

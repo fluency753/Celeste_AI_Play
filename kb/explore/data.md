@@ -21,6 +21,7 @@
 - `solids`：地形的碰撞箱，每项 `[x, y, 宽, 高]`，由地形格子合并而成。会动、会塌、能撞碎的实心物不在这里，在 `entities` 里。
 - `entities`：房间里可碰撞的实体，每项 `{"id", "type", "cat", "x", "y", "w", "h", …}`。`id` 在本次进入房间期间固定，用来跨暂停对照同一个实体；`type` 是游戏里的类型名；`cat` 是大类：`hazard` 致死物、`spring` 弹簧、`refill` 冲刺水晶、`booster` 泡泡、`feather` 羽毛、`collectible` 收集品、`dream_block` 梦境块、`dynamic_solid` 会动的实心块、`jumpthru` 单向平台、`solid` 其他实心块、`interactive` 可交互物、`other` 其他。尖刺有 `dir`（刺尖朝向）；碰撞形状不是矩形时有 `shape`；会动的实体附 `state`（与运动有关的字段）与 `moved`（与上一次暂停相比的位移）。`Killbox` 是坑底的致死区。
 - `triggers`：触发器 `{"type", "rect"}`，不挡路，进入范围时触发效果。
+- 桥接 1.0.14 起，暂未启用碰撞的实体也会列出，`collidable:false` 只表示当前状态；远处圆刺可能在靠近时启用，不能按空地处理。组合形状在 `collider` 中递归给出 `shape,x,y,w,h`，圆形另有 `r`，`list.parts` 包含所有子形状；每层都是世界坐标。旧 `parts` 只包含矩形，会遗漏圆形；字符地图也只是粗略表示。`grid`/`unknown` 的外接范围不代表内部全实心。
 - `spawns` 本房间的重生点；`respawnPoint` 当前生效的重生点。
 - `player`：Madeline 的完整状态，`pos` 精确位置（含小数部分）、`speed` `[vx, vy]`、`state`、`dashes` / `maxDashes`、`stamina`、`onGround`、`facing`、`ducking`、`hitbox` `[左, 上, 宽, 高]`、`internal`（内部计时器与状态的原始数值，计时器单位是秒）。
 - 完整房间 JSON 的 `frame`、`sid`、`room` 用于核对观测身份。`solids` 为 `null` 表示本次没有提供完整地形，不能按空房间处理；需重新观测。

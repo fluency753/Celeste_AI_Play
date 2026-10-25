@@ -20,7 +20,7 @@ internal sealed class SnapshotOptions {
 
 /// <summary>
 /// 从当前帧读出 Madeline 状态、关卡信息、视野内实体与地形。
-/// 只报玩家能看见或能碰到的东西：不报触发器，也不报屏幕外的内容。
+/// 视野或整房间范围由选项指定；实体当前不可见、暂未启用碰撞时仍报告其形状与状态。
 /// </summary>
 internal static class StateExtractor {
     public const int ViewWidth = 320;
@@ -395,9 +395,8 @@ internal static class StateExtractor {
     private static List<EntityInfo> CollectEntities(Level level, Rectangle view) {
         var list = new List<EntityInfo>();
         foreach (Entity e in level.Entities) {
-            // 已被吃掉、等待重生的冲刺水晶不可碰撞，但仍要报告（附重生倒计时）
-            // 致死区 Killbox 只在 Madeline 接近时才可碰撞，但一直报告
-            if (e is Player or Trigger or SolidTiles || e.Collider == null || (!e.Collidable && e is not (Refill or Killbox))) {
+            // 圆刺等实体会按距离临时关闭碰撞；完整房间数据不能把它们当成不存在。
+            if (!EntityGeometry.Include(e)) {
                 continue;
             }
             Collider c = e.Collider;
@@ -425,6 +424,11 @@ internal static class StateExtractor {
             w.WriteNumber("y", Round(info.Y));
             w.WriteNumber("w", Round(info.W));
             w.WriteNumber("h", Round(info.H));
+            w.WriteBoolean("collidable", info.Entity.Collidable);
+            if (info.Entity.Collider is ColliderList) {
+                w.WritePropertyName("collider");
+                EntityGeometry.Write(w, info.Entity.Collider);
+            }
             if (info.Shape != "rect") {
                 w.WriteString("shape", info.Shape);
             }
