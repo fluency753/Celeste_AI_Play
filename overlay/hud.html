@@ -100,11 +100,11 @@
     margin-top: calc(10 * var(--px));
     font-size: calc(15 * var(--px)); line-height: 1.5; font-weight: 500;
     flex: 1 1 0; min-height: 0;
-    overflow-y: auto; overscroll-behavior: contain;
+    overflow-y: auto; overscroll-behavior: contain; scroll-behavior: auto;
     overflow-wrap: anywhere;
   }
   .thought-entry { padding: calc(9 * var(--px)) calc(10 * var(--px)); margin: calc(7 * var(--px)) calc(3 * var(--px)) calc(7 * var(--px)) 0;
-    background: rgba(150, 173, 225, 0.10); border: 1px solid var(--rule); border-radius: calc(9 * var(--px)); white-space: pre-wrap; }
+    background: rgba(150, 173, 225, 0.10); border: 1px solid var(--rule); border-radius: calc(9 * var(--px)); white-space: pre-wrap; animation: none; transition: none; }
   .thought-entry:last-child { background: rgba(127, 166, 245, 0.18); }
   .thought-entry .tag { display: block; color: var(--label); font-size: calc(11 * var(--px)); font-weight: 400; }
   .hud-desktop .head { cursor: move; user-select: none; }
@@ -240,7 +240,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 52;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 53;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -264,7 +264,7 @@ const STATUS = {
   stopped:   ["已结束", "idle", false],
 };
 // 推理强度：显示执行器实际确认的档位，显示英文档位名（configs/hud.json 的 effort_names 可覆盖）
-let state = null, config = null, offset = 0, shownThought = null;
+let state = null, config = null, offset = 0;
 let historyRun = null, historySignature = "", historyReady = false, followHistory = true;
 let historyEndpoint = null;
 const $ = (id) => document.getElementById(id);
@@ -404,17 +404,8 @@ function setText(el, value) {
   if (el.textContent !== text) el.textContent = text;
 }
 
-// 历史气泡来自运行日志（有轮询间隔），最新一句思考来自 metrics（每 0.1 秒）：最新一句还没进历史时先补在末尾，
-// 智能体 narrate 或开始一段动作时 HUD 立即换上新语句，不等历史刷新（录像里新语句与动作的第一帧同时出现）。
-let lastHistoryItems = [], latestThought = null;
-function composedThoughts() {
-  const items = lastHistoryItems.slice();
-  const text = latestThought && (latestThought.text || "").trim();
-  if (text && !items.slice(-6).some(item => String(item.text || "").trim() === text)) {
-    items.push({id: "latest", text, kind: "解说", wall: latestThought.wall});
-  }
-  return items.slice(-12);
-}
+// 消息区只显示历史接口返回的消息，不拼接 metrics 中的实时片段。
+let lastHistoryItems = [];
 function applyThoughts(first) {
   const el = $("thought");
   const oldTop = el.scrollTop;
@@ -422,7 +413,7 @@ function applyThoughts(first) {
   const anchor = visibleEntry && visibleEntry.dataset.id;
   const anchorDelta = visibleEntry ? oldTop - (visibleEntry.offsetTop - el.offsetTop) : 0;
   const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 3;
-  syncThoughtEntries(el, composedThoughts(), first);
+  syncThoughtEntries(el, lastHistoryItems, first);
   if (first) {
     el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
     followHistory = true;
@@ -605,19 +596,10 @@ function render() {
   }
   callEl.classList.toggle("dim", !call);
 
-  // 规划回放：思考语句的位置显示这一轮在试什么，下面一行小字是第几轮、推演了多少条路线（执行前画最终路线时写"即将执行"）
-  // 实时展示开着时，思考语句的位置一直显示智能体此刻的思考（它在回放上一轮时已经在想下一轮），这一轮在试什么写在下面的小字里
+  // 规划回放的轮次、路线数及说明显示在消息区下方。
   const roundInfo = m.replay_round > 0
     ? `第 ${m.replay_round} 轮规划 · 推演 ${(m.replay_runs || 0).toLocaleString("en-US")} 条路线` : "即将执行的路线";
   setText($("meta"), !replaying ? "" : (m.live && m.replay_label ? `${roundInfo} · ${m.replay_label}` : roundInfo));
-
-  // 最新一句思考（metrics 每 0.1 秒）：历史就绪前单独显示，就绪后补在历史末尾，直到历史里出现同一句。
-  const next = (replaying && !m.live ? (m.replay_label || "") : (m.thought || ""));
-  if (next !== shownThought) {
-    shownThought = next;
-    latestThought = next ? {text: next, wall: m.thought_updated_wall} : null;
-    applyThoughts(!historyReady);
-  }
 }
 
 poll();
