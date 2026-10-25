@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from orchestrator import codex_session_environment as env
+from orchestrator.control import RunControl
 
 
 def state(**values):
@@ -62,6 +63,78 @@ class SessionEnvironmentTests(unittest.TestCase):
         with patch.object(env,'active_agents',return_value={'test'}),patch.object(env,'thread_metadata',new_callable=AsyncMock) as rpc:
             result=asyncio.run(env.synchronize(Path('unused'),state(),Path('unused')))
             self.assertEqual(result['status'],'busy');rpc.assert_not_awaited()
+
+    def test_nested_chat_is_discovered_and_blocks_workspace_sync(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);directory=root/'runs'/'test'/'20260101-010000'/'chats'/'old'
+            directory.mkdir(parents=True);(directory/'run_state.json').write_text(json.dumps(state()))
+            RunControl(directory).heartbeat(chat_only=True,phase='idle')
+            self.assertEqual(env.targets(root=root)[0][0],directory.resolve())
+            self.assertEqual(env.active_agents(root),{'test'})
+            with patch.object(env,'thread_metadata',new_callable=AsyncMock) as rpc, \
+                 patch('orchestrator.kb_access.prepare_view') as view, \
+                 patch('orchestrator.container.ensure_container') as container:
+                result=asyncio.run(env.synchronize(directory,{**state(),'runtime':'container'},root/'backup',apply=True,root=root))
+            self.assertEqual(result['status'],'busy')
+            rpc.assert_not_awaited();view.assert_not_called();container.assert_not_called()
+
+    def test_nested_hash_does_not_override_a_newer_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            old=root/'runs'/'test'/'20260101-010000'/'chats'/'zzzz'
+            new=root/'runs'/'test'/'20260102-010000'
+            for directory in [old,new]:
+                directory.mkdir(parents=True);(directory/'run_state.json').write_text(json.dumps(state()))
+            self.assertEqual(env.targets(root=root)[0][0],new.resolve())
+
+    def test_current_tools_do_not_bypass_late_nested_host_check(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);home=root/'home';sessions=home/'sessions';sessions.mkdir(parents=True)
+            path=sessions/'session.jsonl';original=rollout([]);path.write_bytes(original)
+            nested=root/'runs'/'test'/'20260101-010000'/'chats'/'old'
+            async def rpc(*args,**kwargs):
+                nested.mkdir(parents=True);(nested/'run_state.json').write_text(json.dumps(state()))
+                RunControl(nested).heartbeat(chat_only=True,phase='idle')
+                return {'id':'old','path':str(path)}
+            with patch.dict('os.environ',{'CODEX_HOME':str(home)}), \
+                 patch.object(env,'thread_metadata',side_effect=rpc),patch.object(env,'tool_specs',AsyncMock(return_value=[])), \
+                 patch('orchestrator.kb_access.prepare_view') as view, \
+                 patch('orchestrator.container.ensure_container') as container:
+                result=asyncio.run(env.synchronize(root,{**state(),'runtime':'container'},root/'backup',apply=True,root=root))
+            self.assertEqual(result['status'],'busy');self.assertEqual(result['container'],'not_changed')
+            self.assertEqual(path.read_bytes(),original);view.assert_not_called();container.assert_not_called()
+
+    def test_current_tools_require_writer_probe_before_container_updates(self):
+        for scenario in ('idle','writer_busy','host_connected_during_probe'):
+            with self.subTest(scenario=scenario),tempfile.TemporaryDirectory() as folder:
+                root=Path(folder);home=root/'home';sessions=home/'sessions';sessions.mkdir(parents=True)
+                path=sessions/'session.jsonl';original=rollout([]);path.write_bytes(original)
+                async def rpc(*args,**kwargs):
+                    if kwargs.get('resume'):
+                        if scenario == 'writer_busy':
+                            raise RuntimeError('writer busy')
+                        if scenario == 'host_connected_during_probe':
+                            nested=root/'runs'/'test'/'20260101-010000'/'chats'/'old'
+                            nested.mkdir(parents=True);(nested/'run_state.json').write_text(json.dumps(state()))
+                            RunControl(nested).heartbeat(chat_only=True,phase='idle')
+                    return {'id':'old','path':str(path)}
+                with patch.dict('os.environ',{'CODEX_HOME':str(home)}), \
+                     patch.object(env,'thread_metadata',side_effect=rpc) as metadata, \
+                     patch.object(env,'tool_specs',AsyncMock(return_value=[])), \
+                     patch('orchestrator.kb_access.prepare_view') as view, \
+                     patch('orchestrator.container.ensure_container',return_value='sandbox') as container:
+                    if scenario == 'writer_busy':
+                        with self.assertRaisesRegex(RuntimeError,'writer busy'):
+                            asyncio.run(env.synchronize(root,{**state(),'runtime':'container'},root/'backup',apply=True,root=root))
+                        view.assert_not_called();container.assert_not_called()
+                    elif scenario == 'host_connected_during_probe':
+                        result=asyncio.run(env.synchronize(root,{**state(),'runtime':'container'},root/'backup',apply=True,root=root))
+                        self.assertEqual(result['status'],'busy');view.assert_not_called();container.assert_not_called()
+                    else:
+                        result=asyncio.run(env.synchronize(root,{**state(),'runtime':'container'},root/'backup',apply=True,root=root))
+                        self.assertEqual(result['container'],'sandbox');view.assert_called_once();container.assert_called_once()
+                    self.assertTrue(metadata.call_args_list[-1].kwargs.get('resume'))
+                self.assertEqual(path.read_bytes(),original)
 
     def test_batch_skips_non_codex_and_explicit_selection_rejects_it(self):
         with tempfile.TemporaryDirectory() as folder:

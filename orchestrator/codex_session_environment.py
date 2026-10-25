@@ -44,7 +44,7 @@ def configuration(state):
 
 def targets(paths=None, root=REPO_ROOT):
     runs = (root/'runs').resolve()
-    candidates = [Path(p).resolve() for p in paths] if paths else sorted(runs.glob('*/*/run_state.json'), reverse=True)
+    candidates = [Path(p).resolve() for p in paths] if paths else sorted(runs.rglob('run_state.json'), reverse=True)
     selected = {}
     for path in candidates:
         directory = path.parent if path.name == 'run_state.json' else path
@@ -58,14 +58,21 @@ def targets(paths=None, root=REPO_ROOT):
                 raise ValueError('此脚本仅同步 Codex 会话')
             continue
         key = (state['engine'], state['session_id'])
-        if key not in selected or directory.name > selected[key][0].name:
+        if key not in selected or target_order(directory, runs) > target_order(selected[key][0], runs):
             selected[key] = (directory, state)
     return list(selected.values())
 
 
+def target_order(directory, runs):
+    # chats/<hash> 不是运行时间；先比较所属运行，再比较同一运行内的元数据更新时间。
+    parts = directory.relative_to(runs).parts
+    return (parts[1] if len(parts) > 1 else directory.name,
+            (directory/'run_state.json').stat().st_mtime_ns, str(directory))
+
+
 def active_agents(root=REPO_ROOT):
     active = set()
-    for path in (root/'runs').glob('*/*/run_state.json'):
+    for path in (root/'runs').rglob('run_state.json'):
         if (path.parent/'control.sqlite3').exists() and RunControl(path.parent).snapshot().get('connected'):
             active.add(read_json(path).get('agent'))
     return active
@@ -158,7 +165,8 @@ async def synchronize(directory, state, output, *, apply=False, root=REPO_ROOT):
     after = {t['name']: t for t in tools}
     report.update(added=sorted(after.keys()-before.keys()), removed=sorted(before.keys()-after.keys()),
                   changed=sorted(k for k in before.keys() & after.keys() if before[k] != after[k]))
-    if updated != original:
+    needs_update = updated != original
+    if needs_update:
         report['status'] = 'outdated'
         if apply:
             # Acquire/release the real writer first. Never fork or silently edit a
@@ -200,6 +208,15 @@ async def synchronize(directory, state, output, *, apply=False, root=REPO_ROOT):
     if apply and cfg.runtime == 'container':
         from .kb_access import prepare_view
         from .container import ensure_container
+        # 容器同步有独立副作用；不能依赖“工具需要修改”分支里的所有权检查。
+        if state['agent'] in active_agents(root):
+            return {**report, 'status': 'busy', 'container': 'not_changed',
+                    'reason': '容器同步前已有宿主接入，未修改容器'}
+        if not needs_update:
+            await thread_metadata(ident, scratch/'container-writer-check', resume=True)
+        if state['agent'] in active_agents(root):
+            return {**report, 'status': 'busy', 'container': 'not_changed',
+                    'reason': '容器检查期间已有宿主接入，未修改容器'}
         prepare_view(cfg)
         report['container'] = await asyncio.to_thread(ensure_container, cfg, lambda text: print(text, flush=True))
     else:
