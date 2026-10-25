@@ -297,9 +297,19 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
         or "、".join(chapter_name_by_id(c) for c in (cfg.chapters or []))
     head = ("（系统）之前指定的章节都已经通关。"
             + ("这是一个新的会话：之前的对话不在了，但工作区里的笔记与程序都在。" if fresh_session else "现在接着同一个会话，"))
-    return (head + f"开始新的范围：{items}。主控已经进入这一章。本次的规则以当前的系统提示词为准，和之前相比可能有变化"
+    rules = ("本次的规则以当前的系统提示词为准" if fresh_session
+             else "本次的规则以这条消息后面附上的当前规则为准")
+    return (head + f"开始新的范围：{items}。主控已经进入这一章。{rules}，和之前相比可能有变化"
             "（例如单次 act 与自写推演的帧数上限、思考语句的要求），之前写的程序与笔记按新规则检查后再用。"
             "请先调用 observe 看清当前画面，再开始游玩。")
+
+
+def current_rules_note(cfg) -> str:
+    """续跑同一个 Claude Code 会话时附在第一条消息后面的当前规则。Claude Code 压缩上下文时会把当时的系统提示词与工具说明
+    存成快照（prompt_snapshot），之后续跑沿用快照，要到下一次压缩才换成新的；所以续跑时改过的规则要在对话里再给一遍。"""
+    return ("\n\n（系统）续跑的会话沿用之前保存的提示词快照：你看到的系统提示词与工具说明可能还是旧版本，要到下次压缩上下文后才会更新。"
+            f"当前生效的完整规则如下，与旧版本不一致时以这里为准；act 一次最多推进 {act_frame_cap(cfg)} 帧，超过会被主控退回。\n\n"
+            + play_prompt(cfg))
 
 
 def resume_prompt(reason: str, minutes: float, study_note: str | None = None) -> str:

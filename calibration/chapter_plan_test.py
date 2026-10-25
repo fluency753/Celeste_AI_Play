@@ -232,14 +232,24 @@ class ResumeExtensionTests(unittest.TestCase):
             note = opening_note(cfg, args.previous, "sess")
             self.assertIn("之前指定的章节都已经通关", note)
             self.assertIn("天空度假村", note)
-            self.assertIn("以当前的系统提示词为准", note)
-            self.assertNotIn("中断", note)
+            self.assertIn("以这条消息后面附上的当前规则为准", note)
+            self.assertNotIn("主控中断", note)
             self.assertNotIn("暂停了", note)
-            self.assertIn("新的会话", opening_note(cfg, args.previous, None))
+            # 续跑同一个会话：系统提示词可能还是旧快照，附上当前完整规则与 act 上限
+            self.assertIn("提示词快照", note)
+            self.assertIn("act 一次最多推进 150 帧", note)
+            self.assertIn("自写的模拟器或搜索程序每次推演最多 150 帧", note)
+            self.assertIn("实在拿不到才放弃", note)
+            fresh = opening_note(cfg, args.previous, None)
+            self.assertIn("新的会话", fresh)
+            self.assertIn("以当前的系统提示词为准", fresh)
+            self.assertNotIn("提示词快照", fresh)                  # 新会话的系统提示词就是当前的
             # 中途被打断后的续跑仍是原来的消息
             unfinished = self.make_run(root / "u", [[1, 0, None], [2, 0, None]], done[1:2])
             cfg, args = self.parse(root / "u", "--resume", str(unfinished))
-            self.assertIn("主控中断后续跑", opening_note(cfg, args.previous, "sess"))
+            resumed = opening_note(cfg, args.previous, "sess")
+            self.assertIn("主控中断后续跑", resumed)
+            self.assertIn("当前生效的完整规则", resumed)
 
     def test_unfinished_plan_cannot_be_replaced(self):
         with tempfile.TemporaryDirectory() as d:

@@ -30,7 +30,7 @@ from pathlib import Path
 
 import uvicorn
 
-from .prompting import next_chapter_prompt, resume_prompt
+from .prompting import current_rules_note, next_chapter_prompt, resume_prompt
 from .runtimes import RUNTIMES, runtime
 from .config import CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id
 from .container import ensure_container
@@ -913,10 +913,11 @@ def opening_note(cfg, previous, resumed_session) -> str | None:
     if not previous:
         return None
     if getattr(cfg, "_extended_plan", None):
-        return next_chapter_prompt(cfg, fresh_session=not resumed_session)
+        note = next_chapter_prompt(cfg, fresh_session=not resumed_session)
+        return note + current_rules_note(cfg) if resumed_session else note
     gap = max(0.0, time.time() - float(previous["metrics"].get("written_wall") or time.time())) / 60
     if resumed_session:
-        return resume_prompt("主控中断后续跑", gap)
+        return resume_prompt("主控中断后续跑", gap) + current_rules_note(cfg)
     frozen = _previous_kept_frozen(previous)
     return ("（系统）主控中断后续跑，这是一个新的会话：之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。"
             + ("游戏一直冻结在中断时的那一帧，章节计时没有走。先看一遍 /workspace/notes.md，再调用 observe 继续游玩。"
