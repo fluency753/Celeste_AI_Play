@@ -220,6 +220,7 @@ PLACEHOLDERS = {
     "{playback_ratio}": "规划回放每多少条推演画一条（可调参数 playback_ratio）",
     "{playback_min_tracks}": "规划回放每轮至少画几条（可调参数 playback_min_tracks）",
     "{thought_max}": "思考语句最长字数（可调参数 thought_max_chars）",
+    "{thought_mood}": "思考语句语气的一句（不必一直冷静理智，可以带上真实的情绪……）：两种执行器都有",
     "{thought_brief_rule}": "\"思考语句尽量简短，汉字不超过 30 个（英文术语不计）。\"一句（可调参数 thought_max_hanzi）：只给 Claude Code 执行器，Codex 执行器为空",
     "{remind}": "解说提醒间隔（可调参数 remind_s / remind_live_s）",
     "{rounds}": "一屏大的房间存入的规划轮次（--rounds-per-room）",

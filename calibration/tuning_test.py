@@ -65,12 +65,12 @@ class TunableTests(unittest.TestCase):
         self.assertIn("两次 act 之间最多运行 2 次规划程序", text)
         tuning.apply(explore, {"explore_program_s": None})
         self.assertIn("单次规划程序不限时长；", play_prompt(explore))
-        # 探索模式：act 单次上限与自写模拟器、搜索程序的推演帧数（默认都是 300 帧）
+        # 探索模式：act 单次上限与自写模拟器、搜索程序的推演帧数（默认都是 150 帧）
         from orchestrator.modes import act_frame_cap
         from orchestrator.prompting import fill
-        self.assertEqual((act_frame_cap(explore), act_frame_cap(speed)), (300, 900))
-        self.assertEqual(fill("一次最多 {act_max_frames} 帧", explore), "一次最多 300 帧")
-        self.assertIn("自写的模拟器或搜索程序每次推演最多 300 帧", play_prompt(explore))
+        self.assertEqual((act_frame_cap(explore), act_frame_cap(speed)), (150, 900))
+        self.assertEqual(fill("一次最多 {act_max_frames} 帧", explore), "一次最多 150 帧")
+        self.assertIn("自写的模拟器或搜索程序每次推演最多 150 帧", play_prompt(explore))
         tuning.apply(explore, {"explore_act_frames": 240, "explore_search_frames": None})
         self.assertEqual(act_frame_cap(explore), 240)
         self.assertNotIn("自写的模拟器或搜索程序每次推演", play_prompt(explore))
@@ -117,12 +117,17 @@ class TunableTests(unittest.TestCase):
             self.assertNotIn("汉字不超过", play_prompt(codex), kw)
             for c in (claude, codex):
                 self.assertNotIn("{thought_brief", play_prompt(c))
+                self.assertEqual(play_prompt(c).count("思考语句的语气不必一直冷静理智，可以带上真实的情绪"), 1, kw)
+                self.assertNotIn("{thought_mood", play_prompt(c))
         tools = descriptions(cfg(mode="explore", knowledge_profile="explore", chapter=1))
         self.assertIn("thought：一两句中文（尽量简短，汉字不超过 30 个，英文术语不计），会显示给观众", tools["act"])
         self.assertIn("thought：一两句中文（尽量简短，汉字不超过 30 个，英文术语不计），只写", tools["narrate"])
         tools = descriptions(cfg(mode="explore", knowledge_profile="explore", chapter=1, engine="codex"))
         self.assertIn("thought：一两句中文，会显示给观众", tools["act"])
         self.assertIn("thought：一两句中文（120 字以内），只写", tools["narrate"])
+        for desc in (tools["act"], tools["narrate"]):
+            self.assertIn("语气不必一直冷静理智，可以带上情绪。", desc)
+            self.assertNotIn("{thought_mood", desc)
         # 只数汉字：英文术语、数字与标点不计
         self.assertEqual(count_hanzi("先 climbjump 上墙，再 wallbounce 越过尖刺。"), 8)
         claude, codex = cfg(), cfg(engine="codex")

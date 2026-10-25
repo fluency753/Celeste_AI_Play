@@ -51,6 +51,7 @@ DESIGN_WIDTH = 350            # 旧版设计稿：1080p 下卡片页面宽 350 �
 DESIGN_VIEW = 1920
 HISTORY_MAX = 540             # 思考语句历史一栏最高（设计像素）：放得下三条约 85 字的长消息；放不下时最早的几条从上边裁掉
 TEXT_SCALE = 1.15             # 文字相对旧版设计稿放大的倍数（章节计时那一行除外）；卡片宽度与间距不变
+THOUGHT_SIZE = 16.5           # 思考语句气泡的字号（设计像素，再乘 TEXT_SCALE）；原来 15
 TIMER_CHARS = "0123456789:."
 
 STATUS = {
@@ -61,7 +62,8 @@ STATUS = {
 }
 EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 DEFAULT_COLORS = {
-    "card": "rgba(16, 19, 34, 0.80)", "border": "rgba(255, 255, 255, 0.10)", "text": "#F3F5FA",
+    "card": "rgba(16, 19, 34, 0.80)", "mod_card": "rgba(16, 19, 34, 0.60)", "border": "rgba(255, 255, 255, 0.10)",
+    "text": "#F3F5FA",
     "label": "#8F9AB3", "warn": "#F08A3C", "dash0": "#5BC0EB", "dash1": "#E0475B", "dash2": "#F28AC4",
     "effort": "#7FA6F5", "effort_high": "#F5B841", "thinking": "#F5B841", "idle": "#8A93A6",
 }
@@ -97,12 +99,14 @@ def _font_dirs() -> list[Path]:
     return dirs
 
 
-# 角色 → 候选（文件名, ttc 索引, 可变字体实例名）
+# 角色 → 候选（文件名, ttc 索引, 可变字体的实例名或字重）。文字一律用粗体：中文优先用 Noto Sans SC（思源黑体的同款，
+# Windows 11 自带的可变字体 NotoSansSC-VF.ttf），正文 Bold、名字与房间 Black；没有时用微软雅黑粗体。数字用 Bahnschrift Bold。
 FONT_CANDIDATES = {
-    "cjk": [("msyh.ttc", 1, None), ("NotoSansCJK-Regular.ttc", 2, None), ("NotoSansCJK-Medium.ttc", 2, None),
-            ("DejaVuSans.ttf", 0, None)],
-    "cjk_bold": [("msyhbd.ttc", 1, None), ("NotoSansCJK-Bold.ttc", 2, None), ("DejaVuSans-Bold.ttf", 0, None)],
-    "num": [("bahnschrift.ttf", 0, b"SemiBold SemiCondensed"), ("DejaVuSansCondensed-Bold.ttf", 0, None),
+    "cjk": [("NotoSansSC-VF.ttf", 0, 700), ("msyhbd.ttc", 1, None), ("NotoSansCJK-Bold.ttc", 2, None),
+            ("DejaVuSans-Bold.ttf", 0, None)],
+    "cjk_bold": [("NotoSansSC-VF.ttf", 0, 900), ("msyhbd.ttc", 1, None), ("NotoSansCJK-Black.ttc", 2, None),
+                 ("NotoSansCJK-Bold.ttc", 2, None), ("DejaVuSans-Bold.ttf", 0, None)],
+    "num": [("bahnschrift.ttf", 0, b"Bold SemiCondensed"), ("DejaVuSansCondensed-Bold.ttf", 0, None),
             ("LiberationSansNarrow-Bold.ttf", 0, None), ("DejaVuSans-Bold.ttf", 0, None)],
 }
 _font_cache: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
@@ -123,7 +127,10 @@ def font(role: str, size: float) -> ImageFont.FreeTypeFont:
                 loaded = ImageFont.truetype(str(path), size, index=index)
                 if variation:
                     try:
-                        loaded.set_variation_by_name(variation)
+                        if isinstance(variation, bytes):
+                            loaded.set_variation_by_name(variation)
+                        else:                                  # 可变字体的字重轴
+                            loaded.set_variation_by_axes([variation])
                     except (OSError, ValueError):
                         pass
                 break
@@ -564,11 +571,13 @@ def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: in
     card_box = (int(margin), int(margin), width - int(margin), height - int(margin))
     cw, ch = card_box[2] - card_box[0], card_box[3] - card_box[1]
     out = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    shadow = _rounded((cw, ch), int(12 * px), (0, 0, 0, 82))
+    # 游戏内 HUD 的底色用 mod_card（比网页 HUD 的 card 更透），卡片下的投影跟着按比例变淡
+    card_c = parse_color(colors.get("mod_card") or colors["card"])
+    shadow = _rounded((cw, ch), int(12 * px), (0, 0, 0, int(round(82 * min(1.0, card_c[3] / 204)))))
     blurred = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     blurred.alpha_composite(shadow, (card_box[0], card_box[1] + int(3 * px)))
     out.alpha_composite(blurred.filter(ImageFilter.GaussianBlur(max(1, 6 * px))))
-    out.alpha_composite(_rounded((cw, ch), int(12 * px), parse_color(colors["card"]), rule_c, max(1, int(px))),
+    out.alpha_composite(_rounded((cw, ch), int(12 * px), card_c, rule_c, max(1, int(px))),
                         (card_box[0], card_box[1]))
     ImageDraw.Draw(out).rounded_rectangle(
         (margin + 8 * px, margin + 14 * px, margin + 11 * px, height - margin - 14 * px), radius=2 * px, fill=parse_color(vm.theme))
@@ -579,13 +588,13 @@ def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: in
 
 def _history(entries, width: float, px: float, text_c, label_c, rule_c, fs: float | None = None) -> Image.Image:
     fs = fs or px
-    text_style, tag_style = Style(15 * fs, text_c), Style(11 * fs, label_c)
+    text_style, tag_style = Style(THOUGHT_SIZE * fs, text_c), Style(11 * fs, label_c)
     blocks = []
     pad_x, pad_y, gap = 10 * px, 9 * px, 7 * px
     box_w = width - 3 * px
     for e in entries:
         lines = wrap(e.text, text_style, box_w - 2 * pad_x)
-        tag_h, line_h = 11 * 1.5 * fs, 15 * 1.5 * fs
+        tag_h, line_h = 11 * 1.5 * fs, THOUGHT_SIZE * 1.5 * fs
         h = int(pad_y * 2 + tag_h + line_h * len(lines))
         if e.role == "user":
             fill = (91, 145, 230, 61)
@@ -597,7 +606,7 @@ def _history(entries, width: float, px: float, text_c, label_c, rule_c, fs: floa
         bd = ImageDraw.Draw(box)
         draw_text(bd, pad_x, pad_y + tag_h * 0.5 + 11 * fs * 0.36, e.tag, tag_style)
         for j, line in enumerate(lines):
-            draw_text(bd, pad_x, pad_y + tag_h + line_h * j + line_h * 0.5 + 15 * fs * 0.36, line, text_style)
+            draw_text(bd, pad_x, pad_y + tag_h + line_h * j + line_h * 0.5 + THOUGHT_SIZE * fs * 0.36, line, text_style)
         blocks.append(box)
     total = int(sum(b.height for b in blocks) + gap * (len(blocks) + 1))
     column = Image.new("RGBA", (int(width), max(1, total)), (0, 0, 0, 0))

@@ -28,6 +28,7 @@
   "poll_ms": 100,
   "colors": {
     "card": "rgba(16, 19, 34, 0.80)",
+    "mod_card": "rgba(16, 19, 34, 0.60)",
     "border": "rgba(255, 255, 255, 0.10)",
     "text": "#F3F5FA",
     "label": "#8F9AB3",

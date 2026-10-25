@@ -29,9 +29,9 @@ def is_explore(cfg) -> bool:
 
 
 def act_frame_cap(cfg) -> int:
-    """单次 act 最多推进的帧数：探索模式用 explore_act_frames（默认 300），速通模式用 max_frames_per_act（默认 600）。"""
+    """单次 act 最多推进的帧数：探索模式用 explore_act_frames（默认 150），速通模式用 max_frames_per_act（默认 600）。"""
     if is_explore(cfg):
-        return int(getattr(cfg, "explore_act_frames", 300))
+        return int(getattr(cfg, "explore_act_frames", 150))
     return int(getattr(cfg, "max_frames_per_act", 600))
 
 

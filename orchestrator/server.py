@@ -30,7 +30,7 @@ plan_file：（有工作区时可用）工作区里的计划文件路径，与 i
   retry：死亡、偏离（或 "done"：按键用完仍在本房间）时，主控在零网络沙箱里运行 command（工作目录 /workspace），
   它应读取 /workspace/game/ 下的最新数据并改写同一个计划文件，主控接着执行，最多 max 次，不唤醒你。格式详见 /kb/game_data.md。
 thought：一两句中文{thought_brief}，会显示给观众。只写你对当前房间或这一段的分析与判断（难点在哪、怎么取舍、打算怎么过），
-  不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。
+  不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。{thought_mood_short}
 stop_on：提前停下的条件，可选 death room uncontrollable controllable land refill complete story_input；
   默认 ["death", "room", "complete"]，death 与 complete 总会生效。
 死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控自动播放到实际输入节点或恢复控制。读取storyInput与story，教学用act，不需wait；inCutscene标记本身不表示角色失控。"""
@@ -51,7 +51,7 @@ SET_EFFORT_DESCRIPTION = """调整你自己的推理强度：传入当前模型�
 
 NARRATE_DESCRIPTION = """更新 HUD 上给观众看的思考内容（实时展示）：观众在直播画面上看你此刻在想什么。不推进游戏，也不计入章节计时。
 thought：一两句中文（{thought_limit}），只写你对当前房间或这一段的分析与判断，不写具体数值（帧数、坐标、速度等），
-也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。
+也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。{thought_mood_short}
 思考期间随时调用：一有初步判断就先写一句，之后想法每有进展再写一句，不要攒到 act 时才写。"""
 
 # 实时展示的解说更新计时器：思考状态累计满 RunConfig.live_remind_s 秒没有 narrate，就在智能体下一次调用任何工具时

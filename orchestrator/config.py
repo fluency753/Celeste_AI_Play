@@ -190,8 +190,8 @@ class RunConfig:
     explore_program_runs: int | None = None  # 探索模式：两次 act 之间最多运行几次规划程序；None = 不限
     agent_cpus: int = os.cpu_count() or 1   # 探索模式：自写程序最多用几个 CPU 核（写进提示词；容器按它设置 cpuset），默认本机核数
     agent_cpus_effective: int | None = None  # 容器实际能用的核数（apply_cpu_limit 设置，写进提示词）
-    explore_act_frames: int = 300    # 探索模式：单次 act 最多推进的帧数
-    explore_search_frames: int | None = 300  # 探索模式：自写模拟器与搜索程序每次最多推演的帧数（只写进提示词）；None = 不限
+    explore_act_frames: int = 150    # 探索模式：单次 act 最多推进的帧数
+    explore_search_frames: int | None = 150  # 探索模式：自写模拟器与搜索程序每次最多推演的帧数（只写进提示词）；None = 不限
     assist_capacity: int = 100       # 探索模式的限额预测：体力上限
     assist_initial: int = 60         # 初始体力
     assist_regen_frames: int = 60    # 真实操作每多少个移动帧恢复 1 点

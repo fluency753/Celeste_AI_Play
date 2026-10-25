@@ -63,6 +63,11 @@ def local_target_rule(cfg) -> str:
     return LOCAL_TARGET_RULE if getattr(cfg, "engine", "claude") == "codex" else ""
 
 
+# 思考语句的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
+THOUGHT_MOOD = "思考语句的语气不必一直冷静理智，可以带上真实的情绪，比如找到好路线时的兴奋、反复失败后的懊恼、面对难关时的紧张。"
+THOUGHT_MOOD_SHORT = "语气不必一直冷静理智，可以带上情绪。"
+
+
 def thought_brief_rule(cfg) -> str:
     """Claude Code 执行器提示词里思考语句汉字数的一句（可调参数 thought_max_hanzi，见 orchestrator/thought.py）；
     Codex 执行器为空。"""
@@ -88,7 +93,7 @@ def thought_limit(cfg) -> str:
 
 def explore_search_rule(cfg) -> str:
     """探索模式提示词里自写模拟器与搜索程序推演帧数的一句（explore_search_frames 为 None 时不写）。"""
-    frames = getattr(cfg, "explore_search_frames", 300)
+    frames = getattr(cfg, "explore_search_frames", 150)
     return "" if frames is None else f"自写的模拟器或搜索程序每次推演最多 {frames} 帧（从起始状态往后模拟的帧数）。"
 
 
@@ -109,6 +114,8 @@ def fill(text: str, cfg) -> str:
         "{cpu_rule}": cpu_rule(cfg),
         "{local_target_rule}": local_target_rule(cfg),
         "{thought_brief_rule}": thought_brief_rule(cfg),
+        "{thought_mood}": THOUGHT_MOOD,
+        "{thought_mood_short}": THOUGHT_MOOD_SHORT,
         "{thought_brief}": thought_brief(cfg),
         "{thought_limit}": thought_limit(cfg),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
