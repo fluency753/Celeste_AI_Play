@@ -74,14 +74,15 @@
   #page-saves { grid-template-columns: minmax(340px, 0.9fr) minmax(420px, 1.25fr); }
   #page-kb { grid-template-columns: minmax(320px, 0.8fr) minmax(460px, 1.6fr); }
   #page-about { grid-template-columns: minmax(360px, 1fr) minmax(380px, 1.1fr); }
+  #page-prompts { grid-template-columns: minmax(300px, 0.75fr) minmax(480px, 1.7fr); }
   @media (max-width: 1240px) { #page-run { grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr); } #chatPane { grid-column: 2; } #runPane { grid-row: span 2; } }
-  @media (max-width: 960px) { #page-saves, #page-kb, #page-about { grid-template-columns: 1fr; } }
+  @media (max-width: 960px) { #page-saves, #page-kb, #page-about, #page-prompts { grid-template-columns: 1fr; } }
   @media (max-width: 860px) { #page-run { grid-template-columns: 1fr; } main.page { padding: 14px 12px 24px; } #chatPane { grid-column: auto; }
                               header { padding: 0 12px; } .banner { margin: 12px 12px 0; } .lights { justify-content: flex-start; } }
 
   section.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 20px; min-width: 0; }
-  .pane > h2 { margin: 0 0 14px; font-size: 17px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .pane > h2 .aside { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .pane > h2, .pane > div > h2 { margin: 0 0 14px; font-size: 17px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .pane > h2 .aside, .pane > div > h2 .aside { font-size: 13px; font-weight: 400; color: var(--muted); }
   .stack { display: grid; gap: 18px; min-width: 0; }
   fieldset { border: 0; margin: 0 0 18px; padding: 0; min-width: 0; }
   fieldset:disabled { opacity: 0.55; }
@@ -265,6 +266,29 @@
   .env-row small { display: block; color: var(--muted); }
   .scroll { max-height: 70vh; overflow: auto; padding-right: 6px; }
 
+  /* 提示词页：组成条（按长度）、各块的来源文件、本机修改与自动加的部分 */
+  .pbar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 10px 0 12px; background: var(--line); }
+  .pbar a { display: block; min-width: 3px; }
+  .plist { display: grid; gap: 2px; }
+  .prow { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 6px; }
+  .prow:hover { background: rgba(236, 239, 248, 0.04); }
+  .prow i { width: 10px; height: 10px; border-radius: 2px; }
+  .prow button:not(.chip) { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; min-width: 0; overflow-wrap: anywhere;
+                 font: 12.5px Consolas, "Cascadia Mono", monospace; }
+  .prow .size { color: var(--muted); font-size: 12px; white-space: nowrap; display: flex; gap: 6px; align-items: center; }
+  .tag.auto { color: #A797F5; border-color: rgba(167, 151, 245, 0.5); }
+  .pblock { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; overflow: hidden; scroll-margin-top: 80px; }
+  .pblock > header { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--raised); font: 12.5px Consolas, "Cascadia Mono", monospace; color: var(--muted); }
+  .pblock > header i { width: 10px; height: 10px; border-radius: 2px; }
+  .pblock > header .grow { flex: 1; }
+  .ptext { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 14px 12px; font-size: 13.5px; line-height: 1.75; }
+  .ptext .h { font-weight: 700; color: var(--text); }
+  .ptext .h .hash { color: var(--muted); font-weight: 400; }
+  .ptext .ph { color: var(--gold); }
+  .placeholders { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 12.5px; margin: 8px 0 0; }
+  .placeholders code { color: var(--gold); font: 12.5px Consolas, "Cascadia Mono", monospace; }
+  .placeholders span { color: var(--muted); }
+  .warn { color: var(--warn); }
   .toast { position: fixed; right: 22px; bottom: 22px; max-width: 420px; padding: 10px 14px; border-radius: 10px; background: var(--raised);
            border: 1px solid var(--line-strong); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); z-index: 20; }
   .toast.error { border-color: rgba(224, 71, 91, 0.6); }
@@ -278,6 +302,7 @@
     <button class="tab" role="tab" type="button" data-page="run" aria-selected="true">运行</button>
     <button class="tab" role="tab" type="button" data-page="saves" aria-selected="false">存档与章节</button>
     <button class="tab" role="tab" type="button" data-page="kb" aria-selected="false">知识库</button>
+    <button class="tab" role="tab" type="button" data-page="prompts" aria-selected="false">提示词</button>
     <button class="tab" role="tab" type="button" data-page="about" aria-selected="false">关于</button>
   </nav>
   <div class="lights" role="status" aria-live="polite">
@@ -366,6 +391,7 @@
           <div class="presets go">
             <button type="button" class="chip" data-goto="saves">修改存档与章节</button>
             <button type="button" class="chip" data-goto="kb">查看知识库与阅读权限</button>
+            <button type="button" class="chip" data-goto="prompts">预览提示词</button>
           </div>
         </div>
       </fieldset>
@@ -587,7 +613,46 @@
   </section>
 </main>
 
-<!-- ============================================================ 第四页：关于 -->
+<!-- ============================================================ 第四页：提示词 -->
+<main class="page" id="page-prompts" role="tabpanel" aria-label="提示词" hidden>
+  <section class="pane" aria-labelledby="promptTitle">
+    <h2 id="promptTitle">提示词 <span class="aside">按运行页的当前设置生成</span></h2>
+    <p class="hint" id="promptWhat" style="margin-top:0">—</p>
+    <div class="pbar" id="promptBar" role="img" aria-label="这一版由哪些部分组成，按长度"></div>
+    <div class="plist" id="promptParts"></div>
+    <div class="presets" style="margin-top:12px">
+      <button type="button" class="chip" id="promptCopy">复制全文</button>
+      <button type="button" class="chip" data-goto="run">回到运行页修改设置</button>
+    </div>
+    <div class="subhead">本机修改过的文件</div>
+    <div id="promptOverrides" class="plist"></div>
+    <p class="hint">编辑保存的内容放在 local/prompts/（本机文件，不入库），仓库里的提示词文件不变，更新仓库也不会冲突；恢复仓库版本就是删掉本机修改。每次运行会在日志与 run_state.json 里记下用了哪些本机修改。</p>
+  </section>
+
+  <section class="pane" aria-labelledby="promptViewTitle">
+    <div id="promptPreviewBox">
+      <h2 id="promptViewTitle">智能体收到的全文 <span class="aside" id="promptExecutor"></span></h2>
+      <div id="promptPreview"></div>
+    </div>
+    <div id="promptEditor" hidden>
+      <div class="editor-head">
+        <span class="path" id="promptPath"></span>
+        <button class="btn small" type="button" id="promptBack">返回预览</button>
+        <button class="btn small" type="button" id="promptRevert" disabled>放弃修改</button>
+        <button class="btn small" type="button" id="promptReset">恢复仓库版本</button>
+        <button class="btn small primary" type="button" id="promptSave" disabled>保存</button>
+      </div>
+      <textarea class="code" id="promptText" spellcheck="false"></textarea>
+      <p class="hint" id="promptStatus"></p>
+      <div id="promptPlaceholderBox" hidden>
+        <p class="hint" style="margin-top:10px">这个文件里的占位符（运行时换成本次的值，请保留）：</p>
+        <div class="placeholders" id="promptPlaceholders"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ============================================================ 第五页：关于 -->
 <main class="page" id="page-about" role="tabpanel" aria-label="关于" hidden>
   <div class="stack">
     <section class="pane">
@@ -662,7 +727,7 @@ function recall(key) { try { return localStorage.getItem("celesteConsole." + key
 // ---------------------------------------------------------------- 页面切换
 
 function showPage(page) {
-  if (!["run", "saves", "kb", "about"].includes(page)) page = "run";
+  if (!["run", "saves", "kb", "prompts", "about"].includes(page)) page = "run";
   ui.page = page;
   document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.page === page)));
   document.querySelectorAll("main.page").forEach(m => { m.hidden = m.id !== "page-" + page; });
@@ -670,6 +735,7 @@ function showPage(page) {
   if (location.hash !== "#" + page) history.replaceState(null, "", "#" + page);
   if (page === "saves") buildRoute();
   if (page === "kb") loadKb(ui.mode);
+  if (page === "prompts") loadPromptPreview();
   if (page === "about" && !ui.aboutLoaded) loadAbout();
 }
 
@@ -1056,7 +1122,7 @@ function formOptions() {
 
 function schedulePreview() {
   clearTimeout(ui.previewTimer);
-  ui.previewTimer = setTimeout(preview, 200);
+  ui.previewTimer = setTimeout(() => { preview(); if (ui.page === "prompts") loadPromptPreview(); }, 200);
 }
 async function preview() {
   if (!ui.options) return;
@@ -1076,6 +1142,7 @@ function updateStartButton() {
   $("startNote").textContent = busy ? "已有主控在运行：等它结束、或在中间一栏停止 / 中断后再开新的运行。"
     : "开始后主控在后台启动：检查游戏与 OBS、进入存档，然后交给智能体。";
   $("kbSave").title = busy ? "有主控在运行时不能保存" : "";
+  if (ui.promptFile) updatePromptButtons();
 }
 
 async function startRun(event) {
@@ -1403,6 +1470,164 @@ async function saveKbFile() {
   } catch (e) { toast(e.message, true); }
 }
 
+// ---------------------------------------------------------------- 提示词页
+
+const SEG = ["#E0475B", "#5BC0EB", "#F2C14E", "#4CC38A", "#9D8CF2", "#C9A389"];
+function promptText(text) {
+  const box = document.createElement("div"); box.className = "ptext";
+  for (const line of text.split("\n")) {
+    const m = line.match(/^(#{1,4} )(.*)$/);
+    if (m) {
+      const h = document.createElement("span"); h.className = "h";
+      h.append(Object.assign(document.createElement("span"), { className: "hash", textContent: m[1] }), m[2]);
+      box.append(h, "\n");
+    } else box.append(line + "\n");
+  }
+  return box;
+}
+
+function promptOptions() { return formOptions(); }
+
+async function loadPromptPreview() {
+  let data;
+  try { data = await postJSON("/api/console/prompt/preview", { options: promptOptions() }); }
+  catch (e) { $("promptWhat").textContent = "生成不了：" + e.message; return; }
+  ui.prompt = data;
+  const o = promptOptions();
+  const bits = [o.mode === "explore" ? "探索" : "速通"];
+  if (o.mode === "speedrun") bits.push(o.sim && o.runtime === "container" ? "开模拟器" : "关模拟器");
+  else if (o.sim_assist) bits.push("限额预测");
+  if (o.mode === "speedrun" && o.limit_planning && o.sim) bits.push("限制规划轮次");
+  bits.push(o.live ? "直播" : "不直播");
+  if (o.runtime === "host") bits.push("本机运行方式");
+  $("promptWhat").textContent = `${bits.join(" · ")}；共 ${data.text.length.toLocaleString("zh-CN")} 字符`;
+  $("promptExecutor").textContent = data.executor;
+  const colors = new Map();
+  const colorOf = (p) => {
+    if (!p.source) return "#9D8CF2";
+    if (!colors.has(p.source)) colors.set(p.source, SEG[colors.size % SEG.length]);
+    return colors.get(p.source);
+  };
+  const bar = $("promptBar"), list = $("promptParts"), preview = $("promptPreview");
+  bar.replaceChildren(); list.replaceChildren(); preview.replaceChildren();
+  data.parts.forEach((p, i) => {
+    if (!p.text.trim()) return;   // 只剩换行的部分（例如占位符后面的文件末尾）不单独列出，全文里照样有
+    const color = colorOf(p), id = "pblock-" + i;
+    bar.append(Object.assign(document.createElement("a"), { href: "#" + id, title: `${p.label}：${p.text.length} 字符`,
+                                                            style: `flex:${p.text.length};background:${color}` }));
+    const row = document.createElement("div"); row.className = "prow";
+    const jump = Object.assign(document.createElement("button"), { type: "button", textContent: p.label });
+    jump.addEventListener("click", () => { if (!$("promptEditor").hidden) closePromptEditor(); document.getElementById(id).scrollIntoView(); });
+    const size = document.createElement("span"); size.className = "size";
+    if (p.overridden) size.append(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "本机修改" }));
+    if (!p.source) size.append(Object.assign(document.createElement("span"), { className: "tag auto", textContent: "自动加" }));
+    size.append(`${p.text.length} 字`);
+    row.append(Object.assign(document.createElement("i"), { style: `background:${color}` }), jump, size);
+    list.append(row);
+    const block = document.createElement("div"); block.className = "pblock"; block.id = id;
+    const head = document.createElement("header");
+    head.append(Object.assign(document.createElement("i"), { style: `background:${color}` }),
+                Object.assign(document.createElement("span"), { className: "grow", textContent: p.label }));
+    if (p.overridden) head.append(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "本机修改" }));
+    if (p.source) {
+      const edit = Object.assign(document.createElement("button"), { type: "button", className: "btn small", textContent: "编辑 " + p.source });
+      edit.addEventListener("click", () => openPromptFile(p.source));
+      head.append(edit);
+    } else head.append(Object.assign(document.createElement("span"), { className: "tag auto", textContent: "主控自动加，不能编辑" }));
+    block.append(head, promptText(p.text.replace(/^\n+|\n+$/g, "")));
+    preview.append(block);
+  });
+  if (data.first_message) {
+    const block = document.createElement("div"); block.className = "pblock";
+    const head = document.createElement("header");
+    head.append(Object.assign(document.createElement("i"), { style: "background:var(--muted)" }),
+                Object.assign(document.createElement("span"), { className: "grow", textContent: "准备阶段的第一条消息（会话里的第一条用户消息）" }),
+                Object.assign(document.createElement("span"), { className: "tag auto", textContent: "主控自动生成" }));
+    block.append(head, promptText(data.first_message));
+    preview.append(block);
+  }
+  const over = $("promptOverrides");
+  over.replaceChildren(...(data.overridden.length ? data.overridden.map(name => {
+    const row = document.createElement("div"); row.className = "prow";
+    const open = Object.assign(document.createElement("button"), { type: "button", textContent: name });
+    open.addEventListener("click", () => openPromptFile(name));
+    const reset = Object.assign(document.createElement("button"), { type: "button", className: "chip", textContent: "恢复仓库版本" });
+    reset.addEventListener("click", () => resetPromptFile(name));
+    row.append(Object.assign(document.createElement("i"), { style: "background:var(--gold)" }), open, reset);
+    return row;
+  }) : [Object.assign(document.createElement("p"), { className: "hint", textContent: "没有：全部用仓库里的版本。" })]));
+}
+
+async function openPromptFile(name) {
+  if (ui.promptFile && ui.promptFile.dirty && ui.promptFile.name !== name && !confirmLeave()) return;
+  let doc;
+  try { doc = await getJSON(`/api/console/prompt/file?name=${encodeURIComponent(name)}`); }
+  catch (e) { toast(e.message, true); return; }
+  ui.promptFile = { ...doc, dirty: false };
+  $("promptPreviewBox").hidden = true; $("promptEditor").hidden = false;
+  $("promptPath").textContent = "orchestrator/prompts/" + name + (doc.overridden ? "（本机修改）" : "");
+  $("promptText").value = doc.text;
+  $("promptStatus").textContent = doc.overridden ? "这个文件有本机修改，正在编辑的是本机修改。" : "正在编辑仓库里的版本；保存后存为本机修改。";
+  $("promptStatus").classList.remove("warn");
+  $("promptPlaceholderBox").hidden = !doc.placeholders.length;
+  $("promptPlaceholders").replaceChildren(...doc.placeholders.flatMap(p => [
+    Object.assign(document.createElement("code"), { textContent: p.name }),
+    Object.assign(document.createElement("span"), { textContent: p.meaning })]));
+  $("promptReset").disabled = !doc.overridden;
+  updatePromptButtons();
+  window.scrollTo({ top: 0 });
+}
+
+function confirmLeave() {
+  return confirm("当前文件的修改还没保存，放弃修改？");
+}
+
+function closePromptEditor() {
+  if (ui.promptFile && ui.promptFile.dirty && !confirmLeave()) return false;
+  ui.promptFile = null;
+  $("promptEditor").hidden = true; $("promptPreviewBox").hidden = false;
+  loadPromptPreview();
+  return true;
+}
+
+function updatePromptButtons() {
+  const f = ui.promptFile;
+  $("promptSave").disabled = !f || !f.dirty || running();
+  $("promptRevert").disabled = !f || !f.dirty;
+  $("promptSave").title = running() ? "有主控在运行时不能保存" : "";
+}
+
+async function savePromptFile() {
+  const f = ui.promptFile;
+  if (!f) return;
+  try {
+    const result = await postJSON("/api/console/prompt/file", { name: f.name, text: $("promptText").value, version: f.version });
+    ui.promptFile = { ...result, dirty: false };
+    $("promptPath").textContent = "orchestrator/prompts/" + f.name + (result.overridden ? "（本机修改）" : "");
+    $("promptReset").disabled = !result.overridden;
+    const missing = result.missing_placeholders || [];
+    $("promptStatus").textContent = (result.overridden ? "已保存为本机修改，下一次运行生效。" : "和仓库里的版本相同，已删掉本机修改。")
+      + (missing.length ? ` 注意：删掉了占位符 ${missing.join("、")}，运行时这些位置不会再填入对应的内容。` : "");
+    $("promptStatus").classList.toggle("warn", missing.length > 0);
+    updatePromptButtons();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function resetPromptFile(name) {
+  try {
+    const doc = await postJSON("/api/console/prompt/reset", { name });
+    toast(`${name} 已恢复成仓库里的版本。`);
+    if (ui.promptFile && ui.promptFile.name === name) {
+      ui.promptFile = { ...doc, dirty: false };
+      $("promptText").value = doc.text;
+      $("promptPath").textContent = "orchestrator/prompts/" + name;
+      $("promptReset").disabled = true;
+      $("promptStatus").textContent = "已恢复成仓库里的版本。";
+      updatePromptButtons();
+    } else loadPromptPreview();
+  } catch (e) { toast(e.message, true); }
+}
+
 // ---------------------------------------------------------------- 关于页
 
 async function loadAbout() {
@@ -1467,6 +1692,17 @@ $("kbText").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) &&
 $("kbSave").addEventListener("click", saveKbFile);
 $("kbRevert").addEventListener("click", () => { if (ui.kbFile) { $("kbText").value = ui.kbFile.text ?? ""; ui.kbFile.dirty = false; updateKbSave(); setKbView(ui.kbView); } });
 $("aboutRefresh").addEventListener("click", loadAbout);
+$("promptCopy").addEventListener("click", async (e) => {
+  const text = ui.prompt ? ui.prompt.text : "";
+  try { await navigator.clipboard.writeText(text); toast("已复制提示词全文。"); }
+  catch (err) { toast("复制失败：浏览器不允许访问剪贴板", true); }
+});
+$("promptText").addEventListener("input", () => { if (ui.promptFile) { ui.promptFile.dirty = $("promptText").value !== ui.promptFile.text; updatePromptButtons(); } });
+$("promptText").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); if (!$("promptSave").disabled) savePromptFile(); } });
+$("promptSave").addEventListener("click", savePromptFile);
+$("promptRevert").addEventListener("click", () => { if (ui.promptFile) { $("promptText").value = ui.promptFile.text; ui.promptFile.dirty = false; updatePromptButtons(); } });
+$("promptReset").addEventListener("click", () => { if (ui.promptFile && confirmTwice("promptReset", "再点一次：删掉本机修改")) resetPromptFile(ui.promptFile.name); });
+$("promptBack").addEventListener("click", closePromptEditor);
 $("pauseToggle").addEventListener("click", () => sendControl(ui.control && ui.control.paused ? "resume" : "pause"));
 $("liveEffort").addEventListener("change", (e) => sendControl("effort", e.target.value));
 $("liveCutscene").addEventListener("change", (e) => sendControl("cutscene_mode", e.target.value));
@@ -1490,7 +1726,9 @@ $("message").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.sh
 $("releaseGame").addEventListener("click", releaseGame);
 $("resumeLatest").addEventListener("click", () => resumeRun());
 $("launchDismiss").addEventListener("click", () => { $("launchBanner").hidden = true; ui.dismissedLaunch = ui.status && ui.status.orchestrator.launched_wall; });
-window.addEventListener("beforeunload", (e) => { if (ui.kbFile && ui.kbFile.dirty) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", (e) => {
+  if ((ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty)) { e.preventDefault(); e.returnValue = ""; }
+});
 
 // 危险操作点两次：第一次只把按钮换成确认文字，3 秒内再点才执行
 const pending = {};

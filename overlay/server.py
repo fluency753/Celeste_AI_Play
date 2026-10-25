@@ -121,7 +121,8 @@ def make_handler(pinned: Path | None):
                                "/api/console/prefs": console_api.load_prefs,
                                "/api/console/kb": lambda: console_api.kb_list(query.get("mode", "speedrun")),
                                "/api/console/kb/file": lambda: console_api.kb_read(query.get("mode", "speedrun"),
-                                                                                   query.get("path", ""))}.get(path)
+                                                                                   query.get("path", "")),
+                               "/api/console/prompt/file": lambda: console_api.prompt_read(query.get("name", ""))}.get(path)
                     if handler is None:
                         self._send(404, b"not found", "text/plain", cors=False)
                         return
@@ -215,7 +216,8 @@ def make_handler(pinned: Path | None):
             if self.path.startswith("/api/console/"):
                 from . import console_api
                 try:
-                    data = self._body(3_500_000 if self.path == "/api/console/kb/file" else 60000)
+                    data = self._body(3_500_000 if self.path == "/api/console/kb/file"
+                                      else 700_000 if self.path == "/api/console/prompt/file" else 60000)
                     if pinned is not None:
                         raise ValueError("固定预览模式的 HUD 服务不提供控制台操作")
                     with _wake_lock:
@@ -229,6 +231,12 @@ def make_handler(pinned: Path | None):
                             result = console_api.release()
                         elif self.path == "/api/console/prefs":
                             result = console_api.save_prefs(data)
+                        elif self.path == "/api/console/prompt/preview":
+                            result = console_api.prompt_preview(data.get("options"))
+                        elif self.path == "/api/console/prompt/file":
+                            result = console_api.prompt_write(str(data.get("name", "")), data.get("text"), data.get("version"))
+                        elif self.path == "/api/console/prompt/reset":
+                            result = console_api.prompt_reset(str(data.get("name", "")))
                         elif self.path == "/api/console/kb/file":
                             result = console_api.kb_write(str(data.get("mode", "")), str(data.get("path", "")),
                                                           data.get("text"), data.get("mtime"))

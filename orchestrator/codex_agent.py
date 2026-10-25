@@ -27,6 +27,25 @@ TEXT = {"type": "string"}
 
 
 
+def codex_tool_mapping(cfg) -> str:
+    """原生 GPT 的提示词在 play_prompt 之后另加的工具映射（控制台的提示词预览也显示它）。"""
+    tools = game_tools(cfg)
+    return ("# 原生 Codex 工具映射\n"
+            "这里的 Read/Write/Bash 分别是 celeste_read/celeste_write/celeste_bash；"
+            "observe/act/narrate/set_effort 均加 celeste_ 前缀。Edit/Glob/Grep 用沙箱 Bash 完成。"
+            "所有自写程序都必须经 celeste_bash 在 Docker 中执行。不要调用任何宿主 shell、apply_patch、"
+            "MCP、浏览器或子智能体；宿主文件系统是只读的。"
+            "只输出给观众的简短公开解说，不输出内部推理正文。"
+            + ("用户要求退出关卡时调用 celeste_exit_level；" if "exit_level" in tools else "")
+            + ("剧情可用 celeste_cutscene 选择wait/advance/choose/skip。" if "cutscene" in tools else "")
+            + "公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
+            "每次操作后仍应立即公开说明下一步打算，不要持续静默。")
+
+
+def codex_prompt(cfg) -> str:
+    return play_prompt(cfg).replace("调用 simulate 工具", "调用 celeste_simulate 工具") + "\n\n" + codex_tool_mapping(cfg)
+
+
 def program_cap(cfg) -> float:
     """原生执行器里单次程序（celeste_bash）的最长秒数：探索模式用 explore_program_s（提示词里写的上限），
     速通模式用 Bash 最长时长 bash_max_s（与 Claude Code 的 Bash 相同）。"""
@@ -309,18 +328,7 @@ class CodexRunner(SessionControls):
         self._events = (self.run_dir / "codex_events.jsonl").open("a", encoding="utf-8")
         self.metrics.update(telemetry_source="codex_app_server", chat_thread_id=None,
                             tool_calls=self.metrics.state.tool_calls or 0)
-        tools = game_tools(self.cfg)   # 本次按模式注册的游戏工具；剧情模式的说明已在 play_prompt 里
-        prompt = play_prompt(self.cfg).replace("调用 simulate 工具", "调用 celeste_simulate 工具")
-        prompt += ("\n\n# 原生 Codex 工具映射\n"
-                   "这里的 Read/Write/Bash 分别是 celeste_read/celeste_write/celeste_bash；"
-                   "observe/act/narrate/set_effort 均加 celeste_ 前缀。Edit/Glob/Grep 用沙箱 Bash 完成。"
-                   "所有自写程序都必须经 celeste_bash 在 Docker 中执行。不要调用任何宿主 shell、apply_patch、"
-                   "MCP、浏览器或子智能体；宿主文件系统是只读的。"
-                   "只输出给观众的简短公开解说，不输出内部推理正文。"
-                   + ("用户要求退出关卡时调用 celeste_exit_level；" if "exit_level" in tools else "")
-                   + ("剧情可用 celeste_cutscene 选择wait/advance/choose/skip。" if "cutscene" in tools else "")
-                   + "公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
-                   "每次操作后仍应立即公开说明下一步打算，不要持续静默。")
+        prompt = codex_prompt(self.cfg)   # 剧情模式的说明已在 play_prompt 里
         if self.chat_only:
             prompt += (("\n\n# 试玩前聊天\n这是新会话，已完成入门资料准备，还没有开始试玩。" if getattr(self, "ready_to_play", False)
                         else "\n\n# 试玩结束后的聊天\n本次试玩已经结束。") +

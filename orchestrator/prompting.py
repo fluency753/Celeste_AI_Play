@@ -1,4 +1,6 @@
 """Shared play, knowledge preparation and resume prompts."""
+from dataclasses import dataclass
+
 from .config import REPO_ROOT, chapter_name_by_id
 from .kb_study import KbStudy
 from .modes import game_tools, has_cutscene_tool, is_explore
@@ -28,75 +30,127 @@ def fill(text: str, cfg) -> str:
     return text
 
 
-def compose_prompt(runtime: str, sim: bool = False, chapters: list[int] | None = None, pause_limit: bool = False,
-                   rounds_per_room: int = 3, death_bonus: int = 1, playback: bool = False, live: bool = False,
-                   remind_s: float = 30.0) -> str:
-    """系统提示词。按预置模拟器的开关分成两个版本（目标都是以最短的章节计时通关）：
+# 控制台"提示词"页保存的本机修改：local/prompts/<文件名>（不入库）。有这个文件时用它代替仓库里的同名文件，
+# 删掉它就恢复仓库版本。这样更新仓库（git pull）不会和本机修改冲突，每次运行也会记下用了哪些本机修改。
+OVERRIDES = REPO_ROOT / "local" / "prompts"
+
+
+def prompt_files() -> list[str]:
+    return sorted(p.name for p in PROMPTS.glob("*.md"))
+
+
+def read_part(name: str) -> str:
+    """提示词文件的当前内容：有本机修改时用本机修改。"""
+    override = OVERRIDES / name
+    if override.is_file():
+        return override.read_text(encoding="utf-8")
+    return (PROMPTS / name).read_text(encoding="utf-8")
+
+
+def overridden_parts() -> list[str]:
+    known = set(prompt_files())
+    return sorted(p.name for p in OVERRIDES.glob("*.md") if p.name in known) if OVERRIDES.is_dir() else []
+
+
+@dataclass
+class PromptPart:
+    """提示词的一块：source 是来源文件（自动生成的部分为 None），sep 是它和前一块之间的分隔。"""
+    label: str
+    text: str
+    source: str | None = None
+    sep: str = ""
+
+
+def _file_parts(name: str, transform=None, sep: str = "\n\n") -> list[PromptPart]:
+    """一个提示词文件；system_*.md 里的 {interface} 处插入 interface_zh.md（拆成前、接口、后三块）。"""
+    text = read_part(name)
+    if transform:
+        text = transform(text)
+    if "{interface}" not in text:
+        return [PromptPart(name, text, name, sep)]
+    pieces = text.split("{interface}")
+    interface = read_part("interface_zh.md")
+    out = [PromptPart(name, pieces[0], name, sep)]
+    for rest in pieces[1:]:
+        out.append(PromptPart("interface_zh.md", interface, "interface_zh.md"))
+        out.append(PromptPart(name + "（接上）", rest, name))
+    return out
+
+
+def _speedrun_parts(cfg) -> list[PromptPart]:
+    """速通模式的系统提示词。按预置模拟器的开关分成两个版本（目标都是以最短的章节计时通关）：
     - 开模拟器（默认，容器运行方式）：智能体可以随意调用 /sim 寻找并优化路线；提示词里写明做法、建议的工作方式、
       物理参数简表、规划与优化的要求、自动重试与规划回放（system_sim、container_sim、sim、free/pause、retry、playback）；
     - 关模拟器（--no-sim，或本机运行方式）：不教怎么玩，只写目标、规则（不得调用或破解模拟器、不读游戏程序）与工具接口，
       其余由智能体自己决定（system_nosim、container_nosim）；容器里另有展示接口（show.trajectory），算出的逐帧轨迹
       可以交给系统画给观众看，只用于展示。
-    这是速通模式的提示词（探索模式见 play_prompt）。容器运行方式下都有 hud_zh.md：思考期间用 narrate 随时更新 HUD 的思考语句、
-    运行程序期间报告进度；直播模式（live）另加 live_zh.md：观众实时观看、解说计时 10 秒、可按用户要求退出关卡，
-    但不改变速通目标（不加探索模式那样的节奏要求）。"""
-    interface = (PROMPTS / "interface_zh.md").read_text(encoding="utf-8")
-
-    def part(name: str) -> str:
-        return (PROMPTS / name).read_text(encoding="utf-8")
-
-    if not (sim and runtime == "container"):
-        text = part("system_nosim_zh.md").replace("{interface}", interface)
-        text += "\n\n" + part("container_nosim_zh.md" if runtime == "container" else "host_zh.md")
+    容器运行方式下都有 hud_zh.md：思考期间用 narrate 随时更新 HUD 的思考语句、运行程序期间报告进度；直播模式（live）
+    另加 live_zh.md：观众实时观看、解说计时 10 秒、可按用户要求退出关卡，但不改变速通目标。"""
+    runtime = cfg.runtime
+    parts: list[PromptPart] = []
+    if not (cfg.sim and runtime == "container"):
+        parts += _file_parts("system_nosim_zh.md", sep="")
+        parts += _file_parts("container_nosim_zh.md" if runtime == "container" else "host_zh.md")
     else:
-        text = part("system_sim_zh.md").replace("{interface}", interface)
-        text += "\n\n" + part("container_sim_zh.md") + "\n\n" + part("sim_zh.md")
+        parts += _file_parts("system_sim_zh.md", sep="")
+        parts += _file_parts("container_sim_zh.md") + _file_parts("sim_zh.md")
         # 默认不限制思考与调用（free_zh.md，可以把规划程序写成自动重试命令）；--limit-planning 时按章节记账（pause_zh.md）
-        if pause_limit:
-            text += "\n\n" + part("pause_zh.md").replace(
-                "{rounds4}", str(rounds_per_room * 4)).replace("{rounds}", str(rounds_per_room)).replace("{death}", str(death_bonus))
+        if cfg.pause_limit:
+            n, d = cfg.rounds_per_room, cfg.death_bonus
+            parts += _file_parts("pause_zh.md", lambda t: t.replace("{rounds4}", str(n * 4)).replace(
+                "{rounds}", str(n)).replace("{death}", str(d)))
         else:
-            text += "\n\n" + part("free_zh.md")
-            text += "\n\n" + part("retry_zh.md")
-        if playback:
-            text += "\n\n" + part("playback_zh.md")
+            parts += _file_parts("free_zh.md") + _file_parts("retry_zh.md")
+        if cfg.playback:
+            parts += _file_parts("playback_zh.md")
     if runtime == "container":
-        text += "\n\n" + part("hud_zh.md").replace("{remind}", remind_text(remind_s))
-        if live:
-            text += "\n\n" + part("live_zh.md")
-    if chapters and len(chapters) > 1:
-        names = " → ".join(chapter_name_by_id(c) for c in chapters)
-        text += ("\n\n# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
-                 "一章通关后系统自动进入下一章，你接着玩；之前写的程序与笔记都在工作区里，可以继续用。")
-    return text
+        parts += _file_parts("hud_zh.md")
+        if cfg.live:
+            parts += _file_parts("live_zh.md")
+    if cfg.chapters and len(cfg.chapters) > 1:
+        names = " → ".join(chapter_name_by_id(c) for c in cfg.chapters)
+        parts.append(PromptPart("本次的章节（多章时自动加）",
+                                "# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
+                                "一章通关后系统自动进入下一章，你接着玩；之前写的程序与笔记都在工作区里，可以继续用。", None, "\n\n"))
+    return parts
+
+
+def prompt_parts(cfg) -> list[PromptPart]:
+    """游玩提示词的各块，按 模式 × 直播 严格分版本（各执行器只另加自己的工具映射）：
+    - 速通模式：开 / 关模拟器两个版本 + hud_zh；直播时再加 live_zh；
+    - 探索模式：explore_zh（工具清单按本次注册的工具生成）；直播时再加 explore_live_zh。
+    剧情模式的说明只在开放了 cutscene 工具时加（见 modes.has_cutscene_tool）。可调参数的占位符在这里按本次的值填入。"""
+    if is_explore(cfg):
+        tools = "/".join(game_tools(cfg))
+        parts = _file_parts("explore_zh.md", lambda t: t.replace("{game_tools}", tools), sep="")
+        if cfg.live:
+            parts += _file_parts("explore_live_zh.md")
+        chapters = cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else [])
+        if chapters:
+            parts.append(PromptPart("本次指定章节（自动加）", "本次指定章节：" + "、".join(chapter_name_by_id(c) for c in chapters)
+                                    + "；不得自行扩展。", None, "\n"))
+    else:
+        parts = _speedrun_parts(cfg)
+    if has_cutscene_tool(cfg):
+        parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
+                                f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent由你使用cutscene的"
+                                "wait/advance/choose/skip决定。遇到分支必须明确choose，不得用advance代选。", None, "\n"))
+    if is_explore(cfg) and getattr(cfg, "explore_program_runs", None):
+        parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",
+                                f"两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。",
+                                None, "\n"))
+    if cfg.sim_assist:
+        from .sim_assist import AssistRules
+        parts.append(PromptPart("有限模拟辅助（开了限额预测时自动加）",
+                                AssistRules.of(cfg).instructions().lstrip("\n"), None, "\n\n"))
+    for part in parts:
+        part.text = fill(part.text, cfg)
+    return parts
 
 
 def play_prompt(cfg) -> str:
-    """游玩提示词，按 模式 × 直播 严格分版本（各执行器只另加自己的工具映射）：
-    - 速通模式：compose_prompt（开 / 关模拟器两个版本）+ hud_zh；直播时再加 live_zh；
-    - 探索模式：explore_zh（工具清单按本次注册的工具生成）；直播时再加 explore_live_zh。
-    剧情模式的说明只在开放了 cutscene 工具时加（见 modes.has_cutscene_tool）。"""
-    if is_explore(cfg):
-        prompt = (PROMPTS / 'explore_zh.md').read_text(encoding='utf-8')
-        prompt = prompt.replace('{game_tools}', '/'.join(game_tools(cfg))).replace('{remind}', remind_text(cfg.live_remind_s))
-        if cfg.live:
-            prompt += '\n\n' + (PROMPTS / 'explore_live_zh.md').read_text(encoding='utf-8')
-        chapters = cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else [])
-        if chapters:
-            prompt += '\n本次指定章节：' + '、'.join(chapter_name_by_id(c) for c in chapters) + '；不得自行扩展。'
-    else:
-        prompt = compose_prompt(cfg.runtime, cfg.sim, cfg.chapters, cfg.pause_limit,
-                                cfg.rounds_per_room, cfg.death_bonus, cfg.playback, cfg.live,
-                                remind_s=cfg.live_remind_s)
-    if has_cutscene_tool(cfg):
-        prompt += (f'\n当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent由你使用cutscene的'
-                   'wait/advance/choose/skip决定。遇到分支必须明确choose，不得用advance代选。')
-    if is_explore(cfg) and getattr(cfg, "explore_program_runs", None):
-        prompt += f"\n两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。"
-    if cfg.sim_assist:
-        from .sim_assist import AssistRules
-        prompt += AssistRules.of(cfg).instructions()
-    return fill(prompt, cfg)
+    """游玩提示词全文（见 prompt_parts）。"""
+    return "".join(part.sep + part.text for part in prompt_parts(cfg))
 
 
 FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关。"

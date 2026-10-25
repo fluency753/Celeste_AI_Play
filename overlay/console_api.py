@@ -200,6 +200,116 @@ def kb_write(mode: str, path: str, text: str, mtime=None) -> dict:
     return write_document(mode, path, text, mtime)
 
 
+# ---------------------------------------------------------------- 提示词页
+
+PLACEHOLDERS = {
+    "{interface}": "在这里插入 interface_zh.md（工具接口）",
+    "{act_max_frames}": "单次 act 最多推进的帧数（可调参数 max_frames_per_act）",
+    "{bash_default}": "Bash 不写 timeout 时的上限（可调参数 bash_default_s）",
+    "{bash_max}": "Bash 最长时长（可调参数 bash_max_s）",
+    "{explore_program}": "探索模式单次规划程序最长（可调参数 explore_program_s）",
+    "{playback_ratio}": "规划回放每多少条推演画一条（可调参数 playback_ratio）",
+    "{playback_min_tracks}": "规划回放每轮至少画几条（可调参数 playback_min_tracks）",
+    "{thought_max}": "思考语句最长字数（可调参数 thought_max_chars）",
+    "{remind}": "解说提醒间隔（可调参数 remind_s / remind_live_s）",
+    "{rounds}": "一屏大的房间存入的规划轮次（--rounds-per-room）",
+    "{rounds4}": "两倍长、两倍高的房间的规划轮次",
+    "{death}": "死亡补的规划轮次（可调参数 death_bonus）",
+    "{game_tools}": "本次注册的游戏工具",
+}
+
+
+def _prompt_name(name) -> str:
+    from orchestrator.prompting import prompt_files
+    if not isinstance(name, str) or name not in prompt_files():
+        raise ValueError("没有这个提示词文件")
+    return name
+
+
+def _version(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def prompt_preview(options: dict) -> dict:
+    """按运行页的当前设置，生成智能体会收到的提示词（分块，标出来源文件与本机修改）和准备阶段的第一条消息。"""
+    from types import SimpleNamespace
+    from orchestrator.kb_access import root_of
+    from orchestrator.kb_study import CONTAINER_KB, required_files
+    from orchestrator.launch_options import config_for
+    from orchestrator.prompting import overridden_parts, prompt_parts, study_prompt
+    # 预览不需要真的起名字或选存档：没填的用占位值，免得运行页还没填完就看不了提示词
+    options = dict(options or {})
+    if not options.get("agent"):
+        options["agent"] = "preview"
+    if not (options.get("save") or {}).get("name"):
+        options["save"] = {"name": "preview", "slot": None, "create": False}
+    cfg = config_for(options)
+    overridden = set(overridden_parts())
+    parts = [{"label": p.label, "text": p.text, "source": p.source, "sep": p.sep,
+              "overridden": p.source in overridden} for p in prompt_parts(cfg)]
+    if cfg.engine == "codex":
+        from orchestrator.codex_agent import codex_tool_mapping
+        for part in parts:
+            part["text"] = part["text"].replace("调用 simulate 工具", "调用 celeste_simulate 工具")
+        parts.append({"label": "原生 Codex 工具映射（自动加）", "text": codex_tool_mapping(cfg), "source": None,
+                      "sep": "\n\n", "overridden": False})
+    first = None
+    if cfg.study and cfg.runtime == "container":
+        files = [rel for rel in required_files(root_of(cfg.mode)) if rel not in set(cfg.kb_deny)]
+        paths = [f"{CONTAINER_KB}/{rel}" for rel in files]
+        if cfg.sim:
+            k = next((i for i, rel in enumerate(files) if rel.startswith("reference/")), len(files))
+            paths.insert(k, "/sim/README.md")
+        first = study_prompt(SimpleNamespace(container_paths=lambda: paths, minutes=cfg.study_minutes), cfg.sim)
+    executor = ("原生 GPT（Codex 的开发者指令）" if cfg.engine == "codex"
+                else "Claude Code（接在 Claude Code 自带的系统提示词之后）")
+    return {"parts": parts, "text": "".join(p["sep"] + p["text"] for p in parts), "executor": executor,
+            "first_message": first, "overridden": sorted(overridden)}
+
+
+def prompt_read(name: str) -> dict:
+    from orchestrator.prompting import OVERRIDES, PROMPTS, read_part
+    name = _prompt_name(name)
+    text = read_part(name)
+    repo = (PROMPTS / name).read_text(encoding="utf-8")
+    return {"name": name, "text": text, "version": _version(text), "overridden": (OVERRIDES / name).is_file(),
+            "repo_text": repo, "placeholders": [{"name": k, "meaning": v} for k, v in PLACEHOLDERS.items() if k in repo]}
+
+
+def prompt_write(name: str, text, version) -> dict:
+    """保存提示词的本机修改（local/prompts/，不改仓库里的文件）；改回与仓库相同时删掉本机修改。"""
+    from orchestrator.prompting import OVERRIDES, PROMPTS, read_part
+    name = _prompt_name(name)
+    if orchestrator_status()["running"]:
+        raise ValueError("有主控在运行：等运行结束再保存提示词")
+    if not isinstance(text, str) or len(text.encode("utf-8")) > 300_000:
+        raise ValueError("内容须为文本，最多 300 KB")
+    if version != _version(read_part(name)):
+        raise ValueError("这个文件在你打开之后被改过，请重新打开再编辑")
+    text = text.replace("\r\n", "\n")
+    repo = (PROMPTS / name).read_text(encoding="utf-8")
+    override = OVERRIDES / name
+    if text == repo:
+        override.unlink(missing_ok=True)
+    else:
+        OVERRIDES.mkdir(parents=True, exist_ok=True)
+        tmp = override.with_name(override.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8", newline="\n")
+        tmp.replace(override)
+    missing = [k for k in PLACEHOLDERS if k in repo and k not in text]
+    return {**prompt_read(name), "missing_placeholders": missing}
+
+
+def prompt_reset(name: str) -> dict:
+    from orchestrator.prompting import OVERRIDES
+    name = _prompt_name(name)
+    if orchestrator_status()["running"]:
+        raise ValueError("有主控在运行：等运行结束再恢复")
+    (OVERRIDES / name).unlink(missing_ok=True)
+    return prompt_read(name)
+
+
 # ---------------------------------------------------------------- 关于页
 
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"

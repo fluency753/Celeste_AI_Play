@@ -230,6 +230,28 @@ def build(options: dict) -> list[str]:
     return argv
 
 
+def config_for(options: dict):
+    """按运行设置构造与主控相同的 RunConfig（只用于控制台的提示词预览，不连游戏、不建容器）。"""
+    from .config import RunConfig
+    from .modes import KNOWLEDGE_OF_MODE
+    from .tuning import apply
+    o = normalize(options)
+    cfg = RunConfig(agent=o["agent"], save=o["save"]["name"], model=o["model"], effort=o["effort"], provider=o["provider"])
+    cfg.engine, cfg.runtime, cfg.mode = o["engine"], o["runtime"], o["mode"]
+    cfg.knowledge_profile = KNOWLEDGE_OF_MODE[o["mode"]]
+    cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and o["runtime"] == "container"
+    cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"] and o["runtime"] == "container"
+    cfg.live, cfg.playback, cfg.cutscene_mode = o["live"], o["playback"], o["cutscene_mode"]
+    cfg.pause_limit = o["limit_planning"] and cfg.sim
+    cfg.rounds_per_room, cfg.room_scale = o["rounds_per_room"], o["room_scale"]
+    cfg.chapters, cfg.chapter = list(o["chapters"]), o["chapters"][0]
+    cfg.study, cfg.study_minutes = o["study"], o["study_minutes"]
+    cfg.kb_deny = list(o["kb_deny"])
+    apply(cfg, o["tune"])
+    cfg.live_remind_s = cfg.remind_live_s if cfg.live else cfg.remind_s
+    return cfg
+
+
 def resume_args(run_dir: Path, fresh_session: bool = False) -> list[str]:
     """续跑一次停下时保持冻结的运行：其余设置都沿用原运行（见 orchestrator/run.py 的 --resume）。"""
     run_dir = Path(run_dir).resolve()

@@ -312,13 +312,20 @@ def load_previous(path: str) -> dict:
     return {"dir": run_dir, "state": state, "metrics": metrics}
 
 
+def prompt_override_hashes() -> dict[str, str]:
+    """这次用到的提示词本机修改（控制台"提示词"页保存在 local/prompts/ 的文件）：文件名 → 内容的 sha256 前 12 位。"""
+    import hashlib
+    from .prompting import OVERRIDES, overridden_parts
+    return {name: hashlib.sha256((OVERRIDES / name).read_bytes()).hexdigest()[:12] for name in overridden_parts()}
+
+
 def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None) -> None:
     """记下续跑需要的设置与 Claude Code 会话编号。"""
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "session_id": session_id,
-             "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny),
+             "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -708,6 +715,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
     # narrate 与工具状态在所有模式都开（HUD 据 live 把思考放在主位）；直播模式另记 live_mode
     metrics.update(live=True, live_mode=bool(cfg.live), play_mode=describe_mode(cfg), hud_mod=bool(cfg.hud_mod))
     print(f"[run] 模式：{describe_mode(cfg)}", flush=True)
+    if (overrides := prompt_override_hashes()):
+        print(f"[run] 提示词有本机修改（local/prompts）：{'、'.join(overrides)}", flush=True)
     if session.workspace is not None:
         live = LiveStatus(session.workspace / "game" / "hud_status.json", metrics).start()
     server = build_server(session, study, gate)
