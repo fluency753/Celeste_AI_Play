@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from orchestrator import session_environment as env
+from orchestrator import codex_session_environment as env
 
 
 def state(**values):
@@ -62,6 +62,17 @@ class SessionEnvironmentTests(unittest.TestCase):
         with patch.object(env,'active_agents',return_value={'test'}),patch.object(env,'thread_metadata',new_callable=AsyncMock) as rpc:
             result=asyncio.run(env.synchronize(Path('unused'),state(),Path('unused')))
             self.assertEqual(result['status'],'busy');rpc.assert_not_awaited()
+
+    def test_batch_skips_non_codex_and_explicit_selection_rejects_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);directory=root/'runs'/'test'/'20260101-010000';directory.mkdir(parents=True)
+            other={**state(),'engine':'claude'}
+            (directory/'run_state.json').write_text(json.dumps(other))
+            self.assertEqual(env.targets(root=root),[])
+            with self.assertRaisesRegex(ValueError,'仅同步 Codex'):
+                env.targets([directory],root=root)
+            with self.assertRaisesRegex(ValueError,'仅同步 Codex'):
+                asyncio.run(env.synchronize(directory,other,root/'backup',root=root))
 
     def test_apply_rolls_back_when_resume_verification_fails(self):
         with tempfile.TemporaryDirectory() as folder:

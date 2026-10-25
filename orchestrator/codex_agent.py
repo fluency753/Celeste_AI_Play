@@ -326,7 +326,7 @@ class CodexRunner(SessionControls):
         missing = required - names
         if missing:
             raise RuntimeError('旧会话缺少正式游戏工具：' + ', '.join(sorted(missing))
-                               + '。停止宿主后运行 python tools/sync_session_env.py --run "'
+                               + '。停止宿主后运行 python tools/sync_codex_session_env.py --run "'
                                + str(self.run_dir) + '" --apply 同步旧会话环境，再续跑。')
 
     async def run(self):

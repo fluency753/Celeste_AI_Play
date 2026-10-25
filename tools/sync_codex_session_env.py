@@ -1,4 +1,4 @@
-"""检查/同步旧会话环境；不启动试玩、不发送消息、不连接游戏或 OBS。"""
+"""检查/同步旧 Codex 会话环境；不启动试玩、不发送消息、不连接游戏或 OBS。"""
 import argparse
 import asyncio
 from datetime import datetime
@@ -8,14 +8,14 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from orchestrator.config import REPO_ROOT
-from orchestrator.session_environment import synchronize, targets
+from orchestrator.codex_session_environment import synchronize, targets
 
 
 async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--run', action='append', help='runs 下的运行目录，可多次指定')
-    group.add_argument('--all', action='store_true', help='本仓库全部已登记会话，按会话身份去重')
+    group.add_argument('--all', action='store_true', help='本仓库全部已登记的 Codex 会话，按会话身份去重')
     parser.add_argument('--apply', action='store_true', help='备份后同步工具登记，并校验/更新容器；默认仅检查')
     args = parser.parse_args()
     output = REPO_ROOT/'local'/('session-env-sync-'+datetime.now().strftime('%Y%m%d-%H%M%S-%f'))

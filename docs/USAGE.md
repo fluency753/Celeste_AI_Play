@@ -472,17 +472,17 @@ M5 验收（2026-10-23，桥接 0.7.0，当时的网页 HUD）：`python calibra
 
 桥接 1.0.10 修正冻结中重新启动独立录音的暂停继承：子总线不再把父总线的暂停记成自身暂停；显式暂停指令在录音停止期间仍被保留。无需修改 OBS 音轨或系统音频设备。
 
-### 同步旧会话环境
+### 同步旧 Codex 会话环境
 
-更新仓库后，可一次检查或同步本仓库已登记的旧会话：
+更新仓库后，可一次检查或同步本仓库已登记的旧 Codex 会话：
 
 ```powershell
-python tools/sync_session_env.py --all                  # 只检查差异
-python tools/sync_session_env.py --all --apply          # 备份后批量同步
-python tools/sync_session_env.py --run runs/<标签>/<时间戳> --apply
+python tools/sync_codex_session_env.py --all                  # 只检查差异
+python tools/sync_codex_session_env.py --all --apply          # 备份后批量同步
+python tools/sync_codex_session_env.py --run runs/<标签>/<时间戳> --apply
 ```
 
-脚本按执行器与会话身份去重，使用该会话最近一次保存的设置生成当前工具定义；不改存档选择、模型、推理强度、模式、推演开关和额度。Codex 的旧工具登记由停用宿主后的离线迁移补齐，保留同一会话 ID 和原对话历史，再通过 app-server 恢复校验，不发起模型轮次。Claude 的工具在下次启动时由当前主控注册，无需修改会话记录。容器按当前镜像及原有运行设置校验，必要时重建，保留工作区和会话数据卷。
+脚本仅处理 Codex，按会话身份去重，使用该会话最近一次保存的设置生成当前工具定义；不改存档选择、模型、推理强度、模式、推演开关和额度。Codex 的旧工具登记由停用宿主后的离线迁移补齐，保留同一会话 ID 和原对话历史，再通过 app-server 恢复校验，不发起模型轮次。容器按当前镜像及原有运行设置校验，必要时重建，保留工作区和会话数据卷。
 
 正在试玩或聊天的工作区、已归档会话会跳过；不自动中断、切换或唤醒它们。报告及原始记录备份存于 `local/session-env-sync-*/`。提示词和知识库在下次启动时从仓库加载，脚本不伪造准备完成或知识库已读记录，也不连接游戏、启动录制或修改 OBS／CeleMod 配置。
 

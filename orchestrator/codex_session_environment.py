@@ -1,4 +1,4 @@
-"""Stopped repository sessions: synchronize client tools and sandbox without playing."""
+"""Stopped Codex sessions: synchronize client tools and sandbox without playing."""
 import asyncio
 from dataclasses import fields
 import hashlib
@@ -52,6 +52,10 @@ def targets(paths=None, root=REPO_ROOT):
             raise ValueError('只能同步本仓库 runs 下的会话')
         state = read_json(directory/'run_state.json')
         if not state.get('session_id') or not state.get('engine'):
+            continue
+        if state['engine'] != 'codex':
+            if paths:
+                raise ValueError('此脚本仅同步 Codex 会话')
             continue
         key = (state['engine'], state['session_id'])
         if key not in selected or directory.name > selected[key][0].name:
@@ -126,6 +130,8 @@ async def thread_metadata(ident, scratch, *, resume=False):
 
 
 async def synchronize(directory, state, output, *, apply=False, root=REPO_ROOT):
+    if state['engine'] != 'codex':
+        raise ValueError('此脚本仅同步 Codex 会话')
     ident = state['session_id']
     report = {'run': str(directory), 'engine': state['engine'], 'session_id': ident}
     if state['agent'] in active_agents(root):
@@ -136,65 +142,61 @@ async def synchronize(directory, state, output, *, apply=False, root=REPO_ROOT):
     # Prompts and KB are loaded from repository files on every launch. No copies of
     # stale prompts, preparation completion flags, metrics or user preferences are written.
     report['prompt_and_kb'] = 'loaded_from_repository_on_next_launch'
-    if state['engine'] == 'codex':
-        report['status'] = 'current'
-        scratch = output/ident
-        tools = await tool_specs(cfg, scratch)
-        thread = await thread_metadata(ident, scratch/'read')
-        path = canonical(thread['path'])
-        home = canonical(os.environ.get('CODEX_HOME') or Path.home()/'.codex')
-        if not any((home/sub).resolve() in path.parents for sub in ('sessions', 'archived_sessions')):
-            raise ValueError('会话文件不在 Codex 的会话目录，拒绝修改')
-        if (home/'archived_sessions') in path.parents:
-            return {**report, 'status': 'archived', 'reason': '已归档会话不修改、不唤起'}
-        original = path.read_bytes()
-        updated = patched_rollout(original, ident, tools)
-        before = {t['name']: t for t in json.loads(original.split(b'\n', 1)[0])['payload'].get('dynamic_tools', [])}
-        after = {t['name']: t for t in tools}
-        report.update(added=sorted(after.keys()-before.keys()), removed=sorted(before.keys()-after.keys()),
-                      changed=sorted(k for k in before.keys() & after.keys() if before[k] != after[k]))
-        if updated != original:
-            report['status'] = 'outdated'
-            if apply:
-                # Acquire/release the real writer first. Never fork or silently edit a
-                # thread held by another app-server, even when its UI looks idle.
-                await thread_metadata(ident, scratch/'writer-check', resume=True)
-                if state['agent'] in active_agents(root):
-                    raise ValueError('检查期间已有宿主接入，未修改')
-                # Some CLI versions append a thread_settings_applied audit event on
-                # resume. Snapshot after our writer probe, preserving those records.
-                original = path.read_bytes()
-                updated = patched_rollout(original, ident, tools)
-                backup = scratch/path.name
-                backup.parent.mkdir(parents=True, exist_ok=True)
-                backup.write_bytes(original)
-                replace_checked(path, original, updated)
-                try:
-                    verified = await thread_metadata(ident, scratch/'verify', resume=True)
-                    actual = Path(verified['path']).read_bytes()
-                    if patched_rollout(actual, ident, tools) != actual:
-                        raise ValueError('恢复后工具登记校验失败')
-                    history = original.partition(b'\n')[2]
-                    actual_history = actual.partition(b'\n')[2]
-                    if not actual_history.startswith(history):
-                        raise ValueError('校验期间历史发生变化')
-                    for line in actual_history[len(history):].splitlines():
-                        record = json.loads(line)
-                        if record.get('type') != 'event_msg' or record.get('payload', {}).get('type') != 'thread_settings_applied':
-                            raise ValueError('校验期间出现新的会话内容')
-                except Exception:
-                    # Restore only our metadata, retaining protocol audit records and
-                    # any history another writer may have appended in the meantime.
-                    current = path.read_bytes()
-                    if current.partition(b'\n')[0] == updated.partition(b'\n')[0]:
-                        restored = original.partition(b'\n')[0]+b'\n'+current.partition(b'\n')[2]
-                        replace_checked(path, current, restored)
-                    raise
-                report.update(status='updated', backup=str(backup), history_unchanged=True,
-                              before_sha256=digest(original), after_sha256=digest(updated))
-    else:
-        report['status'] = 'current'
-        report['tools'] = 'registered_from_current_server_on_next_launch'
+    report['status'] = 'current'
+    scratch = output/ident
+    tools = await tool_specs(cfg, scratch)
+    thread = await thread_metadata(ident, scratch/'read')
+    path = canonical(thread['path'])
+    home = canonical(os.environ.get('CODEX_HOME') or Path.home()/'.codex')
+    if not any((home/sub).resolve() in path.parents for sub in ('sessions', 'archived_sessions')):
+        raise ValueError('会话文件不在 Codex 的会话目录，拒绝修改')
+    if (home/'archived_sessions') in path.parents:
+        return {**report, 'status': 'archived', 'reason': '已归档会话不修改、不唤起'}
+    original = path.read_bytes()
+    updated = patched_rollout(original, ident, tools)
+    before = {t['name']: t for t in json.loads(original.split(b'\n', 1)[0])['payload'].get('dynamic_tools', [])}
+    after = {t['name']: t for t in tools}
+    report.update(added=sorted(after.keys()-before.keys()), removed=sorted(before.keys()-after.keys()),
+                  changed=sorted(k for k in before.keys() & after.keys() if before[k] != after[k]))
+    if updated != original:
+        report['status'] = 'outdated'
+        if apply:
+            # Acquire/release the real writer first. Never fork or silently edit a
+            # thread held by another app-server, even when its UI looks idle.
+            await thread_metadata(ident, scratch/'writer-check', resume=True)
+            if state['agent'] in active_agents(root):
+                raise ValueError('检查期间已有宿主接入，未修改')
+            # Some CLI versions append a thread_settings_applied audit event on
+            # resume. Snapshot after our writer probe, preserving those records.
+            original = path.read_bytes()
+            updated = patched_rollout(original, ident, tools)
+            backup = scratch/path.name
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            backup.write_bytes(original)
+            replace_checked(path, original, updated)
+            try:
+                verified = await thread_metadata(ident, scratch/'verify', resume=True)
+                actual = Path(verified['path']).read_bytes()
+                if patched_rollout(actual, ident, tools) != actual:
+                    raise ValueError('恢复后工具登记校验失败')
+                history = original.partition(b'\n')[2]
+                actual_history = actual.partition(b'\n')[2]
+                if not actual_history.startswith(history):
+                    raise ValueError('校验期间历史发生变化')
+                for line in actual_history[len(history):].splitlines():
+                    record = json.loads(line)
+                    if record.get('type') != 'event_msg' or record.get('payload', {}).get('type') != 'thread_settings_applied':
+                        raise ValueError('校验期间出现新的会话内容')
+            except Exception:
+                # Restore only our metadata, retaining protocol audit records and
+                # any history another writer may have appended in the meantime.
+                current = path.read_bytes()
+                if current.partition(b'\n')[0] == updated.partition(b'\n')[0]:
+                    restored = original.partition(b'\n')[0]+b'\n'+current.partition(b'\n')[2]
+                    replace_checked(path, current, restored)
+                raise
+            report.update(status='updated', backup=str(backup), history_unchanged=True,
+                          before_sha256=digest(original), after_sha256=digest(updated))
     if apply and cfg.runtime == 'container':
         from .kb_access import prepare_view
         from .container import ensure_container
