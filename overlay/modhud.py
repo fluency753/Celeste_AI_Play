@@ -62,7 +62,7 @@ STATUS = {
 }
 EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 DEFAULT_COLORS = {
-    "card": "rgba(16, 19, 34, 0.80)", "mod_card": "rgba(16, 19, 34, 0.45)", "border": "rgba(255, 255, 255, 0.10)",
+    "card": "rgba(16, 19, 34, 0.80)", "mod_card": "rgba(16, 19, 34, 0.25)", "border": "rgba(255, 255, 255, 0.10)",
     "text": "#F3F5FA",
     "label": "#8F9AB3", "warn": "#F08A3C", "dash0": "#5BC0EB", "dash1": "#E0475B", "dash2": "#F28AC4",
     "effort": "#7FA6F5", "effort_high": "#F5B841", "thinking": "#F5B841", "idle": "#8A93A6",
