@@ -108,7 +108,14 @@ player.StateMachine.State=Player.StNormal;
 if (!PlayerControl.IsControllable(level,player)) throw new Exception("Text appearance must not override actual movement state");
 Check("",StoryText.InputNode(level) ?? "");
 box.waitingForInput=true;
+box.runRoutine=new Monocle.Coroutine();
+box.runRoutine.waitTimer=.1f;
+Check("",StoryText.InputNode(level) ?? ""); // visible page, but confirmation is still debounced
+box.runRoutine.waitTimer=0f;
 Check("dialogue",StoryText.InputNode(level)!);
+box.disableInput=true;
+Check("",StoryText.InputNode(level) ?? "");
+box.disableInput=false;
 level.Paused=true;
 Check("",StoryText.InputNode(level) ?? "");
 level.Paused=false;

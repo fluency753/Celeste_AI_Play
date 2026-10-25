@@ -226,7 +226,7 @@ internal static class StateExtractor {
         w.WriteBoolean("canPause", level.CanPause);
         Textbox? textbox = level.Entities.FindFirst<Textbox>();
         w.WriteBoolean("dialogOpen", textbox != null);
-        w.WriteBoolean("dialogWaiting", textbox is { waitingForInput: true });
+        w.WriteBoolean("dialogWaiting", StoryText.DialogueReady(textbox));
         CS06_Campfire? campfire = level.Entities.FindFirst<CS06_Campfire>();
         bool choices = campfire?.currentOptions is { Count: > 0 };
         w.WriteNumber("dialogChoiceIndex", choices ? campfire!.currentOptionIndex : -1);

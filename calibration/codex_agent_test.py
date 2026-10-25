@@ -59,6 +59,17 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(allowed["contentItems"][0]["text"], "observed")
         self.assertEqual(allowed["contentItems"][1]["imageUrl"], "data:image/png;base64,AAAA")
 
+    async def test_stop_run_can_report_blockage_while_paused_or_study_incomplete(self):
+        self.runner.paused=True
+        self.runner.gate=SimpleNamespace(enabled=True,decide=AsyncMock(return_value=(False,'无额度')))
+        result=await self.runner._request('item/tool/call',{'tool':'celeste_stop_run','arguments':{'reason':'工具故障'}})
+        self.assertTrue(result['success'])
+        self.server.call_tool.assert_awaited_with('stop_run',{'reason':'工具故障'})
+        self.runner.gate.decide.assert_not_awaited()
+        self.runner.chat_only=True
+        denied=await self.runner._request('item/tool/call',{'tool':'celeste_stop_run','arguments':{'reason':'工具故障'}})
+        self.assertFalse(denied['success'])
+
     async def test_exit_tool_is_forwarded_and_denied_when_paused_or_chat_only(self):
         self.runner.study=None
         result=await self.runner._request('item/tool/call',{'tool':'celeste_exit_level','arguments':{'reason':'用户要求退出'}})

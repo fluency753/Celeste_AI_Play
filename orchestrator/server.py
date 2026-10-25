@@ -93,7 +93,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     explore = is_explore(session.cfg)
     # 工具按模式注册（modes.game_tools）：narrate 所有模式都有；exit_level 只在直播模式（用户要求时退出关卡）；
     # cutscene 在探索、直播或 --cutscene-mode agent 时；simulate 只在探索模式开了限额短路线预测时。
-    # 速通模式不开直播时工具集与之前一致：observe、act、narrate、set_effort。
+    # 所有模式都开放 stop_run，用于向主控报告任务阻塞并结束试玩。
     tools = set(game_tools(session.cfg))
     tool_exit_level = "exit_level" in tools
     tool_cutscene = "cutscene" in tools
@@ -233,6 +233,13 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     def optional_tool(enabled: bool, **kw):
         # 不需要的工具不注册：装饰器原样返回函数，不进 MCP 工具列表
         return server.tool(**kw) if enabled else (lambda fn: fn)
+
+    @server.tool(name='stop_run', description='任务被工具故障、缺少能力或其他无法继续的条件阻塞时，说明reason并请求主控停止本次试玩、保存录像、释放游戏。不是通关，不退出关卡，不用于普通死亡或仍可尝试的难点。调用后结束本轮，等待用户处理；暂停或知识库未读完也能报告阻塞。', structured_output=False)
+    async def stop_run(reason: str) -> list:
+        async with call_lock:
+            result = await asyncio.to_thread(session.stop_run, reason)
+            publish(session.run_dir, 'system:agent-stop', '智能体请求停止试玩：' + result['reason'], role='system', kind='系统')
+            return [json.dumps(result,ensure_ascii=False) + '\n主控已接受停止请求，正在保存录像并释放游戏。请结束本轮，不再调用工具。']
 
     @optional_tool(tool_exit_level, name='exit_level', description='仅在用户要求退出时调用：通过游戏暂停菜单保存并退出当前关卡，回到地图或主菜单，结束本次试玩并保存录像。退出不算通关。', structured_output=False)
     async def exit_level(reason: str) -> list:

@@ -56,7 +56,7 @@ class FormalRunTest(unittest.TestCase):
         self.assertNotIn("找到一条安全", speedrun_live)
         explore = play_prompt(_cfg(mode="explore", sim=False, sim_assist=True))
         self.assertIn("# 新手探索 Celeste", explore)
-        self.assertIn("observe/act/narrate/set_effort/cutscene/simulate", explore)
+        self.assertIn("observe/act/narrate/set_effort/stop_run/cutscene/simulate", explore)
         self.assertNotIn("exit_level", explore)
         self.assertNotIn("# 直播", explore)
         self.assertNotIn("10–20 秒", explore)
@@ -64,17 +64,17 @@ class FormalRunTest(unittest.TestCase):
         explore_live = play_prompt(_cfg(mode="explore", sim=False, sim_assist=True, live=True))
         self.assertIn("# 直播（探索）", explore_live)
         self.assertIn("10–20 秒", explore_live)
-        self.assertIn("observe/act/narrate/set_effort/exit_level/cutscene/simulate", explore_live)
+        self.assertIn("observe/act/narrate/set_effort/stop_run/exit_level/cutscene/simulate", explore_live)
         for text in (speedrun, nosim, speedrun_live, explore, explore_live):
             self.assertNotIn("{remind}", text)
             self.assertNotIn("{game_tools}", text)
             self.assertNotIn("# 新手探索", text) if text in (speedrun, nosim, speedrun_live) else None
 
     def test_tools_by_mode(self):
-        self.assertEqual(game_tools(_cfg()), ["observe", "act", "narrate", "set_effort"])
-        self.assertEqual(game_tools(_cfg(live=True)), ["observe", "act", "narrate", "set_effort", "exit_level", "cutscene"])
+        self.assertEqual(game_tools(_cfg()), ["observe", "act", "narrate", "set_effort", "stop_run"])
+        self.assertEqual(game_tools(_cfg(live=True)), ["observe", "act", "narrate", "set_effort", "stop_run", "exit_level", "cutscene"])
         self.assertEqual(game_tools(_cfg(mode="explore", sim=False, sim_assist=True)),
-                         ["observe", "act", "narrate", "set_effort", "cutscene", "simulate"])
+                         ["observe", "act", "narrate", "set_effort", "stop_run", "cutscene", "simulate"])
         self.assertIn("cutscene", game_tools(_cfg(cutscene_mode="agent")))
 
     def test_route_hints_only_in_explore(self):

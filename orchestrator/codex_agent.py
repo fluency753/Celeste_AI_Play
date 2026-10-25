@@ -32,7 +32,7 @@ def codex_tool_mapping(cfg) -> str:
     tools = game_tools(cfg)
     return ("# 原生 Codex 工具映射\n"
             "这里的 Read/Write/Bash 分别是 celeste_read/celeste_write/celeste_bash；"
-            "observe/act/narrate/set_effort 均加 celeste_ 前缀。Edit/Glob/Grep 用沙箱 Bash 完成。"
+            "observe/act/narrate/set_effort/stop_run 均加 celeste_ 前缀。Edit/Glob/Grep 用沙箱 Bash 完成。"
             "所有自写程序都必须经 celeste_bash 在 Docker 中执行。不要调用任何宿主 shell、apply_patch、"
             "MCP、浏览器或子智能体；宿主文件系统是只读的。"
             "只输出给观众的简短公开解说，不输出内部推理正文。"
@@ -168,7 +168,7 @@ class CodexRunner(SessionControls):
         ident = params.get("callId") or name
         self.called_tools.append(name)
         self.metrics.add(tool_calls=1)
-        game = name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_narrate", "celeste_exit_level", "celeste_cutscene", "celeste_simulate")
+        game = name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_narrate", "celeste_stop_run", "celeste_exit_level", "celeste_cutscene", "celeste_simulate")
         detail = args.get("description") or args.get("path") or ""
         self.metrics.tool_begin(ident, game_tool=game, label=name + (" · " + detail if detail else ""))
         try:
@@ -176,11 +176,11 @@ class CodexRunner(SessionControls):
                 raise ValueError(f'用户已手动固定推理强度为 {self.manual_effort}，请保留用户设置；恢复自动后才可自行调整。')
             if self.session is not None and hasattr(self.session, "goals") and self.session.goals.stop_motion.is_set() and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("停止目标已触发，正在保存录像，请结束本轮。")
-            if self.chat_only and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
+            if self.chat_only and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run"}:
                 raise ValueError("本次试玩已经结束，当前只提供聊天，不连接或操作游戏。")
             if self.paused and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("用户已暂停试玩。请只回复用户，不推进游戏或运行规划；结束本轮并等待继续。")
-            if self.gate and self.gate.enabled:
+            if self.gate and self.gate.enabled and name != "celeste_stop_run":
                 # app-server 的动态调用没有 Claude 消息 ID；每次调用独立记一轮。
                 self.gate.note_tool_use(ident, ident)
                 gate_name = {"celeste_read": "Read", "celeste_write": "Write", "celeste_bash": "Bash"}.get(
@@ -218,7 +218,7 @@ class CodexRunner(SessionControls):
                 if self.study is None or not self.study.complete():
                     raise ValueError(self.study.reminder() if self.study else "没有准备阶段")
                 text = "全部知识库已读完；结束本次准备，不启动游戏。"
-            elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate") and self.prepare_only:
+            elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run") and self.prepare_only:
                 raise ValueError("本次只做知识库准备，不开放游戏操作，不会进入关卡。")
             elif game and self.game_server is not None and not self.prepare_only:
                 if name in ("celeste_act", "celeste_observe") and self.study and not self.study.complete():
@@ -434,6 +434,8 @@ class CodexRunner(SessionControls):
                     self.control.mark(row["id"], "submitted", "已提交给当前 agent 会话")
                 self._record_turn_effort(effort,pending)
                 while not self.turn_done.is_set():
+                    if self.session is not None and self.session.done and getattr(self.session, "agent_stop", None):
+                        return self.session.done_reason
                     if self.rpc.reader.done():
                         raise ConnectionError("Codex app-server 已断开；检查 codex_stderr.log")
                     if self._elapsed(started) >= self.cfg.budget_seconds:

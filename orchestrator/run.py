@@ -773,7 +773,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             except Exception as exc:
                 finish_error = str(exc)
                 print(f"[run] 结算收尾未完成：{exc}", flush=True)
-        metrics.update(status="done" if session.done else "stopped")
+        metrics.update(status="done" if session.done and not getattr(session, "agent_stop", None) else "stopped")
         web.should_exit = True
         if not web_task.done():
             try:
@@ -797,7 +797,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         # 锁步结束后先释放，外层finally仍负责关闭连接及异常兜底；暂停不走结束流程。
         summary = metrics.snapshot()
         summary.update(stop_reason=reason, completed=session.done and session.done_reason == "章节完成",
-                       user_stopped=session.user_stopped, goal=session.goals.snapshot(),
+                       user_stopped=session.user_stopped, agent_stop=getattr(session, "agent_stop", None), goal=session.goals.snapshot(),
                        chapters=cfg.chapters, splits=metrics.state.splits or [],
                        total_time_ticks=metrics.state.completed_ticks + (0 if session.done_reason == "章节完成" or session.chapter_finished else metrics.state.chapter_time_ticks),
                        start_sid=session.start_sid, end_scene=session.end_scene, finish_error=finish_error, turns=runner.turns if runner else 0,
@@ -890,7 +890,7 @@ def main() -> int:
           f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）"
           + (f"；准备阶段 {summary['study_s']:.0f} 秒，知识库已读 {summary['kb_study']['progress']:.0%}"
              if summary.get("kb_study") else ""), flush=True)
-    return 0 if summary["completed"] or summary.get("user_stopped") else 1
+    return 0 if summary["completed"] or summary.get("user_stopped") or summary.get("agent_stop") else 1
 
 
 if __name__ == "__main__":

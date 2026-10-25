@@ -48,6 +48,45 @@ class CutsceneTests(unittest.TestCase):
         self.s.client=SceneClient(dialog());self.s.last_obs=dialog()
     def tearDown(self):self.s.close();self.temp.cleanup()
 
+    def test_stop_run_reports_blockage_without_game_inputs_or_completion(self):
+        import asyncio,json
+        from orchestrator.server import build_server
+        self.s.control_guard=lambda: '用户已暂停'
+        server=build_server(self.s,study=Mock(ready=Mock(return_value=False)))
+        result=asyncio.run(server.call_tool('stop_run',{'reason':'游戏动作持续报桥接协议错误'}))
+        self.assertIn('主控已接受',result.content[0].text)
+        self.assertTrue(self.s.done)
+        self.assertFalse(self.s.user_stopped)
+        self.assertIn('协议错误',self.s.done_reason)
+        self.assertEqual(self.s.client.steps,[])
+        self.assertEqual(json.loads((self.path/'agent_stop.json').read_text(encoding='utf-8'))['source'],'agent')
+        with self.assertRaises(ActError):self.s.act(['1,R'],'继续移动',None)
+
+    def test_stop_run_requires_reason_and_preserves_existing_completion(self):
+        with self.assertRaises(ActError):self.s.stop_run('  ')
+        self.assertFalse(self.s.done)
+        self.s.done=True;self.s.done_reason='章节完成'
+        with self.assertRaises(ActError):self.s.stop_run('迟到的停止请求')
+        self.assertEqual(self.s.done_reason,'章节完成')
+
+    def test_advance_waits_for_confirmation_ready_then_next_node(self):
+        initial=dialog();initial['storyInput']=None
+        ready=dialog();after=dialog();after['storyInput']=None
+        next_page=dialog();next_page['frame']=99
+        client=Mock()
+        client.call.side_effect=[{'obs':initial},
+            {'result':{'consumed':7},'obs':ready},{'obs':ready},
+            {'result':{'consumed':2},'obs':after},
+            {'result':{'consumed':30},'obs':next_page},{'obs':next_page},
+            {'obs':next_page}]
+        self.s.client=client
+        obs,_,info=self.s.cutscene('advance')
+        steps=[c.kwargs['inputs'] for c in client.call.call_args_list if c.args[0]=='step']
+        self.assertEqual(steps,[['30'],['1,C','1'],['30']])
+        self.assertEqual(info['auto_frames'],37)
+        self.assertEqual(obs['frame'],99)
+        client.call.side_effect=None
+
     def test_agent_mode_does_not_skip_or_confirm_story(self):
         obs=dialog()
         with patch('orchestrator.game_session.skip_by_pause_menu') as skip:

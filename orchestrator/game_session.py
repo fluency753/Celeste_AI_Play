@@ -160,6 +160,7 @@ class GameSession:
         self.done = False
         self.done_reason = ""
         self.user_stopped = False
+        self.agent_stop = None
         self.goals = GoalManager(run_dir)
         self._goal_progress = {}
         self.start_sid: str | None = None
@@ -805,6 +806,22 @@ class GameSession:
                   'story_input':story_input(obs),'skipped':skipped,'scene':obs.get('scene'),'finished':self.done}
             if action=='skip' and not skipped:info['note']=why
             return obs,reply.get('image'),info
+
+    def stop_run(self, reason: str) -> dict:
+        """End a blocked run without pretending completion or navigating the game."""
+        reason = reason.strip()
+        if not reason:
+            raise ActError('停止试玩必须说明阻塞原因')
+        with self.lock:
+            if self.done or self.goals.stop_motion.is_set():
+                raise ActError('本次试玩已结束或正在按目标收尾')
+            self.end_scene = (self.last_obs or {}).get('scene')
+            self.chapter_queue = []
+            self.agent_stop = {'reason': reason, 'source': 'agent'}
+            (self.run_dir/'agent_stop.json').write_text(json.dumps(self.agent_stop,ensure_ascii=False,indent=2),encoding='utf-8')
+            self._mark_done('任务阻塞：' + reason)
+            self.metrics.update(status='stopped')
+            return {**self.agent_stop, 'finished': True, 'completed': False}
 
     def exit_level(self, reason: str) -> dict:
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 120:

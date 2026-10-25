@@ -8,6 +8,12 @@ namespace CelesteAI.Bridge;
 
 /// <summary>Read the rendered page, never the dialog script or unrevealed glyphs.</summary>
 internal static class StoryText {
+    // Textbox sets waitingForInput before yielding a 0.1s debounce. During that
+    // coroutine wait a confirm press is discarded, although the page is visible.
+    internal static bool DialogueReady(Textbox? box) => box is { Visible: true, waitingForInput: true, disableInput: false }
+        && Ease.CubeInOut(box.ease) >= 0.05f
+        && box.runRoutine is { Finished: false, waitTimer: <= 0f };
+
     public static string? InputNode(Scene? scene) {
         if (scene is Level level && !level.FrozenOrPaused && !level.SkippingCutscene && level.RetryPlayerCorpse == null) {
             var campfire = level.Entities.FindFirst<CS06_Campfire>();
@@ -15,7 +21,7 @@ internal static class StoryText {
                 return campfire.optionEase >= 0.999f ? "choice" : null;
             var box = level.Entities.FindFirst<Textbox>();
             if (box is { Visible: true })
-                return box.waitingForInput && Ease.CubeInOut(box.ease) >= 0.05f ? "dialogue" : null;
+                return DialogueReady(box) ? "dialogue" : null;
             var tutorial = level.Entities.FindFirst<BirdTutorialGui>();
             var player = level.Entities.FindFirst<Player>();
             if (tutorial is { Visible: true, Open: true, Scale: >= 0.999f } && tutorial.controls.Count > 0
@@ -71,7 +77,7 @@ internal static class StoryText {
         if (scene is Level level && !level.FrozenOrPaused && !level.SkippingCutscene && level.RetryPlayerCorpse == null) {
             var box = level.Entities.FindFirst<Textbox>();
             if (box is { Visible: true } && Ease.CubeInOut(box.ease) >= 0.05f) {
-                Entry(w, "dialogue", ReadPage(box.text, box.Start, Ease.CubeInOut(box.ease)), box.waitingForInput,
+                Entry(w, "dialogue", ReadPage(box.text, box.Start, Ease.CubeInOut(box.ease)), DialogueReady(box),
                     box.Page, box.portraitExists ? box.portrait : null);
             }
             var ending = level.Entities.FindFirst<PrologueEndingText>();
