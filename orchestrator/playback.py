@@ -494,7 +494,9 @@ class Playback:
         finally:
             self.metrics.update(sim_round_rollouts=0)   # 这一轮画完：HUD 的"推演路径"清零
         record = {"t": time.time(), "decision": self.session.decision_index + 1, "round": number, "label": rd.label,
-                  "rollouts": rd.rollouts, "frames": seg["frames"], "speed": seg["speed"], "dim": seg["dim"],
+                  "rollouts": rd.rollouts, "frames": seg["frames"], "speed": seg["speed"], "dim": (reply or {}).get("dim", seg["dim"]),
+                  "fade_frames": (reply or {}).get("fade_frames", seg["fade"]),
+                  "trail_half_life_frames": (reply or {}).get("trail_half_life_frames"),
                   "skipped": (reply or {}).get("skipped"),
                   "render_avg_ms": (reply or {}).get("render_avg_ms"), "render_max_ms": (reply or {}).get("render_max_ms"),
                   "tracks": [{"kind": t.kind, "stop": STOPS.get(t.stop), "frames": len(t.path),
