@@ -511,41 +511,40 @@ def write_placeholder_metrics(run_dir: Path, cfg: RunConfig) -> None:
     (run_dir / "metrics.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
-def check_resume_position(cfg: RunConfig) -> None:
-    """续跑前确认游戏停在要续跑的章节里；中断发生在两章之间（结算画面、地图）时，用菜单宏进入下一章。"""
+def check_resume_position(cfg: RunConfig) -> bool:
+    """续跑前看游戏停在哪里。返回 True：游戏就停在要续跑的章节里，直接接着玩；返回 False：要用菜单宏进入
+    （中断发生在两章或两截之间、游戏重启过、还没载入存档或在别的存档的菜单里），由调用方像新开一局那样进入，
+    开了录屏时这段也从选档页开始录进录像。关卡里是别的存档或别的章节时报错，不替你离开那个关卡。"""
     from tools.bridge_client import BridgeClient
-    from tools.enter_save import enter_save as macro  # noqa: WPS433
 
     client = BridgeClient(port=cfg.bridge_port, timeout=120)
     try:
         obs = client.call("observe", image=False, entities=False, tiles=False)["obs"]
         save = (obs.get("save") or {}).get("name")
-        if save != cfg.save:
-            raise SystemExit(f"游戏当前的存档是 {save!r}，不是 {cfg.save!r}")
-        if cfg.save_slot is not None and (obs.get('save') or {}).get('slot') != cfg.save_slot:
-            raise SystemExit(f'游戏当前存档槽位与续跑指定的槽位 {cfg.save_slot} 不一致')
+        right_save = save == cfg.save and (cfg.save_slot is None or (obs.get('save') or {}).get('slot') == cfg.save_slot)
         sid = (obs.get("level") or {}).get("sid")
         want = CHAPTER_SIDS.get(cfg.chapter) if cfg.chapter is not None else sid
         if cfg.resume_pending:
             # 上次在两截之间中断（这一截已完成、还没换过去）：先进入下一截的起点
             print(f"[run] 续跑：上次停在两截之间，进入{chapter_name_by_id(cfg.chapter)}第 {first_checkpoint(cfg)} 个检查点", flush=True)
-            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, save_slot=cfg.save_slot,
-                        cutscene_mode=cfg.cutscene_mode, checkpoint=first_checkpoint(cfg))
-            cfg.resume_pending = False
-            return
+            if obs.get("scene") == "Level" and not right_save:
+                raise SystemExit(f"游戏当前在存档 {save!r} 的关卡里，不是 {cfg.save!r}：先退出那个关卡再续跑")
+            return False
         if obs.get("scene") == "Level":
+            if not right_save:
+                raise SystemExit(f"游戏当前在存档 {save!r} 的关卡里，不是 {cfg.save!r}：先退出那个关卡再续跑")
             if sid != want:
                 raise SystemExit(f"游戏当前在 {chapter_name(sid)}，续跑的章节是 {chapter_name(want)}：请确认 --resume 的目录")
             print(f"[run] 续跑：游戏停在 {chapter_name(sid)} 房间 {(obs.get('level') or {}).get('room')}", flush=True)
-            return
+            return True
         from tools.cutscene import story_pending
-        if cfg.cutscene_mode=='agent' and story_pending(obs):return
+        if cfg.cutscene_mode == 'agent' and right_save and story_pending(obs):
+            return True
         if cfg.chapter is None:
             raise SystemExit(f"游戏当前不在关卡里（{obs.get('scene')}），无法续跑")
-        print(f"[run] 续跑：游戏在 {obs.get('scene')}，进入{chapter_name_by_id(cfg.chapter)}", flush=True)
-        obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode,
-                    checkpoint=first_checkpoint(cfg))
-        print(f"[run] 已进入 {(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}", flush=True)
+        print(f"[run] 续跑：游戏在 {obs.get('scene')}（存档 {save!r}），用菜单宏进入{cfg.save} 的"
+              f"{chapter_name_by_id(cfg.chapter)}", flush=True)
+        return False
     except BaseException:
         client.call('deactivate')
         raise
@@ -902,10 +901,10 @@ def main() -> int:
     try:
         if args.record:
             obs_launched = ensure_obs()
-        if previous:
-            check_resume_position(cfg)
+        if previous and check_resume_position(cfg):
             handoff_needed = True
-        elif not cfg.skip_enter:
+        elif previous or not cfg.skip_enter:
+            # 新开一局，或续跑时游戏不在要续跑的关卡里（两章之间中断、游戏重启过）：用菜单宏进入
             if args.record:
                 # 开局（选存档、进章节）也录进录像：录制从选档页开始。HUD 服务先起来，显示这一局的名字
                 if not args.no_hud:
