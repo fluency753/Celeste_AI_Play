@@ -12,10 +12,10 @@ namespace CelesteAI.Bridge;
 /// 规划回放（主控的 playback 命令，见 orchestrator/playback.py）：把智能体在模拟器里推演过的路线画进游戏。
 /// 智能体每规划完一轮，主控就发来这一轮的一段回放；真实执行之前再发一段"最终路线"。回放期间游戏完全不推进
 /// （帧闸门照常拦住 Engine.Update），桥接只是每个节拍重画一次画面：
-/// - 一轮的路线按帧号逐渐延伸（每个画面帧推进 speed 帧游戏时间），延伸中一律淡绿色细线（线多时整体再调淡，见 dim）；
-///   一条线走到头的那一帧定下结果：死亡的从死亡点往起点一路变成淡红，这一轮最快的一条从终点往起点一路变成实心金色，
-///   变色每个画面帧传导 recolor 帧（默认 4 倍速）；其余的（出口、按键用完）保持淡绿。只画线，不画角色；
-/// - 一轮放完，这一轮的线在最后 fade 帧里变成淡灰，留在画面上（历史层），直到真实执行开始才清掉；
+/// - 一轮的路线按帧号逐渐延伸（每个画面帧推进 speed 帧游戏时间），普通路线绿色，最佳路线亮薄荷色加深色描边；
+///   一条线走到头的那一帧定下结果：死亡的从死亡点往起点一路变红，这一轮最快的一条从终点往起点一路变成实心金色，
+///   变色每个画面帧传导 recolor 帧；其余的（出口、按键用完）保持绿色。只画线和前端标记，不画角色；
+/// - 一轮放完，线快速转成淡灰；每开始新一轮，历史线进一步衰减，过淡的线清掉；真实执行开始清空全部历史；
 /// - 镜头临时借用：渲染前把关卡镜头换成回放镜头（跟着金色路线的前端平滑移动、受房间边界限制），渲染后原样换回，
 ///   连同 Level.cameraPreShake；渲染期间随机数换成单独的发生器（Calc.PushRandom），游戏状态一点不变。
 ///   两轮之间（主控等智能体规划下一轮时）画面停在回放镜头上，历史线照常画；
@@ -55,7 +55,10 @@ internal static class Playback {
     private static readonly Color Green = new(0x4C, 0xC3, 0x8A);
     private static readonly Color Red = new(0xE0, 0x47, 0x5B);
     private static readonly Color Gray = new(0xC8, 0xCC, 0xD6);
-    private const float GreenAlpha = 0.28f, RedAlpha = 0.32f, GrayAlpha = 0.09f;
+    private const float GreenAlpha = 0.65f, RedAlpha = 0.65f, GrayAlpha = 0.045f;
+    private const float ActiveWidth = 1.5f, BestWidth = 2f, HistoryWidth = 0.75f;
+    private const float HistoryDecay = 0.2f;
+    private static readonly Color GrowingBest = new(0xA0, 0xFF, 0xE0);
     private static readonly Vector2 Lift = new(0f, -5f);   // 线画在身体中部，不贴着脚下
 
     private static long requestId;
@@ -101,10 +104,18 @@ internal static class Playback {
         if (running) return "a playback is already running";
         Tracks.Clear();
         final = GetBool(a, "final", false);
+        if (!final && History.Count > 0) {
+            // 每轮只重建一次历史缓存，避免逐帧重画。最新历史保留轮廓，较早轮次迅速退场。
+            foreach (Track track in History) track.Faded *= HistoryDecay;
+            History.RemoveAll(track => track.Faded.A <= 1);
+            historyDrawn = 0;
+            historyClear = true;
+            mergeUpTo = -1;
+        }
         speed = Math.Clamp(GetFloat(a, "speed", 2f), 0.1f, 60f);
         frames = Math.Clamp(GetInt(a, "frames", 60), final ? 0 : 1, 60 * 120);
         returnFrames = Math.Clamp(GetInt(a, "return", 0), 0, 600);
-        fade = Math.Clamp(GetInt(a, "fade", 15), 0, frames);
+        fade = Math.Clamp(GetInt(a, "fade", 8), 0, frames);
         dim = Math.Clamp(GetFloat(a, "dim", 1f), 0.05f, 1f);
         recolor = Math.Clamp(GetFloat(a, "recolor", 4f), 0.1f, 240f);
         focusEvery = Math.Max(1, GetInt(a, "focus_every", 4));
@@ -286,7 +297,7 @@ internal static class Playback {
                 if (layersReady && historyDrawn == History.Count) {
                     if (History.Count > 0) Draw.SpriteBatch.Draw(historyRt, new Vector2(area.X, area.Y), Color.White);
                 } else {
-                    foreach (Track t in History) DrawRange(t, 0f, t.Last, t.Faded);
+                    foreach (Track t in History) DrawRange(t, 0f, t.Last, t.Faded, width: HistoryWidth);
                 }
             }
             if (running) {
@@ -315,7 +326,8 @@ internal static class Playback {
                 float l = (frame - t.Delay) * speed;
                 if (l <= 0f) continue;
                 float shown = Math.Min(l, t.Last);
-                Color green = Color.Lerp(Green * (GreenAlpha * dim), t.Faded, toGray);
+                Color green = Color.Lerp(best ? GrowingBest : Green * (GreenAlpha * dim), t.Faded, toGray);
+                float width = MathHelper.Lerp(best ? BestWidth : ActiveWidth, HistoryWidth, toGray);
                 if (layers && t.Kind is 0 or 2) {
                     // 画进本轮层的段之后：还在延伸的那一小段
                     DrawRange(t, t.F[t.Baked], shown, green, t.Baked + 1);
@@ -324,18 +336,20 @@ internal static class Playback {
                     float since = frame - t.FinishAt;
                     float back = since > 0f && (best || t.Kind == 1) ? since * recolor : 0f;
                     if (back <= 0f) {
-                        DrawRange(t, 0f, shown, green);
+                        DrawRange(t, 0f, shown, green, width: width, outline: best ? keep : 0f);
                     } else {
                         float split = Math.Max(0f, t.Last - back);
-                        DrawRange(t, 0f, split, green);
+                        DrawRange(t, 0f, split, green, width: width, outline: best ? keep : 0f);
                         Color done = best ? Gold : Red * (RedAlpha * dim);
-                        DrawRange(t, split, t.Last, Color.Lerp(done, t.Faded, toGray));
+                        DrawRange(t, split, t.Last, Color.Lerp(done, t.Faded, toGray), width: width, outline: best ? keep : 0f);
                     }
                 }
                 if (keep <= 0.01f) continue;
                 (Vector2 head, _) = Head(t, shown);
                 if (l < t.Last) {
-                    Draw.Point(head + Lift, Color.White * (0.7f * keep));
+                    Vector2 e = head + Lift;
+                    if (best) Draw.Rect(e.X - 2f, e.Y - 2f, 4f, 4f, Color.Black * (0.8f * keep));
+                    Draw.Rect(e.X - 1f, e.Y - 1f, 2f, 2f, Color.White * keep);
                 } else if (t.Kind == 1) {
                     Vector2 e = head + Lift;
                     Color x = Red * (0.85f * keep);
@@ -350,7 +364,8 @@ internal static class Playback {
     }
 
     /// <summary>画路线在帧号 [from, to] 之间的一段（两端按帧号插值），从第 start 段开始找。</summary>
-    private static void DrawRange(Track t, float from, float to, Color color, int start = 1) {
+    private static void DrawRange(Track t, float from, float to, Color color, int start = 1,
+                                  float width = ActiveWidth, float outline = 0f) {
         if (t.P.Length < 2 || to <= from) return;
         for (int i = Math.Max(1, start); i < t.P.Length; i++) {
             float f0 = t.F[i - 1], f1 = t.F[i];
@@ -363,7 +378,9 @@ internal static class Playback {
             float u1 = f1 <= to ? 1f : (to - f0) / span;
             if (u1 <= u0) continue;
             Vector2 p0 = u0 <= 0f ? t.P[i - 1] : Vector2.Lerp(t.P[i - 1], t.P[i], u0);
-            Draw.LineAngle(p0 + Lift, t.Ang[i], len * (u1 - u0), color);
+            if (outline > 0f)
+                Draw.LineAngle(p0 + Lift, t.Ang[i], len * (u1 - u0), Color.Black * (0.8f * outline), width + 1.5f);
+            Draw.LineAngle(p0 + Lift, t.Ang[i], len * (u1 - u0), color, width);
         }
     }
 
@@ -388,7 +405,7 @@ internal static class Playback {
                 }
                 for (; historyDrawn < History.Count; historyDrawn++) {
                     Track t = History[historyDrawn];
-                    DrawRange(t, 0f, t.Last, t.Faded);
+                    DrawRange(t, 0f, t.Last, t.Faded, width: HistoryWidth);
                 }
                 Draw.SpriteBatch.End();
             }
@@ -421,7 +438,7 @@ internal static class Playback {
             bool graying = fade > 0 && frame > frames - fade;
             if (graying && !grayReady) {
                 BeginLayer(device, grayRt!, true);
-                foreach (Track t in Tracks) DrawRange(t, 0f, t.Last, t.Faded);
+                foreach (Track t in Tracks) DrawRange(t, 0f, t.Last, t.Faded, width: HistoryWidth);
                 Draw.SpriteBatch.End();
                 grayReady = true;
             }

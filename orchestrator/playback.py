@@ -487,7 +487,7 @@ class Playback:
                 break
             factor *= seg["frames"] / cap
             seg = build_segment(rd.tracks, speed * factor, max(1, int(stagger / factor)), recolor * factor,
-                                hold=max(1, int(18 / factor)), fade=max(1, int(15 / factor)))
+                                hold=max(1, int(18 / factor)), fade=max(1, int(8 / factor)))
         seg["camera"] = "keep"
         try:
             reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=rd.rollouts)
@@ -612,7 +612,7 @@ class Playback:
 
 
 def build_segment(tracks: list[Track], speed: float, stagger: int, recolor: float = 4.0, hold: int = 18,
-                  fade: int = 15) -> dict:
+                  fade: int = 8) -> dict:
     """一轮的回放：路线按推演先后在 stagger 帧里陆续出场，每个画面帧推进 speed 帧游戏时间；延伸中一律绿色，
     走到头时死亡的从终点往起点变红、金色的变金（每个画面帧传导 recolor 帧）。所有线都画完、变完色之后再停 hold 帧。
     镜头先跟着伸得最远的绿线，金色路线走到头后跟着变金的那一点往回走；没有金色路线时，所有线画完后沿伸得最远的那条往回走。"""
