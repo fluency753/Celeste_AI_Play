@@ -230,11 +230,11 @@ internal static class RecordingAudio {
         public readonly float[] Pcm = new float[Samples * Channels];
         /// <summary>Pcm holds a block rendered since the last Publish.</summary>
         public bool Fresh;
-        public long Created, Released, OrphanedLoops;
+        public long Created, Released, OrphanedLoops, RetiredStopped;
         public int PeakTracked;
         private long frameIndex;
         public object Stats => new { created = Created, released = Released, tracked = Pairs.Count,
-                                     peak_tracked = PeakTracked, orphaned_loops = OrphanedLoops,
+                                     peak_tracked = PeakTracked, orphaned_loops = OrphanedLoops, retired_stopped = RetiredStopped,
                                      oldest = Pairs.Values.OrderBy(p => p.CreatedFrame).Take(8).Select(Describe).ToArray() };
 
         private object Describe(Pair pair) {
@@ -423,9 +423,20 @@ internal static class RecordingAudio {
             foreach (var entry in Pairs.ToArray()) {
                 Pair pair = entry.Value;
                 if (!pair.Copy.isValid()) { Pairs.Remove(entry.Key); continue; }
+                bool sourceValid = pair.Source.isValid();
+                // An event already playing at recording start may have been released before our
+                // hooks could see it. Let its recording tail finish, then release the stopped copy.
+                if (!sourceValid && !pair.Released &&
+                    pair.Copy.getPlaybackState(out PLAYBACK_STATE copyState) == RESULT.OK && copyState == PLAYBACK_STATE.STOPPED) {
+                    Check(pair.Copy.release());
+                    pair.Released = true;
+                    Released++;
+                    RetiredStopped++;
+                    pair.OrphanRetired = true;
+                }
                 // release() is not stop(). A loop whose live owner disappeared cannot end itself.
                 // Ordinary one-shots and snapshot fades keep their independent recording timeline.
-                if (!pair.StopRequested && !pair.OrphanRetired && !pair.OneShot && !pair.Snapshot && !pair.Source.isValid()) {
+                if (!pair.StopRequested && !pair.OrphanRetired && !pair.OneShot && !pair.Snapshot && !sourceValid) {
                     Check(pair.Copy.stop(STOP_MODE.IMMEDIATE));
                     if (!pair.Released) { Check(pair.Copy.release()); pair.Released = true; Released++; }
                     OrphanedLoops++;

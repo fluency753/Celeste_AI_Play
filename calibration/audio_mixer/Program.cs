@@ -13,10 +13,20 @@ foreach(var f in new[]{"Master Bank.bank","Master Bank.strings.bank","music.bank
 Check(live.getEvent("event:/music/lvl0/intro",out var desc)); Check(desc.createInstance(out var music));Check(music.start());
 // Start recording 5 s into the music (past the quiet intro), like a recording started mid-level. WARM overrides the frame count.
 int warm=int.Parse(Environment.GetEnvironmentVariable("WARM")??"300"); for(int i=0;i<warm;i++)live.update();
+// This one-shot was released before recording hooks were installed. Startup must still retire
+// its copy after its independent recording tail ends, without truncating the tail.
+// Default landing has no surface sample: it exercises ownership without masking the BGM checks.
+Check(live.getEvent("event:/char/madeline/landing",out var seededDesc));
+Check(seededDesc.createInstance(out var seededOneShot)); Check(seededOneShot.start()); Check(seededOneShot.release());
 RecordingAudio.Load();
 try {
 RecordingAudio.Start(live,Path.Combine(game,"Content","FMOD","Desktop"),47876);
 if (Environment.GetEnvironmentVariable("LIFECYCLE_ONLY") == "1") { LifecycleChecks.Run(live, music); return; }
+if (!asyncSource) {
+    var startupMixer=typeof(RecordingAudio).GetField("full",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+    var startupPairs=(System.Collections.IDictionary)startupMixer.GetType().GetField("Pairs")!.GetValue(startupMixer)!;
+    if(!startupPairs.Contains(seededOneShot.getRaw()))throw new Exception("Startup one-shot was not seeded; retirement test would be vacuous");
+}
 using var map=MemoryMappedFile.OpenExisting(@"Local\CelesteAIRecordAudio-47876"); using var view=map.CreateViewAccessor();
 const int Block=6400, Slot=64+2*Block;
 if(view.ReadInt32(4)!=2||view.ReadInt32(24)!=Slot||view.ReadInt32(28)!=2)throw new Exception("Unexpected shared memory layout");
@@ -45,6 +55,11 @@ if (capturedPcm != null) {
     Console.WriteLine("PCM WAV: " + args[1]);
 }
 Console.WriteLine($"ERROR={RecordingAudio.Error ?? "none"} ENERGY full={energy} play={playEnergy} FIRST_AUDIBLE_FRAME={firstAudible}");
+foreach(var name in new[]{"full","play"}) {
+    var pairs=(System.Collections.IDictionary)Mixer(name).GetType().GetField("Pairs")!.GetValue(Mixer(name))!;
+    if(pairs.Contains(seededOneShot.getRaw()))throw new Exception("Pre-released startup one-shot remained tracked after its tail");
+}
+Console.WriteLine("PASS: pre-released startup one-shot is retired after its recording tail");
 // Both mixers render the same real frames from the same state: identical output (streams are driven from update, so no
 // wall-clock stream thread can starve one of them). The seeded music needs a few blocks to seek into its stream.
 if(energy!=playEnergy)throw new Exception("The two tracks differ on real frames (stream not driven from update?)");
