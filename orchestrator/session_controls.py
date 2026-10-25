@@ -38,6 +38,9 @@ class SessionControls:
         self.turn_fast = None
         self._fast_yield_requested = None
         self.stop_requested = False
+        self.stop_reason = ""
+        self.interrupted_for_resume = False
+        self.interrupt_ready = asyncio.Event()
         self.goal_finishing = False
         self.paused, self.turn_active, self.user_interrupted = start_paused or self.chat_only, False, False
         self.pending_messages = []
@@ -80,6 +83,11 @@ class SessionControls:
         if self.stop_requested and not self.chat_only:
             return '用户已中断本次运行，不能再执行游戏操作。'
         return None
+
+    async def _stopped_reason(self):
+        if self.interrupted_for_resume:
+            await self.interrupt_ready.wait()
+        return self.stop_reason or "聊天会话切换"
 
     def _agent_pause(self, reason):
         """智能体用 stop_run 报告任务阻塞（在工具线程里调用）：与用户在 HUD 暂停相同，试玩暂停、章节内保持冻结，菜单正常运行，
@@ -148,18 +156,21 @@ class SessionControls:
                             self.pending_messages.append(row)
                             self.control.mark(row["id"], "waiting", "等待提交给当前会话")
                         elif row["kind"] == "interrupt":
-                            # 控制台的"中断"：与 Ctrl+C 相同，结束这次运行但不算通关——Claude 执行器的运行会让游戏
-                            # 保持冻结在当前帧，可以 --resume 接着玩（见 run.py 的 _keeps_game_frozen）
+                            # 显式中断独立于普通停止；收尾时保留接管，可 --resume 接着玩。
                             if not getattr(self, "supports_interrupt", False):
                                 raise ValueError("当前执行器不支持中断后续跑，请用“停止并保存”")
                             if self.chat_only or self.session is None or self.session.done:
                                 raise ValueError("当前没有在试玩")
                             self.stop_reason = "用户中断（章节内保持冻结，菜单正常运行，可续跑）"
+                            self.interrupted_for_resume = True
                             self.stop_requested = True
-                            await self._interrupt_user()
-                            async with self.action_lock:   # 正在执行的动作先走完，游戏停在动作之间
-                                pass
-                            self.control.mark(row["id"], "submitted", "正在结束本次运行，章节内保持冻结，菜单正常运行")
+                            try:
+                                await self._interrupt_user()
+                                async with self.action_lock:   # 正在执行的动作先走完，游戏停在动作之间
+                                    pass
+                                self.control.mark(row["id"], "submitted", "正在结束本次运行，章节内保持冻结，菜单正常运行")
+                            finally:
+                                self.interrupt_ready.set()
                         elif row["kind"] == "detach":
                             if not self.chat_only:
                                 raise ValueError("试玩期间不能切走会话")

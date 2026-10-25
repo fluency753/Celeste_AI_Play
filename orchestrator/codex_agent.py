@@ -56,6 +56,7 @@ def program_cap(cfg) -> float:
 
 class CodexRunner(SessionControls):
     capabilities = RuntimeCapabilities(fast=True, live_steering=True)
+    supports_interrupt = True
 
     def __init__(self, cfg, run_dir, session, metrics, container, study=None, *, game_server=None,
                  session_id=None, resume=False, resume_note=None, gate=None, playback=None,
@@ -392,14 +393,14 @@ class CodexRunner(SessionControls):
             message = self._first_prompt()
             while self._elapsed(started) < self.cfg.budget_seconds:
                 if self.stop_requested:
-                    return "聊天会话切换"
+                    return await self._stopped_reason()
                 if self.session is not None and self.session.done:
                     return self.session.done_reason
                 while self.paused and not self.pending_messages:
                     if self.session is not None and self.session.done:
                         return self.session.done_reason
                     if self.stop_requested:
-                        return "聊天会话切换"
+                        return await self._stopped_reason()
                     if self.rpc.reader.done():
                         raise ConnectionError("暂停期间 Codex app-server 已断开")
                     if self.control_task.done():
@@ -434,6 +435,8 @@ class CodexRunner(SessionControls):
                     self.control.mark(row["id"], "submitted", "已提交给当前 agent 会话")
                 self._record_turn_effort(effort,pending)
                 while not self.turn_done.is_set():
+                    if self.stop_requested:
+                        return await self._stopped_reason()
                     if self.session is not None and self.session.done and getattr(self.session, "agent_stop", None):
                         return self.session.done_reason
                     if self.rpc.reader.done():

@@ -7,10 +7,35 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from orchestrator.game_session import GameSession
-from orchestrator.run import _run_session
+from orchestrator.run import _keeps_game_frozen, _run_session
 
 
 class ReleaseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_codex_interrupt_closes_socket_without_deactivation_and_records_resumability(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            cfg = SimpleNamespace(engine='codex', _keep_frozen=False)
+            args = SimpleNamespace(no_agent=False)
+            client = SimpleNamespace(call=Mock(), close=Mock())
+            session = GameSession.__new__(GameSession)
+            session.client = client
+            session.done = False
+            session._frames_log = Mock()
+            session._decisions_log = Mock()
+
+            async def finish(*_):
+                cfg._keep_frozen = _keeps_game_frozen(cfg, args, session, interrupted=True)
+                return {'completed': False, 'stop_reason': '用户中断'}
+
+            with patch('orchestrator.run.GameSession', return_value=session), \
+                 patch('orchestrator.run._run_connected_session', side_effect=finish):
+                result = await _run_session(cfg, args, directory, None, None, None, None)
+            client.call.assert_not_called()
+            client.close.assert_called_once()
+            session._frames_log.close.assert_called_once()
+            self.assertFalse(result['game_released'])
+            self.assertTrue((directory/'summary.json').exists())
+
     async def test_recording_finishes_before_game_is_released_for_all_stop_reasons(self):
         for completed,user_stopped in [(True,False),(True,True),(False,True),(False,False)]:
             with self.subTest(completed=completed,user_stopped=user_stopped),tempfile.TemporaryDirectory() as folder:

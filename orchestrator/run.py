@@ -670,8 +670,8 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
         return result
     finally:
         # 即使连接、后台初始化或其他清理失败，也必须通过自己的连接解除接管。
-        # 例外：Claude 执行器的运行没通关就停下时（时间预算用完、出错、Ctrl+C），游戏冻结在当前帧，章节计时不走，
-        # 可以 --resume 接着玩（见 _keeps_game_frozen）。
+        # 例外：显式中断，以及 Claude 原有的提前退出策略保留接管，可 --resume 接着玩。
+        # 由桥接按场景决定是否冻结（见 _keeps_game_frozen）。
         had_connection = getattr(session,'client',None) is not None
         keep = bool(getattr(cfg, '_keep_frozen', False)) and had_connection
         session.close(release=not keep)
@@ -704,10 +704,13 @@ def _previous_kept_frozen(previous: dict) -> bool:
     return summary.get("game_released") is False
 
 
-def _keeps_game_frozen(cfg, args, session) -> bool:
-    """Claude 执行器的运行没通关（也没有因退出关卡等结束）就停下时保持冻结，与之前的约定一致；
-    原生 GPT 直播会话、--no-agent，以及已经结束（通关、退出关卡、达成目标）的运行照常交还控制。"""
-    return getattr(cfg, 'engine', 'claude') == 'claude' and not args.no_agent and not session.done
+def _keeps_game_frozen(cfg, args, session, *, interrupted=False) -> bool:
+    """显式中断保留接管；Claude 另保留原有的提前退出策略。
+
+    已通关、退出关卡、普通停止及 --no-agent 均不因中断标记而保留接管。
+    保留接管时仍由桥接按场景决定冻结，菜单继续正常运行。
+    """
+    return (interrupted or getattr(cfg, 'engine', 'claude') == 'claude') and not args.no_agent and not session.done
 
 
 async def _run_connected_session(cfg, args, run_dir, token, previous, study, metrics, recorder, prepared, session):
@@ -841,7 +844,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         if live is not None:
             live.close()
         recording = None
-        cfg._keep_frozen = _keeps_game_frozen(cfg, args, session)
+        cfg._keep_frozen = _keeps_game_frozen(cfg, args, session,
+            interrupted=bool(runner and runner.interrupted_for_resume))
         if recorder:
             try:
                 def release_after_capture():

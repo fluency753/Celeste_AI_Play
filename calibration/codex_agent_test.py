@@ -1,6 +1,7 @@
 """原生 GPT 执行器的契约测试，不连接游戏或调用模型。"""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sys
@@ -45,6 +46,46 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         with patch("orchestrator.codex_agent.workspace_call", return_value=result):
             return await self.runner._request("item/tool/call", {"callId": str(offset), "tool": "celeste_read",
                                                                  "arguments": {"path": "/kb/README.md", "offset": offset}})
+
+    async def test_interrupt_cancels_codex_turn_and_waits_for_active_action(self):
+        runner = self.runner
+        runner.session = SimpleNamespace(done=False)
+        runner.session_id, runner.turn_id, runner.turn_active = 'session', 'turn', True
+        runner.rpc.request = AsyncMock(return_value={})
+        runner._check_goal = AsyncMock()
+        await runner.action_lock.acquire()
+        ident = runner.control.enqueue('interrupt')
+        task = asyncio.create_task(runner._controls())
+        try:
+            for _ in range(30):
+                if runner.interrupted_for_resume:
+                    break
+                await asyncio.sleep(.01)
+            self.assertTrue(runner.interrupted_for_resume)
+            self.assertTrue(runner.stop_requested)
+            runner.rpc.request.assert_awaited_once_with('turn/interrupt', {'threadId': 'session', 'turnId': 'turn'})
+            self.assertIn('中断', runner._game_guard())
+            row = lambda: next(a for a in runner.control.snapshot()['actions'] if a['id'] == ident)
+            self.assertNotEqual(row()['status'], 'submitted')
+            stopping = asyncio.create_task(runner._stopped_reason())
+            await asyncio.sleep(.01)
+            self.assertFalse(stopping.done())
+            runner.action_lock.release()
+            for _ in range(30):
+                if row()['status'] == 'submitted':
+                    break
+                await asyncio.sleep(.01)
+            self.assertEqual(row()['status'], 'submitted')
+            self.assertIn('用户中断', await asyncio.wait_for(stopping, 1))
+            self.assertTrue(runner._effort_status()['interrupt_control'])
+        finally:
+            if runner.action_lock.locked():
+                runner.action_lock.release()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_chat_detach_keeps_its_existing_stop_reason(self):
+        self.assertEqual(await self.runner._stopped_reason(), '聊天会话切换')
 
     async def test_read_audit_gates_game_then_forwards_text_and_image(self):
         await self.read(1)

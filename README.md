@@ -176,7 +176,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1          # 一键部署：�
 | `--bridge-port` / `--mcp-port` / `--hud-port` | 47774 / 47780 / 47790 | 桥接、游戏工具服务、HUD 的端口 |
 | `--play-speed` / `--auto-speed` | 1 / 1 | 动作段 / 转场与剧情段的推进速度，大于 1 是快进，只用于调试（录像会失真） |
 
-Claude 执行器的运行没通关就停下（时间预算用完、出错、Ctrl+C）时，章节内保持冻结在当前帧，菜单正常运行（章节计时不走），可以用 `--resume` 续跑；不续跑时运行 `python tools/bridge_client.py deactivate` 交还控制。通关、退出关卡、原生 GPT 会话与 `--no-agent` 结束时照常交还控制。
+Claude 执行器的运行没通关就停下（时间预算用完、出错、Ctrl+C）时，章节内保持冻结在当前帧，菜单正常运行（章节计时不走），可以用 `--resume` 续跑；不续跑时运行 `python tools/bridge_client.py deactivate` 交还控制。原生 GPT 也支持控制台的显式“中断（保持冻结，可续跑）”：保存录像后保留接管；普通停止、通关、退出关卡以及 `--no-agent` 结束仍交还控制。
 
 **部署与启动脚本**
 

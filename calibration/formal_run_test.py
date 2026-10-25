@@ -99,6 +99,21 @@ class FormalRunTest(unittest.TestCase):
         self.assertFalse(_keeps_game_frozen(SimpleNamespace(engine="codex"), args, SimpleNamespace(done=False)))
         self.assertFalse(_keeps_game_frozen(claude, SimpleNamespace(no_agent=True), SimpleNamespace(done=False)))
 
+    def test_explicit_interrupt_preserves_control_for_codex_and_claude(self):
+        for engine in ('codex', 'claude'):
+            with self.subTest(engine=engine):
+                cfg = SimpleNamespace(engine=engine)
+                args = SimpleNamespace(no_agent=False)
+                self.assertTrue(_keeps_game_frozen(cfg, args, SimpleNamespace(done=False), interrupted=True))
+                # 已完成结算、退出关卡、普通停止或达成目标时，done 优先于中断。
+                self.assertFalse(_keeps_game_frozen(cfg, args, SimpleNamespace(done=True), interrupted=True))
+                self.assertFalse(_keeps_game_frozen(cfg, SimpleNamespace(no_agent=True),
+                                                  SimpleNamespace(done=False), interrupted=True))
+
+    def test_codex_error_or_budget_exit_does_not_implicitly_keep_control(self):
+        self.assertFalse(_keeps_game_frozen(SimpleNamespace(engine='codex'),
+                                           SimpleNamespace(no_agent=False), SimpleNamespace(done=False)))
+
     def test_interrupted_run_records_frozen_game_in_summary(self):
         """Ctrl+C：summary.json 在会话自己的 finally 里写出、没有返回值，仍要记下游戏保持冻结，续跑才知道。"""
         with tempfile.TemporaryDirectory() as folder:

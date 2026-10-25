@@ -320,7 +320,7 @@ winget install Gyan.FFmpeg
 ### 5.4 查看与结束
 
 - 进度：`.\.venv\Scripts\python.exe tools\run_status.py`（加 `-n 30` 显示更多决策）；HUD 在游戏画面右上角（MOD 形式），或在 HUD 窗口里，也可以浏览器打开 `http://127.0.0.1:47790/hud`。
-- 提前结束：在运行主控的窗口按 Ctrl+C，主控会停止录制、写出 `summary.json`。Claude 执行器的运行没通关时游戏冻结在当前帧（章节计时不走），可以 `--resume` 续跑，不续跑时 `.\.venv\Scripts\python.exe tools\bridge_client.py deactivate` 交还控制；通关、退出关卡、原生 GPT 会话与 `--no-agent` 结束时照常交还控制。
+- 提前结束：在运行主控的窗口按 Ctrl+C，主控会停止录制、写出 `summary.json`。Claude 执行器的运行没通关时游戏冻结在当前帧（章节计时不走），可以 `--resume` 续跑，不续跑时 `.\.venv\Scripts\python.exe tools\bridge_client.py deactivate` 交还控制；原生 GPT 也支持控制台的显式“中断（保持冻结，可续跑）”，保存录像后保留接管；普通停止、通关、退出关卡与 `--no-agent` 结束仍交还控制。
 - 产出：`runs\<标签>\<时间戳>\`（`metrics.json`、`decisions.jsonl`、`decision_timing.jsonl`、`frames.jsonl`、`agent_events.jsonl`、`system_prompt.md`、`summary.json`、`save_backup\`、`recording\`）。录像在 `recording\`：完整版 `gameplay.mkv`（含规划回放）与纯享版 `gameplay_pure.mkv`（只有真实游玩帧）。旧录像补生成纯享版：`.\.venv\Scripts\python.exe tools\make_pure.py runs\<标签>\<时间戳>\recording`。
 - `decision_timing.jsonl` 用于诊断推进节奏：记录每轮请求的模型、推理强度、Fast 与服务档位、请求确认耗时、工具请求 / 完成，以及动作请求 / 完成。`decision_wait_s` 是本轮内两次动作之间累计的无工具等待，包含模型请求等待、推理、输出与压缩；`decision_active_s` 还包含中间的工具耗时。暂停与两轮之间的用户等待不计入这两项。请求档位不代表服务端确认的实际档位；不支持 Fast 的执行器记为 `null`。`decisions.jsonl` 同时保留该次动作的等待时间、请求档位、计划帧数与实际帧数，方便对照。
 

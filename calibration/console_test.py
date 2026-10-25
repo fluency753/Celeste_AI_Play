@@ -184,6 +184,7 @@ class InterruptControlTests(unittest.TestCase):
                 await asyncio.gather(task, return_exceptions=True)
             asyncio.run(run())
             self.assertTrue(runner.stop_requested)
+            self.assertTrue(runner.interrupted_for_resume)
             self.assertIn("可续跑", runner.stop_reason)
             self.assertEqual(runner.interrupted, 1)
             row = next(a for a in control.snapshot()["actions"] if a["id"] == ident)
@@ -205,6 +206,7 @@ class InterruptControlTests(unittest.TestCase):
                 await asyncio.gather(task, return_exceptions=True)
             asyncio.run(run())
             self.assertFalse(runner.stop_requested)
+            self.assertFalse(runner.interrupted_for_resume)
             row = next(a for a in control.snapshot()["actions"] if a["id"] == ident)
             self.assertEqual(row["status"], "error")
 
