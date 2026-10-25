@@ -158,6 +158,7 @@ class Recorder:
         self.log = log
         self.started = False
         self.result: dict | None = None
+        self.audio_diagnostics = None
         self.session_id = uuid.uuid4().hex
         self.run_dirs = []
 
@@ -262,7 +263,9 @@ class Recorder:
                 'frames': (hello.get('clock', {}).get('plugin') or {}).get('frames'), 'pending': True}
 
     def clock(self) -> dict:
-        return self.call("hello").get("clock") or {}
+        hello = self.call("hello")
+        self.audio_diagnostics = hello.get('record_audio_diagnostics', self.audio_diagnostics)
+        return hello.get("clock") or {}
 
     def _plugin(self) -> tuple[dict, dict]:
         clock = self.clock()
@@ -358,6 +361,7 @@ class Recorder:
                             "tracks": {"audio.wav": "完整版：规划回放帧里音乐继续（音效暂停）",
                                        "audio_play.wav": "纯享版：只随真实游玩帧推进"}}
                            if self.opts.audio_source == "game_nrt" else analyze_segments(directory / "segments.csv")),
+            "audio_diagnostics": self.audio_diagnostics,
             "options": {"video_args": self.opts.video_args, "audio_offset_ms": self.opts.audio_offset_ms,
                         "marker": self.opts.marker, "continuous_music": self.opts.continuous_music,
                         "audio_source": self.opts.audio_source},

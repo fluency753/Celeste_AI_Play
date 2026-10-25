@@ -50,6 +50,19 @@ class RecordingAudioTests(unittest.TestCase):
              patch("orchestrator.recording.find_ffmpeg", return_value="ffmpeg"):
             self.assertEqual(options_from(Path("run")).audio_source, "game_nrt")
 
+    def test_mixer_diagnostics_survive_recording_finalization(self):
+        import json
+        with tempfile.TemporaryDirectory() as folder:
+            diagnostics = {'full': {'created': 2000, 'tracked': 1, 'peak_tracked': 22}}
+            call = Mock(return_value={'record_audio_diagnostics': diagnostics, 'clock': {
+                'lockstep': False, 'plugin': {'state': 'finished', 'frames': 0}}})
+            recorder = self.recorder(folder, call)
+            recorder.started = True
+            result = recorder.stop()
+            self.assertEqual(result['audio_diagnostics'], diagnostics)
+            saved = json.loads((Path(folder)/'recording.json').read_text(encoding='utf-8'))
+            self.assertEqual(saved['audio_diagnostics'], diagnostics)
+
     def test_game_release_precedes_encoding_and_waits_until_capture_has_stopped(self):
         with tempfile.TemporaryDirectory() as folder:
             recorder=self.recorder(folder,Mock());recorder.started=True

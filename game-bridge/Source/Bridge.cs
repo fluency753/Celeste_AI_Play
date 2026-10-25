@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.0.7";
+    public const string Version = "1.0.8";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -456,6 +456,8 @@ internal static class Bridge {
                     w.WriteBoolean("record_audio_active", RecordingAudio.Enabled);
                     w.WriteNumber("record_audio_frames", RecordingAudio.RenderedFrames);
                     w.WriteNumber("record_audio_replay_frames", RecordingAudio.ReplayFrames);
+                    w.WritePropertyName("record_audio_diagnostics");
+                    JsonSerializer.Serialize(w, RecordingAudio.Diagnostics);
                     if (Audio.CurrentMusicEventInstance is { } music && music.getTimelinePosition(out int musicPosition) == FMOD.RESULT.OK) {
                         w.WriteNumber("live_music_ms", musicPosition);
                         if (RecordingAudio.PositionFor(music) is { } recordingPosition)

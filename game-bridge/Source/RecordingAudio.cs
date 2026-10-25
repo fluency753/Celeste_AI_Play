@@ -30,7 +30,9 @@ internal static class RecordingAudio {
     public const int TrackCount = Tracks;
     private static readonly object Gate = new();
     private static readonly List<Hook> Hooks = new();
-    private sealed record Pair(EventInstance Source, EventInstance Copy) { public bool Released; }
+    private sealed record Pair(EventInstance Source, EventInstance Copy, bool OneShot, bool Snapshot, string Path, long CreatedFrame) {
+        public bool Released, OrphanRetired, StopRequested;
+    }
     [ThreadStatic] private static bool copying;
     private static FMOD.Studio.System? source;
     private static Mixer? full, play;
@@ -39,6 +41,10 @@ internal static class RecordingAudio {
     private static readonly byte[] Bytes = new byte[BlockBytes];
     public static string? Error { get; private set; }
     public static bool Enabled => full != null;
+    private static object? lastDiagnostics;
+    public static object? Diagnostics {
+        get { lock (Gate) return full == null ? lastDiagnostics : new { full = full.Stats, play = play?.Stats }; }
+    }
     /// <summary>Real game frames rendered (both tracks).</summary>
     public static long RenderedFrames { get; private set; }
     /// <summary>Planning-replay frames rendered (full track only).</summary>
@@ -60,10 +66,23 @@ internal static class RecordingAudio {
         AddHook(nameof(EventInstance.release), nameof(OnRelease));
         AddHook(nameof(EventInstance.triggerCue), nameof(OnCue));
         AddHook(nameof(EventInstance.setTimelinePosition), nameof(OnSeek));
+        AddHook(nameof(EventInstance.setVolume), nameof(OnVolume));
+        AddHook(nameof(EventInstance.setPitch), nameof(OnPitch));
+        AddHook(nameof(EventInstance.setPaused), nameof(OnPause));
+        AddHook(nameof(EventInstance.set3DAttributes), nameof(OnAttributes));
+        AddHook(nameof(EventInstance.setParameterValue), nameof(OnParameter));
+        AddHook(nameof(EventInstance.setParameterValueByIndex), nameof(OnParameterIndex));
+        AddHook(nameof(EventInstance.setParameterValuesByIndices), nameof(OnParameters));
         Hooks.Add(new Hook(typeof(Bus).GetMethod(nameof(Bus.stopAllEvents))!,
             typeof(RecordingAudio).GetMethod(nameof(OnBusStop), BindingFlags.NonPublic | BindingFlags.Static)!));
         Hooks.Add(new Hook(typeof(Bus).GetMethod(nameof(Bus.setPaused))!,
             typeof(RecordingAudio).GetMethod(nameof(OnBusPause), BindingFlags.NonPublic | BindingFlags.Static)!));
+        Hooks.Add(new Hook(typeof(Bus).GetMethod(nameof(Bus.setVolume))!,
+            typeof(RecordingAudio).GetMethod(nameof(OnBusVolume), BindingFlags.NonPublic | BindingFlags.Static)!));
+        Hooks.Add(new Hook(typeof(Bus).GetMethod(nameof(Bus.setMute))!,
+            typeof(RecordingAudio).GetMethod(nameof(OnBusMute), BindingFlags.NonPublic | BindingFlags.Static)!));
+        Hooks.Add(new Hook(typeof(VCA).GetMethod(nameof(VCA.setVolume))!,
+            typeof(RecordingAudio).GetMethod(nameof(OnVcaVolume), BindingFlags.NonPublic | BindingFlags.Static)!));
     }
 
     private static void AddHook(string method, string handler) => Hooks.Add(new Hook(
@@ -88,12 +107,13 @@ internal static class RecordingAudio {
             copying = true;
             try {
                 Error = null;
+                lastDiagnostics = null;
                 RenderedFrames = 0;
                 ReplayFrames = 0;
                 source = live;
                 full = new Mixer("full");
                 play = new Mixer("play");
-                foreach (Mixer mixer in Mixers) { mixer.Open(bankDirectory); mixer.SeedBusPause(live); }
+                foreach (Mixer mixer in Mixers) { mixer.Open(bankDirectory); mixer.SeedMix(live); }
                 Check(live.getBankList(out Bank[] banks));
                 foreach (Bank bank in banks) {
                     if (bank.getEventList(out EventDescription[] events) != RESULT.OK) continue;
@@ -130,6 +150,10 @@ internal static class RecordingAudio {
         lock (Gate) {
             copying = true;
             try {
+                if (full != null) {
+                    lastDiagnostics = new { full = full.Stats, play = play?.Stats };
+                    Log.Info("recording audio summary: " + System.Text.Json.JsonSerializer.Serialize(lastDiagnostics));
+                }
                 foreach (Mixer mixer in Mixers) mixer.Close();
                 full = null; play = null; source = null;
                 view?.Dispose(); view = null;
@@ -201,10 +225,25 @@ internal static class RecordingAudio {
         private readonly DSP_READCALLBACK callback; // kept alive while FMOD holds the native pointer
         private int captured;
         private volatile bool capturing;
+        private float[] callbackBuffer = Array.Empty<float>();
         public readonly Dictionary<IntPtr, Pair> Pairs = new();
         public readonly float[] Pcm = new float[Samples * Channels];
         /// <summary>Pcm holds a block rendered since the last Publish.</summary>
         public bool Fresh;
+        public long Created, Released, OrphanedLoops;
+        public int PeakTracked;
+        private long frameIndex;
+        public object Stats => new { created = Created, released = Released, tracked = Pairs.Count,
+                                     peak_tracked = PeakTracked, orphaned_loops = OrphanedLoops,
+                                     oldest = Pairs.Values.OrderBy(p => p.CreatedFrame).Take(8).Select(Describe).ToArray() };
+
+        private object Describe(Pair pair) {
+            pair.Copy.getPlaybackState(out PLAYBACK_STATE state);
+            pair.Copy.getPaused(out bool paused);
+            pair.Copy.getPitch(out float pitch, out _);
+            return new { path = pair.Path, released = pair.Released, age_frames = frameIndex - pair.CreatedFrame,
+                         state = state.ToString(), paused, pitch, source_valid = pair.Source.isValid() };
+        }
 
         public Mixer(string name) { this.name = name; callback = Read; }
 
@@ -258,29 +297,56 @@ internal static class RecordingAudio {
             return null;
         }
 
-        public void MirrorStart(EventInstance instance, bool seed = false) {
-            if (studio == null) return;
+        private Pair? EnsurePair(EventInstance instance, bool restart = false) {
+            if (studio == null) return null;
             IntPtr key = instance.getRaw();
-            if (!Pairs.TryGetValue(key, out Pair? pair) || pair.Released || !pair.Copy.isValid()) {
+            if (!Pairs.TryGetValue(key, out Pair? pair) || !pair.Copy.isValid() || (restart && pair.Released)) {
+                // A restarted/reused source must not leave its previous copy without an owner.
+                if (pair != null && pair.Copy.isValid()) {
+                    Check(pair.Copy.stop(STOP_MODE.IMMEDIATE));
+                    if (!pair.Released) Check(pair.Copy.release());
+                }
                 Check(instance.getDescription(out EventDescription desc));
                 Check(desc.getID(out Guid id));
                 Check(studio.getEventByID(id, out EventDescription copyDesc));
                 Check(copyDesc.createInstance(out EventInstance copy));
-                pair = new Pair(instance, copy);
+                Check(desc.isOneshot(out bool oneShot));
+                Check(desc.isSnapshot(out bool snapshot));
+                Check(desc.getPath(out string path));
+                pair = new Pair(instance, copy, oneShot, snapshot, path, frameIndex);
                 Pairs[key] = pair;
+                Created++;
+                PeakTracked = Math.Max(PeakTracked, Pairs.Count);
+                Sync(pair); // Seed once. Live async getters must not overwrite later explicit commands.
             }
-            Sync(pair);
+            return pair;
+        }
+
+        public void Apply(EventInstance instance, Action<EventInstance> action) {
+            if (EnsurePair(instance) is { } pair) action(pair.Copy);
+        }
+
+        public void MirrorStart(EventInstance instance, bool seed = false) {
+            if (EnsurePair(instance, restart: true) is not { } pair) return;
             Check(pair.Copy.start());
+            pair.StopRequested = false;
             if (seed && instance.getTimelinePosition(out int position) == RESULT.OK)
                 pair.Copy.setTimelinePosition(position);
         }
 
         public void Stop(EventInstance live, STOP_MODE mode) {
-            if (Pairs.TryGetValue(live.getRaw(), out Pair? pair)) pair.Copy.stop(mode);
+            if (Pairs.TryGetValue(live.getRaw(), out Pair? pair) && pair.Copy.isValid()) {
+                Check(pair.Copy.stop(mode));
+                pair.StopRequested = true;
+            }
         }
 
         public void Release(EventInstance live) {
-            if (Pairs.TryGetValue(live.getRaw(), out Pair? pair)) { Sync(pair); pair.Copy.release(); pair.Released = true; }
+            if (Pairs.TryGetValue(live.getRaw(), out Pair? pair) && !pair.Released && pair.Copy.isValid()) {
+                Check(pair.Copy.release());
+                pair.Released = true;
+                Released++;
+            }
         }
 
         public void Cue(EventInstance live) {
@@ -293,20 +359,22 @@ internal static class RecordingAudio {
 
         public void PauseBus(Bus live, bool paused) {
             if (studio != null && live.getID(out Guid id) == RESULT.OK && studio.getBusByID(id, out Bus copy) == RESULT.OK)
-                copy.setPaused(paused);
+                Check(copy.setPaused(paused));
         }
 
-        /// <summary>Bus pause state when recording starts; after that every setPaused is mirrored as it is issued
-        /// (see OnBusPause). Polling getPaused each frame is not enough: the live system runs asynchronously and
-        /// reports the state of its last processed update, so right after the bridge resumes the game (master and
-        /// SFX buses unpaused this tick) it still reads paused and the first frame after a pause came out silent.</summary>
-        public void SeedBusPause(FMOD.Studio.System live) {
-            if (studio == null || live.getBankList(out Bank[] banks) != RESULT.OK) return;
-            foreach (Bank bank in banks) {
-                if (bank.getBusList(out Bus[] buses) != RESULT.OK) continue;
-                foreach (Bus bus in buses)
-                    if (bus.getPaused(out bool paused) == RESULT.OK) PauseBus(bus, paused);
-            }
+        public void BusVolume(Bus live, float volume) {
+            if (studio != null && live.getID(out Guid id) == RESULT.OK && studio.getBusByID(id, out Bus copy) == RESULT.OK)
+                Check(copy.setVolume(volume));
+        }
+
+        public void BusMute(Bus live, bool muted) {
+            if (studio != null && live.getID(out Guid id) == RESULT.OK && studio.getBusByID(id, out Bus copy) == RESULT.OK)
+                Check(copy.setMute(muted));
+        }
+
+        public void VcaVolume(VCA live, float volume) {
+            if (studio != null && live.getID(out Guid id) == RESULT.OK && studio.getVCAByID(id, out VCA copy) == RESULT.OK)
+                Check(copy.setVolume(volume));
         }
 
         public void StopBus(Bus live, STOP_MODE mode) {
@@ -327,7 +395,9 @@ internal static class RecordingAudio {
                         b.setParameterValueByIndex(i, value);
         }
 
-        private void SyncMix(FMOD.Studio.System live) {
+        /// <summary>Capture the initial bus/VCA settings once. Later setters are mirrored directly;
+        /// polling async getters every frame can overwrite a command with its previous value.</summary>
+        public void SeedMix(FMOD.Studio.System live) {
             if (studio == null) return;
             if (live.getListenerAttributes(0, out FMOD.Studio._3D_ATTRIBUTES listener) == RESULT.OK)
                 studio.setListenerAttributes(0, listener);
@@ -342,7 +412,7 @@ internal static class RecordingAudio {
                     if (bus.getID(out Guid id) != RESULT.OK || studio.getBusByID(id, out Bus copy) != RESULT.OK) continue;
                     if (bus.getVolume(out float volume, out _) == RESULT.OK) copy.setVolume(volume);
                     if (bus.getMute(out bool mute) == RESULT.OK) copy.setMute(mute);
-                    // pause state is mirrored as it is set (OnBusPause), not polled here
+                    if (bus.getPaused(out bool paused) == RESULT.OK) copy.setPaused(paused);
                 }
             }
         }
@@ -351,14 +421,24 @@ internal static class RecordingAudio {
         public void Render(FMOD.Studio.System live) {
             if (studio == null) return;
             foreach (var entry in Pairs.ToArray()) {
-                if (!entry.Value.Copy.isValid()) { Pairs.Remove(entry.Key); continue; }
-                if (!entry.Value.Released) Sync(entry.Value);
+                Pair pair = entry.Value;
+                if (!pair.Copy.isValid()) { Pairs.Remove(entry.Key); continue; }
+                // release() is not stop(). A loop whose live owner disappeared cannot end itself.
+                // Ordinary one-shots and snapshot fades keep their independent recording timeline.
+                if (!pair.StopRequested && !pair.OrphanRetired && !pair.OneShot && !pair.Snapshot && !pair.Source.isValid()) {
+                    Check(pair.Copy.stop(STOP_MODE.IMMEDIATE));
+                    if (!pair.Released) { Check(pair.Copy.release()); pair.Released = true; Released++; }
+                    OrphanedLoops++;
+                    pair.OrphanRetired = true;
+                }
             }
-            SyncMix(live);
+            if (live.getListenerAttributes(0, out FMOD.Studio._3D_ATTRIBUTES listener) == RESULT.OK)
+                studio.setListenerAttributes(0, listener);
             Array.Clear(Pcm); captured = 0;
             capturing = true;
             try { Check(studio.update()); } // SYNCHRONOUS_UPDATE also advances the NRT core exactly once
             finally { capturing = false; }
+            frameIndex++;
             if (captured != 0 && captured != Samples)
                 throw new InvalidOperationException($"Recording audio block ({name}) has {captured} samples");
             Fresh = true;
@@ -369,8 +449,10 @@ internal static class RecordingAudio {
             try {
                 outputChannels = inputChannels;
                 int n = checked((int)length * inputChannels);
-                var block = new float[n];
+                if (callbackBuffer.Length < n) Array.Resize(ref callbackBuffer, n);
+                var block = callbackBuffer;
                 if (input != IntPtr.Zero && n > 0) Marshal.Copy(input, block, 0, n);
+                else if (n > 0) Array.Clear(block, 0, n);
                 if (output != IntPtr.Zero && n > 0) Marshal.Copy(block, 0, output, n);
                 if (!capturing) return RESULT.OK; // setup/release may mix extra blocks; they are not movie frames
                 if (inputChannels == Channels && captured + length <= Samples) {
@@ -385,15 +467,75 @@ internal static class RecordingAudio {
     private delegate RESULT InstanceCall(EventInstance self);
     private delegate RESULT StopCall(EventInstance self, STOP_MODE mode);
     private delegate RESULT SeekCall(EventInstance self, int position);
+    private delegate RESULT FloatCall(EventInstance self, float value);
+    private delegate RESULT PauseCall(EventInstance self, bool paused);
+    private delegate RESULT AttributesCall(EventInstance self, FMOD.Studio._3D_ATTRIBUTES attributes);
+    private delegate RESULT ParameterCall(EventInstance self, string name, float value);
+    private delegate RESULT ParameterIndexCall(EventInstance self, int index, float value);
+    private delegate RESULT ParametersCall(EventInstance self, int[] indices, float[] values, int count);
     private delegate RESULT BusStopCall(Bus self, STOP_MODE mode);
     private delegate RESULT BusPauseCall(Bus self, bool paused);
+    private delegate RESULT BusFloatCall(Bus self, float value);
+    private delegate RESULT VcaFloatCall(VCA self, float value);
+    private static RESULT OnVolume(FloatCall orig, EventInstance self, float value) {
+        RESULT result = orig(self, value);
+        if (result == RESULT.OK) Mirror(m => m.Apply(self, copy => Check(copy.setVolume(value))));
+        return result;
+    }
+    private static RESULT OnPitch(FloatCall orig, EventInstance self, float value) {
+        RESULT result = orig(self, value);
+        if (result == RESULT.OK) Mirror(m => m.Apply(self, copy => Check(copy.setPitch(value))));
+        return result;
+    }
+    private static RESULT OnPause(PauseCall orig, EventInstance self, bool paused) {
+        RESULT result = orig(self, paused);
+        if (result == RESULT.OK) Mirror(m => m.Apply(self, copy => Check(copy.setPaused(paused))));
+        return result;
+    }
+    private static RESULT OnAttributes(AttributesCall orig, EventInstance self, FMOD.Studio._3D_ATTRIBUTES attributes) {
+        RESULT result = orig(self, attributes);
+        if (result == RESULT.OK) Mirror(m => m.Apply(self, copy => Check(copy.set3DAttributes(attributes))));
+        return result;
+    }
+    private static RESULT OnParameter(ParameterCall orig, EventInstance self, string name, float value) {
+        RESULT result = orig(self, name, value);
+        if (result == RESULT.OK) Mirror(m => m.Apply(self, copy => Check(copy.setParameterValue(name, value))));
+        return result;
+    }
+    private static RESULT OnParameterIndex(ParameterIndexCall orig, EventInstance self, int index, float value) {
+        RESULT result = orig(self, index, value);
+        if (result == RESULT.OK) Mirror(m => m.Apply(self, copy => Check(copy.setParameterValueByIndex(index, value))));
+        return result;
+    }
+    private static RESULT OnParameters(ParametersCall orig, EventInstance self, int[] indices, float[] values, int count) {
+        RESULT result = orig(self, indices, values, count);
+        if (result == RESULT.OK) Mirror(m => m.Apply(self, copy => Check(copy.setParameterValuesByIndices(indices, values, count))));
+        return result;
+    }
     private static RESULT OnBusPause(BusPauseCall orig, Bus self, bool paused) {
-        Mirror(m => m.PauseBus(self, paused));
-        return orig(self, paused);
+        RESULT result = orig(self, paused);
+        if (result == RESULT.OK) Mirror(m => m.PauseBus(self, paused));
+        return result;
+    }
+    private static RESULT OnBusVolume(BusFloatCall orig, Bus self, float value) {
+        RESULT result = orig(self, value);
+        if (result == RESULT.OK) Mirror(m => m.BusVolume(self, value));
+        return result;
+    }
+    private static RESULT OnBusMute(BusPauseCall orig, Bus self, bool muted) {
+        RESULT result = orig(self, muted);
+        if (result == RESULT.OK) Mirror(m => m.BusMute(self, muted));
+        return result;
+    }
+    private static RESULT OnVcaVolume(VcaFloatCall orig, VCA self, float value) {
+        RESULT result = orig(self, value);
+        if (result == RESULT.OK) Mirror(m => m.VcaVolume(self, value));
+        return result;
     }
     private static RESULT OnBusStop(BusStopCall orig, Bus self, STOP_MODE mode) {
-        Mirror(m => m.StopBus(self, mode));
-        return orig(self, mode);
+        RESULT result = orig(self, mode);
+        if (result == RESULT.OK) Mirror(m => m.StopBus(self, mode));
+        return result;
     }
     private static RESULT OnStart(InstanceCall orig, EventInstance self) {
         RESULT result = orig(self);
@@ -401,6 +543,7 @@ internal static class RecordingAudio {
         return result;
     }
     private static RESULT OnStop(StopCall orig, EventInstance self, STOP_MODE mode) {
+        // The live clock can have ended a sound during thinking while its recording copy is still playing.
         Mirror(m => m.Stop(self, mode));
         return orig(self, mode);
     }
@@ -409,11 +552,13 @@ internal static class RecordingAudio {
         return orig(self);
     }
     private static RESULT OnCue(InstanceCall orig, EventInstance self) {
-        Mirror(m => m.Cue(self));
-        return orig(self);
+        RESULT result = orig(self);
+        if (result == RESULT.OK) Mirror(m => m.Cue(self));
+        return result;
     }
     private static RESULT OnSeek(SeekCall orig, EventInstance self, int position) {
-        Mirror(m => m.Seek(self, position));
-        return orig(self, position);
+        RESULT result = orig(self, position);
+        if (result == RESULT.OK) Mirror(m => m.Seek(self, position));
+        return result;
     }
 }

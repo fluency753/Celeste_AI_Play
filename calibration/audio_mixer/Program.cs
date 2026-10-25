@@ -6,15 +6,17 @@ var game = args.Length > 0 ? args[0] : Environment.GetEnvironmentVariable("CELES
 NativeLibrary.SetDllImportResolver(typeof(FMOD.System).Assembly, (name,asm,path)=>NativeLibrary.Load(Path.Combine(game,"everest-lib","lib64-win-x64",name.Contains("studio")?"fmodstudio64.dll":"fmod64.dll")));
 void Check(FMOD.RESULT r) { if(r!=FMOD.RESULT.OK)throw new Exception(r.ToString()); }
 Check(FMOD.Studio.System.create(out var live)); live.getLowLevelSystem(out var core);
-Check(core.setOutput(FMOD.OUTPUTTYPE.NOSOUND_NRT)); Check(core.setSoftwareFormat(48000,FMOD.SPEAKERMODE.STEREO,0));Check(core.setDSPBufferSize(800,2));
-Check(live.initialize(256,FMOD.Studio.INITFLAGS.SYNCHRONOUS_UPDATE,FMOD.INITFLAGS.NORMAL,IntPtr.Zero));
-foreach(var f in new[]{"Master Bank.bank","Master Bank.strings.bank","music.bank","ui.bank"})Check(live.loadBankFile(Path.Combine(game,"Content","FMOD","Desktop",f),FMOD.Studio.LOAD_BANK_FLAGS.NORMAL,out var bank));
+bool asyncSource = Environment.GetEnvironmentVariable("ASYNC_SOURCE") == "1";
+Check(core.setOutput(asyncSource ? FMOD.OUTPUTTYPE.NOSOUND : FMOD.OUTPUTTYPE.NOSOUND_NRT)); Check(core.setSoftwareFormat(48000,FMOD.SPEAKERMODE.STEREO,0));Check(core.setDSPBufferSize(800,2));
+Check(live.initialize(256,asyncSource ? FMOD.Studio.INITFLAGS.NORMAL : FMOD.Studio.INITFLAGS.SYNCHRONOUS_UPDATE,FMOD.INITFLAGS.NORMAL,IntPtr.Zero));
+foreach(var f in new[]{"Master Bank.bank","Master Bank.strings.bank","music.bank","sfx.bank","ui.bank"})Check(live.loadBankFile(Path.Combine(game,"Content","FMOD","Desktop",f),FMOD.Studio.LOAD_BANK_FLAGS.NORMAL,out var bank));
 Check(live.getEvent("event:/music/lvl0/intro",out var desc)); Check(desc.createInstance(out var music));Check(music.start());
 // Start recording 5 s into the music (past the quiet intro), like a recording started mid-level. WARM overrides the frame count.
 int warm=int.Parse(Environment.GetEnvironmentVariable("WARM")??"300"); for(int i=0;i<warm;i++)live.update();
 RecordingAudio.Load();
 try {
 RecordingAudio.Start(live,Path.Combine(game,"Content","FMOD","Desktop"),47876);
+if (Environment.GetEnvironmentVariable("LIFECYCLE_ONLY") == "1") { LifecycleChecks.Run(live, music); return; }
 using var map=MemoryMappedFile.OpenExisting(@"Local\CelesteAIRecordAudio-47876"); using var view=map.CreateViewAccessor();
 const int Block=6400, Slot=64+2*Block;
 if(view.ReadInt32(4)!=2||view.ReadInt32(24)!=Slot||view.ReadInt32(28)!=2)throw new Exception("Unexpected shared memory layout");
@@ -91,6 +93,7 @@ if(view.ReadInt64(64+Slot)!=1025)throw new Exception("Ring slot did not commit t
 Check(music.stop(FMOD.Studio.STOP_MODE.IMMEDIATE));RecordingAudio.Advance();
 copy.getPlaybackState(out var stopped); fullCopy.getPlaybackState(out var fullStopped);
 if(stopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED||fullStopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED)throw new Exception("Music stop was not mirrored");
+LifecycleChecks.Run(live, music);
 Console.WriteLine("PASS: PCM on both tracks, independent timelines, replay music on the full track only, one-shots, volume, stop and ring wrap");
 } finally {RecordingAudio.Unload();live.release();}
 if(RecordingAudio.Error!=null)throw new Exception("Mixer shutdown produced a false frame error: "+RecordingAudio.Error);
