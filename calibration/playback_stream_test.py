@@ -61,6 +61,35 @@ class StreamTests(unittest.TestCase):
         self.file.write_bytes(MAGIC+record(3))
         self.assertEqual(tail.read([self.file]),[MAGIC+record(3)])
 
+    def test_long_complete_record_exceeds_fair_share_but_does_not_stall(self):
+        tail = RecordTail(MAGIC, HEADER)
+        points = 16366  # 65537 bytes: one byte above the 128-file window.
+        long_record = HEADER.pack(1.,0,0,points,1,0,0,8,0,*([0]*16)) + b'\0'*(4*(points-1))
+        paths = [self.playback.dir/f'writer-{i}.bin' for i in range(128)]
+        for path in paths:
+            path.write_bytes(MAGIC + record(2))
+        paths[0].write_bytes(MAGIC + long_record[:65536])
+        self.assertEqual(len(tail.read(paths)),127)
+        self.assertEqual(tail.read(paths),[])
+        with paths[0].open('ab') as stream:
+            stream.write(long_record[65536:] + record(3))
+        self.assertEqual(tail.read(paths),[MAGIC + long_record])
+        self.assertEqual(tail.read(paths),[MAGIC + record(3)])
+        self.assertEqual(tail.read(paths),[])
+        self.assertEqual(paths[0].read_bytes(),MAGIC+long_record+record(3))
+
+    def test_oversize_record_is_reported_and_does_not_block_following_record(self):
+        tail = RecordTail(MAGIC, HEADER)
+        skipped = []
+        points = 16366
+        long_record = HEADER.pack(1.,0,0,points,1,0,0,8,0,*([0]*16)) + b'\0'*(4*(points-1))
+        self.file.write_bytes(MAGIC + long_record + record(3))
+        self.assertEqual(tail.read([self.file],budget=65536,on_skip=skipped.append),[])
+        self.assertEqual(len(skipped),1)
+        self.assertIn('65537',skipped[0])
+        self.assertEqual(tail.read([self.file],budget=65536,on_skip=skipped.append),[MAGIC+record(3)])
+        self.assertEqual(len(skipped),1)
+
     def test_previews_arrive_before_result_and_account_only_once(self):
         self.start()
         self.file.write_bytes(MAGIC+record(1))

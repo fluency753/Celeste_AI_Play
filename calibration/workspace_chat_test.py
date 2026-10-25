@@ -50,3 +50,22 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, '命名'):
                 await chat(Path('unused'), name_request='name', allow_programs=True, sim=True)
             container.assert_not_called()
+
+    async def test_host_program_access_is_rejected_before_any_external_side_effect(self):
+        for engine in ('codex', 'claude'):
+            for sim in (False, True):
+                with self.subTest(engine=engine, sim=sim), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    state = {'agent':'test', 'save':'test', 'model':'model', 'effort':'medium',
+                             'engine':engine, 'runtime':'host', 'session_id':'original'}
+                    (root/'run_state.json').write_text(json.dumps(state))
+                    (root/'summary.json').write_text('{"completed":true}')
+                    Metrics(root/'metrics.json', 'test', 'model', 'medium', 600)
+                    with patch('orchestrator.chat.ensure_container') as container, \
+                         patch('orchestrator.chat.host_runner') as host, \
+                         patch('orchestrator.runtimes.Runtime.token') as token:
+                        with self.assertRaisesRegex(ValueError, 'container.*host'):
+                            await chat(root, allow_programs=True, sim=sim)
+                    container.assert_not_called()
+                    host.assert_not_called()
+                    token.assert_not_called()

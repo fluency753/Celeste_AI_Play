@@ -7,6 +7,15 @@ void Check(bool value, string label) { if (!value) throw new Exception(label); }
 MInput.Initialize();
 MInput.Active=true; MInput.Disabled=false;
 MInput.ControllerHasFocus=true; MInput.GamePads[0].Attached=true;
+var entry = new MapEntryGuard("Celeste/1-ForsakenCity", 10);
+foreach (string key in new[] {"J", "O"})
+    Check(entry.Check(InputFrame.ParseTas(key), "Celeste/2-OldSite", 10) != null, $"TAS {key} entered wrong map");
+Check(entry.Check(InputFrame.Parse("C"), "Celeste/2-OldSite", 10) != null, "Native confirm entered wrong map");
+Check(entry.Check(InputFrame.Parse("C"), "Celeste/1-ForsakenCity", 11) != null, "Wrong save slot entered map");
+foreach (string key in new[] {"L", "R", "U", "D", "B", ""})
+    Check(entry.Check(InputFrame.Parse(key), "Celeste/2-OldSite", 10) == null, $"Navigation {key} blocked");
+Check(entry.Check(InputFrame.ParseTas("J"), "Celeste/1-ForsakenCity", 10) == null, "Right map confirmation blocked");
+Check(new MapEntryGuard(null,10).Check(InputFrame.Parse("C"), "Celeste/2-OldSite",10) == null, "Unrestricted map blocked");
 var settings=(Settings)RuntimeHelpers.GetUninitializedObject(typeof(Settings));
 InputInjector.ConfigureBindings(settings);
 var jump=new VirtualButton(settings.Jump,0,0,0.2f);

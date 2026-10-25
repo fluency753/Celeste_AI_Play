@@ -412,7 +412,7 @@ class Playback:
     def _queue_preview(self, mid, msg):
         if not self.enabled or not msg.program or getattr(self.cfg, 'playback_stream_interval_s', 1) <= 0:
             return
-        sources = msg.tail.read(sorted(self.dir.glob('*.bin')))
+        sources = msg.tail.read(sorted(self.dir.glob('*.bin')), on_skip=self.log)
         if not sources:
             return
         previous = self._live_pending.get(mid)

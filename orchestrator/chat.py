@@ -45,6 +45,8 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False):
         raise ValueError('自动取名仅用于准备完成、尚未开始的新试玩')
     previous = json.loads((directory / "metrics.json").read_text(encoding="utf-8"))
     cfg = config_from_state(state, previous)
+    if allow_programs and cfg.runtime != 'container':
+        raise ValueError('工作区程序和离线模拟器需要 container 运行方式；host 会话仅支持聊天，请使用容器会话')
     # 与原运行相同的游玩模式与可调参数（提示词按模式生成；探索模式的程序时长等跟原运行一致）
     from .modes import MODE_OF_KNOWLEDGE
     from .tuning import apply

@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.0.21";
+    public const string Version = "1.0.22";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -100,6 +100,10 @@ internal static class Bridge {
                 job.LoadingFrames++;
                 continue;
             }
+            if (!job.AllowNextInput()) {
+                FinishJob();
+                break;
+            }
             AdvanceFrame(runOriginal, job.NextInput());
             job.AfterFrame(Frame);
             if (job.Finished) {
@@ -129,6 +133,7 @@ internal static class Bridge {
     public static bool DrawFrameMarker;
 
     private static void LockstepTick(Action runOriginal) {
+        if (job != null && !job.AllowNextInput()) FinishJob();
         bool wantsFrame = job != null || AdvanceWhenIdle || Playback.Running;
         // 没有要推进的帧时也要及时回复令牌；等待令牌的同时限制空转的循环频率
         if (!ClockServer.TryTakeToken(wantsFrame ? 6 : 3, out long token)) {
@@ -456,6 +461,7 @@ internal static class Bridge {
                     w.WriteBoolean("checkpoints", true);
                     w.WriteBoolean("load_room_modes", true);
                     w.WriteBoolean("stop_rooms", true);
+                    w.WriteBoolean("entry_guard", true);
                     w.WriteBoolean("dialog_choices", true);
                     w.WriteBoolean("story_text", true);
                     w.WriteBoolean("memorial_text", true);
@@ -869,6 +875,12 @@ internal static class Bridge {
             ? sr.EnumerateArray().Select(e => e.GetString() ?? "").Where(x => x.Length > 0).ToList()
             : new List<string>();
 
+        MapEntryGuard? entryGuard = null;
+        if (a.TryGetProperty("entry_guard", out JsonElement guard) && guard.ValueKind == JsonValueKind.Object) {
+            string? sid = guard.TryGetProperty("sid", out JsonElement gsid) && gsid.ValueKind == JsonValueKind.String ? gsid.GetString() : null;
+            int? slot = guard.TryGetProperty("slot", out JsonElement gslot) && gslot.ValueKind == JsonValueKind.Number ? gslot.GetInt32() : null;
+            entryGuard = new MapEntryGuard(sid, slot);
+        }
         Playback.EndOverlay(); // 校验通过后才清理规划回放
         job = new StepJob(
             id, plan, stopOn,
@@ -881,7 +893,7 @@ internal static class Bridge {
             expect: expect,
             tolerance: tolerance,
             progressEvery: GetInt(a, "progress", 0),
-            stopRooms: stopRooms, inputFormat: inputFormat);
+            stopRooms: stopRooms, inputFormat: inputFormat, entryGuard: entryGuard);
 
         if (job.Finished) {
             FinishJob(); // 空计划：直接回报当前帧

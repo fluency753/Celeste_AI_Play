@@ -30,6 +30,7 @@ internal sealed class StepJob {
     private readonly List<InputFrame> plan;
     private readonly HashSet<string> stopOn;
     private readonly HashSet<string> stopRooms;
+    private readonly MapEntryGuard? entryGuard;
     private readonly bool recordTrajectory;
     private readonly ArrayBufferWriter<byte> trajectoryBuffer = new();
     private readonly Utf8JsonWriter trajectory;
@@ -59,9 +60,10 @@ internal sealed class StepJob {
     public StepJob(long requestId, List<InputFrame> plan, IEnumerable<string> stopOn, int framesPerTick,
         bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false,
         List<ExpectRow?>? expect = null, float tolerance = 1f, int progressEvery = 0, IEnumerable<string>? stopRooms = null,
-        string inputFormat = "celeste_ai") {
+        string inputFormat = "celeste_ai", MapEntryGuard? entryGuard = null) {
         RequestId = requestId;
         InputFormat = inputFormat;
+        this.entryGuard = entryGuard;
         this.progressEvery = Math.Max(0, progressEvery);
         this.expect = expect is { Count: > 0 } ? expect : null;
         this.tolerance = tolerance;
@@ -111,6 +113,18 @@ internal sealed class StepJob {
     }
 
     public InputFrame NextInput() => plan[index++];
+
+    public bool AllowNextInput() {
+        if (entryGuard != null && Engine.Scene is Overworld { Current: OuiChapterPanel panel }) {
+            string? reason = entryGuard.Check(plan[index], panel.Area.SID, SaveData.Instance?.FileSlot);
+            if (reason != null) {
+                StopReason = "entry_blocked";
+                events.Add((Bridge.Frame, "entry_blocked", reason));
+                return false;
+            }
+        }
+        return true;
+    }
 
     public void AfterFrame(long frame) {
         Level? level = Engine.Scene as Level;

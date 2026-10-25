@@ -232,6 +232,8 @@ class GameSession:
 
     def connect(self) -> dict:
         self.client = BridgeClient(port=self.cfg.bridge_port, timeout=600)
+        self.entry_guard_supported = self.client.call('hello').get('entry_guard') is True
+        self.client.step_options = self._step_options
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
         reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music)
         obs = reply["obs"]
@@ -251,6 +253,10 @@ class GameSession:
         slot = (obs.get('save') or {}).get('slot')
         if self.cfg.save_slot is not None and slot != self.cfg.save_slot:
             raise RuntimeError(f'当前存档槽位 {slot} 与指定槽位 {self.cfg.save_slot} 不一致')
+        if obs.get('scene') == 'Level' and not self.chapter_finished and self.piece is not None:
+            sid = (obs.get('level') or {}).get('sid')
+            if sid != CHAPTER_SIDS.get(self.piece.chapter):
+                raise RuntimeError(f'当前地图 {sid} 与指定章节不一致，请自行返回选章地图重新选择')
         self._pending_complete |= bool((obs.get('level') or {}).get('completed'))
         if self.piece is None and not self.chapter_finished:        # 没指定章节（进入选章页当前选中的章节）：按游戏里的章节整章玩
             chapter = next((i for i, s in CHAPTER_SIDS.items() if s == (obs.get('level') or {}).get('sid')), None)
@@ -274,6 +280,16 @@ class GameSession:
         if self._pending_complete:
             self._persist_completion_pending()
         return obs
+
+    def _step_options(self):
+        piece = (Piece.of(self.chapter_queue[0]) if self.chapter_finished and self.chapter_queue
+                 else self.piece)
+        chapter = piece.chapter if piece else self.cfg.chapter
+        if chapter is None and self.cfg.save_slot is None:
+            return {}
+        if not self.entry_guard_supported:
+            raise ActError('进入地图的目标核验需要桥接 1.0.22，请更新桥接后继续；未发送输入')
+        return {'entry_guard':{'sid':CHAPTER_SIDS.get(chapter), 'slot':self.cfg.save_slot}}
 
     def close(self, release: bool = True) -> None:
         """试玩结束交还控制；release=False 仅供明确需要保留接管的内部调试使用。"""
@@ -697,7 +713,7 @@ class GameSession:
                              decisions=1 if attempt == 0 else 0)
 
             auto_frames, notes = 0, list(resumed)
-            if plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
+            if result['stop'] != 'entry_blocked' and plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
                     or story_pending(obs)):
                 obs, image, auto_frames, notes = self._auto_advance(obs, image)
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
@@ -705,6 +721,10 @@ class GameSession:
                 notes.extend(more)
             self.goals.check(self.goal_values(obs))
             self._write_sim_state()
+
+            if result['stop'] == 'entry_blocked':
+                notes.extend(e.get('detail','地图选择与任务不符，请自行重新选择')
+                             for e in result.get('events',[]) if e.get('type') == 'entry_blocked')
 
         self.metrics.update(last_stop=result["stop"])
         obs = self._track_motion(obs)

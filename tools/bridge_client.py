@@ -30,6 +30,7 @@ class BridgeClient:
         self.file = self.sock.makefile("rwb")
         self.next_id = 1
         self.cancel_check = None
+        self.step_options = None
         self._cancel_sent = False
 
     def close(self) -> None:
@@ -42,6 +43,10 @@ class BridgeClient:
         """发送一条指令并等待它的回复。执行中桥接推送的事件（{"event": …}，例如 step 的 progress）交给 on_event。"""
         if cmd == "step" and self.cancel_check is not None and self.cancel_check():
             raise InterruptedError("用户停止请求已生效，不再推进游戏")
+        if cmd == 'step' and self.step_options is not None:
+            # Session-owned constraints apply to every caller, including menu
+            # helpers and retries, rather than only the public act tool.
+            args.update(self.step_options())
         req_id = self.next_id
         self._cancel_sent = False
         if cmd == "step" and self.cancel_check is not None:

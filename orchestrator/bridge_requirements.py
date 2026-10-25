@@ -4,9 +4,9 @@ import re
 
 def validate_bridge(hello):
     match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)', str(hello.get('bridge', '')))
-    if (not match or tuple(map(int, match.groups())) < (0, 12, 4)
-            or not all(hello.get(key) for key in ('create_save', 'dialog_choices', 'story_text'))):
-        raise RuntimeError('需要 CelesteAIBridge 0.12.4 或更新版本，包含存档创建、剧情文字和对话选项接口；请更新桥接 Mod。')
+    if (not match or tuple(map(int, match.groups())) < (1, 0, 22)
+            or not all(hello.get(key) for key in ('create_save', 'dialog_choices', 'story_text', 'entry_guard'))):
+        raise RuntimeError('需要 CelesteAIBridge 1.0.22 或更新版本，包含逐帧地图进入核验；请更新桥接 Mod。')
 
 
 def preflight_bridge(port):

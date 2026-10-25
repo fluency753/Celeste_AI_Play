@@ -250,10 +250,10 @@ class CommonContracts(unittest.TestCase):
         self.assertNotIn('PRIVATE', json.dumps(value))
 
     def test_minimum_bridge_is_explicit(self):
-        valid = {'bridge': '0.12.4', 'create_save': True, 'dialog_choices': True, 'story_text': True}
+        valid = {'bridge': '1.0.22', 'create_save': True, 'dialog_choices': True, 'story_text': True, 'entry_guard': True}
         validate_bridge(valid)
-        for change in ({'bridge': '0.12.3'}, {'story_text': False}, {'bridge': ''}):
-            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, '0.12.4'):
+        for change in ({'bridge': '1.0.21'}, {'entry_guard':False}, {'story_text': False}, {'bridge': ''}):
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, '1.0.22'):
                 validate_bridge({**valid, **change})
 
 

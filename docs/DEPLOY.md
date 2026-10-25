@@ -176,7 +176,7 @@ winget install Microsoft.DotNet.SDK.8
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本编译 `game-bridge\`，把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前版本 1.0.10）。主控开局前会检查桥接版本，低于 0.12.4 时拒绝开始；MOD 形式的 HUD 需要 0.13.0，录像的两条音轨需要 0.12.7 起。
+Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本编译 `game-bridge\`，把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前版本 1.0.22）。主控开局前要求桥接至少 1.0.22 且支持逐帧地图进入核验，不满足时在录制、选档前拒绝开始。
 
 冒烟测试（游戏停在标题画面即可）：
 
@@ -412,7 +412,7 @@ winget install Gyan.FFmpeg
 | `python -m orchestrator.replay <运行目录>` | 不调用模型，按记录重放一次运行的决策 | `--save`、`--chapter` |
 | `python -m orchestrator.preparation` | 只准备会话（读知识库、建会话，不连游戏） | `--engine`、`--provider`、`--agent`、`--knowledge`、`--model`、`--effort` |
 | `python -m orchestrator.chat --run <运行目录>` | 运行结束后接着和同一个会话聊天（不连游戏） | — |
-| `python -m orchestrator.chat --run <运行目录> --allow-programs` | 整理工作区：同上，Codex／Claude 均可在零网络沙箱里用 Bash 修改、运行自己写的程序，游戏工具仍关闭 | `--sim`：挂载只读模拟器，用保存快照离线验证；须同时开启 `--allow-programs` |
+| `python -m orchestrator.chat --run <运行目录> --allow-programs` | 整理工作区：同上，container 方式的 Codex／Claude 均可在零网络沙箱里用 Bash 修改、运行自己写的程序，游戏工具仍关闭；host 旧会话不支持此开关，会在启动前报错 | `--sim`：挂载只读模拟器，用保存快照离线验证；须同时开启 `--allow-programs` |
 | `python -m orchestrator.background -- <主控参数>` | 用独立后台宿主启动主控 | — |
 | `python -m overlay.server` / `python -m overlay.window` | 单独启动 HUD 服务（默认跟随 `runs\latest.txt` 指向的运行）/ HUD 窗口 | `--port`、`--run`；`--url` |
 | `python -m overlay.console` | 控制台（5.3 节） | `--port`、`--browser`、`--restart-service` |
