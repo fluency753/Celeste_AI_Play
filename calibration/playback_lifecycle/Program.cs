@@ -34,3 +34,49 @@ Playback.Finish();
 Playback.EndOverlay();
 Check(Count("Tracks")==0 && Count("History")==0 && !(bool)Field("overlay"),"Real execution did not clear held routes");
 Console.WriteLine("PASS: real playback lifecycle retains completed color, freezes idle, rejects empty rounds without mutation, promotes on new drawing, clears on real execution/reset");
+
+// 在真实 EntityList.RenderExcept 上安装同一IL接线，只把绘制替换成顺序日志，不建立GPU。
+var trace=new List<string>();
+var queue=new RenderDepthQueue<string>();
+var scene=(Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene));
+var entityList=new EntityList(scene);
+void Add(string name, double depth, bool visible=true, int tag=0) {
+    var entity=new TraceEntity(name,trace) {Visible=visible,Tag=tag};
+    entity.actualDepth=depth;
+    entityList.entities.Add(entity);
+}
+Add("background",0);
+Add("hidden-spinner",-8500,false);
+Add("terrain",-10000);
+Add("excluded-hud",-11000,true,1);
+queue.Add(-8498,"border");queue.Add(-8499,"connector");queue.Add(-8500,"body");queue.Sort();
+bool injected=false;
+using(var hook=new MonoMod.RuntimeDetour.ILHook(typeof(EntityList).GetMethod(nameof(EntityList.RenderExcept))!,il => {
+    injected=EntityRenderDepthHook.Inject(il,
+        (entity,list,tags) => { if(ReferenceEquals(list,entityList)) queue.Before(entity.actualDepth,trace.Add); },
+        (list,tags) => { if(ReferenceEquals(list,entityList)) queue.Finish(trace.Add); });
+})) {
+    Check(injected,"Native RenderExcept depth boundary was not found");
+    entityList.RenderExcept(1);
+    Check(string.Join(",",trace)=="background,border,connector,body,terrain","Proxy depth or native visibility/tag behavior changed: "+string.Join(",",trace));
+    Check(entityList.entities.Count==4 && entityList.ToAdd.Count==0 && !entityList.entities[1].Visible,
+          "Depth pass mutated native entities or pending queues");
+    trace.Clear();queue.Clear();queue.Add(-20000,"last-depth");queue.Sort();
+    entityList.RenderExcept(1);
+    Check(trace[^1]=="last-depth","Last supplemental depth did not flush inside native render pass");
+    trace.Clear();queue.Clear();
+    entityList.RenderExcept(1);
+    Check(string.Join(",",trace)=="background,terrain","Empty supplemental pass changed normal rendering");
+    trace.Clear();queue.Clear();queue.Add(-20000,"empty-list-finish");queue.Sort();
+    var unrelated=new EntityList(scene);
+    unrelated.RenderExcept(1);
+    Check(trace.Count==0,"Unrelated entity list consumed the supplemental pass");
+    entityList.entities.Clear();
+    entityList.RenderExcept(1);
+    Check(string.Join(",",trace)=="empty-list-finish","Empty native list skipped supplemental finish");
+}
+Console.WriteLine("PASS: native EntityList IL depth insertion preserves visibility, tags, foreground occlusion, end flush and entity ownership");
+
+class TraceEntity(string name,List<string> trace) : Entity {
+    public override void Render() => trace.Add(name);
+}

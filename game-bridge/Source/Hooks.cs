@@ -31,6 +31,7 @@ internal static class Hooks {
         On.Monocle.MInput.Update += OnMInputUpdate;
         On.Celeste.Celeste.RenderCore += OnRenderCore;
         On.Celeste.GameplayRenderer.Render += OnGameplayRender;
+        IL.Monocle.EntityList.RenderExcept += ILEntityRenderExcept;
         On.Celeste.RunThread.Start += OnRunThreadStart;
     }
 
@@ -42,6 +43,7 @@ internal static class Hooks {
         On.Monocle.MInput.Update -= OnMInputUpdate;
         On.Celeste.Celeste.RenderCore -= OnRenderCore;
         On.Celeste.GameplayRenderer.Render -= OnGameplayRender;
+        IL.Monocle.EntityList.RenderExcept -= ILEntityRenderExcept;
         On.Celeste.RunThread.Start -= OnRunThreadStart;
     }
 
@@ -100,8 +102,18 @@ internal static class Hooks {
     }
 
     private static void OnGameplayRender(On.Celeste.GameplayRenderer.orig_Render orig, GameplayRenderer self, Scene scene) {
-        orig(self, scene);
+        try {
+            if (Playback.ShowSpinnerVisuals && scene is Level level) PlaybackSpinners.BeginPass(level);
+            orig(self, scene);
+        } finally {
+            PlaybackSpinners.EndPassScope();
+        }
         Playback.DrawWorld(self.Camera);
+    }
+
+    private static void ILEntityRenderExcept(ILContext il) {
+        if (!EntityRenderDepthHook.Inject(il, PlaybackSpinners.BeforeEntity, PlaybackSpinners.FinishPass))
+            Log.Error("spinner depth render hook unavailable; visual proxies disabled rather than drawn above gameplay");
     }
 
     /// <summary>录制校准：在窗口左下角画 16 格黑白条码，表示当前帧号的低 16 位（每格 12×12 像素，外加白框）。</summary>

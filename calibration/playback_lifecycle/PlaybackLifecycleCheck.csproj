@@ -2,15 +2,19 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);CS0436</NoWarn>
     <CelestePrefix Condition="'$(CelestePrefix)' == ''">$(CELESTE_DIR)</CelestePrefix>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="$(CelestePrefix)/Celeste.dll" Publicize="true" />
     <Reference Include="$(CelestePrefix)/FNA.dll" Publicize="true" />
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.1" />
     <Compile Include="../../game-bridge/Source/Playback.cs" Link="Playback.cs" />
     <Compile Include="../../game-bridge/Source/PlaybackSpinners.cs" Link="PlaybackSpinners.cs" />
     <Compile Include="../../game-bridge/Source/PlaybackDensity.cs" Link="PlaybackDensity.cs" />
     <Compile Include="../../game-bridge/Source/PlaybackTrailClock.cs" Link="PlaybackTrailClock.cs" />
+    <Compile Include="../../game-bridge/Source/RenderDepthQueue.cs" Link="RenderDepthQueue.cs" />
+    <Compile Include="../../game-bridge/Source/EntityRenderDepthHook.cs" Link="EntityRenderDepthHook.cs" />
   </ItemGroup>
 </Project>

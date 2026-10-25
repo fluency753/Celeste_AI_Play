@@ -260,6 +260,7 @@ internal static class Playback {
     // ---- 渲染 ----
 
     private static bool Showing => (running || overlay) && camValid && !Bridge.CapturePending;
+    internal static bool ShowSpinnerVisuals => Showing && !(running && Engine.Scene is Level { Wipe.WipeIn: true });
 
     /// <summary>Celeste.RenderCore 之前：换上回放镜头与单独的随机数（回放进行中与两轮之间；观测截图的那一帧除外）。</summary>
     public static void BeforeRender() {
@@ -302,7 +303,6 @@ internal static class Playback {
         Draw.SpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp,
             DepthStencilState.None, RasterizerState.CullNone, null, camera.Matrix);
         try {
-            if (Showing && Engine.Scene is Level level) PlaybackSpinners.DrawMissing(level);
             if (drawOverlay) {
                 if (layersReady && historyDrawn == History.Count) {
                     if (History.Count > 0) Draw.SpriteBatch.Draw(historyRt, new Vector2(area.X, area.Y), Color.White);
