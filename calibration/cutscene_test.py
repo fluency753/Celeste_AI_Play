@@ -201,6 +201,10 @@ class CutsceneTests(unittest.TestCase):
                 self.assertIn('由你操作',notes[0])
         self.assertEqual(self.s.client.steps,[])
 
+    def test_initial_map_navigation_is_not_reported_as_ending(self):
+        _,_,frames,notes=self.s._auto_advance({'scene':'Overworld','menu':{'current':'OuiChapterSelect'}},None)
+        self.assertEqual(frames,0);self.assertNotIn('结算',notes[0]);self.assertIn('自行导航',notes[0])
+
     def test_agent_completed_flag_does_not_truncate_later_result_inputs(self):
         self.s._pending_complete=True
         self.s.last_obs={'scene':'Level','level':{'completed':True,'frozen':True}}

@@ -820,7 +820,8 @@ class GameSession:
             self._commit_completion(obs)
             if self.done or self.chapter_finished:break
             if self.cfg.cutscene_mode == 'agent' and (self._pending_complete or scene in END_SCENES) and not story_pending(obs):
-                notes.append('结尾或结算由你操作：观察当前界面，用 act 发送确认 C、返回 B 或所需的空帧；回到选章地图才算完成。')
+                notes.append('结尾或结算由你操作：观察当前界面，用 act 发送确认 C、返回 B 或所需的空帧；回到选章地图才算完成。'
+                             if self._pending_complete else '当前菜单或转场由你输入操作，按本次目标自行导航；主控不代选。')
                 break
             if scene in END_SCENES:
                 self._mark_done(f"离开关卡（{scene}）")
