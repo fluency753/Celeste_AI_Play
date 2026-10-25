@@ -82,7 +82,7 @@ class SessionControls:
         return None
 
     def _agent_pause(self, reason):
-        """智能体用 stop_run 报告任务阻塞（在工具线程里调用）：与用户在 HUD 暂停相同，试玩暂停、游戏保持冻结，
+        """智能体用 stop_run 报告任务阻塞（在工具线程里调用）：与用户在 HUD 暂停相同，试玩暂停、章节内保持冻结，菜单正常运行，
         由用户在 HUD 继续或停止；只是不打断当前轮（工具结果已让智能体结束本轮）。"""
         if getattr(self, 'prepare_only', False) or self.chat_only:
             return False
@@ -154,12 +154,12 @@ class SessionControls:
                                 raise ValueError("当前执行器不支持中断后续跑，请用“停止并保存”")
                             if self.chat_only or self.session is None or self.session.done:
                                 raise ValueError("当前没有在试玩")
-                            self.stop_reason = "用户中断（游戏保持冻结，可续跑）"
+                            self.stop_reason = "用户中断（章节内保持冻结，菜单正常运行，可续跑）"
                             self.stop_requested = True
                             await self._interrupt_user()
                             async with self.action_lock:   # 正在执行的动作先走完，游戏停在动作之间
                                 pass
-                            self.control.mark(row["id"], "submitted", "正在结束本次运行，游戏保持冻结")
+                            self.control.mark(row["id"], "submitted", "正在结束本次运行，章节内保持冻结，菜单正常运行")
                         elif row["kind"] == "detach":
                             if not self.chat_only:
                                 raise ValueError("试玩期间不能切走会话")

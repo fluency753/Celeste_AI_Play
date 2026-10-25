@@ -93,6 +93,8 @@ class ConsoleRunsTests(unittest.TestCase):
                 rows = console_api.runs()
                 self.assertEqual([r["stamp"] for r in rows], ["20261024-180000", "20261024-140048"])
                 self.assertEqual([r["resumable"] for r in rows], [True, False])
+                with patch.object(console_api, "game_status", return_value={"running": True, "active": True, "frozen": False}):
+                    self.assertFalse(any(r['resumable'] for r in console_api.runs()))
                 with patch.object(console_api, "orchestrator_status", return_value={"running": True}):
                     with self.assertRaisesRegex(ValueError, "已有主控"):
                         console_api.start(options())

@@ -134,3 +134,26 @@ Check("postcard",StoryText.InputNode(enter)!);
 card.alpha=.5f;
 Check("",StoryText.InputNode(enter) ?? "");
 Console.WriteLine("PASS: player control during cutscenes and real dialogue/tutorial input nodes");
+
+// Menus must keep animating and accept physical input; chapter results stay frozen.
+foreach (Type type in new[] { typeof(Level), typeof(AreaComplete), typeof(IntroVignette), typeof(LevelEnter) }) {
+    var scene=(Monocle.Scene)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type);
+    if (!SceneControl.FreezeWhenIdle(scene) || !SceneControl.OwnInput(true,scene,false)) throw new Exception("Chapter scene released: "+type.Name);
+    if (SceneControl.OwnInput(false,scene,true)) throw new Exception("Inactive bridge captured input");
+}
+foreach (Type type in new[] { typeof(Overworld), typeof(LevelLoader), typeof(LevelExit), typeof(GameLoader), typeof(OverworldLoader), typeof(Monocle.Scene) }) {
+    var scene=(Monocle.Scene)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type);
+    if (SceneControl.FreezeWhenIdle(scene) || SceneControl.OwnInput(true,scene,false)) throw new Exception("Idle menu captured: "+type.Name);
+    if (!SceneControl.OwnInput(true,scene,true)) throw new Exception("Explicit menu step lost input");
+}
+Console.WriteLine("PASS: menus run freely, explicit steps own input, chapter/story/results remain controlled");
+
+// If a freely running menu swaps to a chapter scene inside Engine.Update,
+// stop at the frame gate before that chapter consumes menu input.
+if (SceneControl.HaltEngine(true,false,true,(Monocle.Scene)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Monocle.Scene)))) throw new Exception("Free menu halted");
+if (!SceneControl.HaltEngine(true,false,true,level)) throw new Exception("Menu-to-level boundary advanced");
+var results=(AreaComplete)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AreaComplete));
+if (!SceneControl.HaltEngine(true,false,true,results)) throw new Exception("Results boundary advanced");
+if (SceneControl.HaltEngine(true,false,false,level)) throw new Exception("Explicit chapter step halted");
+if (SceneControl.HaltEngine(false,true,true,level)) throw new Exception("Inactive bridge halted engine");
+Console.WriteLine("PASS: free-running transitions stop before chapter/results updates");

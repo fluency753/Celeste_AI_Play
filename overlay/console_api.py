@@ -436,7 +436,7 @@ def runs(limit: int = 40) -> list[dict]:
     found.sort(key=lambda d: d.name, reverse=True)
     latest = latest_run()
     game = game_status()
-    frozen_now = bool(game.get("running") and game.get("active"))   # 游戏此刻仍被接管、冻结着
+    frozen_now = bool(game.get("running") and game.get("frozen", game.get("active")))   # 菜单中的连接不算冻结
     rows = []
     for directory in found[:limit]:
         state = _read_json(directory / "run_state.json")

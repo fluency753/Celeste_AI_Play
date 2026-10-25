@@ -884,7 +884,7 @@ class GameSession:
             return obs,reply.get('image'),info
 
     def stop_run(self, reason: str) -> dict:
-        """智能体报告任务阻塞：不算通关、不操作游戏，主控把试玩暂停（游戏保持冻结），等用户处理后继续或停止。
+        """智能体报告任务阻塞：不算通关、不操作游戏，主控把试玩暂停（章节内保持冻结，菜单正常运行），等用户处理后继续或停止。
         暂停由 HUD 控制器提供（request_pause）；没有控制器时（例如测试）只记下报告。"""
         reason = " ".join((reason or "").split())
         if not reason:

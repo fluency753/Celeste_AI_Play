@@ -17,36 +17,41 @@ namespace CelesteAI.Bridge;
 
 /// <summary>
 /// 桥接的核心状态机，全部在游戏主线程上运行。
-/// 未接管：游戏照常运行。接管后默认冻结在当前帧；收到 step 才按节拍逐帧推进，
-/// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
+/// 未接管：游戏照常运行。接管后仅章节流程空闲时冻结；菜单空闲时正常运行，收到 step 时执行指定输入，
+/// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.0.6";
+    public const string Version = "1.0.7";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
+    public static bool Frozen => Active && SceneControl.FreezeWhenIdle(Engine.Scene) && job == null && !IsLoading();
+    public static bool OwnsInput => SceneControl.OwnInput(Active, Engine.Scene, job != null);
+    private static bool AdvanceWhenIdle => !SceneControl.FreezeWhenIdle(Engine.Scene) || IsLoading();
     public static bool FeedInputThisFrame { get; private set; }
     public static InputFrame CurrentInput { get; private set; } = InputFrame.Neutral;
 
-    /// <summary>接管以来推进过的总帧数（含加载帧）。</summary>
+    /// <summary>接管以来推进过的总帧数（含空闲菜单和加载帧）。</summary>
     public static long Frame { get; private set; }
 
     private static bool engineHalted = true;
+    private static bool freeFrame;
     private static StepJob? job;
     private static readonly ConcurrentQueue<Request> Inbox = new();
     private static readonly List<RenderReply> PendingRenders = new();
 
     private sealed record RenderReply(long Id, Action<Utf8JsonWriter> Body, string Buffer);
 
-    public static bool ShouldHaltEngineUpdate() => Active && engineHalted;
+    public static bool ShouldHaltEngineUpdate() => SceneControl.HaltEngine(Active, engineHalted, freeFrame, Engine.Scene);
 
     public static void Enqueue(Request request) => Inbox.Enqueue(request);
 
     // ---- 每个节拍的入口 ----
 
     public static void Tick(Action runOriginal) {
-        ModHud.ReportStatus(Active, lockstepEngaged, Frame, ClockServer.Connected, RecordingAudio.Enabled);
+        ModHud.ReportStatus(Active, lockstepEngaged, Frame, ClockServer.Connected, RecordingAudio.Enabled, Frozen, OwnsInput);
         DrainInbox();
+        SyncInputOwnership();
         FlushPendingAck();
         UpdateLoopMode();
 
@@ -73,8 +78,8 @@ internal static class Bridge {
 
     private static void NormalTick(Action runOriginal) {
         if (job == null) {
-            if (IsLoading()) {
-                AdvanceFrame(runOriginal, InputFrame.Neutral);
+            if (AdvanceWhenIdle) {
+                AdvanceFrame(runOriginal, InputFrame.Neutral, feedInput: OwnsInput);
             } else {
                 Halt(runOriginal);
                 // 规划回放：游戏不推进，这个节拍照常重画（回放镜头与路线在渲染钩子里画）
@@ -124,7 +129,7 @@ internal static class Bridge {
     public static bool DrawFrameMarker;
 
     private static void LockstepTick(Action runOriginal) {
-        bool wantsFrame = job != null || IsLoading() || Playback.Running;
+        bool wantsFrame = job != null || AdvanceWhenIdle || Playback.Running;
         // 没有要推进的帧时也要及时回复令牌；等待令牌的同时限制空转的循环频率
         if (!ClockServer.TryTakeToken(wantsFrame ? 6 : 3, out long token)) {
             HaltWithoutDrawing(runOriginal);
@@ -163,12 +168,14 @@ internal static class Bridge {
         if (IsLoading()) {
             AdvanceFrame(runOriginal, InputFrame.Neutral);
             if (job != null) job.LoadingFrames++;
-        } else {
-            AdvanceFrame(runOriginal, job!.NextInput());
+        } else if (job != null) {
+            AdvanceFrame(runOriginal, job.NextInput());
             job.AfterFrame(Frame);
             if (job.Finished) {
                 FinishJob();
             }
+        } else {
+            AdvanceFrame(runOriginal, InputFrame.Neutral, feedInput: OwnsInput);
         }
         pendingAck = token; // 这一帧画到屏幕上之后（EndDraw）再回复，OBS 下一次渲染就能采到它
     }
@@ -346,23 +353,33 @@ internal static class Bridge {
         runOriginal(); // Engine.Update 会在 MInput.Update 之后直接返回
     }
 
-    private static void AdvanceFrame(Action runOriginal, InputFrame input) {
+    private static void SyncInputOwnership() {
+        if (OwnsInput) InputInjector.Install();
+        else InputInjector.Uninstall();
+    }
+
+    private static void AdvanceFrame(Action runOriginal, InputFrame input, bool feedInput = true) {
+        SyncInputOwnership();
         engineHalted = false;
-        FeedInputThisFrame = true;
+        freeFrame = !OwnsInput;
+        FeedInputThisFrame = feedInput;
         CurrentInput = input;
         try {
             runOriginal();
             RecordingAudio.Advance();
         } finally {
             engineHalted = true;
+            freeFrame = false;
             FeedInputThisFrame = false;
             Frame++;
+            SyncInputOwnership();
         }
     }
 
     private static void FinishJob() {
         StepJob finished = job!;
         job = null;
+        SyncInputOwnership();
         byte[] result = Reply.Object(finished.WriteResult);
         byte[] obs = Reply.Object(w => StateExtractor.WriteSnapshot(w, finished.Snapshot));
         void Body(Utf8JsonWriter w) {
@@ -419,6 +436,9 @@ internal static class Bridge {
                     w.WriteString("bridge", Version);
                     w.WriteString("everest", Everest.VersionString);
                     w.WriteBoolean("active", Active);
+                    w.WriteBoolean("frozen", Frozen);
+                    w.WriteBoolean("input_owned", OwnsInput);
+                    w.WriteString("freeze_scope", "chapter");
                     w.WriteNumber("frame", Frame);
                     w.WriteString("scene", Engine.Scene?.GetType().Name ?? "none");
                     w.WriteBoolean("continuous_music", continuousMusic);
@@ -480,8 +500,8 @@ internal static class Bridge {
             case "activate":
                 continuousMusic = GetBool(a, "continuous_music", continuousMusic);
                 if (!Active) {
-                    InputInjector.Install();
                     Active = true;
+                    SyncInputOwnership();
                     engineHalted = true;
                     Log.Info("bridge activated");
                 }
@@ -790,6 +810,9 @@ internal static class Bridge {
         byte[] obs = Reply.Object(w => StateExtractor.WriteSnapshot(w, opt));
         void Body(Utf8JsonWriter w) {
             w.WriteBoolean("active", Active);
+                    w.WriteBoolean("frozen", Frozen);
+                    w.WriteBoolean("input_owned", OwnsInput);
+                    w.WriteString("freeze_scope", "chapter");
             w.WritePropertyName("obs");
             w.WriteRawValue(obs, skipInputValidation: true);
         }

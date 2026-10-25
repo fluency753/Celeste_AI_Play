@@ -73,9 +73,9 @@ internal static class Hooks {
         cur.MarkLabel(resume);
     }
 
-    // 接管期间不读真实键盘手柄，只写入桥接给出的按键
+    // 章节和显式 step 使用合成输入；空闲菜单恢复真实输入，锁步等令牌时不提前消费按键。
     private static void OnMInputUpdate(On.Monocle.MInput.orig_Update orig) {
-        if (!Bridge.Active) {
+        if (!Bridge.Active || (!Bridge.OwnsInput && !Bridge.ShouldHaltEngineUpdate())) {
             orig();
             return;
         }

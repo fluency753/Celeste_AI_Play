@@ -93,7 +93,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     explore = is_explore(session.cfg)
     # 工具按模式注册（modes.game_tools）：narrate 所有模式都有；exit_level 只在直播模式（用户要求时退出关卡）；
     # cutscene 在探索、直播或 --cutscene-mode agent 时；simulate 只在探索模式开了限额短路线预测时。
-    # 所有模式都开放 stop_run：智能体报告任务阻塞，主控暂停试玩等用户处理（不结束运行，游戏保持冻结）。
+    # 所有模式都开放 stop_run：智能体报告任务阻塞，主控暂停试玩等用户处理（不结束运行，章节内保持冻结，菜单正常运行）。
     tools = set(game_tools(session.cfg))
     tool_exit_level = "exit_level" in tools
     tool_cutscene = "cutscene" in tools
@@ -236,7 +236,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         # 不需要的工具不注册：装饰器原样返回函数，不进 MCP 工具列表
         return server.tool(**kw) if enabled else (lambda fn: fn)
 
-    @server.tool(name='stop_run', description='任务被工具故障、缺少能力或其他无法继续的条件阻塞时，用 reason 说明原因（200 字以内）报告给用户：主控暂停试玩，游戏保持冻结，由用户决定继续还是停止。不是通关，不退出关卡，不用于普通死亡或仍可尝试的难点。调用后结束本轮，等待用户处理；暂停或知识库未读完也能报告。', structured_output=False)
+    @server.tool(name='stop_run', description='任务被工具故障、缺少能力或其他无法继续的条件阻塞时，用 reason 说明原因（200 字以内）报告给用户：主控暂停试玩，章节内保持冻结，菜单正常运行，由用户决定继续还是停止。不是通关，不退出关卡，不用于普通死亡或仍可尝试的难点。调用后结束本轮，等待用户处理；暂停或知识库未读完也能报告。', structured_output=False)
     async def stop_run(reason: str) -> list:
         async with call_lock:
             try:
@@ -246,7 +246,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             publish(session.run_dir, f"system:agent-stop:{len(session.agent_stop['reports'])}",
                     '智能体报告任务阻塞：' + result['reason'] + ('；试玩已暂停，等待用户处理。' if result['paused'] else ''),
                     role='system', kind='系统')
-            tail = ('主控已把试玩暂停，游戏保持冻结，等待用户处理。请结束本轮，不再调用工具。' if result['paused']
+            tail = ('主控已把试玩暂停，章节内保持冻结，菜单正常运行，等待用户处理。请结束本轮，不再调用工具。' if result['paused']
                     else '主控已记下阻塞原因，等待用户处理。请结束本轮，不再调用工具。')
             return [json.dumps(result, ensure_ascii=False) + '\n' + tail]
 

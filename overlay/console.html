@@ -1265,7 +1265,7 @@ async function refreshStatus() {
   else {
     const scene = (g.scene || "").replace(/^Level Celeste\//, "").replace(/ Normal /, " ");
     light("lightGame", g.active ? (orch.running ? "active" : "frozen") : "on", "gameDetail",
-          `${g.version || ""} · ${g.active ? (orch.running ? "主控接管中" : "冻结中") : "正常运行"}${scene ? " · " + scene : ""}`);
+          `${g.version || ""} · ${g.active ? (g.frozen === false ? "菜单正常运行" : orch.running ? "主控接管中" : "冻结中") : "正常运行"}${scene ? " · " + scene : ""}`);
   }
   light("lightObs", s.obs.running ? "on" : "off", "obsDetail",
         s.obs.running ? (g.lockstep ? "锁步录制中" : "运行中") : s.obs.running === false ? "没在运行" : "—");

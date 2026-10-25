@@ -45,6 +45,7 @@ OFF_HEARTBEAT, OFF_VIEW_W, OFF_VIEW_H = 2048, 2056, 2060
 # 桥接写的状态（控制台读，不用连桥接）：心跳、接管、锁步、帧号、OBS 插件、录像音频、版本、场景
 OFF_BRIDGE_BEAT, OFF_BRIDGE_ACTIVE, OFF_BRIDGE_LOCKSTEP, OFF_BRIDGE_FRAME = 2064, 2072, 2076, 2080
 OFF_BRIDGE_CLOCK, OFF_BRIDGE_RECORDING, OFF_BRIDGE_VERSION, OFF_BRIDGE_SCENE = 2088, 2092, 2096, 2128
+OFF_BRIDGE_FROZEN, OFF_BRIDGE_INPUT = 2192, 2196
 
 DESIGN_WIDTH = 350            # 旧版设计稿：1080p 下卡片页面宽 350 像素（游戏宽 1920 的约 18%）
 DESIGN_VIEW = 1920
@@ -719,13 +720,19 @@ def bridge_status(bridge_port: int = 47774, buffer=None) -> dict:
         return {"running": False, "reason": "没有收到桥接的状态（游戏没开，或桥接早于 0.13.1）"}
     age = time.time() - beat / 1000
     text = lambda off, n: bytes(buffer[off:off + n]).split(b"\0", 1)[0].decode("utf-8", errors="replace")
+    version = text(OFF_BRIDGE_VERSION, 32)
+    parts = version.split('.')
+    scoped = len(parts) == 3 and all(p.isdigit() for p in parts) and tuple(map(int, parts)) >= (1, 0, 7)
+    active = struct.unpack_from("<i", buffer, OFF_BRIDGE_ACTIVE)[0] == 1
     return {"running": age < 3, "age_s": round(age, 1),
-            "active": struct.unpack_from("<i", buffer, OFF_BRIDGE_ACTIVE)[0] == 1,
+            "active": active,
+            "frozen": struct.unpack_from("<i", buffer, OFF_BRIDGE_FROZEN)[0] == 1 if scoped else active,
+            "input_owned": struct.unpack_from("<i", buffer, OFF_BRIDGE_INPUT)[0] == 1 if scoped else active,
             "lockstep": struct.unpack_from("<i", buffer, OFF_BRIDGE_LOCKSTEP)[0] == 1,
             "frame": struct.unpack_from("<q", buffer, OFF_BRIDGE_FRAME)[0],
             "obs_plugin": struct.unpack_from("<i", buffer, OFF_BRIDGE_CLOCK)[0] == 1,
             "recording_audio": struct.unpack_from("<i", buffer, OFF_BRIDGE_RECORDING)[0] == 1,
-            "version": text(OFF_BRIDGE_VERSION, 32), "scene": text(OFF_BRIDGE_SCENE, 64)}
+            "version": version, "scene": text(OFF_BRIDGE_SCENE, 64)}
 
 
 # ---------------------------------------------------------------- 主控里的线程

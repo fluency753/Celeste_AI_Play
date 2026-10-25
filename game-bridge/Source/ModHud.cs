@@ -80,7 +80,7 @@ internal static class ModHud {
 
     /// <summary>每个节拍（最多每 0.25 秒一次）把桥接的状态写进共享内存，控制台不用连桥接（桥接只接受一个连接，
     /// 连上会顶掉主控）就能看到：心跳、是否接管、锁步、帧号、OBS 插件、录像音频、版本、场景。</summary>
-    public static void ReportStatus(bool active, bool lockstep, long frame, bool clock, bool recording) {
+    public static void ReportStatus(bool active, bool lockstep, long frame, bool clock, bool recording, bool frozen, bool ownsInput) {
         if (SinceReport.ElapsedMilliseconds < 250 && SinceReport.ElapsedMilliseconds > 0) return;
         MemoryMappedViewAccessor? v = View;
         if (v == null) return;
@@ -97,6 +97,8 @@ internal static class ModHud {
             if (Engine.Scene is global::Celeste.Level level)
                 scene = $"Level {level.Session.Area.SID} {level.Session.Area.Mode} {level.Session.Level}";
             WriteText(v, 2128, 64, scene);
+            v.Write(2192, frozen ? 1 : 0);
+            v.Write(2196, ownsInput ? 1 : 0);
         } catch (Exception ex) {
             if (!reportFailed) Log.Warn($"bridge status report failed: {ex.Message}");
             reportFailed = true;
