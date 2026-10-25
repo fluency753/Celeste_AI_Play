@@ -90,12 +90,17 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
                                             or level.get("skippingCutscene") or level["room"] in tried_skip):
                 return obs
             if level["inCutscene"] and not level["skippingCutscene"] and level["room"] not in tried_skip:
-                tried_skip.add(level["room"])
-                skipped, obs, _, _ = skip_by_pause_menu(c)
+                skipped, obs, _, reason = skip_by_pause_menu(c)
+                # no_pause 是入场动画期间的暂时状态，不能记成该房间已处理。
+                if skipped or reason == "no_skip":
+                    tried_skip.add(level["room"])
                 if skipped:
                     continue
                 if (obs.get('level') or {}).get('dialogChoices'):
                     return obs
+                if reason == "no_pause":
+                    obs = step(c, ["10"], stop_on=["controllable"])["obs"]
+                    continue
             obs = step(c, ["120"], stop_on=["controllable"])["obs"]
             continue
 
