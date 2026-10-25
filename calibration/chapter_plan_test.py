@@ -178,5 +178,58 @@ class MacroAndControlTests(unittest.TestCase):
                     control.enqueue("chapters", bad)
 
 
+
+class ResumeExtensionTests(unittest.TestCase):
+    """原计划全部完成的运行：续跑时用 --chapters / --segments 追加接下来要玩的部分，同一会话与统计接着算。"""
+
+    def make_run(self, root: Path, pieces, splits, extra=None) -> Path:
+        run = root / "runs" / "a" / "20261025-042029"
+        run.mkdir(parents=True)
+        state = {"agent": "a", "save": "s", "engine": "claude", "model": "opus", "effort": "high", "max_minutes": 1440,
+                 "runtime": "host", "sim": False, "record": False, "mode": "explore", "knowledge_profile": "explore",
+                 "all_chapters": sorted({p[0] for p in pieces}), "plan_pieces": pieces, "piece_pending": False,
+                 "segment_index": 2, "session_id": "sess", "tuning": {"explore_program_s": None}, **(extra or {})}
+        (run / "run_state.json").write_text(json.dumps(state), encoding="utf-8")
+        (run / "metrics.json").write_text(json.dumps({"splits": splits, "effort": "high"}), encoding="utf-8")
+        return run
+
+    def parse(self, root: Path, *argv):
+        import sys
+        from orchestrator.run import parse_args
+        with patch("orchestrator.config.REPO_ROOT", root), patch("orchestrator.segments.load_table", return_value=TABLE), \
+             patch.object(sys, "argv", ["run", "--agent", "a", "--save", "s", *argv]):
+            return parse_args()
+
+    def test_completed_plan_can_continue_with_next_chapter(self):
+        from orchestrator.run import write_run_state
+        done = [{"chapter": "Celeste/0-Intro"}, {"chapter": "Celeste/1-ForsakenCity"}, {"chapter": "Celeste/2-OldSite"}]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            run = self.make_run(root, [[0, 0, None], [1, 0, None], [2, 0, None]], done)
+            with self.assertRaisesRegex(SystemExit, "--chapters"):
+                self.parse(root, "--resume", str(run))
+            cfg, args = self.parse(root, "--resume", str(run), "--chapters", "3")
+            self.assertEqual((cfg.plan, cfg.chapters, cfg.chapter), ([Piece(3)], [3], 3))
+            self.assertIsNone(cfg.resume_segment)                 # 新的一章从开头玩，不沿用上一章的段号
+            self.assertFalse(cfg.resume_pending)
+            self.assertEqual((cfg.max_minutes, cfg.tuning), (1440, {"explore_program_s": None}))   # 其余设置沿用
+            out = root / "next"
+            out.mkdir()
+            write_run_state(out, cfg, "sess", args.previous)
+            state = json.loads((out / "run_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["plan_pieces"], [[0, 0, None], [1, 0, None], [2, 0, None], [3, 0, None]])
+            self.assertEqual(state["all_chapters"], [0, 1, 2, 3])
+            cfg, _ = self.parse(root, "--resume", str(run), "--segments", "2.1")   # 也可以只追加某几段
+            self.assertEqual(cfg.plan, [Piece(2, 1, 2)])
+
+    def test_unfinished_plan_cannot_be_replaced(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            run = self.make_run(root, [[1, 0, None], [2, 0, None]], [{"chapter": "Celeste/1-ForsakenCity"}])
+            cfg, _ = self.parse(root, "--resume", str(run))
+            self.assertEqual(cfg.plan, [Piece(2)])
+            with self.assertRaisesRegex(SystemExit, "还没有完成"):
+                self.parse(root, "--resume", str(run), "--chapters", "3")
+
 if __name__ == "__main__":
     unittest.main()

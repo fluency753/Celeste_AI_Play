@@ -200,8 +200,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     from .segments import fetch_table, load_table
     cfg.checkpoints = load_table()
     if args.segments:
-        if args.chapters or args.chapter is not None or previous:
-            raise SystemExit("--segments 不能与 --chapter、--chapters 或 --resume 合用（续跑沿用原运行的计划）")
+        if args.chapters or args.chapter is not None:
+            raise SystemExit("--segments 不能与 --chapter 或 --chapters 合用")
         from .segments import chapters_of, parse_segments, pieces_of
         cfg.checkpoints = cfg.checkpoints or fetch_table(args.bridge_port)
         if not cfg.checkpoints:
@@ -302,26 +302,43 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if (args.agent, args.save) != (state["agent"], state["save"]):
             raise SystemExit(f"--resume 的运行是 --agent {state['agent']} --save {state['save']}，与这次给的不一致")
         done = len(previous["metrics"].get("splits") or [])
+        # 原计划已经全部完成时，--chapters / --segments 追加接下来要玩的部分：同一会话、设置与统计接着算
+        from .segments import Piece, chapters_of
+        extension = (list(cfg.plan) if args.segments else [Piece(c) for c in cfg.chapters] if args.chapters else None)
+        if extension is not None and args.chapter is not None:
+            raise SystemExit("续跑追加章节用 --chapters 或 --segments，不用 --chapter")
         if state.get("plan_pieces"):
             # 按段通关（或运行中改过计划）：按已完成的截数从计划里接着走
-            from .segments import Piece, chapters_of
             pieces = [Piece(int(c), int(s), None if e is None else int(e)) for c, s, e in state["plan_pieces"]]
             remaining_pieces = pieces[done:]
+            if extension is not None:
+                if remaining_pieces:
+                    raise SystemExit("原运行的计划还没有完成：续跑沿用原计划；要改范围请在运行中用控制台改")
+                pieces, remaining_pieces = pieces + extension, extension
+                cfg._extended_plan = pieces
             if not remaining_pieces:
-                raise SystemExit("这次运行的计划已经全部完成，不需要续跑")
+                raise SystemExit("这次运行的计划已经全部完成，不需要续跑（要接着玩下一章：加 --chapters 或 --segments）")
             if any(not p.whole() for p in pieces) and not cfg.checkpoints:
                 cfg.checkpoints = fetch_table(args.bridge_port)
                 if not cfg.checkpoints:
                     raise SystemExit("续跑按段通关的运行需要检查点表（configs/checkpoints.json 或桥接 1.0.6）")
             cfg.plan = remaining_pieces
             cfg.chapters, cfg.chapter = chapters_of(remaining_pieces), remaining_pieces[0].chapter
-            cfg.resume_pending = bool(state.get("piece_pending"))
-            cfg.resume_segment = None if cfg.resume_pending else state.get("segment_index")
+            cfg.resume_pending = bool(state.get("piece_pending")) and extension is None
+            # 追加的章节从开头玩：原运行记下的段号是上一章的
+            cfg.resume_segment = None if cfg.resume_pending or extension is not None else state.get("segment_index")
             remaining = cfg.chapters
         else:
             remaining = state["all_chapters"][done:] if state.get("all_chapters") else []
+            if extension is not None:
+                if remaining:
+                    raise SystemExit("原运行的章节还没有全部通关：续跑沿用原计划")
+                if any(not p.whole() for p in extension):
+                    raise SystemExit("这次运行没有按段的计划：续跑只能追加整章（--chapters）")
+                remaining = [p.chapter for p in extension]
+                cfg._extended_plan = [Piece(c) for c in state.get("all_chapters") or []] + extension
             if state.get("all_chapters") and not remaining:
-                raise SystemExit("这次运行的章节已经全部通关，不需要续跑")
+                raise SystemExit("这次运行的章节已经全部通关，不需要续跑（要接着玩下一章：加 --chapters）")
             cfg.chapters = remaining or None
             cfg.chapter = remaining[0] if remaining else None
     if cfg.pause_limit and not cfg.sim:
@@ -358,7 +375,12 @@ def prompt_override_hashes() -> dict[str, str]:
 def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None) -> None:
     """记下续跑需要的设置与 Claude Code 会话编号。"""
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
-    if previous:
+    extended = getattr(cfg, "_extended_plan", None)     # 续跑时追加了章节（见 parse_args）
+    if extended:
+        from .segments import chapters_of
+        plan_pieces = [[p.chapter, p.start, p.end] for p in extended]
+        all_chapters = chapters_of(extended)
+    elif previous:
         plan_pieces = previous["state"].get("plan_pieces")
     elif cfg.plan:
         plan_pieces = [[p.chapter, p.start, p.end] for p in cfg.plan]
