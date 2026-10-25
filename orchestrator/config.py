@@ -12,6 +12,14 @@ CHAPTER_NAMES = {
     "Celeste/0-Intro": "序章",
     "Celeste/1-ForsakenCity": "1 被遗弃之城",
     "Celeste/2-OldSite": "2 旧址",
+    "Celeste/3-CelestialResort": "3 天空度假村",
+    "Celeste/4-GoldenRidge": "4 黄金山脊",
+    "Celeste/5-MirrorTemple": "5 镜之神殿",
+    "Celeste/6-Reflection": "6 映像",
+    "Celeste/7-Summit": "7 顶峰",
+    "Celeste/8-Epilogue": "终章",
+    "Celeste/9-Core": "8 核心",
+    "Celeste/LostLevels": "9 告别",
 }
 
 # 章节编号（菜单宏与 --chapters 用的地图编号）→ 章节 SID

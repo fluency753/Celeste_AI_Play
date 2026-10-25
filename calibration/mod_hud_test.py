@@ -84,7 +84,9 @@ class RenderTests(unittest.TestCase):
         for width in (350, 700):
             card = render(vm, width, CONFIG["colors"])
             self.assertEqual(card.image.width, width)
-            self.assertLess(card.image.height, width * 2)               # 历史一栏有上限，卡片不会无限长
+            self.assertLess(card.image.height, width * 2.6)             # 历史一栏有上限（放得下三条长消息），卡片不会无限长
+            short = render(vm, width, CONFIG["colors"], max_height=int(width * 1.5))
+            self.assertLessEqual(short.image.height, int(width * 1.5))   # 显示区矮时思考语句一栏让出高度
             self.assertTrue(0 < card.timer_x < width / 3 and 0 < card.timer_y < card.image.height / 3)
             self.assertEqual(len(premultiplied(card.image)), width * card.image.height * 4)
         atlas = make_atlas(1.0, CONFIG["colors"])

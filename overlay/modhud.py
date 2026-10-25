@@ -48,7 +48,7 @@ OFF_BRIDGE_CLOCK, OFF_BRIDGE_RECORDING, OFF_BRIDGE_VERSION, OFF_BRIDGE_SCENE = 2
 
 DESIGN_WIDTH = 350            # 旧版设计稿：1080p 下卡片页面宽 350 像素（游戏宽 1920 的约 18%）
 DESIGN_VIEW = 1920
-HISTORY_MAX = 260             # 思考语句历史一栏最高（设计像素）；放不下时最早的几条从上边裁掉
+HISTORY_MAX = 540             # 思考语句历史一栏最高（设计像素）：放得下三条约 85 字的长消息；放不下时最早的几条从上边裁掉
 TEXT_SCALE = 1.15             # 文字相对旧版设计稿放大的倍数（章节计时那一行除外）；卡片宽度与间距不变
 TIMER_CHARS = "0123456789:."
 
@@ -424,7 +424,8 @@ def _with_shadow(layer: Image.Image, px: float, alpha: float = 0.5, dy: float = 
     return out
 
 
-def render(vm: ViewModel, width: int, colors: dict | None = None) -> Rendered:
+def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: int | None = None) -> Rendered:
+    """max_height：卡片最高多少像素（游戏显示区的高度、共享内存的大小），超过时思考语句一栏相应变矮。"""
     colors = {**DEFAULT_COLORS, **(colors or {})}
     px = width / DESIGN_WIDTH
     fs = px * TEXT_SCALE                                     # 文字用的比例
@@ -528,6 +529,8 @@ def render(vm: ViewModel, width: int, colors: dict | None = None) -> Rendered:
         y += 10 * px - 7 * px
         hist = _history(vm.history, inner, px, text_c, label_c, rule_c, fs)
         limit = int(HISTORY_MAX * px)
+        if max_height:                                     # 显示区较矮（或图片太大）时，思考语句一栏让出高度
+            limit = max(int(80 * px), min(limit, int(max_height - y - pad_b - margin - 30 * px)))
         if hist.height > limit:
             hist = hist.crop((0, hist.height - limit, hist.width, hist.height))
             fade = int(24 * px)                            # 顶边渐隐，看得出上面还有
@@ -801,9 +804,10 @@ class ModHud:
         if self._atlas_key != (width, tuple(sorted(colors.items()))):
             self._atlas = make_atlas(px, colors)
             self._atlas_key = (width, tuple(sorted(colors.items())))
-        card = render(vm, width, colors)
+        margin_px = int(round(16 * px))
+        card = render(vm, width, colors, max_height=min(view[1] - 2 * margin_px, IMAGE_MAX // (4 * width)))
         atlas = self._atlas
-        margin = int(round(16 * px))
+        margin = margin_px
         self.shared.publish(premultiplied(card.image), card.image.size, premultiplied(atlas.image), atlas.image.size,
                             atlas.glyphs, (card.timer_x, card.timer_y), (margin, margin))
         self._last = key

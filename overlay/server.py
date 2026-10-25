@@ -308,6 +308,8 @@ def make_handler(pinned: Path | None):
                     raise ValueError('请断开并重新连接会话后再切换剧情模式')
                 if data.get("kind") in {"goal", "goal_clear", "stop"} and not control.snapshot().get("goals_enabled"):
                     raise ValueError("当前未在试玩，不能修改或触发停止目标")
+                if data.get("kind") == "chapters" and not control.snapshot().get("chapters_control"):
+                    raise ValueError("这次运行不能在运行中改章节（已经结束，或主控版本较旧）")
                 ident = control.enqueue(data.get("kind"), data.get("text", ""))
                 self._send(200, json.dumps({"id": ident}).encode(), "application/json")
             except (ValueError, TypeError, RuntimeError, OSError) as exc:

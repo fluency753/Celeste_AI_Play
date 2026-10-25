@@ -952,6 +952,63 @@ class GameSession:
             note += "这是本次的最后一章。"
         return obs, image, [note]
 
+    # ---------------------------------------------------------------- 运行中调整要通关的章节（控制台）
+
+    def current_chapter_id(self) -> int | None:
+        sid = self.metrics.state.chapter or getattr(self, "start_sid", None)
+        return next((i for i, s in CHAPTER_SIDS.items() if s == sid), None)
+
+    def chapter_plan(self) -> dict:
+        """控制台显示用：已通关的章节、正在玩的章节与之后的队列（章节编号）。"""
+        ids = {s: i for i, s in CHAPTER_SIDS.items()}
+        done = [ids.get(split.get("chapter")) for split in (self.metrics.state.splits or [])]
+        return {"done": [i for i in done if i is not None], "current": self.current_chapter_id(),
+                "queue": list(self.chapter_queue), "switching": bool(self.chapter_finished),
+                "editable": not self.done and not self.chapter_finished}
+
+    def set_chapter_queue(self, queue: list[int]) -> str:
+        """运行中改当前章节之后要依次通关的章节（空 = 本章通关后结束）。返回告诉智能体的说明。
+        只改队列，不动正在玩的这一章；按官方顺序，只能是当前章节之后的章节（章节要按顺序通关才会解锁）。"""
+        if not isinstance(queue, list) or any(type(c) is not int or c not in CHAPTER_SIDS for c in queue) \
+                or len(set(queue)) != len(queue):
+            raise ValueError("章节须为不重复的章节编号")
+        queue = sorted(queue)
+        with self.lock:
+            if self.done:
+                raise ValueError("本次试玩已结束，不能再改章节")
+            if self.chapter_finished:
+                raise ValueError("正在换到下一章，稍后再改")
+            current = self.current_chapter_id()
+            if current is None:
+                raise ValueError("还不知道当前章节，稍后再改")
+            if any(c <= current for c in queue):
+                raise ValueError(f"只能选{chapter_name_by_id(current)}之后的章节（按官方顺序依次通关）")
+            self.chapter_queue = list(queue)
+            self._save_chapter_plan(current)
+        print(f"[run] 用户调整了之后要通关的章节：{'、'.join(chapter_name_by_id(c) for c in queue) or '无（本章通关后结束）'}",
+              flush=True)
+        if queue:
+            return (f"用户调整了本次要通关的章节：{chapter_name_by_id(current)}通关后，依次是"
+                    f"{'、'.join(chapter_name_by_id(c) for c in queue)}，不要自行进入其他章节。")
+        return f"用户调整了本次要通关的章节：{chapter_name_by_id(current)}是最后一章，通关后本次运行结束。"
+
+    def _save_chapter_plan(self, current: int) -> None:
+        """把新的章节计划写进 run_state.json 的 all_chapters（续跑按已通关的章数从这里接着走）。"""
+        path = self.run_dir / "run_state.json"
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        done = len(self.metrics.state.splits or [])
+        prefix = list(state.get("all_chapters") or [])[:done]
+        if len(prefix) < done:          # 早先没记章节列表的运行：已通关的部分按分段成绩补上
+            ids = {s: i for i, s in CHAPTER_SIDS.items()}
+            prefix = [ids.get(split.get("chapter"), current) for split in self.metrics.state.splits][:done]
+        state["all_chapters"] = prefix + [current] + list(self.chapter_queue)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+
     def _mark_done(self, reason: str) -> None:
         if not self.done:
             self.done = True

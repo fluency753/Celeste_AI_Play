@@ -91,7 +91,7 @@ class SessionControls:
                 phase="pausing" if self.pausing else "chatting" if self.turn_active else "idle",
                 session_id=self.session_id, chat_only=self.chat_only,
                 **self._fast_status(),
-                **self._effort_status(), **self._goal_status(), **self._cutscene_status())
+                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status())
             await asyncio.sleep(.5)
 
     async def _controls(self):
@@ -121,6 +121,13 @@ class SessionControls:
                                     self.control.mark(row["id"], "waiting", "目标已生效，正在通知 agent")
                                 else:
                                     self.control.mark(row["id"], "submitted", "目标条件已满足，正在保存录像")
+                        elif row["kind"] == "chapters":
+                            if self.session is None or self.session.done or self.chat_only:
+                                raise ValueError("当前没有在试玩，不能改章节")
+                            queue = json.loads(row["text"]).get("queue", [])
+                            note = await asyncio.to_thread(self.session.set_chapter_queue, queue)
+                            self.pending_messages.append({**row, "text": note})
+                            self.control.mark(row["id"], "waiting", "章节已更新，正在通知 agent")
                         elif row["kind"] == "message":
                             self.pending_messages.append(row)
                             self.control.mark(row["id"], "waiting", "等待提交给当前会话")
@@ -218,7 +225,7 @@ class SessionControls:
                 self.control.heartbeat(paused=self.paused, phase="chatting" if self.turn_active else "idle",
                     session_id=self.session_id, chat_only=self.chat_only,
                     **self._fast_status(),
-                    **self._effort_status(), **self._goal_status(), **self._cutscene_status())
+                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status())
                 await asyncio.sleep(.1)
         except asyncio.CancelledError:
             raise
@@ -248,6 +255,11 @@ class SessionControls:
     def _cutscene_status(self):
         return {'cutscene_control':getattr(self.session, 'cutscene_tool', True),
                 'cutscene_mode':self.control.cutscene_preference() or self.cfg.cutscene_mode}
+
+    def _chapter_status(self):
+        if self.session is None or not hasattr(self.session, "chapter_plan") or self.chat_only:
+            return {"chapters_control": False}
+        return {"chapters_control": not self.session.done, "chapter_plan": self.session.chapter_plan()}
 
     def _goal_status(self):
         if self.session is None or not hasattr(self.session, "goals"):

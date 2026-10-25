@@ -200,6 +200,13 @@
   .runs .meta { grid-column: 1; color: var(--muted); font-size: 12.5px; }
   .runs .side { grid-row: 1 / span 2; grid-column: 2; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
   .inline-check { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+  .plan { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .plan button { border: 1px solid var(--line-strong); background: none; color: var(--muted); border-radius: 999px;
+                 padding: 3px 11px; font-size: 13px; cursor: pointer; }
+  .plan button[aria-pressed="true"] { border-color: var(--red); color: var(--text); background: rgba(224, 71, 91, 0.16); }
+  .plan button.done { color: var(--green); border-color: rgba(76, 195, 138, 0.5); cursor: default; }
+  .plan button.current { color: var(--gold); border-color: rgba(242, 193, 78, 0.6); cursor: default; }
+  .plan button:disabled:not(.done):not(.current) { opacity: 0.4; cursor: default; }
   .tag { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
   .tag.ok { color: var(--green); border-color: rgba(76, 195, 138, 0.5); }
   .tag.frozen { color: var(--blue); border-color: rgba(91, 192, 235, 0.5); }
@@ -504,6 +511,16 @@
         <button class="btn" type="button" id="interruptRun" title="结束这次运行、保存录像，游戏保持冻结，之后可以续跑">中断（保持冻结，可续跑）</button>
       </div>
       <p class="hint" id="controlStatus"></p>
+      <details class="more" style="margin-top:14px" id="planBox" hidden>
+        <summary>要通关的章节 <span class="aside" id="planSummary"></span></summary>
+        <p class="hint" style="margin-top:6px">正在玩的这一章不变；选之后要依次通关的章节（按官方顺序，要按顺序通关才会解锁）。不选 = 本章通关后结束。改完后主控会告诉智能体。</p>
+        <div class="plan" id="planChips"></div>
+        <div class="controls" style="margin-top:8px">
+          <button class="btn small" type="button" id="planEndHere">本章通关后结束</button>
+          <button class="btn small primary" type="button" id="planApply" disabled>应用</button>
+          <span class="note" id="planNote"></span>
+        </div>
+      </details>
       <details class="more" style="margin-top:14px" id="goalBox">
         <summary>目标与停止条件</summary>
         <textarea id="goalText" maxlength="4000" placeholder="可选：告诉智能体这次要做什么，例如收集眼前的草莓"></textarea>
@@ -1317,6 +1334,7 @@ function renderControls() {
   $("interruptRun").hidden = !c.interrupt_control;
   $("interruptRun").disabled = !connected;
   $("goalBox").hidden = !c.goals_enabled;
+  renderPlan(c);
   $("send").disabled = !connected;
   const engine = ui.status && ui.status.run && ui.status.run.state && ui.status.run.state.engine;
   $("delivery").textContent = !running() ? "运行开始后可以发消息。" : !c.connected ? "等待主控连上…"
@@ -1324,6 +1342,43 @@ function renderControls() {
     : engine === "codex" ? "消息会插入智能体当前这一轮。" : "智能体会先停下当前这一轮，再读你的消息。";
   const last = (c.actions || [])[0];
   $("controlStatus").textContent = last ? `最近的操作：${last.detail || last.status}` : "";
+}
+
+// 运行中改之后要通关的章节：已通关（绿）、正在玩（金）不能改，之后的章节点选
+function renderPlan(c) {
+  const plan = c.chapter_plan, box = $("planBox");
+  box.hidden = !(c.chapters_control && plan && running());
+  if (box.hidden) { ui.planDraft = null; return; }
+  const label = (id) => ((ui.options && ui.options.chapters) || []).find(x => x.id === id)?.label || `第 ${id} 章`;
+  const serverKey = JSON.stringify(plan.queue);
+  if (!ui.planDraft || ui.planDraft.base !== serverKey) ui.planDraft = { base: serverKey, queue: [...plan.queue] };
+  const draft = ui.planDraft.queue;
+  const names = draft.map(label);
+  $("planSummary").textContent = plan.current == null ? "" :
+    `${label(plan.current)}${plan.queue.length ? " → " + plan.queue.map(label).join(" → ") : "（最后一章）"}`;
+  const chips = ((ui.options && ui.options.chapters) || []).map(ch => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label(ch.id);
+    if (plan.done.includes(ch.id) && ch.id !== plan.current) { b.className = "done"; b.disabled = true; b.title = "已通关"; }
+    else if (ch.id === plan.current) { b.className = "current"; b.disabled = true; b.title = "正在玩"; }
+    else if (plan.current != null && ch.id < plan.current) { b.disabled = true; }
+    else {
+      b.setAttribute("aria-pressed", String(draft.includes(ch.id)));
+      b.disabled = !plan.editable;
+      b.addEventListener("click", () => {
+        const q = ui.planDraft.queue, i = q.indexOf(ch.id);
+        if (i >= 0) q.splice(i, 1); else { q.push(ch.id); q.sort((a, b2) => a - b2); }
+        renderPlan(ui.control || {});
+      });
+    }
+    return b;
+  });
+  $("planChips").replaceChildren(...chips);
+  const changed = JSON.stringify(draft) !== serverKey;
+  $("planApply").disabled = !plan.editable || !changed;
+  $("planEndHere").disabled = !plan.editable || plan.queue.length === 0;
+  $("planNote").textContent = plan.switching ? "正在换章，稍后可以改" :
+    changed ? `改为：${label(plan.current)}${names.length ? " → " + names.join(" → ") : "（通关后结束）"}` : "";
 }
 
 async function sendControl(kind, text = "") {
@@ -1743,6 +1798,12 @@ $("stopRun").addEventListener("click", () => {
 });
 $("interruptRun").addEventListener("click", () => {
   if (confirmTwice("interruptRun", "再点一次确认：中断运行，游戏保持冻结，之后可续跑")) sendControl("interrupt");
+});
+$("planApply").addEventListener("click", () => {
+  if (ui.planDraft) sendControl("chapters", JSON.stringify({ queue: ui.planDraft.queue }));
+});
+$("planEndHere").addEventListener("click", () => {
+  if (confirmTwice("planEndHere", "再点一次：本章通关后结束")) sendControl("chapters", JSON.stringify({ queue: [] }));
 });
 $("goalSave").addEventListener("click", () => {
   const field = $("goalField").value, raw = $("goalValue").value.trim();

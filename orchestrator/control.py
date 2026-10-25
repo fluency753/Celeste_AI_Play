@@ -30,7 +30,7 @@ class RunControl:
 
     def enqueue(self, kind, text=""):
         if kind not in {"message", "pause", "resume", "fast", "effort", "detach", "goal", "goal_clear", "stop", "cutscene_mode",
-                        "interrupt"}:
+                        "interrupt", "chapters"}:
             raise ValueError("未知控制指令")
         text = str(text).strip()
         if kind == 'cutscene_mode' and text not in {'auto','agent'}:
@@ -38,6 +38,11 @@ class RunControl:
         if kind == "goal":
             from .goals import validate_goal
             validate_goal(json.loads(text))
+        if kind == "chapters":         # 运行中改之后要通关的章节：{"queue": [章节编号, ...]}
+            data = json.loads(text)
+            queue = data.get("queue") if isinstance(data, dict) else None
+            if not isinstance(queue, list) or len(queue) > 20 or any(type(c) is not int or not 0 <= c <= 20 for c in queue):
+                raise ValueError("章节须为章节编号的列表")
         if kind == "fast" and text not in {"on", "off"}:
             raise ValueError("Fast 模式须为 on 或 off")
         if kind == 'effort' and not valid_effort(text):
