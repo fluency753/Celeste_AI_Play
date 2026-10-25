@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.0.12";
+    public const string Version = "1.0.13";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -448,6 +448,7 @@ internal static class Bridge {
                     w.WriteNumber("record_audio_tracks", RecordingAudio.TrackCount);
                     w.WriteBoolean("create_save", true);
                     w.WriteBoolean("checkpoints", true);
+                    w.WriteBoolean("load_room_modes", true);
                     w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("dialog_choices", true);
                     w.WriteBoolean("story_text", true);
@@ -715,17 +716,22 @@ internal static class Bridge {
             IpcServer.Send(Reply.Error(id, "load_room is only allowed on the 'test' save"));
             return;
         }
-        if (Engine.Scene is not Level level || job != null) {
+        if (Engine.Scene is not Level level || job != null || Playback.Running) {
             IpcServer.Send(Reply.Error(id, "load_room needs a level scene and no running step"));
             return;
         }
         string room = GetString(a, "room", "");
-        AreaKey area = level.Session.Area;
-        // 可指定章节（编号，A 面）：校准时直接进入尚未解锁的章节
-        if (a.TryGetProperty("chapter", out JsonElement ch) && ch.ValueKind == JsonValueKind.Number) {
-            area = new AreaKey(ch.GetInt32(), AreaMode.Normal);
+        // 旧请求指定 chapter 时仍默认 A；显式 mode 可选 0=A、1=B、2=C。
+        AreaKey area;
+        try {
+            area = RoomAreaSelection.Select(level.Session.Area,
+                a.TryGetProperty("chapter", out JsonElement ch) ? ch.GetInt32() : null,
+                a.TryGetProperty("mode", out JsonElement md) ? md.GetInt32() : null);
+        } catch (ArgumentException e) {
+            IpcServer.Send(Reply.Error(id, e.Message));
+            return;
         }
-        MapData? map = AreaData.Get(area)?.Mode[(int) area.Mode]?.MapData;
+        MapData? map = area.ID < AreaData.Areas.Count ? AreaData.Get(area)?.Mode[(int) area.Mode]?.MapData : null;
         if (map == null || map.Get(room) == null) {
             IpcServer.Send(Reply.Error(id, $"no room '{room}' in chapter {area.ID}"));
             return;
@@ -754,7 +760,11 @@ internal static class Bridge {
             spawn = new Vector2(sp[0].GetSingle(), sp[1].GetSingle());
         }
         Engine.Scene = new LevelLoader(session, spawn);
-        IpcServer.Send(Reply.Ok(id, w => w.WriteString("room", room)));
+        IpcServer.Send(Reply.Ok(id, w => {
+            w.WriteString("room", room);
+            w.WriteNumber("chapter", area.ID);
+            w.WriteNumber("mode", (int)area.Mode);
+        }));
     }
 
     private static void Teleport(long id, JsonElement a) {

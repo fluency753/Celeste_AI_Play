@@ -87,6 +87,7 @@ class MetricsState:
     study_s: float = 0.0              # 准备阶段（读知识库等）用时，不计入 elapsed_s
     kb_progress: float | None = None  # 知识库已读比例（0~1）；None = 没有准备阶段
     chapter: str = ""
+    chapter_side: str = "A"
     room: str = ""
     chapter_time_ticks: int = 0
     completed_ticks: int = 0          # 本次运行里已经通关的章节的计时之和（依次通关多章时，总计时 = 它 + 当前章节计时）

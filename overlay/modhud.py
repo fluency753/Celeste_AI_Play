@@ -326,6 +326,8 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     chapters = config.get("chapters") or {}
     chapter = m.get("chapter") or ""
     room = chapters.get(chapter) or chapter.replace("Celeste/", "")
+    if m.get('chapter_side') in {'B','C'} and room.endswith('A'):
+        room = room[:-1] + m['chapter_side']
 
     theme = colors.get("dash1", "#E0475B")
     if (m.get("max_dashes") or 0) > 0 and m.get("dashes") == 0:

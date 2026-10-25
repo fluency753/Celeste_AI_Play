@@ -154,6 +154,8 @@ docker build -t celeste-agent:0.1 agent-container
 
 **预置模拟器的校准（开发用）**：`python calibration\sim_capture.py --chapter 3 --rooms=00-a,01-b --cases 2 --out runs\simcases\3a` 在 test 存档里载入指定房间（`--chapter` 是地图编号：0 序章、1–7 对应第 1–7 章、9 是第 8 章核心、10 是第 9 章告别）、做随机操作，把起止两帧的完整场景与逐帧轨迹存成用例；加 `--targets` 把 Madeline 放到房间里各类实体旁边定点测（同类实体跨章节累计只测 `--per-type` 个，默认 2）；`--speed` 为每个游戏循环推进的帧数（默认 60，即 60 倍速，只跳过中间帧的绘制）；`--assets 文件` 只导出模拟器用的贴图尺寸与精灵动画表。`load_room`、`teleport` 两个桥接命令只在 test 存档上可用，不会动正式存档。
 
+桥接 1.0.13 的测试入口可用 `load_room(chapter=7, mode=2, room="03")` 选择 7C 末房，`mode=0/1/2` 分别为 A/B/C；只传 `chapter` 仍默认 A，不传章节与模式则保留当前地图及面。成功回执表示请求已接受，游戏在下一帧切换场景：先执行不带提前停止条件的中性 `step`，再等待载入完成并核对 `level.chapter/side/room` 与存档槽位，不能立即用旧观测判定进入成功。此能力不改变正式试玩命令行的章节选择。
+
 按键写法：`L R U D` 方向，`J` 跳，`X` 冲刺，`Z` 蹲冲，`G` 抓，`T` 交互，`C` 确认，`B` 返回，`P` 暂停，`N` 日志；`A:角度` 表示左摇杆模拟方向（0 为右，90 为上）。每段以帧数开头，例如 `"6,R,J"` 表示按住右与跳 6 帧。
 
 ## 4. 运行智能体

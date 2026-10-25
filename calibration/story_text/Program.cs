@@ -157,3 +157,14 @@ if (!SceneControl.HaltEngine(true,false,true,results)) throw new Exception("Resu
 if (SceneControl.HaltEngine(true,false,false,level)) throw new Exception("Explicit chapter step halted");
 if (SceneControl.HaltEngine(false,true,true,level)) throw new Exception("Inactive bridge halted engine");
 Console.WriteLine("PASS: free-running transitions stop before chapter/results updates");
+
+var currentArea = new AreaKey(7, AreaMode.CSide);
+var selectedArea = RoomAreaSelection.Select(currentArea, null, null);
+if (selectedArea.ID != 7 || selectedArea.Mode != AreaMode.CSide) throw new Exception("Loaded C side was lost");
+if (RoomAreaSelection.Select(currentArea, 1, null).Mode != AreaMode.Normal) throw new Exception("Legacy chapter default changed");
+if (RoomAreaSelection.Select(new AreaKey(1), 7, 2).Mode != AreaMode.CSide) throw new Exception("Explicit C side was lost");
+foreach (int invalidMode in new[] {-1,3}) {
+    try { RoomAreaSelection.Select(currentArea,7,invalidMode); throw new Exception("Invalid mode accepted"); }
+    catch (ArgumentException) { }
+}
+Console.WriteLine("PASS: test room area selection preserves current side, legacy A and explicit C; invalid sides rejected");

@@ -30,6 +30,13 @@ def metrics(now, **extra):
 
 
 class ViewModelTests(unittest.TestCase):
+    def test_actual_side_overrides_official_a_label(self):
+        now = time.time()
+        for side in ('A', 'B', 'C'):
+            with self.subTest(side=side):
+                vm = view_model(metrics(now, chapter='Celeste/7-Summit', chapter_side=side), CONFIG, [], now)
+                self.assertEqual(vm.room, '7' + side)
+
     def test_old_design_fields(self):
         now = time.time()
         vm = view_model(metrics(now), CONFIG, [{"id": "a", "text": "进入房间", "kind": "解说", "wall": now - 30}], now)

@@ -244,7 +244,7 @@ class GameSession:
             raise RuntimeError(f'当前存档槽位 {slot} 与指定槽位 {self.cfg.save_slot} 不一致')
         self.cfg.save_slot = slot
         self.start_sid = (obs.get('level') or {}).get('sid') or CHAPTER_SIDS.get(self.cfg.chapter) or self.metrics.state.chapter
-        if self.start_sid:self.metrics.update(chapter=self.start_sid)
+        if self.start_sid:self.metrics.update(chapter=self.start_sid,chapter_side=(obs.get('level') or {}).get('side','A'))
         self._update_metrics_from_obs(obs)
         if self.workspace:
             # 上一次运行留下的观测与动作记录已经过时：先换成当前这一帧，避免智能体在准备阶段读到旧数据
@@ -1308,6 +1308,7 @@ class GameSession:
             self.room_entry_frame = obs.get("frame")   # 进入这个房间的那一帧（推演最速从这里算起）
         self.metrics.update(
             chapter=level.get("sid", self.metrics.state.chapter),
+            chapter_side=level.get("side",self.metrics.state.chapter_side),
             room=level.get("room", self.metrics.state.room),
             chapter_time_ticks=level.get("chapterTimeTicks", self.metrics.state.chapter_time_ticks),
             dashes=player.get("dashes", 0),

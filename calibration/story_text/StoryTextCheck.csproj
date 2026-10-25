@@ -12,6 +12,7 @@
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" ExcludeAssets="runtime" />
     <Compile Include="../../game-bridge/Source/StoryText.cs" Link="StoryText.cs" />
     <Compile Include="../../game-bridge/Source/SceneControl.cs" Link="SceneControl.cs" />
+    <Compile Include="../../game-bridge/Source/RoomAreaSelection.cs" Link="RoomAreaSelection.cs" />
     <Compile Include="../../game-bridge/Source/PlayerControl.cs" Link="PlayerControl.cs" />
   </ItemGroup>
 </Project>

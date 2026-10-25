@@ -254,7 +254,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 56;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 57;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -515,7 +515,8 @@ function render() {
   dot.classList.toggle("breathe", breathe);
 
   const chapters = (config && config.chapters) || {};
-  const ch = chapters[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
+  const chapterLabel = chapters[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
+  const ch = /^[BC]$/.test(m.chapter_side || "") ? chapterLabel.replace(/A$/, m.chapter_side) : chapterLabel;
   const room = $("room");
   const roomLabel = JSON.stringify([ch, m.room]);
   if (room.dataset.label !== roomLabel) {
