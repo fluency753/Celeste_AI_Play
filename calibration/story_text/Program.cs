@@ -78,3 +78,46 @@ level.Paused=false; level.Completed=true;
 using (var snapshot=Snapshot())
     if (snapshot.RootElement.GetProperty("story").GetArrayLength()!=0) throw new Exception("Completed memorial leaked");
 Console.WriteLine("PASS: memorial reaches story JSON only in visible gameplay state");
+
+// A cutscene flag is not a loss of player input: the prologue starts this way.
+level.Completed=false;
+var player=(Player)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Player));
+player.StateMachine=new Monocle.StateMachine(32);
+level.InCutscene=true;
+if (!PlayerControl.IsControllable(level,player)) throw new Exception("Controllable tutorial intro was blocked");
+player.StateMachine.State=Player.StDummy;
+if (PlayerControl.IsControllable(level,player)) throw new Exception("Dummy animation is not player control");
+entities.entities.Clear();
+var tutorial=(BirdTutorialGui)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(BirdTutorialGui));
+tutorial.Visible=true;tutorial.Open=true;tutorial.Scale=.5f;tutorial.controls=new() { "Dash" };
+entities.entities.Add(tutorial);
+entities.entities.Add(player);
+Check("",StoryText.InputNode(level) ?? "");
+tutorial.Scale=1;
+Check("tutorial",StoryText.InputNode(level)!);
+player.StateMachine.State=Player.StNormal;
+Check("",StoryText.InputNode(level) ?? ""); // a hint never blocks otherwise normal movement
+player.StateMachine.State=Player.StDummy;
+tutorial.Open=false;
+Check("",StoryText.InputNode(level) ?? "");
+entities.entities.Clear();
+var box=(Textbox)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Textbox));
+box.Visible=true;box.ease=1;box.waitingForInput=false;
+entities.entities.Add(box);
+player.StateMachine.State=Player.StNormal;
+if (!PlayerControl.IsControllable(level,player)) throw new Exception("Text appearance must not override actual movement state");
+Check("",StoryText.InputNode(level) ?? "");
+box.waitingForInput=true;
+Check("dialogue",StoryText.InputNode(level)!);
+level.Paused=true;
+Check("",StoryText.InputNode(level) ?? "");
+level.Paused=false;
+var enter=(LevelEnter)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(LevelEnter));
+var card=(Postcard)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Postcard));
+enter.postcard=card;card.Visible=true;card.alpha=1;card.buttonEase=0;
+Check("",StoryText.InputNode(enter) ?? "");
+card.buttonEase=1;
+Check("postcard",StoryText.InputNode(enter)!);
+card.alpha=.5f;
+Check("",StoryText.InputNode(enter) ?? "");
+Console.WriteLine("PASS: player control during cutscenes and real dialogue/tutorial input nodes");

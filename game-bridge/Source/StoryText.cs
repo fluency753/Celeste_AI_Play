@@ -8,6 +8,25 @@ namespace CelesteAI.Bridge;
 
 /// <summary>Read the rendered page, never the dialog script or unrevealed glyphs.</summary>
 internal static class StoryText {
+    public static string? InputNode(Scene? scene) {
+        if (scene is Level level && !level.FrozenOrPaused && !level.SkippingCutscene && level.RetryPlayerCorpse == null) {
+            var campfire = level.Entities.FindFirst<CS06_Campfire>();
+            if (campfire?.currentOptions is { Count: > 0 })
+                return campfire.optionEase >= 0.999f ? "choice" : null;
+            var box = level.Entities.FindFirst<Textbox>();
+            if (box is { Visible: true })
+                return box.waitingForInput && Ease.CubeInOut(box.ease) >= 0.05f ? "dialogue" : null;
+            var tutorial = level.Entities.FindFirst<BirdTutorialGui>();
+            var player = level.Entities.FindFirst<Player>();
+            if (tutorial is { Visible: true, Open: true, Scale: >= 0.999f } && tutorial.controls.Count > 0
+                && player != null && !PlayerControl.IsControllable(level, player))
+                return "tutorial";
+        } else if (scene is LevelEnter enter && enter.postcard is { Visible: true, alpha: >= 0.999f, buttonEase: > 0f }) {
+            return "postcard";
+        }
+        return null;
+    }
+
     internal static string ReadMemorial(MemorialText? memorial, bool completed = false) {
         // MemorialText.Render draws a prefix of its localized message, not FancyText.
         // Show may already be false while text is fading out; it is still visible then.

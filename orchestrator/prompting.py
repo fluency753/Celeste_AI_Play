@@ -19,7 +19,7 @@ TOOL_NOTES = {
     "narrate": "思考期间更新观众看到的思考，不推进游戏",
     "set_effort": "调整你自己的推理强度",
     "exit_level": "用户要求退出时保存并退出关卡",
-    "cutscene": "剧情交给你处理时观看、推进、选择或跳过剧情",
+    "cutscene": "在主控交回的输入节点推进、选择或跳过剧情",
     "simulate": "花模拟体力预测短路线",
 }
 CN_COUNT = {1: "一", 2: "两", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九"}
@@ -35,7 +35,7 @@ def auto_handling(cfg) -> str:
     """interface_zh.md 里"系统自动处理的部分"：没有剧情工具时剧情一律自动跳过；有剧情工具时按当前剧情模式处理。"""
     if has_cutscene_tool(cfg):
         return ("屏幕转场、死亡动画与重生由系统自动推进。剧情按当前的剧情模式处理：auto 时系统自动推进并跳过；"
-                "agent 时 `act` 可能停在剧情中，由你用 `cutscene` 工具观看、推进、选择或跳过。")
+                "agent 时主控自动播放到需要输入的节点；对白用 `cutscene` 推进，分支明确选择，教学用 `act`，无需 wait。剧情标记不等于失控，角色可操作时继续用 `act`。")
     return "剧情对话、屏幕转场、死亡动画与重生都由系统自动推进并跳过，`act` 返回时 Madeline 已经可以操作。"
 
 
@@ -177,8 +177,8 @@ def prompt_parts(cfg) -> list[PromptPart]:
         parts = _speedrun_parts(cfg)
     if has_cutscene_tool(cfg):
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
-                                f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent由你使用cutscene的"
-                                "wait/advance/choose/skip决定。遇到分支必须明确choose，不得用advance代选。", None, "\n"))
+                                f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式由主控自动播放到输入节点，无需wait；"
+                                "用advance/choose/skip决定，教学用act。遇到分支必须明确choose，不得用advance代选。", None, "\n"))
     if is_explore(cfg) and getattr(cfg, "explore_program_runs", None):
         parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",
                                 f"两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。",

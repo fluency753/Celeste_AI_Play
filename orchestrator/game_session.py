@@ -18,13 +18,13 @@ from .goals import GoalManager
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
-from cutscene import skip_by_pause_menu, leave_level_by_pause_menu, story_pending  # noqa: E402
+from cutscene import skip_by_pause_menu, leave_level_by_pause_menu, story_pending, story_input  # noqa: E402
 
 LETTERS = set("LRUDJXZGTKYVCBPN")    # 桥接认识的全部按键
 AGENT_LETTERS = set("LRUDJXZGTKYV")  # 智能体只能用游玩按键；暂停、确认、返回等菜单键由主控使用
 AGENT_KEYS_TEXT = "L R U D J X Z G T K Y V，以及 A:角度"
 DEFAULT_STOP_ON = ["death", "room", "complete"]
-VALID_STOP_ON = {"death", "room", "uncontrollable", "controllable", "land", "refill", "complete"}
+VALID_STOP_ON = {"death", "room", "uncontrollable", "controllable", "land", "refill", "complete", "story_input"}
 END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
 PROGRESS_EVERY = 6                   # 执行中每 6 帧（0.1 秒）推送一次进度给 HUD
 
@@ -200,6 +200,8 @@ class GameSession:
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
         reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music)
         obs = reply["obs"]
+        if self.cfg.cutscene_mode == 'agent' and 'storyInput' not in obs:
+            raise RuntimeError('剧情自动推进需要新版桥接的 storyInput，请更新桥接 Mod 并重启游戏')
         self._pending_complete = bool((obs.get('level') or {}).get('completed'))
         if obs.get("scene") != "Level" and not (self.cfg.cutscene_mode == 'agent' and story_pending(obs)):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
@@ -244,6 +246,9 @@ class GameSession:
     def observe(self) -> tuple[dict, str | None]:
         with self.lock:
             reply = self.client.call("observe", image=True, scope="room", fields=True)
+            if self.cfg.cutscene_mode == 'agent' and story_pending(reply['obs']):
+                obs, image, _, _ = self._auto_advance(enrich_obs(reply['obs']), reply.get('image'))
+                reply = {'obs': obs, 'image': image}
             self._write_sim_state()
         obs = self._track_motion(enrich_obs(reply["obs"]))
         self._update_metrics_from_obs(obs)
@@ -394,6 +399,8 @@ class GameSession:
             raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
         if ((self.last_obs or {}).get('level') or {}).get('dialogChoices'):
             raise ActError('当前有对话选项，请使用cutscene的choose动作明确选择')
+        if story_input(self.last_obs or {}) in {'dialogue','postcard'} and not (self.last_obs or {}).get('controllable'):
+            raise ActError('当前对白已等待确认，请使用 cutscene 的 advance 或 skip；教学节点才用 act')
         if plan_file:
             if inputs:
                 raise ActError("inputs 与 plan_file 只能二选一")
@@ -406,6 +413,12 @@ class GameSession:
         if len(thought) > self.cfg.thought_max_chars:
             raise ActError(f"thought 太长，请压缩到一两句话（{self.cfg.thought_max_chars} 字以内）")
         stop = self._stop_list(stop_on or plan.stop_on)
+        if self.cfg.cutscene_mode == 'agent':
+            stop.append('story_input')
+            if (self.last_obs or {}).get('controllable'):
+                stop.append('uncontrollable')
+            elif story_input(self.last_obs or {}) == 'tutorial':
+                stop.append('controllable')
         frames = self._check_plan(plan)
         pre_notes: list[str] = []
         if plan.retry and self.cfg.pause_limit:
@@ -530,7 +543,8 @@ class GameSession:
                              decisions=1 if attempt == 0 else 0)
 
             auto_frames, notes = 0, []
-            if not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and not obs.get("controllable"):
+            if not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
+                    or story_pending(obs)):
                 obs, image, auto_frames, notes = self._auto_advance(obs, image)
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs, image, more = self._enter_next_chapter()
@@ -564,8 +578,26 @@ class GameSession:
 
     def _auto_advance(self, obs: dict, image: str | None):
         """非可控段一律按正常速度推进（与原版一致，录像里不快进）。
-        auto模式跳过剧情或推进普通对话；agent模式交回剧情控制权，分支选项始终要求明确选择。"""
+        auto模式跳过剧情；agent模式只在实际输入节点或恢复角色控制时交回。"""
         total, notes = 0, []
+        history = []
+
+        def remember(observation):
+            for item in observation.get('story') or []:
+                text = item.get('text', '')
+                if not text:
+                    continue
+                entry = {k: item[k] for k in ('kind', 'text', 'speakerPortrait') if k in item}
+                if (history and history[-1].get('kind') == entry.get('kind')
+                        and history[-1].get('speakerPortrait') == entry.get('speakerPortrait')):
+                    previous = history[-1]['text']
+                    if previous.startswith(text):
+                        continue
+                    if text.startswith(previous):
+                        history[-1] = entry
+                        continue
+                if not history or entry != history[-1]:
+                    history.append(entry)
         skip_tries = 0  # 本段剧情已尝试跳过的次数
         self.metrics.update(status="auto")
         self._before_advance()
@@ -581,9 +613,21 @@ class GameSession:
         for _ in range(600):
             if self.done or self.chapter_finished or self.goals.stop_motion.is_set():
                 break
+            guard = getattr(self, 'control_guard', None)
+            if guard and guard():
+                notes.append('用户已暂停，主控停止自动播放。')
+                break
+            if (obs.get('level') or {}).get('paused') or obs.get('pauseMenu'):
+                notes.append('游戏暂停菜单已打开，主控停止自动播放。')
+                break
             scene = obs.get("scene")
-            if self.cfg.cutscene_mode == 'agent' and story_pending(obs):
-                notes.append('剧情等待你的操作：可观看等待、推进、选择对话选项或跳过。')
+            remember(obs)
+            node = story_input(obs)
+            if self.cfg.cutscene_mode == 'agent' and node:
+                notes.append({'dialogue': '对白已完整显示，请决定 advance 或 skip。',
+                              'choice': '对话选项已就绪，请明确 choose，主控不会代选。',
+                              'tutorial': '教学输入已就绪，请阅读提示并用 act 操作；不需要 wait。',
+                              'postcard': '明信片已显示完毕，请用 advance 确认。'}[node])
                 break
             self._commit_completion(obs)
             if self.done or self.chapter_finished:break
@@ -591,9 +635,10 @@ class GameSession:
                 self._mark_done(f"离开关卡（{scene}）")
                 break
             level = obs.get("level") or {}
-            if scene == "Level" and obs.get("controllable"):
+            if (scene == "Level" and obs.get("controllable")
+                    and (self.cfg.cutscene_mode == 'agent' or not level.get('inCutscene'))):
                 break
-            if level.get("completed"):
+            if level.get("completed") and not story_pending(obs):
                 self._chapter_complete()
                 break
             if not level.get("inCutscene"):
@@ -609,21 +654,28 @@ class GameSession:
                     notes.append("这段剧情不能跳过，按正常速度播放")
                 elif reason != "no_pause":
                     continue
-            if level.get('dialogChoices') and not level.get('skippingCutscene'):
+            if node == 'choice':
                 notes.append('当前需要明确选择对话选项，主控不会代选。')
                 break
             inputs = ["1,C", "29"] if self.cfg.cutscene_mode == 'auto' and level.get("dialogWaiting") and not level.get("paused") else ["30"]
-            reply = self.client.call("step", inputs=inputs, stop_on=["controllable", "complete"],
+            stops = ["controllable", "story_input"] if self.cfg.cutscene_mode == 'agent' else ["controllable", "complete", "story_input"]
+            if self.cfg.cutscene_mode == 'auto' and level.get('inCutscene') and obs.get('controllable'):
+                stops.remove('controllable')
+            reply = self.client.call("step", inputs=inputs, stop_on=stops,
                                      speed=self.cfg.auto_speed, image=False, entities=False, tiles=False,
                                      progress=PROGRESS_EVERY, on_event=self._on_progress)
             log_step(inputs, reply["result"])
             obs = reply["obs"]
+        remember(obs)
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         if total:
             notes.append(f"主控自动推进了 {total} 帧（转场、剧情、死亡与重生，均为正常速度）")
             if not self.done and not self.chapter_finished:
                 reply = self.client.call("observe", image=True, scope="room", fields=True)
                 obs, image = enrich_obs(reply["obs"]), reply.get("image")
+        if total:
+            current = [item.get('text') for item in obs.get('story') or []]
+            obs['storyPlayback'] = [item for item in history if item['text'] not in current]
         return obs, image, total, notes
 
     def _before_advance(self) -> None:
@@ -681,15 +733,19 @@ class GameSession:
         if not self.done:
             self._mark_done(self.goals.snapshot().get("stop_reason", "用户停止"))
 
-    def cutscene(self, action: str, frames: int = 30, choice: int | None = None) -> tuple:
-        if action not in {'wait','advance','choose','skip'} or type(frames) is not int or not 1 <= frames <= 180:
-            raise ActError('剧情动作须为 wait/advance/choose/skip，frames为1～180')
+    def cutscene(self, action: str, choice: int | None = None) -> tuple:
+        if action not in {'advance','choose','skip'}:
+            raise ActError('剧情自动播放到下一个输入节点，无需 wait；动作须为 advance/choose/skip，教学请用 act')
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():raise ActError('本次试玩已结束')
             self._before_advance()
             obs=self.client.call('observe',image=False,entities=False,tiles=False)['obs']
             if not story_pending(obs) and not (obs.get('level') or {}).get('skippingCutscene'):
                 raise ActError('当前没有待处理的剧情')
+            original_options = [(item.get('index'),item.get('text')) for item in (obs.get('level') or {}).get('dialogChoices') or []]
+            auto_frames, auto_notes = 0, []
+            if action != 'skip' and not story_input(obs):
+                obs,_,auto_frames,auto_notes = self._auto_advance(obs,None)
             options=(obs.get('level') or {}).get('dialogChoices') or []
             if action in {'advance','choose'} and obs.get('scene')=='Level' and 'dialogChoices' not in (obs.get('level') or {}):
                 raise ActError('推进或选择剧情需要更新桥接0.12.3，避免把分支对话误当普通翻页')
@@ -697,6 +753,8 @@ class GameSession:
                 raise ActError('当前暂停菜单尚未关闭，不能把菜单确认当作对话确认')
             if action == 'advance' and options:
                 raise ActError('当前有对话选项，必须用 choose 明确指定 choice，或等待/跳过整段剧情')
+            if action == 'advance' and story_input(obs) not in {'dialogue','postcard'}:
+                raise ActError('当前不是对白确认节点；角色或教学仍可操作时请用 act')
             used=0
             started=time.monotonic()
             def log(inputs,result):
@@ -713,6 +771,8 @@ class GameSession:
             if action=='skip':
                 skipped,obs,_,why=skip_by_pause_menu(self.client,on_step=log)
             elif action=='choose':
+                if original_options and original_options != [(item.get('index'),item.get('text')) for item in options]:
+                    raise ActError('对话选项已改变，请重新观察后再选择')
                 if type(choice) is not int or not any(item.get('index')==choice for item in options):
                     raise ActError('choice须为当前可见对话选项的index')
                 signature=[(item.get('index'),item.get('text')) for item in options]
@@ -721,24 +781,28 @@ class GameSession:
                     if [(item.get('index'),item.get('text')) for item in level.get('dialogChoices') or []] != signature:
                         raise ActError('对话选项已改变，请重新观察后再选择')
                     if not level.get('dialogChoiceReady'):
-                        raise ActError('对话选项仍在动画中，请先 wait 再选择')
+                        raise ActError('主控尚未检测到可操作的对话选项，请检查剧情节点状态')
                     current=level.get('dialogChoiceIndex')
                     if current==choice:
                         obs=step(['1,C','1']);break
                     obs=step(['1,D' if current < choice else '1,U','1'])
                 else:raise ActError('未能定位对话选项，没有按确认')
             else:
-                obs=step(['1,C',str(max(1,frames-1))] if action=='advance' else [str(frames)])
+                obs=step(['1,C','1'])
             self.metrics.add(play_game_s=time.monotonic()-started,frames_played=used)
             self._commit_completion(obs)
-            if not self.done and not story_pending(obs) and not obs.get('controllable'):
-                obs,_,_,_=self._auto_advance(obs,None)
+            if not self.done and (story_pending(obs) or not obs.get('controllable')):
+                obs,_,more,notes=self._auto_advance(obs,None)
+                auto_frames += more; auto_notes.extend(notes)
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs,_,_=self._enter_next_chapter()
+            playback = obs.get('storyPlayback')
             reply=self.client.call('observe',image=True,scope='room',fields=True)
             obs=self._track_motion(enrich_obs(reply['obs']))
+            if playback:obs['storyPlayback']=playback
             self._update_metrics_from_obs(obs);self._write_workspace(obs)
-            info={'action':action,'frames':used,'skipped':skipped,'scene':obs.get('scene'),'finished':self.done}
+            info={'action':action,'frames':used,'auto_frames':auto_frames,'auto_notes':auto_notes,
+                  'story_input':story_input(obs),'skipped':skipped,'scene':obs.get('scene'),'finished':self.done}
             if action=='skip' and not skipped:info['note']=why
             return obs,reply.get('image'),info
 

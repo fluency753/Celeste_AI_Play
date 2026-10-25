@@ -31,9 +31,9 @@ plan_file：（有工作区时可用）工作区里的计划文件路径，与 i
   它应读取 /workspace/game/ 下的最新数据并改写同一个计划文件，主控接着执行，最多 max 次，不唤醒你。格式详见 /kb/game_data.md。
 thought：一两句中文，会显示给观众。只写你对当前房间或这一段的分析与判断（难点在哪、怎么取舍、打算怎么过），
   不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。
-stop_on：提前停下的条件，可选 death room uncontrollable land refill complete；
+stop_on：提前停下的条件，可选 death room uncontrollable controllable land refill complete story_input；
   默认 ["death", "room", "complete"]，death 与 complete 总会生效。
-死亡、换房后的转场与重生由系统自动推进；剧情按当前模式处理，agent模式可能停在剧情中，需要阅读story与画面后自行操作。"""
+死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控自动播放到实际输入节点或恢复控制。读取storyInput与story，教学用act，不需wait；inCutscene标记本身不表示角色失控。"""
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json）"
 SIM_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
@@ -243,12 +243,12 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             result = await asyncio.to_thread(session.exit_level, reason)
             return [json.dumps(result,ensure_ascii=False) + '\n已退出关卡，本次试玩结束，请结束本轮，不再调用游戏工具。']
 
-    @optional_tool(tool_cutscene, name='cutscene', description='处理剧情：wait观看播放，advance推进一页对话，choose选择当前可见选项index，skip尝试跳过整段。遇到分支选项必须明确choose，advance不会代选。frames为1～180。', structured_output=False)
-    async def cutscene(action: str, frames: int = 30, choice: int | None = None) -> list:
+    @optional_tool(tool_cutscene, name='cutscene', description='主控自动播放剧情到下一输入节点，无需wait。advance确认当前完整对白或明信片，choose选择当前可见选项index，skip尝试跳过整段；教学用act。advance不会代选，动作后自动播放到下一节点或恢复控制。', structured_output=False)
+    async def cutscene(action: str, choice: int | None = None) -> list:
         async with call_lock:
             if (note := gated()) is not None:return [note]
             begin()
-            obs,image,info=await asyncio.to_thread(session.cutscene,action,frames,choice)
+            obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
             result=[]
             if image and session.cfg.images:result.append(Image(data=upscale_png(image),format='png'))
             result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore)+'\n'+room_json(obs))

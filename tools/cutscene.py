@@ -22,6 +22,11 @@ def story_pending(obs: dict) -> bool:
         level.get('inCutscene') or level.get('dialogOpen') or level.get('dialogWaiting') or level.get('dialogChoices'))
 
 
+def story_input(obs: dict) -> str | None:
+    """Bridge-provided input node; a cutscene flag by itself never requests input."""
+    return obs.get('storyInput')
+
+
 def cutscene_skippable(obs: dict) -> bool:
     """当前是否处在可以尝试跳过的剧情里（序章开场，或关卡内的剧情且尚未在跳过中）。"""
     scene = obs.get("scene")

@@ -37,7 +37,7 @@ def codex_tool_mapping(cfg) -> str:
             "MCP、浏览器或子智能体；宿主文件系统是只读的。"
             "只输出给观众的简短公开解说，不输出内部推理正文。"
             + ("用户要求退出关卡时调用 celeste_exit_level；" if "exit_level" in tools else "")
-            + ("剧情可用 celeste_cutscene 选择wait/advance/choose/skip。" if "cutscene" in tools else "")
+            + ("剧情由主控自动播放到输入节点；对白用 celeste_cutscene advance，分支用 choose，可用 skip 跳过，教学用 act，不调用 wait。" if "cutscene" in tools else "")
             + "公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
             "每次操作后仍应立即公开说明下一步打算，不要持续静默。")
 
@@ -161,6 +161,10 @@ class CodexRunner(SessionControls):
         name, args = params.get("tool", ""), params.get("arguments") or {}
         if not isinstance(args, dict):
             return {"contentItems": [{"type": "inputText", "text": "工具参数必须是 JSON 对象"}], "success": False}
+        if name == 'celeste_cutscene' and 'frames' in args:
+            # Existing Codex threads retain their original optional tool fields on resume.
+            # Waiting now belongs to the host; the cached frame field has no effect.
+            args = {key: value for key, value in args.items() if key != 'frames'}
         ident = params.get("callId") or name
         self.called_tools.append(name)
         self.metrics.add(tool_calls=1)

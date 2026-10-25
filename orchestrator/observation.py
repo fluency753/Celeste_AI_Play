@@ -203,6 +203,10 @@ def room_json(obs: dict) -> str:
         data['dialog']={key:level.get(key) for key in ('dialogOpen','dialogWaiting','dialogChoices','dialogChoiceIndex','dialogChoiceReady')}
     if obs.get('story'):
         data['story']=obs['story']
+    if 'storyInput' in obs:
+        data['storyInput']=obs['storyInput']
+    if obs.get('storyPlayback'):
+        data['storyPlayback']=obs['storyPlayback']
     connectivity=static_connectivity(obs)
     if connectivity:data['connectivity']=connectivity
     lines = ["{"]
@@ -269,6 +273,13 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     if effort:
         head += f" · {effort}"
     lines.append(head)
+    for previous in obs.get('storyPlayback') or []:
+        lines.append('刚才由主控自动播放的文字：'+previous['text'])
+    node = obs.get('storyInput')
+    if node:
+        lines.append('当前剧情输入节点：'+node+'；主控已停止自动播放，教学请用 act，完整对白用 advance，选项用 choose。')
+    elif obs.get('controllable') and (level or {}).get('inCutscene'):
+        lines.append('虽然有剧情标记，角色当前仍可操作，请继续用 act；不需要等待或确认。')
     for story in obs.get('story') or []:
         portrait=story.get('speakerPortrait') or {}
         speaker=portrait.get('sprite')

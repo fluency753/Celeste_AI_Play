@@ -38,14 +38,8 @@ internal static class StateExtractor {
 
     public static Player? GetPlayer(Level level) => level.Tracker.GetEntity<Player>();
 
-    /// <summary>Madeline 是否处于玩家可操作的状态（不在剧情、转场、死亡或入场动画中）。</summary>
-    public static bool IsControllable(Level? level, Player? player) {
-        if (level == null || player == null || player.Dead) return false;
-        if (level.InCutscene || level.Paused || level.Transitioning || level.Frozen) return false;
-        if (!player.InControl) return false;
-        return player.StateMachine.State is not (Player.StDummy or Player.StIntroWalk or Player.StIntroJump
-            or Player.StIntroRespawn or Player.StIntroWakeUp or Player.StIntroMoonJump or Player.StIntroThinkForABit);
-    }
+    /// <summary>按角色实际控制状态判断，剧情标记不代表失控。</summary>
+    public static bool IsControllable(Level? level, Player? player) => PlayerControl.IsControllable(level, player);
 
     /// <summary>整个房间（外扩 margin）。</summary>
     public static Rectangle RoomRect(Level level, int margin) {
@@ -66,6 +60,7 @@ internal static class StateExtractor {
         w.WriteNumber("frame", Bridge.Frame);
         w.WriteString("scene", Engine.Scene?.GetType().Name ?? "none");
         StoryText.Write(w, Engine.Scene);
+        w.WriteString("storyInput", StoryText.InputNode(Engine.Scene));
 
         if (SaveData.Instance is { } save) {
             w.WriteStartObject("save");

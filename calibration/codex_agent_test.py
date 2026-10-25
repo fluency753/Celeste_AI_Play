@@ -95,9 +95,9 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.session=SimpleNamespace()
         with patch('orchestrator.codex_agent.run_program') as shell:
             result=await self.runner._request('item/tool/call',{'tool':'celeste_cutscene',
-                'arguments':{'action':'wait','frames':30}})
+                'arguments':{'action':'advance','frames':30}})
         shell.assert_not_called()
-        self.server.call_tool.assert_awaited_with('cutscene',{'action':'wait','frames':30})
+        self.server.call_tool.assert_awaited_with('cutscene',{'action':'advance'})
         self.assertTrue(result['success'])
         self.assertEqual(result['contentItems'][1],{'type':'inputImage','imageUrl':'data:image/png;base64,AAAA'})
 

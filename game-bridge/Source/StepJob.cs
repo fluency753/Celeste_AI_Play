@@ -12,7 +12,7 @@ namespace CelesteAI.Bridge;
 /// <summary>
 /// 一次"推进 N 帧"的任务：逐帧取出按键，记录轨迹与事件，按截断条件提前停下。
 /// 截断条件：death 死亡、room 换房、uncontrollable 失去控制、controllable 恢复控制、
-/// land 落地、refill 冲刺次数恢复、complete 通关。
+/// land 落地、refill 冲刺次数恢复、complete 通关、story_input 到达剧情输入节点。
 /// 给了预期轨迹（expect）时还会逐帧对照 Madeline 的位置与状态，偏差超过容差（tolerance）就以 deviate 停下。
 /// </summary>
 internal sealed class StepJob {
@@ -45,6 +45,7 @@ internal sealed class StepJob {
     private string? lastRoom;
     private bool lastAlive;
     private bool lastControllable;
+    private string? lastStoryInput;
     private bool lastOnGround;
     private int lastDashes;
 
@@ -78,6 +79,7 @@ internal sealed class StepJob {
         lastRoom = level?.Session.Level;
         lastAlive = p is { Dead: false };
         lastControllable = StateExtractor.IsControllable(level, p);
+        lastStoryInput = StoryText.InputNode(Engine.Scene);
         lastOnGround = p?.onGround ?? false;
         lastDashes = p?.Dashes ?? 0;
         if (recordEntities && level != null) {
@@ -127,6 +129,9 @@ internal sealed class StepJob {
         if (!lastOnGround && onGround) Emit(frame, "land", null);
         if (alive && dashes > lastDashes) Emit(frame, "refill", dashes.ToString());
         if (level is { Completed: true }) Emit(frame, "complete", null);
+        string? storyInput = StoryText.InputNode(Engine.Scene);
+        if (storyInput != null && storyInput != lastStoryInput) Emit(frame, "story_input", storyInput);
+        lastStoryInput = storyInput;
 
         CheckExpectation(frame, p);
         if (progressEvery > 0 && level != null && (index % progressEvery == 0 || StopReason != null || index >= plan.Count)) {

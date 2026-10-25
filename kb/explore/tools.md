@@ -25,8 +25,9 @@ Bash 在断网沙箱运行辅助程序，单次时长上限见系统提示词；
 载入、转场和重生由主控处理。剧情有 auto 与 agent 两种模式；agent 模式下你决定观看、推进、选择或跳过。
 观测中的story提供当前画面已显示的对白、说话者头像标识、教学提示与纪念碑文字；结合返回截图理解内容，再决定是否推进或跳过，不能只盯等待标志翻页。它不是完整剧本，不包含未显示的后文。
 截图为游戏画面层，不含对话等HUD层；当前对白与选项应读取story及dialogChoices，不能因截图里没有对白就当作没有剧情信息。
-cutscene(action="wait",frames=60) 等待播放；advance 推进一页；choose(choice=index) 选择可见选项；skip 尝试跳过整段。
-frames必须是1～180的整数；长动画分段wait，每次观察返回状态再决定后续操作。
+主控自动播放动画和逐字对白，到需要输入的节点或角色恢复控制时交回，不需要调用 wait。
+cutscene(action="advance") 确认当前完整对白或明信片；choose(choice=index) 明确选择可见选项；skip 尝试跳过整段。每次确认后主控继续自动播放到下一节点。
+storyInput 标明 dialogue / choice / tutorial / postcard；教学使用 act，inCutscene 标记本身不代表角色不能操作。
 剧情中的教学或互动若需要方向、跳跃、冲刺等真实按键，仍可调用act；不能只等待或把教学输入当普通翻页。
 遇到对话选项时必须明确 choose；advance 不会代选。
 只完成本次指定章节；主控报告全部完成后结束，不能自行进入下一章。
