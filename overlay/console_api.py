@@ -218,6 +218,7 @@ PLACEHOLDERS = {
     "{death}": "死亡补的规划轮次（可调参数 death_bonus）",
     "{game_tools}": "本次注册的游戏工具",
     "{game_tool_list}": "\"游戏工具有 N 个：……\"一句，按本次注册的游戏工具生成",
+    "{preset_sim}": "探索模式里预设模拟器的开放情况（关限额预测时为\"禁用预设模拟器\"，开时为\"预设模拟器只能通过 simulate 按额度使用\"）",
     "{auto_handling}": "系统自动处理哪些画面（剧情是否交给智能体，按本次设置生成）",
 }
 
@@ -315,7 +316,7 @@ def prompt_reset(name: str) -> dict:
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.0.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.0.1"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

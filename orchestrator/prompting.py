@@ -52,6 +52,9 @@ def fill(text: str, cfg) -> str:
     from .tuning import seconds_text
     if "{game_tool_list}" in text:
         text = text.replace("{game_tool_list}", game_tool_list(cfg))
+    if "{preset_sim}" in text:     # 探索模式：开了限额预测时预设模拟器只能经 simulate 按额度用，否则完全不开放
+        text = text.replace("{preset_sim}", "预设模拟器只能通过 simulate 按额度使用" if getattr(cfg, "sim_assist", False)
+                            else "禁用预设模拟器")
     if "{auto_handling}" in text:
         text = text.replace("{auto_handling}", auto_handling(cfg))
     values = {
