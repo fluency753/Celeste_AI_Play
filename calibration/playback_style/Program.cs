@@ -22,5 +22,9 @@ foreach (int count in new[] { 0, 1, 12, 13, 40, 100, 500, 2000, 100000 }) {
     previousHistory = style.HistoryRetention; previousFade = style.FadeFrames(8);
     Console.WriteLine($"tracks={count} halfLife={style.HalfLife:F2} dim={style.Dim:F3} fade={style.FadeFrames(8)} visibleAfter12={visibility:F3}");
 }
-Check(new PlaybackDensity(2000).Visibility(12) < 0.02f, "大量路线的旧亮色线段应迅速消退");
+var dense = new PlaybackDensity(2000);
+Check(dense.Visibility(12) >= 0.3f && dense.Visibility(40) < 0.04f,
+      "密集路线应保留可辨识的短尾迹，同时在约2/3秒后消退");
+Check(dense.FadeFrames(8) == 4, "密集路线的轮末转灰至少保留原请求的一半时间");
+Check(new PlaybackDensity(142).HalfLife > 10f, "实际7C密集回放的尾迹半衰期应由约5帧延长至约10帧");
 Console.WriteLine("PASS: sparse preservation, density monotonicity, bounds and cache/direct decay consistency");
