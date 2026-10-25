@@ -237,9 +237,20 @@ class Recorder:
         log(f'[record] 接续原录像：{recorder.opts.dir}（不重启编码器或音频，不重置帧号）')
         return recorder
 
+    @staticmethod
+    def abandon_saved(saved, reason):
+        """原录像接不上也收不了尾（OBS 关闭或崩溃、独立音频停了等）：把会话标成 abandoned，不再等它续接，
+        之后续跑另起一段录像，控制台也能照常交还游戏。已经写下的文件原样留在录像目录里。"""
+        manifest = Path(saved['options']['dir']) / 'session.json'
+        payload = {**saved, 'state': 'abandoned', 'abandoned_reason': str(reason)}
+        temporary = manifest.with_suffix('.tmp')
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.replace(manifest)
+
     @classmethod
-    def finish_saved(cls, call, saved, run_dir, log=print):
-        """用户放弃续跑时收尾；已经由 OBS 停下的同目录录像也可整理。"""
+    def finish_saved(cls, call, saved, run_dir, log=print, on_capture_stopped=None):
+        """用户放弃续跑时收尾；已经由 OBS 停下的同目录录像也可整理。
+        on_capture_stopped：采集一停就调用（交还游戏），不等 ffmpeg 收尾与纯享版。"""
         hello = call('hello')
         plugin = (hello.get('clock') or {}).get('plugin') or {}
         if not plugin.get('dir') or Path(plugin['dir']).resolve() != Path(saved['options']['dir']).resolve():
@@ -249,11 +260,14 @@ class Recorder:
         recorder.run_dirs = [Path(p) for p in saved.get('runs', [])]
         recorder.bind_run(Path(run_dir))
         recorder.started = True
-        return recorder.stop()
+        return recorder.stop(on_capture_stopped=on_capture_stopped)
 
     def retain(self):
         """编码器和音频由 OBS/Mod 持有；只断开 Python 所有权，不发停止命令。"""
         hello = self.call('hello')
+        if hello.get('frozen') is False:
+            # 菜单与地图不冻结（桥接 1.0.7 起照常运行）：保留录制会把中断期间的菜单画面一直录进同一份录像
+            raise RecordingError('游戏不在冻结的关卡里（菜单或地图照常运行），不保留录制')
         saved = {'state': 'recording', 'options': {'dir': str(self.opts.dir), 'audio_source': self.opts.audio_source}}
         self.validate_resume(saved, hello)
         self._save_session('recording')

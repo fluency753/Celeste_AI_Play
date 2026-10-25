@@ -99,7 +99,10 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
                 if (obs.get('level') or {}).get('dialogChoices'):
                     return obs
                 if reason == "no_pause":
-                    obs = step(c, ["10"], stop_on=["controllable"])["obs"]
+                    # 这一刻打不开暂停菜单：推进几帧再试。已经可操作时不能用"直到可操作"截断——桥接的截断条件
+                    # 开始时就满足就一帧都不推进，关卡又是冻结的，会原地空转到步数用完
+                    stops = ["uncontrollable"] if obs.get("controllable") else ["controllable"]
+                    obs = step(c, ["10"], stop_on=stops)["obs"]
                     continue
             obs = step(c, ["120"], stop_on=["controllable"])["obs"]
             continue

@@ -158,6 +158,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "统计与 Claude Code 会话。模型、推理强度、章节、--sim 等沿用原运行的设置")
     ap.add_argument("--fresh-session", action="store_true",
                     help="与 --resume 一起用：不接原来的 Claude Code 会话，开一个新会话（原会话无法恢复时用）")
+    ap.add_argument("--new-recording", action="store_true",
+                    help="与 --resume 一起用：原录像接不上时（OBS 关了或崩溃、独立音频停了）放弃它，这次续跑另起一段录像")
     args = ap.parse_args()
     previous = args.previous = load_previous(args.resume) if args.resume else None
     if previous:
@@ -894,6 +896,31 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
     return summary
 
 
+def abandon_recording(bridge_port: int, saved: dict | None, previous_dir, problem) -> dict:
+    """--new-recording：原录像接不上时放弃它，这次续跑另起一段录像；返回最新的 hello。
+    OBS 还开着同一目录的录像（例如独立音频停了）就先收尾它；OBS 已经停了就把会话标成 abandoned；
+    OBS 正在录别的会话时不动它，照常报错（不能另开录像）。"""
+    from tools.bridge_client import BridgeClient  # noqa: WPS433
+    client = BridgeClient(port=bridge_port, timeout=900)
+    try:
+        hello = client.call('hello')
+        if saved is not None and saved.get('state') == 'recording':
+            plugin = (hello.get('clock') or {}).get('plugin') or {}
+            recording = plugin.get('state') == 'recording' or plugin.get('recording') is True
+            same = bool(plugin.get('dir')) and Path(plugin['dir']).resolve() == Path(saved['options']['dir']).resolve()
+            if recording and same:
+                print(f"[record] 原录像接不上（{problem}）：先收尾它", flush=True)
+                Recorder.finish_saved(client.call, saved, previous_dir, log=lambda m: print(m, flush=True))
+            else:
+                Recorder.abandon_saved(saved, problem)
+            hello = client.call('hello')
+        Recorder.validate_resume(None, hello)          # OBS 还在录别的会话：不另开录像
+        print(f"[record] 已放弃原录像（{problem}）：这次续跑另起一段录像", flush=True)
+        return hello
+    finally:
+        client.close()
+
+
 def main() -> int:
     cfg, args = parse_args()
     if cfg.create_save:
@@ -910,10 +937,27 @@ def main() -> int:
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
     from .bridge_requirements import preflight_bridge
     hello = preflight_bridge(cfg.bridge_port)
-    saved_recording = Recorder.saved_session(args.previous['dir']) if args.previous else None
-    if Recorder.validate_resume(saved_recording, hello):
+    saved_recording = None
+    try:
+        saved_recording = Recorder.saved_session(args.previous['dir']) if args.previous else None
+        resume_recording = Recorder.validate_resume(saved_recording, hello)
+    except RecordingError as exc:
+        if not (args.previous and args.new_recording):
+            print(f"[record] {exc}", flush=True)
+            if args.previous:
+                print("[record] 原录像接不上时可以放弃它、另起一段录像续跑：续跑加 --new-recording"
+                      "（控制台里用“另起录像续跑”）；不续跑时在控制台交还游戏控制", flush=True)
+            return 2
+        try:
+            hello = abandon_recording(cfg.bridge_port, saved_recording, args.previous['dir'], exc)
+        except RecordingError as again:
+            print(f"[record] {again}", flush=True)
+            return 2
+        saved_recording, resume_recording = None, False
+    if resume_recording:
         if not args.record:
-            raise RecordingError('原录像仍在继续，不能用 --no-record 续跑；请先收尾录像')
+            print('[record] 原录像仍在继续，不能用 --no-record 续跑；请先收尾录像（控制台交还游戏控制时会收尾）', flush=True)
+            return 2
         cfg._recording_resume_manifest = saved_recording
         cfg._keep_frozen = True  # 新主控完成接管前，启动失败不得破坏原冻结和录制。
         cfg.continuous_music = saved_recording['options']['continuous_music']

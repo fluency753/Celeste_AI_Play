@@ -226,7 +226,8 @@ def make_handler(pinned: Path | None):
                         elif self.path == "/api/console/preview":
                             result = console_api.preview(data.get("options"))
                         elif self.path == "/api/console/resume":
-                            result = console_api.resume(str(data.get("run", "")), bool(data.get("fresh_session")))
+                            result = console_api.resume(str(data.get("run", "")), bool(data.get("fresh_session")),
+                                                       bool(data.get("new_recording")))
                         elif self.path == "/api/console/release":
                             result = console_api.release()
                         elif self.path == "/api/console/prefs":

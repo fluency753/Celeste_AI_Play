@@ -160,7 +160,8 @@ class SessionControls:
                             async with self.action_lock:
                                 snapshot = await asyncio.to_thread(self.session.update_simulation, json.loads(row['text']))
                             self.control.mark(row['id'], 'submitted', '推演设置已生效，无需重启主控或录制')
-                            self.pending_messages.append({**row, 'text': '用户已实时更新推演设置：' + snapshot['rules'] +
+                            # 只是通知：不能向进行中的一轮追加输入的执行器（Claude）不为它打断，下一轮带上
+                            self.pending_messages.append({**row, 'next_turn': True, 'text': '用户已实时更新推演设置：' + snapshot['rules'] +
                                 f"当前余额{snapshot['balance']}。新规则从下一次推演生效，继续当前任务，不需要重写笔记或停止试玩。"})
                         elif row["kind"] == "message":
                             self.pending_messages.append(row)
@@ -247,6 +248,8 @@ class SessionControls:
                     for row in list(self.pending_messages):
                         if row.get("attempted_turn") == self.turn_id:
                             continue
+                        if row.get("next_turn") and not self.capabilities.live_steering:
+                            continue          # 系统通知（推演设置已生效）不打断这一轮，留到下一轮
                         row["attempted_turn"] = self.turn_id
                         # 提交期间先移出待启动队列，避免轮次结束时被重复带入下一轮。
                         self.pending_messages.remove(row)

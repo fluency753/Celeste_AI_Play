@@ -1265,7 +1265,7 @@ async function refreshStatus() {
   else {
     const scene = (g.scene || "").replace(/^Level Celeste\//, "").replace(/ Normal /, " ");
     light("lightGame", g.active ? (orch.running ? "active" : "frozen") : "on", "gameDetail",
-          `${g.version || ""} · ${g.active ? (g.frozen === false ? "菜单正常运行" : orch.running ? "主控接管中" : "冻结中") : "正常运行"}${scene ? " · " + scene : ""}`);
+          `${g.version || ""} · ${g.active ? (g.input_owned === false ? "菜单正常运行" : orch.running ? "主控接管中" : "冻结中") : "正常运行"}${scene ? " · " + scene : ""}`);
   }
   light("lightObs", s.obs.running ? "on" : "off", "obsDetail",
         s.obs.running ? (g.lockstep ? "锁步录制中" : "运行中") : s.obs.running === false ? "没在运行" : "—");
@@ -1315,6 +1315,13 @@ async function refreshRuns() {
       b.disabled = running();
       b.addEventListener("click", () => resumeRun(r.dir));
       side.appendChild(b);
+      if (r.recording_pending) {   // 原录像接不上（OBS 关了、独立音频停了）时用：放弃原录像，另起一段
+        const n = document.createElement("button"); n.className = "btn small"; n.type = "button"; n.textContent = "另起录像续跑";
+        n.title = "原录像接不上时（OBS 关了或崩溃、独立音频停了）放弃它，这次续跑另起一段录像";
+        n.disabled = running();
+        n.addEventListener("click", () => resumeRun(r.dir, true));
+        side.appendChild(n);
+      }
     }
     li.append(title, side, meta);
     li.title = r.dir;
@@ -1323,15 +1330,19 @@ async function refreshRuns() {
   if (!ui.runs.length) list.replaceChildren(Object.assign(document.createElement("li"), { textContent: "还没有运行记录。", className: "meta" }));
 }
 
-async function resumeRun(dir) {
+async function resumeRun(dir, newRecording = false) {
   try {
-    await postJSON("/api/console/resume", { run: dir || (ui.runs.find(r => r.resumable) || {}).dir });
-    toast("已启动续跑：接着原来的章节、统计与会话。");
+    await postJSON("/api/console/resume", { run: dir || (ui.runs.find(r => r.resumable) || {}).dir, new_recording: newRecording });
+    toast(newRecording ? "已启动续跑：放弃原录像，另起一段录像。" : "已启动续跑：接着原来的章节、统计与会话。");
     await refreshStatus();
   } catch (e) { toast(e.message, true); }
 }
 async function releaseGame() {
-  try { await postJSON("/api/console/release", {}); toast("已交还游戏控制，游戏恢复正常运行。"); await refreshStatus(); }
+  try {
+    const r = await postJSON("/api/console/release", {});
+    toast("已交还游戏控制，游戏恢复正常运行。" + (r && r.note ? r.note : ""), !!(r && r.note));
+    await refreshStatus();
+  }
   catch (e) { toast(e.message, true); }
 }
 

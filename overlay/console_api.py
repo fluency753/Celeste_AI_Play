@@ -439,7 +439,8 @@ def runs(limit: int = 40) -> list[dict]:
     found.sort(key=lambda d: d.name, reverse=True)
     latest = latest_run()
     game = game_status()
-    frozen_now = bool(game.get("running") and game.get("frozen", game.get("active")))   # 菜单中的连接不算冻结
+    # 主控停下后仍保持接管就能续跑：游戏停在关卡里时冻结，停在地图或菜单上时照常运行，续跑用菜单宏进入（见 run.py）
+    held_now = bool(game.get("running") and game.get("active"))
     rows = []
     for directory in found[:limit]:
         state = _read_json(directory / "run_state.json")
@@ -466,7 +467,7 @@ def runs(limit: int = 40) -> list[dict]:
             "recording": (recording / "gameplay.mkv").exists(), "pure": (recording / "gameplay_pure.mkv").exists(),
             "recording_pending": pending_recording, "recording_dir": str(recording),
             "resumable": bool(summary) and summary.get("game_released") is False and latest is not None
-                         and latest.resolve() == directory.resolve() and frozen_now,
+                         and latest.resolve() == directory.resolve() and held_now,
         })
     return rows
 
@@ -495,13 +496,13 @@ def preview(options: dict) -> dict:
     return {"command": command_line(build(options)), "options": normalize(options)}
 
 
-def resume(run_dir: str, fresh_session: bool = False) -> dict:
+def resume(run_dir: str, fresh_session: bool = False, new_recording: bool = False) -> dict:
     from orchestrator.launch_options import command_line, resume_args
     directory = Path(run_dir)
     row = next((r for r in runs() if Path(r["dir"]).resolve() == directory.resolve()), None)
     if not row or not row["resumable"]:
         raise ValueError("只能续跑最近一次停下时保持冻结的运行")
-    argv = resume_args(directory, bool(fresh_session))
+    argv = resume_args(directory, bool(fresh_session), bool(new_recording))
     return {**_launch(argv), "command": command_line(argv)}
 
 
@@ -510,16 +511,36 @@ def release(bridge_port: int = 47774) -> dict:
     if orchestrator_status()["running"]:
         raise ValueError("主控还在运行，不能从控制台交还控制")
     from tools.bridge_client import BridgeClient
-    client = BridgeClient(port=bridge_port, timeout=10)
+    client = BridgeClient(port=bridge_port, timeout=900)
+    note = None
+    released = False
+
+    def hand_back():
+        nonlocal released
+        if not released:
+            client.call("deactivate")
+            released = True
+
     try:
-        from orchestrator.recording import Recorder
+        from orchestrator.recording import Recorder, RecordingError
         directory = latest_run()
-        saved = Recorder.saved_session(directory) if directory else None
+        try:
+            saved = Recorder.saved_session(directory) if directory else None
+        except RecordingError as exc:
+            saved, note = None, f"原录制会话读不出来，没有收尾：{exc}"
         if saved and saved.get('state') == 'recording':
-            Recorder.finish_saved(client.call, saved, directory)
+            try:   # 采集一停就交还游戏，不等 ffmpeg 收尾与纯享版
+                Recorder.finish_saved(client.call, saved, directory, on_capture_stopped=hand_back)
+            except Exception as exc:  # noqa: BLE001（录像收不了尾也要交还游戏）
+                Recorder.abandon_saved(saved, exc)
+                note = f"原录像无法收尾，已放弃：{exc}"
         else:
-            Recorder.validate_resume(None, client.call('hello'))
-        client.call("deactivate")
+            try:
+                Recorder.validate_resume(None, client.call('hello'))
+            except RecordingError as exc:
+                raise ValueError("OBS 还在录制另一段录像（不是这次运行保留的）：为免游戏画面继续被录进去，"
+                                 "没有交还控制。请先在 OBS 里停止录制，再交还游戏控制") from exc
+        hand_back()
     finally:
         client.close()
-    return {"released": True}
+    return {"released": True, **({"note": note} if note else {})}

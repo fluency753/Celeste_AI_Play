@@ -177,5 +177,36 @@ class LiveSettingsTests(unittest.TestCase):
                 runner.close_events()
 
 
+    def test_claude_turn_is_not_interrupted_by_sim_update_notice(self):
+        """Claude 不能向进行中的一轮追加输入：推演设置生效的通知留到下一轮，不打断当前这一轮思考。"""
+        from orchestrator.agent import ClaudeRunner
+        directory = self.root / 'claude_turn'
+        directory.mkdir()
+        runner = ClaudeRunner(self.cfg, directory, self.session, self.metrics, 'unused')
+        runner._check_goal = AsyncMock()
+        runner._interrupt_user = AsyncMock()
+        runner.turn_active, runner.turn_id = True, 'turn'
+        ident = runner.control.enqueue('sim_update', json.dumps({'balance': 30}))
+
+        async def run():
+            runner._turn_done.clear()
+            task = asyncio.create_task(runner._controls())
+            try:
+                for _ in range(100):
+                    row = next(a for a in runner.control.snapshot()['actions'] if a['id'] == ident)
+                    if row['status'] in {'error', 'submitted'}:
+                        break
+                    await asyncio.sleep(.01)
+                await asyncio.sleep(.3)                 # 再过几轮控制循环
+                return row
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        row = asyncio.run(run())
+        self.assertEqual(row['status'], 'submitted', row)
+        runner._interrupt_user.assert_not_awaited()
+        self.assertTrue(any('推演设置' in m['text'] for m in runner.pending_messages))
+        runner.close_events()
+
 if __name__ == '__main__':
     unittest.main()

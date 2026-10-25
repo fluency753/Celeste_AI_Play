@@ -156,6 +156,74 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertEqual(Recorder.saved_session(self.first)['state'], 'finished')
         client.close.assert_called_once()
 
+    def test_recording_is_not_retained_while_menus_run(self):
+        """游戏停在菜单或地图上（不冻结）时不保留录制：否则中断期间的菜单会被一直录进同一份录像。"""
+        recorder = self.start()
+        self.hello['frozen'] = False
+        with self.assertRaisesRegex(RecordingError, '不在冻结'):
+            recorder.retain()
+        self.assertEqual([a['action'] for c, a in self.commands if c == 'record'], ['start'])
+        self.hello['frozen'] = True
+        self.assertTrue(recorder.retain()['pending'])
+
+    def release_with(self, client):
+        from overlay import console_api
+        with patch.object(console_api, 'orchestrator_status', return_value={'running': False}), \
+             patch.object(console_api, 'latest_run', return_value=self.first), \
+             patch('tools.bridge_client.BridgeClient', return_value=client):
+            return console_api.release()
+
+    def test_console_release_hands_back_game_when_retained_recording_is_lost(self):
+        self.start().retain()
+        self.hello['clock'].update(lockstep=False)
+        self.hello['clock']['plugin'] = {'state': 'idle'}          # OBS 关了或崩溃
+        self.hello['record_audio_active'] = False
+        result = self.release_with(SimpleNamespace(call=self.call, close=Mock()))
+        self.assertTrue(result['released'])
+        self.assertIn('已放弃', result['note'])
+        self.assertIn('deactivate', [c for c, a in self.commands])
+        self.assertEqual(json.loads((self.directory/'session.json').read_text(encoding='utf-8'))['state'], 'abandoned')
+
+    def test_console_release_hands_back_game_when_session_pointer_is_broken(self):
+        self.start().retain()
+        self.hello['clock'].update(lockstep=False)
+        self.hello['clock']['plugin'] = {'state': 'idle'}
+        (self.first/'recording_session.json').write_text('{broken', encoding='utf-8')
+        result = self.release_with(SimpleNamespace(call=self.call, close=Mock()))
+        self.assertTrue(result['released'])
+        self.assertIn('读不出来', result['note'])
+        self.assertIn('deactivate', [c for c, a in self.commands])
+
+    def test_console_release_releases_game_as_soon_as_capture_stops(self):
+        self.start().retain()
+        order = []
+        with patch('orchestrator.recording.make_pure', side_effect=lambda *a, **k: order.append('pure') or {}):
+            def call(command, **args):
+                order.append(command)
+                return self.call(command, **args)
+            (self.directory/'gameplay.mkv').write_bytes(b'x')
+            self.release_with(SimpleNamespace(call=call, close=Mock()))
+        self.assertLess(order.index('deactivate'), order.index('pure'))   # 不等纯享版生成就交还游戏
+
+    def test_new_recording_resume_abandons_lost_recording_only(self):
+        from orchestrator.run import abandon_recording
+        self.start().retain()
+        saved = Recorder.saved_session(self.first)
+        client = lambda: SimpleNamespace(call=self.call, close=Mock())
+        with patch('tools.bridge_client.BridgeClient', side_effect=lambda **k: client()):
+            # 独立音频停了、OBS 还开着同一目录：先收尾原录像，再另起
+            self.hello['record_audio_active'] = False
+            abandon_recording(47774, saved, self.first, RecordingError('原录像的独立音频已停止'))
+            self.assertEqual(Recorder.saved_session(self.first)['state'], 'finished')
+            # OBS 关了：标成 abandoned
+            self.hello['clock']['plugin'] = {'state': 'idle'}
+            abandon_recording(47774, {**saved, 'state': 'recording'}, self.first, RecordingError('原录像已断开'))
+            self.assertEqual(json.loads((self.directory/'session.json').read_text(encoding='utf-8'))['state'], 'abandoned')
+            # OBS 在录别的会话：不另开录像
+            self.hello['clock']['plugin'] = {'state': 'recording', 'dir': str(self.second)}
+            with self.assertRaises(RecordingError):
+                abandon_recording(47774, None, self.first, RecordingError('原录像已断开'))
+
     def test_resume_menu_is_recorded_at_normal_speed_without_restarting(self):
         from orchestrator.config import RunConfig
         from orchestrator.run import enter_save, check_resume_position

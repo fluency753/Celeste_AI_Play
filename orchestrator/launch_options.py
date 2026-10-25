@@ -283,7 +283,7 @@ def config_for(options: dict):
     return cfg
 
 
-def resume_args(run_dir: Path, fresh_session: bool = False) -> list[str]:
+def resume_args(run_dir: Path, fresh_session: bool = False, new_recording: bool = False) -> list[str]:
     """续跑一次停下时保持冻结的运行：其余设置都沿用原运行（见 orchestrator/run.py 的 --resume）。"""
     run_dir = Path(run_dir).resolve()
     if (REPO_ROOT / "runs").resolve() not in run_dir.parents:
@@ -299,6 +299,8 @@ def resume_args(run_dir: Path, fresh_session: bool = False) -> list[str]:
         argv += ["--engine", str(state["engine"])]
     if fresh_session:
         argv.append("--fresh-session")
+    if new_recording:
+        argv.append("--new-recording")      # 原录像接不上时放弃它，另起一段录像
     return argv
 
 
