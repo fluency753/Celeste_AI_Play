@@ -114,7 +114,7 @@ class SessionControls:
                 phase="pausing" if self.pausing else "chatting" if self.turn_active else "idle",
                 session_id=self.session_id, chat_only=self.chat_only,
                 **self._fast_status(),
-                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status())
+                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status())
             await asyncio.sleep(.5)
 
     async def _controls(self):
@@ -154,6 +154,14 @@ class SessionControls:
                                 note = await asyncio.to_thread(self.session.set_chapter_queue, data.get("queue", []))
                             self.pending_messages.append({**row, "text": note})
                             self.control.mark(row["id"], "waiting", "要通关的范围已更新，正在通知 agent")
+                        elif row['kind'] == 'sim_update':
+                            if not self._sim_status()['sim_control']:
+                                raise ValueError('当前主控未开启有限模拟辅助，不能在线修改推演设置')
+                            async with self.action_lock:
+                                snapshot = await asyncio.to_thread(self.session.update_simulation, json.loads(row['text']))
+                            self.control.mark(row['id'], 'submitted', '推演设置已生效，无需重启主控或录制')
+                            self.pending_messages.append({**row, 'text': '用户已实时更新推演设置：' + snapshot['rules'] +
+                                f"当前余额{snapshot['balance']}。新规则从下一次推演生效，继续当前任务，不需要重写笔记或停止试玩。"})
                         elif row["kind"] == "message":
                             self.pending_messages.append(row)
                             self.control.mark(row["id"], "waiting", "等待提交给当前会话")
@@ -256,10 +264,25 @@ class SessionControls:
                 self.control.heartbeat(paused=self.paused, phase="chatting" if self.turn_active else "idle",
                     session_id=self.session_id, chat_only=self.chat_only,
                     **self._fast_status(),
-                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status())
+                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status())
                 await asyncio.sleep(.1)
         except asyncio.CancelledError:
             raise
+
+    def _sim_status(self):
+        from dataclasses import fields
+        from .sim_assist import AssistRules
+        from .tuning import TUNABLES
+        enabled = (not self.chat_only and self.session is not None and not self.session.done
+                   and bool(getattr(self.session, 'sim_energy', None))
+                   and callable(getattr(self.session, 'update_simulation', None)))
+        if not enabled:
+            return {'sim_control': False}
+        return {'sim_control': True, 'sim_settings': {
+            'rules': {'assist_' + item.name: getattr(self.session.assist_rules, item.name) for item in fields(AssistRules)},
+            'energy': self.session.sim_energy.snapshot(),
+            'parameters': [{'key': item.key, 'label': item.label, 'min': item.low, 'max': item.high, 'unit': item.unit}
+                           for item in TUNABLES if item.key.startswith('assist_')]}}
 
     def _fast_status(self):
         return {'fast_control':self.capabilities.fast, 'fast':self.fast_mode,

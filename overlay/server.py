@@ -306,6 +306,8 @@ def make_handler(pinned: Path | None):
                         resolve_selection((read_metrics(directory) or {}).get('model'),data.get('text'))
                 if data.get('kind')=='cutscene_mode' and not control.snapshot().get('cutscene_control'):
                     raise ValueError('请断开并重新连接会话后再切换剧情模式')
+                if data.get('kind') == 'sim_update' and not control.snapshot().get('sim_control'):
+                    raise ValueError('当前主控尚未提供在线推演设置，请先使用支持此功能的主控')
                 if data.get("kind") in {"goal", "goal_clear", "stop"} and not control.snapshot().get("goals_enabled"):
                     raise ValueError("当前未在试玩，不能修改或触发停止目标")
                 if data.get("kind") == "chapters" and not control.snapshot().get("chapters_control"):

@@ -373,17 +373,60 @@ class GameSession:
 
     # ---- 动作 ----
 
+    def update_simulation(self, data: dict) -> dict:
+        from dataclasses import fields
+        from .sim_assist import AssistRules
+        from .tuning import coerce, check_relations, overrides
+        if not isinstance(data, dict) or set(data) - {'rules', 'balance'} or not data:
+            raise ValueError('推演设置只接受 rules 和 balance')
+        proposed = data.get('rules', {})
+        allowed = {'assist_' + item.name for item in fields(AssistRules)}
+        if not isinstance(proposed, dict) or set(proposed) - allowed:
+            raise ValueError('包含未知推演参数')
+        changes = {key: coerce(key, value) for key, value in proposed.items()}
+        with self.lock:
+            if not self.sim_energy or self.done or self.goals.stop_motion.is_set():
+                raise ActError('当前未在进行有限模拟辅助试玩，不能修改推演设置')
+            values = {key: getattr(self.cfg, key) for key in allowed}
+            values.update(changes)
+            check_relations({**getattr(self.cfg, 'tuning', {}), **values})
+            rules = AssistRules(**{item.name: values['assist_' + item.name] for item in fields(AssistRules)})
+            balance = data.get('balance')
+            if 'balance' in data and (type(balance) is not int or not 0 <= balance <= rules.capacity):
+                raise ValueError('当前额度须为0到体力上限之间的整数')
+            previous_rules = self.assist_rules
+            previous_balance = self.sim_energy.snapshot()['balance']
+            snapshot = self.sim_energy.reconfigure(rules, balance)
+            state_path = self.run_dir / 'run_state.json'
+            try:
+                state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {}
+                tuning = {**overrides(self.cfg), **values}
+                from .tuning import DEFAULTS
+                state['tuning'] = {key: value for key, value in tuning.items() if value != DEFAULTS[key]}
+                tmp = state_path.with_suffix('.tmp')
+                tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+                tmp.replace(state_path)
+            except Exception:
+                self.sim_energy.reconfigure(previous_rules, previous_balance)
+                raise
+            for key, value in values.items():
+                setattr(self.cfg, key, value)
+            self.cfg.tuning = state['tuning']
+            self.assist_rules = rules
+            self.metrics.update(sim_energy=snapshot)
+            return snapshot
+
     def simulate(self, request: dict) -> dict:
         from .sim_assist import validate_request, run_predictions
         if not self.sim_energy:
             raise ActError("本局未开启限额模拟辅助")
         if self.done or self.goals.stop_motion.is_set():
             raise ActError("试玩已结束，不能继续预测")
-        candidates, cost = validate_request(request, self.assist_rules)
         # Capture and predict under the same lock: predictions always refer to the actual current frame.
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
                 raise ActError("试玩已结束，不能继续预测")
+            candidates, cost = validate_request(request, self.assist_rules)
             directory = self.run_dir / "sim_private"
             directory.mkdir(exist_ok=True)
             ident = self.sim_energy.reserve(cost)

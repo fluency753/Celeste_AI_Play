@@ -139,6 +139,12 @@
   .goal-row select { flex:1; } .goal-row input { width:calc(60 * var(--px)); }
   #goalStatus { color:var(--label); font-size:calc(11 * var(--px)); margin-top:calc(5 * var(--px)); white-space:pre-wrap; }
   #goalStop { border-color:#ae665d; }
+  #simPanel { font-size:calc(12 * var(--px)); margin-bottom:calc(6 * var(--px)); }
+  #simPanel summary { cursor:pointer; color:var(--label); }
+  #simFields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:calc(5 * var(--px)); }
+  .sim-field { display:flex; flex-direction:column; gap:calc(2 * var(--px)); min-width:0; }
+  #simPanel input { box-sizing:border-box; width:100%; min-width:0; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; padding:calc(4 * var(--px)); }
+  #simStatus, #simCurrent { color:var(--label); font-size:calc(11 * var(--px)); margin:calc(5 * var(--px)) 0; }
   .control-buttons { display:flex; align-items:center; gap:calc(5 * var(--px)); margin-top:calc(5 * var(--px)); }
   .control-buttons button { font:inherit; font-size:calc(12 * var(--px)); border:1px solid #52678e; border-radius:5px; color:#dce8ff; background:#263652; padding:calc(4 * var(--px)) calc(8 * var(--px)); cursor:pointer; }
   .control-buttons button:disabled { opacity:.4; cursor:default; }
@@ -227,6 +233,14 @@
       <div id="goalConditions"></div>
       <div class="control-buttons"><button id="goalSave" type="button">更新目标</button><button id="goalClear" type="button">清除目标</button><button id="goalStop" type="button" title="取消正在执行的动作，结束试玩并保存录像">立即停止并保存</button></div>
       <div id="goalStatus" role="status"></div>
+    </details>
+    <details id="simPanel">
+      <summary>推演设置</summary>
+      <div id="simCurrent"></div>
+      <label class="sim-field">调整当前额度（留空保留现有余额）<input id="simBalance" type="number" min="0" step="1" aria-label="调整当前推演额度"></label>
+      <div id="simFields"></div>
+      <div class="control-buttons"><button id="simApply" type="button">应用修改</button><button id="simReset" type="button">撤销未提交修改</button></div>
+      <div id="simStatus" role="status">正在读取推演设置…</div>
     </details>
     <textarea id="agentInput" aria-label="给独立 agent 的提示" placeholder="给 agent 发提示… Enter 发送，Shift+Enter 换行" maxlength="4000"></textarea>
     <div class="control-buttons" style="flex-wrap:wrap"><button id="togglePlay" type="button" disabled>暂停</button><button id="toggleFast" type="button" aria-pressed="false" title="切换独立 agent 的 Fast 模式，下一轮生效" disabled>Fast：—</button><select id="liveEffort" aria-label="当前会话推理强度" title="手动固定推理强度，下一轮生效；自动表示由 agent 调整" disabled><option value="auto">推理：自动</option></select><select id="cutsceneMode" aria-label="剧情处理模式" title="可在开始前和游玩中切换；agent决定时自行观看、推进、选择或跳过" disabled><option value="auto">剧情：自动跳过</option><option value="agent">剧情：agent决定</option></select><button id="agentSend" type="submit" disabled>发送</button></div>
@@ -613,6 +627,56 @@ function render() {
 poll();
 let controlData = null, sendingMessage = false, wakingAgent = false, switchingSession = false, sessionSignature = '';
 let goalRevision = null, goalRun = null, goalDirty = false, savingGoal = false, goalError = '', controlError = '';
+let simRun=null, simEdited=new Set(), simPending=null, simSending=false, simError='', simApplied=false;
+function renderSimulation(c) {
+  if(simRun!==controlData.run){
+    simRun=controlData.run;simEdited.clear();simPending=null;simError='';simApplied=false;
+    $('simFields').replaceChildren();$('simBalance').value='';
+  }
+  const settings=c.sim_settings;
+  const enabled=!!(c.connected && c.sim_control && settings && !switchingSession);
+  if(settings){
+    $('simCurrent').textContent=`当前 ${settings.energy.balance}/${settings.energy.capacity} · 修改将在当前工具完成后生效，不重启或分段录制。`;
+    $('simBalance').placeholder=String(settings.energy.balance);
+    $('simBalance').max=String(settings.energy.capacity);
+    for(const p of settings.parameters){
+      let input=$('simFields').querySelector(`[data-key="${p.key}"]`);
+      if(!input){
+        const label=document.createElement('label');label.className='sim-field';
+        const caption=document.createElement('span');caption.textContent=(p.key==='assist_initial'?'初始额度（不重置余额）':p.label)+(p.unit?`（${p.unit}）`:'');
+        input=document.createElement('input');input.type='number';input.step='1';input.required=true;input.min=p.min;input.max=p.max;input.dataset.key=p.key;input.setAttribute('aria-label',caption.textContent);
+        input.oninput=()=>{simEdited.add(p.key);simApplied=false;};label.append(caption,input);$('simFields').append(label);
+      }
+      if(!simEdited.has(p.key))input.value=String(settings.rules[p.key]);
+    }
+  }else $('simCurrent').textContent='';
+  if(simPending!=null){
+    const action=(c.actions||[]).find(a=>a.id===simPending);
+    if(action && ['submitted','error'].includes(action.status)){
+      simError=action.status==='error'?action.detail:'';simApplied=action.status==='submitted';simPending=null;
+      if(simApplied){simEdited.clear();$('simBalance').value='';}
+    }
+  }
+  for(const input of $('simPanel').querySelectorAll('input,button'))input.disabled=!enabled || simSending || simPending!=null;
+  $('simStatus').textContent=simError || (!enabled?'当前主控未提供在线推演设置；需已开启模拟辅助并使用新版主控。':
+    simPending!=null || simSending?'等待当前工具完成并应用…':simApplied?'已生效，新规则已排队通知 agent。':'初始额度不重置现有余额；降低上限会截断余额。费用、长度和恢复规则从下一次调用使用。');
+}
+async function saveSimulation(){
+  if(!controlData?.control.sim_control || simSending || simPending!=null)return;
+  const rules={};
+  for(const key of simEdited){const input=$('simFields').querySelector(`[data-key="${key}"]`);if(!input.reportValidity())return;rules[key]=Number(input.value);}
+  const payload={};if(Object.keys(rules).length)payload.rules=rules;
+  $('simBalance').max=String(rules.assist_capacity ?? controlData.control.sim_settings.energy.capacity);
+  if($('simBalance').value!==''){if(!$('simBalance').reportValidity())return;payload.balance=Number($('simBalance').value);}
+  if(!Object.keys(payload).length){simError='没有未提交的修改。';renderSimulation(controlData.control);return;}
+  simSending=true;simError='';const run=controlData.run;renderSimulation(controlData.control);
+  try{
+    const response=await fetch(CONTROL_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run,kind:'sim_update',text:JSON.stringify(payload)})});
+    const result=await response.json();if(!response.ok)throw Error(result.error||'推演设置提交失败');
+    if(controlData.run===run)simPending=result.id;
+  }catch(error){simError=error.message;}
+  finally{simSending=false;await pollControl();}
+}
 const GOAL_FIELDS = {room:'房间',map_complete:'当前地图通关',map:'地图变化',side:'面别 A/B/C',deaths:'本地图死亡次数',frame:'游戏推进帧数',elapsed:'运行时间（秒）'};
 function goalRow(condition={field:'room',op:'changed'}) {
   const row=document.createElement('div'); row.className='goal-row';
@@ -771,6 +835,7 @@ async function pollControl() {
     }
     const c = controlData.control;
     renderGoal(c);
+    renderSimulation(c);
     const sessions = controlData.sessions || [];
     const signature = JSON.stringify([sessions,controlData.selected_session]);
     if (signature !== sessionSignature && !switchingSession) {
@@ -890,6 +955,8 @@ $('toggleFast').onclick = async () => {
   await sendControl('fast', controlData?.control.fast ? 'off' : 'on');
 };
 $('cutsceneMode').onchange=async()=>{await sendControl('cutscene_mode',$('cutsceneMode').value);};
+$('simApply').onclick=saveSimulation;
+$('simReset').onclick=()=>{simEdited.clear();$('simBalance').value='';simError='';simApplied=false;renderSimulation(controlData.control);};
 $('liveEffort').onchange=async()=>{
   const level=$('liveEffort').value;
   changingEffort=true;$('liveEffort').disabled=true;

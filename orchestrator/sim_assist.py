@@ -112,6 +112,21 @@ class SimEnergy:
         with self.lock:
             return {"balance": self.data["balance"], "capacity": self.rules.capacity, "rules": self.rules.text()}
 
+    def reconfigure(self, rules, balance=None):
+        """修改规则不重置账本；仅显式余额调整或降低上限会改变现有余额。"""
+        if balance is not None and (type(balance) is not int or not 0 <= balance <= rules.capacity):
+            raise ValueError('当前额度须为0到体力上限之间的整数')
+        with self.lock:
+            previous_rules, previous_balance = self.rules, self.data['balance']
+            self.rules = rules
+            self.data['balance'] = min(rules.capacity, previous_balance if balance is None else balance)
+            try:
+                self._save()
+            except Exception:
+                self.rules, self.data['balance'] = previous_rules, previous_balance
+                raise
+            return self.snapshot()
+
     def reward(self, moving_frames=0, room=None):
         with self.lock:
             r = self.rules

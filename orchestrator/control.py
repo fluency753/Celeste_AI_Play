@@ -30,7 +30,7 @@ class RunControl:
 
     def enqueue(self, kind, text=""):
         if kind not in {"message", "pause", "resume", "fast", "effort", "detach", "goal", "goal_clear", "stop", "cutscene_mode",
-                        "interrupt", "chapters"}:
+                        "interrupt", "chapters", "sim_update"}:
             raise ValueError("未知控制指令")
         text = str(text).strip()
         if kind == 'cutscene_mode' and text not in {'auto','agent'}:
