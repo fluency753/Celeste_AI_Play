@@ -8,8 +8,9 @@ from overlay.placement import PlacementAPI
 
 
 class WindowTests(unittest.TestCase):
-    def run_window(self, commands=(), minimized=False):
+    def run_window(self, commands=(), minimized=False, visible_again=False):
         user=MagicMock();user.IsWindow.side_effect=[True,True,False];user.IsIconic.return_value=minimized
+        user.IsWindowVisible.side_effect=[False,visible_again]
         window=MagicMock();placement=PlacementAPI();placement._window=window
         for command in commands:placement._commands.put(command)
         args=SimpleNamespace(placement=placement,interval=.25)
@@ -49,7 +50,7 @@ class WindowTests(unittest.TestCase):
 
     def test_hidden_window_does_not_resave_geometry_on_close(self):
         _,window,_,layout,_=self.run_window(['minimize','close'])
-        window.hide.assert_called_once()
+        self.assertEqual(window.hide.call_count,2)
         window.minimize.assert_not_called()
         self.assertEqual(layout.save_window.call_count,2) # initial restore and explicit hide
         window.destroy.assert_not_called()
@@ -58,6 +59,17 @@ class WindowTests(unittest.TestCase):
         _,window,_,_,_=self.run_window(['close','restore'])
         window.hide.assert_called_once()
         window.show.assert_called_once()
+        window.destroy.assert_not_called()
+
+    def test_repeated_hide_commands_do_not_trust_cached_visibility(self):
+        _,window,_,_,_=self.run_window(['minimize','close'])
+        self.assertEqual(window.hide.call_count,2)
+        window.show.assert_not_called()
+
+    def test_page_reload_cannot_restore_a_hidden_window(self):
+        _,window,_,_,_=self.run_window(['close'],visible_again=True)
+        self.assertEqual(window.hide.call_count,2)
+        window.show.assert_not_called()
         window.destroy.assert_not_called()
 
     def test_native_close_is_cancelled_until_explicit_quit(self):

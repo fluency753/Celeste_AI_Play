@@ -287,8 +287,7 @@ def manage(window, args) -> None:
                         layout.save_window(current, placement._topmost)
                 # A transparent WS_EX_TOOLWINDOW leaves a white iconic caption on
                 # the desktop when minimized. Keep its normal geometry and hide it.
-                if not hidden:
-                    window.hide()
+                window.hide()
                 hidden = True
             elif command == 'restore':
                 window.show()
@@ -306,6 +305,10 @@ def manage(window, args) -> None:
                 user32.SetWindowPos(hwnd, 0, *target, SWP_NOACTIVATE | SWP_NOOWNERZORDER | 0x0004)
                 saved_rect = target
                 layout.save_window(saved_rect, placement._topmost)
+        # Transparent WebView2 calls Form.Show on navigation. Preserve the user's
+        # tray state across page reloads instead of trusting the cached visibility.
+        if hidden and user32.IsWindowVisible(hwnd):
+            window.hide()
         if not hidden and not user32.IsIconic(hwnd) and not placement._dragging:
             current = client_rect(user32, hwnd)
             if current and current != saved_rect and time.monotonic() - saved_at >= .15:
