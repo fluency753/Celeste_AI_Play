@@ -84,6 +84,7 @@ class TunableTests(unittest.TestCase):
         explore.agent_cpus_effective = 1
         self.assertNotIn("{cpu_rule}", play_prompt(explore))
         self.assertIn("实在拿不到才放弃", play_prompt(explore))          # 鼓励拿草莓
+        self.assertIn("模拟器对象尽量只构造一次再复用", play_prompt(explore))   # /workspace 是主机挂载，读写慢
         self.assertNotIn("不要求全收集", play_prompt(explore))
         for placeholder in ("{act_max_frames}", "{bash_default}", "{explore_program}", "{explore_program_rule}", "{remind}",
                             "{playback_ratio}"):
