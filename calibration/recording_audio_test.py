@@ -21,8 +21,13 @@ class RecordingAudioTests(unittest.TestCase):
     @patch("orchestrator.recording.gamewindow.ensure_visible")
     def test_new_mode_is_forwarded_and_keeps_live_music_enabled(self, _visible):
         with tempfile.TemporaryDirectory() as folder:
-            call = Mock(return_value={"record_audio_nrt": True, "record_audio_tracks": 2, "clock": {
-                "connected": True, "lockstep": True, "plugin": {"state": "recording", "audio_nrt": True, "audio_tracks": 2}}})
+            hello = {"record_audio_nrt": True, "record_audio_tracks": 2, "clock": {
+                "connected": True, "lockstep": True, "plugin": {"state": "idle", "audio_nrt": True, "audio_tracks": 2}}}
+            def respond(command, **kwargs):
+                if command == 'record' and kwargs.get('action') == 'start':
+                    hello['clock']['plugin']['state'] = 'recording'
+                return hello
+            call = Mock(side_effect=respond)
             recorder = self.recorder(folder, call)
             recorder.opts.continuous_music = True
             recorder.start()

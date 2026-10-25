@@ -1308,6 +1308,7 @@ async function refreshRuns() {
     else if (r.resumable) { tag.classList.add("frozen"); tag.textContent = "游戏冻结中"; }
     else if (r.game_released === false) { tag.textContent = "停下时保持冻结"; }
     else tag.textContent = r.recording ? (r.pure ? "录像 + 纯享版" : "有录像") : "无录像";
+    if(r.recording_pending)tag.textContent += ' · 录像待续接／收尾';
     side.appendChild(tag);
     if (r.resumable) {
       const b = document.createElement("button"); b.className = "btn small blue"; b.type = "button"; b.textContent = "续跑";

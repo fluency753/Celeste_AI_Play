@@ -445,6 +445,15 @@ def runs(limit: int = 40) -> list[dict]:
         summary = _read_json(directory / "summary.json")
         metrics = _read_json(directory / "metrics.json")
         recording = directory / "recording"
+        from orchestrator.recording import Recorder, RecordingError
+        pending_recording = False
+        try:
+            saved = Recorder.saved_session(directory)
+            if saved:
+                recording = Path(saved['options']['dir'])
+                pending_recording = saved.get('state') == 'recording'
+        except RecordingError:
+            pass  # 不可读的会话在接管时明确报错；不使整个运行列表不可用。
         rows.append({
             "dir": str(directory), "agent": state.get("agent") or directory.parent.name, "stamp": directory.name,
             "engine": state.get("engine", "claude"), "provider": state.get("provider"), "model": state.get("model"),
@@ -454,6 +463,7 @@ def runs(limit: int = 40) -> list[dict]:
             "game_released": summary.get("game_released"), "total_time_ticks": summary.get("total_time_ticks"),
             "deaths": summary.get("deaths", metrics.get("deaths")), "finished": bool(summary),
             "recording": (recording / "gameplay.mkv").exists(), "pure": (recording / "gameplay_pure.mkv").exists(),
+            "recording_pending": pending_recording, "recording_dir": str(recording),
             "resumable": bool(summary) and summary.get("game_released") is False and latest is not None
                          and latest.resolve() == directory.resolve() and frozen_now,
         })
@@ -501,6 +511,13 @@ def release(bridge_port: int = 47774) -> dict:
     from tools.bridge_client import BridgeClient
     client = BridgeClient(port=bridge_port, timeout=10)
     try:
+        from orchestrator.recording import Recorder
+        directory = latest_run()
+        saved = Recorder.saved_session(directory) if directory else None
+        if saved and saved.get('state') == 'recording':
+            Recorder.finish_saved(client.call, saved, directory)
+        else:
+            Recorder.validate_resume(None, client.call('hello'))
         client.call("deactivate")
     finally:
         client.close()

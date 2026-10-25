@@ -25,7 +25,8 @@ import json
 import os
 import shutil
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -157,6 +158,108 @@ class Recorder:
         self.log = log
         self.started = False
         self.result: dict | None = None
+        self.session_id = uuid.uuid4().hex
+        self.run_dirs = []
+
+    def bind_run(self, directory: Path):
+        directory = directory.resolve()
+        if directory not in self.run_dirs:
+            self.run_dirs.append(directory)
+
+    def _save_session(self, state):
+        options = asdict(self.opts)
+        options['dir'] = str(self.opts.dir.resolve())
+        manifest = self.opts.dir.resolve() / 'session.json'
+        payload = {'version': 1, 'id': self.session_id, 'state': state, 'options': options,
+                   'runs': [str(p) for p in self.run_dirs]}
+        temporary = manifest.with_suffix('.tmp')
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.replace(manifest)
+        for directory in self.run_dirs:
+            if not directory.is_dir():
+                continue
+            pointer = directory / 'recording_session.json'
+            temporary = pointer.with_suffix('.tmp')
+            temporary.write_text(json.dumps({'id': self.session_id, 'manifest': str(manifest)}), encoding='utf-8')
+            temporary.replace(pointer)
+
+    @staticmethod
+    def link_saved(saved, directory):
+        pointer = Path(directory) / 'recording_session.json'
+        temporary = pointer.with_suffix('.tmp')
+        temporary.write_text(json.dumps({'id': saved['id'], 'manifest': str(Path(saved['options']['dir']) / 'session.json')}), encoding='utf-8')
+        temporary.replace(pointer)
+
+    @staticmethod
+    def saved_session(run_dir):
+        pointer = Path(run_dir) / 'recording_session.json'
+        if not pointer.exists():
+            return None
+        try:
+            link = json.loads(pointer.read_text(encoding='utf-8'))
+            manifest = json.loads(Path(link['manifest']).read_text(encoding='utf-8'))
+            if manifest['version'] != 1 or manifest['id'] != link['id']:
+                raise ValueError('录制会话身份不匹配')
+            return manifest
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RecordingError(f'无法读取原录制会话：{exc}') from exc
+
+    @staticmethod
+    def validate_resume(saved, hello):
+        clock = hello.get('clock') or {}
+        plugin = clock.get('plugin') or {}
+        active = plugin.get('state') == 'recording' or plugin.get('recording') is True
+        held = saved is not None and saved.get('state') == 'recording'
+        if active and not held:
+            raise RecordingError('OBS 正在录制其他会话，不能另开录制；请先收尾原录像')
+        if not held:
+            return False
+        expected = Path(saved['options']['dir']).resolve()
+        actual = Path(plugin.get('dir') or '').resolve()
+        if not active or not clock.get('connected') or not clock.get('lockstep') or not plugin.get('dir') or actual != expected:
+            raise RecordingError('原录像已断开或目录不匹配，拒绝覆盖或悄悄另起录像')
+        if saved['options']['audio_source'] == 'game_nrt' and not hello.get('record_audio_active'):
+            raise RecordingError('原录像的独立音频已停止，不能无缝续录')
+        return True
+
+    @classmethod
+    def adopt(cls, call, saved, run_dir, log=print):
+        if not cls.validate_resume(saved, call('hello')):
+            raise RecordingError('原录制会话已经结束，不能继续写入')
+        options = {**saved['options'], 'dir': Path(saved['options']['dir'])}
+        recorder = cls(call, RecordOptions(**options), log)
+        recorder.session_id = saved['id']
+        recorder.run_dirs = [Path(p) for p in saved.get('runs', [])]
+        recorder.bind_run(Path(run_dir))
+        recorder.started = True
+        recorder._save_session('recording')
+        log(f'[record] 接续原录像：{recorder.opts.dir}（不重启编码器或音频，不重置帧号）')
+        return recorder
+
+    @classmethod
+    def finish_saved(cls, call, saved, run_dir, log=print):
+        """用户放弃续跑时收尾；已经由 OBS 停下的同目录录像也可整理。"""
+        hello = call('hello')
+        plugin = (hello.get('clock') or {}).get('plugin') or {}
+        if not plugin.get('dir') or Path(plugin['dir']).resolve() != Path(saved['options']['dir']).resolve():
+            raise RecordingError('OBS 当前录像与待收尾会话不匹配，未停止任何录像')
+        recorder = cls(call, RecordOptions(**{**saved['options'], 'dir': Path(saved['options']['dir'])}), log)
+        recorder.session_id = saved['id']
+        recorder.run_dirs = [Path(p) for p in saved.get('runs', [])]
+        recorder.bind_run(Path(run_dir))
+        recorder.started = True
+        return recorder.stop()
+
+    def retain(self):
+        """编码器和音频由 OBS/Mod 持有；只断开 Python 所有权，不发停止命令。"""
+        hello = self.call('hello')
+        saved = {'state': 'recording', 'options': {'dir': str(self.opts.dir), 'audio_source': self.opts.audio_source}}
+        self.validate_resume(saved, hello)
+        self._save_session('recording')
+        self.started = False
+        self.log(f'[record] 保留录制会话等待续跑：{self.opts.dir}')
+        return {'state': 'retained', 'dir': str(self.opts.dir.resolve()), 'id': self.session_id,
+                'frames': (hello.get('clock', {}).get('plugin') or {}).get('frames'), 'pending': True}
 
     def clock(self) -> dict:
         return self.call("hello").get("clock") or {}
@@ -172,6 +275,9 @@ class Recorder:
         directory.mkdir(parents=True, exist_ok=True)
         hello = self.call("hello")
         clock = hello.get("clock") or {}
+        self.validate_resume(None, hello)
+        if (directory / 'session.json').exists():
+            raise RecordingError('录制目录已有会话，请另选目录或接续原录像')
         if self.opts.audio_source not in ("obs_mix", "game_nrt"):
             raise RecordingError(f"未知录音来源：{self.opts.audio_source}")
         if self.opts.audio_source == "game_nrt" and (not hello.get("record_audio_nrt")
@@ -197,6 +303,12 @@ class Recorder:
                 raise RecordingError(f"OBS 插件开始录制失败：{plugin.get('error')}")
             if plugin.get("state") == "recording" and clock.get("lockstep"):
                 self.started = True
+                try:
+                    self._save_session('recording')
+                except Exception:
+                    self.call('record', action='stop')
+                    self.started = False
+                    raise
                 audio = "独立游戏音频（不输出到声卡）" if self.opts.audio_source == "game_nrt" else f"声音偏移 {self.opts.audio_offset_ms:g} ms"
                 self.log(f"[record] 开始录制：{directory}（ffmpeg {self.opts.video_args}；{audio}"
                          f"{'；帧号条码' if self.opts.marker else ''}）")
@@ -254,6 +366,7 @@ class Recorder:
             self.log("[record] 生成纯享版（去掉规划回放的帧）……")
             result["pure"] = make_pure(directory, self.opts.ffmpeg, self.opts.video_args, self.log)
         self.result = result
+        self._save_session(result['state'] or 'failed')
         try:
             (directory / "recording.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:

@@ -411,7 +411,9 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
             obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode,
                         checkpoint=first_checkpoint(cfg))
         else:
-            obs = macro(client, cfg.save, chapter=cfg.chapter, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode,
+            # 保留的原录制已经在写；菜单宏同样按正常速度推进，不再发送 record start。
+            resume_options = {'menu_speed': 1} if getattr(cfg, '_recording_resume_manifest', None) else {}
+            obs = macro(client, cfg.save, chapter=cfg.chapter, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode, **resume_options,
                         checkpoint=first_checkpoint(cfg))
         cfg.save_slot = (obs.get('save') or {}).get('slot', cfg.save_slot)
         print(f"[run] 已进入存档 {cfg.save}：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}"
@@ -421,7 +423,8 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
             if recorder is not None and recorder.started:
                 recorder.stop()
         finally:
-            client.call('deactivate')
+            if not getattr(cfg, '_recording_resume_manifest', None):
+                client.call('deactivate')
         raise
     finally:
         client.close()
@@ -546,7 +549,10 @@ def check_resume_position(cfg: RunConfig) -> bool:
               f"{chapter_name_by_id(cfg.chapter)}", flush=True)
         return False
     except BaseException:
-        client.call('deactivate')
+        if getattr(cfg, '_recording_resume_manifest', None):
+            cfg._keep_frozen = True
+        else:
+            client.call('deactivate')
         raise
     finally:
         client.close()
@@ -689,7 +695,7 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
             (run_dir / 'summary.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8')
         if keep:
             print('[run] 游戏保持冻结在当前帧（章节计时不走）：可以用 --resume 续跑；'
-                  '不续跑时用 python tools\\bridge_client.py deactivate 交还控制', flush=True)
+                  '不续跑时在控制台交还游戏控制，先收尾保留的录像', flush=True)
         else:
             print('[run] 已交还游戏控制，游戏恢复正常运行',flush=True)
 
@@ -748,11 +754,12 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             temporary.replace(run_dir / 'run_state.json')
     if recorder is not None:
         recorder.call = session.bridge_call  # 开局时已经开始录制（见 enter_save），之后改用主控的连接
-    elif args.record:
+    elif args.record and not getattr(cfg, '_recording_resume_manifest', None):
         recorder = Recorder(session.bridge_call,
                             options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms, args.record_marker,
                                          continuous_music=cfg.continuous_music),
                             log=lambda m: print(m, flush=True))
+        recorder.bind_run(run_dir)
         try:
             recorder.start()
         except RecordingError:
@@ -793,6 +800,14 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
 
     reason = "中断"
     runner = None
+    # 等工具服务就绪才认领原录制；之前任何初始化失败均保留原运行供续跑。
+    saved_recording = getattr(cfg, '_recording_resume_manifest', None)
+    if recorder is None and args.record and saved_recording:
+        recorder = Recorder.adopt(session.bridge_call, saved_recording, run_dir,
+                                  log=lambda m: print(m, flush=True))
+        cfg._recording_adopted = True
+        cfg._keep_frozen = False
+        session.before_advance = recorder.check_window
     try:
         if args.no_agent:
             print("[run] --no-agent：工具服务已就绪，按 Ctrl+C 结束", flush=True)
@@ -851,7 +866,15 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                     session.bridge_call('deactivate')
                     cfg._game_released=True
                     print('[run] 锁步录制已停止，已交还游戏控制；视频后处理继续进行',flush=True)
-                recording = recorder.stop(on_capture_stopped=None if cfg._keep_frozen else release_after_capture)
+                if cfg._keep_frozen:
+                    try:
+                        recording = recorder.retain()
+                        cfg._recording_retained = True
+                    except Exception as exc:
+                        print(f'[record] 保留录制失败，改为收尾本段：{exc}', flush=True)
+                        recording = recorder.stop()
+                else:
+                    recording = recorder.stop(on_capture_stopped=release_after_capture)
             except Exception as exc:  # noqa: BLE001（录制收尾失败不影响交还游戏控制与写总结）
                 print(f"[record] 停止录制失败：{exc}", flush=True)
         # 锁步结束后先释放，外层finally仍负责关闭连接及异常兜底；暂停不走结束流程。
@@ -887,6 +910,13 @@ def main() -> int:
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
     from .bridge_requirements import preflight_bridge
     hello = preflight_bridge(cfg.bridge_port)
+    saved_recording = Recorder.saved_session(args.previous['dir']) if args.previous else None
+    if Recorder.validate_resume(saved_recording, hello):
+        if not args.record:
+            raise RecordingError('原录像仍在继续，不能用 --no-record 续跑；请先收尾录像')
+        cfg._recording_resume_manifest = saved_recording
+        cfg._keep_frozen = True  # 新主控完成接管前，启动失败不得破坏原冻结和录制。
+        cfg.continuous_music = saved_recording['options']['continuous_music']
     if cfg.hud_mod and not hello.get("mod_hud"):
         print("[run] 桥接还不支持游戏内 HUD（需要 0.13.0）：这次改用网页 HUD", flush=True)
         cfg.hud_mod = False
@@ -894,18 +924,21 @@ def main() -> int:
     token = None if args.no_agent else runtime(cfg.engine).token(cfg)
     run_dir = make_run_dir(cfg.agent)
     print(f"[run] 日志目录：{run_dir}", flush=True)
-    mod_hud = start_mod_hud(cfg, run_dir)
+    mod_hud = None
     recorder = None
     obs_launched = False
     handoff_needed = False
     try:
+        if getattr(cfg, '_recording_resume_manifest', None):
+            Recorder.link_saved(cfg._recording_resume_manifest, run_dir)
+        mod_hud = start_mod_hud(cfg, run_dir)
         if args.record:
             obs_launched = ensure_obs()
         if previous and check_resume_position(cfg):
             handoff_needed = True
         elif previous or not cfg.skip_enter:
             # 新开一局，或续跑时游戏不在要续跑的关卡里（两章之间中断、游戏重启过）：用菜单宏进入
-            if args.record:
+            if args.record and not getattr(cfg, '_recording_resume_manifest', None):
                 # 开局（选存档、进章节）也录进录像：录制从选档页开始。HUD 服务先起来，显示这一局的名字
                 if not args.no_hud:
                     from overlay.server import start_in_thread  # noqa: WPS433
@@ -915,6 +948,7 @@ def main() -> int:
                                                        args.audio_offset_ms, args.record_marker,
                                                        continuous_music=cfg.continuous_music),
                                     log=lambda m: print(m, flush=True))
+                recorder.bind_run(run_dir)
             enter_save(cfg, recorder)
             handoff_needed = True
         summary = asyncio.run(run_async(cfg, args, run_dir, token, previous, recorder))
@@ -942,12 +976,16 @@ def main() -> int:
                     finally:
                         client.close()
         finally:
+            if getattr(cfg, '_recording_resume_manifest', None) and not getattr(cfg, '_recording_adopted', False):
+                latest = REPO_ROOT / 'runs/latest.txt'
+                if latest.exists() and latest.read_text(encoding='utf-8').strip() == str(run_dir):
+                    latest.write_text(str(previous['dir']), encoding='utf-8')
             if mod_hud is not None:
                 mod_hud.close()
-            if obs_launched and not args.keep_obs_open:
+            if obs_launched and not args.keep_obs_open and not getattr(cfg, '_recording_retained', False):
                 close_obs()
             elif obs_launched:
-                print("[record] --keep-obs-open：保留 OBS，直播可继续；手动关闭后可运行 python tools/obs_setup.py restore 还原配置选择", flush=True)
+                print("[record] 保留 OBS：录像等待续跑，或已启用 --keep-obs-open；最终收尾前不要关闭 OBS", flush=True)
     print(f"[run] 结束：{summary['stop_reason']}；决策 {summary['decisions']} 次，死亡 {summary['deaths']} 次，"
           f"用时 {summary['elapsed_s']:.0f} 秒（思考 {summary['thinking_s']:.0f}，工具 {summary['tool_s']:.0f}，"
           f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）"
