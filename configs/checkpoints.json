@@ -1,0 +1,376 @@
+{
+  "note": "官方章节（A 面）的检查点：第 0 项是章节开头。由 tools/dump_checkpoints.py 从游戏导出，按段通关用。",
+  "bridge": "1.0.7",
+  "areas": [
+    {
+      "id": 0,
+      "sid": "Celeste/0-Intro",
+      "name_en": "Prologue",
+      "name_zh": "序幕",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "0",
+          "name_en": "Start",
+          "name_zh": "开始"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "sid": "Celeste/1-ForsakenCity",
+      "name_en": "Forsaken City",
+      "name_zh": "被遗弃的城市",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "1",
+          "name_en": "Start",
+          "name_zh": "开始"
+        },
+        {
+          "index": 1,
+          "level": "6",
+          "name_en": "Crossing",
+          "name_zh": "十字路口"
+        },
+        {
+          "index": 2,
+          "level": "9b",
+          "name_en": "Chasm",
+          "name_zh": "峡谷"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "sid": "Celeste/2-OldSite",
+      "name_en": "Old Site",
+      "name_zh": "旧址",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "start",
+          "name_en": "Start",
+          "name_zh": "开始"
+        },
+        {
+          "index": 1,
+          "level": "3",
+          "name_en": "Intervention",
+          "name_zh": "干涉"
+        },
+        {
+          "index": 2,
+          "level": "end_3",
+          "name_en": "Awake",
+          "name_zh": "唤醒"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "sid": "Celeste/3-CelestialResort",
+      "name_en": "Celestial Resort",
+      "name_zh": "天空度假山庄",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "s0",
+          "name_en": "Start",
+          "name_zh": "开始"
+        },
+        {
+          "index": 1,
+          "level": "08-a",
+          "name_en": "Huge Mess",
+          "name_zh": "乱七八糟"
+        },
+        {
+          "index": 2,
+          "level": "09-d",
+          "name_en": "Elevator Shaft",
+          "name_zh": "电梯井"
+        },
+        {
+          "index": 3,
+          "level": "00-d",
+          "name_en": "Presidential Suite",
+          "name_zh": "总统套房"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "sid": "Celeste/4-GoldenRidge",
+      "name_en": "Golden Ridge",
+      "name_zh": "黄金山脊",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "a-00",
+          "name_en": "Start",
+          "name_zh": "开始"
+        },
+        {
+          "index": 1,
+          "level": "b-00",
+          "name_en": "Shrine",
+          "name_zh": "神迹"
+        },
+        {
+          "index": 2,
+          "level": "c-00",
+          "name_en": "Old Trail",
+          "name_zh": "古道"
+        },
+        {
+          "index": 3,
+          "level": "d-00",
+          "name_en": "Cliff Face",
+          "name_zh": "悬崖峭壁"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "sid": "Celeste/5-MirrorTemple",
+      "name_en": "Mirror Temple",
+      "name_zh": "镜之寺庙",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "a-00b",
+          "name_en": "Start",
+          "name_zh": "开始"
+        },
+        {
+          "index": 1,
+          "level": "b-00",
+          "name_en": "Depths",
+          "name_zh": "深渊"
+        },
+        {
+          "index": 2,
+          "level": "c-00",
+          "name_en": "Unravelling",
+          "name_zh": "豁然开朗"
+        },
+        {
+          "index": 3,
+          "level": "d-00",
+          "name_en": "Search",
+          "name_zh": "搜寻"
+        },
+        {
+          "index": 4,
+          "level": "e-00",
+          "name_en": "Rescue",
+          "name_zh": "营救"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "sid": "Celeste/6-Reflection",
+      "name_en": "Reflection",
+      "name_zh": "沉思",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "start",
+          "name_en": "Start",
+          "name_zh": "开始"
+        },
+        {
+          "index": 1,
+          "level": "00",
+          "name_en": "Lake",
+          "name_zh": "湖"
+        },
+        {
+          "index": 2,
+          "level": "04",
+          "name_en": "Hollows",
+          "name_zh": "洞穴"
+        },
+        {
+          "index": 3,
+          "level": "b-00",
+          "name_en": "Reflection",
+          "name_zh": "深思"
+        },
+        {
+          "index": 4,
+          "level": "boss-00",
+          "name_en": "Rock Bottom",
+          "name_zh": "谷底"
+        },
+        {
+          "index": 5,
+          "level": "after-00",
+          "name_en": "Resolution",
+          "name_zh": "决断"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "sid": "Celeste/7-Summit",
+      "name_en": "The Summit",
+      "name_zh": "山顶",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "a-00-intro",
+          "name_en": "Start",
+          "name_zh": "开始"
+        },
+        {
+          "index": 1,
+          "level": "b-00",
+          "name_en": "500 M",
+          "name_zh": "500 米"
+        },
+        {
+          "index": 2,
+          "level": "c-00",
+          "name_en": "1000 M",
+          "name_zh": "1000 米"
+        },
+        {
+          "index": 3,
+          "level": "d-00",
+          "name_en": "1500 M",
+          "name_zh": "1500 米"
+        },
+        {
+          "index": 4,
+          "level": "e-00b",
+          "name_en": "2000 M",
+          "name_zh": "2000 米"
+        },
+        {
+          "index": 5,
+          "level": "f-00",
+          "name_en": "2500 M",
+          "name_zh": "2500 米"
+        },
+        {
+          "index": 6,
+          "level": "g-00",
+          "name_en": "3000 M",
+          "name_zh": "3000 米"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "sid": "Celeste/8-Epilogue",
+      "name_en": "Epilogue",
+      "name_zh": "尾声",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "outside",
+          "name_en": "Start",
+          "name_zh": "开始"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "sid": "Celeste/9-Core",
+      "name_en": "Core",
+      "name_zh": "核心",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "00",
+          "name_en": "Start",
+          "name_zh": "开始"
+        },
+        {
+          "index": 1,
+          "level": "a-00",
+          "name_en": "Into the Core",
+          "name_zh": "深入腹地"
+        },
+        {
+          "index": 2,
+          "level": "c-00",
+          "name_en": "Hot and Cold",
+          "name_zh": "冰火两重天"
+        },
+        {
+          "index": 3,
+          "level": "d-00",
+          "name_en": "Heart of the Mountain",
+          "name_zh": "山之心"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "sid": "Celeste/LostLevels",
+      "name_en": "Farewell",
+      "name_zh": "再见",
+      "checkpoints": [
+        {
+          "index": 0,
+          "level": "intro-00-past",
+          "name_en": "Start",
+          "name_zh": "开始"
+        },
+        {
+          "index": 1,
+          "level": "a-00",
+          "name_en": "Singular",
+          "name_zh": "一个人"
+        },
+        {
+          "index": 2,
+          "level": "c-00",
+          "name_en": "Power Source",
+          "name_zh": "能源"
+        },
+        {
+          "index": 3,
+          "level": "e-00z",
+          "name_en": "Remembered",
+          "name_zh": "铭记"
+        },
+        {
+          "index": 4,
+          "level": "f-door",
+          "name_en": "Event Horizon",
+          "name_zh": "视界线"
+        },
+        {
+          "index": 5,
+          "level": "h-00b",
+          "name_en": "Determination",
+          "name_zh": "决心"
+        },
+        {
+          "index": 6,
+          "level": "i-00",
+          "name_en": "Stubbornness",
+          "name_zh": "倔强"
+        },
+        {
+          "index": 7,
+          "level": "j-00",
+          "name_en": "Reconciliation",
+          "name_zh": "和谐"
+        },
+        {
+          "index": 8,
+          "level": "j-16",
+          "name_en": "Farewell",
+          "name_zh": "再见"
+        }
+      ]
+    }
+  ]
+}
