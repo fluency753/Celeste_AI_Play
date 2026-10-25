@@ -375,6 +375,7 @@
         <div class="switches">
           <label class="switch" id="rowSim"><span class="text"><b>预置模拟器</b><span id="simNote">逐帧精确地推演路线</span></span><input type="checkbox" id="sim" checked></label>
           <label class="switch" id="rowSimAssist" hidden><span class="text"><b>限额短路线预测</b><span id="simAssistNote">按体力额度预测短路线</span></span><input type="checkbox" id="simAssist" checked></label>
+          <label class="switch" id="rowStiffness" hidden><span class="text"><b>思考僵直</b><span>冻结期间的思考与工具时间按比例变成下一次动作前的僵直（参数在“可调参数”里）</span></span><input type="checkbox" id="stiffness"></label>
           <label class="switch"><span class="text"><b>规划回放</b><span>把推演过的路线画进游戏</span></span><input type="checkbox" id="playback" checked></label>
           <label class="switch"><span class="text"><b>OBS 录屏</b><span>锁步录制完整版与纯享版</span></span><input type="checkbox" id="record" checked></label>
           <label class="switch"><span class="text"><b>游戏内 HUD</b><span id="hudModNote">画在游戏画面右上角</span></span><input type="checkbox" id="hudMod" checked></label>
@@ -973,6 +974,7 @@ function setMode(mode) {
   document.querySelectorAll("[data-pmode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.pmode === mode)));
   $("rowSim").hidden = mode !== "speedrun";
   $("rowSimAssist").hidden = mode !== "explore";
+  $("rowStiffness").hidden = mode !== "explore";
   $("fsExplore").hidden = mode !== "explore";
   $("liveNote").textContent = mode === "explore"
     ? "观众实时观看：解说更勤，每次决策约 10～20 秒，可按要求退出关卡；HUD 默认用可交互的网页形式"
@@ -1197,7 +1199,7 @@ function formOptions() {
   const options = {
     engine, provider, model: $("model").value, effort: $("effort").value, agent: $("agent").value.trim(),
     mode: ui.mode, live: $("live").checked, sim: $("sim").checked, sim_assist: $("simAssist").checked,
-    playback: $("playback").checked, record: $("record").checked, hud_mod: $("hudMod").checked,
+    stiffness: $("stiffness").checked, playback: $("playback").checked, record: $("record").checked, hud_mod: $("hudMod").checked,
     study: $("study").checked, limit_planning: $("limitPlanning").checked, quota_wait: $("quotaWait").checked,
     keep_obs_open: $("keepObs").checked, start_paused: $("startPaused").checked,
     cutscene_mode: $("cutsceneAgent").checked ? "agent" : "auto", chapters: ui.chapters, segments: selectedSegments(), save,
@@ -1708,6 +1710,7 @@ async function loadPromptPreview() {
   const bits = [o.mode === "explore" ? "探索" : "速通"];
   if (o.mode === "speedrun") bits.push(o.sim && o.runtime === "container" ? "开模拟器" : "关模拟器");
   else if (o.sim_assist) bits.push("限额预测");
+  if (o.mode === "explore" && o.stiffness) bits.push("思考僵直");
   if (o.mode === "speedrun" && o.limit_planning && o.sim) bits.push("限制规划轮次");
   bits.push(o.live ? "直播" : "不直播");
   if (o.runtime === "host") bits.push("本机运行方式");

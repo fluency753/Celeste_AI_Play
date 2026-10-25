@@ -29,7 +29,7 @@
 
 ## 工具与解说
 
-游戏每秒 60 帧；思考时冻结。基本规则见 /kb/basics.md，坐标与观测格式见 /kb/data.md，按键和工具约定见 /kb/tools.md。
+游戏每秒 60 帧；思考时冻结。{stiffness_rule}基本规则见 /kb/basics.md，坐标与观测格式见 /kb/data.md，按键和工具约定见 /kb/tools.md。
 Read/Write/Bash 对应容器的文件读取、写入和断网命令；游戏工具为 {game_tools}，具体前缀见执行器工具映射。
 {program_lead}{cpu_rule}{parallel_rule}/workspace 是从主机挂载进容器的目录，读写比容器内的 /tmp 慢得多，许多进程同时读写时会互相排队：模拟与搜索的循环里不要反复读写工作区文件（例如每次试验都重新读观测、扫描历史记录或写状态文件），需要的数据先一次读进内存或拷到 /tmp，模拟器对象尽量只构造一次再复用。
 {explore_program_rule}若有辅助程序，使用 /workspace/game/show.py 的 status() 报告真实进度。

@@ -132,6 +132,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
     ap.add_argument("--sim-assist", action=argparse.BooleanOptionalAction, default=None,
                     help="只用于探索模式：有额度的短路线预测（探索模式默认开启）；不向智能体开放模拟器文件")
+    ap.add_argument("--stiffness", action=argparse.BooleanOptionalAction, default=None,
+                    help="只用于探索模式：思考僵直（默认关；续跑沿用原运行）。一次冻结里思考、运行工具的时间各自满 2.5 分钟后，"
+                         "按比例在下一次 act 前让角色保持上一帧的按键僵直（思考每 2.5 分钟 0.3 秒、工具每 2.5 分钟另加 0.6 秒，"
+                         "见可调参数 stiff_unit_s、stiff_think_s、stiff_tool_s），不计入 act 的帧数上限")
     ap.add_argument("--live", dest="live", action="store_true", default=None,
                     help="直播模式（默认关，可与速通或探索模式叠加）：HUD 默认用可交互的网页形式，解说计时 10 秒，"
                          "可按用户要求退出关卡；速通 + 直播不改变速通目标，探索 + 直播另加直播节奏")
@@ -270,6 +274,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         raise SystemExit("限额模拟辅助仅支持容器模式，不能同时开放无限制 --sim")
     if cfg.sim_assist and not (cfg.sim_dir / "celeste-sim").is_file():
         raise SystemExit("限额模拟辅助需要 sim/dist/celeste-sim；可用 --no-sim-assist 关闭")
+    if args.stiffness and cfg.mode != EXPLORE:
+        raise SystemExit("--stiffness（思考僵直）只用于探索模式")
+    cfg.stiffness = (bool(previous["state"].get("stiffness", False)) if previous and args.stiffness is None
+                     else bool(args.stiffness)) and cfg.mode == EXPLORE
     cfg.pause_limit = bool(args.limit_planning) and not args.free_planning
     cfg.rounds_per_room = max(1, args.rounds_per_room)
     cfg.room_scale = max(1.0, args.room_scale)
@@ -391,7 +399,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         plan_pieces = None
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
-             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
+             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": False, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None}

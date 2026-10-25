@@ -31,6 +31,7 @@ class BridgeClient:
         self.next_id = 1
         self.cancel_check = None
         self.step_options = None
+        self.after_step = None
         self._cancel_sent = False
 
     def close(self) -> None:
@@ -69,6 +70,9 @@ class BridgeClient:
             if reply.get("id") == req_id:
                 if not reply.get("ok"):
                     raise RuntimeError(f"{cmd} failed: {reply.get('error')}")
+                after = getattr(self, "after_step", None)
+                if cmd == "step" and after is not None:
+                    after(args, reply)     # 例如记下最后真正喂给游戏的那一帧按键（思考僵直时保持它）
                 return reply
 
     def cancel_pending(self) -> None:

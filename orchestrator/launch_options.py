@@ -19,13 +19,13 @@ AGENT_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}"
 MODEL_PATTERN = r"[A-Za-z0-9._:/\[\]-]{1,100}"
 PROVIDER_PATTERN = r"[A-Za-z0-9_.-]{1,60}"
 
-SWITCHES = ("live", "sim", "sim_assist", "playback", "record", "hud_mod", "study", "limit_planning",
+SWITCHES = ("live", "sim", "sim_assist", "stiffness", "playback", "record", "hud_mod", "study", "limit_planning",
             "keep_obs_open", "start_paused", "quota_wait", "record_marker", "skip_enter", "no_agent", "hud_window", "hud")
 MAPS = {"celeste": "蔚蓝官方章节"}      # 以后可能加 MOD 地图
 
 DEFAULTS = {
     "engine": "claude", "provider": "anthropic", "model": "opus", "effort": "high", "agent": "",
-    "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": True, "playback": True, "record": True,
+    "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": True, "stiffness": False, "playback": True, "record": True,
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
     "start_paused": False, "quota_wait": True, "cutscene_mode": "auto", "chapters": [0], "segments": None,
     "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 240, "autocompact": "",
@@ -181,6 +181,8 @@ def build(options: dict) -> list[str]:
         argv.append("--sim" if o["sim"] else "--no-sim")
     else:
         argv.append("--sim-assist" if o["sim_assist"] else "--no-sim-assist")
+        if o["stiffness"]:
+            argv.append("--stiffness")          # 思考僵直（探索模式，默认关）
     argv.append("--playback" if o["playback"] else "--no-playback")
     argv.append("--record" if o["record"] else "--no-record")
     argv.append("--hud-mod" if o["hud_mod"] else "--no-hud-mod")
@@ -268,6 +270,7 @@ def config_for(options: dict):
     cfg.knowledge_profile = KNOWLEDGE_OF_MODE[o["mode"]]
     cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and o["runtime"] == "container"
     cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"] and o["runtime"] == "container"
+    cfg.stiffness = o["mode"] == EXPLORE and o["stiffness"]
     cfg.live, cfg.playback, cfg.cutscene_mode = o["live"], o["playback"], o["cutscene_mode"]
     cfg.pause_limit = o["limit_planning"] and cfg.sim
     cfg.rounds_per_room, cfg.room_scale = o["rounds_per_room"], o["room_scale"]

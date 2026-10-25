@@ -143,6 +143,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             line += f"\n模拟体力：{energy['balance']}/{energy['capacity']}（预测花费体力，真实操作和首次到新房间补充）"
         if gate is not None and gate.enabled:
             line += "\n" + gate.status_line()
+        freeze = getattr(session, "freeze_line", lambda: "")()   # 探索模式开了思考僵直：这次冻结已累计的时间与预计僵直
+        if freeze:
+            line += "\n" + freeze
         return line
 
     def credit(obs: dict) -> None:

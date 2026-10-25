@@ -57,6 +57,8 @@ class MetricsState:
     tool_calls: int | None = None
     compactions: int = 0
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）
+    stiff_frames: int = 0             # 思考僵直推进的帧数（探索模式开了 --stiffness 时）
+    stiff_s: float = 0.0              # 思考僵直的游戏内秒数
     retries: int = 0                  # 自动重试次数（重算程序运行次数，不唤醒大模型）
     pause_denials: int = 0            # 规划轮次用完后被拒绝的工具调用次数（见 pausegate.py）
     plan_rounds_left: int | None = None  # 本章还剩的规划轮次（--limit-planning 时）；None = 不限（默认）
@@ -197,6 +199,12 @@ class Metrics:
                               fast_requested=fast, service_tier_requested=service_tier)
             self._in_turn = True
             self._write_locked()
+
+    def freeze_counters(self) -> tuple[float, float, float]:
+        """思考僵直用：结算到此刻的（思考秒数，工具秒数，压缩秒数）累计。用户暂停与等待额度的时间本来就不计入。"""
+        with self._lock:
+            self._flush_locked()
+            return self.state.thinking_s, self.state.tool_s, self.state.compact_s
 
     def turn_acknowledged(self, turn_id: str) -> None:
         with self._lock:
@@ -341,6 +349,7 @@ class Metrics:
             return waited
 
     RESTORED = ("thinking_s", "tool_s", "play_game_s", "auto_game_s", "decisions", "frames_played", "frames_auto",
+                "stiff_frames", "stiff_s",
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
                 "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "context_tokens",

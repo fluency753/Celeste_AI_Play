@@ -27,7 +27,7 @@ class Tunable:
     optional: bool = False                               # 允许空值（不限）
 
 
-GROUPS = ("执行与解说", "规划回放", "速通：程序与规划", "探索：规划程序", "探索：限额预测")
+GROUPS = ("执行与解说", "规划回放", "速通：程序与规划", "探索：规划程序", "探索：思考僵直", "探索：限额预测")
 
 TUNABLES: tuple[Tunable, ...] = (
     Tunable("max_frames_per_act", "单次 act 最多推进的帧数", "执行与解说", int, 600, 60, 3600, "帧",
@@ -73,6 +73,13 @@ TUNABLES: tuple[Tunable, ...] = (
             "探索模式用这一项；提示词与 act 的说明里的上限跟着变", ("explore",)),
     Tunable("explore_search_frames", "自写模拟器与搜索程序每次最多推演", "探索：规划程序", int, 150, 1, 36000, "帧",
             "写进提示词，由智能体遵守（主控检查不了它自己程序里的推演帧数）；空着 = 不限", ("explore",), optional=True),
+    Tunable("stiff_unit_s", "计时单位", "探索：思考僵直", float, 150, 10, 3600, "秒",
+            "开了思考僵直才用：一次冻结里思考、运行工具的时间各自满这么久才开始僵直，之后按比例计算；提示词里的数字跟着变",
+            ("explore",)),
+    Tunable("stiff_think_s", "每份思考的僵直", "探索：思考僵直", float, 0.3, 0, 30, "秒",
+            "思考时间每满一个计时单位，下一次 act 前僵直这么久", ("explore",)),
+    Tunable("stiff_tool_s", "每份工具时间的僵直", "探索：思考僵直", float, 0.6, 0, 30, "秒",
+            "运行工具（Bash 程序、观测等）的时间每满一个计时单位，另外僵直这么久", ("explore",)),
     Tunable("assist_capacity", "体力上限", "探索：限额预测", int, 100, 1, 10000, "点", modes=("explore",)),
     Tunable("assist_initial", "初始体力", "探索：限额预测", int, 60, 0, 10000, "点", modes=("explore",)),
     Tunable("assist_regen_frames", "每多少个移动帧恢复 1 点", "探索：限额预测", int, 60, 1, 3600, "帧", modes=("explore",)),
