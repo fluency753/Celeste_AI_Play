@@ -36,6 +36,7 @@ class SessionControls:
         self.fast_mode = self.control.fast_preference() if self.control else None
         self.manual_effort = self.control.effort_preference() if self.control else None
         self.turn_fast = None
+        self._fast_yield_requested = None
         self.stop_requested = False
         self.goal_finishing = False
         self.paused, self.turn_active, self.user_interrupted = start_paused or self.chat_only, False, False
@@ -89,7 +90,7 @@ class SessionControls:
             self.control.heartbeat(paused=self.paused and not self.pausing,
                 phase="pausing" if self.pausing else "chatting" if self.turn_active else "idle",
                 session_id=self.session_id, chat_only=self.chat_only,
-                fast_control=self.capabilities.fast, fast=self.fast_mode, fast_pending=self.turn_active and self.turn_fast != self.fast_mode,
+                **self._fast_status(),
                 **self._effort_status(), **self._goal_status(), **self._cutscene_status())
             await asyncio.sleep(.5)
 
@@ -147,7 +148,7 @@ class SessionControls:
                                 raise ValueError("当前执行器不支持 Fast")
                             self.fast_mode = row["text"] == "on"
                             self.control.set_fast(self.fast_mode)
-                            self.control.mark(row["id"], "submitted", "Fast 设置已保存，下一轮生效")
+                            self.control.mark(row["id"], "submitted", "Fast 设置已保存，等待模型换轮" if self.turn_active else "Fast 设置已保存，下次模型请求生效")
                         elif row['kind']=='cutscene_mode':
                             if row['text'] == 'agent' and not getattr(self.session, 'cutscene_tool', True):
                                 raise ValueError('本次运行没有开放剧情工具，剧情由主控自动跳过')
@@ -196,6 +197,7 @@ class SessionControls:
                         if row["kind"] == "pause":
                             self.pausing = False
                 if self.turn_active and self.turn_id and not self.turn_done.is_set():
+                    await self._yield_for_fast_change()
                     for row in list(self.pending_messages):
                         if row.get("attempted_turn") == self.turn_id:
                             continue
@@ -215,11 +217,28 @@ class SessionControls:
                             await self._interrupt_user()
                 self.control.heartbeat(paused=self.paused, phase="chatting" if self.turn_active else "idle",
                     session_id=self.session_id, chat_only=self.chat_only,
-                    fast_control=self.capabilities.fast, fast=self.fast_mode, fast_pending=self.turn_active and self.turn_fast != self.fast_mode,
+                    **self._fast_status(),
                     **self._effort_status(), **self._goal_status(), **self._cutscene_status())
                 await asyncio.sleep(.1)
         except asyncio.CancelledError:
             raise
+
+    def _fast_status(self):
+        return {'fast_control':self.capabilities.fast, 'fast':self.fast_mode,
+                'fast_current':self.turn_fast if self.turn_active else None,
+                'fast_pending':bool(self.capabilities.fast and self.turn_active and self.turn_fast != self.fast_mode)}
+
+    async def _yield_for_fast_change(self):
+        if not self.capabilities.fast or not self.capabilities.live_steering or self.turn_fast == self.fast_mode:
+            return
+        key=(self.turn_id,self.fast_mode)
+        if key == self._fast_yield_requested:
+            return
+        try:
+            await self._steer_user('用户更新了 Fast 设置。请在当前工具或动作完成后简短结束本轮，主控会按最新设置继续同一试玩。保持用户当前的暂停或运行设置，不自行退出关卡或结束试玩。')
+        except Exception:
+            return  # a turn/start or turn/completed race; recheck state on the next control tick
+        self._fast_yield_requested=key
 
     def _effort_status(self):
         return {'effort_control':True, 'interrupt_control': bool(getattr(self, 'supports_interrupt', False)),'effort':self.metrics.state.effort,

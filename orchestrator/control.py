@@ -110,4 +110,6 @@ class RunControl:
             manual_effort=json.loads(preference[0]) if preference else None
             story=db.execute("SELECT data FROM preferences WHERE key='cutscene_mode'").fetchone()
             mode=json.loads(story[0]) if story else state.get('cutscene_mode','auto')
-            return {**state, "cutscene_mode":mode, "effort_manual":manual_effort, "connected": connected, "messages": messages[-60:], "actions": actions[:10]}
+            return {**state, "cutscene_mode":mode, "effort_manual":manual_effort, "connected": connected,
+                    "fast_pending":bool(connected and state.get('fast_pending')),
+                    "messages": messages[-60:], "actions": actions[:10]}

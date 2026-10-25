@@ -147,7 +147,7 @@ HUD 底部"会话管理"提供新建并准备、断开会话、章节选择、�
 
 切换时不主动打断当前轮次，也不等待或取消动作锁；如果正有 Codex 轮次在进行，用 steer 通道请求它在当前工具结束后自然结束，主控再按新档位继续。只有 `turn/start` 成功返回后才更新 `metrics.effort`，等待期间用 `effort_pending` 显示"下轮生效"。空闲聊天里修改不会发起额外的模型请求。
 
-`Fast：开 / 关`（只有 Codex 有）控制服务档位：下一轮 `turn/start` 显式传 `serviceTierForTurn=priority/default`，不打断当前回复；回复中切换会显示"下轮"。设置存进当前运行的 SQLite 偏好，唤起聊天时保留。
+`Fast：开 / 关`（只有 Codex 有）控制服务档位：下一轮 `turn/start` 显式传 `serviceTierForTurn=priority/default`，切换时主控会通知模型完成当前动作后简短结束本轮，再按新设置继续；不会中断游戏动作。换轮前显示“待换轮”，新请求发出后清除，断开连接也不会残留待生效标记。设置存进当前运行的 SQLite 偏好，唤起聊天时保留。
 
 实测（Codex）：经 HUD 接口把推理强度从 high 改为 low 并等待下一轮生效，再恢复"自动"撤回请求，原会话、Fast 关闭状态和游戏都保持不变。
 

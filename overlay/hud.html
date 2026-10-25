@@ -240,7 +240,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 51;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 52;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -801,7 +801,8 @@ async function pollControl() {
     $('togglePlay').textContent=primary.label;
     $('togglePlay').disabled=primary.disabled;
     $('agentSend').disabled = !c.connected || sendingMessage;
-    $('toggleFast').textContent = `Fast：${c.fast == null ? '—' : c.fast ? '开' : '关'}${c.fast_pending ? '（下轮）' : ''}`;
+    $('toggleFast').title = c.connected && c.fast_pending ? '等待当前模型轮次结束后切换，当前动作不会被中断' : '设置下次模型请求是否使用 Fast';
+    $('toggleFast').textContent = `Fast：${c.fast == null ? '—' : c.fast ? '开' : '关'}${c.connected && c.fast_pending ? '（待换轮）' : ''}`;
     $('toggleFast').setAttribute('aria-pressed', String(!!c.fast));
     $('toggleFast').hidden = !c.fast_control;
     $('toggleFast').disabled = !c.connected || !c.fast_control || (c.actions || []).some(a => a.kind === 'fast' && a.status === 'queued');

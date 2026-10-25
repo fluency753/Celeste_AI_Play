@@ -168,9 +168,48 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.runner.fast_mode)
         self.assertTrue(RunControl(self.root).fast_preference())
         self.assertTrue(self.runner.control.snapshot()["fast_pending"])
-        self.runner.rpc.request.assert_not_called()
+        self.assertEqual(self.runner.rpc.request.await_args.args[0],'turn/steer')
+        self.assertNotIn('turn/interrupt',[call.args[0] for call in self.runner.rpc.request.await_args_list])
         with self.assertRaises(ValueError):
             self.runner.control.enqueue("fast", "unexpected")
+
+    async def test_fast_change_does_not_wait_for_action_lock_and_pending_clears_next_turn(self):
+        self.runner.fast_mode=False;self.runner.turn_fast=False
+        async with self.runner.action_lock:
+            self.runner.control.enqueue('fast','on')
+            self.task=asyncio.create_task(self.runner._controls())
+            await self.wait_for(lambda:self.runner.rpc.request.await_count==1)
+        self.assertEqual(self.runner.rpc.request.await_args.args[0],'turn/steer')
+        self.runner.turn_fast=True;self.runner.turn_id='next-turn'
+        await self.wait_for(lambda:not self.runner.control.snapshot().get('fast_pending'))
+        self.assertEqual(self.runner.rpc.request.await_count,1)
+
+    async def test_fast_off_requests_natural_turn_end_and_deduplicates(self):
+        self.runner.fast_mode=True;self.runner.turn_fast=True
+        self.runner.control.enqueue('fast','off')
+        self.task=asyncio.create_task(self.runner._controls())
+        await self.wait_for(lambda:self.runner.rpc.request.await_count==1)
+        self.assertFalse(self.runner.fast_mode)
+        self.assertTrue(self.runner.control.snapshot()['fast_pending'])
+        await self.runner._yield_for_fast_change()
+        self.assertEqual(self.runner.rpc.request.await_count,1)
+        self.assertEqual(self.runner.rpc.request.await_args.args[0],'turn/steer')
+        self.runner.turn_fast=False;self.runner.turn_id='next-turn'
+        await self.wait_for(lambda:not self.runner.control.snapshot().get('fast_pending'))
+
+    async def test_fast_changed_during_turn_start_steers_after_acknowledgment(self):
+        self.runner.fast_mode=False;self.runner.turn_fast=False;self.runner.turn_id=None
+        self.runner.control.enqueue('fast','on')
+        self.task=asyncio.create_task(self.runner._controls())
+        await self.wait_for(lambda:not self.runner.control.pending())
+        self.runner.rpc.request.assert_not_called()
+        self.runner.turn_id='acknowledged-turn'
+        await self.wait_for(lambda:self.runner.rpc.request.await_count==1)
+        self.assertEqual(self.runner.rpc.request.await_args.args[1]['expectedTurnId'],'acknowledged-turn')
+
+    def test_disconnected_controller_never_reports_fast_pending(self):
+        self.runner.control.heartbeat(stopped=True,fast_pending=True,fast=False)
+        self.assertFalse(self.runner.control.snapshot()['fast_pending'])
 
     def test_wake_requires_completed_native_run(self):
         from orchestrator.chat import can_wake

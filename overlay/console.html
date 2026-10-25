@@ -1311,7 +1311,8 @@ function renderControls() {
   if (document.activeElement !== cut) cut.value = c.cutscene_mode || "auto";
   cut.disabled = !connected || !c.cutscene_control;
   $("fastToggle").hidden = !c.fast_control;
-  $("fastToggle").textContent = `Fast：${c.fast ? "开" : "关"}`;
+  $("fastToggle").textContent = `Fast：${c.fast ? "开" : "关"}${c.connected && c.fast_pending ? "（待换轮）" : ""}`;
+  $("fastToggle").title = c.connected && c.fast_pending ? "等待当前模型轮次结束后切换，当前动作不会被中断" : "设置下次模型请求是否使用 Fast";
   $("stopRun").disabled = !connected || !c.goals_enabled;
   $("interruptRun").hidden = !c.interrupt_control;
   $("interruptRun").disabled = !connected;
