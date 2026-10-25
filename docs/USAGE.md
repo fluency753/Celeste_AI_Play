@@ -527,6 +527,13 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC，`obs_mix
 - 控制台：在"存档与章节"页选好章节后，下面列出各章的段，取消不想玩的段即可；运行中在"当前运行"的"要通关的范围"里改之后要玩的段（见 4.10）。
 - 续跑：计划写在 `run_state.json` 的 `plan_pieces`（已完成的截 + 当前这一截 + 之后的截），续跑按已完成的截数接着走；在两截之间中断时（`piece_pending`），续跑先进入下一截的起点。
 
+自检（不调用模型，只用 test 存档，不碰正式存档；游戏开着、没有主控在运行）：
+
+```powershell
+.\.venv\Scripts\python.exe tools\dump_checkpoints.py          # 导出检查点表（configs\checkpoints.json）
+.\.venv\Scripts\python.exe calibration\segment_check.py       # 进入检查点、一截完成、换到下一截、最后一截返回地图
+```
+
 ### 4.7 正式挑战
 
 流程已全部由主控串联，并在 test 存档上彩排通过（见 4.6 节）。本项目的正式挑战是：Opus 5.5 与 Fable 5.1 各用自己的新存档（`opus5.5`、`fable5.1`）从序章开始，依次通关序章、1A、2A，分开时段各跑一次。你可以换成自己的存档名、标签与章节。
