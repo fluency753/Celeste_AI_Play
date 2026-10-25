@@ -102,9 +102,11 @@ class SessionControls:
         return True
 
     def _program_guard(self):
-        # Preparation can organize notes in the sandbox; the MCP game gate is
-        # still closed. Idle chat and user-paused play cannot run planners.
-        return None if getattr(self, 'prepare_only', False) else self._game_guard()
+        # Preparation (and chat with --allow-programs) can organize notes and programs in the sandbox;
+        # the MCP game gate is still closed. Idle chat and user-paused play cannot run planners.
+        if getattr(self, 'prepare_only', False) or getattr(self, 'allow_programs', False):
+            return None
+        return self._game_guard()
 
     async def _heartbeat(self):
         while True:

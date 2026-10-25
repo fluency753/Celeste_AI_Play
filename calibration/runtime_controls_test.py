@@ -109,6 +109,15 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.runner.paused)
         self.assertIsNone(self.runner._game_guard())
 
+    async def test_workspace_chat_allows_programs_but_not_game_tools(self):
+        # 通关后唤起会话整理工作区（chat --allow-programs）：沙箱里的 Bash 放行，游戏工具仍然不可用
+        self.runner.chat_only, self.runner.paused = True, True
+        self.assertIsNotNone(self.runner._program_guard())
+        self.runner.allow_programs = True
+        self.assertIsNone(self.runner._program_guard())
+        self.assertIn('暂停', self.runner._game_guard())
+        self.assertIn('整理工作区', self.runner._lifecycle_prompt())
+
     async def test_pause_waits_for_mcp_call_then_blocks_next_simulation(self):
         entered, release = threading.Event(), threading.Event()
         def simulate(data):

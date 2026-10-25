@@ -165,7 +165,9 @@ class ClaudeRunner(SessionControls):
             return False
         rows, self.pending_messages = self.pending_messages, []
         text = '\n'.join(row['text'] for row in rows) if rows else fallback
-        if self.paused:
+        if self.paused and getattr(self, 'allow_programs', False):
+            text += '\n试玩仍处于暂停状态：不调用游戏操作；可以按用户的要求修改、运行工作区里的程序，完成后回复并结束本轮。'
+        elif self.paused:
             text += '\n试玩仍处于暂停状态。只回复用户，不调用游戏操作，回复后结束本轮。'
         await self._send(text)
         for row in rows:
@@ -253,6 +255,9 @@ class ClaudeRunner(SessionControls):
     def _lifecycle_prompt(self):
         if self.prepare_only:
             return '\n本次仅准备：按要求完整读取知识库、整理工作区 notes.md 后结束本轮；不调用游戏工具，不开始试玩。'
+        if self.chat_only and getattr(self, 'allow_programs', False):
+            return ('\n本次整理工作区：按用户的要求修改、运行工作区里的程序（可以用 Bash），回复用户；'
+                    '不观察或操作游戏，不自行开始试玩。没有用户消息时等待。')
         if self.chat_only:
             return '\n本次仅聊天：回复用户、读取笔记，不观察或操作游戏，不运行规划程序，不自行开始试玩。没有用户消息时等待。'
         return ''
