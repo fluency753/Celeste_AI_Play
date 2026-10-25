@@ -1,5 +1,6 @@
 """按段通关与运行中调整要通关的范围：分段、截的终点、换到下一截、run_state 与控制指令。"""
 import json
+from contextlib import ExitStack
 import tempfile
 import threading
 import unittest
@@ -58,8 +59,10 @@ class SegmentTests(unittest.TestCase):
 
 class PlanTests(unittest.TestCase):
     def test_piece_ends_on_entering_end_checkpoint(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
             s = session(Path(d), [Piece(1, 0, 1), Piece(1, 2, None), Piece(2)])
+            cleanup.callback(s._frames_log.close)
+            cleanup.callback(s._decisions_log.close)
             self.assertEqual(s._stop_rooms(), {"stop_rooms": ["6"]})
             self.assertFalse(s._note_room("Celeste/1-ForsakenCity", "5", 100))
             self.assertTrue(s._note_room("Celeste/1-ForsakenCity", "6", 1234))
@@ -73,15 +76,19 @@ class PlanTests(unittest.TestCase):
             self.assertEqual(s.chapter_plan()["segments"]["done"], [[1, 0]])
 
     def test_last_piece_finishes_the_run(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
             s = session(Path(d), [Piece(1, 1, 2)])
+            cleanup.callback(s._frames_log.close)
+            cleanup.callback(s._decisions_log.close)
             self.assertTrue(s._note_room("Celeste/1-ForsakenCity", "9b", 50))
             self.assertTrue(s.done)
             self.assertEqual(s.done_reason, "分段完成")
 
     def test_segment_tracking_and_runtime_edit(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
             s = session(Path(d), [Piece(1)])                  # 整章 1A
+            cleanup.callback(s._frames_log.close)
+            cleanup.callback(s._decisions_log.close)
             self.assertEqual(s._stop_rooms(), {})
             s._note_room("Celeste/1-ForsakenCity", "6")
             self.assertEqual(s.segment_index, 1)
@@ -108,16 +115,20 @@ class PlanTests(unittest.TestCase):
                 s.set_plan([[2, 0]])
 
     def test_old_chapter_queue_control_still_works(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
             s = session(Path(d), [Piece(1)])
+            cleanup.callback(s._frames_log.close)
+            cleanup.callback(s._decisions_log.close)
             s.set_chapter_queue([2])
             self.assertEqual((s.piece, s.chapter_queue), (Piece(1), [Piece(2)]))
             with self.assertRaises(ValueError):
                 s.set_chapter_queue([1])
 
     def test_next_piece_teleports_to_its_start(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
             s = session(Path(d), [Piece(1, 0, 1), Piece(1, 2, None)])
+            cleanup.callback(s._frames_log.close)
+            cleanup.callback(s._decisions_log.close)
             s._note_room("Celeste/1-ForsakenCity", "6", 10)
             arrived = {"scene": "Level", "controllable": True,
                        "level": {"sid": "Celeste/1-ForsakenCity", "room": "9b", "chapterTimeTicks": 0}}
