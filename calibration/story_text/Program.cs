@@ -223,3 +223,11 @@ foreach (var flags in new[] { (false, true), (true, true), (true, false) }) {
         throw new Exception("AreaComplete readiness does not match the native confirm guard");
 }
 Console.WriteLine("PASS: frozen Poem visibility/text and native AreaComplete confirmation readiness observed without inputs");
+var dyingPlayer=(Player)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Player));
+dyingPlayer.Dead=true;
+if (!PlayerControl.IsDeathTransition(true,dyingPlayer)) throw new Exception("Actual death was lost");
+if (PlayerControl.IsDeathTransition(false,dyingPlayer)) throw new Exception("Death animation counted twice");
+if (PlayerControl.IsDeathTransition(true,null)) throw new Exception("Scene exit counted as a death");
+dyingPlayer.Dead=false;
+if (PlayerControl.IsDeathTransition(true,dyingPlayer)) throw new Exception("Living player counted as dead");
+Console.WriteLine("PASS: real death emits once; absent player on scene exit is not a death");

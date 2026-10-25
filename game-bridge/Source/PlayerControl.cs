@@ -3,6 +3,9 @@ using Celeste;
 namespace CelesteAI.Bridge;
 
 internal static class PlayerControl {
+    // A missing player during a scene change is not a death. In normal Celeste
+    // the player remains present with Dead=true during the death animation.
+    public static bool IsDeathTransition(bool wasAlive, Player? player) => wasAlive && player is { Dead: true };
     public static bool IsControllable(Level? level, Player? player) {
         if (level == null || player == null || player.Dead) return false;
         // InCutscene can coexist with real player control (notably the prologue tutorial).

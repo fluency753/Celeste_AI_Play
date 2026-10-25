@@ -128,7 +128,7 @@ internal sealed class StepJob {
         bool onGround = alive && p!.onGround;
         int dashes = p?.Dashes ?? 0;
 
-        if (lastAlive && !alive) Emit(frame, "death", room);
+        if (PlayerControl.IsDeathTransition(lastAlive, p)) Emit(frame, "death", room);
         if (room != null && lastRoom != null && room != lastRoom) {
             Emit(frame, "room", room);
             if (StopReason == null && stopRooms.Contains(room)) StopReason = "room";
