@@ -288,6 +288,20 @@ def study_prompt(study: KbStudy, sim: bool = False) -> str:
 CONTINUE_PROMPT = "本章还没有通关，请继续调用 act 游玩。"
 
 
+def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
+    """续跑一次已经全部通关的运行、追加了新的章节时（run.py 的 --resume … --chapters）发出的第一条消息。
+    不是中途被打断的续跑，不能说"上一轮被结束、游戏一直冻结"；会话里还有旧规则，提醒以当前系统提示词为准。"""
+    from .segments import piece_label
+    table = getattr(cfg, "checkpoints", None) or {}
+    items = "、".join(piece_label(p, table) for p in (cfg.plan or [])) \
+        or "、".join(chapter_name_by_id(c) for c in (cfg.chapters or []))
+    head = ("（系统）之前指定的章节都已经通关。"
+            + ("这是一个新的会话：之前的对话不在了，但工作区里的笔记与程序都在。" if fresh_session else "现在接着同一个会话，"))
+    return (head + f"开始新的范围：{items}。主控已经进入这一章。本次的规则以当前的系统提示词为准，和之前相比可能有变化"
+            "（例如单次 act 与自写推演的帧数上限、思考语句的要求），之前写的程序与笔记按新规则检查后再用。"
+            "请先调用 observe 看清当前画面，再开始游玩。")
+
+
 def resume_prompt(reason: str, minutes: float, study_note: str | None = None) -> str:
     """Claude Code 进程被结束后，用 --resume 接着同一个会话时发出的第一条消息。"""
     text = (f"（系统）{reason}，你的上一轮在中途被结束，暂停了约 {minutes:.0f} 分钟，现在接着同一个会话继续。"

@@ -30,7 +30,7 @@ from pathlib import Path
 
 import uvicorn
 
-from .prompting import resume_prompt
+from .prompting import next_chapter_prompt, resume_prompt
 from .runtimes import RUNTIMES, runtime
 from .config import CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id
 from .container import ensure_container
@@ -843,17 +843,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 container = await asyncio.to_thread(ensure_container, cfg, lambda m: print(m, flush=True))
                 print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
                 session.container = container
-            note = None
-            if previous:
-                gap = max(0.0, time.time() - float(previous["metrics"].get("written_wall") or time.time())) / 60
-                if resumed_session:
-                    note = resume_prompt("主控中断后续跑", gap)
-                else:
-                    frozen = _previous_kept_frozen(previous)
-                    note = ("（系统）主控中断后续跑，这是一个新的会话：之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。"
-                            + ("游戏一直冻结在中断时的那一帧，章节计时没有走。先看一遍 /workspace/notes.md，再调用 observe 继续游玩。"
-                               if frozen else
-                               "上次退出后已交还游戏控制，游戏状态可能发生变化。先看 /workspace/notes.md，再调用 observe 核对当前状态后继续。"))
+            note = opening_note(cfg, previous, resumed_session)
             from .runtimes import runtime
             runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
                 game_server=server, token=token, session_id=session_id,
@@ -916,6 +906,22 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                        kb_study=study.summary() if study else None, recording=recording)
         (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
+
+
+def opening_note(cfg, previous, resumed_session) -> str | None:
+    """续跑时代替开局的第一条消息：追加了新章节（原计划已全部通关）时说开始新的一章，否则说中途被打断后接着玩。"""
+    if not previous:
+        return None
+    if getattr(cfg, "_extended_plan", None):
+        return next_chapter_prompt(cfg, fresh_session=not resumed_session)
+    gap = max(0.0, time.time() - float(previous["metrics"].get("written_wall") or time.time())) / 60
+    if resumed_session:
+        return resume_prompt("主控中断后续跑", gap)
+    frozen = _previous_kept_frozen(previous)
+    return ("（系统）主控中断后续跑，这是一个新的会话：之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。"
+            + ("游戏一直冻结在中断时的那一帧，章节计时没有走。先看一遍 /workspace/notes.md，再调用 observe 继续游玩。"
+               if frozen else
+               "上次退出后已交还游戏控制，游戏状态可能发生变化。先看 /workspace/notes.md，再调用 observe 核对当前状态后继续。"))
 
 
 def abandon_recording(bridge_port: int, saved: dict | None, previous_dir, problem) -> dict:

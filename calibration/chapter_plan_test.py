@@ -222,6 +222,25 @@ class ResumeExtensionTests(unittest.TestCase):
             cfg, _ = self.parse(root, "--resume", str(run), "--segments", "2.1")   # 也可以只追加某几段
             self.assertEqual(cfg.plan, [Piece(2, 1, 2)])
 
+    def test_appended_chapter_gets_a_new_chapter_opening_not_an_interrupted_resume(self):
+        from orchestrator.run import opening_note
+        done = [{"chapter": "Celeste/0-Intro"}, {"chapter": "Celeste/1-ForsakenCity"}, {"chapter": "Celeste/2-OldSite"}]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            run = self.make_run(root, [[0, 0, None], [1, 0, None], [2, 0, None]], done)
+            cfg, args = self.parse(root, "--resume", str(run), "--chapters", "3")
+            note = opening_note(cfg, args.previous, "sess")
+            self.assertIn("之前指定的章节都已经通关", note)
+            self.assertIn("天空度假村", note)
+            self.assertIn("以当前的系统提示词为准", note)
+            self.assertNotIn("中断", note)
+            self.assertNotIn("暂停了", note)
+            self.assertIn("新的会话", opening_note(cfg, args.previous, None))
+            # 中途被打断后的续跑仍是原来的消息
+            unfinished = self.make_run(root / "u", [[1, 0, None], [2, 0, None]], done[1:2])
+            cfg, args = self.parse(root / "u", "--resume", str(unfinished))
+            self.assertIn("主控中断后续跑", opening_note(cfg, args.previous, "sess"))
+
     def test_unfinished_plan_cannot_be_replaced(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
