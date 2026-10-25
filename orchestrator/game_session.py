@@ -229,6 +229,10 @@ class GameSession:
         if self.cfg.cutscene_mode == 'agent' and 'storyInput' not in obs:
             raise RuntimeError('剧情自动推进需要新版桥接的 storyInput，请更新桥接 Mod 并重启游戏')
         self._pending_complete = bool((obs.get('level') or {}).get('completed'))
+        if self.piece is None:        # 没指定章节（进入选章页当前选中的章节）：按游戏里的章节整章玩
+            chapter = next((i for i, s in CHAPTER_SIDS.items() if s == (obs.get('level') or {}).get('sid')), None)
+            if chapter is not None:
+                self.piece = Piece(chapter)
         if obs.get("scene") != "Level" and not (self.cfg.cutscene_mode == 'agent' and story_pending(obs)):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
         save = (obs.get("save") or {}).get("name")
