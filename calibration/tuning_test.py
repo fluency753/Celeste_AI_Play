@@ -83,14 +83,8 @@ class TunableTests(unittest.TestCase):
             tuning.coerce("agent_cpus", tuning.HOST_CPUS + 1)      # 不超过本机的核数
         explore.agent_cpus_effective = 1
         self.assertNotIn("{cpu_rule}", play_prompt(explore))
-        # 粗路线约定的最后一句只给 Codex 执行器（Claude Code 执行器不加）
-        self.assertNotIn("先验证下一个局部目标", play_prompt(explore))
-        self.assertIn("不凭空安排长距离上升。", play_prompt(explore))
         self.assertIn("实在拿不到才放弃", play_prompt(explore))          # 鼓励拿草莓
         self.assertNotIn("不要求全收集", play_prompt(explore))
-        explore.engine = "codex"
-        self.assertIn("无法确认后半段时，先验证下一个局部目标", play_prompt(explore))
-        self.assertNotIn("{local_target_rule}", play_prompt(explore))
         for placeholder in ("{act_max_frames}", "{bash_default}", "{explore_program}", "{explore_program_rule}", "{remind}",
                             "{playback_ratio}"):
             self.assertNotIn(placeholder, changed + text)

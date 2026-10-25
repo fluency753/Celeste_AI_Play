@@ -19,9 +19,9 @@
   `^ v < >` 朝上/下/左/右的尖刺，`*` 其他致死物，`S` 弹簧，`o` 冲刺水晶（恢复冲刺），`O` 泡泡，`F` 羽毛，`~` 梦境块，`$` 收集品，`?` 其他可交互物。
   `#` 与 `solids` 是同一片地形；其他符号只标出实体大致占了哪些格子，精确形状看 `entities`。
 - **精确数据（JSON）**：进入新房间时（以及调用 `observe` 时），返回文字末尾以"整个房间的精确数据"开头的一段覆盖**整个房间**（不只是当前画面），数值与游戏内部完全一致。之后每次 `act` 只描述画面附近的实体与状态，需要再看整个房间时调用 `observe`。字段：
-  - `room` 房间名；`bounds` 房间范围 `[x, y, 宽, 高]`。
+  - `frame` 观测帧号；`sid` 章节标识；`room` 房间名；`bounds` 房间范围 `[x, y, 宽, 高]`。
   - `exits` 可能的出口：`{"side": "left/right/top/bottom", "x": …, "y": [起, 止], "room": 相邻房间}`（左右出口给出 x 与 y 区间，上下出口给出 y 与 x 区间）。出口段上有没有被地形挡住，要对照 `solids`。
-  - `solids` 地形的碰撞箱，每项 `[x, y, 宽, 高]`，由地形格子合并而成，像素精确。会动、会塌、能撞碎的实心物不在这里，在 `entities` 里。
+  - `solids` 地形的碰撞箱，每项 `[x, y, 宽, 高]`，由地形格子合并而成，像素精确。`null` 表示缺少完整地形，不能按空房间处理。会动、会塌、能撞碎的实心物不在这里，在 `entities` 里。
   - `entities` 房间里所有可碰撞的实体，每项 `{"id", "type", "cat", "x", "y", "w", "h", …}`：`id` 在本次进入房间期间固定，用来跨暂停对照同一个实体；`type` 是游戏里的类型名；`cat` 是大类（`hazard` 致死物、`spring` 弹簧、`refill` 冲刺水晶、`booster` 泡泡、`feather` 羽毛、`collectible` 收集品、`dream_block` 梦境块、`dynamic_solid` 会动的实心块、`jumpthru` 单向平台、`solid` 其他实心块、`interactive` 可交互物、`other` 其他）；`x, y, w, h` 是碰撞箱。按类型还有附加属性，例如尖刺的 `dir`（刺尖朝向）、弹簧的 `orient`、冲刺水晶的 `twoDashes` / `collected` / `respawnTimer`；碰撞形状不是矩形时有 `shape`（`circle` 附半径 `r`，`list` 附各部分 `parts`）；会动的实体附 `state`（速度、计时器、轨道节点等与运动有关的字段）与 `moved`（与上一次暂停相比的位移）。`Killbox` 是坑底的致死区。
   - `triggers` 触发器，每项 `{"type", "rect": [x, y, 宽, 高]}`：不挡路，Madeline 进入范围时触发效果（改变重生点、开始剧情、改变风等）。
   - `spawns` 本房间的重生点 `[x, y]`；`respawnPoint` 当前生效的重生点。

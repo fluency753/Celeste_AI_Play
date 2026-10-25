@@ -1,6 +1,11 @@
 import json
 import unittest
-from orchestrator.observation import compact_entity, room_json, terrain_regions, describe_obs
+import asyncio
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import Mock
+from orchestrator.observation import compact_entity, room_json, describe_obs, enrich_obs
 
 
 class ObservationContextTest(unittest.TestCase):
@@ -11,20 +16,29 @@ class ObservationContextTest(unittest.TestCase):
         self.assertIn(story['text'],describe_obs(obs,full_room=False))
         self.assertIn('granny',describe_obs(obs,full_room=False))
 
-    def test_static_wall_separates_target_but_not_same_side(self):
-        observation = {"tiles": {"scope": "room", "origin": [0, 0], "cell": 8,
+    def test_full_geometry_is_delivered_without_host_route_verdicts(self):
+        observation = {"frame": 12, "tiles": {"scope": "room", "origin": [0, 0], "cell": 8,
                                  "rows": ["..#..", "..#..", "..#.."]},
-                       "level": {"bounds": [0, 0, 40, 24]},
+                       "level": {"sid": "Celeste/1-ForsakenCity", "room": "test", "bounds": [0, 0, 40, 24]},
                        "player": {"hitbox": [0, 0, 8, 11]},
                        "entities": [{"id": 1, "type": "Spring", "cat": "spring", "x": 32, "y": 8, "w": 4, "h": 4},
                                     {"id": 2, "type": "Strawberry", "cat": "collectible", "x": 8, "y": 8, "w": 4, "h": 4}]}
-        text = "\n".join(terrain_regions(observation))
-        self.assertIn("Spring#1", text)
-        self.assertNotIn("Strawberry#2", text)
-        observation["tiles"]["rows"][0] = "....."
-        self.assertIn('当前碰撞箱无法接近', '\n'.join(terrain_regions(observation)))
-        observation["tiles"]["scope"] = "view"
-        self.assertEqual(terrain_regions(observation), [])
+        result = json.loads(room_json(enrich_obs(observation)))
+        self.assertEqual(result['solids'],[[16,0,8,24]])
+        self.assertEqual(result['entities'],observation['entities'])
+        self.assertEqual(result['player']['hitbox'],[0,0,8,11])
+        self.assertEqual((result['frame'],result['sid'],result['room']),
+                         (12,'Celeste/1-ForsakenCity','test'))
+        self.assertNotIn('connectivity',result)
+
+    def test_missing_geometry_is_not_reported_as_empty_space(self):
+        self.assertIsNone(json.loads(room_json({}))['solids'])
+        self.assertEqual(json.loads(room_json({'solids':[]}))['solids'],[])
+
+    def test_room_json_keeps_entities_beyond_summary_display_limit(self):
+        entities=[{'id':i,'type':'Solid','cat':'solid','x':i*8,'y':0,'w':8,'h':8,
+                   'collidable':i%2==0,'shape':{'type':'list','parts':[[0,0,4,4]]}} for i in range(80)]
+        self.assertEqual(json.loads(room_json({'entities':entities}))['entities'],entities)
 
     def test_collectible_state_survives_without_unrelated_reflection(self):
         entity = {"type": "Strawberry", "cat": "collectible", "fields": {
@@ -39,6 +53,34 @@ class ObservationContextTest(unittest.TestCase):
     def test_exits_are_not_advertised_as_verified_routes(self):
         result = json.loads(room_json({}))
         self.assertIn("不保证", result["exitsNote"])
+
+    def test_real_tool_dispatch_keeps_data_without_reactive_geometry_hints(self):
+        from calibration.formal_run_test import _observation
+        from orchestrator.config import RunConfig
+        from orchestrator.metrics import Metrics
+        from orchestrator.server import build_server, ROOM_JSON_HEADER
+        for mode in ('explore','speedrun'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as folder:
+                cfg=RunConfig(agent='test',save='test',model='test',runtime='host',mode=mode,
+                              knowledge_profile='explore' if mode=='explore' else 'full',sim=False)
+                obs=enrich_obs(_observation())
+                metrics=Metrics(Path(folder)/'metrics.json','test','test','high',60)
+                outcome=SimpleNamespace(result={'consumed':30,'planned':30,'stop':'done','events':[]},
+                    obs=obs,attempts=[{}],auto_notes=[],image_b64=None)
+                session=SimpleNamespace(cfg=cfg,metrics=metrics,workspace=None,done=False,
+                    observe=Mock(return_value=(obs,None)),act=Mock(return_value=outcome))
+                server=build_server(session)
+                observed=asyncio.run(server.call_tool('observe',{}))
+                text='\n'.join(block.text for block in observed.content if hasattr(block,'text'))
+                data=json.loads(text.split(ROOM_JSON_HEADER,1)[1])
+                self.assertEqual(data['solids'],obs['solids'])
+                self.assertEqual(data['entities'],obs['entities'])
+                self.assertNotIn('connectivity',data)
+                acted=asyncio.run(server.call_tool('act',{'inputs':['30,R'],'thought':'验证通路'}))
+                action_text='\n'.join(block.text for block in acted.content if hasattr(block,'text'))
+                for output in (text,action_text):
+                    for hint in ('【几何核验】','【立即复查】','局部阻挡检查','静态地形检查'):
+                        self.assertNotIn(hint,output)
 
 
 if __name__ == "__main__":

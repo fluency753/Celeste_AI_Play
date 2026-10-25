@@ -55,16 +55,6 @@ def cpu_rule(cfg) -> str:
     return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"
 
 
-LOCAL_TARGET_RULE = "无法确认后半段时，先验证下一个局部目标，用短动作或限额模拟消除歧义，不必长时间推完整条路线。"
-
-
-def local_target_rule(cfg) -> str:
-    """探索模式粗路线约定的最后一句：只给原生 GPT（codex 执行器）；Claude Code 执行器的智能体不加（用户要求）。"""
-    if getattr(cfg, "engine", "claude") != "codex":
-        return ""
-    return LOCAL_TARGET_RULE if getattr(cfg, "sim_assist", False) else LOCAL_TARGET_RULE.replace("或限额模拟", "")
-
-
 # 思考语句的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
 THOUGHT_MOOD = ("思考语句的语气不必一直冷静理智，可以自然流露真实的情绪，比如找到好路线时的高兴、反复失败后的懊恼、"
                "面对难关时的紧张；但不要夸张，像正常人说话一样就好。")
@@ -115,7 +105,6 @@ def fill(text: str, cfg) -> str:
         "{act_max_frames}": str(act_frame_cap(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
-        "{local_target_rule}": local_target_rule(cfg),
         "{thought_brief_rule}": thought_brief_rule(cfg),
         "{thought_mood}": THOUGHT_MOOD,
         "{thought_mood_short}": THOUGHT_MOOD_SHORT,
@@ -247,6 +236,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
                                     + "；不得自行扩展。", None, "\n"))
     else:
         parts = _speedrun_parts(cfg)
+    parts += _file_parts("room_analysis_zh.md")
     if has_cutscene_tool(cfg):
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
                                 f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式由主控自动播放到输入节点，无需wait；"

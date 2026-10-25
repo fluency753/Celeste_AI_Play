@@ -41,7 +41,7 @@ class AssistRules:
                 f"最多{self.max_candidates}条、每条{self.max_frames}帧、合计{self.max_total}帧。")
 
     def instructions(self) -> str:
-        return ("\n\n# 有限模拟辅助\n几何核验后仍有路线歧义，或第一次受阻时，就可主动用它比较 2–3 条能区分假设的短路线（如换起跳点或改变方向），看终点、碰撞与死亡结果，不必等待连续失败。仍以真实尝试为主，不制造无意义的预测，不自动耗尽体力。"
+        return ("\n\n# 有限模拟辅助\nsimulate 从当前游戏帧预测候选输入，不推进真实游戏。你负责依据房间数据与待验证问题选择候选，结合终点、轨迹和事件判断结果；按当前模式安排真实验证，不自动耗尽体力。"
                 + self.text() +
                 '\n调用 simulate 工具，参数为 {"candidates":[["30,R","1,R,J","29,R,J"]]}。'
                 '省略 candidates 查询体力不扣费。只能从游戏当前帧预测；不会推进真实游戏。'

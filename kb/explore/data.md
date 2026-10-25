@@ -23,7 +23,8 @@
 - `triggers`：触发器 `{"type", "rect"}`，不挡路，进入范围时触发效果。
 - `spawns` 本房间的重生点；`respawnPoint` 当前生效的重生点。
 - `player`：Madeline 的完整状态，`pos` 精确位置（含小数部分）、`speed` `[vx, vy]`、`state`、`dashes` / `maxDashes`、`stamina`、`onGround`、`facing`、`ducking`、`hitbox` `[左, 上, 宽, 高]`、`internal`（内部计时器与状态的原始数值，计时器单位是秒）。
-- `connectivity`：只按静态地形算出的区域划分与连通情况（不考虑危险物与会动的物体），连通不等于跳得过去。
+- 完整房间 JSON 的 `frame`、`sid`、`room` 用于核对观测身份。`solids` 为 `null` 表示本次没有提供完整地形，不能按空房间处理；需重新观测。
+- 主控不提供可达性标签或路线判断。自行根据整房间碰撞箱、身体尺寸、实际开口、支撑及实体机制分析路线，再用具体动作验证。
 - `story`、`dialog`：当前画面上的对白、教学提示、纪念碑文字与对话选项（有可见文字时提供）。
 
 ## act 的输入

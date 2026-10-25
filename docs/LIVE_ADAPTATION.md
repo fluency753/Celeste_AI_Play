@@ -97,7 +97,7 @@ HUD 的新建、准备、取玩家名、切换、断开、重新唤醒和开始�
 
 已经移除的旧路径：`--codex-thread` 与聊天日志读取器、内置的 openai 转换网关预设及其专用部署向导步骤、Bash 里专用的 game exit / game story / simulate 拦截和旧的菜单命名回退。自定义 Anthropic 兼容平台与域名 / 宿主端口限制仍保留。桥接最低要求 0.12.4，启动前只读检查，不满足时不会录制也不会选择存档；桥接 0.12.5 移除了 `name_new_save`，新建存档只用 `create_save`。
 
-验证：`calibration/runtime_controls_test.py`、`agent_control_test.py`、`sim_assist_test.py`、`connectivity_test.py`、`session_bootstrap_test.py`、`play_scope_test.py`、`lifecycle_test.py` 与全量 calibration 回归，都不启动付费模型、不推进真实游戏。生命周期联调用真实 stdio 子进程代替模型服务，覆盖 Claude 准备的阅读证明、聊天、断开、再唤醒、取名，以及模型和会话 ID 的延续。
+验证：`calibration/runtime_controls_test.py`、`agent_control_test.py`、`sim_assist_test.py`、`observation_context_test.py`、`session_bootstrap_test.py`、`play_scope_test.py`、`lifecycle_test.py` 与全量 calibration 回归，都不启动付费模型、不推进真实游戏。生命周期联调用真实 stdio 子进程代替模型服务，覆盖 Claude 准备的阅读证明、聊天、断开、再唤醒、取名，以及模型和会话 ID 的延续。
 
 ## 网页 HUD
 
@@ -227,9 +227,9 @@ HUD 底部的"剧情"下拉框提供"自动跳过"和"agent决定"，开始前�
 
 `exits` 只是相邻房间与当前边界的投影，没有验证开口或从当前位置是否可达；之前"离开范围就进入相邻房间"的说法过强，已更正。字符地图的图例原本保存在桥接数据里却没有发给智能体，现在随地图一起发送。
 
-新增静态空区分隔提示：只在已有的整房间字符地图内，对非 `#` 格子做连通分组，用角色碰撞箱的中心定位，提示弹簧、水晶、收集品是否在另一个空区里。它不搜索动作、不模拟物理；同一个空区不代表能跳到，危险与动态物体仍要实际观察判断。例如房间 11 的一份归档观测分出两个空区：初始位置与草莓在同一侧，弹簧在另一侧。
+房间分析现在由智能体直接基于完整原始数据完成：主控删除静态连通分类、四向阻挡提示和 JSON 的 `connectivity`，保留所有地形矩形、实体碰撞形状与状态、角色碰撞箱和候选出口。完整 JSON 附带 `frame`、`sid`、`room`；缺失地形为 `null`，不表示空房间。各执行器、探索与速通共用 `room_analysis_zh.md`，由智能体自行建立空间通路与支撑关系，再结合姿态、资源、危险和实体机制验证具体动作；不把直线距离或主控标签当成路线结论。
 
-这些观测内容（静态地形检查与收集品清单）只给探索模式，速通模式不替智能体做路线分析。
+收集品文字摘要仅用于探索模式；完整房间数据在两种模式均保留全部实体，不替智能体判断路线。
 
 验证：`python -m unittest calibration.observation_context_test`，以及用房间 11 的实际归档观测检查格式化输出。
 
@@ -284,7 +284,7 @@ HUD 把模拟体力显示为"推演额度"（余额 / 上限），网页 HUD 悬
 
 - 直播节奏（`explore_live_zh.md`）只用于探索 + 直播；速通 + 直播只加 `live_zh.md`，不改变以最短章节计时通关的目标。解说提醒在直播模式下是 10 秒，其余半分钟，与执行器无关。
 - `exit_level` 只在直播模式注册；`cutscene` 在探索模式、直播模式或 `--cutscene-mode agent` 时注册；`simulate` 只在开了 `--sim-assist` 时注册。没有剧情工具时，HUD 不提供"剧情交给智能体"的切换。
-- 观测里的静态地形检查与收集品清单只给探索模式。
+- 两种模式都由智能体读取完整碰撞数据并自行分析路线，保留各自的执行目标；主控不输出可达性分类，收集品摘要仅用于探索模式。
 - Claude 执行器的运行没通关就停下（时间预算用完、出错、Ctrl+C）时章节内保持冻结，菜单正常运行（章节计时不走），用 `--resume` 续跑；通关、退出关卡、原生 GPT 会话与 `--no-agent` 照常交还控制。智能体用 `stop_run` 报告任务阻塞时不结束运行，只把试玩暂停，章节内同样保持冻结，菜单仍正常运行。
 - 新建存档放在现有最新存档的下一个槽位，不填中间的空位。
 

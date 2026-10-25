@@ -12,7 +12,6 @@ from .game_session import ActError, GameSession
 from .telemetry import publish
 from .kb_study import KbStudy
 from .observation import describe_attempts, describe_obs, describe_step, room_json, upscale_png
-from .exploration import GEOMETRY, action_hint
 from .efforts import valid_effort
 from .modes import game_tools, is_explore
 from .prompting import fill
@@ -166,7 +165,6 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 content.append(("主控：" + "；".join(notes) + "\n\n" if notes else "")
                                + describe_obs(obs, full_room=True, effort=header_line(), explore=explore)
                                + "\n\n" + ROOM_JSON_HEADER + room_json(obs)
-                               + ("\n" + GEOMETRY if session.cfg.knowledge_profile == "explore" else "")
                                + ("\n" + ws_note if session.workspace else ""))
                 return content
             finally:
@@ -187,9 +185,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             begin()
             try:
                 deaths_before = metrics.state.deaths
-                before = getattr(session, "last_obs", None)
                 metrics.decision_begin()
-                decision_wait = getattr(metrics.state, "decision_wait_s", 0)
                 result = None
                 try:
                     outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file)
@@ -213,13 +209,6 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(), explore=explore))
                 if new_room:
                     parts.append(ROOM_JSON_HEADER + room_json(outcome.obs))
-                if session.cfg.knowledge_profile == "explore" and not session.done:
-                    if new_room:
-                        parts.append(GEOMETRY)
-                    hint = action_hint(before, outcome.obs, outcome.result, inputs,
-                                       decision_wait if session.cfg.live else 0, simulate=tool_simulate)
-                    if hint:
-                        parts.append(hint)
                 if session.workspace:
                     parts.append(ws_note)
                 content: list = []

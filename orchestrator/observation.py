@@ -10,8 +10,6 @@ import re
 from PIL import Image as PILImage
 
 from .config import CHAPTER_NAMES
-from .connectivity import static_connectivity
-from .clearance import clearance_text
 
 STOP_TEXT = {
     "done": "按键全部执行完",
@@ -169,32 +167,16 @@ def compact_entity(entity: dict) -> dict:
     return out
 
 
-def terrain_regions(obs: dict) -> list[str]:
-    """Report static barriers for both observed objects and actual exit openings."""
-    data=static_connectivity(obs)
-    if not data:return []
-    separated=[f"{e['type']}#{e['id']}" for e in data['entities'] if e['relation']=='separated']
-    exits=[e for e in data['exits'] if e['relation']!='connected']
-    narrow=[f"{e['type']}#{e['id']}" for e in data['entities'] if e['relation']=='narrow']
-    if data['regions']<2 and not separated and not exits and not narrow:return []
-    lines=[f"静态地形检查：空区分成{data['regions']}块；按实际地形和当前碰撞箱核对，连通不等于能跳到。"]
-    if separated:lines.append('隔开当前空区的物体：'+'、'.join(separated)+'；需找实际开口或其他入口，不要隔墙硬冲。')
-    labels={'blocked':'邻接边界上没有实际开口','separated':'实际开口与当前区域被静态墙隔断，不能在本房间内直达','narrow':'当前碰撞箱无法通过，改变姿态后的通路尚未验证'}
-    for e in exits:lines.append(f"出口 {e.get('room')}（{e['side']}）：{labels[e['relation']]}。")
-    if narrow:lines.append('当前碰撞箱无法接近：'+'、'.join(narrow)+'；不排除改变姿态或其他入口。')
-    lines.append(data['limitations'])
-    return lines
-
-
 def room_json(obs: dict) -> str:
     """进入新房间时附在返回结果里的完整数据：所有数值都是像素坐标，与游戏一致。"""
     level = obs.get("level") or {}
     player = obs.get("player") or {}
     data = {
-        "room": level.get("room"), "bounds": level.get("bounds"), "exits": obs.get("exits", []),
+        "frame": obs.get("frame"), "sid": level.get("sid"),
+        "room": level.get("room"), "bounds": level.get("bounds"), "exits": obs.get("exits"),
         "exitsNote": "仅相邻房间的边界投影，不保证有开口，也不保证从当前位置可达；先核对地形。",
         "spawns": obs.get("spawns", []), "respawnPoint": obs.get("respawnPoint"),
-        "solids": obs.get("solids", []),
+        "solids": obs.get("solids"),
         "entities": [compact_entity(e) for e in obs.get("entities", [])],
         "triggers": [t for t in obs.get("triggers", []) if not t["type"].startswith(COSMETIC_TRIGGERS)],
         "player": {k: player.get(k) for k in ("pos", "speed", "state", "dashes", "maxDashes", "stamina", "onGround",
@@ -208,8 +190,6 @@ def room_json(obs: dict) -> str:
         data['storyInput']=obs['storyInput']
     if obs.get('storyPlayback'):
         data['storyPlayback']=obs['storyPlayback']
-    connectivity=static_connectivity(obs)
-    if connectivity:data['connectivity']=connectivity
     lines = ["{"]
     keys = list(data)
     for i, key in enumerate(keys):
@@ -320,11 +300,8 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         entities, tiles = obs.get("entities") or [], obs.get("tiles")
     else:
         entities, tiles = crop_to_view(obs)
-    # 静态地形检查与收集品清单只给新手探索模式：速通模式下这相当于主控替智能体做路线分析
+    # 收集品摘要只给探索模式；完整房间数据在所有模式保留全部实体。
     collectibles = [compact_entity(e) for e in entities if e.get("cat") == "collectible"] if explore else []
-    if explore:
-        lines.extend(clearance_text(obs))
-        lines.extend(terrain_regions(obs))
     if collectibles:
         lines.append("当前观测中的收集品（是否能接近需结合地形确认）：")
         for e in collectibles:

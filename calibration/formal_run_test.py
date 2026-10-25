@@ -77,12 +77,15 @@ class FormalRunTest(unittest.TestCase):
                          ["observe", "act", "narrate", "set_effort", "stop_run", "cutscene", "simulate"])
         self.assertIn("cutscene", game_tools(_cfg(cutscene_mode="agent")))
 
-    def test_route_hints_only_in_explore(self):
+    def test_host_does_not_classify_routes_in_either_mode(self):
         speedrun = describe_obs(_observation(), full_room=True)
         self.assertNotIn("静态地形检查", speedrun)
         self.assertNotIn("当前观测中的收集品", speedrun)
         explore = describe_obs(_observation(), full_room=True, explore=True)
-        self.assertIn("静态地形检查", explore)
+        self.assertNotIn("静态地形检查", explore)
+        for text in (speedrun, explore):
+            self.assertNotIn('局部阻挡检查',text)
+            self.assertNotIn('隔开当前空区',text)
         self.assertIn("当前观测中的收集品", explore)
 
     def test_formal_models_offer_all_effort_levels(self):
