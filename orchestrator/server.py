@@ -291,9 +291,10 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         text = " ".join((thought or "").split())
         if not text:
             return ["thought 不能为空。"]
-        limit = getattr(session.cfg, "thought_max_chars", 120)
-        if len(text) > limit:
-            return [f"thought 太长，请压缩到一两句话（{limit} 字以内）。"]
+        from .thought import thought_problem
+        problem = thought_problem(session.cfg, text)
+        if problem:
+            return [problem + "。"]
         metrics.set_thought(text)
         metrics.add(narrates=1)
         metrics.narrated()

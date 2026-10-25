@@ -179,6 +179,7 @@ class RunConfig:
     live_remind_s: float = 30.0      # 解说计时：思考累计这么多秒没有公开解说，在下一次工具调用时提醒（由可调参数 remind_s / remind_live_s 决定）
     # 以下是可调参数（orchestrator/tuning.py，命令行 --tune 名称=值）；默认值就是一直以来的数值
     thought_max_chars: int = 120     # act 的 thought 与 narrate 的长度上限
+    thought_max_hanzi: int = 30      # Claude Code 执行器：thought 与 narrate 的汉字数上限（英文术语不计，见 orchestrator/thought.py）
     remind_s: float = 30.0           # 解说提醒间隔（不开直播）
     remind_live_s: float = 10.0      # 解说提醒间隔（直播）
     bash_default_s: int = 300        # Claude Code 的 Bash 不写 timeout 时的上限（速通模式）

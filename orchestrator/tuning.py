@@ -34,6 +34,9 @@ TUNABLES: tuple[Tunable, ...] = (
             "提示词与 act 的说明里的上限跟着变（探索模式用\"探索：规划程序\"里的那一项）", ("speedrun",)),
     Tunable("thought_max_chars", "思考语句最长字数", "执行与解说", int, 120, 20, 400, "字",
             "act 的 thought 与 narrate 的长度上限"),
+    Tunable("thought_max_hanzi", "思考语句最多汉字数", "执行与解说", int, 30, 5, 400, "个",
+            "只对 Claude Code 执行器：act 的 thought 与 narrate 里的汉字数（英文术语、数字与标点不计），超过就退回让智能体压缩；"
+            "提示词与工具说明里的数字跟着变"),
     Tunable("thought_lead_s", "动作前等 HUD 换上新思考", "执行与解说", float, 0.4, 0, 3, "秒",
             "游戏冻结着等，录像里不占时间"),
     Tunable("remind_s", "解说提醒间隔", "执行与解说", float, 30, 5, 600, "秒",

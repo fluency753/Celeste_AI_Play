@@ -94,12 +94,14 @@ class TunableTests(unittest.TestCase):
             self.assertNotIn(placeholder, changed + text)
 
     def test_thought_brief_per_engine(self):
-        """Claude Code 执行器的提示词与工具说明都要求思考语句尽量简短、不超过 30 字；Codex 执行器不加，工具说明照旧。"""
+        """Claude Code 执行器的提示词与工具说明都要求思考语句汉字不超过 30 个（英文术语不计），超过就退回；
+        Codex 执行器不加，工具说明照旧。"""
         import asyncio
         from types import SimpleNamespace
         from orchestrator.metrics import Metrics
         from orchestrator.server import build_server
-        rule = "思考语句尽量简短，不超过 30 字。"
+        from orchestrator.thought import count_hanzi, thought_problem
+        rule = "思考语句尽量简短，汉字不超过 30 个（英文术语不计）。"
 
         def descriptions(c):
             with tempfile.TemporaryDirectory() as d:
@@ -112,18 +114,32 @@ class TunableTests(unittest.TestCase):
                    dict(mode="speedrun", knowledge_profile="full", sim=False, runtime="container")):
             claude, codex = cfg(**kw), cfg(engine="codex", **kw)
             self.assertEqual(play_prompt(claude).count(rule), 1, kw)
-            self.assertNotIn("不超过 30 字", play_prompt(codex), kw)
+            self.assertNotIn("汉字不超过", play_prompt(codex), kw)
             for c in (claude, codex):
                 self.assertNotIn("{thought_brief", play_prompt(c))
         tools = descriptions(cfg(mode="explore", knowledge_profile="explore", chapter=1))
-        self.assertIn("thought：一两句中文（尽量简短，不超过 30 字），会显示给观众", tools["act"])
-        self.assertIn("thought：一两句中文（尽量简短，不超过 30 字），只写", tools["narrate"])
+        self.assertIn("thought：一两句中文（尽量简短，汉字不超过 30 个，英文术语不计），会显示给观众", tools["act"])
+        self.assertIn("thought：一两句中文（尽量简短，汉字不超过 30 个，英文术语不计），只写", tools["narrate"])
         tools = descriptions(cfg(mode="explore", knowledge_profile="explore", chapter=1, engine="codex"))
         self.assertIn("thought：一两句中文，会显示给观众", tools["act"])
         self.assertIn("thought：一两句中文（120 字以内），只写", tools["narrate"])
-        # 硬上限比 30 还小时按硬上限写
-        self.assertIn("不超过 20 字", play_prompt(cfg(mode="explore", knowledge_profile="explore", chapter=1,
-                                                     thought_max_chars=20)))
+        # 只数汉字：英文术语、数字与标点不计
+        self.assertEqual(count_hanzi("先 climbjump 上墙，再 wallbounce 越过尖刺。"), 8)
+        claude, codex = cfg(), cfg(engine="codex")
+        ok = "借" * 30 + " cornerboost hyper wavedash ultra"
+        self.assertIsNone(thought_problem(claude, ok))
+        self.assertIn("有 31 个汉字", thought_problem(claude, ok + "冲"))
+        self.assertIsNone(thought_problem(codex, ok + "冲"))                     # Codex 执行器不限汉字数
+        self.assertIn("120 字以内", thought_problem(codex, "冲" * 121))
+        tuning.apply(claude, {"thought_max_hanzi": 12})
+        self.assertIn("汉字不超过 12 个", play_prompt(cfg(mode="explore", knowledge_profile="explore", chapter=1,
+                                                       thought_max_hanzi=12)))
+        self.assertIn("压缩到 12 个以内", thought_problem(claude, "冲" * 13))
+        # act 与 narrate 都按同一规则退回
+        tools_server = build_server(SimpleNamespace(cfg=cfg(mode="explore", knowledge_profile="explore", chapter=1),
+                                                    metrics=None, workspace=None))
+        reply = asyncio.run(tools_server.call_tool("narrate", {"thought": "冲" * 31}))
+        self.assertIn("有 31 个汉字", json.dumps(reply, ensure_ascii=False, default=str))
 
     def test_retry_limits(self):
         plan = {"inputs": ["10,R"], "retry": {"command": "python3 p.py", "max": 7, "timeout_s": 90}}

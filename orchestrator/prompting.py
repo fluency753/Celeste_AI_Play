@@ -63,34 +63,27 @@ def local_target_rule(cfg) -> str:
     return LOCAL_TARGET_RULE if getattr(cfg, "engine", "claude") == "codex" else ""
 
 
-THOUGHT_BRIEF_CHARS = 30
-
-
-def thought_brief_chars(cfg) -> int | None:
-    """Claude Code 执行器要求思考语句（act 的 thought 与 narrate）尽量简短、不超过 30 字（用户要求），
-    写在提示词与工具说明里，不另做检查；Codex 执行器不加（None）。工具退回的硬上限两种执行器都是 thought_max_chars，
-    比 30 还小时按它写。"""
-    if getattr(cfg, "engine", "claude") == "codex":
-        return None
-    return min(THOUGHT_BRIEF_CHARS, getattr(cfg, "thought_max_chars", 120))
-
-
 def thought_brief_rule(cfg) -> str:
-    """提示词里的一句（Codex 执行器为空）。"""
-    n = thought_brief_chars(cfg)
-    return "" if n is None else f"思考语句尽量简短，不超过 {n} 字。"
+    """Claude Code 执行器提示词里思考语句汉字数的一句（可调参数 thought_max_hanzi，见 orchestrator/thought.py）；
+    Codex 执行器为空。"""
+    from .thought import hanzi_limit
+    n = hanzi_limit(cfg)
+    return "" if n is None else f"思考语句尽量简短，汉字不超过 {n} 个（英文术语不计）。"
 
 
 def thought_brief(cfg) -> str:
     """act 工具说明里 thought 后的括注（Codex 执行器为空）。"""
-    n = thought_brief_chars(cfg)
-    return "" if n is None else f"（尽量简短，不超过 {n} 字）"
+    from .thought import hanzi_limit
+    n = hanzi_limit(cfg)
+    return "" if n is None else f"（尽量简短，汉字不超过 {n} 个，英文术语不计）"
 
 
 def thought_limit(cfg) -> str:
-    """narrate 工具说明里 thought 的字数：Claude Code 执行器写"尽量简短，不超过 30 字"，Codex 执行器照旧写硬上限。"""
-    n = thought_brief_chars(cfg)
-    return f"{getattr(cfg, 'thought_max_chars', 120)} 字以内" if n is None else f"尽量简短，不超过 {n} 字"
+    """narrate 工具说明里 thought 的字数：Claude Code 执行器写汉字数上限，Codex 执行器照旧写总长度上限。"""
+    from .thought import hanzi_limit
+    n = hanzi_limit(cfg)
+    return (f"{getattr(cfg, 'thought_max_chars', 120)} 字以内" if n is None
+            else f"尽量简短，汉字不超过 {n} 个，英文术语不计")
 
 
 def explore_search_rule(cfg) -> str:

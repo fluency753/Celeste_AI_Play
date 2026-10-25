@@ -16,6 +16,7 @@ from .observation import enrich_obs, fmt_ticks
 from .sandbox import run_program
 from .goals import GoalManager
 from .modes import act_frame_cap
+from .thought import thought_problem
 from .segments import Piece, checkpoint_name, checkpoint_room, chapters_of, piece_label, pieces_of, segments_of, split_segments, validate_segments
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -492,8 +493,9 @@ class GameSession:
         thought = (thought or "").strip()
         if not thought:
             raise ActError("thought 不能为空：用一两句话说明这段操作的意图")
-        if len(thought) > self.cfg.thought_max_chars:
-            raise ActError(f"thought 太长，请压缩到一两句话（{self.cfg.thought_max_chars} 字以内）")
+        problem = thought_problem(self.cfg, thought)
+        if problem:
+            raise ActError(problem)
         forced: list[str] = []          # 剧情交给智能体时强制加的截断条件（自动重试重算计划后也保留）
         if self.cfg.cutscene_mode == 'agent':
             forced.append('story_input')
