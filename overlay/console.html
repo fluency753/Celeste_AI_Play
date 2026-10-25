@@ -1472,7 +1472,8 @@ async function saveKbFile() {
 
 // ---------------------------------------------------------------- 提示词页
 
-const SEG = ["#E0475B", "#5BC0EB", "#F2C14E", "#4CC38A", "#9D8CF2", "#C9A389"];
+// 一版最多九个文件（速通 + 直播），各用一种颜色；自动加的部分统一用淡紫
+const SEG = ["#E0475B", "#5BC0EB", "#F2C14E", "#4CC38A", "#F08A4B", "#C9A389", "#E58FC4", "#2FB8AC", "#B9D46A"];
 function promptText(text) {
   const box = document.createElement("div"); box.className = "ptext";
   for (const line of text.split("\n")) {
