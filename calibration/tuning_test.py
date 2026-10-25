@@ -78,7 +78,7 @@ class TunableTests(unittest.TestCase):
         # 最多可用的 CPU 核：不限时写本机核数；设了就写设的数；容器实际能用的更少时写实际数
         self.assertIn(f"本次最多可以用 {tuning.HOST_CPUS} 个核", play_prompt(explore))
         tuning.apply(explore, {"agent_cpus": 1})
-        self.assertIn("建议用多核并行来缩短计算时间，本次最多可以用 1 个核", play_prompt(explore))
+        self.assertIn("可用多核缩短计算时间，本次最多可以用 1 个核", play_prompt(explore))
         with self.assertRaises(ValueError):
             tuning.coerce("agent_cpus", tuning.HOST_CPUS + 1)      # 不超过本机的核数
         explore.agent_cpus_effective = 1

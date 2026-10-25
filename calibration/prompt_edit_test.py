@@ -18,6 +18,15 @@ def cfg(**kw):
 
 
 class PromptPartsTests(unittest.TestCase):
+    def test_local_target_instruction_respects_available_simulation(self):
+        for enabled in (False, True):
+            c = cfg(mode='explore',engine='codex',sim=False,sim_assist=enabled)
+            rule = prompting.local_target_rule(c)
+            self.assertTrue(rule)
+            self.assertEqual('限额模拟' in rule,enabled)
+            self.assertIn(rule,play_prompt(c))
+        self.assertEqual(prompting.local_target_rule(cfg(engine='claude',sim_assist=True)),'')
+
     def test_parts_join_to_full_prompt(self):
         for mode, sim, live, assist in itertools.product(("speedrun", "explore"), (True, False), (True, False),
                                                          (True, False)):

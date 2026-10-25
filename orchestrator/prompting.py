@@ -60,7 +60,9 @@ LOCAL_TARGET_RULE = "无法确认后半段时，先验证下一个局部目标�
 
 def local_target_rule(cfg) -> str:
     """探索模式粗路线约定的最后一句：只给原生 GPT（codex 执行器）；Claude Code 执行器的智能体不加（用户要求）。"""
-    return LOCAL_TARGET_RULE if getattr(cfg, "engine", "claude") == "codex" else ""
+    if getattr(cfg, "engine", "claude") != "codex":
+        return ""
+    return LOCAL_TARGET_RULE if getattr(cfg, "sim_assist", False) else LOCAL_TARGET_RULE.replace("或限额模拟", "")
 
 
 # 思考语句的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
