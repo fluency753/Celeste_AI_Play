@@ -359,8 +359,10 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
         ("模拟器调用", f"{m.get('sim_calls') or 0} 次", ""), ("推演路径", runs_text, ""),
         ("推演最速", f"{best / 60:.3f}s" if best > 0 else "—", "" if best > 0 else "dim"),
     ]
-    if m.get("sim_energy") is not None:      # 探索模式的限额短路线预测
-        stats.append(("模拟体力", str(m.get("sim_energy")), ""))
+    energy = m.get("sim_energy")
+    if energy is not None:                   # 探索模式的限额短路线预测：只显示余额 / 上限（规则说明不上 HUD）
+        value = f"{energy.get('balance')} / {energy.get('capacity')}" if isinstance(energy, dict) else str(energy)
+        stats.append(("模拟体力", value, ""))
 
     call = ""
     if not ended and m.get("tool_call"):

@@ -47,6 +47,12 @@ class ViewModelTests(unittest.TestCase):
         self.assertTrue(vm.history[-1].latest and not vm.history[0].latest)
         self.assertEqual((vm.timer_base, vm.timer_extra, vm.timer_live), (500_000_000, 123_456_789, True))
 
+    def test_sim_energy_shows_balance_only(self):
+        now = time.time()
+        energy = {"balance": 37, "capacity": 100, "rules": "体力上限100……4×额外候选数；最多6条、每条180帧"}
+        stats = {k: v for k, v, _ in view_model(metrics(now, sim_energy=energy), CONFIG, [], now).stats}
+        self.assertEqual(stats["模拟体力"], "37 / 100")                 # 规则说明只在网页 HUD 的悬停提示里
+
     def test_chapter_done_stops_live_timer_and_replay_meta(self):
         now = time.time()
         m = metrics(now, chapter="Celeste/0-Intro", replaying=True, replay_round=2, replay_runs=1234,
