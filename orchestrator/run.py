@@ -76,6 +76,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--chapter", type=int, help="进入的章节编号：0 序章、1 被遗弃之城、2 旧址；默认进入选章页当前选中的章节")
     ap.add_argument("--chapters", help="依次通关的章节编号，逗号分隔，例如 0,1,2（正式挑战）：一章通关后主控自动走完结算画面、"
                                        "进入下一章，智能体接着玩；给了它就不用 --chapter")
+    ap.add_argument("--segments", help="按段通关：逗号分隔，每项是 章节（整章）、章节.段 或 章节.起-止，例如 1.1-2,2,9.3。"
+                                       "段 k 从检查点 k（0 = 章节开头）到下一个检查点或通关；同一章里相邻的段连续游玩，"
+                                       "不相邻时主控直接传送到下一段的起点（需要桥接 1.0.6）。不能与 --chapter / --chapters 合用")
     ap.add_argument("--skip-enter", action="store_true", help="已在关卡内且可操作时，跳过菜单宏")
     ap.add_argument("--no-agent", action="store_true", help="不启动智能体，只运行工具服务直到 Ctrl+C")
     ap.add_argument("--autocompact", help="上下文自动压缩的窗口大小：auto，或 100000~1000000 的 token 数（默认用 Claude Code 的设置）")
@@ -192,7 +195,21 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.save_slot = args.save_slot if args.save_slot is not None else previous['state'].get('save_slot') if previous else None
     if cfg.save_slot is not None and (cfg.save_slot < 0 or args.create_save):
         raise SystemExit('--save-slot 须为非负槽位编号，不能与 --create-save 合用')
-    if args.chapters:
+    from .segments import fetch_table, load_table
+    cfg.checkpoints = load_table()
+    if args.segments:
+        if args.chapters or args.chapter is not None or previous:
+            raise SystemExit("--segments 不能与 --chapter、--chapters 或 --resume 合用（续跑沿用原运行的计划）")
+        from .segments import chapters_of, parse_segments, pieces_of
+        cfg.checkpoints = cfg.checkpoints or fetch_table(args.bridge_port)
+        if not cfg.checkpoints:
+            raise SystemExit("找不到检查点表：configs/checkpoints.json 不存在，游戏里的桥接也没有提供（需要 1.0.6）")
+        try:
+            cfg.plan = pieces_of(parse_segments(args.segments, cfg.checkpoints), cfg.checkpoints)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
+        cfg.chapters, cfg.chapter = chapters_of(cfg.plan), cfg.plan[0].chapter
+    elif args.chapters:
         cfg.chapters = [int(x) for x in args.chapters.split(",") if x.strip()]
         if not cfg.chapters:
             raise SystemExit("--chapters 至少要给一个章节编号")
@@ -283,11 +300,28 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if (args.agent, args.save) != (state["agent"], state["save"]):
             raise SystemExit(f"--resume 的运行是 --agent {state['agent']} --save {state['save']}，与这次给的不一致")
         done = len(previous["metrics"].get("splits") or [])
-        remaining = state["all_chapters"][done:] if state.get("all_chapters") else []
-        if state.get("all_chapters") and not remaining:
-            raise SystemExit("这次运行的章节已经全部通关，不需要续跑")
-        cfg.chapters = remaining or None
-        cfg.chapter = remaining[0] if remaining else None
+        if state.get("plan_pieces"):
+            # 按段通关（或运行中改过计划）：按已完成的截数从计划里接着走
+            from .segments import Piece, chapters_of
+            pieces = [Piece(int(c), int(s), None if e is None else int(e)) for c, s, e in state["plan_pieces"]]
+            remaining_pieces = pieces[done:]
+            if not remaining_pieces:
+                raise SystemExit("这次运行的计划已经全部完成，不需要续跑")
+            if any(not p.whole() for p in pieces) and not cfg.checkpoints:
+                cfg.checkpoints = fetch_table(args.bridge_port)
+                if not cfg.checkpoints:
+                    raise SystemExit("续跑按段通关的运行需要检查点表（configs/checkpoints.json 或桥接 1.0.6）")
+            cfg.plan = remaining_pieces
+            cfg.chapters, cfg.chapter = chapters_of(remaining_pieces), remaining_pieces[0].chapter
+            cfg.resume_pending = bool(state.get("piece_pending"))
+            cfg.resume_segment = None if cfg.resume_pending else state.get("segment_index")
+            remaining = cfg.chapters
+        else:
+            remaining = state["all_chapters"][done:] if state.get("all_chapters") else []
+            if state.get("all_chapters") and not remaining:
+                raise SystemExit("这次运行的章节已经全部通关，不需要续跑")
+            cfg.chapters = remaining or None
+            cfg.chapter = remaining[0] if remaining else None
     if cfg.pause_limit and not cfg.sim:
         raise SystemExit("--limit-planning 只用于开模拟器的版本（关模拟器的版本不限制思考与调用）")
     if cfg.sim:
@@ -322,9 +356,16 @@ def prompt_override_hashes() -> dict[str, str]:
 def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None) -> None:
     """记下续跑需要的设置与 Claude Code 会话编号。"""
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
+    if previous:
+        plan_pieces = previous["state"].get("plan_pieces")
+    elif cfg.plan:
+        plan_pieces = [[p.chapter, p.start, p.end] for p in cfg.plan]
+    else:
+        plan_pieces = None
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
-             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "session_id": session_id,
+             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
+             "piece_pending": False, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -367,9 +408,11 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
             recorder.call = client.call
             recorder.start()
             print("[record] 从选档页开始录制：选存档、进章节、跳过开场都按正常速度录进录像", flush=True)
-            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode)
+            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode,
+                        checkpoint=first_checkpoint(cfg))
         else:
-            obs = macro(client, cfg.save, chapter=cfg.chapter, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode)
+            obs = macro(client, cfg.save, chapter=cfg.chapter, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode,
+                        checkpoint=first_checkpoint(cfg))
         cfg.save_slot = (obs.get('save') or {}).get('slot', cfg.save_slot)
         print(f"[run] 已进入存档 {cfg.save}：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}"
               f"（菜单宏用时 {time.monotonic() - t0:.1f} 秒）", flush=True)
@@ -483,6 +526,13 @@ def check_resume_position(cfg: RunConfig) -> None:
             raise SystemExit(f'游戏当前存档槽位与续跑指定的槽位 {cfg.save_slot} 不一致')
         sid = (obs.get("level") or {}).get("sid")
         want = CHAPTER_SIDS.get(cfg.chapter) if cfg.chapter is not None else sid
+        if cfg.resume_pending:
+            # 上次在两截之间中断（这一截已完成、还没换过去）：先进入下一截的起点
+            print(f"[run] 续跑：上次停在两截之间，进入{chapter_name_by_id(cfg.chapter)}第 {first_checkpoint(cfg)} 个检查点", flush=True)
+            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, save_slot=cfg.save_slot,
+                        cutscene_mode=cfg.cutscene_mode, checkpoint=first_checkpoint(cfg))
+            cfg.resume_pending = False
+            return
         if obs.get("scene") == "Level":
             if sid != want:
                 raise SystemExit(f"游戏当前在 {chapter_name(sid)}，续跑的章节是 {chapter_name(want)}：请确认 --resume 的目录")
@@ -493,13 +543,19 @@ def check_resume_position(cfg: RunConfig) -> None:
         if cfg.chapter is None:
             raise SystemExit(f"游戏当前不在关卡里（{obs.get('scene')}），无法续跑")
         print(f"[run] 续跑：游戏在 {obs.get('scene')}，进入{chapter_name_by_id(cfg.chapter)}", flush=True)
-        obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode)
+        obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode,
+                    checkpoint=first_checkpoint(cfg))
         print(f"[run] 已进入 {(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}", flush=True)
     except BaseException:
         client.call('deactivate')
         raise
     finally:
         client.close()
+
+
+def first_checkpoint(cfg: RunConfig) -> int:
+    """计划里第一截的起点检查点（整章或没有按段通关时为 0 = 章节开头）。"""
+    return cfg.plan[0].start if cfg.plan else 0
 
 
 def backup_save(obs: dict, run_dir: Path) -> None:
@@ -767,9 +823,10 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             reason = await runner.run()
     finally:
         finish_error = None
-        if session.done and session.done_reason == "章节完成":
+        if session.done and session.done_reason in ("章节完成", "分段完成"):
             try:
-                await asyncio.to_thread(session.finish_at_results)
+                await asyncio.to_thread(session.finish_at_results if session.done_reason == "章节完成"
+                                        else session.finish_at_checkpoint)
             except Exception as exc:
                 finish_error = str(exc)
                 print(f"[run] 结算收尾未完成：{exc}", flush=True)
@@ -796,10 +853,13 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 print(f"[record] 停止录制失败：{exc}", flush=True)
         # 锁步结束后先释放，外层finally仍负责关闭连接及异常兜底；暂停不走结束流程。
         summary = metrics.snapshot()
-        summary.update(stop_reason=reason, completed=session.done and session.done_reason == "章节完成",
+        summary.update(stop_reason=reason, completed=session.done and session.done_reason in ("章节完成", "分段完成"),
                        user_stopped=session.user_stopped, agent_stop=getattr(session, "agent_stop", None), goal=session.goals.snapshot(),
                        chapters=cfg.chapters, splits=metrics.state.splits or [],
-                       total_time_ticks=metrics.state.completed_ticks + (0 if session.done_reason == "章节完成" or session.chapter_finished else metrics.state.chapter_time_ticks),
+                       plan=[[p.chapter, p.start, p.end] for p in cfg.plan] if cfg.plan else None,
+                       total_time_ticks=metrics.state.completed_ticks + (0 if metrics.state.piece_done or session.chapter_finished
+                                                                         or session.done_reason in ("章节完成", "分段完成")
+                                                                         else metrics.state.chapter_time_ticks),
                        start_sid=session.start_sid, end_scene=session.end_scene, finish_error=finish_error, turns=runner.turns if runner else 0,
                        session_id=runner.session_id if runner else None, run_dir=str(run_dir),
                        resumed_from=str(previous["dir"]) if previous else None,

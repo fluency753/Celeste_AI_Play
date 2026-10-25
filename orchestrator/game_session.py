@@ -16,6 +16,7 @@ from .observation import enrich_obs, fmt_ticks
 from .sandbox import run_program
 from .goals import GoalManager
 from .modes import act_frame_cap
+from .segments import Piece, checkpoint_name, checkpoint_room, chapters_of, piece_label, pieces_of, segments_of, split_segments, validate_segments
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
@@ -152,6 +153,14 @@ def expand_inputs(inputs: list[str], max_frames: int, allowed: set[str] = AGENT_
 
 
 class GameSession:
+    piece = None            # 当前这一截（segments.Piece；__init__ 里按计划设置）
+    segment_index = 0       # 当前所在的段
+
+    @property
+    def _table(self) -> dict:
+        """检查点表（按段通关）。"""
+        return getattr(self.cfg, "checkpoints", None) or {}
+
     def __init__(self, cfg: RunConfig, run_dir: Path, metrics: Metrics):
         self.cfg = cfg
         self.run_dir = run_dir
@@ -174,8 +183,15 @@ class GameSession:
         self.room_entry_frame: int | None = None   # 进入当前房间的那一帧（HUD 的推演最速从这里算起）
         self._last_positions: dict = {}
         self._last_room = None
-        # 依次通关多章：当前章节完成后，主控自动进入队列里的下一章
-        self.chapter_queue: list[int] = list(cfg.chapters[1:]) if cfg.chapters else []
+        # 依次通关多章或按段通关（segments.py）：当前这一截完成后，主控自动换到队列里的下一截。
+        # 队列里的每一项是 Piece（整章也可以直接写章节编号）；chapter_finished = 这一截已完成、正在等着换过去
+        plan = list(cfg.plan) if cfg.plan else [Piece(c) for c in (cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else []))]
+        self.piece: Piece | None = Piece.of(plan[0]) if plan else None
+        self.chapter_queue: list = plan[1:]
+        self.segment_index = self.piece.start if self.piece else 0   # 当前所在的段（进入下一个检查点的房间时加一）
+        if self.piece is not None and cfg.resume_segment is not None:
+            self.segment_index = max(self.piece.start, cfg.resume_segment)   # 续跑：上次已经走到的段
+        self.metrics.update(piece_done=False)
         self.chapter_finished = False
         self._pending_complete = False
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
@@ -203,6 +219,13 @@ class GameSession:
         reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music)
         obs = reply["obs"]
         self.story_input_supported = 'storyInput' in obs   # 桥接 1.0.3 起才有；中途把剧情切给智能体时也要检查
+        if not self.cfg.checkpoints:       # 没有 configs/checkpoints.json：用桥接的检查点表（控制台按段调整要用）
+            try:
+                if self.client.call("hello").get("checkpoints"):
+                    from .segments import table_from_areas
+                    self.cfg.checkpoints = table_from_areas(self.client.call("areas").get("areas") or [])
+            except Exception:  # noqa: BLE001（只影响按段调整，不影响游玩）
+                pass
         if self.cfg.cutscene_mode == 'agent' and 'storyInput' not in obs:
             raise RuntimeError('剧情自动推进需要新版桥接的 storyInput，请更新桥接 Mod 并重启游戏')
         self._pending_complete = bool((obs.get('level') or {}).get('completed'))
@@ -542,7 +565,7 @@ class GameSession:
             t0 = time.monotonic()
             reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
                                      scope="room", fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
-                                     on_event=self._on_progress, **extra)
+                                     on_event=self._on_progress, **self._stop_rooms(), **extra)
             game_s = time.monotonic() - t0
             result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
             if self.sim_energy:
@@ -552,6 +575,7 @@ class GameSession:
             self._log_frames(result, frames, thought, auto=False)
             self._handle_events(result)
             self._commit_completion(obs)
+            self._note_obs_room(obs)
             self.goals.check(self.goal_values(obs))
             self.metrics.add(play_game_s=game_s, frames_played=result["consumed"],
                              decisions=1 if attempt == 0 else 0)
@@ -709,7 +733,7 @@ class GameSession:
                 stops.remove('controllable')
             reply = self.client.call("step", inputs=inputs, stop_on=stops,
                                      speed=self.cfg.auto_speed, image=False, entities=False, tiles=False,
-                                     progress=PROGRESS_EVERY, on_event=self._on_progress)
+                                     progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
             log_step(inputs, reply["result"])
             obs = reply["obs"]
         remember(obs)
@@ -750,6 +774,8 @@ class GameSession:
                       deaths=event.get("deaths", values.get("deaths")), dead=event.get("dead", False))
         values["map"] = f"{event.get('sid', self.metrics.state.chapter)}:{values['side']}"
         self._goal_progress = dict(values)
+        if self._note_room(event.get("sid"), event.get("room"), event.get("chapterTimeTicks")):
+            self.client.cancel_pending()      # 这一截在终点检查点结束：立即停下（桥接按 stop_rooms 已经停下时多发一次也无妨）
         self.goals.check(values)
         if self.goals.stop_motion.is_set() and not self.goals.cancel_sent:
             self.goals.cancel_sent = True
@@ -837,7 +863,8 @@ class GameSession:
                 obs=step(['1,C','1'])
             self.metrics.add(play_game_s=time.monotonic()-started,frames_played=used)
             self._commit_completion(obs)
-            if not self.done and (story_pending(obs) or not obs.get('controllable')):
+            self._note_obs_room(obs)
+            if not self.done and not self.chapter_finished and (story_pending(obs) or not obs.get('controllable')):
                 obs,_,more,notes=self._auto_advance(obs,None)
                 auto_frames += more; auto_notes.extend(notes)
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
@@ -918,9 +945,10 @@ class GameSession:
         if self.goals.check(values):
             self.user_stopped = True
             self.chapter_queue.clear()
-        self.metrics.add_split(st.chapter, st.chapter_time_ticks)
+        self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range())
         if self.chapter_queue:
             self.chapter_finished = True
+            self._save_chapter_plan()
         else:
             self._mark_done("章节完成")
 
@@ -968,91 +996,236 @@ class GameSession:
                 obs = reply["obs"]
             raise RuntimeError("最终章节片尾尚未返回选章地图，已停止自动推进")
 
+    # ---------------------------------------------------------------- 按段通关：一截的终点与换到下一截
+
+    def _end_room(self) -> str | None:
+        """当前这一截终点检查点的房间（进入它即完成这一截）；到章节通关为止时为 None。"""
+        piece = self.piece
+        if piece is None or piece.end is None:
+            return None
+        return checkpoint_room(self._table, piece.chapter, piece.end)
+
+    def _stop_rooms(self) -> dict:
+        """推进时让桥接在进入终点检查点的房间那一帧停下（桥接 1.0.6 起的 stop_rooms；旧桥接忽略，靠进度事件停下）。"""
+        room = self._end_room()
+        return {"stop_rooms": [room]} if room and not self.chapter_finished and not self.done else {}
+
+    def _note_obs_room(self, obs: dict) -> None:
+        level = obs.get("level") or {}
+        self._note_room(level.get("sid"), level.get("room"), level.get("chapterTimeTicks"))
+
+    def _note_room(self, sid, room, ticks=None) -> bool:
+        """换房间时：更新当前所在的段；进入这一截终点检查点的房间时完成这一截（返回 True）。"""
+        piece = self.piece
+        if piece is None or room is None or self.done or self.chapter_finished or sid != CHAPTER_SIDS.get(piece.chapter):
+            return False
+        points = self._table.get(piece.chapter) or []
+        stop = piece.end if piece.end is not None else len(points)
+        for k in range(self.segment_index + 1, min(stop, len(points))):
+            if str(points[k].get("level")) == str(room):
+                self.segment_index = k
+                self._save_chapter_plan()
+                break
+        end_room = self._end_room()
+        if end_room is None or str(room) != end_room:
+            return False
+        if ticks is not None:
+            self.metrics.update(chapter_time_ticks=ticks)
+        self._piece_complete()
+        return True
+
+    def _split_range(self) -> dict:
+        """分段成绩里这一截的范围（整章不写）。"""
+        piece = self.piece
+        if piece is None or piece.whole():
+            return {}
+        return {"start": piece.start, "end": piece.end}
+
+    def _piece_complete(self) -> None:
+        """这一截在终点检查点结束：记下分段成绩；还有下一截就等着换过去，否则本次运行完成。"""
+        st = self.metrics.state
+        self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range())
+        print(f"[run] {piece_label(self.piece, self._table)}完成：章节计时 {fmt_ticks(st.chapter_time_ticks)}", flush=True)
+        if self.chapter_queue:
+            self.chapter_finished = True
+            self._save_chapter_plan()
+        else:
+            self._mark_done("分段完成")
+
+    def finish_at_checkpoint(self) -> None:
+        """最后一截在检查点结束（不是章节结尾）：用暂停菜单返回地图，不让游戏在关卡里无人看管地继续运行。"""
+        if not self.done or self.done_reason != "分段完成" or self.chapter_queue:
+            return
+        with self.lock:
+            if self.goals.immediate:
+                return
+            self._before_advance()
+            started = time.monotonic()
+            obs = self.client.call("observe", image=False, entities=False, tiles=False)["obs"]
+            for _ in range(20):            # 换房间的转场走完再打开暂停菜单
+                if obs.get("scene") != "Level" or obs.get("controllable") or (obs.get("level") or {}).get("canPause"):
+                    break
+                obs = self.client.call("step", inputs=["6"], stop_on=["controllable"], speed=1,
+                                       image=False, entities=False, tiles=False)["obs"]
+            if obs.get("scene") == "Level":
+                obs = leave_level_by_pause_menu(self.client)
+            self.end_scene = obs.get("scene")
+            self.metrics.add(auto_game_s=time.monotonic() - started)
+            print(f"[run] 本次的最后一截已完成，已用暂停菜单返回地图（{self.end_scene}）", flush=True)
+
     def _enter_next_chapter(self) -> tuple[dict, str | None, list[str]]:
-        """（调用方持有连接锁）走完结算画面、回到地图、进入下一章，停在可操作的第一帧。"""
+        """（调用方持有连接锁）换到计划里的下一截，停在可操作的第一帧：上一截在章节结尾结束时走完结算画面、
+        回到地图再进入下一章（下一截从章节开头开始时走菜单，否则在地图上直接进入它的起点检查点）；
+        上一截在检查点结束时，下一截在别的章节的开头就用暂停菜单返回地图再走菜单，否则直接传送到它的起点检查点。"""
         from enter_save import enter_save  # noqa: WPS433（tools 目录已在 sys.path 里）
 
         split = (self.metrics.state.splits or [])[-1]
-        chapter = self.chapter_queue.pop(0)
+        previous = self.piece
+        piece = Piece.of(self.chapter_queue.pop(0))
         self._before_advance()
         self.metrics.update(status="auto", thought="")
         t0 = time.monotonic()
-        enter_save(self.client, self.cfg.save, chapter=chapter, menu_speed=1, save_slot=self.cfg.save_slot, cutscene_mode=self.cfg.cutscene_mode,
+        enter_save(self.client, self.cfg.save, chapter=piece.chapter, checkpoint=piece.start, menu_speed=1,
+                   save_slot=self.cfg.save_slot, cutscene_mode=self.cfg.cutscene_mode,
                    should_stop=self.goals.stop_motion.is_set)  # 正常速度，录像里不快进
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         reply = self.client.call("observe", image=True, scope="room", fields=True)
         obs, image = enrich_obs(reply["obs"]), reply.get("image")
         self.chapter_finished = False
         level = obs.get("level") or {}
-        if self.goals.stop_motion.is_set():
-            self.chapter_finished = not level or level.get("sid") == split["chapter"]
+        entered = bool(level) and level.get("sid") == CHAPTER_SIDS.get(piece.chapter) and (
+            piece.start == 0 or str(level.get("room")) == str(checkpoint_room(self._table, piece.chapter, piece.start)))
+        if self.goals.stop_motion.is_set() and not entered:
+            self.chapter_queue.insert(0, piece)            # 还没进入下一截：停在当前帧，续跑时再换过去
+            self.chapter_finished = True
             return obs, image, ["用户停止了自动换图，游戏保持在当前帧。"]
+        self.piece, self.segment_index = piece, piece.start
         self.start_sid = level.get("sid", self.start_sid)
-        self.metrics.update(chapter=level.get("sid", ""), room=level.get("room", ""),
+        self.metrics.update(chapter=level.get("sid", ""), room=level.get("room", ""), piece_done=False,
                             chapter_time_ticks=level.get("chapterTimeTicks", 0))
-        note = (f"【{chapter_name(split['chapter'])}通关】章节计时 {fmt_ticks(split['ticks'])}，死亡 {split['deaths']} 次。"
-                f"系统已自动走完结算画面并进入{chapter_name(level.get('sid', ''))}（新章节的计时从 0 开始），"
-                f"下面是新章节第一个房间；继续游玩。")
-        remaining = "、".join(chapter_name_by_id(c) for c in self.chapter_queue)
-        if remaining:
-            note += f"之后还有：{remaining}。"
-        else:
-            note += "这是本次的最后一章。"
+        self._save_chapter_plan()
+        table = self._table
+        done = piece_label(previous, table) if previous is not None else chapter_name(split["chapter"])
+        how = ("系统已自动走完结算画面并进入" if previous is None or previous.end is None else "系统已把你送到")
+        note = (f"【{done}完成】章节计时 {fmt_ticks(split['ticks'])}，死亡 {split['deaths']} 次。"
+                f"{how}{self._piece_place(piece)}（新的计时从 0 开始），下面是这一截的第一个房间；继续游玩。"
+                f"{self._piece_goal(piece)}")
+        remaining = "、".join(piece_label(p, table) for p in self.chapter_queue)
+        note += f"之后还有：{remaining}。" if remaining else "这是本次的最后一截。"
         return obs, image, [note]
 
-    # ---------------------------------------------------------------- 运行中调整要通关的章节（控制台）
+    def _piece_place(self, piece: Piece) -> str:
+        if piece.start == 0:
+            return chapter_name_by_id(piece.chapter)
+        room = checkpoint_room(self._table, piece.chapter, piece.start)
+        return (f"{chapter_name_by_id(piece.chapter)}的检查点"
+                f"“{checkpoint_name(self._table, piece.chapter, piece.start)}”（房间 {room}）")
+
+    def _piece_goal(self, piece: Piece) -> str:
+        """告诉智能体这一截到哪里为止。"""
+        if piece.end is None:
+            return "这一截到章节通关为止。"
+        room = checkpoint_room(self._table, piece.chapter, piece.end)
+        return (f"这一截的终点是检查点“{checkpoint_name(self._table, piece.chapter, piece.end)}”："
+                f"进入房间 {room} 即完成，之后由系统接管。")
+
+    # ---------------------------------------------------------------- 运行中调整要通关的范围（控制台）
 
     def current_chapter_id(self) -> int | None:
+        if self.piece is not None:
+            return self.piece.chapter
         sid = self.metrics.state.chapter or getattr(self, "start_sid", None)
         return next((i for i, s in CHAPTER_SIDS.items() if s == sid), None)
 
+    def _current_segment(self) -> tuple[int, int] | None:
+        chapter = self.current_chapter_id()
+        return None if chapter is None else (chapter, self.segment_index)
+
+    def _rest_of_piece(self) -> list[tuple[int, int]]:
+        """当前这一截里、当前所在段之后的段（它们之后会连续游玩，也能在控制台取消）。"""
+        piece = self.piece
+        if piece is None or self.chapter_finished:
+            return []
+        return [s for s in piece.segments(self._table) if s[1] > self.segment_index]
+
     def chapter_plan(self) -> dict:
-        """控制台显示用：已通关的章节、正在玩的章节与之后的队列（章节编号）。"""
+        """控制台显示用：已完成、正在玩与之后要玩的段（[章节, 段]），以及章节编号的简表（兼容旧页面）。"""
+        table = self._table
+        done = [list(s) for split in (self.metrics.state.splits or []) for s in split_segments(split, table)]
+        queue = [list(s) for s in self._rest_of_piece() + segments_of(self.chapter_queue, table)]
+        current = self._current_segment()
         ids = {s: i for i, s in CHAPTER_SIDS.items()}
-        done = [ids.get(split.get("chapter")) for split in (self.metrics.state.splits or [])]
-        return {"done": [i for i in done if i is not None], "current": self.current_chapter_id(),
-                "queue": list(self.chapter_queue), "switching": bool(self.chapter_finished),
-                "editable": not self.done and not self.chapter_finished}
+        return {"done": [i for i in (ids.get(sp.get("chapter")) for sp in (self.metrics.state.splits or [])) if i is not None],
+                "current": self.current_chapter_id(), "queue": chapters_of(self.chapter_queue),
+                "segments": {"done": done, "current": None if current is None or self.chapter_finished else list(current),
+                             "queue": queue},
+                "switching": bool(self.chapter_finished), "editable": not self.done and not self.chapter_finished}
 
     def set_chapter_queue(self, queue: list[int]) -> str:
-        """运行中改当前章节之后要依次通关的章节（空 = 本章通关后结束）。返回告诉智能体的说明。
-        只改队列，不动正在玩的这一章；按官方顺序，只能是当前章节之后的章节（章节要按顺序通关才会解锁）。"""
+        """（兼容旧控制台）当前章节之后要依次通关的整章；当前这一截不变。"""
         if not isinstance(queue, list) or any(type(c) is not int or c not in CHAPTER_SIDS for c in queue) \
                 or len(set(queue)) != len(queue):
             raise ValueError("章节须为不重复的章节编号")
-        queue = sorted(queue)
+        current = self.current_chapter_id()
+        if current is not None and any(c <= current for c in queue):
+            raise ValueError(f"只能选{chapter_name_by_id(current)}之后的章节（按官方顺序依次通关）")
+        table = self._table
+        rest = self._rest_of_piece()
+        return self.set_plan(rest + [s for c in sorted(queue) for s in Piece(c).segments(table)])
+
+    def set_plan(self, segments) -> str:
+        """运行中改之后要玩的段（[章节, 段] 的列表，按官方顺序；空 = 当前这一段完成后结束）。返回告诉智能体的说明。
+        只能选当前所在段之后的段；和当前这一截紧接着的段并进这一截连续游玩，其余的分成截排进队列。"""
+        table = self._table
+        segments = validate_segments(segments, table) if segments else []
         with self.lock:
             if self.done:
-                raise ValueError("本次试玩已结束，不能再改章节")
+                raise ValueError("本次试玩已结束，不能再改")
             if self.chapter_finished:
-                raise ValueError("正在换到下一章，稍后再改")
-            current = self.current_chapter_id()
-            if current is None:
-                raise ValueError("还不知道当前章节，稍后再改")
-            if any(c <= current for c in queue):
-                raise ValueError(f"只能选{chapter_name_by_id(current)}之后的章节（按官方顺序依次通关）")
-            self.chapter_queue = list(queue)
-            self._save_chapter_plan(current)
-        print(f"[run] 用户调整了之后要通关的章节：{'、'.join(chapter_name_by_id(c) for c in queue) or '无（本章通关后结束）'}",
-              flush=True)
-        if queue:
-            return (f"用户调整了本次要通关的章节：{chapter_name_by_id(current)}通关后，依次是"
-                    f"{'、'.join(chapter_name_by_id(c) for c in queue)}，不要自行进入其他章节。")
-        return f"用户调整了本次要通关的章节：{chapter_name_by_id(current)}是最后一章，通关后本次运行结束。"
+                raise ValueError("正在换到下一截，稍后再改")
+            current = self._current_segment()
+            if current is None or self.piece is None:
+                raise ValueError("还不知道当前位置，稍后再改")
+            if any(s <= current for s in segments):
+                raise ValueError(f"只能选当前所在段（{chapter_name_by_id(current[0])}第 {current[1]} 段）之后的段")
+            chapter, k = current
+            rest = set(segments)
+            end = k + 1
+            while (chapter, end) in rest:          # 紧接着当前段的段：并进当前这一截
+                rest.discard((chapter, end))
+                end += 1
+            count = len(table.get(chapter) or []) or 1
+            piece = self.piece
+            self.piece = Piece(piece.chapter, piece.start, None if end >= count else end)
+            self.chapter_queue = pieces_of(sorted(rest), table)
+            self._save_chapter_plan()
+        table_label = "、".join(piece_label(p, table) for p in self.chapter_queue)
+        goal = self._piece_goal(self.piece)
+        print(f"[run] 用户调整了要通关的范围：当前这一截 {piece_label(self.piece, table)}；之后 {table_label or '无'}", flush=True)
+        if self.chapter_queue:
+            return f"用户调整了本次要通关的范围。{goal}之后依次是：{table_label}，不要自行进入其他章节。"
+        return f"用户调整了本次要通关的范围。{goal}这是本次的最后一截，完成后本次运行结束。"
 
-    def _save_chapter_plan(self, current: int) -> None:
-        """把新的章节计划写进 run_state.json 的 all_chapters（续跑按已通关的章数从这里接着走）。"""
+    def _save_chapter_plan(self) -> None:
+        """把当前计划写进 run_state.json：plan_pieces（已完成的各截 + 当前这一截 + 队列，续跑按已完成的截数接着走）、
+        all_chapters（涉及的章节）与 piece_pending（这一截已完成、还没换到下一截）。"""
         path = self.run_dir / "run_state.json"
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return
-        done = len(self.metrics.state.splits or [])
-        prefix = list(state.get("all_chapters") or [])[:done]
-        if len(prefix) < done:          # 早先没记章节列表的运行：已通关的部分按分段成绩补上
-            ids = {s: i for i, s in CHAPTER_SIDS.items()}
-            prefix = [ids.get(split.get("chapter"), current) for split in self.metrics.state.splits][:done]
-        state["all_chapters"] = prefix + [current] + list(self.chapter_queue)
+        done = []
+        ids = {s: i for i, s in CHAPTER_SIDS.items()}
+        for split in self.metrics.state.splits or []:
+            chapter = ids.get(split.get("chapter"))
+            if chapter is not None:
+                done.append(Piece(chapter, int(split.get("from") or 0), split.get("to")))
+        current = [] if self.chapter_finished or self.piece is None else [self.piece]
+        pieces = done + current + [Piece.of(p) for p in self.chapter_queue]
+        state["plan_pieces"] = [[p.chapter, p.start, p.end] for p in pieces]
+        state["all_chapters"] = chapters_of(pieces)
+        state["piece_pending"] = bool(self.chapter_finished)
+        state["segment_index"] = None if self.chapter_finished else self.segment_index
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(path)

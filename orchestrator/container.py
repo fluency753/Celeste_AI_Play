@@ -74,6 +74,27 @@ def _create(cfg: RunConfig, name: str) -> None:
     docker(*args, cfg.image)
 
 
+def apply_cpu_limit(cfg: RunConfig, name: str, log=print) -> None:
+    """按可调参数 agent_cpus 限制容器能用的 CPU 核（cpuset，容器里 nproc 显示的就是这个数）；不限时用 Docker 的全部核。
+    每次运行都重新设置（docker update 对运行中的容器生效），复用的容器也跟着这次的设置。"""
+    info = docker("info", "--format", "{{.NCPU}}", check=False)
+    try:
+        total = max(1, int(info.stdout.strip()))
+    except ValueError:
+        log("[container] 读不到 Docker 的 CPU 核数，不限制容器的核数")
+        return
+    want = total if cfg.agent_cpus is None else min(int(cfg.agent_cpus), total)
+    if cfg.agent_cpus is not None and cfg.agent_cpus > total:
+        log(f"[container] Docker 只能用 {total} 个核，按 {total} 个限制（设置的是 {cfg.agent_cpus}）")
+    result = docker("update", "--cpuset-cpus", "0" if want == 1 else f"0-{want - 1}", name, check=False)
+    if result.returncode != 0:
+        log(f"[container] 没能限制容器的 CPU 核数：{(result.stderr or result.stdout).strip()[:200]}")
+        cfg.agent_cpus_effective = total
+    else:
+        cfg.agent_cpus_effective = want          # 提示词里写的最多可用核数
+        log(f"[container] 智能体容器最多用 {want} 个 CPU 核")
+
+
 def ensure_container(cfg: RunConfig, log=print) -> str:
     """返回已就绪（防火墙生效）的容器名。配置变了（镜像、端口）就重建容器；工作区与会话数据卷保留。"""
     image = docker("image", "inspect", "-f", "{{.Id}}", cfg.image, check=False)
@@ -98,6 +119,7 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
         log(f"[container] 创建 {name}（工作区 {cfg.workspace_dir}）")
         _create(cfg, name)
 
+    apply_cpu_limit(cfg, name, log)
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if docker("exec", name, "test", "-f", "/run/firewall-ready", check=False).returncode == 0:

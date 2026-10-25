@@ -1,61 +1,168 @@
-"""运行中在控制台改之后要通关的章节：校验、队列、run_state 与控制指令。"""
+"""按段通关与运行中调整要通关的范围：分段、截的终点、换到下一截、run_state 与控制指令。"""
 import json
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from orchestrator.config import RunConfig
 from orchestrator.control import RunControl
 from orchestrator.game_session import GameSession
 from orchestrator.metrics import Metrics
+from orchestrator.segments import Piece, parse_segments, piece_label, pieces_of, table_from_areas, validate_segments
+from tools.enter_save import enter_save
+
+AREAS = [
+    {"id": 0, "checkpoints": [{"index": 0, "level": "0", "name": "开始"}]},
+    {"id": 1, "checkpoints": [{"index": 0, "level": "1", "name": "开始"}, {"index": 1, "level": "6", "name": "渡口"},
+                              {"index": 2, "level": "9b", "name": "深渊"}]},
+    {"id": 2, "checkpoints": [{"index": 0, "level": "start", "name": "开始"}, {"index": 1, "level": "3", "name": "干预"},
+                              {"index": 2, "level": "end_3", "name": "清醒"}]},
+]
+TABLE = table_from_areas(AREAS)
 
 
-def session(folder: Path, chapter="Celeste/1-ForsakenCity", queue=(2,), splits=None, all_chapters=(0, 1, 2)):
-    s = GameSession.__new__(GameSession)          # 不连游戏：只用到章节队列相关的属性
-    s.lock = threading.RLock()
-    s.done, s.chapter_finished = False, False
-    s.chapter_queue = list(queue)
-    s.run_dir = folder
-    s.start_sid = chapter
-    s.metrics = Metrics(folder / "metrics.json", "a", "opus", "high", 600)
-    s.metrics.update(chapter=chapter, splits=list(splits or [{"chapter": "Celeste/0-Intro", "ticks": 1}]))
-    (folder / "run_state.json").write_text(json.dumps({"all_chapters": list(all_chapters)}), encoding="utf-8")
+def session(folder: Path, plan, splits=(), segment=None):
+    cfg = RunConfig(agent="a", save="s", model="opus", runtime="host")
+    cfg.plan, cfg.checkpoints = list(plan), TABLE
+    cfg.resume_segment = segment
+    metrics = Metrics(folder / "metrics.json", "a", "opus", "high", 600)
+    metrics.update(chapter="Celeste/1-ForsakenCity", splits=list(splits))
+    s = GameSession(cfg, folder, metrics)
+    (folder / "run_state.json").write_text(json.dumps({"all_chapters": [1]}), encoding="utf-8")
     return s
 
 
-class ChapterPlanTests(unittest.TestCase):
-    def test_plan_and_edit(self):
-        with tempfile.TemporaryDirectory() as d:
-            s = session(Path(d))
-            self.assertEqual(s.chapter_plan(), {"done": [0], "current": 1, "queue": [2], "switching": False,
-                                                "editable": True})
-            note = s.set_chapter_queue([4, 3])
-            self.assertEqual(s.chapter_queue, [3, 4])                       # 按官方顺序
-            self.assertIn("依次是", note)
-            state = json.loads((Path(d) / "run_state.json").read_text(encoding="utf-8"))
-            self.assertEqual(state["all_chapters"], [0, 1, 3, 4])           # 续跑按已通关章数从这里接着走
-            self.assertIn("最后一章", s.set_chapter_queue([]))
-            self.assertEqual(s.chapter_queue, [])
-            self.assertEqual(json.loads((Path(d) / "run_state.json").read_text(encoding="utf-8"))["all_chapters"], [0, 1])
+def state(folder: Path) -> dict:
+    return json.loads((folder / "run_state.json").read_text(encoding="utf-8"))
 
-    def test_rejects_bad_edits(self):
+
+class SegmentTests(unittest.TestCase):
+    def test_parse_and_pieces(self):
+        segs = parse_segments("1.1-2,2", TABLE)
+        self.assertEqual(segs, [(1, 1), (1, 2), (2, 0), (2, 1), (2, 2)])
+        self.assertEqual(pieces_of(segs, TABLE), [Piece(1, 1, None), Piece(2, 0, None)])
+        self.assertEqual(pieces_of(parse_segments("1.0,1.2", TABLE), TABLE), [Piece(1, 0, 1), Piece(1, 2, None)])
+        self.assertEqual(pieces_of(parse_segments("0,1", TABLE), TABLE), [Piece(0), Piece(1)])   # 整章
+        for bad in ("1.3", "99", "x", "1.2-1", ""):
+            with self.assertRaises(ValueError, msg=bad):
+                parse_segments(bad, TABLE)
+        self.assertEqual(validate_segments([[2, 0], [1, 2]], TABLE), [(1, 2), (2, 0)])
+        for bad in ([], [[1, 3]], [["1", 0]], [[1]], "1"):
+            with self.assertRaises(ValueError, msg=bad):
+                validate_segments(bad, TABLE)
+        self.assertIn("渡口 → 深渊", piece_label(Piece(1, 1, 2), TABLE))
+        self.assertEqual(piece_label(Piece(1), TABLE), "1 被遗弃之城")
+
+
+class PlanTests(unittest.TestCase):
+    def test_piece_ends_on_entering_end_checkpoint(self):
         with tempfile.TemporaryDirectory() as d:
-            s = session(Path(d))
-            for bad in ([1], [0], [2, 2], ["2"], [99]):
+            s = session(Path(d), [Piece(1, 0, 1), Piece(1, 2, None), Piece(2)])
+            self.assertEqual(s._stop_rooms(), {"stop_rooms": ["6"]})
+            self.assertFalse(s._note_room("Celeste/1-ForsakenCity", "5", 100))
+            self.assertTrue(s._note_room("Celeste/1-ForsakenCity", "6", 1234))
+            split = s.metrics.state.splits[-1]
+            self.assertEqual((split["ticks"], split["from"], split["to"]), (1234, 0, 1))
+            self.assertTrue(s.chapter_finished and s.metrics.state.piece_done)
+            self.assertEqual(s._stop_rooms(), {})
+            saved = state(Path(d))
+            self.assertEqual(saved["plan_pieces"], [[1, 0, 1], [1, 2, None], [2, 0, None]])
+            self.assertTrue(saved["piece_pending"])
+            self.assertEqual(s.chapter_plan()["segments"]["done"], [[1, 0]])
+
+    def test_last_piece_finishes_the_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = session(Path(d), [Piece(1, 1, 2)])
+            self.assertTrue(s._note_room("Celeste/1-ForsakenCity", "9b", 50))
+            self.assertTrue(s.done)
+            self.assertEqual(s.done_reason, "分段完成")
+
+    def test_segment_tracking_and_runtime_edit(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = session(Path(d), [Piece(1)])                  # 整章 1A
+            self.assertEqual(s._stop_rooms(), {})
+            s._note_room("Celeste/1-ForsakenCity", "6")
+            self.assertEqual(s.segment_index, 1)
+            self.assertEqual(state(Path(d))["segment_index"], 1)
+            plan = s.chapter_plan()["segments"]
+            self.assertEqual((plan["current"], plan["queue"]), ([1, 1], [[1, 2]]))
+            note = s.set_plan([[2, 0]])                         # 不玩 1A 的最后一段：到"深渊"为止，再去 2A 开头一段
+            self.assertEqual(s.piece, Piece(1, 0, 2))
+            self.assertEqual(s.chapter_queue, [Piece(2, 0, 1)])
+            self.assertIn("进入房间 9b", note)
+            self.assertEqual(state(Path(d))["plan_pieces"], [[1, 0, 2], [2, 0, 1]])
+            s.set_plan([[1, 2]])                                # 又加回来：并进当前这一截，之后不再有别的
+            self.assertEqual((s.piece, s.chapter_queue), (Piece(1, 0, None), []))
+            self.assertIn("最后一截", s.set_plan([]))           # 空 = 当前这一段完成后结束
+            self.assertEqual(s.piece, Piece(1, 0, 2))
+            for bad in ([[1, 1]], [[0, 0]], [[1, 5]]):
                 with self.assertRaises(ValueError, msg=bad):
-                    s.set_chapter_queue(bad)
+                    s.set_plan(bad)
             s.chapter_finished = True
-            with self.assertRaisesRegex(ValueError, "换到下一章"):
-                s.set_chapter_queue([2])
+            with self.assertRaisesRegex(ValueError, "换到下一截"):
+                s.set_plan([[2, 0]])
             s.chapter_finished, s.done = False, True
             with self.assertRaisesRegex(ValueError, "已结束"):
-                s.set_chapter_queue([2])
+                s.set_plan([[2, 0]])
+
+    def test_old_chapter_queue_control_still_works(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = session(Path(d), [Piece(1)])
+            s.set_chapter_queue([2])
+            self.assertEqual((s.piece, s.chapter_queue), (Piece(1), [Piece(2)]))
+            with self.assertRaises(ValueError):
+                s.set_chapter_queue([1])
+
+    def test_next_piece_teleports_to_its_start(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = session(Path(d), [Piece(1, 0, 1), Piece(1, 2, None)])
+            s._note_room("Celeste/1-ForsakenCity", "6", 10)
+            arrived = {"scene": "Level", "controllable": True,
+                       "level": {"sid": "Celeste/1-ForsakenCity", "room": "9b", "chapterTimeTicks": 0}}
+
+            class Client:
+                def call(self, cmd, **args):
+                    return {"obs": arrived}
+            s.client = Client()
+            with patch("enter_save.enter_save") as macro:
+                obs, _, notes = s._enter_next_chapter()
+            self.assertEqual(macro.call_args.kwargs["checkpoint"], 2)
+            self.assertEqual(macro.call_args.kwargs["chapter"], 1)
+            self.assertEqual((s.piece, s.chapter_finished, s.metrics.state.piece_done), (Piece(1, 2, None), False, False))
+            self.assertIn("送到", notes[0])
+            self.assertIn("章节通关为止", notes[0])
+            self.assertFalse(state(Path(d))["piece_pending"])
+
+
+class MacroAndControlTests(unittest.TestCase):
+    def test_enter_save_teleports_to_checkpoint(self):
+        level = {"scene": "Level", "controllable": True, "save": {"name": "s", "slot": 1},
+                 "level": {"sid": "Celeste/1-ForsakenCity", "room": "6", "inCutscene": False, "skippingCutscene": False}}
+        calls = []
+
+        class Client:
+            def call(self, cmd, **args):
+                calls.append((cmd, args))
+                if cmd == "hello":
+                    return {"checkpoints": True}
+                if cmd == "enter_checkpoint":
+                    level["level"]["room"] = "9b"
+                    return {"room": "9b"}
+                return {"obs": json.loads(json.dumps(level))}
+        obs = enter_save(Client(), "s", chapter=1, checkpoint=2, save_slot=1)
+        self.assertEqual(obs["level"]["room"], "9b")
+        self.assertIn(("enter_checkpoint", {"chapter": 1, "checkpoint": 2}), calls)
 
     def test_control_validates_chapters(self):
         with tempfile.TemporaryDirectory() as d:
             control = RunControl(Path(d))
             self.assertTrue(control.enqueue("chapters", json.dumps({"queue": [2, 3]})))
-            for bad in ("[]", json.dumps({"queue": "2"}), json.dumps({"queue": [-1]})):
+            self.assertTrue(control.enqueue("chapters", json.dumps({"segments": [[1, 2], [2, 0]]})))
+            self.assertTrue(control.enqueue("chapters", json.dumps({"segments": []})))
+            for bad in ("[]", json.dumps({"queue": "2"}), json.dumps({"queue": [-1]}),
+                        json.dumps({"segments": [[1]]}), json.dumps({"segments": "x"})):
                 with self.assertRaises(ValueError):
                     control.enqueue("chapters", bad)
 

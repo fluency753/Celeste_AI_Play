@@ -141,6 +141,10 @@ class RunConfig:
     play_scope: str = 'chapter'     # independent of the user's dynamic stop goal
     chapter: int | None = None      # 菜单宏进入的章节编号；None = 选章页当前章节
     chapters: list[int] | None = None  # 依次通关的章节（如 [0, 1, 2]）：一章完成后主控自动进入下一章，智能体接着玩
+    plan: list | None = None           # 按段通关（--segments）：依次要玩的各截（segments.Piece）；None = 按 chapters 整章
+    checkpoints: dict = field(default_factory=dict)  # 检查点表（segments.load_table / 桥接 areas）
+    resume_pending: bool = False       # 续跑：上次在两截之间中断（这一截已完成、还没换到下一截）
+    resume_segment: int | None = None  # 续跑：上次在当前这一截里已经走到的段
     runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具
     image: str = "celeste-agent:0.1"
     autocompact: str | None = None   # Claude Code 自动压缩的窗口：None 用默认，"auto" 或 100000~1000000 的 token 数
@@ -183,6 +187,8 @@ class RunConfig:
     retry_timeout_max_s: float = 60.0  # 计划文件 retry.timeout_s 的上限
     explore_program_s: int | None = 15   # 探索模式：单次规划程序（Bash）最长秒数；None = 不限时
     explore_program_runs: int | None = None  # 探索模式：两次 act 之间最多运行几次规划程序；None = 不限
+    agent_cpus: int | None = None    # 智能体程序最多用几个 CPU 核（容器按它设置 cpuset）；None = 不限
+    agent_cpus_effective: int | None = None  # 容器实际能用的核数（apply_cpu_limit 设置，写进提示词）
     explore_act_frames: int = 300    # 探索模式：单次 act 最多推进的帧数
     explore_search_frames: int | None = 300  # 探索模式：自写模拟器与搜索程序每次最多推演的帧数（只写进提示词）；None = 不限
     assist_capacity: int = 100       # 探索模式的限额预测：体力上限

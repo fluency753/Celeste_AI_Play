@@ -47,6 +47,14 @@ def explore_program_rule(cfg) -> str:
     return "单次规划程序不限时长；" if seconds is None else f"单次规划程序最多 {seconds_text(seconds)}；"
 
 
+def cpu_rule(cfg) -> str:
+    """提示词里最多可以用几个 CPU 核的一句：容器实际能用的核数（apply_cpu_limit 设置后），
+    否则是可调参数 agent_cpus，不限时是本机的核数。"""
+    from .tuning import HOST_CPUS
+    cpus = getattr(cfg, "agent_cpus_effective", None) or getattr(cfg, "agent_cpus", None) or HOST_CPUS
+    return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"
+
+
 def explore_search_rule(cfg) -> str:
     """探索模式提示词里自写模拟器与搜索程序推演帧数的一句（explore_search_frames 为 None 时不写）。"""
     frames = getattr(cfg, "explore_search_frames", 300)
@@ -67,6 +75,7 @@ def fill(text: str, cfg) -> str:
     values = {
         "{act_max_frames}": str(act_frame_cap(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
+        "{cpu_rule}": cpu_rule(cfg),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
         "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
         "{explore_program_rule}": explore_program_rule(cfg),
@@ -159,7 +168,12 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
         parts += _file_parts("hud_zh.md")
         if cfg.live:
             parts += _file_parts("live_zh.md")
-    if cfg.chapters and len(cfg.chapters) > 1:
+    from .segments import describe_plan, plan_is_partial
+    if plan_is_partial(getattr(cfg, "plan", None)):
+        parts.append(PromptPart("本次的范围（按段通关时自动加）",
+                                "# 本次的范围\n\n" + describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {})
+                                + "之前写的程序与笔记都在工作区里，可以继续用。", None, "\n\n"))
+    elif cfg.chapters and len(cfg.chapters) > 1:
         names = " → ".join(chapter_name_by_id(c) for c in cfg.chapters)
         parts.append(PromptPart("本次的章节（多章时自动加）",
                                 "# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
@@ -178,7 +192,12 @@ def prompt_parts(cfg) -> list[PromptPart]:
         if cfg.live:
             parts += _file_parts("explore_live_zh.md")
         chapters = cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else [])
-        if chapters:
+        from .segments import describe_plan, plan_is_partial
+        if plan_is_partial(getattr(cfg, "plan", None)):
+            parts.append(PromptPart("本次指定范围（按段通关时自动加）",
+                                    describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, speedrun=False)
+                                    + "不得自行扩展。", None, "\n"))
+        elif chapters:
             parts.append(PromptPart("本次指定章节（自动加）", "本次指定章节：" + "、".join(chapter_name_by_id(c) for c in chapters)
                                     + "；不得自行扩展。", None, "\n"))
     else:

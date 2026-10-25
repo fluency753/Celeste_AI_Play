@@ -90,7 +90,8 @@ class MetricsState:
     room: str = ""
     chapter_time_ticks: int = 0
     completed_ticks: int = 0          # 本次运行里已经通关的章节的计时之和（依次通关多章时，总计时 = 它 + 当前章节计时）
-    splits: list | None = None        # 已通关章节的分段成绩：[{"chapter": sid, "ticks": n, "deaths": n}, ...]
+    splits: list | None = None        # 已完成各截的成绩：[{"chapter": sid, "ticks": n, "deaths": n}, ...]；按段通关时另有 from/to（起止检查点，to 为 null = 通关）
+    piece_done: bool | None = None    # 当前这一截已完成、成绩已计入 completed_ticks（换到下一截之前，HUD 不再把当前计时加进总计时）
     dashes: int = 0
     max_dashes: int = 0
     thought: str = ""
@@ -387,14 +388,18 @@ class Metrics:
                 setattr(self.state, key, getattr(self.state, key) + value)
             self._write_locked()
 
-    def add_split(self, chapter: str, ticks: int) -> dict:
-        """记下一章的成绩（章节计时与这一章里的死亡次数），并把它加进已完成章节的总计时。"""
+    def add_split(self, chapter: str, ticks: int, start: int | None = None, end: int | None = None) -> dict:
+        """记下一截（一章，或按段通关时的几段）的成绩：章节计时与其间的死亡次数，并加进已完成的总计时。
+        start / end：按段通关时这一截的起止检查点（end 为 None = 到通关）；整章不写。"""
         with self._lock:
             splits = list(self.state.splits or [])
             deaths_before = sum(s["deaths"] for s in splits)
             split = {"chapter": chapter, "ticks": int(ticks), "deaths": self.state.deaths - deaths_before}
+            if start is not None:
+                split.update({"from": int(start), "to": end})
             splits.append(split)
             self.state.splits = splits
+            self.state.piece_done = True
             self.state.completed_ticks = sum(s["ticks"] for s in splits)
             self._write_locked()
             return split

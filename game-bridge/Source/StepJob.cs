@@ -13,6 +13,7 @@ namespace CelesteAI.Bridge;
 /// 一次"推进 N 帧"的任务：逐帧取出按键，记录轨迹与事件，按截断条件提前停下。
 /// 截断条件：death 死亡、room 换房、uncontrollable 失去控制、controllable 恢复控制、
 /// land 落地、refill 冲刺次数恢复、complete 通关、story_input 到达剧情输入节点。
+/// stop_rooms：进入其中某个房间时以 room 停下（按段通关用，其他换房间不停）。
 /// 给了预期轨迹（expect）时还会逐帧对照 Madeline 的位置与状态，偏差超过容差（tolerance）就以 deviate 停下。
 /// </summary>
 internal sealed class StepJob {
@@ -27,6 +28,7 @@ internal sealed class StepJob {
 
     private readonly List<InputFrame> plan;
     private readonly HashSet<string> stopOn;
+    private readonly HashSet<string> stopRooms;
     private readonly bool recordTrajectory;
     private readonly ArrayBufferWriter<byte> trajectoryBuffer = new();
     private readonly Utf8JsonWriter trajectory;
@@ -55,13 +57,14 @@ internal sealed class StepJob {
 
     public StepJob(long requestId, List<InputFrame> plan, IEnumerable<string> stopOn, int framesPerTick,
         bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false,
-        List<ExpectRow?>? expect = null, float tolerance = 1f, int progressEvery = 0) {
+        List<ExpectRow?>? expect = null, float tolerance = 1f, int progressEvery = 0, IEnumerable<string>? stopRooms = null) {
         RequestId = requestId;
         this.progressEvery = Math.Max(0, progressEvery);
         this.expect = expect is { Count: > 0 } ? expect : null;
         this.tolerance = tolerance;
         this.plan = plan;
         this.stopOn = new HashSet<string>(stopOn, StringComparer.OrdinalIgnoreCase);
+        this.stopRooms = new HashSet<string>(stopRooms ?? Array.Empty<string>(), StringComparer.Ordinal);
         FramesPerTick = framesPerTick;
         WantImage = wantImage;
         Buffer = buffer;
@@ -123,7 +126,10 @@ internal sealed class StepJob {
         int dashes = p?.Dashes ?? 0;
 
         if (lastAlive && !alive) Emit(frame, "death", room);
-        if (room != null && lastRoom != null && room != lastRoom) Emit(frame, "room", room);
+        if (room != null && lastRoom != null && room != lastRoom) {
+            Emit(frame, "room", room);
+            if (StopReason == null && stopRooms.Contains(room)) StopReason = "room";
+        }
         if (lastControllable && !controllable) Emit(frame, "uncontrollable", null);
         if (!lastControllable && controllable) Emit(frame, "controllable", null);
         if (!lastOnGround && onGround) Emit(frame, "land", null);

@@ -137,10 +137,13 @@ class SessionControls:
                         elif row["kind"] == "chapters":
                             if self.session is None or self.session.done or self.chat_only:
                                 raise ValueError("当前没有在试玩，不能改章节")
-                            queue = json.loads(row["text"]).get("queue", [])
-                            note = await asyncio.to_thread(self.session.set_chapter_queue, queue)
+                            data = json.loads(row["text"])
+                            if "segments" in data:
+                                note = await asyncio.to_thread(self.session.set_plan, data["segments"])
+                            else:
+                                note = await asyncio.to_thread(self.session.set_chapter_queue, data.get("queue", []))
                             self.pending_messages.append({**row, "text": note})
-                            self.control.mark(row["id"], "waiting", "章节已更新，正在通知 agent")
+                            self.control.mark(row["id"], "waiting", "要通关的范围已更新，正在通知 agent")
                         elif row["kind"] == "message":
                             self.pending_messages.append(row)
                             self.control.mark(row["id"], "waiting", "等待提交给当前会话")

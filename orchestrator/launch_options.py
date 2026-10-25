@@ -27,7 +27,7 @@ DEFAULTS = {
     "engine": "claude", "provider": "anthropic", "model": "opus", "effort": "high", "agent": "",
     "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": True, "playback": True, "record": True,
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
-    "start_paused": False, "quota_wait": True, "cutscene_mode": "auto", "chapters": [0],
+    "start_paused": False, "quota_wait": True, "cutscene_mode": "auto", "chapters": [0], "segments": None,
     "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 240, "autocompact": "",
     # 以下是"更多设置"里的参数，默认值与命令行相同
     "map": "celeste", "runtime": "container", "study_minutes": 60, "max_usage": None, "quota_wait_max_hours": 24,
@@ -103,6 +103,12 @@ def normalize(options: dict) -> dict:
             or any(type(c) is not int or c not in CHAPTER_SIDS for c in chapters) or len(set(chapters)) != len(chapters)):
         raise ValueError("请选择要游玩的章节（官方章节编号，不重复）")
     o["chapters"] = sorted(chapters)
+    if o.get("segments") is not None:
+        # 按段通关：[[章节, 段], ...]；要玩的章节由选中的段决定
+        from .segments import chapters_of, load_table, pieces_of, validate_segments
+        table = load_table()
+        o["segments"] = [list(s) for s in validate_segments(o["segments"], table)]
+        o["chapters"] = chapters_of(pieces_of([tuple(s) for s in o["segments"]], table))
     save = o["save"]
     if not isinstance(save, dict) or set(save) - {"name", "slot", "create"}:
         raise ValueError("存档设置无效")
@@ -111,7 +117,8 @@ def normalize(options: dict) -> dict:
         raise ValueError("请选择存档，或填写新存档名（1～20 个字符）")
     if type(save["create"]) is not bool or (save["slot"] is not None and (type(save["slot"]) is not int or save["slot"] < 0)):
         raise ValueError("存档槽位无效")
-    if save["create"] and (save["slot"] is not None or o["chapters"][0] != 0):
+    if save["create"] and (save["slot"] is not None or o["chapters"][0] != 0
+                           or (o.get("segments") and o["segments"][0] != [0, 0])):
         raise ValueError("新建存档只能从序章开始，且不指定槽位")
     save["name"] = save["name"].strip()
     o["save"] = save
@@ -177,7 +184,9 @@ def build(options: dict) -> list[str]:
     argv.append("--playback" if o["playback"] else "--no-playback")
     argv.append("--record" if o["record"] else "--no-record")
     argv.append("--hud-mod" if o["hud_mod"] else "--no-hud-mod")
-    if len(o["chapters"]) == 1:
+    if o.get("segments"):
+        argv += ["--segments", segments_arg(o["segments"])]
+    elif len(o["chapters"]) == 1:
         argv += ["--chapter", str(o["chapters"][0])]
     else:
         argv += ["--chapters", ",".join(map(str, o["chapters"]))]
@@ -230,6 +239,24 @@ def build(options: dict) -> list[str]:
     return argv
 
 
+def segments_arg(segments) -> str:
+    """[[章节, 段], ...] → --segments 的写法（同一章里连续的段写成 章节.起-止）。"""
+    out, run = [], []
+    for chapter, k in sorted(tuple(s) for s in segments):
+        if run and (chapter != run[0][0] or k != run[-1][1] + 1):
+            out.append(_segment_text(run))
+            run = []
+        run.append((chapter, k))
+    if run:
+        out.append(_segment_text(run))
+    return ",".join(out)
+
+
+def _segment_text(run) -> str:
+    chapter, first, last = run[0][0], run[0][1], run[-1][1]
+    return f"{chapter}.{first}" if first == last else f"{chapter}.{first}-{last}"
+
+
 def config_for(options: dict):
     """按运行设置构造与主控相同的 RunConfig（只用于控制台的提示词预览，不连游戏、不建容器）。"""
     from .config import RunConfig
@@ -245,6 +272,10 @@ def config_for(options: dict):
     cfg.pause_limit = o["limit_planning"] and cfg.sim
     cfg.rounds_per_room, cfg.room_scale = o["rounds_per_room"], o["room_scale"]
     cfg.chapters, cfg.chapter = list(o["chapters"]), o["chapters"][0]
+    if o.get("segments"):
+        from .segments import load_table, pieces_of
+        cfg.checkpoints = load_table()
+        cfg.plan = pieces_of([tuple(s) for s in o["segments"]], cfg.checkpoints)
     cfg.study, cfg.study_minutes = o["study"], o["study_minutes"]
     cfg.kb_deny = list(o["kb_deny"])
     apply(cfg, o["tune"])

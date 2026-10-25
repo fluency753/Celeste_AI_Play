@@ -38,11 +38,19 @@ class RunControl:
         if kind == "goal":
             from .goals import validate_goal
             validate_goal(json.loads(text))
-        if kind == "chapters":         # 运行中改之后要通关的章节：{"queue": [章节编号, ...]}
+        if kind == "chapters":
+            # 运行中改之后要通关的范围：{"segments": [[章节, 段], ...]}（按段），或旧格式 {"queue": [章节编号, ...]}（整章）
             data = json.loads(text)
-            queue = data.get("queue") if isinstance(data, dict) else None
-            if not isinstance(queue, list) or len(queue) > 20 or any(type(c) is not int or not 0 <= c <= 20 for c in queue):
-                raise ValueError("章节须为章节编号的列表")
+            if isinstance(data, dict) and "segments" in data:
+                segments = data["segments"]
+                if (not isinstance(segments, list) or len(segments) > 200
+                        or any(not isinstance(s, list) or len(s) != 2 or any(type(v) is not int or not 0 <= v <= 50 for v in s)
+                               for s in segments)):
+                    raise ValueError("段须为 [章节编号, 段号] 的列表")
+            else:
+                queue = data.get("queue") if isinstance(data, dict) else None
+                if not isinstance(queue, list) or len(queue) > 20 or any(type(c) is not int or not 0 <= c <= 20 for c in queue):
+                    raise ValueError("章节须为章节编号的列表")
         if kind == "fast" and text not in {"on", "off"}:
             raise ValueError("Fast 模式须为 on 或 off")
         if kind == 'effort' and not valid_effort(text):

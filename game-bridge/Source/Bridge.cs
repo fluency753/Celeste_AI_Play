@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 推进完再冻结并回报。加载场景不受冻结影响，会自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.0.5";
+    public const string Version = "1.0.6";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -427,6 +427,8 @@ internal static class Bridge {
                     w.WriteBoolean("mod_hud", true);
                     w.WriteNumber("record_audio_tracks", RecordingAudio.TrackCount);
                     w.WriteBoolean("create_save", true);
+                    w.WriteBoolean("checkpoints", true);
+                    w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("dialog_choices", true);
                     w.WriteBoolean("story_text", true);
                     w.WriteBoolean("memorial_text", true);
@@ -573,6 +575,16 @@ internal static class Bridge {
                 LoadRoom(req.Id, a);
                 break;
 
+            case "areas":
+                // 官方章节（A 面）与各自的检查点：按段通关用（段 k = 检查点 k 到下一个检查点或章节结尾，0 是章节开头）
+                IpcServer.Send(Reply.Ok(req.Id, WriteAreas));
+                break;
+
+            case "enter_checkpoint":
+                // 按段通关：进入某个官方章节（A 面）的某个检查点，与在选章面板里选它相同；没到过的检查点也能进
+                EnterCheckpoint(req.Id, a);
+                break;
+
             case "skip_cutscene":
                 // 仅供调试：直接调用跳过，不经过暂停菜单。主控与菜单宏改用暂停菜单跳过（与玩家操作一致）。
                 bool skipped = false;
@@ -591,6 +603,85 @@ internal static class Bridge {
                 IpcServer.Send(Reply.Error(req.Id, $"unknown cmd '{req.Cmd}'"));
                 break;
         }
+    }
+
+    private static bool IsOfficial(AreaData? area) => area != null && (area.ToKey().SID ?? "").StartsWith("Celeste/")
+        && area.Mode is { Length: > 0 } && area.Mode[0] != null;
+
+    private static string CleanName(string? key, Language? language = null) =>
+        string.IsNullOrEmpty(key) ? "" : Dialog.Has(key, language) ? Dialog.Clean(key, language) : key;
+
+    private static void WriteAreas(Utf8JsonWriter w) {
+        Dialog.Languages.TryGetValue("english", out Language? english);
+        Dialog.Languages.TryGetValue("schinese", out Language? chinese);
+        void Names(string? key) {
+            w.WriteString("name", CleanName(key));
+            if (english != null) w.WriteString("name_en", CleanName(key, english));
+            if (chinese != null) w.WriteString("name_zh", CleanName(key, chinese));
+        }
+        w.WriteStartArray("areas");
+        foreach (AreaData area in AreaData.Areas) {
+            if (!IsOfficial(area)) continue;
+            ModeProperties mode = area.Mode[0];
+            w.WriteStartObject();
+            w.WriteNumber("id", area.ID);
+            w.WriteString("sid", area.ToKey().SID);
+            Names(area.Name);
+            w.WriteStartArray("checkpoints");
+            w.WriteStartObject();                       // 0：章节开头
+            w.WriteNumber("index", 0);
+            w.WriteString("level", mode.MapData?.StartLevel()?.Name ?? "");
+            Names("overworld_start");
+            w.WriteEndObject();
+            CheckpointData[] checkpoints = mode.Checkpoints ?? Array.Empty<CheckpointData>();
+            for (int i = 0; i < checkpoints.Length; i++) {
+                w.WriteStartObject();
+                w.WriteNumber("index", i + 1);
+                w.WriteString("level", checkpoints[i].Level);
+                Names(checkpoints[i].Name);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static void EnterCheckpoint(long id, JsonElement a) {
+        if (!Active) {
+            IpcServer.Send(Reply.Error(id, "bridge not active; send activate first"));
+            return;
+        }
+        if (job != null || Playback.Running) {
+            IpcServer.Send(Reply.Error(id, "enter_checkpoint needs no running step or playback"));
+            return;
+        }
+        if (SaveData.Instance == null || Engine.Scene is not (Level or Overworld)) {
+            IpcServer.Send(Reply.Error(id, $"enter_checkpoint needs a loaded save in a level or on the map (scene={Engine.Scene?.GetType().Name ?? "none"})"));
+            return;
+        }
+        int chapter = GetInt(a, "chapter", -1);
+        int index = GetInt(a, "checkpoint", 0);
+        AreaData? area = chapter >= 0 && chapter < AreaData.Areas.Count ? AreaData.Areas[chapter] : null;
+        if (!IsOfficial(area)) {
+            IpcServer.Send(Reply.Error(id, $"no official chapter {chapter}"));
+            return;
+        }
+        CheckpointData[] checkpoints = area!.Mode[0].Checkpoints ?? Array.Empty<CheckpointData>();
+        if (index < 0 || index > checkpoints.Length) {
+            IpcServer.Send(Reply.Error(id, $"chapter {chapter} has checkpoints 0..{checkpoints.Length}"));
+            return;
+        }
+        var key = new AreaKey(chapter, AreaMode.Normal);
+        // 与选章面板相同：新会话从检查点开始（检查点的能力、标记由 Session 按检查点设置），经 LevelEnter 进入
+        var session = new Session(key, index == 0 ? null : checkpoints[index - 1].Level);
+        SaveData.Instance.LastArea = key;
+        LevelEnter.Go(session, false);
+        IpcServer.Send(Reply.Ok(id, w => {
+            w.WriteNumber("chapter", chapter);
+            w.WriteNumber("checkpoint", index);
+            w.WriteString("room", session.Level);
+        }));
     }
 
     private static void LoadRoom(long id, JsonElement a) {
@@ -731,6 +822,10 @@ internal static class Bridge {
         List<string> stopOn = a.TryGetProperty("stop_on", out JsonElement s) && s.ValueKind == JsonValueKind.Array
             ? s.EnumerateArray().Select(e => e.GetString() ?? "").Where(x => x.Length > 0).ToList()
             : new List<string>();
+        // 按段通关：进入这些房间（这一截终点检查点的房间）时停下，停止原因记为 room；其他换房间不受影响
+        List<string> stopRooms = a.TryGetProperty("stop_rooms", out JsonElement sr) && sr.ValueKind == JsonValueKind.Array
+            ? sr.EnumerateArray().Select(e => e.GetString() ?? "").Where(x => x.Length > 0).ToList()
+            : new List<string>();
 
         job = new StepJob(
             id, plan, stopOn,
@@ -742,7 +837,8 @@ internal static class Bridge {
             recordEntities: GetBool(a, "entityTrajectory", false),
             expect: expect,
             tolerance: tolerance,
-            progressEvery: GetInt(a, "progress", 0));
+            progressEvery: GetInt(a, "progress", 0),
+            stopRooms: stopRooms);
 
         if (job.Finished) {
             FinishJob(); // 空计划：直接回报当前帧

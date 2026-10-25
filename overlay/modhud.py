@@ -325,7 +325,10 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     elif (m.get("dashes") or 0) >= 2:
         theme = colors.get("dash2", "#F28AC4")
 
-    chapter_done = any(s.get("chapter") == chapter for s in (m.get("splits") or []))
+    # 当前这一截的成绩已计入 completed_ticks（换到下一截之前）：不再把当前计时加进总计时。
+    # 旧主控没有 piece_done：同一章出现在成绩里就算（只有整章时成立）
+    chapter_done = (bool(m.get("piece_done")) if m.get("piece_done") is not None
+                    else any(s.get("chapter") == chapter for s in (m.get("splits") or [])))
 
     effort = m.get("effort")
     level = EFFORT_LEVELS.index(effort) if effort in EFFORT_LEVELS else -1

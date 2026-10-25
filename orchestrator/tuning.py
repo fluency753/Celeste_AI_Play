@@ -6,7 +6,10 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+
+HOST_CPUS = os.cpu_count() or 1     # 本机的 CPU 核数（控制台与主控在同一台电脑上）
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,9 @@ GROUPS = ("执行与解说", "规划回放", "速通：程序与规划", "探索
 TUNABLES: tuple[Tunable, ...] = (
     Tunable("max_frames_per_act", "单次 act 最多推进的帧数", "执行与解说", int, 600, 60, 3600, "帧",
             "提示词与 act 的说明里的上限跟着变（探索模式用\"探索：规划程序\"里的那一项）", ("speedrun",)),
+    Tunable("agent_cpus", "智能体程序最多用几个 CPU 核", "执行与解说", int, None, 1, HOST_CPUS, "核",
+            f"空着 = 不限（本机共 {HOST_CPUS} 核）；容器运行方式按这个数限制智能体容器能用的核（容器里 nproc 显示的就是它），"
+            "探索模式的提示词里也写明", optional=True),
     Tunable("thought_max_chars", "思考语句最长字数", "执行与解说", int, 120, 20, 400, "字",
             "act 的 thought 与 narrate 的长度上限"),
     Tunable("thought_lead_s", "动作前等 HUD 换上新思考", "执行与解说", float, 0.4, 0, 3, "秒",

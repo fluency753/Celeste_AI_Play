@@ -39,13 +39,20 @@ def area_id(sid: str | None) -> int | None:
 
 def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None,
                menu_speed: int = 4, should_stop=None, create_if_missing: bool = False,
-               save_slot: int | None = None, cutscene_mode: str = 'auto') -> dict:
+               save_slot: int | None = None, cutscene_mode: str = 'auto', checkpoint: int = 0) -> dict:
     """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。
     也可以从通关之后接着用：结算画面、回到地图、选下一章、进入，一路处理到可操作的第一帧。
+    checkpoint > 0（按段通关）：载入存档后，在关卡里或选章地图上用桥接的 enter_checkpoint 直接进入这一章的
+    第 checkpoint 个检查点（与在选章面板里选它相同，没到过的检查点也能进；需要桥接 1.0.6）。
     menu_speed：等待菜单切换与载入时每次渲染推进几帧（开跑前用 4 省时间；正式运行中途换章时用 1，录像不快进）。"""
     if create_if_missing and not c.call("hello").get("create_save"):
         raise RuntimeError("新建存档需要 CelesteAIBridge 0.12.4 或更新版本，请更新桥接 Mod。")
+    if checkpoint and chapter is None:
+        raise ValueError("进入检查点需要指定章节")
     obs = c.call("activate", entities=False, tiles=False)["obs"]
+    teleport = bool(checkpoint)     # 还要传送到检查点
+    if teleport and not c.call("hello").get("checkpoints"):
+        raise RuntimeError("按段通关（进入任意检查点）需要 CelesteAIBridge 1.0.6 或更新版本，请更新桥接 Mod。")
     native_started = False
     tried_skip: set[str] = set()
     vignette_tries = 0
@@ -60,7 +67,14 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
         wrong_save = wrong_save or (selected_save_slot is not None and (obs.get('save') or {}).get('slot') != selected_save_slot)
         if create_if_missing and not native_started:
             wrong_save = True  # 同名的已加载存档也不能代替显式新建
-        if cutscene_mode == 'agent' and not wrong_save and story_pending(obs):
+        if teleport and not wrong_save and loaded is not None and (
+                scene == "Level" or (scene == "Overworld" and not menu.get("next")
+                                     and menu.get("current") in ("OuiChapterSelect", "OuiChapterPanel"))):
+            c.call("enter_checkpoint", chapter=chapter, checkpoint=checkpoint)
+            teleport = False
+            obs = step(c, ["10"], speed=menu_speed)["obs"]  # 开始载入：之后按下面的流程等到可操作
+            continue
+        if cutscene_mode == 'agent' and not wrong_save and not teleport and story_pending(obs):
             if scene != 'Level' or chapter is None or area_id((obs.get('level') or {}).get('sid')) == chapter:
                 return obs
 
