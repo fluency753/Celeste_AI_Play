@@ -17,15 +17,15 @@ from .config import find_docker_exe
 class AssistRules:
     """限额预测的规则（可调参数 assist_*，见 tuning.py；默认值就是一直以来的规则）。"""
     capacity: int = 100
-    initial: int = 40
+    initial: int = 60
     regen_frames: int = 60
     regen_per_min: int = 20
     room_bonus: int = 15
-    cost_base: int = 8
-    cost_frames: int = 12
-    cost_extra: int = 4
+    cost_base: int = 2
+    cost_frames: int = 60
+    cost_extra: int = 2
     max_candidates: int = 6
-    max_frames: int = 180
+    max_frames: int = 360
     max_total: int = 600
 
     @classmethod

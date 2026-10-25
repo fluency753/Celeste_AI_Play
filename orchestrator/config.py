@@ -192,15 +192,15 @@ class RunConfig:
     explore_act_frames: int = 300    # 探索模式：单次 act 最多推进的帧数
     explore_search_frames: int | None = 300  # 探索模式：自写模拟器与搜索程序每次最多推演的帧数（只写进提示词）；None = 不限
     assist_capacity: int = 100       # 探索模式的限额预测：体力上限
-    assist_initial: int = 40         # 初始体力
+    assist_initial: int = 60         # 初始体力
     assist_regen_frames: int = 60    # 真实操作每多少个移动帧恢复 1 点
     assist_regen_per_min: int = 20   # 每分钟最多恢复几点
     assist_room_bonus: int = 15      # 首次进入新房间奖励（起始房间不奖励）
-    assist_cost_base: int = 8        # 每次预测的花费 = 基础 + 向上取整(总帧数 / assist_cost_frames) + 每条额外候选 × assist_cost_extra
-    assist_cost_frames: int = 12
-    assist_cost_extra: int = 4
+    assist_cost_base: int = 2        # 每次预测的花费 = 基础 + 向上取整(总帧数 / assist_cost_frames) + 每条额外候选 × assist_cost_extra
+    assist_cost_frames: int = 60
+    assist_cost_extra: int = 2
     assist_max_candidates: int = 6   # 每次最多几条候选
-    assist_max_frames: int = 180     # 每条最多预测几帧
+    assist_max_frames: int = 360     # 每条最多预测几帧
     assist_max_total: int = 600      # 每次合计最多预测几帧
     tuning: dict = field(default_factory=dict)   # 与默认值不同的可调参数（记进 run_state，续跑沿用）
     kb_deny: list = field(default_factory=list)  # 不给智能体看的知识库文件（知识库内的相对路径；控制台的"知识库"页）

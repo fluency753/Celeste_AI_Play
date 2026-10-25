@@ -26,50 +26,61 @@ class SimEnergyTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_billing_counts_all_submitted_frames_and_candidates(self):
-        self.assertEqual(validate_request({"candidates": [["60,R"]]})[1], 13)
-        self.assertEqual(validate_request({"candidates": [["120,R"]] * 3})[1], 46)
+        self.assertEqual(validate_request({"candidates": [["60,R"]]})[1], 3)
+        self.assertEqual(validate_request({"candidates": [["120,R"]] * 3})[1], 12)
         self.assertEqual(validate_request({"candidates": [["10,r+j"]]})[0], [["10,R,J"]])
 
     def test_oversized_or_unsafe_requests_rejected(self):
-        for value in ({"candidates": [["181,R"]]}, {"candidates": [["100,R", "100,L"]]},
+        for value in ({"candidates": [["361,R"]]}, {"candidates": [["200,R", "200,L"]]},
                       {"candidates": [["180,R"]] * 4}, {"candidates": [["1"]] * 7},
                       {"candidates": [["1,A:90"]]}, {"candidates": [["1,P"]]},
                       {"candidates": [["-1,R"]]}, {"candidates": [["1,R"]], "state": "/arbitrary"}):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_request(value)
 
+    def test_longer_predictions_and_comparisons_fit_initial_allowance(self):
+        self.assertEqual(validate_request({'candidates': [['360,R']]})[1], 8)
+        self.assertEqual(validate_request({'candidates': [['120,R'], ['120,L']]})[1], 8)
+        cost = validate_request({'candidates': [['180,R']] * 3})[1]
+        self.assertEqual(cost, 15)
+        for _ in range(4):
+            self.wallet.reserve(cost)
+        self.assertEqual(self.wallet.snapshot()['balance'], 0)
+        with self.assertRaises(ValueError):
+            self.wallet.reserve(cost)
+
     def test_restart_keeps_spent_energy_and_refund_is_idempotent(self):
         ident = self.wallet.reserve(13)
         self.wallet = SimEnergy(self.root / "energy.json")
-        self.assertEqual(self.wallet.snapshot()["balance"], 27)
+        self.assertEqual(self.wallet.snapshot()["balance"], 47)
         self.wallet.finish(ident, refund=True)
         self.wallet.finish(ident, refund=True)
-        self.assertEqual(self.wallet.snapshot()["balance"], 40)
+        self.assertEqual(self.wallet.snapshot()["balance"], 60)
 
     def test_time_alone_does_not_regenerate_and_movement_is_rate_limited(self):
         self.now += 3600
         self.wallet.reward()
-        self.assertEqual(self.wallet.snapshot()["balance"], 40)
-        self.wallet.reward(moving_frames=6000)
         self.assertEqual(self.wallet.snapshot()["balance"], 60)
         self.wallet.reward(moving_frames=6000)
-        self.assertEqual(self.wallet.snapshot()["balance"], 60)
+        self.assertEqual(self.wallet.snapshot()["balance"], 80)
+        self.wallet.reward(moving_frames=6000)
+        self.assertEqual(self.wallet.snapshot()["balance"], 80)
         self.now += 61
         self.wallet.reward()
-        self.assertEqual(self.wallet.snapshot()["balance"], 60)  # no banked excess movement
+        self.assertEqual(self.wallet.snapshot()["balance"], 80)  # no banked excess movement
         self.wallet.reward(moving_frames=60)
-        self.assertEqual(self.wallet.snapshot()["balance"], 61)
+        self.assertEqual(self.wallet.snapshot()["balance"], 81)
 
     def test_room_rewards_do_not_repeat_on_backtracking_or_restart(self):
         self.wallet.reward(room="map:A:room0")
         self.wallet.reward(room="map:A:room1")
-        self.assertEqual(self.wallet.snapshot()["balance"], 55)
+        self.assertEqual(self.wallet.snapshot()["balance"], 75)
         self.wallet = SimEnergy(self.root / "energy.json")
         self.wallet.reward(room="map:A:room0")
         self.wallet.reward(room="map:A:room1")
-        self.assertEqual(self.wallet.snapshot()["balance"], 55)
+        self.assertEqual(self.wallet.snapshot()["balance"], 75)
         self.wallet.reward(room="map:B:room1")
-        self.assertEqual(self.wallet.snapshot()["balance"], 70)
+        self.assertEqual(self.wallet.snapshot()["balance"], 90)
 
     def test_parallel_requests_cannot_overdraw(self):
         def spend(_):
@@ -79,8 +90,8 @@ class SimEnergyTests(unittest.TestCase):
                 return None
         with ThreadPoolExecutor(max_workers=8) as pool:
             accepted = list(pool.map(spend, range(8)))
-        self.assertEqual(sum(v is not None for v in accepted), 3)
-        self.assertEqual(self.wallet.snapshot()["balance"], 1)
+        self.assertEqual(sum(v is not None for v in accepted), 4)
+        self.assertEqual(self.wallet.snapshot()["balance"], 8)
 
     def test_refills_never_exceed_capacity(self):
         for i in range(20):
@@ -192,7 +203,7 @@ class BrokerTests(unittest.TestCase):
         self.assertIn("replay_warning", result)
         self.assertEqual(self.session.metrics.state.sim_calls, 1)
         self.assertEqual(self.session.metrics.state.sim_rollouts, 1)
-        self.assertEqual(result["energy"]["balance"], 27)
+        self.assertEqual(result["energy"]["balance"], 57)
 
     def test_legacy_logs_are_counted_with_playback_disabled(self):
         from orchestrator.playback import Playback
@@ -214,15 +225,15 @@ class BrokerTests(unittest.TestCase):
         with patch("orchestrator.sim_assist.run_predictions", side_effect=RuntimeError("worker down")):
             with self.assertRaises(RuntimeError):
                 self.session.simulate({"candidates": [["60,R"]]})
-        self.assertEqual(self.session.sim_energy.snapshot()["balance"], 40)
+        self.assertEqual(self.session.sim_energy.snapshot()["balance"], 60)
         prediction = {"info": {"frame": 1}, "results": [{"ok": True, "stop": "death", "frames": []}]}
         with patch("orchestrator.sim_assist.run_predictions", return_value=prediction):
             result = self.session.simulate({"candidates": [["60,R"]]})
-        self.assertEqual(result["cost"], 13)
-        self.assertEqual(result["energy"]["balance"], 27)
+        self.assertEqual(result["cost"], 3)
+        self.assertEqual(result["energy"]["balance"], 57)
 
     def test_insufficient_energy_never_runs_worker(self):
-        self.session.sim_energy.reserve(40)
+        self.session.sim_energy.reserve(60)
         with patch("orchestrator.sim_assist.run_predictions") as worker:
             with self.assertRaises(ValueError):
                 self.session.simulate({"candidates": [["60,R"]]})
@@ -233,7 +244,7 @@ class BrokerTests(unittest.TestCase):
         self.session.client.call = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("bridge down"))
         with self.assertRaises(RuntimeError):
             self.session.simulate({"candidates": [["60,R"]]})
-        self.assertEqual(self.session.sim_energy.snapshot()["balance"], 40)
+        self.assertEqual(self.session.sim_energy.snapshot()["balance"], 60)
 
 
 class NativeEntryTests(unittest.IsolatedAsyncioTestCase):

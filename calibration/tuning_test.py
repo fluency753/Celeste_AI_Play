@@ -94,14 +94,14 @@ class TunableTests(unittest.TestCase):
         self.assertEqual(parse_plan(plan, max_retries=8, max_timeout_s=120).retry.max, 7)
 
     def test_assist_rules(self):
-        self.assertEqual(validate_request({"candidates": [["60,R"]]})[1], 13)
-        rules = AssistRules.of(cfg(assist_cost_base=2, assist_max_candidates=2, assist_initial=10))
+        self.assertEqual(validate_request({"candidates": [["60,R"]]})[1], 3)
+        rules = AssistRules.of(cfg(assist_cost_base=2, assist_cost_frames=12, assist_max_candidates=2, assist_initial=10))
         self.assertEqual(validate_request({"candidates": [["60,R"]]}, rules)[1], 7)
         with self.assertRaises(ValueError):
             validate_request({"candidates": [["10,R"]] * 3}, rules)
         with tempfile.TemporaryDirectory() as folder:
             self.assertEqual(SimEnergy(Path(folder) / "e.json", rules=rules).snapshot()["balance"], 10)
-        self.assertIn("体力上限100，初始40", AssistRules().text())
+        self.assertIn("体力上限100，初始60", AssistRules().text())
 
     def test_explore_program_runs_between_acts(self):
         from orchestrator.game_session import GameSession
