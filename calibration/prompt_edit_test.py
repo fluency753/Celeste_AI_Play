@@ -19,11 +19,15 @@ def cfg(**kw):
 
 class PromptPartsTests(unittest.TestCase):
     def test_program_batches_are_shared_by_container_executors_and_modes(self):
+        # 长程序分批反馈只用于直播模式（用户要求）；直播时各模式、执行器共用
         for mode, engine, live, limited in itertools.product(('explore','speedrun'),('codex','claude'),(False,True),(False,True)):
             c=cfg(mode=mode,engine=engine,runtime='container',live=live,pause_limit=limited)
             shared=[p for p in prompt_parts(c) if p.source=='program_batches_zh.md']
-            self.assertEqual(len(shared),1)
-            self.assertIn(shared[0].text,play_prompt(c))
+            self.assertEqual(len(shared),1 if live else 0)
+            if live:
+                self.assertIn(shared[0].text,play_prompt(c))
+            else:
+                self.assertNotIn('长程序的反馈与续算',play_prompt(c))
         self.assertNotIn('program_batches_zh.md',[p.source for p in prompt_parts(cfg(mode='speedrun',runtime='host',sim=False))])
 
     def test_room_analysis_is_shared_across_modes_and_executors(self):

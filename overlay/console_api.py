@@ -212,6 +212,8 @@ PLACEHOLDERS = {
     "{act_max_frames}": "单次 act 最多推进的帧数（可调参数：速通 max_frames_per_act，探索 explore_act_frames）",
     "{explore_search_rule}": "探索模式自写模拟器与搜索程序推演帧数的一句（可调参数 explore_search_frames；不限时为空）",
     "{cpu_rule}": "探索模式最多可以用几个 CPU 核的一句（可调参数 agent_cpus，默认本机的核数；容器运行时不超过 Docker 实际能用的核数）",
+    "{program_freedom}": "探索模式里可以自写程序的一句：Claude Code 执行器为\"但不限制你自行编写模拟器或搜索程序等，你完全可以自由发挥\"，Codex 执行器为\"你也可以自行编写模拟器、搜索或其他辅助程序，自由发挥\"",
+    "{program_lead}": "探索模式多核那句的开头：Claude Code 执行器为\"如果编写模拟器或搜索程序，建议用多核并行来缩短计算时间\"，Codex 执行器另加\"辅助程序用于解决具体问题，先评估是否比直接验证更省事\"",
     "{parallel_rule}": "探索模式多核那句后面的并行要点：Claude Code 执行器为详细版本（主进程去重、子进程回传全部候选、从父节点重放），Codex 执行器为简短的一句",
     "{bash_default}": "Bash 不写 timeout 时的上限（可调参数 bash_default_s）",
     "{bash_max}": "Bash 最长时长（可调参数 bash_max_s）",

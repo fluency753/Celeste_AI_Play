@@ -57,16 +57,22 @@ def cpu_rule(cfg) -> str:
     return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"
 
 
-# 探索模式多核那句后面的并行要点：Claude Code 执行器用详细版本（用户要求），Codex 执行器用简短版本
-PARALLEL_RULE_SHORT = "避免大量进程通信，用相同输入核对并行与单核结果。"
-PARALLEL_RULE_DETAIL = ("并行时注意，主进程单核做的汇总与进程间传输容易成为瓶颈（搜得越深 CPU 占用越低）。"
-                        "以按层展开的搜索为例：去重只在主进程做，不要每层把越来越大的去重集合或完整状态发给各子进程；"
-                        "子进程把候选的分数、序号和去重键全部回传，不要各自先截取前几名；"
-                        "主进程选定保留的节点后，再由子进程从父节点重放生成。并行版本要用同样的输入与单核对比，确认结果完全一致。")
+# 探索模式里关于自写程序的几句按执行器区分（用户要求）：Codex 执行器用协作者改写的版本（先评估程序是否比直接
+# 验证更省事、并行要点只写一句）；Claude Code 执行器保留原来的"完全可以自由发挥"和详细的并行要点。
+# 提示词里是 {preset_sim}{program_freedom}……{program_lead}{cpu_rule}{parallel_rule}
+PROGRAM_FREEDOM = {"claude": "，但不限制你自行编写模拟器或搜索程序等，你完全可以自由发挥。",
+                   "codex": "。你也可以自行编写模拟器、搜索或其他辅助程序，自由发挥。"}
+PROGRAM_LEAD = {"claude": "如果编写模拟器或搜索程序，建议用多核并行来缩短计算时间，",
+                "codex": "辅助程序用于解决具体问题，先评估是否比直接验证更省事。需要较多计算时可用多核缩短计算时间，"}
+PARALLEL_RULE = {"claude": ("。并行时注意，主进程单核做的汇总与进程间传输容易成为瓶颈（搜得越深 CPU 占用越低）。"
+                            "以按层展开的搜索为例：去重只在主进程做，不要每层把越来越大的去重集合或完整状态发给各子进程；"
+                            "子进程把候选的分数、序号和去重键全部回传，不要各自先截取前几名；"
+                            "主进程选定保留的节点后，再由子进程从父节点重放生成。并行版本要用同样的输入与单核对比，确认结果完全一致。"),
+                 "codex": "；避免大量进程通信，用相同输入核对并行与单核结果。"}
 
 
-def parallel_rule(cfg) -> str:
-    return PARALLEL_RULE_SHORT if getattr(cfg, "engine", "claude") == "codex" else PARALLEL_RULE_DETAIL
+def _engine_text(table: dict, cfg) -> str:
+    return table["codex" if getattr(cfg, "engine", "claude") == "codex" else "claude"]
 
 
 # 思考语句的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
@@ -119,7 +125,9 @@ def fill(text: str, cfg) -> str:
         "{act_max_frames}": str(act_frame_cap(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
-        "{parallel_rule}": parallel_rule(cfg),
+        "{program_freedom}": _engine_text(PROGRAM_FREEDOM, cfg),
+        "{program_lead}": _engine_text(PROGRAM_LEAD, cfg),
+        "{parallel_rule}": _engine_text(PARALLEL_RULE, cfg),
         "{thought_brief_rule}": thought_brief_rule(cfg),
         "{thought_mood}": THOUGHT_MOOD,
         "{thought_mood_short}": THOUGHT_MOOD_SHORT,
@@ -255,8 +263,8 @@ def prompt_parts(cfg) -> list[PromptPart]:
     parts += _file_parts("room_analysis_zh.md")
     if cfg.cutscene_mode == 'agent':
         parts += _file_parts("agent_controls_zh.md")
-    if getattr(cfg, "runtime", "container") == "container":
-        parts += _file_parts("program_batches_zh.md")
+    if getattr(cfg, "runtime", "container") == "container" and getattr(cfg, "live", False):
+        parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）
     if has_cutscene_tool(cfg):
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
                                 f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式由主控自动播放到输入节点，无需wait；"

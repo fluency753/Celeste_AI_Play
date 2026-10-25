@@ -78,21 +78,31 @@ class TunableTests(unittest.TestCase):
         # 最多可用的 CPU 核：不限时写本机核数；设了就写设的数；容器实际能用的更少时写实际数
         self.assertIn(f"本次最多可以用 {tuning.HOST_CPUS} 个核", play_prompt(explore))
         tuning.apply(explore, {"agent_cpus": 1})
-        self.assertIn("可用多核缩短计算时间，本次最多可以用 1 个核", play_prompt(explore))
+        self.assertIn("建议用多核并行来缩短计算时间，本次最多可以用 1 个核", play_prompt(explore))
         with self.assertRaises(ValueError):
             tuning.coerce("agent_cpus", tuning.HOST_CPUS + 1)      # 不超过本机的核数
         explore.agent_cpus_effective = 1
         self.assertNotIn("{cpu_rule}", play_prompt(explore))
         self.assertIn("实在拿不到才放弃", play_prompt(explore))          # 鼓励拿草莓
         self.assertIn("模拟器对象尽量只构造一次再复用", play_prompt(explore))   # /workspace 是主机挂载，读写慢
-        # 多核那句后面的并行要点：Claude Code 执行器是详细版本，Codex 执行器是简短的一句
-        self.assertIn("个核，用几个按实际环境决定；并行时注意，主进程单核做的汇总", play_prompt(explore))
-        self.assertIn("再由子进程从父节点重放生成。并行版本要用同样的输入与单核对比，确认结果完全一致。/workspace", play_prompt(explore))
-        self.assertNotIn("避免大量进程通信", play_prompt(explore))
+        # 自写程序的几句按执行器区分（用户要求）：Claude Code 执行器保留原来的"完全可以自由发挥"和详细的并行要点；
+        # Codex 执行器用协作者改写的版本（先评估程序是否比直接验证更省事、并行要点一句）
+        claude_text = play_prompt(explore)
+        self.assertIn("禁用预设模拟器，但不限制你自行编写模拟器或搜索程序等，你完全可以自由发挥。", claude_text)
+        self.assertIn("如果编写模拟器或搜索程序，建议用多核并行来缩短计算时间，本次最多可以用 1 个核，用几个按实际环境决定。"
+                      "并行时注意，主进程单核做的汇总", claude_text)
+        self.assertIn("再由子进程从父节点重放生成。并行版本要用同样的输入与单核对比，确认结果完全一致。/workspace", claude_text)
+        for absent in ("先评估是否比直接验证更省事", "避免大量进程通信", "你也可以自行编写"):
+            self.assertNotIn(absent, claude_text)
         explore.engine = "codex"
-        self.assertIn("个核，用几个按实际环境决定；避免大量进程通信，用相同输入核对并行与单核结果。/workspace", play_prompt(explore))
-        self.assertNotIn("去重只在主进程做", play_prompt(explore))
-        self.assertNotIn("{parallel_rule}", play_prompt(explore))
+        codex_text = play_prompt(explore)
+        self.assertIn("禁用预设模拟器。你也可以自行编写模拟器、搜索或其他辅助程序，自由发挥。", codex_text)
+        self.assertIn("辅助程序用于解决具体问题，先评估是否比直接验证更省事。需要较多计算时可用多核缩短计算时间，本次最多可以用 1 个核，"
+                      "用几个按实际环境决定；避免大量进程通信，用相同输入核对并行与单核结果。/workspace", codex_text)
+        for absent in ("去重只在主进程做", "完全可以自由发挥"):
+            self.assertNotIn(absent, codex_text)
+        for placeholder in ("{program_freedom}", "{program_lead}", "{parallel_rule}"):
+            self.assertNotIn(placeholder, claude_text + codex_text)
         explore.engine = "claude"
         self.assertNotIn("不要求全收集", play_prompt(explore))
         for placeholder in ("{act_max_frames}", "{bash_default}", "{explore_program}", "{explore_program_rule}", "{remind}",
