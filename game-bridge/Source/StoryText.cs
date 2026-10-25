@@ -8,6 +8,29 @@ namespace CelesteAI.Bridge;
 
 /// <summary>Read the rendered page, never the dialog script or unrevealed glyphs.</summary>
 internal static class StoryText {
+    internal static string ReadMemorial(MemorialText? memorial, bool completed = false) {
+        // MemorialText.Render draws a prefix of its localized message, not FancyText.
+        // Show may already be false while text is fading out; it is still visible then.
+        if (memorial == null || !memorial.Visible || completed || memorial.index <= 0f
+            || memorial.alpha <= 0f || (Microsoft.Xna.Framework.Color.White * Ease.CubeInOut(memorial.alpha)).A == 0
+            || string.IsNullOrEmpty(memorial.message)) return "";
+        string message = memorial.message;
+        int count = (int)Math.Min(message.Length, memorial.index);
+        var result = new StringBuilder(count);
+        for (int i = 0; i < count; i++) {
+            char ch = message[i];
+            if (memorial.Dreamy && ch != ' ' && ch != '-' && ch != '\n') {
+                // Mirror the displayed scrambled glyphs; don't expose the clear inscription.
+                int offset = (int)(Math.Sin(memorial.timer * 2f + i / 8f) * 4d);
+                ch = message[(i + offset + message.Length) % message.Length];
+            }
+            result.Append(ch);
+        }
+        // Never serialize half a UTF-16 pair when the reveal index falls between its units.
+        if (result.Length > 0 && char.IsHighSurrogate(result[result.Length - 1])) result.Length--;
+        return result.ToString().Trim();
+    }
+
     internal static string ReadPage(FancyText.Text? text, int start, float alpha = 1f) {
         if (text?.Nodes == null || alpha <= 0f) return "";
         var result = new StringBuilder();
@@ -34,6 +57,8 @@ internal static class StoryText {
             }
             var ending = level.Entities.FindFirst<PrologueEndingText>();
             if (ending is { Visible: true }) Entry(w, "ending", ReadPage(ending.text, 0));
+            foreach (var memorial in level.Entities.FindAll<MemorialText>())
+                Entry(w, "memorial", ReadMemorial(memorial, level.Completed));
             var tutorial = level.Entities.FindFirst<BirdTutorialGui>();
             if (tutorial is { Visible: true, Scale: > 0f }) {
                 w.WriteStartObject();

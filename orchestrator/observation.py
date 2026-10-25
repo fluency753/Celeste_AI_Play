@@ -273,7 +273,8 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         portrait=story.get('speakerPortrait') or {}
         speaker=portrait.get('sprite')
         if story.get('text'):
-            lines.append(('当前对白（头像标识 '+speaker+'）' if speaker else '当前剧情文字')+'：'+story['text'])
+            label = '当前纪念碑文字' if story.get('kind') == 'memorial' else ('当前对白（头像标识 '+speaker+'）' if speaker else '当前剧情文字')
+            lines.append(label+'：'+story['text'])
         if story.get('controls'):
             lines.append('当前教学按键：'+json.dumps(story['controls'],ensure_ascii=False))
     if (level or {}).get('dialogChoices'):

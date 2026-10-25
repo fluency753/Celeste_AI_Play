@@ -24,7 +24,7 @@
 - `spawns` 本房间的重生点；`respawnPoint` 当前生效的重生点。
 - `player`：Madeline 的完整状态，`pos` 精确位置（含小数部分）、`speed` `[vx, vy]`、`state`、`dashes` / `maxDashes`、`stamina`、`onGround`、`facing`、`ducking`、`hitbox` `[左, 上, 宽, 高]`、`internal`（内部计时器与状态的原始数值，计时器单位是秒）。
 - `connectivity`：只按静态地形算出的区域划分与连通情况（不考虑危险物与会动的物体），连通不等于跳得过去。
-- `story`、`dialog`：当前画面上的对白、教学提示与对话选项（有剧情时才有）。
+- `story`、`dialog`：当前画面上的对白、教学提示、纪念碑文字与对话选项（有可见文字时提供）。
 
 ## act 的输入
 
