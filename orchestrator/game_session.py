@@ -459,6 +459,8 @@ class GameSession:
             return {}
         spent = f"这次冻结思考 {minutes_text(stats.get('think_s', 0))}、运行工具 {minutes_text(stats.get('tool_s', 0))}"
         if stats["frames"] <= 0:
+            if getattr(self.cfg, "save_context", False):
+                return {}                  # 节省上下文：没有僵直时不写说明（规则在系统提示词里）
             return {"note": f"思考僵直：{spent}，按规则这次不僵直（思考、工具时间各自满 {self._unit_text()}才计）。"}
         last = self.last_obs or {}
         if last.get("scene") != "Level" or not last.get("controllable") or story_pending(last):

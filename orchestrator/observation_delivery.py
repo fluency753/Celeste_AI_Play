@@ -42,14 +42,27 @@ def observation_file(session, obs):
     }
 
 
+def compact_reference(reference: dict) -> str:
+    """节省上下文：同一房间里观测文件只给一行（路径、帧号、快照编号）；碰撞数据覆盖不完整时才写明缺什么。"""
+    text = (f"观测文件：{reference['files']['observation']}（帧 {reference.get('frame')}，"
+            f"快照 {reference.get('snapshot_id')}）")
+    collision = reference.get('collision')
+    if collision is None or not (collision.get('complete') and collision.get('geometryComplete')):
+        text += '；碰撞数据：' + json.dumps({'collision': collision, 'collisionNote': reference.get('collisionNote')},
+                                       ensure_ascii=False, separators=(',', ':'))
+    return text
+
+
 class ObservationDelivery:
     def __init__(self):
         self.geometry = GeometryContext()
         self.mode = None
 
-    def prepare(self, session, obs, *, files_enabled, force=False):
+    def prepare(self, session, obs, *, files_enabled, force=False, compact=False):
         reference = observation_file(session, obs) if files_enabled else None
         if reference is not None:
+            if compact:
+                return compact_reference(reference), True, ('file', None)
             return FILE_JSON_HEADER + json.dumps(reference, ensure_ascii=False, separators=(',', ':')), True, ('file', None)
         geometry, candidate = self.geometry.prepare(obs, force=force or self.mode == 'file')
         if force or geometry['mode'] == 'baseline':

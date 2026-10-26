@@ -251,7 +251,7 @@ def crop_to_view(obs: dict, margin: int = 16) -> tuple[list[dict], dict | None]:
 
 
 def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, explore: bool = False,
-                 compact_context: bool = False, file_context: bool = False) -> str:
+                 compact_context: bool = False, file_context: bool = False, brief_room: bool = False) -> str:
     """full_room=True：整个房间的实体与地图（进入新房间、主动观察时）；False：只描述当前画面附近。
     effort：附在头部的推理强度说明（例如"推理强度：high"）。
     头部不写现实用时与时间预算：预算只是主控的安全上限，写给智能体看会让它赶时间、执行没优化完的路线。"""
@@ -316,8 +316,11 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     if level:
         cam = level["camera"]
         b = level["bounds"]
-        lines.append(f"画面左上角世界坐标 ({cam[0]}, {cam[1]})，画面 320×180；"
-                     f"本房间范围 x {b[0]}~{b[0] + b[2]}，y {b[1]}~{b[1] + b[3]}（边界未必有出口；相邻房间不等于可直接到达）")
+        if brief_room:   # 节省上下文：同一房间里不重复房间范围与提醒，只给画面位置
+            lines.append(f"画面左上角世界坐标 ({cam[0]}, {cam[1]})")
+        else:
+            lines.append(f"画面左上角世界坐标 ({cam[0]}, {cam[1]})，画面 320×180；"
+                         f"本房间范围 x {b[0]}~{b[0] + b[2]}，y {b[1]}~{b[1] + b[3]}（边界未必有出口；相邻房间不等于可直接到达）")
         flags = [name for name, key in (("剧情中", "inCutscene"), ("转场中", "transitioning"), ("暂停", "paused")) if level.get(key)]
         if flags:
             lines.append("当前：" + "、".join(flags))

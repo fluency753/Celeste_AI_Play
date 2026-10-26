@@ -82,4 +82,5 @@ def describe(cfg) -> str:
     else:
         text = MODE_NAMES[mode] + ("（限额短路线预测）" if getattr(cfg, "sim_assist", False) else "")
     text += " + 直播" if getattr(cfg, "live", False) else ""
-    return text + (" · 仅正式思考" if getattr(cfg, "formal_thought", False) else "")
+    return (text + (" · 仅正式思考" if getattr(cfg, "formal_thought", False) else "")
+            + (" · 节省上下文" if getattr(cfg, "save_context", False) else ""))

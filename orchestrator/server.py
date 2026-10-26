@@ -20,7 +20,7 @@ from .geometry_context import geometry_page
 from .observation_delivery import ObservationDelivery, FILE_JSON_HEADER, ROOM_JSON_HEADER
 from .execution import workspace_capabilities
 
-ACT_DESCRIPTION = """推进游戏若干帧并返回结果、角色状态{act_collision_image}。{observation_delivery_rule} observe(detail="geometry",region=[x,y,w,h])可按需查看最近缓存的局部精确对象；detail="player"查询完整玩家内部状态。不把当帧阻挡当成永久不可达。
+ACT_DESCRIPTION = """推进游戏若干帧并返回结果、角色状态{act_collision_image}。{observation_delivery_rule} observe(detail="geometry",region=[x,y,w,h])可按需查看最近缓存的局部精确对象；detail="player"查询完整玩家内部状态。不把当帧阻挡当成永久不可达。{save_context_rule}
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
 input_format：省略为 celeste_ai；显式 celeste_tas 使用 TAS 离散按键 J/K 双跳、X/C 双冲刺、Z/V 双蹲冲、G/H 双抓、S 暂停、Q 重试、N 日志、O 确认，并保留兼用绑定。须 agent 剧情模式与桥接1.0.20。TAS执行和观察不自动补帧；不支持的模拟或脚本命令明确报错。
@@ -122,11 +122,11 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     state = {"described_room": None}
     delivery = ObservationDelivery()
 
-    def observation_context(obs, *, force=False):
+    def observation_context(obs, *, force=False, compact=False):
         # Limited planning tools can become unavailable immediately after a quota charge.
         # Keep inline geometry available throughout those runs.
         files_enabled = workspace_capabilities(session.cfg).programs and not (gate is not None and gate.enabled)
-        return delivery.prepare(session, obs, files_enabled=files_enabled, force=force)
+        return delivery.prepare(session, obs, files_enabled=files_enabled, force=force, compact=compact)
 
     def room_key(obs: dict):
         level = obs.get("level") or {}
@@ -156,9 +156,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     def finish() -> None:
         metrics.update(status="thinking")
 
-    def header_line(freeze: bool = True) -> str:
+    def header_line(freeze: bool = True, levels_line: bool = True) -> str:
         line = effort_line(metrics)
-        levels = getattr(session, 'effort_levels', lambda: [])()
+        levels = getattr(session, 'effort_levels', lambda: [])() if levels_line else []
         if levels:
             line += "\n可选推理强度：" + "、".join(levels)
         energy = getattr(metrics.state, "sim_energy", None)
@@ -282,10 +282,13 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if session.done:
                     parts.append(f"【{session.done_reason}】本次试玩已结束，不需要再调用工具，请直接结束本轮。")
                 new_room = room_key(outcome.obs) != state["described_room"]
-                context, file_context, candidate = observation_context(outcome.obs, force=new_room)
+                # 节省上下文：同一房间里省略每次都一样的样板（进新房间时照常给全）
+                brief = bool(getattr(session.cfg, "save_context", False)) and not new_room
+                context, file_context, candidate = observation_context(outcome.obs, force=new_room, compact=brief)
                 if new_room:
                     parts.append("【进入新房间】完整碰撞数据已更新到当前观测文件。" if file_context else "【进入新房间】下面是截图、完整碰撞图及精确布局；后续只返回相对此布局的变化。")
-                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(freeze=False), explore=explore, compact_context=True, file_context=file_context))
+                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(freeze=False, levels_line=not brief),
+                                          explore=explore, compact_context=True, file_context=file_context, brief_room=brief))
                 parts.append(context)
                 if session.workspace and not file_context:
                     parts.append(ws_note)

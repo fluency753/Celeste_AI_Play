@@ -145,6 +145,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="仅正式思考（默认关；续跑沿用原运行）：冻结期间 narrate 写的临时思考只显示在控制台（Claude Code 执行器"
                          "汉字不超过 120 个，可调参数 thought_temp_max_hanzi）；act 的 thought 是正式思考，概括整个冻结期间的"
                          "思考（汉字不超过 30 个），游戏内 HUD 只显示当前这一句，字号更大")
+    ap.add_argument("--save-context", action=argparse.BooleanOptionalAction, default=None,
+                    help="节省上下文（新运行默认开；续跑沿用原运行，没记过的旧运行按关，免得章节中途换返回格式）："
+                         "同一房间里的 act 结果省略每次都一样的样板（观测文件只给一行、不列可选推理强度、没僵直不写僵直说明、"
+                         "不重复本房间范围），探索提示词轻提只打印关心的区域")
     ap.add_argument("--live", dest="live", action="store_true", default=None,
                     help="直播模式（默认关，可与速通或探索模式叠加）：HUD 默认用可交互的网页形式，解说计时 10 秒，"
                          "可按用户要求退出关卡；速通 + 直播不改变速通目标，探索 + 直播另加直播节奏")
@@ -305,6 +309,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                           else bool(args.formal_thought))
     cfg.collision_image = (previous["state"].get("collision_image") if previous and args.collision_image is None
                            else args.collision_image)
+    cfg.save_context = save_context_choice(previous, args.save_context)
     cfg.pause_limit = bool(args.limit_planning) and not args.free_planning
     cfg.rounds_per_room = max(1, args.rounds_per_room)
     cfg.room_scale = max(1.0, args.room_scale)
@@ -426,7 +431,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         plan_pieces = None
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
-             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
+             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": False, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None}
@@ -582,6 +587,16 @@ def write_placeholder_metrics(run_dir: Path, cfg: RunConfig) -> None:
             "phase_since_wall": now, "thinking_since_wall": now, "hud_mod": bool(getattr(cfg, "hud_mod", False)),
             "formal_only": bool(getattr(cfg, "formal_thought", False))}
     (run_dir / "metrics.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def save_context_choice(previous: dict | None, flag: bool | None) -> bool:
+    """节省上下文开不开：命令行写了就按命令行；新运行默认开；续跑沿用原运行记下的设置，没记过的旧运行按关
+    （免得章节中途换了 act 返回的格式；追加下一章时显式加 --save-context）。"""
+    if flag is not None:
+        return bool(flag)
+    if previous:
+        return bool(previous["state"].get("save_context", False))
+    return True
 
 
 def check_resume_position(cfg: RunConfig) -> bool:

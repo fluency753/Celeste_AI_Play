@@ -184,6 +184,8 @@ class RunConfig:
                                         # None = 按执行器默认（Codex 每次，其余只在进房与 observe 时）。工作区里每次照样写图
     formal_thought: bool = False     # 仅正式思考（--formal-thought，默认关）：冻结期间 narrate 写临时思考，只进控制台；
                                      # act 的 thought 是正式思考，概括整个冻结期间的思考，游戏内 HUD 只显示当前这一句
+    save_context: bool = False       # 节省上下文（--save-context；新运行默认开，续跑沿用原运行，没记过的旧运行按关）：
+                                     # 同一房间里的 act 结果省略每次都一样的样板；探索提示词轻提只打印关心的区域
     notes_warn_percent: int = 60    # 本周期未观察到笔记更新且上下文超过此百分比时提醒；0关闭前置提醒
     live_remind_s: float = 30.0      # 解说计时：思考累计这么多秒没有公开解说，在下一次工具调用时提醒（由可调参数 remind_s / remind_live_s 决定）
     # 以下是可调参数（orchestrator/tuning.py，命令行 --tune 名称=值）；默认值就是一直以来的数值

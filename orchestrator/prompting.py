@@ -117,6 +117,22 @@ def formal_thought_rule(cfg) -> str:
             "（从上一次 act 结束到这次 act）你整个的思考、分析和判断，而不只是这一段按键的意图。" + temp)
 
 
+SAVE_CONTEXT_ACT = ("本次开启了节省上下文：同一房间里的 act 结果省略每次都一样的部分——观测文件只给一行（路径、帧号、快照编号，"
+                    "覆盖不完整时才写明缺什么）、不列可选推理强度、没有僵直时不写僵直说明、不重复本房间范围；"
+                    "进新房间时和 observe 照常给全。")
+SAVE_CONTEXT_PRINT = "字符地图等大块输出只打印关心的区域，没变化的内容不必重复打印，需要时再读文件。"
+
+
+def save_context_act(cfg) -> str:
+    """开了"节省上下文"（--save-context）时 act 说明里的一句；没开时为空。"""
+    return SAVE_CONTEXT_ACT if getattr(cfg, "save_context", False) else ""
+
+
+def save_context_print(cfg) -> str:
+    """开了"节省上下文"时探索提示词辅助程序一节的一句（只是建议，不加限制）；没开时为空。"""
+    return SAVE_CONTEXT_PRINT if getattr(cfg, "save_context", False) else ""
+
+
 def formal_thought_act(cfg) -> str:
     """act 工具说明里 thought 的补充（开了"仅正式思考"时）；没开时为空。"""
     from .thought import temp_thoughts
@@ -221,6 +237,8 @@ def fill(text: str, cfg) -> str:
         "{thought_temp_limit}": thought_temp_limit(cfg),
         "{formal_thought_rule}": formal_thought_rule(cfg),
         "{formal_thought_act}": formal_thought_act(cfg),
+        "{save_context_rule}": save_context_act(cfg),
+        "{save_context_print}": save_context_print(cfg),
         # 碰撞图什么时候附在工具结果里（--collision-image；默认 Codex 每次，其余只在进新房间与 observe 时）
         "{act_collision_image}": {
             "always": "和完整碰撞图（开启图像时）",
