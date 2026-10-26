@@ -196,6 +196,7 @@ class StiffnessReviewTests(unittest.TestCase):
 
     def tearDown(self):
         self.s.close()
+        self.doCleanups()
         self.temp.cleanup()
 
     def test_stiffness_game_time_is_not_counted_as_tool_time(self):
@@ -216,7 +217,7 @@ class StiffnessReviewTests(unittest.TestCase):
         self.s.container, self.s.workspace = "container", self.root
         plan = PlanSpec(inputs=["20,J"], retry=RetrySpec("python3 planner.py", 3, 10.0, ("death",)), text="{}")
         self.s.resolve_plan_file = lambda path: plan
-        self.s._plan_path = lambda path: self.root / "plan.json"
+        self.s._plan_path = lambda path: (self.root / "plan.json").resolve()
         self.s._freeze_base = (0.0, 0.0, 0.0)
         self.s.metrics.freeze_counters = lambda: (0.0, 750.0, 0.0)
         self.s._held_input = ("R", "celeste_ai")
