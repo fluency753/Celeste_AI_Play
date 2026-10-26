@@ -17,7 +17,7 @@ internal static class PlaybackSpinners {
     private static EntityList? activeEntities;
     public static int PeakCount { get; private set; }
 
-    public static void Clear() { EndPassScope(); Cache.Clear(); PeakCount = 0; }
+    public static void Clear() { EndPassScope(); Cache.Clear(); PlaybackDust.Clear(); PeakCount = 0; }
 
     public static bool NeedsFallback(bool visible, bool expanded, Vector2 position, Vector2 camera) =>
         (!visible || !expanded) && position.X > camera.X - 32 && position.X < camera.X + 352

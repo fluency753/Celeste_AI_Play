@@ -8,10 +8,13 @@
   <ItemGroup>
     <Reference Include="$(CelestePrefix)/Celeste.dll" Publicize="true" />
     <Reference Include="$(CelestePrefix)/FNA.dll" Publicize="true" />
+    <Reference Include="$(CelestePrefix)/MMHOOK_Celeste.dll" />
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" ExcludeAssets="runtime" />
     <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.1" />
     <Compile Include="../../game-bridge/Source/Playback.cs" Link="Playback.cs" />
     <Compile Include="../../game-bridge/Source/PlaybackSpinners.cs" Link="PlaybackSpinners.cs" />
+    <Compile Include="../../game-bridge/Source/PlaybackDust.cs" Link="PlaybackDust.cs" />
+    <Compile Include="../../game-bridge/Source/DustVisualPlan.cs" Link="DustVisualPlan.cs" />
     <Compile Include="../../game-bridge/Source/PlaybackDensity.cs" Link="PlaybackDensity.cs" />
     <Compile Include="../../game-bridge/Source/PlaybackTrailClock.cs" Link="PlaybackTrailClock.cs" />
     <Compile Include="../../game-bridge/Source/RenderDepthQueue.cs" Link="RenderDepthQueue.cs" />

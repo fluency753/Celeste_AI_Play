@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <CelestePrefix Condition="'$(CelestePrefix)' == ''">$(CELESTE_DIR)</CelestePrefix>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="$(CelestePrefix)/Celeste.dll" Publicize="true" />
+    <Reference Include="$(CelestePrefix)/FNA.dll" Publicize="true" />
+    <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" ExcludeAssets="runtime" />
+    <Compile Include="../../game-bridge/Source/DustVisualPlan.cs" Link="DustVisualPlan.cs" />
+  </ItemGroup>
+</Project>

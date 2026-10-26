@@ -174,6 +174,8 @@ internal static class Playback {
             w.WriteNumber("dim", dim);
             w.WriteNumber("fade_frames", 0);
             w.WriteNumber("spinner_visual_peak", PlaybackSpinners.PeakCount);
+            w.WriteNumber("dust_visual_builds", PlaybackDust.Builds);
+            w.WriteNumber("dust_visual_draws", PlaybackDust.Draws);
             if (float.IsFinite(density.HalfLife)) w.WriteNumber("trail_half_life_frames", density.HalfLife);
         }));
     }

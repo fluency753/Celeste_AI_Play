@@ -1,7 +1,7 @@
 using System.Text.Json;
 namespace CelesteAI.Bridge;
 // 只替换外部I/O边界；真实Start/Step/Finish/EndOverlay状态机直接执行。
-internal static class Bridge { public static bool CapturePending => false; }
+internal static class Bridge { public static bool CapturePending => false; public static long Frame => 0; }
 internal static class Log { public static void Info(string message) {} }
 internal static class IpcServer { public static void Send(string message) {} }
 internal static class Reply {

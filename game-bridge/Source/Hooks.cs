@@ -31,6 +31,7 @@ internal static class Hooks {
         On.Monocle.MInput.Update += OnMInputUpdate;
         On.Celeste.Celeste.RenderCore += OnRenderCore;
         On.Celeste.GameplayRenderer.Render += OnGameplayRender;
+        On.Celeste.DustGraphic.Render += PlaybackDust.Render;
         IL.Monocle.EntityList.RenderExcept += ILEntityRenderExcept;
         On.Celeste.RunThread.Start += OnRunThreadStart;
     }
@@ -43,6 +44,8 @@ internal static class Hooks {
         On.Monocle.MInput.Update -= OnMInputUpdate;
         On.Celeste.Celeste.RenderCore -= OnRenderCore;
         On.Celeste.GameplayRenderer.Render -= OnGameplayRender;
+        On.Celeste.DustGraphic.Render -= PlaybackDust.Render;
+        PlaybackDust.Clear();
         IL.Monocle.EntityList.RenderExcept -= ILEntityRenderExcept;
         On.Celeste.RunThread.Start -= OnRunThreadStart;
     }
