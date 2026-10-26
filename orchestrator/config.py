@@ -146,7 +146,7 @@ class RunConfig:
     resume_pending: bool = False       # 续跑：上次在两截之间中断（这一截已完成、还没换到下一截）
     resume_completion_pending: bool = False  # agent 尚未自行确认结算、返回选章地图
     resume_segment: int | None = None  # 续跑：上次在当前这一截里已经走到的段
-    runtime: str = "container"      # container：智能体在 Docker 容器里运行；host：在本机运行且关闭全部内置工具
+    runtime: str = "container"      # Claude客户端位置；Codex客户端始终在本机，工作区工具始终走容器（见execution.py）
     image: str = "celeste-agent:0.1"
     autocompact: str | None = None   # Claude Code 自动压缩的窗口：None 用默认，"auto" 或 100000~1000000 的 token 数
     seccomp_unconfined: bool = True  # 容器内 Bash 沙箱（bubblewrap）需要创建命名空间，Docker 默认的 seccomp 配置不允许

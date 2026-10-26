@@ -9,6 +9,7 @@ from .runtimes import runtime
 @asynccontextmanager
 async def host_runner(cfg, directory, metrics, container, study=None, **options):
     adapter = runtime(cfg.engine)
+    adapter.workspace(cfg).validate(preparation=options.get('prepare_only', False))
     if not adapter.mcp:
         yield adapter.runner(cfg, directory, None, metrics, container, study, **options)
         return

@@ -74,6 +74,32 @@ class PromptPartsTests(unittest.TestCase):
 
 
 class PromptOverrideTests(unittest.TestCase):
+    def test_interface_and_optional_slots_expand_together_with_source_identity(self):
+        self.overrides.mkdir()
+        (self.overrides/'interface_zh.md').write_text('接口自定义。', encoding='utf-8')
+        for template, expected_sources in (
+                ('前{interface}后', ['explore_zh.md', 'interface_zh.md', 'explore_zh.md']),
+                ('前{explore_notes}中{interface}后{explore_programs}尾',
+                 ['explore_zh.md', 'explore_notes_zh.md', 'explore_zh.md', 'interface_zh.md',
+                  'explore_zh.md', 'explore_programs_zh.md', 'explore_zh.md'])):
+            with self.subTest(template=template):
+                (self.overrides/'explore_zh.md').write_text(template, encoding='utf-8')
+                parts = prompt_parts(cfg(mode='explore', runtime='container'))
+                self.assertEqual([p.source for p in parts[:len(expected_sources)]], expected_sources)
+                self.assertEqual(sum(p.text == '接口自定义。' for p in parts), 1)
+                text = play_prompt(cfg(mode='explore', runtime='container'))
+                for slot in ('{interface}', '{explore_notes}', '{explore_programs}'):
+                    self.assertNotIn(slot, text)
+                self.assertEqual(text, ''.join(p.sep + p.text for p in parts))
+
+    def test_full_override_without_optional_slots_is_not_augmented(self):
+        self.overrides.mkdir()
+        (self.overrides/'explore_zh.md').write_text('保留完整自定义提示词。', encoding='utf-8')
+        parts = prompt_parts(cfg(mode='explore', runtime='container'))
+        self.assertNotIn('explore_notes_zh.md', [p.source for p in parts])
+        self.assertNotIn('explore_programs_zh.md', [p.source for p in parts])
+        self.assertIn('保留完整自定义提示词。', play_prompt(cfg(mode='explore')))
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.overrides = Path(self.folder.name) / "prompts"
@@ -97,8 +123,8 @@ class PromptOverrideTests(unittest.TestCase):
         self.assertNotEqual(play_prompt(c), before)
         self.assertEqual(prompting.overridden_parts(), ["explore_zh.md"])
         self.assertEqual(list(prompt_override_hashes()), ["explore_zh.md"])
-        part = next(p for p in prompt_parts(c) if p.source == "explore_zh.md")
-        self.assertIn("本机加的一行。", part.text)
+        sections = [p.text for p in prompt_parts(c) if p.source == "explore_zh.md"]
+        self.assertIn("本机加的一行。", ''.join(sections))
 
     def test_console_write_reset_and_guards(self):
         from overlay import console_api

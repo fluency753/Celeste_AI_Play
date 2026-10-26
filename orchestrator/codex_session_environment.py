@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from .config import REPO_ROOT, RunConfig
 from .control import RunControl
 from .runtimes import config_from_state
+from .execution import workspace_capabilities
 
 
 def read_json(path):
@@ -205,7 +206,7 @@ async def synchronize(directory, state, output, *, apply=False, root=REPO_ROOT):
                 raise
             report.update(status='updated', backup=str(backup), history_unchanged=True,
                           before_sha256=digest(original), after_sha256=digest(updated))
-    if apply and cfg.runtime == 'container':
+    if apply and workspace_capabilities(cfg).needs_container:
         from .kb_access import prepare_view
         from .container import ensure_container
         # 容器同步有独立副作用；不能依赖“工具需要修改”分支里的所有权检查。

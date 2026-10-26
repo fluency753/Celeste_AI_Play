@@ -34,10 +34,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import os
 import queue
+import shutil
 import struct
 import threading
 import time
@@ -53,6 +55,7 @@ HEADER = struct.Struct("<dqBIQiiii16h")
 STOPS = {0: "done", 1: "death", 2: "room", 3: "cutscene", 4: "unsupported", 5: "other"}
 KIND_OPEN, KIND_DEATH, KIND_EXIT, KIND_BEST = 0, 1, 2, 3
 BACKTRACK_PX = 40.0     # 出口离起点这么近的，多半是掉头回上一个房间
+PREVIEW_BYTES = 8 * 1024 * 1024  # 所有待播与正在绘制的增量记录共同持有的字节预算
 
 
 def canon_hash(inputs) -> int:
@@ -131,23 +134,29 @@ def read_logs(sources: list) -> LogIndex:
     rows, where, kept = [], [], []
     for src in sources:
         try:
-            data = src if isinstance(src, (bytes, bytearray)) else Path(src).read_bytes()
+            stream = io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else Path(src).open('rb')
+            with stream:
+                if stream.read(len(MAGIC)) != MAGIC:
+                    continue
+                size = stream.seek(0, os.SEEK_END)
+                s = len(kept)
+                kept.append(src)
+                pos = len(MAGIC)
+                while pos + HEADER.size <= size:
+                    stream.seek(pos)
+                    header = stream.read(HEADER.size)
+                    if len(header) < HEADER.size:
+                        break
+                    h = HEADER.unpack(header)
+                    npts = h[3]
+                    body = 4 * max(0, npts - 1)
+                    if npts <= 0 or pos + HEADER.size + body > size:
+                        break
+                    rows.append(h)
+                    where.append((s, pos + HEADER.size))
+                    pos += HEADER.size + body
         except OSError:
             continue
-        if not data.startswith(MAGIC):
-            continue
-        s = len(kept)
-        kept.append(src)
-        pos = len(MAGIC)
-        while pos + HEADER.size <= len(data):
-            h = HEADER.unpack_from(data, pos)
-            npts = h[3]
-            body = 4 * max(0, npts - 1)
-            if npts <= 0 or pos + HEADER.size + body > len(data):
-                break
-            rows.append(h)
-            where.append((s, pos + HEADER.size))
-            pos += HEADER.size + body
     if not rows:
         return _empty_log()
     arr = np.array([r[:5] for r in rows], dtype=np.float64)
@@ -318,6 +327,28 @@ class _PreviewCompletion:
     offsets: list[int]  # 每个已收走来源中，增量读取器消费到的位置
 
 
+@dataclass(eq=False)
+class _SearchBill:
+    label: str
+    started: bool
+    counted: bool = False
+    account_rollouts: bool = True
+
+
+@dataclass
+class _PreviewJob:
+    key: str
+
+
+@dataclass
+class _RoundJob:
+    label: str
+    sources: list
+    moved: list[Path]  # 入队后由工作线程独占，所有退出路径都要释放
+    account: bool = True
+    completion: _PreviewCompletion | None = None
+
+
 class Playback:
     def __init__(self, cfg, session, metrics, gate, log=print):
         self.cfg = cfg
@@ -345,6 +376,10 @@ class Playback:
         self._streamer = None
         self._live_pending = {}
         self._preview_success = {}
+        self._preview_bytes = 0
+        self._retry_bills = {}  # 未接管来源保留原搜索的计费身份；重试不是新搜索。
+        self._closed = False
+        self._worker_stopped = threading.Event()
         self._stream_sample = False
         self._stream_fast_updates = 0
         self._worker: threading.Thread | None = None
@@ -366,7 +401,7 @@ class Playback:
             self._note_tool_use(message_id, tool_use_id, name, tool_input)
 
     def _note_tool_use(self, message_id, tool_use_id, name, tool_input):
-        if not self.collect or name.startswith("mcp__celeste__"):
+        if self._closed or not self.collect or name.startswith("mcp__celeste__"):
             return
         mid = message_id or tool_use_id
         msg = self._msgs.setdefault(mid, _Msg())
@@ -385,6 +420,8 @@ class Playback:
             self._note_tool_result(tool_use_id)
 
     def _note_tool_result(self, tool_use_id):
+        if self._closed:
+            return
         mid = self._tool_msg.pop(tool_use_id, None)
         if mid is None:
             return
@@ -416,40 +453,64 @@ class Playback:
                 self.log(f'[playback] 搜索中预览暂不可用：{exc}')
 
     def _queue_preview(self, mid, msg):
-        if not self.enabled or not msg.program or getattr(self.cfg, 'playback_stream_interval_s', 1) <= 0:
+        if self._closed or not self.enabled or not msg.program or getattr(self.cfg, 'playback_stream_interval_s', 1) <= 0:
             return
-        sources = msg.tail.read(sorted(self.dir.glob('*.bin')), on_skip=self.log)
+        available = PREVIEW_BYTES - self._preview_bytes
+        if available < len(MAGIC) + HEADER.size:
+            return  # 不消费读取游标；容量释放后继续读，完成时统一补画尾部。
+        sources = msg.tail.read(sorted(self.dir.glob('*.bin')), budget=available,
+                                max_record_bytes=PREVIEW_BYTES, on_skip=self.log)
         if not sources:
             return
         previous = self._live_pending.get(mid)
         chunks = (previous[1] if previous else []) + sources
-        # Backpressure: one queued update per search, retain recent complete chunks.
-        size = sum(map(len, chunks))
-        while len(chunks) > 1 and size > 8 * 1024 * 1024:
-            size -= len(chunks.pop(0))
-            self.log('[playback] 增量预览触发内存保护，略过较早的预览块；原日志仍用于完整计数与最终优选')
+        self._preview_bytes += sum(map(len, sources))
         self._live_pending[mid] = (msg.label, chunks)
         msg.previewed = True
         if previous is None:
-            with self._cv:
-                self._backlog += 1
-            self._jobs.put(('preview', mid))
+            self._enqueue(_PreviewJob(mid))
+
+    def _enqueue(self, job):
+        """调用方持有 _submit_lock；接收与关闭哨兵具有相同的串行边界。"""
+        with self._cv:
+            self._backlog += 1
+        self._jobs.put(job)
 
     def _submit(self, label: str, started: bool, cli: bool = False, previews=()) -> None:
         """一条消息的工具全部返回：调用了模拟器就扣一轮规划轮次，并把这期间的记录文件移出工作区、交给回放线程。"""
         with self._submit_lock:
-            files = sorted(self.dir.glob("*.bin"))
-            if files or cli:
-                self.metrics.add(sim_calls=1)
-                if started and self.gate is not None:   # 准备阶段不扣轮次（只在限制规划轮次时有）
-                    self.gate.charge(label)
-            if not files:
+            if self._closed:
                 return
-            sources, moved, offsets = self._take(files, tuple(tail for _, tail in previews))
-            completion = _PreviewCompletion(tuple(key for key, _ in previews), offsets) if previews else None
-        with self._cv:
-            self._backlog += 1
-        self._jobs.put((label, sources, moved, True, completion))
+            files = sorted(self.dir.glob("*.bin"))
+            if not files and not cli:
+                return
+            bill = _SearchBill(label, started)
+            bills = self._remember_bills(files, bill)
+            sources, moved, offsets, claimed = (self._take(files, tuple(tail for _, tail in previews))
+                                               if files else ([], [], [], []))
+            accepted = {bills[path] for path in claimed}
+            if cli:
+                accepted.add(bill)
+            for path in claimed:
+                self._retry_bills.pop(path, None)
+            for accepted_bill in accepted:
+                if not accepted_bill.counted:
+                    self.metrics.add(sim_calls=1)
+                    if accepted_bill.started and self.gate is not None:
+                        self.gate.charge(accepted_bill.label)
+                    accepted_bill.counted = True
+            if not sources:
+                return
+            # Different owners can be retried together (native prediction and
+            # Bash search). Preserve each owner's rollout accounting contract.
+            groups = {}
+            for i, path in enumerate(claimed):
+                groups.setdefault(bills[path], []).append(i)
+            for owner, indexes in groups.items():
+                ends = [offsets[i] for i in indexes]
+                completion = _PreviewCompletion(tuple(key for key, _ in previews), ends) if previews else None
+                self._enqueue(_RoundJob(owner.label, [sources[i] for i in indexes], [moved[i] for i in indexes],
+                                        account=owner.account_rollouts, completion=completion))
 
     def collect_prediction(self, predictions: list[dict], start_frame: int) -> None:
         """Collect native predictions immediately; GameSession already counted/charged them."""
@@ -458,18 +519,35 @@ class Playback:
         from .sim_assist import write_replay
         # Claim precisely these files before a concurrent Bash collector can see them.
         with self._submit_lock:
+            if self._closed:
+                return
             paths = write_replay(self.session.workspace, predictions, start_frame)
             if not paths:
                 return
-            sources, moved, _ = self._take(paths)
-        with self._cv:
-            self._backlog += 1
-        self._jobs.put(("短路线模拟", sources, moved, False, False))
+            self._remember_bills(paths, _SearchBill("短路线模拟", False, counted=True, account_rollouts=False))
+            sources, moved, _, claimed = self._take(paths)
+            for path in claimed:
+                self._retry_bills.pop(path, None)
+            self._enqueue(_RoundJob("短路线模拟", sources, moved, account=False))
 
-    def _take(self, files: list[Path], tails=()) -> tuple[list, list[Path], list[int]]:
-        """收走本轮日志，返回来源、待删除文件和各来源的已读偏移；移动失败时保留字节来源。"""
+    def _remember_bills(self, paths, bill):
+        result = {}
+        for path in paths:
+            try:
+                stat = path.stat()
+                identity = (stat.st_dev, stat.st_ino, stat.st_size)
+            except OSError:
+                identity = None
+            previous = self._retry_bills.get(path)
+            owner = previous[1] if previous and previous[0] == identity else bill
+            self._retry_bills[path] = (identity, owner)
+            result[path] = owner
+        return result
+
+    def _take(self, files: list[Path], tails=()) -> tuple[list, list[Path], list[int], list[Path]]:
+        """接管本轮日志；移动失败时流式复制，只有接管成功才删除写入方文件。"""
         self.pending.mkdir(parents=True, exist_ok=True)
-        sources, moved, offsets = [], [], []
+        sources, moved, offsets, claimed = [], [], [], []
         for path in files:
             offset = len(MAGIC)
             try:
@@ -488,14 +566,20 @@ class Playback:
                 sources.append(dest)
                 moved.append(dest)
                 offsets.append(offset)
+                claimed.append(path)
             except OSError:
                 try:
-                    sources.append(path.read_bytes())
-                    offsets.append(offset)
-                except OSError:
-                    pass
-                path.unlink(missing_ok=True)
-        return sources, moved, offsets
+                    shutil.copyfile(path, dest)
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    self._delete([dest])
+                    self.log(f'[playback] 无法接管轨迹日志，保留原文件 {path.name}：{exc}')
+                    continue
+                sources.append(dest)
+                moved.append(dest)
+                offsets.append(offset)
+                claimed.append(path)
+        return sources, moved, offsets, claimed
 
     @staticmethod
     def _delete(files: list[Path]) -> None:
@@ -507,13 +591,20 @@ class Playback:
 
     def close(self) -> None:
         """停止预览并等待收尾；超时不删除存活线程仍持有的日志。"""
-        self._stream_stop.set()
-        self.enabled = False
+        with self._submit_lock:
+            if not self._closed:
+                self._closed = True
+                self._msgs.clear()
+                self._tool_msg.clear()
+                self._retry_bills.clear()
+                self._stream_stop.set()
+                self.enabled = False
+                if self._worker is not None:
+                    self._jobs.put(None)
         if self._streamer is not None:
             self._streamer.join(timeout=2)
             self._streamer = None
         if self._worker is not None:
-            self._jobs.put(None)
             self._worker.join(timeout=10)
             if self._worker.is_alive():
                 self.log('[playback] 回放线程仍在收尾，保留其日志，由线程完成后清理')
@@ -521,64 +612,75 @@ class Playback:
                 self._worker = None
         with self._cv:
             self.rounds = []
-        if self._worker is None and self.collect and self.pending.exists():
-            self._delete(list(self.pending.glob("*.bin")))
 
     # ---- 回放线程：逐轮读、挑、画 ----
 
     def _run(self) -> None:
+        try:
+            self._consume_jobs()
+        finally:
+            self._preview_success.clear()
+            self._worker_stopped.set()
+
+    def _consume_jobs(self) -> None:
         while True:
             job = self._jobs.get()
             if job is None:
                 return
+            preview_size = 0
             try:
-                if job[0] == 'preview' and len(job) == 2:
+                if isinstance(job, _PreviewJob):
                     with self._submit_lock:
-                        label, sources = self._live_pending.pop(job[1])
+                        label, sources = self._live_pending.pop(job.key)
+                        preview_size = sum(map(len, sources))
                     if not self._stream_stop.is_set():
-                        previous = self._preview_success.get(job[1], True)
-                        self._preview_success[job[1]] = False
-                        success = bool(self._play_round(label, sources, [], False, preview=True))
-                        self._preview_success[job[1]] = previous and success
+                        previous = self._preview_success.get(job.key, True)
+                        self._preview_success[job.key] = False
+                        success = bool(self._play_round(label, sources, False, preview=True))
+                        self._preview_success[job.key] = previous and success
                 else:
-                    label, sources, moved, account, completion = job
+                    label, sources, account, completion = job.label, job.sources, job.account, job.completion
                     if isinstance(completion, _PreviewCompletion):
                         results = [self._preview_success.pop(key, False) for key in completion.keys]
-                        self._finish_previewed_round(label, sources, moved, account, completion.offsets, all(results))
+                        self._finish_previewed_round(label, sources, account, completion.offsets, all(results))
                     else:
-                        self._play_round(label, sources, moved, account)
+                        self._play_round(label, sources, account)
             except Exception as exc:  # 回放出问题不影响游玩
                 self.log(f"[playback] 回放失败：{exc}")
             finally:
+                if isinstance(job, _RoundJob):
+                    self._delete(job.moved)
+                if preview_size:
+                    sources = []  # 先释放工作线程的字节引用，再归还共享容量。
+                    with self._submit_lock:
+                        self._preview_bytes -= preview_size
                 with self._cv:
                     self._backlog -= 1
                     self._cv.notify_all()
 
-    def _finish_previewed_round(self, label, sources, moved, account, offsets, success):
+    def _finish_previewed_round(self, label, sources, account, offsets, success):
         """补画已收走日志的未读尾部；文件保留到补画和最终记账都完成。"""
-        try:
-            full = read_logs(sources)
-            if self.enabled:
-                # read_logs may omit invalid/unreadable sources; use source
-                # identity rather than assuming its source indexes are unchanged.
-                end_by_source = {id(source):end for source, end in zip(sources, offsets)}
-                ends = np.asarray([end_by_source[id(kept)] for kept in full.sources], dtype=np.int64)
-                unread = (np.flatnonzero(full.off - HEADER.size >= ends[full.src]) if success
-                          else np.arange(len(full)))
-                try:
-                    success = True
-                    for batch in self._remaining_batches(full, unread):
-                        if not self.enabled or not self._play_round(label, [], [], False, preview=True, log=batch):
-                            success = False
-                            break
-                except Exception as exc:
-                    self.log(f'[playback] 尾部补画失败，回退最终回放：{exc}')
-                    success = False
-            self._play_round(label, [], [], account, skip_render=success, log=full)
-        finally:
-            self._delete(moved)
+        full = read_logs(sources)
+        if self.enabled:
+            # read_logs may omit invalid/unreadable sources; use source
+            # identity rather than assuming its source indexes are unchanged.
+            end_by_source = {id(source):end for source, end in zip(sources, offsets)}
+            ends = np.asarray([end_by_source[id(kept)] for kept in full.sources], dtype=np.int64)
+            unread = (np.flatnonzero(full.off - HEADER.size >= ends[full.src]) if success
+                      else np.arange(len(full)))
+            try:
+                success = True
+                for batch in self._remaining_batches(full, unread):
+                    if not self.enabled or not self._play_round(label, [], False, preview=True, log=batch):
+                        success = False
+                        break
+            except Exception as exc:
+                self.log(f'[playback] 尾部补画失败，回退最终回放：{exc}')
+                success = False
+        self._play_round(label, [], account, skip_render=success, log=full)
 
-    def _remaining_batches(self, log, indexes, budget=8 * 1024 * 1024):
+    def _remaining_batches(self, log, indexes, budget=None):
+        budget = PREVIEW_BYTES if budget is None else budget
         batch, size = [], len(MAGIC)
         for index in indexes:
             cost = HEADER.size + 4 * max(0, int(log.npts[index]) - 1)
@@ -593,21 +695,20 @@ class Playback:
         if batch:
             yield log.subset(np.asarray(batch))
 
-    def _play_round(self, label: str, sources: list, moved: list[Path], account: bool = True,
+    def _play_round(self, label: str, sources: list, account: bool = True,
                     preview=False, skip_render=False, log=None) -> bool | None:
         t0 = time.monotonic()
-        try:
-            rd = self._digest(read_logs(sources) if log is None else log, label,
-                              all_tracks=preview and not self._stream_sample)
-        finally:
-            self._delete(moved)   # 挑好的路线已经解出逐帧位置，记录文件用完就删
+        rd = self._digest(read_logs(sources) if log is None else log, label,
+                          all_tracks=preview and not self._stream_sample)
         if rd is None:
             # A batch outside the observed room has nothing to draw. It still
             # completed normally; do not abort subsequent eligible tail batches.
             return True if preview else None
         with self._cv:
             if self.enabled and not preview:
-                self.rounds.append(rd)
+                # final() needs counts only. Keeping decoded tracks here would
+                # retain every previous round's arrays until the next real act.
+                self.rounds.append(Round(rd.label, rd.rollouts, [], best_exit=rd.best_exit))
             number = len(self.rounds) + int(preview)
         stage = '搜索中增量' if preview else f'第 {number} 轮'
         self.log(f"[playback] {stage}：推演 {rd.rollouts} 条，绘制 {len(rd.tracks)} 条（{time.monotonic() - t0:.1f} 秒）")
@@ -727,7 +828,30 @@ class Playback:
         if n == 0:
             return None
         k = n if all_tracks else max(self.cfg.playback_min_tracks, math.ceil(n / max(1, self.cfg.playback_ratio)))
-        tracks = [Track(kind, log.path(i), int(log.stop[i]), i) for i, kind in select(log, k)]
+        # The index is cheap even for sparse/huge records; decoding their paths
+        # is not. Apply the same per-record ceiling on every render path, before
+        # LogIndex.path allocates, including final best-route selection.
+        sizes = HEADER.size + 4 * np.maximum(0, log.npts.astype(np.int64) - 1)
+        eligible = np.flatnonzero(sizes + len(MAGIC) <= PREVIEW_BYTES)
+        if len(eligible) < n:
+            self.log(f'[playback] 轨迹解码略过 {n - len(eligible)} 条超出 {PREVIEW_BYTES} 字节上限的路线；保留完整计数')
+        render_log = log if len(eligible) == n else log.subset(eligible)
+        selected = select(render_log, k)
+        # Both streaming batches and final selection obey the same encoded
+        # payload budget before decoding. numpy point arrays use ~4x the body
+        # bytes; path decoding and RPC serialization add temporary copies. This
+        # is a batch bound, not a process RSS ceiling (header indexes are separate).
+        chosen, used = [], len(MAGIC)
+        for i, kind in sorted(selected, key=lambda pair: (pair[1] != KIND_BEST, pair[0])):
+            cost = int(sizes[eligible[i]])
+            if used + cost > PREVIEW_BYTES:
+                continue
+            chosen.append((i, kind))
+            used += cost
+        if len(chosen) < len(selected):
+            self.log(f'[playback] 优选轨迹触发 {PREVIEW_BYTES} 字节整批解码上限，优先保留最佳路线，略过 {len(selected) - len(chosen)} 条；保留完整计数')
+        tracks = [Track(kind, render_log.path(i), int(render_log.stop[i]), int(eligible[i]))
+                  for i, kind in sorted(chosen)]
         exits = np.flatnonzero(log.stop == 2)
         away = exits[np.hypot(*(log.end[exits] - log.first[exits]).T) > BACKTRACK_PX] if len(exits) else exits
         # 最快出房用时：从进入这个房间的那一帧算起（推演可能从房间中途的检查点或停下的地方出发）

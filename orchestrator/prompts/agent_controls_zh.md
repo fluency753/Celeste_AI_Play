@@ -4,8 +4,8 @@
 `act` 既支持移动键，也支持 `C` 确认、`B` 返回、`P` 暂停、`N` 日志；例如 `["1,P","1"]` 打开暂停菜单，再根据观测选择。
 这些是本项目的按键映射，与 CelesteTAS 的字母并不完全一致，不能直接照搬 TAS 的 S、O、C 等键义。
 读取 TAS 时可显式选择 `input_format="celeste_tas"`（也可写在 JSON 计划里，适用于保留旧工具签名的会话），不要手工逐字替换。支持方向LRUD、J/K双跳、X/C双冲刺、Z/V双蹲冲、G/H双抓、S暂停、Q重试、N日志、O确认及共享菜单绑定。尤其TAS的C是第二冲刺，本项目格式的C才是确认。模拟只支持LRUDJKXCZVG；`F` 摇杆、独立方向通道和自定义键暂不支持，不是完整TAS脚本语言。
-`/workspace/game/tas.py` 提供 `load(path,start_line=...)`、`window(document,offset,count)` 和 `to_sim(inputs)`。前两者只生成计划，不操作游戏；不执行 console/Set/Read 等命令，需显式选取纯输入区。模拟转换拒绝不能表达的菜单键，不忽略它们。
-TAS动作及observe不自动播放转场、重生或剧情；自己用TAS输入或空帧推进。`input_cursor.next`是选定输入文档从0开始的帧偏移，不是源文件行号；用同一load文档和window(offset=next)生成下一窗，或把remaining_inputs写入仍声明celeste_tas的JSON。旧工具不能把剩余数组直接交给默认格式的inputs。观察与规划回放不推进游标。切换格式前，先用原格式显式执行一帧空输入松键；这是真实的一帧，须放在准备边界或计入比较，不靠切换格式制造按下边沿。
+{tas_workspace_rule}
+TAS动作及observe不自动播放转场、重生或剧情；自己用TAS输入或空帧推进。{tas_cursor_rule}观察与规划回放不推进游标。切换格式前，先用原格式显式执行一帧空输入松键；这是真实的一帧，须放在准备边界或计入比较，不靠切换格式制造按下边沿。
 `cutscene` 是你显式调用的便利动作；也可用 `act` 直接操作对白或选项，选择前先读可见选项。
 以下自动播放说明仅适用于celeste_ai：主控可继续播放无需选择的逐字对白、转场与重生，但不会替你发送菜单或确认输入。celeste_tas始终由显式输入推进。
 

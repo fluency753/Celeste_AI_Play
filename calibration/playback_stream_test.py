@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from orchestrator.config import RunConfig
 from orchestrator.metrics import Metrics
-from orchestrator.playback import Playback, MAGIC, HEADER
+from orchestrator.playback import Playback, MAGIC, HEADER, read_logs
 from orchestrator.rollout_tail import RecordTail
 
 
@@ -21,7 +21,8 @@ def record(index):
 def small_preview_batches():
     read, batches = RecordTail.read, Playback._remaining_batches
     def bounded_read(tail, paths, **kwargs):
-        return read(tail, paths, budget=200, **kwargs)
+        kwargs['budget'] = min(kwargs.get('budget', 200), 200)
+        return read(tail, paths, **kwargs)
     def bounded_batches(playback, log, indexes):
         return batches(playback, log, indexes, budget=200)
     with patch.object(RecordTail,'read',bounded_read), patch.object(Playback,'_remaining_batches',bounded_batches):
@@ -266,7 +267,7 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(self.metrics.state.sim_rollouts,12)
         self.gate.charge.assert_called_once()
 
-    def test_finish_handles_bytes_fallback_and_invalid_sources(self):
+    def test_finish_handles_stream_copy_fallback_and_invalid_sources(self):
         self.start()
         self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(1,7)))
         (self.playback.dir/'bad.bin').write_bytes(b'not a rollout log')
@@ -275,7 +276,7 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(self.drawn_starts(),list(range(1,7)))
         self.assertEqual(self.metrics.state.sim_rollouts,6)
 
-    def test_finish_preserves_offsets_for_multiple_mixed_sources(self):
+    def test_finish_preserves_offsets_for_moved_and_copied_sources(self):
         import os
         self.start()
         first = self.playback.dir/'a.bin'
@@ -362,3 +363,214 @@ class StreamTests(unittest.TestCase):
             self.assertEqual(list(self.playback.pending.glob('*.bin')),[])
         finally:
             release.set();worker.join(3)
+
+    def test_preview_budget_includes_active_and_queued_blocks_without_losing_routes(self):
+        entered, release = threading.Event(), threading.Event()
+        def render(*args, **kwargs):
+            entered.set()
+            release.wait(3)
+            return {}
+        self.playback._call.side_effect = render
+        self.start()
+        self.file.write_bytes(MAGIC + record(1))
+        with patch('orchestrator.playback.PREVIEW_BYTES', 300), small_preview_batches():
+            self.poll()
+            self.assertTrue(entered.wait(2))
+            try:
+                for indexes in ((2, 3), (4,), (5, 6)):
+                    with self.file.open('ab') as stream:
+                        stream.write(b''.join(record(index) for index in indexes))
+                    self.poll()
+                    self.assertLessEqual(self.playback._preview_bytes, 300)
+                self.assertEqual(self.playback._backlog, 2)
+                self.playback.note_tool_result('call')
+            finally:
+                release.set()
+            self.wait()
+        self.assertEqual(self.drawn_starts(), list(range(1, 7)))
+        self.assertEqual(self.playback._preview_bytes, 0)
+        self.assertEqual(self.metrics.state.sim_rollouts, 6)
+
+    def test_capacity_deferral_does_not_skip_a_record_within_the_record_limit(self):
+        tail = RecordTail(MAGIC, HEADER)
+        self.file.write_bytes(MAGIC + record(1) + record(2))
+        self.assertEqual(tail.read([self.file], budget=100, max_record_bytes=300), [MAGIC + record(1)])
+        self.assertEqual(tail.read([self.file], budget=100, max_record_bytes=300), [MAGIC + record(2)])
+
+    def test_close_serializes_with_transfer_and_drains_the_accepted_job(self):
+        entered, release = threading.Event(), threading.Event()
+        transferred = self.playback._take
+        def take(*args, **kwargs):
+            entered.set()
+            release.wait(3)
+            return transferred(*args, **kwargs)
+        self.start()
+        self.file.write_bytes(MAGIC + record(1))
+        producer = threading.Thread(target=self.playback.note_tool_result, args=('call',))
+        closer = threading.Thread(target=self.playback.close)
+        with patch.object(self.playback, '_take', side_effect=take):
+            producer.start()
+            self.assertTrue(entered.wait(2))
+            closer.start()
+            try:
+                self.assertFalse(self.playback._worker_stopped.wait(.1))
+            finally:
+                release.set()
+                producer.join(3)
+                closer.join(3)
+        self.assertFalse(producer.is_alive())
+        self.assertFalse(closer.is_alive())
+        self.assertTrue(self.playback._worker_stopped.is_set())
+        self.assertEqual(self.metrics.state.sim_rollouts, 1)
+        self.assertEqual(self.playback._backlog, 0)
+        self.assertEqual(list(self.playback.pending.glob('*.bin')), [])
+
+    def test_closed_playback_rejects_late_results_without_claiming_their_files(self):
+        self.start()
+        self.file.write_bytes(MAGIC + record(1))
+        self.playback.close()
+        self.playback.note_tool_result('call')
+        self.playback.note_tool_use('late', 'late-call', 'Bash', {})
+        self.playback._submit('late', True)
+        self.assertTrue(self.file.exists())
+        self.assertEqual(self.playback._backlog, 0)
+        self.assertEqual(self.metrics.state.sim_calls, 0)
+        self.assertEqual(self.playback._msgs, {})
+
+    def test_failed_source_transfer_preserves_original_and_can_be_retried(self):
+        self.start()
+        self.file.write_bytes(MAGIC + record(1))
+        with patch('orchestrator.playback.os.replace', side_effect=OSError('locked')), \
+                patch('orchestrator.playback.shutil.copyfile', side_effect=OSError('unreadable')):
+            self.playback.note_tool_result('call')
+        self.assertEqual(self.file.read_bytes(), MAGIC + record(1))
+        self.assertEqual(self.metrics.state.sim_calls, 0)
+        self.playback.drain(timeout=3)
+        self.assertEqual(self.metrics.state.sim_calls, 1)
+        self.assertEqual(self.metrics.state.sim_rollouts, 1)
+        self.gate.charge.assert_called_once()
+
+    def test_worker_owns_cleanup_even_when_digest_raises(self):
+        self.start()
+        self.file.write_bytes(MAGIC + record(1))
+        with patch.object(self.playback, '_digest', side_effect=ValueError('invalid log')):
+            self.playback.note_tool_result('call')
+            self.wait()
+        self.assertEqual(list(self.playback.pending.glob('*.bin')), [])
+
+    def test_partial_transfer_and_retry_share_the_same_search_bill(self):
+        self.start()
+        first = self.playback.dir / 'a.bin'
+        first.write_bytes(MAGIC + record(1))
+        self.file.write_bytes(MAGIC + record(2))
+        import os
+        replace = os.replace
+        def locked_last(source, dest):
+            if source == self.file:
+                raise OSError('locked')
+            return replace(source, dest)
+        with patch('orchestrator.playback.os.replace', side_effect=locked_last), \
+                patch('orchestrator.playback.shutil.copyfile', side_effect=OSError('unreadable')):
+            self.playback.note_tool_result('call')
+            self.wait()
+        self.assertEqual(self.metrics.state.sim_calls, 1)
+        self.assertEqual(self.metrics.state.sim_rollouts, 1)
+        self.playback.drain(timeout=3)
+        self.assertEqual(self.metrics.state.sim_calls, 1)
+        self.assertEqual(self.metrics.state.sim_rollouts, 2)
+        self.gate.charge.assert_called_once()
+        # A failed transfer may replay a successful preview conservatively; it
+        # must not lose a route or charge the search again.
+        self.assertEqual(set(self.drawn_starts()), {1, 2})
+
+    def test_native_prediction_retry_does_not_charge_a_bash_search(self):
+        self.metrics.add(sim_calls=1, sim_rollouts=1)  # GameSession.simulate already accounted this result.
+        self.file.write_bytes(MAGIC + record(1))
+        with patch('orchestrator.sim_assist.write_replay', return_value=[self.file]), \
+                patch('orchestrator.playback.os.replace', side_effect=OSError('locked')), \
+                patch('orchestrator.playback.shutil.copyfile', side_effect=OSError('unreadable')):
+            self.playback.collect_prediction([{}], 0)
+            self.wait()
+        self.playback.drain(timeout=3)
+        self.assertEqual(self.metrics.state.sim_calls, 1)
+        self.gate.charge.assert_not_called()
+        self.assertEqual(self.metrics.state.sim_rollouts, 1)
+
+    def test_mixed_native_and_bash_retry_keep_independent_rollout_ownership(self):
+        self.metrics.add(sim_calls=1, sim_rollouts=1)
+        self.file.write_bytes(MAGIC + record(1))
+        with patch('orchestrator.sim_assist.write_replay', return_value=[self.file]), \
+                patch('orchestrator.playback.os.replace', side_effect=OSError('locked')), \
+                patch('orchestrator.playback.shutil.copyfile', side_effect=OSError('unreadable')):
+            self.playback.collect_prediction([{}], 0)
+            self.wait()
+        self.start()
+        (self.playback.dir / 'bash.bin').write_bytes(MAGIC + record(2))
+        self.playback.note_tool_result('call')
+        self.wait()
+        self.assertEqual(self.metrics.state.sim_calls, 2)
+        self.assertEqual(self.metrics.state.sim_rollouts, 2)
+        self.gate.charge.assert_called_once()
+        self.assertEqual(set(self.drawn_starts()), {1, 2})
+
+    def test_file_index_reads_only_headers_and_seeks_over_large_bodies(self):
+        points = 8 * 1024 * 1024
+        header = HEADER.pack(1., 0, 0, points, 1, 0, 0, 8, 0, *([0] * 16))
+        with self.file.open('wb') as stream:
+            stream.write(MAGIC + header)
+            stream.seek(4 * (points - 1) - 1, 1)
+            stream.write(b'\0')
+        original_open = Path.open
+        reads = []
+        class HeaderReader:
+            def __init__(reader, stream): reader.stream = stream
+            def __enter__(reader): return reader
+            def __exit__(reader, *args): reader.stream.close()
+            def seek(reader, *args): return reader.stream.seek(*args)
+            def read(reader, size=-1):
+                self.assertGreaterEqual(size, 0)
+                self.assertLessEqual(size, HEADER.size)
+                reads.append(size)
+                return reader.stream.read(size)
+        def header_open(path, *args, **kwargs):
+            return HeaderReader(original_open(path, *args, **kwargs))
+        with patch.object(Path, 'open', header_open), \
+                patch.object(Path, 'read_bytes', side_effect=AssertionError('whole file read')):
+            log = read_logs([self.file])
+        self.assertEqual(len(log), 1)
+        self.assertEqual(int(log.npts[0]), points)
+        self.assertEqual(reads, [len(MAGIC), HEADER.size])
+
+    def test_final_collection_checks_oversize_paths_before_decoding(self):
+        self.playback.cfg.playback_stream_interval_s = 0
+        self.playback.log = Mock()
+        self.start()
+        points = 8 * 1024 * 1024
+        with self.file.open('wb') as stream:
+            stream.write(MAGIC + HEADER.pack(1., 0, 0, points, 1, 0, 0, 8, 0, *([0] * 16)))
+            stream.seek(4 * (points - 1) - 1, 1)
+            stream.write(b'\0')
+        with patch('orchestrator.playback.LogIndex.path', side_effect=AssertionError('oversize decode')):
+            self.playback.note_tool_result('call')
+            self.wait()
+        self.assertEqual(self.metrics.state.sim_rollouts, 1)
+        self.playback._call.assert_not_called()
+        self.assertTrue(any('轨迹解码略过' in call.args[0] for call in self.playback.log.call_args_list))
+
+    def test_final_selection_applies_batch_budget_before_decode_and_keeps_best(self):
+        self.playback.cfg.playback_stream_interval_s = 0
+        self.playback.log = Mock()
+        self.start()
+        # Every route fits individually, while all six together exceed 300 B.
+        records = [record(i) for i in range(1, 6)]
+        records.append(HEADER.pack(6., 0, 2, 2, 6, 0, 0, 100 * 8, 0, *([0] * 16)) + b'\x08\0\0\0')
+        self.file.write_bytes(MAGIC + b''.join(records))
+        with patch('orchestrator.playback.PREVIEW_BYTES', 300):
+            self.playback.note_tool_result('call')
+            self.wait()
+        tracks = self.playback._call.call_args.args[0]['tracks']
+        self.assertLessEqual(len(tracks) * (len(MAGIC) + HEADER.size + 4), 300)
+        self.assertTrue(any(track['k'] == 3 for track in tracks))
+        self.assertEqual(self.metrics.state.sim_rollouts, 6)
+        self.assertTrue(any('整批解码上限' in call.args[0] for call in self.playback.log.call_args_list))
+        self.assertEqual(self.playback.rounds[0].tracks, [])

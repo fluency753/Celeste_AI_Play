@@ -36,6 +36,8 @@ from .config import CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_na
 from .container import ensure_container
 from .game_session import GameSession
 from .kb_study import KbStudy
+from .execution import workspace_capabilities
+from .recording_lifecycle import pending_recording
 from .metrics import Metrics
 from .recording import Recorder, RecordingError, options_from
 from .pausegate import PauseGate
@@ -273,17 +275,18 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.quota_wait = not args.no_quota_wait
     cfg.quota_wait_cap_s = args.quota_wait_cap_seconds
     cfg.quota_wait_max_h = args.quota_wait_max_hours
+    capabilities = workspace_capabilities(cfg)
     if args.sim is None:
-        args.sim = args.runtime == "container" and cfg.mode == SPEEDRUN
+        args.sim = capabilities.programs and cfg.mode == SPEEDRUN
     if cfg.mode == EXPLORE and args.sim:
         raise SystemExit("探索模式不开放模拟器文件（只能用 --sim-assist 的限额短路线预测）；要开模拟器请用速通模式 --mode speedrun")
     if cfg.mode == SPEEDRUN and args.sim_assist:
         raise SystemExit("--sim-assist 只用于探索模式；速通模式用 --sim / --no-sim 决定是否开放预置模拟器")
     cfg.sim = args.sim
     cfg.sim_assist = (bool(previous["state"].get("sim_assist", False)) if previous else
-                      cfg.knowledge_profile == "explore" and cfg.runtime == 'container'
+                      cfg.knowledge_profile == "explore" and capabilities.programs
                       and (cfg.sim_dir / 'celeste-sim').is_file()) if args.sim_assist is None else args.sim_assist
-    if cfg.sim_assist and (cfg.sim or cfg.runtime != "container"):
+    if cfg.sim_assist and (cfg.sim or not capabilities.programs):
         raise SystemExit("限额模拟辅助仅支持容器模式，不能同时开放无限制 --sim")
     if cfg.sim_assist and not (cfg.sim_dir / "celeste-sim").is_file():
         raise SystemExit("限额模拟辅助需要 sim/dist/celeste-sim；可用 --no-sim-assist 关闭")
@@ -316,7 +319,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                                else args.continuous_music)
     if not args.no_agent and adapter.mcp:
         check_provider(cfg.provider_info)
-    if cfg.third_party and cfg.runtime != "container" and not args.no_agent:
+    if adapter.mcp and cfg.third_party and cfg.runtime != "container" and not args.no_agent:
         raise SystemExit("第三方模型提供方只支持容器运行方式")
     if previous:
         state = previous["state"]
@@ -368,7 +371,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     if cfg.pause_limit and not cfg.sim:
         raise SystemExit("--limit-planning 只用于开模拟器的版本（关模拟器的版本不限制思考与调用）")
     if cfg.sim:
-        if cfg.runtime != "container":
+        if not capabilities.programs:
             raise SystemExit("预置模拟器只能用于容器运行方式（本机运行方式请加 --no-sim）")
         if not (cfg.sim_dir / "celeste-sim").is_file():
             raise SystemExit(f"找不到预置模拟器：{cfg.sim_dir / 'celeste-sim'}（模拟器只在本机，见使用说明的预置模拟器一节；"
@@ -680,10 +683,10 @@ def port_free(port: int) -> bool:
 async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, token: str | None,
                     previous: dict | None = None, recorder: Recorder | None = None) -> dict:
     study = None
-    if cfg.runtime == "container" and not args.no_agent:
+    if workspace_capabilities(cfg).needs_container and not args.no_agent:
         from .kb_access import prepare_view
         prepare_view(cfg)        # 有不给智能体看的知识库文件时，同步只含允许文件的副本（挂进容器 /kb）
-    if cfg.study and cfg.runtime == "container" and not args.no_agent:
+    if cfg.study and workspace_capabilities(cfg).workspace_read and not args.no_agent:
         extra = {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None
         study = KbStudy(cfg.kb_dir, cfg.study_minutes, extra)
         if not study.has_reference and cfg.knowledge_profile == "full":
@@ -822,10 +825,11 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
     if recorder is not None:
         session.before_advance = recorder.check_window
 
-    gate = PauseGate(metrics, enabled=cfg.pause_limit and cfg.runtime == "container",
+    capabilities = workspace_capabilities(cfg)
+    gate = PauseGate(metrics, enabled=cfg.pause_limit and capabilities.programs,
                      log=lambda m: print(m, flush=True), rounds_per_room=cfg.rounds_per_room,
                      death_bonus=cfg.death_bonus, started=previous is not None, sim_only=cfg.sim,
-                     state_path=cfg.workspace_dir / "game" / "rounds.json" if cfg.runtime == "container" else None,
+                     state_path=cfg.workspace_dir / "game" / "rounds.json" if capabilities.workspace_write else None,
                      room_scale=cfg.room_scale)
     playback = Playback(cfg, session, metrics, gate, log=lambda m: print(m, flush=True))
     if playback.collect:
@@ -842,7 +846,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
     server = build_server(session, study, gate)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
-    add_gate_route(app, gate, metrics, cfg.live_remind_s if cfg.runtime == "container" else None,
+    add_gate_route(app, gate, metrics, cfg.live_remind_s if capabilities.workspace_write else None,
                    session=session)
     web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
     web_task = asyncio.create_task(web.serve())
@@ -869,7 +873,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             reason = "手动结束"
         else:
             container = None
-            if cfg.runtime == "container":
+            if capabilities.needs_container:
                 container = await asyncio.to_thread(ensure_container, cfg, lambda m: print(m, flush=True))
                 print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
                 session.container = container
@@ -951,11 +955,11 @@ def opening_note(cfg, previous, resumed_session, user_note: str | None = None) -
     if resumed_session:
         return resume_prompt("主控中断后续跑", gap) + extra + current_rules_note(cfg)
     frozen = _previous_kept_frozen(previous)
-    return ("（系统）主控中断后续跑，这是一个新的会话：之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。"
-            + ("游戏一直冻结在中断时的那一帧，章节计时没有走。先看一遍 /workspace/notes.md，再调用 observe 继续游玩。"
-               if frozen else
-               "上次退出后已交还游戏控制，游戏状态可能发生变化。先看 /workspace/notes.md，再调用 observe 核对当前状态后继续。")
-            + extra)
+    history = ("之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。先查阅 /workspace/notes.md。"
+               if workspace_capabilities(cfg).workspace_read else "之前的对话不在了；当前没有工作区文件工具，以最新观测为准。")
+    state = ("游戏一直冻结在中断时的那一帧，章节计时没有走。" if frozen else
+             "上次退出后已交还游戏控制，游戏状态可能发生变化。")
+    return "（系统）主控中断后续跑，这是一个新的会话：" + history + state + "调用 observe 核对当前状态后继续游玩。" + extra
 
 
 def abandon_recording(bridge_port: int, saved: dict | None, previous_dir, problem) -> dict:
@@ -966,11 +970,11 @@ def abandon_recording(bridge_port: int, saved: dict | None, previous_dir, proble
     client = BridgeClient(port=bridge_port, timeout=900)
     try:
         hello = client.call('hello')
-        if saved is not None and saved.get('state') == 'recording':
+        if pending_recording(saved):
             plugin = (hello.get('clock') or {}).get('plugin') or {}
             recording = plugin.get('state') == 'recording' or plugin.get('recording') is True
             same = bool(plugin.get('dir')) and Path(plugin['dir']).resolve() == Path(saved['options']['dir']).resolve()
-            if recording and same:
+            if same and (recording or plugin.get('state') == 'finishing'):
                 print(f"[record] 原录像接不上（{problem}）：先收尾它", flush=True)
                 Recorder.finish_saved(client.call, saved, previous_dir, log=lambda m: print(m, flush=True))
             else:

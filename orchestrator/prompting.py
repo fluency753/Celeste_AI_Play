@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from .config import REPO_ROOT, chapter_name_by_id
 from .kb_study import KbStudy
+from .execution import workspace_capabilities
 from .modes import act_frame_cap, game_tools, has_cutscene_tool, is_explore
 
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
@@ -106,6 +107,8 @@ def thought_limit(cfg) -> str:
 
 def explore_search_rule(cfg) -> str:
     """探索模式提示词里自写模拟器与搜索程序推演帧数的一句（explore_search_frames 为 None 时不写）。"""
+    if not workspace_capabilities(cfg).programs:
+        return ""
     frames = getattr(cfg, "explore_search_frames", 150)
     return "" if frames is None else f"自写的模拟器或搜索程序每次推演最多 {frames} 帧（从起始状态往后模拟的帧数）。"
 
@@ -131,6 +134,7 @@ def fill(text: str, cfg) -> str:
     """把提示词里的占位符换成本次的值：可调参数（orchestrator/tuning.py；默认值下与原来的文字完全相同），
     以及随设置变化的游戏工具清单与剧情处理说明。"""
     from .tuning import seconds_text
+    workspace = workspace_capabilities(cfg)
     if "{game_tool_list}" in text:
         text = text.replace("{game_tool_list}", game_tool_list(cfg))
     if "{preset_sim}" in text:     # 探索模式：开了限额预测时预设模拟器只能经 simulate 按额度用，否则完全不开放
@@ -139,10 +143,27 @@ def fill(text: str, cfg) -> str:
     if "{auto_handling}" in text:
         text = text.replace("{auto_handling}", auto_handling(cfg))
     values = {
+        "{tas_workspace_rule}": ("`/workspace/game/tas.py` 提供 `load(path,start_line=...)`、`window(document,offset,count)` 和 `to_sim(inputs)`。前两者只生成计划，不操作游戏；不执行 console/Set/Read 等命令，需显式选取纯输入区。模拟转换拒绝不能表达的菜单键，不忽略它们。"
+                                  if workspace.programs else ""),
+        "{tas_cursor_rule}": ("`input_cursor.next`是选定输入文档从0开始的帧偏移，不是源文件行号；用同一load文档和window(offset=next)生成下一窗，或把remaining_inputs写入仍声明celeste_tas的JSON。旧工具不能把剩余数组直接交给默认格式的inputs。"
+                               if workspace.programs else "继续TAS输入时保留 input_format=celeste_tas，按返回的input_cursor.next与remaining_inputs核对输入进度；不要把TAS剩余数组当成默认格式的inputs。"),
+        "{explore_reading_rule}": ("先读必读清单，再在 /workspace/notes.md 记录工具约定。help/ 里是操作提示，需要时随时可以读。"
+                                   if workspace.workspace_read and workspace.workspace_write else
+                                   "根据当前观测、工具说明与真实尝试学习；当前没有文件工具，不要求读取知识库或工作区笔记。"),
+        "{explore_reference_rule}": ("基本规则见 /kb/basics.md，坐标与观测格式见 /kb/data.md，按键和工具约定见 /kb/tools.md。"
+                                     if workspace.workspace_read else "按键和工具约定以本次提供的游戏工具说明为准。"),
+        "{explore_environment_rule}": ("Read/Write/Bash 对应容器的文件读取、写入和断网命令；"
+                                       if workspace.programs else "当前只有游戏工具，不能读取文件或运行程序；"),
+        "{observation_source_rule}": ("使用进入新房间时返回的完整 JSON，或读取 `/workspace/game/latest_obs.json` 的 `obs`"
+                                      if workspace.workspace_read else "使用进入新房间时返回的完整 JSON 或 observe 返回的观测"),
+        "{geometry_program_rule}": ("必要时自行写程序处理整个房间：可用角色矩形扫过候选通道，或把障碍按碰撞箱尺寸扩张后分析角色锚点的可通行空间。"
+                                    if workspace.programs else "根据观测中的矩形边界和角色尺寸核对候选通道，用短动作验证存在歧义的连接。"),
+        "{geometry_record_rule}": ("在笔记或程序里保留已验证的通道、连接依据、失败假设及适用条件。"
+                                   if workspace.workspace_write else "在公开解说中简短总结已验证的通道、连接依据与失败假设。"),
         "{act_max_frames}": str(act_frame_cap(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
-        "{program_freedom}": _engine_text(PROGRAM_FREEDOM, cfg),
+        "{program_freedom}": _engine_text(PROGRAM_FREEDOM, cfg) if workspace.programs else "。",
         "{program_lead}": _engine_text(PROGRAM_LEAD, cfg),
         "{parallel_rule}": _engine_text(PARALLEL_RULE, cfg),
         "{stiffness_rule}": stiffness_rule(cfg),
@@ -197,36 +218,41 @@ class PromptPart:
     sep: str = ""
 
 
-def _file_parts(name: str, transform=None, sep: str = "\n\n") -> list[PromptPart]:
-    """一个提示词文件；system_*.md 里的 {interface} 处插入 interface_zh.md（拆成前、接口、后三块）。"""
+def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None) -> list[PromptPart]:
+    """Expand explicit slots and the shared interface, retaining each source for preview."""
     text = read_part(name)
     if transform:
         text = transform(text)
-    if "{interface}" not in text:
+    blocks = dict(slots or {})
+    if '{interface}' in text:
+        blocks['{interface}'] = [PromptPart('interface_zh.md', read_part('interface_zh.md'), 'interface_zh.md')]
+    if not any(key in text for key in blocks):
         return [PromptPart(name, text, name, sep)]
-    pieces = text.split("{interface}")
-    interface = read_part("interface_zh.md")
-    out = [PromptPart(name, pieces[0], name, sep)]
-    for rest in pieces[1:]:
-        out.append(PromptPart("interface_zh.md", interface, "interface_zh.md"))
-        out.append(PromptPart(name + "（接上）", rest, name))
-    return out
+    import re
+    parts = []
+    for i, piece in enumerate(re.split('(' + '|'.join(re.escape(key) for key in blocks) + ')', text)):
+        if i % 2:
+            parts.extend(blocks[piece])
+        else:
+            parts.append(PromptPart(name + ('（接上）' if i else ''), piece, name, sep if i == 0 else ''))
+    return parts
 
 
 def _speedrun_parts(cfg) -> list[PromptPart]:
     """速通模式的系统提示词。按预置模拟器的开关分成两个版本（目标都是以最短的章节计时通关）：
-    - 开模拟器（默认，容器运行方式）：智能体可以随意调用 /sim 寻找并优化路线；提示词里写明做法、建议的工作方式、
+    - 开模拟器（有容器程序通道）：智能体可以随意调用 /sim 寻找并优化路线；提示词里写明做法、建议的工作方式、
       物理参数简表、规划与优化的要求、自动重试与规划回放（system_sim、container_sim、sim、free/pause、retry、playback）；
-    - 关模拟器（--no-sim，或本机运行方式）：不教怎么玩，只写目标、规则（不得调用或破解模拟器、不读游戏程序）与工具接口，
+    - 关模拟器（--no-sim，或没有程序通道）：不教怎么玩，只写目标、规则（不得调用或破解模拟器、不读游戏程序）与工具接口，
       其余由智能体自己决定（system_nosim、container_nosim）；容器里另有展示接口（show.trajectory），算出的逐帧轨迹
       可以交给系统画给观众看，只用于展示。
     容器运行方式下都有 hud_zh.md：思考期间用 narrate 随时更新 HUD 的思考语句、运行程序期间报告进度；直播模式（live）
     另加 live_zh.md：观众实时观看、解说计时 10 秒、可按用户要求退出关卡，但不改变速通目标。"""
-    runtime = cfg.runtime
+    workspace = workspace_capabilities(cfg)
+    reuse = "之前写的程序与笔记都在工作区里，可以继续用。" if workspace.workspace_read else "以当前观测和已有对话核对进度后继续。"
     parts: list[PromptPart] = []
-    if not (cfg.sim and runtime == "container"):
+    if not (cfg.sim and workspace.programs):
         parts += _file_parts("system_nosim_zh.md", sep="")
-        parts += _file_parts("container_nosim_zh.md" if runtime == "container" else "host_zh.md")
+        parts += _file_parts("container_nosim_zh.md" if workspace.programs else "host_zh.md")
     else:
         parts += _file_parts("system_sim_zh.md", sep="")
         parts += _file_parts("container_sim_zh.md") + _file_parts("sim_zh.md")
@@ -239,7 +265,7 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
             parts += _file_parts("free_zh.md") + _file_parts("retry_zh.md")
         if cfg.playback:
             parts += _file_parts("playback_zh.md")
-    if runtime == "container":
+    if workspace.programs:
         parts += _file_parts("hud_zh.md")
         if cfg.live:
             parts += _file_parts("live_zh.md")
@@ -247,13 +273,13 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
     if plan_is_partial(getattr(cfg, "plan", None)):
         parts.append(PromptPart("本次的范围（按段通关时自动加）",
                                 "# 本次的范围\n\n" + describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, agent_navigation=cfg.cutscene_mode == 'agent')
-                                + "之前写的程序与笔记都在工作区里，可以继续用。", None, "\n\n"))
+                                + reuse, None, "\n\n"))
     elif cfg.chapters and len(cfg.chapters) > 1:
         names = " → ".join(chapter_name_by_id(c) for c in cfg.chapters)
         parts.append(PromptPart("本次的章节（多章时自动加）",
                                 "# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
                                 + ("一章结算并返回选章地图后，按主控报告的下一目标自行导航；主控只核对章节和起点。" if cfg.cutscene_mode == 'agent' else "一章通关后系统自动进入下一章，你接着玩。")
-                                + "之前写的程序与笔记都在工作区里，可以继续用。", None, "\n\n"))
+                                + reuse, None, "\n\n"))
     return parts
 
 
@@ -264,7 +290,12 @@ def prompt_parts(cfg) -> list[PromptPart]:
     剧情模式的说明只在开放了 cutscene 工具时加（见 modes.has_cutscene_tool）。可调参数的占位符在这里按本次的值填入。"""
     if is_explore(cfg):
         tools = "/".join(game_tools(cfg))
-        parts = _file_parts("explore_zh.md", lambda t: t.replace("{game_tools}", tools), sep="")
+        workspace = workspace_capabilities(cfg)
+        slots = {
+            '{explore_notes}': _file_parts('explore_notes_zh.md') if workspace.workspace_read and workspace.workspace_write else [],
+            '{explore_programs}': _file_parts('explore_programs_zh.md') if workspace.programs else [],
+        }
+        parts = _file_parts("explore_zh.md", lambda t: t.replace("{game_tools}", tools), sep="", slots=slots)
         if cfg.live:
             parts += _file_parts("explore_live_zh.md")
         chapters = cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else [])
@@ -281,13 +312,13 @@ def prompt_parts(cfg) -> list[PromptPart]:
     parts += _file_parts("room_analysis_zh.md")
     if cfg.cutscene_mode == 'agent':
         parts += _file_parts("agent_controls_zh.md")
-    if getattr(cfg, "runtime", "container") == "container" and getattr(cfg, "live", False):
+    if workspace_capabilities(cfg).programs and getattr(cfg, "live", False):
         parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）
     if has_cutscene_tool(cfg):
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
                                 f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式由主控自动播放到输入节点，无需wait；"
                                 "用advance/choose/skip或act明确输入，教学用act。分支须先读选项后自行选择，不得用advance代选。", None, "\n"))
-    if is_explore(cfg) and getattr(cfg, "explore_program_runs", None):
+    if is_explore(cfg) and workspace_capabilities(cfg).programs and getattr(cfg, "explore_program_runs", None):
         parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",
                                 f"两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。",
                                 None, "\n"))
@@ -333,12 +364,20 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
     table = getattr(cfg, "checkpoints", None) or {}
     items = "、".join(piece_label(p, table) for p in (cfg.plan or [])) \
         or "、".join(chapter_name_by_id(c) for c in (cfg.chapters or []))
+    workspace = workspace_capabilities(cfg)
+    fresh_context = "这是一个新的会话：之前的对话不在了。"
+    if workspace.workspace_read:
+        fresh_context += "工作区里的笔记与程序仍保留。"
     head = ("（系统）之前指定的章节都已经通关。"
-            + ("这是一个新的会话：之前的对话不在了，但工作区里的笔记与程序都在。" if fresh_session else "现在接着同一个会话，"))
+            + (fresh_context if fresh_session else "现在接着同一个会话，"))
     rules = ("本次的规则以当前的系统提示词为准" if fresh_session
              else "本次的规则以这条消息后面附上的当前规则为准")
-    return (head + f"开始新的范围：{items}。主控已经进入这一章。{rules}，和之前相比可能有变化"
-            "（例如单次 act 与自写推演的帧数上限、思考语句的要求），之前写的程序与笔记按新规则检查后再用。"
+    changed = "单次 act 与自写推演的帧数上限、思考语句的要求" if workspace.programs else "单次 act 的帧数上限、思考语句的要求"
+    reuse = "之前写的程序与笔记按新规则检查后再用。" if workspace.workspace_read else "按当前规则核对后继续。"
+    entry = ("已进入存档，请先观察当前界面，再自行导航到本次指定的章节与起点。" if cfg.cutscene_mode == 'agent'
+             else "主控已经进入这一章。")
+    return (head + f"开始新的范围：{items}。{entry}{rules}，和之前相比可能有变化"
+            + f"（例如{changed}），{reuse}"
             "请先调用 observe 看清当前画面，再开始游玩。")
 
 
@@ -357,4 +396,4 @@ def resume_prompt(reason: str, minutes: float, study_note: str | None = None) ->
             "结果没能送回给你。")
     if study_note:
         return text + "准备阶段还没有结束：\n" + study_note
-    return text + "请先调用 observe 看清当前这一帧（工作区里的 game/ 文件也已更新），再继续游玩。"
+    return text + "请先调用 observe 看清当前这一帧，再继续游玩。"

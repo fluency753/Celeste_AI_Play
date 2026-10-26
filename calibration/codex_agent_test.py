@@ -263,6 +263,14 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             load_preparation(str(self.root), self.cfg, KbStudy(self.kb, 10))
 
+    def test_codex_preparation_uses_actual_workspace_capability_not_client_label(self):
+        data = {**self.preparation(), 'runtime': 'container', 'engine': 'codex'}
+        (self.root / 'prepare_summary.json').write_text(json.dumps(data), encoding='utf-8')
+        self.cfg.runtime = 'host'
+        restored = load_preparation(str(self.root), self.cfg, self.study)
+        self.assertEqual(restored['session_id'], 'native-thread')
+        self.assertTrue(self.study.complete())
+
     def test_quick_check_cannot_be_used_as_full_preparation(self):
         data = {**self.preparation(), "quick_check": True}
         (self.root / "prepare_summary.json").write_text(json.dumps(data), encoding="utf-8")

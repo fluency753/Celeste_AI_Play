@@ -12,6 +12,25 @@ from orchestrator.metrics import Metrics
 
 
 class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_host_claude_idle_chat_does_not_create_an_unused_container(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'run_state.json').write_text(json.dumps({'agent':'test','save':'test','model':'opus',
+                'effort':'high','engine':'claude','runtime':'host','session_id':'original'}))
+            (root/'summary.json').write_text('{"completed":true}')
+            Metrics(root/'metrics.json','test','opus','high',600)
+            runner = SimpleNamespace(run=AsyncMock())
+            @asynccontextmanager
+            async def host(cfg, directory, metrics, container, **options):
+                self.assertIsNone(container)
+                yield runner
+            with patch('orchestrator.chat.ensure_container') as container, \
+                 patch('orchestrator.chat.host_runner', host), \
+                 patch('orchestrator.runtimes.Runtime.token', return_value='stub'):
+                await chat(root)
+            container.assert_not_called()
+            runner.run.assert_awaited_once()
+
     async def test_host_codex_chat_routes_programs_through_its_container(self):
         from orchestrator.codex_agent import CodexRunner
         with tempfile.TemporaryDirectory() as tmp:

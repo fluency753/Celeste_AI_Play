@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from orchestrator.config import CHAPTER_SIDS, REPO_ROOT
+from orchestrator.recording_lifecycle import pending_recording as is_recording_pending
 
 CHAPTER_LABELS = {0: "序章", 1: "1A 被遗弃之城", 2: "2A 旧址", 3: "3A 天空度假村", 4: "4A 黄金山脊", 5: "5A 镜之神殿",
                   6: "6A 映像", 7: "7A 顶峰", 8: "终章", 9: "8A 核心", 10: "第九章 告别"}
@@ -272,7 +273,8 @@ def prompt_preview(options: dict) -> dict:
         parts.append({"label": "原生 Codex 工具映射（自动加）", "text": codex_tool_mapping(cfg), "source": None,
                       "sep": "\n\n", "overridden": False})
     first = None
-    if cfg.study and cfg.runtime == "container":
+    from orchestrator.execution import workspace_capabilities
+    if cfg.study and workspace_capabilities(cfg).workspace_read:
         files = [rel for rel in required_files(root_of(cfg.mode)) if rel not in set(cfg.kb_deny)]
         paths = [f"{CONTAINER_KB}/{rel}" for rel in files]
         if cfg.sim:
@@ -457,7 +459,7 @@ def runs(limit: int = 40) -> list[dict]:
             saved = Recorder.saved_session(directory)
             if saved:
                 recording = Path(saved['options']['dir'])
-                pending_recording = saved.get('state') == 'recording'
+                pending_recording = is_recording_pending(saved)
         except RecordingError:
             pass  # 不可读的会话在接管时明确报错；不使整个运行列表不可用。
         rows.append({
@@ -522,22 +524,32 @@ def release(bridge_port: int = 47774) -> dict:
     def hand_back():
         nonlocal released
         if not released:
+            Recorder.validate_release(saved, client.call('hello'))
             client.call("deactivate")
             released = True
 
     try:
-        from orchestrator.recording import Recorder, RecordingError
+        from orchestrator.recording import Recorder, RecordingError, RecordingOwnershipError
         directory = latest_run()
         try:
             saved = Recorder.saved_session(directory) if directory else None
         except RecordingError as exc:
             saved, note = None, f"原录制会话读不出来，没有收尾：{exc}"
-        if saved and saved.get('state') == 'recording':
+        try:
+            Recorder.validate_release(saved, client.call('hello'))
+        except RecordingOwnershipError as exc:
+            raise ValueError(str(exc)) from exc
+        if is_recording_pending(saved):
             try:   # 采集一停就交还游戏，不等 ffmpeg 收尾与纯享版
                 Recorder.finish_saved(client.call, saved, directory, on_capture_stopped=hand_back)
+            except RecordingOwnershipError as exc:
+                raise ValueError(str(exc)) from exc
             except Exception as exc:  # noqa: BLE001（录像收不了尾也要交还游戏）
-                Recorder.abandon_saved(saved, exc)
                 note = f"原录像无法收尾，已放弃：{exc}"
+                try:
+                    Recorder.abandon_saved(saved, exc)
+                except Exception as save_error:
+                    note += f"；放弃状态未能保存：{save_error}"
         else:
             try:
                 Recorder.validate_resume(None, client.call('hello'))

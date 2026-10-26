@@ -129,6 +129,123 @@ class RecordingSessionTests(unittest.TestCase):
         with self.assertRaises(RecordingError):
             Recorder.adopt(self.call, saved, self.second, log=lambda _: None)
 
+    def test_stop_command_failure_keeps_ownership_for_cleanup_retry(self):
+        recorder = self.start()
+        original = recorder.call
+        def fail(command, **args):
+            if command == 'record':
+                raise OSError('bridge send failed')
+            return original(command, **args)
+        recorder.call = fail
+        with self.assertRaisesRegex(OSError, 'bridge send failed'):
+            recorder.stop()
+        self.assertTrue(recorder.started)
+        self.assertEqual(Recorder.saved_session(self.first)['state'], 'recording')
+        recorder.call = original
+        self.assertEqual(recorder.stop()['state'], 'finished')
+        self.assertFalse(recorder.started)
+
+    def test_asynchronous_start_ignores_previous_terminal_status_until_own_capture_appears(self):
+        recorder = Recorder(self.call, RecordOptions(self.directory, 'ffmpeg', '', audio_source='game_nrt'), log=lambda _: None)
+        recorder.bind_run(self.first)
+        original = recorder.call
+        requested = False
+        stale_once = True
+        def queued(command, **args):
+            nonlocal requested, stale_once
+            if command == 'hello' and not requested:
+                reply = copy.deepcopy(self.hello)
+                reply['clock']['plugin'].update(state='finished', dir=str(self.second))
+                return reply
+            if command == 'record' and args.get('action') == 'start':
+                requested = True
+                return original(command, **args)
+            if command == 'hello' and stale_once:
+                stale_once = False
+                reply = copy.deepcopy(self.hello)
+                reply['clock'].update(lockstep=False)
+                reply['clock']['plugin'].update(state='finished', dir=str(self.second), recording=False)
+                return reply
+            return original(command, **args)
+        recorder.call = queued
+        with patch('orchestrator.recording.gamewindow.ensure_visible'), patch('orchestrator.recording.time.sleep'):
+            recorder.start()
+        self.assertTrue(recorder.started)
+        self.assertEqual(Recorder.saved_session(self.first)['state'], 'recording')
+        self.assertEqual([a['action'] for c, a in self.commands if c == 'record'], ['start'])
+
+    def test_encoder_timeout_is_pending_and_retry_does_not_stop_or_release_twice(self):
+        recorder = self.start()
+        original = recorder.call
+        def finishing(command, **args):
+            reply = original(command, **args)
+            if command == 'record' and args.get('action') == 'stop':
+                self.hello['clock']['plugin']['state'] = 'finishing'
+            return reply
+        recorder.call = finishing
+        release = Mock()
+        result = recorder.stop(timeout=0, on_capture_stopped=release)
+        self.assertEqual(result['state'], 'finishing')
+        self.assertTrue(result['pending'])
+        self.assertFalse(recorder.started)
+        self.assertEqual(Recorder.saved_session(self.first)['state'], 'finishing')
+        with self.assertRaisesRegex(RecordingError, '收尾'):
+            Recorder.validate_resume(Recorder.saved_session(self.first), self.hello)
+        self.hello['clock']['plugin']['state'] = 'finished'
+        result = recorder.stop(timeout=0, on_capture_stopped=release)
+        self.assertEqual(result['state'], 'finished')
+        self.assertFalse(result['pending'])
+        self.assertIs(recorder.stop(on_capture_stopped=release), result)
+        release.assert_called_once()
+        self.assertEqual([a['action'] for c, a in self.commands if c == 'record'], ['start', 'stop'])
+
+    def test_timeout_cannot_claim_finished_while_capture_still_runs(self):
+        recorder = self.start()
+        original = recorder.call
+        def inconsistent(command, **args):
+            if command == 'record' and args.get('action') == 'stop':
+                self.hello['clock']['plugin']['state'] = 'finished'
+                self.hello['clock']['plugin']['recording'] = True
+                return copy.deepcopy(self.hello)
+            return original(command, **args)
+        recorder.call = inconsistent
+        release = Mock()
+        result = recorder.stop(timeout=0, on_capture_stopped=release)
+        self.assertEqual(result['state'], 'recording')
+        self.assertTrue(recorder.started)
+        release.assert_not_called()
+        self.assertEqual(Recorder.saved_session(self.first)['state'], 'recording')
+        self.hello['clock']['lockstep'] = False
+        self.hello['clock']['plugin']['recording'] = False
+        self.assertEqual(recorder.stop(timeout=0, on_capture_stopped=release)['state'], 'finished')
+        release.assert_called_once()
+
+    def test_failed_manifest_publication_is_retried_before_caching_completion(self):
+        recorder = self.start()
+        save = recorder._save_session
+        attempts = []
+        def interrupted(state):
+            attempts.append(state)
+            if len(attempts) == 1:
+                raise PermissionError('manifest locked')
+            return save(state)
+        with patch.object(recorder, '_save_session', side_effect=interrupted):
+            with self.assertRaisesRegex(PermissionError, 'manifest locked'):
+                recorder.stop()
+            self.assertIsNone(recorder.result)
+            self.assertEqual(Recorder.saved_session(self.first)['state'], 'recording')
+            self.assertEqual(recorder.stop()['state'], 'finished')
+        self.assertEqual(Recorder.saved_session(self.first)['state'], 'finished')
+        self.assertEqual([a['action'] for c, a in self.commands if c == 'record'], ['start', 'stop'])
+
+    def test_completed_recorder_cannot_be_reused_for_another_capture(self):
+        recorder = self.start()
+        recorder.stop()
+        before = list(self.commands)
+        with self.assertRaisesRegex(RecordingError, '新的 Recorder'):
+            recorder.start()
+        self.assertEqual(self.commands, before)
+
     def test_corrupted_identity_and_foreign_release_are_rejected(self):
         self.start().retain()
         saved = Recorder.saved_session(self.first)
@@ -193,6 +310,47 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertTrue(result['released'])
         self.assertIn('读不出来', result['note'])
         self.assertIn('deactivate', [c for c, a in self.commands])
+
+    def test_console_release_rejects_foreign_capture_without_abandoning_own_session(self):
+        self.start().retain()
+        self.hello['clock']['plugin']['dir'] = str(self.second)
+        for state in ('recording', 'finishing'):
+            with self.subTest(state=state):
+                self.hello['clock']['plugin']['state'] = state
+                with self.assertRaisesRegex(ValueError, '另一段录像'):
+                    self.release_with(SimpleNamespace(call=self.call, close=Mock()))
+                self.assertEqual(Recorder.saved_session(self.first)['state'], 'recording')
+                self.assertNotIn('deactivate', [c for c, a in self.commands])
+
+    def test_cleanup_persistence_failure_cannot_block_release_of_lost_capture(self):
+        self.start().retain()
+        self.hello['clock'].update(lockstep=False, plugin={'state': 'idle'})
+        self.hello['record_audio_active'] = False
+        with patch.object(Recorder, 'abandon_saved', side_effect=PermissionError('manifest locked')):
+            result = self.release_with(SimpleNamespace(call=self.call, close=Mock()))
+        self.assertTrue(result['released'])
+        self.assertIn('未能保存', result['note'])
+        self.assertIn('deactivate', [c for c, a in self.commands])
+
+    def test_stop_rechecks_owner_before_sending_and_during_encoder_wait(self):
+        from orchestrator.recording import RecordingOwnershipError
+        recorder = self.start()
+        self.hello['clock']['plugin']['dir'] = str(self.second)
+        with self.assertRaises(RecordingOwnershipError):
+            recorder.stop(timeout=0)
+        self.assertEqual([a['action'] for c, a in self.commands if c == 'record'], ['start'])
+        self.hello['clock']['plugin']['dir'] = str(self.directory)
+        original = recorder.call
+        def takeover(command, **args):
+            reply = original(command, **args)
+            if command == 'record' and args.get('action') == 'stop':
+                self.hello['clock']['plugin'].update(dir=str(self.second), state='finished', frames=999)
+            return reply
+        recorder.call = takeover
+        with self.assertRaises(RecordingOwnershipError):
+            recorder.stop(timeout=0)
+        self.assertIsNone(recorder.result)
+        self.assertEqual(Recorder.saved_session(self.first)['state'], 'recording')
 
     def test_console_release_releases_game_as_soon_as_capture_stops(self):
         self.start().retain()
@@ -313,6 +471,7 @@ class RunRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 playback = SimpleNamespace(collect=False,close=Mock())
                 try:
                     with patch('orchestrator.run.Recorder',return_value=recorder) as recorder_class, \
+                         patch('orchestrator.run.ensure_container',return_value='test-container'), \
                          patch('orchestrator.run.build_server',return_value=server), \
                          patch('orchestrator.run.add_gate_route'), \
                          patch('orchestrator.run.uvicorn.Server',return_value=web), \

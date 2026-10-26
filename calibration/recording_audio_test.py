@@ -67,7 +67,8 @@ class RecordingAudioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             recorder=self.recorder(folder,Mock());recorder.started=True
             (Path(folder)/'gameplay.mp4').touch()
-            states=[({'lockstep':True},{'state':'finishing','recording':False}),
+            states=[({'lockstep':True},{'state':'recording','recording':True}),
+                    ({'lockstep':True},{'state':'finishing','recording':False}),
                     ({'lockstep':False},{'state':'finishing','recording':True}),
                     ({'lockstep':False},{'state':'finishing','recording':False}),
                     ({'lockstep':False},{'state':'finished','recording':False,'frames':1})]
@@ -79,7 +80,7 @@ class RecordingAudioTests(unittest.TestCase):
                 events.append('encoding');return {}
             with patch.object(recorder,'_plugin',side_effect=state),patch('orchestrator.recording.time.sleep'),patch('orchestrator.recording.make_pure',side_effect=pure):
                 recorder.stop(on_capture_stopped=lambda:events.append('release'))
-            self.assertEqual(events,['capture:True:False','capture:False:True','capture:False:False','release','capture:False:False','encoding'])
+            self.assertEqual(events,['capture:True:True','capture:True:False','capture:False:True','capture:False:False','release','capture:False:False','encoding'])
 
     def test_old_plugin_is_rejected_before_starting_secondary_mixer(self):
         with tempfile.TemporaryDirectory() as folder:

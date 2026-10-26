@@ -14,6 +14,7 @@ from .config import CHAPTER_SIDS, REPO_ROOT
 from .efforts import valid_effort
 from .modes import EXPLORE, SPEEDRUN
 from .runtimes import RUNTIMES
+from .execution import workspace_capabilities
 
 AGENT_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}"
 MODEL_PATTERN = r"[A-Za-z0-9._:/\[\]-]{1,100}"
@@ -133,8 +134,10 @@ def normalize(options: dict) -> dict:
         raise ValueError("目前只支持蔚蓝官方章节")
     if o["runtime"] not in ("container", "host"):
         raise ValueError("运行方式须为容器或本机")
-    if o["runtime"] == "host" and ((o["mode"] == SPEEDRUN and o["sim"]) or (o["mode"] == EXPLORE and o["sim_assist"])):
-        raise ValueError("本机运行方式没有沙箱，不能开预置模拟器或限额预测")
+    from types import SimpleNamespace
+    capabilities = workspace_capabilities(SimpleNamespace(engine=o['engine'], runtime=o['runtime']))
+    if not capabilities.programs and ((o["mode"] == SPEEDRUN and o["sim"]) or (o["mode"] == EXPLORE and o["sim_assist"])):
+        raise ValueError("当前本机执行器没有沙箱，不能开预置模拟器或限额预测")
     o["study_minutes"] = _number(o, "study_minutes", 1, 600, "准备阶段上限")
     o["max_usage"] = _number(o, "max_usage", 0.01, 1, "提前暂停的用量比例", optional=True)
     o["quota_wait_max_hours"] = _number(o, "quota_wait_max_hours", 0.1, 240, "额度等待上限")
@@ -268,8 +271,9 @@ def config_for(options: dict):
     cfg = RunConfig(agent=o["agent"], save=o["save"]["name"], model=o["model"], effort=o["effort"], provider=o["provider"])
     cfg.engine, cfg.runtime, cfg.mode = o["engine"], o["runtime"], o["mode"]
     cfg.knowledge_profile = KNOWLEDGE_OF_MODE[o["mode"]]
-    cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and o["runtime"] == "container"
-    cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"] and o["runtime"] == "container"
+    capabilities = workspace_capabilities(cfg)
+    cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and capabilities.programs
+    cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"] and capabilities.programs
     cfg.stiffness = o["mode"] == EXPLORE and o["stiffness"]
     cfg.live, cfg.playback, cfg.cutscene_mode = o["live"], o["playback"], o["cutscene_mode"]
     cfg.pause_limit = o["limit_planning"] and cfg.sim

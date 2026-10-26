@@ -21,7 +21,7 @@ Check(seededDesc.createInstance(out var seededOneShot)); Check(seededOneShot.sta
 RecordingAudio.Load();
 try {
 RecordingAudio.Start(live,Path.Combine(game,"Content","FMOD","Desktop"),47876);
-if (Environment.GetEnvironmentVariable("LIFECYCLE_ONLY") == "1") { RestartChecks.Run(live, game, music); LifecycleChecks.Run(live, music); return; }
+if (Environment.GetEnvironmentVariable("LIFECYCLE_ONLY") == "1") { SnapshotChecks.Run(live); RestartChecks.Run(live, game, music); LifecycleChecks.Run(live, music); return; }
 if (!asyncSource) {
     var startupMixer=typeof(RecordingAudio).GetField("full",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static)!.GetValue(null)!;
     var startupPairs=(System.Collections.IDictionary)startupMixer.GetType().GetField("Pairs")!.GetValue(startupMixer)!;

@@ -1,0 +1,4 @@
+## 辅助程序
+
+{program_lead}{cpu_rule}{parallel_rule}/workspace 是从主机挂载进容器的目录，读写比容器内的 /tmp 慢得多，许多进程同时读写时会互相排队：模拟与搜索的循环里不要反复读写工作区文件（例如每次试验都重新读观测、扫描历史记录或写状态文件），需要的数据先一次读进内存或拷到 /tmp，模拟器对象尽量只构造一次再复用。
+{explore_program_rule}若有辅助程序，使用 /workspace/game/show.py 的 status() 报告真实进度。

@@ -5,21 +5,26 @@ import hashlib
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
+
+from .execution import workspace_capabilities
 
 
 def load_preparation(path: str, cfg, study):
     directory = Path(path).resolve()
     data = json.loads((directory / "prepare_summary.json").read_text(encoding="utf-8"))
-    if data.get('runtime', 'container') != cfg.runtime:
+    engine = data.get('engine', 'codex')
+    provider = data.get('provider', 'codex')
+    if engine != cfg.engine or provider != ('codex' if cfg.engine == 'codex' else cfg.provider):
+        raise ValueError('准备会话的执行器或提供方不同，不能跨执行器恢复会话')
+    prepared_workspace = workspace_capabilities(SimpleNamespace(
+        engine=data.get('engine', 'codex'), runtime=data.get('runtime', 'container')))
+    if prepared_workspace != workspace_capabilities(cfg):
         raise ValueError('准备阶段与试玩阶段的运行环境不同，不能恢复同一会话')
     if data.get("knowledge_profile", "full") != cfg.knowledge_profile:
         raise ValueError("准备会话的知识范围不同，不能将已读攻略的会话用于新手探索")
     if data.get("success") is False or data.get("quick_check") or not data.get("kb_study", {}).get("complete"):
         raise ValueError("该目录没有完成真实的全库准备，不能跳过阅读")
-    engine = data.get('engine', 'codex')
-    provider = data.get('provider', 'codex')
-    if engine != cfg.engine or provider != ('codex' if cfg.engine == 'codex' else cfg.provider):
-        raise ValueError('准备会话的执行器或提供方不同，不能跨执行器恢复会话')
     if not data.get("game_tools_registered", data.get("native_game_tools")):
         raise ValueError("该准备会话尚未登记完整游戏工具，请用新版 preparation 重新准备")
     if data.get("metrics", {}).get("agent") != cfg.agent:

@@ -12,6 +12,8 @@ from pathlib import Path
 from .telemetry import publish
 from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, CHAPTER_SIDS
 from .metrics import Metrics
+from .navigation import ChapterNavigation
+from .execution import workspace_capabilities
 from .observation import enrich_obs, fmt_ticks
 from .sandbox import run_program
 from .goals import GoalManager
@@ -192,8 +194,44 @@ def expand_inputs(inputs: list[str], max_frames: int, allowed: set[str] = AGENT_
 
 
 class GameSession:
-    piece = None            # 当前这一截（segments.Piece；__init__ 里按计划设置）
-    segment_index = 0       # 当前所在的段
+    @property
+    def navigation(self):
+        # Lightweight consumers can construct a session without opening game logs.
+        if not hasattr(self, '_navigation'):
+            self._navigation = ChapterNavigation()
+        return self._navigation
+
+    @property
+    def piece(self):
+        return self.navigation.current
+
+    @piece.setter
+    def piece(self, value):
+        self.navigation.current = value
+
+    @property
+    def chapter_queue(self):
+        return self.navigation.queue
+
+    @chapter_queue.setter
+    def chapter_queue(self, value):
+        self.navigation.queue = list(value)
+
+    @property
+    def chapter_finished(self):
+        return self.navigation.switching
+
+    @chapter_finished.setter
+    def chapter_finished(self, value):
+        self.navigation.switching = bool(value)
+
+    @property
+    def segment_index(self):
+        return self.navigation.segment
+
+    @segment_index.setter
+    def segment_index(self, value):
+        self.navigation.segment = value
 
     @property
     def _table(self) -> dict:
@@ -226,24 +264,17 @@ class GameSession:
         self._held_input = ("", "celeste_ai")   # 最近一次真正喂给游戏的那一帧按键与格式（思考僵直时保持它）
         self._freeze_base: tuple[float, float, float] | None = None   # 这次冻结开始时的（思考、工具、压缩）累计
         self.replay_stiffness: dict | None = None   # 重放（orchestrator/replay.py）：下一次 act 前按记录僵直
-        # 依次通关多章或按段通关（segments.py）：当前这一截完成后，主控自动换到队列里的下一截。
-        # 队列里的每一项是 Piece（整章也可以直接写章节编号）；chapter_finished = 这一截已完成、正在等着换过去
+        # Navigation owns the current piece, pending target and entry transition.
         plan = list(cfg.plan) if cfg.plan else [Piece(c) for c in (cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else []))]
-        self.piece: Piece | None = Piece.of(plan[0]) if plan else None
-        self.chapter_queue: list = plan[1:]
-        self.segment_index = self.piece.start if self.piece else 0   # 当前所在的段（进入下一个检查点的房间时加一）
-        if self.piece is not None and cfg.resume_segment is not None:
-            self.segment_index = max(self.piece.start, cfg.resume_segment)   # 续跑：上次已经走到的段
+        self._navigation = ChapterNavigation.start(plan,
+            pending=cfg.cutscene_mode == 'agent' and cfg.resume_pending,
+            resume_segment=cfg.resume_segment, previous_sid=self.metrics.state.chapter)
         self.metrics.update(piece_done=False)
-        self.chapter_finished = cfg.cutscene_mode == 'agent' and cfg.resume_pending
-        if self.chapter_finished:
-            self.chapter_queue, self.piece = plan, None
-        self._agent_previous_sid = self.metrics.state.chapter
         self._pending_complete = cfg.resume_completion_pending
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
         self._decisions_log = open(run_dir / "decisions.jsonl", "a", encoding="utf-8")
         # 容器方式下，观测与轨迹同时写进智能体的工作区，供它自写的程序读取
-        self.workspace: Path | None = cfg.workspace_dir if cfg.runtime == "container" else None
+        self.workspace: Path | None = cfg.workspace_dir if workspace_capabilities(cfg).workspace_write else None
         from .sim_assist import SimEnergy
         from .sim_assist import AssistRules
         self.assist_rules = AssistRules.of(cfg)
@@ -298,6 +329,7 @@ class GameSession:
                 story_pending(obs) or ((self._pending_complete or self.chapter_finished) and obs.get('scene') in END_SCENES)
                 or (obs.get('scene') == 'Overworld' and (obs.get('menu') or {}).get('current') in {'OuiChapterSelect','OuiChapterPanel'}))):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
+        self.navigation.note_scene(obs)
         self.cfg.save_slot = slot
         self.start_sid = (obs.get('level') or {}).get('sid') or CHAPTER_SIDS.get(self.cfg.chapter) or self.metrics.state.chapter
         if self.start_sid:self.metrics.update(chapter=self.start_sid,chapter_side=(obs.get('level') or {}).get('side',self.metrics.state.chapter_side))
@@ -314,8 +346,7 @@ class GameSession:
         return obs
 
     def _step_options(self):
-        piece = (Piece.of(self.chapter_queue[0]) if self.chapter_finished and self.chapter_queue
-                 else self.piece)
+        piece = self.navigation.target
         chapter = piece.chapter if piece else self.cfg.chapter
         if chapter is None and self.cfg.save_slot is None:
             return {}
@@ -1308,9 +1339,7 @@ class GameSession:
             self.user_stopped = True
             self.chapter_queue.clear()
         self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range())
-        if self.chapter_queue:
-            self.chapter_finished = True
-            self._agent_left_piece = False
+        if self.navigation.complete_current():
             self._save_chapter_plan()
         else:
             self._mark_done("章节完成")
@@ -1415,9 +1444,7 @@ class GameSession:
         st = self.metrics.state
         self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range())
         print(f"[run] {piece_label(self.piece, self._table)}完成：章节计时 {fmt_ticks(st.chapter_time_ticks)}", flush=True)
-        if self.chapter_queue:
-            self.chapter_finished = True
-            self._agent_left_piece = False
+        if self.navigation.complete_current():
             self._save_chapter_plan()
         else:
             self._mark_done("分段完成")
@@ -1468,21 +1495,10 @@ class GameSession:
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         reply = self.client.call("observe", image=True, scope="room", fields=True)
         obs, image = enrich_obs(reply["obs"]), reply.get("image")
-        level = obs.get("level") or {}
-        entered = bool(level) and level.get("sid") == CHAPTER_SIDS.get(piece.chapter) and (
-            piece.start == 0 or str(level.get("room")) == str(checkpoint_room(self._table, piece.chapter, piece.start)))
-        if self.goals.stop_motion.is_set() and not entered:
-            self.chapter_finished = True
-            return obs, image, ["用户停止了自动换图，游戏保持在当前帧。"]
-        if not entered:
+        if not self._confirm_next_entry(obs):
+            if self.goals.stop_motion.is_set():
+                return obs, image, ["用户停止了自动换图，游戏保持在当前帧。"]
             raise ActError('自动换图尚未进入目标章节，保留当前计划以便续跑')
-        self.chapter_queue.pop(0)  # 确认进入前，队首仍是菜单输入必须遵守的目标。
-        self.chapter_finished = False
-        self.piece, self.segment_index = piece, piece.start
-        self.start_sid = level.get("sid", self.start_sid)
-        self.metrics.update(chapter=level.get("sid", ""), room=level.get("room", ""), piece_done=False,
-                            chapter_time_ticks=level.get("chapterTimeTicks", 0))
-        self._save_chapter_plan()
         table = self._table
         done = piece_label(previous, table) if previous is not None else chapter_name(split["chapter"])
         how = ("系统已自动走完结算画面并进入" if previous is None or previous.end is None else "系统已把你送到")
@@ -1497,27 +1513,22 @@ class GameSession:
         """Agent owns menu navigation; only commit the configured next piece once observed."""
         reply = self.client.call('observe', image=True, scope='room', fields=True)
         obs, image = enrich_obs(reply['obs']), reply.get('image')
-        piece = Piece.of(self.chapter_queue[0])
-        level = obs.get('level') or {}
-        if obs.get('scene') != 'Level':
-            self._agent_left_piece = True
-        start_room = checkpoint_room(self._table, piece.chapter, piece.start)
-        same_chapter = (self.piece.chapter == piece.chapter if self.piece else
-                        self._agent_previous_sid == CHAPTER_SIDS.get(piece.chapter))
-        entered = obs.get('scene') == 'Level' and not level.get('completed') and level.get('sid') == CHAPTER_SIDS.get(piece.chapter) and (
-            (piece.start == 0 and not same_chapter) or str(level.get('room')) == str(start_room))
-        if same_chapter and piece.start == 0 and not getattr(self, '_agent_left_piece', False):
-            entered = False
-        if not entered:
+        piece = self.navigation.target
+        if not self._confirm_next_entry(obs, require_departure=True):
             return obs, image, [f'上一段已完成。接下来请自行通过菜单进入{self._piece_place(piece)}；主控不会代按、跳过结算或传送。']
-        self.chapter_queue.pop(0)
-        self.chapter_finished = False
-        self.piece, self.segment_index = piece, piece.start
+        return obs, image, [f'已确认你进入{self._piece_place(piece)}。{self._piece_goal(piece)}']
+
+    def _confirm_next_entry(self, obs, *, require_departure=False):
+        """All navigation paths publish metrics/persistence after the same commit."""
+        piece = self.navigation.confirm_entry(obs, self._table, require_departure=require_departure)
+        if piece is None:
+            return False
+        level = obs['level']
         self.start_sid = level['sid']
         self.metrics.update(chapter=level['sid'], room=level.get('room', ''), piece_done=False,
                             chapter_time_ticks=level.get('chapterTimeTicks', 0))
         self._save_chapter_plan()
-        return obs, image, [f'已确认你进入{self._piece_place(piece)}。{self._piece_goal(piece)}']
+        return True
 
     def _piece_place(self, piece: Piece) -> str:
         if piece.start == 0:
@@ -1601,8 +1612,8 @@ class GameSession:
                 end += 1
             count = len(table.get(chapter) or []) or 1
             piece = self.piece
-            self.piece = Piece(piece.chapter, piece.start, None if end >= count else end)
-            self.chapter_queue = pieces_of(sorted(rest), table)
+            self.navigation.replace_future(Piece(piece.chapter, piece.start, None if end >= count else end),
+                                           pieces_of(sorted(rest), table))
             self._save_chapter_plan()
         table_label = "、".join(piece_label(p, table) for p in self.chapter_queue)
         goal = self._piece_goal(self.piece)

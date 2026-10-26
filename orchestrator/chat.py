@@ -12,6 +12,7 @@ from .lifecycle import host_runner
 from .runtimes import runtime, config_from_state
 from .container import ensure_container
 from .metrics import Metrics
+from .execution import workspace_capabilities
 
 
 def can_wake(directory):
@@ -45,8 +46,8 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False):
         raise ValueError('自动取名仅用于准备完成、尚未开始的新试玩')
     previous = json.loads((directory / "metrics.json").read_text(encoding="utf-8"))
     cfg = config_from_state(state, previous)
-    if allow_programs and cfg.engine == 'claude' and cfg.runtime != 'container':
-        raise ValueError('Claude 的工作区程序和离线模拟器需要 container 运行方式；host Claude 会话仅支持聊天')
+    capabilities = workspace_capabilities(cfg)
+    capabilities.validate(programs=allow_programs, sim=sim)
     # 与原运行相同的游玩模式与可调参数（提示词按模式生成；探索模式的程序时长等跟原运行一致）
     from .modes import MODE_OF_KNOWLEDGE
     from .tuning import apply
@@ -59,7 +60,7 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False):
     cfg.sim, cfg.live, cfg.chapters = bool(sim), True, []
     if name_request:
         cfg.max_minutes = 3
-    container = await asyncio.to_thread(ensure_container, cfg)
+    container = await asyncio.to_thread(ensure_container, cfg) if capabilities.needs_container else None
     metrics = Metrics(directory / "metrics.json", cfg.agent, cfg.model, cfg.effort, cfg.budget_seconds)
     metrics.restore(previous, str(directory))
     try:

@@ -33,6 +33,7 @@ from typing import Callable
 from . import gamewindow
 from .purecut import make_pure
 from .recording_files import finished_movie
+from .recording_lifecycle import RecordingStop, pending_recording
 from .config import REPO_ROOT
 
 CONFIG = REPO_ROOT / "configs" / "recording.json"
@@ -42,6 +43,10 @@ AUDIO_TRACKS = 2   # 独立游戏音频（game_nrt）的音轨数：完整版 au
 
 class RecordingError(RuntimeError):
     pass
+
+
+class RecordingOwnershipError(RecordingError):
+    """A foreign live capture must not be stopped or released by this session."""
 
 
 def load_config() -> dict:
@@ -162,6 +167,7 @@ class Recorder:
         self.audio_diagnostics = None
         self.session_id = uuid.uuid4().hex
         self.run_dirs = []
+        self._stop = RecordingStop()
 
     def bind_run(self, directory: Path):
         directory = directory.resolve()
@@ -207,11 +213,25 @@ class Recorder:
             raise RecordingError(f'无法读取原录制会话：{exc}') from exc
 
     @staticmethod
+    def validate_release(saved, hello):
+        clock = hello.get('clock') or {}
+        plugin = clock.get('plugin') or {}
+        active = clock.get('lockstep') or plugin.get('recording') is True or plugin.get('state') in {'recording', 'finishing'}
+        expected = Path(saved['options']['dir']).resolve() if saved else None
+        actual = Path(plugin['dir']).resolve() if plugin.get('dir') else None
+        if active and (expected is None or actual != expected):
+            raise RecordingOwnershipError('OBS 正在采集或收尾另一段录像，不能交还该录制的游戏控制')
+
+    @staticmethod
     def validate_resume(saved, hello):
         clock = hello.get('clock') or {}
         plugin = clock.get('plugin') or {}
         active = plugin.get('state') == 'recording' or plugin.get('recording') is True
         held = saved is not None and saved.get('state') == 'recording'
+        if pending_recording(saved) and not held:
+            raise RecordingError('原录像正在收尾，请先完成收尾，不能恢复采集')
+        if plugin.get('state') == 'finishing':
+            raise RecordingError('OBS 正在收尾录像，请完成收尾后再开始采集')
         if active and not held:
             raise RecordingError('OBS 正在录制其他会话，不能另开录制；请先收尾原录像')
         if not held:
@@ -253,6 +273,7 @@ class Recorder:
         """用户放弃续跑时收尾；已经由 OBS 停下的同目录录像也可整理。
         on_capture_stopped：采集一停就调用（交还游戏），不等 ffmpeg 收尾与纯享版。"""
         hello = call('hello')
+        cls.validate_release(saved, hello)
         plugin = (hello.get('clock') or {}).get('plugin') or {}
         if not plugin.get('dir') or Path(plugin['dir']).resolve() != Path(saved['options']['dir']).resolve():
             raise RecordingError('OBS 当前录像与待收尾会话不匹配，未停止任何录像')
@@ -261,6 +282,8 @@ class Recorder:
         recorder.run_dirs = [Path(p) for p in saved.get('runs', [])]
         recorder.bind_run(Path(run_dir))
         recorder.started = True
+        if not (hello.get('clock') or {}).get('lockstep') and plugin.get('recording') is not True and plugin.get('state') in {'finishing', 'finished', 'failed'}:
+            recorder._stop.requested = True
         return recorder.stop(on_capture_stopped=on_capture_stopped)
 
     def retain(self):
@@ -282,11 +305,20 @@ class Recorder:
         self.audio_diagnostics = hello.get('record_audio_diagnostics', self.audio_diagnostics)
         return hello.get("clock") or {}
 
-    def _plugin(self) -> tuple[dict, dict]:
+    def _plugin(self, allow_previous_terminal=False) -> tuple[dict, dict]:
         clock = self.clock()
-        return clock, clock.get("plugin") or {}
+        plugin = clock.get("plugin") or {}
+        if plugin.get('dir') and Path(plugin['dir']).resolve() != self.opts.dir.resolve():
+            if (allow_previous_terminal and not clock.get('lockstep') and plugin.get('recording') is not True
+                    and plugin.get('state') in {'idle', 'finished', 'failed'}):
+                # Start is queued asynchronously in OBS. Its first reply can still describe the old job.
+                return clock, {}
+            raise RecordingOwnershipError('OBS 录制目录已变化，拒绝停止或归档其他会话的录像')
+        return clock, plugin
 
     def start(self, timeout: float = 20.0) -> dict:
+        if self.started or self._stop.requested or self.result is not None:
+            raise RecordingError('录制对象已经使用，请为新录像创建新的 Recorder')
         directory = self.opts.dir.resolve()
         if not str(directory).isascii():
             raise RecordingError(f"录制目录只能用英文路径（OBS 插件用 ANSI 接口写文件）：{directory}")
@@ -315,7 +347,7 @@ class Recorder:
                   audio_sync="fixed" if self.opts.continuous_music else "onset")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            clock, plugin = self._plugin()
+            clock, plugin = self._plugin(allow_previous_terminal=True)
             if plugin.get("state") == "failed":
                 self.call("record", action="stop")  # release the secondary mixer after a failed plugin start
                 raise RecordingError(f"OBS 插件开始录制失败：{plugin.get('error')}")
@@ -342,29 +374,33 @@ class Recorder:
 
     def stop(self, timeout: float = 900.0, on_capture_stopped: Callable[[], None] | None = None) -> dict | None:
         """停止录制并等 ffmpeg 收尾；返回结果摘要（也写进 recording/recording.json）。"""
-        if not self.started:
+        if self.result and self.result.get('state') in {'finished', 'failed'}:
+            return self.result
+        if not self.started and not self._stop.requested:
             return None
-        self.started = False
-        self.call("record", action="stop", marker=False)
+        if not self._stop.requested:
+            # A failed command must leave ownership intact so callers can retry cleanup.
+            self._plugin()  # Recheck ownership before the stop side effect, not only when adopting.
+            self.call("record", action="stop", marker=False)
+            self._stop.requested = True
         deadline = time.monotonic() + timeout
         clock, plugin = self._plugin()
-        released = False
-        while time.monotonic() < deadline:
-            if (not released and on_capture_stopped is not None and not clock.get('lockstep')
-                    and plugin.get('state') in {'idle','finishing','finished','failed'}
-                    and plugin.get('recording') is not True):
-                on_capture_stopped()
-                released = True
-            if plugin.get("state") in ("finished", "failed") and not clock.get("lockstep"):
+        while True:
+            complete = self._stop.observe(clock, plugin)
+            self.started = not self._stop.capture_stopped
+            self._stop.notify(on_capture_stopped)
+            if complete:
+                break
+            if time.monotonic() >= deadline:
+                self.log(f"[record] 等待 ffmpeg 收尾超时（{timeout:g} 秒），当前状态：{plugin}")
                 break
             time.sleep(0.3)
             clock, plugin = self._plugin()
-        else:
-            self.log(f"[record] 等待 ffmpeg 收尾超时（{timeout:g} 秒），当前状态：{plugin}")
         directory = self.opts.dir.resolve()
         files = {p.name: p.stat().st_size for p in sorted(directory.iterdir()) if p.is_file()} if directory.exists() else {}
         result = {
-            "state": plugin.get("state"),
+            "state": plugin.get("state") if complete else ('finishing' if self._stop.capture_stopped else 'recording'),
+            "pending": not complete,
             "error": plugin.get("error") or "",
             "frames": plugin.get("frames"),
             "tokens": plugin.get("tokens"),
@@ -386,8 +422,9 @@ class Recorder:
             self.log("[record] 生成纯享版（去掉规划回放的帧）……")
             result["pure"] = make_pure(directory, self.opts.ffmpeg, self.opts.video_args, self.log)
             result['files'] = {p.name:p.stat().st_size for p in sorted(directory.iterdir()) if p.is_file()}
+        # Only observed terminal states close the manifest; a timed-out encoder is still pending.
+        self._save_session(result['state'] if complete else ('finishing' if self._stop.capture_stopped else 'recording'))
         self.result = result
-        self._save_session(result['state'] or 'failed')
         try:
             (directory / "recording.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:

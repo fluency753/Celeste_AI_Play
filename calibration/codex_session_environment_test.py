@@ -22,6 +22,16 @@ def rollout(tools, ident='old'):
 
 
 class SessionEnvironmentTests(unittest.TestCase):
+    def setUp(self):
+        # Both Codex client labels use Docker tools. Keep every test at the
+        # external container boundary, including host-labelled fixtures.
+        self.container_patch = patch('orchestrator.container.ensure_container', return_value='sandbox')
+        self.container = self.container_patch.start()
+        self.addCleanup(self.container_patch.stop)
+        self.view_patch = patch('orchestrator.kb_access.prepare_view')
+        self.view_patch.start()
+        self.addCleanup(self.view_patch.stop)
+
     def test_patch_preserves_history_and_identity_and_is_idempotent(self):
         old=rollout([{'name':'celeste_act','description':'old'}])
         tools=[{'name':'celeste_act','description':'new'},{'name':'celeste_stop_run'}]
@@ -185,6 +195,8 @@ class SessionEnvironmentTests(unittest.TestCase):
                  patch.object(env,'thread_metadata',side_effect=rpc),patch.object(env,'tool_specs',AsyncMock(return_value=tools)):
                 result=asyncio.run(env.synchronize(root,state(),root/'backup',apply=True,root=root))
             self.assertEqual(result['status'],'updated')
+            self.assertEqual(result['container'], 'sandbox')
+            self.container.assert_called_once()
             self.assertEqual(path.read_bytes().partition(b'\n')[2],original.partition(b'\n')[2]+audit+audit)
 
     def test_archived_session_is_not_resumed_or_changed(self):

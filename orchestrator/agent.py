@@ -31,6 +31,7 @@ from .config import REPO_ROOT, RunConfig, find_claude_exe, find_docker_exe
 from .game_session import GameSession
 from .kb_study import KbStudy
 from .metrics import Metrics
+from .execution import workspace_capabilities
 from .session_controls import RuntimeCapabilities, SessionControls
 from .prompting import play_prompt, study_prompt, resume_prompt, FIRST_PROMPT, CONTINUE_PROMPT
 
@@ -167,9 +168,12 @@ class ClaudeRunner(SessionControls):
         rows, self.pending_messages = self.pending_messages, []
         text = '\n'.join(row['text'] for row in rows) if rows else fallback
         if self.chat_only:
-            text += ('\n当前仅聊天，可以按要求修改、运行工作区程序；不连接或操作游戏。'
-                     if getattr(self, 'allow_programs', False) else
-                     '\n当前仅聊天，可以按要求读取、整理工作区笔记；不连接或操作游戏。')
+            if getattr(self, 'allow_programs', False):
+                text += '\n当前仅聊天，可以按要求修改、运行工作区程序；不连接或操作游戏。'
+            elif workspace_capabilities(self.cfg).workspace_read:
+                text += '\n当前仅聊天，可以按要求读取、整理工作区笔记；不连接或操作游戏。'
+            else:
+                text += '\n当前仅聊天，依据已有对话回复用户；没有工作区文件工具，不连接或操作游戏。'
         elif self.paused and getattr(self, 'allow_programs', False):
             text += '\n试玩仍处于暂停状态：不调用游戏操作；可以按用户的要求修改、运行工作区里的程序，完成后回复并结束本轮。'
         elif self.paused:
@@ -212,7 +216,7 @@ class ClaudeRunner(SessionControls):
         return args
 
     def _command(self) -> list[str]:
-        if self.cfg.runtime == "container":
+        if workspace_capabilities(self.cfg).agent_location == "container":
             mcp = json.dumps({"mcpServers": {"celeste": {
                 "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
             prompt = play_prompt(self.cfg)
@@ -264,20 +268,21 @@ class ClaudeRunner(SessionControls):
             return ('\n本次整理工作区：按用户的要求修改、运行工作区里的程序（可以用 Bash），回复用户；'
                     '不观察或操作游戏，不自行开始试玩。没有用户消息时等待。')
         if self.chat_only:
-            return '\n本次仅聊天：回复用户、读取笔记，不观察或操作游戏，不运行规划程序，不自行开始试玩。没有用户消息时等待。'
+            reading = '回复用户、读取笔记' if workspace_capabilities(self.cfg).workspace_read else '依据已有对话回复用户，没有工作区文件工具'
+            return f'\n本次仅聊天：{reading}，不观察或操作游戏，不运行规划程序，不自行开始试玩。没有用户消息时等待。'
         return ''
 
     def _allowed_tool(self, name: str) -> bool:
         if name.startswith("mcp__celeste__"):
             return True
-        return self.cfg.runtime == "container" and name in CONTAINER_BUILTIN_TOOLS
+        return workspace_capabilities(self.cfg).builtin_tools and name in CONTAINER_BUILTIN_TOOLS
 
     def _env(self) -> dict[str, str]:
         # 去掉所有 Claude / Anthropic / MCP 相关的继承变量（例如外层 Claude Code 会话留下的推理强度、
         # 入口标记、API 密钥），只保留系统变量，再设置本项目需要的那几项。
         drop_prefixes = ("CLAUDE", "ANTHROPIC", "MCP_", "MAX_THINKING", "MAX_MCP", "DISABLE_", "OTEL_")
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(drop_prefixes)}
-        if self.cfg.runtime == "container":
+        if workspace_capabilities(self.cfg).agent_location == "container":
             # docker exec -e 名字 从这里取值传进容器，令牌与密钥不会出现在命令行里
             if self.cfg.third_party:
                 env.update(self._provider_env())

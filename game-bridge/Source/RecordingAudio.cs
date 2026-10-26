@@ -117,7 +117,8 @@ internal static class RecordingAudio {
                 source = live;
                 full = new Mixer("full");
                 play = new Mixer("play");
-                foreach (Mixer mixer in Mixers) { mixer.Open(bankDirectory); mixer.SeedMix(live); }
+                RecordingMixSnapshot mix = RecordingMixSnapshot.Capture(live, BusPauses);
+                foreach (Mixer mixer in Mixers) { mixer.Open(bankDirectory); mixer.SeedMix(mix); }
                 Check(live.getBankList(out Bank[] banks));
                 foreach (Bank bank in banks) {
                     if (bank.getEventList(out EventDescription[] events) != RESULT.OK) continue;
@@ -399,40 +400,9 @@ internal static class RecordingAudio {
                         b.setParameterValueByIndex(i, value);
         }
 
-        /// <summary>Capture the initial bus/VCA settings once. Later setters are mirrored directly;
-        /// polling async getters every frame can overwrite a command with its previous value.</summary>
-        public void SeedMix(FMOD.Studio.System live) {
-            if (studio == null) return;
-            if (live.getListenerAttributes(0, out FMOD.Studio._3D_ATTRIBUTES listener) == RESULT.OK)
-                studio.setListenerAttributes(0, listener);
-            if (live.getBankList(out Bank[] banks) != RESULT.OK) return;
-            foreach (Bank bank in banks) {
-                if (bank.getVCAList(out VCA[] vcas) == RESULT.OK)
-                    foreach (VCA vca in vcas)
-                        if (vca.getID(out Guid id) == RESULT.OK && studio.getVCAByID(id, out VCA copy) == RESULT.OK &&
-                            vca.getVolume(out float volume, out _) == RESULT.OK) copy.setVolume(volume);
-                if (bank.getBusList(out Bus[] buses) != RESULT.OK) continue;
-                foreach (Bus bus in buses) {
-                    if (bus.getID(out Guid id) != RESULT.OK || studio.getBusByID(id, out Bus copy) != RESULT.OK) continue;
-                    if (bus.getVolume(out float volume, out _) == RESULT.OK) copy.setVolume(volume);
-                    if (bus.getMute(out bool mute) == RESULT.OK) copy.setMute(mute);
-                    if (bus.getPaused(out bool paused) == RESULT.OK) {
-                        if (BusPauses.TryGetValue(bus.getRaw(), out bool requested)) paused = requested;
-                        else if (paused && bus.getPath(out string path) == RESULT.OK) {
-                            // Before hooks were installed, only effective state is available.
-                            // Assign inherited pause to its ancestor rather than every child.
-                            while (path.LastIndexOf('/') > "bus:".Length) {
-                                path = path.Substring(0, path.LastIndexOf('/'));
-                                if (live.getBus(path, out Bus parent) == RESULT.OK &&
-                                    parent.getPaused(out bool parentPaused) == RESULT.OK && parentPaused) { paused = false; break; }
-                            }
-                            if (paused && path != "bus:/" && live.getBus("bus:/", out Bus root) == RESULT.OK &&
-                                root.getPaused(out bool rootPaused) == RESULT.OK && rootPaused) paused = false;
-                        }
-                        copy.setPaused(paused);
-                    }
-                }
-            }
+        /// <summary>Apply the same source snapshot to both tracks; setters mirror subsequent changes.</summary>
+        public void SeedMix(RecordingMixSnapshot snapshot) {
+            if (studio != null) snapshot.ApplyTo(studio);
         }
 
         /// <summary>Copy the live state, then mix exactly one block.</summary>

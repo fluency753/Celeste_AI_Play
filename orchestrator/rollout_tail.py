@@ -8,12 +8,13 @@ class RecordTail:
         self.offsets = {}
         self.next_path = None
 
-    def read(self, paths, budget=8 * 1024 * 1024, on_skip=None):
+    def read(self, paths, budget=8 * 1024 * 1024, on_skip=None, max_record_bytes=None):
         sources = []
         paths = [Path(path) for path in paths]
         if budget < len(self.magic) + self.header.size:
             raise ValueError('rollout read budget must fit a record header and magic')
         remaining = budget
+        record_limit = budget if max_record_bytes is None else max_record_bytes
         allowance = max(65536, budget // max(1, len(paths)))
         start = paths.index(self.next_path) if self.next_path in paths else 0
         for turn in range(len(paths)):
@@ -42,9 +43,9 @@ class RecordTail:
                             break
                         # A record may exceed its fair share, but all returned
                         # blocks (including magic) must fit the whole-call budget.
-                        if size + len(self.magic) > budget:
+                        if size + len(self.magic) > record_limit:
                             if on_skip:
-                                on_skip(f'[playback] 增量预览略过超出 {budget} 字节上限的单条路线：{path.name}，{size} 字节；原日志保留用于完整计数')
+                                on_skip(f'[playback] 增量预览略过超出 {record_limit} 字节上限的单条路线：{path.name}，{size} 字节；原日志保留用于完整计数')
                             stream.seek(size - self.header.size, 1)
                         else:
                             needed = size + (0 if records else len(self.magic))

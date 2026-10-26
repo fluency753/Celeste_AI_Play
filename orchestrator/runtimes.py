@@ -6,6 +6,7 @@ import re
 
 from .config import REPO_ROOT, RunConfig, load_provider, load_api_key, load_dotenv
 from .efforts import normalize_efforts
+from .execution import workspace_capabilities
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,11 @@ class Runtime:
     default_model: str = 'opus'
     default_effort: str = 'high'
     default_knowledge: str = 'full'
+
+    def workspace(self, cfg):
+        if cfg.engine != self.engine:
+            raise ValueError('执行器与配置不一致')
+        return workspace_capabilities(cfg)
 
     def providers(self):
         if self.engine == 'codex':
