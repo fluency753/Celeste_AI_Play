@@ -46,6 +46,7 @@ internal static class Hooks {
         On.Celeste.GameplayRenderer.Render -= OnGameplayRender;
         On.Celeste.DustGraphic.Render -= PlaybackDust.Render;
         PlaybackDust.Clear();
+        PlaybackVisualPass.End();
         IL.Monocle.EntityList.RenderExcept -= ILEntityRenderExcept;
         On.Celeste.RunThread.Start -= OnRunThreadStart;
     }
@@ -106,16 +107,16 @@ internal static class Hooks {
 
     private static void OnGameplayRender(On.Celeste.GameplayRenderer.orig_Render orig, GameplayRenderer self, Scene scene) {
         try {
-            if (Playback.ShowSpinnerVisuals && scene is Level level) PlaybackSpinners.BeginPass(level);
+            if (Playback.ShowSpinnerVisuals && scene is Level level) PlaybackVisualPass.Begin(level);
             orig(self, scene);
         } finally {
-            PlaybackSpinners.EndPassScope();
+            PlaybackVisualPass.End();
         }
         Playback.DrawWorld(self.Camera);
     }
 
     private static void ILEntityRenderExcept(ILContext il) {
-        if (!EntityRenderDepthHook.Inject(il, PlaybackSpinners.BeforeEntity, PlaybackSpinners.FinishPass))
+        if (!EntityRenderDepthHook.Inject(il, PlaybackVisualPass.BeforeEntity, PlaybackVisualPass.Finish))
             Log.Error("spinner depth render hook unavailable; visual proxies disabled rather than drawn above gameplay");
     }
 

@@ -176,6 +176,7 @@ internal static class Playback {
             w.WriteNumber("spinner_visual_peak", PlaybackSpinners.PeakCount);
             w.WriteNumber("dust_visual_builds", PlaybackDust.Builds);
             w.WriteNumber("dust_visual_draws", PlaybackDust.Draws);
+            w.WriteNumber("dust_eye_draws", PlaybackDust.EyeDraws);
             if (float.IsFinite(density.HalfLife)) w.WriteNumber("trail_half_life_frames", density.HalfLife);
         }));
     }

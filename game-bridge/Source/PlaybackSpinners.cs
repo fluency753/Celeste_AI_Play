@@ -13,19 +13,15 @@ internal static class PlaybackSpinners {
                                          int Layer, Vector2 Scale, SpriteEffects Effects, bool DrawColor = true);
     private readonly record struct Command(CrystalStaticSpinner Owner, Piece Piece, bool Border);
     private static readonly Dictionary<CrystalStaticSpinner, List<Piece>> Cache = new();
-    private static readonly RenderDepthQueue<Command> Queue = new();
-    private static EntityList? activeEntities;
     public static int PeakCount { get; private set; }
 
-    public static void Clear() { EndPassScope(); Cache.Clear(); PlaybackDust.Clear(); PeakCount = 0; }
+    public static void Clear() { PlaybackVisualPass.End(); Cache.Clear(); PlaybackDust.Clear(); PeakCount = 0; }
 
     public static bool NeedsFallback(bool visible, bool expanded, Vector2 position, Vector2 camera) =>
         (!visible || !expanded) && position.X > camera.X - 32 && position.X < camera.X + 352
         && position.Y > camera.Y - 32 && position.Y < camera.Y + 212;
 
-    public static void BeginPass(Level level) {
-        EndPassScope();
-        activeEntities = level.Entities;
+    public static void Collect(Level level) {
         int count = 0;
         foreach (Entity entity in level.Tracker.GetEntities<CrystalStaticSpinner>()) {
             var spinner = (CrystalStaticSpinner)entity;
@@ -34,23 +30,16 @@ internal static class PlaybackSpinners {
             if (pieces.Count > 0) count++;
             // 原版边框 Depth+2，连接装饰 Depth+1，主体 Depth；必须在所有实体中统一排序。
             foreach (Piece piece in pieces) {
-                Queue.Add(spinner.actualDepth+2,new Command(spinner,piece,true));
-                if (piece.DrawColor) Queue.Add(spinner.actualDepth+piece.Layer,new Command(spinner,piece,false));
+                var border = new Command(spinner,piece,true);
+                PlaybackVisualPass.Add(spinner.actualDepth+2,tags => Draw(border,tags));
+                if (piece.DrawColor) {
+                    var body = new Command(spinner,piece,false);
+                    PlaybackVisualPass.Add(spinner.actualDepth+piece.Layer,tags => Draw(body,tags));
+                }
             }
         }
-        Queue.Sort();
         PeakCount = Math.Max(PeakCount, count);
     }
-
-    public static void BeforeEntity(Entity entity, EntityList entities, int excludedTags) {
-        if (ReferenceEquals(entities,activeEntities)) Queue.Before(entity.actualDepth,command => Draw(command,excludedTags));
-    }
-
-    public static void FinishPass(EntityList entities, int excludedTags) {
-        if (ReferenceEquals(entities,activeEntities)) Queue.Finish(command => Draw(command,excludedTags));
-    }
-
-    public static void EndPassScope() { activeEntities = null; Queue.Clear(); }
 
     private static void Draw(Command command, int excludedTags) {
         if (command.Owner.TagCheck(excludedTags)) return;

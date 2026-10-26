@@ -4,6 +4,7 @@ using Microsoft.Xna.Framework;
 using System.Runtime.CompilerServices;
 using CelesteAI.Bridge;
 
+
 void Check(bool condition,string message) { if (!condition) throw new Exception(message); }
 var atlas=NativeDustFixture.TokenAtlas();
 var previousAtlas=GFX.Game;
@@ -28,6 +29,8 @@ try {
         var expectedRandom=new Random(9182);
         var random=new Random(9182); Calc.Random=random;
         var beforeEntities=fixture.Level.Entities.entities.Select(e=>(e,e.Collidable,e.Position)).ToArray();
+        var beforeGraphics=fixture.Graphics.Select(g=>(g,g.Estableshed,g.Position,
+            nodes:g.nodes.Select(n=>(n,n.Angle,n.Rotation,n.Enabled)).ToArray())).ToArray();
         var beforeCounter=DustEdges.DustGraphicEstabledCounter;
         var plan=DustVisualPlan.Build(dust,fixture.Level,7,5);
         Check(ReferenceEquals(Calc.Random,random) && random.Next()==expectedRandom.Next(),label+": proxy changed ambient RNG");
@@ -39,6 +42,14 @@ try {
               label+": proxy changed native lifecycle state");
         foreach (var (entity,collidable,at) in beforeEntities)
             Check(entity.Collidable==collidable && entity.Position==at,label+": proxy changed adjacent entity");
+        foreach (var (graphic,established,at,nodes) in beforeGraphics) {
+            Check(graphic.Estableshed==established && graphic.Position==at && graphic.nodes.Count==nodes.Length,
+                label+": proxy changed existing neighbour dust lifecycle");
+            for (int i=0;i<nodes.Length;i++)
+                Check(ReferenceEquals(graphic.nodes[i],nodes[i].n) && graphic.nodes[i].Angle==nodes[i].Angle
+                    && graphic.nodes[i].Rotation==nodes[i].Rotation && graphic.nodes[i].Enabled==nodes[i].Enabled,
+                    label+": proxy mutated established neighbour nodes");
+        }
         dust.AddDustNodesIfInCamera();
         Check(dust.Estableshed && dust.nodes.Count==4,label+": native no-GPU fixture did not establish");
         int disabled=dust.nodes.Count(n=>!n.Enabled);
@@ -77,6 +88,16 @@ try {
         Compare("disabled-neighbour-and-owner",seed,new Vector2(100,100),ownerType:typeof(DustStaticSpinner),arrange:(f,d)=> {
             d.Entity.Collidable=false; f.Spinner(new Vector2(116,100),false);
         });
+        foreach (bool enabled in new[]{true,false}) {
+            Compare("mixed-established-proxy-"+enabled,seed,new Vector2(100,100),ownerType:typeof(DustStaticSpinner),arrange:(f,d)=> {
+                var neighbour=(DustStaticSpinner)RuntimeHelpers.GetUninitializedObject(typeof(DustStaticSpinner));
+                neighbour.Collider=new Circle(6);
+                var established=f.MakeDust(new Vector2(116,100),seed+1,owner:neighbour);
+                established.AddDustNodesIfInCamera();
+                Check(established.Estableshed && established.nodes.Any(n=>n.Angle.X < -1),"Native established neighbour did not expand toward the not-yet-established spinner");
+                neighbour.Collidable=enabled;
+            });
+        }
         Compare("negative-fractional",seed,new Vector2(-100.75f,-20.25f),arrange:(f,d)=> {
             f.Solid(new Vector2(-120,-40),18,18); f.Spinner(new Vector2(-84.75f,-20.25f));
         });
@@ -94,16 +115,87 @@ try {
     Console.WriteLine($"PASS: {comparisons} proxy plans equal actual native establishment (texture tokens, rotations, enabled masks, expansion, offsets and track clipping)");
     Console.WriteLine($"PASS: native fixtures actually exercised {clippedTracks} clipped tracks, {expandedNodes} expanded nodes, {maskedNodes} disabled nodes and {shiftedGraphics} shifted graphics");
     Console.WriteLine("PASS: proxy leaves native nodes, lifecycle, owner/neighbours, scene and ambient random state unchanged");
+    var eyeDraws=new List<(MTexture texture,Vector2 at,Color color,float scale)>();
+    var draw=typeof(MTexture).GetMethod(nameof(MTexture.DrawCentered),new[]{typeof(Vector2),typeof(Color),typeof(float)})!;
+    var savedEyeTokens=new Dictionary<string,List<MTexture>?>();
+    int eyeComparisons=0;
+    using var eyeHook=new MonoMod.RuntimeDetour.Hook(draw,(Action<MTexture,Vector2,Color,float>)((texture,at,color,scale)=>eyeDraws.Add((texture,at,color,scale))));
+    void CompareEyes(int area,int mask,bool auto,bool left,bool right,float scale,Vector2? trackDirection=null,bool up=false) {
+        var fixture=new NativeDustFixture(); fixture.Level.Session.Area=new AreaKey(area);
+        var style=DustStyles.Get(fixture.Level);
+        if (!savedEyeTokens.ContainsKey(style.EyeTextures)) {
+            savedEyeTokens[style.EyeTextures]=atlas.orderedTexturesCache.GetValueOrDefault(style.EyeTextures);
+            atlas.orderedTexturesCache[style.EyeTextures]=Enumerable.Range(0,7)
+                .Select(_=>(MTexture)RuntimeHelpers.GetUninitializedObject(typeof(MTexture))).ToList();
+        }
+        var tokens=atlas.orderedTexturesCache[style.EyeTextures];
+        var owner=trackDirection.HasValue ? (Entity)RuntimeHelpers.GetUninitializedObject(typeof(DustTrackSpinner)) : null;
+        var dust=fixture.MakeDust(new Vector2(100,100),42,ignoreSolids:trackDirection.HasValue,owner:owner);
+        dust.eyesExist=true; dust.eyeTextureIndex=128; dust.autoControlEyes=auto;
+        dust.EyeDirection=new Vector2(.6f,.8f); dust.EyeTargetDirection=new Vector2(.3f,.4f);
+        dust.Position=new Vector2(2.25f,-1.5f); dust.shakeValue=new Vector2(.5f,-.25f); dust.Scale=scale;
+        dust.leftEyeVisible=left; dust.rightEyeVisible=right; dust.Entity.Depth=15;
+        for (int i=0;i<4;i++) if ((mask & (1<<i))!=0)
+            fixture.Solid(new Vector2(100+(i%2==0?-8:0),100+(i<2?-8:0)),8,8);
+        if (trackDirection is Vector2 direction) {
+            fixture.Track(dust,direction,true);
+            ((DustTrackSpinner)dust.Entity).Up=up;
+        }
+        var originalDirection=dust.EyeDirection; var originalTarget=dust.EyeTargetDirection;
+        var originalPosition=dust.Position; int queued=fixture.Level.Entities.toAdd.Count;
+        var plan=DustVisualPlan.Build(dust,fixture.Level,7,5);
+        var eyes=DustVisualPlan.BuildEyes(dust,plan)!;
+        Check(dust.EyeDirection==originalDirection && dust.EyeTargetDirection==originalTarget && dust.Position==originalPosition
+              && dust.eyes==null && fixture.Level.Entities.toAdd.Count==queued,"Eye proxy changed native eye or scene state");
+        dust.AddDustNodesIfInCamera();
+        Check(dust.eyes!=null,"Native fixture did not construct independent Eyeballs");
+        dust.eyes!.Added(fixture.Level);
+        Check(plan.EyeDirection==dust.EyeDirection,"Eye direction differs from native establishment");
+        Check(ReferenceEquals(eyes.Texture,dust.eyeTexture) && ReferenceEquals(eyes.Texture,tokens[128%7])
+              && eyes.Color==dust.eyes.Color && eyes.Color==style.EyeColor && eyes.Depth==dust.eyes.actualDepth,
+              "Eye texture/style/depth differs from native independent Eyeballs");
+        eyeDraws.Clear(); dust.eyes.Render();
+        var expected=new List<Vector2>();
+        if (eyes.LeftVisible) expected.Add(eyes.Left);
+        if (eyes.RightVisible) expected.Add(eyes.Right);
+        Check(expected.Count==eyeDraws.Count,"Blink visibility differs from native Eyeballs.Render");
+        for(int i=0;i<expected.Count;i++)
+            Check(expected[i]==eyeDraws[i].at && ReferenceEquals(eyes.Texture,eyeDraws[i].texture)
+                  && eyes.Color==eyeDraws[i].color && eyes.Scale==eyeDraws[i].scale,"Eye draw differs from intercepted native Eyeballs.Render");
+        foreach(int hiddenCase in new[]{0,1,2}) {
+            dust.eyesExist=hiddenCase!=0; dust.Visible=hiddenCase!=1; dust.Entity.Visible=hiddenCase!=2;
+            Check(DustVisualPlan.BuildEyes(dust,plan)==null,"Hidden/no-eyes proxy was still offered for rendering");
+            if(hiddenCase>0) { eyeDraws.Clear(); dust.eyes.Render(); Check(eyeDraws.Count==0,"Hidden native eyes were drawn"); }
+        }
+        eyeComparisons++;
+    }
+    try {
+        foreach(int area in new[]{3,5}) foreach(int mask in Enumerable.Range(0,16))
+            foreach(bool auto in new[]{false,true}) foreach(var blink in new[]{(true,true),(true,false),(false,true),(false,false)})
+                CompareEyes(area,mask,auto,blink.Item1,blink.Item2,1.75f);
+        foreach(bool up in new[]{false,true}) foreach(var direction in new[]{new Vector2(32,0),new Vector2(0,32),new Vector2(-32,0),new Vector2(24,24)})
+            CompareEyes(3,0,false,true,true,.75f,direction,up);
+        Console.WriteLine($"PASS: {eyeComparisons} eye plans match actual native establishment and intercepted Eyeballs.Render (styles, texture, blink, direction, scale, shake, depth and track)");
+    } finally {
+        foreach(var (path,previous) in savedEyeTokens) {
+            if(previous==null) atlas.orderedTexturesCache.Remove(path);
+            else atlas.orderedTexturesCache[path]=previous;
+        }
+    }
 } finally { GFX.Game=previousAtlas; }
 
 internal sealed class NativeDustFixture {
     internal readonly Level Level;
+    internal readonly List<DustGraphic> Graphics=new();
     internal NativeDustFixture() {
         Level=(Level)RuntimeHelpers.GetUninitializedObject(typeof(Level));
         Level.Entities=new EntityList(Level);
         Level.Tracker=(Tracker)RuntimeHelpers.GetUninitializedObject(typeof(Tracker));
         Level.Tracker.Entities=new() { [typeof(Solid)]=new(), [typeof(DustStaticSpinner)]=new() };
         Level.Camera=new Camera(320,180);
+        Level.Session=(Session)RuntimeHelpers.GetUninitializedObject(typeof(Session));
+        Level.Session.Area=new AreaKey(3);
+        Level.actualDepthLookup=new();
     }
     internal static Atlas TokenAtlas() {
         var atlas=(Atlas)RuntimeHelpers.GetUninitializedObject(typeof(Atlas));
@@ -142,13 +234,15 @@ internal sealed class NativeDustFixture {
         }
     }
     internal DustGraphic MakeDust(Vector2 position,int seed,bool ignoreSolids=false,bool expand=true,Entity? owner=null) {
-        owner??=new Entity(position); owner.Position=position; owner.Collidable=true;
+        owner??=new Entity(position); owner.Position=position; owner.Collidable=true; owner.Visible=true;
         Add(owner);
         var dust=(DustGraphic)RuntimeHelpers.GetUninitializedObject(typeof(DustGraphic));
         dust.Entity=owner; dust.Visible=true; dust.Active=true; dust.Scale=1;
         dust.nodes=new(); dust.LeftNodes=new(); dust.RightNodes=new(); dust.TopNodes=new(); dust.BottomNodes=new();
         dust.randomSeed=seed; dust.ignoreSolids=ignoreSolids; dust.autoExpandDust=expand;
         dust.eyesExist=false;
+        dust.leftEyeVisible=true; dust.rightEyeVisible=true;
+        Graphics.Add(dust);
         DustEdges.DustGraphicEstabledCounter=0;
         return dust;
     }

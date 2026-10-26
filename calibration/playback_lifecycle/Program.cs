@@ -77,6 +77,37 @@ using(var hook=new MonoMod.RuntimeDetour.ILHook(typeof(EntityList).GetMethod(nam
 }
 Console.WriteLine("PASS: native EntityList IL depth insertion preserves visibility, tags, foreground occlusion, end flush and entity ownership");
 
+// Supplemental crystal pieces and dust eyes must share one merge cursor, not
+// flush two independent queues on opposite sides of a native depth boundary.
+var passLevel=(Level)RuntimeHelpers.GetUninitializedObject(typeof(Level));
+var passEntities=new EntityList(passLevel);
+typeof(Scene).GetField("<Entities>k__BackingField",BindingFlags.Instance|BindingFlags.NonPublic)!.SetValue(passLevel,passEntities);
+var passTracker=(Tracker)RuntimeHelpers.GetUninitializedObject(typeof(Tracker));
+passTracker.Entities=new() { [typeof(CrystalStaticSpinner)]=new() };
+passTracker.Components=new() { [typeof(DustEdge)]=new() };
+typeof(Scene).GetField("<Tracker>k__BackingField",BindingFlags.Instance|BindingFlags.NonPublic)!.SetValue(passLevel,passTracker);
+passEntities.entities.Add(new TraceEntity("dust-body",trace) {actualDepth=-50});
+passEntities.entities.Add(new TraceEntity("terrain",trace) {actualDepth=-10000});
+trace.Clear();
+using(var hook=new MonoMod.RuntimeDetour.ILHook(typeof(EntityList).GetMethod(nameof(EntityList.RenderExcept))!,
+    il => Check(EntityRenderDepthHook.Inject(il,PlaybackVisualPass.BeforeEntity,PlaybackVisualPass.Finish),"Shared visual pass IL unavailable"))) {
+    PlaybackVisualPass.Begin(passLevel);
+    // Insert a deep crystal first: each producer's insertion order must not
+    // determine the order across native entities or across producer types.
+    PlaybackVisualPass.Add(-8500,_=>trace.Add("crystal-body"));
+    PlaybackVisualPass.Add(-51,_=>trace.Add("dust-eyes"));
+    // Begin sorts production collections. These extra test commands are sorted
+    // through the same queue immediately before executing the real native list.
+    var sharedQueue=typeof(PlaybackVisualPass).GetField("queue",BindingFlags.Static|BindingFlags.NonPublic)!.GetValue(null)!;
+    sharedQueue.GetType().GetMethod("Sort")!.Invoke(sharedQueue,null);
+    passEntities.RenderExcept(0);
+    Check(string.Join(",",trace)=="dust-body,dust-eyes,crystal-body,terrain","Shared producers crossed a native layer: "+string.Join(",",trace));
+    PlaybackVisualPass.End();trace.Clear();
+    passEntities.RenderExcept(0);
+    Check(string.Join(",",trace)=="dust-body,terrain","Ended visual pass retained supplemental actions");
+}
+Console.WriteLine("PASS: supplemental crystal pieces and dust eyes share native depth ordering and release their draw actions");
+
 class TraceEntity(string name,List<string> trace) : Entity {
     public override void Render() => trace.Add(name);
 }

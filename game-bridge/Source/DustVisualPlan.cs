@@ -8,7 +8,23 @@ namespace CelesteAI.Bridge;
 /// <summary>Read-only counterpart of vanilla dust establishment, without scene or RNG side effects.</summary>
 internal static class DustVisualPlan {
     internal readonly record struct Node(int Base, int Overlay, float Rotation, Vector2 Angle, bool Enabled);
-    internal sealed record Plan(Node[] Nodes, Vector2 Offset);
+    internal sealed record Plan(Node[] Nodes, Vector2 Offset, Vector2 EyeDirection);
+    internal sealed record Eyes(MTexture Texture, Color Color, Vector2 Left, Vector2 Right,
+                                bool LeftVisible, bool RightVisible, float Scale, double Depth);
+
+    // Eyeballs are an independent entity in vanilla: this plan is consumed only
+    // by the gameplay depth pass, never by the DustEdges silhouette callback.
+    public static Eyes? BuildEyes(DustGraphic graphic, Plan plan) {
+        if (!graphic.eyesExist || !graphic.Visible || !graphic.Entity.Visible) return null;
+        var style = DustStyles.Get(graphic.Scene);
+        var textures = GFX.Game.GetAtlasSubtextures(style.EyeTextures);
+        Vector2 perpendicular = new Vector2(-plan.EyeDirection.Y, plan.EyeDirection.X).SafeNormalize();
+        Vector2 center = graphic.RenderPosition + plan.Offset;
+        return new Eyes(textures[graphic.eyeTextureIndex % textures.Count], style.EyeColor,
+            center + (plan.EyeDirection * 5 + perpendicular * 3) * graphic.Scale,
+            center + (plan.EyeDirection * 5 - perpendicular * 3) * graphic.Scale,
+            graphic.leftEyeVisible, graphic.rightEyeVisible, graphic.Scale, graphic.Entity.actualDepth - 1);
+    }
 
     public static Plan Build(DustGraphic graphic, Level level, int baseCount, int overlayCount) {
         Entity owner = graphic.Entity;
@@ -39,6 +55,17 @@ internal static class DustVisualPlan {
         Vector2 offset = new(
             (nodes[1].Enabled || nodes[3].Enabled ? 1 : 0) - (nodes[0].Enabled || nodes[2].Enabled ? 1 : 0),
             (nodes[2].Enabled || nodes[3].Enabled ? 1 : 0) - (nodes[0].Enabled || nodes[1].Enabled ? 1 : 0));
+        Vector2 eyeDirection = graphic.EyeDirection;
+        int enabledCount = 0;
+        Vector2 eyeRange = Vector2.Zero;
+        for (int i = 0; i < nodes.Length; i++) if (nodes[i].Enabled) {
+            enabledCount++;
+            eyeRange += diagonal * new Vector2(i % 2 == 0 ? -1 : 1, i < 2 ? -1 : 1);
+        }
+        if (graphic.autoControlEyes && graphic.eyesExist && enabledCount < 4) {
+            if (enabledCount > 0 && eyeRange.Length() > 0) eyeRange = (eyeRange / enabledCount).SafeNormalize();
+            eyeDirection = eyeRange;
+        }
         if (owner is DustTrackSpinner track) {
             Vector2 along = (track.End - track.Start).SafeNormalize();
             Vector2 normal = new(-along.Y, along.X);
@@ -54,8 +81,11 @@ internal static class DustVisualPlan {
                     if (wallSide) nodes[i] = nodes[i] with { Enabled = false };
                 }
                 offset -= normal;
+                Vector2 outward = -normal;
+                eyeDirection = Calc.AngleToVector(Calc.AngleLerp(outward.Angle(),
+                    track.Up ? track.Angle + MathF.PI : track.Angle, 0.3f), 1);
             }
         }
-        return new Plan(nodes, offset);
+        return new Plan(nodes, offset, eyeDirection);
     }
 }
