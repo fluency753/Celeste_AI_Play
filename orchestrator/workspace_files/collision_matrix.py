@@ -74,7 +74,7 @@ def _write(path, value):
 class Matrix:
     """Each cell indexes every intersecting source; exact geometry refines queries."""
 
-    def __init__(self, obs, cell=2):
+    def __init__(self, obs, cell=8):
         started = time.perf_counter()
         if cell not in (1, 2, 4, 8):
             raise ValueError('cell must be 1, 2, 4, or 8 pixels')
@@ -159,7 +159,7 @@ class Matrix:
         self.build_ms = (time.perf_counter()-started)*1000
 
     @classmethod
-    def from_file(cls, path, cell=2):
+    def from_file(cls, path, cell=8):
         value = json.loads(Path(path).read_text(encoding='utf-8'))
         return cls(value.get('obs', value), cell)
 
@@ -269,7 +269,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--obs', default=str(Path(__file__).with_name('latest_obs.json')))
     parser.add_argument('--out', default=None)
-    parser.add_argument('--cell', type=int, default=2)
+    parser.add_argument('--cell', type=int, default=8)
     args = parser.parse_args()
     matrix = Matrix.from_file(args.obs, args.cell)
     output = args.out or str(Path(args.obs).with_name('collision_matrix.json'))

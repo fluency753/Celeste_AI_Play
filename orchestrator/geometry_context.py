@@ -12,7 +12,7 @@ def snapshot_id(data):
     return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:32]
 
 
-def _observation_id(obs):
+def observation_id(obs):
     return snapshot_id({**{key: obs.get(key) for key in
                           ('collision', 'entities', 'player', 'exits', 'spawns', 'respawnPoint', 'triggers')},
                         'side': (obs.get('level') or {}).get('side')})
@@ -82,7 +82,7 @@ class _Encoder:
 def _header(data, obs):
     return {**{k: data.get(k) for k in ('version', 'frame', 'sid', 'room', 'scope', 'bounds', 'coverage',
                                       'complete', 'geometryComplete', 'player')},
-            'snapshot_id': _observation_id(obs), 'encoding': 'shared-shapes-v1',
+            'snapshot_id': observation_id(obs), 'encoding': 'shared-shapes-v1',
             'shapeNote': 'geometry = shapes[object.shape] translated by object.at; all x/y including nested parts use this same anchor. No rounding.'}
 
 
@@ -145,7 +145,7 @@ def _context_snapshot(obs, shape_ids=None):
         return None
     room_data = room_metadata(obs)
     return {'data': data, 'identity': identity, 'records': records, 'shapes': shapes, 'room_data': room_data,
-            'snapshot_id': _observation_id(obs), 'shape_ids': shape_ids}
+            'snapshot_id': observation_id(obs), 'shape_ids': shape_ids}
 
 
 def _groups(records):
@@ -268,7 +268,7 @@ def geometry_page(obs, *, region=None, offset=0, limit=32, expected_snapshot=Non
     if data is None: raise ValueError(collision_problem(obs) + '；先 observe 获取支持统一碰撞的观测。')
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 64:
         raise ValueError('offset 必须非负整数，limit 为 1–64')
-    ident = _observation_id(obs)
+    ident = observation_id(obs)
     if expected_snapshot is not None and expected_snapshot != ident:
         raise ValueError('快照已改变，不能跨帧或跨房间混合分页；请从 offset=0 重新查询。')
     if offset and expected_snapshot is None:

@@ -14,15 +14,15 @@
 
 ## 房间概况与精确几何
 
-首次入房和默认 `observe` 返回布局；同房 `act/cutscene` 返回变化，按下述格式维护当前几何，不要求每步重新查询整房。选择通道时先用精确实例与角色碰撞箱核对支撑、墙和开口；截图／碰撞图用于定位候选，不替代几何核验。
+具备脚本能力且当前文件已核对时，默认 `observe/act/cutscene` 返回 `workspace-files-v1`：正文只给状态、快照身份和 `/workspace/game/latest_obs.json` 位置。用程序读取文件的 `obs` 并筛选需要的区域，不重复查询同帧已有几何、不整份打印。动作后文件会更新；默认 observe 获取新观测。无脚本能力、文件不可用或规划工具受限时，才回退为首次布局及同房变化，按下述格式维护几何。选择通道时先用精确实例与角色碰撞箱核对支撑、墙和开口；截图／碰撞图用于定位候选，不替代几何核验。
 
-默认工具使用 `room-context-v2`，首次入房或默认 `observe` 返回 `mode=baseline` 的完整布局，替换旧基线。`groups` 只共用相同属性，不省略实例：每组 `instances` 的行按本组 `instanceColumns`（省略时为 `[id,x,y]`）读取，可能另有 `shape/state` 列；共同的形状或状态写在组上。`shape` 引用同包 `shapes`，形状及所有嵌套 x/y 加实例 x/y 还原世界坐标。所有实例位置保留，组不是实心包围区域，不判定可达性。默认 `stateDetail` 明示仅精选游戏状态，完整反射仍可精查。
+回退工具使用 `room-context-v2`，首次入房或默认 `observe` 返回 `mode=baseline` 的完整布局，替换旧基线。`groups` 只共用相同属性，不省略实例：每组 `instances` 的行按本组 `instanceColumns`（省略时为 `[id,x,y]`）读取，可能另有 `shape/state` 列；共同的形状或状态写在组上。`shape` 引用同包 `shapes`，形状及所有嵌套 x/y 加实例 x/y 还原世界坐标。所有实例位置保留，组不是实心包围区域，不判定可达性。默认 `stateDetail` 明示仅精选游戏状态，完整反射仍可精查。
 
 同房 `act/cutscene` 返回 `mode=delta`：核对 `base_snapshot_id`，应用 `added/changed` 中的完整替换对象（按 source/id），`removed` 是本覆盖范围内不再观测的 `[source,id]`，不表示永久消失。每条变化自带所需形状定义；`roomChanges` 按同名字段替换首次布局外层的 `exits/spawns/respawnPoint/triggers/entities`，空值也必须应用。地形不变就不重复发送，移动、生成、形状或碰撞状态变化照常报告；范围变化、缓存失效或变化过大时重发 baseline。快照链缺失、历史压缩后记不清布局时默认 `observe` 重建，不猜测缺失数据。
 
 `observe(detail="geometry", region=[x,y,w,h], limit=32)` 只读最近观测缓存，返回区域精确对象与完整反射状态，格式为 `shared-shapes-v1`（独立的本包形状表）。后续页带 `offset=next_offset` 与同一 `snapshot_id`；动作或新观测后重新从第一页查。`observe(detail="player")` 读取完整玩家内部状态。两种详情都不推进游戏，也不改变变化基线。局部查询超出来源范围、来源缺失或存在未知形状时，空结果不证明安全。完整原始工作区与完整碰撞图不变，不必把整房 JSON 打印进聊天。
 
-以下字段说明专指原始工作区 `latest_obs.json` 的 `obs`，包括 `collision.objects[].geometry` 世界坐标；默认工具的 `groups/instances` 和区域精查的 `objects[].shape/at` 是不同格式，不要混读或重复加锚点。
+以下字段说明专指原始工作区 `latest_obs.json` 的 `obs`，包括 `collision.objects[].geometry` 世界坐标；回退工具的 `groups/instances` 和区域精查的 `objects[].shape/at` 是不同格式，不要混读或重复加锚点。
 
 - `collision.frame/sid/room` 必须匹配当前观测；`scope/bounds` 标覆盖范围，`view` 不代表全房。`complete` 表示范围内地形与实体均已提供，形状是否完整另看 `geometryComplete`。
 - `collision.objects` 区分地形、实体固体、单向平台、危险物、触发类对象和未知对象。按真实 `geometry` 形状分析；Key 等触发类不是墙，未知形状的包围盒也不是已确认实心。

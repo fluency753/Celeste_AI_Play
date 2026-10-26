@@ -251,7 +251,7 @@ def crop_to_view(obs: dict, margin: int = 16) -> tuple[list[dict], dict | None]:
 
 
 def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, explore: bool = False,
-                 compact_context: bool = False) -> str:
+                 compact_context: bool = False, file_context: bool = False) -> str:
     """full_room=True：整个房间的实体与地图（进入新房间、主动观察时）；False：只描述当前画面附近。
     effort：附在头部的推理强度说明（例如"推理强度：high"）。
     头部不写现实用时与时间预算：预算只是主控的安全上限，写给智能体看会让它赶时间、执行没优化完的路线。"""
@@ -321,6 +321,9 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         flags = [name for name, key in (("剧情中", "inCutscene"), ("转场中", "transitioning"), ("暂停", "paused")) if level.get(key)]
         if flags:
             lines.append("当前：" + "、".join(flags))
+
+    if file_context:
+        return "\n".join(lines)
 
     if full_room:
         entities, tiles = obs.get("entities") or [], obs.get("tiles")

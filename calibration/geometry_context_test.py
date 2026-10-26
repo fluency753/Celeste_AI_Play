@@ -12,6 +12,7 @@ from calibration.collision_contract_test import observation, FakeBridge
 from orchestrator.geometry_context import geometry_overview, geometry_page, GeometryContext
 from orchestrator.observation import room_json, enrich_obs, describe_obs
 from orchestrator.config import RunConfig
+from orchestrator.execution import WorkspaceCapabilities
 from orchestrator.game_session import GameSession
 from orchestrator.metrics import Metrics
 from orchestrator.server import build_server, ROOM_JSON_HEADER
@@ -222,6 +223,9 @@ class GeometryContextTests(unittest.TestCase):
         self.assertIsNone(geometry_overview(obs))
         with self.assertRaises(ValueError): geometry_page(obs)
 
+    # Keep the in-context baseline/delta fallback consumer active for this contract test.
+    @patch('orchestrator.server.workspace_capabilities',
+           lambda cfg: WorkspaceCapabilities('host', True, True, None))
     def test_real_tool_query_without_workspace_does_not_touch_bridge(self):
         with tempfile.TemporaryDirectory() as folder, patch('orchestrator.config.REPO_ROOT', Path(folder)):
             root = Path(folder)
@@ -253,6 +257,9 @@ class GeometryContextTests(unittest.TestCase):
             finally:
                 session.close(False)
 
+    # Keep the in-context baseline/delta fallback consumer active for this contract test.
+    @patch('orchestrator.server.workspace_capabilities',
+           lambda cfg: WorkspaceCapabilities('host', True, True, None))
     def test_real_server_delta_queries_render_failure_and_cutscene_share_emitted_baseline(self):
         with tempfile.TemporaryDirectory() as folder, patch('orchestrator.config.REPO_ROOT', Path(folder)):
             root = Path(folder)

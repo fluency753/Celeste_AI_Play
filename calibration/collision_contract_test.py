@@ -13,6 +13,7 @@ from PIL import Image
 from calibration.formal_run_test import _observation
 from orchestrator.collision_snapshot import current_collision
 from orchestrator.config import RunConfig
+from orchestrator.execution import WorkspaceCapabilities
 from orchestrator.game_session import GameSession
 from orchestrator.metrics import Metrics
 from orchestrator.observation import enrich_obs, room_json
@@ -80,6 +81,9 @@ class CollisionContractTests(unittest.TestCase):
         del obs['collision']
         self.assertIsNone(json.loads(room_json(enrich_obs(obs)))['collision'])
 
+    # Keep the in-context baseline/delta fallback consumer active for this contract test.
+    @patch('orchestrator.server.workspace_capabilities',
+           lambda cfg: WorkspaceCapabilities('host', True, True, None))
     def test_real_session_and_tool_dispatch_refresh_same_room_geometry_and_images(self):
         with tempfile.TemporaryDirectory() as folder, patch('orchestrator.config.REPO_ROOT', Path(folder)):
             root = Path(folder)

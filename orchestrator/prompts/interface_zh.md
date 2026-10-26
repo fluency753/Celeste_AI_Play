@@ -13,7 +13,7 @@
 
 **房间具体信息以精确碰撞箱数据和实体数据等为准，截图的视觉识别仅作为参考。** 哪里能站、哪里会死、出口在哪、实体在哪、怎么动，一律以下面的精确数据为依据；截图和字符地图只用来直观地看一眼，与精确数据不一致时以精确数据为准。
 
-- **碰撞来源与格式**：桥接在同一帧读取真实地形 Grid、实体 Collider 和玩家碰撞箱。默认工具将它们投影为下述 `room-context-v2` 布局／变化，不能在默认包中寻找原始 `objects[].geometry`。只有原始工作区 `latest_obs.json.obs.collision` 使用完整 `objects[].geometry` 世界坐标；区域精查则使用独立的 `shared-shapes-v1`。各来源都区分地形、实体固体、单向平台、危险物、触发类及未知对象，不能只看旧 `solids`。核对 `frame/sid/room`、`scope/bounds`、`coverage/complete` 和 `geometryComplete`；完整性只针对来源覆盖范围，未知形状和局部未见不等于空地。
+- **碰撞来源与格式**：桥接在同一帧读取真实地形 Grid、实体 Collider 和玩家碰撞箱。具备脚本能力且同帧完整文件核对成功时，默认工具使用 `workspace-files-v1`：正文仅状态、快照身份和最新观测文件位置，不重复布局。脚本从文件 `obs` 按需读取并筛选数据，不整份打印。文件引用的 `snapshot_id_scope=geometry-cache` 说明其 ID 用于区域详情分页，不是整份文件哈希。无脚本能力、文件不可用或规划工具受限时，回退为下述 `room-context-v2` 布局／变化。两种默认包都不直接提供原始 `objects[].geometry`。只有原始工作区 `latest_obs.json.obs.collision` 使用完整 `objects[].geometry` 世界坐标；区域精查则使用独立的 `shared-shapes-v1`。各来源都区分地形、实体固体、单向平台、危险物、触发类及未知对象，不能只看旧 `solids`。核对 `frame/sid/room`、`scope/bounds`、`coverage/complete` 和 `geometryComplete`；完整性只针对来源覆盖范围，未知形状和局部未见不等于空地。
 - **碰撞图**：开启图像时，每次观测与动作返回同一快照的分色图，区分灰色地形、蓝色实体固体、单向平台、危险物、触发类对象和玩家；禁用碰撞只画轮廓。图中帧号与当前数据一致才可结合使用，图片不预测动态障碍的未来位置。工作区 `game/collision.json` 的 `image` 指向对应图像；旧桥接未提供时明确缺失。
 
 - **截图**：游戏画面放大 2 倍后的样子（原始 320×180，画面左上角的世界坐标在观测文字里给出），只在进入新房间时（以及调用 `observe` 时）附上，只覆盖当前画面。背景、装饰和前景贴图不一定能碰撞，能碰撞的东西也不一定看得清，不要靠看图估计位置和尺寸。
@@ -21,13 +21,13 @@
   `#` 实心地形，`.` 空，`M` Madeline，`=` 其他实心块（可能移动、坠落或可撞碎），`-` 单向平台（可从下方穿过、站在上面），
   `^ v < >` 朝上/下/左/右的尖刺，`*` 其他致死物，`S` 弹簧，`o` 冲刺水晶（恢复冲刺），`O` 泡泡，`F` 羽毛，`~` 梦境块，`$` 收集品，`?` 其他可交互物。
   `#` 是展示地形标记，可能被实体符号遮盖；`collision` 直接读取真实碰撞体，不受这些符号影响。
-- **首次布局、房内变化与精查**：默认工具使用 `room-context-v2`，首次入房或默认 `observe` 返回 `mode=baseline` 的完整布局，替换旧基线。`groups` 只共用相同属性，不省略实例：每组 `instances` 的行按本组 `instanceColumns`（省略时为 `[id,x,y]`）读取，可能另有 `shape/state` 列；共同的形状或状态写在组上。`shape` 引用同包 `shapes`，形状及所有嵌套 x/y 加实例 x/y 还原世界坐标。所有实例位置保留，组不是实心包围区域，不判定可达性。默认 `stateDetail` 明示仅精选游戏状态，完整反射仍可精查。
+- **回退布局、房内变化与精查**：回退工具使用 `room-context-v2`，首次入房或默认 `observe` 返回 `mode=baseline` 的完整布局，替换旧基线。`groups` 只共用相同属性，不省略实例：每组 `instances` 的行按本组 `instanceColumns`（省略时为 `[id,x,y]`）读取，可能另有 `shape/state` 列；共同的形状或状态写在组上。`shape` 引用同包 `shapes`，形状及所有嵌套 x/y 加实例 x/y 还原世界坐标。所有实例位置保留，组不是实心包围区域，不判定可达性。默认 `stateDetail` 明示仅精选游戏状态，完整反射仍可精查。
 
-同房 `act/cutscene` 返回 `mode=delta`：核对 `base_snapshot_id`，应用 `added/changed` 中的完整替换对象（按 source/id），`removed` 是本覆盖范围内不再观测的 `[source,id]`，不表示永久消失。每条变化自带所需形状定义；`roomChanges` 按同名字段替换首次布局外层的 `exits/spawns/respawnPoint/triggers/entities`，空值也必须应用。地形不变就不重复发送，移动、生成、形状或碰撞状态变化照常报告；范围变化、缓存失效或变化过大时重发 baseline。快照链缺失、历史压缩后记不清布局时默认 `observe` 重建，不猜测缺失数据。
+同房 `act/cutscene` 返回 `mode=delta`：核对 `base_snapshot_id`，应用 `added/changed` 中的完整替换对象（按 source/id），`removed` 是本覆盖范围内不再观测的 `[source,id]`，不表示永久消失。每条变化自带所需形状定义；`roomChanges` 按同名字段替换首次布局外层的 `exits/spawns/respawnPoint/triggers/entities`，空值也必须应用。地形不变就不重复发送，移动、生成、形状或碰撞状态变化照常报告；范围变化、缓存失效或变化过大时重发 baseline。回退布局的快照链缺失、历史压缩后记不清时默认 `observe` 重建，不猜测缺失数据。文件模式中 `observe` 刷新文件，并不重新发送整房正文。
 
 `observe(detail="geometry", region=[x,y,w,h], limit=32)` 只读最近观测缓存，返回区域精确对象与完整反射状态，格式为 `shared-shapes-v1`（独立的本包形状表）。后续页带 `offset=next_offset` 与同一 `snapshot_id`；动作或新观测后重新从第一页查。`observe(detail="player")` 读取完整玩家内部状态。两种详情都不推进游戏，也不改变变化基线。局部查询超出来源范围、来源缺失或存在未知形状时，空结果不证明安全。完整原始工作区与完整碰撞图不变，不必把整房 JSON 打印进聊天。
 
-以下字段说明适用于工作区原始观测；默认工具省略已由布局和变化表达的重复实体、地形和玩家内部反射。
+以下字段说明适用于工作区原始观测；默认文件模式不枚举实体和地形，回退布局省略已由布局和变化表达的重复数据。
   - `frame` 观测帧号；`sid` 章节标识；`room` 房间名；`bounds` 房间范围 `[x, y, 宽, 高]`。
   - `exits` 可能的出口：`{"side": "left/right/top/bottom", "x": …, "y": [起, 止], "room": 相邻房间}`（左右出口给出 x 与 y 区间，上下出口给出 y 与 x 区间）。是否有通路须结合 `collision` 中的地形、实体及其机制判断。
   - `solids` 地形的碰撞箱，每项 `[x, y, 宽, 高]`，由地形格子合并而成，像素精确。`null` 表示缺少完整地形，不能按空房间处理。会动、会塌、能撞碎的实心物不在这里，在 `entities` 里。

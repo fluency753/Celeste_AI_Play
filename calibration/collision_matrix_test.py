@@ -22,13 +22,22 @@ def observation(objects=(), bounds=(0, 0, 40, 40)):
 
 class CollisionMatrixTest(unittest.TestCase):
 
+    def test_default_uses_native_eight_pixel_cells_and_retains_exact_shapes(self):
+        shape = {'shape': 'rect', 'x': 10.25, 'y': 10.75, 'w': 1.5, 'h': 2.25}
+        matrix = cm.Matrix(observation([obj(1, 0, 0, 0, 0, shape=shape)]))
+        self.assertEqual(matrix.cell, 8)
+        self.assertEqual((matrix.width, matrix.height), (5, 5))
+        self.assertEqual(matrix.cell_sources(1, 1)[0]['geometry'], shape)
+        self.assertEqual(matrix.contacts([12, 11, 1, 1]), [])
+        self.assertEqual(matrix.contacts([10.5, 11, .25, .25])[0]['geometry'], shape)
+
     def test_cells_keep_state_and_kind_without_traversal_decisions(self):
         objects = [obj(1, 10, 10, 8, 8, kind="hazard", collidable=False),
                    obj(2, 10, 10, 8, 8, kind="sensor"),
                    obj(3, 10, 10, 8, 8, kind="one_way", direction="up"),
                    obj(4, 10, 10, 8, 8, kind="unknown")]
         matrix = cm.Matrix(observation(objects))
-        sources = matrix.cell_sources(6, 6)
+        sources = matrix.cell_sources(1, 1)
         self.assertEqual([source['id'] for source in sources], [1, 2, 3, 4])
         self.assertFalse(sources[0]['collidable'])
         self.assertEqual(sources[2]['direction'], 'up')
@@ -186,7 +195,7 @@ class CollisionMatrixTest(unittest.TestCase):
         rect = {"shape": "rect", "x": 0, "y": 0, "w": 40, "h": 40}
         shape = {"shape": "list", "x": 0, "y": 0, "w": 40, "h": 40,
                  "parts": [rect, rect, rect]}
-        with patch.object(cm, "MAX_RASTER_VISITS", 500), self.assertRaisesRegex(ValueError, "work budget"):
+        with patch.object(cm, "MAX_RASTER_VISITS", 60), self.assertRaisesRegex(ValueError, "work budget"):
             cm.Matrix(observation([obj(1, 0, 0, 0, 0, shape=shape)]))
 
     def test_invalid_coverage_is_rejected(self):

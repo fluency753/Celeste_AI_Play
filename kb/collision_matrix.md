@@ -5,13 +5,13 @@
 ## 生成与读取
 
 ```bash
-python /workspace/game/collision_matrix.py --cell 2
+python /workspace/game/collision_matrix.py --cell 8
 python /workspace/game/collision_matrix.py --obs /workspace/saved_obs.json --out /workspace/matrix.json
 ```
 
-源为观测文件的 `obs.collision`。默认输出输入文件旁的 `collision_matrix.json`，stdout 只有文件路径、身份、尺寸和构建耗时；矩阵正文留在文件中，不用 Read、cat 或 print 整份送入上下文。主控不在每次动作后生成矩阵。
+优先用程序读取当前观测文件的 `obs.collision`；同一快照的全局或局部数据已在文件时，无须再调用查询工具获取一遍。只有想快捷查看或没有脚本能力时，才按需使用局部查询。源为观测文件的 `obs.collision`。默认输出输入文件旁的 `collision_matrix.json`，stdout 只有文件路径、身份、尺寸和构建耗时；矩阵正文留在文件中，不用 Read、cat 或 print 整份送入上下文。主控不在每次动作后生成矩阵。
 
-默认每格 **2×2 像素**，也支持 1/4/8。每格索引所有覆盖它的来源，包含地形、实体、危险物、传感器、未知形状及当前 `collidable=false` 的来源；不自动删去、启用或解释它们。
+默认每格 **8×8 像素**，与原生砖格一致；也支持 1/2/4。格长只决定空间索引，不取整精确形状，也不把覆盖部分扩大成整格实心。每格索引所有覆盖它的来源，包含地形、实体、危险物、传感器、未知形状及当前 `collidable=false` 的来源；不自动删去、启用或解释它们。
 
 ## Python 数据接口
 
@@ -20,7 +20,7 @@ import sys
 sys.path.insert(0, '/workspace/game')
 from collision_matrix import Matrix
 
-m = Matrix.from_file('/workspace/game/latest_obs.json', cell=2)
+m = Matrix.from_file('/workspace/game/latest_obs.json', cell=8)
 m.save('/workspace/matrix.json')
 m = Matrix.load('/workspace/matrix.json')
 print('snapshot', m.identity['frame'], m.identity['room'])
