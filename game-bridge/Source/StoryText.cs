@@ -36,6 +36,21 @@ internal static class StoryText {
         return null;
     }
 
+    // A skippable-cutscene decision is earlier than a dialogue input node. This
+    // only offers an attempt through the pause menu; it does not promise that
+    // this particular cutscene has a Skip item or press anything for the agent.
+    public static string? DecisionNode(Scene? scene) {
+        string? input = InputNode(scene);
+        if (input != null) return input;
+        if (scene is IntroVignette { exiting: false, menu: null }) return "skip";
+        if (scene is Level level && level.InCutscene && level.CanPause
+            && !level.FrozenOrPaused && !level.Transitioning && !level.SkippingCutscene && level.RetryPlayerCorpse == null) {
+            Player? player = level.Entities.FindFirst<Player>();
+            if (player is { Dead: false } && !PlayerControl.IsControllable(level, player)) return "skip";
+        }
+        return null;
+    }
+
     internal static string ReadMemorial(MemorialText? memorial, bool completed = false) {
         // MemorialText.Render draws a prefix of its localized message, not FancyText.
         // Show may already be false while text is fading out; it is still visible then.

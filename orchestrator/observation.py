@@ -198,6 +198,8 @@ def room_json(obs: dict) -> str:
         data['story']=obs['story']
     if 'storyInput' in obs:
         data['storyInput']=obs['storyInput']
+    if 'storyDecision' in obs:
+        data['storyDecision']=obs['storyDecision']
     if obs.get('storyPlayback'):
         data['storyPlayback']=obs['storyPlayback']
     lines = ["{"]
@@ -279,6 +281,8 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     node = obs.get('storyInput')
     if node:
         lines.append('当前剧情输入节点：'+node+'；主控已停止自动播放，教学用 act；对白和选项可明确用 act 输入，或调用 advance / choose。')
+    elif obs.get('storyDecision') == 'skip':
+        lines.append('剧情可尝试跳过，尚不表示对白已完整显示：用 cutscene(action="skip") 尝试暂停菜单跳过，或 watch 不按键观看到下一输入节点。')
     elif obs.get('controllable') and (level or {}).get('inCutscene'):
         lines.append('虽然有剧情标记，角色当前仍可操作，请继续用 act；不需要等待或确认。')
     for story in obs.get('story') or []:

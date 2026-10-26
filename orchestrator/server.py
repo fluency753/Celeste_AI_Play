@@ -35,9 +35,9 @@ plan_file：（有工作区时可用）工作区里的计划文件路径，与 i
   它应读取 /workspace/game/ 下的最新数据并改写同一个计划文件，主控接着执行，最多 max 次，不唤醒你。格式详见 /kb/game_data.md。
 thought：一两句中文{thought_brief}，会显示给观众。只写你对当前房间或这一段的分析与判断（难点在哪、怎么取舍、打算怎么过），
   不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。{thought_mood_short}{formal_thought_act}
-stop_on：提前停下的条件，可选 death room uncontrollable controllable land refill complete story_input；
+stop_on：提前停下的条件，可选 death room uncontrollable controllable land refill complete story_input story_decision；
   默认 ["death", "room", "complete"]，death 总会生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。
-celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控自动播放到实际输入节点或恢复控制。celeste_tas格式下不自动补这些帧，由明确输入推进。读取storyInput与story；inCutscene标记本身不表示角色失控。"""
+celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控在可尝试跳过时先交回，可选skip或watch继续观看到实际输入节点或恢复控制。celeste_tas格式下不自动补这些帧，由明确输入推进。读取storyDecision、storyInput与story；inCutscene标记本身不表示角色失控。"""
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json）"
 SIM_NOTE = WORKSPACE_NOTE[:-1] + "；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
@@ -280,7 +280,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             result = await asyncio.to_thread(session.exit_level, reason)
             return [json.dumps(result,ensure_ascii=False) + '\n已退出关卡，本次试玩结束，请结束本轮，不再调用游戏工具。']
 
-    @optional_tool(tool_cutscene, name='cutscene', description='主控自动播放剧情到下一输入节点，无需wait。advance确认当前完整对白或明信片，choose选择当前可见选项index，skip尝试跳过整段；教学用act。advance不会代选，动作后自动播放到下一节点或恢复控制。', structured_output=False)
+    @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段，watch不按键观看到下一真实输入节点或恢复控制。advance确认当前完整对白或明信片，choose选择当前可见选项index；教学用act。无需wait，advance不会代选，确认后自动播放到下一节点。', structured_output=False)
     async def cutscene(action: str, choice: int | None = None) -> list:
         async with call_lock:
             if (note := gated()) is not None:return [note]

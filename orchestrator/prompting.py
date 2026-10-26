@@ -21,7 +21,7 @@ TOOL_NOTES = {
     "set_effort": "调整你自己的推理强度",
     "stop_run": "任务阻塞时说明原因报告给用户，主控暂停试玩等用户处理",
     "exit_level": "用户要求退出时保存并退出关卡",
-    "cutscene": "在主控交回的输入节点推进、选择或跳过剧情",
+    "cutscene": "在剧情决策点尝试跳过或继续观看，在真实输入节点推进或选择",
     "simulate": "花模拟体力预测短路线",
 }
 CN_COUNT = {1: "一", 2: "两", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九"}
@@ -37,7 +37,7 @@ def auto_handling(cfg) -> str:
     """interface_zh.md 里"系统自动处理的部分"：没有剧情工具时剧情一律自动跳过；有剧情工具时按当前剧情模式处理。"""
     if has_cutscene_tool(cfg):
         return ("屏幕转场、死亡动画与重生由系统自动推进。剧情按当前的剧情模式处理：auto 时系统自动推进并跳过；"
-                "agent 时主控自动播放到需要输入的节点；对白用 `cutscene` 推进，分支明确选择，教学用 `act`，无需 wait。剧情标记不等于失控，角色可操作时继续用 `act`。"
+                "agent 时剧情可尝试跳过便先交回，用 `cutscene` 的 skip 尝试跳过或 watch 观看到下一真实输入节点；对白用 advance，分支明确 choose，教学用 `act`，无需 wait。剧情标记不等于失控，角色可操作时继续用 `act`。"
                 "agent 模式下，吃心提示、结算确认及返回选章地图都由你观察界面后用 act 操作：C 确认、B 返回，纯帧数推进动画。"
                 "complete 事件或 completed=true 只是游戏登记了成绩，不是任务结束；回到选章地图后主控才确认章节完成，不会代按结算。")
     return "剧情对话、屏幕转场、死亡动画与重生都由系统自动推进并跳过，`act` 返回时 Madeline 已经可以操作。"
@@ -368,8 +368,9 @@ def prompt_parts(cfg) -> list[PromptPart]:
         parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）
     if has_cutscene_tool(cfg):
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
-                                f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式由主控自动播放到输入节点，无需wait；"
-                                "用advance/choose/skip或act明确输入，教学用act。分支须先读选项后自行选择，不得用advance代选。", None, "\n"))
+                                f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式在可尝试跳过时先交回，无需wait；"
+                                "用skip尝试跳过，watch不按键观看到下一真实输入节点或恢复控制；advance/choose或act明确输入，教学用act。"
+                                "分支须先读选项后自行选择，不得用advance代选。旧桥接缺少storyDecision时仍只在实际输入节点交回。", None, "\n"))
     if is_explore(cfg) and workspace_capabilities(cfg).programs and getattr(cfg, "explore_program_runs", None):
         parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",
                                 f"两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。",

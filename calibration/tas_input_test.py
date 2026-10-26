@@ -59,6 +59,7 @@ class TasSessionTests(unittest.TestCase):
             if command=='deactivate':return {}
             self.assertEqual(command,'step')
             self.assertEqual(args['input_format'],'celeste_tas')
+            self.assertNotIn('story_decision',args['stop_on'])
             return {'obs':copy.deepcopy(obs),'result':{'stop':'room','consumed':2,'planned':6,'events':[]}}
         self.s.client=Mock(call=call)
         source={'offset':10,'total':20,'locations':[[4,0],[4,1],[5,0],[5,1],[5,2],[5,3]],'path':'route.tas','sha256':'abc'}

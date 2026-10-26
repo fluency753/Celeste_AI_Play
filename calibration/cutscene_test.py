@@ -318,6 +318,109 @@ class ScriptClient(SceneClient):
 class StoryFlowTests(unittest.TestCase):
     setUp=CutsceneTests.setUp
     tearDown=CutsceneTests.tearDown
+
+    def test_act_hands_off_before_first_dialogue_then_watch_reaches_real_input(self):
+        # Model only the external frame source: the real act/auto-play/watch
+        # consumers must decide when to stop. The first page needs 544 frames,
+        # but pausing becomes possible on frame 4.
+        from orchestrator.game_session import expand_inputs, LETTERS
+        class Timeline:
+            def __init__(self):
+                self.frame=0;self.calls=[]
+            def obs(self):
+                return {'scene':'Level','frame':self.frame,'controllable':self.frame==0,
+                        'storyInput':'dialogue' if self.frame>=544 else None,
+                        'storyDecision':'dialogue' if self.frame>=544 else ('skip' if self.frame>=4 else None),
+                        'level':{'inCutscene':self.frame>0,'canPause':self.frame>=4,'room':'test',
+                                 'sid':'Celeste/3-CelestialResort','dialogChoices':[],
+                                 'dialogOpen':self.frame>=100,'dialogWaiting':self.frame>=544}}
+            def call(self,cmd,**args):
+                if cmd!='step':return {'obs':self.obs()}
+                self.calls.append(args)
+                before=self.obs();events=[];count=0;stop='done'
+                for _ in expand_inputs(args['inputs'],10000,LETTERS):
+                    self.frame+=1;count+=1;after=self.obs()
+                    changes=[]
+                    if before['controllable'] and not after['controllable']:changes.append('uncontrollable')
+                    for key,event in [('storyInput','story_input'),('storyDecision','story_decision')]:
+                        if after[key] and after[key]!=before[key]:changes.append(event)
+                    events.extend({'type':item,'frame':self.frame} for item in changes)
+                    before=after
+                    hit=next((item for item in changes if item in args.get('stop_on',[])),None)
+                    if hit:stop=hit;break
+                return {'obs':self.obs(),'result':{'consumed':count,'planned':count,'stop':stop,'events':events}}
+            def close(self):pass
+        client=Timeline();self.s.client=client;self.s.last_obs=client.obs()
+        self.s.cfg.thought_lead_s=0
+        with patch.object(self.s,'_write_sim_state'):
+            outcome=self.s.act(['40,R'],'触发旅馆对话',None)
+            self.assertEqual(outcome.obs['frame'],4)
+            self.assertIsNone(outcome.obs['storyInput'])
+            self.assertEqual(outcome.obs['storyDecision'],'skip')
+            self.assertEqual(outcome.auto_frames,3)
+            calls=len(client.calls)
+            observed,_=self.s.observe()
+            self.assertEqual(observed['frame'],4)
+            self.assertEqual(len(client.calls),calls)  # observe does not watch for the agent
+            obs,_,info=self.s.cutscene('watch')
+        self.assertEqual(obs['frame'],544)
+        self.assertEqual(obs['storyInput'],'dialogue')
+        self.assertEqual(info['auto_frames'],540)
+        self.assertEqual(info['frames'],0)
+        self.assertTrue(all(',' not in line for call in client.calls[1:] for line in call['inputs']))
+        self.assertTrue(all('story_decision' not in call['stop_on'] for call in client.calls[calls:]))
+
+    def test_early_skip_calls_menu_without_waiting_for_dialogue(self):
+        early=dialog();early.update(storyInput=None,storyDecision='skip')
+        early['level']['dialogWaiting']=False
+        self.s.client=SceneClient(early)
+        end=copy.deepcopy(early);end.update(controllable=True,storyDecision=None)
+        end['level'].update(inCutscene=False,dialogOpen=False)
+        with patch('orchestrator.game_session.skip_by_pause_menu',return_value=(True,end,0,'skipped')) as skip:
+            _,_,info=self.s.cutscene('skip')
+        skip.assert_called_once()
+        self.assertEqual(self.s.client.steps,[])
+        self.assertTrue(info['skipped'])
+
+    def test_advance_does_not_stop_again_at_same_skip_opportunity(self):
+        typing=dialog();typing.update(storyInput=None,storyDecision='skip')
+        typing['level']['dialogWaiting']=False
+        ready=dialog();ready['storyDecision']='dialogue'
+        self.s.client=ScriptClient([ready,typing,typing,ready])
+        obs,_,info=self.s.cutscene('advance')
+        self.assertEqual(obs['storyInput'],'dialogue')
+        self.assertEqual(info['auto_frames'],60)
+        self.assertEqual(self.s.client.steps,[['1,C','1'],['30'],['30']])
+
+    def test_explicit_story_tools_do_not_auto_skip_or_confirm_in_auto_mode(self):
+        typing=dialog();typing.update(storyInput=None,storyDecision='skip')
+        typing['level']['dialogWaiting']=False
+        for action in ('watch','advance','choose'):
+            with self.subTest(action=action):
+                self.s.cfg.cutscene_mode='auto'
+                ready=dialog(action=='choose')
+                after=dialog();after.update(storyInput=None,storyDecision='skip')
+                after['level']['dialogWaiting']=False
+                final=dialog()
+                states=[typing,ready] if action=='watch' else [typing,ready,after,final]
+                self.s.client=ScriptClient(states)
+                obs,_,_=self.s.cutscene(action,choice=0 if action=='choose' else None)
+                self.assertEqual(obs['storyInput'],'dialogue')
+                self.assertEqual(self.s.client.steps,[['30']] if action=='watch' else [['30'],['1,C','1'],['30']])
+                self.assertEqual(self.s.cfg.cutscene_mode,'auto')
+
+    def test_watch_never_confirms_choices_or_tutorial_and_respects_user_pause(self):
+        for node in ('choice','tutorial','postcard'):
+            obs=dialog();obs.update(storyInput=node,storyDecision=node)
+            self.s.client=SceneClient(obs)
+            result=self.s.cutscene('watch')
+            self.assertEqual(result[2]['frames'],0)
+            self.assertEqual(self.s.client.steps,[])
+        early=dialog();early.update(storyInput=None,storyDecision='skip')
+        self.s.client=SceneClient(early);self.s.control_guard=lambda:'用户已暂停'
+        _,_,info=self.s.cutscene('watch')
+        self.assertEqual(self.s.client.steps,[])
+        self.assertIn('暂停',info['auto_notes'][0])
     def test_host_plays_typing_to_input_without_any_confirm(self):
         typing=dialog();typing['level']['dialogWaiting']=False;typing['storyInput']=None
         self.s.client=ScriptClient([typing,dialog()])
@@ -451,3 +554,13 @@ class StorySchemaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('当前剧情输入节点：tutorial',rendered)
         self.assertIn('刚才由主控自动播放的文字：相信自己',rendered)
         self.assertEqual(json.loads(room_json(obs))['storyInput'],'tutorial')
+
+    def test_skip_opportunity_is_distinct_in_observation_and_tool_schema(self):
+        import json
+        from orchestrator.observation import describe_obs,room_json
+        obs={'scene':'Level','storyInput':None,'storyDecision':'skip',
+             'level':{'inCutscene':True,'room':'test','sid':'Celeste/3-CelestialResort',
+                      'chapterTimeTicks':0,'deaths':0,'deathsInRoom':0,'camera':[0,0],'bounds':[0,0,320,180]}}
+        self.assertIn('剧情可尝试跳过',describe_obs(obs))
+        self.assertNotIn('当前剧情输入节点',describe_obs(obs))
+        self.assertEqual(json.loads(room_json(obs))['storyDecision'],'skip')

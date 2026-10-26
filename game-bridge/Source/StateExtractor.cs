@@ -63,6 +63,7 @@ internal static class StateExtractor {
         w.WriteString("input_format", Bridge.CurrentInput.Tas ? "celeste_tas" : "celeste_ai");
         StoryText.Write(w, Engine.Scene);
         w.WriteString("storyInput", StoryText.InputNode(Engine.Scene));
+        w.WriteString("storyDecision", StoryText.DecisionNode(Engine.Scene));
 
         if (SaveData.Instance is { } save) {
             w.WriteStartObject("save");

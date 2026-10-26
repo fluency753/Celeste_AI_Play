@@ -231,3 +231,124 @@ if (PlayerControl.IsDeathTransition(true,null)) throw new Exception("Scene exit 
 dyingPlayer.Dead=false;
 if (PlayerControl.IsDeathTransition(true,dyingPlayer)) throw new Exception("Living player counted as dead");
 Console.WriteLine("PASS: real death emits once; absent player on scene exit is not a death");
+
+// A decision to attempt Skip must be offered before the textbox waits for input.
+// Use real Level.CanPause and actual game entities, with no engine/graphics update.
+level.Frozen=false; level.Paused=false; level.Completed=false;
+level.InCutscene=true; level.SkippingCutscene=false;
+entities.entities.Clear(); entities.entities.Add(player); entities.entities.Add(box);
+var decisionTracker=(Monocle.Tracker)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Monocle.Tracker));
+decisionTracker.Entities=new() { [typeof(Player)]=new() {player} };
+typeof(Monocle.Scene).GetField("<Tracker>k__BackingField", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+    .SetValue(level,decisionTracker);
+player.Dead=false; player.StateMachine.State=Player.StDummy;
+box.Visible=true; box.waitingForInput=false; box.disableInput=false;
+level.PauseLock=false;
+if (!level.CanPause) throw new Exception("Decision fixture unexpectedly cannot pause");
+Check("",StoryText.InputNode(level) ?? "");
+Check("skip",StoryText.DecisionNode(level)!);
+level.PauseLock=true;
+Check("",StoryText.DecisionNode(level) ?? "");
+level.PauseLock=false;
+Check("skip",StoryText.DecisionNode(level)!);
+box.waitingForInput=true; box.runRoutine.waitTimer=0f;
+Check("dialogue",StoryText.DecisionNode(level)!); // real input takes priority over Skip
+box.waitingForInput=false;
+player.StateMachine.State=Player.StNormal;
+Check("",StoryText.DecisionNode(level) ?? ""); // playable tutorial intro stays playable
+player.StateMachine.State=Player.StDummy;
+level.Paused=true;
+Check("",StoryText.DecisionNode(level) ?? "");
+level.Paused=false; level.Frozen=true;
+Check("",StoryText.DecisionNode(level) ?? "");
+level.Frozen=false; player.Dead=true;
+Check("",StoryText.DecisionNode(level) ?? "");
+player.Dead=false; level.transition=new Monocle.Coroutine();
+Check("",StoryText.DecisionNode(level) ?? "");
+level.transition=null;
+level.RetryPlayerCorpse=(PlayerDeadBody)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(PlayerDeadBody));
+Check("",StoryText.DecisionNode(level) ?? "");
+level.RetryPlayerCorpse=null; level.SkippingCutscene=true;
+Check("",StoryText.DecisionNode(level) ?? "");
+level.SkippingCutscene=false; level.InCutscene=false;
+Check("",StoryText.DecisionNode(level) ?? "");
+level.InCutscene=true;
+entities.entities.Remove(player);
+decisionTracker.Entities[typeof(Player)].Clear();
+Check("",StoryText.DecisionNode(level) ?? "");
+var intro=(IntroVignette)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(IntroVignette));
+Check("skip",StoryText.DecisionNode(intro)!);
+intro.exiting=true;
+Check("",StoryText.DecisionNode(intro) ?? "");
+intro.exiting=false; intro.menu=(TextMenu)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(TextMenu));
+Check("",StoryText.DecisionNode(intro) ?? "");
+card.alpha=1; card.buttonEase=1;
+Check("postcard",StoryText.DecisionNode(enter)!);
+Console.WriteLine("PASS: early Skip decision, real input priority, pause lock, playable tutorial, paused/frozen/dead/skipping/transition/retry and intro menu/exit exclusions");
+
+// Optional integration check against the freshly built full bridge: execute the
+// real StepJob constructor/NextInput/AfterFrame path, not a copy of its edge rule.
+if (args.Length > 0) {
+    var assembly=System.Reflection.Assembly.LoadFrom(Path.GetFullPath(args[0]));
+    var stepType=assembly.GetType("CelesteAI.Bridge.StepJob",throwOnError:true)!;
+    var frameType=assembly.GetType("CelesteAI.Bridge.InputFrame",throwOnError:true)!;
+    var snapshotType=assembly.GetType("CelesteAI.Bridge.SnapshotOptions",throwOnError:true)!;
+    var flags=System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance
+        | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+    var engine=(Monocle.Engine)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Monocle.Engine));
+    var instance=typeof(Monocle.Engine).GetProperty("Instance",flags)!;
+    var oldEngine=instance.GetValue(null);
+    instance.SetValue(null,engine);
+    typeof(Monocle.Engine).GetField("scene",flags)!.SetValue(engine,level);
+    level.Session=(Session)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Session));
+    level.Session.Level="decision-test";
+    entities.entities.Add(player); decisionTracker.Entities[typeof(Player)].Add(player);
+    player.Dead=false; player.StateMachine.State=Player.StDummy;
+    level.InCutscene=true; level.Paused=false; level.Frozen=false; level.SkippingCutscene=false;
+    level.PauseLock=true; box.waitingForInput=false;
+    try {
+        var plan=(System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(frameType))!;
+        for (int i=0;i<3;i++) plan.Add(Activator.CreateInstance(frameType));
+        var ctor=stepType.GetConstructors(flags).Single();
+        var parameters=ctor.GetParameters();
+        var values=parameters.Select(p => p.HasDefaultValue ? p.DefaultValue : p.ParameterType.IsValueType ? Activator.CreateInstance(p.ParameterType) : null).ToArray();
+        for (int i=0;i<parameters.Length;i++) values[i]=parameters[i].Name switch {
+            "requestId" => 1L, "plan" => plan, "stopOn" => new[]{"story_decision"},
+            "framesPerTick" => 1, "buffer" => "gameplay", "snapshot" => Activator.CreateInstance(snapshotType),
+            _ => values[i]
+        };
+        var job=ctor.Invoke(values);
+        var next=stepType.GetMethod("NextInput",flags)!;
+        var after=stepType.GetMethod("AfterFrame",flags)!;
+        var reason=stepType.GetProperty("StopReason",flags)!;
+        next.Invoke(job,null); after.Invoke(job,new object[]{1L});
+        if (reason.GetValue(job)!=null) throw new Exception("Locked-pause frame stopped before skip opportunity");
+        level.PauseLock=false;
+        next.Invoke(job,null); after.Invoke(job,new object[]{2L});
+        Check("story_decision",reason.GetValue(job)?.ToString() ?? "");
+        var records=(System.Collections.IEnumerable)stepType.GetField("events",flags)!.GetValue(job)!;
+        bool exact=false;
+        foreach (var item in records) {
+            var itemType=item.GetType();
+            if ((string?)itemType.GetField("Item2")!.GetValue(item)=="story_decision"
+                && (long)itemType.GetField("Item1")!.GetValue(item)! == 2L
+                && (string?)itemType.GetField("Item3")!.GetValue(item)=="skip") exact=true;
+        }
+        if (!exact) throw new Exception("StepJob did not publish Skip on the first pause-unlocked frame");
+        // Starting at an acknowledged opportunity must not zero-frame lock act;
+        // no forced stop applies to a caller (including TAS) that did not request it.
+        var alreadySkippable=ctor.Invoke(values);
+        if (reason.GetValue(alreadySkippable)!=null) throw new Exception("Existing skip opportunity locked act before its first frame");
+        next.Invoke(alreadySkippable,null); after.Invoke(alreadySkippable,new object[]{3L});
+        if (reason.GetValue(alreadySkippable)!=null) throw new Exception("Stable skip opportunity stopped explicit act repeatedly");
+        level.PauseLock=true;
+        var noStopValues=(object?[])values.Clone();
+        noStopValues[Array.FindIndex(parameters,p=>p.Name=="stopOn")]=Array.Empty<string>();
+        var noForcedStop=ctor.Invoke(noStopValues);
+        level.PauseLock=false;
+        next.Invoke(noForcedStop,null); after.Invoke(noForcedStop,new object[]{4L});
+        if (reason.GetValue(noForcedStop)!=null) throw new Exception("Unrequested story decision stopped a TAS/raw-input caller");
+        Console.WriteLine("PASS: full bridge StepJob stops and emits Skip at the first pause-unlocked frame");
+        Console.WriteLine("PASS: full bridge StepJob preserves explicit act at an existing decision and never forces unrequested stops");
+    } finally { instance.SetValue(null,oldEngine); }
+}

@@ -27,6 +27,15 @@ def story_input(obs: dict) -> str | None:
     return obs.get('storyInput')
 
 
+def story_decision(obs: dict) -> str | None:
+    """Decision opportunity, distinct from a ready confirmation/choice input.
+
+    Old bridges can still expose ready inputs, but cannot stop at the earlier
+    pause-menu opportunity. Never infer that opportunity from stale flags.
+    """
+    return obs.get('storyDecision', story_input(obs))
+
+
 def cutscene_skippable(obs: dict) -> bool:
     """当前是否处在可以尝试跳过的剧情里（序章开场，或关卡内的剧情且尚未在跳过中）。"""
     scene = obs.get("scene")

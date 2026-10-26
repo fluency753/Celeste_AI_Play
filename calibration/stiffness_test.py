@@ -285,7 +285,7 @@ class StiffnessReviewTests(unittest.TestCase):
         self.s.metrics.freeze_counters = lambda: (300.0, 0.0, 0.0)
         self.s.client = StepClient([])
         self.s.act(["5,R"], "往右走", None)
-        self.assertEqual(self.s.client.steps[0]["stop_on"], ["death", "room", "uncontrollable", "story_input"])
+        self.assertEqual(self.s.client.steps[0]["stop_on"], ["death", "room", "uncontrollable", "story_input", "story_decision"])
 
     def test_stop_request_during_stiffness_skips_the_plan(self):
         self.s._freeze_base = (0.0, 0.0, 0.0)
