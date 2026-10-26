@@ -191,7 +191,13 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         if screenshot and show_screenshot:
             content.append(tagged(upscale_png(screenshot), 'screenshot'))
         renderer = getattr(session, 'collision_png', None)
-        collision = renderer(obs) if renderer is not None else render_collision_view(obs)
+        try:
+            collision = renderer(obs) if renderer is not None else render_collision_view(obs)
+        except Exception as exc:  # noqa: BLE001
+            # 画图失败时游戏可能已经推进：照常返回结果，只少这张图（报错会让智能体以为没执行而重发同样的按键）
+            print(f"[collision] 画碰撞图失败：{exc}", flush=True)
+            content.append('（这次没有附碰撞图：画图失败；碰撞数据仍在 /workspace/game/latest_obs.json。）')
+            return content
         if collision is not None:
             content.append(tagged(collision, 'collision'))
         return content

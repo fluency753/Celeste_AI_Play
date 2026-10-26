@@ -42,5 +42,17 @@ class CollisionSafetyTests(unittest.TestCase):
             self.assertEqual(render.call_count, 2)
 
 
+class FileModeTextTests(unittest.TestCase):
+    def test_file_mode_still_reports_collectibles(self):
+        from calibration.collision_contract_test import observation
+        from orchestrator.observation import describe_obs, enrich_obs
+        obs = enrich_obs(observation())
+        obs["entities"].append({"id": 900, "type": "Strawberry", "cat": "collectible", "x": 40, "y": 0, "w": 14, "h": 14,
+                                "collected": False})
+        text = describe_obs(obs, full_room=False, explore=True, file_context=True)
+        self.assertIn("Strawberry#900", text)
+        self.assertIn("尚未确认收集", text)
+
+
 if __name__ == "__main__":
     unittest.main()

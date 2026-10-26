@@ -287,16 +287,22 @@ class GeometryContextTests(unittest.TestCase):
                 # 碰撞图由 GameSession 按帧画一次、写工作区与工具结果共用：两处都替换才是真实的画图失败
                 with patch('orchestrator.server.render_collision_view', side_effect=ValueError('render failed')), \
                         patch('orchestrator.game_session.render_collision_view', side_effect=ValueError('render failed')):
-                    with self.assertRaises(UnexpectedToolError):
-                        call('act', {'inputs': ['1,R'], 'thought': '测试输出失败'})
-                # The first act advanced the external game, but no response was emitted.
+                    # 画图失败时这次 act 已经推进了游戏：照常返回结果，只少碰撞图（报错会让智能体重发同样的按键）
+                    failed, failed_text = call('act', {'inputs': ['1,R'], 'thought': '测试输出失败'})
+                self.assertFalse(failed.is_error)
+                self.assertIn('没有附碰撞图', failed_text)
+                self.assertFalse(any(getattr(b, 'type', '') == 'image' for b in failed.content))
+                first = delta_from(failed_text)
+                self.assertEqual(first['base_snapshot_id'], baseline['snapshot_id'])
+                self.assertEqual(first['frame'], 13)
+                self.assertEqual(len(first['changed']), 1)                      # 假桥接只在第一次推进时移动实体
                 result, text = call('act', {'inputs': ['1,R'], 'thought': '核对下一动作'})
                 self.assertFalse(result.is_error)
                 delta = delta_from(text)
-                self.assertEqual(delta['base_snapshot_id'], baseline['snapshot_id'])
+                self.assertEqual(delta['base_snapshot_id'], first['snapshot_id'])   # 已发出的结果推进了基线
                 self.assertEqual(delta['frame'], 14)
                 self.assertLess(len(text), 2500)
-                self.assertEqual(len(delta['changed']), 1)
+                self.assertEqual(len(delta['changed']), 0)
                 session.client.obs['storyInput'] = 'dialogue'
                 session.client.obs['level'].update(inCutscene=True, dialogOpen=True, dialogWaiting=True, dialogChoices=[])
                 result, text = call('cutscene', {'action': 'advance'})

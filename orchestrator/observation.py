@@ -322,20 +322,20 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         if flags:
             lines.append("当前：" + "、".join(flags))
 
-    if file_context:
-        return "\n".join(lines)
-
     if full_room:
         entities, tiles = obs.get("entities") or [], obs.get("tiles")
     else:
         entities, tiles = crop_to_view(obs)
-    # 收集品摘要只给探索模式；完整房间数据在所有模式保留全部实体。
+    # 收集品摘要只给探索模式；完整房间数据在所有模式保留全部实体。文件模式也给（几何在文件里，收集品状态仍写在正文）
     collectibles = [compact_entity(e) for e in entities if e.get("cat") == "collectible"] if explore else []
     if collectibles:
         lines.append("当前观测中的收集品（是否能接近需结合地形确认）：")
         for e in collectibles:
             status = "已收集" if e.get("collected") else "此前存档已取得的幽灵收集品" if e.get("isGhostBerry") else "尚未确认收集"
             lines.append(f"- {e['type']}#{e.get('id', '?')} 碰撞范围 ({e['x']}, {e['y']}, {e['w']}, {e['h']})；{status}")
+
+    if file_context:
+        return "\n".join(lines)
     if compact_context and current_collision(obs) is not None:
         covered = {o.get('id') for o in obs['collision']['objects']}
         entities = [e for e in entities if e.get('id') not in covered]

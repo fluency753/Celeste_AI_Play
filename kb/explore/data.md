@@ -10,11 +10,11 @@
 ## 截图与字符地图
 
 - 截图是游戏画面放大 2 倍后的样子（原始 320×180），只覆盖当前画面；画面左上角的世界坐标写在观测文字里。背景、装饰和前景贴图不一定能碰撞，能碰撞的东西也不一定看得清，不要靠看图估计位置和尺寸。
-- 字符地图每格 8×8 像素，行列号与世界坐标的换算写在地图上方，图例随地图给出。`#` 是实心地形；其他符号只标出实体大致占了哪些格子，精确形状看精确数据里的 `entities`。
+- 字符地图（回退布局时出现）每格 8×8 像素，行列号与世界坐标的换算写在地图上方，图例随地图给出。`#` 是实心地形；其他符号只标出实体大致占了哪些格子，精确形状看 `latest_obs.json` 里的 `collision` 与 `entities`。
 
 ## 房间概况与精确几何
 
-具备脚本能力且当前文件已核对时，默认 `observe/act/cutscene` 返回 `workspace-files-v1`：正文只给状态、快照身份和 `/workspace/game/latest_obs.json` 位置。用程序读取文件的 `obs` 并筛选需要的区域，不重复查询同帧已有几何、不整份打印。动作后文件会更新；默认 observe 获取新观测。无脚本能力、文件不可用或规划工具受限时，才回退为首次布局及同房变化，按下述格式维护几何。选择通道时先用精确实例与角色碰撞箱核对支撑、墙和开口；截图／碰撞图用于定位候选，不替代几何核验。
+具备脚本能力且当前文件已核对时，默认 `observe/act/cutscene` 返回 `workspace-files-v1`：正文只给状态、快照身份、收集品状态和 `/workspace/game/latest_obs.json` 位置。`latest_obs.json` 是单行 JSON，可能有几百 KB，Read 会截断过长的行：用 Bash 里的程序读取文件的 `obs` 并筛选需要的区域，不重复查询同帧已有几何、不整份打印。动作后文件会更新；默认 observe 获取新观测。无脚本能力、文件不可用或规划工具受限时，才回退为首次布局及同房变化，按下述格式维护几何。选择通道时先用精确实例与角色碰撞箱核对支撑、墙和开口；截图／碰撞图用于定位候选，不替代几何核验。
 
 回退工具使用 `room-context-v2`，首次入房或默认 `observe` 返回 `mode=baseline` 的完整布局，替换旧基线。`groups` 只共用相同属性，不省略实例：每组 `instances` 的行按本组 `instanceColumns`（省略时为 `[id,x,y]`）读取，可能另有 `shape/state` 列；共同的形状或状态写在组上。`shape` 引用同包 `shapes`，形状及所有嵌套 x/y 加实例 x/y 还原世界坐标。所有实例位置保留，组不是实心包围区域，不判定可达性。默认 `stateDetail` 明示仅精选游戏状态，完整反射仍可精查。
 
@@ -31,12 +31,12 @@
 - `room` 房间名；`bounds` 房间范围 `[x, y, 宽, 高]`。
 - `exits`：相邻房间的边界投影，不保证有开口或从当前位置能到；应结合 `collision` 全部障碍和机制判断，不能只看旧 `solids` 地形。
 - `solids`：地形的碰撞箱，每项 `[x, y, 宽, 高]`，由地形格子合并而成。会动、会塌、能撞碎的实心物不在这里，在 `entities` 里。
-- `entities`：房间里可碰撞的实体，每项 `{"id", "type", "cat", "x", "y", "w", "h", …}`。`id` 在本次进入房间期间固定，用来跨暂停对照同一个实体；`type` 是游戏里的类型名；`cat` 是大类：`hazard` 致死物、`spring` 弹簧、`refill` 冲刺水晶、`booster` 泡泡、`feather` 羽毛、`collectible` 收集品、`dream_block` 梦境块、`dynamic_solid` 会动的实心块、`jumpthru` 单向平台、`solid` 其他实心块、`interactive` 可交互物、`other` 其他。尖刺有 `dir`（刺尖朝向）；碰撞形状不是矩形时有 `shape`；会动的实体附 `state`（与运动有关的字段）与 `moved`（与上一次暂停相比的位移）。`Killbox` 是坑底的致死区。
+- `entities`：房间里可碰撞的实体，每项 `{"id", "type", "cat", "x", "y", "w", "h", …}`。`id` 在本次进入房间期间固定，用来跨暂停对照同一个实体；`type` 是游戏里的类型名；`cat` 是大类：`hazard` 致死物、`spring` 弹簧、`refill` 冲刺水晶、`booster` 泡泡、`feather` 羽毛、`collectible` 收集品、`dream_block` 梦境块、`dynamic_solid` 会动的实心块、`jumpthru` 单向平台、`solid` 其他实心块、`interactive` 可交互物、`other` 其他。尖刺有 `dir`（刺尖朝向）；碰撞形状不是矩形时有 `shape`；会动的实体附 `fields`（反射出的游戏字段）与 `moved`（与上一次暂停相比的位移）；回退布局里精简过的实体用 `state`。`Killbox` 是坑底的致死区。
 - `triggers`：触发器 `{"type", "rect"}`，不挡路，进入范围时触发效果。
 - 桥接 1.0.14 起，暂未启用碰撞的实体也会列出，`collidable:false` 只表示当前状态；远处圆刺可能在靠近时启用，不能按空地处理。组合形状在 `collider` 中递归给出 `shape,x,y,w,h`，圆形另有 `r`，`list.parts` 包含所有子形状；每层都是世界坐标。旧 `parts` 只包含矩形，会遗漏圆形；字符地图也只是粗略表示。`grid`/`unknown` 的外接范围不代表内部全实心。
 - `spawns` 本房间的重生点；`respawnPoint` 当前生效的重生点。
 - `player`：Madeline 的完整状态，`pos` 精确位置（含小数部分）、`speed` `[vx, vy]`、`state`、`dashes` / `maxDashes`、`stamina`、`onGround`、`facing`、`ducking`、`hitbox` `[左, 上, 宽, 高]`、`internal`（内部计时器与状态的原始数值，计时器单位是秒）。
-- 完整房间 JSON 的 `frame`、`sid`、`room` 用于核对观测身份。`solids` 为 `null` 表示本次没有提供完整地形，不能按空房间处理；需重新观测。
+- 观测的 `frame` 与 `level.sid`、`level.room`（`collision` 里另有同名字段）用于核对观测身份。`solids` 为 `null` 表示本次没有提供完整地形，不能按空房间处理；需重新观测。
 - 主控不提供可达性标签或路线判断。自行根据整房间碰撞箱、身体尺寸、实际开口、支撑及实体机制分析路线，再用具体动作验证。
 - `story`、`dialog`：当前画面上的对白、教学提示、纪念碑文字与对话选项（有可见文字时提供）。
 
