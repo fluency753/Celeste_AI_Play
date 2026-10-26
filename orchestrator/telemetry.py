@@ -10,6 +10,8 @@ def publish(directory, ident, text, *, role='assistant', kind='解说'):
 
 
 def public_event(value):
+    if isinstance(value, str) and value.startswith('data:image/'):
+        return '<image omitted>'
     if isinstance(value, dict):
         if str(value.get('type', '')).lower() in {'reasoning', 'thinking', 'redacted_thinking'}:
             return {k: value[k] for k in ('type', 'id') if k in value}

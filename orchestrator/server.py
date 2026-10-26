@@ -174,13 +174,19 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     def images(obs, screenshot=None, *, show_screenshot=True):
         if not session.cfg.images:
             return []
+        def tagged(data, role):
+            block = Image(data=data, format='png').to_image_content()
+            level = obs.get('level') or {}
+            block.meta = {'celeste': {'role': role, 'frame': obs.get('frame'),
+                                      'sid': level.get('sid'), 'room': level.get('room')}}
+            return block
         content = []
         if screenshot and show_screenshot:
-            content.append(Image(data=upscale_png(screenshot), format='png'))
+            content.append(tagged(upscale_png(screenshot), 'screenshot'))
         renderer = getattr(session, 'collision_png', None)
         collision = renderer(obs) if renderer is not None else render_collision_view(obs)
         if collision is not None:
-            content.append(Image(data=collision, format='png'))
+            content.append(tagged(collision, 'collision'))
         return content
 
     @server.tool(name="observe", description=OBSERVE_DESCRIPTION, structured_output=False)

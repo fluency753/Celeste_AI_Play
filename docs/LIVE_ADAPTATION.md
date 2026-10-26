@@ -32,6 +32,15 @@ HUD 直接使用 app-server 的公开消息、工具调用、tokenUsage 与 cont
 
 协议参考：[Codex app-server](https://developers.openai.com/codex/app-server/)。
 
+### Codex 图像交付
+
+模型的代码调用模式会把工具返回的图像 URL 当作可打印值；直接 `text(r)` 曾把 PNG Base64 塞进文字，导致每次操作多出数万 token，且模型收不到正确图像。现在游戏工具只返回文字；适配层把截图和碰撞图通过 `turn/steer` 的原生 image 输入送入原轮次，每图标工具调用、帧号、房间及 screenshot/collision 类型。图像入队和对应文字返回处于同一动作锁内，后续动作不得越过交付；排队请求执行前再次确认原轮次仍有效。
+
+发送超时、轮次变更或确认异常时不把图像编码退回文字、不重发到新轮次：保留已经执行的游戏结果、明确图片交付失败并暂停，避免重复执行动作。恢复后重新 observe；用户已经暂停时，更新续接应显式传 `--start-paused`，不自动恢复试玩。普通 MCP/Claude 图像通道不变。图像本身仍消耗视觉 token，不能将“无 Base64 文本”理解为零上下文开销。
+
+自动回归：`python -m unittest calibration.codex_agent_test calibration.collision_contract_test`。可选真实模型验收（只建临时线程，不连接游戏）：`python -m calibration.codex_image_delivery_check --model <模型标识> --output local/<新的证据目录>`。该检查使用生产适配层，故意打印工具结果，要求读出两张随机码图片，并检查最终文字无图片编码；会使用模型额度。
+
+
 ### 准备与开始试玩
 
 准备（`start_gpt.ps1` 不加 `-Play`，或 HUD 的"新建并准备"）不连接游戏，也不改变当前 HUD 显示的运行。准备会话阅读当前模式的必读资料并写 `/workspace/notes.md`，产生带逐行覆盖与 SHA256 的 `prepare_summary.json`；速通模式（full）另读模拟器说明。准备证明保存执行器、提供方、运行方式、请求的模型、会话 ID、文件摘要和实际读取覆盖。

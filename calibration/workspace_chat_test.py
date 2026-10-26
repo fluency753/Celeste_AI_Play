@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from orchestrator.chat import chat
 from orchestrator.metrics import Metrics
+from orchestrator.sandbox import ProgramResult
 
 
 class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
@@ -51,7 +52,6 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                     yield runner
                 finally:
                     runner.close_events()
-            from orchestrator.sandbox import ProgramResult
             fake = ProgramResult(returncode=0,stdout='OK',stderr='',seconds=.01,timed_out=False)
             with patch('orchestrator.chat.ensure_container',return_value='offline-container'), \
                  patch('orchestrator.chat.host_runner',host), \

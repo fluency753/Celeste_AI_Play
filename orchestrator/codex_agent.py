@@ -39,7 +39,10 @@ def codex_tool_mapping(cfg) -> str:
             + ("用户要求退出关卡时调用 celeste_exit_level；" if "exit_level" in tools else "")
             + ("剧情可尝试跳过时先交回；用 celeste_cutscene skip 尝试跳过或 watch 观看到输入节点，随后对白用 advance、分支用 choose，教学用 act，不调用 wait。" if "cutscene" in tools else "")
             + "公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
-            "每次操作后仍应立即公开说明下一步打算，不要持续静默。")
+            "每次操作后仍应立即公开说明下一步打算，不要持续静默。"
+            "游戏图像由应用直接作为当前轮的图像附件提供，工具结果只含文字；"
+            "附件的帧号、房间和screenshot/collision标签对应本次工具观测，不是新任务。"
+            "不要尝试从Base64文字看图或把图像编码打印进聊天。")
 
 
 def codex_prompt(cfg) -> str:
@@ -236,16 +239,21 @@ class CodexRunner(SessionControls):
             elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run") and self.prepare_only:
                 raise ValueError("本次只做知识库准备，不开放游戏操作，不会进入关卡。")
             elif game and self.game_server is not None and not self.prepare_only:
+                origin_turn = self.turn_id
                 if name in ("celeste_act", "celeste_observe") and self.study and not self.study.complete():
                     raise ValueError(self.study.reminder())
                 if name in {"celeste_act", "celeste_observe", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                     async with self.action_lock:
                         if self.paused:
                             raise ValueError("用户已暂停试玩，不能执行游戏动作")
+                        if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
+                                or self.turn_done.is_set() or self.stop_requested or self.pausing):
+                            raise ValueError('发起此请求的轮次已结束，动作未执行；等待当前轮次的新指令。')
                         result = await self.game_server.call_tool(name.removeprefix("celeste_"), args)
+                        return await self._game_response(result, name, ident, origin_turn)
                 else:
                     result = await self.game_server.call_tool(name.removeprefix("celeste_"), args)
-                return self._game_response(result)
+                    return await self._game_response(result, name, ident, origin_turn)
             else:
                 raise ValueError(f"未开放的工具：{name}")
             if self.cfg.live and name != "celeste_narrate":
@@ -260,14 +268,34 @@ class CodexRunner(SessionControls):
                 self.playback.note_tool_result(ident)
             self.metrics.tool_end(ident)
 
-    @staticmethod
-    def _game_response(result):
-        content=[]
+    async def _game_response(self, result, tool, call_id, origin_turn):
+        """Code-mode may stringify any tool value: images must never enter that value."""
+        content, attachments = [], []
         for block in result.content:
             data=block.model_dump(by_alias=True)
             if data['type']=='text':content.append({'type':'inputText','text':data['text']})
             elif data['type']=='image':
-                content.append({'type':'inputImage','imageUrl':f"data:{data['mimeType']};base64,{data['data']}"})
+                source = (data.get('_meta') or {}).get('celeste') or {'role': 'observation'}
+                label = json.dumps({'tool': tool, 'call_id': str(call_id), **source}, ensure_ascii=False)
+                attachments.extend([
+                    {'type': 'text', 'text': '（应用观测附件；属于本次工具结果，不是新任务）' + label},
+                    {'type': 'image', 'url': f"data:{data['mimeType']};base64,{data['data']}"}])
+        if attachments:
+            try:
+                if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
+                        or self.turn_done.is_set() or self.paused or self.pausing or self.stop_requested):
+                    raise RuntimeError('原轮次已停止或试玩已暂停')
+                response = await self.rpc.request('turn/steer', {'threadId': self.session_id,
+                    'expectedTurnId': origin_turn, 'input': attachments}, timeout=15)
+                if not isinstance(response, dict) or response.get('turnId') != origin_turn:
+                    raise RuntimeError('图像交付未确认原轮次')
+            except (RuntimeError, OSError, TimeoutError) as exc:
+                self._agent_pause('观测图像交付失败')
+                content.append({'type': 'inputText', 'text':
+                    '图像交付失败：' + str(exc) + '。上面的游戏执行结果仍有效，勿重复已执行动作；'
+                    '试玩保持暂停，请结束本轮并等待处理。恢复后重新observe，不沿用旧图。'})
+                return {'contentItems': content, 'success': False}
+            content.append({'type': 'inputText', 'text': '观测图像已作为同轮图像附件送达。'})
         return {'contentItems':content,'success':not result.is_error}
 
     def _elapsed(self, started):

@@ -271,6 +271,7 @@ class NativeEntryTests(unittest.IsolatedAsyncioTestCase):
             session = SimpleNamespace(cfg=cfg, metrics=metrics, workspace=None, done=False, sim_energy=energy, simulate=lambda data: {"cost": 13, "energy": energy.snapshot()})
             from orchestrator.server import build_server
             runner = CodexRunner(cfg, root, session, metrics, "container", game_server=build_server(session))
+            runner.turn_id, runner.turn_active = 'test-turn', True
             with patch("orchestrator.codex_agent.run_program") as shell:
                 result = await runner._request("item/tool/call", {"tool": "celeste_simulate", "arguments": {"candidates": [["60,R"]]}})
                 self.assertTrue(result["success"])

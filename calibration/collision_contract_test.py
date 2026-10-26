@@ -97,6 +97,8 @@ class CollisionContractTests(unittest.TestCase):
                 observed = asyncio.run(server.call_tool('observe', {}))
                 images = [b for b in observed.content if getattr(b, 'type', '') == 'image']
                 self.assertEqual(len(images), 1)  # No screenshot fixture: this is the collision image.
+                self.assertEqual(images[0].meta['celeste'], {'role': 'collision', 'frame': 12,
+                    'sid': 'Celeste/3-CelestialResort', 'room': 's3'})
                 text = '\n'.join(b.text for b in observed.content if hasattr(b, 'text'))
                 data = json.JSONDecoder().raw_decode(text.split(ROOM_JSON_HEADER, 1)[1])[0]
                 self.assertEqual(data['collision']['frame'], 12)

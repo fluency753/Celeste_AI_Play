@@ -36,6 +36,8 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                         {"type": "image", "mimeType": "image/png", "data": "AAAA"}]})))
         self.runner = CodexRunner(self.cfg, self.root, None, self.metrics, "container", self.study,
                                   game_server=self.server)
+        self.runner.session_id, self.runner.turn_id, self.runner.turn_active = 'session', 'turn', True
+        self.runner.rpc.request = AsyncMock(return_value={'turnId': 'turn'})
 
     def tearDown(self):
         self.temp.cleanup()
@@ -98,9 +100,13 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         allowed = await self.runner._request("item/tool/call", {"tool": "celeste_observe", "arguments": {}})
         self.assertTrue(allowed["success"])
         self.assertEqual(allowed["contentItems"][0]["text"], "observed")
-        self.assertEqual(allowed["contentItems"][1]["imageUrl"], "data:image/png;base64,AAAA")
+        self.assertNotIn('data:image/', json.dumps(allowed))
+        attachment = self.runner.rpc.request.call_args.args[1]
+        self.assertEqual(attachment['input'][1], {'type': 'image', 'url': 'data:image/png;base64,AAAA'})
+        self.assertEqual(attachment['expectedTurnId'], 'turn')
 
     async def test_stop_run_can_report_blockage_while_paused_or_study_incomplete(self):
+        self.server.call_tool.return_value = CallToolResult.model_validate({'content': [{'type': 'text', 'text': 'paused'}]})
         self.runner.paused=True
         self.runner.gate=SimpleNamespace(enabled=True,decide=AsyncMock(return_value=(False,'无额度')))
         result=await self.runner._request('item/tool/call',{'tool':'celeste_stop_run','arguments':{'reason':'工具故障'}})
@@ -170,7 +176,95 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         shell.assert_not_called()
         self.server.call_tool.assert_awaited_with('cutscene',{'action':'advance'})
         self.assertTrue(result['success'])
-        self.assertEqual(result['contentItems'][1],{'type':'inputImage','imageUrl':'data:image/png;base64,AAAA'})
+        self.assertNotIn('data:image/', json.dumps(result))
+        self.assertEqual(self.runner.rpc.request.call_args.args[1]['input'][1],
+                         {'type':'image','url':'data:image/png;base64,AAAA'})
+
+    async def test_image_delivery_failure_keeps_executed_text_and_pauses_without_retry(self):
+        self.runner.study = None
+        self.runner.rpc.request = AsyncMock(side_effect=TimeoutError('attachment timeout'))
+        result = await self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}})
+        self.assertFalse(result['success'])
+        self.assertTrue(self.runner.paused)
+        self.assertEqual(result['contentItems'][0]['text'], 'observed')
+        self.assertIn('勿重复已执行动作', result['contentItems'][-1]['text'])
+        self.assertNotIn('data:image/', json.dumps(result))
+        self.assertEqual(self.server.call_tool.await_count, 1)
+        self.assertEqual(self.runner.rpc.request.await_count, 1)
+
+    async def test_image_delivery_never_targets_replacement_turn(self):
+        self.runner.study = None
+        async def changed_turn(*args):
+            self.runner.turn_id = 'replacement'
+            return self.server.call_tool.return_value
+        self.server.call_tool.side_effect = changed_turn
+        result = await self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}})
+        self.assertFalse(result['success'])
+        self.runner.rpc.request.assert_not_awaited()
+        self.assertNotIn('data:image/', json.dumps(result))
+
+    async def test_pause_during_game_call_does_not_deliver_images_or_resume(self):
+        self.runner.study = None
+        async def paused_during_action(*args):
+            self.runner.paused = True
+            return self.server.call_tool.return_value
+        self.server.call_tool.side_effect = paused_during_action
+        result = await self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}})
+        self.assertFalse(result['success'])
+        self.assertTrue(self.runner.paused)
+        self.runner.rpc.request.assert_not_awaited()
+
+    async def test_invalid_image_acknowledgment_is_not_reported_delivered(self):
+        self.runner.study = None
+        self.runner.rpc.request.return_value = {'turnId': 'another-turn'}
+        result = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
+        self.assertFalse(result['success'])
+        self.assertTrue(self.runner.paused)
+        self.assertIn('交付失败', result['contentItems'][-1]['text'])
+
+    async def test_action_lock_covers_image_delivery_before_next_game_call(self):
+        self.runner.study = None
+        sending, release = asyncio.Event(), asyncio.Event()
+        async def send(*args, **kwargs):
+            sending.set()
+            await release.wait()
+            return {'turnId': 'turn'}
+        self.runner.rpc.request.side_effect = send
+        first = asyncio.create_task(self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}}))
+        await sending.wait()
+        second = asyncio.create_task(self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}}))
+        try:
+            await asyncio.sleep(.01)
+            self.assertEqual(self.server.call_tool.await_count, 1)
+        finally:
+            release.set()
+            results = await asyncio.gather(first, second)
+        self.assertTrue(all(r['success'] for r in results))
+        self.assertEqual(self.server.call_tool.await_count, 2)
+
+    async def test_queued_old_turn_action_is_rejected_before_game_execution(self):
+        self.runner.study = None
+        sending, release = asyncio.Event(), asyncio.Event()
+        async def send(*args, **kwargs):
+            sending.set()
+            await release.wait()
+            return {'turnId': 'turn'}
+        self.runner.rpc.request.side_effect = send
+        first = asyncio.create_task(self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}}))
+        await sending.wait()
+        second = asyncio.create_task(self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}}))
+        await asyncio.sleep(.01)
+        self.runner.turn_id = 'replacement'
+        release.set()
+        results = await asyncio.gather(first, second)
+        self.assertEqual(self.server.call_tool.await_count, 1)
+        self.assertFalse(results[1]['success'])
+        self.assertIn('动作未执行', results[1]['contentItems'][0]['text'])
+
+    def test_public_image_inputs_are_redacted_for_all_protocol_aliases(self):
+        value = public_event({'input': [{'type': 'image', 'url': 'data:image/png;base64,PRIVATE'}],
+                              'image_url': 'data:image/png;base64,PRIVATE'})
+        self.assertNotIn('PRIVATE', json.dumps(value))
 
     async def test_other_resume_errors_do_not_fork(self):
         self.runner.rpc.request = AsyncMock(side_effect=RuntimeError("connection failed"))
