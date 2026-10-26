@@ -259,6 +259,28 @@ class ResumeExtensionTests(unittest.TestCase):
             self.assertIn("主控中断后续跑", resumed)
             self.assertIn("当前生效的完整规则", resumed)
 
+    def test_note_file_is_placed_between_the_resume_note_and_the_rules(self):
+        from orchestrator.run import opening_note
+        done = [{"chapter": "Celeste/0-Intro"}, {"chapter": "Celeste/1-ForsakenCity"}, {"chapter": "Celeste/2-OldSite"}]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            run = self.make_run(root, [[0, 0, None], [1, 0, None], [2, 0, None]], done)
+            note_file = root / "note.txt"
+            note_file.write_text("\ufeff先读 /kb/techniques.md，再整理程序。\n", encoding="utf-8")
+            cfg, args = self.parse(root, "--resume", str(run), "--chapters", "3", "--note-file", str(note_file))
+            self.assertEqual(args.note_text, "先读 /kb/techniques.md，再整理程序。")
+            note = opening_note(cfg, args.previous, "sess", args.note_text)
+            head, rules = note.index("开始新的范围"), note.index("当前生效的完整规则")
+            self.assertTrue(head < note.index("（用户留言）\n先读 /kb/techniques.md") < rules)
+            fresh = opening_note(cfg, args.previous, None, args.note_text)
+            self.assertTrue(fresh.endswith("先读 /kb/techniques.md，再整理程序。"))
+            self.assertNotIn("用户留言", opening_note(cfg, args.previous, "sess"))
+            with self.assertRaisesRegex(SystemExit, "只能和 --resume"):
+                self.parse(root, "--note-file", str(note_file))
+            (root / "empty.txt").write_text("  \n", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "空的"):
+                self.parse(root, "--resume", str(run), "--chapters", "3", "--note-file", str(root / "empty.txt"))
+
     def test_unfinished_plan_cannot_be_replaced(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
