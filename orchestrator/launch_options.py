@@ -26,7 +26,7 @@ MAPS = {"celeste": "蔚蓝官方章节"}      # 以后可能加 MOD 地图
 
 DEFAULTS = {
     "engine": "claude", "provider": "anthropic", "model": "opus", "effort": "high", "agent": "",
-    "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": True, "stiffness": False, "formal_thought": False, "playback": True, "record": True,
+    "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": True, "stiffness": False, "formal_thought": False, "collision_image": None, "playback": True, "record": True,
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
     "start_paused": False, "quota_wait": True, "cutscene_mode": "auto", "chapters": [0], "segments": None,
     "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 240, "autocompact": "",
@@ -95,6 +95,10 @@ def normalize(options: dict) -> dict:
         o["hud_mod"] = not o["live"]             # 与命令行相同：不开直播时游戏内 HUD 默认开
     for key in SWITCHES:
         _bool(o, key)
+    if o["collision_image"] in ("", "default"):
+        o["collision_image"] = None
+    if o["collision_image"] not in (None, "always", "room", "off"):
+        raise ValueError("碰撞图须为默认、每次、只在进房与观察时或不附")
     if o["continuous_music"] is not None and type(o["continuous_music"]) is not bool:
         raise ValueError("连续播放音乐须为开、关或默认")
     if o["cutscene_mode"] not in ("auto", "agent"):
@@ -188,6 +192,8 @@ def build(options: dict) -> list[str]:
             argv.append("--stiffness")          # 思考僵直（探索模式，默认关）
     if o["formal_thought"]:
         argv.append("--formal-thought")         # 仅正式思考（默认关）
+    if o["collision_image"]:
+        argv += ["--collision-image", o["collision_image"]]
     argv.append("--playback" if o["playback"] else "--no-playback")
     argv.append("--record" if o["record"] else "--no-record")
     argv.append("--hud-mod" if o["hud_mod"] else "--no-hud-mod")
@@ -278,6 +284,7 @@ def config_for(options: dict):
     cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"] and capabilities.programs
     cfg.stiffness = o["mode"] == EXPLORE and o["stiffness"]
     cfg.formal_thought = bool(o["formal_thought"])
+    cfg.collision_image = o["collision_image"]
     cfg.live, cfg.playback, cfg.cutscene_mode = o["live"], o["playback"], o["cutscene_mode"]
     cfg.pause_limit = o["limit_planning"] and cfg.sim
     cfg.rounds_per_room, cfg.room_scale = o["rounds_per_room"], o["room_scale"]

@@ -138,6 +138,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="只用于探索模式：思考僵直（默认关；续跑沿用原运行）。一次冻结里思考、运行工具的时间各自满 2.5 分钟后，"
                          "按比例在下一次 act 前让角色保持上一帧的按键僵直（思考每 2.5 分钟 0.2 秒、工具每 2.5 分钟另加 0.4 秒，"
                          "见可调参数 stiff_unit_s、stiff_think_s、stiff_tool_s），不计入 act 的帧数上限")
+    ap.add_argument("--collision-image", choices=("always", "room", "off"), default=None,
+                    help="工具结果里附碰撞图：always 每次，room 只在进新房间与 observe 时，off 不附（工作区里每次照样写图）；"
+                         "不写时续跑沿用原运行，新运行按执行器默认（Codex 每次，其余 room）")
     ap.add_argument("--formal-thought", action=argparse.BooleanOptionalAction, default=None,
                     help="仅正式思考（默认关；续跑沿用原运行）：冻结期间 narrate 写的临时思考只显示在控制台（Claude Code 执行器"
                          "汉字不超过 120 个，可调参数 thought_temp_max_hanzi）；act 的 thought 是正式思考，概括整个冻结期间的"
@@ -300,6 +303,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                      else bool(args.stiffness)) and cfg.mode == EXPLORE
     cfg.formal_thought = (bool(previous["state"].get("formal_thought", False)) if previous and args.formal_thought is None
                           else bool(args.formal_thought))
+    cfg.collision_image = (previous["state"].get("collision_image") if previous and args.collision_image is None
+                           else args.collision_image)
     cfg.pause_limit = bool(args.limit_planning) and not args.free_planning
     cfg.rounds_per_room = max(1, args.rounds_per_room)
     cfg.room_scale = max(1.0, args.room_scale)
@@ -421,7 +426,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         plan_pieces = None
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
-             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
+             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": False, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None}

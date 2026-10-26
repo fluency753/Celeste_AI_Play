@@ -13,14 +13,14 @@ from .telemetry import publish
 from .kb_study import KbStudy
 from .observation import describe_attempts, describe_obs, describe_step, upscale_png
 from .efforts import valid_effort
-from .modes import game_tools, is_explore
+from .modes import collision_image_mode, game_tools, is_explore
 from .prompting import fill
 from .collision_view import render_collision_view
 from .geometry_context import geometry_page
 from .observation_delivery import ObservationDelivery, FILE_JSON_HEADER, ROOM_JSON_HEADER
 from .execution import workspace_capabilities
 
-ACT_DESCRIPTION = """推进游戏若干帧并返回结果、角色状态和完整碰撞图（开启图像时）。{observation_delivery_rule} observe(detail="geometry",region=[x,y,w,h])可按需查看最近缓存的局部精确对象；detail="player"查询完整玩家内部状态。不把当帧阻挡当成永久不可达。
+ACT_DESCRIPTION = """推进游戏若干帧并返回结果、角色状态{act_collision_image}。{observation_delivery_rule} observe(detail="geometry",region=[x,y,w,h])可按需查看最近缓存的局部精确对象；detail="player"查询完整玩家内部状态。不把当帧阻挡当成永久不可达。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
 input_format：省略为 celeste_ai；显式 celeste_tas 使用 TAS 离散按键 J/K 双跳、X/C 双冲刺、Z/V 双蹲冲、G/H 双抓、S 暂停、Q 重试、N 日志、O 确认，并保留兼用绑定。须 agent 剧情模式与桥接1.0.20。TAS执行和观察不自动补帧；不支持的模拟或脚本命令明确报错。
@@ -44,7 +44,7 @@ celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进�
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json）"
 SIM_NOTE = WORKSPACE_NOTE[:-1] + "；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
-OBSERVE_DESCRIPTION = '默认获取新观测和完整碰撞图。{observation_delivery_rule}detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态。两种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
+OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}。{observation_delivery_rule}detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态。两种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
 
 # 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
 
@@ -178,7 +178,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             level = obs.get("level") or {}
             gate.on_room(level.get("sid"), level.get("room"), level.get("bounds"))
 
-    def images(obs, screenshot=None, *, show_screenshot=True):
+    def images(obs, screenshot=None, *, show_screenshot=True, room_view=True):
+        """room_view：这次是进新房间或 observe（--collision-image room 时只在这时附碰撞图）。"""
         if not session.cfg.images:
             return []
         def tagged(data, role):
@@ -190,6 +191,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         content = []
         if screenshot and show_screenshot:
             content.append(tagged(upscale_png(screenshot), 'screenshot'))
+        image_mode = collision_image_mode(session.cfg)
+        if image_mode == 'off' or (image_mode == 'room' and not room_view):
+            return content                     # 碰撞图照样写进工作区（game/collision.json 的 image），需要时自己读
         renderer = getattr(session, 'collision_png', None)
         try:
             collision = renderer(obs) if renderer is not None else render_collision_view(obs)
@@ -285,7 +289,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 parts.append(context)
                 if session.workspace and not file_context:
                     parts.append(ws_note)
-                content = images(outcome.obs, outcome.image_b64, show_screenshot=new_room)
+                content = images(outcome.obs, outcome.image_b64, show_screenshot=new_room, room_view=new_room)
                 content.append("\n\n".join(parts))
                 delivery.commit(candidate)
                 state["described_room"] = room_key(outcome.obs)
@@ -330,7 +334,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
             new_room = room_key(obs) != state['described_room']
             context, file_context, candidate = observation_context(obs, force=new_room)
-            result=images(obs, image)
+            result=images(obs, image, room_view=new_room)
             result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore,compact_context=True,file_context=file_context)+'\n'+context)
             delivery.commit(candidate)
             state['described_room'] = room_key(obs)

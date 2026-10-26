@@ -456,6 +456,9 @@
           <label class="field">上下文自动压缩窗口<input type="text" id="autocompact" placeholder="默认，或 auto / 100000～1000000"></label>
         </div>
         <div class="row" style="margin-top:8px">
+          <label class="field">工具结果里的碰撞图<select id="collisionImage"><option value="">默认（Codex 每次，其余只在进房与观察时）</option><option value="always">每次都附</option><option value="room">只在进新房间与 observe 时</option><option value="off">不附（只写进工作区）</option></select></label>
+        </div>
+        <div class="row" style="margin-top:8px">
           <label class="field">动作推进速度<input type="number" id="playSpeed" min="1" max="20" placeholder="1（实时）"></label>
           <label class="field">转场与剧情推进速度<input type="number" id="autoSpeed" min="1" max="20" placeholder="1（与原版一致）"></label>
         </div>
@@ -1217,6 +1220,7 @@ function formOptions() {
     tune, kb_deny: kbDeny(ui.mode),
   };
   if ($("continuousMusic").checked) options.continuous_music = true;
+  if ($("collisionImage").value) options.collision_image = $("collisionImage").value;
   return options;
 }
 

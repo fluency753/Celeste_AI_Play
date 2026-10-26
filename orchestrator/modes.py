@@ -28,6 +28,18 @@ def is_explore(cfg) -> bool:
     return mode_of(cfg) == EXPLORE
 
 
+COLLISION_IMAGE_MODES = ("always", "room", "off")
+
+
+def collision_image_mode(cfg) -> str:
+    """工具结果里什么时候附碰撞图（--collision-image）：没指定时 Codex 执行器每次都附（协作者为 GPT 设的），
+    其余执行器只在进新房间与 observe 时附（同房间的图仍写进工作区，需要时自己读）。"""
+    mode = getattr(cfg, "collision_image", None)
+    if mode in COLLISION_IMAGE_MODES:
+        return mode
+    return "always" if getattr(cfg, "engine", "claude") == "codex" else "room"
+
+
 def act_frame_min(cfg) -> int:
     """单次 act 最少推进的帧数（可调参数 min_frames_per_act，默认 40；不超过本模式的上限）。"""
     return max(1, min(int(getattr(cfg, "min_frames_per_act", 40)), act_frame_cap(cfg)))

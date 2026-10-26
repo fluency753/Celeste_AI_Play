@@ -211,6 +211,7 @@ docker build -t celeste-agent:0.1 agent-container
 | `--live` / `--no-live` | 关 | 直播模式（见上表）。不论开不开，智能体思考期间都用 `narrate` 随时更新 HUD 上的思考，运行程序期间用 `show.status()` 报告进度（见 4.2 节）。续跑沿用 |
 | `--cutscene-mode` | `auto` | 剧情怎么处理：`auto` 由主控像玩家一样用暂停菜单跳过；`agent` 交给智能体：可尝试跳过时先交回，它用 `cutscene` 的 skip 尝试跳过或 watch 继续观看到真实输入节点，再推进或选择（提前交接需要桥接 1.0.25，旧版仍按输入节点交接）。续跑沿用 |
 | `--hud-mod` / `--no-hud-mod` | 不开直播时开 | HUD 以 MOD 形式画在游戏画面右上角；关时用网页 HUD（屏幕上的独立窗口与 OBS 浏览器源），见 4.2 节。续跑沿用 |
+| `--collision-image always` / `room` / `off` | 按执行器（续跑沿用） | 工具结果里附分色碰撞图的时机：`always` 每次 observe、act 与 cutscene 都附；`room` 只在进新房间与 observe 时附，同一房间里的动作只把图写进工作区（`game/collision.json` 的 `image`）；`off` 结果里不附图。没指定时 Codex 执行器用 `always`，其余执行器用 `room`。一张图约 1500 token，图片会一直留在上下文里直到压缩，每次都附会让上下文与缓存读取明显变多。act、observe 的说明与速通提示词按档位写。控制台在"更多设置 → 调试与端口"里选择 |
 | `--formal-thought` / `--no-formal-thought` | 关（续跑沿用） | 仅正式思考。冻结期间（上一次 act 结束到下一次 act）智能体用 `narrate` 写临时思考：只进公开历史，控制台的对话栏显示（标为"临时思考"），游戏内 HUD 与录像里没有；Claude Code 执行器每条汉字不超过 120 个（可调参数 `thought_temp_max_hanzi`）。每次 act 的 `thought` 是正式思考：概括这次冻结期间整个的思考、分析和判断，汉字不超过 30 个（`thought_max_hanzi`），游戏内 HUD 只显示当前这一句（字号更大，换章时清空），控制台里标为"正式思考"。英文术语都不计字数。提示词、act 与 narrate 的说明、解说提醒都按开关写；Codex 执行器只改显示与说明，不限汉字数。控制台"开关"里的"仅正式思考" |
 | `--no-hud-window` | 关 | 不在屏幕上打开网页 HUD 的窗口（游戏内 HUD 开着时本来就不打开） |
 | `--no-hud` / `--hud-port` | 关 / 47790 | 不启动 HUD 服务 / HUD 服务的端口 |

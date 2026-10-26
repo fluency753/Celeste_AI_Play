@@ -131,6 +131,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1          # 一键部署：�
 | `--live` / `--no-live` | 关（沿用） | 直播模式，见上一节。`narrate` 与思考提醒在所有模式下都有：智能体思考期间用 `narrate` 随时更新 HUD 的思考、运行程序时用 `show.status()` 报告进度；思考满半分钟（直播 10 秒）没更新时提醒它 |
 | `--sim-assist` / `--no-sim-assist` | 探索模式且本机有预置模拟器时开（沿用） | 只用于探索模式：有额度的短路线预测（不开放模拟器文件）；规则见 [LIVE_ADAPTATION.md](docs/LIVE_ADAPTATION.md#探索模式的模拟体力) |
 | `--stiffness` / `--no-stiffness` | 关（沿用） | 只用于探索模式：思考僵直——冻结期间的思考与工具时间按比例变成下一次 act 前的僵直（保持上一帧按键），规则见 [USAGE.md](docs/USAGE.md) |
+| `--collision-image always` / `room` / `off` | 按执行器（沿用） | 工具结果里附碰撞图的时机：每次、只在进新房间与 observe 时、不附。没指定时 Codex 执行器每次都附，其余执行器只在进房与 observe 时附；工作区里每次照样写图，需要时自己读 |
 | `--formal-thought` / `--no-formal-thought` | 关（沿用） | 仅正式思考：冻结期间 `narrate` 写的临时思考只显示在控制台（Claude Code 执行器每条汉字不超过 120 个）；每次 act 的 `thought` 是正式思考，概括整个冻结期间的思考（汉字不超过 30 个），游戏内 HUD 只显示当前这一句、字号更大。规则写进提示词与工具说明 |
 | `--cutscene-mode auto` / `agent` | `auto`（沿用） | 剧情：`auto` 由主控用暂停菜单跳过（跳不过时推进对白）；`agent` 交给智能体用 cutscene 工具处理 |
 | `--record` / `--no-record` | 开（沿用） | OBS 录屏。开：OBS 没在运行就由主控启动，锁步录制完整版与纯享版，结束时关掉它启动的 OBS（已经开着的 OBS 直接用、不关）；关：不启动、不调用 OBS |

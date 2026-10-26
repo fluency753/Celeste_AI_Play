@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from .config import REPO_ROOT, chapter_name_by_id
 from .kb_study import KbStudy
 from .execution import workspace_capabilities
-from .modes import act_frame_cap, act_frame_min, game_tools, has_cutscene_tool, is_explore
+from .modes import act_frame_cap, act_frame_min, collision_image_mode, game_tools, has_cutscene_tool, is_explore
 
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
@@ -219,6 +219,20 @@ def fill(text: str, cfg) -> str:
         "{thought_temp_limit}": thought_temp_limit(cfg),
         "{formal_thought_rule}": formal_thought_rule(cfg),
         "{formal_thought_act}": formal_thought_act(cfg),
+        # 碰撞图什么时候附在工具结果里（--collision-image；默认 Codex 每次，其余只在进新房间与 observe 时）
+        "{act_collision_image}": {
+            "always": "和完整碰撞图（开启图像时）",
+            "room": "；进入新房间时另附截图与完整碰撞图（开启图像时），同一房间里的碰撞图只写进工作区"
+                    "（game/collision.json 的 image 指向的文件），需要时自己查看",
+            "off": "；碰撞图不附在结果里，只写进工作区（game/collision.json 的 image 指向的文件），需要时自己查看",
+        }[collision_image_mode(cfg)],
+        "{observe_collision_image}": ("（碰撞图只写进工作区，不附在结果里）" if collision_image_mode(cfg) == "off"
+                                      else "和完整碰撞图"),
+        "{collision_image_when}": {
+            "always": "每次观测与动作返回",
+            "room": "进入新房间与 observe 时返回（同一房间里的动作只写进工作区）",
+            "off": "工具结果不附图，工作区里写有",
+        }[collision_image_mode(cfg)],
         "{temp_thought_where}": temp_thought_where(cfg),
         # 开了"仅正式思考"时换掉提示词里说 narrate 给观众看的几处；没开时与原来的文字完全相同
         "{narrate_target}": "写下临时思考" if getattr(cfg, "formal_thought", False) else "告诉观众",
