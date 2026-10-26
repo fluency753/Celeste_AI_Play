@@ -197,8 +197,8 @@ class RunConfig:
     explore_search_frames: int | None = 150  # 探索模式：自写模拟器与搜索程序每次最多推演的帧数（只写进提示词）；None = 不限
     stiffness: bool = False          # 探索模式的思考僵直（--stiffness）：冻结期间的思考与工具时间按比例变成下一次 act 前的僵直
     stiff_unit_s: float = 150.0      # 思考僵直：计时单位（思考、工具时间各自满一份才开始僵直，之后按比例）
-    stiff_think_s: float = 0.3       # 每份思考时间的僵直秒数
-    stiff_tool_s: float = 0.6        # 每份工具时间（Bash 程序、观测等）另外僵直的秒数
+    stiff_think_s: float = 0.2       # 每份思考时间的僵直秒数
+    stiff_tool_s: float = 0.4        # 每份工具时间（Bash 程序、观测等）另外僵直的秒数
     assist_capacity: int = 100       # 探索模式的限额预测：体力上限
     assist_initial: int = 60         # 初始体力
     assist_regen_frames: int = 60    # 真实操作每多少个移动帧恢复 1 点

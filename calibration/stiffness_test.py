@@ -78,7 +78,8 @@ class StiffnessTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         self.cfg = RunConfig(agent="test", save="test", model="test", runtime="host", mode="explore",
-                             knowledge_profile="explore", chapter=4, stiffness=True)
+                             knowledge_profile="explore", chapter=4, stiffness=True,
+                             stiff_think_s=0.3, stiff_tool_s=0.6)   # 用例按这两个值写，与默认值无关
         self.s = GameSession(self.cfg, root, Metrics(root / "metrics.json", "test", "test", "high", 600))
         self.s.cfg.thought_lead_s = 0
         self.counters = [0.0, 0.0, 0.0]
@@ -190,7 +191,8 @@ class StiffnessReviewTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.cfg = RunConfig(agent="test", save="test", model="test", runtime="host", mode="explore",
-                             knowledge_profile="explore", chapter=4, stiffness=True, thought_lead_s=0)
+                             knowledge_profile="explore", chapter=4, stiffness=True, thought_lead_s=0,
+                        stiff_think_s=0.3, stiff_tool_s=0.6)
         self.s = GameSession(self.cfg, self.root, Metrics(self.root / "metrics.json", "test", "test", "high", 600))
         self.s.last_obs = level_obs()
 
@@ -334,8 +336,8 @@ class StiffnessSettingsTests(unittest.TestCase):
         cfg.stiffness = True
         text = play_prompt(cfg)
         self.assertIn("思考时冻结。本次开启了思考僵直", text)
-        self.assertIn("思考时间满 2.5 分钟后，每 2.5 分钟僵直 0.3 秒", text)
-        self.assertIn("每 2.5 分钟另外僵直 0.6 秒", text)
+        self.assertIn("思考时间满 2.5 分钟后，每 2.5 分钟僵直 0.2 秒", text)   # 默认值
+        self.assertIn("每 2.5 分钟另外僵直 0.4 秒", text)
         self.assertIn("不计入每次 act 的 150 帧上限", text)
         self.assertIn("僵直期间死亡会立刻松开所有按键", text)
         cfg.engine = "codex"                      # 两种执行器都适用
@@ -363,7 +365,8 @@ class StiffnessToolTextTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
         cfg = RunConfig(agent="test", save="test", model="test", runtime="host", mode="explore",
-                        knowledge_profile="explore", chapter=4, stiffness=True, thought_lead_s=0)
+                        knowledge_profile="explore", chapter=4, stiffness=True, thought_lead_s=0,
+                        stiff_think_s=0.3, stiff_tool_s=0.6)
         session = GameSession(cfg, root, Metrics(root / "metrics.json", "test", "test", "high", 600))
         self.addCleanup(session.close)
         counters = [0.0, 0.0, 0.0]

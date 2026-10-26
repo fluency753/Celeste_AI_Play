@@ -134,7 +134,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="只用于探索模式：有额度的短路线预测（探索模式默认开启）；不向智能体开放模拟器文件")
     ap.add_argument("--stiffness", action=argparse.BooleanOptionalAction, default=None,
                     help="只用于探索模式：思考僵直（默认关；续跑沿用原运行）。一次冻结里思考、运行工具的时间各自满 2.5 分钟后，"
-                         "按比例在下一次 act 前让角色保持上一帧的按键僵直（思考每 2.5 分钟 0.3 秒、工具每 2.5 分钟另加 0.6 秒，"
+                         "按比例在下一次 act 前让角色保持上一帧的按键僵直（思考每 2.5 分钟 0.2 秒、工具每 2.5 分钟另加 0.4 秒，"
                          "见可调参数 stiff_unit_s、stiff_think_s、stiff_tool_s），不计入 act 的帧数上限")
     ap.add_argument("--live", dest="live", action="store_true", default=None,
                     help="直播模式（默认关，可与速通或探索模式叠加）：HUD 默认用可交互的网页形式，解说计时 10 秒，"
