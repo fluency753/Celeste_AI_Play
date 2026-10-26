@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import sys
 import threading
@@ -14,6 +15,8 @@ from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, CHAP
 from .metrics import Metrics
 from .navigation import ChapterNavigation
 from .execution import workspace_capabilities
+from .collision_snapshot import current_collision, collision_summary
+from .collision_view import render_collision_view
 from .observation import enrich_obs, fmt_ticks
 from .sandbox import run_program
 from .goals import GoalManager
@@ -586,16 +589,48 @@ class GameSession:
             return
         try:
             self._write_json("game/latest_obs.json", {"decision": self.decision_index, "obs": obs})
+            self._write_collision_view(obs)
             level = obs.get("level") or {}
             if level.get("room") is not None and obs.get("tiles"):
                 sid = str(level.get("sid", "unknown")).replace("/", "_")
                 room_rel = f"game/rooms/{sid}__{level['room']}.json"
                 if not (self.workspace / room_rel).exists():
-                    self._write_json(room_rel, {"decision": self.decision_index, "obs": obs})
+                    self._write_json(room_rel, {"decision": self.decision_index, "obs": obs,
+                                               "snapshot": {"historical": True, "kind": "first_observation", "frame": obs.get('frame')}})
             if act_record is not None:
                 self._write_json("game/last_act.json", act_record)
         except OSError:
             pass  # 工作区写入失败不影响游戏推进
+
+    def _write_collision_view(self, obs: dict) -> None:
+        """Publish a same-frame snapshot and an immutable image reference, not a cross-frame cache."""
+        directory = self.workspace / 'game' / 'collision'
+        manifest = self.workspace / 'game' / 'collision.json'
+        previous_image = None
+        try:
+            previous_image = json.loads(manifest.read_text(encoding='utf-8')).get('image')
+        except (OSError, ValueError):
+            pass
+        png = render_collision_view(obs) if self.cfg.images else None
+        image = None
+        if png is not None:
+            directory.mkdir(exist_ok=True)
+            name = f"{obs['frame']}-{hashlib.sha256(png).hexdigest()[:16]}.png"
+            destination = directory / name
+            if not destination.exists():
+                temporary = destination.with_suffix('.tmp')
+                temporary.write_bytes(png)
+                temporary.replace(destination)
+            image = 'game/collision/' + name
+        self._write_json('game/collision.json', {'collision': current_collision(obs),
+                         'collisionNote': collision_summary(obs), 'image': image,
+                         'imageRetention': 'current_and_previous; reread this manifest if the image no longer exists'})
+        # One-generation grace only: older readers must reload the current manifest after a missing image.
+        keep = {Path(p).name for p in (image, previous_image) if isinstance(p, str)}
+        if directory.exists():
+            for path in directory.glob('*.png'):
+                if path.name not in keep:
+                    path.unlink(missing_ok=True)
 
     def _write_sim_state(self) -> None:
         """预置模拟器的起始状态：当前这一帧的完整场景（调用方持有连接锁）。取不到时删掉旧文件，免得智能体用错帧。"""

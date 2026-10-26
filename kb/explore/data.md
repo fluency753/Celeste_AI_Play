@@ -14,10 +14,14 @@
 
 ## 整个房间的精确数据（JSON）
 
-进入新房间与调用 `observe` 时，返回文字里有一段"整个房间的精确数据"，覆盖整个房间，数值与游戏内部一致。之后每次 `act` 只描述画面附近的实体与状态。
+进入新房间与调用 `observe` 时返回整个房间数据。桥接 1.0.24 起，每次 `act` 也返回当前帧的统一 `collision`，开启图像时附分色碰撞图，直接同时看到地形与实体，避免漏看实体砖。
+
+- `collision.frame/sid/room` 必须匹配当前观测；`scope/bounds` 标覆盖范围，`view` 不代表全房。`complete` 表示范围内地形与实体均已提供，形状是否完整另看 `geometryComplete`。
+- `collision.objects` 区分地形、实体固体、单向平台、危险物、触发类对象和未知对象。按真实 `geometry` 形状分析；Key 等触发类不是墙，未知形状的包围盒也不是已确认实心。
+- 实体位置、形状和 `collidable` 每次观测按当前帧重取；`mutable=true` 表示以后可能变化，当前零速不表示静态，禁用碰撞仍保留形状。当前被挡不等于一直不可达。
 
 - `room` 房间名；`bounds` 房间范围 `[x, y, 宽, 高]`。
-- `exits`：相邻房间在本房间边界上的投影，`{"side": "left/right/top/bottom", "x" 或 "y": …, 区间, "room": 相邻房间}`。它只说明边界外有房间，不保证有开口，也不保证从当前位置能到，要对照 `solids`。
+- `exits`：相邻房间的边界投影，不保证有开口或从当前位置能到；应结合 `collision` 全部障碍和机制判断，不能只看旧 `solids` 地形。
 - `solids`：地形的碰撞箱，每项 `[x, y, 宽, 高]`，由地形格子合并而成。会动、会塌、能撞碎的实心物不在这里，在 `entities` 里。
 - `entities`：房间里可碰撞的实体，每项 `{"id", "type", "cat", "x", "y", "w", "h", …}`。`id` 在本次进入房间期间固定，用来跨暂停对照同一个实体；`type` 是游戏里的类型名；`cat` 是大类：`hazard` 致死物、`spring` 弹簧、`refill` 冲刺水晶、`booster` 泡泡、`feather` 羽毛、`collectible` 收集品、`dream_block` 梦境块、`dynamic_solid` 会动的实心块、`jumpthru` 单向平台、`solid` 其他实心块、`interactive` 可交互物、`other` 其他。尖刺有 `dir`（刺尖朝向）；碰撞形状不是矩形时有 `shape`；会动的实体附 `state`（与运动有关的字段）与 `moved`（与上一次暂停相比的位移）。`Killbox` 是坑底的致死区。
 - `triggers`：触发器 `{"type", "rect"}`，不挡路，进入范围时触发效果。
@@ -44,5 +48,6 @@
 ## 工作区里的数据
 
 - `/workspace/game/latest_obs.json`：最新的完整观测，格式 `{"decision": n, "obs": 观测}`，例如房间范围在 `obs.level.bounds`。
+- `/workspace/game/collision.json`：当前碰撞快照，`image` 指向同帧碰撞图；图像只保留两代，旧路径失效时重读此文件，不沿用旧位置。
 - `/workspace/game/last_act.json`：上一次 `act` 的输入与全精度逐帧轨迹，`trajectoryFormat` 给出各列的名字；第 j 行是用第 j 帧的输入推进之后的状态。
-- `/workspace/game/rooms/`：每个房间第一次得到的观测，便于回看初始几何。
+- `/workspace/game/rooms/`：每房首次观测的历史快照，只供回看初始情况，不代表当前实体位置。

@@ -32,6 +32,8 @@
 
 ## 验证与边界
 
+新增统一碰撞视图的成因复盘：`solids` 命名容易被理解为全部障碍，但实体固体另在 `entities`；地形又从叠加实体符号的 ASCII 展示反推，表示层可能遮掉真实地形。只提醒模型“看全数据”没有消除接口上的拼接负担。现在桥接从同一帧的真实 Grid／Collider 输出统一快照，来源覆盖与形状精度分开；Python 的各工具和工作区消费同一身份校验，实体每次替换，不跨帧补齐。测试以头顶实体砖、移动／消失、稀疏 Grid 和旧协议缺失为触发链。功能契约见 [统一碰撞视图](../COLLISION_VIEW.md)。
+
 - Python：`python -m unittest discover -s calibration -p '*_test.py'`，隔离实际桥接、模型与进程。
 - 原生音频：`LIFECYCLE_ONLY=1` 运行 `calibration/audio_mixer`，分别使用同步与 `ASYNC_SOURCE=1` 源，验证快照不可变、暂停继承、冻结重建及双轨冲刺／对白 PCM。
 - 录制封装：`python -m calibration.recording_mp4_check`，执行生产 C 收尾逻辑与真实 FFmpeg。

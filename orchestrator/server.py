@@ -15,8 +15,10 @@ from .observation import describe_attempts, describe_obs, describe_step, room_js
 from .efforts import valid_effort
 from .modes import game_tools, is_explore
 from .prompting import fill
+from .collision_snapshot import collision_json
+from .collision_view import render_collision_view
 
-ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。进入新房间时附截图、整个房间的字符地图与精确数据（JSON；房间信息以精确数据为准，截图仅作参考），其余时候只给文字状态与画面附近的信息。
+ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。每次返回当前帧统一碰撞数据与碰撞图（开启图像时），同时包括地形和实体；进入新房间时另附截图、整个房间字符地图和完整数据。collision的frame/scope/coverage/geometryComplete分别表示时刻、范围、来源覆盖及形状精度，不把当前阻挡当成永久不可达。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
 input_format：省略为 celeste_ai；显式 celeste_tas 使用 TAS 离散按键 J/K 双跳、X/C 双冲刺、Z/V 双蹲冲、G/H 双抓、S 暂停、Q 重试、N 日志、O 确认，并保留兼用绑定。须 agent 剧情模式与桥接1.0.20。TAS执行和观察不自动补帧；不支持的模拟或脚本命令明确报错。
@@ -37,10 +39,10 @@ stop_on：提前停下的条件，可选 death room uncontrollable controllable 
   默认 ["death", "room", "complete"]，death 总会生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。
 celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控自动播放到实际输入节点或恢复控制。celeste_tas格式下不自动补这些帧，由明确输入推进。读取storyInput与story；inCutscene标记本身不表示角色失控。"""
 
-WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json）"
-SIM_NOTE = "（完整观测：/workspace/game/latest_obs.json；本次逐帧轨迹：/workspace/game/last_act.json；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
+WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json）"
+SIM_NOTE = WORKSPACE_NOTE[:-1] + "；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
-OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图，以及整个房间的字符地图与精确数据（JSON；房间信息以精确数据为准，截图仅作参考）。act 的返回已经包含最新状态，只在需要重新看画面或整个房间时调用。"
+OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图、统一碰撞图和整个房间精确数据。collision同时包含地形和实体，保留真实形状与当前碰撞状态；检查frame、scope、coverage和geometryComplete。碰撞图只显示当前帧，不判定未来可达性。act已返回最新状态，只在需要重新看画面或整个房间时调用。"
 
 # 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
 ROOM_JSON_HEADER = "整个房间的精确数据（像素坐标；房间信息以此为准，截图与字符地图仅作参考）：\n"
@@ -168,6 +170,17 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             level = obs.get("level") or {}
             gate.on_room(level.get("sid"), level.get("room"), level.get("bounds"))
 
+    def images(obs, screenshot=None, *, show_screenshot=True):
+        if not session.cfg.images:
+            return []
+        content = []
+        if screenshot and show_screenshot:
+            content.append(Image(data=upscale_png(screenshot), format='png'))
+        collision = render_collision_view(obs)
+        if collision is not None:
+            content.append(Image(data=collision, format='png'))
+        return content
+
     @server.tool(name="observe", description=OBSERVE_DESCRIPTION, structured_output=False)
     async def observe() -> list:
         async with call_lock:
@@ -178,9 +191,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 obs, image = await asyncio.to_thread(session.observe)
                 credit(obs)
                 state["described_room"] = room_key(obs)
-                content: list = []
-                if image and session.cfg.images:
-                    content.append(Image(data=upscale_png(image), format="png"))
+                content = images(obs, image)
                 notes = getattr(session, "observe_notes", None) or []
                 content.append(("主控：" + "；".join(notes) + "\n\n" if notes else "")
                                + describe_obs(obs, full_room=True, effort=header_line(), explore=explore)
@@ -230,11 +241,11 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(freeze=False), explore=explore))
                 if new_room:
                     parts.append(ROOM_JSON_HEADER + room_json(outcome.obs))
+                else:
+                    parts.append('当前帧的统一碰撞数据：\n' + collision_json(outcome.obs))
                 if session.workspace:
                     parts.append(ws_note)
-                content: list = []
-                if outcome.image_b64 and new_room and session.cfg.images:
-                    content.append(Image(data=upscale_png(outcome.image_b64), format="png"))
+                content = images(outcome.obs, outcome.image_b64, show_screenshot=new_room)
                 content.append("\n\n".join(parts))
                 return content
             except ActError as err:
@@ -275,8 +286,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             if (note := gated()) is not None:return [note]
             begin()
             obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
-            result=[]
-            if image and session.cfg.images:result.append(Image(data=upscale_png(image),format='png'))
+            result=images(obs, image)
             result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore)+'\n'+room_json(obs))
             return result
 

@@ -10,6 +10,7 @@ import re
 from PIL import Image as PILImage
 
 from .config import CHAPTER_NAMES
+from .collision_snapshot import current_collision, collision_problem, collision_summary, terrain_rects
 
 STOP_TEXT = {
     "done": "按键全部执行完",
@@ -146,10 +147,16 @@ def is_dynamic(entity: dict) -> bool:
 
 def enrich_obs(obs: dict) -> dict:
     """整房间观测里补上合并后的地形碰撞箱与出口，原地修改并返回。"""
+    if obs.get('collision') is not None and (problem := collision_problem(obs)):
+        obs['collision'] = None
+        obs['collisionUnavailableReason'] = problem
     tiles = obs.get("tiles")
     if tiles and tiles.get("scope") == "room":
         obs["solids"] = solid_rects(tiles)
         obs["exits"] = room_exits(obs.get("level") or {}, obs.get("neighbors"))
+    collision = current_collision(obs)
+    if collision is not None and collision['coverage']['terrain']:
+        obs['solids'] = terrain_rects(collision)
     return obs
 
 
@@ -177,6 +184,9 @@ def room_json(obs: dict) -> str:
         "exitsNote": "仅相邻房间的边界投影，不保证有开口，也不保证从当前位置可达；先核对地形。",
         "spawns": obs.get("spawns", []), "respawnPoint": obs.get("respawnPoint"),
         "solids": obs.get("solids"),
+        "solidsNote": "仅地形矩形；全部碰撞体及当前状态见 collision，不能只用 solids 判断通路。",
+        "collision": current_collision(obs),
+        "collisionNote": collision_summary(obs),
         "entities": [compact_entity(e) for e in obs.get("entities", [])],
         "triggers": [t for t in obs.get("triggers", []) if not t["type"].startswith(COSMETIC_TRIGGERS)],
         "player": {k: player.get(k) for k in ("pos", "speed", "state", "dashes", "maxDashes", "stamina", "onGround",
@@ -254,6 +264,8 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     if effort:
         head += f" · {effort}"
     lines.append(head)
+    if level:
+        lines.append(collision_summary(obs))
     if (level or {}).get('completed'):
         lines.append('游戏已登记通关成绩，但吃心提示、片尾或结算可能仍未确认；这不等于已返回选章地图。')
     if obs.get('menu'):

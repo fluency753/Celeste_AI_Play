@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <CelestePrefix Condition="'$(CelestePrefix)' == ''">$(CELESTE_DIR)</CelestePrefix>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="$(CelestePrefix)/Celeste.dll" Publicize="true" />
+    <Reference Include="$(CelestePrefix)/FNA.dll" Publicize="true" />
+    <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" ExcludeAssets="runtime" />
+    <Compile Include="../../game-bridge/Source/CollisionSnapshot.cs" Link="CollisionSnapshot.cs" />
+    <Compile Include="../../game-bridge/Source/EntityGeometry.cs" Link="EntityGeometry.cs" />
+    <Compile Include="../../game-bridge/Source/EntityState.cs" Link="EntityState.cs" />
+    <Compile Include="../../game-bridge/Source/EntityCatalog.cs" Link="EntityCatalog.cs" />
+  </ItemGroup>
+</Project>

@@ -7,8 +7,9 @@
 | 文件 | 何时写入 | 内容 |
 | --- | --- | --- |
 | `latest_obs.json` | 每次 `observe`、每次 `act` 结束 | `{"decision": n, "obs": 观测}`，当前帧的完整观测 |
+| `collision.json` | 每次观测、动作和剧情操作结束 | 当前统一碰撞快照及 `image` 路径；图像只保留当前和前一代，旧路径失效时重读本文件 |
 | `last_act.json` | 每次 `act` 结束 | 上一次 `act` 的输入与逐帧轨迹（全精度） |
-| `rooms/<章节>__<房间>.json` | 第一次在某个房间得到观测时 | 同 `latest_obs.json`，便于以后回看该房间的初始几何 |
+| `rooms/<章节>__<房间>.json` | 第一次在某个房间得到观测时 | 历史首次观测，`snapshot.historical=true`；可回看初始几何，不能作为当前实体位置 |
 | `sim_state.json` | 只在开放预置模拟器的运行里：每次游戏停下（`observe`、`act` 结束、自动重试之前） | 当前帧的完整场景，是 `/sim` 里预置模拟器的起始状态；格式不需要读懂，直接交给模拟器（见 `/sim/README.md`） |
 
 `<章节>` 是章节编号里的 `/` 换成 `_`，例如 `Celeste_1-ForsakenCity__3.json`。
@@ -26,6 +27,7 @@
   "entities": [...],
   "tiles": {...},
   "solids": [[x, y, 宽, 高], ...],
+  "collision": {...},
   "exits": [...],
   "neighbors": [...],
   "spawns": [[x, y], ...],
@@ -36,6 +38,17 @@
 
 - `frame`：主控接管游戏以来推进过的总帧数（全局帧号），每推进一帧加 1。
 - `controllable`：Madeline 此刻是否可操作（不在剧情、转场、暂停、冻结、死亡或入场动画中）。
+
+### 1.0 `collision`：当前统一碰撞快照
+
+桥接 1.0.24 起，直接读取当前地形 Grid 与实体 Collider，不从展示字符图反推。`collision` 同时出现在工具返回和 `latest_obs.json` 的 `obs` 中；不存在或身份不匹配时明确不可用，不拼接旧实体。
+
+- `version=1`；`frame/sid/room` 与当前观测对应；`scope` 为 `room` 或 `view`，`bounds` 是包含边距的覆盖范围。
+- `coverage.terrain/entities` 表示两类来源是否请求并提供；`complete=true` 仅表示在该范围内来源均已覆盖，局部视图仍不代表全房间。`geometryComplete` 单独表示所有形状是否能精确表达。
+- `objects` 每项保留 `id/source/type/kind/collidable/mutable/geometry`。`source` 区分地形和实体；`kind` 为 solid、one_way、hazard、sensor、unknown；Key 等触发类对象不是墙。`category` 与其他实体属性保留梦境块、门等机制语义，kind 不表示永不可穿越。
+- `geometry` 用世界坐标表达 rect、circle、list 或 grid；list/grid 的 `parts` 保留真实组成与空洞。unknown 的包围范围不是已确认实心。地形序号只标识本次快照条目，实体 ID 可在同一场景跨帧对照。
+- 实体 `mutable=true`：后续可能移动、变形、禁用或消失，不能因当前零速判成静态。`collidable=false` 保留形状供识别，当前不参与碰撞。当前阻挡不等于永久不可达。
+- `player.hitbox` 是同一快照帧的角色矩形。工具同时给分色碰撞图；图像只帮助看清几何，不预测运动或输出可达性结论。`collision.json.image` 指向帧号与内容哈希命名的不可变 PNG；只保留两代，路径不存在时重读当前 manifest，不回退到旧帧。
 
 ### 1.1 `level`
 
@@ -137,9 +150,9 @@
 
 由主控根据整房间数据补充：
 
-- `solids`：把 `tiles` 里所有 `#` 格子合并成的矩形碰撞箱 `[x, y, 宽, 高]`（像素，世界坐标）。与 `tiles` 表示同一片地形，只是换成碰撞箱形式；其他实心物（坠落块、交通块等）在 `entities` 里。
+- `solids`：旧地形专用字段，不包含实体。新快照存在且覆盖地形时，直接取 `collision` 的地形矩形；旧桥接仍从字符图的 `#` 推导，可能受展示符号遮盖影响。全部当前碰撞体以 `collision` 为统一入口，不能只根据 `solids` 判断通路。
 - `neighbors`：与本房间边界相接或只隔几个像素的房间 `{"room": 名称, "bounds": [x, y, 宽, 高]}`，只有范围，不含内容。有的相邻房间与本房间之间隔着几个像素的缝（例如 1A 开头几个房间上下相隔 4 像素）；游戏换房时是在 Madeline 中心外侧 8 像素（左右）或 12 像素（上下）处找房间，所以这样的缝照样能换房。
-- `exits`：本房间与相邻房间正对着的边界段（含上面说的缝），即可能的出口：`{"side": "left/right/top/bottom", "x": ..., "y": [起, 止], "room": 相邻房间}`（左右出口给出 x 与 y 区间，上下出口给出 y 与 x 区间）。出口段上是否被地形挡住，要对照 `solids`。
+- `exits`：本房间与相邻房间正对着的边界段（含上面说的缝），即候选出口：`{"side": "left/right/top/bottom", "x": ..., "y": [起, 止], "room": 相邻房间}`。是否能通过须核对 `collision` 中的地形、实体、危险物及机制，不以边界投影作为通路证明。
 - `spawns`：本房间的重生点（死亡后可能在这些点之一重生）；`respawnPoint`：当前生效的重生点。
 - `triggers`：触发器 `{"type": 类型名, "rect": [x, y, 宽, 高]}`。触发器不挡路，Madeline 进入范围时触发效果（例如改变重生点、开始剧情）；返回给你的文字里省略了镜头、音乐、光照等与操作无关的触发器，文件里保留全部。
 

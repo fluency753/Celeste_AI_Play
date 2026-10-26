@@ -112,13 +112,16 @@ internal static class StateExtractor {
         }
 
         if (opt.Entities || opt.Tiles) {
-            List<EntityInfo> entities = CollectEntities(level, ScopeRect(level, opt));
+            Rectangle scope = ScopeRect(level, opt);
+            List<EntityInfo> entities = CollectEntities(level, scope);
             if (opt.Entities) {
                 WriteEntities(w, entities, opt.Fields);
             }
             if (opt.Tiles) {
                 WriteTiles(w, level, player, entities, opt);
             }
+            CollisionSnapshot.Write(w, Bridge.Frame, level.Session.Area.SID, level.Session.Level, scope,
+                opt.Room, level.SolidTiles, level.Entities, player, opt.Tiles, opt.Entities);
         }
     }
 
