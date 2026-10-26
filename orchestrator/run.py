@@ -980,10 +980,15 @@ def abandon_recording(bridge_port: int, saved: dict | None, previous_dir, proble
     try:
         hello = client.call('hello')
         if pending_recording(saved):
-            plugin = (hello.get('clock') or {}).get('plugin') or {}
-            recording = plugin.get('state') == 'recording' or plugin.get('recording') is True
+            clock = hello.get('clock') or {}
+            plugin = clock.get('plugin') or {}
+            state = plugin.get('state')
+            recording = state == 'recording' or plugin.get('recording') is True
             same = bool(plugin.get('dir')) and Path(plugin['dir']).resolve() == Path(saved['options']['dir']).resolve()
-            if same and (recording or plugin.get('state') == 'finishing'):
+            # OBS 断开后桥接仍报告断开前的插件状态：还在"录制/收尾中"的收不了尾，只能放弃；
+            # 已经编码完（finished/failed）的同目录录像照常收尾，生成成片与纯享版，不标成放弃
+            connected = clock.get('connected') is not False
+            if same and ((connected and (recording or state == 'finishing')) or state in {'finished', 'failed'}):
                 print(f"[record] 原录像接不上（{problem}）：先收尾它", flush=True)
                 Recorder.finish_saved(client.call, saved, previous_dir, log=lambda m: print(m, flush=True))
             else:

@@ -511,7 +511,8 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(self.metrics.state.sim_calls, 2)
         self.assertEqual(self.metrics.state.sim_rollouts, 2)
         self.gate.charge.assert_called_once()
-        self.assertEqual(set(self.drawn_starts()), {1, 2})
+        # 两组来源共用同一份预览结果：预览画过的路线不再整批重画（之前第二组会把路线 1 再画一遍）
+        self.assertEqual(sorted(self.drawn_starts()), [1, 2])
 
     def test_file_index_reads_only_headers_and_seeks_over_large_bodies(self):
         points = 8 * 1024 * 1024

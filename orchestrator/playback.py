@@ -325,6 +325,9 @@ class _Msg:
 class _PreviewCompletion:
     keys: tuple[str, ...]
     offsets: list[int]  # 每个已收走来源中，增量读取器消费到的位置
+    # 同一次接管按来源拆成几组时，各组共用这一份预览结果：第一组取走 _preview_success 后记在这里，
+    # 后面的组照用，不会因为取不到而把已经预览过的路线整批重画
+    shared: dict = field(default_factory=dict)
 
 
 @dataclass(eq=False)
@@ -506,9 +509,11 @@ class Playback:
             groups = {}
             for i, path in enumerate(claimed):
                 groups.setdefault(bills[path], []).append(i)
+            shared = {}
             for owner, indexes in groups.items():
                 ends = [offsets[i] for i in indexes]
-                completion = _PreviewCompletion(tuple(key for key, _ in previews), ends) if previews else None
+                completion = (_PreviewCompletion(tuple(key for key, _ in previews), ends, shared)
+                              if previews else None)
                 self._enqueue(_RoundJob(owner.label, [sources[i] for i in indexes], [moved[i] for i in indexes],
                                         account=owner.account_rollouts, completion=completion))
 
@@ -641,8 +646,11 @@ class Playback:
                 else:
                     label, sources, account, completion = job.label, job.sources, job.account, job.completion
                     if isinstance(completion, _PreviewCompletion):
-                        results = [self._preview_success.pop(key, False) for key in completion.keys]
-                        self._finish_previewed_round(label, sources, account, completion.offsets, all(results))
+                        if 'success' not in completion.shared:
+                            results = [self._preview_success.pop(key, False) for key in completion.keys]
+                            completion.shared['success'] = all(results)
+                        self._finish_previewed_round(label, sources, account, completion.offsets,
+                                                     completion.shared['success'])
                     else:
                         self._play_round(label, sources, account)
             except Exception as exc:  # 回放出问题不影响游玩

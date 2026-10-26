@@ -400,6 +400,38 @@ class RecordingSessionTests(unittest.TestCase):
             with self.assertRaises(RecordingError):
                 abandon_recording(47774, None, self.first, RecordingError('原录像已断开'))
 
+    def test_new_recording_resume_finishes_an_encoded_recording_instead_of_abandoning_it(self):
+        from orchestrator.run import abandon_recording
+        recorder = self.start()
+        original = recorder.call
+        def finishing(command, **args):
+            reply = original(command, **args)
+            if command == 'record' and args.get('action') == 'stop':
+                self.hello['clock']['plugin']['state'] = 'finishing'
+            return reply
+        recorder.call = finishing
+        recorder.stop(timeout=0)                                   # 上次收尾超时：会话停在 finishing
+        saved = Recorder.saved_session(self.first)
+        self.assertEqual(saved['state'], 'finishing')
+        self.hello['clock']['plugin']['state'] = 'finished'       # 之后 OBS 编码完了同一目录
+        client = lambda: SimpleNamespace(call=self.call, close=Mock())
+        with patch('tools.bridge_client.BridgeClient', side_effect=lambda **k: client()):
+            abandon_recording(47774, saved, self.first, RecordingError('原录像正在收尾'))
+        self.assertEqual(Recorder.saved_session(self.first)['state'], 'finished')
+
+    def test_new_recording_resume_abandons_recording_lost_with_obs(self):
+        from orchestrator.run import abandon_recording
+        self.start().retain()
+        saved = Recorder.saved_session(self.first)
+        # OBS 崩溃：桥接仍报告断开前"录制中"的状态，时钟端口已断开；不能发停止命令，只能放弃
+        self.hello['clock']['connected'] = False
+        client = lambda: SimpleNamespace(call=self.call, close=Mock())
+        with patch('tools.bridge_client.BridgeClient', side_effect=lambda **k: client()):
+            with patch('orchestrator.recording.Recorder.validate_resume'):
+                abandon_recording(47774, saved, self.first, RecordingError('原录像已断开'))
+        self.assertEqual(json.loads((self.directory/'session.json').read_text(encoding='utf-8'))['state'], 'abandoned')
+        self.assertNotIn('stop', [a.get('action') for c, a in self.commands if c == 'record'])
+
     def test_resume_menu_is_recorded_at_normal_speed_without_restarting(self):
         from orchestrator.config import RunConfig
         from orchestrator.run import enter_save, check_resume_position
