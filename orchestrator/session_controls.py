@@ -105,10 +105,12 @@ class SessionControls:
             response['contentItems'].append({'type': 'inputText', 'text': text})
         return response
 
-    def _public_compaction(self, ident, *, completed=False):
+    def _public_compaction(self, ident, *, completed=False, reminder_key=None):
+        """ident：历史里这次压缩的编号（开始与完成用同一个，完成时替换"正在压缩"那一条）；
+        reminder_key：笔记提醒按它去重（Claude Code 的 compact_boundary 带 uuid），不给时用 ident。"""
         notes = getattr(self, 'note_reminders', None)
         if completed and notes is not None:
-            notes.compacted(ident)
+            notes.compacted(ident if reminder_key is None else reminder_key)
         from .telemetry import publish
         publish(self.run_dir, 'system:compaction:' + str(ident),
                 '上下文压缩完成。' if completed else '正在压缩上下文，完成后继续处理对话…',

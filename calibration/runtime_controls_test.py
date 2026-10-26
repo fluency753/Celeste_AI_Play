@@ -220,6 +220,13 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('PRIVATE', json.dumps(history))
         self.assertEqual(history[0]['text'], '左边有个开口，先试一下。')
 
+    async def test_compaction_with_uuid_replaces_the_in_progress_entry(self):
+        # Claude Code 的 compact_boundary 带 uuid：完成时仍替换"正在压缩"那一条，历史里不留两条
+        self.runner._handle({'type': 'system', 'subtype': 'status', 'status': 'compacting'})
+        self.runner._handle({'type': 'system', 'subtype': 'compact_boundary', 'uuid': 'c-1', 'compact_metadata': {}})
+        history = PublicHistory(self.root).snapshot({})
+        self.assertEqual([item['text'] for item in history], ['上下文压缩完成。'])
+
     def test_woken_chat_has_its_own_time_budget(self):
         """通关后唤起的聊天会话：整次运行的现实用时早已超过预算，也不能一开始就因"时间预算用完"被结束。"""
         import time

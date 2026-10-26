@@ -670,7 +670,9 @@ class ClaudeRunner(SessionControls):
                 if self.proc and self.proc.returncode is None:
                     self.proc.terminate()
         elif etype == "system" and subtype == "compact_boundary":
-            self._public_compaction(event.get("uuid") or event.get("id") or self.metrics.state.compactions, completed=True)
+            # 历史编号与"正在压缩"那一条相同（压缩次数此时还没加一），完成时替换它；笔记提醒仍按 uuid 去重
+            self._public_compaction(self.metrics.state.compactions, completed=True,
+                                    reminder_key=event.get("uuid") or event.get("id") or self.metrics.state.compactions)
             meta = event.get("compact_metadata") or {}
             self.metrics.add(compactions=1, compact_s=(meta.get("duration_ms") or 0) / 1000)
             print(f"[agent] 压缩完成（{meta.get('trigger')}）：{meta.get('pre_tokens')} → {meta.get('post_tokens')} token，"

@@ -152,7 +152,8 @@ class ToolHistory:
     def _row(self, ident, name='', wall=0):
         if not isinstance(wall, (int, float)) or not math.isfinite(wall): wall = 0
         if ident not in self.rows:
-            self.rows[ident] = {'id': ident, 'tool': name, 'text': safe_text(name), 'wall': wall,
+            self._seq = getattr(self, '_seq', 0) + 1     # 读到的先后：没有时间的行按它排，不按随机的编号排
+            self.rows[ident] = {'id': ident, 'tool': name, 'text': safe_text(name), 'wall': wall, 'seq': self._seq,
                                 'status': 'running', 'parameters': None, 'result': None}
         row = self.rows[ident]
         if name and not row['tool']:
@@ -207,14 +208,15 @@ class ToolHistory:
                         self.owned.add(ident)
                         self.owned_order.append(ident)
                     self._row(ident, str(event.get('tool') or '').split(' · ')[0], event.get('wall', 0))
-                elif event.get('event') == 'tool_completed' and ident in self.owned:
+                elif event.get('event') == 'tool_completed' and isinstance(ident, str) and ident in self.owned:
                     row = self.rows.get(ident)
                     if row is None: continue  # Old, evicted calls cannot break current history.
                     if row['status'] == 'running': row['status'] = 'unknown'
                     row['duration_s'] = event.get('tool_active_s')
                 elif event.get('event') == 'turn_ended':
-                    for ident in event.get('pending_tools') or []:
-                        if ident in self.rows and self.rows[ident]['status'] == 'running':
+                    pending = event.get('pending_tools')
+                    for ident in pending if isinstance(pending, list) else []:
+                        if isinstance(ident, str) and ident in self.rows and self.rows[ident]['status'] == 'running':
                             self.rows[ident]['status'] = 'interrupted'
             try:
                 state = mapping(json.loads((self.directory/'run_state.json').read_text(encoding='utf-8-sig')))
@@ -265,11 +267,11 @@ class ToolHistory:
                             row['text'], row['parameters'] = request_summary(block.get('name', ''), block.get('input'))
                         elif block.get('type') == 'tool_result':
                             ident = block.get('tool_use_id')
-                            if ident in self.rows:
+                            if isinstance(ident, str) and ident in self.rows:
                                 row = self.rows[ident]
                                 row['result'] = result_summary(block.get('content'), not block.get('is_error', False))
                                 row['status'] = 'failed' if block.get('is_error') else 'returned'
-            retained = sorted(self.rows.values(), key=lambda row: (row['wall'], row['id']))[-240:]
+            retained = sorted(self.rows.values(), key=lambda row: (row['wall'], row.get('seq', 0), row['id']))[-240:]
             self.rows = {row['id']: row for row in retained}
             if (self.directory/'summary.json').exists():
                 for row in retained:

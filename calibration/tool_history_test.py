@@ -184,6 +184,40 @@ class ToolHistoryTests(unittest.TestCase):
                 server.server_close()
                 thread.join()
 
+    def test_malformed_timing_lines_do_not_break_the_batch(self):
+        self.begin('one')
+        self.append(self.run/'decision_timing.jsonl', {'event': 'turn_ended', 'pending_tools': 5})
+        self.append(self.run/'decision_timing.jsonl', {'event': 'tool_completed', 'tool_id': {'bad': 1}})
+        self.begin('two', wall=11)
+        items = self.reader.snapshot()['items']
+        self.assertEqual([item['id'] for item in items], ['one', 'two'])
+
+    def test_rows_without_time_keep_reading_order(self):
+        reader = ToolHistory(self.run, self.home)
+        for ident in ('toolu_zzz', 'toolu_aaa', 'toolu_mmm'):
+            reader._row(ident, 'Read')
+        ordered = sorted(reader.rows.values(), key=lambda row: (row['wall'], row.get('seq', 0), row['id']))
+        self.assertEqual([row['id'] for row in ordered], ['toolu_zzz', 'toolu_aaa', 'toolu_mmm'])
+
+    def test_tools_endpoint_is_readable_only_from_local_pages(self):
+        from urllib.request import Request
+        from overlay.server import make_handler
+        (self.run/'run_state.json').write_text('{"engine":"claude"}')
+        with patch('overlay.server.current_run', return_value=self.run):
+            server = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(None))
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                url = 'http://127.0.0.1:'+str(server.server_port)+'/hud/tools'
+                with urlopen(Request(url, headers={'Origin': 'https://example.com'})) as response:
+                    self.assertIsNone(response.headers.get('Access-Control-Allow-Origin'))
+                with urlopen(Request(url, headers={'Origin': 'http://127.0.0.1:47790'})) as response:
+                    self.assertEqual(response.headers.get('Access-Control-Allow-Origin'), 'http://127.0.0.1:47790')
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
 
 if __name__ == '__main__':
     unittest.main()
