@@ -11,7 +11,8 @@ from PIL import Image as PILImage
 
 from .config import CHAPTER_NAMES
 from .collision_snapshot import current_collision, collision_problem, collision_summary, terrain_rects
-from .geometry_context import geometry_overview
+from .geometry_context import geometry_overview, room_metadata
+from .entity_context import KEY_FIELD, COSMETIC_TRIGGERS
 
 STOP_TEXT = {
     "done": "按键全部执行完",
@@ -113,10 +114,6 @@ def room_exits(level: dict, neighbors: list[dict] | None) -> list[dict]:
     return out
 
 
-KEY_FIELD = re.compile(r"(?i)(speed|vel|state|timer|target|percent|node|dir|angle|radius|delay|wait|anger|chase|"
-                       r"moving|active|triggered|falling|lerp|ease|progress|amount)")
-
-
 def key_fields(entity: dict, limit: int = 10) -> dict:
     """从反射读出的状态字段里挑出与运动有关的几项（完整字段在工作区文件里）。"""
     fields = entity.get("fields") or {}
@@ -175,7 +172,7 @@ def compact_entity(entity: dict) -> dict:
     return out
 
 
-def room_json(obs: dict, *, compact_context: bool = False) -> str:
+def room_json(obs: dict, *, compact_context: bool = False, geometry_context: dict | None = None) -> str:
     """进入新房间时附在返回结果里的完整数据：所有数值都是像素坐标，与游戏一致。"""
     level = obs.get("level") or {}
     player = obs.get("player") or {}
@@ -204,11 +201,12 @@ def room_json(obs: dict, *, compact_context: bool = False) -> str:
     if obs.get('storyPlayback'):
         data['storyPlayback']=obs['storyPlayback']
     if compact_context and current_collision(obs) is not None:
-        covered = {o.get('id') for o in obs['collision']['objects']}
-        data['collision'] = geometry_overview(obs)
-        data['entities'] = [compact_entity(e) for e in obs.get('entities', []) if e.get('id') not in covered]
+        data['collision'] = geometry_context if geometry_context is not None else geometry_overview(obs)
+        data.update(room_metadata(obs))
         data.pop('solids', None)
         data.pop('solidsNote', None)
+        data.pop('collisionNote', None)
+        data['player'].pop('internal', None)
     lines = ["{"]
     keys = list(data)
     for i, key in enumerate(keys):
@@ -228,10 +226,6 @@ def room_json(obs: dict, *, compact_context: bool = False) -> str:
 
 # 与操作无关的触发器（镜头、音乐、光照等），在给智能体看的数据里省略（工作区文件里保留全部）。
 # 风的触发器（WindTrigger、WindAttackTrigger）会改变风向、影响移动，不省略
-COSMETIC_TRIGGERS = ("Camera", "Music", "Ambience", "Light", "Bloom", "Rumble", "Sound", "Altmusic", "Minitext",
-                     "Lookout", "Spawn")
-
-
 def crop_to_view(obs: dict, margin: int = 16) -> tuple[list[dict], dict | None]:
     """把整房间的实体与字符地图裁到当前画面（外扩 margin），用于每次动作后的简要文字。"""
     level = obs.get("level") or {}
@@ -274,7 +268,7 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     if effort:
         head += f" · {effort}"
     lines.append(head)
-    if level:
+    if level and not (compact_context and current_collision(obs) is not None):
         lines.append(collision_summary(obs))
     if (level or {}).get('completed'):
         lines.append('游戏已登记通关成绩，但吃心提示、片尾或结算可能仍未确认；这不等于已返回选章地图。')

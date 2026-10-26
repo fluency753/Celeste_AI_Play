@@ -21,10 +21,13 @@
   `#` 实心地形，`.` 空，`M` Madeline，`=` 其他实心块（可能移动、坠落或可撞碎），`-` 单向平台（可从下方穿过、站在上面），
   `^ v < >` 朝上/下/左/右的尖刺，`*` 其他致死物，`S` 弹簧，`o` 冲刺水晶（恢复冲刺），`O` 泡泡，`F` 羽毛，`~` 梦境块，`$` 收集品，`?` 其他可交互物。
   `#` 是展示地形标记，可能被实体符号遮盖；`collision` 直接读取真实碰撞体，不受这些符号影响。
-- **结构化概况（JSON）**：每次动作返回当前帧几何概况，新房间和默认 `observe` 另含出口、重生点等房间信息。统一碰撞可用时不重复列出旧 `solids` 与已覆盖的 `entities`；以下旧字段仍保留在原始工作区中。
-  - `encoding=shared-shapes-v1`：对象的 `shape` 引用 `shapes`，`at=[x,y]` 是锚点；将形状及所有嵌套部分的 x/y 都加上该锚点还原世界坐标。`attributes/state` 保留实体属性与机制状态。
-  - 危险物不超过12个时全列；更多时仅将形状与属性相同的重复对象按空间邻近归组，独特对象保留明细，差异状态与位移按 ID 保留在 `instanceStates`，`hazards.groups` 是全体分布索引。组范围既不是实心障碍，也不能证明中间安全。`detailsComplete=false` 表示没有逐个展示全部实例，与来源 `complete` 不同。
-  - 精确核验候选通道时用 `observe(detail="geometry", region=[x,y,w,h])`，只读最近观测缓存，不推进游戏；每页最多64个对象，后续页用 `offset=next_offset` 并传返回的 `snapshot_id`。动作或换房后重新从第一页查。无工作区也能使用。查询保留整形状、孔洞及未知范围，区域超出来源或来源不完整时不能据空结果判安全。
+- **首次布局、房内变化与精查**：默认工具使用 `room-context-v2`，首次入房或默认 `observe` 返回 `mode=baseline` 的完整布局，替换旧基线。`groups` 只共用相同属性，不省略实例：每组 `instances` 的行按本组 `instanceColumns`（省略时为 `[id,x,y]`）读取，可能另有 `shape/state` 列；共同的形状或状态写在组上。`shape` 引用同包 `shapes`，形状及所有嵌套 x/y 加实例 x/y 还原世界坐标。所有实例位置保留，组不是实心包围区域，不判定可达性。默认 `stateDetail` 明示仅精选游戏状态，完整反射仍可精查。
+
+同房 `act/cutscene` 返回 `mode=delta`：核对 `base_snapshot_id`，应用 `added/changed` 中的完整替换对象（按 source/id），`removed` 是本覆盖范围内不再观测的 `[source,id]`，不表示永久消失。每条变化自带所需形状定义；`roomChanges` 按同名字段替换首次布局外层的 `exits/spawns/respawnPoint/triggers/entities`，空值也必须应用。地形不变就不重复发送，移动、生成、形状或碰撞状态变化照常报告；范围变化、缓存失效或变化过大时重发 baseline。快照链缺失、历史压缩后记不清布局时默认 `observe` 重建，不猜测缺失数据。
+
+`observe(detail="geometry", region=[x,y,w,h], limit=32)` 只读最近观测缓存，返回区域精确对象与完整反射状态，格式为 `shared-shapes-v1`（独立的本包形状表）。后续页带 `offset=next_offset` 与同一 `snapshot_id`；动作或新观测后重新从第一页查。`observe(detail="player")` 读取完整玩家内部状态。两种详情都不推进游戏，也不改变变化基线。局部查询超出来源范围、来源缺失或存在未知形状时，空结果不证明安全。完整原始工作区与完整碰撞图不变，不必把整房 JSON 打印进聊天。
+
+以下字段说明适用于工作区原始观测；默认工具省略已由布局和变化表达的重复实体、地形和玩家内部反射。
   - `frame` 观测帧号；`sid` 章节标识；`room` 房间名；`bounds` 房间范围 `[x, y, 宽, 高]`。
   - `exits` 可能的出口：`{"side": "left/right/top/bottom", "x": …, "y": [起, 止], "room": 相邻房间}`（左右出口给出 x 与 y 区间，上下出口给出 y 与 x 区间）。是否有通路须结合 `collision` 中的地形、实体及其机制判断。
   - `solids` 地形的碰撞箱，每项 `[x, y, 宽, 高]`，由地形格子合并而成，像素精确。`null` 表示缺少完整地形，不能按空房间处理。会动、会塌、能撞碎的实心物不在这里，在 `entities` 里。

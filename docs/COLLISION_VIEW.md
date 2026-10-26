@@ -19,11 +19,13 @@
 
 输出图最长边为 1280，最多处理 16000 个绘图节点、12 层嵌套，超限或不支持的绘图形状在图中明确标记，不能据空白推定安全。精确对象数据仍以 JSON 为准。碰撞图不计算可达性或预测障碍物未来位置。
 
-## 文字概况与局部精读
+## 首次布局、变化与精查
 
-默认工具文字使用 `shared-shapes-v1`：`shape` 引用 `shapes`，`at` 是锚点，形状及嵌套部分的 x/y 都加该锚点得到世界坐标；原始工作区仍是完整 `geometry`。危险物超过12个时仅将同形状与属性的重复对象按空间邻近归组，共同属性保留在组中，不同机制状态与位移按 ID 列在 `instanceStates`；独特对象、非危险对象及未知形状仍逐项提供。`detailsComplete=false` 表示实例省略，与来源完整性 `complete` 不同。组范围只是分布索引，不能当实心障碍或安全通道。
+默认工具使用 `room-context-v2`，首次入房或默认 `observe` 返回 `mode=baseline` 的完整布局，替换旧基线。`groups` 只共用相同属性，不省略实例：每组 `instances` 的行按本组 `instanceColumns`（省略时为 `[id,x,y]`）读取，可能另有 `shape/state` 列；共同的形状或状态写在组上。`shape` 引用同包 `shapes`，形状及所有嵌套 x/y 加实例 x/y 还原世界坐标。所有实例位置保留，组不是实心包围区域，不判定可达性。默认 `stateDetail` 明示仅精选游戏状态，完整反射仍可精查。
 
-核验候选通道时调用 `observe(detail="geometry", region=[x,y,w,h], limit=32)` 获取区域精确对象，仅查询最近观测缓存，不推进游戏。返回完整形状；更多结果用 `offset=next_offset` 和同一 `snapshot_id` 分页。动作后快照改变则重新查询；无工作区也能查询。先看概况与完整碰撞图，再查局部，不打印全体原始危险物列表。超出来源范围、未知形状或缺失来源不能据空结果判安全。
+同房 `act/cutscene` 返回 `mode=delta`：核对 `base_snapshot_id`，应用 `added/changed` 中的完整替换对象（按 source/id），`removed` 是本覆盖范围内不再观测的 `[source,id]`，不表示永久消失。每条变化自带所需形状定义；`roomChanges` 按同名字段替换首次布局外层的 `exits/spawns/respawnPoint/triggers/entities`，空值也必须应用。地形不变就不重复发送，移动、生成、形状或碰撞状态变化照常报告；范围变化、缓存失效或变化过大时重发 baseline。快照链缺失、历史压缩后记不清布局时默认 `observe` 重建，不猜测缺失数据。
+
+`observe(detail="geometry", region=[x,y,w,h], limit=32)` 只读最近观测缓存，返回区域精确对象与完整反射状态，格式为 `shared-shapes-v1`（独立的本包形状表）。后续页带 `offset=next_offset` 与同一 `snapshot_id`；动作或新观测后重新从第一页查。`observe(detail="player")` 读取完整玩家内部状态。两种详情都不推进游戏，也不改变变化基线。局部查询超出来源范围、来源缺失或存在未知形状时，空结果不证明安全。完整原始工作区与完整碰撞图不变，不必把整房 JSON 打印进聊天。
 
 ## 验证
 

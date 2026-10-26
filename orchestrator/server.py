@@ -15,11 +15,10 @@ from .observation import describe_attempts, describe_obs, describe_step, room_js
 from .efforts import valid_effort
 from .modes import game_tools, is_explore
 from .prompting import fill
-from .collision_snapshot import collision_json
 from .collision_view import render_collision_view
-from .geometry_context import geometry_overview, geometry_page
+from .geometry_context import GeometryContext, geometry_page
 
-ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。每次返回当前帧碰撞概况与完整碰撞图（开启图像时），包括地形和实体；进入新房间时另附截图和房间信息。同类形状共享，大量危险物只列分布分组；组范围不是实心障碍，使用 observe(detail="geometry", region=[x,y,w,h]) 查询精确实例。collision的frame/scope/coverage/geometryComplete分别表示时刻、范围、来源覆盖及形状精度，detailsComplete表示是否展示全部实例。不把当前阻挡当成永久不可达。
+ACT_DESCRIPTION = """推进游戏若干帧并返回结果、角色状态和完整碰撞图（开启图像时）。首次入房返回精确布局；同房后续只给对象增删改和房间信息变化，读取base_snapshot_id→snapshot_id，changed完整替换对应source/id的对象。来源范围改变或变化过大时重发baseline；原始数据始终保留。默认observe可重新取得完整布局；observe(detail="geometry",region=[x,y,w,h])只查当前缓存精确对象；detail="player"读取完整玩家内部状态。布局按groups共用属性，每行instances依instanceColumns读取，shapes的嵌套坐标加实例x/y还原世界坐标；组不表示实心包围区域。默认state仅精选游戏状态，反射细节按需查询。不把当前阻挡当成永久不可达。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
 input_format：省略为 celeste_ai；显式 celeste_tas 使用 TAS 离散按键 J/K 双跳、X/C 双冲刺、Z/V 双蹲冲、G/H 双抓、S 暂停、Q 重试、N 日志、O 确认，并保留兼用绑定。须 agent 剧情模式与桥接1.0.20。TAS执行和观察不自动补帧；不支持的模拟或脚本命令明确报错。
@@ -43,10 +42,10 @@ celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进�
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json）"
 SIM_NOTE = WORKSPACE_NOTE[:-1] + "；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
-OBSERVE_DESCRIPTION = '默认返回新观测、完整碰撞图及紧凑几何概况：同类形状共享，大量危险物按分布归组，组范围不是实心障碍。detail="geometry"只查询最近一次观测缓存，不推进游戏：region=[x,y,w,h]取区域精确对象，offset/limit分页（最多64）；后续页必须传上页snapshot_id，跨帧失效。返回整形状、不裁掉孔洞；scope/coverage仍限制来源覆盖。act已返回最新概况，无需重复observe。无工作区也能区域查询。'
+OBSERVE_DESCRIPTION = '默认获取新观测、完整碰撞图及完整精确布局baseline，用于首次查看或遗忘旧基线后的恢复；act/cutscene同房只返回变化。detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态。两种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
 
 # 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
-ROOM_JSON_HEADER = "房间结构化概况（世界像素坐标；大量危险物的分组只是分布索引，不是实心障碍，精确实例按区域查询）：\n"
+ROOM_JSON_HEADER = "房间布局（精确实例位置；共享属性与形状，后续按快照返回变化）：\n"
 
 SET_EFFORT_DESCRIPTION = """调整你自己的推理强度：传入当前模型能力列表中的档位标识，当前值与可选档位见观测头部。
 强度越高，每次思考越深入，但每次决策更慢、消耗的额度更多；简单的房间可以调低，需要精确规划的难房间可以调高。
@@ -120,6 +119,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     # 截图只在进入新房间时（以及主动 observe 时）附上；同时给出整个房间的实体与地图，平时只描述画面附近
     # 思考与工具时间由主控按 Claude Code 输出流里的 tool_use / tool_result 事件统计（见 metrics.py），这里不计时
     state = {"described_room": None}
+    geometry_context = GeometryContext()
 
     def room_key(obs: dict):
         level = obs.get("level") or {}
@@ -190,6 +190,16 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 return [note]
             begin()
             try:
+                if detail == 'player':
+                    if region is not None or offset or snapshot_id is not None:
+                        return ['player 查询不接受区域或分页参数。']
+                    with session.lock:
+                        cached = session.last_obs or {}
+                        if cached.get("frame") is None:
+                            raise ValueError("尚无观测缓存，请先默认observe。")
+                        player = {key: cached.get(key) for key in ('frame', 'player', 'controllable')}
+                        player.update({key: (cached.get('level') or {}).get(key) for key in ('sid', 'room')})
+                    return [json.dumps(player,ensure_ascii=False,separators=(',', ':'))]
                 if detail == 'geometry':
                     with session.lock:
                         page = geometry_page(session.last_obs or {}, region=region, offset=offset, limit=limit,
@@ -199,13 +209,15 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     return ['区域或分页查询请用 detail="geometry"；默认 overview 会获取新观测。']
                 obs, image = await asyncio.to_thread(session.observe)
                 credit(obs)
-                state["described_room"] = room_key(obs)
+                geometry, candidate = geometry_context.prepare(obs, force=True)
                 content = images(obs, image)
                 notes = getattr(session, "observe_notes", None) or []
                 content.append(("主控：" + "；".join(notes) + "\n\n" if notes else "")
                                + describe_obs(obs, full_room=True, effort=header_line(), explore=explore, compact_context=True)
-                               + "\n\n" + ROOM_JSON_HEADER + room_json(obs, compact_context=True)
+                               + "\n\n" + ROOM_JSON_HEADER + room_json(obs, compact_context=True, geometry_context=geometry)
                                + ("\n" + ws_note if session.workspace else ""))
+                geometry_context.commit(candidate)
+                state["described_room"] = room_key(obs)
                 return content
             except ValueError as exc:
                 return [str(exc)]
@@ -235,7 +247,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     result = outcome.result
                 finally:
                     metrics.decision_end(result)
-                parts = [describe_step(outcome.result)]
+                parts = [describe_step(outcome.result, max_rows=8)]
                 if gate is not None:
                     gate.on_death(metrics.state.deaths - deaths_before)  # 在游戏里死了：补规划轮次
                     credit(outcome.obs)
@@ -246,19 +258,20 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if session.done:
                     parts.append(f"【{session.done_reason}】本次试玩已结束，不需要再调用工具，请直接结束本轮。")
                 new_room = room_key(outcome.obs) != state["described_room"]
+                geometry, candidate = geometry_context.prepare(outcome.obs, force=new_room)
                 if new_room:
-                    state["described_room"] = room_key(outcome.obs)
-                    parts.append("【进入新房间】下面是截图、完整碰撞图及结构化概况；密集危险区域可按需查询精确实例。")
+                    parts.append("【进入新房间】下面是截图、完整碰撞图及精确布局；后续只返回相对此布局的变化。")
                 parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(freeze=False), explore=explore, compact_context=True))
-                if new_room:
-                    parts.append(ROOM_JSON_HEADER + room_json(outcome.obs, compact_context=True))
+                if new_room or geometry['mode'] == 'baseline':
+                    parts.append(ROOM_JSON_HEADER + room_json(outcome.obs, compact_context=True, geometry_context=geometry))
                 else:
-                    compact = geometry_overview(outcome.obs)
-                    parts.append('当前帧的统一碰撞数据（概况）：\n' + (json.dumps(compact,ensure_ascii=False,separators=(',', ':')) if compact is not None else collision_json(outcome.obs)))
+                    parts.append('当前帧的统一碰撞数据（变化）：\n' + json.dumps(geometry,ensure_ascii=False,separators=(',', ':')))
                 if session.workspace:
                     parts.append(ws_note)
                 content = images(outcome.obs, outcome.image_b64, show_screenshot=new_room)
                 content.append("\n\n".join(parts))
+                geometry_context.commit(candidate)
+                state["described_room"] = room_key(outcome.obs)
                 return content
             except ActError as err:
                 return [f"动作未执行（没有消耗任何游戏帧）：{err}"]
@@ -298,8 +311,14 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             if (note := gated()) is not None:return [note]
             begin()
             obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
+            new_room = room_key(obs) != state['described_room']
+            geometry, candidate = geometry_context.prepare(obs, force=new_room)
             result=images(obs, image)
-            result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore,compact_context=True)+'\n'+room_json(obs,compact_context=True))
+            context = (room_json(obs,compact_context=True,geometry_context=geometry) if new_room or geometry['mode'] == 'baseline'
+                       else json.dumps(geometry,ensure_ascii=False,separators=(',', ':')))
+            result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore,compact_context=True)+'\n'+context)
+            geometry_context.commit(candidate)
+            state['described_room'] = room_key(obs)
             return result
 
     @optional_tool(tool_simulate, name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)

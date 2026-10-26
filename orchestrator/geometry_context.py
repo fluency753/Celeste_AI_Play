@@ -5,13 +5,17 @@ import json
 import math
 
 from .collision_snapshot import current_collision, collision_problem
-
-SMALL_HAZARD_SET = 12
-GROUP_CELL = 64
+from .entity_context import selected_state, COSMETIC_TRIGGERS
 
 
 def snapshot_id(data):
     return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:32]
+
+
+def _observation_id(obs):
+    return snapshot_id({**{key: obs.get(key) for key in
+                          ('collision', 'entities', 'player', 'exits', 'spawns', 'respawnPoint', 'triggers')},
+                        'side': (obs.get('level') or {}).get('side')})
 
 
 def _bounds(shape):
@@ -65,73 +69,184 @@ class _Encoder:
         result = {k: obj[k] for k in ('id', 'source', 'type', 'category', 'kind', 'collidable', 'mutable') if k in obj}
         result['shape'], result['at'] = self.shape(obj)
         entity = self.entities.get(obj.get('id'), {})
-        attributes = {k: v for k, v in entity.items()
+        attributes = {k: v for k, v in obj.items() if k not in result and k != 'geometry'}
+        attributes.update({k: v for k, v in entity.items()
                       if k not in {'id', 'type', 'cat', 'x', 'y', 'w', 'h', 'collider', 'parts', 'fields', 'moved'}}
+        )
         if attributes: result['attributes'] = attributes
         if entity.get('fields'): result['state'] = entity['fields']
         if entity.get('moved'): result['moved'] = entity['moved']
         return result
 
 
-def _header(data):
+def _header(data, obs):
     return {**{k: data.get(k) for k in ('version', 'frame', 'sid', 'room', 'scope', 'bounds', 'coverage',
                                       'complete', 'geometryComplete', 'player')},
-            'snapshot_id': snapshot_id(data), 'encoding': 'shared-shapes-v1',
+            'snapshot_id': _observation_id(obs), 'encoding': 'shared-shapes-v1',
             'shapeNote': 'geometry = shapes[object.shape] translated by object.at; all x/y including nested parts use this same anchor. No rounding.'}
 
 
-def geometry_overview(obs):
+def _size(value):
+    return len(json.dumps(value, ensure_ascii=False, separators=(',', ':')))
+
+
+def room_metadata(obs):
+    """The same outer baseline fields that roomChanges replaces, including clears."""
+    data = current_collision(obs)
+    covered = {obj.get('id') for obj in data['objects']} if data else set()
+    result = {key: copy.deepcopy(obs.get(key)) for key in ('exits', 'spawns', 'respawnPoint')}
+    result['triggers'] = [trigger for trigger in obs.get('triggers') or []
+                          if not trigger.get('type', '').startswith(COSMETIC_TRIGGERS)]
+    result['entities'] = []
+    for entity in obs.get('entities') or []:
+        if entity.get('id') not in covered:
+            item = {key: value for key, value in entity.items() if key not in {'fields', 'moved'}}
+            state = selected_state(entity)
+            if state:
+                item['state'] = state
+            result['entities'].append(item)
+    return result
+
+
+def _context_snapshot(obs, shape_ids=None):
     data = current_collision(obs)
     if data is None:
         return None
     encoder = _Encoder(obs)
-    all_hazards = [o for o in data['objects'] if o.get('kind') == 'hazard']
-    hazards = [o for o in all_hazards if _known(o.get('geometry'))]
+    shapes, records = {}, {}
+    shape_ids = dict(shape_ids or {})
+    for obj in data['objects']:
+        packed = encoder.pack(obj)
+        shape = encoder.shapes[packed['shape']]
+        shape_key = json.dumps(shape, sort_keys=True, separators=(',', ':'))
+        if shape_key not in shape_ids:
+            shape_ids[shape_key] = 's' + str(len(shape_ids))
+        ident = shape_ids[shape_key]
+        shapes[ident] = shape
+        packed['shape'] = ident
+        packed.pop('moved', None)  # Geometry positions already express movement; not a second clock.
+        state = selected_state(encoder.entities.get(obj.get('id'), {}))
+        packed.pop('state', None)
+        if state:
+            packed['state'] = state
+        attributes = packed.get('attributes', {})
+        attributes = {key: value for key, value in attributes.items()
+                      if key not in packed and key not in {'shape', 'r'}}
+        if attributes:
+            packed['attributes'] = attributes
+        else:
+            packed.pop('attributes', None)
+        records[(obj.get('source'), obj.get('id'))] = packed
+    identity = {key: data.get(key) for key in
+                ('version', 'sid', 'room', 'scope', 'bounds', 'coverage', 'complete', 'geometryComplete')}
+    identity['side'] = (obs.get('level') or {}).get('side')
+    # Source IDs must identify distinct instances for replacement/removal to be meaningful.
+    if len(records) != len(data['objects']):
+        return None
+    room_data = room_metadata(obs)
+    return {'data': data, 'identity': identity, 'records': records, 'shapes': shapes, 'room_data': room_data,
+            'snapshot_id': _observation_id(obs), 'shape_ids': shape_ids}
+
+
+def _groups(records):
     cohorts = {}
-    common_data = {}
-    for obj in hazards:
-        common = {k: v for k, v in encoder.pack(obj).items() if k not in {'id', 'at', 'state', 'moved'}}
+    for obj in records:
+        common = {key: value for key, value in obj.items() if key not in {'id', 'at', 'state', 'shape'}}
         key = json.dumps(common, sort_keys=True, separators=(',', ':'))
-        common_data[key] = common
-        cohorts.setdefault(key, []).append(obj)
-    repeated = [o for members in cohorts.values() if len(members) > 1 for o in members]
-    hidden = len(hazards) > SMALL_HAZARD_SET and bool(repeated)
-    hazard_ids = {id(o) for o in repeated} if hidden else set()
-    objects = [encoder.pack(o) for o in data['objects'] if id(o) not in hazard_ids]
-    buckets = {}
-    for key, members in cohorts.items():
-        for obj in members if hidden and len(members) > 1 else []:
-            _, at = encoder.shape(obj)
-            cell = (math.floor(at[0] / GROUP_CELL), math.floor(at[1] / GROUP_CELL))
-            buckets.setdefault(key, {}).setdefault(cell, []).append(obj)
-    groups = []
-    for key, cells in buckets.items():
-        pending = set(cells)
-        while pending:
-            seed = min(pending); pending.remove(seed)
-            queue = [seed]; members = []
-            while queue:
-                cell = queue.pop(); members.extend(cells[cell])
-                for dx in (-1, 0, 1):
-                    for dy in (-1, 0, 1):
-                        neighbour = (cell[0]+dx, cell[1]+dy)
-                        if neighbour in pending: pending.remove(neighbour); queue.append(neighbour)
-            rectangles = [_bounds(o['geometry']) for o in members]
-            x, y = min(r[0] for r in rectangles), min(r[1] for r in rectangles)
-            group = {**common_data[key],
-                           'count': len(members), 'bounds': [x, y, max(r[0]+r[2] for r in rectangles)-x,
-                                                          max(r[1]+r[3] for r in rectangles)-y]}
-            states = [{k: v for k, v in encoder.pack(o).items() if k in {'state', 'moved'}} for o in members]
-            if all(state == states[0] for state in states):
-                group.update(states[0])
-            else:
-                group['instanceStates'] = [{'id': obj.get('id'), **state} for obj, state in zip(members, states)]
-            groups.append(group)
-    return {**_header(data), 'shapes': encoder.shapes, 'objects': objects,
-            'detailsComplete': not hidden, 'hazards': {'total': len(all_hazards), 'detailsReturned': len(all_hazards)-len(hazard_ids),
-                'detailsOmitted': len(hazard_ids), 'groups': groups,
-                'grouping': 'repeated identical type/shape/attributes, adjacent 64px anchor cells; differing state/moved retained in instanceStates. Distribution index only, NOT filled obstacles or safe gaps'},
-            'detailNote': 'Dense hazards are overview only. Use observe(detail="geometry", region=[x,y,w,h]) for exact candidates; complete means source coverage, NOT all instances shown. Raw game/latest_obs.json and game/collision.json remain complete.'}
+        if key not in cohorts:
+            cohorts[key] = (common, [])
+        cohorts[key][1].append(obj)
+    result = []
+    for common, objects in cohorts.values():
+        group = dict(common)
+        columns = ['id', 'x', 'y']
+        same_shape = all(obj['shape'] == objects[0]['shape'] for obj in objects)
+        if same_shape:
+            group['shape'] = objects[0]['shape']
+        else:
+            columns.append('shape')
+        states = [obj.get('state', {}) for obj in objects]
+        same_state = all(state == states[0] for state in states)
+        if same_state:
+            if states[0]:
+                group['state'] = states[0]
+        else:
+            columns.append('state')
+        if len(columns) != 3:
+            group['instanceColumns'] = columns
+        group['instances'] = []
+        for obj, state in zip(objects, states):
+            row = [obj['id'], *obj['at']]
+            if not same_shape:
+                row.append(obj['shape'])
+            if not same_state:
+                row.append(state)
+            group['instances'].append(row)
+        result.append(group)
+    return result
+
+
+def _base(current):
+    data = current['data']
+    return {**current['identity'], 'frame': data['frame'], 'snapshot_id': current['snapshot_id'],
+            'encoding': 'room-context-v2', 'instanceColumns': ['id', 'x', 'y'],
+            'stateDetail': 'selected gameplay fields; geometry query/raw workspace retains full reflection'}
+
+
+def _shape_subset(current, records):
+    return {obj['shape']: current['shapes'][obj['shape']] for obj in records}
+
+
+def _baseline(current):
+    records = list(current['records'].values())
+    return {**_base(current), 'mode': 'baseline', 'detailsComplete': True,
+            'object_count': len(records), 'shapes': current['shapes'], 'groups': _groups(records)}
+
+
+def geometry_overview(obs):
+    """Exact layout: group metadata once, preserve every instance position; no hazard threshold."""
+    current = _context_snapshot(obs)
+    return _baseline(current) if current is not None else None
+
+
+class GeometryContext:
+    """Per-server last-emitted projection. Preparing a response never advances the baseline."""
+    def __init__(self):
+        self.last_emitted = None
+
+    def prepare(self, obs, *, force=False):
+        previous = self.last_emitted
+        current = _context_snapshot(obs, previous['shape_ids'] if previous else None)
+        if current is None:
+            return {'mode': 'unavailable', 'frame': obs.get('frame'),
+                    'reason': collision_problem(obs) or 'duplicate collision IDs', 'baselineInvalidated': True}, None
+        if (force or previous is None or current['identity'] != previous['identity']
+                or current['data']['frame'] < previous['data']['frame']):
+            current = _context_snapshot(obs)  # A baseline replaces the whole shape namespace.
+            return _baseline(current), current
+        added, changed = [], []
+        for key, obj in current['records'].items():
+            if key not in previous['records']:
+                added.append(obj)
+            elif obj != previous['records'][key]:
+                changed.append(obj)
+        removed = [[source, ident] for source, ident in previous['records'] if (source, ident) not in current['records']]
+        used = added + changed
+        delta = {'mode': 'delta', 'encoding': 'room-context-v2', 'frame': current['data']['frame'],
+                 'sid': current['data']['sid'], 'room': current['data']['room'],
+                 'base_snapshot_id': previous['snapshot_id'], 'snapshot_id': current['snapshot_id'],
+                 'object_count': len(current['records']), 'added': _groups(added),
+                 'changed': _groups(changed), 'removed': removed, 'shapes': _shape_subset(current, used)}
+        room_changes = {key: value for key, value in current['room_data'].items()
+                        if value != previous['room_data'].get(key)}
+        if room_changes:
+            delta['roomChanges'] = room_changes
+        baseline = _baseline(current)
+        # A large rebuild should not cost more than resending its complete compact layout.
+        return (baseline if _size(baseline) < _size(delta) else delta), current
+
+    def commit(self, candidate):
+        self.last_emitted = copy.deepcopy(candidate)
 
 
 def _intersects(shape, region):
@@ -153,7 +268,7 @@ def geometry_page(obs, *, region=None, offset=0, limit=32, expected_snapshot=Non
     if data is None: raise ValueError(collision_problem(obs) + '；先 observe 获取支持统一碰撞的观测。')
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 64:
         raise ValueError('offset 必须非负整数，limit 为 1–64')
-    ident = snapshot_id(data)
+    ident = _observation_id(obs)
     if expected_snapshot is not None and expected_snapshot != ident:
         raise ValueError('快照已改变，不能跨帧或跨房间混合分页；请从 offset=0 重新查询。')
     if offset and expected_snapshot is None:
@@ -169,7 +284,7 @@ def geometry_page(obs, *, region=None, offset=0, limit=32, expected_snapshot=Non
     objects = [encoder.pack(o) for o in matches[offset:offset+limit]]
     bx, by, bw, bh = data['bounds']
     covered = region is None or (region[0] >= bx and region[1] >= by and region[0]+region[2] <= bx+bw and region[1]+region[3] <= by+bh)
-    return {**_header(data), 'source': 'last_observation_cache; no game advancement', 'region': region,
+    return {**_header(data, obs), 'source': 'last_observation_cache; no game advancement', 'region': region,
             'regionWithinSourceBounds': covered, 'selection': 'known shapes intersect region; unknown shapes use conservative bounds. Returned shapes are whole, not cropped.',
             'shapes': encoder.shapes, 'objects': objects, 'matched_total': len(matches), 'offset': offset,
             'returned': len(objects), 'next_offset': offset+len(objects) if offset+len(objects) < len(matches) else None}
