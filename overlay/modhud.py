@@ -793,16 +793,16 @@ class SharedHud:
         struct.pack_into("<q", self.buf, OFF_HEARTBEAT, 0)
 
 
-def anchor_bottom(config: dict, view_h: int) -> int | None:
-    """游戏内 HUD 卡片的底边放在显示区高度的多少处（configs/hud.json 的 mod_bottom，默认 0.9）；null 时贴着上边。"""
-    frac = config.get("mod_bottom", 0.9)
+def anchor_top(config: dict, view_h: int, margin: int) -> int:
+    """游戏内 HUD 卡片的上边放在显示区高度的多少处（configs/hud.json 的 mod_top，默认 0.1）；null 时贴着上边（留 margin）。"""
+    frac = config.get("mod_top", 0.1)
     if frac is None:
-        return None
+        return margin
     try:
-        frac = min(1.0, max(0.1, float(frac)))
+        frac = min(0.9, max(0.0, float(frac)))
     except (TypeError, ValueError):
-        frac = 0.9
-    return int(round(view_h * frac))
+        frac = 0.1
+    return max(margin, int(round(view_h * frac)))
 
 
 def mapping_name(bridge_port: int) -> str:
@@ -914,7 +914,7 @@ class ModHud:
         width = max(160, int(round(DESIGN_WIDTH * view[0] / DESIGN_VIEW)))
         colors = config.get("colors") or {}
         self.shared.timer(vm.timer_base, vm.timer_extra, vm.timer_live)
-        key = (vm, width, view[1], config.get("mod_bottom", 0.9), tuple(sorted(colors.items())))   # 显示区变高或改了位置也要重发
+        key = (vm, width, view[1], config.get("mod_top", 0.1), tuple(sorted(colors.items())))   # 显示区变高或改了位置也要重发
         if key == self._last:
             return False
         px = width / DESIGN_WIDTH
@@ -922,12 +922,10 @@ class ModHud:
             self._atlas = make_atlas(px, colors)
             self._atlas_key = (width, tuple(sorted(colors.items())))
         margin_px = int(round(16 * px))
-        bottom = anchor_bottom(config, view[1])
-        room = (bottom if bottom is not None else view[1] - margin_px) - margin_px
-        card = render(vm, width, colors, max_height=min(room, IMAGE_MAX // (4 * width)))
+        # 卡片上边放在显示区高度的 mod_top（默认 10%）处，内容变多时往下长，最多到显示区底边留 margin
+        top = anchor_top(config, view[1], margin_px)
+        card = render(vm, width, colors, max_height=min(view[1] - top - margin_px, IMAGE_MAX // (4 * width)))
         atlas = self._atlas
-        # 卡片底边对齐显示区高度的 mod_bottom（默认 90%），内容变多时往上长；不设时照旧贴着上边
-        top = margin_px if bottom is None else max(margin_px, bottom - card.image.height)
         self.shared.publish(premultiplied(card.image), card.image.size, premultiplied(atlas.image), atlas.image.size,
                             atlas.glyphs, (card.timer_x, card.timer_y), (margin_px, top))
         self._last = key

@@ -214,7 +214,7 @@ class HudStyleTests(unittest.TestCase):
         off = view_model({**m, "formal_only": False}, CONFIG, history, now)
         self.assertEqual([e.text for e in off.history], ["临时思考", "临时的想法不上 HUD"])
 
-    def test_card_bottom_sits_at_ninety_percent_of_the_view(self):
+    def test_card_top_sits_at_ten_percent_of_the_view(self):
         import struct
         from overlay.modhud import MAPPING_SIZE, OFF_IMG_H, OFF_MARGIN_TOP, OFF_VIEW_W, ModHud, SharedHud
         now = time.time()
@@ -226,15 +226,9 @@ class HudStyleTests(unittest.TestCase):
             hud = ModHud(Path(folder), shared=shared, metrics=m)
             with patch("overlay.history.read_history", return_value=[]):
                 self.assertTrue(hud.tick())
-                top = struct.unpack_from("<i", shared.buf, OFF_MARGIN_TOP)[0]
-                height = struct.unpack_from("<i", shared.buf, OFF_IMG_H)[0]
-                self.assertEqual(top + height, 972)
-                m["formal_thought"] = "很长的一句" * 12            # 卡片变高：底边不动，往上长
-                self.assertTrue(hud.tick())
-                taller = struct.unpack_from("<i", shared.buf, OFF_IMG_H)[0]
-                self.assertGreater(taller, height)
-                self.assertEqual(struct.unpack_from("<i", shared.buf, OFF_MARGIN_TOP)[0] + taller, 972)
-                hud._config = {**hud._config, "mod_bottom": None}   # 不设时照旧贴着上边
+                self.assertEqual(struct.unpack_from("<i", shared.buf, OFF_MARGIN_TOP)[0], 108)
+                self.assertLessEqual(108 + struct.unpack_from("<i", shared.buf, OFF_IMG_H)[0], 1080 - 16)
+                hud._config = {**hud._config, "mod_top": None}      # 不设时照旧贴着上边
                 self.assertTrue(hud.tick())
                 self.assertEqual(struct.unpack_from("<i", shared.buf, OFF_MARGIN_TOP)[0], 16)
             hud.close()
