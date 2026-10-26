@@ -528,6 +528,17 @@ class ClaudeRunner(SessionControls):
         self.proc.stdin.write((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
         await self.proc.stdin.drain()
 
+    def _notes_window(self):
+        reported = super()._notes_window()
+        if reported:
+            return reported
+        # Match the effective configuration actually passed to Claude Code.
+        configured = self.cfg.autocompact or (self.cfg.provider_info or {}).get('autocompact')
+        try:
+            return int(configured) if configured is not None else None
+        except (TypeError, ValueError):
+            return None
+
     async def _send(self, text: str) -> None:
         self.turns += 1
         self.turn_id = str(self.turns)
@@ -535,7 +546,10 @@ class ClaudeRunner(SessionControls):
         self.turn_active = True
         self.turn_done.clear()
         self._tool_calls_this_turn = 0
+        offered_notes = self.note_reminders.peek()
+        text += ('\n\n' + '\n'.join(value for _, value in offered_notes) if offered_notes else '')
         await self._write(text)
+        self.note_reminders.acknowledge(offered_notes)
         self._begin_model_turn(runtime="claude")
         self.metrics.update(status=self._idle_status())
 
@@ -626,7 +640,8 @@ class ClaudeRunner(SessionControls):
                     future.set_result(response)
         elif etype == "system" and subtype == "init":
             if event.get("model"):
-                self.metrics.update(model=event["model"])
+                changed = event["model"] != self.metrics.state.model
+                self.metrics.update(model=event["model"], **({"context_window": None} if changed else {}))
             # 每轮开始都会输出一次 init：每次都核对工具列表，只在第一次打印
             tools = event.get("tools") or []
             unexpected = [t for t in tools if not self._allowed_tool(t)]
@@ -655,7 +670,7 @@ class ClaudeRunner(SessionControls):
                 if self.proc and self.proc.returncode is None:
                     self.proc.terminate()
         elif etype == "system" and subtype == "compact_boundary":
-            self._public_compaction(self.metrics.state.compactions, completed=True)
+            self._public_compaction(event.get("uuid") or event.get("id") or self.metrics.state.compactions, completed=True)
             meta = event.get("compact_metadata") or {}
             self.metrics.add(compactions=1, compact_s=(meta.get("duration_ms") or 0) / 1000)
             print(f"[agent] 压缩完成（{meta.get('trigger')}）：{meta.get('pre_tokens')} → {meta.get('post_tokens')} token，"
@@ -673,6 +688,7 @@ class ClaudeRunner(SessionControls):
                        + usage.get("cache_creation_input_tokens", 0))
             if context:
                 self.metrics.update(context_tokens=context)
+                self._notes_usage()
             for index, block in enumerate(message.get("content") or []):
                 if block.get("type") == "tool_use":
                     self.metrics.add(tool_calls=1)
@@ -694,6 +710,7 @@ class ClaudeRunner(SessionControls):
                         self.playback.note_tool_use(message.get("id"), str(block.get("id")), str(block.get("name", "")),
                                                     block.get("input"))
         elif etype == "user":
+            self.note_reminders.observe_file()
             content = (event.get("message") or {}).get("content")
             for block in content if isinstance(content, list) else []:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -744,6 +761,13 @@ class ClaudeRunner(SessionControls):
             if self._command_active:
                 self._turn_done.set()
         elif etype == "result":
+            model_usage = event.get('modelUsage') or {}
+            selected = model_usage.get(self.metrics.state.model)
+            if selected is None and len(model_usage) == 1:
+                selected = next(iter(model_usage.values()))
+            window = selected.get('contextWindow') if isinstance(selected, dict) else None
+            if type(window) is int and window > 0:
+                self.metrics.update(context_window=window)
             if self.naming_only and event.get('result'):
                 self.naming_reply = event['result']
             if event.get("is_error") and LIMIT_TEXT.search(str(event.get("result") or "")):

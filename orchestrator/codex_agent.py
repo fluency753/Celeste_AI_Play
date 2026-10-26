@@ -122,6 +122,7 @@ class CodexRunner(SessionControls):
                                 context_window=usage.get("modelContextWindow"),
                                 output_tokens=total.get("outputTokens", 0),
                                 thinking_tokens=total.get("reasoningOutputTokens", 0))
+            self._notes_usage()
         elif method == "item/agentMessage/delta":
             ident = params.get("itemId", "public")
             text = self.message_text.get(ident, "") + params.get("delta", "")
@@ -174,7 +175,7 @@ class CodexRunner(SessionControls):
             raise RuntimeError(f"只接受客户端动态工具请求，拒绝 {method}")
         name, args = params.get("tool", ""), params.get("arguments") or {}
         if not isinstance(args, dict):
-            return {"contentItems": [{"type": "inputText", "text": "工具参数必须是 JSON 对象"}], "success": False}
+            return self._notes_response({"contentItems": [{"type": "inputText", "text": "工具参数必须是 JSON 对象"}], "success": False})
         if name == 'celeste_cutscene' and 'frames' in args:
             # Existing Codex threads retain their original optional tool fields on resume.
             # Waiting now belongs to the host; the cached frame field has no effect.
@@ -260,9 +261,9 @@ class CodexRunner(SessionControls):
                 elapsed = self.metrics.take_live_reminder(self.cfg.live_remind_s)
                 if elapsed:
                     text += "\n（直播提醒）请先更新一句公开解说，再继续规划。"
-            return {"contentItems": [{"type": "inputText", "text": text}], "success": True}
+            return self._notes_response({"contentItems": [{"type": "inputText", "text": text}], "success": True})
         except Exception as exc:
-            return {"contentItems": [{"type": "inputText", "text": str(exc)}], "success": False}
+            return self._notes_response({"contentItems": [{"type": "inputText", "text": str(exc)}], "success": False})
         finally:
             if self.playback and name == "celeste_bash":
                 self.playback.note_tool_result(ident)
@@ -294,9 +295,9 @@ class CodexRunner(SessionControls):
                 content.append({'type': 'inputText', 'text':
                     '图像交付失败：' + str(exc) + '。上面的游戏执行结果仍有效，勿重复已执行动作；'
                     '试玩保持暂停，请结束本轮并等待处理。恢复后重新observe，不沿用旧图。'})
-                return {'contentItems': content, 'success': False}
+                return self._notes_response({'contentItems': content, 'success': False})
             content.append({'type': 'inputText', 'text': '观测图像已作为同轮图像附件送达。'})
-        return {'contentItems':content,'success':not result.is_error}
+        return self._notes_response({'contentItems':content,'success':not result.is_error})
 
     def _elapsed(self, started):
         if self.naming_only:
@@ -471,9 +472,12 @@ class CodexRunner(SessionControls):
                 self.turn_fast = self.fast_mode
                 tier = "priority" if self.turn_fast else "default"
                 self._begin_model_turn(fast=self.turn_fast, service_tier=tier, effort=effort, runtime="codex")
+                offered_notes = self.note_reminders.peek()
+                turn_input = message + ('\n\n' + '\n'.join(text for _, text in offered_notes) if offered_notes else '')
                 response = await self.rpc.request("turn/start", {"threadId": self.session_id, "effort": effort,
                     "serviceTierForTurn": tier,
-                    "input": [{"type": "text", "text": message}]})
+                    "input": [{"type": "text", "text": turn_input}]})
+                self.note_reminders.acknowledge(offered_notes)
                 self.turn_id = response["turn"]["id"]
                 self.metrics.turn_acknowledged(self.turn_id)
                 for row in assigned:

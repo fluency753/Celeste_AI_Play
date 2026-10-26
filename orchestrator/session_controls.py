@@ -45,6 +45,14 @@ class SessionControls:
     def _init_controls(self, *, disabled=False, start_paused=False):
         if self.metrics.state.tool_calls is None:
             self.metrics.update(tool_calls=0)
+        from .execution import workspace_capabilities
+        from .note_reminders import NoteReminders
+        readable = workspace_capabilities(self.cfg).workspace_read and not getattr(self, 'naming_only', False)
+        workspace = getattr(self.session, 'workspace', None) if self.session is not None else None
+        if readable and workspace is None:
+            workspace = getattr(self.cfg, 'workspace_dir', None)
+        self.note_reminders = NoteReminders(workspace if readable else None,
+                                            lambda: getattr(self.cfg, 'notes_warn_percent', 60))
         self.completed_preparation = False
         self.control = None if disabled else RunControl(self.run_dir)
         self.fast_mode = self.control.fast_preference() if self.control else None
@@ -63,6 +71,7 @@ class SessionControls:
         self.control_task = None
         self.heartbeat_task, self.pausing = None, False
         if self.session is not None:
+            self.session.note_reminders = self.note_reminders
             self.session.control_guard = self._game_guard
             self.session.request_pause = self._agent_pause
             self.session.program_guard = self._program_guard
@@ -81,7 +90,25 @@ class SessionControls:
             if self.control:
                 self.control.reply(str(ident), text)
 
+    def _notes_window(self):
+        return self.metrics.state.context_window
+
+    def _notes_usage(self):
+        notes = getattr(self, 'note_reminders', None)
+        if notes is not None:
+            notes.usage(self.metrics.state.context_tokens, self._notes_window())
+
+    def _notes_response(self, response):
+        notes = getattr(self, 'note_reminders', None)
+        text = notes.take() if notes is not None else ''
+        if text:
+            response['contentItems'].append({'type': 'inputText', 'text': text})
+        return response
+
     def _public_compaction(self, ident, *, completed=False):
+        notes = getattr(self, 'note_reminders', None)
+        if completed and notes is not None:
+            notes.compacted(ident)
         from .telemetry import publish
         publish(self.run_dir, 'system:compaction:' + str(ident),
                 '上下文压缩完成。' if completed else '正在压缩上下文，完成后继续处理对话…',

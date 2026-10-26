@@ -516,7 +516,14 @@ def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | No
             elif (waited := metrics.take_live_reminder(live_remind_s)) is not None:
                 context = narrate_reminder(getattr(session, "cfg", None), waited)
                 print(f"[live] 提醒更新 HUD 思考（已思考 {waited:.0f} 秒，调用 {tool_name}）", flush=True)
-        return JSONResponse({"decision": "allow" if allow else "deny", "reason": reason, "context": context})
+        notes = getattr(session, 'note_reminders', None)
+        offered = notes.peek() if allow and notes is not None else ()
+        if offered:
+            context = '\n'.join(value for value in (context, '\n'.join(text for _, text in offered)) if value)
+        response = JSONResponse({"decision": "allow" if allow else "deny", "reason": reason, "context": context})
+        if offered:
+            notes.acknowledge(offered)
+        return response
 
     app.router.routes.insert(0, Route("/gate", endpoint, methods=["POST"]))
 

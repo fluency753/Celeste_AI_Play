@@ -182,6 +182,7 @@ class RunConfig:
     hud_mod: bool = False            # HUD 以 MOD 形式画在游戏画面里（overlay/modhud.py；不开直播时默认开）
     formal_thought: bool = False     # 仅正式思考（--formal-thought，默认关）：冻结期间 narrate 写临时思考，只进控制台；
                                      # act 的 thought 是正式思考，概括整个冻结期间的思考，游戏内 HUD 只显示当前这一句
+    notes_warn_percent: int = 60    # 本周期未观察到笔记更新且上下文超过此百分比时提醒；0关闭前置提醒
     live_remind_s: float = 30.0      # 解说计时：思考累计这么多秒没有公开解说，在下一次工具调用时提醒（由可调参数 remind_s / remind_live_s 决定）
     # 以下是可调参数（orchestrator/tuning.py，命令行 --tune 名称=值）；默认值就是一直以来的数值
     thought_max_chars: int = 120     # act 的 thought 与 narrate 的长度上限

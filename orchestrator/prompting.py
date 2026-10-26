@@ -364,6 +364,11 @@ def prompt_parts(cfg) -> list[PromptPart]:
     else:
         parts = _speedrun_parts(cfg)
     parts += _file_parts("room_analysis_zh.md")
+    if workspace_capabilities(cfg).workspace_read:
+        threshold = getattr(cfg, 'notes_warn_percent', 60)
+        before = (f"已知上下文窗口占用超过 {threshold:g}% 且本监测周期未检测到笔记内容更新时提醒一次。" if threshold else "前置整理提醒已关闭。")
+        parts.append(PromptPart("笔记维护提醒", "主控在压缩完成后通过后续工具交互提醒读取 /workspace/notes.md；" + before
+                                + "提醒不代替主动维护，不代表笔记已经读过或整理过，也不要求机械重写。遵守当前暂停和仅聊天状态。", None, "\n\n"))
     if cfg.cutscene_mode == 'agent':
         parts += _file_parts("agent_controls_zh.md")
     if workspace_capabilities(cfg).programs and getattr(cfg, "live", False):
