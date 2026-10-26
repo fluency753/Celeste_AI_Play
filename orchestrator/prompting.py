@@ -36,11 +36,13 @@ def game_tool_list(cfg) -> str:
 def auto_handling(cfg) -> str:
     """interface_zh.md 里"系统自动处理的部分"：没有剧情工具时剧情一律自动跳过；有剧情工具时按当前剧情模式处理。"""
     if has_cutscene_tool(cfg):
-        return ("屏幕转场、死亡动画与重生由系统自动推进。剧情按当前的剧情模式处理：auto 时系统自动推进并跳过；"
+        return ("屏幕转场、死亡动画与重生由系统自动推进。拿到磁带、吃心后画面冻结等确认的界面，auto 时系统替你按确认，agent 时交回由你用 act 发 C。"
+                "剧情按当前的剧情模式处理：auto 时系统自动推进并跳过；"
                 "agent 时剧情可尝试跳过便先交回，用 `cutscene` 的 skip 尝试跳过或 watch 观看到下一真实输入节点；对白用 advance，分支明确 choose，教学用 `act`，无需 wait。剧情标记不等于失控，角色可操作时继续用 `act`。"
                 "agent 模式下，吃心提示、结算确认及返回选章地图都由你观察界面后用 act 操作：C 确认、B 返回，纯帧数推进动画。"
                 "complete 事件或 completed=true 只是游戏登记了成绩，不是任务结束；回到选章地图后主控才确认章节完成，不会代按结算。")
-    return "剧情对话、屏幕转场、死亡动画与重生都由系统自动推进并跳过，`act` 返回时 Madeline 已经可以操作。"
+    return ("剧情对话、屏幕转场、死亡动画与重生都由系统自动推进并跳过，拿到磁带、吃心后画面冻结等确认的界面也由系统按确认，"
+            "`act` 返回时 Madeline 已经可以操作；仍卡在确认界面时可以用 act 发 C 确认。")
 
 
 def explore_program_rule(cfg) -> str:

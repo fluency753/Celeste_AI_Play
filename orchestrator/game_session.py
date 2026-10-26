@@ -30,10 +30,22 @@ from bridge_client import BridgeClient  # noqa: E402
 from cutscene import skip_by_pause_menu, leave_level_by_pause_menu, story_pending, story_input, story_decision  # noqa: E402
 
 LETTERS = set("LRUDJXZGTKYVCBPN")    # 桥接认识的全部按键
-AGENT_LETTERS = set("LRUDJXZGTKYV")  # 自动剧情模式的游玩按键；agent 模式开放桥接的全部按键
+PLAY_LETTERS = set("LRUDJXZGTKYV")   # 游玩按键（思考僵直时只保持这些）
+AGENT_LETTERS = PLAY_LETTERS | {"C"}  # 自动剧情模式可用的按键：游玩按键加 C 确认；agent 模式开放桥接的全部按键
 DEFAULT_STOP_ON = ["death", "room", "complete"]
 VALID_STOP_ON = {"death", "room", "uncontrollable", "controllable", "land", "refill", "complete", "story_input", "story_decision"}
 END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
+FROZEN_GIVE_UP_FRAMES = 600          # 画面冻结等确认时，主控最多推进这么多帧（10 秒，期间每 30 帧按一次确认）就交回
+
+
+def awaiting_confirm(obs: dict) -> bool:
+    """关卡画面冻结、角色不可操作，又不是剧情、对白、暂停菜单或转场：例如第一次拿到某章磁带后的"B 面已解锁"、
+    吃心后的诗句。游戏在等确认键（MenuConfirm），不按就一直停着，章节计时却照走。"""
+    level = obs.get("level") or {}
+    return (obs.get("scene") == "Level" and not obs.get("controllable") and bool(level.get("frozen"))
+            and not level.get("inCutscene") and not level.get("dialogOpen") and not level.get("dialogWaiting")
+            and not level.get("paused") and not obs.get("pauseMenu") and not level.get("transitioning")
+            and not level.get("completed") and not story_input(obs))
 PROGRESS_EVERY = 6                   # 执行中每 6 帧（0.1 秒）推送一次进度给 HUD
 
 # 自动重试：计划文件里声明重算程序，死亡或偏离预期时由主控在零网络沙箱里运行它，不唤醒大模型
@@ -374,7 +386,7 @@ class GameSession:
         if obs.get("scene", "Level") != "Level":
             tokens, fmt = [], "celeste_ai"
         elif fmt == "celeste_ai":
-            tokens = [k for k in tokens if k.startswith("A:") or set(k) <= AGENT_LETTERS]
+            tokens = [k for k in tokens if k.startswith("A:") or set(k) <= PLAY_LETTERS]
         else:
             tokens = [k for k in tokens if set(k) <= TAS_HELD_LETTERS]
         self._set_held_input((",".join(tokens), fmt), obs.get("frame"))
@@ -1077,6 +1089,9 @@ class GameSession:
             raise ActError('执行前主控接着推进了上次被打断的转场或剧情，章节已通关：' + '；'.join(map(str, notes))
                            + '。这次动作没有执行，请先 observe 再操作。')
         if not obs.get('controllable'):
+            if awaiting_confirm(obs):
+                # 画面冻结在等确认、主控按确认也没用：照常执行智能体的按键（它可以发 C 确认），不再拒绝
+                return ['执行前主控接着自动推进，画面仍冻结在等确认，按你的输入执行', *notes]
             raise ActError('游戏还在转场或剧情中，主控的自动推进被打断（' + '；'.join(map(str, notes)) + '），这次动作没有执行；稍后再试')
         return ['执行前，主控先接着自动推进了上次被打断的转场或剧情', *notes]
 
@@ -1106,6 +1121,7 @@ class GameSession:
                     history.append(entry)
         skip_tries = 0  # 本段剧情已尝试跳过的次数
         menu_closes = 0  # 自动跳过剧情时关掉残留暂停菜单的次数
+        frozen_frames, confirms = 0, 0  # 连续停在"画面冻结等确认"的帧数、主控按确认的次数
         self.metrics.update(status="auto")
         self._before_advance()
         t0 = time.monotonic()
@@ -1179,7 +1195,23 @@ class GameSession:
             if node == 'choice':
                 notes.append('当前需要明确选择对话选项，主控不会代选。')
                 break
-            inputs = ["1,C", "29"] if mode == 'auto' and level.get("dialogWaiting") and not level.get("paused") else ["30"]
+            waiting = awaiting_confirm(obs)
+            if not waiting:
+                frozen_frames = 0
+            elif mode == 'agent':
+                notes.append('画面冻结、角色不可操作，游戏可能在等确认键（例如拿到磁带后的"B 面已解锁"、吃心后的诗句）：'
+                             '请观察后用 act 发送 C 确认；主控不代按。')
+                break
+            elif frozen_frames >= FROZEN_GIVE_UP_FRAMES:
+                notes.append(f'画面冻结约 {round(frozen_frames / 60)} 秒，主控按了 {confirms} 次确认 C 仍未恢复，'
+                             '为免空耗章节计时停止自动推进：请 observe 查看，可以用 act 发送按键（含 C 确认）尝试，'
+                             '解决不了就调用 stop_run 报告。')
+                break
+            if mode == 'auto' and waiting:
+                inputs = ["1,C", "29"]       # 磁带、吃心等界面在等确认：照真人的做法按确认继续
+                confirms += 1
+            else:
+                inputs = ["1,C", "29"] if mode == 'auto' and level.get("dialogWaiting") and not level.get("paused") else ["30"]
             stops = ["controllable", "story_input"] if mode == 'agent' else ["controllable", "complete", "story_input"]
             if mode == 'agent' and stop_for_skip:
                 stops.append('story_decision')
@@ -1190,6 +1222,10 @@ class GameSession:
                                      progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
             log_step(inputs, reply["result"])
             obs = reply["obs"]
+            if waiting:
+                frozen_frames += reply["result"]["consumed"]
+        if confirms and not awaiting_confirm(obs):
+            notes.append(f"画面冻结等确认（如磁带、吃心后的提示），主控按了 {confirms} 次确认 C 继续")
         remember(obs)
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         if total:
