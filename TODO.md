@@ -3,7 +3,7 @@
 项目还没有完成。下面是接下来要做的事，完成后从这里移到 [CHANGELOG.md](CHANGELOG.md)。
 
 地图、路线和结构整理事项的背景与验收要求见 [待办设计说明](docs/TODO_DETAILS.md)。
-已完成的状态边界整理与缺陷成因见 [主控状态契约](docs/STATE_CONTRACTS.md)。
+已完成的状态边界整理与缺陷成因见 [Codex 整改复盘（可选参考）](docs/codex/STATE_CONTRACTS.md)。
 
 ## 正式挑战（M7）
 
