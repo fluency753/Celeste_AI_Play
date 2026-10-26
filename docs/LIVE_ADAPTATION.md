@@ -28,6 +28,8 @@
 
 HUD 直接使用 app-server 的公开消息、工具调用、tokenUsage 与 contextCompaction 事件。公开文字至多每 0.4 秒更新一次；模型没有输出时不能凭空生成解说。模型与推理强度采用服务器实际回报的值，上下文采用最近一次用量，不用累计输入量。内部推理正文不会进入 HUD 或事件日志。游戏工具由主控直接分发，只有一个桥接连接；规划回放和录制沿用同一个主控实现。
 
+`celeste_bash` 的 stdout/stderr 超过 2000 字符时返回带省略标记的首尾预览，并分别给出 `*_chars`、`*_truncated`、`*_path`。超长流的完整文本以同容器 agent 身份写入 `/workspace/program-output-<随机标识>/output.txt`，可通过 Read 分页，超长单行用 Bash 筛选或分段。写入失败时路径为空并报告 `output_save_errors`，不改变程序退出码；`seconds` 记录命令耗时，发布文件的额外时间由工具总耗时记录。自动重试／诊断读取完整原始输出，不混入展示标记。
+
 协议参考：[Codex app-server](https://developers.openai.com/codex/app-server/)。
 
 ### 准备与开始试玩

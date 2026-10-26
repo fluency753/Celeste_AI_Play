@@ -86,7 +86,7 @@ class CodexRunner(SessionControls):
                        "limit": {"type": "integer", "minimum": 1, "maximum": 500}}, ["path"]),
                  spec("celeste_write", "Write：写入 /workspace 内的文件。不能改知识库、模拟器或宿主机。",
                       {"path": TEXT, "content": TEXT}, ["path", "content"]),
-                 spec("celeste_bash", f"Bash：在 Docker 的零网络沙箱运行命令。最长 {program_cap(self.cfg):g} 秒；长程序每 1–2 秒用 show.status 报告进度。",
+                 spec("celeste_bash", f"Bash：在 Docker 的零网络沙箱运行命令。最长 {program_cap(self.cfg):g} 秒；长程序每 1–2 秒用 show.status 报告进度。输出超过2000字符时仅返回带标记的首尾预览，完整输出见stdout_path/stderr_path，可用Read分页，超长单行用Bash筛选或分段读取。",
                       {"command": TEXT, "description": TEXT, "timeout_s": {"type": "number", "minimum": 1}},
                       ["command", "description"])]
         from .server import build_server
@@ -218,10 +218,8 @@ class CodexRunner(SessionControls):
                         denied := self.session.program_run_denied()):
                     raise ValueError(denied)
                 limit = min(float(args.get("timeout_s", 10)), program_cap(self.cfg))
-                result = await asyncio.to_thread(run_program, self.container, command, limit)
-                text = json.dumps({"returncode": result.returncode, "stdout": result.stdout,
-                                   "stderr": result.stderr, "seconds": round(result.seconds, 2),
-                                   "timed_out": result.timed_out}, ensure_ascii=False)
+                result = await asyncio.to_thread(run_program, self.container, command, limit, save_output=True)
+                text = json.dumps(result.tool_payload(), ensure_ascii=False)
             elif name == "celeste_narrate" and self.game_server is None:
                 note = str(args.get("thought", ""))[:self.cfg.thought_max_chars]
                 if getattr(self.cfg, "formal_thought", False):

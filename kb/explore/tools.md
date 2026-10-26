@@ -21,6 +21,7 @@ set_effort 可以申请调整下一轮推理强度；申请后简短结束本轮
 
 Read 读取 /kb 和 /workspace 的文件；Write 只写 /workspace。
 Bash 在断网沙箱运行辅助程序，单次时长上限见系统提示词；实际工具名和前缀以执行器提供的映射为准。可以整理观测、保存笔记、绘图、写规划程序等。
+若返回 stdout_truncated / stderr_truncated，输出只是首尾预览，不能当作完整几何或完整程序结果。用对应 stdout_path / stderr_path 读取完整输出；Read 可分页，超长单行用 Bash 筛选字段或分段读取。路径为空时检查保存错误，必要时重新运行并重定向到工作区文件。大量同类危险物宜与房间边界、出口、支撑和玩家状态分别输出，不要把整个明细列表当作短摘要。
 /workspace/game/latest_obs.json 是最新观测，last_act.json 是上次动作的轨迹。
 /workspace/game/show.py 提供 status("进度") 和 trajectory() 展示接口；有实际预测轨迹时可以展示。
 规划回放保持开启；没有产生轨迹时不会生成虚假的回放。

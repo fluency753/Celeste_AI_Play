@@ -217,6 +217,23 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.mode, self.cfg.knowledge_profile = "speedrun", "full"
         self.assertEqual(await call(), 600)
 
+    async def test_bash_exposes_head_tail_and_recoverable_output_metadata(self):
+        import subprocess
+        self.cfg.live=False
+        raw='frame=22 bounds=room exits=right\n'+'spinner\n'*1000+'LAST SPINNER'
+        replies=[subprocess.CompletedProcess([],0,raw,''),subprocess.CompletedProcess([],0,
+                 json.dumps({'path':'/workspace/program-output-'+'a'*24+'/output.txt'}),'')]
+        with patch('orchestrator.sandbox.find_docker_exe',return_value='docker'),patch('orchestrator.sandbox.subprocess.run',side_effect=replies):
+            response=await self.runner._request('item/tool/call',{'tool':'celeste_bash',
+                'arguments':{'command':'python geometry.py','description':'读取几何'}})
+        self.assertTrue(response['success'])
+        data=json.loads(response['contentItems'][0]['text'])
+        self.assertTrue(data['stdout'].startswith('frame=22 bounds='))
+        self.assertTrue(data['stdout'].endswith('LAST SPINNER'))
+        self.assertTrue(data['stdout_truncated'])
+        self.assertEqual(data['stdout_chars'],len(raw))
+        self.assertTrue(data['stdout_path'].startswith('/workspace/program-output-'))
+
     async def test_host_permission_request_is_never_approved(self):
         with self.assertRaises(RuntimeError):
             await self.runner._request("item/permissions/requestApproval", {})
