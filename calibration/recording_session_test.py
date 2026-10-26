@@ -1,6 +1,7 @@
 """OBS 持有录制，Python 主控交接时不重开文件或音频；不连接真实 OBS/游戏。"""
 import asyncio
 import copy
+import time
 import json
 from pathlib import Path
 import tempfile
@@ -198,6 +199,23 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertIs(recorder.stop(on_capture_stopped=release), result)
         release.assert_called_once()
         self.assertEqual([a['action'] for c, a in self.commands if c == 'record'], ['start', 'stop'])
+
+    def test_obs_disconnect_during_stop_returns_pending_without_waiting(self):
+        recorder = self.start()
+        original = recorder.call
+        def disconnected(command, **args):
+            reply = original(command, **args)
+            if command == 'record' and args.get('action') == 'stop':
+                # OBS 崩溃：插件状态停在断开前的"录制中"，时钟端口已断开
+                self.hello['clock'].update(connected=False, lockstep=True)
+                self.hello['clock']['plugin'].update(state='recording', recording=True)
+            return copy.deepcopy(self.hello)
+        recorder.call = disconnected
+        started = time.monotonic()
+        result = recorder.stop(timeout=30)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertTrue(result['pending'])
+        self.assertEqual(result['state'], 'recording')
 
     def test_timeout_cannot_claim_finished_while_capture_still_runs(self):
         recorder = self.start()

@@ -1087,7 +1087,11 @@ def main() -> int:
                 try:
                     if recorder is not None and recorder.started:
                         recorder.call = client.call
-                        recorder.stop()
+                        try:
+                            # 已经停过一次（运行里收尾失败或超时）时只短等一下；失败只记下，不让收尾报堆栈退出
+                            recorder.stop(timeout=60.0 if recorder._stop.requested else 900.0)
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"[record] 收尾时停止录制失败：{exc}", flush=True)
                 finally:
                     try:
                         if not keep_frozen:

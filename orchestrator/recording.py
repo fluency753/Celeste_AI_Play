@@ -391,6 +391,10 @@ class Recorder:
             self._stop.notify(on_capture_stopped)
             if complete:
                 break
+            if clock.get("connected") is False:
+                # OBS 关了或崩溃：插件状态停在断开前的那一刻，再等也不会变；留作未收尾的录像（续跑或控制台处理）
+                self.log(f"[record] OBS 插件已断开，录像无法收尾，留待续跑或控制台处理；最后的状态：{plugin}")
+                break
             if time.monotonic() >= deadline:
                 self.log(f"[record] 等待 ffmpeg 收尾超时（{timeout:g} 秒），当前状态：{plugin}")
                 break
