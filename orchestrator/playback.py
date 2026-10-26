@@ -381,6 +381,8 @@ class Playback:
         self._preview_success = {}
         self._preview_bytes = 0
         self._retry_bills = {}  # 未接管来源保留原搜索的计费身份；重试不是新搜索。
+        self._retain_counts = {}  # 每个留在原处的来源已经接管失败了几次（日志里提示）
+        self._retain_offsets = {}  # 留在原处的来源在原搜索的预览里已经画到哪儿：(设备与文件编号, 位置)
         self._closed = False
         self._worker_stopped = threading.Event()
         self._stream_sample = False
@@ -461,8 +463,9 @@ class Playback:
         available = PREVIEW_BYTES - self._preview_bytes
         if available < len(MAGIC) + HEADER.size:
             return  # 不消费读取游标；容量释放后继续读，完成时统一补画尾部。
-        sources = msg.tail.read(sorted(self.dir.glob('*.bin')), budget=available,
-                                max_record_bytes=PREVIEW_BYTES, on_skip=self.log)
+        # 之前接管失败、留在原处的来源属于更早的搜索：不当成这次搜索的进度预览（接管成功时随它的原搜索补画）
+        files = [path for path in sorted(self.dir.glob('*.bin')) if path not in self._retry_bills]
+        sources = msg.tail.read(files, budget=available, max_record_bytes=PREVIEW_BYTES, on_skip=self.log)
         if not sources:
             return
         previous = self._live_pending.get(mid)
@@ -512,8 +515,9 @@ class Playback:
             shared = {}
             for owner, indexes in groups.items():
                 ends = [offsets[i] for i in indexes]
+                # 有预览，或者有之前接管失败、已在原搜索预览里画过一部分的来源：只补画没画过的部分
                 completion = (_PreviewCompletion(tuple(key for key, _ in previews), ends, shared)
-                              if previews else None)
+                              if previews or any(end > len(MAGIC) for end in ends) else None)
                 self._enqueue(_RoundJob(owner.label, [sources[i] for i in indexes], [moved[i] for i in indexes],
                                         account=owner.account_rollouts, completion=completion))
 
@@ -539,8 +543,9 @@ class Playback:
         result = {}
         for path in paths:
             try:
+                # 只认文件本身（设备与文件编号）：写入方还在追加、大小变了，也仍是原来那次搜索的文件
                 stat = path.stat()
-                identity = (stat.st_dev, stat.st_ino, stat.st_size)
+                identity = (stat.st_dev, stat.st_ino)
             except OSError:
                 identity = None
             previous = self._retry_bills.get(path)
@@ -555,11 +560,13 @@ class Playback:
         sources, moved, offsets, claimed = [], [], [], []
         for path in files:
             offset = len(MAGIC)
+            identity = None
             try:
                 stat = path.stat()
                 identity = (stat.st_dev, stat.st_ino)
-                for tail in tails:
-                    previous, end = tail.offsets.get(path, (None, len(MAGIC)))
+                kept = self._retain_offsets.get(path)
+                for previous, end in [*(tail.offsets.get(path, (None, len(MAGIC))) for tail in tails),
+                                      *([kept] if kept else [])]:
                     if previous == identity and end <= stat.st_size:
                         offset = max(offset, end)
             except OSError:
@@ -568,6 +575,8 @@ class Playback:
             dest = self.pending / f"{self._seq:06d}-{path.name}"
             try:
                 os.replace(path, dest)
+                self._retain_counts.pop(path, None)
+                self._retain_offsets.pop(path, None)
                 sources.append(dest)
                 moved.append(dest)
                 offsets.append(offset)
@@ -578,8 +587,15 @@ class Playback:
                     path.unlink(missing_ok=True)
                 except OSError as exc:
                     self._delete([dest])
-                    self.log(f'[playback] 无法接管轨迹日志，保留原文件 {path.name}：{exc}')
+                    failures = self._retain_counts.get(path, 0) + 1
+                    self._retain_counts[path] = failures
+                    if identity is not None:
+                        self._retain_offsets[path] = (identity, offset)   # 接管成功时只补画原搜索没画过的部分
+                    self.log(f'[playback] 无法接管轨迹日志，保留原文件 {path.name}（第 {failures} 次；文件可能仍被占用，'
+                             f'下次有搜索结束时再试，仍算原来那次搜索）：{exc}')
                     continue
+                self._retain_counts.pop(path, None)
+                self._retain_offsets.pop(path, None)
                 sources.append(dest)
                 moved.append(dest)
                 offsets.append(offset)
@@ -602,6 +618,8 @@ class Playback:
                 self._msgs.clear()
                 self._tool_msg.clear()
                 self._retry_bills.clear()
+                self._retain_counts.clear()
+                self._retain_offsets.clear()
                 self._stream_stop.set()
                 self.enabled = False
                 if self._worker is not None:

@@ -479,9 +479,38 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(self.metrics.state.sim_calls, 1)
         self.assertEqual(self.metrics.state.sim_rollouts, 2)
         self.gate.charge.assert_called_once()
-        # A failed transfer may replay a successful preview conservatively; it
-        # must not lose a route or charge the search again.
-        self.assertEqual(set(self.drawn_starts()), {1, 2})
+        # A failed transfer must not lose a route, charge the search again, or
+        # redraw what the original search's preview already drew.
+        self.assertEqual(sorted(self.drawn_starts()), [1, 2])
+
+    def test_retained_log_that_keeps_growing_stays_with_its_original_search(self):
+        locked = {'on': True}
+        import os
+        replace, unlink = os.replace, Path.unlink
+        def maybe_replace(source, dest):
+            if locked['on'] and source == self.file:
+                raise OSError('locked')
+            return replace(source, dest)
+        self.playback.note_tool_use('first', 'c1', 'Bash', {'command': 'python search.py', 'description': 'first search'})
+        self.file.write_bytes(MAGIC + record(1))
+        with patch('orchestrator.playback.os.replace', side_effect=maybe_replace), \
+                patch('orchestrator.playback.shutil.copyfile', side_effect=OSError('unreadable')):
+            self.playback.note_tool_result('c1'); self.wait()
+        self.assertTrue(self.file.exists())
+        self.assertEqual(self.metrics.state.sim_calls, 0)
+        with self.file.open('ab') as f: f.write(record(2))          # 写入方还在追加：大小变了
+        # 下一次搜索运行期间的预览不读这个留在原处、属于更早搜索的文件
+        self.playback.note_tool_use('second', 'c2', 'Bash', {'command': 'python search.py', 'description': 'second search'})
+        (self.playback.dir / 'b.bin').write_bytes(MAGIC + record(3))
+        self.poll(); self.wait()
+        self.assertEqual(self.drawn_starts(), [1, 3])                # 1 是第一次搜索自己运行时预览画的
+        locked['on'] = False
+        self.playback.note_tool_result('c2'); self.wait()
+        self.assertEqual(self.metrics.state.sim_calls, 2)
+        self.assertEqual(sorted(c.args[0] for c in self.gate.charge.call_args_list), ['first search', 'second search'])
+        self.assertEqual(sorted(self.drawn_starts()), [1, 2, 3])   # 接管成功时只补画路线 2，路线 1 不重画
+        self.assertEqual(self.playback._retain_counts, {})
+        self.assertEqual(self.playback._retain_offsets, {})
 
     def test_native_prediction_retry_does_not_charge_a_bash_search(self):
         self.metrics.add(sim_calls=1, sim_rollouts=1)  # GameSession.simulate already accounted this result.
