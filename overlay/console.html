@@ -1350,16 +1350,44 @@ async function releaseGame() {
 
 // ---------------------------------------------------------------- 当前运行：统计、控制与对话
 
+// 主机时钟与本页时钟之差：取最近一分钟里往返最快的一次请求来估计（往返慢时估计误差大，走表会忽快忽慢）
+function syncClock(hostNow, t0, t1) {
+  if (!(hostNow > 0)) return;
+  const rtt = t1 - t0, sync = ui.clockSync;
+  if (!sync || rtt <= sync.rtt || t1 - sync.at > 60) ui.clockSync = { rtt, at: t1, offset: hostNow - (t0 + t1) / 2 };
+}
+function serverNow() { return Date.now() / 1000 + ((ui.clockSync && ui.clockSync.offset) || 0); }
+
 async function refreshRun() {
-  try { ui.hud = await getJSON("/hud/state"); } catch (e) { ui.hud = null; }
-  try { const c = await getJSON("/api/control"); ui.control = c.control || {}; ui.controlRun = c.run; } catch (e) { ui.control = null; }
-  const m = ui.hud && ui.hud.metrics;
-  const live = running() && m;
-  $("runIdle").hidden = !!live; $("runLive").hidden = !live;
-  if (live) renderRun(m);
-  renderControls();
-  const current = currentChapterId();
-  document.querySelectorAll("#route button").forEach((b, i) => b.classList.toggle("current", running() && current === i));
+  if (ui.runBusy) return;               // 上一次还没返回就跳过，免得并发请求乱序覆盖
+  ui.runBusy = true;
+  try {
+    try {
+      const t0 = Date.now() / 1000;
+      ui.hud = await getJSON("/hud/state");
+      syncClock(ui.hud && ui.hud.now, t0, Date.now() / 1000);
+    } catch (e) { ui.hud = null; }
+    try { const c = await getJSON("/api/control"); ui.control = c.control || {}; ui.controlRun = c.run; } catch (e) { ui.control = null; }
+    const m = ui.hud && ui.hud.metrics;
+    const live = running() && m;
+    $("runIdle").hidden = !!live; $("runLive").hidden = !live;
+    if (live) renderRun(m);
+    renderControls();
+    const current = currentChapterId();
+    document.querySelectorAll("#route button").forEach((b, i) => b.classList.toggle("current", running() && current === i));
+  } finally { ui.runBusy = false; }
+}
+
+// 思考、工具时间：metrics.json 只在事件时写入，两次写入之间按本页时钟（换算成主机时间）实时走表
+function renderRunTimers(m) {
+  const base = m.chapter_base || {};
+  const since = (key) => Math.max(0, (m[key] || 0) - (base[key] || 0));
+  const now = serverNow();
+  let thinking = since("thinking_s"), tool = since("tool_s");
+  if (["thinking", "compacting"].includes(m.status) && m.thinking_since_wall > 0) thinking += Math.max(0, now - m.thinking_since_wall);
+  if (m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
+  $("mThinking").textContent = clock(thinking);
+  $("mTool").textContent = clock(tool);
 }
 
 function renderRun(m) {
@@ -1380,15 +1408,10 @@ function renderRun(m) {
   const t = ticksText(ticks);
   $("runClock").replaceChildren(document.createTextNode(t.slice(0, -4)), Object.assign(document.createElement("small"), { textContent: t.slice(-4) }));
   $("runMode").textContent = [m.play_mode, m.hud_mod ? "游戏内 HUD" : "网页 HUD"].filter(Boolean).join(" · ");
-  const now = Date.now() / 1000 + ((ui.hud.now || Date.now() / 1000) - Date.now() / 1000);
-  let thinking = since("thinking_s"), tool = since("tool_s");
-  if (["thinking", "compacting"].includes(m.status) && m.thinking_since_wall > 0) thinking += Math.max(0, now - m.thinking_since_wall);
-  if (m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
+  renderRunTimers(m);
   $("mDeaths").textContent = since("deaths");
   $("mDecisions").textContent = since("decisions");
   $("mEffort").textContent = m.effort_pending && m.effort_pending !== m.effort ? `${m.effort} → ${m.effort_pending}` : (m.effort || "—");
-  $("mThinking").textContent = clock(thinking);
-  $("mTool").textContent = clock(tool);
   $("mContext").textContent = tokens(m.context_tokens);
   $("runToolCall").textContent = m.tool_call ? `正在调用：${m.tool_call}${m.tool_status ? " — " + m.tool_status : ""}` : "";
   $("runAside").textContent = m.status === "paused" ? "已暂停" : "";
@@ -1976,6 +1999,7 @@ function confirmTwice(id, text) {
   await refreshRuns(); await refreshStatus(); await refreshRun(); await refreshFeed();
   setInterval(refreshStatus, 1500);
   setInterval(refreshRun, 700);
+  setInterval(() => { const m = ui.hud && ui.hud.metrics; if (running() && m) renderRunTimers(m); }, 100);
   setInterval(refreshFeed, 1200);
   setInterval(refreshRuns, 8000);
   window.addEventListener("resize", () => { if (ui.page === "saves") buildRoute(); });
