@@ -177,7 +177,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         content = []
         if screenshot and show_screenshot:
             content.append(Image(data=upscale_png(screenshot), format='png'))
-        collision = render_collision_view(obs)
+        renderer = getattr(session, 'collision_png', None)
+        collision = renderer(obs) if renderer is not None else render_collision_view(obs)
         if collision is not None:
             content.append(Image(data=collision, format='png'))
         return content

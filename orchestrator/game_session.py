@@ -592,7 +592,6 @@ class GameSession:
             return
         try:
             self._write_json("game/latest_obs.json", {"decision": self.decision_index, "obs": obs})
-            self._write_collision_view(obs)
             level = obs.get("level") or {}
             if level.get("room") is not None and obs.get("tiles"):
                 sid = str(level.get("sid", "unknown")).replace("/", "_")
@@ -604,6 +603,23 @@ class GameSession:
                 self._write_json("game/last_act.json", act_record)
         except OSError:
             pass  # 工作区写入失败不影响游戏推进
+        try:
+            # 碰撞图最后写、单独兜底：它出错（文件被占用、画图异常）不能连带 last_act.json 与房间快照没写，
+            # 也不能在已经推进了帧之后让这次 act 报错
+            self._write_collision_view(obs)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[collision] 写碰撞图失败：{exc}", flush=True)
+
+    def collision_png(self, obs: dict) -> bytes | None:
+        """这一帧的分色碰撞图：同一帧只画一次（写工作区与工具结果共用）。"""
+        if not self.cfg.images:
+            return None
+        cached = getattr(self, '_collision_png', None)
+        if cached is not None and cached[0] is obs:
+            return cached[1]
+        png = render_collision_view(obs)
+        self._collision_png = (obs, png)
+        return png
 
     def _write_collision_view(self, obs: dict) -> None:
         """Publish a same-frame snapshot and an immutable image reference, not a cross-frame cache."""
@@ -614,7 +630,7 @@ class GameSession:
             previous_image = json.loads(manifest.read_text(encoding='utf-8')).get('image')
         except (OSError, ValueError):
             pass
-        png = render_collision_view(obs) if self.cfg.images else None
+        png = self.collision_png(obs)
         image = None
         if png is not None:
             directory.mkdir(exist_ok=True)
