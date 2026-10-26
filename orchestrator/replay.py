@@ -31,6 +31,7 @@ def main() -> int:
     decisions = [json.loads(line) for line in
                  (Path(args.source) / "decisions.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
     cfg = RunConfig(agent="replay", save=args.save, model="replay", bridge_port=args.bridge_port, chapter=args.chapter)
+    cfg.min_frames_per_act = 1      # 原样重放旧记录：不足最短帧数的旧动作也照常执行
     run_dir = make_run_dir("replay")
     print(f"[replay] {len(decisions)} 条决策，日志目录 {run_dir}", flush=True)
     if not args.skip_enter:

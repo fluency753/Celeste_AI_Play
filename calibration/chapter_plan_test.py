@@ -245,7 +245,7 @@ class ResumeExtensionTests(unittest.TestCase):
             self.assertNotIn("暂停了", note)
             # 续跑同一个会话：系统提示词可能还是旧快照，附上当前完整规则与 act 上限
             self.assertIn("提示词快照", note)
-            self.assertIn("act 一次最多推进 150 帧", note)
+            self.assertIn("act 一次至少推进 40 帧、最多 150 帧", note)
             self.assertNotIn("自写的模拟器或搜索程序", note)   # host Claude 没有程序工具
             self.assertNotIn("程序与笔记", note)
             cfg.runtime = 'container'

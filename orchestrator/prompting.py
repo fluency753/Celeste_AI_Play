@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from .config import REPO_ROOT, chapter_name_by_id
 from .kb_study import KbStudy
 from .execution import workspace_capabilities
-from .modes import act_frame_cap, game_tools, has_cutscene_tool, is_explore
+from .modes import act_frame_cap, act_frame_min, game_tools, has_cutscene_tool, is_explore
 
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
@@ -84,10 +84,51 @@ THOUGHT_MOOD_SHORT = "语气不必一直冷静理智，可以自然带点情绪�
 
 def thought_brief_rule(cfg) -> str:
     """Claude Code 执行器提示词里思考语句汉字数的一句（可调参数 thought_max_hanzi，见 orchestrator/thought.py）；
-    Codex 执行器为空。"""
-    from .thought import hanzi_limit
+    Codex 执行器为空。开了"仅正式思考"时只说 act 的 thought（正式思考），临时思考的字数写在 formal_thought_rule 里。"""
+    from .thought import hanzi_limit, temp_thoughts
     n = hanzi_limit(cfg)
-    return "" if n is None else f"思考语句尽量简短，汉字不超过 {n} 个（英文术语不计）。"
+    if n is None:
+        return ""
+    if temp_thoughts(cfg):
+        return f"act 的 thought（正式思考）尽量简短，汉字不超过 {n} 个（英文术语不计）。"
+    return f"思考语句尽量简短，汉字不超过 {n} 个（英文术语不计）。"
+
+
+def temp_thought_where(cfg) -> str:
+    """临时思考显示在哪里：游戏内 HUD 只显示正式思考；用网页 HUD（直播或 --no-hud-mod）时它的历史一栏也会列出临时思考。"""
+    if getattr(cfg, "hud_mod", True):
+        return "只显示在控制台，游戏画面的 HUD 和录像里都看不到"
+    return "显示在控制台和网页 HUD 的历史里，但不算正式思考"
+
+
+def formal_thought_rule(cfg) -> str:
+    """开了"仅正式思考"（--formal-thought）时提示词里的说明；没开时为空（提示词与原来完全相同）。"""
+    from .thought import hanzi_limit, temp_thoughts
+    if not temp_thoughts(cfg):
+        return ""
+    n = hanzi_limit(cfg, temp=True)
+    where = temp_thought_where(cfg)
+    temp = (f"冻结期间的 narrate 与公开 commentary 是临时思考，{where}。" if n is None else
+            f"冻结期间用 narrate 写的是临时思考，{where}；每条汉字不超过 {n} 个"
+            "（英文术语不计），写你此刻的分析、尝试与判断，想法有进展就更新。")
+    return ("本次开启了“仅正式思考”：游戏画面的 HUD 上只显示每次 act 的 thought（正式思考），它要概括这次冻结期间"
+            "（从上一次 act 结束到这次 act）你整个的思考、分析和判断，而不只是这一段按键的意图。" + temp)
+
+
+def formal_thought_act(cfg) -> str:
+    """act 工具说明里 thought 的补充（开了"仅正式思考"时）；没开时为空。"""
+    from .thought import temp_thoughts
+    if not temp_thoughts(cfg):
+        return ""
+    return ("\n  本次开启了“仅正式思考”：这里的 thought 是正式思考，游戏画面的 HUD 上只显示它；用它概括这次冻结期间"
+            f"（从上一次 act 结束到现在）你整个的思考、分析和判断。冻结期间的临时思考用 narrate 写，{temp_thought_where(cfg)}。")
+
+
+def thought_temp_limit(cfg) -> str:
+    """开了"仅正式思考"时 narrate（临时思考）说明里的字数。"""
+    from .thought import char_cap, hanzi_limit
+    n = hanzi_limit(cfg, temp=True)
+    return f"{char_cap(cfg, temp=True)} 字以内" if n is None else f"汉字不超过 {n} 个，英文术语不计"
 
 
 def thought_brief(cfg) -> str:
@@ -161,6 +202,7 @@ def fill(text: str, cfg) -> str:
         "{geometry_record_rule}": ("在笔记或程序里保留已验证的通道、连接依据、失败假设及适用条件。"
                                    if workspace.workspace_write else "在公开解说中简短总结已验证的通道、连接依据与失败假设。"),
         "{act_max_frames}": str(act_frame_cap(cfg)),
+        "{act_min_frames}": str(act_frame_min(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
         "{program_freedom}": _engine_text(PROGRAM_FREEDOM, cfg) if workspace.programs else "。",
@@ -172,6 +214,16 @@ def fill(text: str, cfg) -> str:
         "{thought_mood_short}": THOUGHT_MOOD_SHORT,
         "{thought_brief}": thought_brief(cfg),
         "{thought_limit}": thought_limit(cfg),
+        "{thought_temp_limit}": thought_temp_limit(cfg),
+        "{formal_thought_rule}": formal_thought_rule(cfg),
+        "{formal_thought_act}": formal_thought_act(cfg),
+        "{temp_thought_where}": temp_thought_where(cfg),
+        # 开了"仅正式思考"时换掉提示词里说 narrate 给观众看的几处；没开时与原来的文字完全相同
+        "{narrate_target}": "写下临时思考" if getattr(cfg, "formal_thought", False) else "告诉观众",
+        "{hud_thought_shown}": ("你最近一次 act 的 thought（正式思考）" if getattr(cfg, "formal_thought", False)
+                                else "你最新写下的一句思考"),
+        "{narrate_viewers}": ("。这些是临时思考（规则见前面“仅正式思考”的说明）：中文，" if getattr(cfg, "formal_thought", False)
+                              else "——观众在你思考的这段时间里只能看到 `narrate` 写下的内容。规则与 `act` 的 `thought` 相同：一两句中文，"),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
         "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
         "{explore_program_rule}": explore_program_rule(cfg),
@@ -385,7 +437,7 @@ def current_rules_note(cfg) -> str:
     """续跑同一个 Claude Code 会话时附在第一条消息后面的当前规则。Claude Code 压缩上下文时会把当时的系统提示词与工具说明
     存成快照（prompt_snapshot），之后续跑沿用快照，要到下一次压缩才换成新的；所以续跑时改过的规则要在对话里再给一遍。"""
     return ("\n\n（系统）续跑的会话沿用之前保存的提示词快照：你看到的系统提示词与工具说明可能还是旧版本，要到下次压缩上下文后才会更新。"
-            f"当前生效的完整规则如下，与旧版本不一致时以这里为准；act 一次最多推进 {act_frame_cap(cfg)} 帧，超过会被主控退回。\n\n"
+            f"当前生效的完整规则如下，与旧版本不一致时以这里为准；act 一次至少推进 {act_frame_min(cfg)} 帧、最多 {act_frame_cap(cfg)} 帧，不在范围内会被主控退回。\n\n"
             + play_prompt(cfg))
 
 

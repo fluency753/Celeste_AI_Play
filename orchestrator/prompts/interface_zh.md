@@ -37,7 +37,7 @@
 - 例：`["10,R", "1,R,J", "14,R,J", "20,R"]` = 向右走 10 帧，然后起跳并按住跳 15 帧（长跳），再继续向右 20 帧。
 - **跳和冲刺是“按下”触发的**：连续按住 J 只算一次起跳。要再跳一次，中间必须有至少 1 帧松开 J；或者换另一个跳键：按住 J 时按下 K 也算一次新的起跳，所以相邻两帧可以各跳一次（同真人的双键绑定）。冲刺 X/Y、crouch dash Z/V 同理。
 - 跳和冲刺有约 5 帧的 input buffer：落地前几帧按下 J，落地时会自动起跳。
-- 一次最多 {act_max_frames} 帧。`stop_on` 可选：`death` 死亡、`room` 换房间、`land` 落地、`refill` 冲刺恢复、`uncontrollable` 失去控制、`complete` 通关；默认 `["death","room","complete"]`。death 总是生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。触发后立即停下，剩余按键不执行。
+- 一次至少 {act_min_frames} 帧、最多 {act_max_frames} 帧（不足时在末尾补空帧或继续保持按键）。`stop_on` 可选：`death` 死亡、`room` 换房间、`land` 落地、`refill` 冲刺恢复、`uncontrollable` 失去控制、`complete` 通关；默认 `["death","room","complete"]`。death 总是生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。触发后立即停下，剩余按键不执行。
 - 用 `land` 时要注意：起跳前站在地上的那一帧不算，它只在“离地后再落地”时触发。
 
 返回内容：实际执行了多少帧、停止原因、事件、取样轨迹（帧, x, y, vx, vy, 状态, 冲刺数, 是否着地），以及新的截图和完整观测。

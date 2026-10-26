@@ -7,7 +7,7 @@
 规则：
 
 - 本次运行不提供预置模拟器。不要尝试调用、寻找或破解任何预置的模拟器，也不要读取、反编译或反汇编游戏的程序文件。容器断网，不能访问任何网站。
-- 回复里不要写长篇文字，直接调用工具。每次 `act` 的 `thought` 参数写一两句中文给观众看（会显示在屏幕上）：**只写你对当前房间或这一段的分析与判断**，**不写具体数值**（帧数、坐标、速度等），**也不写用了什么算法、程序算出了什么路线**。**技巧与机制的专有名词一律用英文**（例如 wallbounce、walljump、climbjump、super、hyper、wavedash、ultra、cornerboost），其余照常用中文。{thought_mood}{thought_brief_rule}
+- 回复里不要写长篇文字，直接调用工具。每次 `act` 的 `thought` 参数写一两句中文给观众看（会显示在屏幕上）：**只写你对当前房间或这一段的分析与判断**，**不写具体数值**（帧数、坐标、速度等），**也不写用了什么算法、程序算出了什么路线**。**技巧与机制的专有名词一律用英文**（例如 wallbounce、walljump、climbjump、super、hyper、wavedash、ultra、cornerboost），其余照常用中文。{thought_mood}{thought_brief_rule}{formal_thought_rule}
 
 {game_tool_list}
 

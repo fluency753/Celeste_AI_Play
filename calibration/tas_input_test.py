@@ -49,7 +49,7 @@ class TasSessionTests(unittest.TestCase):
     tearDown=cutscene_test.CutsceneTests.tearDown
 
     def test_act_forwards_format_retains_cursor_and_does_not_auto_advance(self):
-        self.s.cfg.thought_lead_s=0
+        self.s.cfg.thought_lead_s=0;self.s.cfg.min_frames_per_act=1
         self.s.workspace=self.path
         (self.path/'game').mkdir()
         self.s._input_formats=['celeste_ai','celeste_tas']
@@ -97,7 +97,7 @@ class TasSessionTests(unittest.TestCase):
     def test_old_tool_signature_executes_tas_declared_in_json_plan(self):
         import asyncio
         from orchestrator.server import build_server
-        self.s.cfg.thought_lead_s=0;self.s.workspace=self.path
+        self.s.cfg.thought_lead_s=0;self.s.cfg.min_frames_per_act=1;self.s.workspace=self.path
         (self.path/'game').mkdir()
         (self.path/'tas-plan.json').write_text(json.dumps({'input_format':'celeste_tas','inputs':['1,C']}),encoding='utf-8')
         self.s._input_formats=['celeste_ai','celeste_tas']

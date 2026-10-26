@@ -79,7 +79,8 @@ class StiffnessTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.cfg = RunConfig(agent="test", save="test", model="test", runtime="host", mode="explore",
                              knowledge_profile="explore", chapter=4, stiffness=True,
-                             stiff_think_s=0.3, stiff_tool_s=0.6)   # 用例按这两个值写，与默认值无关
+                             stiff_think_s=0.3, stiff_tool_s=0.6,   # 用例按这两个值写，与默认值无关
+                             min_frames_per_act=1)                 # 用例用短输入，与最短帧数无关
         self.s = GameSession(self.cfg, root, Metrics(root / "metrics.json", "test", "test", "high", 600))
         self.s.cfg.thought_lead_s = 0
         self.counters = [0.0, 0.0, 0.0]
@@ -192,7 +193,7 @@ class StiffnessReviewTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.cfg = RunConfig(agent="test", save="test", model="test", runtime="host", mode="explore",
                              knowledge_profile="explore", chapter=4, stiffness=True, thought_lead_s=0,
-                        stiff_think_s=0.3, stiff_tool_s=0.6)
+                        stiff_think_s=0.3, stiff_tool_s=0.6, min_frames_per_act=1)
         self.s = GameSession(self.cfg, self.root, Metrics(self.root / "metrics.json", "test", "test", "high", 600))
         self.s.last_obs = level_obs()
 
@@ -366,7 +367,7 @@ class StiffnessToolTextTests(unittest.TestCase):
         root = Path(temp.name)
         cfg = RunConfig(agent="test", save="test", model="test", runtime="host", mode="explore",
                         knowledge_profile="explore", chapter=4, stiffness=True, thought_lead_s=0,
-                        stiff_think_s=0.3, stiff_tool_s=0.6)
+                        stiff_think_s=0.3, stiff_tool_s=0.6, min_frames_per_act=1)
         session = GameSession(cfg, root, Metrics(root / "metrics.json", "test", "test", "high", 600))
         self.addCleanup(session.close)
         counters = [0.0, 0.0, 0.0]

@@ -6,7 +6,8 @@ OBS 浏览器源里的网页 HUD 也不显示（录像里只有游戏画面里�
 分工：
 - 这里（主控进程里的一个线程）每 0.1 秒读一次统计（metrics）、公开解说历史与 HUD 配置，显示的内容变了就用 Pillow
   画一张卡片（版式按 2026-10-24 之前的旧版 HUD：大号章节计时、推理强度、统计两列、调用工具；思考语句一栏改成新版那样
-  保留最近几条历史，最新一条在最下面高亮），连同章节计时用的数字字形表写进共享内存 `Local\\CelesteAIHud-<桥接端口>`。
+  保留最近几条历史，最新一条在最下面高亮；开了"仅正式思考"时只显示当前这一句正式思考），连同章节计时用的数字字形表
+  写进共享内存 `Local\\CelesteAIHud-<桥接端口>`。卡片默认全透明，文字加深色描边（见 render()）。
 - 桥接（game-bridge/Source/ModHud.cs）在每帧画完游戏之后把卡片贴在游戏显示区的右上角，章节计时按当帧的游戏时间
   用字形表拼出来，逐帧准确；智能体的观测截图取的是游戏自己的画面缓冲，不含 HUD。
 - 现实时间只取本机时钟（time.time()），显示在解说历史的时间标签里，不进入智能体的观测。
@@ -52,7 +53,13 @@ DESIGN_VIEW = 1920
 HISTORY_MAX = 540             # 思考语句历史一栏最高（设计像素）：放得下三条约 85 字的长消息；放不下时最早的几条从上边裁掉
 TEXT_SCALE = 1.15             # 文字相对旧版设计稿放大的倍数（章节计时那一行除外）；卡片宽度与间距不变
 THOUGHT_SIZE = 16.5           # 思考语句气泡的字号（设计像素，再乘 TEXT_SCALE）；原来 15
+FORMAL_SIZE = 20              # 开了"仅正式思考"时，HUD 只显示当前这一句正式思考，字号更大
+STROKE = 1.6                  # 文字描边的宽度（设计像素）：卡片全透明，靠描边在任何背景上都看得清
 TIMER_CHARS = "0123456789:."
+# 统计栏的值按栏名上色（键名用 label 色）；上下文快满时仍用 warn，未开始的"—"仍用 label
+STAT_COLORS = {"思考": "stat_think", "工具": "stat_tool", "上下文": "stat_context", "压缩": "stat_compact",
+               "知识库读取": "stat_study", "死亡": "stat_death", "模拟器调用": "stat_sim", "推演路径": "stat_sim",
+               "推演最速": "stat_sim", "推演额度": "stat_sim"}
 
 STATUS = {
     "starting": ("等待", "idle"), "studying": ("读知识库", "studying"), "thinking": ("思考中", "thinking"),
@@ -62,10 +69,15 @@ STATUS = {
 }
 EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 DEFAULT_COLORS = {
-    "card": "rgba(16, 19, 34, 0.80)", "mod_card": "rgba(16, 19, 34, 0.25)", "border": "rgba(255, 255, 255, 0.10)",
+    "card": "rgba(16, 19, 34, 0.80)", "mod_card": "rgba(16, 19, 34, 0)", "border": "rgba(255, 255, 255, 0.10)",
     "text": "#F3F5FA",
     "label": "#8F9AB3", "warn": "#F08A3C", "dash0": "#5BC0EB", "dash1": "#E0475B", "dash2": "#F28AC4",
     "effort": "#7FA6F5", "effort_high": "#F5B841", "thinking": "#F5B841", "idle": "#8A93A6",
+    # 游戏内 HUD 专用：描边、较亮的标签色、统计值与各部分的颜色
+    "mod_stroke": "rgba(6, 8, 16, 0.92)", "mod_label": "#B4C0DC", "mod_rule": "rgba(255, 255, 255, 0.28)",
+    "mod_tag": "#9FB4E8", "mod_tag_latest": "#FFD479", "mod_call": "#CBBFFF", "mod_formal": "#FFF3D6",
+    "stat_think": "#F5B841", "stat_tool": "#B7A8FF", "stat_context": "#6CCFF6", "stat_compact": "#5ED6C0",
+    "stat_study": "#8FB3FF", "stat_death": "#FF6F86", "stat_sim": "#6EDC9A",
 }
 
 
@@ -168,6 +180,8 @@ class Style:
     color: tuple
     bold: bool = False
     num: bool = False
+    stroke: tuple | None = None      # 描边颜色（None = 不描边）
+    stroke_w: int = 0                # 描边宽度（像素）
 
     def fonts(self):
         return font("cjk_bold" if self.bold else "cjk", self.size), font("num", self.size)
@@ -180,11 +194,19 @@ def text_width(text: str, style: Style) -> float:
 
 def draw_text(draw: ImageDraw.ImageDraw, x: float, baseline: float, text: str, style: Style) -> float:
     cjk, num = style.fonts()
+    outline = {"stroke_width": style.stroke_w, "stroke_fill": style.stroke} if style.stroke and style.stroke_w > 0 else {}
     for part, flag in runs(text, style.num):
         f = num if flag else cjk
-        draw.text((x, baseline), part, font=f, fill=style.color, anchor="ls")
+        draw.text((x, baseline), part, font=f, fill=style.color, anchor="ls", **outline)
         x += f.getlength(part)
     return x
+
+
+def stroke_width(px: float) -> int:
+    return max(1, int(round(STROKE * px)))
+
+
+NO_LINE_START = set("，。、；：！？）》」』”’…,.;:!?)")
 
 
 def wrap(text: str, style: Style, width: float) -> list[str]:
@@ -205,6 +227,14 @@ def wrap(text: str, style: Style, width: float) -> list[str]:
             tokens.append(word)
         line = ""
         for token in tokens:
+            if token in NO_LINE_START and line and text_width(line + token, style) > width:
+                # 句读不放在行首：放不下时把上一行的最后一个字带到下一行（一行只剩一个字时就让它稍微超出）
+                if len(line.rstrip()) > 1:
+                    lines.append(line.rstrip()[:-1])
+                    line = line.rstrip()[-1] + token
+                else:
+                    line += token
+                continue
             if text_width(line + token, style) <= width or not line:
                 if text_width(token, style) > width and not line:   # 单个超长的词：逐字拆
                     for ch in token:
@@ -395,15 +425,25 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
                 if (m.get("replay_round") or 0) > 0 else "即将执行的路线")
         meta = f"{info} · {m['replay_label']}" if m.get("live") and m.get("replay_label") else info
 
+    def stamp_of(wall) -> str:
+        if not wall:
+            return ""
+        t = time.localtime(wall)
+        return f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d} · "
+
     entries = []
-    items = composed_history(history, m)
-    for i, item in enumerate(items):
-        stamp = ""
-        if item.get("wall"):
-            t = time.localtime(item["wall"])
-            stamp = f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d} · "
-        entries.append(HistoryEntry(tag=stamp + (item.get("kind") or "解说"), text=str(item.get("text", "")).strip(),
-                                    latest=i == len(items) - 1, role=str(item.get("role") or "")))
+    if m.get("formal_only"):
+        # 仅正式思考：只显示当前这一句正式思考（最近一次 act 的 thought）；冻结期间的临时思考只进控制台
+        formal = str(m.get("formal_thought") or "").strip()
+        if formal:
+            entries.append(HistoryEntry(tag=stamp_of(m.get("formal_thought_wall")) + "思考", text=formal,
+                                        latest=True, role="formal"))
+    else:
+        items = composed_history(history, m)
+        for i, item in enumerate(items):
+            entries.append(HistoryEntry(tag=stamp_of(item.get("wall")) + (item.get("kind") or "解说"),
+                                        text=str(item.get("text", "")).strip(),
+                                        latest=i == len(items) - 1, role=str(item.get("role") or "")))
 
     return ViewModel(
         name=display_name(m, config), status=text, dot=colors.get(kind, colors.get("idle", "#8F9AB3")),
@@ -444,33 +484,44 @@ def _with_shadow(layer: Image.Image, px: float, alpha: float = 0.5, dy: float = 
 
 
 def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: int | None = None) -> Rendered:
-    """max_height：卡片最高多少像素（游戏显示区的高度、共享内存的大小），超过时思考语句一栏相应变矮。"""
+    """max_height：卡片最高多少像素（游戏显示区的高度、共享内存的大小），超过时思考语句一栏相应变矮。
+
+    游戏内 HUD 默认全透明（mod_card 的不透明度为 0）：不画卡片底色、边框与投影，所有文字加深色描边（mod_stroke），
+    小字一律用最粗的字重；统计值按栏名上色（STAT_COLORS）。mod_card 调成不透明时照旧画卡片。"""
     colors = {**DEFAULT_COLORS, **(colors or {})}
     px = width / DESIGN_WIDTH
     fs = px * TEXT_SCALE                                     # 文字用的比例
-    text_c, label_c = parse_color(colors["text"]), parse_color(colors["label"])
+    sw = stroke_width(px)
+    stroke_c = parse_color(colors["mod_stroke"])
+    text_c = parse_color(colors["text"])
+    label_c = parse_color(colors.get("mod_label") or colors["label"])
     warn_c = parse_color(colors["warn"])
-    rule_c = parse_color(colors["border"])
+    rule_c = parse_color(colors["mod_rule"])
+
+    def S(size, color, bold=True, num=False) -> Style:      # 带描边的文字样式；小字默认最粗
+        return Style(size, color, bold=bold, num=num, stroke=stroke_c, stroke_w=sw)
+
     margin, pad_l, pad_r, pad_t, pad_b = 4 * px, 21 * px, 16 * px, 13 * px, 14 * px
     left, right = margin + pad_l, width - margin - pad_r
     inner = right - left
     tall = int(1600 * px)
     layer = Image.new("RGBA", (width, tall), (0, 0, 0, 0))     # 文字层（之后加阴影）
-    flat = Image.new("RGBA", (width, tall), (0, 0, 0, 0))      # 不加阴影的东西：分隔线、历史气泡
+    flat = Image.new("RGBA", (width, tall), (0, 0, 0, 0))      # 不加阴影的东西：分隔线、思考语句一栏
     d, fd = ImageDraw.Draw(layer), ImageDraw.Draw(flat)
     y = margin + pad_t
 
-    # 第一行：名字 · 状态（圆点）· 章节与房间
+    # 第一行：名字 · 状态（圆点，状态文字与圆点同色）· 章节与房间
     lh = 15 * 1.35 * fs
     base = y + lh * 0.5 + 15 * fs * 0.36
-    x = draw_text(d, left, base, vm.name, Style(15 * fs, text_c, bold=True)) + 8 * px
+    x = draw_text(d, left, base, vm.name, S(15 * fs, text_c)) + 8 * px
     dot = 7 * px
     dot_c = parse_color(vm.dot)
-    d.ellipse((x, base - 15 * fs * 0.36 - dot / 2 + 0.5 * px, x + dot, base - 15 * fs * 0.36 + dot / 2 + 0.5 * px), fill=dot_c)
+    d.ellipse((x, base - 15 * fs * 0.36 - dot / 2 + 0.5 * px, x + dot, base - 15 * fs * 0.36 + dot / 2 + 0.5 * px),
+              fill=dot_c, outline=stroke_c, width=max(1, int(round(px))))
     x += dot + 5 * px
-    room_style, rm_style = Style(15 * fs, text_c, bold=True), Style(15 * fs, label_c)
+    room_style, rm_style = S(15 * fs, text_c), S(15 * fs, label_c)
     room_w = text_width(vm.room, room_style) + ((4 * px + text_width(vm.room_id, rm_style)) if vm.room_id else 0)
-    status_style = Style(13 * fs, label_c)
+    status_style = S(13 * fs, dot_c)
     status_room = right - room_w - 8 * px - x
     status = vm.status
     while status and text_width(status, status_style) > status_room:
@@ -489,8 +540,8 @@ def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: in
     timer_base = y + timer_h * 0.82
     timer_x, timer_y = left, timer_base
     if vm.effort is not None:
-        val_style = Style(18 * px, parse_color(vm.effort_color), num=True)
-        pend_style = Style(18 * px, parse_color(colors["thinking"]), num=True)
+        val_style = S(18 * px, parse_color(vm.effort_color), num=True)
+        pend_style = S(18 * px, parse_color(colors["thinking"]), num=True)
         val_w = text_width(vm.effort, val_style) + (text_width(vm.effort_pending, pend_style) if vm.effort_pending else 0)
         meter_w = 5 * 3 * px + 4 * 2 * px
         row_base = timer_base - 1 * px
@@ -499,37 +550,41 @@ def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: in
         if vm.effort_pending:
             draw_text(d, ex, row_base, vm.effort_pending, pend_style)
         mx = vx - 6 * px - meter_w
-        on_c, off_c = parse_color(vm.effort_color), (255, 255, 255, 41)
+        on_c, off_c = parse_color(vm.effort_color), (255, 255, 255, 70)
         for i, frac in enumerate((0.36, 0.52, 0.68, 0.84, 1.0)):
             h = 12 * px * frac
             bx = mx + i * 5 * px
-            d.rounded_rectangle((bx, row_base - h, bx + 3 * px, row_base), radius=max(0, px), fill=on_c if i <= vm.effort_level else off_c)
-        lbl = Style(12 * px, label_c)
+            d.rounded_rectangle((bx, row_base - h, bx + 3 * px, row_base), radius=max(0, px),
+                                fill=on_c if i <= vm.effort_level else off_c, outline=stroke_c, width=1)
+        lbl = S(12 * px, label_c)
         draw_text(d, right - text_width("推理强度", lbl), row_base - 18 * 1.2 * px, "推理强度", lbl)
     y += timer_h + 11 * px
 
-    # 分隔线
+    # 分隔线：浅色细线下面垫一条深色细线，任何背景上都看得出
     def rule(at):
-        fd.rectangle((left - 0, at, right, at + max(1, px) - 1), fill=rule_c)
+        thick = max(1, int(round(px)))
+        fd.rectangle((left, at + thick, right, at + 2 * thick - 1), fill=(stroke_c[0], stroke_c[1], stroke_c[2], 150))
+        fd.rectangle((left, at, right, at + thick - 1), fill=rule_c)
     rule(y)
     y += max(1, px)
 
-    # 统计：两列，最后一行"调用工具"占满一行（最多三行）
+    # 统计：两列，最后一行"调用工具"占满一行（最多三行）；值按栏名上色
     y += 9 * px
     col_gap = 10 * px
     col_w = (inner - col_gap) / 2
     row_h = 16 * 1.3 * fs
-    stat_k, stat_v = Style(12.5 * fs, label_c), Style(16 * fs, text_c, num=True)   # 两列放得下最长的键与值
+    stat_k = S(12.5 * fs, label_c)                           # 两列放得下最长的键与值
     for i, (k, v, tone) in enumerate(vm.stats):
         cx = left + (i % 2) * (col_w + col_gap)
         ry = y + (i // 2) * (row_h + 3 * px)
         b = ry + row_h * 0.5 + 16 * fs * 0.36
         draw_text(d, cx, b, k, stat_k)
-        color = warn_c if tone == "warn" else label_c if tone == "dim" else text_c
-        vs = Style(16 * fs, color, num=True)
+        color = (warn_c if tone == "warn" else label_c if tone == "dim"
+                 else parse_color(colors.get(STAT_COLORS.get(k, ""), colors["text"])))
+        vs = S(16 * fs, color, num=True)
         draw_text(d, cx + col_w - text_width(v, vs), b, v, vs)
     y += math.ceil(len(vm.stats) / 2) * (row_h + 3 * px)
-    call_style = Style(14 * fs, text_c if vm.tool_call else label_c)
+    call_style = S(14 * fs, parse_color(colors["mod_call"]) if vm.tool_call else label_c)
     call_text = vm.tool_call or "—"
     k_w = text_width("调用工具", stat_k) + 8 * px
     call_lines = clamp_lines(wrap(call_text, call_style, inner - k_w), 3, call_style, inner - k_w)
@@ -543,10 +598,10 @@ def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: in
     rule(y)
     y += max(1, px)
 
-    # 思考语句历史：新版那样一条一个气泡，最新的在最下面高亮；放不下时最早的从上边裁掉
+    # 思考语句：一条一段，左边一条色条（最新的一条高亮），最新的在最下面；放不下时最早的从上边裁掉
     if vm.history:
         y += 10 * px - 7 * px
-        hist = _history(vm.history, inner, px, text_c, label_c, rule_c, fs)
+        hist = _history(vm.history, inner, px, colors, fs)
         limit = int(HISTORY_MAX * px)
         if max_height:                                     # 显示区较矮（或图片太大）时，思考语句一栏让出高度
             limit = max(int(80 * px), min(limit, int(max_height - y - pad_b - margin - 30 * px)))
@@ -561,7 +616,7 @@ def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: in
         flat.alpha_composite(hist, (int(left), int(y)))
         y += hist.height
     if vm.meta:
-        meta_style = Style(13 * fs, label_c)
+        meta_style = S(13 * fs, label_c)
         lines = clamp_lines(wrap(vm.meta, meta_style, inner), 2, meta_style, inner)
         y += 4 * px
         for line in lines:
@@ -569,47 +624,62 @@ def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: in
             y += 13 * 1.4 * fs
     height = int(math.ceil(y + pad_b + margin))
 
-    # 卡片：圆角底、描边、投影，左边的色条跟着 Madeline 的发色
+    # 卡片：mod_card 不透明度为 0（默认）时不画底色、边框与投影；左边的色条跟着 Madeline 的发色，加深色描边
     card_box = (int(margin), int(margin), width - int(margin), height - int(margin))
     cw, ch = card_box[2] - card_box[0], card_box[3] - card_box[1]
     out = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    # 游戏内 HUD 的底色用 mod_card（比网页 HUD 的 card 更透），卡片下的投影跟着按比例变淡
     card_c = parse_color(colors.get("mod_card") or colors["card"])
-    shadow = _rounded((cw, ch), int(12 * px), (0, 0, 0, int(round(82 * min(1.0, card_c[3] / 204)))))
-    blurred = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    blurred.alpha_composite(shadow, (card_box[0], card_box[1] + int(3 * px)))
-    out.alpha_composite(blurred.filter(ImageFilter.GaussianBlur(max(1, 6 * px))))
-    out.alpha_composite(_rounded((cw, ch), int(12 * px), card_c, rule_c, max(1, int(px))),
-                        (card_box[0], card_box[1]))
+    if card_c[3] > 0:
+        border_c = parse_color(colors["border"])
+        shadow = _rounded((cw, ch), int(12 * px), (0, 0, 0, int(round(82 * min(1.0, card_c[3] / 204)))))
+        blurred = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        blurred.alpha_composite(shadow, (card_box[0], card_box[1] + int(3 * px)))
+        out.alpha_composite(blurred.filter(ImageFilter.GaussianBlur(max(1, 6 * px))))
+        out.alpha_composite(_rounded((cw, ch), int(12 * px), card_c, border_c, max(1, int(px))),
+                            (card_box[0], card_box[1]))
     ImageDraw.Draw(out).rounded_rectangle(
-        (margin + 8 * px, margin + 14 * px, margin + 11 * px, height - margin - 14 * px), radius=2 * px, fill=parse_color(vm.theme))
+        (margin + 8 * px, margin + 14 * px, margin + 11 * px, height - margin - 14 * px), radius=2 * px,
+        fill=parse_color(vm.theme), outline=stroke_c, width=max(1, int(round(px))))
     out.alpha_composite(flat.crop((0, 0, width, height)))
     out.alpha_composite(_with_shadow(layer.crop((0, 0, width, height)), px))
     return Rendered(out, int(round(timer_x)), int(round(timer_y)))
 
 
-def _history(entries, width: float, px: float, text_c, label_c, rule_c, fs: float | None = None) -> Image.Image:
+# 思考语句左边色条的颜色：用户消息、系统消息、最新一条、较早的几条
+_ACCENTS = {"user": (110, 160, 245, 235), "system": (214, 172, 92, 220)}
+
+
+def _history(entries, width: float, px: float, colors: dict, fs: float | None = None) -> Image.Image:
+    """思考语句一栏：全透明，每条左边一条色条，文字加描边。role 为 formal 的一条（开了"仅正式思考"时 HUD 只显示
+    当前这一句正式思考）用更大的字号与暖白色。"""
     fs = fs or px
-    text_style, tag_style = Style(THOUGHT_SIZE * fs, text_c), Style(11 * fs, label_c)
+    colors = {**DEFAULT_COLORS, **(colors or {})}
+    sw = stroke_width(px)
+    stroke_c = parse_color(colors["mod_stroke"])
+    text_c = parse_color(colors["text"])
+    older_c = (text_c[0], text_c[1], text_c[2], 215)
+    tag_c, tag_latest_c = parse_color(colors["mod_tag"]), parse_color(colors["mod_tag_latest"])
     blocks = []
-    pad_x, pad_y, gap = 10 * px, 9 * px, 7 * px
+    bar_w, pad_x, pad_y, gap = max(2, int(round(3 * px))), 10 * px, 4 * px, 7 * px
     box_w = width - 3 * px
     for e in entries:
-        lines = wrap(e.text, text_style, box_w - 2 * pad_x)
-        tag_h, line_h = 11 * 1.5 * fs, THOUGHT_SIZE * 1.5 * fs
+        formal = e.role == "formal"
+        size = FORMAL_SIZE if formal else THOUGHT_SIZE
+        color = parse_color(colors["mod_formal"]) if formal else (text_c if e.latest else older_c)
+        text_style = Style(size * fs, color, stroke=stroke_c, stroke_w=sw)
+        tag_style = Style(11 * fs, tag_latest_c if e.latest else tag_c, bold=True, stroke=stroke_c, stroke_w=sw)
+        lines = wrap(e.text, text_style, box_w - pad_x - sw)
+        tag_h, line_h = 11 * 1.5 * fs, size * 1.45 * fs
         h = int(pad_y * 2 + tag_h + line_h * len(lines))
-        if e.role == "user":
-            fill = (91, 145, 230, 61)
-        elif e.role == "system":
-            fill = (190, 153, 82, 26)
-        else:
-            fill = (127, 166, 245, 46) if e.latest else (150, 173, 225, 26)
-        box = _rounded((int(box_w), h), int(9 * px), fill, rule_c, 1)
-        words = Image.new("RGBA", box.size, (0, 0, 0, 0))     # 文字单独一层加阴影：底色很透时也看得清
+        box = Image.new("RGBA", (int(box_w), h), (0, 0, 0, 0))
+        accent = _ACCENTS.get(e.role) or ((245, 184, 65, 235) if e.latest else (150, 173, 225, 130))
+        ImageDraw.Draw(box).rounded_rectangle((0, pad_y, bar_w - 1, h - pad_y), radius=max(1, bar_w // 2),
+                                              fill=accent, outline=stroke_c, width=1)
+        words = Image.new("RGBA", box.size, (0, 0, 0, 0))     # 文字单独一层加阴影：卡片全透明时也看得清
         bd = ImageDraw.Draw(words)
         draw_text(bd, pad_x, pad_y + tag_h * 0.5 + 11 * fs * 0.36, e.tag, tag_style)
         for j, line in enumerate(lines):
-            draw_text(bd, pad_x, pad_y + tag_h + line_h * j + line_h * 0.5 + THOUGHT_SIZE * fs * 0.36, line, text_style)
+            draw_text(bd, pad_x, pad_y + tag_h + line_h * j + line_h * 0.5 + size * fs * 0.36, line, text_style)
         box.alpha_composite(_with_shadow(words, px))
         blocks.append(box)
     total = int(sum(b.height for b in blocks) + gap * (len(blocks) + 1))
@@ -632,19 +702,21 @@ class Atlas:
 def make_atlas(px: float, colors: dict | None = None) -> Atlas:
     """章节计时 H:MM:SS（36 设计像素）与 .mmm（小一号、颜色淡一点），数字等宽，阴影烘进字形里。"""
     colors = {**DEFAULT_COLORS, **(colors or {})}
-    specs = [(0, 36 * px, parse_color(colors["text"])), (1, 36 * 0.62 * px, (201, 208, 222, 255))]
+    specs = [(0, 36 * px, parse_color(colors["text"])), (1, 36 * 0.62 * px, (214, 221, 236, 255))]
+    stroke_c, sw = parse_color(colors["mod_stroke"]), stroke_width(px)   # 与卡片文字相同的描边
     cells = []
     for cls, size, color in specs:
         f = font("num", size)
         digit_adv = max(f.getlength(c) for c in "0123456789")
         for ch in TIMER_CHARS:
             l, t, r, b = f.getbbox(ch, anchor="ls")
-            p = int(math.ceil(3 * px)) + 1
+            p = int(math.ceil(3 * px)) + 1 + sw
             w, h = int(r - l) + 2 * p, int(b - t) + 2 * p
             adv = digit_adv if ch.isdigit() else f.getlength(ch)
             shift = (digit_adv - f.getlength(ch)) / 2 if ch.isdigit() else 0
             glyph = Image.new("RGBA", (max(1, w), max(1, h)), (0, 0, 0, 0))
-            ImageDraw.Draw(glyph).text((p - l, p - t), ch, font=f, fill=color, anchor="ls")
+            ImageDraw.Draw(glyph).text((p - l, p - t), ch, font=f, fill=color, anchor="ls",
+                                       stroke_width=sw, stroke_fill=stroke_c)
             glyph = _with_shadow(glyph, px)
             cells.append((ord(ch), cls, glyph, int(round(l - p + shift)), int(t - p), int(round(adv))))
     width = sum(c[2].width for c in cells) + len(cells)

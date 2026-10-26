@@ -17,7 +17,7 @@ from .execution import workspace_capabilities
 from .observation import enrich_obs, fmt_ticks
 from .sandbox import run_program
 from .goals import GoalManager
-from .modes import act_frame_cap, is_explore
+from .modes import act_frame_cap, act_frame_min, is_explore
 from .thought import thought_problem
 from .workspace_files import tas
 from .segments import Piece, checkpoint_name, checkpoint_room, chapters_of, piece_label, pieces_of, segments_of, split_segments, validate_segments
@@ -821,6 +821,7 @@ class GameSession:
                 if new_plan.text == plan.text:
                     record["error"] = "重算程序没有改动计划文件"
                     break
+                new_plan = self._pad_retry_plan(new_plan)
                 frames = self._check_plan(new_plan)
                 new_stop = self._stop_list(stop_on or new_plan.stop_on, forced)
             except ActError as err:
@@ -846,6 +847,28 @@ class GameSession:
                 stop.append(must)
         return stop
 
+    def _least_frames(self, plan: PlanSpec, planned: int) -> int:
+        """这次 act 最少要推进的帧数。只管正常游玩：角色不可操作时（菜单、结算、对白等剧情输入）不限制；
+        TAS 文件按游标分段时，文件的最后一段剩多少就放多少（不能补帧，补了会和输入来源对不上）。"""
+        if not (self.last_obs or {}).get("controllable"):
+            return 1
+        source = plan.input_source
+        if source is not None and source['offset'] + planned >= source['total']:
+            return 1
+        return act_frame_min(self.cfg)
+
+    def _pad_retry_plan(self, plan: PlanSpec) -> PlanSpec:
+        """自动重试重算出的计划不足最短帧数时，在末尾补空帧（死亡、换房等截断条件照样提前停下），免得重试链因此中断。"""
+        if plan.input_format != 'celeste_ai' or plan.input_source is not None:
+            return plan
+        try:
+            allowed = LETTERS if self.cfg.cutscene_mode == 'agent' else AGENT_LETTERS
+            planned = len(expand_inputs(plan.inputs, act_frame_cap(self.cfg), allowed))
+        except ActError:
+            return plan                      # 不合法的计划交给 _check_plan 报错
+        least = self._least_frames(plan, planned)
+        return replace(plan, inputs=list(plan.inputs) + [str(least - planned)]) if planned < least else plan
+
     def _check_plan(self, plan: PlanSpec) -> list[str]:
         if plan.input_format == 'celeste_tas':
             if self.cfg.cutscene_mode != 'agent':raise ActError('TAS输入须使用agent剧情模式，避免主控额外输入改变时序')
@@ -857,6 +880,10 @@ class GameSession:
         else:
             allowed = LETTERS if self.cfg.cutscene_mode == 'agent' else AGENT_LETTERS
             frames = expand_inputs(plan.inputs, act_frame_cap(self.cfg), allowed)
+        least = self._least_frames(plan, len(frames))
+        if len(frames) < least:
+            raise ActError(f"一次至少推进 {least} 帧（这次只有 {len(frames)} 帧）：请在末尾补上空帧或继续保持按键；"
+                           "死亡、换房等截断条件照样会提前停下")
         if plan.input_source is not None and (len(plan.input_source['locations']) != len(frames) or plan.input_source['offset'] + len(frames) > plan.input_source['total']):
             raise ActError('input_source与本次实际计划帧数不一致')
         if plan.expect is not None and len(plan.expect) > len(frames):
@@ -872,9 +899,10 @@ class GameSession:
             self._before_advance()
             with self.lock:
                 self.playback.final()
-        self.metrics.set_thought(thought)
+        self.metrics.set_thought(thought, formal=attempt == 0)   # 正式思考不带"（自动重试 N）"的后缀
         try:  # 这段动作的思考在推进之前就进 HUD 的公开解说历史（动作结束后 decisions.jsonl 用同一个 id）
-            publish(self.run_dir, f"act:{self.decision_index}:{attempt}", thought, kind="尝试")
+            publish(self.run_dir, f"act:{self.decision_index}:{attempt}", thought,
+                    kind="正式思考" if getattr(self.cfg, "formal_thought", False) else "尝试")
         except OSError:
             pass
         self.metrics.update(status="executing")
@@ -1487,7 +1515,7 @@ class GameSession:
         previous = self.piece
         piece = Piece.of(self.chapter_queue[0])
         self._before_advance()
-        self.metrics.update(status="auto", thought="")
+        self.metrics.update(status="auto", thought="", formal_thought="", formal_thought_wall=0.0)
         t0 = time.monotonic()
         enter_save(self.client, self.cfg.save, chapter=piece.chapter, checkpoint=piece.start, menu_speed=1,
                    save_slot=self.cfg.save_slot, cutscene_mode=self.cfg.cutscene_mode,
@@ -1526,7 +1554,8 @@ class GameSession:
         level = obs['level']
         self.start_sid = level['sid']
         self.metrics.update(chapter=level['sid'], room=level.get('room', ''), piece_done=False,
-                            chapter_time_ticks=level.get('chapterTimeTicks', 0))
+                            chapter_time_ticks=level.get('chapterTimeTicks', 0),
+                            formal_thought="", formal_thought_wall=0.0)   # 新的一段：上一章最后的正式思考不留在 HUD 上
         self._save_chapter_plan()
         return True
 

@@ -28,6 +28,11 @@ def is_explore(cfg) -> bool:
     return mode_of(cfg) == EXPLORE
 
 
+def act_frame_min(cfg) -> int:
+    """单次 act 最少推进的帧数（可调参数 min_frames_per_act，默认 40；不超过本模式的上限）。"""
+    return max(1, min(int(getattr(cfg, "min_frames_per_act", 40)), act_frame_cap(cfg)))
+
+
 def act_frame_cap(cfg) -> int:
     """单次 act 最多推进的帧数：探索模式用 explore_act_frames（默认 150），速通模式用 max_frames_per_act（默认 600）。"""
     if is_explore(cfg):
@@ -64,4 +69,5 @@ def describe(cfg) -> str:
         text = MODE_NAMES[mode] + ("（开模拟器）" if getattr(cfg, "sim", False) else "（关模拟器）")
     else:
         text = MODE_NAMES[mode] + ("（限额短路线预测）" if getattr(cfg, "sim_assist", False) else "")
-    return text + (" + 直播" if getattr(cfg, "live", False) else "")
+    text += " + 直播" if getattr(cfg, "live", False) else ""
+    return text + (" · 仅正式思考" if getattr(cfg, "formal_thought", False) else "")

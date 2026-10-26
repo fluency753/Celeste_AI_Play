@@ -132,6 +132,7 @@ class RunConfig:
     mcp_port: int = 47780
     max_minutes: float = 240.0      # 现实时间上限（宽松；主要指标是游戏内计时）
     max_frames_per_act: int = 600   # 单次 act 最多推进的帧数（速通模式；探索模式用 explore_act_frames，见 modes.act_frame_cap）
+    min_frames_per_act: int = 40    # 单次 act 最少推进的帧数（两种模式；不超过上限，见 modes.act_frame_min）
     play_speed: int = 1             # 智能体动作块的推进速度（1 = 实时 60 帧/秒）
     auto_speed: int = 1             # 转场、剧情、重生等自动推进段的速度（1 = 与原版一致；大于 1 只用于调试）
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
@@ -179,10 +180,13 @@ class RunConfig:
     continuous_music: bool = False   # 直播：冻结逻辑时继续播放音乐，仅暂停音效
     live: bool = False               # 直播模式（--live）：网页 HUD、解说计时 10 秒、可按用户要求退出关卡；narrate 在所有模式都有
     hud_mod: bool = False            # HUD 以 MOD 形式画在游戏画面里（overlay/modhud.py；不开直播时默认开）
+    formal_thought: bool = False     # 仅正式思考（--formal-thought，默认关）：冻结期间 narrate 写临时思考，只进控制台；
+                                     # act 的 thought 是正式思考，概括整个冻结期间的思考，游戏内 HUD 只显示当前这一句
     live_remind_s: float = 30.0      # 解说计时：思考累计这么多秒没有公开解说，在下一次工具调用时提醒（由可调参数 remind_s / remind_live_s 决定）
     # 以下是可调参数（orchestrator/tuning.py，命令行 --tune 名称=值）；默认值就是一直以来的数值
     thought_max_chars: int = 120     # act 的 thought 与 narrate 的长度上限
     thought_max_hanzi: int = 30      # Claude Code 执行器：thought 与 narrate 的汉字数上限（英文术语不计，见 orchestrator/thought.py）
+    thought_temp_max_hanzi: int = 120  # 开了"仅正式思考"时：Claude Code 执行器 narrate（临时思考）的汉字数上限
     remind_s: float = 30.0           # 解说提醒间隔（不开直播）
     remind_live_s: float = 10.0      # 解说提醒间隔（直播）
     bash_default_s: int = 300        # Claude Code 的 Bash 不写 timeout 时的上限（速通模式）

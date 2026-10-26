@@ -68,12 +68,15 @@ class PublicHistory:
                     ident = "public:" + str(item.get("id"))
                     self.items[ident] = {"id": ident, "text": text, "kind": "解说",
                                          "wall": (params.get("completedAtMs") or 0) / 1000}
+            # 开了"仅正式思考"时 act 的 thought 是正式思考（控制台里与 narrate 写的临时思考区分开）
+            act_kind = "正式思考" if (metrics or {}).get("formal_only") else "尝试"
             for action in self.actions.read():
                 text = action.get("thought", "").strip()
                 if text:
                     ident = f"act:{action.get('i')}:{action.get('attempt', 0)}"
                     previous = self.items.get(ident)   # 动作开始时已作为公开事件记下：保留那时的时间
-                    self.items[ident] = {"id": ident, "text": text, "kind": "尝试",
+                    kind = previous["kind"] if previous and previous.get("kind") in ("正式思考", "尝试") else act_kind
+                    self.items[ident] = {"id": ident, "text": text, "kind": kind,
                                          "wall": previous["wall"] if previous else (metrics.get("started_wall") or 0) + action.get("t", 0)}
             if (self.events.path.parent / "control.sqlite3").exists():
                 for message in RunControl(self.events.path.parent).snapshot()["messages"]:

@@ -124,7 +124,11 @@ class CodexRunner(SessionControls):
             text = self.message_text.get(ident, "") + params.get("delta", "")
             self.message_text[ident] = text
             if self.cfg.live and time.monotonic() - self._last_public > 0.4:
-                self.metrics.set_thought(" ".join(text.split())[-self.cfg.thought_max_chars:])
+                latest = " ".join(text.split())[-self.cfg.thought_max_chars:]
+                if getattr(self.cfg, "formal_thought", False):
+                    self.metrics.set_temp_thought(latest)      # 仅正式思考：commentary 是临时思考
+                else:
+                    self.metrics.set_thought(latest)
                 self._last_public = time.monotonic()
         elif method in ("item/started", "item/completed"):
             if method == "item/completed" and item.get("type") == "agentMessage" and self.control:
@@ -219,7 +223,11 @@ class CodexRunner(SessionControls):
                                    "stderr": result.stderr, "seconds": round(result.seconds, 2),
                                    "timed_out": result.timed_out}, ensure_ascii=False)
             elif name == "celeste_narrate" and self.game_server is None:
-                self.metrics.set_thought(str(args.get("thought", ""))[:self.cfg.thought_max_chars])
+                note = str(args.get("thought", ""))[:self.cfg.thought_max_chars]
+                if getattr(self.cfg, "formal_thought", False):
+                    self.metrics.set_temp_thought(note)
+                else:
+                    self.metrics.set_thought(note)
                 self.metrics.add(narrates=1)
                 self.metrics.narrated()
                 text = "解说已更新"

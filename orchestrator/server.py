@@ -23,7 +23,7 @@ input_format：省略为 celeste_ai；显式 celeste_tas 使用 TAS 离散按键
   按键：L R U D 方向，J 跳，X 冲刺，Z crouch dash，G 抓墙，T 交互；K、Y、V 是第二个跳、冲刺、crouch dash 键
   （按住 J 时按下 K 也算一次新的"按下"，可以在相邻两帧各跳一次）；A:角度 表示摇杆角度（0 右、90 上）。
   agent 剧情模式还可用 C 确认、B 返回、P 暂停、N 日志，直接操作菜单、对白、重试与结算。
-  只写帧数表示这些帧不按任何键，例如 "5"。一次最多 {act_max_frames} 帧。
+  只写帧数表示这些帧不按任何键，例如 "5"。一次至少 {act_min_frames} 帧、最多 {act_max_frames} 帧（不足时在末尾补空帧或继续保持按键，截断条件照样提前停下）。
 plan_file：（有工作区时可用）工作区里的计划文件路径，与 inputs 二选一。内容是按键段数组，或对象：
   {"inputs": [...], "expect": [[x, y], [x, y, "Dash"], null, ...], "tolerance": 0.5,
    "stop_on": [...], "retry": {"command": "python3 planner.py", "max": 3, "timeout_s": 20, "on": ["death", "deviate"]}}
@@ -32,7 +32,7 @@ plan_file：（有工作区时可用）工作区里的计划文件路径，与 i
   retry：死亡、偏离（或 "done"：按键用完仍在本房间）时，主控在零网络沙箱里运行 command（工作目录 /workspace），
   它应读取 /workspace/game/ 下的最新数据并改写同一个计划文件，主控接着执行，最多 max 次，不唤醒你。格式详见 /kb/game_data.md。
 thought：一两句中文{thought_brief}，会显示给观众。只写你对当前房间或这一段的分析与判断（难点在哪、怎么取舍、打算怎么过），
-  不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。{thought_mood_short}
+  不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。{thought_mood_short}{formal_thought_act}
 stop_on：提前停下的条件，可选 death room uncontrollable controllable land refill complete story_input；
   默认 ["death", "room", "complete"]，death 总会生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。
 celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控自动播放到实际输入节点或恢复控制。celeste_tas格式下不自动补这些帧，由明确输入推进。读取storyInput与story；inCutscene标记本身不表示角色失控。"""
@@ -56,10 +56,23 @@ thought：一两句中文（{thought_limit}），只写你对当前房间或这�
 也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。{thought_mood_short}
 思考期间随时调用：一有初步判断就先写一句，之后想法每有进展再写一句，不要攒到 act 时才写。"""
 
+# 开了"仅正式思考"（--formal-thought）时 narrate 的说明：写的是临时思考，只显示在控制台，游戏画面的 HUD 上没有
+NARRATE_TEMP_DESCRIPTION = """更新临时思考：本次开启了"仅正式思考"，你在冻结期间（两次 act 之间）写的临时思考{temp_thought_where}；游戏画面的 HUD 只显示每次 act 的 thought（正式思考）。不推进游戏，也不计入章节计时。
+thought：中文（{thought_temp_limit}），写你此刻的分析、尝试与判断，不写具体数值（帧数、坐标、速度等），
+也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。{thought_mood_short}
+思考期间随时调用：一有初步判断就先写一句，之后想法每有进展再写一句。"""
+
 # 实时展示的解说更新计时器：思考状态累计满 RunConfig.live_remind_s 秒没有 narrate，就在智能体下一次调用任何工具时
 # 由容器里的 PreToolUse 钩子把这句提醒放到那次工具结果旁边（见 run.add_gate_route 与 agent-container/celeste-gate.py）
 LIVE_REMINDER = ("（系统·实时展示）你已经思考了约 {s} 秒没有更新 HUD 上的思考内容，观众看不到你此刻的思路。"
                  "请调用 narrate 写一句你现在的分析与判断，之后想法每有进展再写一句。")
+TEMP_REMINDER = ("（系统）你已经思考了约 {s} 秒没有更新临时思考。"
+                 "请调用 narrate 写一句你现在的分析与判断（只显示在控制台），之后想法每有进展再写一句。")
+
+
+def narrate_reminder(cfg, seconds: float) -> str:
+    """解说计时满了时提醒的话：开了"仅正式思考"时提醒更新临时思考。"""
+    return (TEMP_REMINDER if getattr(cfg, "formal_thought", False) else LIVE_REMINDER).format(s=int(seconds))
 
 
 def effort_line(metrics) -> str:
@@ -284,24 +297,31 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             return [json.dumps(result, ensure_ascii=False)]
 
     # narrate 在所有模式都有：思考期间更新 HUD 的思考语句
-    @server.tool(name="narrate", description=fill(NARRATE_DESCRIPTION, session.cfg), structured_output=False)
+    temp_thoughts = bool(getattr(session.cfg, "formal_thought", False))
+
+    @server.tool(name="narrate", description=fill(NARRATE_TEMP_DESCRIPTION if temp_thoughts else NARRATE_DESCRIPTION,
+                                                  session.cfg), structured_output=False)
     async def narrate(thought: str) -> list:
         # 不推进游戏、不受准备阶段限制、不开始计现实用时；只换 HUD 上的思考语句
+        # 开了"仅正式思考"时写的是临时思考：只进公开历史（控制台），不换游戏内 HUD 上的正式思考
         text = " ".join((thought or "").split())
         if not text:
             return ["thought 不能为空。"]
         from .thought import thought_problem
-        problem = thought_problem(session.cfg, text)
+        problem = thought_problem(session.cfg, text, temp=temp_thoughts)
         if problem:
             return [problem + "。"]
-        metrics.set_thought(text)
+        if temp_thoughts:
+            metrics.set_temp_thought(text)
+        else:
+            metrics.set_thought(text)
         metrics.add(narrates=1)
         metrics.narrated()
         try:  # 进 HUD 的公开解说历史（只记这句话本身）
-            publish(session.run_dir, f"narrate:{time.time_ns()}", text)
+            publish(session.run_dir, f"narrate:{time.time_ns()}", text, kind="临时思考" if temp_thoughts else "解说")
         except OSError:
             pass
-        return ["已更新。"]
+        return ["已更新（临时思考，只显示在控制台）。" if temp_thoughts else "已更新。"]
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
     async def set_effort(level: str, reason: str = "") -> list:

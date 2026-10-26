@@ -350,7 +350,7 @@ class StoryFlowTests(unittest.TestCase):
     def test_story_text_does_not_forbid_act_when_player_is_actually_controllable(self):
         self.s.last_obs=dialog();self.s.last_obs['controllable']=True
         with patch.object(self.s,'_execute',return_value=({'stop':'done','consumed':1,'planned':1},self.s.last_obs,None,0,0,[])) as execute:
-            self.s.act(['1,R'],'继续移动并观察剧情',None)
+            self.s.act(['40,R'],'继续移动并观察剧情',None)
         execute.assert_called_once()
 
     def test_automatic_intro_text_is_returned_after_playback(self):

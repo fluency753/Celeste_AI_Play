@@ -100,6 +100,11 @@ class MetricsState:
     max_dashes: int = 0
     thought: str = ""
     thought_updated_wall: float = 0.0
+    formal_only: bool = False         # "仅正式思考"开关（--formal-thought）：游戏内 HUD 只显示当前这一句正式思考
+    formal_thought: str = ""          # 正式思考：最近一次 act 的 thought（换章时清空）
+    formal_thought_wall: float = 0.0
+    temp_thought: str = ""            # 临时思考：开了"仅正式思考"时 narrate 写的内容（只进控制台，不上游戏内 HUD）
+    temp_thought_wall: float = 0.0
     last_stop: str = ""
     usage_5h: float | None = None     # Max 套餐 5 小时窗口已用比例（0~1），来自 Claude Code 的 rate_limit_event
     usage_7d: float | None = None     # 7 天窗口已用比例
@@ -352,7 +357,8 @@ class Metrics:
                 "stiff_frames", "stiff_s",
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
                 "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
-                "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "context_tokens",
+                "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "formal_thought",
+                "formal_thought_wall", "context_tokens",
                 "effort_pending", "effort_changes", "effort_log", "pause_denials", "plan_rounds_used", "replays", "replay_s", "replay_act_s",
                 "sim_calls", "sim_rollouts", "tool_calls", "context_window", "chapter_base")
     # 进入新的一章时 HUD 清零的累计值（知识库、上下文与压缩次数不清零；章节计时本来就从 0 开始）
@@ -458,10 +464,22 @@ class Metrics:
                 self.state.tool_status = text
                 self._write_locked()
 
-    def set_thought(self, thought: str) -> None:
+    def set_thought(self, thought: str, formal: bool = False) -> None:
+        """formal：act 的 thought（正式思考），同时记成 formal_thought，开了"仅正式思考"时游戏内 HUD 只显示它。"""
         with self._lock:
+            now = time.time()
             self.state.thought = thought
-            self.state.thought_updated_wall = time.time()
+            self.state.thought_updated_wall = now
+            if formal:
+                self.state.formal_thought = thought
+                self.state.formal_thought_wall = now
+            self._write_locked()
+
+    def set_temp_thought(self, thought: str) -> None:
+        """开了"仅正式思考"时 narrate 写的临时思考：只记下来（控制台从公开历史里看），不换 HUD 上的思考语句。"""
+        with self._lock:
+            self.state.temp_thought = thought
+            self.state.temp_thought_wall = time.time()
             self._write_locked()
 
     def snapshot(self) -> dict:

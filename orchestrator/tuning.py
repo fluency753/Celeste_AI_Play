@@ -32,11 +32,17 @@ GROUPS = ("执行与解说", "规划回放", "速通：程序与规划", "探索
 TUNABLES: tuple[Tunable, ...] = (
     Tunable("max_frames_per_act", "单次 act 最多推进的帧数", "执行与解说", int, 600, 60, 3600, "帧",
             "提示词与 act 的说明里的上限跟着变（探索模式用\"探索：规划程序\"里的那一项）", ("speedrun",)),
+    Tunable("min_frames_per_act", "单次 act 最少推进的帧数", "执行与解说", int, 40, 1, 600, "帧",
+            "两种模式都用（超过本模式的上限时按上限算）：inputs 或计划文件合计不足就退回，让智能体在末尾补空帧或继续保持按键；"
+            "死亡、换房等截断条件照样提前停下"),
     Tunable("thought_max_chars", "思考语句最长字数", "执行与解说", int, 120, 20, 400, "字",
             "act 的 thought 与 narrate 的长度上限"),
     Tunable("thought_max_hanzi", "思考语句最多汉字数", "执行与解说", int, 30, 5, 400, "个",
             "只对 Claude Code 执行器：act 的 thought 与 narrate 里的汉字数（英文术语、数字与标点不计），超过就退回让智能体压缩；"
             "提示词与工具说明里的数字跟着变"),
+    Tunable("thought_temp_max_hanzi", "临时思考最多汉字数", "执行与解说", int, 120, 10, 400, "个",
+            "只在开了“仅正式思考”时用、只对 Claude Code 执行器：narrate 写的临时思考（只显示在控制台）的汉字数上限，"
+            "英文术语、数字与标点不计；act 的正式思考仍按上一项"),
     Tunable("thought_lead_s", "动作前等 HUD 换上新思考", "执行与解说", float, 0.4, 0, 3, "秒",
             "游戏冻结着等，录像里不占时间"),
     Tunable("remind_s", "解说提醒间隔", "执行与解说", float, 30, 5, 600, "秒",
