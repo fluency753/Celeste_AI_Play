@@ -1,6 +1,6 @@
 # Codex 状态边界与缺陷复盘
 
-本文由 [CODEX.md](../../CODEX.md) 按相关改动引入，供 Codex 复盘自身的实现与审查问题，不约束其他开发或试玩 agent。记录导航、执行能力、回放及录像的状态边界；剩余工作见 [TODO](../../TODO.md) 和 [验收说明](../TODO_DETAILS.md)。
+本文由 [CODEX.md](CODEX.md) 按相关改动引入，供 Codex 复盘自身的实现与审查问题，不约束其他开发或试玩 agent。记录导航、执行能力、回放及录像的状态边界；剩余工作见 [TODO](../../TODO.md) 和 [验收说明](../TODO_DETAILS.md)。
 
 ## 导航
 
@@ -36,4 +36,4 @@
 - 原生音频：`LIFECYCLE_ONLY=1` 运行 `calibration/audio_mixer`，分别使用同步与 `ASYNC_SOURCE=1` 源，验证快照不可变、暂停继承、冻结重建及双轨冲刺／对白 PCM。
 - 录制封装：`python -m calibration.recording_mp4_check`，执行生产 C 收尾逻辑与真实 FFmpeg。
 
-自动化不代表已验收真实模型的自主决策、任意 MOD 地图或所有压力组合；本轮未启动试玩、连接在用桥接或替换已安装组件。Codex 的新增功能与后续修复按 [CODEX.md](../../CODEX.md) 执行成因复盘和独立最终审查。
+自动化不代表已验收真实模型的自主决策、任意 MOD 地图或所有压力组合；本轮未启动试玩、连接在用桥接或替换已安装组件。Codex 的新增功能与后续修复按 [CODEX.md](CODEX.md) 执行成因复盘和独立最终审查。
