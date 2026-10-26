@@ -107,6 +107,17 @@
     background: rgba(150, 173, 225, 0.10); border: 1px solid var(--rule); border-radius: calc(9 * var(--px)); white-space: pre-wrap; animation: none; transition: none; }
   .thought-entry:last-child { background: rgba(127, 166, 245, 0.18); }
   .thought-entry .tag { display: block; color: var(--label); font-size: calc(11 * var(--px)); font-weight: 400; }
+  .thought.hidden { display:none; }
+  .history-tabs { display:flex; gap:calc(5 * var(--px)); margin-top:calc(6 * var(--px)); }
+  .history-tabs button { cursor:pointer; font:inherit; font-size:calc(12 * var(--px)); color:var(--label); background:transparent; border:1px solid var(--rule); border-radius:5px; padding:calc(3 * var(--px)) calc(8 * var(--px)); }
+  .history-tabs button[aria-selected="true"] { color:var(--text); background:rgba(127,166,245,.18); }
+  .obs-surface .history-tabs, .obs-surface #toolActivity { display:none !important; }
+  .tool-entry { margin:calc(5 * var(--px)) 0; border:1px solid var(--rule); border-radius:6px; background:rgba(150,173,225,.08); }
+  .tool-entry summary { cursor:pointer; padding:calc(6 * var(--px)); font-size:calc(12 * var(--px)); }
+  .tool-entry .tool-meta, #toolNotice { color:var(--label); font-size:calc(11 * var(--px)); }
+  .tool-entry[data-status="failed"] .tool-meta { color:#ff9c91; }
+  .tool-entry[data-status="running"] .tool-meta { color:#9fc5ff; }
+  .tool-entry pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:calc(6 * var(--px)); font:inherit; font-size:calc(11 * var(--px)); }
   .hud-desktop .head { cursor: move; user-select: none; }
   .window-bar { display:none; }
   .hud-desktop .window-bar { display:flex; align-items:center; gap:calc(5 * var(--px)); margin-bottom:calc(5 * var(--px)); cursor:move; user-select:none; }
@@ -208,7 +219,9 @@
     <div class="stat wide"><span class="k">调用工具</span><span class="v call" id="toolCall">—</span></div>
   </div>
   <div class="rule"></div>
-  <div class="thought" id="thought" tabindex="0" aria-label="公开解说历史，可滚动查看"></div>
+  <div class="history-tabs" role="tablist" aria-label="历史记录类型"><button id="showMessages" type="button" role="tab" aria-selected="true" aria-controls="thought">对话</button><button id="showTools" type="button" role="tab" aria-selected="false" aria-controls="toolActivity">工具记录</button></div>
+  <div class="thought" id="thought" tabindex="0" role="tabpanel" aria-label="公开解说历史，可滚动查看"></div>
+  <div class="thought hidden" id="toolActivity" tabindex="0" role="tabpanel" aria-label="实际工具调用记录"><div id="toolNotice">选择工具记录后读取…</div><div id="toolRows"></div></div>
   <div class="meta" id="meta"></div>
   <form id="agentControls">
     <select id="sessionSelect" aria-label="独立 agent 会话" title="选择本项目的 agent 会话；试玩结束后可切换聊天" disabled><option>正在读取会话…</option></select>
@@ -254,7 +267,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 57;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 58;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -427,6 +440,71 @@ function setText(el, value) {
 
 // 消息区只显示历史接口返回的消息，不拼接 metrics 中的实时片段。
 let lastHistoryItems = [];
+let showingTools = false, toolsInflight = false, toolsRun = null, toolsEpoch = 0;
+const TOOL_STATES = {running:'执行中', returned:'已返回', failed:'失败', unknown:'结果未确认', interrupted:'未收到结果·轮次已结束'};
+function selectHistory(tools) {
+  if (OBS_SURFACE) return;
+  toolsEpoch++;
+  showingTools = tools;
+  $('thought').classList.toggle('hidden', tools);
+  $('toolActivity').classList.toggle('hidden', !tools);
+  $('showMessages').setAttribute('aria-selected', String(!tools));
+  $('showTools').setAttribute('aria-selected', String(tools));
+  if (tools) pollTools();
+}
+$('showMessages').onclick = () => selectHistory(false);
+$('showTools').onclick = () => selectHistory(true);
+
+function toolEntry(item, opened) {
+  const entry = document.createElement('details');
+  entry.className='tool-entry'; entry.dataset.id=item.id; entry.dataset.status=item.status;
+  entry.dataset.signature=JSON.stringify(item); entry.open=opened;
+  const summary=document.createElement('summary'), meta=document.createElement('span');
+  meta.className='tool-meta';
+  const stamp=item.wall ? new Date(item.wall*1000) : null;
+  const clock=stamp ? `${pad(stamp.getHours())}:${pad(stamp.getMinutes())}:${pad(stamp.getSeconds())} · ` : '';
+  const duration=Number.isFinite(item.duration_s) ? ` · ${item.duration_s.toFixed(2)}秒` : '';
+  meta.textContent=clock+(TOOL_STATES[item.status] || '未知')+duration;
+  summary.append(meta,document.createElement('br'),document.createTextNode(item.text || item.tool || '工具'));
+  const body=document.createElement('pre');
+  body.textContent='请求参数\n'+(item.parameters===null ? '尚无可核实的参数记录' : JSON.stringify(item.parameters,null,2))+
+    '\n\n返回摘要（原生工具结果，非总上下文）\n'+(item.result===null ? '尚无可核实的返回结果' : JSON.stringify(item.result,null,2))+
+    '\n应用图像附件：'+(item.attached_images==null ? '未确认数量' : item.attached_images+' 张');
+  entry.append(summary,body); return entry;
+}
+async function pollTools() {
+  if (OBS_SURFACE || !showingTools || toolsInflight) return;
+  toolsInflight=true;
+  const epoch=toolsEpoch, expectedRun=controlData?.run || historyRun;
+  try {
+    if(!expectedRun) throw new Error('等待当前会话身份…');
+    if(toolsRun && toolsRun!==expectedRun) { $('toolRows').replaceChildren(); toolsRun=null; }
+    let response=await fetch(STATE_URL.replace(/\/state$/, '/tools'),{cache:'no-store'});
+    if(!response.ok) response=await fetch('http://127.0.0.1:47792/hud/tools',{cache:'no-store'});
+    if(!response.ok) throw new Error('工具记录接口尚未就绪');
+    const data=await response.json(), box=$('toolRows'), scroll=$('toolActivity');
+    if(!showingTools || epoch!==toolsEpoch || expectedRun!==(controlData?.run || historyRun)) return;
+    if(data.run!==expectedRun) { box.replaceChildren(); toolsRun=null; throw new Error('工具记录属于另一运行，等待当前会话接口就绪。'); }
+    const reset=toolsRun!==data.run, follow=reset || scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<12;
+    if(reset) box.replaceChildren();
+    toolsRun=data.run;
+    const existing=new Map(Array.from(box.children,e=>[e.dataset.id,e]));
+    (data.items || []).forEach((item,index)=>{
+      let entry=existing.get(String(item.id));
+      if(!entry) entry=toolEntry(item,false);
+      else if(entry.dataset.signature!==JSON.stringify(item)){
+        const replacement=toolEntry(item,entry.open);entry.replaceWith(replacement);entry=replacement;
+      }
+      existing.delete(String(item.id));
+      if(box.children[index]!==entry) box.insertBefore(entry,box.children[index] || null);
+    });
+    for(const entry of existing.values()) entry.remove();
+    $('toolNotice').textContent=[data.loading?'正在载入历史详情…':'点击记录展开参数和结果',data.warning,
+      data.skipped_lines?`${data.skipped_lines} 行详情超限或无效，未解析`:'',data.scope].filter(Boolean).join(' · ');
+    if(follow) scroll.scrollTop=scroll.scrollHeight;
+  } catch(error) { $('toolNotice').textContent=error.message || '工具记录暂不可用'; }
+  finally { toolsInflight=false; }
+}
 function applyThoughts(first) {
   const el = $("thought");
   const oldTop = el.scrollTop;
@@ -1016,6 +1094,7 @@ loadModelChoices();
 loadSaveChoices();
 setInterval(poll, Number(params.get("poll") || 100));
 pollHistory(); setInterval(pollHistory, 750);
+if (!OBS_SURFACE) setInterval(pollTools, 1000);
 (function loop() { render(); requestAnimationFrame(loop); })();
 </script>
 </body>

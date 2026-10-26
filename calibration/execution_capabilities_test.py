@@ -48,7 +48,7 @@ class WorkspaceCapabilityTests(unittest.TestCase):
             self.assertIsNone(preview['first_message'])
             for unavailable in ('/workspace', '/kb/', 'Bash', '编写模拟器', '自行写程序'):
                 self.assertNotIn(unavailable, preview['text'])
-            self.assertIn('observe 返回的观测', preview['text'])
+            self.assertIn('缺少基线时默认 observe 重建', preview['text'])
             self.assertIn('短动作验证', preview['text'])
             self.assertIn('当前只有游戏工具', preview['text'])
 

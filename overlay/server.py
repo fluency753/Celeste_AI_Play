@@ -190,6 +190,11 @@ def make_handler(pinned: Path | None):
                 payload = {"run": str(run_dir) if run_dir else None,
                            "items": read_history(run_dir, read_metrics(run_dir), limit)}
                 self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+            elif path == '/hud/tools':
+                from .tool_history import read_tools
+                run_dir = current_run(pinned)
+                payload = {'run': str(run_dir) if run_dir else None, **read_tools(run_dir)}
+                self._send(200, json.dumps(payload, ensure_ascii=False).encode('utf-8'), 'application/json; charset=utf-8')
             else:
                 self._send(404, b"not found", "text/plain")
 
