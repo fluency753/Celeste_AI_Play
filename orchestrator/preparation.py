@@ -5,7 +5,6 @@ import argparse
 import asyncio
 import json
 import hashlib
-import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from .runtimes import RUNTIMES, runtime
 from .config import REPO_ROOT, RunConfig
 from .container import ensure_container
 from .kb_study import KbStudy
+from .workspace_setup import install_game_helpers
 from .live import LiveStatus
 from .metrics import Metrics
 from overlay.server import start_in_thread
@@ -36,7 +36,7 @@ async def prepare(args):
     container = await asyncio.to_thread(ensure_container, cfg)
     game = cfg.workspace_dir / "game"
     game.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(REPO_ROOT / "orchestrator/workspace_files/show.py", game / "show.py")
+    install_game_helpers(cfg.workspace_dir)
     study = KbStudy(cfg.kb_dir, cfg.max_minutes,
                     {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None)
     if args.quick_check:

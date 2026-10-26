@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import shutil
 import sys
 import threading
 import time
@@ -23,6 +22,7 @@ from .goals import GoalManager
 from .modes import act_frame_cap, act_frame_min, is_explore
 from .thought import thought_problem
 from .workspace_files import tas
+from .workspace_setup import install_game_helpers
 from .segments import Piece, checkpoint_name, checkpoint_room, chapters_of, piece_label, pieces_of, segments_of, split_segments, validate_segments
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -288,8 +288,7 @@ class GameSession:
         if self.workspace:
             (self.workspace / "game" / "rooms").mkdir(parents=True, exist_ok=True)
             # 给观众看的展示接口（HUD 进度、轨迹记录），每次运行都换成主控这一版；上次运行留下的进度清掉
-            shutil.copyfile(REPO_ROOT / "orchestrator" / "workspace_files" / "show.py", self.workspace / "game" / "show.py")
-            shutil.copyfile(REPO_ROOT / "orchestrator" / "workspace_files" / "tas.py", self.workspace / "game" / "tas.py")
+            install_game_helpers(self.workspace)
             (self.workspace / "game" / "hud_status.json").unlink(missing_ok=True)
 
     # ---- 连接与观测 ----

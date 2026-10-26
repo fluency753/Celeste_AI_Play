@@ -66,6 +66,9 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
                  patch('orchestrator.chat.ensure_container',return_value=None), \
                  patch.object(ClaudeRunner,'_command',command):
                 self.assertEqual(await asyncio.wait_for(prepare(args),10),0)
+                for name in ("show.py", "tas.py", "collision_matrix.py", "collision_matrix.md"):
+                    self.assertTrue((root / "workspaces/claude-test-explore/game" / name).is_file(), name)
+                self.assertFalse((root / "workspaces/claude-test-explore/game/collision_matrix.json").exists())
                 self.assertTrue(can_wake(directory))
                 proof = json.loads((directory/'prepare_summary.json').read_text(encoding='utf-8'))
                 self.assertEqual(proof['engine'],'claude')

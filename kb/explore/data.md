@@ -55,6 +55,8 @@
 
 ## 工作区里的数据
 
+需要程序分析通道时，可用 `/workspace/game/collision_matrix.py` 从当前快照按需生成多来源矩阵文件；用法见同目录 `collision_matrix.md`。只输出分析摘要，不把整个矩阵读进上下文；无采样通路不等于房间不可通过。
+
 - `/workspace/game/latest_obs.json`：最新的完整观测，格式 `{"decision": n, "obs": 观测}`，例如房间范围在 `obs.level.bounds`。
 - `/workspace/game/collision.json`：当前碰撞快照，`image` 指向同帧碰撞图；图像只保留两代，旧路径失效时重读此文件，不沿用旧位置。
 - `/workspace/game/last_act.json`：上一次 `act` 的输入与全精度逐帧轨迹，`trajectoryFormat` 给出各列的名字；第 j 行是用第 j 帧的输入推进之后的状态。
