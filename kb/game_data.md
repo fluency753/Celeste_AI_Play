@@ -41,7 +41,7 @@
 
 ### 1.0 `collision`：当前统一碰撞快照
 
-桥接 1.0.24 起，直接读取当前地形 Grid 与实体 Collider，不从展示字符图反推。`collision` 同时出现在工具返回和 `latest_obs.json` 的 `obs` 中；不存在或身份不匹配时明确不可用，不拼接旧实体。
+桥接 1.0.24 起，直接读取当前地形 Grid 与实体 Collider，不从展示字符图反推。本节专指原始 `latest_obs.json` 的 `obs.collision`；默认工具投影为 `room-context-v2` 的布局／变化，区域精查另用 `shared-shapes-v1`，不能混用字段或坐标锚点。原始快照不存在或身份不匹配时明确不可用，不拼接旧实体。
 
 - `version=1`；`frame/sid/room` 与当前观测对应；`scope` 为 `room` 或 `view`，`bounds` 是包含边距的覆盖范围。
 - `coverage.terrain/entities` 表示两类来源是否请求并提供；`complete=true` 仅表示在该范围内来源均已覆盖，局部视图仍不代表全房间。`geometryComplete` 单独表示所有形状是否能精确表达。

@@ -195,9 +195,9 @@ def fill(text: str, cfg) -> str:
                                      if workspace.workspace_read else "按键和工具约定以本次提供的游戏工具说明为准。"),
         "{explore_environment_rule}": ("Read/Write/Bash 对应容器的文件读取、写入和断网命令；"
                                        if workspace.programs else "当前只有游戏工具，不能读取文件或运行程序；"),
-        "{observation_source_rule}": ("使用进入新房间时返回的完整 JSON，或读取 `/workspace/game/latest_obs.json` 的 `obs`"
-                                      if workspace.workspace_read else "使用进入新房间时返回的完整 JSON 或 observe 返回的观测"),
-        "{geometry_program_rule}": ("必要时自行写程序处理整个房间：可用角色矩形扫过候选通道，或把障碍按碰撞箱尺寸扩张后分析角色锚点的可通行空间。"
+        "{observation_source_rule}": ("优先使用首次返回的布局和后续变化；需要程序处理原始数据时读取 `/workspace/game/latest_obs.json` 的 `obs`"
+                                      if workspace.workspace_read else "使用首次返回的布局和后续变化，缺少基线时默认 observe 重建"),
+        "{geometry_program_rule}": ("确需计算时自行用程序核对相关区域：可用角色矩形扫过候选通道，或把障碍按角色碰撞箱尺寸扩张后分析角色锚点的通行空间。"
                                     if workspace.programs else "根据观测中的矩形边界和角色尺寸核对候选通道，用短动作验证存在歧义的连接。"),
         "{geometry_record_rule}": ("在笔记或程序里保留已验证的通道、连接依据、失败假设及适用条件。"
                                    if workspace.workspace_write else "在公开解说中简短总结已验证的通道、连接依据与失败假设。"),
