@@ -379,6 +379,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
         from .sim_assist import AssistRules
         parts.append(PromptPart("有限模拟辅助（开了限额预测时自动加）",
                                 AssistRules.of(cfg).instructions().lstrip("\n"), None, "\n\n"))
+    parts.append(PromptPart("异常工具输出", "工具返回大量编码串（如 Base64）、乱码、无信息重复，或截断导致关键信息不可读时，第一次发现就用公开消息向用户报告工具名、异常现象及影响；有依据时附可见规模，不编造 token 数。不要粘贴大块原文，不把图片编码当作已看到图片，不反复调用同一工具继续堆积。能通过现有可靠的局部查询或原始文件恢复信息时，报告后继续；关键信息无法可靠恢复、继续操作可能依据错误状态时，调用 stop_run 说明原因并等待处理。正常可读的长数据或不熟悉游戏机制本身不算工具故障。", None, "\n\n"))
     parts.append(PromptPart("任务阻塞处理", "任务因工具故障、缺少必要能力等无法继续时，调用 stop_run(reason=明确的阻塞原因) 报告给用户：主控暂停试玩、游戏保持冻结，由用户决定继续还是停止；然后结束本轮等待用户。不要无限重试失败工具，也不要把阻塞当作通关；普通死亡和仍可尝试的难点继续正常游玩。", None, "\n\n"))
     for part in parts:
         part.text = fill(part.text, cfg)
