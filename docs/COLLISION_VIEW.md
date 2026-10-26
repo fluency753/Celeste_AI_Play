@@ -19,9 +19,15 @@
 
 输出图最长边为 1280，最多处理 16000 个绘图节点、12 层嵌套，超限或不支持的绘图形状在图中明确标记，不能据空白推定安全。精确对象数据仍以 JSON 为准。碰撞图不计算可达性或预测障碍物未来位置。
 
+## 文字概况与局部精读
+
+默认工具文字使用 `shared-shapes-v1`：`shape` 引用 `shapes`，`at` 是锚点，形状及嵌套部分的 x/y 都加该锚点得到世界坐标；原始工作区仍是完整 `geometry`。危险物超过12个时仅将同形状与属性的重复对象按空间邻近归组，共同属性保留在组中，不同机制状态与位移按 ID 列在 `instanceStates`；独特对象、非危险对象及未知形状仍逐项提供。`detailsComplete=false` 表示实例省略，与来源完整性 `complete` 不同。组范围只是分布索引，不能当实心障碍或安全通道。
+
+核验候选通道时调用 `observe(detail="geometry", region=[x,y,w,h], limit=32)` 获取区域精确对象，仅查询最近观测缓存，不推进游戏。返回完整形状；更多结果用 `offset=next_offset` 和同一 `snapshot_id` 分页。动作后快照改变则重新查询；无工作区也能查询。先看概况与完整碰撞图，再查局部，不打印全体原始危险物列表。超出来源范围、未知形状或缺失来源不能据空结果判安全。
+
 ## 验证
 
-- `python -m unittest calibration.collision_contract_test calibration.collision_view_test calibration.observation_context_test`：真实会话与工具分发、同房移动／消失、剧情更新、历史与当前文件隔离、旧协议和显示保护。
+- `python -m unittest calibration.geometry_context_test calibration.collision_contract_test calibration.collision_view_test calibration.observation_context_test`：真实会话与工具分发、同房移动／消失、剧情更新、历史与当前文件隔离、旧协议和显示保护。
 - `dotnet run --project calibration/collision_snapshot "-p:CelestePrefix=<游戏目录>"`：使用实际 Collider、Grid 与实体的无 GPU 原生检查。
 
 这些检查不会连接正在运行的游戏。模型能否据此稳定规划路线、实际游戏中的图像观感以及特殊 MOD 碰撞语义，应分别实测；接口成功和合成图不能替代这些验收。

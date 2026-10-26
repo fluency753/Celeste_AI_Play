@@ -11,6 +11,7 @@ from PIL import Image as PILImage
 
 from .config import CHAPTER_NAMES
 from .collision_snapshot import current_collision, collision_problem, collision_summary, terrain_rects
+from .geometry_context import geometry_overview
 
 STOP_TEXT = {
     "done": "按键全部执行完",
@@ -174,7 +175,7 @@ def compact_entity(entity: dict) -> dict:
     return out
 
 
-def room_json(obs: dict) -> str:
+def room_json(obs: dict, *, compact_context: bool = False) -> str:
     """进入新房间时附在返回结果里的完整数据：所有数值都是像素坐标，与游戏一致。"""
     level = obs.get("level") or {}
     player = obs.get("player") or {}
@@ -202,6 +203,12 @@ def room_json(obs: dict) -> str:
         data['storyDecision']=obs['storyDecision']
     if obs.get('storyPlayback'):
         data['storyPlayback']=obs['storyPlayback']
+    if compact_context and current_collision(obs) is not None:
+        covered = {o.get('id') for o in obs['collision']['objects']}
+        data['collision'] = geometry_overview(obs)
+        data['entities'] = [compact_entity(e) for e in obs.get('entities', []) if e.get('id') not in covered]
+        data.pop('solids', None)
+        data.pop('solidsNote', None)
     lines = ["{"]
     keys = list(data)
     for i, key in enumerate(keys):
@@ -249,7 +256,8 @@ def crop_to_view(obs: dict, margin: int = 16) -> tuple[list[dict], dict | None]:
     return shown, tiles
 
 
-def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, explore: bool = False) -> str:
+def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, explore: bool = False,
+                 compact_context: bool = False) -> str:
     """full_room=True：整个房间的实体与地图（进入新房间、主动观察时）；False：只描述当前画面附近。
     effort：附在头部的推理强度说明（例如"推理强度：high"）。
     头部不写现实用时与时间预算：预算只是主控的安全上限，写给智能体看会让它赶时间、执行没优化完的路线。"""
@@ -331,6 +339,10 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         for e in collectibles:
             status = "已收集" if e.get("collected") else "此前存档已取得的幽灵收集品" if e.get("isGhostBerry") else "尚未确认收集"
             lines.append(f"- {e['type']}#{e.get('id', '?')} 碰撞范围 ({e['x']}, {e['y']}, {e['w']}, {e['h']})；{status}")
+    if compact_context and current_collision(obs) is not None:
+        covered = {o.get('id') for o in obs['collision']['objects']}
+        entities = [e for e in entities if e.get('id') not in covered]
+        tiles = None  # The full collision image and shared-shape projection replace duplicate ASCII/detail lists.
     if entities:
         px, py = player["pos"] if player else (0.0, 0.0)
         entities = sorted(entities, key=lambda e: math.hypot(e["x"] + e["w"] / 2 - px, e["y"] + e["h"] / 2 - py))

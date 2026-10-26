@@ -17,8 +17,9 @@ from .modes import game_tools, is_explore
 from .prompting import fill
 from .collision_snapshot import collision_json
 from .collision_view import render_collision_view
+from .geometry_context import geometry_overview, geometry_page
 
-ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。每次返回当前帧统一碰撞数据与碰撞图（开启图像时），同时包括地形和实体；进入新房间时另附截图、整个房间字符地图和完整数据。collision的frame/scope/coverage/geometryComplete分别表示时刻、范围、来源覆盖及形状精度，不把当前阻挡当成永久不可达。
+ACT_DESCRIPTION = """推进游戏若干帧并返回结果与新的观测。每次返回当前帧碰撞概况与完整碰撞图（开启图像时），包括地形和实体；进入新房间时另附截图和房间信息。同类形状共享，大量危险物只列分布分组；组范围不是实心障碍，使用 observe(detail="geometry", region=[x,y,w,h]) 查询精确实例。collision的frame/scope/coverage/geometryComplete分别表示时刻、范围、来源覆盖及形状精度，detailsComplete表示是否展示全部实例。不把当前阻挡当成永久不可达。
 
 inputs：按顺序执行的按键段，每段写作 "帧数,按键"，例如 ["12,R", "1,R,J", "15,R,J", "8,R"]。
 input_format：省略为 celeste_ai；显式 celeste_tas 使用 TAS 离散按键 J/K 双跳、X/C 双冲刺、Z/V 双蹲冲、G/H 双抓、S 暂停、Q 重试、N 日志、O 确认，并保留兼用绑定。须 agent 剧情模式与桥接1.0.20。TAS执行和观察不自动补帧；不支持的模拟或脚本命令明确报错。
@@ -42,10 +43,10 @@ celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进�
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json）"
 SIM_NOTE = WORKSPACE_NOTE[:-1] + "；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
-OBSERVE_DESCRIPTION = "不推进游戏，返回当前帧的截图、统一碰撞图和整个房间精确数据。collision同时包含地形和实体，保留真实形状与当前碰撞状态；检查frame、scope、coverage和geometryComplete。碰撞图只显示当前帧，不判定未来可达性。act已返回最新状态，只在需要重新看画面或整个房间时调用。"
+OBSERVE_DESCRIPTION = '默认返回新观测、完整碰撞图及紧凑几何概况：同类形状共享，大量危险物按分布归组，组范围不是实心障碍。detail="geometry"只查询最近一次观测缓存，不推进游戏：region=[x,y,w,h]取区域精确对象，offset/limit分页（最多64）；后续页必须传上页snapshot_id，跨帧失效。返回整形状、不裁掉孔洞；scope/coverage仍限制来源覆盖。act已返回最新概况，无需重复observe。无工作区也能区域查询。'
 
 # 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
-ROOM_JSON_HEADER = "整个房间的精确数据（像素坐标；房间信息以此为准，截图与字符地图仅作参考）：\n"
+ROOM_JSON_HEADER = "房间结构化概况（世界像素坐标；大量危险物的分组只是分布索引，不是实心障碍，精确实例按区域查询）：\n"
 
 SET_EFFORT_DESCRIPTION = """调整你自己的推理强度：传入当前模型能力列表中的档位标识，当前值与可选档位见观测头部。
 强度越高，每次思考越深入，但每次决策更慢、消耗的额度更多；简单的房间可以调低，需要精确规划的难房间可以调高。
@@ -182,22 +183,32 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         return content
 
     @server.tool(name="observe", description=OBSERVE_DESCRIPTION, structured_output=False)
-    async def observe() -> list:
+    async def observe(detail: str = 'overview', region: list[float] | None = None, offset: int = 0,
+                      limit: int = 32, snapshot_id: str | None = None) -> list:
         async with call_lock:
             if (note := gated()) is not None:
                 return [note]
             begin()
             try:
+                if detail == 'geometry':
+                    with session.lock:
+                        page = geometry_page(session.last_obs or {}, region=region, offset=offset, limit=limit,
+                                             expected_snapshot=snapshot_id)
+                    return [json.dumps(page,ensure_ascii=False,separators=(',', ':'))]
+                if detail != 'overview' or region is not None or offset or snapshot_id is not None:
+                    return ['区域或分页查询请用 detail="geometry"；默认 overview 会获取新观测。']
                 obs, image = await asyncio.to_thread(session.observe)
                 credit(obs)
                 state["described_room"] = room_key(obs)
                 content = images(obs, image)
                 notes = getattr(session, "observe_notes", None) or []
                 content.append(("主控：" + "；".join(notes) + "\n\n" if notes else "")
-                               + describe_obs(obs, full_room=True, effort=header_line(), explore=explore)
-                               + "\n\n" + ROOM_JSON_HEADER + room_json(obs)
+                               + describe_obs(obs, full_room=True, effort=header_line(), explore=explore, compact_context=True)
+                               + "\n\n" + ROOM_JSON_HEADER + room_json(obs, compact_context=True)
                                + ("\n" + ws_note if session.workspace else ""))
                 return content
+            except ValueError as exc:
+                return [str(exc)]
             finally:
                 finish()
 
@@ -237,12 +248,13 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 new_room = room_key(outcome.obs) != state["described_room"]
                 if new_room:
                     state["described_room"] = room_key(outcome.obs)
-                    parts.append("【进入新房间】下面是新房间的截图、整个房间的字符地图，以及整个房间的精确数据（JSON）。房间信息以精确数据为准，截图仅作参考。")
-                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(freeze=False), explore=explore))
+                    parts.append("【进入新房间】下面是截图、完整碰撞图及结构化概况；密集危险区域可按需查询精确实例。")
+                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(freeze=False), explore=explore, compact_context=True))
                 if new_room:
-                    parts.append(ROOM_JSON_HEADER + room_json(outcome.obs))
+                    parts.append(ROOM_JSON_HEADER + room_json(outcome.obs, compact_context=True))
                 else:
-                    parts.append('当前帧的统一碰撞数据：\n' + collision_json(outcome.obs))
+                    compact = geometry_overview(outcome.obs)
+                    parts.append('当前帧的统一碰撞数据（概况）：\n' + (json.dumps(compact,ensure_ascii=False,separators=(',', ':')) if compact is not None else collision_json(outcome.obs)))
                 if session.workspace:
                     parts.append(ws_note)
                 content = images(outcome.obs, outcome.image_b64, show_screenshot=new_room)
@@ -287,7 +299,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             begin()
             obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
             result=images(obs, image)
-            result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore)+'\n'+room_json(obs))
+            result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore,compact_context=True)+'\n'+room_json(obs,compact_context=True))
             return result
 
     @optional_tool(tool_simulate, name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)
