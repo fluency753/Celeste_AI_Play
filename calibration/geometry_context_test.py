@@ -277,7 +277,9 @@ class GeometryContextTests(unittest.TestCase):
                     self.assertEqual(json.loads(detail)['frame'], 12)
                     _, player = call('observe', {'detail': 'player'})
                     self.assertEqual(json.loads(player)['frame'], 12)
-                with patch('orchestrator.server.render_collision_view', side_effect=ValueError('render failed')):
+                # 碰撞图由 GameSession 按帧画一次、写工作区与工具结果共用：两处都替换才是真实的画图失败
+                with patch('orchestrator.server.render_collision_view', side_effect=ValueError('render failed')), \
+                        patch('orchestrator.game_session.render_collision_view', side_effect=ValueError('render failed')):
                     with self.assertRaises(UnexpectedToolError):
                         call('act', {'inputs': ['1,R'], 'thought': '测试输出失败'})
                 # The first act advanced the external game, but no response was emitted.
