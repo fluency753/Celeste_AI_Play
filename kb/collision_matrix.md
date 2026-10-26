@@ -27,23 +27,37 @@ m = Matrix.from_file('/workspace/game/latest_obs.json', cell=2)
 m.save('/workspace/matrix.json')
 # 后续程序读取已经导出的矩阵；仍须核对其快照是否适用
 m = Matrix.load('/workspace/matrix.json')
-print([(s['key'], s['type']) for s in m.contacts([x, y, width, height])])
-# start、goal 为角色位置锚点，不是碰撞箱左上角
+print('snapshot', m.identity['frame'], m.identity['room'])
+x, y, width, height = m.player['hitbox']
+start = m.player['pos']
+end = [start[0] + 8, start[1]]
+goal = end  # 这里只演示向右8像素的几何查询，不执行动作；实际使用时换成自己的目标
+hits = m.contacts([x, y, width, height])
+print('contacts', len(hits), [(s['key'], s['type']) for s in hits[:8]])
+# start、goal 为角色位置锚点，不是碰撞箱左上角；单轴移动才可用 transition
+edge = m.transition(start, end, body=m.body())
+print('transition', edge['clear'], edge['outside_coverage'],
+      'blocker_count', len(edge['blockers']), 'blockers', edge['blockers'][:8])
+by_key = {s['key']: s for s in m.sources}
+# blockers是key字符串；需要类型/形状时通过来源表查询，不是对字符串调用.get()
+print('blocker_types', [(key, by_key[key]['type']) for key in edge['blockers'][:8]])
 result = m.route(start, goal, body=m.body(), tolerance=2, max_nodes=20000)
-print({k: result[k] for k in
-       ('status', 'visited', 'elapsed_ms', 'blocking_sources', 'entity_frontier')})
+print({k: result[k] for k in ('status', 'visited', 'elapsed_ms')},
+      'path_points', len(result['path']),
+      'blocker_count', len(result['blocking_sources']),
+      'blockers', result['blocking_sources'][:8])
 # result['path'] 留给程序消费或保存，不整条输出
 ```
 
-`Matrix.from_file` 读取观测文件；`Matrix.load` 读取已导出的矩阵，校验尺寸、游程、来源索引与精确来源的一致性，再重建空间索引，拒绝把损坏的单元格当空地。导入上限为 32 MiB。`contacts(rect)` 用精确形状复查相交来源。`body()` 从同帧玩家位置和碰撞箱推导 `[左偏移, 上偏移, 宽, 高]`；也可显式传入已核实的姿态尺寸，不能把站立姿态的通路结论用于下蹲或反之。
+`Matrix.from_file` 读取观测文件；`Matrix.load` 读取已导出的矩阵，校验尺寸、游程、来源索引与精确来源的一致性，再重建空间索引，拒绝把损坏的单元格当空地。导入上限为 32 MiB。`contacts(rect)` 用精确形状复查相交来源，它不应用通行策略，返回值也包含传感器及 `collidable=false` 的来源；是否阻挡须应用通行策略，危险物当前为 false 仍默认保守阻挡；无相交不代表脚下有支撑，落点还要检查脚底与支撑面的关系。`body()` 从同帧玩家位置和碰撞箱推导 `[左偏移, 上偏移, 宽, 高]`；也可显式传入已核实的姿态尺寸，不能把站立姿态的通路结论用于下蹲或反之。
 
-`transition(start, end, body=..., policies=...)` 检查沿单一坐标轴移动时身体扫过的空间，拒绝对角线输入，返回阻挡来源和是否越出已知范围。`route` 用这些转换搜索四方向锚点通道；`step` 默认等于格长，必要时减小步长或换精确局部查询。身体查询保留精确几何，格子有占用不意味着整格实心。
+`transition(start, end, body=..., policies=...)` 检查沿单一坐标轴移动时身体扫过的空间，拒绝对角线输入，返回 `clear`、`blockers`（来源 key 列表）、`outside_coverage`；它没有 `status`、`outside` 或 `blocking_sources` 字段，不要用 `.get()` 将拼错的字段静默当成无阻挡。`route` 用这些转换搜索四方向锚点通道；`step` 默认等于格长，必要时减小步长或换精确局部查询。身体查询保留精确几何，格子有占用不意味着整格实心。
 
 ## 策略与结论边界
 
 `policies` 是字典，优先级为来源 `key`、实体 `type`、碰撞 `kind`；值为 `block`、`pass`、`one_way`、`unknown`。用 `sources` 中实际的 key，不自行猜 ID 格式。
 
-默认实心物和危险物阻挡；危险物即使当前未启用也保守阻挡，因为靠近后可能启用。传感器及当前不参与碰撞的其他物体可通过；未知语义保守阻挡。默认朝上的单向平台允许上穿和横穿，阻止身体从上向下穿过顶面；不支持的方向或形状需要明确核实，不能套用普通平台规则。
+默认实心物和危险物阻挡；危险物即使当前未启用也保守阻挡，因为靠近后可能启用；当帧 `collidable=false` 不能证明未来落点安全。传感器及当前不参与碰撞的其他物体可通过；未知语义保守阻挡。默认朝上的单向平台允许上穿和横穿，阻止身体从上向下穿过顶面；不支持的方向或形状需要明确核实，不能套用普通平台规则。
 
 改变策略只是在比较一个**假设**，不会触发、删除或移动真实实体。遇到动态阻挡，先查相关状态或机制，再做短动作或受限模拟，随后重新观测。`mutable` 不等于肯定会动，也不表示可以直接忽略。
 
