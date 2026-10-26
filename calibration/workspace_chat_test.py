@@ -51,7 +51,8 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                     yield runner
                 finally:
                     runner.close_events()
-            fake = SimpleNamespace(returncode=0,stdout='OK',stderr='',seconds=.01,timed_out=False)
+            from orchestrator.sandbox import ProgramResult
+            fake = ProgramResult(returncode=0,stdout='OK',stderr='',seconds=.01,timed_out=False)
             with patch('orchestrator.chat.ensure_container',return_value='offline-container'), \
                  patch('orchestrator.chat.host_runner',host), \
                  patch('orchestrator.codex_agent.run_program',return_value=fake) as program:
