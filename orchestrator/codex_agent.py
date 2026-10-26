@@ -339,6 +339,9 @@ class CodexRunner(SessionControls):
         return self.resume_note or "知识库准备阶段已完成。现在开始本次指定章节的试玩，先调用 celeste_narrate 和 celeste_observe；剧情按当前模式使用 celeste_cutscene，正常游玩用 celeste_act。"
 
     async def _resume_thread(self, params):
+        # Resume the model's history without hydrating the complete transcript into
+        # one JSON-RPC response. Long play sessions exceed the transport line limit.
+        params = {**params, 'excludeTurns': True}
         try:
             return await self.rpc.request("thread/resume", params)
         except RuntimeError as exc:

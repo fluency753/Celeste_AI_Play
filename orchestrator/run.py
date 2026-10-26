@@ -902,6 +902,9 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()
+    except Exception as exc:
+        print(f'[run] 智能体异常，开始收尾：{type(exc).__name__}: {exc}', flush=True)
+        raise
     finally:
         finish_error = None
         if session.done and session.done_reason in ("章节完成", "分段完成"):

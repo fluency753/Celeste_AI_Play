@@ -157,6 +157,33 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(denied['success'])
             shell.assert_not_called()
 
+    async def test_resume_requests_metadata_only_without_mutating_parameters(self):
+        expected = {"thread": {"id": "original", "path": str(self.root / "thread.jsonl")},
+                    "sandbox": {"type": "readOnly"}, "model": "test-model"}
+        self.runner.rpc.request = AsyncMock(return_value=expected)
+        params = {"threadId": "original", "sandbox": "read-only", "selectedCapabilityRoots": []}
+        result = await self.runner._resume_thread(params)
+        self.assertEqual(result, expected)
+        self.runner.rpc.request.assert_awaited_once_with("thread/resume", {
+            **params, "excludeTurns": True})
+        self.assertNotIn("excludeTurns", params)
+        self.assertNotIn("turns", result["thread"])
+        self.assertEqual(result["thread"]["id"], "original")
+
+    async def test_metadata_only_resume_keeps_dynamic_tool_validation(self):
+        from orchestrator.modes import game_tools
+        path = self.root / 'resumed-thread.jsonl'
+        tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)]
+        path.write_text(json.dumps({'payload': {'dynamic_tools': tools}}), encoding='utf-8')
+        response = {'thread': {'id': 'original', 'path': str(path)}, 'sandbox': {'type': 'readOnly'}}
+        self.runner.rpc.request = AsyncMock(return_value=response)
+        result = await self.runner._resume_thread({'threadId': 'original', 'sandbox': 'read-only'})
+        self.runner._validate_resumed_tools(result['thread'])
+        self.assertNotIn('turns', result['thread'])
+        path.write_text(json.dumps({'payload': {'dynamic_tools': []}}), encoding='utf-8')
+        with self.assertRaisesRegex(RuntimeError, '缺少正式游戏工具'):
+            self.runner._validate_resumed_tools(result['thread'])
+
     async def test_writer_conflict_forks_history_and_records_recovery(self):
         expected = {"thread": {"id": "recovered"}}
         self.runner.rpc.request = AsyncMock(side_effect=[

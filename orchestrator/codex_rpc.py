@@ -99,6 +99,7 @@ class CodexRPC:
             await self.send({"id": message["id"], "error": {"code": -32000, "message": str(exc)}})
 
     async def _read(self):
+        failure = None
         try:
             while line := await self.proc.stdout.readline():
                 message = json.loads(line)
@@ -114,10 +115,13 @@ class CodexRPC:
                         future.set_exception(RuntimeError(str(message["error"])))
                     else:
                         future.set_result(message.get("result"))
+        except Exception as exc:
+            failure = ConnectionError(f'Codex app-server 协议读取失败：{type(exc).__name__}: {exc}')
+            raise
         finally:
             for future in self.pending.values():
                 if not future.done():
-                    future.set_exception(ConnectionError("Codex app-server 已断开；检查 codex_stderr.log"))
+                    future.set_exception(failure or ConnectionError("Codex app-server 已断开；检查 codex_stderr.log"))
 
     async def close(self):
         if self.proc and self.proc.returncode is None:
