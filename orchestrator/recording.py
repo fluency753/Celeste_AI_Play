@@ -2,15 +2,15 @@
 
 流程：主控接管游戏后 start()：桥接把录制指令转给 OBS 插件，插件建录制输出并打开锁步——之后 OBS 每个视频
 节拍向桥接要一帧，桥接推进一帧、画到屏幕上再回复，插件只把这些帧交给 ffmpeg；智能体思考、桥接空闲时不写。
-结束时 stop()：插件关锁步、等 ffmpeg 编完，把画面与声音合成 gameplay.mkv（完整版，含规划回放）；
-主控再从完整版里去掉规划回放的帧，生成只有真实游玩帧的 gameplay_pure.mkv（纯享版，见 purecut.py）。
+结束时 stop()：插件关锁步、等 ffmpeg 编完，把画面与声音合成 gameplay.mp4（完整版，含规划回放）；
+主控再从完整版里去掉规划回放的帧，生成只有真实游玩帧的 gameplay_pure.mp4（纯享版，见 purecut.py）。
 
 前提：OBS 已用 tools/obs_setup.py 启动（CelesteAI 配置文件与场景集合），装了 celeste-lockstep 插件，
 插件已经连上桥接的时钟端口（hello 的 clock.connected）。
 
 输出目录（runs/<智能体>/<时间>/recording/）：
-    gameplay.mkv   成片完整版（画面 + 声音，含规划回放）
-    gameplay_pure.mkv  成片纯享版（只有真实游玩的帧）
+    gameplay.mp4   成片完整版（画面 + 声音，含规划回放）
+    gameplay_pure.mp4  成片纯享版（只有真实游玩的帧）
     video.mkv      只有画面
     audio.wav      只有声音（32 位浮点立体声，每个成片帧 1/60 秒；独立游戏音频时规划回放帧里音乐继续、音效暂停）
     audio_play.wav 纯享版音轨（独立游戏音频才有：只随真实游玩帧推进，纯享版直接用它）
@@ -32,6 +32,7 @@ from typing import Callable
 
 from . import gamewindow
 from .purecut import make_pure
+from .recording_files import finished_movie
 from .config import REPO_ROOT
 
 CONFIG = REPO_ROOT / "configs" / "recording.json"
@@ -380,9 +381,11 @@ class Recorder:
                         "marker": self.opts.marker, "continuous_music": self.opts.continuous_music,
                         "audio_source": self.opts.audio_source},
         }
-        if result["state"] == "finished" and "gameplay.mkv" in files:
+        movie = finished_movie(directory)
+        if result["state"] == "finished" and movie is not None:
             self.log("[record] 生成纯享版（去掉规划回放的帧）……")
             result["pure"] = make_pure(directory, self.opts.ffmpeg, self.opts.video_args, self.log)
+            result['files'] = {p.name:p.stat().st_size for p in sorted(directory.iterdir()) if p.is_file()}
         self.result = result
         self._save_session(result['state'] or 'failed')
         try:
@@ -394,7 +397,7 @@ class Recorder:
         self.log(f"[record] 录制结束：{result['state']}，{result['frames']} 帧（{seconds:.1f} 秒），"
                  f"其中规划回放 {check.get('replay_frames') or 0} 帧（补帧 {check.get('replay_filled') or 0}），缺帧 {check.get('missing_frames')}，重复 {check.get('repeats')}"
                  + (f"，错误：{result['error']}" if result["error"] else "")
-                 + (f"；成片 {directory / 'gameplay.mkv'}" if "gameplay.mkv" in files else ""))
+                 + (f"；成片 {movie}" if movie is not None else ""))
         pure = result.get("pure") or {}
         if pure.get("state") == "finished":
             self.log(f"[record] 纯享版：{pure['frames']} 帧（{pure['seconds']:.1f} 秒，去掉规划回放 {pure['removed']} 帧）；{pure['file']}")

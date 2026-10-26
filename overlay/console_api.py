@@ -450,6 +450,7 @@ def runs(limit: int = 40) -> list[dict]:
         summary = _read_json(directory / "summary.json")
         metrics = _read_json(directory / "metrics.json")
         recording = directory / "recording"
+        from orchestrator.recording_files import finished_movie
         from orchestrator.recording import Recorder, RecordingError
         pending_recording = False
         try:
@@ -467,7 +468,7 @@ def runs(limit: int = 40) -> list[dict]:
             "stop_reason": summary.get("stop_reason"), "completed": summary.get("completed"),
             "game_released": summary.get("game_released"), "total_time_ticks": summary.get("total_time_ticks"),
             "deaths": summary.get("deaths", metrics.get("deaths")), "finished": bool(summary),
-            "recording": (recording / "gameplay.mkv").exists(), "pure": (recording / "gameplay_pure.mkv").exists(),
+            "recording": finished_movie(recording) is not None, "pure": finished_movie(recording, pure=True) is not None,
             "recording_pending": pending_recording, "recording_dir": str(recording),
             "resumable": bool(summary) and summary.get("game_released") is False and latest is not None
                          and latest.resolve() == directory.resolve() and held_now,

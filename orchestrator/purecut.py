@@ -1,7 +1,7 @@
 """纯享版录像：从完整版里去掉规划回放的帧，只留真实游玩的帧。
 
-完整版 gameplay.mkv 是插件录下的全部成片帧：真实游玩（游戏推进）的帧，以及规划回放的帧（游戏不推进、只把推演过的
-路线画进画面；frames.csv 里章节计时记 -1，回放跟不上节拍时插件补的帧记 -2）。纯享版 gameplay_pure.mkv 只留章节计时
+完整版 gameplay.mp4 是插件录下的全部成片帧：真实游玩（游戏推进）的帧，以及规划回放的帧（游戏不推进、只把推演过的
+路线画进画面；frames.csv 里章节计时记 -1，回放跟不上节拍时插件补的帧记 -2）。纯享版 gameplay_pure.mp4 只留章节计时
 不小于 0 的帧：
 - 画面：按 frames.csv 的行号（就是 video.mkv 的帧序号）挑帧，重新编码（编码参数与录制相同）；
 - 声音：独立游戏音频（game_nrt）录制时插件另写了一条纯享版音轨 audio_play.wav：它只随真实游玩帧推进，每个游玩帧
@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
+
+from .recording_files import finished_movie
 
 SAMPLES_PER_FRAME = 800       # 48000 / 60
 FADE_SAMPLES = 240            # 5 毫秒
@@ -126,9 +128,11 @@ def _run(cmd: list[str], log_path: Path) -> None:
 
 def make_pure(directory: Path, ffmpeg: str, video_args: str, log: Callable[[str], None] = print,
               fps: int = 60) -> dict:
-    """生成纯享版 gameplay_pure.mkv；返回摘要（写进 recording.json 的 pure）。"""
+    """生成纯享版 gameplay_pure.mp4；返回摘要（写进 recording.json 的 pure）。"""
     directory = Path(directory)
-    out = directory / "gameplay_pure.mkv"
+    out = directory / "gameplay_pure.mp4"
+    temporary = directory / 'gameplay_pure.tmp.mp4'
+    log_path = directory / "ffmpeg_pure.log"
     t0 = time.monotonic()
     ticks = read_ticks(directory / "frames.csv")
     ranges = keep_ranges(ticks)
@@ -142,16 +146,28 @@ def make_pure(directory: Path, ffmpeg: str, video_args: str, log: Callable[[str]
         log("[record] audio_play.wav 的长度与游玩帧数对不上，纯享版改从 audio.wav 裁剪")
     summary["audio"] = "audio_play.wav" if track else "audio.wav 裁剪"
     if kept == len(ticks):            # 没有规划回放：纯享版与完整版相同
-        if out.exists():
-            out.unlink()
         try:
-            os.link(directory / "gameplay.mkv", out)
-        except OSError:
-            shutil.copyfile(directory / "gameplay.mkv", out)
+            full = finished_movie(directory)
+            if full is None:
+                raise FileNotFoundError('没有已完成的完整版录像')
+            temporary.unlink(missing_ok=True)
+            if full.suffix == '.mp4':
+                try:
+                    os.link(full, temporary)
+                except OSError:
+                    shutil.copyfile(full, temporary)
+            else:  # Legacy MKV must be remuxed, never renamed to .mp4.
+                _run([ffmpeg,'-hide_banner','-loglevel','warning','-y','-i',str(full),
+                      '-map','0:v','-map','0:a','-c','copy','-movflags','+faststart',str(temporary)],log_path)
+            temporary.replace(out)
+        except Exception as exc:
+            log(f'[record] 纯享版生成失败：{exc}')
+            return {**summary,'state':'failed','error':str(exc)}
+        finally:
+            temporary.unlink(missing_ok=True)
         return {**summary, "state": "finished", "same_as_full": True}
 
     video_tmp, audio_tmp, script = directory / "video_pure.mkv", directory / "audio_pure_cut.wav", directory / "pure_select.txt"
-    log_path = directory / "ffmpeg_pure.log"
     try:
         # 画面：select 按帧序号挑出各段游玩，时间戳重排成连续的 60 帧/秒
         expr = "+".join(f"between(n,{a},{b})" for a, b in ranges)
@@ -165,12 +181,14 @@ def make_pure(directory: Path, ffmpeg: str, video_args: str, log: Callable[[str]
         if track is None:
             cut_audio(directory / "audio.wav", audio_tmp, ranges)
         _run([ffmpeg, "-hide_banner", "-loglevel", "warning", "-y", "-i", str(video_tmp), "-i", str(track or audio_tmp),
-              "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", "-shortest", str(out)], log_path)
+              "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
+              "-movflags", "+faststart", "-shortest", str(temporary)], log_path)
+        temporary.replace(out)
     except Exception as exc:  # 纯享版失败不影响完整版
         log(f"[record] 纯享版生成失败：{exc}")
         return {**summary, "state": "failed", "error": str(exc)}
     finally:
-        for p in (video_tmp, audio_tmp, script):
+        for p in (video_tmp, audio_tmp, script, temporary):
             try:
                 p.unlink()
             except OSError:

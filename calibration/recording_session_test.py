@@ -201,7 +201,7 @@ class RecordingSessionTests(unittest.TestCase):
             def call(command, **args):
                 order.append(command)
                 return self.call(command, **args)
-            (self.directory/'gameplay.mkv').write_bytes(b'x')
+            (self.directory/'gameplay.mp4').write_bytes(b'x')
             self.release_with(SimpleNamespace(call=call, close=Mock()))
         self.assertLess(order.index('deactivate'), order.index('pure'))   # 不等纯享版生成就交还游戏
 

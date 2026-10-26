@@ -1,4 +1,4 @@
-"""给已有的录像补生成纯享版（只有真实游玩的帧，去掉规划回放）：gameplay_pure.mkv。
+"""给已有的录像补生成纯享版（只有真实游玩的帧，去掉规划回放）：gameplay_pure.mp4。
 
 用法（仓库根目录）：
     python tools/make_pure.py runs/<智能体>/<时间>/recording

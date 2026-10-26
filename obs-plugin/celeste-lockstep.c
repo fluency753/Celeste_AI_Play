@@ -4,7 +4,7 @@
  * 1. 锁步：录制期间，OBS 每个视频节拍（tick 回调，渲染这一帧之前）向桥接 Mod 的时钟端口发一个令牌，
  *    等桥接推进一帧并把它呈现到屏幕（最多等 WAIT_MS 毫秒），这一帧渲染时就采到了这个游戏帧。
  * 2. 只录游玩帧：插件自带一个原始画面输出（celeste_gameplay_output），只把"刚采到一个新游戏帧"的视频帧
- *    交给 ffmpeg 编码；每个保留的视频帧配上同一时段（加音频偏移）的 1/fps 秒音频，写进 WAV，结束时合成 MKV。
+ *    交给 ffmpeg 编码；每个保留的视频帧配上同一时段（加音频偏移）的 1/fps 秒音频，写进 WAV，结束时合成 MP4。
  *    思考期间、桥接空闲时的视频帧都不写，所以成片的帧数等于游玩帧数。
  *    规划回放的帧（游戏不推进、只重画画面，章节计时 -1）期间音乐一直在放：这时画一帧跟不上节拍，就把漏掉的节拍
  *    用下一帧补上（章节计时记 -2），声音一段不丢，音乐保持原速。
@@ -953,7 +953,7 @@ static DWORD WINAPI finish_thread(LPVOID param)
 	if (!job->failed && job->written > 0) {
 		snprintf(cmd, sizeof(cmd),
 			 "\"%s\" -hide_banner -loglevel warning -y -i \"%s\\video.mkv\" -i \"%s\\audio.wav\" -map 0:v -map 1:a "
-			 "-c:v copy -c:a aac -b:a 256k \"%s\\gameplay.mkv\"",
+			 "-c:v copy -c:a aac -b:a 256k -movflags +faststart \"%s\\gameplay.mp4\"",
 			 job->ffmpeg, job->dir, job->dir, job->dir);
 		snprintf(log_path, sizeof(log_path), "%s\\ffmpeg_mux.log", job->dir);
 		HANDLE mux;

@@ -66,7 +66,7 @@ class RecordingAudioTests(unittest.TestCase):
     def test_game_release_precedes_encoding_and_waits_until_capture_has_stopped(self):
         with tempfile.TemporaryDirectory() as folder:
             recorder=self.recorder(folder,Mock());recorder.started=True
-            (Path(folder)/'gameplay.mkv').touch()
+            (Path(folder)/'gameplay.mp4').touch()
             states=[({'lockstep':True},{'state':'finishing','recording':False}),
                     ({'lockstep':False},{'state':'finishing','recording':True}),
                     ({'lockstep':False},{'state':'finishing','recording':False}),
@@ -123,8 +123,12 @@ class PureCutAudioTests(unittest.TestCase):
         def run(cmd, log_path):
             if "-map" in cmd:
                 used.append(Path(cmd[cmd.index("-i", cmd.index("-i") + 1) + 1]).name)
+            Path(cmd[-1]).write_bytes(b'ffmpeg fixture')
         with patch.object(purecut, "_run", side_effect=run):
-            return purecut.make_pure(Path(folder), "ffmpeg", "", log=lambda _: None), used
+            result = purecut.make_pure(Path(folder), "ffmpeg", "", log=lambda _: None)
+        self.assertEqual(result['state'],'finished')
+        self.assertTrue(result['file'].endswith('gameplay_pure.mp4'))
+        return result, used
 
     def test_play_track_is_used_when_it_matches(self):
         with tempfile.TemporaryDirectory() as folder:

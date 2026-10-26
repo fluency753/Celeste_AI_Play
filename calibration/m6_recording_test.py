@@ -8,7 +8,7 @@
      在 WAV 里出现的位置给出声音相对画面的延迟，建议的 audio_offset_ms 写进 configs/local.recording.json；
      每段动作最后一帧的末尾不该有超过淡出长度（2 毫秒）的静音（声音暂停得太早会截掉一截音乐）；
      连续的声音里不该有单个样本的断口（左右声道都正好是 0、同一声道前后高于静音阈值；插件取音频块边界的老问题，听起来是电流声）；
-  4. gameplay.mkv 合成成功，画面与声音时长一致。
+  4. gameplay.mp4 合成成功，画面与声音时长一致。
 
 前提：游戏开着（桥接 0.8.5 以上），test 存档停在关卡里、Madeline 可操作并站在平地上（建议 1A 房间 6）；
 OBS 已用 python tools/obs_setup.py launch 启动，插件已连上桥接。
@@ -271,9 +271,9 @@ def main() -> int:
         print(f"  建议把 configs/local.recording.json 的 audio_offset_ms 设为 {statistics.median(latencies):.0f}"
               "（只在某段量不到时作为后备）", flush=True)
 
-    info = probe(options.ffmpeg, rec_dir / "gameplay.mkv")
+    info = probe(options.ffmpeg, rec_dir / "gameplay.mp4")
     kinds = {s.get("codec_type"): s for s in info.get("streams") or []}
-    check({"video", "audio"} <= set(kinds), "gameplay.mkv 含画面与声音", f"{sorted(kinds)}")
+    check({"video", "audio"} <= set(kinds), "gameplay.mp4 含画面与声音", f"{sorted(kinds)}")
     summary = {"acts": acts, "expected": expected, "rows": len(rows), "gaps": gaps[:50], "onsets_ms": onsets,
                "tails_ms": tails,
                "recording": result}
