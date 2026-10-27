@@ -507,7 +507,13 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     client.step_options = lambda: step_options(cfg, departure=True)
     try:
         t0 = time.monotonic()
-        if recorder is not None:
+        if recorder is not None and recorder.started:
+            # Recovery already owns a fresh physical chunk of the original
+            # logical recording. Do not navigate backwards or send start again.
+            recorder.call = client.call
+            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, create_if_missing=cfg.create_save,
+                        save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode, checkpoint=first_checkpoint(cfg))
+        elif recorder is not None:
             to_file_select(client)
             recorder.call = client.call
             recorder.start()
@@ -900,6 +906,9 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             temporary.replace(run_dir / 'run_state.json')
     if recorder is not None:
         recorder.call = session.bridge_call  # 开局时已经开始录制（见 enter_save），之后改用主控的连接
+        if getattr(cfg, '_recording_resume_manifest', None):
+            cfg._recording_adopted = True
+            cfg._keep_frozen = False
     elif args.record and not getattr(cfg, '_recording_resume_manifest', None):
         recorder = Recorder(session.bridge_call,
                             options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms, args.record_marker,
@@ -1050,30 +1059,48 @@ def choose_session(previous: dict | None, fresh: bool, prepared: dict | None = N
 
 
 def recording_guard(recorder: Recorder, run_dir: Path):
-    """录制时每次推进游戏前调用：确认游戏窗口没被最小化；这一段录像录不上了（插件失败、独立音频出错、OBS 断开）
-    就收尾这一段、在同一运行目录里另起一段接着录。另起不了就暂停试玩并抛 RecordingHalt，不再推进录不上的帧。"""
+    """Before input, recover failed capture into the same logical recording or pause."""
     def check():
-        recorder.check_window()
-        reason = recorder.segment_failed()
-        if not reason:
-            return
-        from .telemetry import publish
+        reason = '录制安全检查未通过'
         try:
-            recorder.roll(reason)
-        except RecordingHalt as exc:
+            recorder.check_window()
+            try:
+                reason = recorder.segment_failed()
+                if not reason:
+                    return
+                recorder.roll(reason)
+            except RecordingError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                # A failed hello/file read is also an unverified capture, not
+                # permission to advance without recording. Ordinary window
+                # errors keep the generic callback behavior outside this block.
+                raise RecordingHalt(f'无法确认录制安全状态：{exc}') from exc
+        except RecordingError as exc:
+            # GameSession intentionally ignores ordinary window-check errors.
+            # Recording ownership/ledger failures must cross that boundary as
+            # RecordingHalt, including failures before roll is reached.
+            halt = exc if isinstance(exc, RecordingHalt) else RecordingHalt(f'录制安全检查失败：{exc}')
             from .control import RunControl
             try:
                 RunControl(run_dir).enqueue('pause')
             except Exception as again:  # noqa: BLE001
                 print(f'[record] 暂停试玩失败：{again}', flush=True)
             print(f'[record] {exc}：试玩已暂停', flush=True)
-            publish(run_dir, f'system:recording-halt:{int(time.time())}',
-                    f'录像中断（{reason}），另起一段也失败：{exc}。试玩已暂停，游戏保持冻结；'
-                    '处理好 OBS 后中断运行，再加 --new-recording 续跑。', role='system', kind='系统')
-            raise
+            try:
+                from .telemetry import publish
+                publish(run_dir, f'system:recording-halt:{int(time.time())}',
+                        f'录像中断（{reason}），录制检查或恢复失败：{exc}。试玩已暂停，游戏保持冻结；'
+                        '处理好 OBS 或录制记录后重试，以原会话恢复；仅明确放弃旧录像时使用 --new-recording。', role='system', kind='系统')
+            except Exception as again:  # noqa: BLE001
+                print(f'[record] 发布暂停通知失败：{again}', flush=True)
+            if halt is exc:
+                raise
+            raise halt from exc
+        from .telemetry import publish
         publish(run_dir, f'system:recording-roll:{len(recorder.segments)}',
-                f'录像这一段中断（{reason}）：已收尾，另起一段接着录（{recorder.opts.dir.name}）。'
-                '出错那次推进里、出错之后的画面没录上。', role='system', kind='系统')
+                f'录像捕获中断（{reason}）：原内容已保留，已恢复同一录制会话（{recorder.opts.dir.name}）。'
+                '故障中未录下的帧不会补造，恢复边界写入录制记录。', role='system', kind='系统')
     return check
 
 
@@ -1117,7 +1144,7 @@ def abandon_recording(bridge_port: int, saved: dict | None, previous_dir, proble
             plugin = clock.get('plugin') or {}
             state = plugin.get('state')
             recording = state == 'recording' or plugin.get('recording') is True
-            same = bool(plugin.get('dir')) and Path(plugin['dir']).resolve() == Path(saved['options']['dir']).resolve()
+            same = bool(plugin.get('dir')) and Path(plugin['dir']).resolve() == Recorder.capture_directory(saved)
             # OBS 断开后桥接仍报告断开前的插件状态：还在"录制/收尾中"的收不了尾，只能放弃；
             # 已经编码完（finished/failed）的同目录录像照常收尾，生成成片与纯享版，不标成放弃
             connected = clock.get('connected') is not False
@@ -1153,12 +1180,14 @@ def main() -> int:
     saved_recording = None
     try:
         saved_recording = Recorder.saved_session(args.previous['dir']) if args.previous else None
-        resume_recording = Recorder.validate_resume(saved_recording, hello)
+        recording_mode = (('live' if Recorder.validate_resume(saved_recording, hello) else 'new')
+                          if getattr(args, 'new_recording', False) else Recorder.resume_mode(saved_recording, hello))
+        resume_recording = recording_mode != 'new'
     except RecordingError as exc:
         if not (args.previous and args.new_recording):
             print(f"[record] {exc}", flush=True)
             if args.previous:
-                print("[record] 原录像接不上时可以放弃它、另起一段录像续跑：续跑加 --new-recording"
+                print("[record] 原录像保持，处理故障后正常 --resume 会重试恢复；仅明确放弃它时加 --new-recording"
                       "（控制台里用“另起录像续跑”）；不续跑时在控制台交还游戏控制", flush=True)
             return 2
         try:
@@ -1166,7 +1195,7 @@ def main() -> int:
         except RecordingError as again:
             print(f"[record] {again}", flush=True)
             return 2
-        saved_recording, resume_recording = None, False
+        saved_recording, resume_recording, recording_mode = None, False, 'new'
     if resume_recording:
         if not args.record:
             print('[record] 原录像仍在继续，不能用 --no-record 续跑；请先收尾录像（控制台交还游戏控制时会收尾）', flush=True)
@@ -1191,6 +1220,23 @@ def main() -> int:
         mod_hud = start_mod_hud(cfg, run_dir)
         if args.record:
             obs_launched = ensure_obs()
+        if recording_mode == 'recover':
+            from tools.bridge_client import BridgeClient
+            recovery_client = BridgeClient(port=cfg.bridge_port, timeout=120)
+            try:
+                Recorder.validate_recovery(saved_recording, recovery_client.call('hello'))
+                recovery_client.call('activate', entities=False, tiles=False, continuous_music=cfg.continuous_music)
+                recorder = Recorder.recover(recovery_client.call, saved_recording, run_dir,
+                                             log=lambda m: print(m, flush=True))
+                handoff_needed = True
+            except BaseException:
+                # An asynchronous start may have succeeded despite a lost ACK.
+                # Keep this owner and OBS available for the next recovery try.
+                cfg._keep_frozen = True
+                cfg._recording_retained = True
+                raise
+            finally:
+                recovery_client.close()
         if previous and check_resume_position(cfg):
             handoff_needed = True
         elif previous or not cfg.skip_enter:

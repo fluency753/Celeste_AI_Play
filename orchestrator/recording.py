@@ -149,7 +149,7 @@ def options_from(run_dir: Path, ffmpeg: str | None = None, video_args: str | Non
     )
 
 
-def analyze_frames(csv_path: Path) -> dict:
+def analyze_frames(csv_path: Path, boundaries=None) -> dict:
     """检查 frames.csv：成片帧数、游戏帧号是否连续（不连续说明有游玩帧没录上）；规划回放的帧另计。"""
     rows, malformed = [], 0
     try:
@@ -166,9 +166,12 @@ def analyze_frames(csv_path: Path) -> dict:
     replay = sum(1 for r in rows if r[2] in (-1, -2))
     filled = sum(1 for r in rows if r[2] == -2)
     rows_all, rows = rows, [r for r in rows if r[2] >= 0]
-    gaps, repeats = [], 0
-    for (_, prev, _, _), (index, cur, _, _) in zip(rows, rows[1:]):
-        if cur == prev:
+    gaps, repeats, resets = [], 0, []
+    boundary_indices = {item['index'] for item in boundaries or []}
+    for (previous_index, prev, _, _), (index, cur, _, _) in zip(rows, rows[1:]):
+        if cur <= prev and any(previous_index < boundary <= index for boundary in boundary_indices):
+            resets.append({'index': index, 'from': prev, 'to': cur})
+        elif cur == prev:
             repeats += 1
         elif cur != prev + 1:
             gaps.append({"index": index, "from": prev, "to": cur, "missing": cur - prev - 1})
@@ -181,6 +184,7 @@ def analyze_frames(csv_path: Path) -> dict:
         "missing_frames": sum(g["missing"] for g in gaps if g["missing"] > 0),
         "gaps": gaps[:50],
         "repeats": repeats,
+        **({'frame_resets': resets} if resets else {}),
         **({"malformed_rows": malformed} if malformed else {}),
     }
 
@@ -216,18 +220,34 @@ class Recorder:
         self.run_dirs = []
         self._stop = RecordingStop()
         self.segments: list[dict] = []   # 本次运行里之前失败、已收尾的录像段（见 roll）
+        self._recovery_start = None
+        self._roll_pending = None
 
     def bind_run(self, directory: Path):
         directory = directory.resolve()
         if directory not in self.run_dirs:
             self.run_dirs.append(directory)
 
-    def _save_session(self, state):
+    def _session_data(self, state='recording'):
         options = asdict(self.opts)
         options['dir'] = str(self.opts.dir.resolve())
-        manifest = self.opts.dir.resolve() / 'session.json'
         payload = {'version': 1, 'id': self.session_id, 'state': state, 'options': options,
                    'runs': [str(p) for p in self.run_dirs]}
+        if self._recovery_start is not None:
+            payload['recovery_start'] = self._recovery_start
+        return payload
+
+    @staticmethod
+    def capture_directory(saved):
+        from .recording_recovery import capture_directory, RecoveryError
+        try:
+            return capture_directory(saved)
+        except (RecoveryError, OSError, ValueError) as exc:
+            raise RecordingError(f'录制恢复记录无效：{exc}') from exc
+
+    def _save_session(self, state):
+        manifest = self.opts.dir.resolve() / 'session.json'
+        payload = self._session_data(state)
         temporary = manifest.with_suffix('.tmp')
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
         temporary.replace(manifest)
@@ -265,7 +285,7 @@ class Recorder:
         clock = hello.get('clock') or {}
         plugin = clock.get('plugin') or {}
         active = clock.get('lockstep') or plugin.get('recording') is True or plugin.get('state') in {'recording', 'finishing'}
-        expected = Path(saved['options']['dir']).resolve() if saved else None
+        expected = Recorder.capture_directory(saved) if saved else None
         actual = Path(plugin['dir']).resolve() if plugin.get('dir') else None
         if active and (expected is None or actual != expected):
             raise RecordingOwnershipError('OBS 正在采集或收尾另一段录像，不能交还该录制的游戏控制')
@@ -275,17 +295,19 @@ class Recorder:
         clock = hello.get('clock') or {}
         plugin = clock.get('plugin') or {}
         active = plugin.get('state') == 'recording' or plugin.get('recording') is True
-        held = saved is not None and saved.get('state') == 'recording'
+        held = saved is not None and saved.get('state') in {'recording', 'recovering'}
         if pending_recording(saved) and not held:
             raise RecordingError('原录像正在收尾，请先完成收尾，不能恢复采集')
         if plugin.get('state') == 'finishing':
             raise RecordingError('OBS 正在收尾录像，请完成收尾后再开始采集')
         if active and not held:
-            raise RecordingError('OBS 正在录制其他会话，不能另开录制；请先收尾原录像')
+            raise RecordingOwnershipError('OBS 正在录制其他会话，不能另开录制；请先收尾原录像')
         if not held:
             return False
-        expected = Path(saved['options']['dir']).resolve()
+        expected = Recorder.capture_directory(saved)
         actual = Path(plugin.get('dir') or '').resolve()
+        if active and actual != expected:
+            raise RecordingOwnershipError('OBS 正在录制其他会话，拒绝接续或替换它')
         if not active or not clock.get('connected') or not clock.get('lockstep') or not plugin.get('dir') or actual != expected:
             raise RecordingError('原录像已断开或目录不匹配，拒绝覆盖或悄悄另起录像')
         if saved['options']['audio_source'] == 'game_nrt' and not hello.get('record_audio_active'):
@@ -307,6 +329,104 @@ class Recorder:
         return recorder
 
     @staticmethod
+    def validate_recovery(saved, hello):
+        """Only a stopped capture belonging to this logical recording can recover."""
+        if not saved or saved.get('state') not in {'recording', 'recovering', 'finishing', 'failed', 'finished'}:
+            raise RecordingError('没有可恢复的原录制会话；不会覆盖或另开录像')
+        Recorder.validate_release(saved, hello)
+        plugin = (hello.get('clock') or {}).get('plugin') or {}
+        if plugin.get('state') == 'finishing':
+            raise RecordingError('原编码器仍在收尾，保持暂停，完成后重试恢复')
+
+    @classmethod
+    def resume_mode(cls, saved, hello):
+        """Choose live adoption or stopped-encoder recovery without side effects."""
+        try:
+            if cls.validate_resume(saved, hello):
+                return 'live'
+        except RecordingOwnershipError:
+            raise
+        except RecordingError:
+            if not saved:
+                raise
+            cls.validate_recovery(saved, hello)
+            return 'recover'
+        if saved:
+            cls.validate_recovery(saved, hello)
+            return 'recover'
+        return 'new'
+
+    @classmethod
+    def recover(cls, call, saved, run_dir, log=print, timeout=20.0):
+        """Restart capture into a private chunk while retaining the logical ID/files."""
+        from .recording_recovery import prepare, RecoveryError
+        hello = call('hello')
+        cls.validate_recovery(saved, hello)
+        try:
+            if cls.validate_resume(saved, hello):
+                return cls.adopt(call, saved, run_dir, log)
+        except RecordingOwnershipError:
+            raise
+        except RecordingError:
+            pass
+        if not (hello.get('clock') or {}).get('connected'):
+            raise RecordingError('OBS 插件尚未连接；原录制文件保持，连接后重试恢复')
+        recorder = cls(call, RecordOptions(**{**saved['options'], 'dir': Path(saved['options']['dir'])}), log)
+        recorder.session_id = saved['id']
+        recorder.run_dirs = [Path(p) for p in saved.get('runs', [])]
+        recorder.bind_run(Path(run_dir))
+        previous_request = saved.get('recovery_start')
+        if previous_request and previous_request.get('phase') == 'requested':
+            # A queued OBS start can outlive a lost acknowledgement. Only its
+            # actual recording/failed state resolves that uncertainty.
+            until = time.monotonic() + timeout
+            while True:
+                hello = call('hello')
+                cls.validate_release(saved, hello)
+                plugin = (hello.get('clock') or {}).get('plugin') or {}
+                actual = Path(plugin['dir']).resolve() if plugin.get('dir') else None
+                expected = cls.capture_directory(saved)
+                if actual == expected and plugin.get('state') == 'recording':
+                    return cls.adopt(call, saved, run_dir, log)
+                if actual == expected and plugin.get('state') in {'failed', 'finished'}:
+                    break
+                if time.monotonic() >= until:
+                    raise RecordingError('上次恢复启动的结果尚未确认，原交接保持；未重复 start，请稍后重试')
+                time.sleep(.2)
+        clock = hello.get('clock') or {}
+        plugin = clock.get('plugin') or {}
+        if clock.get('lockstep') or plugin.get('recording') or hello.get('record_audio_active'):
+            # validate_release above prevents a stop from touching foreign work.
+            call('record', action='stop', marker=False)
+            deadline = time.monotonic() + timeout
+            while True:
+                hello = call('hello')
+                cls.validate_release(saved, hello)
+                clock, plugin = hello.get('clock') or {}, (hello.get('clock') or {}).get('plugin') or {}
+                if not clock.get('lockstep') and not plugin.get('recording') and plugin.get('state') in {'idle', 'finished', 'failed'}:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RecordingError('原编码器尚未停止，未替换文件或启动新捕获')
+                time.sleep(.2)
+        try:
+            ledger = prepare(saved)
+        except (RecoveryError, OSError, ValueError) as exc:
+            raise RecordingError(f'原录像校验／恢复准备失败：{exc}') from exc
+        capture = cls.capture_directory(saved)
+        recorder._recovery_start = {'capture_dir': str(capture), 'phase': 'prepared'}
+        recorder._save_session('recovering')
+        try:
+            recorder._start_capture(capture, timeout)
+        except (OSError, TimeoutError) as exc:
+            raise RecordingError('恢复采集的启动结果尚未确认，原录像和交接保留；请正常 --resume 重试，不重复 start') from exc
+        except RecordingError:
+            raise
+        except RuntimeError as exc:
+            raise RecordingError(f'恢复采集未能启动：{exc}；原录像保留，修复后正常 --resume 重试') from exc
+        log(f'[record] 恢复原录像：{recorder.opts.dir}（会话 {recorder.session_id}，原有 {ledger.get("prefix_frames", 0)} 帧保留）')
+        return recorder
+
+    @staticmethod
     def abandon_saved(saved, reason):
         """原录像接不上也收不了尾（OBS 关闭或崩溃、独立音频停了等）：把会话标成 abandoned，不再等它续接，
         之后续跑另起一段录像，控制台也能照常交还游戏。已经写下的文件原样留在录像目录里。"""
@@ -323,7 +443,7 @@ class Recorder:
         hello = call('hello')
         cls.validate_release(saved, hello)
         plugin = (hello.get('clock') or {}).get('plugin') or {}
-        if not plugin.get('dir') or Path(plugin['dir']).resolve() != Path(saved['options']['dir']).resolve():
+        if not plugin.get('dir') or Path(plugin['dir']).resolve() != cls.capture_directory(saved):
             raise RecordingError('OBS 当前录像与待收尾会话不匹配，未停止任何录像')
         recorder = cls(call, RecordOptions(**{**saved['options'], 'dir': Path(saved['options']['dir'])}), log)
         recorder.session_id = saved['id']
@@ -336,59 +456,92 @@ class Recorder:
 
     def retain(self):
         """编码器和音频由 OBS/Mod 持有；只断开 Python 所有权，不发停止命令。"""
+        if self._roll_pending is not None:
+            raise RecordingError('录制恢复尚未确认，不能保留旧捕获的终态；请先重试恢复或收尾')
         hello = self.call('hello')
         if hello.get('frozen') is False:
             # 菜单与地图不冻结（桥接 1.0.7 起照常运行）：保留录制会把中断期间的菜单画面一直录进同一份录像
             raise RecordingError('游戏不在冻结的关卡里（菜单或地图照常运行），不保留录制')
-        saved = {'state': 'recording', 'options': {'dir': str(self.opts.dir), 'audio_source': self.opts.audio_source}}
+        saved = self._session_data()
         self.validate_resume(saved, hello)
+        from .recording_recovery import prefix_counts, RecoveryError
+        try:
+            prefix = prefix_counts(saved)
+        except (RecoveryError, OSError, ValueError) as exc:
+            raise RecordingError(f'原录制累计计量读取失败：{exc}') from exc
         self._save_session('recording')
         self.started = False
         self.log(f'[record] 保留录制会话等待续跑：{self.opts.dir}')
         return {'state': 'retained', 'dir': str(self.opts.dir.resolve()), 'id': self.session_id,
-                'frames': (hello.get('clock', {}).get('plugin') or {}).get('frames'), 'pending': True}
+                'frames': prefix['frames'] + ((hello.get('clock', {}).get('plugin') or {}).get('frames') or 0), 'pending': True}
 
     def segment_failed(self) -> str | None:
         """这一段录像是否已经录不上画面：OBS 插件报失败、桥接的独立录像音频出错，或插件与桥接断开。
-        返回原因；没问题返回 None。OBS 在录别的目录时不是这一段的状态，不动它。"""
+        返回原因；没问题返回 None。OBS 指向其他目录时拒绝推进，不操作它。"""
+        if self._roll_pending is not None:
+            return self._roll_pending['reason']
         if not self.started or self._stop.requested:
             return None
         hello = self.call('hello')
         self.audio_diagnostics = hello.get('record_audio_diagnostics', self.audio_diagnostics)
         clock = hello.get('clock') or {}
         plugin = clock.get('plugin') or {}
-        if plugin.get('dir') and Path(plugin['dir']).resolve() != self.opts.dir.resolve():
-            return None
+        if plugin.get('dir') and Path(plugin['dir']).resolve() != self.capture_directory(self._session_data()):
+            raise RecordingOwnershipError('OBS 已指向其他录制，当前会话没有可核验的采集；未操作其他录像')
         if clock.get('connected') is False:
             return 'OBS 插件与桥接的时钟连接断开'
         if plugin.get('state') == 'failed':
             return plugin.get('error') or 'OBS 插件报告录制失败'
+        active = plugin.get('state') == 'recording' or plugin.get('recording') is True
+        if active and not plugin.get('dir'):
+            raise RecordingOwnershipError('OBS 正在采集但未报告归属目录；拒绝推进或操作未知录像')
+        if not active and (plugin.get('state') == 'idle' or not plugin.get('dir')):
+            raise RecordingHalt('OBS 编码器已退出或重启，当前没有可核验的采集；请中断主控后正常 --resume，以原会话恢复。动作未执行')
+        if not active or not clock.get('lockstep'):
+            return '原录制采集或锁步已停止，需要恢复原会话'
         if self.opts.audio_source == 'game_nrt' and hello.get('record_audio_error'):
             return '独立录像音频出错：' + str(hello['record_audio_error'])
         return None
 
     def roll(self, reason: str) -> dict | None:
-        """这一段录像失败：收尾已录的部分（插件没合成成片时由主控合成），在同一运行目录里另起一段接着录
-        （recording_2、recording_3…；运行目录的 recording_session.json 指向最新一段）。
-        返回旧段的收尾结果；收尾没完成或另起失败时抛 RecordingHalt。"""
-        self.log(f'[record] 这一段录像失败（{reason}）：收尾已录的部分，另起一段接着录')
+        """Close failed capture and recover the same logical recording before more input."""
+        self.log(f'[record] 录像捕获失败（{reason}）：保留原录像，恢复同一录制会话')
+        if self._roll_pending is None:
+            self._roll_pending = {'reason': reason, 'closed': False, 'old': None}
+        pending = self._roll_pending
+        if not pending['closed']:
+            try:
+                old = self.stop(timeout=300.0, _rolling=True)
+            except Exception as exc:  # noqa: BLE001
+                raise RecordingHalt(f'收尾失败的那段录像出错：{exc}') from exc
+            if old is not None and old.get('pending'):
+                raise RecordingHalt('失败的捕获还没收尾完，不能恢复采集')
+            pending.update(closed=True, old=old)
+            self.segments.append({'dir': str(self.opts.dir.resolve()), 'state': (old or {}).get('state'),
+                                  'frames': (old or {}).get('frames'), 'reason': pending['reason'],
+                                  'salvaged': (old or {}).get('salvaged')})
+        old = pending['old']
         try:
-            old = self.stop(timeout=300.0)
+            # recover may have persisted a requested start before its ACK was lost.
+            # The disk manifest and ledger own that new capture, not this object's
+            # cached stop/result from the capture we just closed.
+            resumed = self.recover(self.call, self._roll_saved(),
+                                   self.run_dirs[-1] if self.run_dirs else self.opts.dir.parent, self.log)
         except Exception as exc:  # noqa: BLE001
-            raise RecordingHalt(f'收尾失败的那段录像出错：{exc}') from exc
-        if old is not None and old.get('pending'):
-            raise RecordingHalt('失败的那段录像还没收尾完，不能另起一段')
-        self.segments.append({'dir': str(self.opts.dir.resolve()), 'state': (old or {}).get('state'),
-                              'frames': (old or {}).get('frames'), 'reason': reason,
-                              'salvaged': (old or {}).get('salvaged')})
-        self.opts = replace(self.opts, dir=next_segment_dir(self.opts.dir))
-        self.session_id = uuid.uuid4().hex
-        self.started, self.result, self._stop = False, None, RecordingStop()
-        try:
-            self.start()
-        except Exception as exc:  # noqa: BLE001
-            raise RecordingHalt(f'另起一段录像失败：{exc}') from exc
+            raise RecordingHalt(f'恢复原录像失败：{exc}') from exc
+        previous = self.segments
+        self.__dict__.update(resumed.__dict__)
+        self.segments = previous
         return old
+
+    def _roll_saved(self):
+        try:
+            saved = json.loads((self.opts.dir / 'session.json').read_text(encoding='utf-8'))
+            if saved.get('id') != self.session_id:
+                raise ValueError('录制会话身份不匹配')
+            return saved
+        except (OSError, ValueError, TypeError) as exc:
+            raise RecordingError(f'无法读取恢复中的录制会话：{exc}') from exc
 
     def clock(self) -> dict:
         hello = self.call("hello")
@@ -398,7 +551,7 @@ class Recorder:
     def _plugin(self, allow_previous_terminal=False) -> tuple[dict, dict]:
         clock = self.clock()
         plugin = clock.get("plugin") or {}
-        if plugin.get('dir') and Path(plugin['dir']).resolve() != self.opts.dir.resolve():
+        if plugin.get('dir') and Path(plugin['dir']).resolve() != self.capture_directory(self._session_data()):
             if (allow_previous_terminal and not clock.get('lockstep') and plugin.get('recording') is not True
                     and plugin.get('state') in {'idle', 'finished', 'failed'}):
                 # Start is queued asynchronously in OBS. Its first reply can still describe the old job.
@@ -418,6 +571,12 @@ class Recorder:
         self.validate_resume(None, hello)
         if (directory / 'session.json').exists():
             raise RecordingError('录制目录已有会话，请另选目录或接续原录像')
+        return self._start_capture(directory, timeout, hello=hello)
+
+    def _start_capture(self, directory, timeout, *, hello=None):
+        hello = hello if hello is not None else self.call('hello')
+        self.validate_resume(None, hello)
+        clock = hello.get('clock') or {}
         if self.opts.audio_source not in ("obs_mix", "game_nrt"):
             raise RecordingError(f"未知录音来源：{self.opts.audio_source}")
         if self.opts.audio_source == "game_nrt" and (not hello.get("record_audio_nrt")
@@ -430,11 +589,22 @@ class Recorder:
             raise RecordingError("OBS 插件没有连上桥接的时钟端口：先运行 python tools/obs_setup.py launch 启动 OBS"
                                  "（插件构建见使用说明 4.4 节）")
         gamewindow.ensure_visible(self.log)  # 游戏窗口最小化时 OBS 采不到画面
-        self.call("record", action="start", dir=str(directory), ffmpeg=self.opts.ffmpeg, video_args=self.opts.video_args,
-                  audio_offset_ms=self.opts.audio_offset_ms, marker=self.opts.marker,
-                  continuous_music=self.opts.continuous_music,
-                  audio_source=self.opts.audio_source,
-                  audio_sync="fixed" if self.opts.continuous_music else "onset")
+        if self._recovery_start is not None:
+            self._recovery_start.update(phase='requested', requested_wall=time.time())
+            self._save_session('recovering')
+        try:
+            self.call("record", action="start", dir=str(directory), ffmpeg=self.opts.ffmpeg, video_args=self.opts.video_args,
+                      audio_offset_ms=self.opts.audio_offset_ms, marker=self.opts.marker,
+                      continuous_music=self.opts.continuous_music,
+                      audio_source=self.opts.audio_source,
+                      audio_sync="fixed" if self.opts.continuous_music else "onset")
+        except RuntimeError:
+            # BridgeClient reports a negative bridge reply as RuntimeError.
+            # No OBS start was queued if the bridge rejected its audio setup.
+            if self._recovery_start is not None:
+                self._recovery_start['phase'] = 'prepared'
+                self._save_session('recovering')
+            raise
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             clock, plugin = self._plugin(allow_previous_terminal=True)
@@ -443,6 +613,7 @@ class Recorder:
                 raise RecordingError(f"OBS 插件开始录制失败：{plugin.get('error')}")
             if plugin.get("state") == "recording" and clock.get("lockstep"):
                 self.started = True
+                self._recovery_start = None
                 try:
                     self._save_session('recording')
                 except Exception:
@@ -462,8 +633,53 @@ class Recorder:
         if self.started:
             gamewindow.ensure_visible(self.log)
 
-    def stop(self, timeout: float = 900.0, on_capture_stopped: Callable[[], None] | None = None) -> dict | None:
+    def stop(self, timeout: float = 900.0, on_capture_stopped: Callable[[], None] | None = None,
+             *, _rolling=False, _closed_capture=None) -> dict | None:
         """停止录制并等 ffmpeg 收尾；返回结果摘要（也写进 recording/recording.json）。"""
+        if self._roll_pending is not None and self._roll_pending['closed'] and not _rolling:
+            saved = self._roll_saved()
+            hello = self.call('hello')
+            self.validate_release(saved, hello)
+            plugin = (hello.get('clock') or {}).get('plugin') or {}
+            request = saved.get('recovery_start') or {}
+            actual = Path(plugin['dir']).resolve() if plugin.get('dir') else None
+            if (request.get('phase') == 'requested'
+                    and (actual != self.capture_directory(saved)
+                         or plugin.get('state') not in {'recording', 'finishing', 'finished', 'failed'})):
+                raise RecordingError('恢复启动结果尚未确认，不能用旧捕获的收尾结果代替；保持交接，稍后重试收尾')
+            clock = hello.get('clock') or {}
+            capture = self.capture_directory(saved)
+            inactive = (not clock.get('lockstep') and plugin.get('recording') is not True
+                        and plugin.get('state') not in {'recording', 'finishing'}
+                        and not hello.get('record_audio_active'))
+            empty = not any((capture / name).exists() and (capture / name).stat().st_size
+                            for name in ('video.mkv', 'audio.wav', 'audio_play.wav', 'frames.csv', 'segments.csv'))
+            # finish_saved validates the ledger capture and polls actual OBS state.
+            # It cannot reuse the old capture's cached successful stop. An unknown
+            # queued start remains pending instead of being reported as cleaned up.
+            if request.get('phase') == 'prepared' and capture != self.opts.dir.resolve() and inactive and empty:
+                # A definitively rejected start never owned an encoder at this
+                # empty destination. Publish the closed prefix without stopping
+                # whichever terminal capture OBS still happens to describe.
+                ending = Recorder(self.call, self.opts, self.log)
+                ending.session_id, ending.run_dirs = self.session_id, list(self.run_dirs)
+                ending.segments = list(self.segments)
+                ending._recovery_start = request
+                ending._stop.requested = True
+                result = ending.stop(timeout, on_capture_stopped,
+                                     _closed_capture=(clock, {'state': 'finished', 'frames': 0}))
+            else:
+                result = self.finish_saved(self.call, saved,
+                                           self.run_dirs[-1] if self.run_dirs else self.opts.dir.parent,
+                                           self.log, on_capture_stopped)
+            if result and not result.get('pending'):
+                self._roll_pending = None
+                self._recovery_start = None
+                self.started = False
+                self._stop = RecordingStop()
+                self._stop.requested = True
+                self.result = result
+            return result
         if self.result and self.result.get('state') in {'finished', 'failed'}:
             return self.result
         if not self.started and not self._stop.requested:
@@ -474,7 +690,7 @@ class Recorder:
             self.call("record", action="stop", marker=False)
             self._stop.requested = True
         deadline = time.monotonic() + timeout
-        clock, plugin = self._plugin()
+        clock, plugin = _closed_capture if _closed_capture is not None else self._plugin()
         while True:
             complete = self._stop.observe(clock, plugin)
             self.started = not self._stop.capture_stopped
@@ -491,17 +707,27 @@ class Recorder:
             time.sleep(0.3)
             clock, plugin = self._plugin()
         directory = self.opts.dir.resolve()
+        recovered = None
+        if complete and self.capture_directory(self._session_data()) != directory:
+            from .recording_recovery import finalize, RecoveryError
+            # Capture already stopped; persisting this phase allows a new owner
+            # to finish interrupted media publication without touching OBS.
+            self._save_session('finishing')
+            try:
+                recovered = finalize(self._session_data('finishing'))
+            except (RecoveryError, OSError, ValueError) as exc:
+                raise RecordingError(f'录制采集已停止，但累计文件发布未完成：{exc}；保留原文件，可重试收尾') from exc
         files = {p.name: p.stat().st_size for p in sorted(directory.iterdir()) if p.is_file()} if directory.exists() else {}
         result = {
             "state": plugin.get("state") if complete else ('finishing' if self._stop.capture_stopped else 'recording'),
             "pending": not complete,
             "error": plugin.get("error") or "",
-            "frames": plugin.get("frames"),
+            "frames": recovered['frames'] if recovered is not None else plugin.get("frames"),
             "tokens": plugin.get("tokens"),
             "late_ticks": plugin.get("late"),
             "dir": str(directory),
             "files": files,
-            "check": analyze_frames(directory / "frames.csv"),
+            "check": analyze_frames(directory / "frames.csv", recovered.get('boundaries') if recovered else None),
             "audio_sync": ({"method": "game_nrt", "sample_rate": 48000, "samples_per_frame": 800,
                             "tracks": {"audio.wav": "完整版：规划回放帧里音乐继续（音效暂停）",
                                        "audio_play.wav": "纯享版：只随真实游玩帧推进"}}
@@ -513,7 +739,17 @@ class Recorder:
         }
         if self.segments:
             result["previous_segments"] = list(self.segments)
+        if recovered is not None:
+            result['recovery'] = recovered
         movie = finished_movie(directory)
+        if recovered is not None and result['frames']:
+            # The plugin muxes only its private chunk. Rebuild the logical movie
+            # from the validated cumulative files rather than reuse an old MP4.
+            movie = salvage_movie(directory, self.opts.ffmpeg, self.log)
+            if movie is None:
+                raise RecordingError('累计录像已发布，但成片合成失败；原始文件保持，可重试收尾')
+            if result['state'] == 'failed':
+                result['salvaged'] = str(movie)
         if result["state"] == "failed" and complete and movie is None and (result["frames"] or 0) > 0:
             movie = salvage_movie(directory, self.opts.ffmpeg, self.log)
             if movie is not None:
@@ -524,6 +760,8 @@ class Recorder:
             result["pure"] = make_pure(directory, self.opts.ffmpeg, self.opts.video_args, self.log)
             result['files'] = {p.name:p.stat().st_size for p in sorted(directory.iterdir()) if p.is_file()}
         # Only observed terminal states close the manifest; a timed-out encoder is still pending.
+        if _closed_capture is not None and complete:
+            self._recovery_start = None
         self._save_session(result['state'] if complete else ('finishing' if self._stop.capture_stopped else 'recording'))
         self.result = result
         try:

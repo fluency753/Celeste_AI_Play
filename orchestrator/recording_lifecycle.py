@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 
 def pending_recording(saved: dict | None) -> bool:
-    return bool(saved and saved.get('state') in {'recording', 'finishing'})
+    return bool(saved and saved.get('state') in {'recording', 'recovering', 'finishing'})
 
 
 @dataclass
