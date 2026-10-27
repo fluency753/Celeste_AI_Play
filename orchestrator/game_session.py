@@ -50,6 +50,42 @@ def awaiting_confirm(obs: dict, *, ending: bool = False) -> bool:
             and not level.get("inCutscene") and not level.get("dialogOpen") and not level.get("dialogWaiting")
             and not level.get("paused") and not obs.get("pauseMenu") and not level.get("transitioning")
             and (ending or not level.get("completed")) and not story_input(obs))
+
+
+IDLE_GIVE_UP_FRAMES = 1800           # 角色不可操作又不在剧情里（见 idle_uncontrolled）时，主控最多自动推进这么多帧（30 秒）就交回
+# 玩家操控的不是 Madeline 的房间：(sid, side, room)。5A 镜子后的 void：操控 PlayerSeeker（读方向键与冲刺键），
+# Madeline 睡在 Dummy 状态（inControl=false、不在剧情中），桥接按 Madeline 报告"不可操作"
+SEEKER_ROOMS = {("Celeste/5-MirrorTemple", "A", "void")}
+SEEKER_NOTE = ("这一段操控的是 PlayerSeeker：Madeline 处于 Dummy 状态，桥接按 Madeline 报告不可操作，但这不是剧情。"
+               "主控把这一段当作可操作交给你，不再自动推进等 Madeline 恢复控制；按键照常执行（每次至少帧数、思考僵直照常），"
+               "PlayerSeeker 的位置在观测的实体里。")
+SEEKER_DEATH_NOTE = "这次的 death 事件是 PlayerSeeker 碰到了 Madeline：游戏不计入死亡统计，主控也不计死亡"
+
+
+def seeker_control(obs: dict) -> bool:
+    """SEEKER_ROOMS 里 Madeline 睡着（Dummy）、关卡没有暂停、转场或剧情：这时按键由 PlayerSeeker 读取，主控当作可操作。"""
+    if obs.get("scene") != "Level":
+        return False
+    level = obs.get("level") or {}
+    player = obs.get("player") or {}
+    if (level.get("sid"), level.get("side"), level.get("room")) not in SEEKER_ROOMS:
+        return False
+    return (player.get("state") == "Dummy" and not player.get("dead") and not level.get("inCutscene")
+            and not level.get("paused") and not obs.get("pauseMenu") and not level.get("transitioning"))
+
+
+def idle_uncontrolled(obs: dict) -> bool:
+    """关卡里 Madeline 活着、不可操作，却不在剧情、对白、暂停菜单或转场里，也不是画面冻结等确认：通常几帧就过去
+    （重生、入场动画）。一直这样多半是游戏要你操作别的东西（像 5A 的 PlayerSeeker）或别的意外状态，
+    "等到可操作"会空耗章节计时（5A 一次推进 18000 帧，计时白走 5 分钟）。"""
+    level = obs.get("level") or {}
+    player = obs.get("player") or {}
+    return (obs.get("scene") == "Level" and not obs.get("controllable") and bool(player) and not player.get("dead")
+            and not level.get("inCutscene") and not level.get("dialogOpen") and not level.get("dialogWaiting")
+            and not level.get("paused") and not obs.get("pauseMenu") and not level.get("transitioning")
+            and not level.get("frozen") and not level.get("completed") and not story_input(obs))
+
+
 PROGRESS_EVERY = 6                   # 执行中每 6 帧（0.1 秒）推送一次进度给 HUD
 
 # 自动重试：计划文件里声明重算程序，死亡或偏离预期时由主控在零网络沙箱里运行它，不唤醒大模型
@@ -295,6 +331,9 @@ class GameSession:
         self._pending_complete = cfg.resume_completion_pending
         self._ending_pending = False    # auto 剧情模式：最终章刚通关，片尾还没走完（这次动作里由 _finish_ending 处理）
         self._ending_agent = False      # 片尾主控没能走完，交给智能体：开放全部按键，回到选章地图才算完成
+        self._idle_handover = False     # 不可操作又不在剧情里等满 IDLE_GIVE_UP_FRAMES，已交给智能体（状态变了就清掉）
+        self._seeker_act = False        # 这次动作开始时在操控 PlayerSeeker：Madeline 被它碰到的 death 不计死亡
+        self._seeker_death = False
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
         self._decisions_log = open(run_dir / "decisions.jsonl", "a", encoding="utf-8")
         # 容器方式下，观测与轨迹同时写进智能体的工作区，供它自写的程序读取
@@ -479,7 +518,7 @@ class GameSession:
                 return {}                  # 节省上下文：没有僵直时不写说明（规则在系统提示词里）
             return {"note": f"思考僵直：{spent}，按规则这次不僵直（思考、工具时间各自满 {self._unit_text()}才计）。"}
         last = self.last_obs or {}
-        if last.get("scene") != "Level" or not last.get("controllable") or story_pending(last):
+        if last.get("scene") != "Level" or not self._agent_controls(last) or story_pending(last):
             self._start_freeze()
             return {"note": f"思考僵直：{spent}，按规则应僵直 {stats['seconds']:g} 秒；角色当前不可操作，这次不僵直。"}
         keys, fmt = (stats["keys"], stats.get("input_format", "celeste_ai")) if "keys" in stats else self._held_input
@@ -940,7 +979,7 @@ class GameSession:
     def _least_frames(self, plan: PlanSpec, planned: int) -> int:
         """这次 act 最少要推进的帧数。只管正常游玩：角色不可操作时（菜单、结算、对白等剧情输入）不限制；
         TAS 文件按游标分段时，文件的最后一段剩多少就放多少（不能补帧，补了会和输入来源对不上）。"""
-        if not (self.last_obs or {}).get("controllable"):
+        if not self._agent_controls(self.last_obs or {}):
             return 1
         source = plan.input_source
         if source is not None and source['offset'] + planned >= source['total']:
@@ -1005,6 +1044,8 @@ class GameSession:
         with self.lock:
             if self.goals.stop_motion.is_set():
                 raise ActError("已请求停止，本次动作未执行")
+            # 操控 PlayerSeeker 时 Madeline 被它碰到会"死亡"（游戏不计入死亡统计）：这次动作里的 death 不计数
+            self._seeker_act, self._seeker_death = seeker_control(self.last_obs or {}), False
             resumed = self._resume_auto_handling() if attempt == 0 else []
             stiff = self._stiffen(stiff_stats) if attempt == 0 else {}
             if stiff.get("note"):
@@ -1046,13 +1087,18 @@ class GameSession:
                 self._handle_events(result)
                 self._commit_completion(obs)
                 self._note_obs_room(obs)
+            self._seeker_act = False
+            if not idle_uncontrolled(obs):
+                self._idle_handover = False     # 已离开"不可操作又不在剧情里"的状态：以后照常自动推进
             self.goals.check(self.goal_values(obs))
             self.metrics.add(play_game_s=game_s, frames_played=result["consumed"],
                              decisions=1 if attempt == 0 else 0)
 
             auto_frames, notes = 0, list(resumed)
+            if self._seeker_death:
+                notes.append(SEEKER_DEATH_NOTE)
             ending_agent = self._ending_agent       # 片尾已交给智能体：主控不再自动推进
-            if not ending_agent and result['stop'] not in BLOCK_STOPS and plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
+            if not ending_agent and result['stop'] not in BLOCK_STOPS and plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not self._agent_controls(obs)
                     or story_pending(obs)):
                 obs, image, auto_frames, more = self._auto_advance(obs, image)
                 notes.extend(more)        # 接在执行前的说明（续推剧情、思考僵直）后面，不覆盖它们
@@ -1106,14 +1152,24 @@ class GameSession:
         有的剧情在跳过的淡出过程中角色已报告可操作（例如 5A 开场），这时还要接着推进到剧情结束。"""
         return bool(obs.get('controllable')) and not (obs.get('level') or {}).get('inCutscene')
 
+    def _handed_over(self, obs: dict) -> bool:
+        """Madeline 不可操作，但按键照样交给智能体、主控不自动推进：在操控 PlayerSeeker；或不可操作又不在剧情里、
+        主控已等满 IDLE_GIVE_UP_FRAMES 交回（状态没变）。"""
+        return seeker_control(obs) or (self._idle_handover and idle_uncontrolled(obs))
+
+    def _agent_controls(self, obs: dict) -> bool:
+        """按键由智能体操作：Madeline 可操作，或 _handed_over。"""
+        return bool(obs.get('controllable')) or self._handed_over(obs)
+
     def _resume_auto_handling(self) -> list[str]:
         """（调用方持有连接锁）自动跳过剧情时，上一次的自动推进可能被用户暂停打断，游戏停在转场、剧情或对白中途：
         先接着自动推进到可操作，再执行智能体的按键，不把按键落在剧情上。推进后仍不可操作（又被暂停）就不执行这次动作。"""
         last = self.last_obs or {}
-        if self.cfg.cutscene_mode != 'auto' or self._ending_agent or not last or self._settled(last):
+        if (self.cfg.cutscene_mode != 'auto' or self._ending_agent or not last or self._settled(last)
+                or self._handed_over(last)):
             return []
         obs = enrich_obs(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
-        if obs.get('scene') != 'Level' or self._settled(obs):
+        if obs.get('scene') != 'Level' or self._settled(obs) or self._handed_over(obs):
             return []
         obs, _, _, notes = self._auto_advance(obs, None)
         self.last_obs = obs
@@ -1131,6 +1187,9 @@ class GameSession:
             raise ActError('执行前主控接着推进了上次被打断的转场或剧情，章节已通关：' + '；'.join(map(str, notes))
                            + '。这次动作没有执行，请先 observe 再操作。')
         if not obs.get('controllable'):
+            if self._handed_over(obs):
+                # PlayerSeeker，或不可操作又不在剧情里、主控已等满时限交回：照常执行智能体的按键
+                return ['执行前主控接着自动推进，角色仍不可操作但不在剧情里，按你的输入执行', *notes]
             if awaiting_confirm(obs):
                 # 画面冻结在等确认、主控按确认也没用：照常执行智能体的按键（它可以发 C 确认），不再拒绝
                 return ['执行前主控接着自动推进，画面仍冻结在等确认，按你的输入执行', *notes]
@@ -1164,6 +1223,7 @@ class GameSession:
         skip_tries = 0  # 本段剧情已尝试跳过的次数
         menu_closes = 0  # 自动跳过剧情时关掉残留暂停菜单的次数
         frozen_frames, confirms = 0, 0  # 连续停在"画面冻结等确认"的帧数、主控按确认的次数
+        idle_frames = 0  # 连续"不可操作又不在剧情里"（idle_uncontrolled）的帧数
         self.metrics.update(status="auto")
         self._before_advance()
         t0 = time.monotonic()
@@ -1221,6 +1281,18 @@ class GameSession:
             if level.get("completed") and not story_pending(obs):
                 self._chapter_complete()
                 break
+            if seeker_control(obs):
+                notes.append(SEEKER_NOTE)  # 操控 PlayerSeeker：交给智能体，不等 Madeline 恢复控制
+                break
+            idle = idle_uncontrolled(obs)
+            if not idle:
+                idle_frames, self._idle_handover = 0, False
+            elif idle_frames >= IDLE_GIVE_UP_FRAMES:
+                self._idle_handover = True
+                notes.append(f'角色不可操作（状态 {(obs.get("player") or {}).get("state")}）又不在剧情、对白、暂停或转场里，'
+                             f'主控已等约 {round(idle_frames / 60)} 秒仍未恢复，为免空耗章节计时停止自动推进：请 observe 查看；'
+                             '之后的 act 按键照常执行（主控不再先自动推进），解决不了就调用 stop_run 报告。')
+                break
             if not level.get("inCutscene"):
                 skip_tries = 0  # 一段剧情结束，下一段剧情可以重新尝试
             elif mode == 'auto' and not level.get("skippingCutscene") and skip_tries < 3:
@@ -1266,6 +1338,8 @@ class GameSession:
             obs = reply["obs"]
             if waiting:
                 frozen_frames += reply["result"]["consumed"]
+            if idle:
+                idle_frames += reply["result"]["consumed"]
         if confirms and not awaiting_confirm(obs):
             notes.append(f"画面冻结等确认（如磁带、吃心后的提示），主控按了 {confirms} 次确认 C 继续")
         remember(obs)
@@ -1474,6 +1548,10 @@ class GameSession:
     def _handle_events(self, result: dict) -> None:
         for e in result.get("events", []):
             if e["type"] == "death":
+                if self._seeker_act:
+                    # PlayerSeeker 碰到 Madeline：游戏用 Die(registerDeathInStats: false) 结束这一段，不计死亡
+                    self._seeker_death = True
+                    continue
                 self.metrics.add(deaths=1)
             elif e["type"] == "complete":
                 if self.cfg.cutscene_mode == 'agent':
