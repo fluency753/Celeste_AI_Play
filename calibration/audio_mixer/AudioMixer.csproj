@@ -10,6 +10,7 @@
     <Reference Include="Celeste"><HintPath>$(CelestePrefix)/Celeste.dll</HintPath></Reference>
     <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.1" />
     <Compile Include="../../game-bridge/Source/RecordingAudio.cs" Link="RecordingAudio.cs" />
+    <Compile Include="../../game-bridge/Source/RecordingBanks.cs" Link="RecordingBanks.cs" />
     <Compile Include="../../game-bridge/Source/RecordingMixSnapshot.cs" Link="RecordingMixSnapshot.cs" />
   </ItemGroup>
 </Project>

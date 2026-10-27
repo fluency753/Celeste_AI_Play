@@ -176,7 +176,7 @@ winget install Microsoft.DotNet.SDK.8
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本编译 `game-bridge\`，把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.1.2）。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。更新代码不会更新正在运行的游戏或主控，需另行安排安装与重启。
+Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本编译 `game-bridge\`，把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.2.0）。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。更新代码不会更新正在运行的游戏或主控，需另行安排安装与重启。
 
 冒烟测试（游戏停在标题画面即可）：
 
@@ -234,13 +234,13 @@ winget install Gyan.FFmpeg
 
 录像的声音有两种来源（`audio_source`）：
 
-- **`game_nrt`（默认）**：桥接另开 FMOD 混音，按游玩帧生成录像专用的游戏声音，不输出到声卡、不需要虚拟声卡，也不需要校准声音偏移；输出完整版 `audio.wav` 与纯享版 `audio_play.wav` 两条音轨。需要桥接 0.12.7 起与同时更新的 OBS 插件，版本不匹配时拒绝开始录制。它读取本机安装的官方音频 bank，针对 Windows 与 60 fps，不保证其他 Mod 的自定义 bank 可用。实时游戏中存在、但独立混音器找不到的单个事件（`getEventByID: ERR_EVENT_NOTFOUND`）会被省略，其余音频继续录制；日志及 `record_audio_diagnostics` 的 `unmirrored_events`／`unmirrored` 会记录缺失事件的 GUID、可取得的路径及来源 bank 名称或 GUID。省略按事件 GUID 去重，重建录像时同样处理；这不表示支持该 Mod 的音效。必需官方 bank 加载失败、混音器故障等仍使录制失败并按录制恢复流程处理。
+- **`game_nrt`（默认）**：桥接另开 FMOD 混音，按游玩帧生成录像专用的游戏声音，不输出到声卡、不需要虚拟声卡，也不需要校准声音偏移；输出完整版 `audio.wav` 与纯享版 `audio_play.wav` 两条音轨。需要桥接 0.12.7 起与同时更新的 OBS 插件，版本不匹配时拒绝开始录制。桥接 1.2.0 起同步游戏实际已加载的官方和标准 Mod bank，支持普通文件、内存加载及 Everest 的 ZIP／资源流（通过对应 ModAsset 缓存读取），并跟随运行中的加载、卸载和同 GUID 重载；不扫描或加载未启用的 Mod。它针对 Windows 与 60 fps，自定义 DSP、programmer sound 或绕过 Studio 事件的运行时音频不在本次支持范围。实时游戏中存在、但独立混音器找不到的单个事件（`getEventByID: ERR_EVENT_NOTFOUND`）会被省略，其余音频继续录制；日志及 `record_audio_diagnostics` 的 `unmirrored_events`／`unmirrored` 会记录缺失事件的 GUID、可取得的路径及来源 bank 名称或 GUID。省略按事件 GUID 去重，重建录像时同样处理；此降级仅用于无法解析来源或确实不可镜像的事件，不能把缺音效当作已支持。`banks`／`unsupported_banks` 另报告镜像数量和未解析来源；来源已知的 bank 加载失败、混音器故障等仍使录制失败并按录制恢复流程处理。
 - **`obs_mix`**：旧方式，从 OBS 混音里按段裁切，用 `audio_offset_ms`（声音相对画面的延迟）对齐；某段量不到延迟时用它作后备。这个值用下面的校准测试得到。
 
 启动 OBS（自动建好专用的配置文件与场景集合 CelesteAI，不动你自己的配置）并校准：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\enter_save.py test --chapter 1 --leave-active
+.\.venv\Scripts\python.exe tools\enter_save.py test --destination play --save-slot 10 --chapter 1 --leave-active
 .\.venv\Scripts\python.exe tools\obs_setup.py launch
 .\.venv\Scripts\python.exe calibration\m6_recording_test.py --rounds 18 --think 1.5
 .\.venv\Scripts\python.exe tools\obs_setup.py stop

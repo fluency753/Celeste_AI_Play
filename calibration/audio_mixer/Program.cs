@@ -21,7 +21,7 @@ Check(seededDesc.createInstance(out var seededOneShot)); Check(seededOneShot.sta
 RecordingAudio.Load();
 try {
 RecordingAudio.Start(live,Path.Combine(game,"Content","FMOD","Desktop"),47876);
-if (Environment.GetEnvironmentVariable("LIFECYCLE_ONLY") == "1") { SnapshotChecks.Run(live); MissingEventChecks.Run(live, game, music); RestartChecks.Run(live, game, music); LifecycleChecks.Run(live, music); return; }
+if (Environment.GetEnvironmentVariable("LIFECYCLE_ONLY") == "1") { SnapshotChecks.Run(live); MissingEventChecks.Run(live, game, music); RestartChecks.Run(live, game, music); LifecycleChecks.Run(live, music); ModBankChecks.Run(live, game, music); return; }
 if (!asyncSource) {
     var startupMixer=typeof(RecordingAudio).GetField("full",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static)!.GetValue(null)!;
     var startupPairs=(System.Collections.IDictionary)startupMixer.GetType().GetField("Pairs")!.GetValue(startupMixer)!;
@@ -129,6 +129,7 @@ if(stopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED||fullStopped!=FMOD.Studio.PLAYBAC
 MissingEventChecks.Run(live, game, music);
 RestartChecks.Run(live, game, music);
 LifecycleChecks.Run(live, music);
+ModBankChecks.Run(live, game, music);
 Console.WriteLine("PASS: PCM on both tracks, independent timelines, replay music on the full track only, one-shots, volume, stop, ring wrap and stale handles");
 } finally {RecordingAudio.Unload();live.release();}
 if(RecordingAudio.Error!=null)throw new Exception("Mixer shutdown produced a false frame error: "+RecordingAudio.Error);

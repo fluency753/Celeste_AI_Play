@@ -1,5 +1,5 @@
 - Name: CelesteAIBridge
-  Version: 1.1.2
+  Version: 1.2.0
   DLL: bin/CelesteAIBridge.dll
   Dependencies:
     - Name: EverestCore

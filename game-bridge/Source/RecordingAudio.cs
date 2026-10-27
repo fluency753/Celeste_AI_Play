@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// - play: advances only on real game frames, so the pure cut (replay frames removed) has a
 ///   continuous soundtrack too.
 /// OBS reads both blocks by clock token, so idle wall time, missed captures and live audio
-/// buffering cannot skew them. No game banks are redistributed: this reads the installed official banks.
+/// buffering cannot skew them. Bank resources follow the live game's loaded official and Mod banks.
 /// </summary>
 internal static class RecordingAudio {
     private const int Samples = 800, Channels = 2, Slots = 1024, Tracks = 2;
@@ -64,6 +64,7 @@ internal static class RecordingAudio {
     }
 
     public static void Load() {
+        RecordingBanks.LoadHooks();
         AddHook(nameof(EventInstance.start), nameof(OnStart));
         AddHook(nameof(EventInstance.stop), nameof(OnStop));
         AddHook(nameof(EventInstance.release), nameof(OnRelease));
@@ -94,6 +95,7 @@ internal static class RecordingAudio {
 
     public static void Unload() {
         Stop();
+        RecordingBanks.UnloadHooks();
         foreach (Hook hook in Hooks) hook.Dispose();
         Hooks.Clear();
         lock (Gate) BusPauses.Clear();
@@ -123,7 +125,7 @@ internal static class RecordingAudio {
                 full = new Mixer("full");
                 play = new Mixer("play");
                 RecordingMixSnapshot mix = RecordingMixSnapshot.Capture(live, BusPauses);
-                foreach (Mixer mixer in Mixers) { mixer.Open(bankDirectory); mixer.SeedMix(mix); }
+                foreach (Mixer mixer in Mixers) { mixer.Open(live, bankDirectory); mixer.SeedMix(mix); }
                 Check(live.getBankList(out Bank[] banks));
                 foreach (Bank bank in banks) {
                     if (bank.getEventList(out EventDescription[] events) != RESULT.OK) continue;
@@ -231,6 +233,8 @@ internal static class RecordingAudio {
         private readonly string name;
         private FMOD.Studio.System? studio;
         private FMOD.System? core;
+        private RecordingBanks? banks;
+        private bool syncingBanks;
         private DSP? tap;
         private readonly DSP_READCALLBACK callback; // kept alive while FMOD holds the native pointer
         private int captured;
@@ -249,6 +253,7 @@ internal static class RecordingAudio {
                                      peak_tracked = PeakTracked, orphaned_loops = OrphanedLoops, retired_stopped = RetiredStopped,
                                      dropped = Dropped, drops = drops.ToArray(),
                                      unmirrored_events = missingEvents.Count, unmirrored = missingEvents.Values.Take(16).ToArray(),
+                                     banks = banks?.Count, unsupported_banks = banks?.Unsupported,
                                      oldest = Pairs.Values.OrderBy(p => p.CreatedFrame).Take(8).Select(Describe).ToArray() };
 
         private void NoteDrop(string note) {
@@ -293,7 +298,7 @@ internal static class RecordingAudio {
 
         public Mixer(string name) { this.name = name; callback = Read; }
 
-        public void Open(string bankDirectory) {
+        public void Open(FMOD.Studio.System live, string bankDirectory) {
             Check(FMOD.Studio.System.create(out FMOD.Studio.System system));
             studio = system;
             Check(system.getLowLevelSystem(out FMOD.System lowLevel));
@@ -308,10 +313,8 @@ internal static class RecordingAudio {
                 FMOD.INITFLAGS.STREAM_FROM_UPDATE, IntPtr.Zero));
             Check(lowLevel.getDSPBufferSize(out uint size, out _));
             if (size != Samples) throw new InvalidOperationException("FMOD changed the recording block size");
-            foreach (string file in new[] { "Master Bank.bank", "Master Bank.strings.bank", "music.bank", "dlc_music.bank", "sfx.bank", "dlc_sfx.bank", "ui.bank" }) {
-                Check(system.loadBankFile(Path.Combine(bankDirectory, file), LOAD_BANK_FLAGS.NORMAL, out Bank bank));
-                Check(bank.loadSampleData());
-            }
+            banks = new RecordingBanks(live, system, bankDirectory);
+            banks.Sync();
             Check(system.flushSampleLoading());
         }
 
@@ -331,6 +334,7 @@ internal static class RecordingAudio {
 
         public void Close() {
             capturing = false;
+            banks?.Dispose(); banks = null;
             studio?.release();
             studio = null; core = null; tap = null;
             Pairs.Clear();
@@ -361,10 +365,11 @@ internal static class RecordingAudio {
             if (missingEvents.ContainsKey(id)) return false;
             RESULT result = studio!.getEventByID(id, out description);
             if (result == RESULT.ERR_EVENT_NOTFOUND) {
-                // The live game can load custom Mod banks; the independent mixers load official banks only.
-                // A single absent event is not a broken mixer. Do not apply this exception to bank loading,
+                // Known official and Mod banks are synchronized before lookup. An unavailable source
+                // or special event can still be absent; that single event is not a broken mixer.
+                // Do not apply this exception to bank loading,
                 // mixer updates, or other FMOD failures. Cache by GUID so every parameter hook does not retry it.
-                string note = $"event {path} [{id}] from {SourceBank(id)} is absent from the independent mixer's official banks (getEventByID: {result}); this event is omitted";
+                string note = $"event {path} [{id}] from {SourceBank(id)} is absent from the independent mixer's synchronized banks (getEventByID: {result}); this event is omitted";
                 missingEvents.Add(id, note);
                 if (missingEvents.Count <= 8 || missingEvents.Count % 100 == 0)
                     Log.Warn($"recording audio ({name}): {note}; recording continues");
@@ -375,6 +380,7 @@ internal static class RecordingAudio {
 
         private Pair? EnsurePair(EventInstance instance, bool restart = false) {
             if (studio == null) return null;
+            SyncBanks();
             IntPtr key = instance.getRaw();
             if (!Pairs.TryGetValue(key, out Pair? pair) || !pair.Copy.isValid() || (restart && pair.Released)) {
                 // A restarted/reused source must not leave its previous copy without an owner.
@@ -476,9 +482,38 @@ internal static class RecordingAudio {
             if (studio != null) snapshot.ApplyTo(studio);
         }
 
+        private void SyncBanks() {
+            if (syncingBanks) return;
+            syncingBanks = true;
+            try {
+                if (banks?.Sync() != true) return;
+                missingEvents.Clear();
+                foreach (var entry in Pairs.ToArray())
+                    if (!entry.Value.Copy.isValid()) Pairs.Remove(entry.Key);
+                if (source == null || studio == null) return;
+                RecordingMixSnapshot.Capture(source, BusPauses).ApplyTo(studio);
+                // Replacing a bank invalidates its event copies, even when the
+                // live event is still playing/paused and sends no new start.
+                // Preserve unaffected copies and their independent timelines.
+                if (source.getBankList(out Bank[] liveBanks) != RESULT.OK) return;
+                foreach (Bank bank in liveBanks) {
+                    if (bank.getEventList(out EventDescription[] descriptions) != RESULT.OK) continue;
+                    foreach (EventDescription description in descriptions) {
+                        if (description.getInstanceList(out EventInstance[] instances) != RESULT.OK) continue;
+                        foreach (EventInstance instance in instances) {
+                            if (Pairs.TryGetValue(instance.getRaw(), out Pair? pair) && pair.Copy.isValid()) continue;
+                            if (instance.getPlaybackState(out PLAYBACK_STATE state) == RESULT.OK && state != PLAYBACK_STATE.STOPPED)
+                                MirrorStart(instance, seed: true);
+                        }
+                    }
+                }
+            } finally { syncingBanks = false; }
+        }
+
         /// <summary>Copy the live state, then mix exactly one block.</summary>
         public void Render(FMOD.Studio.System live) {
             if (studio == null) return;
+            SyncBanks();
             foreach (var entry in Pairs.ToArray()) {
                 Pair pair = entry.Value;
                 if (!pair.Copy.isValid()) { Pairs.Remove(entry.Key); continue; }
