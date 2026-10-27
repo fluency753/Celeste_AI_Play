@@ -2,7 +2,8 @@
 
 --allow-programs：整理工作区——仍然不碰游戏，但允许智能体在零网络沙箱里用 Bash 修改、运行自己写的程序
 （例如在下一章开始前按用户要求改模拟器与搜索程序）。
-配合 --sim 挂载只读模拟器，用保存的快照做离线验证；仍不连接游戏。"""
+配合 --sim 挂载只读模拟器，用保存的快照做离线验证；仍不连接游戏。
+章节中途显式中断、游戏保持冻结的运行也能这样唤起（例如暂停去改搜索程序），聊完再 --resume 接着玩。"""
 import argparse
 import asyncio
 import json
@@ -34,13 +35,30 @@ def can_wake(directory):
         return False
 
 
+def can_wake_frozen(directory):
+    """章节中途中断、游戏保持冻结（summary 的 game_released 为 False）且未通关的运行。
+
+    这种运行之后要 --resume 接着玩；中间允许唤起聊天或整理工作区（不碰游戏、不碰录像）。
+    会话管理（新建、切换会话）仍按 can_wake，要先停止试玩、保存录像。"""
+    if directory is None:
+        return False
+    try:
+        state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
+        runtime(state.get("engine"))
+        summary = json.loads((directory / "summary.json").read_text(encoding="utf-8"))
+        return (bool(state.get("session_id")) and summary.get("game_released") is False
+                and summary.get("completed") is not True)
+    except (OSError, ValueError):
+        return False
+
+
 async def chat(directory, name_request=None, allow_programs=False, sim=False):
     if sim and not allow_programs:
         raise ValueError('离线模拟器需要同时开启 --allow-programs')
     if name_request and (allow_programs or sim):
         raise ValueError('存档命名不开放工作区程序或离线模拟器')
-    if not can_wake(directory):
-        raise ValueError("只能唤起已准备或已完成试玩的会话")
+    if not (can_wake(directory) or (not name_request and can_wake_frozen(directory))):
+        raise ValueError("只能唤起已准备、已完成试玩，或中断后保持冻结的会话")
     state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
     if name_request and state.get('session_kind') != 'ready':
         raise ValueError('自动取名仅用于准备完成、尚未开始的新试玩')
