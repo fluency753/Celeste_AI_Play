@@ -466,7 +466,7 @@ internal static class Bridge {
                     w.WriteBoolean("checkpoints", true);
                     w.WriteBoolean("load_room_modes", true);
                     w.WriteBoolean("stop_rooms", true);
-                    w.WriteBoolean("entry_guard", true);
+                    w.WriteBoolean("entry_guard", MapEntryGuard.Available);
                     w.WriteBoolean("chapter_reset_guard", ChapterResetGuard.Available);
                     w.WriteNumber("action_policy", ChapterResetGuard.Available && MapEntryGuard.Available ? ActionPolicy.Version : 0);
                     w.WriteBoolean("dialog_choices", true);

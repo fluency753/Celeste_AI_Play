@@ -959,7 +959,7 @@ async function pollControl() {
     const pendingPermissions=(c.actions || []).some(a=>['action_permissions','chapter_reset'].includes(a.kind) && ['queued','waiting'].includes(a.status));
     for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {
       const input=$('permission'+id);
-      input.value=(c.action_permissions?.[key] ?? c.allow_chapter_reset) ? 'allow' : 'deny';
+      if(document.activeElement!==input) input.value=(c.action_permissions?.[key] ?? c.allow_chapter_reset) ? 'allow' : 'deny';
       input.disabled=!c.connected || !c.chapter_reset_control || c.action_policy_supported !== true || busy || pendingPermissions;
     }
     $('cutsceneMode').value=pendingStory?.text || c.cutscene_mode || 'auto';

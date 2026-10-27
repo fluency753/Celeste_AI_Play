@@ -373,7 +373,10 @@ class GameSession:
 
     def _step_options(self):
         from .action_policy import require_capability, step_options
-        require_capability({'action_policy': getattr(self, 'action_policy_supported', None)})
+        try:
+            require_capability({'action_policy': getattr(self, 'action_policy_supported', None)})
+        except ValueError as exc:
+            raise ActError(str(exc)) from exc
         piece = self.navigation.target
         chapter = piece.chapter if piece else self.cfg.chapter
         if (chapter is not None or self.cfg.save_slot is not None) and not self.entry_guard_supported:
@@ -1067,8 +1070,8 @@ class GameSession:
             self._write_sim_state()
 
             if result.get('block'):
-                block = result['block']
-                notes.append(f"主控拦截 {block['action']}（{block['rule_id']}）：{block['reason']}")
+                from .action_policy import block_note
+                notes.append(block_note(result['block']))
 
         self.metrics.update(last_stop=result["stop"])
         obs = self._track_motion(obs)

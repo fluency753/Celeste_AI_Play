@@ -10,17 +10,19 @@
 
 Python 的 `action_policy.py` 统一验证、迁移、构造策略和生成提示。`GameSession._step_options` 为所有 step 调用强制设置带版本的 `action_policy`，覆盖 act、TAS、剧情工具、菜单宏和重试，调用者不能自行覆盖。地图/存档目标是强制正确性约束，不是可关闭的用户权限。`exit_level` 只选择当前允许的退出项：允许保存退出不等于允许返回地图。
 
-桥接只有在真实菜单确认与真实地图入场两个钩子均安装成功时才报告 `hello.action_policy: 1`。新主控要求此能力，旧桥接在录制/进档前拒绝；已有连接在 step 发送前拒绝。新策略存在时，桥接忽略调用者的旧参数，拒绝未知版本或非法权限，不能静默退回旧协议。桥接兼容旧客户端字段，但旧 `allow_map_exit` 也受修复后的关卡生命周期限制。
+桥接只有在真实菜单确认与真实地图入场两个钩子均安装成功时才报告 `hello.action_policy: 1`（`entry_guard` 也按入场钩子是否装上报告）。钩子装不上（游戏或 Everest 更新、别的 Mod 改写了 `TextMenu.orig_Update` 或 `OuiChapterPanel.Start`）时只记日志、对应门禁不可用，桥接其余功能照常加载；MonoMod 在钩子链变化时重跑注入函数，注入函数找不到调用点也只标记不可用、不抛异常。新主控要求此能力，旧桥接在录制/进档前拒绝；已有连接在 step 发送前拒绝。新策略存在时，桥接忽略调用者的旧参数，拒绝未知版本或非法权限，不能静默退回旧协议。桥接兼容旧客户端字段，但旧 `allow_map_exit` 也受修复后的关卡生命周期限制。
 
 用户指定新开局或需要重新进档的续跑，在 agent 接管前使用独立的启动连接；该连接明确允许退出旧地图以进入用户指定存档，并传入本次重置配置。它不会给后续 GameSession 放宽返回地图权限。单独运行 `tools/enter_save.py` 也仅为明确指定的进档导航授权退出。
 
 临时退出许可只绑定该 step 创建时的原 `Level` 和 `Session` 对象；从菜单或加载场景创建时不绑定未来关卡。每个实际推进帧都观察场景变化，包括加载帧。首次离开原 Level 或替换其 Session 后永久撤销，即使复用 Session 载入另一 Level，或重新回到原 Level，也不会恢复。许可保留到实际离开，因此返回地图的主菜单与二级确认均可完成。
 
-已对照所安装游戏的 `TextMenu.orig_Update`：先上下切换，再处理左右，随后调用实际选中 Item 的 `ConfirmPressed` 和 `OnPressed`，最后处理取消。桥接在该确认调用点前注入门禁，读取实际 Item，不猜测复合按键的最终选择。原生虚拟按钮负责按下边沿、重复、模拟摇杆和 TAS 绑定；同帧方向加确认选到安全项照常执行，选到危险项时两个确认回调均不执行。未知菜单项按原游戏逻辑处理。
+已对照所安装游戏的 `TextMenu.orig_Update`：先上下切换，再处理左右，随后调用实际选中 Item 的 `ConfirmPressed` 和 `OnPressed`，最后处理取消。桥接在该确认调用点前注入门禁，读取实际 Item，不猜测复合按键的最终选择。原生虚拟按钮负责按下边沿、重复、模拟摇杆和 TAS 绑定；同帧方向加确认选到安全项照常执行，选到危险项时两个确认回调均不执行。
+
+菜单项按当前语言的显示文本识别，只靠危险项名单会放过 Mod 新加的、或改了名字的重启/退出按钮。所以在**未通关、没有核验过的离开许可、且三项权限没有全部允许**的关卡里，映射不到语义动作的菜单项改用白名单：只放行继续、重试、跳过剧情和两个二级菜单的取消；选项、辅助、变体、Mod 选项以及任何不认识的按钮一律拦下（`rule_id: menu.unknown_item`，`action: menu_item`，`actual` 是按钮文字）。通关后、核验过的离开许可内、三项全允许时，以及地图与主菜单里，不认识的菜单项按原游戏逻辑处理。只在主控的 step 执行期间生效，用户自己操作菜单不受影响。
 
 地图入口在 `OuiChapterPanel.Start(checkpoint)` 方法入口核验；方向切换、按键边沿和重复均由原生面板处理。按原生 `StartRoutine` 规则纯解析检查点前缀的目的地图，再核验实际 SID/存档槽位；拒绝时不改变 Focused、Area，不播放启动音效或创建启动协程。因此方向优先时不会误拦，而方向到边界后实际触发的错误入场仍会被拒绝。
 
-菜单识别 `menu_pause_restartarea`、`menu_pause_return`、`menu_pause_savequit`、`intro_vignette_quit` 以及二级 `menu_restart_continue`、`menu_return_continue` 的当前语言文本，映射为语义动作后读取策略；序章退出按原生 `ReturnToMap` 回调归入返回地图，取消仍允许。两类拦截统一输出 `result.block: {rule_id, action, reason, expected, actual}`，同时保留 `entry_blocked`/`chapter_reset_blocked` 停止原因和事件用于兼容。此前输入及本帧已经发生的导航仍计入 consumed，后续计划不执行，不自动关菜单或代选。
+菜单识别 `menu_pause_restartarea`、`menu_pause_return`、`menu_pause_savequit`、`intro_vignette_quit` 以及二级 `menu_restart_continue`、`menu_return_continue` 的当前语言文本，映射为语义动作后读取策略；序章退出按原生 `ReturnToMap` 回调归入返回地图，取消仍允许。两类拦截统一输出 `result.block: {rule_id, action, reason, expected, actual}`，同时保留 `entry_blocked`/`chapter_reset_blocked` 停止原因和事件用于兼容。此前输入及本帧已经发生的导航仍计入 consumed，后续计划不执行，不自动关菜单或代选；主控在 act 结果里附中文说明（`action_policy.block_note`：拦的是哪项权限或哪个菜单项，菜单仍开着先按 B 返回或选「继续」，不要用退出重进代替找路；入场被拦时写明地图或存档与任务不符）。
 
 验证：Python 回归使用临时运行目录、真实策略分发与会话控制消费者，不连接在用主控。原生检查先构建桥接，再运行：
 

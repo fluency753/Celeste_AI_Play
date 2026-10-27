@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass, replace
 
 VERSION = 1
 LABELS = {'restart_chapter': '重启章节', 'return_to_map': '返回地图', 'save_quit': '保存并退出'}
+MENU_WHITELIST = '未通关时暂停菜单里只能选继续、重试、跳过剧情或取消'
 BLOCK_STOPS = frozenset({'entry_blocked', 'chapter_reset_blocked'})
 
 
@@ -34,7 +35,23 @@ class ActionPermissions:
 
     def instructions(self):
         return '操作权限：' + '；'.join(f'{label}={"允许" if getattr(self, key) else "禁止"}' for key, label in LABELS.items()) + \
-            '。禁止项由主控在实际操作前拦截。正常死亡和房间重试允许；已核验完成后的退出由主控授权。不得用重置代替路线求解，无法继续时用 stop_run 报告。'
+            '。禁止项由主控在实际操作前拦截' + ('' if all(self.snapshot().values()) else f'，{MENU_WHITELIST}（选项、辅助等其他菜单项也会被拦）') + \
+            '。正常死亡和房间重试允许；已核验完成后的退出由主控授权。不得用重置代替路线求解，无法继续时用 stop_run 报告。'
+
+
+def block_note(block):
+    """桥接 result.block 的中文说明，附在 act 结果后面给智能体。"""
+    action, rule = block.get('action'), block.get('rule_id') or ''
+    if action == 'enter_map':
+        what = '存档槽位' if rule == 'target.save_slot' else '地图'
+        return (f'主控拦下了这次进入地图：{what}与任务不符（要求 {block.get("expected")}，实际 {block.get("actual")}），'
+                '没有进入。请退回去选对存档和章节再进。')
+    if action in LABELS:
+        head = f'主控拦下了「{LABELS[action]}」：本次没有这项权限'
+    else:
+        head = f'主控拦下了这次菜单确认（{block.get("actual") or "未知选项"}）：{MENU_WHITELIST}'
+    return (head + '。这一帧之后的按键没有执行，暂停菜单仍开着：先按 B 返回或选「继续」关掉菜单再接着玩。'
+            '不要用退出重进代替找路；确实无法继续时用 stop_run 报告。')
 
 
 def validate_update(data):

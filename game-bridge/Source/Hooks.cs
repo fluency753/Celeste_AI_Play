@@ -21,14 +21,8 @@ internal static class Hooks {
     private static Hook? chapterEntryHook;
 
     public static void Load() {
-        // Everest's orig_Update navigates before confirming. Guard the actual
-        // dispatch site so simultaneous directions/confirm use native selection.
-        MethodInfo menuUpdate = typeof(TextMenu).GetMethod("orig_Update", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?? throw new MissingMethodException("TextMenu.orig_Update");
-        menuConfirmationHook = new ILHook(menuUpdate, ILMenuConfirmation);
-        chapterEntryHook = new Hook(typeof(OuiChapterPanel).GetMethod(nameof(OuiChapterPanel.Start))!,
-            typeof(Hooks).GetMethod(nameof(OnChapterStart), BindingFlags.Static | BindingFlags.NonPublic)!);
-        MapEntryGuard.Available = true;
+        InstallMenuGuard();
+        InstallEntryGuard();
         // FNA 的 Game.EndDraw 里调用 Present：钩在它之后，锁步时回复"这一帧已经呈现"
         MethodInfo? endDraw = typeof(Game).GetMethod("EndDraw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         if (endDraw != null) {
@@ -49,9 +43,9 @@ internal static class Hooks {
     public static void Unload() {
         ChapterResetGuard.Available = false;
         MapEntryGuard.Available = false;
-        chapterEntryHook?.Dispose();
+        try { chapterEntryHook?.Dispose(); } catch (Exception e) { Log.Error("map entry guard: removing the hook failed: " + e.Message); }
         chapterEntryHook = null;
-        menuConfirmationHook?.Dispose();
+        try { menuConfirmationHook?.Dispose(); } catch (Exception e) { Log.Error("chapter reset guard: removing the menu hook failed: " + e.Message); }
         menuConfirmationHook = null;
         endDrawHook?.Dispose();
         endDrawHook = null;
@@ -95,10 +89,57 @@ internal static class Hooks {
         cur.MarkLabel(resume);
     }
 
+    // The two guards hook game methods that a game or Everest update, or another mod rewriting them, can change.
+    // A failure must only make that guard unavailable (hello reports action_policy=0 and the controller refuses to
+    // start before recording or entering the save); throwing here would abort Load and take the frame gate, input,
+    // rendering and every other hook down with it.
+
+    /// <summary>Everest's orig_Update navigates before confirming. Guard the actual dispatch site so simultaneous
+    /// directions/confirm use native selection.</summary>
+    private static void InstallMenuGuard() {
+        ChapterResetGuard.Available = false;
+        try {
+            MethodInfo? menuUpdate = typeof(TextMenu).GetMethod("orig_Update", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (menuUpdate == null) {
+                Log.Error("chapter reset guard unavailable: TextMenu.orig_Update not found");
+                return;
+            }
+            menuConfirmationHook = new ILHook(menuUpdate, ILMenuConfirmation);
+        } catch (Exception e) {
+            ChapterResetGuard.Available = false;
+            try { menuConfirmationHook?.Dispose(); } catch { /* already broken */ }
+            menuConfirmationHook = null;
+            Log.Error("chapter reset guard unavailable: installing the menu hook failed: " + e);
+        }
+    }
+
+    private static void InstallEntryGuard() {
+        MapEntryGuard.Available = false;
+        try {
+            MethodInfo? start = typeof(OuiChapterPanel).GetMethod(nameof(OuiChapterPanel.Start));
+            if (start == null) {
+                Log.Error("map entry guard unavailable: OuiChapterPanel.Start not found");
+                return;
+            }
+            chapterEntryHook = new Hook(start, typeof(Hooks).GetMethod(nameof(OnChapterStart), BindingFlags.Static | BindingFlags.NonPublic)!);
+            MapEntryGuard.Available = true;
+        } catch (Exception e) {
+            MapEntryGuard.Available = false;
+            try { chapterEntryHook?.Dispose(); } catch { /* already broken */ }
+            chapterEntryHook = null;
+            Log.Error("map entry guard unavailable: installing the hook failed: " + e);
+        }
+    }
+
+    // MonoMod re-runs this whenever the hook chain of TextMenu.orig_Update changes (e.g. another mod hooks it), so it
+    // must not throw either: a missing dispatch site only marks the guard unavailable.
     private static void ILMenuConfirmation(ILContext il) {
+        ChapterResetGuard.Available = false;
         var cur = new ILCursor(il);
-        if (!cur.TryGotoNext(MoveType.Before, ins => ins.MatchCallvirt(typeof(TextMenu.Item), nameof(TextMenu.Item.ConfirmPressed))))
-            throw new InvalidOperationException("TextMenu confirmation dispatch not found; chapter reset guard unavailable");
+        if (!cur.TryGotoNext(MoveType.Before, ins => ins.MatchCallvirt(typeof(TextMenu.Item), nameof(TextMenu.Item.ConfirmPressed)))) {
+            Log.Error("chapter reset guard unavailable: TextMenu confirmation dispatch not found");
+            return;
+        }
         var allowed = cur.DefineLabel();
         cur.Emit(OpCodes.Dup);
         cur.EmitDelegate<Func<TextMenu.Item, bool>>(Bridge.AllowMenuConfirmation);

@@ -6,6 +6,7 @@ using Monocle;
 namespace CelesteAI.Bridge;
 
 internal sealed record ActionPermissions(bool RestartChapter = false, bool ReturnToMap = false, bool SaveQuit = false) {
+    public bool AllowsAll => RestartChapter && ReturnToMap && SaveQuit;
     public bool Allows(string action) => action switch {
         "restart_chapter" => RestartChapter, "return_to_map" => ReturnToMap, "save_quit" => SaveQuit,
         _ => throw new ArgumentException("Unknown game action: " + action),
@@ -38,9 +39,21 @@ internal sealed class ActionPolicy {
     public ActionBlock? CheckMenu(TextMenu.Item item) {
         NoteScene(Engine.Scene);
         string? action = ChapterResetGuard.ActionOf(item);
-        if (action == null || Permissions.Allows(action)) return null;
-        if ((action is "return_to_map" or "save_quit") &&
-                (departureLevel != null || Engine.Scene is Level { Completed: true })) return null;
+        bool completed = Engine.Scene is Level { Completed: true };
+        if (action == null) {
+            // Items are recognised by their text in the current language, so a list of dangerous items alone would let
+            // through a button a mod adds (or a renamed one) that restarts or leaves the chapter. In an unfinished
+            // level with no departure grant, unless every action is allowed, only the known safe items pass; options,
+            // assist/variant/mod menus and anything unrecognised are refused there.
+            if (Engine.Scene is Level && !completed && departureLevel == null && !Permissions.AllowsAll &&
+                    !ChapterResetGuard.IsSafe(item))
+                return new("chapter_reset_blocked", "menu.unknown_item", "menu_item",
+                    "In an unfinished chapter only resume, retry, skip cutscene and cancel may be confirmed",
+                    "resume/retry/skip_cutscene/cancel", ChapterResetGuard.LabelOf(item));
+            return null;
+        }
+        if (Permissions.Allows(action)) return null;
+        if ((action is "return_to_map" or "save_quit") && (departureLevel != null || completed)) return null;
         return new("chapter_reset_blocked", "permission." + action, action,
             "Controller policy forbids " + action, true, false);
     }

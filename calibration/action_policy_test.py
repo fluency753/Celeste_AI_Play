@@ -47,7 +47,7 @@ class PolicyConfigurationTests(unittest.TestCase):
         argv = build(options)
         for flag in ('--no-allow-restart-chapter','--no-allow-return-to-map','--allow-save-quit'):
             self.assertIn(flag, argv)
-        with patch('sys.argv', ['run', '--agent','test','--save','test','--no-agent','--no-record',
+        with patch('sys.argv', ['run', '--agent','test','--save','test','--no-agent','--no-record','--no-sim',
                                 '--allow-chapter-reset','--no-allow-restart-chapter','--no-allow-return-to-map']):
             cfg, _ = parse_args()
         self.assertEqual(permissions_for(cfg).snapshot(), MIXED)
@@ -101,7 +101,7 @@ class PolicyUiTests(unittest.TestCase):
             source = (root/'overlay'/filename).read_text(encoding='utf-8')
             offset = source.index('function renderControls') if filename == 'console.html' else source.index('const pendingStory=')
             start = source.index(first, offset); end = source.index(last, start)
-            script = '''const inputs={}; const $=id=>inputs[id]??={};
+            script = '''const inputs={}; const $=id=>inputs[id]??={}; const document={activeElement:null};
 const c={connected:true,chapter_reset_control:true,action_policy_supported:true,allow_chapter_reset:true,action_permissions:%s};
 const connected=true,busy=false,pendingStory=null;
 %s
@@ -110,6 +110,11 @@ process.stdout.write(JSON.stringify(inputs));''' % (json.dumps(MIXED), source[st
             inputs = json.loads(result.stdout)
             self.assertEqual([inputs[prefix+ident]['value'] for ident in ('RestartChapter','ReturnToMap','SaveQuit')], ['deny','deny','allow'])
             self.assertTrue(all(not inputs[prefix+ident]['disabled'] for ident in ('RestartChapter','ReturnToMap','SaveQuit')))
+            # The user is choosing in one dropdown: polling must not snap it back.
+            focused = script.replace('const document={activeElement:null};',
+                                     "const document={activeElement:$('%sRestartChapter')}; document.activeElement.value='allow';" % prefix)
+            chosen = json.loads(subprocess.run([node,'-e',focused],capture_output=True,text=True,check=True).stdout)
+            self.assertEqual([chosen[prefix+ident]['value'] for ident in ('RestartChapter','ReturnToMap','SaveQuit')], ['allow','deny','allow'])
             old_script = script.replace('action_policy_supported:true,', '')
             old = json.loads(subprocess.run([node,'-e',old_script],capture_output=True,text=True,check=True).stdout)
             self.assertTrue(all(old[prefix+ident]['disabled'] for ident in ('RestartChapter','ReturnToMap','SaveQuit')))

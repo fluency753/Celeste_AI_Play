@@ -115,6 +115,28 @@ class ChapterResetTests(unittest.TestCase):
         self.assertTrue(result['exited'])
         self.assertFalse(result['completed'])
 
+    def test_blocks_are_explained_in_chinese_and_old_bridges_get_an_act_error(self):
+        from orchestrator.action_policy import block_note
+        from orchestrator.observation import describe_step
+        note = block_note({'rule_id': 'permission.return_to_map', 'action': 'return_to_map', 'reason': 'x',
+                           'expected': True, 'actual': False})
+        self.assertIn('「返回地图」', note)
+        self.assertIn('暂停菜单仍开着', note)
+        self.assertIn('stop_run', note)
+        unknown = block_note({'rule_id': 'menu.unknown_item', 'action': 'menu_item', 'reason': 'x',
+                              'expected': 'resume/retry/skip_cutscene/cancel', 'actual': 'Mod Options'})
+        self.assertIn('Mod Options', unknown)
+        self.assertIn('只能选继续、重试、跳过剧情或取消', unknown)
+        entry = block_note({'rule_id': 'target.map', 'action': 'enter_map', 'reason': 'x',
+                            'expected': 'Celeste/5-MirrorTemple', 'actual': 'Celeste/4-GoldenRidge'})
+        self.assertIn('地图与任务不符', entry)
+        self.assertNotIn('暂停菜单', entry)
+        self.assertIn('主控操作权限拦截', describe_step({'consumed': 1, 'planned': 2, 'stop': 'chapter_reset_blocked', 'events': []}))
+        self.assertIn('只能选继续、重试、跳过剧情或取消', play_prompt(self.cfg))
+        self.session.action_policy_supported = 0
+        with self.assertRaises(ActError):
+            self.session._step_options()
+
     def test_verified_handoff_allows_departure_but_never_restart(self):
         self.session.chapter_finished = True
         options = self.session._step_options()

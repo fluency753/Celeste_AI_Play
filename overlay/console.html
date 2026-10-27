@@ -1449,7 +1449,7 @@ function renderControls() {
   cut.disabled = !connected || !c.cutscene_control;
   for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {
     const input = $('live'+id);
-    input.value = (c.action_permissions?.[key] ?? c.allow_chapter_reset) ? 'allow' : 'deny';
+    if (document.activeElement !== input) input.value = (c.action_permissions?.[key] ?? c.allow_chapter_reset) ? 'allow' : 'deny';
     input.disabled = !connected || !c.chapter_reset_control || c.action_policy_supported !== true;
   }
   $("fastToggle").hidden = !c.fast_control;

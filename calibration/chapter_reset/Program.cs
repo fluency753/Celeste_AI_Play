@@ -49,6 +49,12 @@ Input.MenuRight = new VirtualButton(0);
 Input.MenuRight.Nodes.Add(new VirtualButton.PadDPadRight(0));
 var manipulator = (ILContext.Manipulator)typeof(Hooks).GetMethod("ILMenuConfirmation", flags)!
     .CreateDelegate(typeof(ILContext.Manipulator));
+// A method without the confirmation dispatch (a game/Everest update, or another mod rewriting orig_Update): the
+// manipulator must not throw — that would abort the bridge's Load and every other hook with it — and must report
+// the guard unavailable (hello then reports action_policy=0 and the controller refuses to start).
+using (var probe = new ILHook(typeof(TextMenu.Item).GetMethod("ConfirmPressed", flags)!, manipulator)) {
+    Check(!ChapterResetGuard.Available, "Guard reported available without its injection point");
+}
 using var hook = new ILHook(typeof(TextMenu).GetMethod("orig_Update", flags)!, manipulator);
 using var silence = new Hook(typeof(Audio).GetMethod("Play", new[] { typeof(string) })!,
     (Func<string, FMOD.Studio.EventInstance>)(_ => null!));
@@ -162,6 +168,26 @@ for (int mask = 0; mask < 8; mask++) {
         Check(job.AllowMenuConfirmation(Menu(label).Items[0]) == allowed, "Permissions are coupled");
     }
 }
+// Unfinished Level, no departure grant, not every action allowed: items that map to no known action pass only if
+// they are known safe ones. A button a mod adds (or a renamed one) that restarts or leaves must not slip through.
+foreach (var (label, ok) in new[] { ("menu_pause_resume", true), ("menu_pause_retry", true), ("menu_pause_skip_cutscene", true),
+        ("intro_vignette_resume", true), ("intro_vignette_skip", true), ("menu_restart_cancel", true), ("menu_return_cancel", true),
+        ("ordinary settings", false) }) {
+    Scene(Level()); Feed(""); var menu = Menu(label); var job = Job(); int before = pressed;
+    Feed("C"); menu.orig_Update();
+    Check((pressed == before + 1) == ok && (job.StopReason == "chapter_reset_blocked") == !ok, "Unfinished-level whitelist: " + label);
+}
+{
+    Scene(Level()); var partial = Job(permissions: new(false, true, false));
+    Check(!partial.AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Partial permission opened unknown items");
+    Check(partial.AllowMenuConfirmation(Menu("menu_pause_return").Items[0]), "Allowed return to map blocked");
+    Scene(Level()); Check(Job(allow: true).AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "All-allowed run checked unknown items");
+    Scene(Level()); Check(Job(exit: true).AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Verified departure blocked unknown items");
+    var done = Level(); done.Completed = true; Scene(done);
+    Check(Job().AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Finished level blocked unknown items");
+    Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)));
+    Check(Job().AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Menus outside a Level were whitelisted");
+}
 Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)));
 int entries = 0;
 // Replace only the scene-loading effect, then wrap it with the production hook.
@@ -226,6 +252,7 @@ using (var data = System.Text.Json.JsonDocument.Parse("""
 }
 Console.WriteLine("PASS: production IL hook + real TextMenu + virtual buttons + StepJob: native/TAS resets, secondary confirmations, safe callbacks, simultaneous direction+confirm, configured allow and verified departure");
 Console.WriteLine("PASS: cross-Level/loading grants revoked, split permissions, actual Panel direction priority/held input/checkpoint destination/save-slot entry hooks");
+Console.WriteLine("PASS: missing menu injection point only disables the guard; unfinished-level whitelist (partial/all/departure/finished/outside Level)");
 
 sealed class ProbeButton(string label, Action onConfirm) : TextMenu.Button(label) {
     public override void ConfirmPressed() => onConfirm();
