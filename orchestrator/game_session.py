@@ -1275,8 +1275,12 @@ class GameSession:
     def _before_advance(self) -> None:
         """推进游戏之前的检查（录制时由 run.py 设成"确认游戏窗口没有最小化"）；出错不影响游玩。"""
         if self.before_advance is not None:
+            from .recording import RecordingHalt
             try:
                 self.before_advance()
+            except RecordingHalt as exc:
+                # 录像录不上又没能另起一段：不推进这些录不上的帧（主控已把试玩暂停）
+                raise ActError(f"录像中断：{exc}。主控已暂停试玩，游戏保持冻结，等用户处理；这次按键没有执行，请结束本轮。") from exc
             except Exception as exc:  # noqa: BLE001
                 print(f"[run] 推进前检查出错（忽略）：{exc}", flush=True)
 

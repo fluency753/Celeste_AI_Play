@@ -23,10 +23,12 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shutil
+import subprocess
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -47,6 +49,47 @@ class RecordingError(RuntimeError):
 
 class RecordingOwnershipError(RecordingError):
     """A foreign live capture must not be stopped or released by this session."""
+
+
+class RecordingHalt(RecordingError):
+    """这一段录像失败、又没能另起一段：不能再推进游戏（推进的帧录不上）。"""
+
+
+def next_segment_dir(directory: Path) -> Path:
+    """同一运行目录里的下一段录像：recording → recording_2 → recording_3 …（跳过已有会话的目录）。"""
+    directory = Path(directory)
+    match = re.fullmatch(r'(.+)_(\d+)', directory.name)
+    base, number = (match.group(1), int(match.group(2))) if match else (directory.name, 1)
+    while True:
+        number += 1
+        candidate = directory.with_name(f'{base}_{number}')
+        if not (candidate / 'session.json').exists():
+            return candidate
+
+
+def salvage_movie(directory: Path, ffmpeg: str, log: Callable[[str], None] = print) -> Path | None:
+    """插件中途失败（例如独立音频某帧出错）时不合成成片，但画面 video.mkv 与声音 audio.wav 已正常关闭：
+    照插件的做法合成 gameplay.mp4，保住失败之前录下的部分。失败返回 None（原文件不动）。"""
+    directory = Path(directory)
+    video, audio = directory / 'video.mkv', directory / 'audio.wav'
+    if not (video.is_file() and audio.is_file() and video.stat().st_size > 0):
+        return None
+    partial, out = directory / 'gameplay.salvage.mp4', directory / 'gameplay.mp4'
+    cmd = [ffmpeg, '-hide_banner', '-loglevel', 'warning', '-y', '-i', str(video), '-i', str(audio),
+           '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '256k', '-movflags', '+faststart',
+           str(partial)]
+    try:
+        with open(directory / 'ffmpeg_mux.log', 'w', encoding='utf-8') as stream:
+            code = subprocess.run(cmd, stdout=stream, stderr=subprocess.STDOUT, timeout=1800).returncode
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log(f'[record] 合成失败那段的成片出错：{exc}')
+        return None
+    if code != 0 or not partial.is_file():
+        log(f'[record] 合成失败那段的成片出错（ffmpeg 返回 {code}，见 ffmpeg_mux.log）')
+        return None
+    partial.replace(out)
+    log(f'[record] 插件没有合成成片：已用失败前录下的画面与声音合成 {out.name}')
+    return out
 
 
 def load_config() -> dict:
@@ -108,12 +151,15 @@ def options_from(run_dir: Path, ffmpeg: str | None = None, video_args: str | Non
 
 def analyze_frames(csv_path: Path) -> dict:
     """检查 frames.csv：成片帧数、游戏帧号是否连续（不连续说明有游玩帧没录上）；规划回放的帧另计。"""
-    rows = []
+    rows, malformed = [], 0
     try:
         with open(csv_path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
-                rows.append((int(row["index"]), int(row["game_frame"]), int(row["chapter_ticks"]), int(row["obs_ts_ns"])))
-    except (OSError, KeyError, ValueError) as exc:
+                try:
+                    rows.append((int(row["index"]), int(row["game_frame"]), int(row["chapter_ticks"]), int(row["obs_ts_ns"])))
+                except (KeyError, TypeError, ValueError):
+                    malformed += 1    # 插件写到一半就停了（失败或收尾时）的行：不算，单独计数
+    except OSError as exc:
         return {"rows": 0, "error": str(exc)}
     # 规划回放的帧（游戏不推进、只重画画面）章节计时记为 -1，回放跟不上节拍时插件补的帧记为 -2：
     # 都不参与连续性检查，单独计数
@@ -135,6 +181,7 @@ def analyze_frames(csv_path: Path) -> dict:
         "missing_frames": sum(g["missing"] for g in gaps if g["missing"] > 0),
         "gaps": gaps[:50],
         "repeats": repeats,
+        **({"malformed_rows": malformed} if malformed else {}),
     }
 
 
@@ -168,6 +215,7 @@ class Recorder:
         self.session_id = uuid.uuid4().hex
         self.run_dirs = []
         self._stop = RecordingStop()
+        self.segments: list[dict] = []   # 本次运行里之前失败、已收尾的录像段（见 roll）
 
     def bind_run(self, directory: Path):
         directory = directory.resolve()
@@ -300,6 +348,48 @@ class Recorder:
         return {'state': 'retained', 'dir': str(self.opts.dir.resolve()), 'id': self.session_id,
                 'frames': (hello.get('clock', {}).get('plugin') or {}).get('frames'), 'pending': True}
 
+    def segment_failed(self) -> str | None:
+        """这一段录像是否已经录不上画面：OBS 插件报失败、桥接的独立录像音频出错，或插件与桥接断开。
+        返回原因；没问题返回 None。OBS 在录别的目录时不是这一段的状态，不动它。"""
+        if not self.started or self._stop.requested:
+            return None
+        hello = self.call('hello')
+        self.audio_diagnostics = hello.get('record_audio_diagnostics', self.audio_diagnostics)
+        clock = hello.get('clock') or {}
+        plugin = clock.get('plugin') or {}
+        if plugin.get('dir') and Path(plugin['dir']).resolve() != self.opts.dir.resolve():
+            return None
+        if clock.get('connected') is False:
+            return 'OBS 插件与桥接的时钟连接断开'
+        if plugin.get('state') == 'failed':
+            return plugin.get('error') or 'OBS 插件报告录制失败'
+        if self.opts.audio_source == 'game_nrt' and hello.get('record_audio_error'):
+            return '独立录像音频出错：' + str(hello['record_audio_error'])
+        return None
+
+    def roll(self, reason: str) -> dict | None:
+        """这一段录像失败：收尾已录的部分（插件没合成成片时由主控合成），在同一运行目录里另起一段接着录
+        （recording_2、recording_3…；运行目录的 recording_session.json 指向最新一段）。
+        返回旧段的收尾结果；收尾没完成或另起失败时抛 RecordingHalt。"""
+        self.log(f'[record] 这一段录像失败（{reason}）：收尾已录的部分，另起一段接着录')
+        try:
+            old = self.stop(timeout=300.0)
+        except Exception as exc:  # noqa: BLE001
+            raise RecordingHalt(f'收尾失败的那段录像出错：{exc}') from exc
+        if old is not None and old.get('pending'):
+            raise RecordingHalt('失败的那段录像还没收尾完，不能另起一段')
+        self.segments.append({'dir': str(self.opts.dir.resolve()), 'state': (old or {}).get('state'),
+                              'frames': (old or {}).get('frames'), 'reason': reason,
+                              'salvaged': (old or {}).get('salvaged')})
+        self.opts = replace(self.opts, dir=next_segment_dir(self.opts.dir))
+        self.session_id = uuid.uuid4().hex
+        self.started, self.result, self._stop = False, None, RecordingStop()
+        try:
+            self.start()
+        except Exception as exc:  # noqa: BLE001
+            raise RecordingHalt(f'另起一段录像失败：{exc}') from exc
+        return old
+
     def clock(self) -> dict:
         hello = self.call("hello")
         self.audio_diagnostics = hello.get('record_audio_diagnostics', self.audio_diagnostics)
@@ -421,8 +511,15 @@ class Recorder:
                         "marker": self.opts.marker, "continuous_music": self.opts.continuous_music,
                         "audio_source": self.opts.audio_source},
         }
+        if self.segments:
+            result["previous_segments"] = list(self.segments)
         movie = finished_movie(directory)
-        if result["state"] == "finished" and movie is not None:
+        if result["state"] == "failed" and complete and movie is None and (result["frames"] or 0) > 0:
+            movie = salvage_movie(directory, self.opts.ffmpeg, self.log)
+            if movie is not None:
+                result["salvaged"] = str(movie)
+                result['files'] = {p.name: p.stat().st_size for p in sorted(directory.iterdir()) if p.is_file()}
+        if movie is not None and (result["state"] == "finished" or result.get("salvaged")):
             self.log("[record] 生成纯享版（去掉规划回放的帧）……")
             result["pure"] = make_pure(directory, self.opts.ffmpeg, self.opts.video_args, self.log)
             result['files'] = {p.name:p.stat().st_size for p in sorted(directory.iterdir()) if p.is_file()}

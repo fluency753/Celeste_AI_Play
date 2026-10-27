@@ -39,7 +39,7 @@ from .kb_study import KbStudy
 from .execution import workspace_capabilities
 from .recording_lifecycle import pending_recording
 from .metrics import Metrics
-from .recording import Recorder, RecordingError, options_from
+from .recording import Recorder, RecordingError, RecordingHalt, options_from
 from .pausegate import PauseGate
 from .live import LiveStatus
 from .modes import EXPLORE, KNOWLEDGE_OF_MODE, MODE_OF_KNOWLEDGE, SPEEDRUN, describe as describe_mode
@@ -842,10 +842,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         print(f"[run] 续跑 {previous['dir']}：已通关 {len(metrics.state.splits or [])} 章，现实用时已用 "
               f"{metrics.elapsed() / 60:.0f} 分钟" + (f"，剩余章节 {cfg.chapters}" if cfg.chapters else ""), flush=True)
     backup_save(obs, run_dir)
-    resumed_session = previous["state"].get("session_id") if previous and not args.fresh_session else None
-    if prepared:
-        resumed_session = prepared["session_id"]
-    session_id = resumed_session or str(uuid.uuid4())
+    resumed_session, session_id = choose_session(previous, args.fresh_session, prepared)
     if args.no_agent:
         metrics.update(telemetry_source="external", chat_thread_id=None)
     write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous)
@@ -874,7 +871,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             session.close()
             raise
     if recorder is not None:
-        session.before_advance = recorder.check_window
+        session.before_advance = recording_guard(recorder, run_dir)
 
     capabilities = workspace_capabilities(cfg)
     gate = PauseGate(metrics, enabled=cfg.pause_limit and capabilities.programs,
@@ -917,7 +914,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                                   log=lambda m: print(m, flush=True))
         cfg._recording_adopted = True
         cfg._keep_frozen = False
-        session.before_advance = recorder.check_window
+        session.before_advance = recording_guard(recorder, run_dir)
     try:
         if args.no_agent:
             print("[run] --no-agent：工具服务已就绪，按 Ctrl+C 结束", flush=True)
@@ -996,6 +993,47 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                        kb_study=study.summary() if study else None, recording=recording)
         (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
+
+
+def choose_session(previous: dict | None, fresh: bool, prepared: dict | None = None) -> tuple[str | None, str]:
+    """(接续的会话编号或 None, 这次用的会话编号)。接班会话的目录（session_pending，见 chat.successor_run）里
+    新会话还没开始过：用它记下的编号新开一个会话；--fresh-session 总是另起新编号。"""
+    if prepared:
+        return prepared["session_id"], prepared["session_id"]
+    state = previous["state"] if previous else {}
+    if previous and not fresh and state.get("session_id"):
+        if state.get("session_pending"):
+            return None, state["session_id"]
+        return state["session_id"], state["session_id"]
+    return None, str(uuid.uuid4())
+
+
+def recording_guard(recorder: Recorder, run_dir: Path):
+    """录制时每次推进游戏前调用：确认游戏窗口没被最小化；这一段录像录不上了（插件失败、独立音频出错、OBS 断开）
+    就收尾这一段、在同一运行目录里另起一段接着录。另起不了就暂停试玩并抛 RecordingHalt，不再推进录不上的帧。"""
+    def check():
+        recorder.check_window()
+        reason = recorder.segment_failed()
+        if not reason:
+            return
+        from .telemetry import publish
+        try:
+            recorder.roll(reason)
+        except RecordingHalt as exc:
+            from .control import RunControl
+            try:
+                RunControl(run_dir).enqueue('pause')
+            except Exception as again:  # noqa: BLE001
+                print(f'[record] 暂停试玩失败：{again}', flush=True)
+            print(f'[record] {exc}：试玩已暂停', flush=True)
+            publish(run_dir, f'system:recording-halt:{int(time.time())}',
+                    f'录像中断（{reason}），另起一段也失败：{exc}。试玩已暂停，游戏保持冻结；'
+                    '处理好 OBS 后中断运行，再加 --new-recording 续跑。', role='system', kind='系统')
+            raise
+        publish(run_dir, f'system:recording-roll:{len(recorder.segments)}',
+                f'录像这一段中断（{reason}）：已收尾，另起一段接着录（{recorder.opts.dir.name}）。'
+                '出错那次推进里、出错之后的画面没录上。', role='system', kind='系统')
+    return check
 
 
 def publish_user_note(run_dir: Path, text: str | None) -> None:

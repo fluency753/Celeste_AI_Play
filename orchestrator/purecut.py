@@ -34,8 +34,13 @@ CHUNK_FRAMES = 3600           # 声音每次处理一分钟
 
 def read_ticks(csv_path: Path) -> list[int]:
     """frames.csv 每一行的章节计时（按 index 排好，index 必须连续）。"""
+    rows = []
     with open(csv_path, newline="", encoding="utf-8") as f:
-        rows = [(int(r["index"]), int(r["chapter_ticks"])) for r in csv.DictReader(f)]
+        for r in csv.DictReader(f):
+            try:
+                rows.append((int(r["index"]), int(r["chapter_ticks"])))
+            except (KeyError, TypeError, ValueError):
+                continue        # 插件停下时写到一半的行
     rows.sort()
     if any(i != k for k, (i, _) in enumerate(rows)):
         raise ValueError("frames.csv 的 index 不连续")
