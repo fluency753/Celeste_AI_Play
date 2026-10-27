@@ -1,5 +1,13 @@
 # 常驻运行时重载验收
 
+构建元数据回归（仅构建，不安装或连接游戏）：
+
+```powershell
+.\calibration\runtime_reload\resident_build_check.ps1 -CelesteDir "<游戏目录>"
+```
+
+分别使用两个不同 SourceRevisionId 和当前检出版本构建核心，要求 DLL 哈希一致，防止 SourceLink 或版本提交号导致兼容热重载被误拒绝。
+
 先构建 `game-runtime` 和 `game-bridge`。原生检查保留真实 TCP IPC、时钟令牌、两套 FMOD mixer、共享 PCM 与可回收程序集委托，替换的外部边界只有 Everest `ReloadMod`，不声称覆盖实际游戏加载器：
 
 ```powershell
