@@ -48,3 +48,6 @@ kb/reference/
 
 # 本机笔记（交接材料等，只在本机）
 local/
+
+# Codex 本机会话附件
+/.codex-remote-attachments/
