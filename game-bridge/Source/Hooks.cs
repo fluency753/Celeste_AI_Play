@@ -30,9 +30,6 @@ internal static class Hooks {
         } else {
             Log.Error("Game.EndDraw not found; lockstep acks fall back to the next update");
         }
-        On.Celeste.Celeste.Update += OnCelesteUpdate;
-        IL.Monocle.Engine.Update += ILEngineUpdate;
-        On.Monocle.MInput.Update += OnMInputUpdate;
         On.Celeste.Celeste.RenderCore += OnRenderCore;
         On.Celeste.GameplayRenderer.Render += OnGameplayRender;
         On.Celeste.DustGraphic.Render += PlaybackDust.Render;
@@ -49,9 +46,6 @@ internal static class Hooks {
         menuConfirmationHook = null;
         endDrawHook?.Dispose();
         endDrawHook = null;
-        On.Celeste.Celeste.Update -= OnCelesteUpdate;
-        IL.Monocle.Engine.Update -= ILEngineUpdate;
-        On.Monocle.MInput.Update -= OnMInputUpdate;
         On.Celeste.Celeste.RenderCore -= OnRenderCore;
         On.Celeste.GameplayRenderer.Render -= OnGameplayRender;
         On.Celeste.DustGraphic.Render -= PlaybackDust.Render;
@@ -61,32 +55,11 @@ internal static class Hooks {
         On.Celeste.RunThread.Start -= OnRunThreadStart;
     }
 
-    // 每个 FNA 节拍进入一次；由 Bridge 决定本节拍推进几帧
-    private static void OnCelesteUpdate(On.Celeste.Celeste.orig_Update orig, global::Celeste.Celeste self, GameTime gameTime) {
-        // 接管期间每帧的时长固定为目标帧时长（锁步时游戏循环不限速，FNA 给出的实际间隔会变）
-        GameTime time = Bridge.Active ? new GameTime(gameTime.TotalGameTime, self.TargetElapsedTime) : gameTime;
-        Bridge.Tick(() => orig(self, time));
-    }
-
     private delegate void OrigEndDraw(Game self);
 
     private static void OnEndDraw(OrigEndDraw orig, Game self) {
         orig(self);
         Bridge.AfterPresent();
-    }
-
-    private static void ILEngineUpdate(ILContext il) {
-        var cur = new ILCursor(il);
-        if (!cur.TryGotoNext(MoveType.After, ins => ins.MatchCall(typeof(MInput), nameof(MInput.Update)))) {
-            Log.Error("IL hook failed: MInput.Update call not found in Engine.Update; frame gate disabled");
-            return;
-        }
-
-        var resume = cur.DefineLabel();
-        cur.EmitDelegate<Func<bool>>(Bridge.ShouldHaltEngineUpdate);
-        cur.Emit(OpCodes.Brfalse, resume);
-        cur.Emit(OpCodes.Ret);
-        cur.MarkLabel(resume);
     }
 
     // The two guards hook game methods that a game or Everest update, or another mod rewriting them, can change.
@@ -153,17 +126,6 @@ internal static class Hooks {
     private delegate void OrigChapterStart(OuiChapterPanel self, string? checkpoint);
     private static void OnChapterStart(OrigChapterStart orig, OuiChapterPanel self, string? checkpoint) {
         if (Bridge.AllowMapEntry(self, checkpoint)) orig(self, checkpoint);
-    }
-
-    // 章节和显式 step 使用合成输入；空闲菜单恢复真实输入，锁步等令牌时不提前消费按键。
-    private static void OnMInputUpdate(On.Monocle.MInput.orig_Update orig) {
-        if (!Bridge.Active || (!Bridge.OwnsInput && !Bridge.ShouldHaltEngineUpdate())) {
-            orig();
-            return;
-        }
-        if (Bridge.FeedInputThisFrame) {
-            InputInjector.Feed(Bridge.CurrentInput);
-        }
     }
 
     private static void OnRenderCore(On.Celeste.Celeste.orig_RenderCore orig, global::Celeste.Celeste self) {

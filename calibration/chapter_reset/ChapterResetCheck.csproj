@@ -9,6 +9,7 @@
     <Reference Include="$(CelestePrefix)/Celeste.dll" Publicize="true" />
     <Reference Include="$(CelestePrefix)/FNA.dll" Publicize="true" />
     <Reference Include="../../game-bridge/bin/CelesteAIBridge.dll" Publicize="true" />
+    <Reference Include="../../game-runtime/bin/CelesteAIRuntime.dll" Publicize="true" />
     <Reference Include="$(CelestePrefix)/MonoMod.RuntimeDetour.dll" />
     <Reference Include="$(CelestePrefix)/MonoMod.Utils.dll" />
     <Reference Include="$(CelestePrefix)/Mono.Cecil.dll" />

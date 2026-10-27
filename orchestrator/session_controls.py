@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import threading
 from dataclasses import dataclass
 
 from .control import RunControl
@@ -162,7 +163,7 @@ class SessionControls:
                 phase="pausing" if self.pausing else "chatting" if self.turn_active else "idle",
                 session_id=self.session_id, chat_only=self.chat_only,
                 **self._fast_status(),
-                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._chapter_reset_status())
+                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._chapter_reset_status(), **self._bridge_reload_status())
             await asyncio.sleep(.5)
 
     async def _controls(self):
@@ -202,6 +203,8 @@ class SessionControls:
                                 note = await asyncio.to_thread(self.session.set_chapter_queue, data.get("queue", []))
                             self.pending_messages.append({**row, "text": note})
                             self.control.mark(row["id"], "waiting", "要通关的范围已更新，正在通知 agent")
+                        elif row['kind'] == 'bridge_reload':
+                            await self._reload_bridge(row)
                         elif row['kind'] in {'chapter_reset', 'action_permissions'}:
                             if self.session is None or self.session.done or self.chat_only:
                                 raise ValueError('当前没有在试玩，不能改章节重置策略')
@@ -293,6 +296,8 @@ class SessionControls:
                                 self.metrics.update(status="paused")
                             self.control.mark(row["id"], "submitted", "当前动作已结束，试玩已暂停")
                         elif row["kind"] == "resume":
+                            if getattr(self, '_bridge_reload_failed', False):
+                                raise ValueError('桥接重载尚未接回，请先重试重载；不能直接恢复游戏输入')
                             if self.chat_only:
                                 raise ValueError("本次试玩已经完成。当前只能聊天，开始新试玩需要另行指定目标。")
                             if self.pause_at is not None:
@@ -330,10 +335,74 @@ class SessionControls:
                 self.control.heartbeat(paused=self.paused, phase="chatting" if self.turn_active else "idle",
                     session_id=self.session_id, chat_only=self.chat_only,
                     **self._fast_status(),
-                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._chapter_reset_status())
+                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._chapter_reset_status(), **self._bridge_reload_status())
                 await asyncio.sleep(.1)
         except asyncio.CancelledError:
             raise
+
+    async def _reload_bridge(self, row):
+        if self.session is None or self.session.done or self.chat_only:
+            raise ValueError('当前没有在试玩，不能重载桥接')
+        from .bridge_reload import reload_bridge, options
+        request = options(json.loads(row['text'] or '{}'))
+        was_paused = self.paused
+        started_pause = self.pause_at is None
+        self.paused, self.pausing = True, True
+        self.control.mark(row['id'], 'waiting', '等待当前动作完成，再重载桥接并保持原录像')
+        try:
+            async with self.action_lock:
+                if started_pause:
+                    self.pause_at = time.monotonic()
+                    self.metrics.pause()
+                self.metrics.update(status='paused')
+                cancel = threading.Event()
+                worker = asyncio.create_task(asyncio.to_thread(reload_bridge, self.session, self.run_dir, request, cancel=cancel,
+                                                              owner_was_paused=was_paused))
+                try:
+                    result = await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    # to_thread cancellation does not stop the worker. Keep the
+                    # action lock until it acknowledges cancellation, so cleanup
+                    # cannot race an unfinished commit on the owner connection.
+                    cancel.set()
+                    while not worker.done():
+                        try:
+                            await asyncio.shield(worker)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    self.paused = True
+                    self.cfg._keep_frozen = True
+                    worker_error = worker.exception() if not worker.cancelled() else None
+                    completed = not worker.cancelled() and worker_error is None and worker.result().get('phase') == 'finished'
+                    self._bridge_reload_failed = getattr(worker_error, 'reload_held', not completed)
+                    self.metrics.update(status='paused')
+                    self.control.mark(row['id'], 'error', '重载已完成，但控制任务取消，试玩保持暂停' if completed
+                                      else '重载等待已取消，原录像与交接保留，试玩保持暂停')
+                    raise
+                self._bridge_reload_failed = False
+                self.paused = result.get('owner_was_paused', was_paused)
+                if not self.paused and self.pause_at is not None:
+                    self.paused_seconds += time.monotonic() - self.pause_at
+                    self.pause_at = None
+                    self.metrics.resume(quota=False)
+            self.control.mark(row['id'], 'submitted', f'桥接 {result.get("version")} 已接回，原录像继续')
+            self.pending_messages.append({**row, 'id': 'bridge_reload:' + str(row['id']), 'next_turn': True,
+                'text': '桥接代码已重载并接回，原录像保持连续。当前房间经 Everest 正常重载，主控仍核验原存档与房间。请先重新 observe 核对状态，不沿用旧实体编号，不重复已经执行的动作。'})
+        except Exception as exc:
+            self._bridge_reload_failed = getattr(exc, 'reload_held', False)
+            self.paused = True
+            self.cfg._keep_frozen = True
+            self.metrics.update(status='paused')
+            raise
+        finally:
+            self.pausing = False
+
+    def _bridge_reload_status(self):
+        return {'bridge_reload_control': bool(self.session is not None and not self.session.done and not self.chat_only
+                                             and getattr(self.session, 'bridge_reload_supported', False)),
+                'bridge_reload_failed': getattr(self, '_bridge_reload_failed', False)}
 
     def _sim_status(self):
         from dataclasses import fields

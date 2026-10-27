@@ -4,10 +4,11 @@ using Celeste.Mod;
 namespace CelesteAI.Bridge;
 
 /// <summary>
-/// Everest 入口：加载时挂钩子并启动本机 IPC 服务，卸载时全部撤销。
-/// 桥接默认处于"未接管"状态，游戏照常可玩；主控发送 activate 后才接管帧推进与输入。
+/// 可重载的执行与观测逻辑。连接、冻结和录音由 CelesteAIRuntime 持有。
 /// </summary>
 public class BridgeModule : EverestModule {
+    private readonly Guid owner = Guid.NewGuid();
+    private bool attached;
     public static BridgeModule Instance { get; private set; } = null!;
 
     public override Type SettingsType => typeof(BridgeSettings);
@@ -18,20 +19,31 @@ public class BridgeModule : EverestModule {
     }
 
     public override void Load() {
-        Hooks.Load();
-        RecordingAudio.Load();
-        IpcServer.Start(Settings.Port);
-        ClockServer.Start(Settings.ClockPort);
-        Log.Info($"loaded v{Bridge.Version}, listening on 127.0.0.1:{Settings.Port}");
+        try {
+            Hooks.Load();
+            Metadata.VersionString = Bridge.Version;
+            BridgeRuntime.Attach(owner, 1, Bridge.Version, Bridge.Tick, Bridge.Enqueue, Bridge.CanReload,
+                Bridge.ExportReloadState, Bridge.ImportReloadState, Bridge.ServiceReloadRequests);
+            attached = true;
+        } catch {
+            Hooks.Unload();
+            throw;
+        }
+        Log.Info($"loaded v{Bridge.Version}, resident IPC 127.0.0.1:{RuntimeModule.Settings.Port}");
     }
 
     public override void Unload() {
-        IpcServer.Stop();
-        ClockServer.Stop();
-        Bridge.Deactivate();
-        RecordingAudio.Unload();
-        ModHud.Unload();
-        Hooks.Unload();
+        if (attached) {
+            BridgeRuntime.Detach(owner);
+            attached = false;
+        }
+        void Cleanup() {
+            Bridge.ReleasePayloadResources();
+            ModHud.Unload();
+            Hooks.Unload();
+        }
+        if (Celeste.Mod.MainThreadHelper.IsMainThread) Cleanup();
+        else Celeste.Mod.MainThreadHelper.Schedule(Cleanup).GetAwaiter().GetResult();
     }
 }
 

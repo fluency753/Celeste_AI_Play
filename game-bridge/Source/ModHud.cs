@@ -43,7 +43,7 @@ internal static class ModHud {
         get {
             if (view != null || openFailed || !OperatingSystem.IsWindows()) return view;
             try {
-                mapping = MemoryMappedFile.CreateOrOpen($"Local\\CelesteAIHud-{BridgeModule.Settings.Port}", MappingSize);
+                mapping = MemoryMappedFile.CreateOrOpen($"Local\\CelesteAIHud-{RuntimeModule.Settings.Port}", MappingSize);
                 view = mapping.CreateViewAccessor();
             } catch (Exception ex) {
                 openFailed = true;

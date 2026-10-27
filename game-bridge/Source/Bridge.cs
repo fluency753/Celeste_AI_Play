@@ -21,25 +21,25 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.2.0";
+    public const string Version = "1.3.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
-    public static bool Active { get; private set; }
+    public static bool Active { get => BridgeRuntime.Active; private set => BridgeRuntime.Active = value; }
     public static bool Frozen => Active && SceneControl.FreezeWhenIdle(Engine.Scene) && job == null && !IsLoading();
     public static bool OwnsInput => SceneControl.OwnInput(Active, Engine.Scene, job != null);
     private static bool AdvanceWhenIdle => !SceneControl.FreezeWhenIdle(Engine.Scene) || IsLoading();
-    public static bool FeedInputThisFrame { get; private set; }
-    public static InputFrame CurrentInput { get; private set; } = InputFrame.Neutral;
+    public static bool FeedInputThisFrame { get => BridgeRuntime.FeedInputThisFrame; private set => BridgeRuntime.FeedInputThisFrame = value; }
+    public static InputFrame CurrentInput { get => BridgeRuntime.CurrentInput; private set => BridgeRuntime.CurrentInput = value; }
     public static bool AllowMenuConfirmation(TextMenu.Item item) =>
         job?.AllowMenuConfirmation(item) ?? true;
     public static bool AllowMapEntry(OuiChapterPanel panel, string? checkpoint) =>
         job?.AllowMapEntry(panel, checkpoint) ?? true;
 
     /// <summary>接管以来推进过的总帧数（含空闲菜单和加载帧）。</summary>
-    public static long Frame { get; private set; }
+    public static long Frame { get => BridgeRuntime.Frame; private set => BridgeRuntime.Frame = value; }
 
-    private static bool engineHalted = true;
-    private static bool freeFrame;
+    private static bool engineHalted { get => BridgeRuntime.EngineHalted; set => BridgeRuntime.EngineHalted = value; }
+    private static bool freeFrame { get => BridgeRuntime.FreeFrame; set => BridgeRuntime.FreeFrame = value; }
     private static StepJob? job;
     private static readonly ConcurrentQueue<Request> Inbox = new();
     private static readonly List<RenderReply> PendingRenders = new();
@@ -49,6 +49,38 @@ internal static class Bridge {
     public static bool ShouldHaltEngineUpdate() => SceneControl.HaltEngine(Active, engineHalted, freeFrame, Engine.Scene);
 
     public static void Enqueue(Request request) => Inbox.Enqueue(request);
+
+    public static bool CanReload() => job == null && pendingAck == null && PendingRenders.Count == 0 &&
+        Inbox.IsEmpty && !Playback.Running && !Playback.Done && !IsLoading();
+
+    public static void ServiceReloadRequests() => DrainInbox();
+
+    public static void ReleasePayloadResources() {
+        Playback.Reset();
+        syncTarget?.Dispose();
+        syncTarget = null;
+        PendingRenders.Clear();
+        Inbox.Clear();
+    }
+
+    public static string ExportReloadState() {
+        if (!CanReload()) throw new InvalidOperationException("Bridge is busy; wait for the full step and present acknowledgement");
+        SetAudio(IdleAudio);
+        return JsonSerializer.Serialize(new { schema = 1, continuousMusic, audioMode = (int)audioMode,
+            sfxPausedByUs, lockstepEngaged, DrawFrameMarker, idleTokens });
+    }
+
+    public static void ImportReloadState(string data) {
+        using JsonDocument document = JsonDocument.Parse(data);
+        JsonElement state = document.RootElement;
+        if (state.GetProperty("schema").GetInt32() != 1) throw new InvalidOperationException("Unsupported bridge reload state");
+        continuousMusic = state.GetProperty("continuousMusic").GetBoolean();
+        audioMode = (AudioMode)state.GetProperty("audioMode").GetInt32();
+        sfxPausedByUs = state.GetProperty("sfxPausedByUs").GetBoolean();
+        lockstepEngaged = state.GetProperty("lockstepEngaged").GetBoolean();
+        DrawFrameMarker = state.GetProperty("DrawFrameMarker").GetBoolean();
+        idleTokens = state.GetProperty("idleTokens").GetInt32();
+    }
 
     // ---- 每个节拍的入口 ----
 
@@ -369,6 +401,7 @@ internal static class Bridge {
     }
 
     private static void SyncInputOwnership() {
+        BridgeRuntime.InputOwned = OwnsInput;
         if (OwnsInput) InputInjector.Install();
         else InputInjector.Uninstall();
     }
@@ -467,6 +500,8 @@ internal static class Bridge {
                     w.WriteString("audio_mode", audioMode.ToString());
                     w.WriteBoolean("record_audio_nrt", true);
                     w.WriteBoolean("record_audio_mod_banks", true);
+                    w.WriteNumber("bridge_reload", BridgeRuntime.Ready ? 1 : 0);
+                    w.WriteNumber("runtime_contract", BridgeRuntime.ContractVersion);
                     w.WriteBoolean("mod_hud", true);
                     w.WriteNumber("record_audio_tracks", RecordingAudio.TrackCount);
                     w.WriteBoolean("create_save", true);
@@ -521,7 +556,7 @@ internal static class Bridge {
                     if (!plugin.RootElement.TryGetProperty("audio_tracks", out JsonElement tracks) || tracks.ValueKind != JsonValueKind.Number ||
                         tracks.GetInt32() != RecordingAudio.TrackCount)
                         throw new InvalidOperationException("Update the OBS lockstep plugin for two-track recording audio");
-                    RecordingAudio.Start(Audio.System, Path.Combine(Engine.ContentDirectory, "FMOD", "Desktop"), BridgeModule.Settings.ClockPort);
+                    RecordingAudio.Start(Audio.System, Path.Combine(Engine.ContentDirectory, "FMOD", "Desktop"), RuntimeModule.Settings.ClockPort);
                 }
                 else if (recordAction == "stop") RecordingAudio.Stop();
                 ClockServer.Send("R " + a.GetRawText());

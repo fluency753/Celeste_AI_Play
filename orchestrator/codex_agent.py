@@ -174,6 +174,8 @@ class CodexRunner(SessionControls):
             # 拒绝任何宿主权限扩张/工具授权请求；不代替用户批准。
             raise RuntimeError(f"只接受客户端动态工具请求，拒绝 {method}")
         name, args = params.get("tool", ""), params.get("arguments") or {}
+        reload_ticket = (getattr(self.session, 'reload_epoch', 0),
+                         getattr(self.session, 'reload_observation_required', False))
         if not isinstance(args, dict):
             return self._notes_response({"contentItems": [{"type": "inputText", "text": "工具参数必须是 JSON 对象"}], "success": False})
         if name == 'celeste_cutscene' and 'frames' in args:
@@ -247,6 +249,10 @@ class CodexRunner(SessionControls):
                     async with self.action_lock:
                         if self.paused:
                             raise ValueError("用户已暂停试玩，不能执行游戏动作")
+                        if name != 'celeste_observe' and (reload_ticket[1]
+                                or reload_ticket[0] != getattr(self.session, 'reload_epoch', 0)
+                                or getattr(self.session, 'reload_observation_required', False)):
+                            raise ValueError('桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。')
                         if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
                                 or self.turn_done.is_set() or self.stop_requested or self.pausing):
                             raise ValueError('发起此请求的轮次已结束，动作未执行；等待当前轮次的新指令。')
@@ -291,6 +297,8 @@ class CodexRunner(SessionControls):
                 if not isinstance(response, dict) or response.get('turnId') != origin_turn:
                     raise RuntimeError('图像交付未确认原轮次')
             except (RuntimeError, OSError, TimeoutError) as exc:
+                if tool == 'celeste_observe' and getattr(self.session, 'reload_epoch', 0):
+                    self.session.reload_observation_required = True
                 self._agent_pause('观测图像交付失败')
                 content.append({'type': 'inputText', 'text':
                     '图像交付失败：' + str(exc) + '。上面的游戏执行结果仍有效，勿重复已执行动作；'

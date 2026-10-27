@@ -23,7 +23,7 @@ namespace CelesteAI.Bridge;
 /// OBS reads both blocks by clock token, so idle wall time, missed captures and live audio
 /// buffering cannot skew them. Bank resources follow the live game's loaded official and Mod banks.
 /// </summary>
-internal static class RecordingAudio {
+public static class RecordingAudio {
     private const int Samples = 800, Channels = 2, Slots = 1024, Tracks = 2;
     private const int BlockBytes = Samples * Channels * 4, SlotSize = 64 + Tracks * BlockBytes;
     private const int Magic = 0x43414941, LayoutVersion = 2;

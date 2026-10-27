@@ -14,13 +14,16 @@ namespace CelesteAI.Bridge;
 /// 没有要推进的帧时回 "N id"。插件用 "L 1" / "L 0" 开关锁步，用 "S {json}" 报告录制状态；
 /// 桥接用 "R {json}" 把主控的录制指令转给插件。
 /// </summary>
-internal static class ClockServer {
+public static class ClockServer {
     private static TcpListener? listener;
     private static volatile bool running;
     private static TcpClient? client;
     private static readonly object ClientLock = new();
     private static readonly ConcurrentQueue<long> Tokens = new();
     private static readonly SemaphoreSlim TokenSignal = new(0);
+    private static Thread? acceptThread;
+    private static readonly ConcurrentBag<Thread> readThreads = new();
+    private static long generation;
 
     public static volatile bool LockstepRequested;
     public static volatile string? PluginStatus;
@@ -30,6 +33,8 @@ internal static class ClockServer {
     }
 
     public static void Start(int port) {
+        if (running) throw new InvalidOperationException("Clock server is already running");
+        long epoch = Interlocked.Increment(ref generation);
         try {
             listener = new TcpListener(IPAddress.Loopback, port);
             listener.Start();
@@ -38,14 +43,20 @@ internal static class ClockServer {
             return;
         }
         running = true;
-        new Thread(AcceptLoop) { IsBackground = true, Name = "CelesteAIBridge-clock" }.Start();
+        var server = listener;
+        acceptThread = new Thread(() => AcceptLoop(epoch, server!)) { IsBackground = true, Name = "CelesteAIBridge-clock" };
+        acceptThread.Start();
         Log.Info($"clock listening on 127.0.0.1:{port}");
     }
 
     public static void Stop() {
         running = false;
+        Interlocked.Increment(ref generation);
         try { listener?.Stop(); } catch { /* ignored */ }
         Drop(null);
+        Join(acceptThread);
+        while (readThreads.TryTake(out Thread? reader)) Join(reader);
+        acceptThread = null; listener = null;
     }
 
     /// <summary>取一个令牌；没有时最多等 waitMs 毫秒。</summary>
@@ -58,6 +69,17 @@ internal static class ClockServer {
             if (left <= 0 || !TokenSignal.Wait(left)) return Tokens.TryDequeue(out id);
             if (Tokens.TryDequeue(out id)) return true;
         }
+    }
+
+    /// <summary>Held maintenance produces no movie/audio frames, but keeps the OBS clock alive.</summary>
+    public static void AcknowledgeIdle() {
+        while (Tokens.TryDequeue(out long id)) Send("N " + id);
+        while (TokenSignal.Wait(0)) { }
+    }
+
+    private static void Join(Thread? thread) {
+        if (thread != null && thread != Thread.CurrentThread && !thread.Join(2000))
+            Log.Warn("Clock worker did not stop within two seconds: " + thread.Name);
     }
 
     public static void Send(string line) {
@@ -82,34 +104,40 @@ internal static class ClockServer {
         while (Tokens.TryDequeue(out _)) { }
     }
 
-    private static void AcceptLoop() {
-        while (running) {
+    private static void AcceptLoop(long epoch, TcpListener server) {
+        while (running && epoch == Interlocked.Read(ref generation)) {
             TcpClient accepted;
             try {
-                accepted = listener!.AcceptTcpClient();
+                accepted = server.AcceptTcpClient();
             } catch (Exception) {
-                if (!running) return;
+                if (!running || epoch != Interlocked.Read(ref generation)) return;
                 continue;
             }
             accepted.NoDelay = true;
             Drop(null);
-            lock (ClientLock) client = accepted;
+            lock (ClientLock) {
+                if (!running || epoch != Interlocked.Read(ref generation)) { accepted.Close(); return; }
+                client = accepted;
+            }
             Log.Info("clock: OBS plugin connected");
-            new Thread(() => ReadLoop(accepted)) { IsBackground = true, Name = "CelesteAIBridge-clock-read" }.Start();
+            var thread = new Thread(() => ReadLoop(epoch, accepted)) { IsBackground = true, Name = "CelesteAIBridge-clock-read" };
+            readThreads.Add(thread); thread.Start();
         }
     }
 
-    private static void ReadLoop(TcpClient c) {
+    private static void ReadLoop(long epoch, TcpClient c) {
         try {
             using var reader = new StreamReader(c.GetStream(), new UTF8Encoding(false));
             string? line;
-            while (running && (line = reader.ReadLine()) != null) {
+            while (running && epoch == Interlocked.Read(ref generation) && (line = reader.ReadLine()) != null) {
+                lock (ClientLock) if (!ReferenceEquals(client, c)) break;
                 if (line.Length < 1) continue;
                 switch (line[0]) {
                     case 'T':
                         if (long.TryParse(line.AsSpan(2), out long id)) {
                             Tokens.Enqueue(id);
                             TokenSignal.Release();
+                            if (BridgeRuntime.HoldingReload) AcknowledgeIdle();
                         }
                         break;
                     case 'L':

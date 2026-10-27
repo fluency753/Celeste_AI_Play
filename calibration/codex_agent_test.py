@@ -269,6 +269,27 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(r['success'] for r in results))
         self.assertEqual(self.server.call_tool.await_count, 2)
 
+    async def test_queued_pre_reload_action_is_rejected_after_baseline_ack(self):
+        self.runner.study = None
+        self.runner.session = SimpleNamespace(reload_epoch=0, reload_observation_required=False)
+        await self.runner.action_lock.acquire()
+        pending = asyncio.create_task(self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}}))
+        await asyncio.sleep(0)
+        self.runner.session.reload_epoch = 1
+        self.runner.action_lock.release()
+        result = await pending
+        self.assertFalse(result['success'])
+        self.assertIn('旧计划未执行', result['contentItems'][0]['text'])
+        self.server.call_tool.assert_not_awaited()
+
+    async def test_failed_reload_observation_image_keeps_fresh_observe_required(self):
+        self.runner.study = None
+        self.runner.session = SimpleNamespace(reload_epoch=1, reload_observation_required=False)
+        self.runner.rpc.request.side_effect = RuntimeError('image transport failed')
+        result = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
+        self.assertFalse(result['success'])
+        self.assertTrue(self.runner.session.reload_observation_required)
+
     async def test_queued_old_turn_action_is_rejected_before_game_execution(self):
         self.runner.study = None
         sending, release = asyncio.Event(), asyncio.Event()

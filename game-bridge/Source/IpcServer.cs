@@ -11,21 +11,28 @@ using System.Threading;
 
 namespace CelesteAI.Bridge;
 
-internal sealed record Request(long Id, string Cmd, JsonElement Args);
+public sealed record Request(long Id, string Cmd, JsonElement Args);
 
 /// <summary>
 /// 只监听 127.0.0.1 的行协议服务：每行一个 JSON 对象。
 /// 收到的请求放进队列，由游戏主线程在下一个节拍处理；回复经独立写线程发出，不阻塞游戏。
 /// 同一时间只服务一个主控连接，新连接会顶替旧连接。
 /// </summary>
-internal static class IpcServer {
+public static class IpcServer {
     private static TcpListener? listener;
     private static volatile bool running;
     private static TcpClient? client;
     private static readonly object ClientLock = new();
-    private static readonly BlockingCollection<string> Outbox = new(new ConcurrentQueue<string>());
+    private sealed record Outbound(TcpClient Client, string Json);
+    private static BlockingCollection<Outbound> Outbox = new(new ConcurrentQueue<Outbound>());
+    private static Thread? acceptThread, writeThread;
+    private static readonly ConcurrentBag<Thread> readThreads = new();
+    private static long generation;
 
     public static void Start(int port) {
+        if (running) throw new InvalidOperationException("IPC server is already running");
+        long epoch = Interlocked.Increment(ref generation);
+        Outbox = new(new ConcurrentQueue<Outbound>());
         try {
             listener = new TcpListener(IPAddress.Loopback, port);
             listener.Start();
@@ -34,49 +41,68 @@ internal static class IpcServer {
             return;
         }
         running = true;
-        new Thread(AcceptLoop) { IsBackground = true, Name = "CelesteAIBridge-accept" }.Start();
-        new Thread(WriteLoop) { IsBackground = true, Name = "CelesteAIBridge-write" }.Start();
+        var output = Outbox;
+        var server = listener;
+        acceptThread = new Thread(() => AcceptLoop(epoch, server!)) { IsBackground = true, Name = "CelesteAIBridge-accept" };
+        writeThread = new Thread(() => WriteLoop(epoch, output)) { IsBackground = true, Name = "CelesteAIBridge-write" };
+        acceptThread.Start(); writeThread.Start();
     }
 
     public static void Stop() {
         running = false;
+        Interlocked.Increment(ref generation);
         try { listener?.Stop(); } catch { /* ignored */ }
         lock (ClientLock) {
             client?.Close();
             client = null;
         }
+        Outbox.CompleteAdding();
+        Join(acceptThread); Join(writeThread);
+        while (readThreads.TryTake(out Thread? reader)) Join(reader);
+        acceptThread = writeThread = null;
+        listener = null;
     }
 
     public static void Send(string json) {
-        if (running) {
-            Outbox.Add(json);
-        }
+        TcpClient? destination;
+        lock (ClientLock) destination = client;
+        if (!running || destination == null) return;
+        try { Outbox.Add(new(destination, json)); }
+        catch (InvalidOperationException) { /* Server stopped between checking and enqueueing. */ }
     }
 
-    private static void AcceptLoop() {
-        while (running) {
+    private static void Join(Thread? thread) {
+        if (thread != null && thread != Thread.CurrentThread && !thread.Join(2000))
+            Log.Warn("IPC worker did not stop within two seconds: " + thread.Name);
+    }
+
+    private static void AcceptLoop(long epoch, TcpListener server) {
+        while (running && epoch == Interlocked.Read(ref generation)) {
             TcpClient accepted;
             try {
-                accepted = listener!.AcceptTcpClient();
+                accepted = server.AcceptTcpClient();
             } catch (Exception) {
-                if (!running) return;
+                if (!running || epoch != Interlocked.Read(ref generation)) return;
                 continue;
             }
             accepted.NoDelay = true;
             lock (ClientLock) {
+                if (!running || epoch != Interlocked.Read(ref generation)) { accepted.Close(); return; }
                 client?.Close();
                 client = accepted;
             }
             Log.Info("orchestrator connected");
-            new Thread(() => ReadLoop(accepted)) { IsBackground = true, Name = "CelesteAIBridge-read" }.Start();
+            var thread = new Thread(() => ReadLoop(epoch, accepted)) { IsBackground = true, Name = "CelesteAIBridge-read" };
+            readThreads.Add(thread); thread.Start();
         }
     }
 
-    private static void ReadLoop(TcpClient c) {
+    private static void ReadLoop(long epoch, TcpClient c) {
         try {
             using var reader = new StreamReader(c.GetStream(), new UTF8Encoding(false));
             string? line;
-            while (running && (line = reader.ReadLine()) != null) {
+            while (running && epoch == Interlocked.Read(ref generation) && (line = reader.ReadLine()) != null) {
+                lock (ClientLock) if (!ReferenceEquals(client, c)) break;
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 Request req;
                 try {
@@ -89,7 +115,7 @@ internal static class IpcServer {
                     Send(Reply.Error(0, $"bad json: {ex.Message}"));
                     continue;
                 }
-                Bridge.Enqueue(req);
+                BridgeRuntime.Enqueue(req);
             }
         } catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException) {
             // 连接断开
@@ -97,13 +123,14 @@ internal static class IpcServer {
         Log.Info("orchestrator disconnected");
     }
 
-    private static void WriteLoop() {
-        foreach (string message in Outbox.GetConsumingEnumerable()) {
+    private static void WriteLoop(long epoch, BlockingCollection<Outbound> output) {
+        foreach (Outbound message in output.GetConsumingEnumerable()) {
+            if (!running || epoch != Interlocked.Read(ref generation)) break;
             TcpClient? c;
             lock (ClientLock) c = client;
-            if (c == null) continue;
+            if (c == null || !ReferenceEquals(c, message.Client)) continue;
             try {
-                byte[] bytes = Encoding.UTF8.GetBytes(message + "\n");
+                byte[] bytes = Encoding.UTF8.GetBytes(message.Json + "\n");
                 c.GetStream().Write(bytes, 0, bytes.Length);
             } catch (Exception) {
                 // 主控已断开，丢弃
@@ -113,7 +140,7 @@ internal static class IpcServer {
 }
 
 /// <summary>构造回复：{"id":…,"ok":true|false, "error"?:…, …}</summary>
-internal static class Reply {
+public static class Reply {
     private static readonly JsonWriterOptions Options = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     public static string Ok(long id, Action<Utf8JsonWriter>? body = null) => Build(id, true, null, body);

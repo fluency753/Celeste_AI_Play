@@ -1,0 +1,7 @@
+- Name: CelesteAIRuntime
+  Version: 1.0.0
+  DLL: bin/CelesteAIRuntime.dll
+  SupportsCodeReload: false
+  Dependencies:
+    - Name: EverestCore
+      Version: 1.5935.0

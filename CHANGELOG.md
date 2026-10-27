@@ -2,6 +2,10 @@
 
 按日期倒序；同一天的条目也按时间倒序（新的在上）。原生 GPT、直播、可交互网页 HUD 等改动的细节另见 [docs/LIVE_ADAPTATION.md](docs/LIVE_ADAPTATION.md)。
 
+## 2026-10-28
+
+- **桥接 1.3.0：常驻核心与受控代码重载**：新增独立 `CelesteAIRuntime`，冻结、IPC／时钟及双轨录音跨桥接逻辑卸载留存；主控在完整动作／呈现边界交接，不发送录制 stop/start，不另开录像目录。复用普通 `Everest.Loader.ReloadMod`，当前房间仍按 Everest 默认行为重建，玩家／手持物等状态不承诺原样保留；存档、SID、房间、章节计时、桥接与音频帧计量必须通过核验。失败保持暂停和 lease，确认丢失、版本约束、后台取消及工作区刷新失败分别可恢复，不重放旧动作；重载后必须先重新观测。此为不兼容部署结构变化，按当前原则递增 minor 而非 major，旧版首次迁移和核心自身更新须维护重启安装两个 Mod；兼容逻辑更新使用 `-HotReload` 或主控 HTTP 重载工具。已验证私有游戏普通重载、坏 DLL 同 lease 修复、真实 OBS 同编码进程／同输出文件跨重载，以及真实 agent 收图与重新操作，详见 [重载说明](docs/BRIDGE_RELOAD.md)。
+
 ## 2026-10-27
 
 - **5A 操控 PlayerSeeker 时主控不再空推计时（控制台 1.2.1）**：5A 镜子后的 void 房间里玩家操控的是 PlayerSeeker（读方向键与冲刺键），Madeline 睡在 Dummy 状态（`inControl=false`，但不在剧情中）。主控原来把这当成剧情：每次 act 先自动推进 600 × 30 = 18000 帧等 Madeline 恢复可操作，等不到再以"游戏还在转场或剧情中"拒绝执行；5A 正式运行里两次 act 让章节计时白走了约 10 分钟。现在识别出这一段就当作可操作交给智能体（不先自动推进，每次至少帧数与思考僵直照常），act 结果附说明；Madeline 被 PlayerSeeker 碰到的那次死亡（游戏用 `registerDeathInStats: false`）主控也不计。另外加了通用兜底：Madeline 活着、不可操作，又不在剧情、对白、暂停菜单、转场里，也不是画面冻结等确认时，自动推进最多 30 秒（`IDLE_GIVE_UP_FRAMES`）就交回，之后的 act 不再先自动推进，状态变了恢复原样。新增 `calibration/seeker_control_test.py`（旧代码在同一场景下推满 18000 帧后报错）。只改主控，桥接不变；控制台与启动器 1.2.1，重编 CelesteAIConsole.exe。

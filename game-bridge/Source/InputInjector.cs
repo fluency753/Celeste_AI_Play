@@ -17,7 +17,7 @@ namespace CelesteAI.Bridge;
 /// 绑定思路参考 CelesteTAS（MIT）：先改绑定、重建虚拟输入，再把设置字段还原，
 /// 这样玩家自己的按键设置不会被保存成桥接用的绑定。
 /// </summary>
-internal static class InputInjector {
+public static class InputInjector {
     // 游戏内动作：手柄
     private const Buttons JumpButton = Buttons.A;
     private const Buttons DashButton = Buttons.B;
@@ -235,7 +235,8 @@ internal static class InputInjector {
     private static void ClearModBindings() {
         ModBindingBackup.Clear();
         foreach (EverestModule module in Everest.Modules) {
-            if (module == BridgeModule.Instance || module.SettingsType is not { } type || module._Settings is not { } moduleSettings) {
+            if (module.Metadata?.Name is "CelesteAIBridge" or "CelesteAIRuntime" ||
+                    module.SettingsType is not { } type || module._Settings is not { } moduleSettings) {
                 continue;
             }
             foreach (PropertyInfo p in type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)) {

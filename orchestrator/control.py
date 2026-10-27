@@ -30,9 +30,12 @@ class RunControl:
 
     def enqueue(self, kind, text=""):
         if kind not in {"message", "pause", "resume", "fast", "effort", "detach", "goal", "goal_clear", "stop", "cutscene_mode",
-                        "interrupt", "chapters", "sim_update", "chapter_reset", "action_permissions"}:
+                        "interrupt", "chapters", "sim_update", "chapter_reset", "action_permissions", "bridge_reload"}:
             raise ValueError("未知控制指令")
         text = str(text).strip()
+        if kind == 'bridge_reload':
+            from .bridge_reload import options
+            text = json.dumps(options(json.loads(text or '{}')), ensure_ascii=False)
         if kind == 'action_permissions':
             from .action_policy import validate_update
             validate_update(json.loads(text))

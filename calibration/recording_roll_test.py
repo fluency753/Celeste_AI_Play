@@ -168,7 +168,7 @@ class RollTests(unittest.TestCase):
 
     def test_session_turns_halt_into_act_error(self):
         from orchestrator.game_session import ActError, GameSession
-        holder = type('S', (), {})()
+        holder = GameSession.__new__(GameSession)
         holder.before_advance = lambda: (_ for _ in ()).throw(RecordingHalt('另起一段录像失败'))
         with self.assertRaises(ActError):
             GameSession._before_advance(holder)

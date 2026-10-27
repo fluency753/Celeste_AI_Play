@@ -356,6 +356,7 @@ class GameSession:
     def connect(self) -> dict:
         self.client = BridgeClient(port=self.cfg.bridge_port, timeout=600)
         hello = self.client.call('hello')
+        self.bridge_reload_supported = type(hello.get('bridge_reload')) is int and hello['bridge_reload'] == 1
         self.entry_guard_supported = hello.get('entry_guard') is True
         self.chapter_reset_guard_supported = hello.get('chapter_reset_guard') is True
         self.action_policy_supported = hello.get('action_policy')
@@ -410,6 +411,47 @@ class GameSession:
             self._persist_completion_pending()
         return obs
 
+    def after_bridge_reload(self, obs: dict) -> None:
+        """Publish a fresh baseline after the resident core has finished its hold."""
+        with self.lock:
+            self.reload_epoch = getattr(self, 'reload_epoch', 0) + 1
+            self.reload_observation_required = True
+            self._input_formats = None
+            self._last_positions, self._last_room = {}, None
+            self._collision_png = None
+            self._held_input = ('', 'celeste_ai')
+            held = self.run_dir / 'held_input.json'
+            pending = held.with_suffix('.reload-tmp')
+            try:
+                pending.write_text(json.dumps({'keys': '', 'input_format': 'celeste_ai', 'frame': obs.get('frame')}), encoding='utf-8')
+                pending.replace(held)
+            finally:
+                pending.unlink(missing_ok=True)
+            self.last_obs = enrich_obs(obs)
+            reset = getattr(self, 'reset_observation_delivery', None)
+            if reset:
+                reset()
+            self._update_metrics_from_obs(self.last_obs)
+            if self.workspace:
+                game = self.workspace / 'game'
+                game.mkdir(parents=True, exist_ok=True)
+                for name in ('last_act.json', 'retry.json', 'sim_state.json', 'latest_obs.json', 'collision.json'):
+                    (game / name).unlink(missing_ok=True)
+                # Unlike post-act best-effort output, a reload must not report
+                # a fresh baseline while leaving stale files behind on failure.
+                self._write_json('game/latest_obs.json', {'decision': self.decision_index, 'obs': self.last_obs})
+                self._write_collision_view(self.last_obs)
+                self._write_sim_state()
+
+    def acknowledge_reload_observation(self, epoch: int) -> None:
+        with self.lock:
+            if epoch == getattr(self, 'reload_epoch', 0):
+                self.reload_observation_required = False
+
+    def _require_reload_observation(self) -> None:
+        if getattr(self, 'reload_observation_required', False):
+            raise ActError('桥接已重载，当前房间和玩家状态可能变化；请先默认 observe 获取新观测，再重新决定动作。旧计划未执行。')
+
     def _step_options(self):
         from .action_policy import require_capability, step_options
         try:
@@ -461,6 +503,17 @@ class GameSession:
         previous = getattr(getattr(getattr(self, "metrics", None), "state", None), "resumed_from", None)
         if not previous:
             return
+        ledger = Path(previous) / 'bridge_reload.json'
+        if ledger.exists():
+            try:
+                finished = json.loads(ledger.read_text(encoding='utf-8')).get('phase') == 'finished'
+            except (OSError, ValueError, AttributeError):
+                finished = False
+            if not finished:
+                # A failed output refresh may leave the old key file at the
+                # same frame. A successor must not replay that pre-reload key.
+                self.reload_observation_required = True
+                return
         try:
             summary = json.loads((Path(previous) / "summary.json").read_text(encoding="utf-8"))
             data = json.loads((Path(previous) / "held_input.json").read_text(encoding="utf-8"))
@@ -593,15 +646,16 @@ class GameSession:
             reply = self.client.call("observe", image=True, scope="room", fields=True)
             obs, image = enrich_obs(reply["obs"]), reply.get("image")
             self._commit_completion(obs)
-            if self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas' and story_pending(obs) and not self.done:
+            reload_observation = getattr(self, 'reload_observation_required', False)
+            if not reload_observation and self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas' and story_pending(obs) and not self.done:
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
-            elif (self.cfg.cutscene_mode == 'auto' and obs.get('scene') == 'Level' and (obs.get('level') or {}).get('inCutscene')
+            elif (not reload_observation and self.cfg.cutscene_mode == 'auto' and obs.get('scene') == 'Level' and (obs.get('level') or {}).get('inCutscene')
                   and not self._ending_agent and not self._ending_pending and not self.done):
                 # 自动跳过剧情：剧情（含跳过的淡出）还没结束就先推进完，不让智能体看着黑屏或剧情画面判断
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
-            if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
+            if not reload_observation and self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs, image, more = self._enter_next_chapter()
                 notes = [*notes, *more]
             self._write_sim_state()
@@ -783,6 +837,7 @@ class GameSession:
             return snapshot
 
     def simulate(self, request: dict) -> dict:
+        self._require_reload_observation()
         from .sim_assist import validate_request, run_predictions
         if not isinstance(request, dict):raise ActError('模拟请求必须是对象')
         if not self.sim_energy:
@@ -855,6 +910,7 @@ class GameSession:
 
     def act(self, inputs: list[str] | None, thought: str, stop_on: list[str] | None,
             plan_file: str | None = None, input_format: str | None = None) -> ActOutcome:
+        self._require_reload_observation()
         self.programs_since_act = 0
         if self.done:
             raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
@@ -1356,6 +1412,7 @@ class GameSession:
 
     def _before_advance(self) -> None:
         """推进游戏之前的检查（录制时由 run.py 设成"确认游戏窗口没有最小化"）；出错不影响游玩。"""
+        self._require_reload_observation()
         if self.before_advance is not None:
             from .recording import RecordingHalt
             try:

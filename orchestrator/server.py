@@ -122,6 +122,13 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     state = {"described_room": None}
     delivery = ObservationDelivery()
 
+    def reset_observation_delivery():
+        nonlocal delivery
+        delivery = ObservationDelivery()
+        state['described_room'] = None
+
+    session.reset_observation_delivery = reset_observation_delivery
+
     def observation_context(obs, *, force=False, compact=False):
         # Limited planning tools can become unavailable immediately after a quota charge.
         # Keep inline geometry available throughout those runs.
@@ -144,11 +151,17 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             print(f"[run] 开始游玩：准备阶段用时 {metrics.state.study_s:.0f} 秒"
                   + (f"，知识库已读 {study.progress():.0%}" if study else ""), flush=True)
 
-    def gated() -> str | None:
+    def reload_ticket():
+        return (getattr(session, 'reload_epoch', 0), getattr(session, 'reload_observation_required', False))
+
+    def gated(ticket=None) -> str | None:
         """知识库没读完时不执行游戏工具，返回提示。"""
         guard = getattr(session, 'control_guard', None)
         if guard and (note := guard()):
             return note
+        if ticket is not None and (ticket[1] or ticket[0] != getattr(session, 'reload_epoch', 0)
+                                   or getattr(session, 'reload_observation_required', False)):
+            return '桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。'
         if study is None or study.ready():
             return None
         return study.reminder()
@@ -232,6 +245,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 if detail != 'overview' or region is not None or offset or snapshot_id is not None:
                     return ['区域或分页查询请用 detail="geometry"；默认 overview 会获取新观测。']
                 obs, image = await asyncio.to_thread(session.observe)
+                observed_epoch = getattr(session, 'reload_epoch', 0)
                 credit(obs)
                 context, file_context, candidate = observation_context(obs, force=True)
                 content = images(obs, image)
@@ -242,6 +256,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                                + ("\n" + ws_note if session.workspace and not file_context else ""))
                 delivery.commit(candidate)
                 state["described_room"] = room_key(obs)
+                acknowledge = getattr(session, 'acknowledge_reload_observation', None)
+                if acknowledge:
+                    acknowledge(observed_epoch)
                 return content
             except ValueError as exc:
                 return [str(exc)]
@@ -257,8 +274,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     @server.tool(name="act", description=fill(act_description, session.cfg), structured_output=False)
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
                   stop_on: list[str] | None = None, input_format: str | None = None) -> list:
+        ticket = reload_ticket()
         async with call_lock:
-            if (note := gated()) is not None:
+            if (note := gated(ticket)) is not None:
                 return [note]
             begin()
             try:
@@ -322,8 +340,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     @optional_tool(tool_exit_level, name='exit_level', description='仅在用户要求退出且主控允许返回地图或保存退出时调用：通过暂停菜单选择已允许的退出操作，结束试玩并保存录像。默认禁止，退出不算通关；受阻时用 stop_run 报告。', structured_output=False)
     async def exit_level(reason: str) -> list:
+        ticket = reload_ticket()
         async with call_lock:
-            if (note := gated()) is not None:
+            if (note := gated(ticket)) is not None:
                 return [note]
             begin()
             result = await asyncio.to_thread(session.exit_level, reason)
@@ -331,8 +350,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段，watch不按键观看到下一真实输入节点或恢复控制。advance确认当前完整对白或明信片，choose选择当前可见选项index；教学用act。无需wait，advance不会代选，确认后自动播放到下一节点。', structured_output=False)
     async def cutscene(action: str, choice: int | None = None) -> list:
+        ticket = reload_ticket()
         async with call_lock:
-            if (note := gated()) is not None:return [note]
+            if (note := gated(ticket)) is not None:return [note]
             begin()
             obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
             new_room = room_key(obs) != state['described_room']
@@ -345,8 +365,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     @optional_tool(tool_simulate, name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)
     async def simulate(candidates: list[list[str]] | None = None, input_format: str = 'celeste_ai') -> list:
+        ticket = reload_ticket()
         async with call_lock:
-            if (note := gated()) is not None:
+            if (note := gated(ticket)) is not None:
                 return [note]
             if not getattr(session, 'sim_energy', None):
                 return ['本次未启用限额模拟辅助。']

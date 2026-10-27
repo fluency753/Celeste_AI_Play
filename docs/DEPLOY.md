@@ -105,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 | 1 system | 检查 Windows 版本、Python、winget、git | — |
 | 2 game | 从 Steam 的库目录找《蔚蓝》，检查 Everest（`Celeste.dll`） | 确认或填写游戏目录；没装 Everest 时用 Olympus 装好、启动一次游戏 |
 | 3 dotnet | 找 .NET 8 SDK，没有就用 winget 装 | 已装在别处时填 `dotnet.exe` 所在目录 |
-| 4 bridge | 编译桥接 Mod 并装进游戏的 `Mods\CelesteAIBridge\` | 先关掉游戏 |
+| 4 bridge | 编译并安装 `CelesteAIRuntime` 常驻核心与 `CelesteAIBridge` 逻辑两个 Mod | 首次安装及核心更新先关游戏；兼容逻辑更新见受控重载 |
 | 5 docker | 检查 Docker Desktop 与引擎，构建智能体镜像 `celeste-agent:0.1` | 没装时先装 WSL2（管理员、重启），再装 Docker Desktop 并启动到 Engine running |
 | 6 platform | 选择智能体接入的平台（Anthropic、DeepSeek 或其他兼容 Anthropic 接口的平台），配置令牌或密钥，填模型名；模型不在平台配置里时，填它支持的推理强度档位 | Anthropic：浏览器授权 `claude setup-token`，把令牌粘贴回来（输入不显示）；DeepSeek 等：给密钥文件或粘贴密钥；其他平台：接口地址与密钥。原生 GPT 不在这一步配置，见 4.11 节 |
 | 7 recording | 找 OBS 与 ffmpeg（没有就用 winget 装），编译安装锁步插件，写 `configs\local.recording.json`（有 NVIDIA 显卡时用 NVENC） | 选择要不要录制；编译插件前关掉 OBS |
@@ -133,7 +133,8 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only platform,switches # �
 | `configs\local.recording.json` | OBS 目录、ffmpeg 路径、编码参数、声音偏移校准值 |
 | `configs\local.deploy.json` | 向导的回答（不含密钥），其中的游戏目录也用来读取存档列表（没有这个文件时，存档列表改从环境变量 `CELESTE_DIR`、控制台里填的游戏位置、正在运行的游戏或 Steam 库找游戏目录） |
 | `start_local.ps1` | 启动脚本（见 5.1 节） |
-| `<Celeste 安装目录>\Mods\CelesteAIBridge\` | 桥接 Mod |
+| `<Celeste 安装目录>\Mods\CelesteAIBridge\` | 桥接逻辑 Mod |
+| `<Celeste 安装目录>\Mods\CelesteAIRuntime\` | 常驻冻结／连接／录音核心 Mod |
 | `<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll` | 锁步插件 |
 
 部署完先用 `.\start_local.ps1 -Trial` 在调试存档上试跑一次（见 5 节）。
@@ -176,7 +177,7 @@ winget install Microsoft.DotNet.SDK.8
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本编译 `game-bridge\`，把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.2.0）。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。更新代码不会更新正在运行的游戏或主控，需另行安排安装与重启。
+Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本构建桥接及其常驻核心依赖，备份并安装 `Mods\CelesteAIBridge\` 与 `Mods\CelesteAIRuntime\` 两个 Mod；首次安装与核心更新必须关闭游戏。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.3.0）。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。1.3.0 是不兼容的部署结构变化，旧版需维护重启迁移。已经安装相同常驻核心的兼容逻辑更新，可用 `-HotReload -HudPort 47792` 经在用主控保持原录像重载；正常 Everest 重载仍会重建当前房间。完整流程、失败重试与验收边界见 [桥接重载](BRIDGE_RELOAD.md)。
 
 冒烟测试（游戏停在标题画面即可）：
 
@@ -499,7 +500,7 @@ GPT 使用本机 Codex 已登录的原生执行器（`--engine codex`），不�
 
 | 改动了 | 要做 |
 | --- | --- |
-| `game-bridge\`（桥接版本号变了） | 关游戏，`.\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"` |
+| `game-bridge\`／`game-runtime\` | 首次安装或核心变更：关游戏后运行部署脚本；已安装相同核心的兼容逻辑更新可加 `-HotReload`，见 [受控重载](BRIDGE_RELOAD.md) |
 | `agent-container\` | `docker build -t celeste-agent:0.1 agent-container`（容器会自动重建） |
 | `obs-plugin\` 或 OBS 更新了 | 关 OBS，`tools\build_obs_plugin.py`（找不到 OBS 时加 `--obs-dir`），重跑录制校准 |
 | `overlay\hud.html` | 网页 HUD 会在 `configs\hud.json` 的 `page_version` 变化时自动重新加载；仍显示旧页面时，在 OBS 里刷新 HUD 浏览器源（或用 `tools\obs_setup.py stop` 关掉，下次运行时主控会重新启动它），并重开 HUD 窗口 |

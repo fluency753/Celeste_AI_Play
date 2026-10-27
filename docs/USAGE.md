@@ -121,7 +121,7 @@ docker build -t celeste-agent:0.1 agent-container
 
 ## 3. 桥接 Mod：构建、安装与测试
 
-桥接 Mod（CelesteAIBridge，当前版本 1.2.0）运行在游戏进程内，只监听本机 `127.0.0.1:47774`。未接管时游戏照常可玩；测试客户端发送 `activate` 后，游戏在章节内冻结在当前帧（菜单仍正常运行），只有收到 `step` 才逐帧推进。主控要求桥接 0.12.4 或更新；默认的录像声音（两条音轨）需要 0.12.7，游戏内 HUD 需要 0.13.0，剧情交给智能体（按输入节点交接）需要 1.0.4，可尝试跳过时提前交接需要 1.0.25，按检查点分段（进入任意检查点）需要 1.0.6。
+桥接 Mod（CelesteAIBridge，当前版本 1.3.0）运行在游戏进程内，只监听本机 `127.0.0.1:47774`。未接管时游戏照常可玩；测试客户端发送 `activate` 后，游戏在章节内冻结在当前帧（菜单仍正常运行），只有收到 `step` 才逐帧推进。主控要求桥接 0.12.4 或更新；默认的录像声音（两条音轨）需要 0.12.7，游戏内 HUD 需要 0.13.0，剧情交给智能体（按输入节点交接）需要 1.0.4，可尝试跳过时提前交接需要 1.0.25，按检查点分段（进入任意检查点）需要 1.0.6。
 
 ### 3.1 构建与安装
 
@@ -131,11 +131,11 @@ docker build -t celeste-agent:0.1 agent-container
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-脚本会编译 `game-bridge/`，再把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。启动游戏后，在 `log.txt` 中能看到 `[CelesteAIBridge] loaded`。
+脚本构建并备份安装 `CelesteAIRuntime` 常驻核心与 `CelesteAIBridge` 逻辑两个 Mod。1.3.0 为不兼容的部署结构变化，首次迁移及核心自身更新必须维护重启。启动后日志应分别显示核心与桥接加载成功。已安装相同核心的兼容逻辑更新可用 `-HotReload -HudPort 47792` 保持原录像重载，或运行 `tools/reload_bridge.py`；普通 Everest 重载仍会重建当前房间，失败保留冻结及 lease 后用 `--retry` 接回。详见 [桥接重载](BRIDGE_RELOAD.md)，其中列明未完成的真实 OBS 同编码进程连续录像验收。
 
 ### 3.2 冒烟测试
 
-1. 启动游戏，停在标题画面即可。执行 `python tools\enter_save.py test --leave-active`，菜单宏会自动选中 `test` 存档、进入关卡、跳过开场，停在 Madeline 可以操作的第一帧（实测约 7 秒）。
+1. 确认没有在用主控，启动游戏后执行 `python tools\enter_save.py test --save-slot 10`，只原生继续载入指定存档并保持冻结，不自行退出、选章或跳剧情。若存档没有进行中的章节，会停在地图，需先明确进入测试章节。
 2. 在仓库根目录执行 `python tools\bridge_client.py smoke --out-dir smoke`。
 3. 通过的标准：冻结 1 秒帧号不变；单帧推进恰好 1 帧；向右走并起跳 51 帧后有轨迹与截图；最后自动交还控制。截图保存在 `smoke\` 里。
 
