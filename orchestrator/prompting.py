@@ -486,6 +486,18 @@ def current_rules_note(cfg) -> str:
             + play_prompt(cfg))
 
 
+def net_resume_prompt(minutes: float, chat: bool = False, study_note: str | None = None) -> str:
+    """模型连不上、主控暂停等待之后，网络恢复时接着同一个会话发出的第一条消息。"""
+    text = (f"（系统）刚才模型连不上（断网或接口不可用），主控暂停了智能体约 {max(minutes, 0):.0f} 分钟，现在已经恢复，"
+            "接着同一个会话继续。中断前已经完成的工具调用结果都在对话里；最后那次回复没有送达，需要的话重新想一遍。")
+    if chat:
+        return text + "请接着处理用户刚才的消息。"
+    text += "这段时间游戏一直冻结，章节计时没有走，也不计入思考僵直。"
+    if study_note:
+        return text + "准备阶段还没有结束：\n" + study_note
+    return text + "请先调用 observe 看清当前这一帧，再继续游玩。"
+
+
 def resume_prompt(reason: str, minutes: float, study_note: str | None = None) -> str:
     """Claude Code 进程被结束后，用 --resume 接着同一个会话时发出的第一条消息。"""
     text = (f"（系统）{reason}，你的上一轮在中途被结束，暂停了约 {minutes:.0f} 分钟，现在接着同一个会话继续。"

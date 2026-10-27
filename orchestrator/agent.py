@@ -16,6 +16,11 @@
 Max 额度：默认一直用到额度真正用完（Claude Code 报告限额拒绝）为止；用完时结束 Claude Code 进程，游戏保持冻结，
 等到额度重置后用 --resume 接着同一个会话继续（上下文保留），等待时间不计入现实用时；要等超过
 --quota-wait-max-hours 才重置时结束本次运行。可选的 --max-usage 让主控在用量到某个比例时提前这样暂停。
+
+模型连不上（断网、接口不可用）：Claude Code 会自己按退避重试；连接类错误重试到第 --net-retry-attempts 次（或它放弃重试、
+这一轮以连接错误结束）时，主控认定断网，结束 Claude Code 进程，游戏保持冻结，现实用时与思考僵直从第一次连不上起停表；
+之后每隔一段时间从智能体所在的位置（容器里）探测模型接口，连续两次连得上就用 --resume 接着同一个会话继续。
+连续断网时等待逐次加长（服务过载时探测总能连上，避免反复重启）；超过 --net-wait-max-hours 结束本次运行。
 """
 from __future__ import annotations
 
@@ -33,7 +38,8 @@ from .kb_study import KbStudy
 from .metrics import Metrics
 from .execution import workspace_capabilities
 from .session_controls import RuntimeCapabilities, SessionControls
-from .prompting import play_prompt, study_prompt, resume_prompt, FIRST_PROMPT, CONTINUE_PROMPT
+from .prompting import play_prompt, study_prompt, resume_prompt, net_resume_prompt, FIRST_PROMPT, CONTINUE_PROMPT
+from .telemetry import publish
 
 GAME_TOOLS = ['mcp__celeste__' + name for name in
               ('observe', 'act', 'set_effort', 'cutscene', 'exit_level', 'simulate', 'stop_run')]
@@ -44,6 +50,29 @@ EFFORT_OK = re.compile(r"^Set effort level to ([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\s|
 # "Claude AI usage limit reached|1792766400"、"You've hit your limit · resets 3pm"
 LIMIT_TEXT = re.compile(r"usage limit|hit your (?:usage )?limit|rate[ _]limit", re.I)
 CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
+# 模型连不上：没有 HTTP 响应（连接被拒、DNS 失败、超时、断开），或网关/服务不可用、过载
+NET_STATUS = frozenset({408, 500, 502, 503, 504, 529})
+NET_TEXT = re.compile(r"connect|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EPIPE|socket hang up|"
+                      r"fetch failed|network|timed? ?out|timeout|overloaded|unavailable|bad gateway|gateway", re.I)
+API_ERROR = re.compile(r"API Error|Connection error|Request timed out|overloaded", re.I)
+# 容器里探测模型接口：收到任何 HTTP 响应（包括 4xx）就算连得上
+PROBE_SCRIPT = ("import sys,urllib.request,urllib.error\n"
+                "try:\n urllib.request.urlopen(urllib.request.Request(sys.argv[1],method='HEAD'),timeout=10)\n"
+                "except urllib.error.HTTPError:\n pass\n"
+                "except Exception:\n sys.exit(3)\n")
+
+
+def network_error(status, text) -> bool:
+    """一次 API 重试 / 一轮错误是不是"连不上"：认证（401/403）与限额（429）不算。"""
+    if status in (401, 403, 429) or LIMIT_TEXT.search(str(text or "")):
+        return False
+    if status is None:
+        return True              # 没有 HTTP 响应：连接层面的失败
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        return bool(NET_TEXT.search(str(text or "")))
+    return status in NET_STATUS or (status >= 500 and status != 501)
 def tool_label(name: str, tool_input) -> str:
     """HUD"调用工具"一栏：工具名（游戏工具去掉前缀）加一句说明——Bash 用智能体写的 description，文件工具用路径，查找用模式。"""
     short = name.removeprefix("mcp__celeste__")
@@ -110,6 +139,11 @@ class ClaudeRunner(SessionControls):
         self.resume_note = resume_note
         self.quota_until: float | None = None    # 额度到上限：预计重置的时刻（墙钟，秒）
         self.quota_reason = ""
+        self.net_down_since: float | None = None  # 模型第一次连不上的时刻（monotonic）；恢复后清空
+        self.net_outage = False                  # 已认定断网：结束进程，等网络恢复后接着同一个会话
+        self.net_reason = ""
+        self.net_streak = 0                      # 连续几次断网之间没有成功回复（用来逐次加长等待）
+        self._net_force_first = False            # 恢复后第一条消息不等暂停/聊天空闲，直接发出
         self._windows: dict[str, dict] = {}      # 最近一次限额事件里各窗口的用量与重置时刻
         self.proc: asyncio.subprocess.Process | None = None
         self.turns = 0
@@ -154,7 +188,7 @@ class ClaudeRunner(SessionControls):
             self._interrupt_responses.pop(ident, None)
 
     async def _next_user_turn(self, fallback):
-        while self.paused and not self.pending_messages:
+        while self.paused and not self.pending_messages and not self._net_force_first:
             idle = 'chat_idle' if self.chat_only else 'paused'
             if self.metrics.state.status != idle:
                 self.metrics.update(status=idle)
@@ -166,7 +200,12 @@ class ClaudeRunner(SessionControls):
         if self.session.done or self.stop_requested:
             return False
         rows, self.pending_messages = self.pending_messages, []
-        text = '\n'.join(row['text'] for row in rows) if rows else fallback
+        if self._net_force_first:
+            # 网络恢复：先把被打断的这一轮接上（用户这期间发的消息一起带上）
+            self._net_force_first = False
+            text = '\n'.join([fallback] + [row['text'] for row in rows])
+        else:
+            text = '\n'.join(row['text'] for row in rows) if rows else fallback
         if self.chat_only:
             if getattr(self, 'allow_programs', False):
                 text += '\n当前仅聊天，可以按要求修改、运行工作区程序；不连接或操作游戏。'
@@ -325,6 +364,21 @@ class ClaudeRunner(SessionControls):
                 if (note := self._effort_at_start()):
                     first = note + first
                 stopped = await self._run_process(workdir, first)
+                if not stopped and self.net_outage:
+                    # 模型连不上：游戏保持冻结，等网络恢复后接着同一个会话
+                    minutes = await self._wait_for_network()
+                    if self.session.done or self.stop_requested or self.stop_reason:
+                        if not self.stop_reason:
+                            self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
+                        break
+                    self.resume = True
+                    self.idle_turns = 0
+                    study_note = None
+                    if not self.metrics.playing and self.study is not None and not self.study.ready():
+                        study_note = self.study.reminder()
+                    first = net_resume_prompt(minutes, chat=self.chat_only, study_note=study_note)
+                    self._net_force_first = True
+                    continue
                 if stopped or self.quota_until is None:
                     break
                 # 额度到上限：游戏保持冻结，等额度重置后接着同一个会话
@@ -372,6 +426,8 @@ class ClaudeRunner(SessionControls):
                     return True
                 if reader.done():
                     await reader
+                    if (self.net_outage or self.quota_until is not None) and not self.stop_reason:
+                        return False      # 主控为等待网络 / 额度结束了进程
                     self.stop_reason = self.stop_reason or 'Claude Code 输出流已结束'
                     return True
                 if not self.metrics.playing and self.study is not None:
@@ -403,7 +459,7 @@ class ClaudeRunner(SessionControls):
                         if self.stop_requested and self.stop_reason and not self.turn_active:
                             return True       # 控制台中断：这一轮已经停下
                         continue
-                if self.quota_until is not None and not self.stop_reason:
+                if (self.quota_until is not None or self.net_outage) and not self.stop_reason:
                     return False
                 if reader.done():
                     self.stop_reason = self.stop_reason or "Claude Code 进程已退出"
@@ -503,6 +559,108 @@ class ClaudeRunner(SessionControls):
             self.study.started += waited  # 准备阶段的上限不算等待的时间
         self.quota_until = None
         print(f"[agent] 额度等待结束（{waited / 60:.0f} 分钟），恢复智能体", flush=True)
+        return waited / 60.0
+
+    def _api_url(self) -> str:
+        """探测用的模型接口地址：第三方提供方用它的接口地址，否则是 Anthropic 的接口。"""
+        if self.cfg.third_party:
+            return str((self.cfg.provider_info or {}).get("base_url") or "https://api.anthropic.com")
+        return "https://api.anthropic.com"
+
+    async def _probe_network(self) -> bool:
+        """现在连得上模型接口吗：容器运行时在容器里探测（与 Claude Code 走同一条出站路径），容器探测不了时退回本机。"""
+        url = self._api_url()
+        if self.container:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    find_docker_exe(), "exec", "-u", "agent", self.container, "python3", "-c", PROBE_SCRIPT, url,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                code = await asyncio.wait_for(proc.wait(), timeout=25)
+                if code in (0, 3):
+                    return code == 0
+            except (OSError, asyncio.TimeoutError):
+                pass
+
+        def host_probe() -> bool:
+            import urllib.error
+            import urllib.request
+            try:
+                urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=10)
+            except urllib.error.HTTPError:
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+            return True
+        return await asyncio.to_thread(host_probe)
+
+    def _net_trouble(self, status, text: str, give_up: bool) -> None:
+        """Claude Code 报告连不上模型（一次重试，或这一轮以连接错误结束）。重试次数够了或它已放弃时认定断网。"""
+        if self.stop_reason or self.quota_until is not None or not getattr(self.cfg, "net_wait", True):
+            return
+        if self.net_down_since is None:
+            self.net_down_since = time.monotonic()
+            print(f"[agent] 模型连不上（{status or '无响应'}：{str(text)[:80]}），Claude Code 正在重试", flush=True)
+        if self.net_outage or not give_up:
+            return
+        self.net_outage = True
+        self.net_reason = f"{status or '无响应'}：{str(text).strip()[:80]}"
+        print(f"[agent] 认定模型连不上（{self.net_reason}），暂停智能体，游戏保持冻结，等网络恢复后接着同一个会话", flush=True)
+        if self.proc and self.proc.returncode is None:
+            self.proc.terminate()
+
+    def _net_ok(self) -> None:
+        """收到模型的正常输出：之前的连接重试已经自己好了。"""
+        if self.net_down_since is not None and not self.net_outage:
+            print(f"[agent] 模型连接已恢复（重试 {time.monotonic() - self.net_down_since:.0f} 秒）", flush=True)
+            self.net_down_since = None
+        self.net_streak = 0
+
+    async def _wait_for_network(self) -> float:
+        """等到连得上模型接口（连续两次探测成功，且至少等一段逐次加长的时间）；返回等待的分钟数。
+        从第一次连不上起暂停：现实用时与思考僵直都不算这段时间，游戏保持冻结。"""
+        since = self.net_down_since or time.monotonic()
+        self.net_streak += 1
+        min_wait = min(600.0, 30.0 * 2 ** (self.net_streak - 1))
+        self.metrics.pause(status="net_wait", since=since)
+        self.metrics.update(thought="")
+        n = self.metrics.state.net_waits + 1
+        publish(self.run_dir, f"system:net-wait:{n}:{int(time.time())}",
+                f"模型连不上（{self.net_reason}）：主控暂停了智能体，游戏保持冻结，现实用时与思考僵直都停表；"
+                "网络恢复后自动接着同一个会话继续。", role="system", kind="系统")
+        cap = getattr(self.cfg, "net_wait_cap_s", None)
+        deadline = time.monotonic() + getattr(self.cfg, "net_wait_max_h", 24.0) * 3600
+        probe_every = max(0.05, float(getattr(self.cfg, "net_probe_s", 15.0)))
+        started = time.monotonic()
+        if cap is not None:  # 只用于测试
+            min_wait = min(min_wait, cap)
+        ok = 0
+        while True:
+            if self.session.done or self.stop_requested:
+                break
+            if self.control_task and self.control_task.done():
+                await self.control_task
+            ok = ok + 1 if await self._probe_network() else 0
+            waited = time.monotonic() - started
+            if ok >= 2 and waited >= min_wait:
+                break
+            if cap is not None and waited >= cap:
+                break
+            if time.monotonic() >= deadline:
+                hours = getattr(self.cfg, "net_wait_max_h", 24.0)
+                self.stop_reason = f"模型连续 {hours:g} 小时连不上"
+                print(f"[agent] {self.stop_reason}，停止运行（之后可以用 --resume 续跑）", flush=True)
+                break
+            end = time.monotonic() + probe_every
+            while time.monotonic() < end and not (self.session.done or self.stop_requested):
+                await asyncio.sleep(min(.5, max(.01, end - time.monotonic())))
+        waited = self.metrics.resume(net=True)
+        if self.study is not None and not self.metrics.playing:
+            self.study.started += waited  # 准备阶段的上限不算等待的时间
+        self.net_outage, self.net_down_since = False, None
+        if not self.stop_reason and not (self.session.done or self.stop_requested):
+            print(f"[agent] 模型接口已能连上（等了 {waited / 60:.1f} 分钟），恢复智能体", flush=True)
+            publish(self.run_dir, f"system:net-back:{n}:{int(time.time())}",
+                    f"模型接口已恢复（暂停约 {waited / 60:.0f} 分钟），接着同一个会话继续。", role="system", kind="系统")
         return waited / 60.0
 
     def _budget_remaining(self, started: float) -> float:
@@ -661,6 +819,11 @@ class ClaudeRunner(SessionControls):
             elif event.get("compact_result"):
                 self.metrics.update(status=self._idle_status())
         elif etype == "system" and subtype == "api_retry":
+            print(f"[agent] API 重试：{event.get('error')} status={event.get('error_status')} attempt={event.get('attempt')}", flush=True)
+            if network_error(event.get("error_status"), event.get("error")):
+                attempt = event.get("attempt") or 0
+                self._net_trouble(event.get("error_status"), str(event.get("error") or ""),
+                                  give_up=attempt >= getattr(self.cfg, "net_retry_attempts", 4))
             # 认证失败不会自己好：Claude Code 会按退避重试 10 次（约 3 分钟），连续两次 401 就直接停下
             if event.get("error_status") == 401 and (event.get("attempt") or 0) >= 2 and not self.stop_reason:
                 who = (self.cfg.provider_info or {}).get("label") or self.cfg.provider
@@ -681,6 +844,8 @@ class ClaudeRunner(SessionControls):
             message = event.get("message") or {}
             if self._command_active:
                 return  # /effort 等主控命令的回复，不是模型输出
+            if message.get("model") != "<synthetic>" and not event.get("error"):
+                self._net_ok()
             if event.get("error") == "rate_limit" or message.get("model") == "<synthetic>":
                 text = " ".join(b.get("text", "") for b in message.get("content") or [] if b.get("type") == "text")
                 if event.get("error") == "rate_limit" or LIMIT_TEXT.search(text):
@@ -755,8 +920,6 @@ class ClaudeRunner(SessionControls):
                 self._quota_hit(names, until, text)
             if info.get("status") not in (None, "allowed", "allowed_warning"):
                 print(f"[agent] 用量限制：{info}", flush=True)
-        elif etype == "system" and subtype == "api_retry":
-            print(f"[agent] API 重试：{event.get('error')} attempt={event.get('attempt')}", flush=True)
         elif etype == "result" and (self._command_active or EFFORT_OK.match(str(event.get("result") or ""))):
             # 主控发出的 /effort 命令执行完（超时之后才到的确认也在这里吃掉，不当作智能体的一轮）
             self._command_reply = str(event.get("result") or "")
@@ -774,6 +937,12 @@ class ClaudeRunner(SessionControls):
                 self.naming_reply = event['result']
             if event.get("is_error") and LIMIT_TEXT.search(str(event.get("result") or "")):
                 self._quota_from_text(str(event.get("result")))
+            elif event.get("is_error") and API_ERROR.search(str(event.get("result") or "")):
+                result_text = str(event.get("result") or "")
+                code = re.search(r"\b([45]\d\d)\b", result_text)
+                status = int(code.group(1)) if code else None
+                if network_error(status, result_text):
+                    self._net_trouble(status, result_text, give_up=True)
             usage = event.get("usage") or {}
             self.metrics.add(output_tokens=usage.get("output_tokens", 0),
                              thinking_tokens=(usage.get("output_tokens_details") or {}).get("thinking_tokens", 0))

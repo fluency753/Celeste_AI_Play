@@ -37,7 +37,7 @@ class MetricsState:
     effort_pending: str | None = None  # 智能体用 set_effort 申请、本轮结束后才生效的强度
     effort_changes: int = 0           # 推理强度实际切换的次数
     effort_log: list | None = None    # 每次切换：[{"t": 现实用时, "from", "to", "chapter", "room", "reason"}, ...]
-    status: str = "starting"         # starting / studying / thinking / tool / executing / auto / retrying / compacting / quota_wait / done / stopped
+    status: str = "starting"         # starting / studying / thinking / tool / executing / auto / retrying / compacting / quota_wait / net_wait / done / stopped
     started_wall: float = 0.0
     elapsed_s: float = 0.0
     budget_s: float = 0.0
@@ -112,6 +112,8 @@ class MetricsState:
     waited_s: float = 0.0             # 等待 Max 额度重置的总时间（不计入现实用时）
     quota_waits: int = 0              # 等待额度重置的次数
     quota_wait_until: float | None = None  # 正在等待时：预计恢复的时刻（墙钟，秒）
+    net_wait_s: float = 0.0           # 模型连不上（断网等）时暂停等待的总时间（不计入现实用时与思考僵直）
+    net_waits: int = 0                # 网络等待的次数
     resumed_from: str | None = None   # 续跑时：上一段运行的日志目录
     output_tokens: int = 0
     thinking_tokens: int = 0
@@ -319,24 +321,34 @@ class Metrics:
             self.state.status = "thinking"
             self._write_locked()
 
-    def pause(self, until_wall: float | None = None) -> None:
-        """等待额度重置：现实用时（或准备时间）停止走表。"""
+    def pause(self, until_wall: float | None = None, *, status: str = "quota_wait", since: float | None = None) -> None:
+        """等待额度重置（或网络恢复，status="net_wait"）：现实用时（或准备时间）停止走表。
+        since（monotonic）：从更早的时刻算起暂停——例如模型第一次连不上的时刻；那之后已经记成思考的时间退回来。"""
         with self._lock:
             self._flush_locked()
             self.timing.pause()
+            if self._pause_start is None:
+                now_m = time.monotonic()
+                start = now_m
+                if since is not None and since < now_m:
+                    back = now_m - since
+                    if (self.playing or self.kb_done) and self._in_turn and not self._tools:
+                        take = min(back, self.state.thinking_s)
+                        self.state.thinking_s -= take
+                        self._unnarrated = max(0.0, self._unnarrated - take)
+                    start = max(since, self._t0)
+                self._pause_start = start
             self._in_turn = False
             self._tools.clear()
-            if self._pause_start is None:
-                self._pause_start = time.monotonic()
             now = time.time()
-            if self.state.status != "quota_wait":
+            if self.state.status != status:
                 self.state.phase_since_wall = now
-            self.state.status = "quota_wait"
+            self.state.status = status
             self.state.quota_wait_until = until_wall
             self._write_locked()
 
-    def resume(self, *, quota: bool = True) -> float:
-        """额度恢复：返回这次等待的秒数。"""
+    def resume(self, *, quota: bool = True, net: bool = False) -> float:
+        """额度（net=True：网络）恢复：返回这次等待的秒数。"""
         with self._lock:
             if self._pause_start is None:
                 return 0.0
@@ -344,7 +356,10 @@ class Metrics:
             waited = time.monotonic() - self._pause_start
             self._paused += waited
             self._pause_start = None
-            if quota:
+            if net:
+                self.state.net_wait_s += waited
+                self.state.net_waits += 1
+            elif quota:
                 self.state.waited_s += waited
                 self.state.quota_waits += 1
             self.state.quota_wait_until = None
@@ -357,6 +372,7 @@ class Metrics:
                 "stiff_frames", "stiff_s",
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
                 "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
+                "net_wait_s", "net_waits",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "formal_thought",
                 "formal_thought_wall", "context_tokens",
                 "effort_pending", "effort_changes", "effort_log", "pause_denials", "plan_rounds_used", "replays", "replay_s", "replay_act_s",

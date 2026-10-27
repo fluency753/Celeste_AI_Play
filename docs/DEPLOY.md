@@ -378,6 +378,7 @@ winget install Gyan.FFmpeg
 | `--resume <运行目录>` | 无 | 续跑一次中断的运行（游戏须仍冻结在原处）；`--fresh-session` 开新会话 |
 | `--max-usage 0~1` | 不设 | Max 订阅：用量到这个比例就提前暂停、等重置；默认用到真正用完再等 |
 | `--no-quota-wait` / `--quota-wait-max-hours` | 关 / 24 | 额度用完时直接停止 / 最多等多少小时 |
+| `--no-net-wait` / `--net-wait-max-hours` | 关 / 24 | 模型连不上时不暂停等待 / 最多等多少小时（见使用说明 4.8） |
 | `--autocompact` | 平台默认 | 上下文自动压缩窗口：`auto` 或 100000～1000000 token |
 | `--tune 名称=值` | 不改 | 修改可调参数（规划回放倍速与每轮时长、解说提醒间隔、单次 act 帧数、Bash 时长、探索模式规划程序的时长与次数、限额预测规则等），可写多个；全部名称与默认值见 [USAGE.md 4.11 节](USAGE.md#411-可调参数--tune) |
 | `--kb-deny 文件,...` | 全部可读 | 不给智能体看的知识库文件（知识库内的相对路径），见 [USAGE.md 4.12 节](USAGE.md#412-知识库的阅读权限--kb-deny) |

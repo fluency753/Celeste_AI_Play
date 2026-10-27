@@ -168,6 +168,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--quota-wait-max-hours", type=float, default=24.0,
                     help="额度重置还要等超过这么多小时就停止本次运行（之后可用 --resume 续跑），默认 24")
     ap.add_argument("--quota-wait-cap-seconds", type=float, help=argparse.SUPPRESS)  # 只用于测试：等待额度的最长秒数
+    ap.add_argument("--no-net-wait", action="store_true",
+                    help="模型连不上（断网、接口不可用）时不暂停等待（默认：暂停智能体，游戏保持冻结，现实用时与思考僵直停表，"
+                         "网络恢复后自动接着同一个会话继续）")
+    ap.add_argument("--net-wait-max-hours", type=float, default=24.0,
+                    help="模型连续这么多小时连不上就停止本次运行（之后可用 --resume 续跑），默认 24")
+    ap.add_argument("--net-wait-cap-seconds", type=float, help=argparse.SUPPRESS)  # 只用于测试：每次网络等待的最长秒数
     ap.add_argument("--tune", action="append", metavar="名称=值", default=[],
                     help="修改一个可调参数（可以写多个），例如 --tune playback_speed=4 --tune explore_program_s=20；"
                          "全部参数与默认值见 docs/USAGE.md 的\"可调参数\"一节（orchestrator/tuning.py）。续跑沿用原运行改过的参数")
@@ -306,6 +312,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.quota_wait = not args.no_quota_wait
     cfg.quota_wait_cap_s = args.quota_wait_cap_seconds
     cfg.quota_wait_max_h = args.quota_wait_max_hours
+    cfg.net_wait = not args.no_net_wait
+    cfg.net_wait_max_h = args.net_wait_max_hours
+    cfg.net_wait_cap_s = args.net_wait_cap_seconds
     capabilities = workspace_capabilities(cfg)
     if args.sim is None:
         args.sim = capabilities.programs and cfg.mode == SPEEDRUN
