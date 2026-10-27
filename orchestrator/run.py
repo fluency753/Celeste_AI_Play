@@ -930,6 +930,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
                 session.container = container
             note = opening_note(cfg, previous, resumed_session, getattr(args, "note_text", None))
+            publish_user_note(run_dir, getattr(args, "note_text", None))
             from .runtimes import runtime
             runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
                 game_server=server, token=token, session_id=session_id,
@@ -995,6 +996,13 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                        kb_study=study.summary() if study else None, recording=recording)
         (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
+
+
+def publish_user_note(run_dir: Path, text: str | None) -> None:
+    """--note-file 的留言附在开场消息里发给智能体；同时记进公开事件，控制台的对话栏里能看到发了什么。"""
+    if text:
+        from .telemetry import publish
+        publish(run_dir, "user:note-file", text, role="user", kind="你 · 局间留言（附在开场消息里）")
 
 
 def opening_note(cfg, previous, resumed_session, user_note: str | None = None) -> str | None:
