@@ -244,7 +244,8 @@
       <textarea id="goalText" aria-label="任务目标" placeholder="自由填写任务，例如探索支路、尝试收集眼前的草莓" maxlength="4000"></textarea>
       <div class="control-buttons"><span>自动停止：</span><select id="goalMatch" aria-label="条件组合"><option value="all">满足全部条件</option><option value="any">满足任一条件</option></select><button id="goalAdd" type="button">＋条件</button></div>
       <div id="goalConditions"></div>
-      <div class="control-buttons"><button id="goalSave" type="button">更新目标</button><button id="goalClear" type="button">清除目标</button><button id="goalStop" type="button" title="取消正在执行的动作，结束试玩并保存录像">立即停止并保存</button></div>
+      <div class="control-buttons"><button id="goalSave" type="button" title="应用当前编辑；重复更新会重新记录停止条件的比较基线">更新</button><button id="goalClear" type="button">清除</button><button id="goalStop" type="button" title="取消正在执行的动作，结束试玩并保存录像">立即停止并保存</button></div>
+      <div id="goalDraftStatus" role="status" hidden style="color:#b8822d;font-size:calc(11 * var(--px));margin-top:calc(5 * var(--px))"></div>
       <div id="goalStatus" role="status"></div>
     </details>
     <details id="simPanel">
@@ -267,7 +268,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 59;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 60;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -373,6 +374,7 @@ window.addEventListener('resize', applyObsLayout);
 
 // 页面版本对不上时刷新一次换成新页面；刷新后版本仍不一致（页面与配置没有同步更新）时，一分钟内不再刷新，免得一直闪
 function reloadAllowed() {
+  if (goalDirty || savingGoal || goalPending) return false;
   try {
     const last = Number(sessionStorage.getItem("hudReloadAt") || 0);
     if (Date.now() - last < 60000) return false;
@@ -711,7 +713,7 @@ function render() {
 
 poll();
 let controlData = null, sendingMessage = false, wakingAgent = false, switchingSession = false, sessionSignature = '';
-let goalRevision = null, goalRun = null, goalDirty = false, savingGoal = false, goalError = '', controlError = '';
+let goalRevision = null, goalRun = null, goalDirty = false, savingGoal = false, goalPending = null, goalError = '', controlError = '';
 let simRun=null, simEdited=new Set(), simPending=null, simSending=false, simError='', simApplied=false;
 function renderSimulation(c) {
   if(simRun!==controlData.run){
@@ -763,6 +765,10 @@ async function saveSimulation(){
   finally{simSending=false;await pollControl();}
 }
 const GOAL_FIELDS = {room:'房间',map_complete:'当前地图通关',map:'地图变化',side:'面别 A/B/C',deaths:'本地图死亡次数',frame:'游戏推进帧数',elapsed:'运行时间（秒）'};
+function editGoal() {
+  goalDirty=true; goalError='';
+  if(controlData) renderGoal(controlData.control);
+}
 function goalRow(condition={field:'room',op:'changed'}) {
   const row=document.createElement('div'); row.className='goal-row';
   const field=document.createElement('select'), op=document.createElement('select'), value=document.createElement('input'), remove=document.createElement('button');
@@ -778,25 +784,39 @@ function goalRow(condition={field:'room',op:'changed'}) {
   };
   update(); op.value=condition.op; if (condition.value!=null) value.value=String(condition.value);
   value.disabled=op.value==='changed'||field.value==='map_complete'; value.hidden=value.disabled;
-  field.onchange=()=>{update();goalDirty=true;};
-  op.onchange=()=>{value.disabled=op.value==='changed'||field.value==='map_complete';value.hidden=value.disabled;goalDirty=true;};
-  value.oninput=()=>goalDirty=true;
-  remove.onclick=()=>{row.remove();goalDirty=true;};
+  field.onchange=()=>{update();editGoal();};
+  op.onchange=()=>{value.disabled=op.value==='changed'||field.value==='map_complete';value.hidden=value.disabled;editGoal();};
+  value.oninput=editGoal;
+  remove.onclick=()=>{row.remove();editGoal();};
   row.append(field,op,value,remove); return row;
 }
 function renderGoal(c) {
   const goal=c.goal || {revision:0,text:'',conditions:[],match:'all',active:false};
-  if (goalRun!==controlData.run) {goalRun=controlData.run;goalDirty=false;goalRevision=null;}
-  if (goalRevision!==goal.revision && !goalDirty && !savingGoal) {
+  if (goalRun!==controlData.run) {goalRun=controlData.run;goalDirty=false;goalRevision=null;goalPending=null;goalError='';}
+  if(goalPending){
+    const action=(c.actions||[]).find(a=>a.id===goalPending.id);
+    if(action?.status==='error'){
+      goalError=action.detail||'主控未应用本次编辑，请重试。';goalPending=null;
+    }else if(['waiting','submitted'].includes(action?.status) &&
+             (goalPending.kind==='stop' ? goal.reached : goal.revision>goalPending.revision)){
+      goalPending=null;goalDirty=false;goalRevision=null;
+    }else if(Date.now()-goalPending.wall>15000){
+      goalError='请求尚未确认，原请求仍可能生效；请检查连接后重试。';goalPending=null;
+    }
+  }
+  if (goalRevision!==goal.revision && !goalDirty && !savingGoal && !goalPending) {
     goalRevision=goal.revision; $('goalText').value=goal.text||''; $('goalMatch').value=goal.match||'all';
     $('goalConditions').replaceChildren(...(goal.conditions||[]).map(goalRow));
   }
-  const enabled=c.connected && c.goals_enabled && !savingGoal && !switchingSession;
+  const enabled=c.connected && c.goals_enabled && !savingGoal && !goalPending && !switchingSession;
   for (const input of $('goalPanel').querySelectorAll('textarea,select,input,button')) input.disabled=!enabled;
   if (enabled) for (const row of $('goalConditions').children) row.children[2].disabled=row.children[1].value==='changed'||row.children[0].value==='map_complete';
   $('goalAdd').disabled=!enabled || $('goalConditions').children.length>=12;
-  $('goalStatus').textContent=goalError || (!c.goals_enabled ? '当前未在试玩；开始试玩后可实时修改目标。' : goal.reached ? '停止条件已触发，正在保存录像。' :
-    goal.active ? (goal.text||'自定义停止目标') + ((goal.conditions||[]).length ? ` · ${goal.match==='any'?'任一':'全部'}条件满足后停止` : ' · 无自动停止条件') : '未设置自定义目标；按本次试玩范围继续。');
+  $('goalStop').disabled=!c.connected || !c.goals_enabled || savingGoal || switchingSession;
+  const draft=savingGoal?'正在提交…':goalError || (goalPending?'已提交，等待主控确认生效…':goalDirty?'有未应用的更改，点击“更新”后生效。':'');
+  $('goalDraftStatus').textContent=draft;$('goalDraftStatus').hidden=!draft;
+  $('goalStatus').textContent=goal.reached ? '停止条件已触发，正在保存录像。' : !c.goals_enabled ? '当前未在试玩；开始试玩后可实时修改目标。' :
+    goal.active ? '已生效：' + (goal.text||'自定义停止目标') + ((goal.conditions||[]).length ? ` · ${goal.match==='any'?'任一':'全部'}条件满足后停止` : ' · 无自动停止条件') : '当前未设置自定义目标；按本次试玩范围继续。';
 }
 function primaryControlView(data, local = {}) {
   const c=data?.control || {}, operation=data?.operation || {};
@@ -903,12 +923,16 @@ async function loadModelChoices(refresh=false) {
 $('sessionRuntime').onchange=()=>{modelCatalog={models:[]};$('sessionModel').replaceChildren();$('sessionEffort').replaceChildren();loadModelChoices();};
 $('sessionModel').onchange=()=>{updateModelEfforts();pollControl();};
 $('sessionModelRefresh').onclick=()=>loadModelChoices(true);
+let controlPollRequested=0, controlPollApplied=0;
 async function pollControl() {
   if (OBS_SURFACE) return;
+  const request=++controlPollRequested;
   try {
     const response = await fetch(CONTROL_URL, {cache:'no-store'});
     if (!response.ok) throw Error('主控暂未连接');
-    controlData = await response.json();
+    const snapshot=await response.json();
+    if(request<controlPollApplied) return;
+    controlPollApplied=request;controlData=snapshot;
     const runtimeSelect=$('sessionRuntime'), runtimeOptions=controlData.runtimes || [{id:'codex:codex',label:'Codex'}];
     runtimeSelect.hidden=!controlData.runtimes;
     const runtimeSignature=JSON.stringify(runtimeOptions);
@@ -988,6 +1012,7 @@ async function pollControl() {
       for (const id of ['sessionSelect','togglePlay','toggleFast','agentSend']) $(id).disabled=true;
     }
   } catch (error) {
+    if(request<controlPollApplied) return;
     $('controlStatus').textContent = error.message;
     $('togglePlay').textContent = '未连接';
     $('togglePlay').disabled = $('agentSend').disabled = true;
@@ -1019,7 +1044,7 @@ $('sessionPlay').onclick=()=>{
   if(choice.create_save && chapter!==0){lifecycleError='新存档须从序章（0）开始。';pollControl();return;}
   sessionAction('play_session',{chapter,...choice,scope:$('sessionScope').value,sim_assist:$('sessionSimAssist').checked});
 };
-async function sendControl(kind, text='') {
+async function sendControl(kind, text='', onAccepted=null) {
   if (!controlData) return false;
   controlError = '';
   try {
@@ -1027,6 +1052,7 @@ async function sendControl(kind, text='') {
       body:JSON.stringify({run:controlData.run,kind,text})});
     const result = await response.json();
     if (!response.ok) throw Error(result.error || '提交失败');
+    if(onAccepted) onAccepted(result);
     await pollControl(); return true;
   } catch (error) { controlError=error.message; $('controlStatus').textContent = error.message; return false; }
 }
@@ -1057,23 +1083,26 @@ $('liveEffort').onchange=async()=>{
   await sendControl('effort',level);
   changingEffort=false;await pollControl();
 };
-$('goalText').oninput=()=>goalDirty=true;
-$('goalMatch').onchange=()=>goalDirty=true;
-$('goalAdd').onclick=()=>{if($('goalConditions').children.length<12){$('goalConditions').append(goalRow());goalDirty=true;}};
+$('goalText').oninput=editGoal;
+$('goalMatch').onchange=editGoal;
+$('goalAdd').onclick=()=>{if($('goalConditions').children.length<12){$('goalConditions').append(goalRow());editGoal();}};
 async function saveGoal(kind) {
   goalError='';
   if (kind==='goal' && Array.from($('goalConditions').children).some(row => ['deaths','frame','elapsed'].includes(row.children[0].value) && !row.children[2].value.trim())) {
-    goalError='请填写数值条件。'; $('goalStatus').textContent=goalError; return;
+    goalError='请填写数值条件。'; renderGoal(controlData.control); return;
   }
   const conditions=Array.from($('goalConditions').children).map(row=>{
     const [field,op,value]=row.children;
     return {field:field.value,op:op.value,value:field.value==='map_complete'?true:['deaths','frame','elapsed'].includes(field.value)?Number(value.value):value.value.trim()};
   });
-  savingGoal=true;
-  const ok=await sendControl(kind,kind==='goal'?JSON.stringify({text:$('goalText').value,conditions,match:$('goalMatch').value}):'');
+  const run=controlData.run, revision=controlData.control.goal?.revision||0;
+  savingGoal=true;renderGoal(controlData.control);
+  const ok=await sendControl(kind,kind==='goal'?JSON.stringify({text:$('goalText').value,conditions,match:$('goalMatch').value}):'',result=>{
+    if(controlData.run===run) goalPending={id:result.id,kind,revision,wall:Date.now()};
+  });
   savingGoal=false;
-  if(!ok) goalError=controlError || '目标未更新，请重试。';
-  if(ok){goalDirty=false;goalRevision=null;}
+  if(controlData.run===run && !ok) goalError=controlError || '未提交成功，请重试。';
+  if(controlData) renderGoal(controlData.control);
   await pollControl();
 }
 $('goalSave').onclick=()=>saveGoal('goal');
