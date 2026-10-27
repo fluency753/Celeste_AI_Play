@@ -226,5 +226,32 @@ class SegmentAndCsvTests(unittest.TestCase):
             self.assertFalse((directory / 'gameplay.mp4').exists())
 
 
+
+
+class GuardInsideSessionLockTests(unittest.TestCase):
+    """推进前检查在 GameSession 持锁时运行（observe/act 里），检查录像状态要向桥接发指令：锁必须可重入，否则自锁
+    （10-27 5A 第二代开局 observe 卡死，中断时主线程的保留录制也一起卡住）。"""
+
+    def test_bridge_call_while_holding_the_session_lock(self):
+        import threading
+        from orchestrator.config import RunConfig
+        from orchestrator.game_session import GameSession
+        from orchestrator.metrics import Metrics
+        with tempfile.TemporaryDirectory() as folder:
+            run = Path(folder)
+            session = GameSession(RunConfig(agent='t', save='s', model='opus'), run, Metrics(run / 'metrics.json', 't', 'opus', 'high', 60))
+            session.client = type('C', (), {'call': lambda self, cmd, **a: {'clock': {}}})()
+            done = threading.Event()
+
+            def run_guarded():
+                with session.lock:                      # observe / act 持锁时调用推进前检查
+                    session.bridge_call('hello')        # 检查录像状态
+                done.set()
+            threading.Thread(target=run_guarded, daemon=True).start()
+            self.assertTrue(done.wait(2), 'bridge_call deadlocked while the session lock was held')
+            session.client = None
+            session.close(release=False)
+
+
 if __name__ == '__main__':
     unittest.main()

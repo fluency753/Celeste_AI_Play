@@ -66,7 +66,8 @@ class SuccessorSessionTests(unittest.TestCase):
         run.mkdir(parents=True)
         (run / 'run_state.json').write_text(json.dumps(self.STATE), encoding='utf-8')
         (run / 'summary.json').write_text(json.dumps({'completed': True}), encoding='utf-8')
-        (run / 'metrics.json').write_text(json.dumps({'elapsed_s': 5.0, 'decisions': 7}), encoding='utf-8')
+        (run / 'metrics.json').write_text(json.dumps({'elapsed_s': 5.0, 'decisions': 7, 'compactions': 8,
+                                                      'compact_s': 400.0, 'context_tokens': 600000}), encoding='utf-8')
         return run
 
     def test_successor_copies_settings_and_gets_a_new_pending_session(self):
@@ -83,7 +84,9 @@ class SuccessorSessionTests(unittest.TestCase):
             self.assertEqual(state['resumed_from'], str(run))
             self.assertEqual(state['kb_extra'], 'local/kb_extra/x')
             self.assertNotIn('session_name', state)
-            self.assertEqual(json.loads((new / 'metrics.json').read_text())['decisions'], 7)
+            metrics = json.loads((new / 'metrics.json').read_text())
+            self.assertEqual((metrics['decisions'], metrics['elapsed_s']), (7, 5.0))
+            self.assertEqual((metrics['compactions'], metrics['compact_s'], metrics['context_tokens']), (0, 0.0, 0))
             self.assertTrue(can_wake(new))
             self.assertEqual(json.loads((run / 'run_state.json').read_text())['session_id'], 'old-session')
             self.assertNotEqual(successor_run(run), new)          # 同一秒再开一次也不覆盖

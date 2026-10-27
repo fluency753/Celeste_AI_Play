@@ -73,6 +73,11 @@ def successor_run(directory):
     for name in ("metrics.json", "summary.json", "goal.json", "sim_energy.json"):
         if (directory / name).exists():
             shutil.copy2(directory / name, target / name)
+    # 统计里属于原会话的几项从零算（新会话没有压缩过、上下文是空的）；现实用时、决策、死亡等累计项照旧
+    if (target / "metrics.json").exists():
+        metrics = json.loads((target / "metrics.json").read_text(encoding="utf-8"))
+        metrics.update(compactions=0, compact_s=0.0, context_tokens=0)
+        (target / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
     state.update(session_id=str(uuid.uuid4()), session_pending=True, resumed_from=str(directory),
                  fresh_session_from=state.get("session_id"))
     state.pop("session_name", None)

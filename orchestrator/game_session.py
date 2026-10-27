@@ -263,7 +263,7 @@ class GameSession:
         self.cfg = cfg
         self.run_dir = run_dir
         self.metrics = metrics
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()   # 可重入：推进前检查（录像状态）在持锁时也要向桥接发指令
         self.client: BridgeClient | None = None
         self.done = False
         self.done_reason = ""
