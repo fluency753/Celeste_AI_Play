@@ -92,7 +92,7 @@ class SuccessorSessionTests(unittest.TestCase):
         from contextlib import asynccontextmanager
         from types import SimpleNamespace
         from unittest.mock import patch
-        calls = []
+        calls, configs = [], []
 
         @asynccontextmanager
         async def fake_host(cfg, directory, metrics, container, **options):
@@ -102,6 +102,7 @@ class SuccessorSessionTests(unittest.TestCase):
                 runner.turns += 1
             runner.run = run
             calls.append((directory, options['session_id'], options['resume']))
+            configs.append(cfg)
             yield runner
         caps = SimpleNamespace(needs_container=False, validate=lambda **k: None)
         with tempfile.TemporaryDirectory() as folder:
@@ -118,6 +119,14 @@ class SuccessorSessionTests(unittest.TestCase):
                 self.assertNotIn('session_pending', state)           # 第一轮之后按编号接续
                 asyncio.run(chat(new, allow_programs=True))
                 self.assertEqual(calls[1], (new, session, True))
+                self.assertFalse(configs[0].formal_thought)
+                state = json.loads((new / 'run_state.json').read_text(encoding='utf-8'))
+                state.update(formal_thought=True, stiffness=True, save_context=True, collision_image='room')
+                (new / 'run_state.json').write_text(json.dumps(state), encoding='utf-8')
+                asyncio.run(chat(new, allow_programs=True))
+                cfg = configs[2]
+                self.assertTrue(cfg.formal_thought and cfg.stiffness and cfg.save_context)
+                self.assertEqual(cfg.collision_image, 'room')
 
 
 class ChooseSessionTests(unittest.TestCase):
