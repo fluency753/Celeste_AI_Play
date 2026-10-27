@@ -1,26 +1,26 @@
-"""菜单宏：从标题画面一路进入指定存档的关卡，用暂停菜单跳过开场，停在 Madeline 可操作的第一帧。
+"""原生存档载入与菜单导航；默认载入后保持冻结，不退出或重启章节。
 
 只依据桥接报告的菜单状态做决定，不看画面。用法：
-    python tools/enter_save.py test
-    python tools/enter_save.py opus5.5 --leave-active
+    python tools/enter_save.py test --save-slot 10
+    python tools/enter_save.py test --destination play --chapter 3 --leave-active
 """
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
-try:
-    from bridge_client import BridgeClient, summarize_obs
-    from cutscene import leave_level_by_pause_menu, skip_by_pause_menu, story_pending
-except ImportError:  # 作为 tools 包导入时
-    from tools.bridge_client import BridgeClient, summarize_obs
-    from tools.cutscene import leave_level_by_pause_menu, skip_by_pause_menu, story_pending
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.bridge_client import BridgeClient, summarize_obs
+from tools.cutscene import leave_level_by_pause_menu, skip_by_pause_menu, story_pending
+from tools.menu_navigation import checked_step, MenuActionBlocked
 
 QUIET = dict(image=False, entities=False, tiles=False, trajectory=False)
 
 
 def step(c: BridgeClient, inputs: list[str], **extra) -> dict:
-    return c.call("step", inputs=inputs, **{**QUIET, **extra})
+    return checked_step(c, inputs, **{**QUIET, **extra})
 
 
 def press(c: BridgeClient, key: str, settle: int = 12) -> dict:
@@ -37,10 +37,10 @@ def area_id(sid: str | None) -> int | None:
         return None
 
 
-def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None,
+def _enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None,
                menu_speed: int = 4, should_stop=None, create_if_missing: bool = False,
                save_slot: int | None = None, cutscene_mode: str = 'auto', checkpoint: int = 0,
-               stop_at_chapter_select: bool = False) -> dict:
+               destination: str = 'play') -> dict:
     """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。
     也可以从通关之后接着用：结算画面、回到地图、选下一章、进入，一路处理到可操作的第一帧。
     checkpoint > 0（按段通关）：载入存档后，在关卡里或选章地图上用桥接的 enter_checkpoint 直接进入这一章的
@@ -50,7 +50,8 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
         raise RuntimeError("新建存档需要 CelesteAIBridge 0.12.4 或更新版本，请更新桥接 Mod。")
     if checkpoint and chapter is None:
         raise ValueError("进入检查点需要指定章节")
-    if stop_at_chapter_select and (chapter is not None or checkpoint):
+    stop_at_chapter_select = destination == 'chapter_select'
+    if destination != 'play' and (chapter is not None or checkpoint):
         raise ValueError('仅进入存档时不指定章节或检查点，由智能体自行导航')
     obs = c.call("activate", entities=False, tiles=False)["obs"]
     teleport = bool(checkpoint)     # 还要传送到检查点
@@ -70,6 +71,13 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
         wrong_save = wrong_save or (selected_save_slot is not None and (obs.get('save') or {}).get('slot') != selected_save_slot)
         if create_if_missing and not native_started:
             wrong_save = True  # 同名的已加载存档也不能代替显式新建
+        if destination == 'loaded':
+            if scene in {'Level', 'IntroVignette', 'LevelEnter'}:
+                if wrong_save:
+                    raise RuntimeError('载入已停止：当前关卡属于其他存档，不自动退出或切换')
+                return obs
+            if not wrong_save and scene == 'Overworld' and not menu.get('next') and menu.get('current') in {'OuiChapterSelect','OuiChapterPanel'}:
+                return obs  # 原生载入没有在玩章节；保留地图，不代选一章。
         if teleport and not wrong_save and loaded is not None and (
                 scene == "Level" or (scene == "Overworld" and not menu.get("next")
                                      and menu.get("current") in ("OuiChapterSelect", "OuiChapterPanel"))):
@@ -161,6 +169,50 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
     raise RuntimeError(f"未能在 {max_actions} 步内进入存档 {save_name}：\n{summarize_obs(obs)}")
 
 
+def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None,
+               menu_speed: int = 4, should_stop=None, create_if_missing: bool = False,
+               save_slot: int | None = None, cutscene_mode: str = 'auto', checkpoint: int = 0,
+               stop_at_chapter_select: bool = False) -> dict:
+    """进入并准备游玩章节；恢复存档请用 load_save_and_freeze，打开选章页请用 open_chapter_select。"""
+    if stop_at_chapter_select:
+        raise ValueError('stop_at_chapter_select 已停用：打开选章地图请用 open_chapter_select；'
+                         '恢复存档并立即冻结请用 load_save_and_freeze，不能先退出关卡')
+    return _enter_save(c, save_name, max_actions, chapter, menu_speed, should_stop, create_if_missing,
+                       save_slot, cutscene_mode, checkpoint)
+
+
+def open_chapter_select(c: BridgeClient, save_name: str, *, save_slot: int | None = None,
+                        max_actions: int = 120, menu_speed: int = 4, should_stop=None) -> dict:
+    """明确退出当前章节并打开指定存档的选章地图；不得用于恢复关卡进度。"""
+    return _enter_save(c, save_name, max_actions=max_actions, save_slot=save_slot, menu_speed=menu_speed,
+                       should_stop=should_stop, cutscene_mode='agent', destination='chapter_select')
+
+
+class _LoadOnlyClient:
+    """Decorate only this macro's requests; do not replace the connection's authoritative permissions."""
+    def __init__(self, client):
+        self.client = client
+
+    def call(self, cmd, **options):
+        if cmd == 'step':
+            options['stop_on'] = list(dict.fromkeys([*options.get('stop_on', []), 'chapter_loaded']))
+        return self.client.call(cmd, **options)
+
+
+def load_save_and_freeze(c: BridgeClient, save_name: str, *, save_slot: int,
+                         max_actions: int = 120, menu_speed: int = 4, should_stop=None) -> dict:
+    """只按原生继续载入指定存档，首次进入章节即冻结；不退出、不重启、不选章或跳剧情。
+
+    存档没有进行中的章节时，返回原生选章菜单，不自行选择章节。返回值保留实际 scene。
+    """
+    if type(save_slot) is not int or save_slot < 0:
+        raise ValueError('载入后冻结须指定非负整数存档槽位')
+    if c.call('hello').get('chapter_loaded_stop') is not True:
+        raise RuntimeError('载入后立即冻结需要支持 chapter_loaded_stop 的新版桥接；未发送游戏输入')
+    return _enter_save(_LoadOnlyClient(c), save_name, max_actions=max_actions, save_slot=save_slot,
+                       menu_speed=menu_speed, should_stop=should_stop, cutscene_mode='agent', destination='loaded')
+
+
 def to_file_select(c: BridgeClient, max_actions: int = 120, menu_speed: int = 4) -> dict:
     """从任意画面退回选档页（光标停在存档列表上，没有选中任何存档）。
     录制开局之前用：这一段不进录像，所以可以快进；之后从选档页开始录，选存档、进章节都按正常速度。"""
@@ -229,21 +281,35 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("save", help="存档名，如 test、opus5.5")
     ap.add_argument("--port", type=int, default=47774)
+    ap.add_argument("--destination", choices=('load', 'play', 'chapter-select'), default='load',
+                    help="load（默认）原生载入并冻结；play 进入章节；chapter-select 明确退出关卡到选章地图")
+    ap.add_argument("--save-slot", type=int, help="存档槽位；load 必填，避免选错同名存档")
     ap.add_argument("--chapter", type=int, help="章节编号：0 序章、1 被遗弃之城、2 旧址；默认进入选章页当前选中的章节")
-    ap.add_argument("--leave-active", action="store_true", help="完成后保持接管（默认交还控制）")
+    ap.add_argument("--leave-active", action="store_true", help="play/chapter-select 完成后保持接管；load 始终保持接管")
     args = ap.parse_args()
+    if args.destination == 'load' and args.save_slot is None:
+        ap.error('载入后冻结必须指定 --save-slot')
+    if args.destination != 'play' and args.chapter is not None:
+        ap.error('--chapter 只用于 --destination play')
 
     c = BridgeClient(port=args.port)
     from pathlib import Path
-    from types import SimpleNamespace
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from orchestrator.action_policy import step_options
-    c.step_options = lambda: step_options(SimpleNamespace(), departure=True)
+    from orchestrator.action_policy import controller_navigation
     try:
-        obs = enter_save(c, args.save, chapter=args.chapter)
-        print(summarize_obs(obs))
-        if not args.leave_active:
-            c.call("deactivate")
+        with controller_navigation(c, slot=args.save_slot):
+            if args.destination == 'load':
+                obs = load_save_and_freeze(c, args.save, save_slot=args.save_slot)
+            elif args.destination == 'chapter-select':
+                obs = open_chapter_select(c, args.save, save_slot=args.save_slot)
+            else:
+                obs = enter_save(c, args.save, chapter=args.chapter, save_slot=args.save_slot)
+            print(summarize_obs(obs))
+            if args.destination != 'load' and not args.leave_active:
+                c.call("deactivate")
+    except MenuActionBlocked as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     finally:
         c.close()
     return 0

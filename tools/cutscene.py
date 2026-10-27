@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+from tools.menu_navigation import MenuActionBlocked, checked_step
+
 SKIP_IDS = ("menu_pause_skip_cutscene", "intro_vignette_skip")
 QUIET = dict(image=False, entities=False, tiles=False)
 
@@ -59,7 +61,12 @@ def skip_by_pause_menu(client, on_step: StepHook | None = None, max_wait_frames:
 
     def step(inputs: list[str]) -> dict:
         nonlocal used
-        reply = client.call("step", inputs=inputs, speed=1, **QUIET)
+        try:
+            reply = checked_step(client, inputs, speed=1, **QUIET)
+        except MenuActionBlocked as exc:
+            if on_step:
+                on_step(inputs, exc.result)
+            raise
         used += reply["result"]["consumed"] + reply["result"].get("loadingFrames", 0)
         if on_step:
             on_step(inputs, reply["result"])
@@ -109,7 +116,7 @@ def skip_by_pause_menu(client, on_step: StepHook | None = None, max_wait_frames:
 def leave_level_by_pause_menu(client, max_wait_frames: int = 60, *, allowed_exit_ids=None) -> dict:
     """在关卡里用暂停菜单"返回地图"（没有就选"保存并退出"），回到选章页。返回最新观测。"""
     def step(inputs: list[str]) -> dict:
-        return client.call("step", inputs=inputs, speed=1, **QUIET)["obs"]
+        return checked_step(client, inputs, speed=1, **QUIET)["obs"]
 
     obs = client.call("observe", **QUIET)["obs"]
     menu = obs.get("pauseMenu")
@@ -146,6 +153,8 @@ def leave_level_by_pause_menu(client, max_wait_frames: int = 60, *, allowed_exit
             break
         obs = step([f"1,{'D' if target > menu['selection'] else 'U'}", "6"])
         menu = obs.get("pauseMenu") or menu
+    else:
+        raise RuntimeError('菜单宏已停止：无法选中退出选项，保留当前菜单')
     obs = step(["1,C", "20"])
     # 选中后会弹出确认菜单：标题是同一个按钮文字（不可选），下面是"是 / 取消"，默认选中"是"
     for _ in range(3):
@@ -158,13 +167,19 @@ def leave_level_by_pause_menu(client, max_wait_frames: int = 60, *, allowed_exit
         yes = next((it["index"] for it in menu["items"] if it["selectable"] and not it["disabled"]), None)
         if yes is None:
             break
-        while menu["selection"] != yes:
+        for _ in range(len(menu['items']) + 2):
+            if menu['selection'] == yes:
+                break
             obs = step([f"1,{'D' if yes > menu['selection'] else 'U'}", "6"])
             menu = obs.get("pauseMenu") or menu
+        else:
+            raise RuntimeError('菜单宏已停止：无法选中退出确认，保留当前菜单')
         obs = step(["1,C", "30"])
     # 等关卡真正退出（擦除转场、保存），避免调用方在退出途中又按暂停
     for _ in range(60):
         if obs.get('scene')=='Overworld' or obs.get('scene') not in {'Level','LevelExit','IntroVignette','LevelEnter','OverworldLoader'}:
             break
         obs = step(["10"])
+    if obs.get('scene') in {'Level','LevelExit','IntroVignette','LevelEnter','OverworldLoader'}:
+        raise RuntimeError('菜单宏已停止：等待退出关卡超时，保留当前状态，不再重试')
     return obs

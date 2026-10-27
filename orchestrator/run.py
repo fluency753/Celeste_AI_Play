@@ -523,12 +523,12 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
         print(f"[run] 已进入存档 {cfg.save}：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}"
               f"（菜单宏用时 {time.monotonic() - t0:.1f} 秒）", flush=True)
     except BaseException:
+        cfg._keep_frozen = True
         try:
             if recorder is not None and recorder.started:
                 recorder.stop()
-        finally:
-            if not getattr(cfg, '_recording_resume_manifest', None):
-                client.call('deactivate')
+        except Exception as exc:
+            print(f'[record] 菜单导航失败后的录像收尾也失败：{exc}；保留游戏状态', flush=True)
         raise
     finally:
         client.close()
@@ -654,6 +654,16 @@ def check_resume_position(cfg: RunConfig) -> bool:
     client = BridgeClient(port=cfg.bridge_port, timeout=120)
     try:
         obs = client.call("observe", image=False, entities=False, tiles=False)["obs"]
+        # A saved native Session may resume directly into its Level. Do not turn
+        # "load this save" into "leave that Level to reach chapter select".
+        if cfg.chapter is None and obs.get('scene') == 'Overworld' and (
+                (obs.get('save') or {}).get('name') != cfg.save or
+                (cfg.save_slot is not None and (obs.get('save') or {}).get('slot') != cfg.save_slot) or
+                (obs.get('menu') or {}).get('current') not in {'OuiChapterSelect', 'OuiChapterPanel'}):
+            from tools.enter_save import load_save_and_freeze
+            from .action_policy import controller_navigation
+            with controller_navigation(client, cfg, slot=cfg.save_slot):
+                obs = load_save_and_freeze(client, cfg.save, save_slot=cfg.save_slot)
         save = (obs.get("save") or {}).get("name")
         right_save = save == cfg.save and (cfg.save_slot is None or (obs.get('save') or {}).get('slot') == cfg.save_slot)
         sid = (obs.get("level") or {}).get("sid")
@@ -686,10 +696,9 @@ def check_resume_position(cfg: RunConfig) -> bool:
               f"{chapter_name_by_id(cfg.chapter)}", flush=True)
         return False
     except BaseException:
-        if getattr(cfg, '_recording_resume_manifest', None):
-            cfg._keep_frozen = True
-        else:
-            client.call('deactivate')
+        # This connection either only observed an existing state, or performed
+        # native loading. Neither failure authorizes unfreezing that state.
+        cfg._keep_frozen = True
         raise
     finally:
         client.close()

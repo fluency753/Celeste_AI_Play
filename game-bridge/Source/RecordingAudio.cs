@@ -244,9 +244,11 @@ internal static class RecordingAudio {
         public int PeakTracked;
         private long frameIndex;
         private readonly List<string> drops = new();
+        private readonly Dictionary<Guid, string> missingEvents = new();
         public object Stats => new { created = Created, released = Released, tracked = Pairs.Count,
                                      peak_tracked = PeakTracked, orphaned_loops = OrphanedLoops, retired_stopped = RetiredStopped,
                                      dropped = Dropped, drops = drops.ToArray(),
+                                     unmirrored_events = missingEvents.Count, unmirrored = missingEvents.Values.Take(16).ToArray(),
                                      oldest = Pairs.Values.OrderBy(p => p.CreatedFrame).Take(8).Select(Describe).ToArray() };
 
         private void NoteDrop(string note) {
@@ -341,6 +343,36 @@ internal static class RecordingAudio {
             return null;
         }
 
+        private static string SourceBank(Guid id) {
+            if (source == null || source.getBankList(out Bank[] banks) != RESULT.OK) return "unknown live bank";
+            foreach (Bank bank in banks) {
+                if (bank.getEventList(out EventDescription[] events) != RESULT.OK) continue;
+                foreach (EventDescription desc in events) {
+                    if (desc.getID(out Guid candidate) != RESULT.OK || candidate != id) continue;
+                    if (bank.getPath(out string path) == RESULT.OK && !string.IsNullOrEmpty(path)) return path;
+                    return bank.getID(out Guid bankId) == RESULT.OK ? $"unnamed live bank [{bankId}]" : "unnamed live bank";
+                }
+            }
+            return "unknown live bank";
+        }
+
+        private bool FindEvent(Guid id, string path, out EventDescription description) {
+            description = null!;
+            if (missingEvents.ContainsKey(id)) return false;
+            RESULT result = studio!.getEventByID(id, out description);
+            if (result == RESULT.ERR_EVENT_NOTFOUND) {
+                // The live game can load custom Mod banks; the independent mixers load official banks only.
+                // A single absent event is not a broken mixer. Do not apply this exception to bank loading,
+                // mixer updates, or other FMOD failures. Cache by GUID so every parameter hook does not retry it.
+                string note = $"event {path} [{id}] from {SourceBank(id)} is absent from the independent mixer's official banks (getEventByID: {result}); this event is omitted";
+                missingEvents.Add(id, note);
+                if (missingEvents.Count <= 8 || missingEvents.Count % 100 == 0)
+                    Log.Warn($"recording audio ({name}): {note}; recording continues");
+                return false;
+            }
+            return Soft(IntPtr.Zero, null, "getEventByID", result, $"{path} [{id}]");
+        }
+
         private Pair? EnsurePair(EventInstance instance, bool restart = false) {
             if (studio == null) return null;
             IntPtr key = instance.getRaw();
@@ -356,7 +388,7 @@ internal static class RecordingAudio {
                 if (!Soft(key, null, "getID", desc.getID(out Guid id), path)
                     || !Soft(key, null, "isOneshot", desc.isOneshot(out bool oneShot), path)
                     || !Soft(key, null, "isSnapshot", desc.isSnapshot(out bool snapshot), path)
-                    || !Soft(key, null, "getEventByID", studio.getEventByID(id, out EventDescription copyDesc), path)
+                    || !FindEvent(id, path, out EventDescription copyDesc)
                     || !Soft(key, null, "createInstance", copyDesc.createInstance(out EventInstance copy), path)) return null;
                 pair = new Pair(instance, copy, oneShot, snapshot, path, frameIndex);
                 Pairs[key] = pair;

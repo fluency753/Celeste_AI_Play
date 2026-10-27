@@ -7,7 +7,7 @@ from unittest.mock import Mock,patch
 from orchestrator.config import RunConfig
 from orchestrator.game_session import GameSession,ActError
 from orchestrator.metrics import Metrics
-from tools.enter_save import enter_save
+from tools.enter_save import enter_save, open_chapter_select
 
 
 def dialog(choices=False,ready=True):
@@ -250,7 +250,7 @@ class CutsceneTests(unittest.TestCase):
         obs={'scene':'Overworld','storyInput':None,'save':{'name':'player','slot':1},
              'menu':{'current':'OuiChapterSelect','area':7}}
         client=SceneClient(obs)
-        self.assertEqual(enter_save(client,'player',save_slot=1,stop_at_chapter_select=True),obs)
+        self.assertEqual(open_chapter_select(client,'player',save_slot=1),obs)
         with patch('orchestrator.game_session.BridgeClient',return_value=client):
             self.s.connect()
         self.assertEqual(client.steps,[]);self.assertFalse(self.s.done)
@@ -260,7 +260,7 @@ class CutsceneTests(unittest.TestCase):
                   'menu':{'current':'OuiChapterSelect','area':7}}
         panel=copy.deepcopy(selected);panel['menu']['current']='OuiChapterPanel'
         client=ScriptClient([panel,selected])
-        self.assertEqual(enter_save(client,'player',save_slot=1,stop_at_chapter_select=True),selected)
+        self.assertEqual(open_chapter_select(client,'player',save_slot=1),selected)
         self.assertEqual(client.steps,[['1,B','30']])
         with self.assertRaises(ValueError):
             enter_save(client,'player',chapter=1,stop_at_chapter_select=True)

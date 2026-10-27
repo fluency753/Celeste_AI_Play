@@ -107,6 +107,10 @@ internal sealed class StepJob {
         }
 
         // "直到可控/失控"类条件在开始时就已满足，则不推进
+        CheckChapterLoaded();
+        if (StopReason != null) {
+            return;
+        }
         if (this.stopOn.Contains("controllable") && lastControllable) {
             StopReason = "controllable";
         } else if (this.stopOn.Contains("uncontrollable") && !lastControllable) {
@@ -120,6 +124,16 @@ internal sealed class StepJob {
 
     public bool AllowNextInput() => !Finished;
     public void NoteScene(Scene? scene) => policy.NoteScene(scene);
+
+    // Loading frames do not consume the input plan. They still have to stop a
+    // restore job at the first chapter scene, before its remaining menu inputs.
+    public bool CheckChapterLoaded() {
+        if (StopReason == null && stopOn.Contains("chapter_loaded") &&
+                Engine.Scene is Level or IntroVignette or LevelEnter && !Bridge.IsLoading()) {
+            StopReason = "chapter_loaded";
+        }
+        return StopReason == "chapter_loaded";
+    }
 
     public bool AllowMapEntry(OuiChapterPanel panel, string? checkpoint) {
         if (policy.Entry == null) return true;
@@ -145,6 +159,7 @@ internal sealed class StepJob {
     }
 
     public void AfterFrame(long frame) {
+        CheckChapterLoaded();
         Level? level = Engine.Scene as Level;
         Player? p = level == null ? null : StateExtractor.GetPlayer(level);
         if (recordTrajectory) {

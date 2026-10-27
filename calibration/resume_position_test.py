@@ -63,6 +63,85 @@ class ResumePositionTests(unittest.TestCase):
         obs['save']['slot']=9
         self.assertFalse(self.check(obs,cutscene_mode='agent')[0])
 
+    def test_restart_without_chapter_loads_native_session_without_exiting(self):
+        from calibration.menu_navigation_test import GameIpc, file_select, reply
+        loaded = level()
+        initial = file_select()
+        initial['menu']['slots'][0].update(name='opus5.5', fileSlot=8)
+
+        class NativeContinue(GameIpc):
+            step_options = None
+            policies = []
+            closed = False
+
+            def call(client, command, **options):
+                if command == 'step':
+                    client.policies.append(client.step_options())
+                return super().call(command, **options)
+
+            def close(client):
+                client.closed = True
+
+        client = NativeContinue(initial, [reply(loaded, stop='chapter_loaded')])
+        cfg = RunConfig(agent='opus5.5', save='opus5.5', model='opus', save_slot=8)
+        cfg.chapter = None
+        cfg.cutscene_mode = 'agent'
+        with patch('tools.bridge_client.BridgeClient', return_value=client):
+            self.assertTrue(check_resume_position(cfg))
+        self.assertEqual(len(client.steps), 1)
+        self.assertEqual(client.steps[0]['stop_on'], ['chapter_loaded'])
+        self.assertEqual(client.policies[0]['action_policy']['entry_target'], {'sid': None, 'slot': 8})
+        self.assertEqual(client.policies[0]['action_policy']['departure'], 'current_level')
+        self.assertIsNone(client.step_options)
+        self.assertTrue(client.closed)
+
+    def test_controller_navigation_grant_is_connection_local_and_revoked_on_error(self):
+        from orchestrator.action_policy import controller_navigation
+        client = Client({})
+        strict = lambda: {'agent_policy': True}
+        client.step_options = strict
+        cfg = RunConfig(agent='test', save='test', model='test')
+        with self.assertRaisesRegex(RuntimeError, 'failed'):
+            with controller_navigation(client, cfg, sid='Celeste/3-CelestialResort', slot=10):
+                options = client.step_options()
+                self.assertTrue(options['allow_map_exit'])
+                self.assertFalse(options['allow_chapter_reset'])
+                self.assertEqual(options['entry_guard']['slot'], 10)
+                raise RuntimeError('failed')
+        self.assertIs(client.step_options, strict)
+
+    def test_failed_native_restore_never_releases_the_loaded_state(self):
+        from calibration.menu_navigation_test import GameIpc, file_select, reply, blocked
+        for response, capable in ((reply(level(save='other', slot=9)), True),
+                                  (blocked(file_select()), True), (None, False)):
+            cfg = RunConfig(agent='opus5.5', save='opus5.5', model='opus', save_slot=8)
+            cfg.chapter = None
+            initial = file_select()
+            initial['menu']['slots'][0].update(name='opus5.5', fileSlot=8)
+            client = GameIpc(initial, [response] if response else [], capability=capable)
+            client.step_options = None
+            client.close = lambda: None
+            with self.subTest(capable=capable, response=response), \
+                 patch('tools.bridge_client.BridgeClient', return_value=client), \
+                 self.assertRaises(RuntimeError):
+                check_resume_position(cfg)
+            self.assertNotIn('deactivate', [cmd for cmd, _ in client.calls])
+            self.assertTrue(cfg._keep_frozen)
+            self.assertIsNone(client.step_options)
+
+    def test_startup_macro_denial_preserves_game_instead_of_unfreezing(self):
+        from calibration.menu_navigation_test import GameIpc, level as state, pause_menu, blocked
+        from orchestrator.run import enter_save
+        initial = state(pauseMenu=pause_menu())
+        client = GameIpc(initial, [blocked(initial)])
+        client.close = lambda: None
+        cfg = RunConfig(agent='test', save='test', model='test', save_slot=10)
+        cfg.chapter = 1
+        with patch('tools.bridge_client.BridgeClient', return_value=client), self.assertRaises(RuntimeError):
+            enter_save(cfg)
+        self.assertNotIn('deactivate', [cmd for cmd, _ in client.calls])
+        self.assertTrue(cfg._keep_frozen)
+
 
 if __name__ == "__main__":
     unittest.main()

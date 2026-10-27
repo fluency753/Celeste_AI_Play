@@ -1,4 +1,4 @@
-# 游戏操作策略与门禁（桥接 1.1.1）
+# 游戏操作策略与门禁（桥接 1.1.2）
 
 主控默认禁止 `restart_chapter`（重启章节）、`return_to_map`（未通关返回地图）、`save_quit`（未通关保存退出），三项权限分别配置。正常死亡、暂停菜单 Retry、TAS QuickRestart（当前房间重试）、继续游戏和跳过剧情不受影响。真实章节完成，或主控已核验用户指定分段终点后的退出保留；交接许可不允许重启章节。
 
@@ -13,6 +13,12 @@ Python 的 `action_policy.py` 统一验证、迁移、构造策略和生成提�
 桥接只有在真实菜单确认与真实地图入场两个钩子均安装成功时才报告 `hello.action_policy: 1`（`entry_guard` 也按入场钩子是否装上报告）。钩子装不上（游戏或 Everest 更新、别的 Mod 改写了 `TextMenu.orig_Update` 或 `OuiChapterPanel.Start`）时只记日志、对应门禁不可用，桥接其余功能照常加载；MonoMod 在钩子链变化时重跑注入函数，注入函数找不到调用点也只标记不可用、不抛异常。新主控要求此能力，旧桥接在录制/进档前拒绝；已有连接在 step 发送前拒绝。新策略存在时，桥接忽略调用者的旧参数，拒绝未知版本或非法权限，不能静默退回旧协议。桥接兼容旧客户端字段，但旧 `allow_map_exit` 也受修复后的关卡生命周期限制。
 
 用户指定新开局或需要重新进档的续跑，在 agent 接管前使用独立的启动连接；该连接明确允许退出旧地图以进入用户指定存档，并传入本次重置配置。它不会给后续 GameSession 放宽返回地图权限。单独运行 `tools/enter_save.py` 也仅为明确指定的进档导航授权退出。
+
+恢复入口使用 `load_save_and_freeze(client, save_name, save_slot=...)`，只按原生继续载入存档：有进行中的章节就停在首次进入该章节的场景，无进行中章节就保留原生地图，不代选、退出或重启。桥接 1.1.2 的 `hello.chapter_loaded_stop` 声明此能力；每条载入输入带 `stop_on: ["chapter_loaded"]`，加载帧也检查截断，进入 Level、IntroVignette 或 LevelEnter 后不再执行菜单输入的剩余帧。已在正确章节时零输入返回。无章节参数的冷启动续跑使用此入口；旧桥接明确拒绝，不能声称已经立即冻结。
+
+明确需要退出章节打开地图时用 `open_chapter_select`；旧 `stop_at_chapter_select=True` 在发送输入前报错并指向两个命名入口，避免误把“停在地图”理解为“载入后冻结”。独立 CLI 默认采用载入后冻结，须指定存档槽位，例如 `.\.venv\Scripts\python.exe tools/enter_save.py test --save-slot 10`；其他目的需明确 `--destination play` 或 `--destination chapter-select`。load 模式返回后保持接管。
+
+受信主控的启动/人工恢复使用独立连接上的 `controller_navigation` 作用域授权当前关卡退出，保留存档/地图目标核验，作用域结束或失败后恢复原策略。agent 工具即使调用同一菜单宏，也继续受 GameSession 的权限约束；不得按“调用了宏”就获得主控身份。所有菜单宏检查完整 step 结果，被门禁拒绝时立即抛出携带原观测、规则和帧计量的 `MenuActionBlocked`，不再等待、补按或重试退出；退出超时也不能返回假成功。
 
 临时退出许可只绑定该 step 创建时的原 `Level` 和 `Session` 对象；从菜单或加载场景创建时不绑定未来关卡。每个实际推进帧都观察场景变化，包括加载帧。首次离开原 Level 或替换其 Session 后永久撤销，即使复用 Session 载入另一 Level，或重新回到原 Level，也不会恢复。许可保留到实际离开，因此返回地图的主菜单与二级确认均可完成。
 

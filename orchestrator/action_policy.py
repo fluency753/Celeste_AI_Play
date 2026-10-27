@@ -1,5 +1,6 @@
 """Small semantic policy shared by configuration, controls and bridge dispatch."""
 from dataclasses import asdict, dataclass, replace
+from contextlib import contextmanager
 
 VERSION = 1
 LABELS = {'restart_chapter': '重启章节', 'return_to_map': '返回地图', 'save_quit': '保存并退出'}
@@ -83,6 +84,21 @@ def step_options(cfg, *, sid=None, slot=None, departure=False):
             # Older menu clients/tests can still inspect these; the new bridge
             # uses action_policy exclusively when it is present.
             'entry_guard': target, 'allow_chapter_reset': all(permissions.values()), 'allow_map_exit': bool(departure)}
+
+
+@contextmanager
+def controller_navigation(client, cfg=None, *, sid=None, slot=None):
+    """Owner-requested startup/restore only; never wrap agent-dispatched tools.
+
+    Departure remains bound to the current Level in each bridge job, and target
+    checks remain active. Restore the connection's policy even when a macro fails.
+    """
+    previous = getattr(client, 'step_options', None)
+    client.step_options = lambda: step_options(cfg, sid=sid, slot=slot, departure=True)
+    try:
+        yield
+    finally:
+        client.step_options = previous
 
 
 def require_capability(hello):

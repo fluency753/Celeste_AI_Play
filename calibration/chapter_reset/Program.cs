@@ -254,6 +254,50 @@ Console.WriteLine("PASS: production IL hook + real TextMenu + virtual buttons + 
 Console.WriteLine("PASS: cross-Level/loading grants revoked, split permissions, actual Panel direction priority/held input/checkpoint destination/save-slot entry hooks");
 Console.WriteLine("PASS: missing menu injection point only disables the guard; unfinished-level whitelist (partial/all/departure/finished/outside Level)");
 
+// Exercise both production tick paths. Only external input-binding, audio and
+// snapshot/IPC boundaries are replaced; loading, jobs, accounting and freezing
+// keep their production implementations.
+using (var noInstall = new Hook(typeof(InputInjector).GetMethod("Install", flags)!, (Action)(() => { })))
+using (var noUninstall = new Hook(typeof(InputInjector).GetMethod("Uninstall", flags)!, (Action)(() => { })))
+using (var noAudio = new Hook(typeof(Bridge).GetMethod("SetAudio", flags)!, (Action<Bridge.AudioMode>)(_ => { })))
+using (var snapshot = new Hook(typeof(StateExtractor).GetMethod("WriteSnapshot", flags)!,
+        (Action<System.Text.Json.Utf8JsonWriter, SnapshotOptions>)((w, _) => w.WriteString("scene", Engine.Scene.GetType().Name)))) {
+    string? received = null;
+    using var send = new Hook(typeof(IpcServer).GetMethod("Send", flags)!, (Action<string>)(s => received = s));
+    using var tokens = new Hook(typeof(ClockServer).GetMethod("TryTakeToken", flags)!,
+        (TestToken)((int _, out long token) => { token = 1; return true; }));
+    typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, true);
+    foreach (bool locked in new[] { false, true }) {
+        Scene((LevelLoader)RuntimeHelpers.GetUninitializedObject(typeof(LevelLoader)));
+        var job = new StepJob(99, new() { InputFrame.Neutral, InputFrame.Parse("C"), InputFrame.Neutral },
+            new[] { "chapter_loaded" }, 4, false, "level", new SnapshotOptions(), false);
+        typeof(Bridge).GetField("job", flags)!.SetValue(null, job);
+        var loaded = Level(); int updates = 0; received = null;
+        typeof(Bridge).GetMethod(locked ? "LockstepTick" : "NormalTick", flags)!.Invoke(null,
+            new object[] { (Action)(() => { updates++; Scene(loaded); }) });
+        Check(updates == 1 && job.Finished && job.StopReason == "chapter_loaded" && Bridge.Frozen,
+            "Loading failed to freeze before leftover menu confirmation: " + locked);
+        using var response = System.Text.Json.JsonDocument.Parse(received!);
+        var result = response.RootElement.GetProperty("result");
+        Check(result.GetProperty("consumed").GetInt32() == 0 && job.LoadingFrames == 1,
+            "Loading consumed leftover menu input: " + locked);
+        Check(!job.AllowNextInput(), "Frozen job still accepts menu input");
+        typeof(Bridge).GetField("pendingAck", flags)!.SetValue(null, null);
+    }
+    foreach (Scene loaded in new Scene[] { Level(),
+            (IntroVignette)RuntimeHelpers.GetUninitializedObject(typeof(IntroVignette)),
+            (LevelEnter)RuntimeHelpers.GetUninitializedObject(typeof(LevelEnter)) }) {
+        Scene(loaded);
+        var job = new StepJob(100, new() { InputFrame.Parse("C") }, new[] { "chapter_loaded" }, 1,
+            false, "level", new SnapshotOptions(), false);
+        Check(job.Finished && job.StopReason == "chapter_loaded", "Existing chapter did not stop before input");
+    }
+    typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, false);
+}
+Console.WriteLine("PASS: production normal/lockstep loading ticks freeze at first chapter scene, preserve input plan and loading accounting");
+
 sealed class ProbeButton(string label, Action onConfirm) : TextMenu.Button(label) {
     public override void ConfirmPressed() => onConfirm();
 }
+
+delegate bool TestToken(int timeout, out long token);

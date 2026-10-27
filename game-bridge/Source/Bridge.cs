@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.1.1";
+    public const string Version = "1.1.2";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get; private set; }
@@ -102,6 +102,8 @@ internal static class Bridge {
             if (IsLoading()) {
                 AdvanceFrame(runOriginal, InputFrame.Neutral);
                 job.LoadingFrames++;
+                job.CheckChapterLoaded();
+                if (job.Finished) FinishJob();
                 continue;
             }
             if (!job.AllowNextInput()) {
@@ -176,7 +178,11 @@ internal static class Bridge {
         SetAudio(AudioMode.Playing);
         if (IsLoading()) {
             AdvanceFrame(runOriginal, InputFrame.Neutral);
-            if (job != null) job.LoadingFrames++;
+            if (job != null) {
+                job.LoadingFrames++;
+                job.CheckChapterLoaded();
+                if (job.Finished) FinishJob();
+            }
         } else if (job != null) {
             AdvanceFrame(runOriginal, job.NextInput());
             job.AfterFrame(Frame);
@@ -405,7 +411,7 @@ internal static class Bridge {
         }
     }
 
-    private static bool IsLoading() => Engine.Scene switch {
+    internal static bool IsLoading() => Engine.Scene switch {
         Level level => level.Paused && UserIO.Saving,
         LevelLoader or LevelExit or GameLoader or OverworldLoader => true,
         _ => false,
@@ -467,6 +473,7 @@ internal static class Bridge {
                     w.WriteBoolean("load_room_modes", true);
                     w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("entry_guard", MapEntryGuard.Available);
+                    w.WriteBoolean("chapter_loaded_stop", true);
                     w.WriteBoolean("chapter_reset_guard", ChapterResetGuard.Available);
                     w.WriteNumber("action_policy", ChapterResetGuard.Available && MapEntryGuard.Available ? ActionPolicy.Version : 0);
                     w.WriteBoolean("dialog_choices", true);
