@@ -549,6 +549,11 @@ class GameSession:
             if self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas' and story_pending(obs) and not self.done:
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
+            elif (self.cfg.cutscene_mode == 'auto' and obs.get('scene') == 'Level' and (obs.get('level') or {}).get('inCutscene')
+                  and not self._ending_agent and not self._ending_pending and not self.done):
+                # 自动跳过剧情：剧情（含跳过的淡出）还没结束就先推进完，不让智能体看着黑屏或剧情画面判断
+                obs, image, _, notes = self._auto_advance(obs, image)
+                self.goals.check(self.goal_values(obs))
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs, image, more = self._enter_next_chapter()
                 notes = [*notes, *more]
@@ -1087,14 +1092,20 @@ class GameSession:
 
     # ---- 非可控段：按剧情模式交接，自动处理转场、死亡与重生 ----
 
+    @staticmethod
+    def _settled(obs: dict) -> bool:
+        """auto 剧情模式下可以把按键交给智能体了：角色可操作，而且剧情（含正在跳过的剧情）已经结束。
+        有的剧情在跳过的淡出过程中角色已报告可操作（例如 5A 开场），这时还要接着推进到剧情结束。"""
+        return bool(obs.get('controllable')) and not (obs.get('level') or {}).get('inCutscene')
+
     def _resume_auto_handling(self) -> list[str]:
         """（调用方持有连接锁）自动跳过剧情时，上一次的自动推进可能被用户暂停打断，游戏停在转场、剧情或对白中途：
         先接着自动推进到可操作，再执行智能体的按键，不把按键落在剧情上。推进后仍不可操作（又被暂停）就不执行这次动作。"""
         last = self.last_obs or {}
-        if self.cfg.cutscene_mode != 'auto' or self._ending_agent or not last or last.get('controllable'):
+        if self.cfg.cutscene_mode != 'auto' or self._ending_agent or not last or self._settled(last):
             return []
         obs = enrich_obs(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
-        if obs.get('scene') != 'Level' or obs.get('controllable'):
+        if obs.get('scene') != 'Level' or self._settled(obs):
             return []
         obs, _, _, notes = self._auto_advance(obs, None)
         self.last_obs = obs

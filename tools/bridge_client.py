@@ -21,24 +21,54 @@ import time
 from pathlib import Path
 
 DEFAULT_PORT = 47774
+# 只读、重发无副作用的指令：连接在等回复时断开（例如被别的客户端挤掉），重连后可以安全地重发
+READ_ONLY = frozenset({"hello", "observe", "areas"})
 
 
 class BridgeClient:
+    """桥接只接受一个连接：新客户端连上时旧连接会被关掉（游戏照样冻结、按键绑定不变）。所以请求发不出去时
+    （请求还没到桥接）重连后重发一次；只读指令在等回复时断开也重连重发。step 等会推进游戏的指令发出后才断开时
+    不重发，照常报错，免得同一段按键执行两次。"""
+
     def __init__(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT, timeout: float = 120.0):
-        self.sock = socket.create_connection((host, port), timeout=timeout)
-        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self.file = self.sock.makefile("rwb")
+        self.host, self.port, self.timeout = host, port, timeout
+        self._connect()
         self.next_id = 1
         self.cancel_check = None
         self.step_options = None
         self.after_step = None
         self._cancel_sent = False
+        self.reconnects = 0
+
+    def _connect(self) -> None:
+        self.sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.file = self.sock.makefile("rwb")
+
+    def reconnect(self) -> None:
+        try:
+            self.close()
+        except OSError:
+            pass
+        self._connect()
+        self.reconnects += 1
 
     def close(self) -> None:
         try:
             self.file.close()
         finally:
             self.sock.close()
+
+    def _send(self, data: bytes) -> None:
+        try:
+            self.file.write(data)
+            self.file.flush()
+        except TimeoutError:
+            raise
+        except OSError:
+            self.reconnect()          # 请求没送到桥接：重连后重发一次
+            self.file.write(data)
+            self.file.flush()
 
     def call(self, cmd: str, on_event=None, **args) -> dict:
         """发送一条指令并等待它的回复。执行中桥接推送的事件（{"event": …}，例如 step 的 progress）交给 on_event。"""
@@ -54,11 +84,22 @@ class BridgeClient:
             args.setdefault("progress", 6)
         self.next_id += 1
         payload = {"id": req_id, "cmd": cmd, **args}
-        self.file.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
-        self.file.flush()
+        data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        self._send(data)
+        retried = False
         while True:
-            line = self.file.readline()
+            try:
+                line = self.file.readline()
+            except TimeoutError:
+                raise
+            except OSError:
+                line = b""
             if not line:
+                if cmd in READ_ONLY and not retried:
+                    retried = True
+                    self.reconnect()
+                    self._send(data)
+                    continue
                 raise ConnectionError("bridge closed the connection")
             reply = json.loads(line)
             if "event" in reply:
