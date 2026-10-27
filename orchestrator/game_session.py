@@ -27,7 +27,8 @@ from .segments import Piece, checkpoint_name, checkpoint_room, chapters_of, piec
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
-from cutscene import skip_by_pause_menu, leave_level_by_pause_menu, story_pending, story_input, story_decision  # noqa: E402
+from cutscene import (skip_by_pause_menu, leave_level_by_pause_menu, story_pending, story_input, story_decision,  # noqa: E402
+                      cutscene_skippable)
 
 LETTERS = set("LRUDJXZGTKYVCBPN")    # 桥接认识的全部按键
 PLAY_LETTERS = set("LRUDJXZGTKYV")   # 游玩按键（思考僵直时只保持这些）
@@ -35,17 +36,19 @@ AGENT_LETTERS = PLAY_LETTERS | {"C"}  # 自动剧情模式可用的按键：游�
 DEFAULT_STOP_ON = ["death", "room", "complete"]
 VALID_STOP_ON = {"death", "room", "uncontrollable", "controllable", "land", "refill", "complete", "story_input", "story_decision"}
 END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
+ENDING_STUCK_STEPS = 40              # 最终章片尾连续 40 次（每次 30 帧，约 20 秒）画面状态不变就不再空等
 FROZEN_GIVE_UP_FRAMES = 600          # 画面冻结等确认时，主控最多推进这么多帧（10 秒，期间每 30 帧按一次确认）就交回
 
 
-def awaiting_confirm(obs: dict) -> bool:
+def awaiting_confirm(obs: dict, *, ending: bool = False) -> bool:
     """关卡画面冻结、角色不可操作，又不是剧情、对白、暂停菜单或转场：例如第一次拿到某章磁带后的"B 面已解锁"、
-    吃心后的诗句。游戏在等确认键（MenuConfirm），不按就一直停着，章节计时却照走。"""
+    吃心后的诗句。游戏在等确认键（MenuConfirm），不按就一直停着，章节计时却照走。
+    ending=True：最终章通关后的片尾（completed 已为真）也算。"""
     level = obs.get("level") or {}
     return (obs.get("scene") == "Level" and not obs.get("controllable") and bool(level.get("frozen"))
             and not level.get("inCutscene") and not level.get("dialogOpen") and not level.get("dialogWaiting")
             and not level.get("paused") and not obs.get("pauseMenu") and not level.get("transitioning")
-            and not level.get("completed") and not story_input(obs))
+            and (ending or not level.get("completed")) and not story_input(obs))
 PROGRESS_EVERY = 6                   # 执行中每 6 帧（0.1 秒）推送一次进度给 HUD
 
 # 自动重试：计划文件里声明重算程序，死亡或偏离预期时由主控在零网络沙箱里运行它，不唤醒大模型
@@ -209,6 +212,9 @@ def expand_inputs(inputs: list[str], max_frames: int, allowed: set[str] = AGENT_
 
 
 class GameSession:
+    _ending_pending = False   # 见 __init__
+    _ending_agent = False
+
     @property
     def navigation(self):
         # Lightweight consumers can construct a session without opening game logs.
@@ -286,6 +292,8 @@ class GameSession:
             resume_segment=cfg.resume_segment, previous_sid=self.metrics.state.chapter)
         self.metrics.update(piece_done=False)
         self._pending_complete = cfg.resume_completion_pending
+        self._ending_pending = False    # auto 剧情模式：最终章刚通关，片尾还没走完（这次动作里由 _finish_ending 处理）
+        self._ending_agent = False      # 片尾主控没能走完，交给智能体：开放全部按键，回到选章地图才算完成
         self._frames_log = open(run_dir / "frames.jsonl", "a", encoding="utf-8")
         self._decisions_log = open(run_dir / "decisions.jsonl", "a", encoding="utf-8")
         # 容器方式下，观测与轨迹同时写进智能体的工作区，供它自写的程序读取
@@ -908,7 +916,7 @@ class GameSession:
             raise ActError(f"未知的截断条件 {bad}；可用：{sorted(VALID_STOP_ON)}")
         # Completed remains true throughout the heart prompt and results. Once
         # reported, it must not truncate every subsequent agent confirmation.
-        ending = self.cfg.cutscene_mode == 'agent' and self._pending_complete
+        ending = (self.cfg.cutscene_mode == 'agent' and self._pending_complete) or self._ending_agent
         if ending:
             stop = [item for item in stop if item != 'complete']
         for must in ("death", *(("complete",) if not ending else ()), *forced):
@@ -931,7 +939,7 @@ class GameSession:
         if plan.input_format != 'celeste_ai' or plan.input_source is not None:
             return plan
         try:
-            allowed = LETTERS if self.cfg.cutscene_mode == 'agent' else AGENT_LETTERS
+            allowed = LETTERS if self.cfg.cutscene_mode == 'agent' or self._ending_agent else AGENT_LETTERS
             planned = len(expand_inputs(plan.inputs, act_frame_cap(self.cfg), allowed))
         except ActError:
             return plan                      # 不合法的计划交给 _check_plan 报错
@@ -947,7 +955,7 @@ class GameSession:
                 if self._input_formats is None:self._input_formats = self.client.call('hello').get('input_formats', ['celeste_ai'])
             if 'celeste_tas' not in self._input_formats:raise ActError('TAS输入需要桥接1.0.20或更新版本')
         else:
-            allowed = LETTERS if self.cfg.cutscene_mode == 'agent' else AGENT_LETTERS
+            allowed = LETTERS if self.cfg.cutscene_mode == 'agent' or self._ending_agent else AGENT_LETTERS
             frames = expand_inputs(plan.inputs, act_frame_cap(self.cfg), allowed)
         least = self._least_frames(plan, len(frames))
         if len(frames) < least:
@@ -1030,10 +1038,18 @@ class GameSession:
                              decisions=1 if attempt == 0 else 0)
 
             auto_frames, notes = 0, list(resumed)
-            if result['stop'] != 'entry_blocked' and plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
+            ending_agent = self._ending_agent       # 片尾已交给智能体：主控不再自动推进
+            if not ending_agent and result['stop'] != 'entry_blocked' and plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
                     or story_pending(obs)):
                 obs, image, auto_frames, more = self._auto_advance(obs, image)
                 notes.extend(more)        # 接在执行前的说明（续推剧情、思考僵直）后面，不覆盖它们
+            if self._ending_pending and not self.done and not self.goals.stop_motion.is_set():
+                obs, image, more = self._finish_ending()
+                notes.extend(more)
+            elif ending_agent and not self.done and self._at_chapter_select(obs):
+                self.end_scene, self._ending_agent = obs.get('scene'), False
+                self._mark_done("章节完成")
+                notes.append("已回到选章地图，主控确认本章完成")
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs, image, more = self._enter_next_chapter()
                 notes.extend(more)
@@ -1075,13 +1091,18 @@ class GameSession:
         """（调用方持有连接锁）自动跳过剧情时，上一次的自动推进可能被用户暂停打断，游戏停在转场、剧情或对白中途：
         先接着自动推进到可操作，再执行智能体的按键，不把按键落在剧情上。推进后仍不可操作（又被暂停）就不执行这次动作。"""
         last = self.last_obs or {}
-        if self.cfg.cutscene_mode != 'auto' or not last or last.get('controllable'):
+        if self.cfg.cutscene_mode != 'auto' or self._ending_agent or not last or last.get('controllable'):
             return []
         obs = enrich_obs(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
         if obs.get('scene') != 'Level' or obs.get('controllable'):
             return []
         obs, _, _, notes = self._auto_advance(obs, None)
         self.last_obs = obs
+        if self._ending_pending and not self.done:
+            self.last_obs, _, more = self._finish_ending()
+            notes = [*notes, *more]
+            raise ActError('执行前主控接着推进了上次被打断的转场或剧情，章节已通关：' + '；'.join(map(str, notes))
+                           + ('。这次动作没有执行，请结束本轮。' if self.done else '。这次动作没有执行，请先 observe 再按上面的说明处理片尾。'))
         if self.done:
             raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
         if self.chapter_finished:
@@ -1297,6 +1318,9 @@ class GameSession:
             self.chapter_queue.clear()
             self._pending_complete=False
             if not self.done:self._chapter_complete()
+        if not self.done and (self._ending_pending or self._ending_agent):
+            self._ending_pending = self._ending_agent = False
+            self._mark_done("章节完成")         # 已通关、片尾没走完：收尾时照常跳过片尾、确认结算
         if not self.done:
             self._mark_done(self.goals.snapshot().get("stop_reason", "用户停止"))
 
@@ -1458,8 +1482,9 @@ class GameSession:
         return obs.get('scene') == 'Overworld' and menu.get('current') == 'OuiChapterSelect' and not menu.get('next')
 
     def _chapter_complete(self) -> None:
-        """当前章节通关：记下分段成绩；还有下一章就等进入下一章，否则本次运行完成。"""
-        if self.done or self.chapter_finished:
+        """当前章节通关：记下分段成绩；还有下一章就等进入下一章，否则本次运行完成。
+        auto 剧情模式的最终章：先不结束，片尾在这次动作里走完（_finish_ending），走不完交给智能体。"""
+        if self.done or self.chapter_finished or self._ending_pending or self._ending_agent:
             return
         st = self.metrics.state
         values = self.goal_values()
@@ -1470,8 +1495,31 @@ class GameSession:
         self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range())
         if self.navigation.complete_current():
             self._save_chapter_plan()
+        elif self.cfg.cutscene_mode != 'agent' and not self.goals.immediate and not self.user_stopped:
+            self._ending_pending = True     # 用户的停止目标触发时照旧立即结束，片尾由 finish_at_results 收尾
         else:
             self._mark_done("章节完成")
+
+    def _finish_ending(self) -> tuple[dict, str | None, list[str]]:
+        """（调用方持有连接锁）auto 剧情模式的最终章刚通关：在这次动作里跳过片尾剧情、确认结算并回到选章地图，
+        回到了就结束本次运行；走不完就把剩下的片尾交给智能体（开放确认、返回、暂停等按键），回到选章地图才算完成。"""
+        self._ending_pending = False
+        problem = None
+        try:
+            self._run_ending(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
+        except RuntimeError as exc:
+            problem = str(exc)
+        reply = self.client.call("observe", image=True, scope="room", fields=True)
+        obs, image = enrich_obs(reply["obs"]), reply.get("image")
+        if self._at_chapter_select(obs) or self.goals.immediate:
+            self.end_scene = obs.get('scene')
+            self._mark_done("章节完成")
+            return obs, image, ["通关后主控走完了片尾、确认了结算，已回到选章地图"]
+        self._ending_agent = True
+        print(f"[run] 最终章片尾主控没能走完（{problem}），交给智能体处理", flush=True)
+        return obs, image, [f"章节已通关，章节计时已经停止；片尾主控没能自动走完（{problem or '没有回到选章地图'}）。"
+                            "请观察画面后用 act 自行处理：C 确认、B 返回、P 打开暂停菜单（菜单里可选跳过剧情）、方向键选择，"
+                            "纯帧数等待动画；回到选章地图才算完成，主控不再代按。"]
 
     def finish_at_results(self) -> None:
         """最终章走完片尾，展示并确认结算，停在选章地图，不进入下一章。"""
@@ -1486,42 +1534,73 @@ class GameSession:
         with self.lock:
             if self.goals.immediate:
                 return
-            obs = self.client.call("observe", image=False, entities=False, tiles=False)["obs"]
-            started = time.monotonic()
-            results_shown = False
-            for _ in range(600):
-                self.end_scene = obs.get('scene')
-                if self.goals.immediate:
+            self._run_ending(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
+
+    def _run_ending(self, obs: dict) -> None:
+        """（调用方持有连接锁）最终章通关后走完片尾：剧情能跳过就用暂停菜单跳过，对白和等确认的界面按确认，
+        展示并确认结算，停在选章地图。走不完抛 RuntimeError。"""
+        started = time.monotonic()
+        results_shown = False
+        skip_tries = menu_closes = 0
+        last_sig, unchanged = None, 0        # 片尾画面连续没有变化的次数（每次 30 帧）
+
+        def log_step(inputs, result):
+            self._log_frames(result, expand_inputs(inputs, 10000, LETTERS), "(最终章结算)", auto=True)
+            self.metrics.add(frames_auto=result["consumed"])
+
+        for _ in range(600):
+            self.end_scene = obs.get('scene')
+            if self.goals.immediate:
+                return
+            if self.end_scene == 'Overworld':
+                menu=obs.get('menu') or {}
+                if menu.get('current') == 'OuiChapterSelect' and not menu.get('next'):
+                    self._before_advance()
+                    reply=self.client.call('step',inputs=['60'],stop_on=[],speed=1,
+                                           image=False,entities=False,tiles=False)
+                    self._log_frames(reply['result'],expand_inputs(['60'],10000,LETTERS),'(选章地图停留)',auto=True)
+                    self.metrics.add(frames_auto=reply['result']['consumed'])
+                    self.end_scene=reply['obs'].get('scene')
+                    self.metrics.add(auto_game_s=time.monotonic() - started)
+                    print('[run] 章节结算已确认，停在选章地图，不进入下一章',flush=True)
                     return
-                if self.end_scene == 'Overworld':
-                    menu=obs.get('menu') or {}
-                    if menu.get('current') == 'OuiChapterSelect' and not menu.get('next'):
+                inputs=['1,B','29'] if menu.get('current')=='OuiChapterPanel' and not menu.get('next') else ['10']
+            if obs.get("scene") == "AreaComplete":
+                # 先展示结算，再确认；确认只在AreaComplete内发送，地图中绝不按确认。
+                inputs=['120'] if not results_shown else ['1,C','29']
+                results_shown=True
+            elif self.end_scene != 'Overworld':
+                if self.end_scene not in {'Level','LevelExit','OverworldLoader'}:
+                    raise RuntimeError(f"最终章结算出现意外场景：{self.end_scene}")
+                level=obs.get('level') or {}
+                if (level.get('paused') or obs.get('pauseMenu')) and menu_closes < 3:
+                    menu_closes += 1                 # 跳过剧情留下的暂停菜单：关掉后接着推进
+                    inputs = ['1,B', '20']
+                else:
+                    if cutscene_skippable(obs) and skip_tries < 3:
+                        skip_tries += 1
                         self._before_advance()
-                        reply=self.client.call('step',inputs=['60'],stop_on=[],speed=1,
-                                               image=False,entities=False,tiles=False)
-                        self._log_frames(reply['result'],expand_inputs(['60'],10000,LETTERS),'(选章地图停留)',auto=True)
-                        self.metrics.add(frames_auto=reply['result']['consumed'])
-                        self.end_scene=reply['obs'].get('scene')
-                        self.metrics.add(auto_game_s=time.monotonic() - started)
-                        print('[run] 章节结算已确认，停在选章地图，不进入下一章',flush=True)
-                        return
-                    inputs=['1,B','29'] if menu.get('current')=='OuiChapterPanel' and not menu.get('next') else ['10']
-                if obs.get("scene") == "AreaComplete":
-                    # 先展示结算，再确认；确认只在AreaComplete内发送，地图中绝不按确认。
-                    inputs=['120'] if not results_shown else ['1,C','29']
-                    results_shown=True
-                elif self.end_scene != 'Overworld':
-                    if self.end_scene not in {'Level','LevelExit','OverworldLoader'}:
-                        raise RuntimeError(f"最终章结算出现意外场景：{self.end_scene}")
-                    level=obs.get('level') or {}
-                    inputs=['1,C','29'] if level.get('dialogWaiting') else ['30']
-                self._before_advance()
-                reply = self.client.call("step", inputs=inputs, stop_on=[], speed=self.cfg.auto_speed,
-                                         image=False, entities=False, tiles=False)
-                self._log_frames(reply["result"], expand_inputs(inputs, 10000, LETTERS), "(最终章结算)", auto=True)
-                self.metrics.add(frames_auto=reply["result"]["consumed"])
-                obs = reply["obs"]
-            raise RuntimeError("最终章节片尾尚未返回选章地图，已停止自动推进")
+                        skipped, obs, _, reason = skip_by_pause_menu(self.client, on_step=log_step)
+                        if skipped:
+                            continue
+                        if reason == "no_skip":
+                            skip_tries = 3           # 这段片尾不能跳过：按正常速度播放
+                        elif reason != "no_pause":
+                            continue
+                        level = obs.get('level') or {}
+                    inputs=['1,C','29'] if level.get('dialogWaiting') or awaiting_confirm(obs, ending=True) else ['30']
+                    sig = (obs.get('scene'), level.get('room'), level.get('inCutscene'), level.get('dialogOpen'),
+                           level.get('dialogWaiting'), level.get('frozen'), level.get('paused'), obs.get('storyInput'))
+                    unchanged = unchanged + 1 if sig == last_sig else 0
+                    last_sig = sig
+                    if unchanged >= ENDING_STUCK_STEPS:
+                        raise RuntimeError(f"片尾画面约 {ENDING_STUCK_STEPS // 2} 秒没有变化，已停止自动推进")
+            self._before_advance()
+            reply = self.client.call("step", inputs=inputs, stop_on=[], speed=self.cfg.auto_speed,
+                                     image=False, entities=False, tiles=False)
+            log_step(inputs, reply["result"])
+            obs = reply["obs"]
+        raise RuntimeError("最终章节片尾尚未返回选章地图，已停止自动推进")
 
     # ---------------------------------------------------------------- 按段通关：一截的终点与换到下一截
 
