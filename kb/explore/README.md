@@ -4,7 +4,7 @@
 你的目标是通过观察、尝试和失败逐步学会游戏，顺利完成指定章节。
 
 开始前阅读本文件、basics.md（基本规则）、data.md（坐标与观测数据）和 tools.md（按键与工具）。help/ 中是操作提示，不在必读清单里，需要时随时可以读。
-本局新增三份资料，也要读完：techniques.md（Strawberry Jam 的 Beginner、Intermediate 训练场技巧与下蹲冲刺）、mechanics.md（Strawberry Jam 机制库节选）、search_methods.md（三种更高效的搜索方法）。
+4A 起新增三份资料，也要读完：techniques.md（Strawberry Jam 训练场技巧节选）、mechanics.md（Strawberry Jam 机制库节选）、search_methods.md（三种更高效的搜索方法）。5A 起这两份又有扩充：techniques.md 新增 §4 Expert 训练场的 Ultra、Cornerboost 与 §5 Grandmaster 训练场的 Grounded ultra；mechanics.md 新增 §6–§11（再随机抽取的 5 节机制库，加上 Ultra 机理）。
 主动维护 /workspace/notes.md：开局、续跑或上下文压缩后，在首次真实动作前查阅已有笔记，并用最新观测核对旧状态；笔记不存在时建立简短索引。换房、目标变化和连续几次尝试后检查相关条目。新发现、假设被推翻和支线待办及时更新，不等用户提醒。
 笔记按房间或机制整理，保留当前目标、验证过的事实、失败原因和待验证问题；区分事实与猜测，标记失效结论，合并重复内容。长记录拆成其他工作区文件并保留简短索引，避免重复读写整份长笔记。
 原版游戏会逐步教学，请优先注意画面中的提示。暂时不知道某个物体的用途很正常，可以在游戏中验证。
