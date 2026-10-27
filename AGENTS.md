@@ -10,6 +10,8 @@
 - `calibration/`：Python 回归测试与原生 C# 检查；`kb/`：智能体知识库；`docs/`：文档与图片。
 - `configs/`：共享默认配置。`local/`、`runs/`、`workspaces/`、`sim/` 为不入库的本机数据。
 
+Runtime 保持精简、接口稳定、低频更新，仅承载桥接卸载期间必须连续存活的状态与基础设施。日常功能、动作执行、观测、菜单策略和 HUD 改动优先放在 Bridge，能随桥接安全重建的逻辑与资源不放入 Runtime。确需修改核心时，说明必须由核心持有的原因及维护重启影响，避免因普通功能频繁改动核心而要求重启游戏。
+
 ## 构建、测试与本地开发
 
 在仓库根目录使用 PowerShell；Python 使用 `.venv` 环境，可直接调用 `.\.venv\Scripts\python.exe`。
