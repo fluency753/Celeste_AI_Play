@@ -27,7 +27,7 @@ input_format：省略为 celeste_ai；显式 celeste_tas 使用 TAS 离散按键
   按键：L R U D 方向，J 跳，X 冲刺，Z crouch dash，G 抓墙，T 交互；K、Y、V 是第二个跳、冲刺、crouch dash 键
   （按住 J 时按下 K 也算一次新的"按下"，可以在相邻两帧各跳一次）；A:角度 表示摇杆角度（0 右、90 上）。
   C 是确认键，两种剧情模式都可用：画面冻结在等确认的界面（如第一次拿到磁带后的"B 面已解锁"、吃心后的诗句）时按它，auto 剧情模式下主控会先替你按；agent 剧情模式还可用 B 返回、P 暂停、N 日志，直接操作菜单、对白、重试与结算。
-  只写帧数表示这些帧不按任何键，例如 "5"。一次至少 {act_min_frames} 帧、最多 {act_max_frames} 帧（不足时在末尾补空帧或继续保持按键，截断条件照样提前停下）。
+  只写帧数表示这些帧不按任何键，例如 "5"。一次至少 {act_min_frames} 帧、最多 {act_max_frames} 帧（不足时自己在末尾补空帧或继续保持按键，不在范围内主控会退回；截断条件照样提前停下）。
 plan_file：（有工作区时可用）工作区里的计划文件路径，与 inputs 二选一。内容是按键段数组，或对象：
   {"inputs": [...], "expect": [[x, y], [x, y, "Dash"], null, ...], "tolerance": 0.5,
    "stop_on": [...], "retry": {"command": "python3 planner.py", "max": 3, "timeout_s": 20, "on": ["death", "deviate"]}}
