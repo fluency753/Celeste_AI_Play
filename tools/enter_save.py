@@ -234,7 +234,11 @@ def main() -> int:
     args = ap.parse_args()
 
     c = BridgeClient(port=args.port)
-    c.step_options = lambda: {'allow_chapter_reset': False, 'allow_map_exit': True}
+    from pathlib import Path
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from orchestrator.action_policy import step_options
+    c.step_options = lambda: step_options(SimpleNamespace(), departure=True)
     try:
         obs = enter_save(c, args.save, chapter=args.chapter)
         print(summarize_obs(obs))

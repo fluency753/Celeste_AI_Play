@@ -9,14 +9,17 @@ def validate_bridge(hello):
         raise RuntimeError('需要 CelesteAIBridge 1.0.22 或更新版本，包含逐帧地图进入核验；请更新桥接 Mod。')
 
 
-def preflight_bridge(port, *, allow_chapter_reset=False):
+def preflight_bridge(port):
     from tools.bridge_client import BridgeClient
     client = BridgeClient(port=port)
     try:
         hello = client.call('hello')
         validate_bridge(hello)
-        if not allow_chapter_reset and hello.get('chapter_reset_guard') is not True:
-            raise RuntimeError('默认禁止章节重置需要 CelesteAIBridge 1.0.28 的逐帧菜单门禁；请先更新桥接 Mod，未开始录制或进档。')
+        from .action_policy import require_capability
+        try:
+            require_capability(hello)
+        except ValueError as exc:
+            raise RuntimeError(str(exc) + '未开始录制或进档。') from exc
         return hello
     finally:
         client.close()

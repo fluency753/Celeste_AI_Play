@@ -18,6 +18,7 @@ namespace CelesteAI.Bridge;
 internal static class Hooks {
     private static Hook? endDrawHook;
     private static ILHook? menuConfirmationHook;
+    private static Hook? chapterEntryHook;
 
     public static void Load() {
         // Everest's orig_Update navigates before confirming. Guard the actual
@@ -25,6 +26,9 @@ internal static class Hooks {
         MethodInfo menuUpdate = typeof(TextMenu).GetMethod("orig_Update", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             ?? throw new MissingMethodException("TextMenu.orig_Update");
         menuConfirmationHook = new ILHook(menuUpdate, ILMenuConfirmation);
+        chapterEntryHook = new Hook(typeof(OuiChapterPanel).GetMethod(nameof(OuiChapterPanel.Start))!,
+            typeof(Hooks).GetMethod(nameof(OnChapterStart), BindingFlags.Static | BindingFlags.NonPublic)!);
+        MapEntryGuard.Available = true;
         // FNA 的 Game.EndDraw 里调用 Present：钩在它之后，锁步时回复"这一帧已经呈现"
         MethodInfo? endDraw = typeof(Game).GetMethod("EndDraw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         if (endDraw != null) {
@@ -44,6 +48,9 @@ internal static class Hooks {
 
     public static void Unload() {
         ChapterResetGuard.Available = false;
+        MapEntryGuard.Available = false;
+        chapterEntryHook?.Dispose();
+        chapterEntryHook = null;
         menuConfirmationHook?.Dispose();
         menuConfirmationHook = null;
         endDrawHook?.Dispose();
@@ -100,6 +107,11 @@ internal static class Hooks {
         cur.Emit(OpCodes.Ret); // neither ConfirmPressed nor OnPressed executes
         cur.MarkLabel(allowed);
         ChapterResetGuard.Available = true;
+    }
+
+    private delegate void OrigChapterStart(OuiChapterPanel self, string? checkpoint);
+    private static void OnChapterStart(OrigChapterStart orig, OuiChapterPanel self, string? checkpoint) {
+        if (Bridge.AllowMapEntry(self, checkpoint)) orig(self, checkpoint);
     }
 
     // 章节和显式 step 使用合成输入；空闲菜单恢复真实输入，锁步等令牌时不提前消费按键。

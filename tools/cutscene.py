@@ -106,14 +106,17 @@ def skip_by_pause_menu(client, on_step: StepHook | None = None, max_wait_frames:
     return True, obs, used, "skipped"
 
 
-def leave_level_by_pause_menu(client, max_wait_frames: int = 60) -> dict:
+def leave_level_by_pause_menu(client, max_wait_frames: int = 60, *, allowed_exit_ids=None) -> dict:
     """在关卡里用暂停菜单"返回地图"（没有就选"保存并退出"），回到选章页。返回最新观测。"""
     def step(inputs: list[str]) -> dict:
         return client.call("step", inputs=inputs, speed=1, **QUIET)["obs"]
 
     obs = client.call("observe", **QUIET)["obs"]
     menu = obs.get("pauseMenu")
-    exit_ids = ('menu_pause_return','menu_pause_savequit','intro_vignette_quit')
+    exit_ids = (('menu_pause_return','menu_pause_savequit','intro_vignette_quit')
+                if allowed_exit_ids is None else tuple(allowed_exit_ids))
+    if not exit_ids:
+        raise ValueError('没有允许的退出操作')
     if menu is not None and not any(it.get("id") in exit_ids
                                      for it in menu["items"] if it["selectable"]):
         obs = step(["1,B", "20"])  # 停在别的子菜单里：先退回去

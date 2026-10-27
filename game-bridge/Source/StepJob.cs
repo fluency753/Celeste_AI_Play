@@ -30,9 +30,8 @@ internal sealed class StepJob {
     private readonly List<InputFrame> plan;
     private readonly HashSet<string> stopOn;
     private readonly HashSet<string> stopRooms;
-    private readonly MapEntryGuard? entryGuard;
-    private readonly bool allowChapterReset;
-    private readonly bool allowMapExit;
+    private readonly ActionPolicy policy;
+    private ActionBlock? blocked;
     private readonly bool recordTrajectory;
     private readonly ArrayBufferWriter<byte> trajectoryBuffer = new();
     private readonly Utf8JsonWriter trajectory;
@@ -64,12 +63,10 @@ internal sealed class StepJob {
         bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false,
         List<ExpectRow?>? expect = null, float tolerance = 1f, int progressEvery = 0, IEnumerable<string>? stopRooms = null,
         string inputFormat = "celeste_ai", MapEntryGuard? entryGuard = null, bool allowChapterReset = false,
-        bool allowMapExit = false) {
+        bool allowMapExit = false, ActionPolicy? actionPolicy = null) {
         RequestId = requestId;
         InputFormat = inputFormat;
-        this.entryGuard = entryGuard;
-        this.allowChapterReset = allowChapterReset;
-        this.allowMapExit = allowMapExit;
+        policy = actionPolicy ?? new ActionPolicy(new(allowChapterReset, allowChapterReset, allowChapterReset), entryGuard, allowMapExit);
         this.progressEvery = Math.Max(0, progressEvery);
         this.expect = expect is { Count: > 0 } ? expect : null;
         this.tolerance = tolerance;
@@ -121,23 +118,27 @@ internal sealed class StepJob {
 
     public InputFrame NextInput() => plan[index++];
 
-    public bool AllowNextInput() {
-        if (entryGuard != null && Engine.Scene is Overworld { Current: OuiChapterPanel panel }) {
-            string? reason = entryGuard.Check(plan[index], panel.Area.SID, SaveData.Instance?.FileSlot);
-            if (reason != null) {
-                StopReason = "entry_blocked";
-                events.Add((Bridge.Frame, "entry_blocked", reason));
-                return false;
-            }
-        }
-        return true;
+    public bool AllowNextInput() => !Finished;
+    public void NoteScene(Scene? scene) => policy.NoteScene(scene);
+
+    public bool AllowMapEntry(OuiChapterPanel panel, string? checkpoint) {
+        if (policy.Entry == null) return true;
+        // Match StartRoutine's destination resolution without changing the panel.
+        AreaKey area = panel.Area;
+        int split = checkpoint?.IndexOf('|') ?? -1;
+        if (split >= 0) area = AreaData.Get(checkpoint!.Substring(0, split))?.ToKey(area.Mode) ?? area;
+        return Check(policy.Entry.Check(area.SID, SaveData.Instance?.FileSlot));
     }
 
     public bool AllowMenuConfirmation(TextMenu.Item item) {
-        if (!allowChapterReset && ChapterResetGuard.Check(item,
-                allowMapExit || Engine.Scene is Level { Completed: true }) is { } blocked) {
-            StopReason = "chapter_reset_blocked";
-            events.Add((Bridge.Frame, "chapter_reset_blocked", blocked));
+        return Check(policy.CheckMenu(item));
+    }
+
+    private bool Check(ActionBlock? result) {
+        if (result != null) {
+            blocked ??= result;
+            StopReason = blocked.Stop;
+            events.Add((Bridge.Frame, blocked.Stop, blocked.Reason));
             return false;
         }
         return true;
@@ -258,6 +259,10 @@ internal sealed class StepJob {
     }
 
     public void WriteResult(Utf8JsonWriter w) {
+        if (blocked != null) {
+            w.WritePropertyName("block");
+            blocked.Write(w);
+        }
         w.WriteString("input_format", InputFormat);
         w.WriteString("stop", StopReason ?? "running");
         w.WriteNumber("consumed", index);

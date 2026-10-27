@@ -138,6 +138,7 @@ class RunConfig:
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
     create_save: bool = False       # 显式新建空存档；只用于首次进档，不用于续跑或换章
     allow_chapter_reset: bool = False  # 允许菜单重启章节、未通关返回地图/保存退出
+    action_permissions: dict | None = None  # canonical 三权限；None 仅用于兼容旧总开关
     save_slot: int | None = None    # 存档身份由槽位决定，名称可以重复
     cutscene_mode: str = 'auto'     # auto 自动跳过；agent 自行决定观看、推进或跳过
     play_scope: str = 'chapter'     # independent of the user's dynamic stop goal

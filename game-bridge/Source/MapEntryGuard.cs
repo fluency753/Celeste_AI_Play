@@ -2,15 +2,14 @@ using System;
 
 namespace CelesteAI.Bridge;
 
-/// <summary>Check the actual chapter panel before feeding its confirmation key.</summary>
+/// <summary>Validate the destination after native navigation/confirmation dispatch.</summary>
 internal sealed record MapEntryGuard(string? Sid, int? Slot) {
-    public string? Check(InputFrame input, string panelSid, int? slot) {
-        bool confirms = input.Has(Act.Confirm) || (input.Tas && input.Has(Act.Jump));
-        if (!confirms) return null;
+    public static bool Available { get; set; }
+    public ActionBlock? Check(string panelSid, int? slot) {
         if (Slot.HasValue && Slot != slot)
-            return $"entry_blocked: save slot {slot} does not match required slot {Slot}";
+            return new("entry_blocked", "target.save_slot", "enter_map", "Save slot does not match the task", Slot, slot);
         if (Sid != null && !string.Equals(Sid, panelSid, StringComparison.Ordinal))
-            return $"entry_blocked: map {panelSid} does not match required map {Sid}; navigate back and choose the requested chapter";
+            return new("entry_blocked", "target.map", "enter_map", "Map does not match the task; choose the requested chapter", Sid, panelSid);
         return null;
     }
 }

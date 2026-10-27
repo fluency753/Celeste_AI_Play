@@ -29,6 +29,7 @@ DEFAULTS = {
     "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": True, "stiffness": False, "formal_thought": False, "save_context": True, "collision_image": None, "playback": True, "record": True,
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
     "start_paused": False, "quota_wait": True, "allow_chapter_reset": False, "cutscene_mode": "auto", "chapters": [0], "segments": None,
+    "action_permissions": None,
     "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 240, "autocompact": "",
     # 以下是"更多设置"里的参数，默认值与命令行相同
     "map": "celeste", "runtime": "container", "study_minutes": 60, "max_usage": None, "quota_wait_max_hours": 24,
@@ -95,6 +96,9 @@ def normalize(options: dict) -> dict:
         o["hud_mod"] = not o["live"]             # 与命令行相同：不开直播时游戏内 HUD 默认开
     for key in SWITCHES:
         _bool(o, key)
+    from .action_policy import ActionPermissions
+    o['action_permissions'] = (ActionPermissions.legacy(o['allow_chapter_reset']) if o['action_permissions'] is None
+                               else ActionPermissions.read(o['action_permissions'])).snapshot()
     if o["collision_image"] in ("", "default"):
         o["collision_image"] = None
     if o["collision_image"] not in (None, "always", "room", "off"):
@@ -185,6 +189,8 @@ def build(options: dict) -> list[str]:
             "--save", o["save"]["name"], "--cutscene-mode", o["cutscene_mode"]]
     argv.append("--live" if o["live"] else "--no-live")
     argv.append("--allow-chapter-reset" if o["allow_chapter_reset"] else "--no-allow-chapter-reset")
+    for action, enabled in o['action_permissions'].items():
+        argv.append(('--allow-' if enabled else '--no-allow-') + action.replace('_', '-'))
     if o["mode"] == SPEEDRUN:
         argv.append("--sim" if o["sim"] else "--no-sim")
     else:
@@ -290,6 +296,7 @@ def config_for(options: dict):
     cfg.collision_image = o["collision_image"]
     cfg.live, cfg.playback, cfg.cutscene_mode = o["live"], o["playback"], o["cutscene_mode"]
     cfg.allow_chapter_reset = o["allow_chapter_reset"]
+    cfg.action_permissions = o['action_permissions']
     cfg.pause_limit = o["limit_planning"] and cfg.sim
     cfg.rounds_per_room, cfg.room_scale = o["rounds_per_room"], o["room_scale"]
     cfg.chapters, cfg.chapter = list(o["chapters"]), o["chapters"][0]

@@ -25,6 +25,8 @@ STOP_TEXT = {
     "complete": "章节完成",
     "cancelled": "被取消",
     "deviate": "偏离预期轨迹",
+    "entry_blocked": "主控阻止进入非任务地图或存档",
+    "chapter_reset_blocked": "主控操作权限拦截",
 }
 
 

@@ -176,7 +176,7 @@ winget install Microsoft.DotNet.SDK.8
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本编译 `game-bridge\`，把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前版本 1.1.0）。主控开局前要求桥接至少 1.0.22 且支持逐帧地图进入核验，不满足时在录制、选档前拒绝开始。
+Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本编译 `game-bridge\`，把 `everest.yaml` 与 `bin\CelesteAIBridge.dll` 复制到游戏的 `Mods\CelesteAIBridge\`。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.1.1）。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。更新代码不会更新正在运行的游戏或主控，需另行安排安装与重启。
 
 冒烟测试（游戏停在标题画面即可）：
 
@@ -364,7 +364,8 @@ winget install Gyan.FFmpeg
 | `--live` / `--no-live` | 关（沿用） | 直播模式：提示词加直播一节，解说计时 10 秒，可按用户要求退出关卡，HUD 默认用网页形式。`narrate` 与思考提醒在所有模式下都有（不开直播时解说计时半分钟，`RunConfig.live_remind_s`） |
 | `--hud-mod` / `--no-hud-mod` | 不开直播时开，直播模式关（沿用） | HUD 以 MOD 形式画在游戏画面右上角（需要桥接 0.13.0，旧桥接自动改用网页 HUD）；关时用网页 HUD |
 | `--cutscene-mode auto` / `agent` | `auto`（沿用） | 剧情由主控跳过，或交给智能体用 cutscene 工具处理 |
-| `--allow-chapter-reset` / `--no-allow-chapter-reset` | 禁止（续跑沿用） | 菜单重启章节、未通关返回地图/保存退出；默认需桥接 1.0.28，旧桥接在录制/进档前报错，详见[门禁契约](CHAPTER_RESET_GUARD.md) |
+| `--allow-restart-chapter`、`--allow-return-to-map`、`--allow-save-quit` | 均禁止（续跑沿用） | 各有 `--no-allow-...` 形式，三权限独立配置；需桥接 1.1.1 的 `action_policy=1`，详见[策略契约](CHAPTER_RESET_GUARD.md) |
+| `--allow-chapter-reset` / `--no-allow-chapter-reset` | 兼容别名 | 设置全部三项权限，独立选项覆盖它，旧运行自动迁移 |
 | `--playback` / `--no-playback` | 开（沿用） | 规划回放：把推演过的路线按轮画进游戏（开模拟器时画 `/sim` 的推演，关模拟器时画智能体用 `show.trajectory()` 交来的轨迹） |
 | `--record` / `--no-record` | 开（沿用） | OBS 录屏开关：开时 OBS 没在运行就由主控自己启动（专用配置、最小化到托盘），锁步录制完整版与纯享版，结束时关掉它启动的 OBS；OBS 已经开着就直接用、结束时不关；`--no-record` 不启动也不调用 OBS |
 | `--keep-obs-open` | 关 | 结束时保留主控启动的 OBS（直播用）；手动关闭 OBS 后可用 `tools\obs_setup.py restore` 还原配置选择 |

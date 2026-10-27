@@ -30,9 +30,12 @@ class RunControl:
 
     def enqueue(self, kind, text=""):
         if kind not in {"message", "pause", "resume", "fast", "effort", "detach", "goal", "goal_clear", "stop", "cutscene_mode",
-                        "interrupt", "chapters", "sim_update", "chapter_reset"}:
+                        "interrupt", "chapters", "sim_update", "chapter_reset", "action_permissions"}:
             raise ValueError("未知控制指令")
         text = str(text).strip()
+        if kind == 'action_permissions':
+            from .action_policy import validate_update
+            validate_update(json.loads(text))
         if kind == 'chapter_reset' and text not in {'allow', 'deny'}:
             raise ValueError('章节重置策略须为 allow 或 deny')
         if kind == 'cutscene_mode' and text not in {'auto','agent'}:
@@ -69,15 +72,27 @@ class RunControl:
             return json.loads(row[0]) if row else None
 
     def chapter_reset_preference(self):
+        permissions = self.action_permissions_preference()
+        return all(permissions.values()) if permissions is not None else None
+
+    def action_permissions_preference(self):
+        from .action_policy import ActionPermissions
         with self._db() as db:
+            current = db.execute("SELECT data FROM preferences WHERE key='action_permissions'").fetchone()
+            if current:
+                return ActionPermissions.read(json.loads(current[0])).snapshot()
             row = db.execute("SELECT data FROM preferences WHERE key='allow_chapter_reset'").fetchone()
-            return json.loads(row[0]) is True if row else None
+            return ActionPermissions.legacy(json.loads(row[0])).snapshot() if row else None
 
     def set_chapter_reset(self, enabled):
-        if type(enabled) is not bool:
-            raise ValueError('章节重置策略须为布尔值')
+        from .action_policy import ActionPermissions
+        self.set_action_permissions(ActionPermissions.legacy(enabled).snapshot())
+
+    def set_action_permissions(self, data):
+        from .action_policy import ActionPermissions
+        value = ActionPermissions.read(data).snapshot()
         with self._db() as db:
-            db.execute("INSERT OR REPLACE INTO preferences VALUES('allow_chapter_reset',?)", (json.dumps(enabled),))
+            db.execute("INSERT OR REPLACE INTO preferences VALUES('action_permissions',?)", (json.dumps(value),))
 
     def set_fast(self, enabled):
         with self._db() as db:

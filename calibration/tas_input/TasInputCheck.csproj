@@ -10,6 +10,7 @@
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" ExcludeAssets="runtime" />
     <Compile Include="../../game-bridge/Source/InputFrame.cs" Link="InputFrame.cs" />
     <Compile Include="../../game-bridge/Source/MapEntryGuard.cs" Link="MapEntryGuard.cs" />
+    <Compile Include="../../game-bridge/Source/ActionBlock.cs" Link="ActionBlock.cs" />
     <Compile Include="../../game-bridge/Source/InputInjector.cs" Link="InputInjector.cs" />
   </ItemGroup>
 </Project>

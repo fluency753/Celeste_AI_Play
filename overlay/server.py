@@ -319,8 +319,10 @@ def make_handler(pinned: Path | None):
                     if data.get('text') != 'auto' and engine == 'codex':
                         from orchestrator.model_catalog import resolve_selection
                         resolve_selection((read_metrics(directory) or {}).get('model'),data.get('text'))
-                if data.get('kind') == 'chapter_reset' and not control.snapshot().get('chapter_reset_control'):
+                if data.get('kind') in {'chapter_reset', 'action_permissions'} and not control.snapshot().get('chapter_reset_control'):
                     raise ValueError('当前主控不支持实时章节重置策略')
+                if data.get('kind') == 'action_permissions' and control.snapshot().get('action_policy_supported') is not True:
+                    raise ValueError('当前会话未加载新版操作策略，不能独立修改三项权限')
                 if data.get('kind')=='cutscene_mode' and not control.snapshot().get('cutscene_control'):
                     raise ValueError('请断开并重新连接会话后再切换剧情模式')
                 if data.get('kind') == 'sim_update' and not control.snapshot().get('sim_control'):

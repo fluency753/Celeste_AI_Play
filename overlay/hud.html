@@ -256,7 +256,7 @@
       <div id="simStatus" role="status">正在读取推演设置…</div>
     </details>
     <textarea id="agentInput" aria-label="给独立 agent 的提示" placeholder="给 agent 发提示… Enter 发送，Shift+Enter 换行" maxlength="4000"></textarea>
-    <div class="control-buttons" style="flex-wrap:wrap"><button id="togglePlay" type="button" disabled>暂停</button><button id="toggleFast" type="button" aria-pressed="false" title="切换独立 agent 的 Fast 模式，下一轮生效" disabled>Fast：—</button><select id="liveEffort" aria-label="当前会话推理强度" title="手动固定推理强度，下一轮生效；自动表示由 agent 调整" disabled><option value="auto">推理：自动</option></select><select id="cutsceneMode" aria-label="剧情处理模式" title="可在开始前和游玩中切换；agent决定时自行观看、推进、选择或跳过" disabled><option value="auto">剧情：自动跳过</option><option value="agent">剧情：agent决定</option></select><select id="chapterReset" aria-label="章节重置策略" disabled><option value="deny">章节重置：禁止</option><option value="allow">章节重置：允许</option></select><button id="agentSend" type="submit" disabled>发送</button></div>
+    <div class="control-buttons" style="flex-wrap:wrap"><button id="togglePlay" type="button" disabled>暂停</button><button id="toggleFast" type="button" aria-pressed="false" title="切换独立 agent 的 Fast 模式，下一轮生效" disabled>Fast：—</button><select id="liveEffort" aria-label="当前会话推理强度" title="手动固定推理强度，下一轮生效；自动表示由 agent 调整" disabled><option value="auto">推理：自动</option></select><select id="cutsceneMode" aria-label="剧情处理模式" title="可在开始前和游玩中切换；agent决定时自行观看、推进、选择或跳过" disabled><option value="auto">剧情：自动跳过</option><option value="agent">剧情：agent决定</option></select><select id="permissionRestartChapter" aria-label="重启章节权限" disabled><option value="deny">重启章节：禁止</option><option value="allow">重启章节：允许</option></select><select id="permissionReturnToMap" aria-label="返回地图权限" disabled><option value="deny">返回地图：禁止</option><option value="allow">返回地图：允许</option></select><select id="permissionSaveQuit" aria-label="保存退出权限" disabled><option value="deny">保存退出：禁止</option><option value="allow">保存退出：允许</option></select><button id="agentSend" type="submit" disabled>发送</button></div>
     <div id="controlStatus" role="status">正在连接主控…</div>
   </form>
 </div>
@@ -956,10 +956,12 @@ async function pollControl() {
     const busy = lifecycleBusy || ['preparing','connecting','starting','naming'].includes(operation.status);
     syncLiveEffort(controlData,busy || switchingSession);
     const pendingStory=(c.actions || []).find(a=>a.kind==='cutscene_mode' && ['queued','waiting'].includes(a.status));
-    const reset=$('chapterReset');
-    const pendingReset=(c.actions || []).find(a=>a.kind==='chapter_reset' && ['queued','waiting'].includes(a.status));
-    reset.value=pendingReset?.text || (c.allow_chapter_reset ? 'allow' : 'deny');
-    reset.disabled=!c.connected || !c.chapter_reset_control || busy || !!pendingReset;
+    const pendingPermissions=(c.actions || []).some(a=>['action_permissions','chapter_reset'].includes(a.kind) && ['queued','waiting'].includes(a.status));
+    for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {
+      const input=$('permission'+id);
+      input.value=(c.action_permissions?.[key] ?? c.allow_chapter_reset) ? 'allow' : 'deny';
+      input.disabled=!c.connected || !c.chapter_reset_control || c.action_policy_supported !== true || busy || pendingPermissions;
+    }
     $('cutsceneMode').value=pendingStory?.text || c.cutscene_mode || 'auto';
     $('cutsceneMode').disabled=!c.connected || !c.cutscene_control || busy || !!pendingStory;
     const manageable = controlData.session_management && (controlData.can_create_session || controlData.can_wake) && c.phase !== 'chatting' && !switchingSession && !controlData.waking && !busy;
@@ -1043,7 +1045,9 @@ $('toggleFast').onclick = async () => {
   await sendControl('fast', controlData?.control.fast ? 'off' : 'on');
 };
 $('cutsceneMode').onchange=async()=>{await sendControl('cutscene_mode',$('cutsceneMode').value);};
-$('chapterReset').onchange=async()=>{await sendControl('chapter_reset',$('chapterReset').value);};
+for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {
+  $('permission'+id).onchange=async()=>sendControl('action_permissions',JSON.stringify({[key]:$('permission'+id).value==='allow'}));
+}
 $('simApply').onclick=saveSimulation;
 $('simReset').onclick=()=>{simEdited.clear();$('simBalance').value='';simError='';simApplied=false;renderSimulation(controlData.control);};
 $('liveEffort').onchange=async()=>{

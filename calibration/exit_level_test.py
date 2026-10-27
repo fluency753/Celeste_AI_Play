@@ -25,7 +25,7 @@ class ExitLevelTests(unittest.TestCase):
                 with patch('orchestrator.game_session.leave_level_by_pause_menu',return_value={'scene':'Overworld','frame':30}) as leave, \
                      patch('orchestrator.game_session.BridgeClient') as extra:
                     result=session.exit_level('用户要求退出序章')
-                leave.assert_called_once_with(session.client)
+                leave.assert_called_once_with(session.client, allowed_exit_ids=('menu_pause_return','intro_vignette_quit','menu_pause_savequit'))
                 extra.assert_not_called()
                 self.assertTrue(result['exited']);self.assertFalse(result['completed'])
                 self.assertTrue(session.done and session.user_stopped)

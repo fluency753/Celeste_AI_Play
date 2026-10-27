@@ -30,7 +30,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
                              knowledge_profile='explore', sim=False, sim_assist=True)
         self.cfg.provider_info = {'models': [{'id':'sonnet', 'efforts':['low', 'medium', 'high', 'ultra', 'adaptive-high']}]}
         self.metrics = Metrics(self.root / 'metrics.json', 'test', 'sonnet', 'medium', 100)
-        self.session = SimpleNamespace(cfg=self.cfg, metrics=self.metrics, workspace=None,
+        self.session = SimpleNamespace(cfg=self.cfg, metrics=self.metrics, workspace=None, action_policy_supported=1,
             done=False, done_reason='目标达成', goals=GoalManager(self.root),
             goal_values=lambda: {'room': 'start', 'map_complete': False},
             sim_energy=SimpleNamespace(snapshot=lambda: {'balance': 40}),
@@ -97,7 +97,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.runner.turn_active = False
         self.runner.turn_done.set()
         await self.runner._next_user_turn('continue')
-        self.assertIn('用户禁止菜单重启章节', self.packets[-1]['message']['content'])
+        self.assertIn('重启章节=禁止', self.packets[-1]['message']['content'])
         self.assertEqual(self.action(ident)['status'], 'submitted')
 
     async def test_chapter_reset_change_waits_for_current_action(self):
@@ -109,6 +109,19 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.action(ident)['status'], 'queued')
         await self.until(lambda: self.cfg.allow_chapter_reset)
         self.assertIs(self.runner.control.chapter_reset_preference(), True)
+
+    async def test_individual_permission_updates_persist_notify_and_preserve_pause(self):
+        self.runner.paused = True
+        self.controls()
+        ident = self.runner.control.enqueue('action_permissions', '{"save_quit":true}')
+        await self.until(lambda: self.runner.control.action_permissions_preference() is not None)
+        self.assertEqual(self.runner.control.action_permissions_preference(),
+                         {'restart_chapter':False, 'return_to_map':False, 'save_quit':True})
+        await self.runner._next_user_turn('continue')
+        self.assertTrue(self.runner.paused)
+        self.assertIn('重启章节=禁止', self.packets[-1]['message']['content'])
+        self.assertIn('保存并退出=允许', self.packets[-1]['message']['content'])
+        self.assertEqual(self.action(ident)['status'], 'submitted')
 
     async def test_paused_chat_turn_does_not_resume_play(self):
         self.runner.paused = True

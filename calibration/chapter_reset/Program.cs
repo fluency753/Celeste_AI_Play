@@ -68,13 +68,25 @@ TextMenu Menu(params string[] labels) {
     menu.Selection = 0;
     return menu;
 }
-StepJob Job(bool allow = false, bool exit = false) {
+StepJob Job(bool allow = false, bool exit = false, ActionPermissions? permissions = null, MapEntryGuard? entry = null) {
     var job = new StepJob(1, new() { InputFrame.Neutral, InputFrame.Neutral }, Array.Empty<string>(), 1,
-        false, "level", new SnapshotOptions(), false, allowChapterReset: allow, allowMapExit: exit);
+        false, "level", new SnapshotOptions(), false,
+        actionPolicy: new ActionPolicy(permissions ?? new(allow, allow, allow), entry, exit));
     typeof(Bridge).GetField("job", flags)!.SetValue(null, job);
     return job;
 }
 void Feed(string keys, bool tas = false) => InputInjector.Feed(tas ? InputFrame.ParseTas(keys) : InputFrame.Parse(keys));
+void Scene(Scene scene) => typeof(Engine).GetField("scene", flags)!.SetValue(engine, scene);
+Level Level(Session? session = null) {
+    var level = (Level)RuntimeHelpers.GetUninitializedObject(typeof(Level));
+    level.Session = session ?? (Session)RuntimeHelpers.GetUninitializedObject(typeof(Session));
+    level.Paused = true;
+    var tracker = (Tracker)RuntimeHelpers.GetUninitializedObject(typeof(Tracker));
+    tracker.Entities = new() { [typeof(Player)] = new() };
+    typeof(Scene).GetField("<Tracker>k__BackingField", flags)!.SetValue(level, tracker);
+    typeof(Scene).GetField("<Entities>k__BackingField", flags)!.SetValue(level, new EntityList(level));
+    return level;
+}
 foreach (string dangerous in new[] { "menu_pause_restartarea", "menu_restart_continue", "menu_pause_return", "menu_return_continue", "menu_pause_savequit", "intro_vignette_quit" }) {
     foreach (bool tas in new[] { false, true }) {
         Feed("", tas); var menu = Menu(dangerous); var job = Job();
@@ -110,12 +122,110 @@ foreach (bool intoDanger in new[] { true, false }) {
     Check((job.StopReason == "chapter_reset_blocked") == intoDanger, "Combined key result wrong");
 }
 foreach (bool allow in new[] { true, false }) {
+    Scene(Level());
     Feed(""); var menu = Menu("menu_pause_return"); var job = Job(allow, exit: !allow); int before = pressed;
     Feed("C"); menu.orig_Update(); Check(pressed == before + 1, "Configured/verified departure blocked");
 }
 Feed(""); var restartMenu = Menu("menu_pause_restartarea"); var restartJob = Job(exit: true);
 Feed("C"); restartMenu.orig_Update(); Check(restartJob.StopReason == "chapter_reset_blocked", "Handoff allowed chapter restart");
+
+// One job may span loading frames. Its old Level grant must not reach the new
+// Level, even if the game reuses Session or returns to the original instance.
+foreach (bool reuseSession in new[] { false, true }) {
+    var old = Level(); Scene(old); var job = Job(exit: true);
+    Check(job.AllowMenuConfirmation(Menu("menu_pause_return").Items[0]), "Old Level main exit rejected");
+    Check(job.AllowMenuConfirmation(Menu("menu_return_continue").Items[0]), "Second confirmation consumed grant early");
+    job.NextInput();
+    Bridge.AdvanceFrame(() => Scene((LevelLoader)RuntimeHelpers.GetUninitializedObject(typeof(LevelLoader))), InputFrame.Neutral);
+    var next = Level(reuseSession ? old.Session : null);
+    Bridge.AdvanceFrame(() => Scene(next), InputFrame.Neutral);
+    job.NextInput();
+    Feed(""); var menu = Menu("menu_pause_savequit"); int before = pressed;
+    Feed("C"); menu.orig_Update();
+    Check(job.Finished && pressed == before, "Old departure permission leaked into a new Level");
+    Scene(old);
+    Check(!job.AllowMenuConfirmation(Menu("menu_pause_return").Items[0]), "Revoked grant revived on old Level");
+}
+Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)));
+var fromMenu = Job(exit: true); Scene(Level());
+Check(!fromMenu.AllowMenuConfirmation(Menu("menu_pause_return").Items[0]), "Menu job bound a future Level");
+var replacedSession = Level(); Scene(replacedSession); var sessionGrant = Job(exit: true);
+replacedSession.Session = (Session)RuntimeHelpers.GetUninitializedObject(typeof(Session));
+Check(!sessionGrant.AllowMenuConfirmation(Menu("menu_pause_return").Items[0]), "Replacing Session preserved departure grant");
+// Every permission controls only its own semantic action.
+for (int mask = 0; mask < 8; mask++) {
+    var permission = new ActionPermissions((mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0);
+    foreach (var (label, allowed) in new[] { ("menu_pause_restartarea", permission.RestartChapter),
+            ("menu_pause_return", permission.ReturnToMap), ("menu_pause_savequit", permission.SaveQuit),
+            ("intro_vignette_quit", permission.ReturnToMap) }) {
+        Scene(Level()); var job = Job(permissions: permission);
+        Check(job.AllowMenuConfirmation(Menu(label).Items[0]) == allowed, "Permissions are coupled");
+    }
+}
+Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)));
+int entries = 0;
+// Replace only the scene-loading effect, then wrap it with the production hook.
+using var entryEffect = new Hook(typeof(OuiChapterPanel).GetMethod("Start")!,
+    (Action<OuiChapterPanel, string?>)((panel, checkpoint) => { entries++; panel.Focused = false; }));
+using var entryHook = new Hook(typeof(OuiChapterPanel).GetMethod("Start")!, typeof(Hooks).GetMethod("OnChapterStart", flags)!);
+AreaData.Areas = new() { new AreaData { ID = 0, SID = "test/old" }, new AreaData { ID = 1, SID = "test/target" } };
+SaveData.Instance = (SaveData)RuntimeHelpers.GetUninitializedObject(typeof(SaveData));
+SaveData.Instance.FileSlot = 10;
+OuiChapterPanel Panel(int checkpoint = 0) {
+    var panel = (OuiChapterPanel)RuntimeHelpers.GetUninitializedObject(typeof(OuiChapterPanel));
+    typeof(Entity).GetField("<Components>k__BackingField", flags)!.SetValue(panel, new ComponentList(panel));
+    var world = (Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld));
+    typeof(Entity).GetProperty("Scene", flags)!.SetValue(panel, world);
+    world.Current = panel;
+    panel.Area = new AreaKey(0); panel.initialized = true; panel.Focused = true; panel.selectingMode = false;
+    panel.wiggler = Wiggler.Create(.1f, 1);
+    panel.heart = (HeartGemDisplay)RuntimeHelpers.GetUninitializedObject(typeof(HeartGemDisplay));
+    panel.strawberries = (StrawberriesCounter)RuntimeHelpers.GetUninitializedObject(typeof(StrawberriesCounter));
+    panel.deaths = (DeathsCounter)RuntimeHelpers.GetUninitializedObject(typeof(DeathsCounter));
+    panel.checkpoints = new(); panel.checkpoint = checkpoint;
+    foreach (string name in new[] { "start", "test/target|checkpoint" }) {
+        var option = (OuiChapterPanel.Option)RuntimeHelpers.GetUninitializedObject(typeof(OuiChapterPanel.Option));
+        option.CheckpointLevelName = name; panel.checkpoints.Add(option);
+    }
+    return panel;
+}
+foreach (bool tas in new[] { false, true }) {
+    Feed("", tas); var panel = Panel(); var job = Job(entry: new("test/target", 10)); int before = entries;
+    Feed(tas ? "R,J" : "R,C", tas); panel.orig_Update();
+    Check(panel.checkpoint == 1 && entries == before && !job.Finished && panel.Focused, "Direction+confirm was misidentified as entry");
+    // Still holding confirm creates no new native edge: nothing should start.
+    Feed(tas ? "J" : "C", tas); panel.orig_Update();
+    Check(entries == before && !job.Finished, "Held confirmation became a new entry");
+    Feed("", tas); Feed(tas ? "J" : "C", tas); panel.orig_Update();
+    Check(entries == before + 1 && !job.Finished, "Checkpoint destination prefix was not resolved");
+    Feed("", tas); panel = Panel(1); job = Job(entry: new("test/old", 10)); before = entries;
+    Feed(tas ? "R,J" : "R,C", tas); panel.orig_Update();
+    Check(job.StopReason == "entry_blocked" && entries == before && panel.Focused, "Direction at edge bypassed actual wrong-map entry guard");
+}
+Feed(""); var wrongSlot = Panel(1); var slotJob = Job(entry: new("test/target", 11)); int prior = entries;
+Feed("C"); wrongSlot.orig_Update(); Check(slotJob.Finished && entries == prior && wrongSlot.Focused, "Wrong-slot entry executed side effects");
+foreach (string invalid in new[] {
+    "{\"version\":2}", "{\"version\":true}", "{\"version\":\"1\"}",
+    "{\"version\":1,\"permissions\":{\"restart_chapter\":false,\"return_to_map\":false,\"save_quit\":false,\"unknown\":true},\"departure\":\"none\"}",
+    "{\"version\":1,\"permissions\":{\"restart_chapter\":1,\"return_to_map\":false,\"save_quit\":false},\"departure\":\"none\"}",
+    "{\"version\":1,\"permissions\":{\"restart_chapter\":false,\"return_to_map\":false,\"save_quit\":false},\"departure\":\"always\"}",
+}) {
+    using var data = System.Text.Json.JsonDocument.Parse("{\"action_policy\":" + invalid + "}");
+    try { ActionPolicy.Read(data.RootElement); throw new Exception("Malformed policy accepted"); }
+    catch (FormatException) { }
+}
+using (var data = System.Text.Json.JsonDocument.Parse("""
+    {"allow_chapter_reset":true,"allow_map_exit":true,"action_policy":{"version":1,
+     "permissions":{"restart_chapter":false,"return_to_map":false,"save_quit":false},"departure":"none",
+     "entry_target":{"sid":"test/target","slot":10}}}
+    """)) {
+    var policy = ActionPolicy.Read(data.RootElement);
+    Check(!policy.Permissions.RestartChapter && policy.CheckMenu(Menu("menu_pause_savequit").Items[0]) != null,
+        "Legacy arguments overrode canonical permissions");
+    Check(policy.Entry?.Check("wrong", 10)?.RuleId == "target.map", "Canonical mandatory target missing");
+}
 Console.WriteLine("PASS: production IL hook + real TextMenu + virtual buttons + StepJob: native/TAS resets, secondary confirmations, safe callbacks, simultaneous direction+confirm, configured allow and verified departure");
+Console.WriteLine("PASS: cross-Level/loading grants revoked, split permissions, actual Panel direction priority/held input/checkpoint destination/save-slot entry hooks");
 
 sealed class ProbeButton(string label, Action onConfirm) : TextMenu.Button(label) {
     public override void ConfirmPressed() => onConfirm();

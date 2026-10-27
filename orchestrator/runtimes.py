@@ -132,4 +132,6 @@ def config_from_state(state, metrics=None):
     # 挂给智能体的 /kb 与原运行相同（否则唤起会话时容器标签对不上，会被重建）
     cfg.kb_deny = list(state.get('kb_deny') or [])
     cfg.kb_extra = str(state.get('kb_extra') or '')
+    from .action_policy import configure, permissions_from_state
+    configure(cfg, permissions_from_state(state))
     return runtime(state['engine']).configure(cfg, state.get('provider'))

@@ -65,6 +65,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument('--cutscene-mode',choices=['auto','agent'],default=None,help='剧情：auto主控自动跳过；agent自行观看、推进或跳过')
     ap.add_argument('--allow-chapter-reset', action=argparse.BooleanOptionalAction, default=None,
                     help='允许菜单重启章节和未通关返回地图/保存退出，默认禁止')
+    for action, label in (('restart-chapter','重启章节'), ('return-to-map','返回地图'), ('save-quit','保存并退出')):
+        ap.add_argument('--allow-' + action, action=argparse.BooleanOptionalAction, default=None, help=label + '权限，默认禁止')
     ap.add_argument('--scope',choices=['chapter','campaign'],default=None,help='单章或按官方章节顺序游玩；独立于停止目标')
     ap.add_argument("--create-save", action="store_true", help="显式新建独立存档：放在现有最新存档的下一个槽位（不填中间的空位），只允许从序章开始；名称允许重复")
     ap.add_argument("--model", default="opus", help="Claude Code 模型别名：opus / fable 等（默认 opus）；第三方提供方写它的模型名")
@@ -224,12 +226,18 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
     cfg.chapter = args.chapter
-    cfg.allow_chapter_reset = bool(args.allow_chapter_reset)
-    if previous and args.allow_chapter_reset is None:
+    from .action_policy import ActionPermissions, configure, permissions_from_state
+    permissions = ActionPermissions()
+    if previous:
         from .control import RunControl
-        saved_reset = RunControl(previous['dir']).chapter_reset_preference()
-        cfg.allow_chapter_reset = (saved_reset if saved_reset is not None else
-                                   previous['state'].get('allow_chapter_reset', False))
+        permissions = permissions_from_state(previous['state'], RunControl(previous['dir']).action_permissions_preference())
+    if args.allow_chapter_reset is not None:
+        permissions = ActionPermissions.legacy(args.allow_chapter_reset)
+    overrides = {key: getattr(args, 'allow_' + key) for key in ('restart_chapter', 'return_to_map', 'save_quit')
+                 if getattr(args, 'allow_' + key) is not None}
+    if overrides:
+        permissions = permissions.update(overrides)
+    configure(cfg, permissions)
     cfg.play_scope=args.scope or (previous['state'].get('play_scope','chapter') if previous else 'chapter')
     cfg.create_save = args.create_save
     cfg.cutscene_mode = args.cutscene_mode or (previous['state'].get('cutscene_mode','auto') if previous else 'auto')
@@ -444,7 +452,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         plan_pieces = [[p.chapter, p.start, p.end] for p in cfg.plan]
     else:
         plan_pieces = None
-    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "allow_chapter_reset":cfg.allow_chapter_reset, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
+    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": False, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
@@ -486,7 +494,8 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     # Startup navigation is explicitly requested by the user, before the agent
     # owns this connection. Allow leaving a previously loaded map to enter the
     # selected save; the runtime session installs its own stricter policy.
-    client.step_options = lambda: {'allow_chapter_reset': cfg.allow_chapter_reset, 'allow_map_exit': True}
+    from .action_policy import step_options
+    client.step_options = lambda: step_options(cfg, departure=True)
     try:
         t0 = time.monotonic()
         if recorder is not None:
@@ -847,7 +856,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             RunControl(run_dir).set_fast(preference)
         RunControl(run_dir).set_effort(source_control.effort_preference())
         RunControl(run_dir).set_cutscene_mode(source_control.cutscene_preference() or cfg.cutscene_mode)
-        RunControl(run_dir).set_chapter_reset(cfg.allow_chapter_reset)
+        from .action_policy import permissions_for
+        RunControl(run_dir).set_action_permissions(permissions_for(cfg).snapshot())
     obs = session.connect()
     print(f"[run] 已接管游戏：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}，存档 {cfg.save}", flush=True)
     if previous:
@@ -1121,7 +1131,7 @@ def main() -> int:
     if not port_free(cfg.mcp_port):
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
     from .bridge_requirements import preflight_bridge
-    hello = preflight_bridge(cfg.bridge_port, allow_chapter_reset=cfg.allow_chapter_reset)
+    hello = preflight_bridge(cfg.bridge_port)
     saved_recording = None
     try:
         saved_recording = Recorder.saved_session(args.previous['dir']) if args.previous else None

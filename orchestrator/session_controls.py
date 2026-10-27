@@ -56,9 +56,10 @@ class SessionControls:
         self.completed_preparation = False
         self.control = None if disabled else RunControl(self.run_dir)
         if self.control:
-            reset = self.control.chapter_reset_preference()
-            if reset is not None:
-                self.cfg.allow_chapter_reset = reset
+            permissions = self.control.action_permissions_preference()
+            if permissions is not None:
+                from .action_policy import ActionPermissions, configure
+                configure(self.cfg, ActionPermissions.read(permissions))
         self.fast_mode = self.control.fast_preference() if self.control else None
         self.manual_effort = self.control.effort_preference() if self.control else None
         self.turn_fast = None
@@ -201,16 +202,19 @@ class SessionControls:
                                 note = await asyncio.to_thread(self.session.set_chapter_queue, data.get("queue", []))
                             self.pending_messages.append({**row, "text": note})
                             self.control.mark(row["id"], "waiting", "要通关的范围已更新，正在通知 agent")
-                        elif row['kind'] == 'chapter_reset':
+                        elif row['kind'] in {'chapter_reset', 'action_permissions'}:
                             if self.session is None or self.session.done or self.chat_only:
                                 raise ValueError('当前没有在试玩，不能改章节重置策略')
-                            allowed = row['text'] == 'allow'
+                            if row['kind'] == 'action_permissions' and not self._chapter_reset_status()['action_policy_supported']:
+                                raise ValueError('当前会话未加载新版操作策略，不能独立修改权限')
+                            from .action_policy import ActionPermissions, configure, permissions_for
+                            permissions = (ActionPermissions.legacy(row['text'] == 'allow') if row['kind'] == 'chapter_reset'
+                                           else permissions_for(self.cfg).update(json.loads(row['text'])))
                             async with self.action_lock:
-                                self.control.set_chapter_reset(allowed)
-                                self.cfg.allow_chapter_reset = allowed
-                                self.session.cfg.allow_chapter_reset = allowed
-                            note = ('用户允许菜单重启章节、返回地图和保存退出。' if allowed else
-                                    '用户禁止菜单重启章节、未通关返回地图和保存退出；不得退出重进或用章节重置脱困。正常死亡及房间重试仍允许。请寻找实际脱离路线，无法继续时用 stop_run 报告。')
+                                self.control.set_action_permissions(permissions.snapshot())
+                                configure(self.cfg, permissions)
+                                configure(self.session.cfg, permissions)
+                            note = '用户更新了' + permissions.instructions()
                             self.pending_messages.append({**row, 'text': note})
                             self.control.mark(row['id'], 'waiting', '章节重置策略已生效，正在通知 agent')
                         elif row['kind'] == 'sim_update':
@@ -352,8 +356,12 @@ class SessionControls:
                 'fast_pending':bool(self.capabilities.fast and self.turn_active and self.turn_fast != self.fast_mode)}
 
     def _chapter_reset_status(self):
+        from .action_policy import permissions_for
+        permissions = permissions_for(self.cfg).snapshot()
         return {'chapter_reset_control': bool(self.session is not None and not self.session.done and not self.chat_only),
-                'allow_chapter_reset': self.cfg.allow_chapter_reset,
+                'action_permissions': permissions,
+                'action_policy_supported': getattr(self.session, 'action_policy_supported', None) == 1,
+                'allow_chapter_reset': all(permissions.values()),
                 'chapter_reset_guard_supported': bool(getattr(self.session, 'chapter_reset_guard_supported', False))}
 
     async def _yield_for_fast_change(self):

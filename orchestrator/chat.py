@@ -64,6 +64,10 @@ def successor_run(directory):
     state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
     if state.get("session_kind") == "ready":
         raise ValueError("已准备、尚未开始的会话不需要接班")
+    from .action_policy import permissions_from_state
+    from .control import RunControl
+    preference = RunControl(directory).action_permissions_preference() if (directory / 'control.sqlite3').exists() else None
+    state['action_permissions'] = permissions_from_state(state, preference).snapshot()
     stamp = time.strftime("%Y%m%d-%H%M%S")
     target, number = directory.parent / stamp, 1
     while target.exists():
