@@ -864,7 +864,7 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 | 「Wallboost」「Cornerboost Wallboost (cobwob)」「Wallboost Neutral」「Wallkick Wallboost」 | 4.5 | |
 | 「Cornerboost (cb)」「Downward Cornerboosts」「Double Cornerboost (dcb)」「Reverse Cornerboost (rcb)」「Neutral Reverse Cornerboost (nrcb)」「Spiked Cornerboost」「Disappearing Block Cornerboost」 | 5.2 | "撞墙后 5 帧内退还速度"——代码为 4 次检查 |
 | 「6jump」 | 4.7；5.2 | |
-| 「7jump」「8jump」「9jump」「Longer jumps」 | 5.2 | harness 单跳键，依赖双重抓角的版本基本不可行 |
+| 「7jump」「8jump」「9jump」「Longer jumps」 | 5.2 | 依赖双重抓角的版本交替用 J、K 两个跳键（7.5） |
 | 「Modded Cornerboosts」 | 附录 A | 原版没有 |
 | 「Overhangs」「4tile」「5tile」「Crouched 5tile」「6tile」「k×1 overhang」 | 4.8 | |
 | 「Spike Climb」「Narrow Spiked Climb」「Spike Clip」「Spike Jumps」 | 5.4；5.5 | |
