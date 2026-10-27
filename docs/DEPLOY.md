@@ -379,6 +379,7 @@ winget install Gyan.FFmpeg
 | `--autocompact` | 平台默认 | 上下文自动压缩窗口：`auto` 或 100000～1000000 token |
 | `--tune 名称=值` | 不改 | 修改可调参数（规划回放倍速与每轮时长、解说提醒间隔、单次 act 帧数、Bash 时长、探索模式规划程序的时长与次数、限额预测规则等），可写多个；全部名称与默认值见 [USAGE.md 4.11 节](USAGE.md#411-可调参数--tune) |
 | `--kb-deny 文件,...` | 全部可读 | 不给智能体看的知识库文件（知识库内的相对路径），见 [USAGE.md 4.12 节](USAGE.md#412-知识库的阅读权限--kb-deny) |
+| `--kb-extra 目录` | 不追加 | 追加本机资料目录（相对路径按仓库根目录算；同名文件覆盖默认版本；续跑沿用），见 [USAGE.md 4.12 节](USAGE.md#412-知识库的阅读权限--kb-deny) |
 | `--no-hud-window` / `--no-hud` | 关 / 关 | 不开 HUD 窗口 / 连 HUD 服务也不开 |
 | `--hud-port` | 47790 | HUD 端口 |
 | `--bridge-port` / `--mcp-port` | 47774 / 47780 | 桥接与游戏工具服务的端口 |

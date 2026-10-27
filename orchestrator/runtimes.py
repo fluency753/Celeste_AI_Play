@@ -129,4 +129,7 @@ def config_from_state(state, metrics=None):
                     effort=(metrics or {}).get('effort') or state['effort'],
                     knowledge_profile=state.get('knowledge_profile','explore'), runtime=state.get('runtime','container'))
     cfg.mcp_port = state.get('mcp_port', cfg.mcp_port)
+    # 挂给智能体的 /kb 与原运行相同（否则唤起会话时容器标签对不上，会被重建）
+    cfg.kb_deny = list(state.get('kb_deny') or [])
+    cfg.kb_extra = str(state.get('kb_extra') or '')
     return runtime(state['engine']).configure(cfg, state.get('provider'))

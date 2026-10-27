@@ -1,9 +1,10 @@
 """知识库的阅读权限与编辑（控制台的"知识库"页）。
 
 每种游玩模式给智能体挂进容器 /kb 的目录不同：速通模式是整个 kb/（含本机的 kb/reference/ 社区原文），
-探索模式只有 kb/explore/。用户可以取消勾选某些文件（RunConfig.kb_deny，命令行 --kb-deny）：
-这时主控把允许的文件同步到 local/kb_views/<工作区标签>/，挂进容器的是这个副本，准备阶段也只要求读允许的文件。
-全部可读（默认）时直接挂知识库本身，与之前完全相同。
+探索模式只有 kb/explore/。用户可以取消勾选某些文件（RunConfig.kb_deny，命令行 --kb-deny），
+也可以给某个系列赛追加本机资料（RunConfig.kb_extra，命令行 --kb-extra，目录放在 local/ 下、不入库；
+同名文件覆盖默认版本）。这两种情况下主控把最终的文件同步到 local/kb_views/<工作区标签>/，挂进容器的是这个副本，
+准备阶段也只要求读这些文件。全部可读且没有追加（默认）时直接挂知识库本身，与之前完全相同。
 """
 from __future__ import annotations
 
@@ -129,18 +130,23 @@ def write_document(mode: str, rel: str, text: str, expected_mtime: float | None 
 
 
 def prepare_view(cfg, log=print) -> Path:
-    """有不给看的文件时，把允许的文件同步到 cfg.kb_dir（local/kb_views/<标签>/）并返回它；全部可读时返回知识库本身。"""
+    """有不给看的文件或本机追加资料时，把最终的文件同步到 cfg.kb_dir（local/kb_views/<标签>/）并返回它；
+    否则返回知识库本身。追加目录里与知识库同名的文件覆盖默认版本；不给看的文件对追加的文件同样生效。"""
     source = cfg.kb_source
-    if not cfg.kb_deny:
+    if not cfg.kb_view:
         return source
     view = cfg.kb_dir
     deny = set(cfg.kb_deny)
-    allowed = {}
-    for path in _files(source):
-        rel = path.relative_to(source).as_posix()
-        if rel not in deny:
-            allowed[rel] = path
-    missing = sorted(deny - {p.relative_to(source).as_posix() for p in _files(source)})
+    files = {path.relative_to(source).as_posix(): path for path in _files(source)}
+    extra_dir = cfg.kb_extra_dir
+    extra = {}
+    if extra_dir is not None:
+        if not extra_dir.is_dir():
+            raise RuntimeError(f"找不到本机追加资料的目录：{extra_dir}")
+        extra = {path.relative_to(extra_dir).as_posix(): path for path in _files(extra_dir)}
+        files.update(extra)
+    allowed = {rel: path for rel, path in files.items() if rel not in deny}
+    missing = sorted(deny - set(files))
     if missing:
         log(f"[kb] 提示：这些不给看的文件在知识库里不存在：{'、'.join(missing)}")
     view.mkdir(parents=True, exist_ok=True)
@@ -160,5 +166,8 @@ def prepare_view(cfg, log=print) -> Path:
     for dirpath in sorted((d for d, _, _ in os.walk(view)), key=len, reverse=True):
         if Path(dirpath) != view and not any(Path(dirpath).iterdir()):
             Path(dirpath).rmdir()
-    log(f"[kb] 知识库有 {len(deny)} 个文件不给智能体看，挂进容器的是只含允许文件的副本（{view}）")
+    if deny:
+        log(f"[kb] 知识库有 {len(deny)} 个文件不给智能体看，挂进容器的是只含允许文件的副本（{view}）")
+    if extra:
+        log(f"[kb] 追加本机资料 {len(extra)} 个（{extra_dir}）：{'、'.join(sorted(extra))}；挂进容器的是合并后的副本（{view}）")
     return view

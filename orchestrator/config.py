@@ -221,6 +221,9 @@ class RunConfig:
     assist_max_total: int = 600      # 每次合计最多预测几帧
     tuning: dict = field(default_factory=dict)   # 与默认值不同的可调参数（记进 run_state，续跑沿用）
     kb_deny: list = field(default_factory=list)  # 不给智能体看的知识库文件（知识库内的相对路径；控制台的"知识库"页）
+    # 本机追加的资料目录（例如某个系列赛自己加的资料，放在 local/ 下、不入库）：里面的文件加进挂给智能体的 /kb，
+    # 与默认知识库同名的文件覆盖默认版本。空字符串表示不追加。命令行 --kb-extra，续跑沿用
+    kb_extra: str = ""
 
     @property
     def third_party(self) -> bool:
@@ -253,10 +256,23 @@ class RunConfig:
         return REPO_ROOT / "kb" / "explore" if self.knowledge_profile == "explore" else REPO_ROOT / "kb"
 
     @property
+    def kb_extra_dir(self) -> Path | None:
+        """本机追加资料的目录（相对路径按仓库根目录算）；没有追加时为 None。"""
+        if not self.kb_extra:
+            return None
+        path = Path(self.kb_extra)
+        return path if path.is_absolute() else REPO_ROOT / path
+
+    @property
+    def kb_view(self) -> bool:
+        """/kb 挂的是不是同步出来的副本：有不给看的文件（kb_deny）或有本机追加资料（kb_extra）时是。"""
+        return bool(self.kb_deny or self.kb_extra)
+
+    @property
     def kb_dir(self) -> Path:
-        """挂进容器 /kb 的目录：全部可读时就是知识库本身；有不给看的文件（kb_deny）时是只含允许文件的副本
+        """挂进容器 /kb 的目录：默认就是知识库本身；有不给看的文件（kb_deny）或本机追加资料（kb_extra）时是同步出来的副本
         （orchestrator/kb_access.prepare_view 同步）。"""
-        if self.kb_deny:
+        if self.kb_view:
             return REPO_ROOT / "local" / "kb_views" / self.workspace_dir.name
         return self.kb_source
 

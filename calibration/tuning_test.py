@@ -296,6 +296,45 @@ class KbAccessTests(unittest.TestCase):
         self.assertEqual(LABEL_DEFAULTS[f"{LABEL}.kb_view"], "0")     # 旧容器没有这个标签，不会因此重建
         c.kb_deny = ["README.md"]
         self.assertEqual(_labels(c)[f"{LABEL}.kb_view"], "1")
+        c.kb_deny = []
+        c.kb_extra = "local/kb_extra/series"
+        self.assertEqual(_labels(c)[f"{LABEL}.kb_view"], "1")
+
+    def test_extra_files_join_the_view_and_override_defaults(self):
+        from orchestrator.kb_study import required_files
+        extra = self.root / "local" / "kb_extra" / "series"
+        extra.mkdir(parents=True)
+        (extra / "README.md").write_text("series readme\n", encoding="utf-8")
+        (extra / "mechanics.md").write_text("m\n", encoding="utf-8")
+        c = cfg(knowledge_profile="explore", kb_extra="local/kb_extra/series")
+        self.assertEqual(c.kb_extra_dir, extra)
+        view = kb_access.prepare_view(c, log=lambda *_: None)
+        self.assertEqual(view, self.root / "local" / "kb_views" / c.workspace_dir.name)
+        self.assertEqual((view / "README.md").read_text(encoding="utf-8"), "series readme\n")   # 同名覆盖默认版本
+        self.assertEqual((view / "tools.md").read_text(encoding="utf-8"), "d\n")                # 默认资料照样在
+        self.assertIn("mechanics.md", required_files(view))                                       # 追加的也要读
+        self.assertEqual((self.root / "kb/explore/README.md").read_text(encoding="utf-8"), "c\n")  # 不改默认知识库
+        c.kb_deny = ["mechanics.md"]                                                              # 不给看对追加的同样生效
+        kb_access.prepare_view(c, log=lambda *_: None)
+        self.assertFalse((view / "mechanics.md").exists())
+        c.kb_deny, c.kb_extra = [], ""                                                            # 取消追加：直接挂知识库本身
+        self.assertEqual(kb_access.prepare_view(c, log=lambda *_: None), self.root / "kb" / "explore")
+        c.kb_extra = "local/kb_extra/missing"
+        with self.assertRaises(RuntimeError):
+            kb_access.prepare_view(c, log=lambda *_: None)
+
+    def test_kb_extra_choice_and_state(self):
+        from orchestrator.run import kb_extra_choice
+        from orchestrator.runtimes import config_from_state
+        self.assertEqual(kb_extra_choice(None, None), "")
+        self.assertEqual(kb_extra_choice(None, "local/kb_extra/s"), "local/kb_extra/s")
+        self.assertEqual(kb_extra_choice({"state": {"kb_extra": "local/kb_extra/s"}}, None), "local/kb_extra/s")  # 续跑沿用
+        self.assertEqual(kb_extra_choice({"state": {}}, None), "")                                                # 旧运行没记过
+        self.assertEqual(kb_extra_choice({"state": {"kb_extra": "local/kb_extra/s"}}, " "), "")                   # 显式取消
+        state = {"agent": "a", "model": "m", "effort": "high", "engine": "claude", "knowledge_profile": "explore",
+                 "kb_deny": ["help/controls.md"], "kb_extra": "local/kb_extra/s"}
+        restored = config_from_state(state)                    # 唤起会话（整理工作区）时容器挂的 /kb 与原运行相同
+        self.assertEqual((restored.kb_deny, restored.kb_extra), (["help/controls.md"], "local/kb_extra/s"))
 
 
 class ConsolePrefsTests(unittest.TestCase):

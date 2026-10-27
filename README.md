@@ -175,6 +175,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1          # 一键部署：�
 | `--autocompact` | 平台默认 | 上下文自动压缩的窗口：`auto` 或 100000～1000000 token |
 | `--tune 名称=值` | 不改 | 修改一个可调参数，可以写多个（沿用）：规划回放倍速与每轮最长时长、解说提醒间隔、单次 act 帧数、Bash 时长、探索模式规划程序的时长与次数、限额预测规则等，全部名称与默认值见 [docs/USAGE.md 4.11 节](docs/USAGE.md#411-可调参数--tune) |
 | `--kb-deny 文件,...` | 全部可读 | 不给智能体看的知识库文件（沿用），见 [docs/USAGE.md 4.12 节](docs/USAGE.md#412-知识库的阅读权限--kb-deny) |
+| `--kb-extra 目录` | 不追加 | 追加本机资料目录（放在 `local/` 下、不入库；同名文件覆盖默认版本；沿用），见 USAGE.md 4.12 节 |
 | `--runtime` | `container`（沿用） | `host`：在本机运行、只开放游戏工具（早期的过渡方式，没有沙箱与模拟器） |
 | `--ffmpeg` / `--record-video-args` / `--audio-offset-ms` | 见录制配置 | 临时覆盖 ffmpeg 路径、视频编码参数、声音偏移 |
 | `--bridge-port` / `--mcp-port` / `--hud-port` | 47774 / 47780 / 47790 | 桥接、游戏工具服务、HUD 的端口 |

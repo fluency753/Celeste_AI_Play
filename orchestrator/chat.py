@@ -60,6 +60,9 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False):
     cfg.sim, cfg.live, cfg.chapters = bool(sim), True, []
     if name_request:
         cfg.max_minutes = 3
+    if capabilities.needs_container:
+        from .kb_access import prepare_view
+        prepare_view(cfg)
     container = await asyncio.to_thread(ensure_container, cfg) if capabilities.needs_container else None
     metrics = Metrics(directory / "metrics.json", cfg.agent, cfg.model, cfg.effort, cfg.budget_seconds)
     metrics.restore(previous, str(directory))

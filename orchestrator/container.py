@@ -3,14 +3,19 @@
 容器里：/workspace 挂载宿主机的 workspaces/<标签>/（可写），/kb 挂载仓库的 kb/（只读），
 /home/agent/.claude 是独立的数据卷（会话记录，便于中断后续跑）。游戏目录、存档、OBS 都不挂载。
 开放预置模拟器（--sim）时，本机的 sim/dist 只读挂到 /sim。
+配置变了要重建容器时，旧容器 /tmp 里的东西（智能体常把程序和中间结果放在 Claude Code 的 /tmp/claude-<uid>）
+先打包到本机 local/container_tmp/，新容器建好后原样放回（保留属主与权限）。
 """
 from __future__ import annotations
 
 import json
 import re
 import subprocess
+import tarfile
 import time
+from pathlib import Path
 
+from . import config as _config
 from .config import REPO_ROOT, RunConfig, find_docker_exe
 
 LABEL = "celeste-ai-play"
@@ -40,8 +45,9 @@ def _labels(cfg: RunConfig) -> dict[str, str]:
             f"{LABEL}.workspace_tag": cfg.workspace_dir.name,
             f"{LABEL}.domains": ",".join(cfg.provider_domains),
             f"{LABEL}.host_ports": ",".join(str(p) for p in cfg.provider_host_ports),
-            # /kb 挂的是知识库本身（0）还是只含允许文件的副本（1，见 kb_access.py）；之前建的容器没有这个标签，按 0 算
-            f"{LABEL}.kb_view": "1" if cfg.kb_deny else "0"}
+            # /kb 挂的是知识库本身（0）还是同步出来的副本（1：有不给看的文件或本机追加资料，见 kb_access.py）；
+            # 之前建的容器没有这个标签，按 0 算
+            f"{LABEL}.kb_view": "1" if cfg.kb_view else "0"}
 
 
 LABEL_DEFAULTS = {f"{LABEL}.kb_view": "0"}
@@ -72,6 +78,46 @@ def _create(cfg: RunConfig, name: str) -> None:
     for key, value in _labels(cfg).items():
         args += ["--label", f"{key}={value}"]
     docker(*args, cfg.image)
+
+
+def _save_tmp(name: str) -> Path:
+    """重建前把旧容器的 /tmp 打包到本机（docker cp 的 tar 保留属主与权限，套接字会被跳过）。失败就抛错、不重建。"""
+    folder = _config.REPO_ROOT / "local" / "container_tmp"
+    folder.mkdir(parents=True, exist_ok=True)
+    archive = folder / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.tar"
+    with open(archive, "wb") as out:
+        result = subprocess.run([find_docker_exe(), "cp", f"{name}:/tmp", "-"], stdout=out, stderr=subprocess.PIPE,
+                                timeout=900)
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()[:300]
+        raise RuntimeError(f"要重建容器 {name}，但没能先保存它的 /tmp（{detail}）；容器没有动")
+    return archive
+
+
+def _regular_files(archive: Path) -> int:
+    with tarfile.open(archive) as tar:
+        return sum(1 for member in tar if member.isfile())
+
+
+def _restore_tmp(name: str, archive: Path, log=print) -> None:
+    """把旧容器的 /tmp 放回新容器（-a：按打包里的属主写入，智能体用户照样能改）。核对普通文件数后删掉本机打包。"""
+    hint = f"旧 /tmp 的打包保留在 {archive}，可以手动放回：docker cp -a - {name}:/ < 打包文件"
+    with open(archive, "rb") as source:
+        result = subprocess.run([find_docker_exe(), "cp", "-a", "-", f"{name}:/"], stdin=source,
+                                stderr=subprocess.PIPE, timeout=900)
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()[:300]
+        raise RuntimeError(f"容器 {name} 已重建，但没能放回旧的 /tmp（{detail}）。{hint}")
+    expected = _regular_files(archive)
+    found = docker("exec", name, "sh", "-c", "find /tmp -type f | wc -l", check=False)
+    try:
+        count = int(found.stdout.strip())
+    except ValueError:
+        count = -1
+    if count < expected:
+        raise RuntimeError(f"容器 {name} 已重建，但新 /tmp 里只有 {count} 个文件（打包里有 {expected} 个）。{hint}")
+    archive.unlink()
+    log(f"[container] 旧容器 /tmp 的 {expected} 个文件已放回新容器")
 
 
 def apply_cpu_limit(cfg: RunConfig, name: str, log=print) -> None:
@@ -109,9 +155,14 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
         stale = container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
                                                    for k, v in _labels(cfg).items())
         if stale:
-            log(f"[container] {name} 的镜像或配置已变化，重建（工作区与会话保留）")
+            log(f"[container] {name} 的镜像或配置已变化，重建（工作区、会话与 /tmp 保留）")
+            archive = _save_tmp(name)
             docker("rm", "-f", name)
-            _create(cfg, name)
+            try:
+                _create(cfg, name)
+            except Exception as exc:
+                raise RuntimeError(f"重建容器 {name} 失败：{exc}；旧 /tmp 的打包保留在 {archive}") from exc
+            _restore_tmp(name, archive, log)
         elif running != "true":
             log(f"[container] 启动 {name}")
             docker("start", name)

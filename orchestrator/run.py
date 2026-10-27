@@ -170,6 +170,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--kb-deny", metavar="文件,...",
                     help="不给智能体看的知识库文件（知识库内的相对路径，逗号分隔，例如 techniques.md,reference/celeste_wiki/Tech.md）："
                          "这些文件不挂进容器，也不在准备阶段要求阅读。默认全部可读。续跑沿用")
+    ap.add_argument("--kb-extra", metavar="目录",
+                    help="追加本机资料：把这个目录（相对路径按仓库根目录算，例如 local/kb_extra/<系列>）里的文件加进挂给"
+                         "智能体的 /kb，同名文件覆盖默认版本。用于某个系列赛自己加的资料，不入库、不影响别的运行。"
+                         "续跑沿用；传空字符串取消")
     ap.add_argument("--resume", metavar="RUN_DIR",
                     help="续跑一次中断的运行（主控退出、断电以外的意外）：游戏须仍冻结在原处；接着原来的章节队列、"
                          "统计与 Claude Code 会话。模型、推理强度、章节、--sim 等沿用原运行的设置")
@@ -328,6 +332,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         cfg.kb_deny = sorted({x.strip().replace("\\", "/") for x in args.kb_deny.split(",") if x.strip()})
     elif previous:
         cfg.kb_deny = list(previous["state"].get("kb_deny") or [])
+    cfg.kb_extra = kb_extra_choice(previous, args.kb_extra)
+    if cfg.kb_extra and not cfg.kb_extra_dir.is_dir():
+        raise SystemExit(f"--kb-extra：找不到目录 {cfg.kb_extra_dir}")
     args.record = args.record is not False  # 默认开启
     cfg.record = args.record
     from .recording import load_config
@@ -433,7 +440,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": False, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
-             "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "prompt_overrides": prompt_override_hashes(),
+             "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "kb_extra": cfg.kb_extra, "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -589,6 +596,15 @@ def write_placeholder_metrics(run_dir: Path, cfg: RunConfig) -> None:
     (run_dir / "metrics.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
+def kb_extra_choice(previous: dict | None, flag: str | None) -> str:
+    """本机追加资料的目录：命令行写了就按命令行（空字符串表示取消）；续跑沿用原运行记下的目录；新运行默认不追加。"""
+    if flag is not None:
+        return Path(flag.strip()).as_posix() if flag.strip() else ""
+    if previous:
+        return str(previous["state"].get("kb_extra") or "")
+    return ""
+
+
 def save_context_choice(previous: dict | None, flag: bool | None) -> bool:
     """节省上下文开不开：命令行写了就按命令行；新运行默认开；续跑沿用原运行记下的设置，没记过的旧运行按关
     （免得章节中途换了 act 返回的格式；追加下一章时显式加 --save-context）。"""
@@ -719,7 +735,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
     study = None
     if workspace_capabilities(cfg).needs_container and not args.no_agent:
         from .kb_access import prepare_view
-        prepare_view(cfg)        # 有不给智能体看的知识库文件时，同步只含允许文件的副本（挂进容器 /kb）
+        prepare_view(cfg)        # 有不给看的文件或本机追加资料时，同步合并后的副本（挂进容器 /kb）
     if cfg.study and workspace_capabilities(cfg).workspace_read and not args.no_agent:
         extra = {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None
         study = KbStudy(cfg.kb_dir, cfg.study_minutes, extra)

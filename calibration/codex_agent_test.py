@@ -422,8 +422,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.cfg.kb_dir.name, "explore")
         self.assertNotIn("reference", str(self.cfg.kb_dir))
         study = KbStudy(self.cfg.kb_dir, 10)
-        self.assertEqual(set(study.files), {"README.md", "basics.md", "data.md", "tools.md",
-                                            "techniques.md", "mechanics.md", "search_methods.md"})   # 后三份是 4A 起新增的资料
+        self.assertEqual(set(study.files), {"README.md", "basics.md", "data.md", "tools.md"})   # 系列赛自己加的资料走 --kb-extra
         self.assertNotIn("help/controls.md", study.files)
         data = self.preparation()
         (self.root / "prepare_summary.json").write_text(json.dumps(data), encoding="utf-8")
