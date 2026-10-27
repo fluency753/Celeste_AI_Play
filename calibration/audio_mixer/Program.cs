@@ -108,9 +108,27 @@ if(view.ReadInt64(64+Slot)!=1025)throw new Exception("Ring slot did not commit t
 Check(music.stop(FMOD.Studio.STOP_MODE.IMMEDIATE));RecordingAudio.Advance();
 copy.getPlaybackState(out var stopped); fullCopy.getPlaybackState(out var fullStopped);
 if(stopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED||fullStopped!=FMOD.Studio.PLAYBACK_STATE.STOPPED)throw new Exception("Music stop was not mirrored");
+// A stale handle on one mirrored event drops only that mirror; recording continues (10-27, 5A lost ~12 s to one).
+{
+    Check(live.getEvent("event:/ui/main/button_select",out var staleDesc)); Check(staleDesc.createInstance(out var stale)); Check(stale.start());
+    var fullMixer=Mixer("full"); var apply=fullMixer.GetType().GetMethod("Apply")!;
+    var droppedField=fullMixer.GetType().GetField("Dropped")!; long droppedBefore=(long)droppedField.GetValue(fullMixer)!;
+    apply.Invoke(fullMixer,new object[]{stale,"test setVolume",(Func<FMOD.Studio.EventInstance,FMOD.RESULT>)(c=>FMOD.RESULT.ERR_INVALID_HANDLE)});
+    var stalePairs=(System.Collections.IDictionary)fullMixer.GetType().GetField("Pairs")!.GetValue(fullMixer)!;
+    if(stalePairs.Contains(stale.getRaw()))throw new Exception("Stale mirror was not dropped");
+    if((long)droppedField.GetValue(fullMixer)!!=droppedBefore+1)throw new Exception("Stale handle was not counted");
+    RecordingAudio.Advance(); RecordingAudio.Publish(1026,false);
+    if(RecordingAudio.Error!=null||view.ReadInt32(64L+(1026%1024)*Slot+8)!=0)throw new Exception("A stale handle failed the recording: "+RecordingAudio.Error);
+    bool named=false;
+    try{apply.Invoke(fullMixer,new object[]{stale,"test other",(Func<FMOD.Studio.EventInstance,FMOD.RESULT>)(c=>FMOD.RESULT.ERR_INTERNAL)});}
+    catch(System.Reflection.TargetInvocationException e) when (e.InnerException is InvalidOperationException inner && inner.Message.Contains("test other")){named=true;}
+    if(!named)throw new Exception("Other FMOD errors must still fail, naming the call");
+    Check(stale.stop(FMOD.Studio.STOP_MODE.IMMEDIATE)); Check(stale.release()); RecordingAudio.Advance();
+    if(RecordingAudio.Error!=null)throw new Exception("Recording failed after the stale-handle checks: "+RecordingAudio.Error);
+}
 RestartChecks.Run(live, game, music);
 LifecycleChecks.Run(live, music);
-Console.WriteLine("PASS: PCM on both tracks, independent timelines, replay music on the full track only, one-shots, volume, stop and ring wrap");
+Console.WriteLine("PASS: PCM on both tracks, independent timelines, replay music on the full track only, one-shots, volume, stop, ring wrap and stale handles");
 } finally {RecordingAudio.Unload();live.release();}
 if(RecordingAudio.Error!=null)throw new Exception("Mixer shutdown produced a false frame error: "+RecordingAudio.Error);
-namespace CelesteAI.Bridge { static class Log {public static void Info(string s)=>Console.WriteLine(s); public static void Error(string s)=>Console.WriteLine(s);} }
+namespace CelesteAI.Bridge { static class Log {public static void Info(string s)=>Console.WriteLine(s); public static void Warn(string s)=>Console.WriteLine(s); public static void Error(string s)=>Console.WriteLine(s);} }
