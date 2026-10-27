@@ -405,6 +405,9 @@ def prompt_parts(cfg) -> list[PromptPart]:
                                 + "提醒不代替主动维护，不代表笔记已经读过或整理过，也不要求机械重写。遵守当前暂停和仅聊天状态。", None, "\n\n"))
     if cfg.cutscene_mode == 'agent':
         parts += _file_parts("agent_controls_zh.md")
+    parts.append(PromptPart("章节重置策略", (
+        "本次允许通过菜单重启章节、返回地图和保存退出。" if cfg.allow_chapter_reset else
+        "本次默认禁止菜单重启章节、未通关返回地图和保存退出，主控在危险确认帧执行前拦截；不得用退出重进代替脱离路线求解。正常死亡及房间重试仍允许。无法继续时用 stop_run 报告，等待用户处理。"), None, "\n\n"))
     if workspace_capabilities(cfg).programs and getattr(cfg, "live", False):
         parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）
     if has_cutscene_tool(cfg):

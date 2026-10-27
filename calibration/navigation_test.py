@@ -24,6 +24,7 @@ class NavigationTests(unittest.TestCase):
         metrics.update(chapter=CHAPTER_SIDS[1])
         self.session = GameSession(cfg, self.root, metrics)
         self.session.entry_guard_supported = True
+        self.session.chapter_reset_guard_supported = True
         (self.root/'run_state.json').write_text('{}', encoding='utf-8')
 
     def tearDown(self):

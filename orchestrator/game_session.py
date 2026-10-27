@@ -315,7 +315,9 @@ class GameSession:
 
     def connect(self) -> dict:
         self.client = BridgeClient(port=self.cfg.bridge_port, timeout=600)
-        self.entry_guard_supported = self.client.call('hello').get('entry_guard') is True
+        hello = self.client.call('hello')
+        self.entry_guard_supported = hello.get('entry_guard') is True
+        self.chapter_reset_guard_supported = hello.get('chapter_reset_guard') is True
         self.client.step_options = self._step_options
         self.client.after_step = self._remember_held_input
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
@@ -368,13 +370,21 @@ class GameSession:
         return obs
 
     def _step_options(self):
+        reset_options = {}
+        if getattr(self, 'chapter_reset_guard_supported', False):
+            reset_options['allow_chapter_reset'] = self.cfg.allow_chapter_reset
+            # A verified user-selected segment boundary may need a menu handoff.
+            # It permits departure, never an unsolicited chapter restart.
+            reset_options['allow_map_exit'] = self.chapter_finished or (self.done and self.done_reason == '分段完成')
+        elif not self.cfg.allow_chapter_reset:
+            raise ActError('禁止章节重置需要桥接 1.0.28；旧桥接无法在执行前拦截，未发送输入。请更新桥接后继续。')
         piece = self.navigation.target
         chapter = piece.chapter if piece else self.cfg.chapter
         if chapter is None and self.cfg.save_slot is None:
-            return {}
+            return reset_options
         if not self.entry_guard_supported:
             raise ActError('进入地图的目标核验需要桥接 1.0.22，请更新桥接后继续；未发送输入')
-        return {'entry_guard':{'sid':CHAPTER_SIDS.get(chapter), 'slot':self.cfg.save_slot}}
+        return {**reset_options, 'entry_guard':{'sid':CHAPTER_SIDS.get(chapter), 'slot':self.cfg.save_slot}}
 
     # ---- 思考僵直（探索模式 --stiffness） ----
 
@@ -1044,7 +1054,7 @@ class GameSession:
 
             auto_frames, notes = 0, list(resumed)
             ending_agent = self._ending_agent       # 片尾已交给智能体：主控不再自动推进
-            if not ending_agent and result['stop'] != 'entry_blocked' and plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
+            if not ending_agent and result['stop'] not in {'entry_blocked', 'chapter_reset_blocked'} and plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not obs.get("controllable")
                     or story_pending(obs)):
                 obs, image, auto_frames, more = self._auto_advance(obs, image)
                 notes.extend(more)        # 接在执行前的说明（续推剧情、思考僵直）后面，不覆盖它们
@@ -1439,6 +1449,8 @@ class GameSession:
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
                 raise ActError('本次试玩已停止，不能继续操作菜单')
+            if not self.cfg.allow_chapter_reset:
+                raise ActError('主控禁止未通关返回地图或保存退出；请寻找脱离路线，无法继续时用 stop_run 报告')
             self._before_advance()
             self.metrics.update(status='auto',thought=reason.strip())
             before = (self.last_obs or {}).get('frame',0)

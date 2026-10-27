@@ -30,6 +30,8 @@ internal static class Bridge {
     private static bool AdvanceWhenIdle => !SceneControl.FreezeWhenIdle(Engine.Scene) || IsLoading();
     public static bool FeedInputThisFrame { get; private set; }
     public static InputFrame CurrentInput { get; private set; } = InputFrame.Neutral;
+    public static bool AllowMenuConfirmation(TextMenu.Item item) =>
+        job?.AllowMenuConfirmation(item) ?? true;
 
     /// <summary>接管以来推进过的总帧数（含空闲菜单和加载帧）。</summary>
     public static long Frame { get; private set; }
@@ -462,6 +464,7 @@ internal static class Bridge {
                     w.WriteBoolean("load_room_modes", true);
                     w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("entry_guard", true);
+                    w.WriteBoolean("chapter_reset_guard", ChapterResetGuard.Available);
                     w.WriteBoolean("dialog_choices", true);
                     w.WriteBoolean("story_text", true);
                     w.WriteBoolean("memorial_text", true);
@@ -894,7 +897,9 @@ internal static class Bridge {
             expect: expect,
             tolerance: tolerance,
             progressEvery: GetInt(a, "progress", 0),
-            stopRooms: stopRooms, inputFormat: inputFormat, entryGuard: entryGuard);
+            stopRooms: stopRooms, inputFormat: inputFormat, entryGuard: entryGuard,
+            allowChapterReset: GetBool(a, "allow_chapter_reset", false),
+            allowMapExit: GetBool(a, "allow_map_exit", false));
 
         if (job.Finished) {
             FinishJob(); // 空计划：直接回报当前帧

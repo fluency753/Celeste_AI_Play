@@ -20,6 +20,7 @@ class MapEntryGuardTests(unittest.TestCase):
                         chapters=[1,2],cutscene_mode='agent')
         self.session = GameSession(cfg,root,Metrics(root/'metrics.json','test','test','medium',600))
         self.session.entry_guard_supported = True
+        self.session.chapter_reset_guard_supported = True
 
     def tearDown(self):
         self.session.close()
@@ -62,7 +63,8 @@ class MapEntryGuardTests(unittest.TestCase):
     def test_unrestricted_chapter_does_not_impose_a_map(self):
         self.session.piece = None
         self.session.cfg.chapter = None
-        self.assertEqual(self.session._step_options(),{'entry_guard':{'sid':None,'slot':10}})
+        self.assertEqual(self.session._step_options(),{'allow_chapter_reset':False,'allow_map_exit':False,
+                                                     'entry_guard':{'sid':None,'slot':10}})
 
     def test_automatic_handoff_runs_real_menu_macro_with_the_target_still_queued(self):
         for queue in ([2], [2,3]):

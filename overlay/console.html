@@ -384,6 +384,7 @@
           <label class="switch"><span class="text"><b>先读知识库</b><span>开局前的准备阶段，不计现实用时</span></span><input type="checkbox" id="study" checked></label>
           <label class="switch"><span class="text"><b>开始时先暂停</b><span>进入章节后等你点继续</span></span><input type="checkbox" id="startPaused"></label>
           <label class="switch"><span class="text"><b>剧情交给智能体</b><span>关时由主控自动跳过剧情</span></span><input type="checkbox" id="cutsceneAgent"></label>
+          <label class="switch"><span class="text"><b>允许章节重置</b><span>允许菜单重启章节、未通关返回地图和保存退出；默认禁止</span></span><input type="checkbox" id="allowChapterReset"></label>
         </div>
       </fieldset>
 
@@ -514,6 +515,7 @@
         <button class="btn blue" type="button" id="pauseToggle">暂停</button>
         <select id="liveEffort" aria-label="推理强度：自动或固定"></select>
         <select id="liveCutscene" aria-label="剧情处理"><option value="auto">剧情：自动跳过</option><option value="agent">剧情：交给智能体</option></select>
+        <select id="liveChapterReset" aria-label="章节重置策略"><option value="deny">章节重置：禁止</option><option value="allow">章节重置：允许</option></select>
         <button class="btn" type="button" id="fastToggle" hidden>Fast：关</button>
       </div>
       <div class="controls" style="margin-top:10px">
@@ -1207,6 +1209,7 @@ function formOptions() {
     stiffness: $("stiffness").checked, formal_thought: $("formalThought").checked, save_context: $("saveContext").checked, playback: $("playback").checked, record: $("record").checked, hud_mod: $("hudMod").checked,
     study: $("study").checked, limit_planning: $("limitPlanning").checked, quota_wait: $("quotaWait").checked,
     keep_obs_open: $("keepObs").checked, start_paused: $("startPaused").checked,
+    allow_chapter_reset: $("allowChapterReset").checked,
     cutscene_mode: $("cutsceneAgent").checked ? "agent" : "auto", chapters: ui.chapters, segments: selectedSegments(), save,
     max_minutes: Number($("maxMinutes").value), autocompact: $("autocompact").value.trim(), map: ui.map,
     runtime: $("runMode").value, study_minutes: withDefault("studyMinutes", "study_minutes"),
@@ -1440,6 +1443,9 @@ function renderControls() {
   const cut = $("liveCutscene");
   if (document.activeElement !== cut) cut.value = c.cutscene_mode || "auto";
   cut.disabled = !connected || !c.cutscene_control;
+  const reset = $("liveChapterReset");
+  reset.value = c.allow_chapter_reset ? 'allow' : 'deny';
+  reset.disabled = !connected || !c.chapter_reset_control;
   $("fastToggle").hidden = !c.fast_control;
   $("fastToggle").textContent = `Fast：${c.fast ? "开" : "关"}${c.connected && c.fast_pending ? "（待换轮）" : ""}`;
   $("fastToggle").title = c.connected && c.fast_pending ? "等待当前模型轮次结束后切换，当前动作不会被中断" : "设置下次模型请求是否使用 Fast";
@@ -1958,6 +1964,7 @@ $("promptBack").addEventListener("click", closePromptEditor);
 $("pauseToggle").addEventListener("click", () => sendControl(ui.control && ui.control.paused ? "resume" : "pause"));
 $("liveEffort").addEventListener("change", (e) => sendControl("effort", e.target.value));
 $("liveCutscene").addEventListener("change", (e) => sendControl("cutscene_mode", e.target.value));
+$("liveChapterReset").addEventListener("change", (e) => sendControl("chapter_reset", e.target.value));
 $("fastToggle").addEventListener("click", () => sendControl("fast", ui.control && ui.control.fast ? "off" : "on"));
 $("stopRun").addEventListener("click", () => {
   if (confirmTwice("stopRun", "再点一次确认：结束运行、保存录像并交还游戏控制")) sendControl("stop");

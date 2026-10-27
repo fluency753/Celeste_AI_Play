@@ -55,6 +55,10 @@ class SessionControls:
                                             lambda: getattr(self.cfg, 'notes_warn_percent', 60))
         self.completed_preparation = False
         self.control = None if disabled else RunControl(self.run_dir)
+        if self.control:
+            reset = self.control.chapter_reset_preference()
+            if reset is not None:
+                self.cfg.allow_chapter_reset = reset
         self.fast_mode = self.control.fast_preference() if self.control else None
         self.manual_effort = self.control.effort_preference() if self.control else None
         self.turn_fast = None
@@ -157,7 +161,7 @@ class SessionControls:
                 phase="pausing" if self.pausing else "chatting" if self.turn_active else "idle",
                 session_id=self.session_id, chat_only=self.chat_only,
                 **self._fast_status(),
-                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status())
+                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._chapter_reset_status())
             await asyncio.sleep(.5)
 
     async def _controls(self):
@@ -197,6 +201,18 @@ class SessionControls:
                                 note = await asyncio.to_thread(self.session.set_chapter_queue, data.get("queue", []))
                             self.pending_messages.append({**row, "text": note})
                             self.control.mark(row["id"], "waiting", "要通关的范围已更新，正在通知 agent")
+                        elif row['kind'] == 'chapter_reset':
+                            if self.session is None or self.session.done or self.chat_only:
+                                raise ValueError('当前没有在试玩，不能改章节重置策略')
+                            allowed = row['text'] == 'allow'
+                            async with self.action_lock:
+                                self.control.set_chapter_reset(allowed)
+                                self.cfg.allow_chapter_reset = allowed
+                                self.session.cfg.allow_chapter_reset = allowed
+                            note = ('用户允许菜单重启章节、返回地图和保存退出。' if allowed else
+                                    '用户禁止菜单重启章节、未通关返回地图和保存退出；不得退出重进或用章节重置脱困。正常死亡及房间重试仍允许。请寻找实际脱离路线，无法继续时用 stop_run 报告。')
+                            self.pending_messages.append({**row, 'text': note})
+                            self.control.mark(row['id'], 'waiting', '章节重置策略已生效，正在通知 agent')
                         elif row['kind'] == 'sim_update':
                             if not self._sim_status()['sim_control']:
                                 raise ValueError('当前主控未开启有限模拟辅助，不能在线修改推演设置')
@@ -310,7 +326,7 @@ class SessionControls:
                 self.control.heartbeat(paused=self.paused, phase="chatting" if self.turn_active else "idle",
                     session_id=self.session_id, chat_only=self.chat_only,
                     **self._fast_status(),
-                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status())
+                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._chapter_reset_status())
                 await asyncio.sleep(.1)
         except asyncio.CancelledError:
             raise
@@ -334,6 +350,11 @@ class SessionControls:
         return {'fast_control':self.capabilities.fast, 'fast':self.fast_mode,
                 'fast_current':self.turn_fast if self.turn_active else None,
                 'fast_pending':bool(self.capabilities.fast and self.turn_active and self.turn_fast != self.fast_mode)}
+
+    def _chapter_reset_status(self):
+        return {'chapter_reset_control': bool(self.session is not None and not self.session.done and not self.chat_only),
+                'allow_chapter_reset': self.cfg.allow_chapter_reset,
+                'chapter_reset_guard_supported': bool(getattr(self.session, 'chapter_reset_guard_supported', False))}
 
     async def _yield_for_fast_change(self):
         if not self.capabilities.fast or not self.capabilities.live_steering or self.turn_fast == self.fast_mode:

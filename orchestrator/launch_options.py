@@ -21,14 +21,14 @@ MODEL_PATTERN = r"[A-Za-z0-9._:/\[\]-]{1,100}"
 PROVIDER_PATTERN = r"[A-Za-z0-9_.-]{1,60}"
 
 SWITCHES = ("live", "sim", "sim_assist", "stiffness", "formal_thought", "save_context", "playback", "record", "hud_mod", "study", "limit_planning",
-            "keep_obs_open", "start_paused", "quota_wait", "record_marker", "skip_enter", "no_agent", "hud_window", "hud")
+            "keep_obs_open", "start_paused", "quota_wait", "record_marker", "skip_enter", "no_agent", "hud_window", "hud", "allow_chapter_reset")
 MAPS = {"celeste": "蔚蓝官方章节"}      # 以后可能加 MOD 地图
 
 DEFAULTS = {
     "engine": "claude", "provider": "anthropic", "model": "opus", "effort": "high", "agent": "",
     "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": True, "stiffness": False, "formal_thought": False, "save_context": True, "collision_image": None, "playback": True, "record": True,
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
-    "start_paused": False, "quota_wait": True, "cutscene_mode": "auto", "chapters": [0], "segments": None,
+    "start_paused": False, "quota_wait": True, "allow_chapter_reset": False, "cutscene_mode": "auto", "chapters": [0], "segments": None,
     "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 240, "autocompact": "",
     # 以下是"更多设置"里的参数，默认值与命令行相同
     "map": "celeste", "runtime": "container", "study_minutes": 60, "max_usage": None, "quota_wait_max_hours": 24,
@@ -184,6 +184,7 @@ def build(options: dict) -> list[str]:
             "--agent", o["agent"], "--mode", o["mode"], "--max-minutes", f"{o['max_minutes']:g}",
             "--save", o["save"]["name"], "--cutscene-mode", o["cutscene_mode"]]
     argv.append("--live" if o["live"] else "--no-live")
+    argv.append("--allow-chapter-reset" if o["allow_chapter_reset"] else "--no-allow-chapter-reset")
     if o["mode"] == SPEEDRUN:
         argv.append("--sim" if o["sim"] else "--no-sim")
     else:
@@ -288,6 +289,7 @@ def config_for(options: dict):
     cfg.save_context = bool(o["save_context"])
     cfg.collision_image = o["collision_image"]
     cfg.live, cfg.playback, cfg.cutscene_mode = o["live"], o["playback"], o["cutscene_mode"]
+    cfg.allow_chapter_reset = o["allow_chapter_reset"]
     cfg.pause_limit = o["limit_planning"] and cfg.sim
     cfg.rounds_per_room, cfg.room_scale = o["rounds_per_room"], o["room_scale"]
     cfg.chapters, cfg.chapter = list(o["chapters"]), o["chapters"][0]

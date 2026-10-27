@@ -320,7 +320,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     else '主控已记下阻塞原因，等待用户处理。请结束本轮，不再调用工具。')
             return [json.dumps(result, ensure_ascii=False) + '\n' + tail]
 
-    @optional_tool(tool_exit_level, name='exit_level', description='仅在用户要求退出时调用：通过游戏暂停菜单保存并退出当前关卡，回到地图或主菜单，结束本次试玩并保存录像。退出不算通关。', structured_output=False)
+    @optional_tool(tool_exit_level, name='exit_level', description='仅在用户要求退出且已在主控允许章节重置时调用：通过游戏暂停菜单保存并退出当前关卡，回到地图或主菜单，结束本次试玩并保存录像。默认禁止，退出不算通关；受阻时用 stop_run 报告。', structured_output=False)
     async def exit_level(reason: str) -> list:
         async with call_lock:
             if (note := gated()) is not None:

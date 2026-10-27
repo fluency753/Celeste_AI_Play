@@ -84,6 +84,32 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.action(ident)['status'], 'submitted')
         self.assertEqual(self.runner.pending_messages, [])
 
+    async def test_chapter_reset_policy_is_saved_published_and_delivered(self):
+        await self.runner._send('first')
+        self.cfg.allow_chapter_reset = True
+        ident = self.runner.control.enqueue('chapter_reset', 'deny')
+        self.controls()
+        await self.until(lambda: self.action(ident)['status'] == 'waiting')
+        self.assertFalse(self.cfg.allow_chapter_reset)
+        self.assertIs(self.runner.control.chapter_reset_preference(), False)
+        await self.until(lambda: self.runner.control.snapshot().get('chapter_reset_control'))
+        self.assertIs(self.runner.control.snapshot()['allow_chapter_reset'], False)
+        self.runner.turn_active = False
+        self.runner.turn_done.set()
+        await self.runner._next_user_turn('continue')
+        self.assertIn('用户禁止菜单重启章节', self.packets[-1]['message']['content'])
+        self.assertEqual(self.action(ident)['status'], 'submitted')
+
+    async def test_chapter_reset_change_waits_for_current_action(self):
+        self.controls()
+        async with self.runner.action_lock:
+            ident = self.runner.control.enqueue('chapter_reset', 'allow')
+            await asyncio.sleep(.15)
+            self.assertFalse(self.cfg.allow_chapter_reset)
+            self.assertEqual(self.action(ident)['status'], 'queued')
+        await self.until(lambda: self.cfg.allow_chapter_reset)
+        self.assertIs(self.runner.control.chapter_reset_preference(), True)
+
     async def test_paused_chat_turn_does_not_resume_play(self):
         self.runner.paused = True
         self.controls()

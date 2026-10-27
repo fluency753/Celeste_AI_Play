@@ -234,6 +234,7 @@ def main() -> int:
     args = ap.parse_args()
 
     c = BridgeClient(port=args.port)
+    c.step_options = lambda: {'allow_chapter_reset': False, 'allow_map_exit': True}
     try:
         obs = enter_save(c, args.save, chapter=args.chapter)
         print(summarize_obs(obs))

@@ -137,6 +137,7 @@ class RunConfig:
     auto_speed: int = 1             # 转场、剧情、重生等自动推进段的速度（1 = 与原版一致；大于 1 只用于调试）
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
     create_save: bool = False       # 显式新建空存档；只用于首次进档，不用于续跑或换章
+    allow_chapter_reset: bool = False  # 允许菜单重启章节、未通关返回地图/保存退出
     save_slot: int | None = None    # 存档身份由槽位决定，名称可以重复
     cutscene_mode: str = 'auto'     # auto 自动跳过；agent 自行决定观看、推进或跳过
     play_scope: str = 'chapter'     # independent of the user's dynamic stop goal

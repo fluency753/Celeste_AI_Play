@@ -17,8 +17,14 @@ namespace CelesteAI.Bridge;
 /// </summary>
 internal static class Hooks {
     private static Hook? endDrawHook;
+    private static ILHook? menuConfirmationHook;
 
     public static void Load() {
+        // Everest's orig_Update navigates before confirming. Guard the actual
+        // dispatch site so simultaneous directions/confirm use native selection.
+        MethodInfo menuUpdate = typeof(TextMenu).GetMethod("orig_Update", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException("TextMenu.orig_Update");
+        menuConfirmationHook = new ILHook(menuUpdate, ILMenuConfirmation);
         // FNA 的 Game.EndDraw 里调用 Present：钩在它之后，锁步时回复"这一帧已经呈现"
         MethodInfo? endDraw = typeof(Game).GetMethod("EndDraw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         if (endDraw != null) {
@@ -37,6 +43,9 @@ internal static class Hooks {
     }
 
     public static void Unload() {
+        ChapterResetGuard.Available = false;
+        menuConfirmationHook?.Dispose();
+        menuConfirmationHook = null;
         endDrawHook?.Dispose();
         endDrawHook = null;
         On.Celeste.Celeste.Update -= OnCelesteUpdate;
@@ -77,6 +86,20 @@ internal static class Hooks {
         cur.Emit(OpCodes.Brfalse, resume);
         cur.Emit(OpCodes.Ret);
         cur.MarkLabel(resume);
+    }
+
+    private static void ILMenuConfirmation(ILContext il) {
+        var cur = new ILCursor(il);
+        if (!cur.TryGotoNext(MoveType.Before, ins => ins.MatchCallvirt(typeof(TextMenu.Item), nameof(TextMenu.Item.ConfirmPressed))))
+            throw new InvalidOperationException("TextMenu confirmation dispatch not found; chapter reset guard unavailable");
+        var allowed = cur.DefineLabel();
+        cur.Emit(OpCodes.Dup);
+        cur.EmitDelegate<Func<TextMenu.Item, bool>>(Bridge.AllowMenuConfirmation);
+        cur.Emit(OpCodes.Brtrue, allowed);
+        cur.Emit(OpCodes.Pop);
+        cur.Emit(OpCodes.Ret); // neither ConfirmPressed nor OnPressed executes
+        cur.MarkLabel(allowed);
+        ChapterResetGuard.Available = true;
     }
 
     // 章节和显式 step 使用合成输入；空闲菜单恢复真实输入，锁步等令牌时不提前消费按键。

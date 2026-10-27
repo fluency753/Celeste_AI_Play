@@ -159,7 +159,7 @@ class FakeRunner(SessionControls):
         self.run_dir = directory
         self.chat_only = False
         self.session_id = "s"
-        self.cfg = SimpleNamespace(cutscene_mode="auto")
+        self.cfg = SimpleNamespace(cutscene_mode="auto", allow_chapter_reset=False)
         self.metrics = SimpleNamespace(state=SimpleNamespace(tool_calls=0, effort="high", effort_pending=None),
                                        update=lambda **kw: None)
         self.session = SimpleNamespace(done=False, goals=SimpleNamespace(check=lambda values: False, snapshot=lambda: None),

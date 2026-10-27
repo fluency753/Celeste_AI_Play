@@ -31,6 +31,8 @@ internal sealed class StepJob {
     private readonly HashSet<string> stopOn;
     private readonly HashSet<string> stopRooms;
     private readonly MapEntryGuard? entryGuard;
+    private readonly bool allowChapterReset;
+    private readonly bool allowMapExit;
     private readonly bool recordTrajectory;
     private readonly ArrayBufferWriter<byte> trajectoryBuffer = new();
     private readonly Utf8JsonWriter trajectory;
@@ -61,10 +63,13 @@ internal sealed class StepJob {
     public StepJob(long requestId, List<InputFrame> plan, IEnumerable<string> stopOn, int framesPerTick,
         bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false,
         List<ExpectRow?>? expect = null, float tolerance = 1f, int progressEvery = 0, IEnumerable<string>? stopRooms = null,
-        string inputFormat = "celeste_ai", MapEntryGuard? entryGuard = null) {
+        string inputFormat = "celeste_ai", MapEntryGuard? entryGuard = null, bool allowChapterReset = false,
+        bool allowMapExit = false) {
         RequestId = requestId;
         InputFormat = inputFormat;
         this.entryGuard = entryGuard;
+        this.allowChapterReset = allowChapterReset;
+        this.allowMapExit = allowMapExit;
         this.progressEvery = Math.Max(0, progressEvery);
         this.expect = expect is { Count: > 0 } ? expect : null;
         this.tolerance = tolerance;
@@ -124,6 +129,16 @@ internal sealed class StepJob {
                 events.Add((Bridge.Frame, "entry_blocked", reason));
                 return false;
             }
+        }
+        return true;
+    }
+
+    public bool AllowMenuConfirmation(TextMenu.Item item) {
+        if (!allowChapterReset && ChapterResetGuard.Check(item,
+                allowMapExit || Engine.Scene is Level { Completed: true }) is { } blocked) {
+            StopReason = "chapter_reset_blocked";
+            events.Add((Bridge.Frame, "chapter_reset_blocked", blocked));
+            return false;
         }
         return true;
     }

@@ -10,7 +10,7 @@ from orchestrator.metrics import Metrics
 
 class ExitLevelTests(unittest.TestCase):
     def make_session(self, folder):
-        cfg=RunConfig(agent='exit-test',save='same',model='test',save_slot=11,runtime='host')
+        cfg=RunConfig(agent='exit-test',save='same',model='test',save_slot=11,runtime='host',allow_chapter_reset=True)
         metrics=Metrics(folder/'metrics.json','exit-test','test','high',60)
         session=GameSession(cfg,folder,metrics)
         session.client=Mock()

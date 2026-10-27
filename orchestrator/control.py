@@ -30,9 +30,11 @@ class RunControl:
 
     def enqueue(self, kind, text=""):
         if kind not in {"message", "pause", "resume", "fast", "effort", "detach", "goal", "goal_clear", "stop", "cutscene_mode",
-                        "interrupt", "chapters", "sim_update"}:
+                        "interrupt", "chapters", "sim_update", "chapter_reset"}:
             raise ValueError("未知控制指令")
         text = str(text).strip()
+        if kind == 'chapter_reset' and text not in {'allow', 'deny'}:
+            raise ValueError('章节重置策略须为 allow 或 deny')
         if kind == 'cutscene_mode' and text not in {'auto','agent'}:
             raise ValueError('剧情模式须为 auto 或 agent')
         if kind == "goal":
@@ -65,6 +67,17 @@ class RunControl:
         with self._db() as db:
             row = db.execute("SELECT data FROM preferences WHERE key='fast'").fetchone()
             return json.loads(row[0]) if row else None
+
+    def chapter_reset_preference(self):
+        with self._db() as db:
+            row = db.execute("SELECT data FROM preferences WHERE key='allow_chapter_reset'").fetchone()
+            return json.loads(row[0]) is True if row else None
+
+    def set_chapter_reset(self, enabled):
+        if type(enabled) is not bool:
+            raise ValueError('章节重置策略须为布尔值')
+        with self._db() as db:
+            db.execute("INSERT OR REPLACE INTO preferences VALUES('allow_chapter_reset',?)", (json.dumps(enabled),))
 
     def set_fast(self, enabled):
         with self._db() as db:

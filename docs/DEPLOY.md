@@ -364,6 +364,7 @@ winget install Gyan.FFmpeg
 | `--live` / `--no-live` | 关（沿用） | 直播模式：提示词加直播一节，解说计时 10 秒，可按用户要求退出关卡，HUD 默认用网页形式。`narrate` 与思考提醒在所有模式下都有（不开直播时解说计时半分钟，`RunConfig.live_remind_s`） |
 | `--hud-mod` / `--no-hud-mod` | 不开直播时开，直播模式关（沿用） | HUD 以 MOD 形式画在游戏画面右上角（需要桥接 0.13.0，旧桥接自动改用网页 HUD）；关时用网页 HUD |
 | `--cutscene-mode auto` / `agent` | `auto`（沿用） | 剧情由主控跳过，或交给智能体用 cutscene 工具处理 |
+| `--allow-chapter-reset` / `--no-allow-chapter-reset` | 禁止（续跑沿用） | 菜单重启章节、未通关返回地图/保存退出；默认需桥接 1.0.28，旧桥接在录制/进档前报错，详见[门禁契约](CHAPTER_RESET_GUARD.md) |
 | `--playback` / `--no-playback` | 开（沿用） | 规划回放：把推演过的路线按轮画进游戏（开模拟器时画 `/sim` 的推演，关模拟器时画智能体用 `show.trajectory()` 交来的轨迹） |
 | `--record` / `--no-record` | 开（沿用） | OBS 录屏开关：开时 OBS 没在运行就由主控自己启动（专用配置、最小化到托盘），锁步录制完整版与纯享版，结束时关掉它启动的 OBS；OBS 已经开着就直接用、结束时不关；`--no-record` 不启动也不调用 OBS |
 | `--keep-obs-open` | 关 | 结束时保留主控启动的 OBS（直播用）；手动关闭 OBS 后可用 `tools\obs_setup.py restore` 还原配置选择 |
