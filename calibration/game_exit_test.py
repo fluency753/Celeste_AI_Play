@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from tools.game_exit import exit_game_by_menu
 from tools.bridge_client import BridgeClient
-from orchestrator.maintenance import save_and_exit
+from orchestrator.maintenance import save_and_exit, _wait_for_save_ready
 from calibration import recording_session_test as recording_fixture
 
 
@@ -17,7 +17,7 @@ class MenuGame:
         self.level, self.disconnect, self.exited = level, disconnect, False
         self.calls, self.saved, self.paused = [], False, False
         self.selected = 0
-        self.hello = {'bridge': '1.5.0', 'process_id': 123, 'record_audio_active': False,
+        self.hello = {'bridge': '1.5.1', 'process_id': 123, 'record_audio_active': False,
                       'clock': {'lockstep': False, 'plugin': {'state': 'idle'}}}
 
     def observation(self):
@@ -75,7 +75,107 @@ class Process:
         self.closed = True
 
 
+class EntryGame(MenuGame):
+    def __init__(self, states):
+        super().__init__(level=True)
+        self.states = copy.deepcopy(states)
+        self.activated = False
+
+    def observation(self):
+        if self.states:
+            return copy.deepcopy({'save': {'slot': 10}, **self.states[0]})
+        return super().observation()
+
+    def call(self, cmd, **args):
+        if cmd == 'activate':
+            self.activated = True
+        if self.states and (cmd == 'step' or (cmd == 'observe' and self.activated
+                                              and self.states[0]['scene'] == 'LevelLoader')):
+            self.calls.append((cmd, args))
+            if cmd == 'step':
+                if args['inputs'] != ['1'] or args.get('stop_on') != ['story_input']:
+                    raise AssertionError('Entry wait must use one neutral frame and stop at story input')
+            self.states.pop(0)
+            return {'obs': self.observation(), 'result': {'consumed': int(cmd == 'step')}}
+        return super().call(cmd, **args)
+
+
 class GameExitTests(unittest.TestCase):
+    def test_entry_loader_wipe_and_room_transition_continue_to_save_and_exit(self):
+        game = EntryGame([
+            {'scene': 'LevelEnter', 'frame': 0}, {'scene': 'LevelLoader', 'frame': 1},
+            {'scene': 'Level', 'frame': 2, 'level': {'canPause': False, 'screenWipe': True}},
+            {'scene': 'Level', 'frame': 3, 'level': {'canPause': False, 'transitioning': True}}])
+        progress = []
+        with patch('orchestrator.maintenance.GameProcess', return_value=Process(game)), \
+             patch('orchestrator.maintenance.time.sleep'):
+            result = save_and_exit(game, save_slot=10, run_dir=None, progress=progress.append)
+        self.assertEqual(result['phase'], 'finished')
+        self.assertTrue(game.saved and game.exited)
+        self.assertEqual(sum(row['phase'] == 'waiting_transition' for row in progress), 4)
+        self.assertEqual(next(row['transition_frames'] for row in progress if row['phase'] == 'transition_ready'), 4)
+        self.assertIsNone(result['scene'])
+        self.assertEqual(sum(args.get('inputs') == ['1'] for _, args in game.calls), 3)
+
+    def test_wait_refuses_story_input_and_slot_change_before_any_save_or_record(self):
+        for state in ({'scene': 'LevelEnter', 'storyInput': 'postcard'},
+                      {'scene': 'LevelEnter', 'story': [{'kind': 'postcard', 'waitingForInput': True}]},
+                      {'scene': 'LevelEnter', 'save': {'slot': 11}},
+                      {'scene': 'Level', 'level': {'canPause': False, 'inCutscene': True}}):
+            for immediate in (False, True):
+                with self.subTest(state=state, immediate=immediate):
+                    game = EntryGame(([{'scene': 'LevelEnter'}] if not immediate else []) + [state])
+                    progress = []
+                    with patch('orchestrator.maintenance.GameProcess', return_value=Process(game)), \
+                         self.assertRaises(RuntimeError):
+                        save_and_exit(game, save_slot=10, run_dir=None, progress=progress.append)
+                    self.assertFalse(game.saved or game.exited)
+                    self.assertFalse(any(cmd == 'record' for cmd, _ in game.calls))
+                    self.assertTrue(all(args['inputs'] == ['1'] for cmd, args in game.calls if cmd == 'step'))
+                    self.assertEqual(progress[-1].get('transition_frames', 0), int(not immediate))
+
+    def test_wait_frame_budget_includes_loading_and_wall_timeout(self):
+        game = EntryGame([{'scene': 'LevelEnter', 'frame': i} for i in range(4)])
+        with self.assertRaisesRegex(RuntimeError, '超时'):
+            _wait_for_save_ready(game, game.observation(), lambda _: None, lambda **_: None, max_frames=2)
+        self.assertEqual(sum(cmd == 'step' for cmd, _ in game.calls), 2)
+        game = EntryGame([{'scene': 'LevelLoader', 'frame': 0},
+                          {'scene': 'LevelLoader', 'frame': 10}])
+        game.activated = True
+        with patch('orchestrator.maintenance.time.sleep'), self.assertRaisesRegex(RuntimeError, '帧预算'):
+            _wait_for_save_ready(game, game.observation(), lambda _: None, lambda **_: None, max_frames=2)
+        self.assertFalse(any(cmd == 'step' for cmd, _ in game.calls))
+        client = Mock()
+        client.call.return_value = {'obs': {'scene': 'Level', 'level': {'canPause': True}},
+                                    'result': {'consumed': 1, 'loadingFrames': 5}}
+        with self.assertRaisesRegex(RuntimeError, '帧预算'):
+            _wait_for_save_ready(client, {'scene': 'LevelEnter'}, lambda _: None, lambda **_: None, max_frames=2)
+        client.call.assert_called_once()
+        game = EntryGame([{'scene': 'LevelEnter'}])
+        with patch('orchestrator.maintenance.time.monotonic', side_effect=[0, 2]), \
+             self.assertRaisesRegex(RuntimeError, '超时'):
+            _wait_for_save_ready(game, game.observation(), lambda _: None, lambda **_: None, timeout=1)
+        self.assertEqual(game.calls, [])
+        client = Mock()
+        client.call.return_value = {'obs': {'scene': 'Level', 'level': {'canPause': True}},
+                                    'result': {'consumed': 1}}
+        with patch('orchestrator.maintenance.time.monotonic', side_effect=[0, 0, 2]), \
+             self.assertRaisesRegex(RuntimeError, '超时'):
+            _wait_for_save_ready(client, {'scene': 'LevelEnter'}, lambda _: None, lambda **_: None, timeout=1)
+
+    def test_already_paused_save_menu_is_ready_even_when_can_pause_is_false(self):
+        game = MenuGame(level=True)
+        game.paused = True
+        original = game.observation
+        def observation():
+            value = original()
+            if game.level:
+                value['level']['canPause'] = False
+            return value
+        game.observation = observation
+        with patch('orchestrator.maintenance.GameProcess', return_value=Process(game)):
+            result = save_and_exit(game, save_slot=10, run_dir=None)
+        self.assertEqual(result['phase'], 'finished')
     def test_actual_graph_navigation_and_separate_confirm_with_optional_eof(self):
         for eof in (False, True):
             game = MenuGame(disconnect=eof)

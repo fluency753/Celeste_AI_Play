@@ -16,6 +16,65 @@ from .recording import Recorder
 from .recording_lifecycle import pending_recording
 from tools.cutscene import leave_level_by_pause_menu
 from tools.game_exit import exit_game_by_menu
+from tools.menu_navigation import checked_step
+
+
+LOADING_SCENES = frozenset({'LevelLoader', 'OverworldLoader', 'GameLoader'})
+ENTRY_SCENES = LOADING_SCENES | {'LevelEnter'}
+
+
+def _wait_for_save_ready(client, obs, validate, publish, *, max_frames=600, timeout=15):
+    """只等已知加载/入场或房间转场；不发送确认，不代选剧情。
+
+    加载器空闲时本就运行，只观测它；冻结的入场/关卡转场每次仅给一帧中性输入。
+    同一预算贯穿所有场景，包含桥接报告的加载帧；RPC本身另受连接超时约束。
+    """
+    used = 0
+    waited = False
+    deadline = time.monotonic() + timeout
+
+    def stop(reason):
+        publish(phase='transition_stopped', transition_frames=used, scene=obs.get('scene'))
+        raise RuntimeError(reason)
+
+    while True:
+        try:
+            validate(obs)
+        except RuntimeError as exc:
+            stop(str(exc))
+        scene, level = obs.get('scene'), obs.get('level') or {}
+        if used > max_frames:
+            stop(f'等待转场超过帧预算（已观测推进 {used} 帧）；未停止录制或退出游戏，可稍后重试')
+        if waited and time.monotonic() >= deadline:
+            stop(f'等待转场结束超时（已观测推进 {used} 帧）；未停止录制或退出游戏，可稍后重试')
+        if scene == 'Overworld' or (scene == 'Level' and (level.get('canPause') is not False or level.get('paused') is True)):
+            if waited:
+                publish(phase='transition_ready', transition_frames=used, scene=scene)
+            return obs
+        if obs.get('storyInput') or any(row.get('waitingForInput') for row in obs.get('story', [])):
+            stop(f'转场等待遇到剧情输入（{obs.get("storyInput") or "story"}）；'
+                 '未确认或跳过剧情，未停止录制或退出游戏')
+        waiting = scene in ENTRY_SCENES or (scene == 'Level' and (
+            level.get('transitioning') is True or level.get('screenWipe') is True))
+        if not waiting:
+            stop('当前关卡不能保存退出，且不在已知转场中；未自动推进剧情，请先完成当前操作')
+        if used >= max_frames or time.monotonic() >= deadline:
+            stop(f'等待转场结束超时（已观测推进 {used} 帧）；未停止录制或退出游戏，可稍后重试')
+        publish(phase='waiting_transition', transition_frames=used, scene=scene)
+        waited = True
+        before = obs.get('frame')
+        if scene in LOADING_SCENES:
+            time.sleep(0.02)
+            reply = client.call('observe', image=False, entities=False, tiles=False)
+        else:
+            reply = checked_step(client, ['1'], speed=1, stop_on=['story_input'],
+                                 image=False, entities=False, tiles=False)
+        obs = reply['obs']
+        result = reply.get('result') or {}
+        counted = result.get('consumed', 0) + result.get('loadingFrames', 0)
+        after = obs.get('frame')
+        elapsed = max(0, after - before) if type(before) is int and type(after) is int else 0
+        used += max(counted, elapsed)
 
 
 def save_and_exit(client, *, save_slot: int, run_dir: Path | None, progress=lambda data: None):
@@ -48,10 +107,10 @@ def save_and_exit(client, *, save_slot: int, run_dir: Path | None, progress=lamb
         slot = (obs.get('save') or {}).get('slot')
         if slot is not None and slot != save_slot:
             raise RuntimeError(f'当前存档槽位 {slot} 与指定 {save_slot} 不符；未执行保存或退出')
-        if obs.get('scene') not in {'Level', 'Overworld'}:
+        if obs.get('scene') not in {'Level', 'Overworld'} | ENTRY_SCENES:
             raise RuntimeError(f"当前场景 {obs.get('scene')} 无法安全保存退出；请先完成当前操作")
-        if obs.get('scene') == 'Level' and (slot is None or (obs.get('level') or {}).get('canPause') is False):
-            raise RuntimeError('当前关卡尚不能保存退出；请先结束剧情输入或等待转场，不自动跳过剧情')
+        if obs.get('scene') == 'Level' and slot is None:
+            raise RuntimeError('当前关卡未报告存档槽位，未执行保存或退出')
 
     try:
         hello = client.call('hello')
@@ -64,22 +123,23 @@ def save_and_exit(client, *, save_slot: int, run_dir: Path | None, progress=lamb
         validate_observation(obs)
         # Main-menu graph support must be present before any save/stop side effect.
         version = tuple(int(n) for n in hello.get('bridge', '').split('.'))
-        if version < (1, 5, 0):
-            raise RuntimeError('维护菜单宏需要 Bridge 1.5.0 或更新；未执行保存或停止录制')
+        if version < (1, 5, 1):
+            raise RuntimeError('维护菜单宏需要 Bridge 1.5.1 或更新；未执行保存或停止录制')
         obs = client.call('activate', image=False, entities=False, tiles=False)['obs']
         validate_observation(obs)  # The world may change before activation freezes it.
+        obs = _wait_for_save_ready(client, obs, validate_observation, publish)
         if obs.get('scene') == 'Level':
-            publish(phase='saving')
+            publish(phase='saving', scene=obs.get('scene'))
             with controller_navigation(client, slot=save_slot):
                 obs = leave_level_by_pause_menu(client, allowed_exit_ids=('menu_pause_savequit',))
             if obs.get('scene') != 'Overworld':
                 raise RuntimeError('尚未完成原生保存退出，未关闭游戏')
-        publish(phase='stopping_recording')
+        publish(phase='stopping_recording', scene=obs.get('scene'))
 
         def quit_menu():
-            publish(phase='exiting_game')
+            publish(phase='exiting_game', scene='Overworld')
             result = exit_game_by_menu(client, process)
-            publish(phase='postprocessing', game_exited=True, exit=result)
+            publish(phase='postprocessing', game_exited=True, scene=None, exit=result)
             # This remains truthful even if offline media processing later fails.
             release_summary()
 

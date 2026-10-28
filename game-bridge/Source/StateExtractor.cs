@@ -269,6 +269,7 @@ internal static class StateExtractor {
         }
         w.WriteEndArray();
         w.WriteBoolean("transitioning", level.Transitioning);
+        w.WriteBoolean("screenWipe", level.Wipe != null);
         w.WriteBoolean("frozen", level.Frozen);
         // 冻结帧（冲刺开始、吃水晶、撞碎冲刺砖等）：剩余秒数，以及接下来还会冻结几帧
         w.WriteNumber("freezeTimer", Engine.FreezeTimer);
