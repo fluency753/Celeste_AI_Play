@@ -78,6 +78,7 @@ internal static class Hooks {
     private static void InstallMenuGuard() {
         ChapterResetGuard.Available = false;
         try {
+            if (!ChapterResetGuard.Initialize()) return;
             MethodInfo? menuUpdate = typeof(TextMenu).GetMethod("orig_Update", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (menuUpdate == null) {
                 Log.Error("chapter reset guard unavailable: TextMenu.orig_Update not found");

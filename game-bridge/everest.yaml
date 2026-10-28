@@ -1,5 +1,5 @@
 - Name: CelesteAIBridge
-  Version: 1.7.0
+  Version: 1.7.1
   DLL: bin/CelesteAIBridge.dll
   SupportsCodeReload: false
   Dependencies:

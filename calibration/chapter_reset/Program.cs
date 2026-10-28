@@ -23,7 +23,7 @@ Dialog.Language = new Language();
 Dialog.FallbackLanguage = Dialog.Language;
 string[] ids = { "menu_pause_resume", "menu_pause_retry", "menu_pause_skip_cutscene", "intro_vignette_resume",
     "intro_vignette_skip", "menu_restart_cancel", "menu_return_cancel", "menu_pause_return", "menu_pause_savequit",
-    "intro_vignette_quit", "menu_return_continue", "menu_pause_restartarea", "menu_restart_continue" };
+    "intro_vignette_quit", "menu_return_continue", "menu_pause_restartarea", "menu_restart_continue", "menu_return_title", "menu_restart_title" };
 foreach (string id in ids) {
     Dialog.Language.Dialog[id.ToUpperInvariant()] = id;
     Dialog.Language.Cleaned[id.ToUpperInvariant()] = id;
@@ -49,6 +49,7 @@ Input.MenuRight = new VirtualButton(0);
 Input.MenuRight.Nodes.Add(new VirtualButton.PadDPadRight(0));
 var manipulator = (ILContext.Manipulator)typeof(Hooks).GetMethod("ILMenuConfirmation", flags)!
     .CreateDelegate(typeof(ILContext.Manipulator));
+Check(ChapterResetGuard.Initialize(), "Native callback identity initialization failed");
 // A method without the confirmation dispatch (a game/Everest update, or another mod rewriting orig_Update): the
 // manipulator must not throw — that would abort the bridge's Load and every other hook with it — and must report
 // the guard unavailable (hello then reports action_policy=0 and the controller refuses to start).
@@ -58,15 +59,47 @@ using (var probe = new ILHook(typeof(TextMenu.Item).GetMethod("ConfirmPressed", 
 using var hook = new ILHook(typeof(TextMenu).GetMethod("orig_Update", flags)!, manipulator);
 using var silence = new Hook(typeof(Audio).GetMethod("Play", new[] { typeof(string) })!,
     (Func<string, FMOD.Studio.EventInstance>)(_ => null!));
+using var noFontLayout = new Hook(typeof(TextMenu).GetMethod("RecalculateSize", flags)!, (Action<TextMenu>)(_ => { }));
 Check(ChapterResetGuard.Available, "Production menu hook did not install");
 int confirmed = 0, pressed = 0;
+var nativeCallbacks = new Dictionary<string, (MethodInfo Method, object Binding)>();
+foreach (System.Collections.DictionaryEntry pair in (System.Collections.IDictionary)typeof(ChapterResetGuard).GetField("bindings", flags)!.GetValue(null)!) {
+    object binding = pair.Value!;
+    nativeCallbacks.Add((string)binding.GetType().GetProperty("Key")!.GetValue(binding)!, ((MethodInfo)pair.Key, binding));
+}
+// Replace only the external effects of actual native callbacks; dispatch and
+// callback identity/owner recognition remain production code.
+var callbackEffects = nativeCallbacks.Values.Select(value => new Hook(value.Method,
+    (Action<object>)(_ => { pressed++; confirmed++; }))).ToList();
 Tags.PauseUpdate = new BitTag("pause");
 Tags.HUD = new BitTag("hud");
+Action NativeCallback(string key) {
+    if (key == "menu_return_continue") key = "menu_restart_continue";
+    if (key == "menu_return_cancel") key = "menu_restart_cancel";
+    var (method, binding) = nativeCallbacks[key];
+    FieldInfo[] owner = (FieldInfo[])binding.GetType().GetProperty("Owner")!.GetValue(binding)!;
+    object target = owner.Length == 0 ? Engine.Scene : RuntimeHelpers.GetUninitializedObject(method.DeclaringType!);
+    object current = target;
+    for (int i = 0; i < owner.Length; i++) {
+        object child = i == owner.Length - 1 ? Engine.Scene : RuntimeHelpers.GetUninitializedObject(owner[i].FieldType);
+        owner[i].SetValue(current, child);
+        current = child;
+    }
+    return (Action)method.CreateDelegate(typeof(Action), target);
+}
 TextMenu Menu(params string[] labels) {
     var menu = new TextMenu { Focused = true, AutoScroll = false };
     foreach (var label in labels) {
-        var button = new ProbeButton(label, () => confirmed++);
-        button.OnPressed = () => pressed++;
+        bool intro = label.StartsWith("intro_");
+        if (intro && Engine.Scene is not IntroVignette) Scene((IntroVignette)RuntimeHelpers.GetUninitializedObject(typeof(IntroVignette)));
+        if (label.StartsWith("menu_") && Engine.Scene is not Celeste.Level) Scene(Level());
+        var button = new TextMenu.Button(Dialog.Has(label) ? Dialog.Clean(label) : label);
+        string key = label == "menu_return_continue" ? "menu_restart_continue" : label == "menu_return_cancel" ? "menu_restart_cancel" : label;
+        if (nativeCallbacks.TryGetValue(key, out var info)) {
+            button.OnPressed = NativeCallback(label);
+            if (info.Binding.GetType().GetProperty("RestartArea")!.GetValue(info.Binding) is FieldInfo restart)
+                restart.SetValue(button.OnPressed.Target, label == "menu_restart_continue");
+        } else button.OnPressed = () => { pressed++; confirmed++; };
         button.Container = menu;
         button.SelectWiggler = Wiggler.Create(.1f, 1);
         menu.Items.Add(button);
@@ -93,6 +126,46 @@ Level Level(Session? session = null) {
     typeof(Scene).GetField("<Entities>k__BackingField", flags)!.SetValue(level, new EntityList(level));
     return level;
 }
+foreach (string yes in new[] { "是", "Yes" }) {
+    foreach (string key in new[] { "menu_restart_continue", "menu_return_continue" }) {
+        Dialog.Language.Dialog[key.ToUpperInvariant()] = yes;
+        Dialog.Language.Cleaned[key.ToUpperInvariant()] = yes;
+    }
+    foreach (bool restart in new[] { false, true }) {
+        for (int mask = 0; mask < 8; mask++) {
+            var level = Level(); Scene(level);
+            typeof(Level).GetMethod("GiveUp", flags)!.Invoke(level, new object[] { 0, restart, false, false });
+            var confirmation = level.Entities.ToAdd.OfType<TextMenu>().Single();
+            Check(((TextMenu.Button)confirmation.Items[1]).Label == yes, "Native confirmation did not use shared real translation");
+            Check(ChapterResetGuard.ActionOf(confirmation.Items[1]) == (restart ? "restart_chapter" : "return_to_map"),
+                "Actual native GiveUp callback was misclassified");
+            Check(ChapterResetGuard.IsSafe(confirmation.Items[2]), "Actual native GiveUp cancel was not safe");
+            var permissions = new ActionPermissions((mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0);
+            Feed(""); var job = Job(permissions: permissions); int before = pressed;
+            Feed("C"); confirmation.orig_Update();
+            bool allowed = restart ? permissions.RestartChapter : permissions.ReturnToMap;
+            Check((pressed == before + 1) == allowed && (job.StopReason == null) == allowed,
+                "Shared confirmation translation coupled independent action permissions");
+            // Existing native menus survive registry reconstruction after reload.
+            Check(ChapterResetGuard.Initialize() && ChapterResetGuard.ActionOf(confirmation.Items[1]) ==
+                (restart ? "restart_chapter" : "return_to_map"), "Existing native menu identity lost after reinitialize");
+        }
+    }
+}
+Console.WriteLine("PASS: actual native GiveUp menus share Chinese/English Yes but preserve independent restart/return permissions and survive identity reconstruction");
+var actualIntro = (IntroVignette)RuntimeHelpers.GetUninitializedObject(typeof(IntroVignette));
+typeof(Scene).GetField("<Entities>k__BackingField", flags)!.SetValue(actualIntro, new EntityList(actualIntro));
+Scene(actualIntro);
+actualIntro.OpenMenu();
+var actualIntroMenu = (TextMenu)typeof(IntroVignette).GetField("menu", flags)!.GetValue(actualIntro)!;
+Check(ChapterResetGuard.IsSafe(actualIntroMenu.Items[0]) && ChapterResetGuard.IsSafe(actualIntroMenu.Items[1]) &&
+    ChapterResetGuard.ActionOf(actualIntroMenu.Items[2]) == "return_to_map", "Actual IntroVignette construction identity is wrong");
+Check(ChapterResetGuard.Initialize() && ChapterResetGuard.ActionOf(actualIntroMenu.Items[2]) == "return_to_map",
+    "Preserved actual intro menu identity was lost on reload");
+Check(!Job().AllowMenuConfirmation(actualIntroMenu.Items[2]) &&
+    Job(permissions: new(false, true, false)).AllowMenuConfirmation(actualIntroMenu.Items[2]),
+    "Actual intro return permission is coupled to restart/save permission");
+Console.WriteLine("PASS: actual native IntroVignette menu construction and preserved menu re-identification retain safe callbacks and independent return permission");
 foreach (string dangerous in new[] { "menu_pause_restartarea", "menu_restart_continue", "menu_pause_return", "menu_return_continue", "menu_pause_savequit", "intro_vignette_quit" }) {
     foreach (bool tas in new[] { false, true }) {
         Feed("", tas); var menu = Menu(dangerous); var job = Job();
@@ -113,7 +186,7 @@ foreach (var (keys, tas) in new[] { ("J", false), ("Q", true), ("K", true) }) {
     Feed(keys, tas); menu.orig_Update();
     Check(pressed == before && job.StopReason == null, "Non-confirm/room-retry input was blocked");
 }
-foreach (string safe in new[] { "menu_pause_resume", "menu_pause_retry", "menu_pause_skip_cutscene", "menu_restart_cancel", "menu_return_cancel", "ordinary settings" }) {
+foreach (string safe in new[] { "menu_pause_resume", "menu_pause_retry", "menu_pause_skip_cutscene", "menu_restart_cancel", "menu_return_cancel" }) {
     Feed(""); var menu = Menu(safe); var job = Job(); int before = pressed;
     Feed("C"); menu.orig_Update();
     Check(pressed == before + 1 && confirmed == pressed && job.StopReason == null, "Safe confirmation blocked: " + safe);
@@ -168,6 +241,38 @@ for (int mask = 0; mask < 8; mask++) {
         Check(job.AllowMenuConfirmation(Menu(label).Items[0]) == allowed, "Permissions are coupled");
     }
 }
+// Display text, replacement callbacks and overridden ConfirmPressed cannot
+// impersonate a trusted native action, even with a completed/departure grant.
+foreach (bool completed in new[] { false, true }) {
+    foreach (bool departure in new[] { false, true }) {
+        var level = Level(); level.Completed = completed; Scene(level);
+        var native = (TextMenu.Button)Menu("menu_pause_restartarea").Items[0];
+        native.Label = "menu_pause_resume";
+        Check(!Job(exit: departure).AllowMenuConfirmation(native), "Renaming restart made it safe");
+        native.OnPressed += () => { };
+        Check(!Job(exit: departure).AllowMenuConfirmation(native), "Multicast native action bypassed protection");
+        native.OnPressed = () => { };
+        Check(!Job(exit: departure).AllowMenuConfirmation(native), "Replaced native action bypassed protection");
+        var forged = new TextMenu.Button(Dialog.Clean("menu_pause_resume")) { OnPressed = () => { } };
+        Check(!Job(exit: departure).AllowMenuConfirmation(forged), "Safe text impersonated native callback");
+        var safe = (TextMenu.Button)Menu("menu_pause_resume").Items[0];
+        var derived = new ProbeButton(safe.Label, () => { }) { OnPressed = safe.OnPressed };
+        Check(!Job(exit: departure).AllowMenuConfirmation(derived), "Derived ConfirmPressed bypassed native callback authentication");
+        Scene(Level());
+        Check(!Job(exit: departure).AllowMenuConfirmation(safe), "Old scene native callback acquired current owner grant");
+    }
+}
+var introOwner = (IntroVignette)RuntimeHelpers.GetUninitializedObject(typeof(IntroVignette)); Scene(introOwner);
+var introQuit = (TextMenu.Button)Menu("intro_vignette_quit").Items[0];
+introQuit.OnPressed += () => { };
+Check(!Job().AllowMenuConfirmation(introQuit), "Multicast intro quit bypassed independent return permission");
+introQuit.OnPressed = () => { };
+Check(!Job().AllowMenuConfirmation(introQuit), "Replaced intro quit bypassed independent return permission");
+typeof(ChapterResetGuard).GetField("identitiesReady", flags)!.SetValue(null, false);
+ChapterResetGuard.Available = true;
+Check(!ChapterResetGuard.Available, "Dispatch availability hid failed native identity initialization");
+Check(ChapterResetGuard.Initialize() && ChapterResetGuard.Available, "Identity initialization failed to restore capability");
+Console.WriteLine("PASS: native owner/callback/type authentication rejects forged, modified and derived buttons across completion/departure/intro grants");
 // Unfinished Level, no departure grant, not every action allowed: items that map to no known action pass only if
 // they are known safe ones. A button a mod adds (or a renamed one) that restarts or leaves must not slip through.
 foreach (var (label, ok) in new[] { ("menu_pause_resume", true), ("menu_pause_retry", true), ("menu_pause_skip_cutscene", true),
@@ -182,9 +287,9 @@ foreach (var (label, ok) in new[] { ("menu_pause_resume", true), ("menu_pause_re
     Check(!partial.AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Partial permission opened unknown items");
     Check(partial.AllowMenuConfirmation(Menu("menu_pause_return").Items[0]), "Allowed return to map blocked");
     Scene(Level()); Check(Job(allow: true).AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "All-allowed run checked unknown items");
-    Scene(Level()); Check(Job(exit: true).AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Verified departure blocked unknown items");
+    Scene(Level()); Check(!Job(exit: true).AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Verified departure allowed unknown items");
     var done = Level(); done.Completed = true; Scene(done);
-    Check(Job().AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Finished level blocked unknown items");
+    Check(!Job().AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Finished level allowed unknown items");
     Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)));
     Check(Job().AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Menus outside a Level were whitelisted");
 }

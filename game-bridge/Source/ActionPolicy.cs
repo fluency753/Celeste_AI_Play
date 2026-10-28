@@ -41,14 +41,13 @@ internal sealed class ActionPolicy {
         string? action = ChapterResetGuard.ActionOf(item);
         bool completed = Engine.Scene is Level { Completed: true };
         if (action == null) {
-            // Items are recognised by their text in the current language, so a list of dangerous items alone would let
-            // through a button a mod adds (or a renamed one) that restarts or leaves the chapter. In an unfinished
-            // level with no departure grant, unless every action is allowed, only the known safe items pass; options,
-            // assist/variant/mod menus and anything unrecognised are refused there.
-            if (Engine.Scene is Level && !completed && departureLevel == null && !Permissions.AllowsAll &&
+            // A list of dangerous callbacks alone would let through a button a mod adds or changes.
+            // Completion and departure grants apply only to authenticated
+            // return/save callbacks, never to an unknown operation. Other scenes retain normal menu controls.
+            if (Engine.Scene is Level or IntroVignette && !Permissions.AllowsAll &&
                     !ChapterResetGuard.IsSafe(item))
                 return new("chapter_reset_blocked", "menu.unknown_item", "menu_item",
-                    "In an unfinished chapter only resume, retry, skip cutscene and cancel may be confirmed",
+                    "Only authenticated native resume, retry, skip cutscene and cancel callbacks may be confirmed without all action permissions",
                     "resume/retry/skip_cutscene/cancel", ChapterResetGuard.LabelOf(item));
             return null;
         }

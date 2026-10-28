@@ -69,6 +69,15 @@ def blocked(obs):
 
 
 class MenuNavigationTests(unittest.TestCase):
+    def test_unknown_callback_explanation_applies_after_completion_too(self):
+        obs = level()
+        obs['level']['completed'] = True
+        error = MenuActionBlocked(reply(obs, stop='chapter_reset_blocked',
+            block={'rule_id': 'menu.unknown_item', 'action': 'menu_item', 'actual': '是'}))
+        self.assertIn('原生行为核验', str(error))
+        self.assertIn('未知按钮不放行', str(error))
+        self.assertNotIn('未通关', str(error))
+
     def test_resume_loaded_level_returns_without_input_or_departure(self):
         for controllable in (True, False):
             obs = level(controllable=controllable)

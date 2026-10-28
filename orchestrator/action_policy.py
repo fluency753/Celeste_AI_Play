@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 VERSION = 1
 LABELS = {'restart_chapter': '重启章节', 'return_to_map': '返回地图', 'save_quit': '保存并退出'}
-MENU_WHITELIST = '未通关时暂停菜单里只能选继续、重试、跳过剧情或取消'
+MENU_WHITELIST = '权限受限时，关卡／序章菜单只能选继续、重试、跳过剧情或取消，或执行已明确获准的原生菜单动作；未知按钮不放行'
 BLOCK_STOPS = frozenset({'entry_blocked', 'chapter_reset_blocked', 'unsupported_scene_blocked'})
 
 

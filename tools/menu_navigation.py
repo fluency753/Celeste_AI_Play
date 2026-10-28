@@ -1,7 +1,7 @@
 """Menu macros must stop at a denied action instead of waiting for an impossible transition."""
 from __future__ import annotations
 
-from orchestrator.action_policy import BLOCK_STOPS
+from orchestrator.action_policy import BLOCK_STOPS, MENU_WHITELIST
 
 
 class MenuActionBlocked(RuntimeError):
@@ -19,7 +19,7 @@ class MenuActionBlocked(RuntimeError):
             target = '地图' if rule == 'target.map' else '存档槽位'
             reason = f'{target}与任务不符（要求 {self.block.get("expected")}，实际 {self.block.get("actual")}）'
         elif rule == 'menu.unknown_item':
-            reason = '未通关时只允许继续、重试、跳过剧情或取消；当前选项不在允许范围'
+            reason = f'{MENU_WHITELIST}；当前按钮未通过原生行为核验'
         else:
             reason = self.block.get('reason') or self.result.get('stop') or '权限不足'
         super().__init__(f'菜单宏已停止：主控拦截「{action}」（{rule}）：{reason}。'
