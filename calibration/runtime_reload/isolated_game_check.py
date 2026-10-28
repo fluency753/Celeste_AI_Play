@@ -144,6 +144,26 @@ class ClockReceiver:
         self.sock.close()
 
 
+def binding_probe(client, before_obs):
+    """Everest 重载会按玩家设置重建按键；默认设置下合成的抓（手柄 X）会变成冲刺，对话（Y）会变成跳。
+    重载后实际按一次抓和对话，确认核心已重新套用桥接绑定，而不只是发送中立帧。"""
+    player = before_obs.get('player') or {}
+    result = {}
+    if (player.get('dashes') or 0) > 0:
+        grab = client.call('step', inputs=['1,G'], image=False, trajectory=False)['obs'].get('player') or {}
+        result.update(grab_state=grab.get('state'), grab_dashes=grab.get('dashes'))
+        assert grab.get('state') != 'Dash' and grab.get('dashes') == player.get('dashes'), \
+            ('Grab was interpreted as a dash after reload', grab)
+        client.call('step', inputs=['20'], image=False, trajectory=False)
+    if player.get('onGround') is True:
+        talk = client.call('step', inputs=['1,T'], image=False, trajectory=False)['obs'].get('player') or {}
+        speed_y = (talk.get('speed') or [0, 0])[1]
+        result['talk_speed_y'] = speed_y
+        assert speed_y >= 0, ('Talk was interpreted as a jump after reload', talk)
+        client.call('step', inputs=['20'], image=False, trajectory=False)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--isolation', type=Path, required=True)
@@ -196,6 +216,8 @@ def main():
             receiver.phase = f'cycle-{cycle}-before'
             client.call('step', inputs=['120'], image=False, trajectory=False)
             before = client.call('hello')
+            assert before.get('input_reinit_guard') is True and before.get('input_bindings_ok') is True, \
+                ('Runtime cannot re-apply or verify injected bindings', before.get('input_binding_mismatches'))
             before_obs = client.call('observe', image=False, entities=False, tiles=False)['obs']
             prepared = client.call('reload_prepare')
             assert prepared['stage'] == 'prepared', prepared
@@ -251,6 +273,11 @@ def main():
                 if field in before:
                     assert before[field] == after[field], (field, before[field], after.get(field))
             assert after['record_audio_active'] and after['frozen'], after
+            # Everest's LateInitializeModules re-initialized inputs for the new module; the core must have re-applied them.
+            assert after.get('input_bindings_ok') is True, ('Bindings not restored after reload', after.get('input_binding_mismatches'))
+            assert after.get('input_bindings_reapplied', 0) > before.get('input_bindings_reapplied', 0), \
+                'Everest did not re-initialize inputs, or the core did not observe it'
+            assert after.get('reload_hold') is True, after
             assert before_obs['save']['slot'] == after_obs['save']['slot'] == manifest['slot']
             for field in ('sid', 'room', 'chapterTimeTicks'):
                 assert before_obs['level'][field] == after_obs['level'][field], field
@@ -260,6 +287,7 @@ def main():
                 'before_obs': before_obs, 'after_obs': after_obs, 'ipc_reconnects': client.reconnects})
             client.call('reload_finish', lease=lease)
             receiver.phase = f'cycle-{cycle}-after'
+            report['cycles'][-1]['binding_probe'] = binding_probe(client, after_obs)
             client.call('step', inputs=['120'], image=False, trajectory=False)
         client.call('record', action='stop')
         deadline = time.monotonic() + 5

@@ -8,7 +8,7 @@
 
 分别使用两个不同 SourceRevisionId 和当前检出版本构建核心，要求 DLL 哈希一致，防止 SourceLink 或版本提交号导致兼容热重载被误拒绝。
 
-先构建 `game-runtime` 和 `game-bridge`。原生检查保留真实 TCP IPC、时钟令牌、两套 FMOD mixer、共享 PCM 与可回收程序集委托，替换的外部边界只有 Everest `ReloadMod`，不声称覆盖实际游戏加载器：
+先构建 `game-runtime` 和 `game-bridge`。原生检查保留真实 TCP IPC、时钟令牌、两套 FMOD mixer、共享 PCM 与可回收程序集委托，替换的外部边界是 Everest `ReloadMod`，不声称覆盖实际游戏加载器。替身 Level 没有 Tracker 与玩家：检查先确认生产预检以 `refused` 拒绝它（不进入冻结），再替换预检 `ReloadBlocker` 继续传输检查；另核对冻结期间只读 `hello`、只有未提交的交接可 `reload_abort`、提交失败后拒绝撤销，以及上次尝试已换过房间时重试仍等待本次的房间重建：
 
 ```powershell
 dotnet run --project calibration/runtime_reload "-p:CelestePrefix=<游戏目录>" -- "<游戏目录>"
@@ -28,7 +28,7 @@ dotnet run --project calibration/runtime_reload "-p:CelestePrefix=<游戏目录>
 
 增加 `--bad-dll --cycles 1` 可在 prepare 后备份并破坏私有 payload DLL，确认真实 Loader 卸载旧模块、失败保持冻结与时钟应答，再恢复文件并用同一 lease 重试。原 DLL 在 `finally` 中恢复，备份和失败状态保留在证据目录；不要对原安装运行此场景。
 
-检查实际载入 slot 10，保留同一 IPC/时钟连接及两个 WAV 输出句柄，调用普通 `Everest.Loader.ReloadMod`，对比同存档、SID、房间、IGT、帧号、录音计数和音乐时间线，并验证共享 PCM 可读且有声。结果和音频保存在副本中的 `reload-acceptance-*`。该接收器执行 OBS 插件线协议与 PCM 消费，但不启动 OBS 编码器，不覆盖真实 OBS 插件编码输出。关闭测试时只关闭已核对路径的私有进程，不退出用户原游戏。
+检查实际载入 slot 10，保留同一 IPC/时钟连接及两个 WAV 输出句柄，调用普通 `Everest.Loader.ReloadMod`，对比同存档、SID、房间、IGT、帧号、录音计数和音乐时间线，并验证共享 PCM 可读且有声。1.3.1 起每次重载前后都要求 `hello.input_bindings_ok`，重载后 `input_bindings_reapplied` 必须增加（Everest 注册新模块时重建了按键，核心已重新套用）；结束交接后实际按一次抓（G）与对话（T），确认没有按玩家默认绑定变成冲刺或跳，结果记入每轮的 `binding_probe`。结果和音频保存在副本中的 `reload-acceptance-*`。该接收器执行 OBS 插件线协议与 PCM 消费，但不启动 OBS 编码器，不覆盖真实 OBS 插件编码输出。关闭测试时只关闭已核对路径的私有进程，不退出用户原游戏。
 
 ## 真实 OBS 编码验收
 

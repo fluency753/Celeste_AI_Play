@@ -177,7 +177,7 @@ winget install Microsoft.DotNet.SDK.8
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本构建桥接及其常驻核心依赖，备份并安装 `Mods\CelesteAIBridge\` 与 `Mods\CelesteAIRuntime\` 两个 Mod；首次安装与核心更新必须关闭游戏。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.3.0）。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。1.3.0 是不兼容的部署结构变化，旧版需维护重启迁移。已经安装相同常驻核心的兼容逻辑更新，可用 `-HotReload -HudPort 47792` 经在用主控保持原录像重载；正常 Everest 重载仍会重建当前房间。完整流程、失败重试与验收边界见 [桥接重载](BRIDGE_RELOAD.md)。
+Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本构建桥接及其常驻核心依赖，备份并安装 `Mods\CelesteAIBridge\` 与 `Mods\CelesteAIRuntime\` 两个 Mod；首次安装与核心更新必须关闭游戏。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.3.1，要求常驻核心 1.0.2），以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。1.3.0 是不兼容的部署结构变化，旧版需维护重启迁移；1.3.1／核心 1.0.2 同样需要维护重启安装。已经安装相同常驻核心的兼容逻辑更新，可用 `-HotReload -HudPort 47792` 经在用主控保持原录像重载；正常 Everest 重载仍会重建当前房间。回滚在关闭游戏后用 `-Rollback "<部署时打印的备份目录>"`：当前两个 Mod 先移到 `<Celeste 安装目录>\CelesteAI-backups\`（不删除），备份里没有常驻核心时核心不再加载，避免旧桥接与核心争用端口。完整流程、撤销、失败重试与验收边界见 [桥接重载](BRIDGE_RELOAD.md)。
 
 冒烟测试（游戏停在标题画面即可）：
 
@@ -513,6 +513,7 @@ GPT 使用本机 Codex 已登录的原生执行器（`--engine codex`），不�
 ```powershell
 docker rm -f celeste-agent-<标签>; docker volume rm celeste-claude-<标签>; docker image rm celeste-agent:0.1
 Remove-Item "<Celeste 安装目录>\Mods\CelesteAIBridge" -Recurse
+Remove-Item "<Celeste 安装目录>\Mods\CelesteAIRuntime" -Recurse
 Remove-Item "<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll"
 .\.venv\Scripts\python.exe tools\obs_setup.py restore     # OBS 下次打开时选中你原来的配置文件与场景集合
 ```

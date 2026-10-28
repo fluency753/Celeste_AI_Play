@@ -14,9 +14,13 @@ public sealed class RuntimeModule : EverestModule {
     public override void Load() {
         RecordingAudio.Load();
         FreezeGate.Load();
+        // Input bindings are resident state; Everest re-initializes inputs whenever a Mod
+        // (such as the reloaded bridge) registers, so the core must re-apply them.
+        InputInjector.Load();
         IpcServer.Start(Settings.Port);
         ClockServer.Start(Settings.ClockPort);
-        Log.Info($"resident runtime ABI {BridgeRuntime.ContractVersion}, IPC {Settings.Port}, clock {Settings.ClockPort}");
+        Log.Info($"resident runtime ABI {BridgeRuntime.ContractVersion}, IPC {Settings.Port}, clock {Settings.ClockPort}, " +
+            $"input re-init guard {(InputInjector.ReinitializeHooked ? "on" : "unavailable")}");
     }
 
     public override void Unload() {
@@ -25,6 +29,7 @@ public sealed class RuntimeModule : EverestModule {
         ClockServer.Stop();
         RecordingAudio.Unload();
         InputInjector.Uninstall();
+        InputInjector.Unload();
         FreezeGate.Unload();
         RuntimeStatus.Unload();
     }

@@ -7,6 +7,7 @@ using Celeste.Mod;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using Monocle;
+using MonoMod.RuntimeDetour;
 using CelesteSettings = Celeste.Settings;
 using GameInput = Celeste.Input;
 
@@ -48,31 +49,147 @@ public static class InputInjector {
     private static bool origAttached;
     private static readonly List<(VirtualButton button, Binding original)> ModBindingBackup = new();
 
-    public static void Install() {
-        if (installed) {
-            return;
-        }
+    // Everest 每次注册 Mod（包括受控重载后的新桥接）都会调用 Input.Initialize，按玩家设置重建全部虚拟按键，
+    // 并让其他 Mod 的快捷键重新生效。接管期间要在这之后重新套用桥接绑定，否则合成输入会按玩家自己的绑定解释。
+    private delegate void OrigInitialize();
+    private static Hook? initializeHook;
+    [ThreadStatic] private static int ownInitialize;   // 本类自己调用 Input.Initialize 时不再触发重新套用
+    private static volatile bool reinitPending;         // 非主线程上的 Initialize：交给下一次主线程节拍处理
+    private static readonly Dictionary<string, Binding> Expected = new();
+    // 核对的游戏按键：设置字段名 → 游戏里实际使用的虚拟按键
+    private static readonly (string Setting, string Name, Func<VirtualButton?> Live)[] Checked = {
+        ("Jump", "Jump", () => GameInput.Jump),
+        ("Dash", "Dash", () => GameInput.Dash),
+        ("Grab", "Grab", () => GameInput.Grab),
+        ("Talk", "Talk", () => GameInput.Talk),
+        ("DemoDash", "CrouchDash", () => GameInput.CrouchDash),
+        ("Confirm", "MenuConfirm", () => GameInput.MenuConfirm),
+        ("Cancel", "MenuCancel", () => GameInput.MenuCancel),
+        ("Pause", "Pause", () => GameInput.Pause),
+        ("Journal", "MenuJournal", () => GameInput.MenuJournal),
+    };
 
+    public static bool Installed => installed;
+    /// <summary>Input.Initialize 的重新套用钩子已安装（核心 1.0.2 起）。</summary>
+    public static bool ReinitializeHooked => initializeHook != null;
+    /// <summary>接管期间因外部 Input.Initialize 重新套用桥接绑定的次数。</summary>
+    public static int Reapplied { get; private set; }
+
+    public static void Load() {
+        try {
+            MethodInfo? initialize = typeof(GameInput).GetMethod("Initialize", BindingFlags.Public | BindingFlags.Static,
+                null, Type.EmptyTypes, null);
+            if (initialize == null) {
+                Log.Error("Input.Initialize not found; bridge bindings cannot be re-applied after a Mod reload");
+                return;
+            }
+            initializeHook = new Hook(initialize,
+                typeof(InputInjector).GetMethod(nameof(OnInitialize), BindingFlags.Static | BindingFlags.NonPublic)!);
+        } catch (Exception ex) {
+            initializeHook = null;
+            Log.Error("installing the Input.Initialize hook failed: " + ex);
+        }
+    }
+
+    public static void Unload() {
+        initializeHook?.Dispose();
+        initializeHook = null;
+        reinitPending = false;
+    }
+
+    private static void OnInitialize(OrigInitialize orig) {
+        orig();
+        if (ownInitialize > 0) return;
+        if (!MainThreadHelper.IsMainThread) {
+            // Mod 重载的工作线程：此时主线程可能正在喂输入，留到主线程节拍开头再套用
+            reinitPending = true;
+        } else if (installed) {
+            Reapply("Input.Initialize");
+        }
+    }
+
+    /// <summary>主线程调用：补做其他线程上的 Input.Initialize 之后应当进行的重新套用。</summary>
+    public static void ServicePending() {
+        if (!reinitPending) return;
+        reinitPending = false;
+        if (installed) Reapply("Input.Initialize on a worker thread");
+    }
+
+    private static void Reapply(string reason) {
+        try {
+            ApplyBindings();
+            Reapplied++;
+            Log.Info($"input bindings re-applied after {reason}");
+        } catch (Exception ex) {
+            Log.Error("re-applying input bindings failed: " + ex);
+        }
+    }
+
+    private static void InitializeOwn() {
+        ownInitialize++;
+        try {
+            GameInput.Initialize();
+        } finally {
+            ownInitialize--;
+        }
+    }
+
+    /// <summary>按桥接绑定重建虚拟按键并清空其他 Mod 的快捷键；不改模式设置，也不改玩家保存的绑定。</summary>
+    private static void ApplyBindings() {
         CelesteSettings settings = CelesteSettings.Instance;
         FieldInfo[] bindingFields = typeof(CelesteSettings)
             .GetFields(BindingFlags.Public | BindingFlags.Instance)
             .Where(f => f.FieldType == typeof(Binding))
             .ToArray();
         var backup = bindingFields.ToDictionary(f => f, f => f.GetValue(settings));
+        reinitPending = false;   // 此后其他线程再调用 Initialize 仍会重新标记
 
-        foreach (FieldInfo f in bindingFields) {
-            f.SetValue(settings, new Binding());
-        }
-        ConfigureBindings(settings);
+        try {
+            foreach (FieldInfo f in bindingFields) {
+                f.SetValue(settings, new Binding());
+            }
+            ConfigureBindings(settings);
+            Expected.Clear();
+            foreach (var (setting, _, _) in Checked) {
+                if (typeof(CelesteSettings).GetField(setting)?.GetValue(settings) is Binding expected) Expected[setting] = expected;
+            }
 
-        GameInput.Initialize();
-
-        // 还原设置字段：虚拟输入已按上面的绑定建好，玩家的设置文件保持不变
-        foreach (var (field, value) in backup) {
-            field.SetValue(settings, value);
+            InitializeOwn();
+        } finally {
+            // 还原设置字段：虚拟输入已按上面的绑定建好，玩家的设置文件保持不变
+            foreach (var (field, value) in backup) {
+                field.SetValue(settings, value);
+            }
         }
 
         ClearModBindings();
+    }
+
+    /// <summary>接管期间实际生效的游戏按键与桥接绑定不一致的项；未接管时为空。</summary>
+    public static string[] BindingMismatches() {
+        if (!installed) return Array.Empty<string>();
+        var result = new List<string>();
+        foreach (var (setting, name, live) in Checked) {
+            Binding? actual = live()?.Binding;
+            if (!Expected.TryGetValue(setting, out Binding? expected) || actual == null || !SameBinding(expected, actual))
+                result.Add(name);
+        }
+        foreach (string mod in LiveModBindings()) result.Add("mod:" + mod);
+        return result.ToArray();
+    }
+
+    private static bool SameBinding(Binding expected, Binding actual) =>
+        ReferenceEquals(expected, actual) ||
+        new HashSet<Buttons>(expected.Controller).SetEquals(actual.Controller) &&
+        new HashSet<Keys>(expected.Keyboard).SetEquals(actual.Keyboard);
+
+    public static void Install() {
+        if (installed) {
+            return;
+        }
+
+        CelesteSettings settings = CelesteSettings.Instance;
+        ApplyBindings();
 
         origGrabMode = settings.GrabMode;
         origCrouchDashMode = settings.CrouchDashMode;
@@ -98,8 +215,9 @@ public static class InputInjector {
         CelesteSettings settings = CelesteSettings.Instance;
         settings.GrabMode = origGrabMode;
         settings.CrouchDashMode = origCrouchDashMode;
-        GameInput.Initialize();
+        InitializeOwn();
 
+        // Input.Initialize 已按 Mod 设置重建了它们的按键；这里再把仍在用的旧按键对象还原，两种情况都回到玩家绑定
         foreach (var (button, original) in ModBindingBackup) {
             button.Binding = original;
         }
@@ -109,6 +227,8 @@ public static class InputInjector {
         MInput.GamePads[GameInput.Gamepad].Attached = origAttached;
 
         installed = false;
+        reinitPending = false;
+        Expected.Clear();
         Log.Info("input bindings restored");
     }
 
@@ -233,7 +353,24 @@ public static class InputInjector {
 
     // 其他 Mod 的快捷键（例如存读档工具）可能绑在手柄按钮上，接管期间全部清空，退出时还原
     private static void ClearModBindings() {
+        var previous = ModBindingBackup.ToList();
         ModBindingBackup.Clear();
+        foreach (var (_, button) in ModButtons()) {
+            // 只改运行时的虚拟按键，不动设置里保存的绑定。重新套用时同一个按键对象已被清空过，
+            // 沿用第一次备份的玩家绑定；Input.Initialize 新建的按键对象则备份它当前（玩家）的绑定。
+            int known = previous.FindIndex(entry => ReferenceEquals(entry.button, button));
+            ModBindingBackup.Add((button, known >= 0 ? previous[known].original : button.Binding));
+            button.Binding = new Binding();
+        }
+    }
+
+    private static IEnumerable<string> LiveModBindings() {
+        foreach (var (label, button) in ModButtons()) {
+            if (button.Binding is { } binding && (binding.Controller.Count > 0 || binding.Keyboard.Count > 0)) yield return label;
+        }
+    }
+
+    private static IEnumerable<(string Label, VirtualButton Button)> ModButtons() {
         foreach (EverestModule module in Everest.Modules) {
             if (module.Metadata?.Name is "CelesteAIBridge" or "CelesteAIRuntime" ||
                     module.SettingsType is not { } type || module._Settings is not { } moduleSettings) {
@@ -243,10 +380,8 @@ public static class InputInjector {
                 if (p.PropertyType != typeof(ButtonBinding) || p.GetGetMethod(true) == null) {
                     continue;
                 }
-                // 只改运行时的虚拟按键，不动设置里保存的绑定
                 if (p.GetValue(moduleSettings) is ButtonBinding { Button: { } button }) {
-                    ModBindingBackup.Add((button, button.Binding));
-                    button.Binding = new Binding();
+                    yield return ($"{module.Metadata?.Name}.{p.Name}", button);
                 }
             }
         }

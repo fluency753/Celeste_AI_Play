@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- 与桥接共用本机游戏路径：game-bridge/local.props（不入库）；也可在本目录另放 local.props -->
+  <Import Project="../game-bridge/local.props" Condition="Exists('../game-bridge/local.props')" />
+  <Import Project="local.props" Condition="Exists('local.props')" />
   <PropertyGroup>
     <AssemblyName>CelesteAIRuntime</AssemblyName>
     <RootNamespace>CelesteAI.Bridge</RootNamespace>
@@ -8,11 +11,16 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <NoWarn>$(NoWarn);CS0436</NoWarn>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <!-- Payload-only commits must not change the resident DLL's debug identity. -->
     <EnableSourceLink>false</EnableSourceLink>
+    <!-- The PE embeds the PDB path and a PDB id derived from source paths; map the
+         checkout root so the hot-reload hash check does not depend on where the repo lives. -->
+    <CelesteAIRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../'))</CelesteAIRepoRoot>
+    <PathMap>$(CelesteAIRepoRoot)=/_/</PathMap>
     <CelestePrefix Condition="'$(CelestePrefix)' == ''">$(CELESTE_DIR)</CelestePrefix>
+    <CelestePrefix Condition="'$(CelestePrefix)' == ''">..\..\Celeste</CelestePrefix>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="$(CelestePrefix)/Celeste.dll" Private="false" Publicize="true" />

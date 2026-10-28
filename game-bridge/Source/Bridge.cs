@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.3.0";
+    public const string Version = "1.3.1";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get => BridgeRuntime.Active; private set => BridgeRuntime.Active = value; }
@@ -477,6 +477,17 @@ internal static class Bridge {
         }
     }
 
+    /// <summary>游戏正在使用的常驻核心 DLL 路径（主控热重载前据此核对核心构建是否相同）。</summary>
+    private static string? RuntimeDllPath() {
+        EverestModuleMetadata? meta = RuntimeModule.Instance?.Metadata;
+        if (string.IsNullOrEmpty(meta?.PathDirectory) || string.IsNullOrEmpty(meta.DLL) || !string.IsNullOrEmpty(meta.PathArchive)) return null;
+        try {
+            return Path.GetFullPath(Path.Combine(meta.PathDirectory, meta.DLL));
+        } catch (Exception) {
+            return null;
+        }
+    }
+
     private static void Handle(Request req) {
         JsonElement a = req.Args;
         switch (req.Cmd) {
@@ -502,6 +513,18 @@ internal static class Bridge {
                     w.WriteBoolean("record_audio_mod_banks", true);
                     w.WriteNumber("bridge_reload", BridgeRuntime.Ready ? 1 : 0);
                     w.WriteNumber("runtime_contract", BridgeRuntime.ContractVersion);
+                    w.WriteBoolean("reload_hold", BridgeRuntime.HoldingReload);
+                    w.WriteString("runtime_version", RuntimeModule.Instance?.Metadata?.VersionString);
+                    w.WriteString("runtime_path", RuntimeDllPath());
+                    // 受控重载后 Everest 会按玩家设置重建按键；核心应已重新套用桥接绑定，这里报告实际生效的结果
+                    string[] bindingMismatches = InputInjector.BindingMismatches();
+                    w.WriteBoolean("input_reinit_guard", InputInjector.ReinitializeHooked);
+                    w.WriteBoolean("input_bindings_installed", InputInjector.Installed);
+                    w.WriteBoolean("input_bindings_ok", bindingMismatches.Length == 0);
+                    w.WriteStartArray("input_binding_mismatches");
+                    foreach (string mismatch in bindingMismatches) w.WriteStringValue(mismatch);
+                    w.WriteEndArray();
+                    w.WriteNumber("input_bindings_reapplied", InputInjector.Reapplied);
                     w.WriteBoolean("mod_hud", true);
                     w.WriteNumber("record_audio_tracks", RecordingAudio.TrackCount);
                     w.WriteBoolean("create_save", true);

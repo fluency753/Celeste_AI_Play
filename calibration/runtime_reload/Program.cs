@@ -55,6 +55,7 @@ Guid owner = Guid.Empty;
 int imports = 0, logicTicks = 0, originalTicks = 0;
 bool failReload = false;
 bool wrongSlot = false;
+bool deferScene = false;
 WeakReference? oldContext = null;
 object AudioMixer(string name) => typeof(RecordingAudio).GetField(name, flags)!.GetValue(null)!;
 object full = AudioMixer("full"), play = AudioMixer("play");
@@ -75,7 +76,7 @@ using var reload = new Hook(typeof(Everest.Loader).GetMethod("ReloadMod", flags)
     if (owner != Guid.Empty) { BridgeRuntime.Detach(owner); owner = Guid.Empty; }
     if (failReload) throw new InvalidOperationException("Injected loader failure");
     Attach();
-    Scene(NewLevel());
+    if (!deferScene) Scene(NewLevel());
     if (wrongSlot) SaveData.Instance.FileSlot = 11;
 }));
 void Pump() => BridgeRuntime.Tick(() => originalTicks++, () => originalTicks++);
@@ -126,6 +127,12 @@ try {
     using var engineGate = new ILHook(typeof(Engine).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic)!,
         typeof(FreezeGate).GetMethod("EngineGate", flags)!.CreateDelegate<ILContext.Manipulator>());
     Check(BridgeRuntime.Ready, "Production Engine IL did not enable the resident freeze gate");
+    // The fixture Level has no Tracker/Player: the production precheck must refuse it
+    // (not a transient busy), then the precheck is replaced for the transport checks.
+    JsonElement refused = Call("reload_prepare");
+    Check(refused.GetProperty("ok").GetBoolean() && refused.GetProperty("stage").GetString() == "refused" && !BridgeRuntime.HoldingReload,
+        "Core prepared a reload without a controllable player: " + refused);
+    using var blocker = new Hook(typeof(BridgeRuntime).GetMethod("ReloadBlocker", flags)!, (Func<Level, string?>)(_ => null));
     for (int i = 0; i < 30; i++) ClockToken(nextToken++, false);
     Check(receivedEnergy.All(e => e > 0), "Actual dual PCM receiver has no audible baseline");
     for (int cycle = 0; cycle < 3; cycle++) {
@@ -138,6 +145,10 @@ try {
         int ticksBefore = logicTicks;
         for (int i = 0; i < 4; i++) ClockToken(nextToken++, true);
         Check(!Call("step").GetProperty("ok").GetBoolean(), "Held core accepted a new game action");
+        JsonElement held = Call("hello");
+        Check(held.GetProperty("ok").GetBoolean() && held.GetProperty("reload_hold").GetBoolean() &&
+            held.GetProperty("reload").GetProperty("stage").GetString() == "prepared" &&
+            held.GetProperty("reload").GetProperty("abortable").GetBoolean(), "Held hello did not report an abortable hold: " + held);
         Check(!Call("reload_finish", "not-the-lease").GetProperty("ok").GetBoolean(), "Mismatched lease resumed the core");
         Check(BridgeRuntime.ShouldHaltEngineUpdate(), "Hold does not freeze game");
         Check(BridgeRuntime.Frame == before && RecordingAudio.RenderedFrames == audioBefore && logicTicks == ticksBefore,
@@ -158,11 +169,22 @@ try {
         for (int i = 0; i < 3 && previous.IsAlive; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect(); }
         Check(!previous.IsAlive, "Old collectible payload context remains rooted");
     }
+    string abortLease = Call("reload_prepare").GetProperty("lease").GetString()!;
+    long abortFrame = BridgeRuntime.Frame;
+    ClockToken(nextToken++, true);
+    Check(!Call("reload_abort", "not-the-lease").GetProperty("ok").GetBoolean(), "Mismatched lease released the hold");
+    JsonElement aborted = Call("reload_abort", abortLease);
+    Check(aborted.GetProperty("ok").GetBoolean() && aborted.GetProperty("stage").GetString() == "aborted" && !BridgeRuntime.HoldingReload,
+        "Prepared hold was not released: " + aborted);
+    Check(BridgeRuntime.Frame == abortFrame && imports == 3, "Abort advanced the game or imported state");
+    ClockToken(nextToken++, false);
     string failedLease = Call("reload_prepare").GetProperty("lease").GetString()!;
     failReload = true;
     Check(Call("reload_commit", failedLease).GetProperty("stage").GetString() == "failed", "Loader failure not reported");
     ClockToken(nextToken++, true);
     Check(BridgeRuntime.HoldingReload && BridgeRuntime.ShouldHaltEngineUpdate(), "Failure released hold");
+    Check(!Call("reload_abort", failedLease).GetProperty("ok").GetBoolean() && BridgeRuntime.HoldingReload,
+        "A committed reload whose payload was unloaded was released by abort");
     failReload = false;
     Call("reload_commit", failedLease); Pump();
     Check(Call("reload_status", failedLease).GetProperty("stage").GetString() == "ready", "Same-lease recovery failed");
@@ -176,13 +198,19 @@ try {
         mismatch.GetProperty("error").GetString()!.Contains("save slot"), "Wrong save identity was accepted");
     ClockToken(nextToken++, true);
     wrongSlot = false; SaveData.Instance.FileSlot = 10;
+    // The failed attempt already rebuilt the room. The retry must wait for its own rebuild.
+    deferScene = true;
     Call("reload_commit", mismatchLease); Pump();
+    Check(Call("reload_status", mismatchLease).GetProperty("stage").GetString() == "reloading",
+        "Retry became ready before its own room reload");
+    deferScene = false; Scene(NewLevel()); Pump();
     Check(Call("reload_status", mismatchLease).GetProperty("stage").GetString() == "ready", "Identity retry did not recover");
     Check(Call("reload_finish", mismatchLease).GetProperty("ok").GetBoolean(), "Identity recovery finish rejected");
     ClockToken(nextToken++, false);
     Check(imports == 5 && ipc.Connected && clock.Connected && RecordingAudio.Enabled, "Resident session ownership changed");
     Console.WriteLine("PASS: same real IPC/clock connections, token accounting, audio mixers and recording frame sequence survive three payload reloads");
     Console.WriteLine("PASS: failed loader remains frozen; old payload collectible contexts are released");
+    Console.WriteLine("PASS: precheck refuses a Level without a controllable player; held hello is read-only; only an uncommitted hold can be aborted; a retry waits for its own room reload");
     Console.WriteLine("BOUNDARY: Everest loader is replaced here; stock Loader.ReloadMod and room rebuild require separate isolated game acceptance");
 } finally {
     BridgeRuntime.Shutdown(); IpcServer.Stop(); ClockServer.Stop(); RecordingAudio.Unload(); live.release();

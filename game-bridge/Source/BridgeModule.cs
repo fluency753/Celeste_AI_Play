@@ -19,6 +19,9 @@ public class BridgeModule : EverestModule {
     }
 
     public override void Load() {
+        // 1.3.1 依赖核心 1.0.2 的输入绑定重新套用；旧核心缺少这个成员时在这里加载失败，不会接上桥接
+        if (!InputInjector.ReinitializeHooked)
+            Log.Warn("resident runtime cannot re-apply input bindings after Input.Initialize; reloads will be refused by the controller");
         try {
             Hooks.Load();
             Metadata.VersionString = Bridge.Version;

@@ -3,6 +3,9 @@ import re
 
 
 def validate_bridge(hello):
+    from .bridge_reload import hold_message
+    if held := hold_message(hello):
+        raise RuntimeError(held)
     match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)', str(hello.get('bridge', '')))
     if (not match or tuple(map(int, match.groups())) < (1, 0, 22)
             or not all(hello.get(key) for key in ('create_save', 'dialog_choices', 'story_text', 'entry_guard'))):

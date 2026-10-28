@@ -348,7 +348,8 @@ class SessionControls:
         was_paused = self.paused
         started_pause = self.pause_at is None
         self.paused, self.pausing = True, True
-        self.control.mark(row['id'], 'waiting', '等待当前动作完成，再重载桥接并保持原录像')
+        self.control.mark(row['id'], 'waiting', '等待当前动作完成，再撤销尚未提交的重载交接' if request.get('abort')
+                          else '等待当前动作完成，再重载桥接并保持原录像')
         try:
             async with self.action_lock:
                 if started_pause:
@@ -375,7 +376,7 @@ class SessionControls:
                     self.paused = True
                     self.cfg._keep_frozen = True
                     worker_error = worker.exception() if not worker.cancelled() else None
-                    completed = not worker.cancelled() and worker_error is None and worker.result().get('phase') == 'finished'
+                    completed = not worker.cancelled() and worker_error is None and worker.result().get('phase') in {'finished', 'aborted'}
                     self._bridge_reload_failed = getattr(worker_error, 'reload_held', not completed)
                     self.metrics.update(status='paused')
                     self.control.mark(row['id'], 'error', '重载已完成，但控制任务取消，试玩保持暂停' if completed
@@ -387,6 +388,10 @@ class SessionControls:
                     self.paused_seconds += time.monotonic() - self.pause_at
                     self.pause_at = None
                     self.metrics.resume(quota=False)
+            if result.get('phase') == 'aborted':
+                # Nothing was committed: the original bridge, room and observation stay valid.
+                self.control.mark(row['id'], 'submitted', '已撤销尚未提交的重载交接，原桥接继续运行，游戏与录像未改变')
+                return
             self.control.mark(row['id'], 'submitted', f'桥接 {result.get("version")} 已接回，原录像继续')
             self.pending_messages.append({**row, 'id': 'bridge_reload:' + str(row['id']), 'next_turn': True,
                 'text': '桥接代码已重载并接回，原录像保持连续。当前房间经 Everest 正常重载，主控仍核验原存档与房间。请先重新 observe 核对状态，不沿用旧实体编号，不重复已经执行的动作。'})

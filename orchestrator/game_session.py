@@ -356,6 +356,10 @@ class GameSession:
     def connect(self) -> dict:
         self.client = BridgeClient(port=self.cfg.bridge_port, timeout=600)
         hello = self.client.call('hello')
+        from .bridge_reload import hold_message
+        if held := hold_message(hello):
+            # A previous controller's reload hold: never activate or send input into it.
+            raise RuntimeError(held)
         self.bridge_reload_supported = type(hello.get('bridge_reload')) is int and hello['bridge_reload'] == 1
         self.entry_guard_supported = hello.get('entry_guard') is True
         self.chapter_reset_guard_supported = hello.get('chapter_reset_guard') is True
