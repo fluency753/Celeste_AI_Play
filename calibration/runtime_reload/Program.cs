@@ -10,6 +10,7 @@ using System.Text.Json;
 using Celeste;
 using Celeste.Mod;
 using CelesteAI.Bridge;
+using Bridge = CelesteAI.Bridge.Bridge;
 using Monocle;
 using MonoMod.RuntimeDetour;
 using MonoMod.Cil;
@@ -69,7 +70,7 @@ void Logic(Action original) {
 void Attach() {
     owner = Guid.NewGuid();
     oldContext = ReloadFixture.Attach(owner, Logic, request => IpcServer.Send(Reply.Ok(request.Id)),
-        text => { Check(text == "{\"state\":7}", "Reload state changed"); imports++; });
+        text => { Bridge.ImportReloadState(text); imports++; });
 }
 Attach(); BridgeRuntime.Active = true;
 using var reload = new Hook(typeof(Everest.Loader).GetMethod("ReloadMod", flags)!, (Action<EverestModuleMetadata>)(_ => {
@@ -127,12 +128,29 @@ try {
     using var engineGate = new ILHook(typeof(Engine).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic)!,
         typeof(FreezeGate).GetMethod("EngineGate", flags)!.CreateDelegate<ILContext.Manipulator>());
     Check(BridgeRuntime.Ready, "Production Engine IL did not enable the resident freeze gate");
-    // The fixture Level has no Tracker/Player: the production precheck must refuse it
-    // (not a transient busy), then the precheck is replaced for the transport checks.
-    JsonElement refused = Call("reload_prepare");
-    Check(refused.GetProperty("ok").GetBoolean() && refused.GetProperty("stage").GetString() == "refused" && !BridgeRuntime.HoldingReload,
-        "Core prepared a reload without a controllable player: " + refused);
-    using var blocker = new Hook(typeof(BridgeRuntime).GetMethod("ReloadBlocker", flags)!, (Func<Level, string?>)(_ => null));
+    // The Level deliberately has no player and is in a cutscene: these are not
+    // resident-resource concerns and must not require bypassing any core rule.
+    originalScene.InCutscene = true;
+    JsonElement unrestricted = Call("reload_prepare");
+    Check(unrestricted.GetProperty("stage").GetString() == "prepared" && BridgeRuntime.HoldingReload,
+        "Resident core imposed a gameplay rule: " + unrestricted);
+    Check(Call("reload_abort", unrestricted.GetProperty("lease").GetString()).GetProperty("stage").GetString() == "aborted",
+        "Prepared cutscene hold could not abort");
+    originalScene.InCutscene = false;
+    string identitySnapshot = Bridge.ExportReloadState();
+    foreach (string identityField in new[] { "slot", "room", "time" }) {
+        string oldRoom = session.Level; long oldTime = session.Time; int oldSlot = SaveData.Instance.FileSlot;
+        if (identityField == "slot") SaveData.Instance.FileSlot++;
+        if (identityField == "room") session.Level = "wrong-room";
+        if (identityField == "time") session.Time++;
+        bool rejected = false;
+        try { Bridge.ImportReloadState(identitySnapshot); } catch (InvalidOperationException) { rejected = true; }
+        Check(rejected, "Real bridge import accepted changed " + identityField);
+        session.Level = oldRoom; session.Time = oldTime; SaveData.Instance.FileSlot = oldSlot;
+    }
+    Bridge.ImportReloadState(identitySnapshot);
+    var legacy = System.Text.Json.Nodes.JsonNode.Parse(identitySnapshot)!.AsObject(); legacy.Remove("identity");
+    Bridge.ImportReloadState(legacy.ToJsonString());
     for (int i = 0; i < 30; i++) ClockToken(nextToken++, false);
     Check(receivedEnergy.All(e => e > 0), "Actual dual PCM receiver has no audible baseline");
     for (int cycle = 0; cycle < 3; cycle++) {
@@ -210,7 +228,8 @@ try {
     Check(imports == 5 && ipc.Connected && clock.Connected && RecordingAudio.Enabled, "Resident session ownership changed");
     Console.WriteLine("PASS: same real IPC/clock connections, token accounting, audio mixers and recording frame sequence survive three payload reloads");
     Console.WriteLine("PASS: failed loader remains frozen; old payload collectible contexts are released");
-    Console.WriteLine("PASS: precheck refuses a Level without a controllable player; held hello is read-only; only an uncommitted hold can be aborted; a retry waits for its own room reload");
+    Console.WriteLine("PASS: resident core imposes no player/cutscene rules; real bridge imports verify slot/room/time and accept legacy schema-1 snapshots");
+    Console.WriteLine("PASS: held hello is read-only; only an uncommitted hold can abort; a retry waits for its own scene replacement");
     Console.WriteLine("BOUNDARY: Everest loader is replaced here; stock Loader.ReloadMod and room rebuild require separate isolated game acceptance");
 } finally {
     BridgeRuntime.Shutdown(); IpcServer.Stop(); ClockServer.Stop(); RecordingAudio.Unload(); live.release();
@@ -218,7 +237,7 @@ try {
 
 sealed class FixtureModule : EverestModule { public override void Load() { } public override void Unload() { } }
 public static class ReloadFixture {
-    public static string Export() => "{\"state\":7}";
+    public static string Export() => Bridge.ExportReloadState();
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static WeakReference Attach(Guid owner, Action<Action> tick, Action<Request> enqueue, Action<string> import) {
         var context = new FixtureContext();

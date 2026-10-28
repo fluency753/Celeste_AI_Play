@@ -8,7 +8,7 @@
 
 分别使用两个不同 SourceRevisionId 和当前检出版本构建核心，要求 DLL 哈希一致，防止 SourceLink 或版本提交号导致兼容热重载被误拒绝。
 
-先构建 `game-runtime` 和 `game-bridge`。原生检查保留真实 TCP IPC、时钟令牌、两套 FMOD mixer、共享 PCM 与可回收程序集委托，替换的外部边界是 Everest `ReloadMod`，不声称覆盖实际游戏加载器。替身 Level 没有 Tracker 与玩家：检查先确认生产预检以 `refused` 拒绝它（不进入冻结），再替换预检 `ReloadBlocker` 继续传输检查；另核对冻结期间只读 `hello`、只有未提交的交接可 `reload_abort`、提交失败后拒绝撤销，以及上次尝试已换过房间时重试仍等待本次的房间重建：
+先构建 `game-runtime` 和 `game-bridge`。原生检查保留真实 TCP IPC、时钟令牌、两套 FMOD mixer、共享 PCM 与可回收程序集委托，替换的外部边界是 Everest `ReloadMod`，不声称覆盖实际游戏加载器。替身 Level 没有 Tracker 与玩家，Runtime 不再据此拒绝，也无需 Hook 绕过场景策略；透明快照回调调用真实 Bridge Export／Import，覆盖错存档、房间与计时拒绝以及旧 schema-1 快照兼容。另核对冻结期间只读 `hello`、只有未提交的交接可 `reload_abort`、提交失败后拒绝撤销，以及上次尝试已替换场景时重试仍等待本次加载完成：
 
 ```powershell
 dotnet run --project calibration/runtime_reload "-p:CelestePrefix=<游戏目录>" -- "<游戏目录>"

@@ -201,9 +201,10 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertEqual(result['phase'], 'finished')
         self.assertEqual(result['before']['recording']['replays'], 3)
 
-    def test_cutscene_completion_or_uncontrollable_player_refuses_before_prepare(self):
+    def test_transient_game_states_allow_room_rebuild_without_touching_recording(self):
         cases = [({'level': {'inCutscene': True}}, '剧情进行中'), ({'level': {'skippingCutscene': True}}, '正在跳过剧情'),
                  ({'level': {'completed': True}}, '本章已通关'), ({'level': {'paused': True}}, '暂停菜单'),
+                 ({'level': {'frozen': True}}, '游戏冻结'), ({'level': {'transitioning': True}}, '换房间'),
                  ({'player': None}, '不在场'), ({'player': {'dead': True}}, '已死亡'),
                  ({'player': {'inControl': False}}, '不受玩家控制')]
         base = copy.deepcopy(self.session.obs)
@@ -216,11 +217,12 @@ class ReloadWorkerTests(unittest.TestCase):
                 else:
                     obs['player'] = change['player']
                 self.session.obs = obs
-                with self.assertRaisesRegex(BridgeReloadError, message) as raised:
-                    reload_bridge(self.session, self.root, self.options)
-                self.assertFalse(getattr(raised.exception, 'reload_held', False))
-                self.assertFalse(any(c == 'reload_prepare' for c, _ in self.session.calls))
-                self.assertEqual(self.target.read_bytes(), b'previous payload')
+                result = reload_bridge(self.session, self.root, self.options)
+                self.assertEqual(result['phase'], 'finished')
+                self.assertIn('临时剧情', result['room_rebuild'])
+                self.assertTrue(any(c == 'reload_prepare' for c, _ in self.session.calls))
+                self.assertFalse(any(c in {'record', 'step', 'activate', 'deactivate'} for c, _ in self.session.calls))
+                self.assertEqual(result['before']['recording']['dir'], 'same-recording')
 
     def test_runtime_refusal_is_reported_without_a_hold(self):
         original = self.session.bridge_call

@@ -90,27 +90,6 @@ def _verify(before, hello, obs):
         raise BridgeReloadError('重载核验失败：原录像目录、录音或音频帧计量已变化；未停止或另开录像')
 
 
-# 普通 Everest 重载会重建房间、把 Madeline 恢复成普通状态并丢下手持物与跟随物；这些状态下重建会打断流程。
-# 常驻核心 1.0.2 起自己也拒绝（stage=refused），这里提前用观测说明原因，不进入冻结交接。
-_LEVEL_BLOCKERS = (('transitioning', '正在换房间'), ('inCutscene', '剧情进行中'), ('skippingCutscene', '正在跳过剧情'),
-                   ('completed', '本章已通关、正在结算'), ('paused', '暂停菜单已打开'), ('frozen', '关卡被游戏冻结'))
-
-
-def reload_blockers(obs):
-    """观测里妨碍保持录像重载的状态；字段缺失（旧桥接）时不据此拒绝，由常驻核心再查一次。"""
-    level = obs.get('level') or {}
-    reasons = [text for key, text in _LEVEL_BLOCKERS if level.get(key) is True]
-    if 'player' in obs:
-        player = obs.get('player')
-        if not isinstance(player, dict):
-            reasons.append('Madeline 不在场（死亡或重生中）')
-        elif player.get('dead') is True:
-            reasons.append('Madeline 已死亡')
-        elif player.get('inControl') is False:
-            reasons.append('Madeline 当前不受玩家控制')
-    return reasons
-
-
 def hold_message(hello):
     """新连接的 hello 显示游戏仍被桥接重载交接冻结时，给出能否撤销或必须重启的说明；未冻结时返回 None。"""
     if not isinstance(hello, dict) or hello.get('reload_hold') is not True:
@@ -431,11 +410,6 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                     raise BridgeReloadError('只能在章节已冻结的动作边界重载；未发送游戏输入')
                 if obs.get('scene') != 'Level' or not (obs.get('level') or {}).get('sid'):
                     raise BridgeReloadError('当前不在可核验的关卡内，暂不支持保持录像的桥接重载')
-                if blockers := reload_blockers(obs):
-                    raise BridgeReloadError('当前状态不支持保持录像的桥接重载：' + '、'.join(blockers)
-                                            + '。Everest 重载会重建房间、把 Madeline 恢复为普通状态并丢下手持物和跟随物，'
-                                            '可能打断剧情、结算或死亡重生；请在 Madeline 可操作的普通房间里再重载。'
-                                            '未进入交接，未替换文件')
                 level, save = obs.get('level') or {}, obs.get('save') or {}
                 if (type(hello.get('frame')) is not int or type(save.get('slot')) is not int or not save.get('name')
                         or not level.get('room') or not level.get('side') or type(level.get('chapterTimeTicks')) is not int):
@@ -444,7 +418,8 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                 if request.get('dll') and hello.get('runtime_path'):
                     runtime_check = _check_runtime(request, _installed_runtime(hello, None))
                 record = {'phase': 'preparing', 'before': _snapshot(hello, obs), 'started_wall': time.time(),
-                          'expected_version': request.get('expected_version')}
+                          'expected_version': request.get('expected_version'),
+                          'room_rebuild': 'Everest 普通重载会重建当前房间；临时剧情、玩家动作、手持物和跟随物不保证保留。'}
                 if runtime_check:
                     record['runtime_check'] = runtime_check
                 if type(owner_was_paused) is bool:

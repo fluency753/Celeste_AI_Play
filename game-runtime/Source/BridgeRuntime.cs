@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using Celeste;
@@ -29,13 +28,10 @@ public static class BridgeRuntime {
         public string SceneIdentity = Guid.NewGuid().ToString("N");
         public Scene? Scene;
         // The scene current when the latest commit started. Its own ordinary
-        // ReloadLevel must replace it before readiness, even on a retry.
+        // The loader must replace it before readiness, even on a retry.
         public Scene? CommitScene;
-        public bool ExpectRoomReload;
-        public Session? Session;
-        public string? Sid, Room;
-        public int? Slot;
-        public long SessionTime, Frame, AttemptAt;
+        public bool ExpectSceneChange;
+        public long Frame, AttemptAt;
         public Guid PreviousOwner;
         public EverestModuleMetadata? Metadata;
         public bool Imported;
@@ -193,13 +189,6 @@ public static class BridgeRuntime {
             if (holdingReload) { SendStatus(request.Id); return; }
             current = attachment;
         }
-        string? blocker = Engine.Scene is Level readyLevel ? ReloadBlocker(readyLevel)
-            : "the current scene is not a playable Level (menus, maps, chapter intros and results are not supported)";
-        if (blocker != null) {
-            // Not transient: the game is frozen, so retrying cannot clear it.
-            IpcServer.Send(Reply.Ok(request.Id, w => { w.WriteString("stage", "refused"); w.WriteString("error", "Reload refused: " + blocker); }));
-            return;
-        }
         if (current == null || !Active || forwarded || !current.CanReload()) {
             IpcServer.Send(Reply.Ok(request.Id, w => { w.WriteString("stage", "busy"); w.WriteString("error", "Wait for the current step, render acknowledgement and playback to finish"); }));
             return;
@@ -213,38 +202,12 @@ public static class BridgeRuntime {
         if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Bridge DLL escapes its Mod directory");
         var prepared = new Lease { Scene = Engine.Scene, Metadata = metadata, Snapshot = current.Export(),
             Path = path, PreviousOwner = current.Owner, Frame = Frame };
-        if (Engine.Scene is Level level) {
-            prepared.Session = level.Session;
-            prepared.Sid = level.Session.Area.SID;
-            prepared.Room = level.Session.Level;
-            prepared.SessionTime = level.Session.Time;
-            prepared.Slot = SaveData.Instance?.FileSlot;
-        }
         lock (Gate) { lease = prepared; holdingReload = true; }
         EngineHalted = true;
         FeedInputThisFrame = false;
         CurrentInput = InputFrame.Neutral;
         ClockServer.AcknowledgeIdle();
         SendStatus(request.Id);
-    }
-
-    /// <summary>
-    /// Everest's ordinary ReloadLevel rebuilds the room, forces Madeline back to
-    /// her Normal state and drops followers/held items. Only allow it where that
-    /// cannot break a story sequence, chapter completion or a death/respawn.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static string? ReloadBlocker(Level level) {
-        if (level.Transitioning) return "a room transition is in progress";
-        if (level.InCutscene || level.SkippingCutscene) return "a cutscene is running or being skipped";
-        if (level.Completed) return "the chapter is already completed";
-        if (level.Paused) return "the pause menu is open";
-        if (level.Frozen) return "the level is frozen by the game";
-        Player? player = level.Tracker?.GetEntity<Player>();
-        if (player == null) return "Madeline is missing (dying or respawning)";
-        if (player.Dead) return "Madeline is dead";
-        if (!player.InControl) return "Madeline is not under player control";
-        return null;
     }
 
     private static EverestModuleMetadata? FindPayload() => Everest.Modules.FirstOrDefault(m => m.Metadata.Name == PayloadName)?.Metadata;
@@ -273,7 +236,7 @@ public static class BridgeRuntime {
             current.Imported = false;
             current.AttemptAt = Environment.TickCount64;
             current.CommitScene = Engine.Scene;
-            current.ExpectRoomReload = ordinary;
+            current.ExpectSceneChange = ordinary;
         }
         try {
             if (ordinary) {
@@ -315,41 +278,36 @@ public static class BridgeRuntime {
         if (!holdingReload || current?.Stage != "reloading") return;
         if (Environment.TickCount64 - current.AttemptAt > 120000) { Fail(current, "Bridge reload did not become ready within 120 seconds"); return; }
         if (MaintenanceScene(Engine.Scene)) return;
-        bool awaitingRoom = current.ExpectRoomReload && current.CommitScene is Level && ReferenceEquals(Engine.Scene, current.CommitScene);
+        bool awaitingScene = current.ExpectSceneChange && ReferenceEquals(Engine.Scene, current.CommitScene);
         if (next == null) {
-            if (current.ExpectRoomReload && current.CommitScene is Level && !awaitingRoom)
+            if (current.ExpectSceneChange && !awaitingScene)
                 Fail(current, "Everest completed room reload without compatible bridge logic");
             return;
         }
         if (next.Owner == current.PreviousOwner) return;
         // Wait for the ordinary ReloadLevel of this commit attempt; a retry after
         // an earlier room reload must not become ready before its own rebuild.
-        if (awaitingRoom) return;
+        if (awaitingScene) return;
         try {
-            CheckScene(current);
+            CheckHeldFrame(current);
             if (!string.IsNullOrEmpty(current.ExpectedVersion) && next.Version != current.ExpectedVersion)
                 throw new InvalidOperationException($"Bridge version mismatch: expected {current.ExpectedVersion}, got {next.Version}");
             if (!current.Imported) { next.Import(current.Snapshot); current.Imported = true; }
-            CheckScene(current);
+            CheckHeldFrame(current);
             if (next.Service == null) throw new InvalidOperationException("Bridge payload cannot service read-only requests while held");
             lock (Gate) current.Stage = "ready";
         } catch (Exception ex) { Fail(current, ex.Message); }
     }
 
-    private static void CheckScene(Lease current) {
+    private static void CheckHeldFrame(Lease current) {
         if (Frame != current.Frame) throw new InvalidOperationException("Bridge frame counter changed during reload");
-        if (current.Session == null) return;
-        if (Engine.Scene is not Level level || !ReferenceEquals(level.Session, current.Session) ||
-                level.Session.Area.SID != current.Sid || level.Session.Level != current.Room ||
-                level.Session.Time != current.SessionTime || SaveData.Instance?.FileSlot != current.Slot)
-            throw new InvalidOperationException("Reloaded room does not match the held Session, map, room, save slot or chapter time");
     }
 
     private static void Finish(Request request) {
         Lease current = ValidateLease(request.Args);
         if (current.Stage == "finished") { SendStatus(request.Id); return; }
         if (current.Stage != "ready") throw new InvalidOperationException("Bridge reload is not ready");
-        CheckScene(current);
+        CheckHeldFrame(current);
         InputInjector.ServicePending();
         string[] mismatches = InputInjector.BindingMismatches();
         if (mismatches.Length > 0) Log.Warn("finishing reload while input bindings differ: " + string.Join(", ", mismatches));
@@ -357,7 +315,6 @@ public static class BridgeRuntime {
             current.Stage = "finished";
             current.Scene = null;
             current.CommitScene = null;
-            current.Session = null;
             current.Metadata = null;
             current.Snapshot = "";
             holdingReload = false;
@@ -382,7 +339,6 @@ public static class BridgeRuntime {
             current.Error = "";
             current.Scene = null;
             current.CommitScene = null;
-            current.Session = null;
             current.Metadata = null;
             current.Snapshot = "";
             holdingReload = false;

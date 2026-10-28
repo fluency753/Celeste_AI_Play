@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.3.2";
+    public const string Version = "1.3.3";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get => BridgeRuntime.Active; private set => BridgeRuntime.Active = value; }
@@ -65,15 +65,35 @@ internal static class Bridge {
 
     public static string ExportReloadState() {
         if (!CanReload()) throw new InvalidOperationException("Bridge is busy; wait for the full step and present acknowledgement");
+        if (Engine.Scene is not Level level || level.Session == null)
+            throw new InvalidOperationException("Bridge reload requires a loaded Level with a session");
+        // Game identity belongs to the reloadable payload. The resident runtime
+        // keeps only this opaque snapshot, never gameplay types or policy.
+        var identity = new { sid = level.Session.Area.SID, side = (int)level.Session.Area.Mode,
+            room = level.Session.Level, time = level.Session.Time, slot = SaveData.Instance?.FileSlot };
         SetAudio(IdleAudio);
         return JsonSerializer.Serialize(new { schema = 1, continuousMusic, audioMode = (int)audioMode,
-            sfxPausedByUs, lockstepEngaged, DrawFrameMarker, idleTokens });
+            sfxPausedByUs, lockstepEngaged, DrawFrameMarker, idleTokens, identity });
     }
 
     public static void ImportReloadState(string data) {
         using JsonDocument document = JsonDocument.Parse(data);
         JsonElement state = document.RootElement;
         if (state.GetProperty("schema").GetInt32() != 1) throw new InvalidOperationException("Unsupported bridge reload state");
+        if (state.TryGetProperty("identity", out var identity)) {
+            if (Engine.Scene is not Level level || level.Session == null ||
+                    level.Session.Area.SID != identity.GetProperty("sid").GetString() ||
+                    (int)level.Session.Area.Mode != identity.GetProperty("side").GetInt32() ||
+                    level.Session.Level != identity.GetProperty("room").GetString() ||
+                    level.Session.Time != identity.GetProperty("time").GetInt64() ||
+                    (SaveData.Instance?.FileSlot) != (identity.GetProperty("slot").ValueKind == JsonValueKind.Null
+                        ? (int?)null : identity.GetProperty("slot").GetInt32()))
+                throw new InvalidOperationException("Reloaded map, side, room, save slot or chapter time does not match the bridge snapshot");
+        } else {
+            // Older schema-1 payloads did not export identity. The controller
+            // still verifies its observation snapshot before reload_finish.
+            Log.Warn("legacy reload snapshot has no game identity; controller verification is required");
+        }
         continuousMusic = state.GetProperty("continuousMusic").GetBoolean();
         audioMode = (AudioMode)state.GetProperty("audioMode").GetInt32();
         sfxPausedByUs = state.GetProperty("sfxPausedByUs").GetBoolean();
