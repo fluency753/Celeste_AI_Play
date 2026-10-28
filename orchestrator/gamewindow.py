@@ -94,7 +94,10 @@ def game_executable() -> str | None:
         kernel32.CloseHandle(handle)
 
 def capture_size() -> tuple[int, int] | None:
-    """游戏采集的实际客户区尺寸（与屏幕 DPI 缩放后的窗口截图尺寸不同）。"""
+    """游戏采集的实际客户区尺寸（物理像素，与屏幕 DPI 缩放后的窗口截图尺寸不同）。
+
+    本进程默认不感知 DPI：屏幕缩放 150% 时，Windows 会把感知 DPI 的游戏窗口的 1920×1080 客户区
+    报成 1280×720。查询时临时把本线程切到按显示器感知 DPI，拿到 OBS 实际采到的物理尺寸。"""
     if not _IS_WINDOWS:
         return None
     ctypes, wt, user32, _kernel32, _enum = _api()
@@ -102,8 +105,18 @@ def capture_size() -> tuple[int, int] | None:
     if hwnd is None:
         return None
     rect = wt.RECT()
-    if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
-        return None
+    set_context = getattr(user32, "SetThreadDpiAwarenessContext", None)  # Windows 10 1607 起
+    previous = None
+    if set_context is not None:
+        set_context.argtypes = [ctypes.c_void_p]
+        set_context.restype = ctypes.c_void_p
+        previous = set_context(ctypes.c_void_p(-4))  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+    try:
+        if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+            return None
+    finally:
+        if set_context is not None and previous:
+            set_context(ctypes.c_void_p(previous))
     return (rect.right, rect.bottom) if rect.right > 64 and rect.bottom > 64 else None
 
 
