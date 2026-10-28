@@ -6,6 +6,8 @@
 
 ## 采集与累计产物
 
+新运行默认[分章录制](CHAPTER_RECORDING.md)，每章内部仍使用本文的恢复机制。全序列以 `recording/chapters.json` 为准，当前片指针不能代替全清单：停止、`finish_saved`、控制台 pending 状态均检查旧片未完成的后处理和下一片启动意图。恢复先解析清单，再按原片 ID 接回；旧片离线收尾不改当前片指针。旧连续运行保持原组织方式。
+
 维护中断若不能直接保留活编码器，只关闭本段采集并等待编码器终态，不立即做累计发布或纯享版转码。会话保持 `finishing`，另记 `postprocess_pending`，不会被 `--no-record` 或追加章节误当作已完成录像；正常 `--resume` 仍接回同一录制，最终正常停止时补齐累计成片与纯享版。
 
 正常观察到本会话编码器 `finished` 后，主控将实际采集目录、会话 ID、帧数及媒体 SHA256 写入 `capture_complete.json`。恢复核对凭据、文件指纹、连续 CSV 行、两轨 PCM 计量及完整包时间戳后，可跳过整段解码；报告 `validation=clean-encoder-packets`。仍需顺序读取文件和媒体包，不是零成本。旧录像、失败采集、凭据缺失／不匹配或包计量异常仍完整解码，报告 `validation=decoded`；不为旧录像补造正常关闭凭据。

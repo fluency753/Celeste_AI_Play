@@ -374,7 +374,9 @@ class GameSession:
         self.client.step_options = self._step_options
         self.client.after_step = self._remember_held_input
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
-        reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music)
+        from .chapter_recording import menu_options
+        reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music,
+                                 **menu_options(self.cfg))
         obs = reply["obs"]
         self._restore_held_input(obs.get("frame"))
         self.story_input_supported = 'storyInput' in obs   # 桥接 1.0.3 起才有；中途把剧情切给智能体时也要检查
@@ -1145,6 +1147,8 @@ class GameSession:
                 if used < len(locations):result['input_cursor']['next_location'] = locations[used]
                 elif source.get('following_location'):result['input_cursor']['next_location'] = source['following_location']
                 result['remaining_inputs'] = tas.compress(frames[used:])
+            if result.get('stop') == 'recording_boundary' and plan.input_format != 'celeste_tas':
+                result['remaining_inputs']=tas.compress(frames[result.get('consumed',0):])
             if self.sim_energy and not skipped:
                 from .sim_assist import moving_frames
                 previous = (self.last_obs or {}).get("player") or {}

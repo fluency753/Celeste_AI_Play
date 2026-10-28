@@ -10,6 +10,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .game_session import ActError, GameSession
+from .recording import RecordingHalt
 from .telemetry import publish
 from .kb_study import KbStudy
 from .observation import describe_attempts, describe_obs, describe_step, upscale_png
@@ -316,6 +317,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 delivery.commit(candidate)
                 state["described_room"] = room_key(outcome.obs)
                 return content
+            except RecordingHalt as err:
+                return [f'录制交接未完成：{err}。出错的推进请求未发送，之前已执行的输入不重复；试玩已暂停，等待处理。']
             except ActError as err:
                 return [f"动作未执行（没有消耗任何游戏帧）：{err}"]
             finally:

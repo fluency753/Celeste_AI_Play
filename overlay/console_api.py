@@ -478,11 +478,22 @@ def runs(limit: int = 40) -> list[dict]:
         from orchestrator.recording_files import finished_movie
         from orchestrator.recording import Recorder, RecordingError
         pending_recording = False
+        chapter_videos = []
         try:
             saved = Recorder.saved_session(directory)
             if saved:
                 recording = Path(saved['options']['dir'])
                 pending_recording = is_recording_pending(saved)
+                if saved.get('chapter_playlist'):
+                    from orchestrator.chapter_recording import ChapterRecording
+                    playlist=Path(saved['chapter_playlist']).resolve()
+                    data=_read_json(playlist);ChapterRecording.validate(playlist,data)
+                    recording=playlist.parent
+                    for item in data['entries']:
+                        movie=finished_movie(Path(item['dir']))
+                        if movie:
+                            chapter_videos.append({'id':item['id'],'sid':item.get('sid'),'side':item.get('side'),
+                                                   'movie':str(movie),'pure':str(finished_movie(Path(item['dir']),True) or '')})
         except RecordingError:
             pass  # 不可读的会话在接管时明确报错；不使整个运行列表不可用。
         rows.append({
@@ -493,7 +504,9 @@ def runs(limit: int = 40) -> list[dict]:
             "stop_reason": summary.get("stop_reason"), "completed": summary.get("completed"),
             "game_released": summary.get("game_released"), "total_time_ticks": summary.get("total_time_ticks"),
             "deaths": summary.get("deaths", metrics.get("deaths")), "finished": bool(summary),
-            "recording": finished_movie(recording) is not None, "pure": finished_movie(recording, pure=True) is not None,
+            "recording": bool(chapter_videos) or finished_movie(recording) is not None,
+            "pure": bool(chapter_videos) and all(v['pure'] for v in chapter_videos) or finished_movie(recording, pure=True) is not None,
+            "chapter_videos":chapter_videos,
             "recording_pending": pending_recording, "recording_dir": str(recording),
             "resumable": bool(summary) and summary.get("game_released") is False and latest is not None
                          and latest.resolve() == directory.resolve() and held_now,

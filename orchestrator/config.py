@@ -185,6 +185,10 @@ class RunConfig:
     mode: str = "speedrun"           # 速通模式 speedrun / 探索模式 explore（互斥）；直播模式是 live，可以和任一个叠加
     record: bool = True              # OBS 录屏：主控自己启动 OBS（没在运行时）并锁步录制，结束时关掉它启动的 OBS
     continuous_music: bool = False   # 直播：冻结逻辑时继续播放音乐，仅暂停音效
+    recording_mode: str = 'continuous'  # CLI new runs default chapter; legacy/direct integrations retain behavior.
+    freeze_chapter_select: bool = False
+    freeze_file_select: bool = False
+    freeze_main_menu: bool = False
     live: bool = False               # 直播模式（--live）：网页 HUD、解说计时 10 秒、可按用户要求退出关卡；narrate 在所有模式都有
     hud_mod: bool = False            # HUD 以 MOD 形式画在游戏画面里（overlay/modhud.py；不开直播时默认开）
     collision_image: str | None = None  # 工具结果里附碰撞图：always 每次 / room 只在进新房间与 observe 时 / off 不附；

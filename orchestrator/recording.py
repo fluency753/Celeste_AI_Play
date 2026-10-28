@@ -148,6 +148,8 @@ class RecordOptions:
     marker: bool = False     # 校准用：在画面左下角画帧号条码
     continuous_music: bool = False
     audio_source: str = "obs_mix"
+    chapter_only: bool = False
+    chapter_context: bool = False
 
 
 def options_from(run_dir: Path, ffmpeg: str | None = None, video_args: str | None = None,
@@ -240,6 +242,7 @@ class Recorder:
         self._roll_pending = None
         self._postprocess_pending = False
         self._closed_capture_state = None
+        self._publish_run_links = True
 
     def bind_run(self, directory: Path):
         directory = directory.resolve()
@@ -255,6 +258,10 @@ class Recorder:
             payload['recovery_start'] = self._recovery_start
         if self._postprocess_pending:
             payload['postprocess_pending'] = True
+        if getattr(self, 'chapter_playlist', None):
+            payload['chapter_playlist'] = self.chapter_playlist
+        if getattr(self, 'chapter_cancelled', False):
+            payload['chapter_cancelled'] = True
         return payload
 
     @staticmethod
@@ -271,6 +278,9 @@ class Recorder:
         temporary = manifest.with_suffix('.tmp')
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
         temporary.replace(manifest)
+
+        if not self._publish_run_links:
+            return
         for directory in self.run_dirs:
             if not directory.is_dir():
                 continue
@@ -341,6 +351,7 @@ class Recorder:
         options = {**saved['options'], 'dir': Path(saved['options']['dir'])}
         recorder = cls(call, RecordOptions(**options), log)
         recorder.session_id = saved['id']
+        recorder.chapter_playlist = saved.get('chapter_playlist')
         recorder.run_dirs = [Path(p) for p in saved.get('runs', [])]
         recorder.bind_run(Path(run_dir))
         recorder.started = True
@@ -393,6 +404,7 @@ class Recorder:
             raise RecordingError('OBS 插件尚未连接；原录制文件保持，连接后重试恢复')
         recorder = cls(call, RecordOptions(**{**saved['options'], 'dir': Path(saved['options']['dir'])}), log)
         recorder.session_id = saved['id']
+        recorder.chapter_playlist = saved.get('chapter_playlist')
         recorder.run_dirs = [Path(p) for p in saved.get('runs', [])]
         recorder.bind_run(Path(run_dir))
         previous_request = saved.get('recovery_start')
@@ -434,6 +446,10 @@ class Recorder:
         except (RecoveryError, OSError, ValueError) as exc:
             raise RecordingError(f'原录像校验／恢复准备失败：{exc}') from exc
         capture = cls.capture_directory(saved)
+        if recorder.opts.chapter_only and ledger.get('prefix_frames',0)>0:
+            # A crash may precede the controller's next observation. The
+            # validated chapter-only prefix proves a chapter had already begun.
+            recorder.opts.chapter_context = True
         recorder._recovery_start = {'capture_dir': str(capture), 'phase': 'prepared'}
         recorder._save_session('recovering')
         try:
@@ -505,10 +521,23 @@ class Recorder:
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
         temporary.replace(manifest)
 
+        if saved.get('chapter_playlist'):
+            from .chapter_recording import ChapterRecording
+            from .session_store import write_json
+            path=Path(saved['chapter_playlist'])
+            data=json.loads(path.read_text(encoding='utf-8'));ChapterRecording.validate(path.resolve(),data)
+            for entry in data['entries']:
+                if entry['state'] not in {'finished','failed','empty'}:
+                    entry.update(state='abandoned',abandoned_reason=str(reason))
+            data['pending']=None
+            write_json(path,data)
+
     @classmethod
     def finish_saved(cls, call, saved, run_dir, log=print, on_capture_stopped=None, *, on_encoder_finished=None):
-        """用户放弃续跑时收尾；已经由 OBS 停下的同目录录像也可整理。
-        on_capture_stopped：采集一停就调用（交还游戏），不等 ffmpeg 收尾与纯享版。"""
+        """收尾当前录像及分章队列；已关闭编码器的派生物可离线补齐。"""
+        if saved.get('chapter_playlist'):
+            from .chapter_recording import finish_saved
+            return finish_saved(call,saved,run_dir,log,on_capture_stopped,on_encoder_finished)
         hello = call('hello')
         cls.validate_release(saved, hello)
         plugin = (hello.get('clock') or {}).get('plugin') or {}
@@ -516,6 +545,7 @@ class Recorder:
             raise RecordingError('OBS 当前录像与待收尾会话不匹配，未停止任何录像')
         recorder = cls(call, RecordOptions(**{**saved['options'], 'dir': Path(saved['options']['dir'])}), log)
         recorder.session_id = saved['id']
+        recorder.chapter_playlist = saved.get('chapter_playlist')
         recorder.run_dirs = [Path(p) for p in saved.get('runs', [])]
         recorder.bind_run(Path(run_dir))
         recorder.started = True
@@ -676,6 +706,8 @@ class Recorder:
                       audio_offset_ms=self.opts.audio_offset_ms, marker=self.opts.marker,
                       continuous_music=self.opts.continuous_music,
                       audio_source=self.opts.audio_source,
+                      chapter_only=self.opts.chapter_only,
+                      chapter_context=self.opts.chapter_context,
                       audio_sync="fixed" if self.opts.continuous_music else "onset")
         except RuntimeError:
             # BridgeClient reports a negative bridge reply as RuntimeError.

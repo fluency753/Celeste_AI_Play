@@ -1,9 +1,25 @@
 """Capture ownership and encoder completion are separate recording milestones."""
 from dataclasses import dataclass
+import json
+from pathlib import Path
 
 
 def pending_recording(saved: dict | None) -> bool:
-    return bool(saved and saved.get('state') in {'recording', 'recovering', 'finishing'})
+    if not saved:
+        return False
+    if saved.get('state') in {'recording', 'recovering', 'finishing'}:
+        return True
+    if saved.get('chapter_playlist'):
+        from .chapter_recording import ChapterRecording
+        from .recording import RecordingError
+        try:
+            path=Path(saved['chapter_playlist']).resolve()
+            data=json.loads(path.read_text(encoding='utf-8'))
+            ChapterRecording.validate(path,data)
+            return bool(data.get('pending') or any(e.get('state') not in {'finished','failed','empty','abandoned'} for e in data['entries']))
+        except (OSError,ValueError,KeyError,TypeError,RecordingError):
+            return True  # unreadable series must not be treated as fully published
+    return False
 
 
 @dataclass

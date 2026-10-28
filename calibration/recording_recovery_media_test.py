@@ -115,6 +115,27 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
         self.assertEqual(self.fingerprints(), before)
         self.assertEqual(Path(self.recovery.capture_directory(self.saved)), self.root)
 
+    def test_chapter_loader_recovery_infers_context_from_validated_prefix(self):
+        from orchestrator.recording import Recorder
+        import copy
+        self.media(self.root,[100,200,300])
+        self.saved['options'].update(chapter_only=True,chapter_context=False)
+        hello={'record_audio_nrt':True,'record_audio_tracks':2,'record_audio_active':False,
+               'clock':{'connected':True,'lockstep':False,'plugin':{'state':'finished','frames':3,
+                        'dir':str(self.root),'audio_nrt':True,'audio_tracks':2}}}
+        commands=[]
+        def call(cmd,**args):
+            commands.append((cmd,args))
+            if cmd=='record' and args['action']=='start':
+                hello['record_audio_active']=True;hello['clock']['lockstep']=True
+                hello['clock']['plugin'].update(state='recording',recording=True,dir=args['dir'],frames=0)
+            return copy.deepcopy(hello)
+        with patch('orchestrator.recording.gamewindow.ensure_visible'):
+            recorder=Recorder.recover(call,self.saved,self.work,lambda _:None)
+        self.assertTrue(recorder.opts.chapter_context)
+        start=next(args for cmd,args in commands if cmd=='record' and args['action']=='start')
+        self.assertTrue(start['chapter_context'])
+
     def test_clean_encoder_receipt_skips_decode_and_keeps_exact_media(self):
         base=self.media(self.root,[100,-1,200,300])
         self.recovery.record_closed_capture(self.saved,self.root,{'state':'finished','frames':4})

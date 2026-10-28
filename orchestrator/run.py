@@ -76,6 +76,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--effort", default="high", help="推理强度标识，支持的档位由所选模型决定")
     ap.add_argument("--max-minutes", type=float, default=240.0, help="现实时间上限（分钟）；目标以游戏内计时为主，这里只防止无限运行")
     ap.add_argument("--bridge-port", type=int, default=47774)
+    ap.add_argument('--recording-mode', choices=('chapter','continuous'), default=None, help='新运行默认按章独立录像；continuous跨章连续录制')
+    for menu in ('chapter-select','file-select','main-menu'):
+        ap.add_argument('--freeze-'+menu, action=argparse.BooleanOptionalAction, default=None, help='接管时冻结此菜单的就绪界面')
     ap.add_argument("--mcp-port", type=int, default=47780)
     ap.add_argument("--play-speed", type=int, default=1, help="智能体动作段的推进速度（每次渲染推进几帧）")
     ap.add_argument("--auto-speed", type=int, default=1, help="转场、剧情、重生段的推进速度；1 与原版一致，大于 1 为快进（只用于调试，录像会失真）")
@@ -232,6 +235,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
     cfg.chapter = args.chapter
+    cfg.recording_mode = args.recording_mode or ((previous['state'].get('recording_mode') or 'continuous') if previous else 'chapter')
+    for key, default in (('freeze_chapter_select',True),('freeze_file_select',False),('freeze_main_menu',False)):
+        value=getattr(args,key)
+        setattr(cfg,key, value if value is not None else previous['state'].get(key,False) if previous else default)
+    if previous and cfg.recording_mode != previous['state'].get('recording_mode','continuous') and not args.new_recording:
+        raise SystemExit('更改录像组织方式需先收尾旧录像，再显式使用 --new-recording；不会隐式拆分或合并原录像')
     from .action_policy import ActionPermissions, configure, permissions_from_state
     permissions = ActionPermissions()
     if previous:
@@ -470,6 +479,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
              "controller_host": os.environ.get("CELESTE_CONTROLLER_HOST"), "controller_pid": os.getpid(),
              "controller_parent_pid": os.getppid(),
              "bridge_port": cfg.bridge_port}
+    state.update({key:getattr(cfg,key) for key in ('recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu')})
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -508,19 +518,28 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     # selected save; the runtime session installs its own stricter policy.
     from .action_policy import step_options
     client.step_options = lambda: step_options(cfg, departure=True)
+    from .chapter_recording import menu_options
+    client.call('activate', **menu_options(cfg))
     try:
         t0 = time.monotonic()
         if recorder is not None and recorder.started:
             # Recovery already owns a fresh physical chunk of the original
             # logical recording. Do not navigate backwards or send start again.
             recorder.call = client.call
+            if getattr(cfg,'recording_mode','continuous') == 'chapter':
+                client.before_step = recorder.before_step
             obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, create_if_missing=cfg.create_save,
                         save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode, checkpoint=first_checkpoint(cfg))
         elif recorder is not None:
             to_file_select(client)
             recorder.call = client.call
             recorder.start()
-            print("[record] 从选档页开始录制：选存档、进章节、跳过开场都按正常速度录进录像", flush=True)
+            if getattr(cfg,'recording_mode','continuous') == 'chapter':
+                client.before_step = recorder.before_step
+            if getattr(cfg,'recording_mode','continuous') == 'chapter':
+                print("[record] 分章采集已准备：排除选档与选章，从章节第一帧开始录制", flush=True)
+            else:
+                print("[record] 从选档页开始连续录制：选存档、进章节、跳过开场都按正常速度录进录像", flush=True)
             obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode,
                         checkpoint=first_checkpoint(cfg))
         else:
@@ -918,12 +937,18 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                                          continuous_music=cfg.continuous_music),
                             log=lambda m: print(m, flush=True))
         recorder.bind_run(run_dir)
+        from .chapter_recording import wrap
+        recorder = wrap(cfg,recorder)
         try:
             recorder.start()
         except RecordingError:
             session.close()
             raise
+    from .chapter_recording import wrap
+    recorder = wrap(cfg,recorder)
     if recorder is not None:
+        if getattr(cfg,'recording_mode','continuous') == 'chapter':
+            session.client.before_step = lambda: session.before_advance(boundary_only=True)
         session.before_advance = recording_guard(recorder, run_dir)
 
     capabilities = workspace_capabilities(cfg)
@@ -965,6 +990,9 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
     if recorder is None and args.record and saved_recording:
         recorder = Recorder.adopt(session.bridge_call, saved_recording, run_dir,
                                   log=lambda m: print(m, flush=True))
+        recorder = wrap(cfg,recorder)
+        if getattr(cfg,'recording_mode','continuous') == 'chapter':
+            session.client.before_step = lambda: session.before_advance(boundary_only=True)
         cfg._recording_adopted = True
         cfg._keep_frozen = False
         session.before_advance = recording_guard(recorder, run_dir)
@@ -1063,9 +1091,14 @@ def choose_session(previous: dict | None, fresh: bool, prepared: dict | None = N
 
 def recording_guard(recorder: Recorder, run_dir: Path):
     """Before input, recover failed capture into the same logical recording or pause."""
-    def check():
+    def check(boundary_only=False):
         reason = '录制安全检查未通过'
         try:
+            from .chapter_recording import ChapterRecording
+            if isinstance(recorder,ChapterRecording):
+                recorder.before_step()
+            if boundary_only:
+                return
             recorder.check_window()
             try:
                 reason = recorder.segment_failed()
@@ -1202,9 +1235,22 @@ def main() -> int:
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
     from .bridge_requirements import preflight_bridge
     hello = preflight_bridge(cfg.bridge_port)
+    if (args.record and getattr(cfg,'recording_mode','continuous') == 'chapter' or any(getattr(cfg,key,False) for key in
+            ('freeze_chapter_select','freeze_file_select','freeze_main_menu'))) and hello.get('chapter_recording') != 1:
+        raise SystemExit('按章录制与菜单冻结设置需要桥接 1.9.0；请先更新 Bridge，未启动录制或游戏输入')
     saved_recording = None
     try:
         saved_recording = Recorder.saved_session(args.previous['dir']) if args.previous else None
+        if (args.previous and getattr(cfg,'recording_mode','continuous') != (args.previous.get('state') or {}).get('recording_mode','continuous') and saved_recording):
+            clock=hello.get('clock') or {};plugin=clock.get('plugin') or {}
+            if saved_recording.get('state') not in {'finished','failed','abandoned'} or clock.get('lockstep') or plugin.get('state') in {'recording','finishing'}:
+                raise SystemExit('切换按章／连续录像前，请先停止并完整保存原录像；不会把在录的原片隐式转换')
+            if saved_recording.get('chapter_playlist'):
+                if pending_recording(saved_recording):
+                    raise SystemExit('分章清单仍有待收尾的片段，先完整保存后再切换录制方式')
+        if getattr(cfg,'recording_mode','continuous') == 'chapter' and not args.new_recording:
+            from .chapter_recording import resolve_saved
+            saved_recording = resolve_saved(saved_recording,hello,prepare_next=args.record)
         recording_mode = resume_recording_mode(cfg, args, saved_recording, hello)
         if recording_mode == 'new':
             saved_recording = None
@@ -1282,6 +1328,8 @@ def main() -> int:
                                                        continuous_music=cfg.continuous_music),
                                     log=lambda m: print(m, flush=True))
                 recorder.bind_run(run_dir)
+                from .chapter_recording import wrap
+                recorder = wrap(cfg,recorder)
             enter_save(cfg, recorder)
             handoff_needed = True
         summary = asyncio.run(run_async(cfg, args, run_dir, token, previous, recorder))
@@ -1313,6 +1361,8 @@ def main() -> int:
                     finally:
                         client.close()
         finally:
+            if recorder is not None and getattr(cfg,'recording_mode','continuous') == 'chapter' and recorder._recovery_start is not None:
+                cfg._recording_retained = True
             if getattr(cfg, '_recording_resume_manifest', None) and not getattr(cfg, '_recording_adopted', False):
                 latest = REPO_ROOT / 'runs/latest.txt'
                 if latest.exists() and latest.read_text(encoding='utf-8').strip() == str(run_dir):

@@ -21,7 +21,12 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.8.1";
+    public const string Version = "1.9.0";
+    internal static bool RecordOnlyChapters { get; private set; }
+    internal static bool ChapterRecordingEnabled => RecordOnlyChapters && RecordingAudio.Enabled;
+    internal static bool RecordingChapterActive { get; private set; }
+    private static bool recordingHasFrame, captureThisFrame, recordingNrt;
+    private static string? recordingSid, recordingSide;
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get => BridgeRuntime.Active; private set => BridgeRuntime.Active = value; }
@@ -73,7 +78,9 @@ internal static class Bridge {
         var identity = ReloadBoundary.Capture();
         SetAudio(IdleAudio);
         string data = JsonSerializer.Serialize(new { schema = 1, continuousMusic, audioMode = (int)audioMode,
-            sfxPausedByUs, lockstepEngaged, DrawFrameMarker, idleTokens, identity });
+            sfxPausedByUs, lockstepEngaged, DrawFrameMarker, idleTokens, identity,
+            SceneControl.FreezeChapterSelect, SceneControl.FreezeFileSelect, SceneControl.FreezeMainMenu,
+            RecordOnlyChapters, RecordingChapterActive, recordingHasFrame, recordingNrt, recordingSid, recordingSide });
         reloadBoundaryHeld = false;
         return data;
     }
@@ -95,6 +102,21 @@ internal static class Bridge {
         lockstepEngaged = state.GetProperty("lockstepEngaged").GetBoolean();
         DrawFrameMarker = state.GetProperty("DrawFrameMarker").GetBoolean();
         idleTokens = state.GetProperty("idleTokens").GetInt32();
+        if (state.TryGetProperty("FreezeChapterSelect", out var freeze)) {
+            SceneControl.FreezeChapterSelect = freeze.GetBoolean();
+            SceneControl.FreezeFileSelect = state.GetProperty("FreezeFileSelect").GetBoolean();
+            SceneControl.FreezeMainMenu = state.GetProperty("FreezeMainMenu").GetBoolean();
+            RecordOnlyChapters = state.GetProperty("RecordOnlyChapters").GetBoolean();
+            RecordingChapterActive = state.GetProperty("RecordingChapterActive").GetBoolean();
+            recordingHasFrame = state.GetProperty("recordingHasFrame").GetBoolean();
+            recordingNrt = state.GetProperty("recordingNrt").GetBoolean();
+            recordingSid = state.GetProperty("recordingSid").GetString();
+            recordingSide = state.GetProperty("recordingSide").GetString();
+        } else {
+            // Legacy payloads left menus running. Do not change an in-flight
+            // recording's menu behavior merely by reloading the bridge.
+            SceneControl.FreezeChapterSelect = SceneControl.FreezeFileSelect = SceneControl.FreezeMainMenu = false;
+        }
     }
 
     // ---- 每个节拍的入口 ----
@@ -181,6 +203,7 @@ internal static class Bridge {
     private static bool lockstepEngaged;
     private static long? pendingAck;
     private static bool pendingAckReplay;
+    private static bool pendingAckCapture;
     private static readonly Stopwatch SinceAdvance = Stopwatch.StartNew();
     private enum AudioMode { Playing, Frozen, MusicOnly }
     private static AudioMode audioMode = AudioMode.Playing;
@@ -242,6 +265,7 @@ internal static class Bridge {
             RecordingAudio.AdvanceReplay();
             pendingAck = token;
             pendingAckReplay = true;
+            pendingAckCapture = true;
             return;
         }
         // 推进之前恢复声音：恢复的指令在这一帧的 Audio.Update 里生效，这一段从第一帧开头就有声音
@@ -263,6 +287,7 @@ internal static class Bridge {
         } else {
             AdvanceFrame(runOriginal, InputFrame.Neutral, feedInput: OwnsInput);
         }
+        pendingAckCapture = captureThisFrame;
         pendingAck = token; // 这一帧画到屏幕上之后（EndDraw）再回复，OBS 下一次渲染就能采到它
     }
 
@@ -321,6 +346,11 @@ internal static class Bridge {
 
     private static void FlushPendingAck() {
         if (pendingAck is not { } token) return;
+        if (!pendingAckCapture) {
+            pendingAck = null;
+            ClockServer.Send($"N {token}");
+            return;
+        }
         RecordingAudio.Publish(token, pendingAckReplay);
         pendingAck = null;
         long ticks = pendingAckReplay ? -1 : Engine.Scene is Level level ? level.Session.Time : 0;
@@ -460,8 +490,24 @@ internal static class Bridge {
         CurrentInput = input;
         try {
             runOriginal();
+            if (Engine.Scene is Overworld or GameLoader) RecordingChapterActive = false;
+            else if (SceneControl.ChapterScene(Engine.Scene)) RecordingChapterActive = true;
+            captureThisFrame = !RecordOnlyChapters || RecordingChapterActive;
             job?.NoteScene(Engine.Scene);
-            RecordingAudio.Advance();
+            if (captureThisFrame) {
+                if (RecordOnlyChapters && !recordingHasFrame && recordingNrt && RecordingAudio.Enabled) {
+                    // No movie/PCM frame exists yet: discard menu one-shots and
+                    // seed the current live scene before its first recorded frame.
+                    RecordingAudio.Stop();
+                    RecordingAudio.Start(Audio.System, Path.Combine(Engine.ContentDirectory, "FMOD", "Desktop"), RuntimeModule.Settings.ClockPort);
+                }
+                if (recordingSid == null && SceneControl.ChapterScene(Engine.Scene)) {
+                    var chapter = ReloadBoundary.Capture().session;
+                    recordingSid = chapter?.sid; recordingSide = chapter?.side;
+                }
+                recordingHasFrame = true;
+                RecordingAudio.Advance();
+            }
         } finally {
             engineHalted = true;
             freeFrame = false;
@@ -570,7 +616,14 @@ internal static class Bridge {
                     w.WriteBoolean("active", Active);
                     w.WriteBoolean("frozen", Frozen);
                     w.WriteBoolean("input_owned", OwnsInput);
-                    w.WriteString("freeze_scope", "chapter");
+                    w.WriteString("freeze_scope", "configured-menus");
+                    w.WriteNumber("chapter_recording", 1);
+                    w.WriteBoolean("record_chapter_active", RecordingChapterActive);
+                    w.WriteString("record_chapter_sid", recordingSid);
+                    w.WriteString("record_chapter_side", recordingSide);
+                    w.WriteBoolean("freeze_chapter_select", SceneControl.FreezeChapterSelect);
+                    w.WriteBoolean("freeze_file_select", SceneControl.FreezeFileSelect);
+                    w.WriteBoolean("freeze_main_menu", SceneControl.FreezeMainMenu);
                     w.WriteNumber("frame", Frame);
                     w.WriteString("scene", Engine.Scene?.GetType().Name ?? "none");
                     w.WriteBoolean("continuous_music", continuousMusic);
@@ -642,6 +695,14 @@ internal static class Bridge {
                 DrawFrameMarker = GetBool(a, "marker", DrawFrameMarker);
                 continuousMusic = GetBool(a, "continuous_music", continuousMusic);
                 string recordAction = GetString(a, "action", "");
+                if (recordAction == "start") {
+                    RecordOnlyChapters = GetBool(a, "chapter_only", false);
+                    recordingNrt = GetString(a, "audio_source", "obs_mix") == "game_nrt";
+                    if (RecordOnlyChapters && !recordingNrt) throw new InvalidOperationException("Chapter recording requires game_nrt audio");
+                    RecordingChapterActive = SceneControl.ChapterScene(Engine.Scene) ||
+                        GetBool(a, "chapter_context", false) && Engine.Scene is LevelLoader or LevelExit or OverworldLoader;
+                    recordingHasFrame = false; recordingSid = recordingSide = null;
+                }
                 if (recordAction == "start" && GetString(a, "audio_source", "obs_mix") == "game_nrt") {
                     using JsonDocument plugin = JsonDocument.Parse(ClockServer.PluginStatus ?? "{}");
                     if (!plugin.RootElement.TryGetProperty("audio_nrt", out JsonElement capability) || capability.ValueKind != JsonValueKind.True)
@@ -657,6 +718,9 @@ internal static class Bridge {
                 break;
 
             case "activate":
+                SceneControl.FreezeChapterSelect = GetBool(a, "freeze_chapter_select", SceneControl.FreezeChapterSelect);
+                SceneControl.FreezeFileSelect = GetBool(a, "freeze_file_select", SceneControl.FreezeFileSelect);
+                SceneControl.FreezeMainMenu = GetBool(a, "freeze_main_menu", SceneControl.FreezeMainMenu);
                 continuousMusic = GetBool(a, "continuous_music", continuousMusic);
                 if (!Active) {
                     Active = true;
@@ -981,7 +1045,7 @@ internal static class Bridge {
             w.WriteBoolean("active", Active);
                     w.WriteBoolean("frozen", Frozen);
                     w.WriteBoolean("input_owned", OwnsInput);
-                    w.WriteString("freeze_scope", "chapter");
+                    w.WriteString("freeze_scope", "configured-menus");
             w.WritePropertyName("obs");
             w.WriteRawValue(obs, skipInputValidation: true);
         }

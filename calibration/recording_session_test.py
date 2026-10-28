@@ -474,7 +474,7 @@ class RecordingSessionTests(unittest.TestCase):
             macro.side_effect = RuntimeError('menu failed')
             with self.assertRaises(RuntimeError):
                 enter_save(cfg)
-            client.call.assert_not_called()
+            self.assertFalse(any(call.args and call.args[0]=='record' for call in client.call.call_args_list))
             client.call.side_effect = RuntimeError('observe failed')
             with self.assertRaises(RuntimeError):
                 check_resume_position(cfg)

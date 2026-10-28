@@ -47,6 +47,7 @@ internal sealed class StepJob {
     private (long frame, int index, ExpectRow expected, float? x, float? y, string? state)? deviation;
 
     private int index;
+    private bool recordingSawChapter = Bridge.RecordingChapterActive;
     private string? lastRoom;
     private bool lastAlive;
     private bool lastControllable;
@@ -126,7 +127,14 @@ internal sealed class StepJob {
     public InputFrame NextInput() => plan[index++];
 
     public bool AllowNextInput() => !Finished;
-    public void NoteScene(Scene? scene) => policy.NoteScene(scene);
+    public void NoteScene(Scene? scene) {
+        policy.NoteScene(scene);
+        if (SceneControl.ChapterScene(scene)) recordingSawChapter = true;
+        if (Bridge.ChapterRecordingEnabled && recordingSawChapter && scene is Overworld && StopReason == null) {
+            StopReason = "recording_boundary";
+            events.Add((Bridge.Frame + 1, "recording_boundary", "Chapter presentation ended; remaining inputs were not executed"));
+        }
+    }
 
     // Loading frames do not consume the input plan. They still have to stop a
     // restore job at the first chapter scene, before its remaining menu inputs.

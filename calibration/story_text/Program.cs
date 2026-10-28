@@ -154,6 +154,25 @@ foreach (Type type in new[] { typeof(Overworld), typeof(LevelLoader), typeof(Lev
 }
 Console.WriteLine("PASS: menus run freely, explicit steps own input, chapter/story/results remain controlled");
 
+var menuWorld=(Overworld)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Overworld));
+var select=(OuiChapterSelect)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(OuiChapterSelect));
+menuWorld.Current=select;select.Focused=true;
+typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(select,menuWorld);
+if(!SceneControl.FreezeWhenIdle(menuWorld) || !SceneControl.OwnInput(true,menuWorld,false)) throw new Exception("Ready chapter select was not frozen");
+select.Focused=false;
+if(SceneControl.FreezeWhenIdle(menuWorld)) throw new Exception("Entering chapter select animation froze");
+select.Focused=true;
+var panel=(OuiChapterPanel)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(OuiChapterPanel));
+menuWorld.Current=panel;panel.Focused=true;
+typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(panel,menuWorld);
+if(!SceneControl.FreezeWhenIdle(menuWorld)) throw new Exception("Ready chapter panel was not frozen");
+menuWorld.Next=select;
+if(SceneControl.FreezeWhenIdle(menuWorld)) throw new Exception("Menu transition froze");
+menuWorld.Next=null;SceneControl.FreezeChapterSelect=false;
+if(SceneControl.FreezeWhenIdle(menuWorld)) throw new Exception("Disabled chapter freeze stayed enabled");
+SceneControl.FreezeChapterSelect=true;
+Console.WriteLine("PASS: chapter select/panel freeze only when input-ready; transitions and disabled policy run");
+
 // If a freely running menu swaps to a chapter scene inside Engine.Update,
 // stop at the frame gate before that chapter consumes menu input.
 if (SceneControl.HaltEngine(true,false,true,(Monocle.Scene)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Monocle.Scene)))) throw new Exception("Free menu halted");

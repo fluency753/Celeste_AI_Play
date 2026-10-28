@@ -21,7 +21,8 @@ MODEL_PATTERN = r"[A-Za-z0-9._:/\[\]-]{1,100}"
 PROVIDER_PATTERN = r"[A-Za-z0-9_.-]{1,60}"
 
 SWITCHES = ("live", "sim", "sim_assist", "stiffness", "formal_thought", "save_context", "playback", "record", "hud_mod", "study", "limit_planning",
-            "keep_obs_open", "start_paused", "quota_wait", "record_marker", "skip_enter", "no_agent", "hud_window", "hud", "allow_chapter_reset")
+            "keep_obs_open", "start_paused", "quota_wait", "record_marker", "skip_enter", "no_agent", "hud_window", "hud", "allow_chapter_reset",
+            "freeze_chapter_select", "freeze_file_select", "freeze_main_menu")
 MAPS = {"celeste": "蔚蓝官方章节"}      # 以后可能加 MOD 地图
 
 DEFAULTS = {
@@ -30,6 +31,7 @@ DEFAULTS = {
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
     "start_paused": False, "quota_wait": True, "allow_chapter_reset": False, "cutscene_mode": "auto", "chapters": [0], "segments": None,
     "action_permissions": None,
+    "recording_mode": "chapter", "freeze_chapter_select": True, "freeze_file_select": False, "freeze_main_menu": False,
     "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 240, "autocompact": "",
     # 以下是"更多设置"里的参数，默认值与命令行相同
     "map": "celeste", "runtime": "container", "study_minutes": 60, "max_usage": None, "quota_wait_max_hours": 24,
@@ -92,6 +94,8 @@ def normalize(options: dict) -> dict:
         raise ValueError("推理强度无效")
     if o["mode"] not in (SPEEDRUN, EXPLORE):
         raise ValueError("游玩模式须为速通或探索")
+    if o['recording_mode'] not in ('chapter','continuous'):
+        raise ValueError('录像组织须为 chapter 或 continuous')
     if o["hud_mod"] is None and type(o["live"]) is bool:
         o["hud_mod"] = not o["live"]             # 与命令行相同：不开直播时游戏内 HUD 默认开
     for key in SWITCHES:
@@ -188,6 +192,9 @@ def build(options: dict) -> list[str]:
             "--agent", o["agent"], "--mode", o["mode"], "--max-minutes", f"{o['max_minutes']:g}",
             "--save", o["save"]["name"], "--cutscene-mode", o["cutscene_mode"]]
     argv.append("--live" if o["live"] else "--no-live")
+    argv += ['--recording-mode', o['recording_mode']]
+    for key in ('freeze_chapter_select','freeze_file_select','freeze_main_menu'):
+        argv.append(('--' if o[key] else '--no-') + key.replace('_','-'))
     argv.append("--allow-chapter-reset" if o["allow_chapter_reset"] else "--no-allow-chapter-reset")
     for action, enabled in o['action_permissions'].items():
         argv.append(('--allow-' if enabled else '--no-allow-') + action.replace('_', '-'))

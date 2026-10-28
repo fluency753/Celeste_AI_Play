@@ -20,6 +20,19 @@ def options(**extra):
 
 
 class LaunchOptionsTests(unittest.TestCase):
+    def test_chapter_recording_and_independent_menu_freeze_options(self):
+        default = build(options())
+        self.assertEqual(default[default.index('--recording-mode') + 1], 'chapter')
+        for flag in ('--freeze-chapter-select', '--no-freeze-file-select', '--no-freeze-main-menu'):
+            self.assertIn(flag, default)
+        custom = build(options(recording_mode='continuous', freeze_chapter_select=False,
+                               freeze_file_select=True, freeze_main_menu=True))
+        self.assertEqual(custom[custom.index('--recording-mode') + 1], 'continuous')
+        for flag in ('--no-freeze-chapter-select', '--freeze-file-select', '--freeze-main-menu'):
+            self.assertIn(flag, custom)
+        with self.assertRaises(ValueError):
+            build(options(recording_mode='other'))
+
     def test_default_speedrun(self):
         argv = build(options())
         for flag in ("--mode", "speedrun", "--no-live", "--sim", "--playback", "--record", "--hud-mod",

@@ -437,6 +437,12 @@
         </div>
 
         <div class="group-title">录像与声音</div>
+        <label class="field">录像组织<select id="recordingMode"><option value="chapter">每章独立视频（不录选章）</option><option value="continuous">连续录制（跨章收集）</option></select></label>
+        <div class="switches">
+          <label class="switch"><span class="text"><b>冻结选章界面</b><span>等待操作时不推进或录入空闲画面</span></span><input type="checkbox" id="freezeChapterSelect" checked></label>
+          <label class="switch"><span class="text"><b>冻结选档界面</b></span><input type="checkbox" id="freezeFileSelect"></label>
+          <label class="switch"><span class="text"><b>冻结主菜单</b></span><input type="checkbox" id="freezeMainMenu"></label>
+        </div>
         <div class="switches">
           <label class="switch"><span class="text"><b>思考时继续放音乐</b><span>直播用；关时声音随游戏冻结</span></span><input type="checkbox" id="continuousMusic"></label>
           <label class="switch"><span class="text"><b>结束后保留 OBS</b><span>直播时让推流接着开</span></span><input type="checkbox" id="keepObs"></label>
@@ -1225,6 +1231,8 @@ function formOptions() {
     bridge_port: withDefault("bridgePort", "bridge_port"), mcp_port: withDefault("mcpPort", "mcp_port"),
     hud_port: withDefault("hudPort", "hud_port"), ffmpeg: $("ffmpeg").value.trim(),
     record_video_args: $("videoArgs").value.trim(), audio_offset_ms: numberOrNull("audioOffset"),
+    recording_mode: $("recordingMode").value, freeze_chapter_select: $("freezeChapterSelect").checked,
+    freeze_file_select: $("freezeFileSelect").checked, freeze_main_menu: $("freezeMainMenu").checked,
     tune, kb_deny: kbDeny(ui.mode),
   };
   if ($("continuousMusic").checked) options.continuous_music = true;
@@ -1324,6 +1332,7 @@ async function refreshRuns() {
     else if (r.game_released === false) { tag.textContent = "停下时保持冻结"; }
     else tag.textContent = r.recording ? (r.pure ? "录像 + 纯享版" : "有录像") : "无录像";
     if(r.recording_pending)tag.textContent += ' · 录像待续接／收尾';
+    if(r.chapter_videos?.length)tag.textContent += ` · ${r.chapter_videos.length} 章视频`;
     side.appendChild(tag);
     if (r.resumable) {
       const b = document.createElement("button"); b.className = "btn small blue"; b.type = "button"; b.textContent = "续跑";

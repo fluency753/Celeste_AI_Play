@@ -610,6 +610,30 @@ interact.Invoke(console, new object?[] { null });
 typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, false);
 Console.WriteLine("PASS: both native PICO-8 entry hooks stop before side effects, preserve plan accounting and manual control");
 
+// Exercise the real StepJob boundary with only the external mixer resource faked.
+Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)));
+var fullMixer=typeof(RecordingAudio).GetField("full",flags)!;
+var oldMixer=fullMixer.GetValue(null);
+var onlyChapters=typeof(Bridge).GetField("<RecordOnlyChapters>k__BackingField",flags)!;
+var oldOnly=onlyChapters.GetValue(null);
+try {
+    onlyChapters.SetValue(null,true);
+    fullMixer.SetValue(null,RuntimeHelpers.GetUninitializedObject(fullMixer.FieldType));
+    var chapterJob=new StepJob(220,new(){InputFrame.Parse("C"),InputFrame.Parse("R")},Array.Empty<string>(),1,false,"level",new SnapshotOptions(),false);
+    chapterJob.NextInput();
+    chapterJob.NoteScene((IntroVignette)RuntimeHelpers.GetUninitializedObject(typeof(IntroVignette)));
+    chapterJob.NoteScene((OverworldLoader)RuntimeHelpers.GetUninitializedObject(typeof(OverworldLoader)));
+    Check(chapterJob.StopReason==null,"Outgoing loader prematurely closed the chapter");
+    chapterJob.NoteScene((Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld)));
+    Check(chapterJob.StopReason=="recording_boundary" && !chapterJob.AllowNextInput(),"Compound input crossed the recording boundary");
+    fullMixer.SetValue(null,null);
+    var noRecord=new StepJob(221,new(){InputFrame.Parse("C"),InputFrame.Parse("R")},Array.Empty<string>(),1,false,"level",new SnapshotOptions(),false);
+    noRecord.NoteScene((IntroVignette)RuntimeHelpers.GetUninitializedObject(typeof(IntroVignette)));
+    noRecord.NoteScene((Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld)));
+    Check(noRecord.StopReason==null,"Stopped recording left chapter-boundary interception active");
+} finally { fullMixer.SetValue(null,oldMixer);onlyChapters.SetValue(null,oldOnly); }
+Console.WriteLine("PASS: recording boundary preserves outgoing loaders, truncates compound input, and releases no-record play");
+
 sealed class ProbeButton(string label, Action onConfirm) : TextMenu.Button(label) {
     public override void ConfirmPressed() => onConfirm();
 }

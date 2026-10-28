@@ -439,6 +439,9 @@ def describe_attempts(attempts: list[dict]) -> str:
 def describe_step(result: dict, max_rows: int = 30) -> str:
     stop = result.get("stop", "?")
     lines = [f"执行了 {result['consumed']}/{result['planned']} 帧，停止原因：{STOP_TEXT.get(stop, stop)}"]
+    if stop == 'recording_boundary':
+        lines.append('已返回选章界面，停在分章录像边界；后续输入没有执行，不会自动重放。观察当前菜单后再继续。')
+        lines.append('本次未执行的输入：' + json.dumps(result.get('remaining_inputs',[]),ensure_ascii=False))
     if result.get('input_cursor'):
         lines.append('TAS输入游标（按实际消耗帧推进）：' + json.dumps(result['input_cursor'], ensure_ascii=False))
         lines.append('本次未执行的输入：' + json.dumps(result.get('remaining_inputs', []), ensure_ascii=False))
