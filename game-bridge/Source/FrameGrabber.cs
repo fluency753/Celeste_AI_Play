@@ -41,7 +41,8 @@ internal static class FrameGrabber {
     }
 
     // Replace native screen-target assignments in Engine.RenderCore and the
-    // Level.Render final composition. Scene.Render executes exactly once.
+    // Level.Render final composition. Scene.Render executes once, unless an
+    // incomplete redirect is abandoned and the frame is redrawn natively.
     internal static RenderTarget2D? ScreenTarget(RenderTarget2D? original) {
         if (!capturing || original != null) return original;
         redirected = true;
@@ -52,6 +53,25 @@ internal static class FrameGrabber {
         if (!capturing) return;
         var targets = Engine.Graphics.GraphicsDevice.GetRenderTargets();
         rendered = redirected && targets.Length == 1 && ReferenceEquals(targets[0].RenderTarget, screenTarget);
+    }
+
+    /// <summary>
+    /// The native frame left the capture target before it finished (some draw
+    /// switched to the screen or another target outside the two hooked
+    /// assignments), so neither surface holds the whole frame.
+    /// </summary>
+    internal static bool RedirectIncomplete => capturing && redirected && !rendered;
+
+    /// <summary>Stop redirecting this frame; the caller redraws it through the native path.</summary>
+    internal static void AbandonRedirect() {
+        try {
+            var device = Engine.Graphics.GraphicsDevice;
+            device.SetRenderTarget(null);
+            device.Viewport = Engine.Viewport;
+        } finally {
+            capturing = redirected = rendered = false;
+        }
+        Log.Warn("story HUD capture redirect was incomplete; frame redrawn natively without a story HUD image");
     }
 
     internal static void EndFrame() {
@@ -82,34 +102,12 @@ internal static class FrameGrabber {
 
     public static Capture CapturePngBase64(string buffer, bool storyHud) {
         if (buffer != "gameplay" && storyHud) {
-            // Read a reusable render target, never the backbuffer: the latter
-            // leaks FNA3D staging textures on the installed graphics backend.
-            if (!capturing || !rendered || screenTarget is not { IsDisposed: false } screen)
-                return new Capture(null, null, "原生剧情界面截图目标未就绪，请重新观测。", StoryHud: true);
-            var device = Engine.Graphics.GraphicsDevice;
-            var bindings = device.GetRenderTargets();
-            var viewport = device.Viewport;
-            try {
-                device.SetRenderTarget(null);
-                var bounds = Engine.Viewport.Bounds;
-                int length = checked(bounds.Width * bounds.Height);
-                if (pixels.Length != length) pixels = new Color[length];
-                screen.GetData(0, bounds, pixels, 0, length);
-                if (cropped == null || cropped.IsDisposed || cropped.Width != bounds.Width || cropped.Height != bounds.Height) {
-                    cropped?.Dispose();
-                    cropped = new Texture2D(device, bounds.Width, bounds.Height, false, SurfaceFormat.Color);
-                }
-                cropped.SetData(pixels);
-                using var stream = new MemoryStream();
-                cropped.SaveAsPng(stream, cropped.Width, cropped.Height);
-                return new Capture(Convert.ToBase64String(stream.ToArray()), $"png-base64-{cropped.Width}x{cropped.Height}", StoryHud: true);
-            } catch (Exception ex) {
-                Log.Warn($"story HUD capture failed: {ex.Message}");
-                return new Capture(null, null, "原生剧情界面截图失败；当前没有可用的剧情图片，请重新观测。", StoryHud: true);
-            } finally {
-                device.SetRenderTargets(bindings);
-                device.Viewport = viewport;
-            }
+            if (TryCaptureStoryHud() is { } story) return story;
+            // No native HUD pixels this frame (hooks unavailable, or the redirect
+            // was abandoned and the frame redrawn natively). A Level's world
+            // buffer is still this frame; other story scenes have none.
+            if (Engine.Scene is not Level)
+                return new Capture(null, null, "原生剧情界面截图暂不可用，本次不附图片，请重新观测。", StoryHud: true);
         }
         VirtualRenderTarget? source = buffer == "gameplay" ? GameplayBuffers.Gameplay : GameplayBuffers.Level;
         RenderTarget2D? target = source?.Target;
@@ -124,6 +122,37 @@ internal static class FrameGrabber {
         } catch (Exception ex) {
             Log.Warn($"capture failed: {ex.Message}");
             return new Capture(null, null, "游戏截图失败，请重新观测。");
+        }
+    }
+
+    private static Capture? TryCaptureStoryHud() {
+        // Read a reusable render target, never the backbuffer: the latter
+        // leaks FNA3D staging textures on the installed graphics backend.
+        if (!capturing || !rendered || screenTarget is not { IsDisposed: false } screen) return null;
+        var device = Engine.Graphics.GraphicsDevice;
+        var bindings = device.GetRenderTargets();
+        var viewport = device.Viewport;
+        try {
+            device.SetRenderTarget(null);
+            var bounds = Engine.Viewport.Bounds;
+            int length = checked(bounds.Width * bounds.Height);
+            if (pixels.Length != length) pixels = new Color[length];
+            screen.GetData(0, bounds, pixels, 0, length);
+            if (cropped == null || cropped.IsDisposed || cropped.Width != bounds.Width || cropped.Height != bounds.Height) {
+                cropped?.Dispose();
+                cropped = new Texture2D(device, bounds.Width, bounds.Height, false, SurfaceFormat.Color);
+            }
+            cropped.SetData(pixels);
+            using var stream = new MemoryStream();
+            cropped.SaveAsPng(stream, cropped.Width, cropped.Height);
+            return new Capture(Convert.ToBase64String(stream.ToArray()), $"png-base64-{cropped.Width}x{cropped.Height}", StoryHud: true);
+        } catch (Exception ex) {
+            Log.Warn($"story HUD capture failed: {ex.Message}");
+            return Engine.Scene is Level ? null
+                : new Capture(null, null, "原生剧情界面截图失败；当前没有可用的剧情图片，请重新观测。", StoryHud: true);
+        } finally {
+            device.SetRenderTargets(bindings);
+            device.Viewport = viewport;
         }
     }
 }

@@ -511,7 +511,13 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     再按正常速度选存档、进地图、选章节、进关卡、用暂停菜单跳过开场剧情。"""
     from tools.enter_save import enter_save as macro, to_file_select  # noqa: WPS433（延迟导入，避免 --help 时连接游戏）
     from tools.bridge_client import BridgeClient
+    from .chapter_recording import ChapterRecording
 
+    if (recorder is not None and getattr(cfg, 'recording_mode', 'continuous') == 'chapter'
+            and not isinstance(recorder, ChapterRecording)):
+        # Every chapter-mode caller must hand over the playlist owner; a bare
+        # Recorder would bypass rotation and fail after capture already started.
+        raise RecordingError('分章录制对象未接入分章清单；未连接游戏或发送菜单输入')
     client = BridgeClient(port=cfg.bridge_port, timeout=120)
     # Startup navigation is explicitly requested by the user, before the agent
     # owns this connection. Allow leaving a previously loaded map to enter the
@@ -1189,6 +1195,12 @@ def abandon_recording(bridge_port: int, saved: dict | None, previous_dir, proble
                 Recorder.finish_saved(client.call, saved, previous_dir, log=lambda m: print(m, flush=True))
             else:
                 Recorder.abandon_saved(saved, problem)
+                try:
+                    # Chapters closed before the failure keep their footage; publish
+                    # their derivatives offline before the new recording starts.
+                    Recorder.finish_closed_offline(saved, log=lambda m: print(m, flush=True))
+                except Exception as exc:  # noqa: BLE001（离线收尾失败不阻止另起录像，章节保持待收尾）
+                    print(f'[record] 已关闭章节的离线收尾未完成，保持待收尾：{exc}', flush=True)
             hello = client.call('hello')
         Recorder.validate_resume(None, hello)          # OBS 还在录别的会话：不另开录像
         print(f"[record] 已放弃原录像（{problem}）：这次续跑另起一段录像", flush=True)
@@ -1302,8 +1314,13 @@ def main() -> int:
             try:
                 Recorder.validate_recovery(saved_recording, recovery_client.call('hello'))
                 recovery_client.call('activate', entities=False, tiles=False, continuous_music=cfg.continuous_music)
-                recorder = Recorder.recover(recovery_client.call, saved_recording, run_dir,
+                recovered = Recorder.recover(recovery_client.call, saved_recording, run_dir,
                                              log=lambda m: print(m, flush=True))
+                # Chapter mode: the playlist owner must wrap the recovered chunk
+                # before enter_save or the session can advance the game. A
+                # rejected wrap keeps the live chunk for the next resume.
+                from .chapter_recording import wrap
+                recorder = wrap(cfg, recovered)
                 handoff_needed = True
             except BaseException:
                 # An asynchronous start may have succeeded despite a lost ACK.
@@ -1381,6 +1398,16 @@ def main() -> int:
     return 0 if summary["completed"] or summary.get("user_stopped") else 1
 
 
+def claim_controller_lease():
+    """命令行启动时持有主控互斥锁（后台宿主已代为持有时跳过），供维护与重启工具核验归属。"""
+    from .game_process import hold_cli_controller_lease
+    try:
+        return hold_cli_controller_lease()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from None
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(REPO_ROOT))
+    _controller_lease = claim_controller_lease()  # held until this process exits
     sys.exit(main())

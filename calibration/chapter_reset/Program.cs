@@ -436,7 +436,7 @@ using (var snapshot = new Hook(typeof(StateExtractor).GetMethod("WriteSnapshot",
         long frame = Bridge.Frame; received = null;
         typeof(Bridge).GetMethod(locked ? "LockstepTick" : "NormalTick", flags)!.Invoke(null,
             new object[] { (Action)(() => {
-                Check(Bridge.ShouldHaltEngineUpdate(), "Saving wait advanced the scene");
+                Check(BridgeRuntime.ShouldHaltEngineUpdate(), "Saving wait advanced the scene");
                 typeof(UserIO).GetProperty("Saving", flags)!.SetValue(null, false);
             }) });
         using var response = System.Text.Json.JsonDocument.Parse(received!);
@@ -469,7 +469,7 @@ using (var snapshot = new Hook(typeof(StateExtractor).GetMethod("WriteSnapshot",
         Check(Bridge.Frozen && Bridge.OwnsInput && !Bridge.IsLoading() && ReloadBoundary.Capture().requires_origin_hold,
             "Stable loader presentation did not become a controlled preserve boundary");
         typeof(Bridge).GetMethod(locked ? "LockstepTick" : "NormalTick", flags)!.Invoke(null,
-            new object[] { (Action)(() => Check(Bridge.ShouldHaltEngineUpdate(), "Idle loader presentation advanced")) });
+            new object[] { (Action)(() => Check(BridgeRuntime.ShouldHaltEngineUpdate(), "Idle loader presentation advanced")) });
         Check(Bridge.Frame == frame + 1, "Idle loader presentation advanced a recording frame");
         loader.Entities.current.Add(card);
         card.alpha = 0;
@@ -521,10 +521,14 @@ using (var snapshot = new Hook(typeof(StateExtractor).GetMethod("WriteSnapshot",
         using var acquireArgs = System.Text.Json.JsonDocument.Parse("{\"enabled\":true}");
         typeof(Bridge).GetMethod("Handle", flags)!.Invoke(null, new object[] { new Request(104, "reload_boundary", acquireArgs.RootElement) });
         using var acquireReply = System.Text.Json.JsonDocument.Parse(received!);
-        Check(acquireReply.RootElement.GetProperty("acquired").GetBoolean() && Bridge.Frozen && Bridge.OwnsInput && Bridge.ShouldHaltEngineUpdate(),
+        Check(acquireReply.RootElement.GetProperty("acquired").GetBoolean() && Bridge.Frozen && Bridge.OwnsInput,
             "Menu maintenance boundary failed to freeze/own input");
         long frame = Bridge.Frame;
-        typeof(Bridge).GetMethod("NormalTick", flags)!.Invoke(null, new object[] { (Action)(() => Check(Bridge.ShouldHaltEngineUpdate(), "Boundary advanced menu")) });
+        // The resident FreezeGate calls BridgeRuntime.ShouldHaltEngineUpdate after
+        // MInput.Update; start from a released gate so the boundary must close it.
+        BridgeRuntime.EngineHalted = false;
+        typeof(Bridge).GetMethod("NormalTick", flags)!.Invoke(null, new object[] { (Action)(() => Check(BridgeRuntime.ShouldHaltEngineUpdate() &&
+            !BridgeRuntime.FeedInputThisFrame, "Boundary advanced menu")) });
         Check(Bridge.Frame == frame, "Boundary incremented menu clock");
         string exported = Bridge.ExportReloadState();
         Check(!(bool)typeof(Bridge).GetField("reloadBoundaryHeld", flags)!.GetValue(null)!, "Export retained the payload boundary after transfer");
@@ -553,6 +557,91 @@ using (var snapshot = new Hook(typeof(StateExtractor).GetMethod("WriteSnapshot",
     Check(ReloadBoundary.Capture().mode == "replace", "Level failed native replacement policy");
     Scene((LevelLoader)RuntimeHelpers.GetUninitializedObject(typeof(LevelLoader)));
     Check(ReloadBoundary.Capture().mode == "wait" && !Bridge.CanReload(), "Loader was allowed to reload");
+
+    // An image observation in a freely running menu is answered for the frame
+    // this tick advances to (never with a stale-frame error), and an unanswered
+    // image holds the next idle advance until its draw.
+    Scene((Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld)));
+    typeof(Bridge).GetField("job", flags)!.SetValue(null, null);
+    var menuRenders = (System.Collections.IList)typeof(Bridge).GetField("PendingRenders", flags)!.GetValue(null)!;
+    var menuDeferred = (System.Collections.IList)typeof(Bridge).GetField("DeferredObservations", flags)!.GetValue(null)!;
+    menuRenders.Clear(); received = null;
+    using (var observeArgs = System.Text.Json.JsonDocument.Parse("{\"image\":true}")) {
+        typeof(Bridge).GetMethod("Handle", flags)!.Invoke(null, new object[] { new Request(240, "observe", observeArgs.RootElement.Clone()) });
+    }
+    Check(received == null && menuRenders.Count == 0 && menuDeferred.Count == 1 && !Bridge.CanReload(),
+        "Menu image observation was answered for a frame the same tick replaces");
+    long menuFrame = Bridge.Frame;
+    int menuUpdates = 0;
+    typeof(Bridge).GetMethod("NormalTick", flags)!.Invoke(null, new object[] { (Action)(() => menuUpdates++) });
+    typeof(Bridge).GetMethod("FlushDeferredObservations", flags)!.Invoke(null, null);
+    Check(menuUpdates == 1 && Bridge.Frame == menuFrame + 1 && menuDeferred.Count == 0 && menuRenders.Count == 1,
+        "Deferred menu observation was not queued for the advanced frame");
+    var menuRenderFrame = menuRenders[0]!.GetType().GetProperty("Frame")!;
+    Check((long)menuRenderFrame.GetValue(menuRenders[0])! == Bridge.Frame, "Menu image belongs to a stale frame");
+    // A draw skipped before the next update (fixed-step catch-up) must not let an idle advance invalidate it.
+    typeof(Bridge).GetMethod("NormalTick", flags)!.Invoke(null, new object[] { (Action)(() => menuUpdates++) });
+    Check(menuUpdates == 2 && Bridge.Frame == menuFrame + 1, "Idle menu advanced past an unanswered image");
+    // A frame is held once: replies that keep arriving for it cannot starve the menu.
+    typeof(Bridge).GetMethod("NormalTick", flags)!.Invoke(null, new object[] { (Action)(() => menuUpdates++) });
+    Check(menuUpdates == 3 && Bridge.Frame == menuFrame + 2, "Unanswered images froze a running menu");
+    menuRenders.Clear();
+    typeof(Bridge).GetMethod("NormalTick", flags)!.Invoke(null, new object[] { (Action)(() => menuUpdates++) });
+    Check(menuUpdates == 4 && Bridge.Frame == menuFrame + 3, "Answered image kept the menu frozen");
+    Console.WriteLine("PASS: running-menu image observations answer the advanced frame; an unanswered image holds one idle frame, never more");
+
+    // A refused record start (duplicate start, chapter recording without game
+    // audio) must leave the recording that is still running exactly as it was.
+    using (var clockConnected = new Hook(typeof(ClockServer).GetProperty("Connected")!.GetGetMethod()!, (Func<bool>)(() => true))) {
+        var recAudioFull = typeof(RecordingAudio).GetField("full", flags)!;
+        object? recPriorFull = recAudioFull.GetValue(null);
+        string[] recFields = { "<RecordOnlyChapters>k__BackingField", "<RecordingChapterActive>k__BackingField",
+            "recordingHasFrame", "recordingNrt", "recordingSid", "recordingSide" };
+        object?[] recRunning = { true, true, true, true, "Celeste/1-ForsakenCity", "A" };
+        try {
+            for (int i = 0; i < recFields.Length; i++) typeof(Bridge).GetField(recFields[i], flags)!.SetValue(null, recRunning[i]);
+            recAudioFull.SetValue(null, RuntimeHelpers.GetUninitializedObject(recAudioFull.FieldType));
+            foreach (string recStart in new[] {
+                    "{\"action\":\"start\",\"audio_source\":\"game_nrt\",\"chapter_only\":true}",
+                    "{\"action\":\"start\",\"audio_source\":\"obs_mix\",\"chapter_only\":false}",
+                    "{\"action\":\"start\",\"audio_source\":\"obs_mix\",\"chapter_only\":true}" }) {
+                using var recStartArgs = System.Text.Json.JsonDocument.Parse(recStart);
+                bool recRefused = false;
+                try {
+                    typeof(Bridge).GetMethod("Handle", flags)!.Invoke(null, new object[] { new Request(250, "record", recStartArgs.RootElement) });
+                } catch (TargetInvocationException e) when (e.InnerException is InvalidOperationException) { recRefused = true; }
+                Check(recRefused && RecordingAudio.Enabled, "Duplicate or invalid record start was accepted: " + recStart);
+                for (int i = 0; i < recFields.Length; i++)
+                    Check(object.Equals(typeof(Bridge).GetField(recFields[i], flags)!.GetValue(null), recRunning[i]),
+                        "Refused record start rewrote " + recFields[i] + ": " + recStart);
+            }
+            recAudioFull.SetValue(null, null);
+            using var recInvalid = System.Text.Json.JsonDocument.Parse("{\"action\":\"start\",\"audio_source\":\"obs_mix\",\"chapter_only\":true}");
+            bool recInvalidRefused = false;
+            try {
+                typeof(Bridge).GetMethod("Handle", flags)!.Invoke(null, new object[] { new Request(251, "record", recInvalid.RootElement) });
+            } catch (TargetInvocationException e) when (e.InnerException is InvalidOperationException) { recInvalidRefused = true; }
+            Check(recInvalidRefused && (bool)typeof(Bridge).GetField("recordingHasFrame", flags)!.GetValue(null)!,
+                "Chapter recording without game audio changed recording state before refusing");
+
+            // The first chapter frame reseeds recording audio inside Celeste.Update:
+            // a failure there is reported through hello, never thrown into the game loop.
+            typeof(Bridge).GetField("recordingHasFrame", flags)!.SetValue(null, false);
+            typeof(Bridge).GetField("recordingAudioFailure", flags)!.SetValue(null, null);
+            // An unconstructed mixer makes RecordingAudio.Stop throw, like a broken FMOD teardown.
+            recAudioFull.SetValue(null, RuntimeHelpers.GetUninitializedObject(recAudioFull.FieldType));
+            typeof(Bridge).GetMethod("BeginCapturedFrame", flags)!.Invoke(null, null);
+            Check((bool)typeof(Bridge).GetField("recordingHasFrame", flags)!.GetValue(null)! &&
+                typeof(Bridge).GetField("recordingAudioFailure", flags)!.GetValue(null) is string,
+                "Failed chapter-audio reseed escaped the game loop or went unreported");
+        } finally {
+            recAudioFull.SetValue(null, recPriorFull);
+            object?[] recIdle = { false, false, false, false, null, null };
+            for (int i = 0; i < recFields.Length; i++) typeof(Bridge).GetField(recFields[i], flags)!.SetValue(null, recIdle[i]);
+            typeof(Bridge).GetField("recordingAudioFailure", flags)!.SetValue(null, null);
+        }
+    }
+    Console.WriteLine("PASS: refused record starts keep the running recording's state; a failed chapter-audio reseed is reported, not thrown");
     typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, false);
 }
 Console.WriteLine("PASS: save waits halt scenes without consuming/recording input; nullable menu/entry identity and short maintenance freeze transfer verified");

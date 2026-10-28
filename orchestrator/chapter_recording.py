@@ -12,6 +12,17 @@ from .recording import Recorder, RecordOptions, RecordingHalt
 from .session_store import write_json
 
 
+# Entries in these states need no capture or post-processing work.
+TERMINAL = frozenset({'finished', 'failed', 'empty', 'abandoned'})
+# Fields describing a closed encoder; only valid while the entry is finishing.
+STALE_CLOSE_KEYS = ('closed', 'result', 'options', 'runs')
+
+
+def closed_pending(entry):
+    """A cleanly closed capture whose offline derivatives are still owed."""
+    return entry.get('state') == 'finishing' and bool(entry.get('closed'))
+
+
 class ChapterRecording:
     def __init__(self, recorder):
         self.active = recorder
@@ -29,7 +40,12 @@ class ChapterRecording:
             elif self.data['current'] != recorder.session_id:
                 raise RecordingHalt('分章录制索引与当前录像不一致，未推进游戏')
             if recorder.started:
-                self._current()['state']='armed'
+                # A live chunk replaces any earlier deferred close of this
+                # chapter; its old encoder terminal state must not end the new one.
+                entry = self._current()
+                entry['state'] = 'armed'
+                for key in STALE_CLOSE_KEYS:
+                    entry.pop(key, None)
                 self._save()
         else:
             if recorder.started:
@@ -178,11 +194,11 @@ class ChapterRecording:
         return self.active.retain()
 
     def stop(self, *args, **kwargs):
-        if not self.data.get('pending') and not self.active.started and all(e['state'] in {'finished','empty'} for e in self.data['entries']):
-            self._notify_empty(kwargs.get('on_capture_stopped'),kwargs.get('on_encoder_finished'))
-            return self._summary()
         defer = kwargs.pop('defer_postprocessing', False)
-        if not self.data.get('pending') and self._current()['state']=='empty':
+        if not self.data.get('pending') and not self.active.started and self._current()['state'] in TERMINAL:
+            # Nothing is capturing for the current chapter (empty, abandoned or
+            # already processed); only closed earlier chapters may still owe
+            # offline derivatives, which never need OBS or the game.
             self._notify_empty(kwargs.get('on_capture_stopped'),kwargs.get('on_encoder_finished'))
             return self._finish_entries() if not defer else self._summary()
         if self._cancel_prepared():
@@ -238,11 +254,10 @@ class ChapterRecording:
         return True
 
     def _finish_entries(self):
-        results = []
         for item in self.data['entries']:
-            if item.get('state') in {'finished', 'empty'}:
-                results.append(item.get('result')); continue
-            if not item.get('closed'):
+            if item.get('state') in TERMINAL:
+                continue
+            if not closed_pending(item):
                 raise RecordingHalt('分章片段没有已关闭的编码器状态，未离线处理')
             if not item['result'].get('frames'):
                 item.update(state='empty', result={'state': 'empty', 'frames': 0, 'dir': item['dir']})
@@ -250,24 +265,55 @@ class ChapterRecording:
                 if empty:
                     empty._postprocess_pending = False; empty._save_session('finished')
             else:
-                recorder = Recorder(None, RecordOptions(**{**item['options'], 'dir': Path(item['dir'])}), self.active.log)
-                recorder.session_id, recorder.run_dirs = item['id'], [Path(p) for p in item['runs']]
-                recorder.chapter_playlist = str(self.path)
-                recorder._publish_run_links = False
-                recorder._stop.requested = True
-                recorder._closed_capture_state = tuple(item['closed'])
-                output = recorder.stop()
-                item.update(state=output['state'], result=output)
-            results.append(item['result']); self._save()
+                _finish_closed_entry(self.path, item, self.active.log)
+            self._save()
         return self._summary()
 
     def _summary(self):
         results=[e['result'] for e in self.data['entries'] if e.get('state')!='empty' and e.get('result')]
-        pending=any(e['state'] not in {'finished','failed','empty','abandoned'} for e in self.data['entries'])
+        pending=any(e['state'] not in TERMINAL for e in self.data['entries'])
         errors=[r.get('error') for r in results if r.get('state')=='failed']
         return {'state':'finishing' if pending else 'failed' if errors else 'finished','pending':pending,
                 'error':'; '.join(str(e or '章节录像失败') for e in errors), 'frames':sum(r.get('frames',0) for r in results),
                 'chapters':results,'playlist':str(self.path),'dir':str(self.path.parent)}
+
+
+def _finish_closed_entry(path, item, log):
+    """Publish one closed chapter's cumulative movie and pure cut offline; no bridge calls."""
+    recorder = Recorder(None, RecordOptions(**{**item['options'], 'dir': Path(item['dir'])}), log)
+    recorder.session_id, recorder.run_dirs = item['id'], [Path(p) for p in item['runs']]
+    recorder.chapter_playlist = str(path)
+    recorder._publish_run_links = False
+    recorder._stop.requested = True
+    recorder._closed_capture_state = tuple(item['closed'])
+    output = recorder.stop()
+    item.update(state=output['state'], result=output)
+    return output
+
+
+def finish_closed(saved, log=print):
+    """Complete derivatives of cleanly closed chapters without the game or OBS.
+
+    Used when the live part of a series is abandoned: chapters whose encoder
+    already closed keep their footage and still receive their final movie and
+    pure cut. Unclosed entries are left untouched. Returns processed entry IDs.
+    """
+    if not saved or not saved.get('chapter_playlist'):
+        return []
+    path = Path(saved['chapter_playlist']).resolve()
+    data = json.loads(path.read_text(encoding='utf-8'))
+    ChapterRecording.validate(path, data)
+    processed = []
+    for item in data['entries']:
+        if not closed_pending(item):
+            continue
+        if not item['result'].get('frames'):
+            item.update(state='empty', result={'state': 'empty', 'frames': 0, 'dir': item['dir']})
+        else:
+            _finish_closed_entry(path, item, log)
+        write_json(path, data)
+        processed.append(item['id'])
+    return processed
 
 
 def wrap(cfg, recorder):
@@ -331,9 +377,11 @@ def finish_saved(call,saved,run_dir,log=print,on_capture=None,on_encoder=None):
     path=Path(recorder.chapter_playlist)
     data=json.loads(path.read_text(encoding='utf-8'));ChapterRecording.validate(path,data)
     entry=next(e for e in data['entries'] if e['id']==recorder.session_id)
-    if entry.get('closed'):
+    if closed_pending(entry):
         recorder._closed_capture_state=tuple(entry['closed']);recorder._stop.requested=True
-    elif not data.get('pending') and entry['state']!='empty':
+    elif not data.get('pending') and entry['state'] not in TERMINAL:
+        # Only a finishing entry's own close is trusted; anything else may be a
+        # live chunk, so stop it through the normal ownership-checked path.
         recorder.started=True
     series=ChapterRecording(recorder)
     return series.stop(on_capture_stopped=on_capture,on_encoder_finished=on_encoder)

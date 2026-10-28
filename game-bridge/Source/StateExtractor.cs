@@ -87,8 +87,7 @@ internal static class StateExtractor {
         if (Engine.Scene is Overworld overworld) {
             WriteMenu(w, overworld);
         }
-        if (Engine.Scene is AreaComplete results) {
-            Session session = results.Session;
+        if (Engine.Scene is AreaComplete { Session: { } session }) {
             w.WriteStartObject("completion");
             w.WriteString("sid", session.Area.SID);
             w.WriteString("side", session.Area.Mode switch { AreaMode.Normal => "A", AreaMode.BSide => "B", _ => "C" });
@@ -143,19 +142,23 @@ internal static class StateExtractor {
         w.WriteString("current", overworld.Current?.GetType().Name);
         w.WriteString("next", overworld.Next?.GetType().Name);
         if (overworld.Current is OuiMainMenu main) {
+            // Buttons are created when the menu is entered; this snapshot is also
+            // written from the game loop (step results), where a throw is fatal.
+            List<MenuButton> mainButtons = main.Buttons ?? new List<MenuButton>();
             w.WriteBoolean("focused", main.Focused && main.Selected);
-            w.WriteNumber("selection", main.Buttons.FindIndex(b => b.Selected));
+            w.WriteNumber("selection", mainButtons.FindIndex(b => b?.Selected == true));
             w.WriteStartArray("buttons");
-            for (int i = 0; i < main.Buttons.Count; i++) {
-                MenuButton button = main.Buttons[i];
+            for (int i = 0; i < mainButtons.Count; i++) {
+                MenuButton? button = mainButtons[i];
+                if (button == null) continue;
                 w.WriteStartObject();
                 w.WriteNumber("index", i);
                 if (button is MainMenuSmallButton small) w.WriteString("id", small.LabelName);
                 w.WriteBoolean("ready", button.Scene == overworld && button.canAcceptInput);
-                w.WriteNumber("L", main.Buttons.IndexOf(button.LeftButton));
-                w.WriteNumber("R", main.Buttons.IndexOf(button.RightButton));
-                w.WriteNumber("U", main.Buttons.IndexOf(button.UpButton));
-                w.WriteNumber("D", main.Buttons.IndexOf(button.DownButton));
+                w.WriteNumber("L", button.LeftButton == null ? -1 : mainButtons.IndexOf(button.LeftButton));
+                w.WriteNumber("R", button.RightButton == null ? -1 : mainButtons.IndexOf(button.RightButton));
+                w.WriteNumber("U", button.UpButton == null ? -1 : mainButtons.IndexOf(button.UpButton));
+                w.WriteNumber("D", button.DownButton == null ? -1 : mainButtons.IndexOf(button.DownButton));
                 w.WriteEndObject();
             }
             w.WriteEndArray();

@@ -199,12 +199,19 @@ internal static class Hooks {
         // 规划回放：这一帧借用回放镜头与单独的随机数渲染，渲染完原样换回（见 Playback）
         FrameGrabber.BeginFrame(Bridge.WantsStoryHudImage);
         try {
-            Playback.BeforeRender();
-            try {
-                orig(self);
-                FrameGrabber.MarkRendered();
-            } finally {
-                Playback.AfterRender();
+            RenderNative(orig, self);
+            if (FrameGrabber.RedirectIncomplete) {
+                // Part of this frame went past the capture target, so presenting
+                // (and, in lockstep, recording) either surface would show a split
+                // image. Redraw the frame natively; its gameplay random draws use
+                // a private generator so the extra pass leaves game state as is.
+                FrameGrabber.AbandonRedirect();
+                Calc.PushRandom(unchecked(7927 + (int)Bridge.Frame));
+                try {
+                    RenderNative(orig, self);
+                } finally {
+                    Calc.PopRandom();
+                }
             }
             Bridge.AfterRender();
         } finally {
@@ -214,6 +221,16 @@ internal static class Hooks {
             DrawFrameMarker();
         }
         ModHud.DrawOverlay(); // 游戏内 HUD（--hud-mod）：画在后备缓冲上，观测截图里没有
+    }
+
+    private static void RenderNative(On.Celeste.Celeste.orig_RenderCore orig, global::Celeste.Celeste self) {
+        Playback.BeforeRender();
+        try {
+            orig(self);
+            FrameGrabber.MarkRendered();
+        } finally {
+            Playback.AfterRender();
+        }
     }
 
     private static void OnGameplayRender(On.Celeste.GameplayRenderer.orig_Render orig, GameplayRenderer self, Scene scene) {

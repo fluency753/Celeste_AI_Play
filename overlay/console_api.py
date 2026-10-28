@@ -556,6 +556,7 @@ def release(bridge_port: int = 47774) -> dict:
     client = BridgeClient(port=bridge_port, timeout=900)
     note = None
     released = False
+    abandoned = None
 
     def hand_back():
         nonlocal released
@@ -584,6 +585,7 @@ def release(bridge_port: int = 47774) -> dict:
                 note = f"原录像无法收尾，已放弃：{exc}"
                 try:
                     Recorder.abandon_saved(saved, exc)
+                    abandoned = saved
                 except Exception as save_error:
                     note += f"；放弃状态未能保存：{save_error}"
         else:
@@ -595,4 +597,11 @@ def release(bridge_port: int = 47774) -> dict:
         hand_back()
     finally:
         client.close()
+    if abandoned is not None:
+        # Offline only, after the game is handed back: chapters whose encoder had
+        # closed keep their footage and still receive their movie and pure cut.
+        try:
+            Recorder.finish_closed_offline(abandoned)
+        except Exception as exc:  # noqa: BLE001
+            note += f"；已关闭章节的离线收尾未完成，保持待收尾：{exc}"
     return {"released": True, **({"note": note} if note else {})}

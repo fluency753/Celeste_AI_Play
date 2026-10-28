@@ -316,3 +316,173 @@ class ChapterRecordingTests(unittest.TestCase):
         for _ in range(3):client.call('step',inputs=['1,C'])
         self.assertEqual(steps,[1,1,2])
         self.assertEqual(len(self.stops),1)
+
+    # ---- review fixes: recover wrapping, abandon/offline finish, stale close, legacy resume ----
+
+    def _encoder(self):
+        """Simulated OBS encoder that writes real media for the captured frame count on stop."""
+        from orchestrator.recording import find_ffmpeg
+        from orchestrator.recording_recovery import ffprobe_path
+        try:ffmpeg=find_ffmpeg();ffprobe_path(ffmpeg)
+        except RuntimeError as exc:self.skipTest(str(exc))
+        self.rec.active.opts.ffmpeg=ffmpeg
+        self.rec.active.opts.video_args='-c:v libx264 -preset ultrafast -g 1 -bf 0'
+        original=self.call
+        def encoded(cmd,**args):
+            if cmd=='record' and args['action']=='stop':
+                plugin=self.hello['clock']['plugin'];directory=Path(plugin['dir']);count=plugin['frames']
+                if count:
+                    for command in (
+                        [ffmpeg,'-v','error','-y','-f','lavfi','-i','color=c=red:s=64x48:r=60','-frames:v',str(count),
+                         '-c:v','libx264','-preset','ultrafast','-g','1','-bf','0',str(directory/'video.mkv')],
+                        [ffmpeg,'-v','error','-y','-i',str(directory/'video.mkv'),'-i',str(directory/'audio.wav'),
+                         '-c:v','copy','-c:a','aac','-shortest',str(directory/'gameplay.mp4')]):
+                        subprocess.run(command,check=True,capture_output=True,timeout=60)
+            return original(cmd,**args)
+        self.rec.call=encoded
+        return encoded
+
+    def test_main_recover_wraps_playlist_before_entering_save(self):
+        from types import SimpleNamespace
+        from orchestrator import run
+        from orchestrator.config import RunConfig
+        self.rec.start();self.frames(3);self.map()
+        self.rec.stop(defer_postprocessing=True)      # previous run closed chapter 1 at the map
+        next_run=self.run/'next-run';next_run.mkdir()
+        cfg=RunConfig(agent='test',save='test',model='test',recording_mode='chapter')
+        args=SimpleNamespace(prepared=None,previous={'dir':self.run,'state':{'recording_mode':'chapter'},'metrics':{}},
+                             record=True,new_recording=False,no_agent=True,keep_obs_open=False)
+        seen={}
+        def bridge_client(*_args,**_kwargs):
+            return SimpleNamespace(call=self.call,close=lambda:None,step_options=None)
+        def macro(client,*_args,**_kwargs):
+            seen['before_step']=getattr(client,'before_step',None)
+            return {'scene':'Level','save':{'slot':1},'level':{'sid':'Celeste/1-ForsakenCity','room':'1'}}
+        async def connected(cfg,args,run_dir,token,previous,recorder):
+            seen['recorder']=recorder
+            return {'stop_reason':'test','decisions':0,'deaths':0,'elapsed_s':0,'thinking_s':0,'tool_s':0,
+                    'play_game_s':0,'auto_game_s':0,'completed':True}
+        with patch.object(run,'parse_args',return_value=(cfg,args)), \
+             patch.object(run,'port_free',return_value=True), \
+             patch('orchestrator.bridge_requirements.preflight_bridge',return_value=copy.deepcopy(self.hello)), \
+             patch.object(run,'make_run_dir',return_value=next_run), \
+             patch.object(run,'start_mod_hud',return_value=None), \
+             patch.object(run,'ensure_obs',return_value=False), \
+             patch.object(run,'check_resume_position',return_value=False), \
+             patch.object(run,'run_async',connected), \
+             patch('tools.bridge_client.BridgeClient',bridge_client), \
+             patch('tools.enter_save.enter_save',macro), \
+             patch('orchestrator.recording.finished_movie',return_value=None):
+            self.assertEqual(run.main(),0)
+        recorder=seen['recorder']
+        self.assertIsInstance(recorder,ChapterRecording)
+        self.assertEqual(seen['before_step'],recorder.before_step)
+        data=json.loads(recorder.path.read_text(encoding='utf-8'))
+        self.assertIsNone(data['pending'])
+        self.assertEqual([Path(e['dir']).name for e in data['entries']],['chapter-001','chapter-002'])
+        self.assertEqual(len(self.starts),2)
+
+    def test_enter_save_rejects_bare_recorder_in_chapter_mode_before_connecting(self):
+        from orchestrator import run
+        from orchestrator.config import RunConfig
+        from orchestrator.recording import RecordingError
+        cfg=RunConfig(agent='test',save='test',model='test',recording_mode='chapter')
+        with patch('tools.bridge_client.BridgeClient') as bridge, \
+             self.assertRaisesRegex(RecordingError,'分章清单'):
+            run.enter_save(cfg,self.rec.active)
+        bridge.assert_not_called()
+
+    def test_abandon_keeps_cleanly_closed_chapter_pending(self):
+        from orchestrator.recording_lifecycle import pending_recording
+        self.rec.start();self.frames(3);self.rec.before_step();self.map();self.rec.before_step()
+        self.frames(2)
+        saved=Recorder.saved_session(self.run)
+        Recorder.abandon_saved(saved,'OBS restarted')
+        data=json.loads(self.rec.path.read_text(encoding='utf-8'))
+        self.assertEqual([e['state'] for e in data['entries']],['finishing','abandoned'])
+        self.assertTrue(data['entries'][0]['closed'])
+        self.assertTrue(pending_recording(Recorder.saved_session(self.run)))
+
+    def test_new_recording_abandon_publishes_closed_chapters_offline(self):
+        from types import SimpleNamespace
+        from orchestrator import run
+        from orchestrator.recording_lifecycle import pending_recording
+        encoded=self._encoder()
+        self.rec.start();self.frames(3);self.rec.before_step();self.map();self.rec.before_step()
+        self.frames(2)
+        # OBS restarted: chapter 2's live capture cannot be closed or recovered.
+        self.hello['clock'].update(lockstep=False,plugin={'state':'idle','frames':0,'audio_nrt':True,'audio_tracks':2})
+        self.hello['record_audio_active']=False
+        starts,stops=len(self.starts),len(self.stops)
+        saved=Recorder.saved_session(self.run)
+        client=SimpleNamespace(call=encoded,close=lambda:None)
+        with patch('tools.bridge_client.BridgeClient',return_value=client):
+            run.abandon_recording(48974,saved,self.run,'OBS restarted')
+        data=json.loads(self.rec.path.read_text(encoding='utf-8'))
+        self.assertEqual([e['state'] for e in data['entries']],['finished','abandoned'])
+        self.assertEqual(data['entries'][0]['result']['frames'],3)
+        self.assertTrue((Path(data['entries'][0]['dir'])/'gameplay_pure.mp4').is_file())
+        self.assertFalse(pending_recording(Recorder.saved_session(self.run)))
+        self.assertEqual((len(self.starts),len(self.stops)),(starts,stops))   # offline: no OBS commands
+
+    def test_rearmed_recovered_chapter_finish_stops_live_capture(self):
+        from orchestrator.chapter_recording import resolve_saved
+        encoded=self._encoder()
+        self.rec.start();self.frames(3)
+        self.rec.stop(defer_postprocessing=True)      # interrupted in the level; retain had failed
+        saved=Recorder.saved_session(self.run)
+        selected=resolve_saved(saved,self.hello)
+        self.assertEqual(selected['id'],saved['id'])
+        recovered=Recorder.recover(encoded,selected,self.run,lambda _:None)
+        series=ChapterRecording(recovered)
+        entry=json.loads(series.path.read_text(encoding='utf-8'))['entries'][0]
+        self.assertEqual(entry['state'],'armed')
+        self.assertNotIn('closed',entry)
+        live=self.hello['clock']['plugin']['dir']
+        self.assertIn('.recovery',live)
+        self.frames(2)
+        # The controller dies without stopping; console handback finishes the series.
+        result=Recorder.finish_saved(encoded,Recorder.saved_session(self.run),self.run,lambda _:None)
+        self.assertEqual(self.stops[-1],live)
+        self.assertFalse(self.hello['clock']['lockstep'])
+        self.assertFalse(result['pending'])
+        self.assertEqual(result['frames'],5)
+
+    def test_old_run_without_recording_fields_resumes_continuous_on_bridge_140(self):
+        import sys
+        from types import SimpleNamespace
+        from orchestrator import run
+        from orchestrator.chapter_recording import wrap
+        old=self.run/'old-run';old.mkdir()
+        state={'agent':'opus5.5','save':'opus5.5','save_slot':3,'cutscene_mode':'auto','model':'claude-opus-5-5',
+               'engine':'claude','effort':'high','max_minutes':4500,'runtime':'container','sim':False,'live':False,
+               'live_mode':False,'mode':'speedrun','record':True,'playback':True,'hud_mod':True,
+               'all_chapters':[6],'plan_pieces':None,'session_id':'abc','mcp_port':47780}
+        write_json(old/'run_state.json',state);write_json(old/'metrics.json',{'splits':[{'chapter':6}],'effort':'high'})
+        note=old/'note.txt';note.write_text('next chapter',encoding='utf-8')
+        argv=['run','--resume',str(old),'--agent','opus5.5','--save','opus5.5','--chapters','7',
+              '--max-minutes','4500','--note-file',str(note)]
+        with patch.object(sys,'argv',argv):
+            cfg,args=run.parse_args()
+        self.assertEqual(cfg.recording_mode,'continuous')
+        self.assertEqual((cfg.freeze_chapter_select,cfg.freeze_file_select,cfg.freeze_main_menu),(False,False,False))
+        recorder=Recorder(self.call,RecordOptions(old/'recording','ffmpeg',''),lambda _:None)
+        self.assertIs(wrap(cfg,recorder),recorder)
+        # Bridge 1.4.0: no chapter_recording field; the finished recording yields a new continuous one.
+        legacy=copy.deepcopy(self.hello);legacy.pop('chapter_recording')
+        legacy['clock']['plugin'].update(state='finished',dir=str(old/'recording'))
+        write_json(old/'recording'/'session.json',{'version':1,'id':'old-id','state':'finished',
+                   'options':{'dir':str(old/'recording'),'ffmpeg':'ffmpeg','video_args':'','continuous_music':False},
+                   'runs':[str(old)]})
+        write_json(old/'recording_session.json',{'id':'old-id','manifest':str(old/'recording'/'session.json')})
+        with patch.object(run,'parse_args',return_value=(cfg,args)), \
+             patch.object(run,'port_free',return_value=True), \
+             patch('orchestrator.bridge_requirements.preflight_bridge',return_value=legacy), \
+             patch('orchestrator.runtimes.runtime',return_value=SimpleNamespace(token=lambda _cfg:'token')), \
+             patch.object(run,'make_run_dir',side_effect=RuntimeError('new run reached')), \
+             patch('tools.bridge_client.BridgeClient') as bridge:
+            with self.assertRaisesRegex(RuntimeError,'new run reached'):
+                run.main()
+        bridge.assert_not_called()
+        self.assertIsNone(getattr(cfg,'_recording_resume_manifest',None))
+        self.assertFalse((old/'recording'/'chapters.json').exists())

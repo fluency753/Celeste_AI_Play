@@ -20,11 +20,46 @@ def _kernel():
     return k
 
 
+CONTROLLER_MUTEX = 'Local\\CelesteAIPlayController'
+ERROR_ALREADY_EXISTS = 183
+
+
+def hold_cli_controller_lease(environ=None, *, kernel=None, last_error=None, attempts=5, delay=0.2):
+    """命令行直接启动的主控持有与后台宿主相同的互斥锁，直到进程退出。
+
+    后台宿主（CELESTE_CONTROLLER_HOST）已为其子进程持有该锁，此时不再申请，避免自锁。
+    返回需在进程生命周期内保留的句柄；非 Windows 返回 None。互斥锁已存在时说明另一个主控
+    （或维护工具）正在运行，短暂重试以容忍其他工具的瞬时存在检查，仍存在就拒绝启动。
+    """
+    environ = os.environ if environ is None else environ
+    if environ.get('CELESTE_CONTROLLER_HOST'):
+        return None
+    if kernel is None:
+        if os.name != 'nt':
+            return None
+        kernel = _kernel()
+    import time
+    for attempt in range(attempts):
+        if last_error is None:
+            ctypes.set_last_error(0)
+        handle = kernel.CreateMutexW(None, False, CONTROLLER_MUTEX)
+        error = last_error() if last_error is not None else ctypes.get_last_error()
+        if not handle:
+            raise OSError(f'无法创建主控互斥锁（Windows 错误 {error}）')
+        if error != ERROR_ALREADY_EXISTS:
+            return handle
+        kernel.CloseHandle(handle)
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+    raise RuntimeError('已有主控或维护工具在运行（主控互斥锁已被持有）；未连接桥接或启动录制。'
+                       '请先中断并等待它退出后再启动')
+
+
 @contextmanager
 def controller_lease():
     k = _kernel()
     ctypes.set_last_error(0)
-    handle = k.CreateMutexW(None, False, 'Local\\CelesteAIPlayController')
+    handle = k.CreateMutexW(None, False, CONTROLLER_MUTEX)
     error = ctypes.get_last_error()
     if not handle:
         raise ctypes.WinError(error)

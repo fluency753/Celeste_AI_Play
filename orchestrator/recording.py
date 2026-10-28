@@ -522,15 +522,28 @@ class Recorder:
         temporary.replace(manifest)
 
         if saved.get('chapter_playlist'):
-            from .chapter_recording import ChapterRecording
+            from .chapter_recording import ChapterRecording, TERMINAL, closed_pending
             from .session_store import write_json
             path=Path(saved['chapter_playlist'])
             data=json.loads(path.read_text(encoding='utf-8'));ChapterRecording.validate(path.resolve(),data)
             for entry in data['entries']:
-                if entry['state'] not in {'finished','failed','empty'}:
+                # A cleanly closed chapter only owes offline derivatives; its
+                # footage is intact, so it stays finishing (see finish_closed).
+                if closed_pending(entry) and not (entry.get('result') or {}).get('frames'):
+                    entry.update(state='empty',result={'state':'empty','frames':0,'dir':entry['dir']})
+                elif entry['state'] not in TERMINAL and not closed_pending(entry):
                     entry.update(state='abandoned',abandoned_reason=str(reason))
             data['pending']=None
             write_json(path,data)
+
+    @staticmethod
+    def finish_closed_offline(saved, log=print):
+        """放弃分章序列的在录部分后，仍为已正常关闭编码器的章节补齐成片与纯享版；不连接游戏或 OBS。
+        失败时抛出异常，这些章节保持 finishing（待收尾），可之后重试。"""
+        if not (saved or {}).get('chapter_playlist'):
+            return []
+        from .chapter_recording import finish_closed
+        return finish_closed(saved, log)
 
     @classmethod
     def finish_saved(cls, call, saved, run_dir, log=print, on_capture_stopped=None, *, on_encoder_finished=None):

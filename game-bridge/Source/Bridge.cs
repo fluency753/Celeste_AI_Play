@@ -21,12 +21,17 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.9.0";
+    public const string Version = "1.9.1";
     internal static bool RecordOnlyChapters { get; private set; }
     internal static bool ChapterRecordingEnabled => RecordOnlyChapters && RecordingAudio.Enabled;
     internal static bool RecordingChapterActive { get; private set; }
     private static bool recordingHasFrame, captureThisFrame, recordingNrt;
     private static string? recordingSid, recordingSide;
+    private static bool recordingSidLookupFailed;
+    // A chapter-audio reseed that failed inside the game loop. RecordingAudio
+    // (resident) owns its own Error; this one is reported through the same
+    // hello field until the next successful record start.
+    private static string? recordingAudioFailure;
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get => BridgeRuntime.Active; private set => BridgeRuntime.Active = value; }
@@ -51,15 +56,17 @@ internal static class Bridge {
     private static StepJob? job;
     private static readonly ConcurrentQueue<Request> Inbox = new();
     private static readonly List<RenderReply> PendingRenders = new();
+    // Image observations that arrived in a tick which will advance the game:
+    // they are answered after that frame, so the snapshot and the image agree.
+    private static readonly List<DeferredObservation> DeferredObservations = new();
 
     private sealed record RenderReply(long Id, Action<Utf8JsonWriter> Body, string Buffer, Scene? Scene, long Frame, bool StoryHud);
-
-    public static bool ShouldHaltEngineUpdate() => Active && reloadBoundaryHeld || SceneControl.HaltEngine(Active, engineHalted, freeFrame, Engine.Scene);
+    private sealed record DeferredObservation(long Id, JsonElement Args, bool DefaultImage);
 
     public static void Enqueue(Request request) => Inbox.Enqueue(request);
 
     public static bool CanReload() => job == null && pendingAck == null && PendingRenders.Count == 0 &&
-        Inbox.IsEmpty && !Playback.Running && !Playback.Done && !ReloadBoundary.Waiting;
+        DeferredObservations.Count == 0 && Inbox.IsEmpty && !Playback.Running && !Playback.Done && !ReloadBoundary.Waiting;
 
     public static void ServiceReloadRequests() => DrainInbox();
 
@@ -68,6 +75,7 @@ internal static class Bridge {
         syncTarget?.Dispose();
         syncTarget = null;
         PendingRenders.Clear();
+        DeferredObservations.Clear();
         Inbox.Clear();
     }
 
@@ -80,7 +88,8 @@ internal static class Bridge {
         string data = JsonSerializer.Serialize(new { schema = 1, continuousMusic, audioMode = (int)audioMode,
             sfxPausedByUs, lockstepEngaged, DrawFrameMarker, idleTokens, identity,
             SceneControl.FreezeChapterSelect, SceneControl.FreezeFileSelect, SceneControl.FreezeMainMenu,
-            RecordOnlyChapters, RecordingChapterActive, recordingHasFrame, recordingNrt, recordingSid, recordingSide });
+            RecordOnlyChapters, RecordingChapterActive, recordingHasFrame, recordingNrt, recordingSid, recordingSide,
+            recordingAudioFailure });
         reloadBoundaryHeld = false;
         return data;
     }
@@ -112,6 +121,9 @@ internal static class Bridge {
             recordingNrt = state.GetProperty("recordingNrt").GetBoolean();
             recordingSid = state.GetProperty("recordingSid").GetString();
             recordingSide = state.GetProperty("recordingSide").GetString();
+            // 1.9.0 payloads predate this field.
+            recordingAudioFailure = state.TryGetProperty("recordingAudioFailure", out var failure) &&
+                failure.ValueKind == JsonValueKind.String ? failure.GetString() : null;
         } else {
             // Legacy payloads left menus running. Do not change an in-flight
             // recording's menu behavior merely by reloading the bridge.
@@ -130,6 +142,7 @@ internal static class Bridge {
 
         if (!Active) {
             runOriginal();
+            FlushDeferredObservations();
             return;
         }
         // 规划回放的最后一帧已经在上一个节拍画出来了：回复主控
@@ -145,6 +158,40 @@ internal static class Bridge {
             NormalTick(runOriginal);
         }
         UpdateAudio(Frame != before, Playback.StepCount != replayBefore);
+        // This tick's frame is final; its draw follows this update.
+        FlushDeferredObservations();
+    }
+
+    /// <summary>
+    /// An idle advance would make an image requested earlier for this frame
+    /// impossible to attach. Hold that idle frame once until the draw answers it.
+    /// Such renders only outlive their tick when a draw was skipped (fixed-step
+    /// catch-up) or a step finished before this tick's idle decision; new
+    /// observations are deferred instead. Holding a given frame only once keeps
+    /// back-to-back immediate replies from starving a running menu or loader.
+    /// </summary>
+    private static bool LivePendingRender =>
+        PendingRenders.Exists(pending => pending.Frame == Frame && ReferenceEquals(pending.Scene, Engine.Scene));
+    private static long idleHoldFrame = -1;
+    private static bool ShouldIdleAdvance() {
+        if (!AdvanceWhenIdle) return false;
+        if (!LivePendingRender || idleHoldFrame == Frame) return true;
+        idleHoldFrame = Frame;
+        return false;
+    }
+    private static bool TickMayAdvance => Active && !BridgeRuntime.HoldingReload && (job != null || AdvanceWhenIdle);
+
+    private static void FlushDeferredObservations() {
+        if (DeferredObservations.Count == 0) return;
+        DeferredObservation[] ready = DeferredObservations.ToArray();
+        DeferredObservations.Clear();
+        foreach (DeferredObservation observation in ready) {
+            try {
+                SendObservation(observation.Id, observation.Args, observation.DefaultImage, allowDefer: false);
+            } catch (Exception ex) {
+                IpcServer.Send(Reply.Error(observation.Id, $"{ex.GetType().Name}: {ex.Message}"));
+            }
+        }
     }
 
     // ---- 普通节拍：每个游戏循环推进 FramesPerTick 帧 ----
@@ -156,12 +203,12 @@ internal static class Bridge {
             return;
         }
         if (job == null) {
-            if (AdvanceWhenIdle) {
+            if (ShouldIdleAdvance()) {
                 AdvanceFrame(runOriginal, InputFrame.Neutral, feedInput: OwnsInput);
             } else {
                 Halt(runOriginal);
                 // 规划回放：游戏不推进，这个节拍照常重画（回放镜头与路线在渲染钩子里画）
-                if (Playback.Running && Engine.Scene is Level level) {
+                if (!AdvanceWhenIdle && Playback.Running && Engine.Scene is Level level) {
                     Playback.Step(level);
                 }
             }
@@ -234,7 +281,9 @@ internal static class Bridge {
             if (job.Finished) FinishJob();
             return;
         }
-        bool wantsFrame = job != null || AdvanceWhenIdle || Playback.Running;
+        // A loading scene advances only through the idle decision, so a live
+        // image request also holds a playback that is waiting for a loader.
+        bool wantsFrame = job != null || ShouldIdleAdvance() || (Playback.Running && !IsLoading());
         // 没有要推进的帧时也要及时回复令牌；等待令牌的同时限制空转的循环频率
         if (!ClockServer.TryTakeToken(wantsFrame ? 6 : 3, out long token)) {
             HaltWithoutDrawing(runOriginal);
@@ -261,11 +310,18 @@ internal static class Bridge {
             SetAudio(AudioMode.MusicOnly);
             Halt(runOriginal);
             if (Engine.Scene is Level level) Playback.Step(level);
-            // 录像声音：完整版音轨跟着这一帧推进（只放音乐），纯享版音轨不推进（见 RecordingAudio）
-            RecordingAudio.AdvanceReplay();
+            // A replay frame is a published movie/PCM frame too: it is filtered
+            // like a game frame, and the first one of a chapter-only piece seeds
+            // the recording mixers exactly as a first game frame would.
+            bool captureReplay = !RecordOnlyChapters || RecordingChapterActive;
+            if (captureReplay) {
+                BeginCapturedFrame();
+                // 录像声音：完整版音轨跟着这一帧推进（只放音乐），纯享版音轨不推进（见 RecordingAudio）
+                RecordingAudio.AdvanceReplay();
+            }
             pendingAck = token;
-            pendingAckReplay = true;
-            pendingAckCapture = true;
+            pendingAckReplay = captureReplay;
+            pendingAckCapture = captureReplay;
             return;
         }
         // 推进之前恢复声音：恢复的指令在这一帧的 Audio.Update 里生效，这一段从第一帧开头就有声音
@@ -348,6 +404,7 @@ internal static class Bridge {
         if (pendingAck is not { } token) return;
         if (!pendingAckCapture) {
             pendingAck = null;
+            pendingAckReplay = false;
             ClockServer.Send($"N {token}");
             return;
         }
@@ -495,17 +552,7 @@ internal static class Bridge {
             captureThisFrame = !RecordOnlyChapters || RecordingChapterActive;
             job?.NoteScene(Engine.Scene);
             if (captureThisFrame) {
-                if (RecordOnlyChapters && !recordingHasFrame && recordingNrt && RecordingAudio.Enabled) {
-                    // No movie/PCM frame exists yet: discard menu one-shots and
-                    // seed the current live scene before its first recorded frame.
-                    RecordingAudio.Stop();
-                    RecordingAudio.Start(Audio.System, Path.Combine(Engine.ContentDirectory, "FMOD", "Desktop"), RuntimeModule.Settings.ClockPort);
-                }
-                if (recordingSid == null && SceneControl.ChapterScene(Engine.Scene)) {
-                    var chapter = ReloadBoundary.Capture().session;
-                    recordingSid = chapter?.sid; recordingSide = chapter?.side;
-                }
-                recordingHasFrame = true;
+                BeginCapturedFrame();
                 RecordingAudio.Advance();
             }
         } finally {
@@ -515,6 +562,46 @@ internal static class Bridge {
             Frame++;
             SyncInputOwnership();
         }
+    }
+
+    /// <summary>
+    /// Called before the first PCM of every published frame, game or planning
+    /// replay. The first frame of a chapter-only piece reseeds the recording
+    /// mixers; that runs inside Celeste.Update and must never throw there.
+    /// </summary>
+    private static void BeginCapturedFrame() {
+        if (RecordOnlyChapters && !recordingHasFrame && recordingNrt && RecordingAudio.Enabled) {
+            // No movie/PCM frame exists yet: discard menu one-shots and
+            // seed the current live scene before its first recorded frame.
+            try {
+                RecordingAudio.Stop();
+                RecordingAudio.Start(Audio.System, Path.Combine(Engine.ContentDirectory, "FMOD", "Desktop"), RuntimeModule.Settings.ClockPort);
+            } catch (Exception ex) {
+                // Without mixers no PCM slot is published for this token, so the
+                // OBS plugin fails the capture instead of substituting live audio;
+                // hello's record_audio_error tells the controller why.
+                recordingAudioFailure = "chapter recording audio could not be reseeded: " + ex.Message;
+                Log.Error(recordingAudioFailure + "\n" + ex);
+                try {
+                    RecordingAudio.Stop();
+                } catch (Exception stopError) {
+                    Log.Error("stopping recording audio after a failed reseed also failed: " + stopError.Message);
+                }
+            }
+        }
+        // The chapter identity only feeds the chapter-only playlist (hello's
+        // record_chapter_sid). This also runs inside Celeste.Update, so a failed
+        // lookup is logged once and retried on a later frame, never thrown.
+        if (RecordOnlyChapters && recordingSid == null && SceneControl.ChapterScene(Engine.Scene)) {
+            try {
+                var chapter = ReloadBoundary.Capture().session;
+                recordingSid = chapter?.sid; recordingSide = chapter?.side;
+            } catch (Exception ex) {
+                if (!recordingSidLookupFailed) Log.Error("chapter recording identity unavailable: " + ex.Message);
+                recordingSidLookupFailed = true;
+            }
+        }
+        recordingHasFrame = true;
     }
 
     private static void FinishJob() {
@@ -663,6 +750,10 @@ internal static class Bridge {
                     w.WriteBoolean("memorial_text", true);
                     w.WriteBoolean("story_input", true);
                     w.WriteBoolean("story_decision", true);
+                    // Native story HUD pixels need both screen-target hooks; without
+                    // them a story observation in a Level carries the world image.
+                    w.WriteBoolean("story_hud_capture", FrameGrabber.CaptureHookAvailable);
+                    w.WriteBoolean("story_hud_capture_level", FrameGrabber.CaptureHookAvailable && FrameGrabber.LevelCaptureHookAvailable);
                     w.WriteBoolean("record_audio_active", RecordingAudio.Enabled);
                     w.WriteNumber("record_audio_frames", RecordingAudio.RenderedFrames);
                     w.WriteNumber("record_audio_replay_frames", RecordingAudio.ReplayFrames);
@@ -675,7 +766,7 @@ internal static class Bridge {
                         if (RecordingAudio.FullPositionFor(music) is { } fullPosition)
                             w.WriteNumber("record_music_full_ms", fullPosition);
                     }
-                    if (RecordingAudio.Error != null) w.WriteString("record_audio_error", RecordingAudio.Error);
+                    if ((RecordingAudio.Error ?? recordingAudioFailure) is { } audioError) w.WriteString("record_audio_error", audioError);
                     w.WriteStartObject("clock");
                     w.WriteBoolean("connected", ClockServer.Connected);
                     w.WriteBoolean("lockstep", lockstepEngaged);
@@ -692,27 +783,36 @@ internal static class Bridge {
                     IpcServer.Send(Reply.Error(req.Id, "OBS plugin not connected to the clock port"));
                     break;
                 }
-                DrawFrameMarker = GetBool(a, "marker", DrawFrameMarker);
-                continuousMusic = GetBool(a, "continuous_music", continuousMusic);
                 string recordAction = GetString(a, "action", "");
                 if (recordAction == "start") {
-                    RecordOnlyChapters = GetBool(a, "chapter_only", false);
-                    recordingNrt = GetString(a, "audio_source", "obs_mix") == "game_nrt";
-                    if (RecordOnlyChapters && !recordingNrt) throw new InvalidOperationException("Chapter recording requires game_nrt audio");
+                    bool startNrt = GetString(a, "audio_source", "obs_mix") == "game_nrt";
+                    bool startChapterOnly = GetBool(a, "chapter_only", false);
+                    // Every check that can refuse a start runs before any recording
+                    // state changes: a refused (e.g. duplicate) start must leave the
+                    // recording that is still running exactly as it was.
+                    if (startChapterOnly && !startNrt) throw new InvalidOperationException("Chapter recording requires game_nrt audio");
+                    if (RecordingAudio.Enabled)
+                        throw new InvalidOperationException("Recording audio is already running; stop the current recording first");
+                    if (startNrt) {
+                        using JsonDocument plugin = JsonDocument.Parse(ClockServer.PluginStatus ?? "{}");
+                        if (!plugin.RootElement.TryGetProperty("audio_nrt", out JsonElement capability) || capability.ValueKind != JsonValueKind.True)
+                            throw new InvalidOperationException("Update the OBS lockstep plugin for independent recording audio");
+                        if (!plugin.RootElement.TryGetProperty("audio_tracks", out JsonElement tracks) || tracks.ValueKind != JsonValueKind.Number ||
+                            tracks.GetInt32() != RecordingAudio.TrackCount)
+                            throw new InvalidOperationException("Update the OBS lockstep plugin for two-track recording audio");
+                        // Start cleans up after itself when it throws; nothing else changed yet.
+                        RecordingAudio.Start(Audio.System, Path.Combine(Engine.ContentDirectory, "FMOD", "Desktop"), RuntimeModule.Settings.ClockPort);
+                    }
+                    RecordOnlyChapters = startChapterOnly;
+                    recordingNrt = startNrt;
                     RecordingChapterActive = SceneControl.ChapterScene(Engine.Scene) ||
                         GetBool(a, "chapter_context", false) && Engine.Scene is LevelLoader or LevelExit or OverworldLoader;
-                    recordingHasFrame = false; recordingSid = recordingSide = null;
+                    recordingHasFrame = false; recordingSid = recordingSide = null; recordingSidLookupFailed = false;
+                    recordingAudioFailure = null;
                 }
-                if (recordAction == "start" && GetString(a, "audio_source", "obs_mix") == "game_nrt") {
-                    using JsonDocument plugin = JsonDocument.Parse(ClockServer.PluginStatus ?? "{}");
-                    if (!plugin.RootElement.TryGetProperty("audio_nrt", out JsonElement capability) || capability.ValueKind != JsonValueKind.True)
-                        throw new InvalidOperationException("Update the OBS lockstep plugin for independent recording audio");
-                    if (!plugin.RootElement.TryGetProperty("audio_tracks", out JsonElement tracks) || tracks.ValueKind != JsonValueKind.Number ||
-                        tracks.GetInt32() != RecordingAudio.TrackCount)
-                        throw new InvalidOperationException("Update the OBS lockstep plugin for two-track recording audio");
-                    RecordingAudio.Start(Audio.System, Path.Combine(Engine.ContentDirectory, "FMOD", "Desktop"), RuntimeModule.Settings.ClockPort);
-                }
-                else if (recordAction == "stop") RecordingAudio.Stop();
+                DrawFrameMarker = GetBool(a, "marker", DrawFrameMarker);
+                continuousMusic = GetBool(a, "continuous_music", continuousMusic);
+                if (recordAction == "stop") RecordingAudio.Stop();
                 ClockServer.Send("R " + a.GetRawText());
                 IpcServer.Send(Reply.Ok(req.Id, w => w.WriteBoolean("marker", DrawFrameMarker)));
                 break;
@@ -1036,9 +1136,16 @@ internal static class Bridge {
         }));
     }
 
-    private static void SendObservation(long id, JsonElement a, bool defaultImage) {
-        SnapshotOptions opt = ReadSnapshotOptions(a);
+    private static void SendObservation(long id, JsonElement a, bool defaultImage, bool allowDefer = true) {
         bool image = GetBool(a, "image", defaultImage);
+        if (image && allowDefer && TickMayAdvance) {
+            // The rest of this tick advances a frame (idle menu/loader or a
+            // running step), which would invalidate an image of the current one.
+            // Observe that frame instead, right before its own draw.
+            DeferredObservations.Add(new DeferredObservation(id, a, defaultImage));
+            return;
+        }
+        SnapshotOptions opt = ReadSnapshotOptions(a);
         string buffer = GetString(a, "buffer", "level");
         byte[] obs = Reply.Object(w => StateExtractor.WriteSnapshot(w, opt));
         void Body(Utf8JsonWriter w) {

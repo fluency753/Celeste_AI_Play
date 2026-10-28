@@ -329,3 +329,98 @@ class RestartTests(unittest.TestCase):
                 self.assertEqual(len(self.launches),1)
             finally:
                 server.shutdown();thread.join()
+
+    # ---- review fixes: recoverable launch failures, CLI controllers, read-only check ----
+
+    def test_rejected_launch_retries_in_fresh_host_without_second_interrupt(self):
+        from orchestrator.background import LaunchRejected
+        original=self.launch
+        attempts=[]
+        def flaky(args,*,directory):
+            attempts.append(directory)
+            if len(attempts)==1:
+                # launch() creates the host directory before Windows rejects the process.
+                write_json(directory/'launch.json',{'arguments':args})
+                raise LaunchRejected('ReturnValue 9')
+            return original(args,directory=directory)
+        with patch.object(restart,'launch',flaky):
+            with self.assertRaisesRegex(RuntimeError,'--retry'):self.execute()
+            self.assertEqual(restart.read(self.journal)['phase'],'launching')
+            result=self.execute(retry=True)
+        self.assertEqual(result['phase'],'finished')
+        self.assertEqual(len(self.calls),1)
+        self.assertEqual(len(self.launches),1)
+        self.assertNotEqual(attempts[0],attempts[1])
+        self.assertEqual(result['failed_hosts'][0]['host'],str(attempts[0].resolve()))
+
+    def test_unconfirmed_launch_relaunches_only_without_host_evidence(self):
+        import os
+        import time
+        original=self.launch
+        attempts=[]
+        def lost(args,*,directory):
+            attempts.append(directory)
+            if len(attempts)==1:
+                write_json(directory/'launch.json',{'arguments':args})
+                raise TimeoutError('powershell timed out')
+            return original(args,directory=directory)
+        with patch.object(restart,'launch',lost):
+            with self.assertRaises(TimeoutError):self.execute()
+            # Within the grace period the worker may still be starting.
+            with self.assertRaises(TimeoutError):self.execute(retry=True)
+            self.assertEqual(len(attempts),1)
+            stale=time.time()-restart.LAUNCH_GRACE_S-5
+            os.utime(attempts[0]/'launch.json',(stale,stale))
+            def held():
+                raise RuntimeError('主控仍在运行')
+            # A held lease means a worker or controller is alive: never launch a second one.
+            with patch.object(restart,'controller_lease',held),self.assertRaises(TimeoutError):
+                self.execute(retry=True)
+            self.assertEqual(len(attempts),1)
+            result=self.execute(retry=True)
+        self.assertEqual(result['phase'],'finished')
+        self.assertEqual(len(attempts),2)
+        self.assertEqual(len(self.calls),1)
+
+    def test_superseded_unfinished_update_does_not_block_a_fresh_restart(self):
+        stale=self.root/'local/background/stale'
+        stale.mkdir(parents=True)
+        write_json(self.journal,{'phase':'waiting_ready','token':'old','port':48992,'host':str(stale),
+                                 'before':{'run':str(self.root/'runs/agent/older')}})
+        result=self.execute()
+        self.assertEqual(result['phase'],'finished')
+        self.assertEqual(len(self.calls),1)
+        self.assertEqual(len(self.launches),1)
+
+    def test_unfinished_update_whose_host_runs_still_requires_retry(self):
+        running=self.root/'local/background/running'
+        write_json(running/'status.json',{'state':'running','child_pid':300,'host_pid':301})
+        write_json(self.journal,{'phase':'waiting_ready','token':'old','port':48992,'host':str(running),
+                                 'before':{'run':str(self.root/'runs/agent/older')}})
+        with self.assertRaisesRegex(ValueError,'--retry'):self.execute()
+        self.assertEqual(self.calls+self.launches,[])
+
+    def test_cli_controller_is_refused_before_interrupt_even_with_host(self):
+        write_json(self.old/'run_state.json',{**self.state,'controller_host':None})
+        self.assertEqual(restart.inspect(48992)['controller'],'cli')
+        with self.assertRaisesRegex(ValueError,'命令行'):self.execute(host=str(self.host))
+        self.assertEqual(self.calls+self.launches,[])
+        self.assertFalse(self.journal.exists())
+
+    def test_check_reports_non_recording_states_without_raising(self):
+        from tools.restart_controller import main
+        write_json(self.manifest,{'version':1,'id':'recording-id','state':'finished',
+                                  'options':{'audio_source':'game_nrt','dir':str(self.manifest.parent)}})
+        status=restart.inspect(48992)
+        self.assertEqual((status['recording']['id'],status['recording']['state']),('recording-id','finished'))
+        output=io.StringIO()
+        with patch('sys.argv',['restart_controller.py','check','--json']),redirect_stdout(output):
+            self.assertEqual(main(),0)
+        self.assertEqual(json.loads(output.getvalue())['recording']['state'],'finished')
+        with self.assertRaisesRegex(ValueError,'不是 recording'):self.execute()
+        self.assertEqual(self.calls+self.launches,[])
+        self.assertFalse(self.journal.exists())
+        write_json(self.old/'recording_session.json',{'id':'other','manifest':str(self.manifest)})
+        self.assertEqual(restart.inspect(48992)['recording']['state'],'unreadable')
+        (self.old/'recording_session.json').unlink()
+        self.assertEqual(restart.inspect(48992)['recording'],{'state':'missing'})

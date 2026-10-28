@@ -35,8 +35,11 @@ def main():
             print(f"{'主控已接回' if args.action == 'restart' else '主控检查'}："
                   f"{'已连接' if result['connected'] else '未连接'} / {'暂停' if result['paused'] else '运行'} / "
                   f"游戏{'冻结' if result['bridge'].get('frozen') else '未确认冻结'} / Bridge {result['bridge'].get('version', '未知')}")
+            current = result['recording'] or {}
             print(f"会话 {result['session']['session_id']}；原录制 "
-                  + ((result['recording'] or {}).get('id') or '无录制'))
+                  + (f"{current.get('id') or '—'}（{current.get('state')}）" if current else '无录制')
+                  + (f"：{current['error']}" if current.get('error') else '')
+                  + ('；命令行直接启动的主控不支持自动 restart' if result.get('controller') == 'cli' else ''))
         return 0
     except (OSError, ValueError, RuntimeError, KeyError) as exc:
         print(f'主控更新未完成：{exc}', file=sys.stderr)

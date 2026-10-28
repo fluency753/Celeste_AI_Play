@@ -24,6 +24,10 @@ def console_python() -> str:
     return sys.executable
 
 
+class LaunchRejected(RuntimeError):
+    """Windows 明确没有创建宿主进程（WMI 返回失败或 PowerShell 调用失败），可以安全地换目录重试。"""
+
+
 def launch(arguments, *, probe=False, service="play", directory=None):
     if os.name != "nt":
         raise RuntimeError("独立宿主目前只支持 Windows")
@@ -45,12 +49,16 @@ def launch(arguments, *, probe=False, service="play", directory=None):
               "$result=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{"
               f"CommandLine={quote(command)};CurrentDirectory={quote(ROOT)};ProcessStartupInformation=$startup" + "}; "
               "$result | Select-Object ReturnValue,ProcessId | ConvertTo-Json -Compress")
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                            capture_output=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW,
-                            timeout=30, check=True)
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                                capture_output=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW,
+                                timeout=30, check=True)
+    except subprocess.CalledProcessError as exc:
+        # ErrorActionPreference=Stop: Invoke-CimMethod failed, so no process exists.
+        raise LaunchRejected(f"Windows 独立启动失败：{(exc.stderr or exc.stdout or '').strip() or exc}") from exc
     created = json.loads(result.stdout.strip())
     if created["ReturnValue"]:
-        raise RuntimeError(f"Windows 独立启动失败：{created}")
+        raise LaunchRejected(f"Windows 独立启动失败：{created}")
     for _ in range(100):
         status = directory / "status.json"
         if status.exists():

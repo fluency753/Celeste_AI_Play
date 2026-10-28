@@ -10,7 +10,7 @@ import time
 import urllib.request
 import uuid
 
-from .background import launch
+from .background import LaunchRejected, launch
 from .config import REPO_ROOT
 from .game_process import GameProcess, controller_lease
 from .launch_options import resume_args
@@ -23,6 +23,7 @@ class HandoffRejected(ValueError):
 
 
 IDENTITY = ('agent', 'save', 'save_slot', 'session_id', 'engine', 'provider', 'model', 'runtime')
+LAUNCH_GRACE_S = 60   # 宿主目录创建后，这么久仍无状态文件且锁空闲，才认定没有宿主进程
 
 
 def read(path):
@@ -47,22 +48,42 @@ def inside(value, folder):
 
 
 def recording(run, state):
+    """只读描述原录制；非 recording 状态如实报告，由 restart 的 require_recording 决定是否拒绝。"""
     pointer = run / 'recording_session.json'
     if not pointer.exists():
-        if state.get('record', True):
-            raise ValueError('运行要求录制但缺少原录制引用，未中断主控')
-        return None
-    link = read(pointer)
+        return {'state': 'missing'} if state.get('record', True) else None
     from .recording import Recorder
     from .recording_recovery import prefix_counts
-    manifest = Recorder.saved_session(run)
-    capture = Recorder.capture_directory(manifest)
-    prefix_counts(manifest)  # same pure-read recovery validation used by retain
-    if manifest.get('state') != 'recording':
-        raise ValueError('原录制不处于 recording 状态，不能无缝重启主控')
+    try:
+        link = read(pointer)
+        manifest = Recorder.saved_session(run)
+        capture = Recorder.capture_directory(manifest)
+        prefix_counts(manifest)  # same pure-read recovery validation used by retain
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        return {'state': 'unreadable', 'error': str(exc)}
     return {'id': link['id'], 'manifest': str(Path(link['manifest']).resolve()),
-            'capture_dir': str(capture.resolve()),
+            'capture_dir': str(capture.resolve()), 'state': manifest.get('state'),
             'audio_required': (manifest.get('options') or {}).get('audio_source') == 'game_nrt'}
+
+
+def same_recording(before, after):
+    """录制身份一致；旧版交接记录没有 state 字段时只比较身份。"""
+    if before is None or after is None:
+        return before is after
+    keys = ('id', 'manifest', 'capture_dir', 'audio_required') + (('state',) if 'state' in before and 'state' in after else ())
+    return all(before.get(key) == after.get(key) for key in keys)
+
+
+def require_recording(status):
+    current = status['recording']
+    if current is None:
+        return
+    if current.get('state') == 'missing':
+        raise ValueError('运行要求录制但缺少原录制引用，未中断主控')
+    if current.get('state') == 'unreadable':
+        raise ValueError(f"原录制记录无法读取（{current.get('error')}），未中断主控")
+    if current.get('state') != 'recording':
+        raise ValueError(f"原录制处于 {current.get('state')} 状态，不是 recording，不能无缝重启主控；未中断")
 
 
 def inspect(port=47792, *, host=None, bridge_port=None):
@@ -80,7 +101,8 @@ def inspect(port=47792, *, host=None, bridge_port=None):
     if selected_port is not None:
         from overlay.modhud import bridge_status
         bridge = bridge_status(int(selected_port))
-    return {'run': str(run), 'session': {key: state.get(key) for key in IDENTITY},
+    kind = 'host' if state.get('controller_host') else 'cli' if state.get('controller_pid') else 'unrecorded'
+    return {'run': str(run), 'session': {key: state.get(key) for key in IDENTITY}, 'controller': kind,
             'host': str(inside(selected_host, 'local/background')) if selected_host else None,
             'pid': state.get('controller_pid'), 'parent_pid': state.get('controller_parent_pid'), 'bridge_port': selected_port,
             'paused': current.get('paused'), 'phase': current.get('phase'),
@@ -101,7 +123,7 @@ def require_frozen(status):
         raise ValueError('缺少游戏帧号，无法核验重启期间是否推进；未中断主控')
     if status['recording'] and not (bridge.get('lockstep') and bridge.get('obs_plugin')):
         raise ValueError('原录制的锁步连接未就绪；未中断主控')
-    if status['recording'] and status['recording']['audio_required'] and not bridge.get('recording_audio'):
+    if status['recording'] and status['recording'].get('audio_required') and not bridge.get('recording_audio'):
         raise ValueError('原录制音频已断开；未中断主控')
     return 'menu' if menu and not bridge.get('frozen') else 'frozen'
 
@@ -147,6 +169,52 @@ def _wait(check, deadline):
         time.sleep(.2)
 
 
+def _launch_absent(destination):
+    """仅当宿主目录长时间没有状态文件、且主控互斥锁空闲时，才确认那次启动没有宿主进程。"""
+    if (destination / 'status.json').exists():
+        return False
+    marker = destination / 'launch.json'
+    try:
+        created = (marker if marker.exists() else destination).stat().st_mtime
+    except FileNotFoundError:
+        return False
+    if time.time() - created < LAUNCH_GRACE_S:
+        return False
+    try:
+        with controller_lease():
+            return True          # no worker (nor any controller) holds the lease
+    except RuntimeError:
+        return False
+
+
+def _next_host(operation, path, reason):
+    """记下未能启动的宿主目录，换用新目录；只在确认原目录没有宿主进程后调用。"""
+    failed = operation.setdefault('failed_hosts', [])
+    failed.append({'host': operation['host'], 'reason': reason, 'wall': time.time()})
+    destination = REPO_ROOT / 'local/background' / f"controller-update-{operation['token']}-{len(failed)}"
+    operation.update(phase='launching', host=str(destination.resolve()))
+    write_json(path, operation)
+    return destination
+
+
+def _superseded(previous, port):
+    """未完成的旧交接已被人工续跑等新运行取代，且它启动的宿主没有在运行。"""
+    before_run = (previous.get('before') or {}).get('run')
+    if not before_run:
+        return False   # cannot prove the old handoff is obsolete
+    current = control(port)
+    if Path(current['run']).resolve() == Path(before_run).resolve():
+        return False
+    host = previous.get('host')
+    if host:
+        try:
+            if read(Path(host) / 'status.json').get('state') in {'starting', 'running'}:
+                return False   # this update's own controller may be the current run; use --retry
+        except FileNotFoundError:
+            pass
+    return True
+
+
 def restart(*, port=47792, host=None, bridge_port=None, timeout=90, retry=False, record_path=None):
     path = Path(record_path or REPO_ROOT / 'local/controller-restart.json')
     with operation_lock(path.with_suffix('.lock')):
@@ -167,9 +235,19 @@ def _restart(path, port, host, bridge_port, timeout, retry):
             return operation
         port = operation['port']
     else:
-        if path.exists() and read(path).get('phase') not in {'finished', 'failed'}:
-            raise ValueError('存在未完成更新，请用 --retry；未重复中断或启动')
+        if path.exists():
+            previous = read(path)
+            if previous.get('phase') not in {'finished', 'failed'}:
+                if not _superseded(previous, port):
+                    raise ValueError('存在未完成更新，请用 --retry；未重复中断或启动')
+                previous.update(phase='failed', superseded_wall=time.time(),
+                                error=(previous.get('error') or '') + '；当前运行已改变，该交接不再接续')
+                write_json(path, previous)
         before = inspect(port, host=host, bridge_port=bridge_port)
+        if before['controller'] == 'cli':
+            raise ValueError('该主控由命令行直接启动，没有后台宿主，不能自动暂停重启；'
+                             '请在 HUD 中断后手动按标准 --resume <原运行目录> --start-paused 续跑；未中断')
+        require_recording(before)
         boundary = require_frozen(before)
         if (Path(before['run']) / 'summary.json').exists():
             raise ValueError('该运行已有结束记录；未中断主控')
@@ -191,7 +269,7 @@ def _restart(path, port, host, bridge_port, timeout, retry):
     try:
         if operation['phase'] in {'prepared', 'interrupting'}:
             now = inspect(port, host=before['host'], bridge_port=before['bridge_port'])
-            if now['run'] != before['run'] or now['session'] != before['session'] or now['recording'] != before['recording']:
+            if now['run'] != before['run'] or now['session'] != before['session'] or not same_recording(before['recording'], now['recording']):
                 raise HandoffRejected('运行或会话已切换，未操作其他会话')
             action = interrupt_action(operation)
             if not action and not (old / 'summary.json').exists():
@@ -259,12 +337,25 @@ def _restart(path, port, host, bridge_port, timeout, retry):
             destination = REPO_ROOT / 'local/background' / ('controller-update-' + operation['token'])
             operation.update(phase='launching', host=str(destination.resolve()), arguments=args)
             write_json(path, operation)
+        if operation['phase'] == 'waiting_ready' and _launch_absent(inside(operation['host'], 'local/background')):
+            # A host directory with no worker evidence and a free lease never
+            # started; relaunching cannot create a second controller.
+            _next_host(operation, path, '宿主目录没有状态文件且主控互斥锁空闲')
         if operation['phase'] == 'launching':
             destination = inside(operation['host'], 'local/background')
             # The host path is persisted before WMI dispatch. If launch's ACK
             # is lost, retry observes this same path rather than launching twice.
+            if destination.exists() and _launch_absent(destination):
+                destination = _next_host(operation, path, '宿主目录没有状态文件且主控互斥锁空闲')
             if not destination.exists():
-                launch(operation['arguments'], directory=destination)
+                try:
+                    launch(operation['arguments'], directory=destination)
+                except LaunchRejected as exc:
+                    # Windows definitively created no process: the next retry
+                    # uses a fresh directory instead of waiting on this one.
+                    _next_host(operation, path, str(exc))
+                    raise RuntimeError(f'新主控未能启动（Windows 未创建进程）：{exc}；旧主控已退出，游戏保持接管。'
+                                       '排除问题后用 --retry 重新启动，不会重复中断') from exc
             operation['phase'] = 'waiting_ready'; write_json(path, operation)
         if operation['phase'] == 'waiting_ready':
             def ready():
@@ -294,13 +385,17 @@ def _restart(path, port, host, bridge_port, timeout, retry):
                     raise HandoffRejected('新主控未接回指定会话，停止操作')
                 now = inspect(port)
                 previous_recording, current_recording = before['recording'], now['recording']
+                if previous_recording and (current_recording or {}).get('state') == 'missing':
+                    raise ValueError('运行要求录制但缺少原录制引用')  # as before: not a terminal rejection
+                if previous_recording and (current_recording or {}).get('state') == 'unreadable':
+                    raise RecordingError('新主控录制记录无法核验：' + str(current_recording.get('error')))
                 if 'closed_frames' in operation:
                     from .recording_recovery import prefix_counts
                     same = (current_recording is not None and
                             all(current_recording.get(key) == previous_recording.get(key) for key in ('id', 'manifest')))
                     if not same or prefix_counts(read(current_recording['manifest']))['frames'] != operation['closed_frames']:
                         raise HandoffRejected('恢复前缀与已关闭录像计量不一致，未声称接续成功')
-                elif current_recording != previous_recording:
+                elif not same_recording(previous_recording, current_recording):
                     raise HandoffRejected('新主控录制身份改变，未声称接续成功')
                 try:
                     boundary = require_frozen(now)
