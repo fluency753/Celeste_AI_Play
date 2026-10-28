@@ -133,7 +133,7 @@
   .obs-surface #agentControls { display: none; }
   .obs-surface body { width: 100vw; height: 100vh; }
   #agentInput { box-sizing: border-box; width: 100%; height: calc(54 * var(--px)); resize: none; padding: calc(7 * var(--px)); border: 1px solid #52678e; border-radius: 6px; background: #1b2436; color: var(--text); font: inherit; font-size: calc(13 * var(--px)); }
-  #liveEffort, #cutsceneMode { min-width:0; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; font:inherit; font-size:calc(12 * var(--px)); padding:calc(3 * var(--px)); }
+  #agentControls > .control-buttons select { min-width:0; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; font:inherit; font-size:calc(12 * var(--px)); padding:calc(3 * var(--px)); }
   #sessionSelect { box-sizing:border-box; width:100%; margin-bottom:calc(6 * var(--px)); padding:calc(4 * var(--px)); border:1px solid #52678e; border-radius:5px; background:#1b2436; color:var(--text); font:inherit; font-size:calc(12 * var(--px)); }
   #sessionPanel { font-size:calc(12 * var(--px)); margin-bottom:calc(6 * var(--px)); }
   #sessionPanel summary { cursor:pointer; color:var(--label); padding:calc(3 * var(--px)) 0; }
@@ -268,7 +268,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 61;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 62;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
