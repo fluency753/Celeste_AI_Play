@@ -31,8 +31,8 @@ Bash 在断网沙箱运行辅助程序，单次时长上限见系统提示词；
 观测中的story提供当前画面已显示的对白、说话者头像标识、教学提示与纪念碑文字；结合返回截图理解内容，再决定是否推进或跳过，不能只盯等待标志翻页。它不是完整剧本，不包含未显示的后文。
 截图为游戏画面层，不含对话等HUD层；当前对白与选项应读取story及dialogChoices，不能因截图里没有对白就当作没有剧情信息。
 storyDecision=skip 表示剧情目前可尝试通过暂停菜单跳过（不保证存在跳过选项），不表示对白已显示完整。桥接 1.0.25 起支持此提前交接；旧版仍等实际输入节点。
-cutscene(action="advance") 确认当前完整对白或明信片；choose(choice=index) 明确选择可见选项；skip 尝试跳过整段；watch 不按键观看到下一真实输入节点或角色恢复控制。每次确认后主控继续自动播放到下一节点，不需要 wait。
-storyInput 标明 dialogue / choice / tutorial / postcard；教学使用 act，inCutscene 标记本身不代表角色不能操作。
+cutscene(action="advance") 确认当前完整对白、明信片或旧纸的一页；choose(choice=index) 明确选择可见选项；skip 尝试跳过整段。watch 只播放桥接明确识别的动画，到下一输入节点或恢复控制即返回，每次工具调用最多自动等待600帧；超限且仍明确播放时可再次watch，未知状态立即交回，不重复空等。确认后的等待也遵守同一预算，不需要 wait。
+storyInput 标明 dialogue / choice / tutorial / postcard / memo；教学使用 act，旧纸可用 advance 或 C 翻页、U/D 翻页、B 关闭。storyPlaybackState 区分 playing / input / unknown / none；inCutscene 标记本身不证明动画正在播放，也不代表角色不能操作。桥接1.3.2起提供此事实，旧桥接缺字段时agent模式不猜测播放。
 剧情中的教学或互动若需要方向、跳跃、冲刺等真实按键，仍可调用act；不能只等待或把教学输入当普通翻页。
 遇到对话选项先读选项，再用 choose 或明确的 act 输入自行选择；advance 不会代选。
 complete／completed=true 只表示游戏登记成绩；agent 模式须自行处理吃心提示、结算并返回稳定的 OuiChapterSelect 选章地图，主控才确认整章完成。之后若还有指定目标，你自行导航，主控不会代按或传送。

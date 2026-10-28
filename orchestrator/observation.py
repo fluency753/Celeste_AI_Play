@@ -283,7 +283,9 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     for previous in obs.get('storyPlayback') or []:
         lines.append('刚才由主控自动播放的文字：'+previous['text'])
     node = obs.get('storyInput')
-    if node:
+    if node == 'memo':
+        lines.append('旧纸页面正在等待输入：用 advance 或 act 的 C 翻页，U/D 翻页、B 关闭；主控不会自动等待或代按。')
+    elif node:
         lines.append('当前剧情输入节点：'+node+'；主控已停止自动播放，教学用 act；对白和选项可明确用 act 输入，或调用 advance / choose。')
     elif obs.get('storyDecision') == 'skip':
         lines.append('剧情可尝试跳过，尚不表示对白已完整显示：用 cutscene(action="skip") 尝试暂停菜单跳过，或 watch 不按键观看到下一输入节点。')

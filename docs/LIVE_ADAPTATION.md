@@ -204,6 +204,10 @@ HUD 底部"会话管理"提供新建并准备、断开会话、章节选择、�
 
 ### 剧情模式与分支对话（桥接 0.12.3 起）
 
+桥接 1.3.2 起，`storyPlaybackState` 明确报告 `playing/input/unknown/none`。agent 模式只自动等待已识别播放或已知死亡／转场，未知（含旧桥接缺少此字段）立即交回观测，不凭剧情标记空推；每次工具调用的前后自动等待共用最多 600 帧，超限仍为播放时可明确 `watch` 继续。3A 旧纸按实际 `MemoPage.Wait` 协程报告 `storyInput=memo`；`advance` 只确认一页，亦可显式用 `act` 的 U/D 翻页、B 关闭。UI 只报告可见状态、输入就绪与按键，不读取整页未显示正文。失败结果保留最新观测并说明已等待、已移动与未发送确认的范围。
+
+验证：`calibration.story_wait_test` 保留真实 GameSession／MCP，仅替换外部桥接；原生 `calibration/story_text` 覆盖真实 Memo／Textbox／Postcard 协程和 StepJob 输入边沿。隔离游戏证据 `local/story-memo-game-20261028/memo-report.json` 覆盖等待零帧、逐页明确确认和关闭恢复控制，原存档／设置哈希未变；未测试任意 Mod 剧情。可选真实模型接收检查：`python -m calibration.story_wait_receiver_check --model <模型标识> --output local/<新目录>`，只使用独立线程和外部桥接 fixture，不连接在用游戏、主控或 OBS。
+
 HUD 底部的"剧情"下拉框提供"自动跳过"和"agent决定"，开始前或游玩中都可以切换，随当前会话保存、续跑时沿用；默认自动跳过（命令行 `--cutscene-mode auto/agent`）。自动模式用原生暂停菜单跳过剧情，跳不过时推进普通对白；agent 模式把开场和关卡内的剧情交给会话：剧情可尝试跳过时先交回，由它选择 skip 或 watch；继续观看后主控播放到真实输入节点，再由它推进或选择。加载、转场、死亡与重生仍由主控按正常速度处理。只有开放了 cutscene 工具（探索模式、直播模式或 `--cutscene-mode agent`）时，HUD 才能切到"agent决定"。
 
 自动入场和切换检查点时，跳过函数返回 `no_pause` 表示暂时无法打开暂停菜单：菜单宏每次推进 10 帧后重试，不把房间记为已处理。只有已发出跳过确认或确认菜单无跳过项（`no_skip`）才记录本房间已尝试；等待仍受调用方的停止回调和动作次数上限约束。

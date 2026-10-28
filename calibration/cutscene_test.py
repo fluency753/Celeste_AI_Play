@@ -12,6 +12,7 @@ from tools.enter_save import enter_save, open_chapter_select
 
 def dialog(choices=False,ready=True):
     return {'scene':'Level','frame':10,'controllable':False,
+            'storyPlaybackState':{'state':'playing','source':'fixture_textbox_animation'},
             'storyInput':('choice' if ready else None) if choices else 'dialogue','level':{
         'sid':'Celeste/6-Reflection','room':'test','inCutscene':True,'dialogWaiting':not choices,
         'dialogOpen':not choices,'dialogChoiceReady':ready,'dialogChoiceIndex':0,
@@ -158,8 +159,9 @@ class CutsceneTests(unittest.TestCase):
 
     def test_changed_choices_never_receive_confirmation(self):
         self.s.client=SceneClient(dialog(True),change_choices=True)
-        with self.assertRaisesRegex(ActError,'已改变'):self.s.cutscene('choose',choice=1)
+        with self.assertRaisesRegex(ActError,'已改变.*已执行 2 帧选项移动，确认键未发送'):self.s.cutscene('choose',choice=1)
         self.assertEqual(self.s.client.steps,[['1,D','1']])
+        self.assertEqual(self.s.metrics.state.frames_played, 2)
 
     def test_wait_is_not_an_agent_action_and_advance_only_confirms_once(self):
         with self.assertRaisesRegex(ActError,'无需 wait'):self.s.cutscene('wait')
@@ -329,6 +331,7 @@ class StoryFlowTests(unittest.TestCase):
                 self.frame=0;self.calls=[]
             def obs(self):
                 return {'scene':'Level','frame':self.frame,'controllable':self.frame==0,
+                        'storyPlaybackState':{'state':'playing','source':'fixture_cutscene_animation'},
                         'storyInput':'dialogue' if self.frame>=544 else None,
                         'storyDecision':'dialogue' if self.frame>=544 else ('skip' if self.frame>=4 else None),
                         'level':{'inCutscene':self.frame>0,'canPause':self.frame>=4,'room':'test',
@@ -457,8 +460,8 @@ class StoryFlowTests(unittest.TestCase):
         execute.assert_called_once()
 
     def test_automatic_intro_text_is_returned_after_playback(self):
-        a={'scene':'IntroVignette','storyInput':None,'story':[{'kind':'intro','text':'开始登山'}]}
-        b={'scene':'IntroVignette','storyInput':None,'story':[{'kind':'intro','text':'相信自己'}]}
+        a={'scene':'IntroVignette','storyInput':None,'storyPlaybackState':{'state':'playing','source':'fixture_intro'},'story':[{'kind':'intro','text':'开始登山'}]}
+        b={'scene':'IntroVignette','storyInput':None,'storyPlaybackState':{'state':'playing','source':'fixture_intro'},'story':[{'kind':'intro','text':'相信自己'}]}
         play={'scene':'Level','controllable':True,'storyInput':None,'level':{}}
         self.s.client=ScriptClient([a,b,play])
         obs,_,frames,_=self.s._auto_advance(a,None)

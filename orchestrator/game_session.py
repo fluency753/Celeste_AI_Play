@@ -39,6 +39,7 @@ VALID_STOP_ON = {"death", "room", "uncontrollable", "controllable", "land", "ref
 END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
 ENDING_STUCK_STEPS = 40              # 最终章片尾连续 40 次（每次 30 帧，约 20 秒）画面状态不变就不再空等
 FROZEN_GIVE_UP_FRAMES = 600          # 画面冻结等确认时，主控最多推进这么多帧（10 秒，期间每 30 帧按一次确认）就交回
+AGENT_STORY_WAIT_FRAMES = 600        # 每次工具调用中，已确认播放阶段的等待总预算；未知状态不推进。
 
 
 def awaiting_confirm(obs: dict, *, ending: bool = False) -> bool:
@@ -1256,7 +1257,8 @@ class GameSession:
             raise ActError('游戏还在转场或剧情中，主控的自动推进被打断（' + '；'.join(map(str, notes)) + '），这次动作没有执行；稍后再试')
         return ['执行前，主控先接着自动推进了上次被打断的转场或剧情', *notes]
 
-    def _auto_advance(self, obs: dict, image: str | None, *, stop_for_skip: bool = True, story_mode: str | None = None):
+    def _auto_advance(self, obs: dict, image: str | None, *, stop_for_skip: bool = True, story_mode: str | None = None,
+                      wait_budget: int = AGENT_STORY_WAIT_FRAMES):
         """非可控段一律按正常速度推进（与原版一致，录像里不快进）。
         auto模式跳过剧情；agent模式在决策机会、实际输入节点或恢复控制时交回。
         显式 watch/advance/choose 后忽略本段的跳过机会，播至下一实际输入节点。"""
@@ -1320,7 +1322,9 @@ class GameSession:
                 notes.append({'dialogue': '对白已完整显示，请决定 advance 或 skip。',
                               'choice': '对话选项已就绪，请明确 choose，主控不会代选。',
                               'tutorial': '教学输入已就绪，请阅读提示并用 act 操作；不需要 wait。',
-                              'postcard': '明信片已显示完毕，请用 advance 确认。'}[node])
+                              'memo': '旧纸页面正在等待输入：用 advance 或 act 发送 C 翻页，也可用 U/D 翻页、B 关闭；主控不代按。',
+                              'postcard': '明信片已显示完毕，请用 advance 确认。'}.get(node,
+                              f'当前输入节点 {node} 尚未支持，主控停止等待；请查看观测后明确操作。'))
                 break
             if mode == 'agent' and stop_for_skip and story_decision(obs) == 'skip':
                 notes.append('剧情已可尝试暂停菜单跳过：用 cutscene(skip)，或 watch 观看到下一输入节点；主控不会替你跳过。')
@@ -1344,6 +1348,24 @@ class GameSession:
             if seeker_control(obs):
                 notes.append(SEEKER_NOTE)  # 操控 PlayerSeeker：交给智能体，不等 Madeline 恢复控制
                 break
+            if mode == 'agent' and awaiting_confirm(obs):
+                notes.append('画面冻结、角色不可操作，游戏可能在等确认键（例如拿到磁带后的"B 面已解锁"、吃心后的诗句）：'
+                             '请观察后用 act 发送 C 确认；主控不代按。')
+                break
+            if mode == 'agent':
+                playback = obs.get('storyPlaybackState') or {}
+                known_transition = (scene == 'LevelLoader' or level.get('transitioning')
+                                    or (obs.get('player') or {}).get('dead'))
+                if playback.get('state') != 'playing' and not known_transition:
+                    if idle_uncontrolled(obs):
+                        self._idle_handover = True
+                    notes.append('当前不是已确认的剧情播放、死亡或转场阶段，主控停止自动等待；'
+                                 '未知界面可能在等按键，请查看当前观测后明确操作，不能靠空帧猜测。')
+                    break
+                if total >= wait_budget:
+                    notes.append(f'本次已等待 {total} 帧，达到剧情播放等待预算；主控交回当前观测。'
+                                 '若仍为已确认的播放阶段，可明确 watch 继续；本次未额外发送确认键。')
+                    break
             idle = idle_uncontrolled(obs)
             if not idle:
                 idle_frames, self._idle_handover = 0, False
@@ -1372,10 +1394,6 @@ class GameSession:
             waiting = awaiting_confirm(obs)
             if not waiting:
                 frozen_frames = 0
-            elif mode == 'agent':
-                notes.append('画面冻结、角色不可操作，游戏可能在等确认键（例如拿到磁带后的"B 面已解锁"、吃心后的诗句）：'
-                             '请观察后用 act 发送 C 确认；主控不代按。')
-                break
             elif frozen_frames >= FROZEN_GIVE_UP_FRAMES:
                 notes.append(f'画面冻结约 {round(frozen_frames / 60)} 秒，主控按了 {confirms} 次确认 C 仍未恢复，'
                              '为免空耗章节计时停止自动推进：请 observe 查看，可以用 act 发送按键（含 C 确认）尝试，'
@@ -1385,7 +1403,8 @@ class GameSession:
                 inputs = ["1,C", "29"]       # 磁带、吃心等界面在等确认：照真人的做法按确认继续
                 confirms += 1
             else:
-                inputs = ["1,C", "29"] if mode == 'auto' and level.get("dialogWaiting") and not level.get("paused") else ["30"]
+                inputs = (["1,C", "29"] if mode == 'auto' and level.get("dialogWaiting") and not level.get("paused")
+                          else [str(min(30, wait_budget - total))] if mode == 'agent' else ["30"])
             stops = ["controllable", "story_input"] if mode == 'agent' else ["controllable", "complete", "story_input"]
             if mode == 'agent' and stop_for_skip:
                 stops.append('story_decision')
@@ -1495,15 +1514,26 @@ class GameSession:
             auto_frames, auto_notes = 0, []
             if action in {'advance','choose'} and not story_input(obs):
                 obs,_,auto_frames,auto_notes = self._auto_advance(obs,None,stop_for_skip=False,story_mode='agent')
+            def refuse_input(reason, moved_frames=0):
+                current = self._track_motion(enrich_obs(obs))
+                self._update_metrics_from_obs(current); self._write_workspace(current)
+                scope = ('本次确认/选择输入未发送' if not moved_frames
+                         else f'已执行 {moved_frames} 帧选项移动，确认键未发送')
+                if moved_frames:
+                    self.metrics.add(frames_played=moved_frames, play_game_s=time.monotonic()-started)
+                raise ActError(reason + f'；{scope}，此前已自动等待 {auto_frames} 帧，新观测已保存。'
+                               + '；'.join(map(str, auto_notes)))
             options=(obs.get('level') or {}).get('dialogChoices') or []
             if action in {'advance','choose'} and obs.get('scene')=='Level' and 'dialogChoices' not in (obs.get('level') or {}):
-                raise ActError('推进或选择剧情需要更新桥接0.12.3，避免把分支对话误当普通翻页')
+                refuse_input('推进或选择剧情需要更新桥接0.12.3，避免把分支对话误当普通翻页')
             if action in {'advance','choose'} and ((obs.get('level') or {}).get('paused') or obs.get('pauseMenu')):
-                raise ActError('当前暂停菜单尚未关闭，不能把菜单确认当作对话确认')
+                refuse_input('当前暂停菜单尚未关闭，不能把菜单确认当作对话确认')
             if action == 'advance' and options:
-                raise ActError('当前有对话选项，必须用 choose 明确指定 choice，或等待/跳过整段剧情')
-            if action == 'advance' and story_input(obs) not in {'dialogue','postcard'}:
-                raise ActError('当前不是对白确认节点；角色或教学仍可操作时请用 act')
+                refuse_input('当前有对话选项，必须用 choose 明确指定 choice，或等待/跳过整段剧情')
+            if action == 'advance' and story_input(obs) not in {'dialogue','postcard','memo'}:
+                refuse_input('当前不是对白、明信片或旧纸确认节点；角色或教学仍可操作时请用 act')
+            if action == 'choose' and story_input(obs) != 'choice':
+                refuse_input('主控尚未检测到可操作的对话选项，请检查剧情节点状态')
             used=0
             started=time.monotonic()
             def log(inputs,result):
@@ -1521,28 +1551,29 @@ class GameSession:
                 skipped,obs,_,why=skip_by_pause_menu(self.client,on_step=log)
             elif action=='choose':
                 if original_options and original_options != [(item.get('index'),item.get('text')) for item in options]:
-                    raise ActError('对话选项已改变，请重新观察后再选择')
+                    refuse_input('对话选项已改变，请重新观察后再选择')
                 if type(choice) is not int or not any(item.get('index')==choice for item in options):
-                    raise ActError('choice须为当前可见对话选项的index')
+                    refuse_input('choice须为当前可见对话选项的index')
                 signature=[(item.get('index'),item.get('text')) for item in options]
                 for _ in range(len(options)*2+2):
                     level=obs.get('level') or {}
                     if [(item.get('index'),item.get('text')) for item in level.get('dialogChoices') or []] != signature:
-                        raise ActError('对话选项已改变，请重新观察后再选择')
+                        refuse_input('对话选项已改变，请重新观察后再选择', used)
                     if not level.get('dialogChoiceReady'):
-                        raise ActError('主控尚未检测到可操作的对话选项，请检查剧情节点状态')
+                        refuse_input('主控尚未检测到可操作的对话选项，请检查剧情节点状态', used)
                     current=level.get('dialogChoiceIndex')
                     if current==choice:
                         obs=step(['1,C','1']);break
                     obs=step(['1,D' if current < choice else '1,U','1'])
-                else:raise ActError('未能定位对话选项，没有按确认')
+                else:refuse_input('未能定位对话选项，没有按确认', used)
             elif action=='advance':
                 obs=step(['1,C','1'])
             self.metrics.add(play_game_s=time.monotonic()-started,frames_played=used)
             self._commit_completion(obs)
             self._note_obs_room(obs)
             if not self.done and not self.chapter_finished and (story_pending(obs) or not obs.get('controllable')):
-                obs,_,more,notes=self._auto_advance(obs,None,stop_for_skip=False,story_mode='agent')
+                obs,_,more,notes=self._auto_advance(obs,None,stop_for_skip=False,story_mode='agent',
+                                                  wait_budget=max(0, AGENT_STORY_WAIT_FRAMES-auto_frames))
                 auto_frames += more; auto_notes.extend(notes)
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs,_,_=self._enter_next_chapter()

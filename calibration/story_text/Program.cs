@@ -286,15 +286,113 @@ card.alpha=1; card.buttonEase=1;
 Check("postcard",StoryText.DecisionNode(enter)!);
 Console.WriteLine("PASS: early Skip decision, real input priority, pause lock, playable tutorial, paused/frozen/dead/skipping/transition/retry and intro menu/exit exclusions");
 
+// The memo's drawn alpha is not proof that its input loop has begun. Keep
+// real game-generated iterator instances, including Everest's wrapper; never
+// run them here (their animation bodies require graphics/audio/game inputs).
+entities.entities.Clear();
+level.InCutscene=true; level.Paused=false; level.Frozen=false; level.SkippingCutscene=false;
+var memo=(CS03_Memo.MemoPage)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(CS03_Memo.MemoPage));
+memo.Visible=true;memo.alpha=1;
+var memoOwner=new CS03_Memo(player);
+memoOwner.memo=memo;
+var memoRoutine=new Monocle.Coroutine(memo.EaseIn());
+memoOwner.Add(memoRoutine);
+entities.entities.Add(memoOwner);entities.entities.Add(memo);
+void Playback(string state,string source) {
+    var actual=StoryText.PlaybackState(level);
+    Check(state,actual.State);Check(source,actual.Source);
+}
+Check("",StoryText.InputNode(level) ?? "");
+Playback("playing","memo_animation"); // even alpha=1 is still the EaseIn iterator
+memoRoutine.Replace(Celeste.Mod.SwapImmediatelyExtension.SafeEnumerate(memo.Wait()));
+Check("memo",StoryText.InputNode(level)!);
+Playback("input","memo");
+using(var snapshot=Snapshot()) {
+    var ui=snapshot.RootElement.GetProperty("ui");
+    Check("MemoPage",ui.GetProperty("type").GetString()!);
+    if(!ui.GetProperty("inputReady").GetBoolean()) throw new Exception("Memo Wait was not ready");
+    if(ui.TryGetProperty("text",out _)) throw new Exception("Memo leaked text beyond the visible viewport");
+    Check("input",snapshot.RootElement.GetProperty("storyPlaybackState").GetProperty("state").GetString()!);
+}
+memo.Visible=false;
+Check("",StoryText.InputNode(level) ?? "");
+memo.Visible=true;memo.alpha=0;
+Check("",StoryText.InputNode(level) ?? "");
+memo.alpha=1;memo.easingOut=true;memoRoutine.Replace(memo.EaseOut());
+Check("",StoryText.InputNode(level) ?? "");
+Playback("playing","memo_animation");
+memo.easingOut=false;
+System.Collections.IEnumerator UnknownRoutine() {yield return null;}
+memoRoutine.Replace(UnknownRoutine());
+Check("",StoryText.InputNode(level) ?? "");
+Playback("unknown","memo_unrecognized_routine");
+entities.entities.Clear();
+Playback("unknown","unrecognized_cutscene");
+level.InCutscene=false;Playback("none","no_cutscene");
+level.InCutscene=true;
+box.Visible=true;box.disableInput=false;box.waitingForInput=false;box.isInTrigger=false;box.ease=1;
+box.runRoutine=new Monocle.Coroutine(box.EaseOpen());
+entities.entities.Add(box);
+Playback("playing","dialogue_animation");
+var reveal=box.RunRoutine();
+reveal.GetType().GetField("<>2__current",System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+    .SetValue(reveal,.1f);
+box.runRoutine.Replace(reveal);box.text=new FancyText.Text {Nodes=new() {Glyph('显')}};box.index=1;
+Playback("playing","dialogue_delay"); // last glyph delay already incremented index past the page
+box.isInTrigger=true;Playback("unknown","dialogue_unrecognized_routine");
+box.isInTrigger=false;box.waitingForInput=true;box.runRoutine.waitTimer=.1f;
+Playback("playing","dialogue_debounce");
+box.runRoutine.waitTimer=0;
+Playback("input","dialogue");
+box.waitingForInput=false;box.runRoutine.Replace(UnknownRoutine());
+Playback("unknown","dialogue_unrecognized_routine");
+entities.entities.Clear();
+// The postcard is driven by a LevelEnter-owned entity coroutine. Its mere
+// existence is not proof that the current phase can advance without input.
+var enterEntities=new Monocle.EntityList(enter);
+typeof(Monocle.Scene).GetField("<Entities>k__BackingField",System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+    .SetValue(enter,enterEntities);
+var enterOwner=new Monocle.Entity();
+var cardRoutine=new Monocle.Coroutine(card.EaseIn());
+enterOwner.Add(cardRoutine);enterEntities.entities.Add(enterOwner);
+card.Visible=true;card.alpha=1;card.buttonEase=0;
+Check("playing",StoryText.PlaybackState(enter).State);
+Check("postcard_animation",StoryText.PlaybackState(enter).Source);
+cardRoutine.Replace(Celeste.Mod.SwapImmediatelyExtension.SafeEnumerate(card.DisplayRoutine()));
+cardRoutine.waitTimer=.5f;
+Check("playing",StoryText.PlaybackState(enter).State);
+Check("postcard_delay",StoryText.PlaybackState(enter).Source);
+cardRoutine.waitTimer=0;card.buttonEase=1;
+Check("input",StoryText.PlaybackState(enter).State);
+card.buttonEase=0;cardRoutine.Replace(UnknownRoutine());
+Check("unknown",StoryText.PlaybackState(enter).State);
+// Restore the entities consumed by the optional StepJob integration below.
+entities.entities.Add(box);
+Console.WriteLine("PASS: memo iterator readiness, full-alpha entrance, Everest wrappers, closing/hidden state, UI facts, postcard phases and fail-closed story playback");
+
 // Optional integration check against the freshly built full bridge: execute the
 // real StepJob constructor/NextInput/AfterFrame path, not a copy of its edge rule.
 if (args.Length > 0) {
-    var assembly=System.Reflection.Assembly.LoadFrom(Path.GetFullPath(args[0]));
+    var bridgePath=Path.GetFullPath(args[0]);
+    var bridgeDirectory=Path.GetDirectoryName(bridgePath)!;
+    // Payload builds and deployed Mods both keep the resident assembly beside
+    // the payload's module, rather than defining InputFrame in the payload.
+    System.Runtime.Loader.AssemblyLoadContext.Default.Resolving += (_,name) => {
+        foreach(var candidate in new[] {
+            Path.Combine(bridgeDirectory,name.Name+".dll"),
+            Path.Combine(bridgeDirectory,"..","..","game-runtime","bin",name.Name+".dll"),
+            Path.Combine(bridgeDirectory,"..","..","CelesteAIRuntime","bin",name.Name+".dll")})
+            if(File.Exists(candidate)) return System.Reflection.Assembly.LoadFrom(Path.GetFullPath(candidate));
+        return null;
+    };
+    var assembly=System.Reflection.Assembly.LoadFrom(bridgePath);
     var stepType=assembly.GetType("CelesteAI.Bridge.StepJob",throwOnError:true)!;
-    var frameType=assembly.GetType("CelesteAI.Bridge.InputFrame",throwOnError:true)!;
     var snapshotType=assembly.GetType("CelesteAI.Bridge.SnapshotOptions",throwOnError:true)!;
     var flags=System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance
         | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+    var ctor=stepType.GetConstructors(flags).Single();
+    var parameters=ctor.GetParameters();
+    var frameType=parameters.Single(p=>p.Name=="plan").ParameterType.GetGenericArguments().Single();
     var engine=(Monocle.Engine)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Monocle.Engine));
     var instance=typeof(Monocle.Engine).GetProperty("Instance",flags)!;
     var oldEngine=instance.GetValue(null);
@@ -309,8 +407,6 @@ if (args.Length > 0) {
     try {
         var plan=(System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(frameType))!;
         for (int i=0;i<3;i++) plan.Add(Activator.CreateInstance(frameType));
-        var ctor=stepType.GetConstructors(flags).Single();
-        var parameters=ctor.GetParameters();
         var values=parameters.Select(p => p.HasDefaultValue ? p.DefaultValue : p.ParameterType.IsValueType ? Activator.CreateInstance(p.ParameterType) : null).ToArray();
         for (int i=0;i<parameters.Length;i++) values[i]=parameters[i].Name switch {
             "requestId" => 1L, "plan" => plan, "stopOn" => new[]{"story_decision"},
@@ -348,7 +444,27 @@ if (args.Length > 0) {
         level.PauseLock=false;
         next.Invoke(noForcedStop,null); after.Invoke(noForcedStop,new object[]{4L});
         if (reason.GetValue(noForcedStop)!=null) throw new Exception("Unrequested story decision stopped a TAS/raw-input caller");
+        box.Visible=false;memo.Visible=true;memo.alpha=1;memo.easingOut=false;
+        entities.entities.Add(memoOwner);entities.entities.Add(memo);
+        memoRoutine.Replace(memo.EaseIn());
+        var memoValues=(object?[])values.Clone();
+        memoValues[Array.FindIndex(parameters,p=>p.Name=="stopOn")]=new[]{"story_input"};
+        var memoJob=ctor.Invoke(memoValues);
+        next.Invoke(memoJob,null);after.Invoke(memoJob,new object[]{5L});
+        if(reason.GetValue(memoJob)!=null) throw new Exception("Memo full-alpha entrance incorrectly accepted input");
+        memoRoutine.Replace(Celeste.Mod.SwapImmediatelyExtension.SafeEnumerate(memo.Wait()));
+        next.Invoke(memoJob,null);after.Invoke(memoJob,new object[]{6L});
+        Check("story_input",reason.GetValue(memoJob)?.ToString() ?? "");
+        bool memoEvent=false;
+        foreach(var item in (System.Collections.IEnumerable)stepType.GetField("events",flags)!.GetValue(memoJob)!) {
+            var itemType=item.GetType();
+            if((string?)itemType.GetField("Item2")!.GetValue(item)=="story_input"
+                && (long)itemType.GetField("Item1")!.GetValue(item)! ==6L
+                && (string?)itemType.GetField("Item3")!.GetValue(item)=="memo") memoEvent=true;
+        }
+        if(!memoEvent) throw new Exception("StepJob missed the first memo Wait input frame");
         Console.WriteLine("PASS: full bridge StepJob stops and emits Skip at the first pause-unlocked frame");
         Console.WriteLine("PASS: full bridge StepJob preserves explicit act at an existing decision and never forces unrequested stops");
+        Console.WriteLine("PASS: full bridge StepJob stops exactly when memo entrance switches to Wait");
     } finally { instance.SetValue(null,oldEngine); }
 }

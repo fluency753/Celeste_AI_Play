@@ -105,6 +105,7 @@ class SessionTests(unittest.TestCase):
 
     def test_mirror_cutscene_then_void_stops_at_the_seeker(self):
         cutscene = level_obs(room="b-16", state="Dummy", inCutscene=True)
+        cutscene['storyPlaybackState'] = {'state':'playing','source':'fixture_mirror_animation'}
         self.s.client = StepClient([("controllable", 30, cutscene, []), ("room", 12, seeker_obs(), [])],
                                    make=lambda: cutscene)
         self.s.cfg.cutscene_mode = "agent"          # 不走暂停菜单跳过，直接按 30 帧推进

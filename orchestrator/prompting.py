@@ -415,7 +415,8 @@ def prompt_parts(cfg) -> list[PromptPart]:
     if has_cutscene_tool(cfg):
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
                                 f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式在可尝试跳过时先交回，无需wait；"
-                                "用skip尝试跳过，watch不按键观看到下一真实输入节点或恢复控制；advance/choose或act明确输入，教学用act。"
+                                "用skip尝试跳过，watch只播放明确识别的动画到下一输入节点或恢复控制，每次调用最多自动等待600帧；未知状态立即交回，不重复空等。"
+                                "advance确认对白、明信片或旧纸的一页，choose明确选择，教学和其他输入用act；旧纸可用U/D翻页、B关闭。"
                                 "分支须先读选项后自行选择，不得用advance代选。旧桥接缺少storyDecision时仍只在实际输入节点交回。", None, "\n"))
     if is_explore(cfg) and workspace_capabilities(cfg).programs and getattr(cfg, "explore_program_runs", None):
         parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",

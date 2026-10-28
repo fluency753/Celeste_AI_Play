@@ -6,6 +6,7 @@ import time
 import json
 
 from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .game_session import ActError, GameSession
@@ -348,13 +349,16 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             result = await asyncio.to_thread(session.exit_level, reason)
             return [json.dumps(result,ensure_ascii=False) + '\n已退出关卡，本次试玩结束，请结束本轮，不再调用游戏工具。']
 
-    @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段，watch不按键观看到下一真实输入节点或恢复控制。advance确认当前完整对白或明信片，choose选择当前可见选项index；教学用act。无需wait，advance不会代选，确认后自动播放到下一节点。', structured_output=False)
+    @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段。watch只播放桥接明确识别的动画，未知状态立即返回，每次调用最多自动等待600帧；仍在播放可明确watch继续。advance确认当前完整对白、明信片或旧纸的一页，choose选择可见选项index；教学或其他输入用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
     async def cutscene(action: str, choice: int | None = None) -> list:
         ticket = reload_ticket()
         async with call_lock:
             if (note := gated(ticket)) is not None:return [note]
             begin()
-            obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
+            try:
+                obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
+            except ActError as err:
+                raise ToolError(str(err)) from err
             new_room = room_key(obs) != state['described_room']
             context, file_context, candidate = observation_context(obs, force=new_room)
             result=images(obs, image, room_view=new_room)
