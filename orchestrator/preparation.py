@@ -25,7 +25,7 @@ async def prepare(args):
                     knowledge_profile=args.knowledge, sim=args.knowledge == "full", sim_assist=False,
                     live=True, max_minutes=args.max_minutes)
     adapter.configure(cfg, args.provider)
-    cfg.model, cfg.effort = adapter.resolve(cfg.model, cfg.effort, cfg.provider)
+    cfg.model, cfg.effort = await asyncio.to_thread(adapter.resolve, cfg.model, cfg.effort, cfg.provider)
     adapter.token(cfg)  # Fail before creating containers or changing the selected session.
     cfg.mcp_port = getattr(args, 'mcp_port', cfg.mcp_port)
     directory = Path(args.output).resolve() if args.output else REPO_ROOT / "runs" / cfg.agent / datetime.now().strftime("%Y%m%d-%H%M%S")
