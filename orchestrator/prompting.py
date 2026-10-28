@@ -218,7 +218,8 @@ def fill(text: str, cfg) -> str:
                                        if workspace.programs else "当前只有游戏工具，不能读取文件或运行程序；"),
         "{observation_delivery_rule}": ("具备脚本能力且当前观测文件核对成功时，默认正文只给状态、快照身份及文件位置；程序优先读取latest_obs.json的obs，完整碰撞数据不重复进入正文。文件不可用或规划工具受限时回退完整布局baseline/同房delta。"
                                         if workspace.programs else "首次入房或默认observe返回完整布局baseline，同房act/cutscene返回变化delta；快照链缺失时默认observe重建。"),
-        "{observation_source_rule}": ("优先从 `/workspace/game/latest_obs.json` 的 `obs` 读取当前原始数据；默认正文只给状态、快照身份和文件位置；若回退布局则按实际格式读取"
+        "{observation_source_rule}": ("优先从 `/workspace/game/latest_obs.json` 的 `obs` 读取当前原始数据；默认正文只给状态、快照身份和文件位置；若回退布局则按实际格式读取。"
+                                      "同类 JSON 查询反复出现时，将共用读取和筛选保存为工作区参数化脚本，后续用短命令复用；一次性小查询仍可直接执行"
                                       if workspace.workspace_read else "使用首次返回的布局和后续变化，缺少基线时默认 observe 重建"),
         "{geometry_program_rule}": ("确需计算时可用 `/workspace/game/collision_matrix.py` 读取原始快照、按需生成多来源矩阵文件或做基础几何相交查询；用法见同目录 `collision_matrix.md`。通行规则、实体交互与路线由你按具体场景自行写脚本分析，不预设某类来源始终阻挡；不要把完整矩阵打印进上下文，结论仍需用动作或模拟验证。"
                                     if workspace.programs else "根据观测中的矩形边界和角色尺寸核对候选通道，用短动作验证存在歧义的连接。"),
