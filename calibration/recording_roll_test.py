@@ -709,7 +709,8 @@ class RollTests(unittest.TestCase):
         recorder = self.recorder()
         self.bridge.advance(3)
         recorder.stop()
-        directory = recorder.opts.dir
+        # tempfile may use a Windows 8.3 user path; publication resolves its root.
+        directory = recorder.opts.dir.resolve()
         (directory/'gameplay.mp4').write_bytes(b'original episode')
         recovered = Recorder.recover(self.bridge.call, Recorder.saved_session(self.run), self.run, log=lambda _: None)
         self.bridge.advance(2)
@@ -718,9 +719,11 @@ class RollTests(unittest.TestCase):
             if Path(source) == directory/'gameplay.mp4':
                 raise PermissionError('movie open in a player')
             return replace(source, destination)
-        with patch.object(recording_recovery.os, 'replace', side_effect=locked):
+        with patch.object(recording_recovery.os, 'replace', side_effect=locked) as replacements:
             with self.assertRaises(RecordingError):
                 recovered.stop()
+            self.assertTrue(any(Path(call.args[0]) == directory/'gameplay.mp4'
+                                for call in replacements.call_args_list))
         self.assertEqual((directory/'gameplay.mp4').read_bytes(), b'original episode')
         result = recovered.stop()
         self.assertEqual(result['frames'], 5)
