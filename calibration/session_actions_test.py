@@ -258,6 +258,48 @@ class SessionActionTests(unittest.TestCase):
         self.assertIn('--name-save',args)
         self.assertNotIn('--create-save',args)
 
+    def test_recording_options_reach_play_launcher_and_default_consistently(self):
+        from orchestrator.session_actions import _launch_play
+        operation=self.operation()
+        with patch('orchestrator.session_actions.start_chat'):_finish(self.anchor,operation)
+        current=selected_run(self.anchor)
+        base={'chapter':0,'save':'test','create_save':False,'save_slot':10}
+        for extra,expected in [({},['chapter','--freeze-chapter-select','--no-freeze-file-select','--no-freeze-main-menu']),
+            ({'recording_mode':'continuous','freeze_chapter_select':False,'freeze_file_select':True,'freeze_main_menu':True},
+             ['continuous','--no-freeze-chapter-select','--freeze-file-select','--freeze-main-menu'])]:
+            with self.subTest(extra=extra),patch('orchestrator.session_actions.launch',return_value=(self.root/'host',{})) as launch:
+                _launch_play(current,{**base,**extra})
+                args=launch.call_args.args[0]
+                self.assertEqual(args[args.index('--recording-mode')+1],expected[0])
+                for flag in expected[1:]:self.assertIn(flag,args)
+                self.assertIn('--start-paused',args)
+
+    def test_invalid_recording_options_never_release_chat_or_write_preparation(self):
+        from orchestrator.session_actions import _launch_play
+        operation=self.operation()
+        with patch('orchestrator.session_actions.start_chat'):_finish(self.anchor,operation)
+        current=selected_run(self.anchor)
+        base={'chapter':0,'save':'test','create_save':False,'save_slot':10}
+        before=(Path(operation['directory'])/'prepare_summary.json').read_bytes()
+        with patch('orchestrator.session_actions.release_chat') as release,patch('orchestrator.session_actions.launch') as launch:
+            for extra in ({'recording_mode':'invalid'},{'freeze_chapter_select':1},{'freeze_file_select':'false'},{'freeze_main_menu':None}):
+                for method in (lambda options:play_session(self.anchor,current,options),lambda options:_launch_play(current,options)):
+                    with self.subTest(extra=extra),self.assertRaises(ValueError):method({**base,**extra})
+        release.assert_not_called();launch.assert_not_called()
+        self.assertEqual((Path(operation['directory'])/'prepare_summary.json').read_bytes(),before)
+
+    def test_naming_preserves_recording_draft(self):
+        operation=self.operation()
+        with patch('orchestrator.session_actions.start_chat'):_finish(self.anchor,operation)
+        current=selected_run(self.anchor)
+        settings={'recording_mode':'continuous','freeze_chapter_select':False,'freeze_file_select':True,'freeze_main_menu':True}
+        with patch('orchestrator.session_actions.release_chat'), \
+             patch('orchestrator.session_actions.launch',return_value=(self.root/'namer',{})), \
+             patch('orchestrator.session_actions._monitor'),patch('orchestrator.prepared.load_preparation'):
+            play_session(self.anchor,current,{'chapter':0,'save':'','create_save':True,'save_slot':None,**settings})
+        request=read_json(self.anchor/'session_operation.json')['play_options']
+        for key,value in settings.items():self.assertEqual(request[key],value)
+
     def naming_operation(self, name, request_id='name-op'):
         host=self.root/'name-host'
         write_json(host/'status.json',{'state':'exited','exit_code':0})

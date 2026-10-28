@@ -42,6 +42,27 @@ DEFAULTS = {
 }
 
 
+RECORDING_KEYS = ('recording_mode', 'freeze_chapter_select', 'freeze_file_select', 'freeze_main_menu')
+
+
+def recording_options(options: dict, *, legacy: bool = False) -> dict:
+    """Shared HUD/console settings; old runs without fields retain their behavior."""
+    values = {key: options.get(key, ('continuous' if key == 'recording_mode' else False)
+                              if legacy else DEFAULTS[key]) for key in RECORDING_KEYS}
+    if values['recording_mode'] not in ('chapter', 'continuous'):
+        raise ValueError('录像组织须为 chapter 或 continuous')
+    for key in RECORDING_KEYS[1:]:
+        if type(values[key]) is not bool:
+            raise ValueError(f'{key} 须为开或关')
+    return values
+
+
+def recording_args(options: dict) -> list[str]:
+    values = recording_options(options)
+    return ['--recording-mode', values['recording_mode']] + [
+        ('--' if values[key] else '--no-') + key.replace('_', '-') for key in RECORDING_KEYS[1:]]
+
+
 def _number(options: dict, key: str, low: float, high: float, label: str, integer: bool = False, optional: bool = False):
     value = options[key]
     if value is None or value == "":
@@ -94,8 +115,7 @@ def normalize(options: dict) -> dict:
         raise ValueError("推理强度无效")
     if o["mode"] not in (SPEEDRUN, EXPLORE):
         raise ValueError("游玩模式须为速通或探索")
-    if o['recording_mode'] not in ('chapter','continuous'):
-        raise ValueError('录像组织须为 chapter 或 continuous')
+    o.update(recording_options(o))
     if o["hud_mod"] is None and type(o["live"]) is bool:
         o["hud_mod"] = not o["live"]             # 与命令行相同：不开直播时游戏内 HUD 默认开
     for key in SWITCHES:
@@ -192,9 +212,7 @@ def build(options: dict) -> list[str]:
             "--agent", o["agent"], "--mode", o["mode"], "--max-minutes", f"{o['max_minutes']:g}",
             "--save", o["save"]["name"], "--cutscene-mode", o["cutscene_mode"]]
     argv.append("--live" if o["live"] else "--no-live")
-    argv += ['--recording-mode', o['recording_mode']]
-    for key in ('freeze_chapter_select','freeze_file_select','freeze_main_menu'):
-        argv.append(('--' if o[key] else '--no-') + key.replace('_','-'))
+    argv += recording_args(o)
     argv.append("--allow-chapter-reset" if o["allow_chapter_reset"] else "--no-allow-chapter-reset")
     for action, enabled in o['action_permissions'].items():
         argv.append(('--allow-' if enabled else '--no-allow-') + action.replace('_', '-'))

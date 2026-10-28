@@ -205,8 +205,11 @@ def play_session(anchor, current, options):
     if state.get('session_kind') != 'ready':
         raise ValueError('请先新建并准备会话；旧试玩请使用续跑入口')
     if (not isinstance(options, dict) or not {'chapter','save','create_save','save_slot'} <= set(options)
-            or set(options)-{'chapter','save','create_save','save_slot','scope','sim_assist'}):
+            or set(options)-{'chapter','save','create_save','save_slot','scope','sim_assist',
+                             'recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu'}):
         raise ValueError('请显式选择存档及是否新建')
+    from .launch_options import recording_options
+    options = {**options, **recording_options(options)}
     from .play_scope import chapter_sequence,sim_available
     chapter_sequence(options['chapter'],options.get('scope','chapter'))
     if type(options.get('sim_assist',False)) is not bool:
@@ -258,6 +261,8 @@ def play_session(anchor, current, options):
 
 
 def _launch_play(current, options):
+    from .launch_options import recording_args
+    capture_args = recording_args(options)  # validate before any preparation writes or launches
     state = read_json(current / 'run_state.json')
     directory = Path(state['prepared_dir']).resolve()
     preparation = read_json(directory / 'prepare_summary.json')
@@ -276,4 +281,4 @@ def _launch_play(current, options):
                           '--sim-assist' if options.get('sim_assist',False) else '--no-sim-assist',
                           '--prepared',str(directory),'--chapter',str(options['chapter']), '--effort',manual_effort or read_json(current/'metrics.json').get('effort',state['effort']),
                           '--live','--keep-obs-open','--playback','--continuous-music','--start-paused','--cutscene-mode',mode] +
-                         (['--create-save'] if options['create_save'] else ['--save-slot',str(options['save_slot'])]))
+                         capture_args + (['--create-save'] if options['create_save'] else ['--save-slot',str(options['save_slot'])]))

@@ -135,9 +135,11 @@
   #agentInput { box-sizing: border-box; width: 100%; height: calc(54 * var(--px)); resize: none; padding: calc(7 * var(--px)); border: 1px solid #52678e; border-radius: 6px; background: #1b2436; color: var(--text); font: inherit; font-size: calc(13 * var(--px)); }
   #agentControls > .control-buttons select { min-width:0; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; font:inherit; font-size:calc(12 * var(--px)); padding:calc(3 * var(--px)); }
   #sessionSelect { box-sizing:border-box; width:100%; margin-bottom:calc(6 * var(--px)); padding:calc(4 * var(--px)); border:1px solid #52678e; border-radius:5px; background:#1b2436; color:var(--text); font:inherit; font-size:calc(12 * var(--px)); }
-  #sessionPanel { font-size:calc(12 * var(--px)); margin-bottom:calc(6 * var(--px)); }
-  #sessionPanel summary { cursor:pointer; color:var(--label); padding:calc(3 * var(--px)) 0; }
-  #sessionPanel input, #sessionPanel select { box-sizing:border-box; min-width:0; max-width:100%; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; padding:calc(4 * var(--px)); }
+  #sessionPanel, #recordingPanel { font-size:calc(12 * var(--px)); margin-bottom:calc(6 * var(--px)); }
+  #sessionPanel summary, #recordingPanel summary { cursor:pointer; color:var(--label); padding:calc(3 * var(--px)) 0; }
+  #sessionPanel input, #sessionPanel select, #recordingPanel select { box-sizing:border-box; min-width:0; max-width:100%; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; padding:calc(4 * var(--px)); }
+  #recordingPanel label { display:block; margin:calc(4 * var(--px)) 0; }
+  #recordingStatus { color:var(--label); font-size:calc(11 * var(--px)); }
   #sessionName { width:100%; margin-top:calc(4 * var(--px)); }
   #sessionModel { flex:1; width:0; }
   #modelChoiceStatus { font-size:calc(11 * var(--px)); color:var(--warn); overflow-wrap:anywhere; }
@@ -239,6 +241,14 @@
       <label><input id="sessionSimAssist" type="checkbox" disabled>有限模拟辅助<span id="simAvailability">（检查安装状态…）</span></label>
       <div id="sessionOperation" role="status" hidden></div>
     </details>
+    <details id="recordingPanel">
+      <summary>录像与冻结</summary>
+      <label>录像组织 <select id="recordingMode" aria-label="录像组织" disabled><option value="chapter">每章独立视频（不录选章）</option><option value="continuous">连续录制（跨章收集）</option></select></label>
+      <label><input id="freezeChapterSelect" type="checkbox" checked disabled>冻结选章界面</label>
+      <label><input id="freezeFileSelect" type="checkbox" disabled>冻结选档界面</label>
+      <label><input id="freezeMainMenu" type="checkbox" disabled>冻结主菜单</label>
+      <div id="recordingStatus" role="status">正在读取录像设置…</div>
+    </details>
     <details id="goalPanel">
       <summary>目标与停止条件</summary>
       <textarea id="goalText" aria-label="任务目标" placeholder="自由填写任务，例如探索支路、尝试收集眼前的草莓" maxlength="4000"></textarea>
@@ -268,7 +278,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 62;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 63;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -997,6 +1007,7 @@ async function pollControl() {
     $('sessionPlay').disabled = !manageable || !controlData.ready_to_play || savesLoading || !!savesError || !save || (!save.create_save && !save.save);
     for (const id of ['sessionName','sessionModel','sessionEffort','sessionChapter']) $(id).disabled=busy;
     for(const id of ['sessionSave','sessionSaveName'])$(id).disabled=busy || !manageable;
+    syncRecordingOptions(controlData, busy || switchingSession || !!controlData.waking);
     $('sessionScope').disabled=busy || !manageable;
     $('sessionSimAssist').disabled=busy || !manageable || !controlData.sim_available;
     if(!controlData.sim_available)$('sessionSimAssist').checked=false;
@@ -1019,8 +1030,25 @@ async function pollControl() {
     $('toggleFast').disabled = true;
     $('liveEffort').disabled = true;
     $('sessionSelect').disabled = true;
-    for (const id of ['sessionNew','sessionDisconnect','sessionPlay']) $(id).disabled=true;
+    for (const id of ['sessionNew','sessionDisconnect','sessionPlay','recordingMode','freezeChapterSelect','freezeFileSelect','freezeMainMenu']) $(id).disabled=true;
   }
+}
+let recordingSelectionRun=null;
+function readRecordingOptions() {
+  return {recording_mode:$('recordingMode').value, freeze_chapter_select:$('freezeChapterSelect').checked,
+    freeze_file_select:$('freezeFileSelect').checked, freeze_main_menu:$('freezeMainMenu').checked};
+}
+function syncRecordingOptions(data, busy=false) {
+  const live=!!data.control?.connected && !data.control?.chat_only;
+  if(recordingSelectionRun!==data.run || live) {
+    const values=data.recording_options || {recording_mode:'chapter',freeze_chapter_select:true,freeze_file_select:false,freeze_main_menu:false};
+    $('recordingMode').value=values.recording_mode;
+    for(const [key,id] of [['freeze_chapter_select','freezeChapterSelect'],['freeze_file_select','freezeFileSelect'],['freeze_main_menu','freezeMainMenu']])$(id).checked=values[key];
+    recordingSelectionRun=data.run;
+  }
+  for(const id of ['recordingMode','freezeChapterSelect','freezeFileSelect','freezeMainMenu'])$(id).disabled=busy || live || !data.session_management;
+  $('recordingStatus').textContent=live ? '当前试玩配置；停止后才能为新试玩调整，不能直接切换正在采集的录像。' :
+    '点击会话管理中的“开始试玩”时应用；旧运行续跑沿用原设置。';
 }
 let lifecycleBusy=false, lifecycleError='';
 async function sessionAction(kind, options) {
@@ -1042,7 +1070,7 @@ $('sessionPlay').onclick=()=>{
   const choice=selectedSave();
   if(!choice || (!choice.create_save && !choice.save)){lifecycleError='请显式选择存档。';pollControl();return;}
   if(choice.create_save && chapter!==0){lifecycleError='新存档须从序章（0）开始。';pollControl();return;}
-  sessionAction('play_session',{chapter,...choice,scope:$('sessionScope').value,sim_assist:$('sessionSimAssist').checked});
+  sessionAction('play_session',{chapter,...choice,scope:$('sessionScope').value,sim_assist:$('sessionSimAssist').checked,...readRecordingOptions()});
 };
 async function sendControl(kind, text='', onAccepted=null) {
   if (!controlData) return false;

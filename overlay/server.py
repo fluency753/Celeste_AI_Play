@@ -166,6 +166,8 @@ def make_handler(pinned: Path | None):
                 payload["sessions"] = [{"id":record["key"], "label":record["label"], "model":record["model"]}
                                        for record in catalog(anchor_run(pinned))]
                 selected = read_json(directory / "run_state.json") if directory else {}
+                from orchestrator.launch_options import recording_options
+                payload['recording_options'] = recording_options(selected, legacy=bool(selected) and selected.get('session_kind') != 'ready')
                 payload["selected_session"] = session_key(selected) if selected.get("session_id") else None
                 from orchestrator.runtimes import configured_runtimes
                 payload["runtimes"] = configured_runtimes()
