@@ -489,8 +489,12 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
             raise BridgeReloadError('新桥接版本与要求不符，保持暂停')
         if type(hello.get('bridge_reload')) is not int or hello['bridge_reload'] != 1:
             raise BridgeReloadError('新桥接缺少受控重载能力，保持暂停')
-        from .action_policy import require_capability
+        from .action_policy import require_capability, require_pico8_guard
         require_capability(hello)
+        try:
+            require_pico8_guard(hello)
+        except ValueError as exc:
+            raise BridgeReloadError(str(exc) + '保持暂停，修复后用 --retry 重新核验。') from exc
         if hello.get('entry_guard') is not True:
             raise BridgeReloadError('新桥接的地图入场门禁未加载，保持暂停')
         if hello.get('input_bindings_ok') is not True:

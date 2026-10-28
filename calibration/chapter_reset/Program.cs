@@ -296,6 +296,57 @@ using (var snapshot = new Hook(typeof(StateExtractor).GetMethod("WriteSnapshot",
 }
 Console.WriteLine("PASS: production normal/lockstep loading ticks freeze at first chapter scene, preserve input plan and loading accounting");
 
+// Install production hooks on both actual PICO-8 entry methods. The blocked path
+// uses the original methods, with no substituted interaction/cutscene callback.
+typeof(Hooks).GetMethod("InstallPico8Guard", flags)!.Invoke(null, null);
+Check(Hooks.Pico8GuardAvailable, "PICO-8 entry hooks unavailable");
+var console = (PicoConsole)RuntimeHelpers.GetUninitializedObject(typeof(PicoConsole));
+var main = (OuiMainMenu)RuntimeHelpers.GetUninitializedObject(typeof(OuiMainMenu));
+var interact = typeof(PicoConsole).GetMethod("OnInteract", flags)!;
+var menuEntry = typeof(OuiMainMenu).GetMethod("OnPico8", flags)!;
+foreach (bool fromConsole in new[] { true, false }) {
+    var level = Level(); level.PauseLock = false; Scene(level);
+    var job = Job(); job.NextInput(); main.Focused = true;
+    Settings.Instance.Pico8OnMainMenu = false;
+    typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, true);
+    if (fromConsole) interact.Invoke(console, new object?[] { null });
+    else menuEntry.Invoke(main, null);
+    Check(job.StopReason == "unsupported_scene_blocked" && !job.AllowNextInput(), "PICO entry did not stop plan");
+    Check(ReferenceEquals(Engine.Scene, level) && !level.PauseLock && main.Focused &&
+        !(bool)typeof(PicoConsole).GetField("talking", flags)!.GetValue(console)! &&
+        !Settings.Instance.Pico8OnMainMenu, "PICO entry applied side effects before refusal");
+    using var buffer = new MemoryStream();
+    using (var writer = new System.Text.Json.Utf8JsonWriter(buffer)) {
+        writer.WriteStartObject(); job.WriteResult(writer); writer.WriteEndObject();
+    }
+    using var result = System.Text.Json.JsonDocument.Parse(buffer.ToArray());
+    Check(result.RootElement.GetProperty("consumed").GetInt32() == 1 &&
+        result.RootElement.GetProperty("block").GetProperty("action").GetString() == "enter_pico8",
+        "PICO block response lost accounting or reason");
+    Console.WriteLine("PICO_BLOCK_JSON:" + System.Text.Encoding.UTF8.GetString(buffer.ToArray()));
+}
+// The manual console path with talking=true is a safe native no-op. It must
+// bypass the guard both when inactive and when no action is pending.
+typeof(PicoConsole).GetField("talking", flags)!.SetValue(console, true);
+var manualJob = Job();
+typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, false);
+interact.Invoke(console, new object?[] { null });
+Check(manualJob.StopReason == null, "Inactive bridge blocked manual console");
+// Stop manual menu entry at the external audio boundary, before graphics/wipes.
+int menuAudio = 0;
+using (var audioProbe = new Hook(typeof(Audio).GetMethod("Play", new[] { typeof(string) })!,
+        (Func<string, FMOD.Studio.EventInstance>)(_ => { menuAudio++; throw new InvalidOperationException("manual menu reached audio"); }))) {
+    try { menuEntry.Invoke(main, null); }
+    catch (TargetInvocationException e) when (e.InnerException?.Message == "manual menu reached audio") { }
+    Check(menuAudio == 1 && manualJob.StopReason == null, "Inactive bridge blocked manual main-menu entry");
+}
+typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, true);
+typeof(Bridge).GetField("job", flags)!.SetValue(null, null);
+Check(Bridge.AllowPico8Entry(), "Idle bridge blocked manual menu");
+interact.Invoke(console, new object?[] { null });
+typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, false);
+Console.WriteLine("PASS: both native PICO-8 entry hooks stop before side effects, preserve plan accounting and manual control");
+
 sealed class ProbeButton(string label, Action onConfirm) : TextMenu.Button(label) {
     public override void ConfirmPressed() => onConfirm();
 }

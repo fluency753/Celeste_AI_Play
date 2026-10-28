@@ -149,7 +149,7 @@ class SaveMenuTests(unittest.TestCase):
         from orchestrator.config import RunConfig
         session=object.__new__(GameSession)
         session.cfg=RunConfig(agent='test',save='same',model='test',save_slot=1)
-        client=Mock();client.call.return_value={'obs':{'scene':'Level','save':{'name':'same','slot':0}}}
+        client=Mock();client.call.return_value={'pico8_entry_guard':True,'obs':{'scene':'Level','save':{'name':'same','slot':0}}}
         with patch('orchestrator.game_session.BridgeClient',return_value=client), \
              self.assertRaisesRegex(RuntimeError,'槽位'):
             session.connect()

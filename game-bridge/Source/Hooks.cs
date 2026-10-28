@@ -19,10 +19,13 @@ internal static class Hooks {
     private static Hook? endDrawHook;
     private static ILHook? menuConfirmationHook;
     private static Hook? chapterEntryHook;
+    private static Hook? picoConsoleHook, picoMenuHook;
+    internal static bool Pico8GuardAvailable { get; private set; }
 
     public static void Load() {
         InstallMenuGuard();
         InstallEntryGuard();
+        InstallPico8Guard();
         // FNA 的 Game.EndDraw 里调用 Present：钩在它之后，锁步时回复"这一帧已经呈现"
         MethodInfo? endDraw = typeof(Game).GetMethod("EndDraw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         if (endDraw != null) {
@@ -38,6 +41,9 @@ internal static class Hooks {
     }
 
     public static void Unload() {
+        Pico8GuardAvailable = false;
+        picoConsoleHook?.Dispose(); picoConsoleHook = null;
+        picoMenuHook?.Dispose(); picoMenuHook = null;
         ChapterResetGuard.Available = false;
         MapEntryGuard.Available = false;
         try { chapterEntryHook?.Dispose(); } catch (Exception e) { Log.Error("map entry guard: removing the hook failed: " + e.Message); }
@@ -126,6 +132,31 @@ internal static class Hooks {
     private delegate void OrigChapterStart(OuiChapterPanel self, string? checkpoint);
     private static void OnChapterStart(OrigChapterStart orig, OuiChapterPanel self, string? checkpoint) {
         if (Bridge.AllowMapEntry(self, checkpoint)) orig(self, checkpoint);
+    }
+
+    private static void InstallPico8Guard() {
+        Pico8GuardAvailable = false;
+        try {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            picoConsoleHook = new Hook(typeof(PicoConsole).GetMethod("OnInteract", flags)!,
+                typeof(Hooks).GetMethod(nameof(OnPicoConsole), BindingFlags.Static | BindingFlags.NonPublic)!);
+            picoMenuHook = new Hook(typeof(OuiMainMenu).GetMethod("OnPico8", flags)!,
+                typeof(Hooks).GetMethod(nameof(OnPicoMenu), BindingFlags.Static | BindingFlags.NonPublic)!);
+            Pico8GuardAvailable = true;
+        } catch (Exception e) {
+            picoConsoleHook?.Dispose(); picoConsoleHook = null;
+            picoMenuHook?.Dispose(); picoMenuHook = null;
+            Log.Error("PICO-8 entry guard unavailable: " + e);
+        }
+    }
+
+    private delegate void OrigPicoConsole(PicoConsole self, Player player);
+    private static void OnPicoConsole(OrigPicoConsole orig, PicoConsole self, Player player) {
+        if (Bridge.AllowPico8Entry()) orig(self, player);
+    }
+    private delegate void OrigPicoMenu(OuiMainMenu self);
+    private static void OnPicoMenu(OrigPicoMenu orig, OuiMainMenu self) {
+        if (Bridge.AllowPico8Entry()) orig(self);
     }
 
     private static void OnRenderCore(On.Celeste.Celeste.orig_RenderCore orig, global::Celeste.Celeste self) {

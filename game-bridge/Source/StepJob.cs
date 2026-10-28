@@ -148,6 +148,9 @@ internal sealed class StepJob {
         return Check(policy.CheckMenu(item));
     }
 
+    public bool AllowPico8Entry() => Check(new ActionBlock("unsupported_scene_blocked", "unsupported.pico8",
+        "enter_pico8", "这是内置的 PICO-8 小游戏，暂不支持；未进入小游戏，请继续本体关卡。"));
+
     private bool Check(ActionBlock? result) {
         if (result != null) {
             blocked ??= result;

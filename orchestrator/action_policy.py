@@ -5,7 +5,7 @@ from contextlib import contextmanager
 VERSION = 1
 LABELS = {'restart_chapter': '重启章节', 'return_to_map': '返回地图', 'save_quit': '保存并退出'}
 MENU_WHITELIST = '未通关时暂停菜单里只能选继续、重试、跳过剧情或取消'
-BLOCK_STOPS = frozenset({'entry_blocked', 'chapter_reset_blocked'})
+BLOCK_STOPS = frozenset({'entry_blocked', 'chapter_reset_blocked', 'unsupported_scene_blocked'})
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,9 @@ class ActionPermissions:
 def block_note(block):
     """桥接 result.block 的中文说明，附在 act 结果后面给智能体。"""
     action, rule = block.get('action'), block.get('rule_id') or ''
+    if action == 'enter_pico8':
+        return ('主控拦下了小游戏入口：这是内置的 PICO-8 小游戏，暂不支持。未进入小游戏，'
+                '本次输入在触发入口的这一帧停止，后续按键没有执行；请继续本体关卡。')
     if action == 'enter_map':
         what = '存档槽位' if rule == 'target.save_slot' else '地图'
         return (f'主控拦下了这次进入地图：{what}与任务不符（要求 {block.get("expected")}，实际 {block.get("actual")}），'
@@ -104,3 +107,8 @@ def controller_navigation(client, cfg=None, *, sid=None, slot=None):
 def require_capability(hello):
     if type(hello.get('action_policy')) is not int or hello['action_policy'] != VERSION:
         raise ValueError('需要支持 action_policy=1 的新版桥接（含实际入场核验和分关卡授权）；未发送游戏输入。')
+
+
+def require_pico8_guard(hello):
+    if hello.get('pico8_entry_guard') is not True:
+        raise ValueError('需要 CelesteAIBridge 1.4.0 或更新版本且 PICO-8 入口拦截已加载；未发送游戏输入。')

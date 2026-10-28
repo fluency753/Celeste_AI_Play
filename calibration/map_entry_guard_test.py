@@ -55,7 +55,7 @@ class MapEntryGuardTests(unittest.TestCase):
         obs = {'scene':'Level','storyInput':None,'save':{'name':'test','slot':10},
                'level':{'sid':CHAPTER_SIDS[2],'side':'A'}}
         client = Mock()
-        client.call.return_value = {'obs':obs,'entry_guard':True}
+        client.call.return_value = {'obs':obs,'entry_guard':True,'pico8_entry_guard':True}
         with patch('orchestrator.game_session.BridgeClient',return_value=client):
             with self.assertRaisesRegex(RuntimeError,'当前地图.*不一致'):
                 self.session.connect()

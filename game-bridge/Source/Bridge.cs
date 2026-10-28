@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.3.3";
+    public const string Version = "1.4.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get => BridgeRuntime.Active; private set => BridgeRuntime.Active = value; }
@@ -34,6 +34,7 @@ internal static class Bridge {
         job?.AllowMenuConfirmation(item) ?? true;
     public static bool AllowMapEntry(OuiChapterPanel panel, string? checkpoint) =>
         job?.AllowMapEntry(panel, checkpoint) ?? true;
+    public static bool AllowPico8Entry() => !Active || (job?.AllowPico8Entry() ?? true);
 
     /// <summary>接管以来推进过的总帧数（含空闲菜单和加载帧）。</summary>
     public static long Frame { get => BridgeRuntime.Frame; private set => BridgeRuntime.Frame = value; }
@@ -554,6 +555,7 @@ internal static class Bridge {
                     w.WriteBoolean("entry_guard", MapEntryGuard.Available);
                     w.WriteBoolean("chapter_loaded_stop", true);
                     w.WriteBoolean("chapter_reset_guard", ChapterResetGuard.Available);
+                    w.WriteBoolean("pico8_entry_guard", Hooks.Pico8GuardAvailable);
                     w.WriteNumber("action_policy", ChapterResetGuard.Available && MapEntryGuard.Available ? ActionPolicy.Version : 0);
                     w.WriteBoolean("dialog_choices", true);
                     w.WriteBoolean("story_text", true);

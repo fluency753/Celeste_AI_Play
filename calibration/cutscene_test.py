@@ -24,6 +24,7 @@ class SceneClient:
         self.obs=copy.deepcopy(obs);self.obs.setdefault('storyInput',None)
         self.steps=[];self.change_choices=change_choices
     def call(self,cmd,**args):
+        if cmd == 'hello':return {'pico8_entry_guard':True}
         if cmd in {'observe','activate'}:return {'obs':copy.deepcopy(self.obs)}
         if cmd=='step':
             inputs=args['inputs'];self.steps.append(inputs)

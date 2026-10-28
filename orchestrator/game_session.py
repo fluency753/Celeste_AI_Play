@@ -361,6 +361,8 @@ class GameSession:
         if held := hold_message(hello):
             # A previous controller's reload hold: never activate or send input into it.
             raise RuntimeError(held)
+        from .action_policy import require_pico8_guard
+        require_pico8_guard(hello)
         self.bridge_reload_supported = type(hello.get('bridge_reload')) is int and hello['bridge_reload'] == 1
         self.entry_guard_supported = hello.get('entry_guard') is True
         self.chapter_reset_guard_supported = hello.get('chapter_reset_guard') is True

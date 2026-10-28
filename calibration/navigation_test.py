@@ -84,7 +84,7 @@ class NavigationTests(unittest.TestCase):
             def __init__(client, **kwargs): pass
             def call(client, cmd, **kwargs):
                 self.assertNotEqual(cmd, 'step')
-                return {'obs':copy.deepcopy(client.obs), 'entry_guard':True}
+                return {'obs':copy.deepcopy(client.obs), 'entry_guard':True, 'pico8_entry_guard':True}
             def close(client): pass
         with patch('orchestrator.game_session.BridgeClient', Client):
             self.session.connect()

@@ -1,6 +1,8 @@
 """Menu macros must stop at a denied action instead of waiting for an impossible transition."""
 from __future__ import annotations
 
+from orchestrator.action_policy import BLOCK_STOPS
+
 
 class MenuActionBlocked(RuntimeError):
     def __init__(self, reply: dict):
@@ -8,7 +10,7 @@ class MenuActionBlocked(RuntimeError):
         self.result = reply.get('result') or {}
         self.block = self.result.get('block') or {}
         labels = {'restart_chapter': '重启章节', 'return_to_map': '返回地图', 'save_quit': '保存并退出',
-                  'enter_map': '进入地图', 'menu_item': '菜单确认'}
+                  'enter_map': '进入地图', 'menu_item': '菜单确认', 'enter_pico8': 'PICO-8 小游戏入口'}
         action = labels.get(self.block.get('action'), self.block.get('action') or '菜单操作')
         rule = self.block.get('rule_id') or '未提供规则'
         if rule.startswith('permission.'):
@@ -29,6 +31,6 @@ class MenuActionBlocked(RuntimeError):
 def checked_step(client, inputs: list[str], **options) -> dict:
     reply = client.call('step', inputs=inputs, **options)
     result = reply.get('result') or {}
-    if result.get('block') or result.get('stop') in {'entry_blocked', 'chapter_reset_blocked'}:
+    if result.get('block') or result.get('stop') in BLOCK_STOPS:
         raise MenuActionBlocked(reply)
     return reply

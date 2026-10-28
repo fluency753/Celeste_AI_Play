@@ -54,7 +54,7 @@ class Resident:
         self.calls.append((command, args))
         if command == 'hello':
             hello = {'bridge_reload': 1, 'bridge': self.version, 'frame': 18, 'frozen': True,
-                     'entry_guard': True, 'chapter_reset_guard': True, 'action_policy': 1,
+                     'entry_guard': True, 'chapter_reset_guard': True, 'action_policy': 1, 'pico8_entry_guard': True,
                      'input_reinit_guard': True, 'input_bindings_ok': self.bindings_ok,
                      'input_binding_mismatches': [] if self.bindings_ok else ['Grab', 'mod:SpeedrunTool.LoadState'],
                      'record_audio_active': True, 'record_audio_frames': 15, 'record_audio_replay_frames': self.replays,
@@ -158,6 +158,28 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertEqual([c for c, _ in self.session.calls].count('reload_finish'), 1)
         self.assertEqual(self.session.resets, 1)
         self.assertFalse(any(c in {'record', 'step', 'advance', 'deactivate'} for c, _ in self.session.calls))
+
+    def test_missing_pico_guard_after_reload_keeps_hold_until_verified_retry(self):
+        original = self.session.bridge_call
+        value = False
+        def call(command, **args):
+            reply = original(command, **args)
+            if command == 'hello':
+                reply.pop('pico8_entry_guard', None)
+                if value is not None:
+                    reply['pico8_entry_guard'] = value
+            return reply
+        self.session.bridge_call = call
+        for missing in (False, None):
+            value = missing
+            with self.subTest(value=value), self.assertRaisesRegex(BridgeReloadError, 'PICO-8'):
+                reload_bridge(self.session, self.root, self.options if missing is False else {'retry': True})
+            self.assertTrue(self.session.holding())
+            self.assertNotIn('reload_finish', [command for command, _ in self.session.calls])
+        self.session.bridge_call = original
+        result = reload_bridge(self.session, self.root, {'retry': True})
+        self.assertEqual(result['phase'], 'finished')
+        self.assertEqual([command for command, _ in self.session.calls].count('reload_commit'), 1)
 
     def test_playback_between_snapshot_and_prepare_cannot_strand_the_hold(self):
         self.session.lock = PlaybackGapLock()
