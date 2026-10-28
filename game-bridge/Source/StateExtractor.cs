@@ -58,6 +58,7 @@ internal static class StateExtractor {
 
     public static void WriteSnapshot(Utf8JsonWriter w, SnapshotOptions opt) {
         w.WriteNumber("frame", Bridge.Frame);
+        w.WriteBoolean("saving", UserIO.Saving);
         w.WriteBoolean("frozen", Bridge.Frozen);
         w.WriteString("scene", Engine.Scene?.GetType().Name ?? "none");
         w.WriteString("input_format", Bridge.CurrentInput.Tas ? "celeste_tas" : "celeste_ai");
@@ -131,6 +132,24 @@ internal static class StateExtractor {
         w.WriteStartObject("menu");
         w.WriteString("current", overworld.Current?.GetType().Name);
         w.WriteString("next", overworld.Next?.GetType().Name);
+        if (overworld.Current is OuiMainMenu main) {
+            w.WriteBoolean("focused", main.Focused && main.Selected);
+            w.WriteNumber("selection", main.Buttons.FindIndex(b => b.Selected));
+            w.WriteStartArray("buttons");
+            for (int i = 0; i < main.Buttons.Count; i++) {
+                MenuButton button = main.Buttons[i];
+                w.WriteStartObject();
+                w.WriteNumber("index", i);
+                if (button is MainMenuSmallButton small) w.WriteString("id", small.LabelName);
+                w.WriteBoolean("ready", button.Scene == overworld && button.canAcceptInput);
+                w.WriteNumber("L", main.Buttons.IndexOf(button.LeftButton));
+                w.WriteNumber("R", main.Buttons.IndexOf(button.RightButton));
+                w.WriteNumber("U", main.Buttons.IndexOf(button.UpButton));
+                w.WriteNumber("D", main.Buttons.IndexOf(button.DownButton));
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+        }
         if (overworld.Current is OuiChapterSelect chapterSelect) {
             w.WriteNumber("area", chapterSelect.area); // 0 = 序章，1 = 1 被遗弃之城，2 = 2 旧址……
         }

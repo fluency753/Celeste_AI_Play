@@ -502,7 +502,7 @@ class Recorder:
         temporary.replace(manifest)
 
     @classmethod
-    def finish_saved(cls, call, saved, run_dir, log=print, on_capture_stopped=None):
+    def finish_saved(cls, call, saved, run_dir, log=print, on_capture_stopped=None, *, on_encoder_finished=None):
         """用户放弃续跑时收尾；已经由 OBS 停下的同目录录像也可整理。
         on_capture_stopped：采集一停就调用（交还游戏），不等 ffmpeg 收尾与纯享版。"""
         hello = call('hello')
@@ -517,7 +517,7 @@ class Recorder:
         recorder.started = True
         if not (hello.get('clock') or {}).get('lockstep') and plugin.get('recording') is not True and plugin.get('state') in {'finishing', 'finished', 'failed'}:
             recorder._stop.requested = True
-        return recorder.stop(on_capture_stopped=on_capture_stopped)
+        return recorder.stop(on_capture_stopped=on_capture_stopped, on_encoder_finished=on_encoder_finished)
 
     def retain(self):
         """编码器和音频由 OBS/Mod 持有；只断开 Python 所有权，不发停止命令。"""
@@ -709,7 +709,8 @@ class Recorder:
             gamewindow.ensure_visible(self.log)
 
     def stop(self, timeout: float = 900.0, on_capture_stopped: Callable[[], None] | None = None,
-             *, _rolling=False, _closed_capture=None) -> dict | None:
+             *, on_encoder_finished: Callable[[], None] | None = None,
+             _rolling=False, _closed_capture=None) -> dict | None:
         """停止录制并等 ffmpeg 收尾；返回结果摘要（也写进 recording/recording.json）。"""
         if self._roll_pending is not None and self._roll_pending['closed'] and not _rolling:
             saved = self._roll_saved()
@@ -742,20 +743,23 @@ class Recorder:
                 ending._recovery_start = request
                 ending._stop.requested = True
                 result = ending.stop(timeout, on_capture_stopped,
+                                     on_encoder_finished=on_encoder_finished,
                                      _closed_capture=(clock, {'state': 'finished', 'frames': 0}))
             else:
                 result = self.finish_saved(self.call, saved,
                                            self.run_dirs[-1] if self.run_dirs else self.opts.dir.parent,
-                                           self.log, on_capture_stopped)
+                                           self.log, on_capture_stopped, on_encoder_finished=on_encoder_finished)
             if result and not result.get('pending'):
                 self._roll_pending = None
                 self._recovery_start = None
                 self.started = False
                 self._stop = RecordingStop()
                 self._stop.requested = True
+                self._stop.encoder_notified = on_encoder_finished is not None
                 self.result = result
             return result
         if self.result and self.result.get('state') in {'finished', 'failed'}:
+            self._stop.notify_encoder(on_encoder_finished)
             return self.result
         if not self.started and not self._stop.requested:
             return None
@@ -787,6 +791,12 @@ class Recorder:
                 break
             time.sleep(0.3)
             clock, plugin = self._plugin()
+        if complete:
+            # No bridge calls below this boundary: the game may now exit while
+            # recovery, muxing and pure-cut processing continue offline.
+            if on_encoder_finished is not None:
+                self._save_session('finishing')
+            self._stop.notify_encoder(on_encoder_finished)
         directory = self.opts.dir.resolve()
         recovered = None
         if complete and self.capture_directory(self._session_data()) != directory:

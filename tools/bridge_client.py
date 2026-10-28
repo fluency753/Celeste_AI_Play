@@ -59,18 +59,20 @@ class BridgeClient:
         finally:
             self.sock.close()
 
-    def _send(self, data: bytes) -> None:
+    def _send(self, data: bytes, *, allow_reconnect: bool = True) -> None:
         try:
             self.file.write(data)
             self.file.flush()
         except TimeoutError:
             raise
         except OSError:
+            if not allow_reconnect:
+                raise
             self.reconnect()          # 请求没送到桥接：重连后重发一次
             self.file.write(data)
             self.file.flush()
 
-    def call(self, cmd: str, on_event=None, **args) -> dict:
+    def call(self, cmd: str, on_event=None, *, allow_reconnect: bool = True, **args) -> dict:
         """发送一条指令并等待它的回复。执行中桥接推送的事件（{"event": …}，例如 step 的 progress）交给 on_event。"""
         if cmd == "step" and self.cancel_check is not None and self.cancel_check():
             raise InterruptedError("用户停止请求已生效，不再推进游戏")
@@ -85,7 +87,7 @@ class BridgeClient:
         self.next_id += 1
         payload = {"id": req_id, "cmd": cmd, **args}
         data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-        self._send(data)
+        self._send(data, allow_reconnect=allow_reconnect)
         retried = False
         while True:
             try:
@@ -95,7 +97,7 @@ class BridgeClient:
             except OSError:
                 line = b""
             if not line:
-                if cmd in READ_ONLY and not retried:
+                if allow_reconnect and cmd in READ_ONLY and not retried:
                     retried = True
                     self.reconnect()
                     self._send(data)

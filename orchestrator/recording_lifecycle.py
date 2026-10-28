@@ -11,6 +11,7 @@ class RecordingStop:
     requested: bool = False
     capture_stopped: bool = False
     notified: bool = False
+    encoder_notified: bool = False
 
     def observe(self, clock: dict, plugin: dict) -> bool:
         """Return encoder completion; never infer capture release from a stop request."""
@@ -27,3 +28,8 @@ class RecordingStop:
         if self.capture_stopped and not self.notified and callback is not None:
             callback()
             self.notified = True
+
+    def notify_encoder(self, callback) -> None:
+        if callback is not None and not self.encoder_notified:
+            callback()
+            self.encoder_notified = True
