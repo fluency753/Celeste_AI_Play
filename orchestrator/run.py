@@ -468,6 +468,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "kb_extra": cfg.kb_extra, "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None,
              "controller_host": os.environ.get("CELESTE_CONTROLLER_HOST"), "controller_pid": os.getpid(),
+             "controller_parent_pid": os.getppid(),
              "bridge_port": cfg.bridge_port}
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -1025,7 +1026,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                         cfg._recording_retained = True
                     except Exception as exc:
                         print(f'[record] 保留录制失败，改为收尾本段：{exc}', flush=True)
-                        recording = recorder.stop()
+                        recording = recorder.stop(defer_postprocessing=bool(runner and runner.interrupted_for_resume))
                 else:
                     recording = recorder.stop(on_capture_stopped=release_after_capture)
             except Exception as exc:  # noqa: BLE001（录制收尾失败不影响交还游戏控制与写总结）

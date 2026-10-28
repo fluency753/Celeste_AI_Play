@@ -82,7 +82,7 @@ def inspect(port=47792, *, host=None, bridge_port=None):
         bridge = bridge_status(int(selected_port))
     return {'run': str(run), 'session': {key: state.get(key) for key in IDENTITY},
             'host': str(inside(selected_host, 'local/background')) if selected_host else None,
-            'pid': state.get('controller_pid'), 'bridge_port': selected_port,
+            'pid': state.get('controller_pid'), 'parent_pid': state.get('controller_parent_pid'), 'bridge_port': selected_port,
             'paused': current.get('paused'), 'phase': current.get('phase'),
             'connected': current.get('connected'), 'interrupt_control': current.get('interrupt_control'),
             'recording': recording(run, state), 'bridge': bridge}
@@ -94,7 +94,8 @@ def require_frozen(status):
     if not status.get('interrupt_control'):
         raise ValueError('当前执行器不支持保留接管中断；未中断主控')
     bridge = status['bridge']
-    if not bridge.get('running') or not bridge.get('active') or not bridge.get('frozen'):
+    menu = bridge.get('scene') == 'Overworld'
+    if not bridge.get('running') or not bridge.get('active') or not (bridge.get('frozen') or menu):
         raise ValueError('没有确认游戏正在冻结；菜单／地图或过期状态不支持保录像重启')
     if not isinstance(bridge.get('frame'), int):
         raise ValueError('缺少游戏帧号，无法核验重启期间是否推进；未中断主控')
@@ -102,6 +103,7 @@ def require_frozen(status):
         raise ValueError('原录制的锁步连接未就绪；未中断主控')
     if status['recording'] and status['recording']['audio_required'] and not bridge.get('recording_audio'):
         raise ValueError('原录制音频已断开；未中断主控')
+    return 'menu' if menu and not bridge.get('frozen') else 'frozen'
 
 
 def interrupt_action(operation):
@@ -168,7 +170,7 @@ def _restart(path, port, host, bridge_port, timeout, retry):
         if path.exists() and read(path).get('phase') not in {'finished', 'failed'}:
             raise ValueError('存在未完成更新，请用 --retry；未重复中断或启动')
         before = inspect(port, host=host, bridge_port=bridge_port)
-        require_frozen(before)
+        boundary = require_frozen(before)
         if (Path(before['run']) / 'summary.json').exists():
             raise ValueError('该运行已有结束记录；未中断主控')
         if not before['session']['session_id'] or not before['host'] or before['bridge_port'] is None:
@@ -178,10 +180,11 @@ def _restart(path, port, host, bridge_port, timeout, retry):
         argv = read(old_host / 'launch.json')['arguments']
         if started.get('state') != 'running' or before['session']['agent'] not in argv or before['session']['save'] not in argv:
             raise ValueError('宿主与本次运行不匹配；未中断')
-        if before['pid'] is not None and before['pid'] != started.get('child_pid'):
+        if before['pid'] is not None and started.get('child_pid') not in (before['pid'], before['parent_pid']):
             raise ValueError('主控 PID 与宿主记录不一致；未中断')
         operation = {'phase': 'prepared', 'port': port, 'before': before, 'started_wall': time.time(),
-                     'token': uuid.uuid4().hex, 'old_pids': [started['child_pid'], started['host_pid']]}
+                     'token': uuid.uuid4().hex, 'boundary': boundary,
+                     'old_pids': list({pid for pid in (started['child_pid'], started['host_pid'], before['pid']) if pid})}
         write_json(path, operation)
     before = operation['before']
     old = inside(before['run'], 'runs')
@@ -212,8 +215,13 @@ def _restart(path, port, host, bridge_port, timeout, retry):
                     raise HandoffRejected('旧主控未保留游戏接管，停止自动续接')
                 if before['recording']:
                     held = summary.get('recording') or {}
-                    if held.get('state') != 'retained' or held.get('id') != before['recording']['id']:
+                    closed = (operation.get('boundary') == 'menu' and held.get('encoder_finished') is True
+                              and held.get('postprocess_pending') is True and held.get('capture_state') == 'finished'
+                              and type(held.get('frames')) is int)
+                    if held.get('id') != before['recording']['id'] or not (held.get('state') == 'retained' or closed):
                         raise HandoffRejected('旧录制未成功保留；未另建录制')
+                    if closed:
+                        operation['closed_frames'] = held['frames']
                 if read(Path(before['host']) / 'status.json').get('state') not in {'exited', 'failed'}:
                     return None
                 # Holding a process handle distinguishes actual exit from a
@@ -280,18 +288,28 @@ def _restart(path, port, host, bridge_port, timeout, retry):
                     return None  # latest is published before run_state is ready
                 if not all(state.get(key) for key in ('controller_host', 'controller_pid', 'session_id')):
                     return None
-                if Path(state.get('controller_host') or '').resolve() != host_path.resolve() or state.get('controller_pid') != host_state.get('child_pid'):
+                if Path(state.get('controller_host') or '').resolve() != host_path.resolve() or host_state.get('child_pid') not in (state.get('controller_pid'), state.get('controller_parent_pid')):
                     raise HandoffRejected('检测到其他宿主接管，停止等待，不操作该会话')
                 if {key: state.get(key) for key in IDENTITY} != before['session'] or Path(state.get('resumed_from') or '').resolve() != old:
                     raise HandoffRejected('新主控未接回指定会话，停止操作')
                 now = inspect(port)
-                if now['recording'] != before['recording']:
+                previous_recording, current_recording = before['recording'], now['recording']
+                if 'closed_frames' in operation:
+                    from .recording_recovery import prefix_counts
+                    same = (current_recording is not None and
+                            all(current_recording.get(key) == previous_recording.get(key) for key in ('id', 'manifest')))
+                    if not same or prefix_counts(read(current_recording['manifest']))['frames'] != operation['closed_frames']:
+                        raise HandoffRejected('恢复前缀与已关闭录像计量不一致，未声称接续成功')
+                elif current_recording != previous_recording:
                     raise HandoffRejected('新主控录制身份改变，未声称接续成功')
                 try:
-                    require_frozen(now)
+                    boundary = require_frozen(now)
                 except ValueError:
                     return None
-                if now['bridge'].get('frame') != before['bridge'].get('frame'):
+                if operation.get('boundary', 'frozen') == 'menu':
+                    if now['bridge'].get('scene') != 'Overworld':
+                        raise HandoffRejected('更新期间已离开选章地图，保持暂停等待检查')
+                elif boundary != 'frozen' or now['bridge'].get('frame') != before['bridge'].get('frame'):
                     raise HandoffRejected('重启期间游戏帧号发生变化，未声称零推进；保持当前暂停')
                 return now
             operation['after'] = _wait(ready, deadline)

@@ -29,6 +29,7 @@ MEDIA = ('video.mkv', 'audio.wav', 'audio_play.wav', 'frames.csv', 'segments.csv
 FIELDS = ('index', 'game_frame', 'chapter_ticks', 'obs_ts_ns')
 SEG_FIELDS = ('segment', 'first_index', 'start_ts_ns', 'measured_ms', 'offset_ms', 'method')
 BLOCK = 800 * 2 * 4
+CLOSED_RECEIPT = 'capture_complete.json'
 MAX_PCM_BYTES = 0xffffffff - 36  # RIFF header, not RF64.
 
 
@@ -58,6 +59,41 @@ def _hash(path):
         for block in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(block)
     return digest.hexdigest()
+
+
+def record_closed_capture(saved, capture, plugin):
+    """Only the owner observing a clean encoder exit may issue this receipt."""
+    if plugin.get('state') != 'finished' or type(plugin.get('frames')) is not int:
+        return
+    capture = Path(capture).resolve()
+    required = set(MEDIA) - (set() if saved['options']['audio_source'] == 'game_nrt' else {'audio_play.wav'})
+    if any(not (capture / name).is_file() for name in required):
+        return
+    with ExitStack() as locks:
+        for name in required:
+            locks.enter_context(_closed_file(capture / name))
+        rows = list(_rows(capture / 'frames.csv'))
+        play = sum(row[2] >= 0 for row in rows)
+        if len(rows) != plugin['frames'] or _wave(capture / 'audio.wav')[1] != len(rows) * BLOCK:
+            return
+        if 'audio_play.wav' in required and _wave(capture / 'audio_play.wav')[1] != play * BLOCK:
+            return
+        _write(capture / CLOSED_RECEIPT, {'version': 1, 'session_id': saved['id'],
+               'capture_dir': str(capture), 'frames': len(rows),
+               'files': {name: _hash(capture / name) for name in required}})
+
+
+def _clean_receipt(saved, source, relative, hashes, count, play, full_bytes, play_bytes):
+    try:
+        receipt = json.loads((source / CLOSED_RECEIPT).read_text(encoding='utf-8'))
+        origin = _root(saved) if relative == 'base' else source
+        return (receipt['version'] == 1 and receipt['session_id'] == saved['id']
+                and Path(receipt['capture_dir']).resolve() == origin.resolve()
+                and receipt['files'] == hashes and type(receipt['frames']) is int
+                and receipt['frames'] == count and full_bytes == count * BLOCK
+                and (play_bytes is None or play_bytes == play * BLOCK))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def _inside(root, relative):
@@ -454,9 +490,17 @@ def _normalize(saved, relative):
                 break
             ticks.append(row[2])
             play += row[2] >= 0
-        # The only full decode of this immutable source; later checks use packets.
+        # Clean encoder completion is bound to these exact media bytes. Packet
+        # timestamps still have to cover every CSV frame; otherwise decode.
         timeout = max(1800, count_csv // 20)
-        probed = _probe(ffmpeg, source / 'video.mkv', timeout=timeout)
+        clean = _clean_receipt(saved, source, relative, hashes, len(ticks), play, full_bytes, play_bytes)
+        probed = _probe(ffmpeg, source / 'video.mkv', decode=not clean, timeout=timeout)
+        clean = clean and not probed['damaged'] and sorted(probed['packets']) == list(range(count_csv))
+        if probed['frames'] is None:
+            if clean:
+                probed['frames'] = list(range(count_csv))
+            else:
+                probed = _probe(ffmpeg, source / 'video.mkv', timeout=timeout)
         profile = probed['profile']
         count, contiguous = video_prefix(probed['packets'], probed['frames'], len(ticks), tail_suspect=probed['damaged'])
         play = sum(1 for tick in ticks[:count] if tick >= 0)
@@ -496,7 +540,8 @@ def _normalize(saved, relative):
             tail = csv_stream.read().rsplit(b'\n', 1)[-1]
         decoded = len(probed['frames'])
         report = {'frames': count, 'replays': count - play, 'source': relative, 'profile': profile,
-                  'source_hashes': hashes, 'available_video_frames': decoded, 'available_csv_rows': count_csv,
+                  'source_hashes': hashes, 'validation': 'clean-encoder-packets' if clean else 'decoded',
+                  'available_video_frames': decoded, 'available_csv_rows': count_csv,
                   'contiguous_video_frames': contiguous, 'video_packets': len(probed['packets']),
                   'video_ended_prematurely': probed['damaged'],
                   'unused_csv_rows': count_csv - count,
@@ -654,6 +699,8 @@ def prepare(saved):
                         if source.is_file():
                             locks.enter_context(_closed_file(source))
                             shutil.copy2(source, stage / name)
+                    if (root / CLOSED_RECEIPT).is_file():
+                        shutil.copy2(root / CLOSED_RECEIPT, stage / CLOSED_RECEIPT)
                 _write(stage / 'identity.json', {'session_id': saved['id']})
                 os.replace(stage, base)
             elif json.loads((base / 'identity.json').read_text(encoding='utf-8'))['session_id'] != saved['id']:

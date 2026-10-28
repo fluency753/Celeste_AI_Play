@@ -59,6 +59,32 @@ class RecordingSessionTests(unittest.TestCase):
             recorder.start()
         return recorder
 
+    def test_maintenance_stop_defers_media_work_and_repeat_stop_does_not_resend(self):
+        recorder=self.start();self.advance(3)
+        with patch('orchestrator.recording.make_pure') as pure,patch('orchestrator.recording_recovery.finalize') as publish:
+            result=recorder.stop(defer_postprocessing=True)
+            repeated=recorder.stop(defer_postprocessing=True)
+        self.assertEqual(result,repeated)
+        self.assertTrue(result['encoder_finished'] and result['postprocess_pending'])
+        self.assertEqual(result['frames'],3)
+        self.assertEqual(self.commands.count(('record',{'action':'stop','marker':False})),1)
+        pure.assert_not_called();publish.assert_not_called()
+        saved=Recorder.saved_session(self.first)
+        self.assertEqual(saved['state'],'finishing')
+        self.assertTrue(saved['postprocess_pending'])
+        self.assertEqual(Recorder.resume_mode(saved,self.hello),'recover')
+
+    def test_deferred_postprocessing_can_finish_after_transport_closed(self):
+        recorder=self.start();self.advance(3)
+        def close():recorder.call=Mock(side_effect=RuntimeError('transport closed'))
+        recorder.stop(defer_postprocessing=True,on_encoder_finished=close)
+        with patch('orchestrator.recording.finished_movie',return_value=self.directory/'gameplay.mp4'),patch('orchestrator.recording.make_pure',return_value={'state':'finished','frames':3,'seconds':.05,'removed':0,'file':'pure'}) as pure:
+            result=recorder.stop()
+        self.assertEqual(result['state'],'finished')
+        pure.assert_called_once()
+        recorder.call.assert_not_called()
+        self.assertEqual(Recorder.saved_session(self.first)['state'],'finished')
+
     def test_encoder_audio_and_frame_index_survive_multiple_controller_handoffs(self):
         recorder = self.start()
         self.advance(5)
@@ -490,7 +516,7 @@ class RunRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
         from orchestrator.game_session import GameSession
         from orchestrator.metrics import Metrics
         from orchestrator.run import _run_connected_session
-        for interrupt, resume in [(True, False), (False, False), (True, True), (False, True)]:
+        for interrupt, resume, menu in [(True, False,False), (False, False,False), (True, True,False), (False, True,False), (True,False,True)]:
             with self.subTest(interrupt=interrupt, resume=resume), tempfile.TemporaryDirectory() as folder:
                 directory = Path(folder)
                 cfg = RunConfig(agent='test', save='test', model='test', engine='codex', runtime='host', sim=False)
@@ -506,6 +532,8 @@ class RunRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                                        record_marker=False, start_paused=False)
                 recorder = Mock(started=True)
                 recorder.retain.return_value = {'state':'retained','pending':True}
+                if menu:
+                    recorder.retain.side_effect=RuntimeError('菜单正常运行')
                 recorder.stop.return_value = {'state':'finished'}
                 async def run():
                     if not interrupt:
@@ -532,8 +560,11 @@ class RunRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(recorder_class.adopt.called, resume)
                     if interrupt:
                         recorder.retain.assert_called_once()
-                        recorder.stop.assert_not_called()
-                        self.assertTrue(cfg._recording_retained)
+                        if menu:
+                            recorder.stop.assert_called_once_with(defer_postprocessing=True)
+                        else:
+                            recorder.stop.assert_not_called()
+                            self.assertTrue(cfg._recording_retained)
                     else:
                         recorder.stop.assert_called_once()
                         recorder.retain.assert_not_called()

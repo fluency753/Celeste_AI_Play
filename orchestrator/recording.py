@@ -238,6 +238,8 @@ class Recorder:
         self.segments: list[dict] = []   # 本次运行里之前失败、已收尾的录像段（见 roll）
         self._recovery_start = None
         self._roll_pending = None
+        self._postprocess_pending = False
+        self._closed_capture_state = None
 
     def bind_run(self, directory: Path):
         directory = directory.resolve()
@@ -251,6 +253,8 @@ class Recorder:
                    'runs': [str(p) for p in self.run_dirs]}
         if self._recovery_start is not None:
             payload['recovery_start'] = self._recovery_start
+        if self._postprocess_pending:
+            payload['postprocess_pending'] = True
         return payload
 
     @staticmethod
@@ -710,7 +714,7 @@ class Recorder:
 
     def stop(self, timeout: float = 900.0, on_capture_stopped: Callable[[], None] | None = None,
              *, on_encoder_finished: Callable[[], None] | None = None,
-             _rolling=False, _closed_capture=None) -> dict | None:
+             _rolling=False, _closed_capture=None, defer_postprocessing=False) -> dict | None:
         """停止录制并等 ffmpeg 收尾；返回结果摘要（也写进 recording/recording.json）。"""
         if self._roll_pending is not None and self._roll_pending['closed'] and not _rolling:
             saved = self._roll_saved()
@@ -769,7 +773,14 @@ class Recorder:
             self.call("record", action="stop", marker=False)
             self._stop.requested = True
         deadline = time.monotonic() + timeout
-        clock, plugin = _closed_capture if _closed_capture is not None else self._plugin()
+        closed = _closed_capture if _closed_capture is not None else self._closed_capture_state
+        if closed is not None:
+            clock, plugin = closed
+            actual = self.capture_directory(self._session_data())
+            if plugin.get('dir') and actual != Path(plugin['dir']).resolve():
+                raise RecordingOwnershipError('实际采集已变化，不能使用旧编码器终态收尾')
+        else:
+            clock, plugin = self._plugin()
         while True:
             complete = self._stop.observe(clock, plugin)
             self.started = not self._stop.capture_stopped
@@ -792,11 +803,29 @@ class Recorder:
             time.sleep(0.3)
             clock, plugin = self._plugin()
         if complete:
+            self._closed_capture_state = (dict(clock), dict(plugin))
             # No bridge calls below this boundary: the game may now exit while
             # recovery, muxing and pure-cut processing continue offline.
             if on_encoder_finished is not None:
                 self._save_session('finishing')
             self._stop.notify_encoder(on_encoder_finished)
+            from .recording_recovery import record_closed_capture
+            capture = self.capture_directory(self._session_data())
+            try:
+                record_closed_capture(self._session_data(), capture, plugin)
+            except (OSError, RuntimeError, ValueError) as exc:
+                self.log(f'[record] 无法记录正常关闭凭据，恢复时将执行完整校验：{exc}')
+            if defer_postprocessing:
+                from .recording_recovery import prefix_counts
+                prefix = prefix_counts(self._session_data())['frames']
+                self._postprocess_pending = True
+                self._save_session('finishing')
+                self.result = {'state': 'finishing', 'pending': True, 'encoder_finished': True,
+                               'postprocess_pending': True, 'id': self.session_id,
+                               'dir': str(self.opts.dir.resolve()), 'capture_frames': plugin.get('frames'),
+                               'capture_state': plugin.get('state'), 'frames': prefix + (plugin.get('frames') or 0)}
+                self.log('[record] 编码器已关闭；中断续跑不生成累计成片或纯享版，留待最终收尾')
+                return self.result
         directory = self.opts.dir.resolve()
         recovered = None
         if complete and self.capture_directory(self._session_data()) != directory:
@@ -854,6 +883,7 @@ class Recorder:
         # Only observed terminal states close the manifest; a timed-out encoder is still pending.
         if _closed_capture is not None and complete:
             self._recovery_start = None
+        self._postprocess_pending = False if complete else self._postprocess_pending
         self._save_session(result['state'] if complete else ('finishing' if self._stop.capture_stopped else 'recording'))
         self.result = result
         try:

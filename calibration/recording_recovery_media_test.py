@@ -115,6 +115,52 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
         self.assertEqual(self.fingerprints(), before)
         self.assertEqual(Path(self.recovery.capture_directory(self.saved)), self.root)
 
+    def test_clean_encoder_receipt_skips_decode_and_keeps_exact_media(self):
+        base=self.media(self.root,[100,-1,200,300])
+        self.recovery.record_closed_capture(self.saved,self.root,{'state':'finished','frames':4})
+        with patch.object(self.recovery,'_probe',wraps=self.recovery._probe) as probe:
+            prepared=self.recovery.prepare(self.saved)
+        self.assertTrue(probe.call_args_list)
+        self.assertTrue(all(call.kwargs.get('decode') is False for call in probe.call_args_list))
+        self.assertEqual(prepared['prefix_frames'],4)
+        tail=self.media(prepared['active_capture'],[400,500],color='blue')
+        final=self.recovery.finalize(self.saved)
+        self.assertEqual(final['frames'],6)
+        self.assertEqual(self.decode(self.root/'video.mkv'),base['raw']+tail['raw'])
+        self.assertEqual(self.wav('audio.wav'),base['full']+tail['full'])
+        self.assertEqual(self.wav('audio_play.wav'),base['play']+tail['play'])
+
+    def test_foreign_receipt_falls_back_to_full_decode(self):
+        self.media(self.root,[100,200,300])
+        self.recovery.record_closed_capture(self.saved,self.root,{'state':'finished','frames':3})
+        path=self.root/self.recovery.CLOSED_RECEIPT
+        receipt=json.loads(path.read_text());receipt['session_id']='other'
+        path.write_text(json.dumps(receipt))
+        with patch.object(self.recovery,'_probe',wraps=self.recovery._probe) as probe:
+            prepared=self.recovery.prepare(self.saved)
+        self.assertEqual(prepared['prefix_frames'],3)
+        self.assertTrue(any(call.kwargs.get('decode',True) for call in probe.call_args_list))
+
+    def test_changed_media_invalidates_clean_receipt(self):
+        self.media(self.root,[100,200])
+        self.recovery.record_closed_capture(self.saved,self.root,{'state':'finished','frames':2})
+        with (self.root/'segments.csv').open('a') as stream:stream.write('\n')
+        with patch.object(self.recovery,'_probe',wraps=self.recovery._probe) as probe:
+            self.recovery.prepare(self.saved)
+        self.assertTrue(any(call.kwargs.get('decode',True) for call in probe.call_args_list))
+
+    def test_receipt_does_not_hide_missing_video_packets(self):
+        self.media(self.root,[100,200,300])
+        # Encoder claims three frames, but the actual video only contains two.
+        video=self.root/'video.mkv'
+        self.command([self.ffmpeg,'-v','error','-y','-f','lavfi','-i','color=c=red:s=64x48:r=60',
+                      '-frames:v','2','-c:v','libx264','-g','1','-bf','0',str(video)])
+        self.recovery.record_closed_capture(self.saved,self.root,{'state':'finished','frames':3})
+        with patch.object(self.recovery,'_probe',wraps=self.recovery._probe) as probe:
+            prepared=self.recovery.prepare(self.saved)
+        self.assertEqual(prepared['prefix_frames'],2)
+        self.assertTrue(any(call.kwargs.get('decode',True) for call in probe.call_args_list))
+
     def test_two_recoveries_keep_identity_and_publish_complete_dual_track_media(self):
         base = self.media(self.root, [100, -1, 200, 300])
         original = self.fingerprints()
@@ -502,6 +548,18 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
         self.numbered(prepared['active_capture'], 30, 2)
         self.recovery.finalize(self.saved)
         self.assertEqual(self.identities(self.root/'video.mkv'), [(1, i) for i in range(90)] + [(2, i) for i in range(30)])
+
+    def test_clean_bframe_receipt_keeps_splice_exact_without_decode(self):
+        old=self.numbered(self.root,90,1)
+        self.recovery.record_closed_capture(self.saved,self.root,{'state':'finished','frames':90})
+        with patch.object(self.recovery,'_probe',wraps=self.recovery._probe) as probe:
+            prepared=self.recovery.prepare(self.saved)
+        self.assertTrue(all(call.kwargs.get('decode') is False for call in probe.call_args_list))
+        new=self.numbered(prepared['active_capture'],30,2)
+        self.recovery.finalize(self.saved)
+        self.assertEqual(self.identities(self.root/'video.mkv'),[(1,i) for i in range(90)]+[(2,i) for i in range(30)])
+        self.assertEqual(self.wav('audio.wav'),b''.join(old+new))
+        self.assertEqual(self.wav('audio_play.wav'),b''.join(old+new))
 
     def test_lost_ledger_cannot_fall_back_to_root_after_attempt_started(self):
         self.media(self.root, [100, 200])

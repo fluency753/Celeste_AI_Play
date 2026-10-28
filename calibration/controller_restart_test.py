@@ -100,6 +100,54 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(args[args.index('--bridge-port')+1],'48984')
         self.assertEqual(args[args.index('--mcp-port')+1],'48980')
 
+    def test_map_handoff_requires_closed_prefix_accounting_and_allows_menu_frames(self):
+        self.bridge.update(frozen=False,scene='Overworld')
+        original_control=self.control;original_launch=self.launch
+        def closed(port,payload=None):
+            result=original_control(port,payload)
+            if payload:
+                write_json(self.old/'summary.json',{'game_released':False,'recording':{
+                    'state':'finishing','id':'recording-id','postprocess_pending':True,
+                    'encoder_finished':True,'capture_state':'finished','frames':800}})
+            return result
+        def recovered(args,**kwargs):
+            result=original_launch(args,**kwargs)
+            self.bridge['frame']+=300
+            return result
+        with patch.object(restart,'control',closed),patch.object(restart,'launch',recovered),patch('orchestrator.recording_recovery.prefix_counts',return_value={'frames':800,'replays':0}):
+            result=self.execute()
+        self.assertEqual(result['phase'],'finished')
+        self.assertEqual(result['closed_frames'],800)
+        self.assertTrue(result['after']['paused'])
+
+    def test_map_prefix_mismatch_does_not_claim_success(self):
+        self.bridge.update(frozen=False,scene='Overworld')
+        original=self.control
+        def closed(port,payload=None):
+            result=original(port,payload)
+            if payload:
+                write_json(self.old/'summary.json',{'game_released':False,'recording':{
+                    'state':'finishing','id':'recording-id','postprocess_pending':True,
+                    'encoder_finished':True,'capture_state':'finished','frames':800}})
+            return result
+        with patch.object(restart,'control',closed),self.assertRaisesRegex(ValueError,'恢复前缀'):
+            self.execute()
+
+    def test_venv_launcher_parent_is_verified_and_actual_process_is_waited(self):
+        self.state['controller_pid']=102;self.state['controller_parent_pid']=100
+        write_json(self.old/'run_state.json',self.state)
+        original=self.launch
+        def wrapped(args,**kwargs):
+            result=original(args,**kwargs)
+            state=restart.read(self.new/'run_state.json')
+            state.update(controller_pid=202,controller_parent_pid=200)
+            write_json(self.new/'run_state.json',state)
+            return result
+        with patch.object(restart,'launch',wrapped):
+            result=self.execute()
+        self.assertIn(102,result['old_pids'])
+        self.assertEqual(result['after']['pid'],202)
+
     def test_check_only_reads_and_does_not_create_journal_or_dispatch(self):
         before=(self.old/'control.sqlite3').read_bytes()
         result=restart.inspect(48992)
@@ -211,6 +259,15 @@ class RestartTests(unittest.TestCase):
         with patch.object(restart,'launch',moved),self.assertRaisesRegex(ValueError,'帧号发生变化'):
             self.execute()
         self.assertEqual(restart.read(self.journal)['phase'],'failed')
+
+    def test_frozen_level_cannot_finish_on_unfrozen_map_at_same_frame(self):
+        original=self.launch
+        def changed(args,**kwargs):
+            result=original(args,**kwargs)
+            self.bridge.update(frozen=False,scene='Overworld')
+            return result
+        with patch.object(restart,'launch',changed),self.assertRaisesRegex(ValueError,'未声称零推进'):
+            self.execute()
 
     def test_interrupt_ack_loss_uses_recorded_action_on_retry(self):
         original=self.control
