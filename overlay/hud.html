@@ -268,7 +268,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 60;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 61;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -1088,6 +1088,12 @@ $('goalMatch').onchange=editGoal;
 $('goalAdd').onclick=()=>{if($('goalConditions').children.length<12){$('goalConditions').append(goalRow());editGoal();}};
 async function saveGoal(kind) {
   goalError='';
+  if (!controlData?.control) {
+    // 主控还没连上：没有可提交的运行，提示而不是静默失败
+    $('goalDraftStatus').textContent='主控尚未连接，暂时不能修改目标；连接后再点击。';
+    $('goalDraftStatus').hidden=false;
+    return;
+  }
   if (kind==='goal' && Array.from($('goalConditions').children).some(row => ['deaths','frame','elapsed'].includes(row.children[0].value) && !row.children[2].value.trim())) {
     goalError='请填写数值条件。'; renderGoal(controlData.control); return;
   }

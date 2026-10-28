@@ -152,6 +152,42 @@ def prefix_counts(saved):
     return {key: int(published.get(key, 0)) for key in ('frames', 'replays')}
 
 
+def storage_bytes(saved):
+    """Bytes kept under .recovery (backups, attempts, prefixes, generations); nothing is pruned automatically."""
+    total = 0
+    for folder, _, names in os.walk(_root(saved) / '.recovery', followlinks=False):
+        for name in names:
+            try:
+                total += os.lstat(os.path.join(folder, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def replace_unstarted(saved):
+    """Retire an empty prepared attempt whose start request never reached OBS.
+
+    The caller has confirmed OBS is idle elsewhere. A fresh directory replaces
+    the attempt in the ledger, so even a start that were delivered very late
+    could never write into the directory used by the retried capture. The old
+    empty directory stays on disk and is listed under unstarted_attempts."""
+    root = _root(saved)
+    with _lock(root):
+        ledger = _load(saved)
+        if not ledger or ledger['phase'] != 'prepared' or ledger['active_capture'] == 'base' or ledger.get('transaction'):
+            raise RecoveryError('No unstarted recovery capture can be replaced')
+        old = ledger['active_capture']
+        if any(_inside(root, old).iterdir()):
+            raise RecoveryError('The pending capture directory already contains files')
+        attempt = 'attempt-' + uuid.uuid4().hex
+        _inside(root, attempt).mkdir()
+        ledger['chunks'][ledger['chunks'].index(old)] = attempt
+        ledger['active_capture'] = attempt
+        ledger['unstarted_attempts'] = [*ledger.get('unstarted_attempts', []), old]
+        _write(root / '.recovery/ledger.json', ledger)
+        return _inside(root, attempt)
+
+
 @contextmanager
 def _lock(root):
     directory = root / '.recovery'
@@ -204,26 +240,94 @@ def _closed_file(path):
         kernel.CloseHandle(handle)
 
 
-def _probe(ffmpeg, video):
+def ffprobe_path(ffmpeg):
+    """ffprobe beside the configured ffmpeg, otherwise the one on PATH."""
     program = Path(ffmpeg)
-    probe = program.with_name('ffprobe.exe' if program.suffix.lower() == '.exe' else 'ffprobe')
-    probe = str(probe) if probe.is_file() else shutil.which(str(probe))
-    if not probe:
+    beside = program.with_name('ffprobe.exe' if program.suffix.lower() == '.exe' else 'ffprobe')
+    if beside.is_file():
+        return str(beside)
+    found = shutil.which('ffprobe')
+    if not found:
         raise RecoveryError('Recording recovery requires ffprobe beside ffmpeg or on PATH')
+    return found
+
+
+def _ffprobe(probe, args, video, timeout):
     try:
-        result = subprocess.run([probe, '-v', 'error', '-count_frames', '-select_streams', 'v:0',
-            '-show_entries', 'stream=codec_name,width,height,pix_fmt,r_frame_rate,nb_read_frames,profile,level',
-            '-of', 'json', str(video)], capture_output=True, timeout=1800)
+        result = subprocess.run([probe, '-v', 'error', '-select_streams', 'v:0', *args, str(video)],
+                                capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RecoveryError(f'Video prefix probe failed: {video}') from exc
+    if result.returncode:
+        raise RecoveryError(f'Cannot determine a valid video prefix: {video}')
+    return result.stdout.decode('utf-8', 'replace'), result.stderr.decode('utf-8', 'replace').strip()
+
+
+def _grid(lines, origin, time_base, video):
+    """Timestamps → 60 fps frame indices; the recorder writes constant-rate video."""
+    indices = []
     try:
-        stream = json.loads(result.stdout)['streams'][0]
-        count = int(stream.pop('nb_read_frames'))
-        if result.returncode or Fraction(stream['r_frame_rate']) != 60:
-            raise ValueError('not a decodable 60 fps video')
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        values = [int(line.split(',')[0]) for line in lines]
+    except ValueError as exc:
+        raise RecoveryError(f'Video timestamps are missing: {video}') from exc
+    origin = min(values) if origin is None and values else origin
+    for value in values:
+        position = (value - origin) * time_base * 60
+        index = round(position)
+        if abs(position - index) > Fraction(1, 4):
+            raise RecoveryError(f'Video timestamps are not on the 60 fps grid: {video}')
+        indices.append(int(index))
+    return indices, origin
+
+
+def _probe(ffmpeg, video, *, decode=True, timeout=1800):
+    """Profile, packet frame indices in decode order and, when decode is set, decoded frame indices.
+
+    Only decode=True decodes the video. Packet timestamps come from demuxing and
+    are enough to verify already-decoded material after a stream copy."""
+    probe = ffprobe_path(ffmpeg)
+    text, _ = _ffprobe(probe, ['-show_entries', 'stream=codec_name,width,height,pix_fmt,r_frame_rate,profile,level,time_base',
+                               '-of', 'json'], video, timeout)
+    try:
+        stream = json.loads(text)['streams'][0]
+        time_base = Fraction(stream.pop('time_base'))
+        if Fraction(stream['r_frame_rate']) != 60 or time_base <= 0:
+            raise ValueError('not a 60 fps video')
+    except (ValueError, KeyError, IndexError, TypeError, ZeroDivisionError) as exc:
         raise RecoveryError(f'Cannot determine a valid video prefix: {video}') from exc
-    return count, stream
+    text, packet_errors = _ffprobe(probe, ['-show_entries', 'packet=pts', '-of', 'csv=p=0'], video, timeout)
+    packets, origin = _grid([line for line in text.splitlines() if line.strip()], None, time_base, video)
+    frames, damaged = None, bool(packet_errors)
+    if decode:
+        text, frame_errors = _ffprobe(probe, ['-show_entries', 'frame=best_effort_timestamp', '-of', 'csv=p=0'],
+                                      video, timeout)
+        frames, _ = _grid([line for line in text.splitlines() if line.strip()], origin, time_base, video)
+        damaged = damaged or bool(frame_errors)
+    return {'profile': stream, 'packets': packets, 'frames': frames, 'damaged': damaged}
+
+
+def video_prefix(packets, frames, limit, *, tail_suspect=False):
+    """Largest stream-copy prefix that is exactly presentation frames 0..M-1.
+
+    packets: frame indices in decode order; frames: indices that decoded. With
+    B-frames a decode-order cut is exact only at a mini-GOP boundary, so M is
+    the largest count whose first M packets are {0..M-1}, all decodable and at
+    most limit (complete CSV/PCM rows). A file that ended prematurely may end
+    in a partial packet, so its last packet is never used."""
+    decoded = set(frames)
+    contiguous = 0
+    while contiguous in decoded:
+        contiguous += 1
+    bound = min(limit, contiguous, len(packets) - (1 if tail_suspect and packets else 0))
+    best, seen, highest = 0, set(), -1
+    for count, index in enumerate(packets[:max(bound, 0)], 1):
+        if index < 0 or index in seen:
+            break
+        seen.add(index)
+        highest = max(highest, index)
+        if highest == count - 1:
+            best = count
+    return best, contiguous
 
 
 def _run(ffmpeg, args, log):
@@ -340,24 +444,31 @@ def _normalize(saved, relative):
                           'unused_csv_rows': count_csv, 'reason': 'encoder produced no video packets',
                           'source_sizes': {name: (source / name).stat().st_size for name in files}}
         ffmpeg = saved['options']['ffmpeg']
-        video_count, profile = _probe(ffmpeg, source / 'video.mkv')
         full_bytes = _wave(source / 'audio.wav')[1]
         play_bytes = _wave(source / 'audio_play.wav')[1] if 'audio_play.wav' in needed else None
-        limit = min(count_csv, video_count, full_bytes // BLOCK)
-        count, play = 0, 0
+        # Rows whose CSV line and PCM blocks are complete; the video then picks
+        # an exact boundary within them.
+        limit, ticks, play = min(count_csv, full_bytes // BLOCK), [], 0
         for row in _rows(source / 'frames.csv'):
-            if count >= limit or (row[2] >= 0 and play_bytes is not None and play >= play_bytes // BLOCK):
+            if len(ticks) >= limit or (row[2] >= 0 and play_bytes is not None and play >= play_bytes // BLOCK):
                 break
-            count += 1
+            ticks.append(row[2])
             play += row[2] >= 0
+        # The only full decode of this immutable source; later checks use packets.
+        timeout = max(1800, count_csv // 20)
+        probed = _probe(ffmpeg, source / 'video.mkv', timeout=timeout)
+        profile = probed['profile']
+        count, contiguous = video_prefix(probed['packets'], probed['frames'], len(ticks), tail_suspect=probed['damaged'])
+        play = sum(1 for tick in ticks[:count] if tick >= 0)
         if not count:
             raise RecoveryError('No complete audiovisual frame can be recovered')
         stage = _inside(root, 'normalize-work-' + uuid.uuid4().hex)
         stage.mkdir()
         _run(ffmpeg, ['-i', str(source / 'video.mkv'), '-map', '0:v:0', '-an', '-c:v', 'copy',
                      '-frames:v', str(count), str(stage / 'video.mkv')], stage / 'ffmpeg.log')
-        verified, checked_profile = _probe(ffmpeg, stage / 'video.mkv')
-        if verified != count or checked_profile != profile:
+        checked = _probe(ffmpeg, stage / 'video.mkv', decode=False, timeout=timeout)
+        if (checked['profile'] != profile or len(checked['packets']) != count
+                or sorted(checked['packets']) != list(range(count))):
             raise RecoveryError('Recovered video prefix could not be verified')
         _copy_pcm(source / 'audio.wav', stage / 'audio.wav', count * BLOCK)
         if play_bytes is not None:
@@ -383,12 +494,15 @@ def _normalize(saved, relative):
         with csv_path.open('rb') as csv_stream:
             csv_stream.seek(max(0, csv_path.stat().st_size - 4096))
             tail = csv_stream.read().rsplit(b'\n', 1)[-1]
+        decoded = len(probed['frames'])
         report = {'frames': count, 'replays': count - play, 'source': relative, 'profile': profile,
-                  'source_hashes': hashes, 'available_video_frames': video_count, 'available_csv_rows': count_csv,
+                  'source_hashes': hashes, 'available_video_frames': decoded, 'available_csv_rows': count_csv,
+                  'contiguous_video_frames': contiguous, 'video_packets': len(probed['packets']),
+                  'video_ended_prematurely': probed['damaged'],
                   'unused_csv_rows': count_csv - count,
                   'unusable_csv_tail_rows': max(0, nonempty_lines - 1 - count_csv),
                   'unusable_csv_tail_bytes': len(tail),
-                  'unused_video_frames': video_count - count, 'unused_full_pcm_bytes': full_bytes - count * BLOCK,
+                  'unused_video_frames': decoded - count, 'unused_full_pcm_bytes': full_bytes - count * BLOCK,
                   'unused_play_pcm_bytes': None if play_bytes is None else play_bytes - play * BLOCK,
                   'normalized_hashes': {name: _hash(stage / name) for name in MEDIA if (stage / name).exists()}}
         _write(stage / 'report.json', report)
@@ -416,12 +530,19 @@ def _publish(root, ledger, transaction, saved):
             os.fsync(dst.fileno())
         os.replace(temporary, target)
     # Completed movies from an older generation must not win finished_movie().
+    # Move them into this generation with a same-volume rename: the original is
+    # never deleted, and a crash leaves it either in place or fully archived.
     for name in ('gameplay.mp4', 'gameplay_pure.mp4', 'gameplay.mkv', 'gameplay_pure.mkv', 'recording.json'):
         target = root / name
+        if target.is_symlink() or (hasattr(target, 'is_junction') and target.is_junction()):
+            raise RecoveryError('Finished movie cannot be a link')
         if target.exists():
             archive = generation / ('previous-' + name)
-            if not archive.exists(): shutil.copy2(target, archive)
-            target.unlink()
+            if archive.exists():
+                # Possibly an incomplete copy from an interrupted older publisher;
+                # keep it aside instead of trusting it as the backup.
+                os.replace(archive, generation / f'previous-{name}.stale-{uuid.uuid4().hex}')
+            os.replace(target, archive)
     ledger['published'] = transaction['summary']
     ledger['published_files'] = transaction['files']
     ledger['phase'] = 'committed'
@@ -468,7 +589,11 @@ def _finalize(saved, ledger):
     ffmpeg = saved['options']['ffmpeg']
     _run(ffmpeg, ['-f', 'concat', '-safe', '0', '-i', str(concat), '-map', '0:v:0', '-c:v', 'copy',
                  str(generation / 'video.mkv')], generation / 'ffmpeg.log')
-    if _probe(ffmpeg, generation / 'video.mkv')[0] != frames:
+    # Every chunk was decoded once when its prefix was validated. The splice is
+    # checked from packet timestamps (demux only): exactly one packet per frame
+    # 0..frames-1, so no old frame lands between new B-frames and nothing is lost.
+    packets = _probe(ffmpeg, generation / 'video.mkv', decode=False, timeout=max(1800, frames // 20))['packets']
+    if len(packets) != frames or sorted(packets) != list(range(frames)):
         raise RecoveryError('Cumulative video frame count does not match its capture ledger')
     for name, count in [('audio.wav', frames), ('audio_play.wav', frames - replays)]:
         if name == 'audio_play.wav' and saved['options']['audio_source'] != 'game_nrt': continue
@@ -499,7 +624,8 @@ def _finalize(saved, ledger):
                     seg_writer.writerow(row)
             index += report['frames']
     summary = {'frames': frames, 'replays': replays, 'prefix_frames': frames, 'boundaries': boundaries,
-               'recovery_history': [report for _, report in prefixes], 'generation': relative}
+               'recovery_history': [report for _, report in prefixes], 'generation': relative,
+               'recovery_bytes': storage_bytes(saved)}
     ledger['transaction'] = {'generation': relative, 'summary': summary,
                              'files': {name: _hash(generation / name) for name in MEDIA if (generation / name).exists()}}
     ledger['phase'] = 'publishing'

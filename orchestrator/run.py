@@ -1161,6 +1161,28 @@ def abandon_recording(bridge_port: int, saved: dict | None, previous_dir, proble
         client.close()
 
 
+def resume_recording_mode(cfg, args, saved, hello) -> str:
+    """续跑时这次的录制方式：'live' 接续仍在录的原编码器，'recover' 恢复到原录制会话，'new' 在新运行目录另起录像（或不录）。
+
+    追加章节（--chapters / --segments）且原录像已正常收尾（finished）时另起新录像：上一章的录像目录与成片原样保留，
+    不把下一章拼进去。只有明确 --new-recording 才放弃尚未收尾的原录像。"""
+    state = (saved or {}).get('state')
+    if getattr(args, 'new_recording', False):
+        return 'live' if Recorder.validate_resume(saved, hello) else 'new'
+    if saved and not args.record and state in {'finished', 'failed', 'abandoned'}:
+        print(f"[record] 原录像已结束（{state}）：这次 --no-record 续跑不录制，原录像文件保持不变", flush=True)
+        return 'new'
+    if saved and state == 'finished' and getattr(cfg, '_extended_plan', None):
+        print(f"[record] 上一章的录像已正常收尾（{saved['options']['dir']}）：这次追加章节另起新录像，"
+              '原录像目录与成片保持不变', flush=True)
+        return 'new'
+    if saved and state == 'abandoned':
+        reason = saved.get('abandoned_reason')
+        raise RecordingError('原录制会话已被放弃' + (f'（{reason}）' if reason else '') + '，不能再恢复：'
+                             '这次续跑要录制请加 --new-recording 另起新录像（原录像文件保持不变），不录制请加 --no-record')
+    return Recorder.resume_mode(saved, hello)
+
+
 def main() -> int:
     cfg, args = parse_args()
     if cfg.create_save:
@@ -1180,13 +1202,14 @@ def main() -> int:
     saved_recording = None
     try:
         saved_recording = Recorder.saved_session(args.previous['dir']) if args.previous else None
-        recording_mode = (('live' if Recorder.validate_resume(saved_recording, hello) else 'new')
-                          if getattr(args, 'new_recording', False) else Recorder.resume_mode(saved_recording, hello))
+        recording_mode = resume_recording_mode(cfg, args, saved_recording, hello)
+        if recording_mode == 'new':
+            saved_recording = None
         resume_recording = recording_mode != 'new'
     except RecordingError as exc:
         if not (args.previous and args.new_recording):
             print(f"[record] {exc}", flush=True)
-            if args.previous:
+            if args.previous and (saved_recording or {}).get('state') != 'abandoned':
                 print("[record] 原录像保持，处理故障后正常 --resume 会重试恢复；仅明确放弃它时加 --new-recording"
                       "（控制台里用“另起录像续跑”）；不续跑时在控制台交还游戏控制", flush=True)
             return 2
@@ -1198,7 +1221,11 @@ def main() -> int:
         saved_recording, resume_recording, recording_mode = None, False, 'new'
     if resume_recording:
         if not args.record:
-            print('[record] 原录像仍在继续，不能用 --no-record 续跑；请先收尾录像（控制台交还游戏控制时会收尾）', flush=True)
+            if recording_mode == 'live':
+                print('[record] 原录像仍在继续，不能用 --no-record 续跑；请先收尾录像（控制台交还游戏控制时会收尾）', flush=True)
+            else:
+                print(f"[record] 原录像尚未收尾（{saved_recording.get('state')}），不能用 --no-record 续跑：请不加 --no-record 正常 --resume，"
+                      '以原会话恢复并收尾；确定放弃原录像时加 --new-recording', flush=True)
             return 2
         cfg._recording_resume_manifest = saved_recording
         cfg._keep_frozen = True  # 新主控完成接管前，启动失败不得破坏原冻结和录制。

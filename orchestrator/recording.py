@@ -92,6 +92,22 @@ def salvage_movie(directory: Path, ffmpeg: str, log: Callable[[str], None] = pri
     return out
 
 
+def _has_files(directory: Path) -> bool:
+    return directory.is_dir() and any(directory.iterdir())
+
+
+def log_storage(saved: dict, log: Callable[[str], None] = print) -> None:
+    """恢复目录只增不删：每次恢复或收尾时报告占用，方便用户自己决定何时整理。"""
+    from .recording_recovery import storage_bytes
+    try:
+        size = storage_bytes(saved)
+    except Exception:  # noqa: BLE001（只是提示）
+        return
+    if size:
+        log(f'[record] 恢复目录 .recovery 当前占用 {size / 2**30:.2f} GiB（原件备份、各次采集、校验过的前缀与累计版本，'
+            '主控不会自动删除）')
+
+
 def load_config() -> dict:
     config: dict = {}
     for path in (CONFIG, LOCAL_CONFIG):
@@ -391,7 +407,8 @@ class Recorder:
                 if actual == expected and plugin.get('state') in {'failed', 'finished'}:
                     break
                 if time.monotonic() >= until:
-                    raise RecordingError('上次恢复启动的结果尚未确认，原交接保持；未重复 start，请稍后重试')
+                    hello = cls._retire_lost_start(call, saved, expected, timeout, log)
+                    break
                 time.sleep(.2)
         clock = hello.get('clock') or {}
         plugin = clock.get('plugin') or {}
@@ -424,7 +441,55 @@ class Recorder:
         except RuntimeError as exc:
             raise RecordingError(f'恢复采集未能启动：{exc}；原录像保留，修复后正常 --resume 重试') from exc
         log(f'[record] 恢复原录像：{recorder.opts.dir}（会话 {recorder.session_id}，原有 {ledger.get("prefix_frames", 0)} 帧保留）')
+        log_storage(saved, log)
         return recorder
+
+    @staticmethod
+    def _capture_idle(hello):
+        clock = hello.get('clock') or {}
+        plugin = clock.get('plugin') or {}
+        return (clock.get('connected') is True and not clock.get('lockstep') and plugin.get('recording') is not True
+                and plugin.get('state') in {'idle', 'finished', 'failed'})
+
+    @classmethod
+    def _retire_lost_start(cls, call, saved, expected, timeout, log):
+        """A persisted start whose directory OBS never reported: resolve it without a second capture.
+
+        Started (files exist, OBS idle now): the normal path closes that attempt
+        and opens a new one. Never delivered: a stop is queued behind any start
+        OBS might still hold (it also ends bridge audio left by a start that
+        reached only the bridge), then the empty attempt is swapped for a fresh
+        directory, so a retried start cannot overwrite or race the old one.
+        Returns the latest hello."""
+        from .recording_recovery import replace_unstarted, RecoveryError
+        hello = call('hello')
+        cls.validate_release(saved, hello)
+        if not cls._capture_idle(hello):
+            raise RecordingError('上次恢复启动的结果尚未确认：OBS 仍在采集、收尾或未连接，未重复 start。'
+                                 '请确认 OBS 已打开并连上桥接、没有其他录像在进行，再正常 --resume 重试')
+        if _has_files(expected):
+            return hello  # The attempt did start and has ended; prepare closes it as a chunk.
+        call('record', action='stop', marker=False)
+        deadline = time.monotonic() + timeout
+        while True:
+            hello = call('hello')
+            cls.validate_release(saved, hello)
+            if cls._capture_idle(hello) and not hello.get('record_audio_active'):
+                break
+            if time.monotonic() >= deadline:
+                raise RecordingError('上次恢复启动的结果尚未确认，OBS 尚未回到空闲，未重复 start；请稍后正常 --resume 重试')
+            time.sleep(.2)
+        plugin = (hello.get('clock') or {}).get('plugin') or {}
+        actual = Path(plugin['dir']).resolve() if plugin.get('dir') else None
+        if actual == expected or _has_files(expected):
+            return hello  # A late start ran before the queued stop; treat it as a closed chunk.
+        try:
+            fresh = replace_unstarted(saved)
+        except (RecoveryError, OSError) as exc:
+            raise RecordingError(f'上次恢复启动未到达 OBS，但无法改用新的采集目录：{exc}；原录像保留，未重复 start') from exc
+        log(f'[record] 上次恢复启动没有到达 OBS（采集目录一直为空、OBS 空闲）：改用新的采集目录 {fresh.name} 重新开始，'
+            f'原空目录 {expected.name} 保留不用')
+        return hello
 
     @staticmethod
     def abandon_saved(saved, reason):
@@ -477,19 +542,29 @@ class Recorder:
 
     def segment_failed(self) -> str | None:
         """这一段录像是否已经录不上画面：OBS 插件报失败、桥接的独立录像音频出错，或插件与桥接断开。
-        返回原因；没问题返回 None。OBS 指向其他目录时拒绝推进，不操作它。"""
-        if self._roll_pending is not None:
-            return self._roll_pending['reason']
-        if not self.started or self._stop.requested:
+        返回原因；没问题返回 None。OBS 指向其他目录时拒绝推进，不操作它。
+        OBS 断开或已重启时恢复不了采集：立即抛 RecordingHalt 并说明怎么处理，不先停止、等待收尾。"""
+        if self._roll_pending is None and (not self.started or self._stop.requested):
             return None
         hello = self.call('hello')
         self.audio_diagnostics = hello.get('record_audio_diagnostics', self.audio_diagnostics)
         clock = hello.get('clock') or {}
         plugin = clock.get('plugin') or {}
+        if clock.get('connected') is False:
+            raise RecordingHalt('OBS 插件与桥接的时钟连接已断开（OBS 可能已关闭或崩溃）：游戏保持冻结，这次动作未执行。'
+                                'OBS 重新连上且原采集仍在时可直接继续试玩；OBS 已重启或采集已停止时，'
+                                '请中断主控后正常 --resume，以原会话恢复')
+        restarted = (plugin.get('state') == 'idle' and not plugin.get('dir') and not clock.get('lockstep')
+                     and plugin.get('recording') is not True)
+        if self._roll_pending is not None:
+            if not self._roll_pending['closed'] and restarted:
+                # The failed capture's encoder state went away with OBS; it can
+                # only be closed and recovered from the files by a new owner.
+                raise RecordingHalt('OBS 已重启，失败的那段采集在本次运行里无法收尾：游戏保持冻结，这次动作未执行。'
+                                    '请中断主控后正常 --resume，以原会话恢复（已录下的文件都保留）')
+            return self._roll_pending['reason']
         if plugin.get('dir') and Path(plugin['dir']).resolve() != self.capture_directory(self._session_data()):
             raise RecordingOwnershipError('OBS 已指向其他录制，当前会话没有可核验的采集；未操作其他录像')
-        if clock.get('connected') is False:
-            return 'OBS 插件与桥接的时钟连接断开'
         if plugin.get('state') == 'failed':
             return plugin.get('error') or 'OBS 插件报告录制失败'
         active = plugin.get('state') == 'recording' or plugin.get('recording') is True
@@ -605,7 +680,7 @@ class Recorder:
                 self._recovery_start['phase'] = 'prepared'
                 self._save_session('recovering')
             raise
-        deadline = time.monotonic() + timeout
+        deadline, plugin = time.monotonic() + timeout, {}
         while time.monotonic() < deadline:
             clock, plugin = self._plugin(allow_previous_terminal=True)
             if plugin.get("state") == "failed":
@@ -701,6 +776,12 @@ class Recorder:
                 # OBS 关了或崩溃：插件状态停在断开前的那一刻，再等也不会变；留作未收尾的录像（续跑或控制台处理）
                 self.log(f"[record] OBS 插件已断开，录像无法收尾，留待续跑或控制台处理；最后的状态：{plugin}")
                 break
+            if (self._stop.capture_stopped and plugin.get('state') == 'idle' and not plugin.get('dir')
+                    and not clock.get('lockstep')):
+                # A fresh OBS reports idle without a directory: the encoder job and
+                # its terminal state are gone, so waiting for finished cannot help.
+                self.log('[record] OBS 已重启，原编码器的收尾状态已丢失：录像留作未收尾，正常 --resume 时以原会话恢复')
+                break
             if time.monotonic() >= deadline:
                 self.log(f"[record] 等待 ffmpeg 收尾超时（{timeout:g} 秒），当前状态：{plugin}")
                 break
@@ -717,6 +798,7 @@ class Recorder:
                 recovered = finalize(self._session_data('finishing'))
             except (RecoveryError, OSError, ValueError) as exc:
                 raise RecordingError(f'录制采集已停止，但累计文件发布未完成：{exc}；保留原文件，可重试收尾') from exc
+            log_storage(self._session_data('finishing'), self.log)
         files = {p.name: p.stat().st_size for p in sorted(directory.iterdir()) if p.is_file()} if directory.exists() else {}
         result = {
             "state": plugin.get("state") if complete else ('finishing' if self._stop.capture_stopped else 'recording'),

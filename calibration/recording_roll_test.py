@@ -1,5 +1,6 @@
 """Retain the production recorder/recovery ledger; replace only bridge and media codecs."""
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -84,8 +85,10 @@ class RollTests(unittest.TestCase):
         self.pure = patch('orchestrator.recording.make_pure', return_value={'state': 'skipped'})
         self.pure.start()
         profile = {'codec_name': 'fixture', 'width': 8, 'height': 8, 'r_frame_rate': '60/1'}
-        self.probe = patch('orchestrator.recording_recovery._probe',
-                           side_effect=lambda ffmpeg, path: (len(path.read_bytes()), profile))
+        def probe(ffmpeg, path, decode=True, timeout=1800):
+            frames = list(range(len(path.read_bytes())))      # one fixture byte per intra frame
+            return {'profile': profile, 'packets': frames, 'frames': frames if decode else None, 'damaged': False}
+        self.probe = patch('orchestrator.recording_recovery._probe', side_effect=probe)
         def media(ffmpeg, args, log):
             if args[:2] == ['-f', 'concat']:
                 listing = Path(args[args.index('-i') + 1]).read_text(encoding='utf-8')
@@ -146,10 +149,16 @@ class RollTests(unittest.TestCase):
         self.bridge.hello['record_audio_error'] = 'Recording FMOD (full) update: ERR_FILE_BAD'
         self.assertIn('独立录像音频出错', recorder.segment_failed())
 
-    def test_disconnected_obs_counts_as_failure_and_halts_when_restart_fails(self):
+    def test_disconnected_obs_halts_at_once_with_resume_guidance_and_no_stop(self):
         recorder = self.recorder()
         self.bridge.hello['clock']['connected'] = False
-        self.assertIn('断开', recorder.segment_failed())
+        before = len(self.bridge.commands)
+        with self.assertRaisesRegex(RecordingHalt, '断开.*--resume'):
+            recorder.segment_failed()
+        self.assertFalse(any(c == 'record' for c, _ in self.bridge.commands[before:]))
+        self.assertTrue(recorder.started)
+        self.bridge.hello['clock']['connected'] = True      # OBS reconnected while the capture survived
+        self.assertIsNone(recorder.segment_failed())
 
     def test_restart_failure_raises_halt(self):
         recorder = self.recorder()
@@ -392,7 +401,7 @@ class RollTests(unittest.TestCase):
         self.assertNotIn('recovery_start', Recorder.saved_session(self.run))
         self.assertEqual(len([a for c, a in self.bridge.commands if c == 'record' and a['action'] == 'start']), before)
 
-    def test_unknown_recovery_start_does_not_resubmit_or_overwrite_the_attempt(self):
+    def test_start_that_never_reached_obs_is_retried_in_a_fresh_directory(self):
         recorder = self.recorder()
         self.bridge.advance(3)
         recorder.stop()
@@ -403,10 +412,94 @@ class RollTests(unittest.TestCase):
             return calls(command, **args)
         with self.assertRaises(RecordingError):
             Recorder.recover(missing, Recorder.saved_session(self.run), self.run, log=lambda _: None)
-        before = list(self.bridge.commands)
-        with self.assertRaisesRegex(RecordingError, '未重复 start'):
+        pending = Recorder.saved_session(self.run)
+        self.assertEqual(pending['recovery_start']['phase'], 'requested')
+        lost = Recorder.capture_directory(pending)
+        before = len(self.bridge.commands)
+        recovered = Recorder.recover(calls, pending, self.run, log=lambda _: None, timeout=0.3)
+        self.assertTrue(recovered.started)
+        fresh = Recorder.capture_directory(Recorder.saved_session(self.run))
+        self.assertNotEqual(fresh, lost)
+        self.assertTrue(lost.is_dir())
+        self.assertEqual(list(lost.iterdir()), [])            # kept, never reused
+        record = [a for c, a in self.bridge.commands[before:] if c == 'record']
+        self.assertEqual([a['action'] for a in record], ['stop', 'start'])   # flush, then one start
+        self.assertEqual(Path(record[-1]['dir']).resolve(), fresh)
+        import json
+        ledger = json.loads((recorder.opts.dir/'.recovery/ledger.json').read_text(encoding='utf-8'))
+        self.assertNotIn(lost.name, ledger['chunks'])
+        self.assertEqual(ledger['unstarted_attempts'], [lost.name])
+        self.bridge.advance(2)
+        self.assertEqual(recovered.stop()['frames'], 5)
+
+    def test_started_then_lost_capture_is_closed_as_a_chunk_not_restarted_in_place(self):
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        recorder.stop()
+        calls = self.bridge.call
+        def started_then_lost(command, **args):
+            result = calls(command, **args)
+            if command == 'record' and args.get('action') == 'start':
+                raise OSError('ack lost')
+            return result
+        with self.assertRaises(RecordingError):
+            Recorder.recover(started_then_lost, Recorder.saved_session(self.run), self.run, log=lambda _: None)
+        pending = Recorder.saved_session(self.run)
+        first = Recorder.capture_directory(pending)
+        self.bridge.advance(2)
+        # OBS restarts: the job and its directory are gone from the plugin status.
+        self.bridge.plugin.clear()
+        self.bridge.plugin.update(state='idle', frames=0, audio_nrt=True, audio_tracks=2)
+        self.bridge.hello['clock']['lockstep'] = False
+        self.bridge.hello['record_audio_active'] = False
+        snapshot = {p.name: p.read_bytes() for p in first.iterdir()}
+        recovered = Recorder.recover(calls, pending, self.run, log=lambda _: None, timeout=0.3)
+        second = Recorder.capture_directory(Recorder.saved_session(self.run))
+        self.assertNotEqual(second, first)
+        self.assertEqual({p.name: p.read_bytes() for p in first.iterdir()}, snapshot)
+        self.bridge.advance(1)
+        self.assertEqual(recovered.stop()['frames'], 6)
+
+    def test_lost_start_is_not_retried_while_obs_is_busy(self):
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        recorder.stop()
+        calls = self.bridge.call
+        def missing(command, **args):
+            if command == 'record' and args.get('action') == 'start':
+                raise OSError('request outcome unknown')
+            return calls(command, **args)
+        with self.assertRaises(RecordingError):
+            Recorder.recover(missing, Recorder.saved_session(self.run), self.run, log=lambda _: None)
+        before = len(self.bridge.commands)
+        self.bridge.plugin['state'] = 'finishing'           # another job still closing: not ours to touch
+        with self.assertRaises(RecordingOwnershipError):
             Recorder.recover(calls, Recorder.saved_session(self.run), self.run, log=lambda _: None, timeout=0)
-        self.assertFalse(any(c == 'record' for c, _ in self.bridge.commands[len(before):]))
+        self.bridge.plugin['state'] = 'finished'
+        self.bridge.hello['clock']['connected'] = False     # OBS not connected: nothing can be confirmed
+        with self.assertRaises(RecordingError):
+            Recorder.recover(calls, Recorder.saved_session(self.run), self.run, log=lambda _: None, timeout=0)
+        self.assertFalse(any(c == 'record' for c, _ in self.bridge.commands[before:]))
+        self.assertEqual(Recorder.saved_session(self.run)['recovery_start']['phase'], 'requested')
+
+    def test_start_lost_between_bridge_and_obs_stops_orphan_audio_then_retries(self):
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        recorder.stop()
+        calls = self.bridge.call
+        def dropped(command, **args):
+            if command == 'record' and args.get('action') == 'start':
+                self.bridge.hello['record_audio_active'] = True     # bridge started its audio, OBS never heard
+                raise OSError('clock socket dropped')
+            return calls(command, **args)
+        with self.assertRaises(RecordingError):
+            Recorder.recover(dropped, Recorder.saved_session(self.run), self.run, log=lambda _: None)
+        lost = Recorder.capture_directory(Recorder.saved_session(self.run))
+        before = len(self.bridge.commands)
+        recovered = Recorder.recover(calls, Recorder.saved_session(self.run), self.run, log=lambda _: None, timeout=0.3)
+        self.assertTrue(recovered.started)
+        self.assertNotEqual(Recorder.capture_directory(Recorder.saved_session(self.run)), lost)
+        self.assertEqual([a['action'] for c, a in self.bridge.commands[before:] if c == 'record'], ['stop', 'start'])
 
     def test_confirmed_bridge_start_refusal_can_retry_same_prepared_capture(self):
         recorder = self.recorder()
@@ -459,6 +552,188 @@ class RollTests(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertEqual(Recorder.saved_session(second)['id'], recorder.session_id)
         self.assertFalse((second/'recording').exists())
+
+    def run_main(self, cfg_extra=None, args_extra=None):
+        """Production main() up to the agent session; returns (exit code, recorder handed to the session, cfg, stdout)."""
+        import contextlib, io
+        from orchestrator import run
+        second = self.run.parent/'second'
+        second.mkdir(exist_ok=True)
+        cfg = SimpleNamespace(agent='fixture', create_save=False, bridge_port=48974, mcp_port=48980,
+                              hud_mod=False, continuous_music=False, skip_enter=True, **(cfg_extra or {}))
+        args = SimpleNamespace(**{'previous': {'dir': self.run}, 'new_recording': False, 'record': True,
+                                  'no_agent': True, 'prepared': None, 'keep_obs_open': True, **(args_extra or {})})
+        summary = {key: 0 for key in ('decisions', 'deaths', 'elapsed_s', 'thinking_s', 'tool_s', 'play_game_s', 'auto_game_s')}
+        summary.update(completed=True, stop_reason='fixture')
+        received = []
+        async def run_session(*parameters):
+            received.append(parameters[-1])
+            return summary
+        client = SimpleNamespace(call=self.bridge.call, close=Mock())
+        output = io.StringIO()
+        with patch.object(run, 'parse_args', return_value=(cfg, args)), \
+             patch.object(run, 'port_free', return_value=True), \
+             patch('orchestrator.bridge_requirements.preflight_bridge', return_value=self.bridge.hello), \
+             patch.object(run, 'make_run_dir', return_value=second), \
+             patch.object(run, 'start_mod_hud', return_value=None), \
+             patch.object(run, 'ensure_obs', return_value=False), \
+             patch.object(run, 'check_resume_position', return_value=True), \
+             patch.object(run, 'run_async', side_effect=run_session), \
+             patch('tools.bridge_client.BridgeClient', return_value=client), \
+             contextlib.redirect_stdout(output):
+            code = run.main()
+        return code, (received[0] if received else 'not started'), cfg, second, output.getvalue()
+
+    @staticmethod
+    def tree(directory):
+        return {str(p.relative_to(directory)): (p.read_bytes(), p.stat().st_mtime_ns)
+                for p in sorted(directory.rglob('*')) if p.is_file()}
+
+    def test_chapter_extension_after_finished_recording_starts_new_and_leaves_old_untouched(self):
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        self.assertEqual(recorder.stop()['state'], 'finished')
+        for name in ('gameplay.mp4', 'gameplay_pure.mp4'):
+            (recorder.opts.dir/name).write_bytes(b'chapter 4A episode')
+        before, commands = self.tree(self.run), len(self.bridge.commands)
+        code, handed, cfg, second, output = self.run_main({'_extended_plan': ['4A', '5A']})
+        self.assertEqual(code, 0)
+        self.assertIsNone(handed)                               # session starts a fresh Recorder in second/
+        self.assertFalse(getattr(cfg, '_recording_resume_manifest', None))
+        self.assertIn('另起新录像', output)
+        self.assertEqual(self.tree(self.run), before)
+        self.assertFalse((recorder.opts.dir/'.recovery').exists())
+        self.assertFalse(any(c == 'record' for c, _ in self.bridge.commands[commands:]))
+        self.assertFalse((second/'recording_session.json').exists())
+
+    def test_finished_recording_without_chapter_extension_still_recovers(self):
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        recorder.stop()
+        code, handed, cfg, second, _ = self.run_main()
+        self.assertEqual(code, 0)
+        self.assertIsInstance(handed, Recorder)
+        self.assertEqual(handed.session_id, recorder.session_id)
+        self.assertTrue((recorder.opts.dir/'.recovery/ledger.json').exists())
+
+    def test_chapter_extension_keeps_recovery_for_a_failed_recording(self):
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        self.bridge.fail()
+        self.assertEqual(recorder.stop()['state'], 'failed')
+        code, handed, cfg, second, _ = self.run_main({'_extended_plan': ['4A', '5A']})
+        self.assertEqual(code, 0)
+        self.assertIsInstance(handed, Recorder)
+        self.assertEqual(handed.session_id, recorder.session_id)
+        self.assertTrue((recorder.opts.dir/'.recovery/ledger.json').exists())
+
+    def test_chapter_extension_keeps_adopting_a_live_retained_recording(self):
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        self.bridge.hello['frozen'] = True
+        recorder.retain()
+        commands = len(self.bridge.commands)
+        code, handed, cfg, _, _ = self.run_main({'_extended_plan': ['4A', '5A']})
+        self.assertEqual(code, 0)
+        self.assertIsNone(handed)                               # adopted later by the connected session
+        self.assertEqual(cfg._recording_resume_manifest['id'], recorder.session_id)
+        self.assertFalse(any(c == 'record' for c, _ in self.bridge.commands[commands:]))
+        self.assertFalse((recorder.opts.dir/'.recovery').exists())
+
+    def test_abandoned_and_no_record_resumes_get_accurate_guidance(self):
+        from orchestrator.run import resume_recording_mode
+        recorder = self.recorder()
+        self.bridge.advance(2)
+        recorder.stop()
+        saved = Recorder.saved_session(self.run)
+        cfg = SimpleNamespace()
+        quiet = SimpleNamespace(new_recording=False, record=False)
+        for state in ('finished', 'failed', 'abandoned'):
+            with self.subTest(state=state):
+                self.assertEqual(resume_recording_mode(cfg, quiet, {**saved, 'state': state}, self.bridge.hello), 'new')
+        abandoned = {**saved, 'state': 'abandoned', 'abandoned_reason': 'OBS 已关闭'}
+        with self.assertRaisesRegex(RecordingError, '已被放弃.*--new-recording'):
+            resume_recording_mode(cfg, SimpleNamespace(new_recording=False, record=True), abandoned, self.bridge.hello)
+        self.assertEqual(resume_recording_mode(cfg, SimpleNamespace(new_recording=True, record=True), abandoned,
+                                               self.bridge.hello), 'new')
+        Recorder.abandon_saved(saved, 'OBS 已关闭')
+        code, handed, _, _, output = self.run_main()
+        self.assertEqual(code, 2)
+        self.assertIn('--new-recording', output)
+        self.assertNotIn('会重试恢复', output)
+        # A pending (not live) recording cannot be left dangling by --no-record.
+        self.bridge.plugin.update(state='idle', dir='')
+        (recorder.opts.dir/'session.json').write_text(json.dumps({**saved, 'state': 'finishing'}), encoding='utf-8')
+        code, _, _, _, output = self.run_main(args_extra={'record': False})
+        self.assertEqual(code, 2)
+        self.assertIn('尚未收尾', output)
+        self.assertNotIn('仍在继续', output)
+
+    def test_obs_restart_with_unclosed_roll_halts_promptly_with_resume_guidance(self):
+        from orchestrator.run import recording_guard
+        recorder = self.recorder()
+        self.bridge.advance(2)
+        recorder._roll_pending = {'reason': 'OBS 插件报告录制失败', 'closed': False, 'old': None}
+        self.bridge.plugin.clear()
+        self.bridge.plugin.update(state='idle', frames=0, audio_nrt=True, audio_tracks=2)
+        self.bridge.hello['clock']['lockstep'] = False
+        before = len(self.bridge.commands)
+        with patch('orchestrator.recording.time.sleep', side_effect=AssertionError('must not wait')), \
+             patch('orchestrator.control.RunControl') as control:
+            with self.assertRaisesRegex(RecordingHalt, '重启.*--resume'):
+                recording_guard(recorder, self.run)()
+            control.return_value.enqueue.assert_called_with('pause')
+        self.assertFalse(any(c == 'record' for c, _ in self.bridge.commands[before:]))
+
+    def test_stop_after_obs_restart_does_not_wait_for_a_lost_encoder(self):
+        recorder = self.recorder()
+        self.bridge.advance(2)
+        self.bridge.plugin.clear()
+        self.bridge.plugin.update(state='idle', frames=0, audio_nrt=True, audio_tracks=2)
+        self.bridge.hello['clock']['lockstep'] = False
+        real = self.bridge.call
+        def restarted(command, **args):      # the fresh plugin ignores a stop for a job it never had
+            if command == 'record':
+                self.bridge.commands.append((command, args))
+                return copy.deepcopy(self.bridge.hello)
+            return real(command, **args)
+        recorder.call = restarted
+        with patch('orchestrator.recording.time.sleep', side_effect=AssertionError('must not wait')):
+            result = recorder.stop(timeout=300)
+        self.assertTrue(result['pending'])
+        self.assertEqual(Recorder.saved_session(self.run)['state'], 'finishing')
+        self.assertEqual(Recorder.resume_mode(Recorder.saved_session(self.run), self.bridge.hello), 'recover')
+
+    def test_archived_movies_are_moved_never_deleted_and_stale_backups_are_kept(self):
+        from orchestrator import recording_recovery
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        recorder.stop()
+        directory = recorder.opts.dir
+        (directory/'gameplay.mp4').write_bytes(b'original episode')
+        recovered = Recorder.recover(self.bridge.call, Recorder.saved_session(self.run), self.run, log=lambda _: None)
+        self.bridge.advance(2)
+        replace = recording_recovery.os.replace
+        def locked(source, destination):
+            if Path(source) == directory/'gameplay.mp4':
+                raise PermissionError('movie open in a player')
+            return replace(source, destination)
+        with patch.object(recording_recovery.os, 'replace', side_effect=locked):
+            with self.assertRaises(RecordingError):
+                recovered.stop()
+        self.assertEqual((directory/'gameplay.mp4').read_bytes(), b'original episode')
+        result = recovered.stop()
+        self.assertEqual(result['frames'], 5)
+        generation = directory/'.recovery'/result['recovery']['generation']
+        self.assertEqual((generation/'previous-gameplay.mp4').read_bytes(), b'original episode')
+        # A leftover backup (e.g. a partial copy by an older publisher) is set aside, not trusted or deleted.
+        (generation/'previous-gameplay.mp4').write_bytes(b'partial')
+        (directory/'audio.wav').write_bytes(b'damaged')            # forces republishing the same generation
+        current = (directory/'gameplay.mp4').read_bytes()
+        recording_recovery.finalize(Recorder.saved_session(self.run))
+        self.assertEqual((generation/'previous-gameplay.mp4').read_bytes(), current)
+        stale = list(generation.glob('previous-gameplay.mp4.stale-*'))
+        self.assertEqual([p.read_bytes() for p in stale], [b'partial'])
 
     def test_entry_macro_does_not_restart_an_already_recovered_capture(self):
         from orchestrator import run

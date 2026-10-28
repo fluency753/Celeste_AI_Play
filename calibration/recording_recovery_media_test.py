@@ -22,9 +22,11 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
             cls.ffmpeg = find_ffmpeg()
         except RuntimeError as exc:
             raise unittest.SkipTest(str(exc)) from exc
-        cls.ffprobe = str(Path(cls.ffmpeg).with_name('ffprobe' + Path(cls.ffmpeg).suffix))
-        if not Path(cls.ffprobe).is_file() and shutil.which(cls.ffprobe) is None:
-            raise unittest.SkipTest('ffprobe is unavailable')
+        from orchestrator.recording_recovery import ffprobe_path, RecoveryError
+        try:
+            cls.ffprobe = ffprobe_path(cls.ffmpeg)      # beside ffmpeg, else on PATH (same rule as recovery)
+        except RecoveryError as exc:
+            raise unittest.SkipTest('ffprobe is unavailable') from exc
 
     def setUp(self):
         from orchestrator import recording_recovery
@@ -429,9 +431,123 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
             self.recovery.finalize(self.saved)
         self.assertEqual(self.fingerprints(), before)
 
+    # Production encoding: x264 veryfast reorders B-frames, so a crash leaves
+    # presentation holes at the tail of the decode-order packet stream.
+    PRODUCTION = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-g', '120']
+
+    def numbered(self, directory, frames, chunk, truncate=None):
+        """Every frame shows (chunk, number) as luma blocks; PCM and CSV rows are per-frame distinct."""
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        pattern = (f"geq=lum='16+20*if(lt(X,W/3),{chunk},if(lt(X,2*W/3),trunc(N/10),mod(N,10)))':cb=128:cr=128")
+        self.command([self.ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi',
+                      '-i', 'color=c=black:s=192x64:r=60', '-vf', pattern, '-frames:v', str(frames),
+                      *self.PRODUCTION, '-pix_fmt', 'yuv420p', str(directory/'video.mkv')])
+        if truncate is not None:
+            data = (directory/'video.mkv').read_bytes()
+            (directory/'video.mkv').write_bytes(data[:int(len(data)*truncate)])
+        blocks = [array.array('f', [chunk + i/1000, -(chunk + i/1000)]*800).tobytes() for i in range(frames)]
+        for name in ('audio.wav', 'audio_play.wav'):
+            (directory/name).write_bytes(_wav_header(len(blocks)*6400) + b''.join(blocks))
+        with (directory/'frames.csv').open('w', newline='', encoding='utf-8') as stream:
+            stream.write('index,game_frame,chapter_ticks,obs_ts_ns\n')
+            for i in range(frames):
+                stream.write(f'{i},{chunk*1000 + i},{i},{(i + 1)*16666667}\n')
+        (directory/'segments.csv').write_text('segment,first_index,start_ts_ns,measured_ms,offset_ms,method\n'
+                                              '0,0,16666667,0,0,fixed\n', encoding='utf-8')
+        return blocks
+
+    def identities(self, path):
+        raw = self.command([self.ffmpeg, '-v', 'error', '-i', str(path), '-map', '0:v:0', '-fps_mode', 'passthrough',
+                            '-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-'])
+        size, result = 192*64*3//2, []
+        for start in range(0, len(raw) - size + 1, size):
+            frame = raw[start:start + size]
+            def digit(x0):
+                values = [frame[y*192 + x] for y in range(16, 48) for x in range(x0, x0 + 32)]
+                return round((sum(values)/len(values) - 16)/20)
+            result.append((digit(16), digit(80)*10 + digit(144)))
+        return result
+
+    def test_bframe_crash_prefix_is_frame_exact_and_splices_cleanly(self):
+        for truncate in (.55, .7, .8, .9):
+            with self.subTest(truncate=truncate):
+                shutil.rmtree(self.root/'.recovery', ignore_errors=True)
+                old = self.numbered(self.root, 100, 1, truncate)
+                prepared = self.recovery.prepare(self.saved)
+                count = prepared['prefix_frames']
+                self.assertGreater(count, 0)
+                normalized = self.root/'.recovery/normalized/base'
+                self.assertEqual(self.identities(normalized/'video.mkv'), [(1, i) for i in range(count)])
+                self.assertEqual(len(read_ticks(normalized/'frames.csv')), count)
+                new = self.numbered(prepared['active_capture'], 20, 2)
+                result = self.recovery.finalize(self.saved)
+                self.assertEqual(result['frames'], count + 20)
+                # Exactly old 0..count-1 then new 0..19: no lost, repeated or interleaved frame.
+                self.assertEqual(self.identities(self.root/'video.mkv'),
+                                 [(1, i) for i in range(count)] + [(2, i) for i in range(20)])
+                self.assertEqual(self.wav('audio.wav'), b''.join(old[:count] + new))
+                self.assertEqual(self.wav('audio_play.wav'), b''.join(old[:count] + new))
+                with (self.root/'frames.csv').open(newline='', encoding='utf-8') as stream:
+                    games = [int(row['game_frame']) for row in csv.DictReader(stream)]
+                self.assertEqual(games, [1000 + i for i in range(count)] + [2000 + i for i in range(20)])
+                report = next(r for r in result['recovery_history'] if r['source'] == 'base')
+                self.assertTrue(report['video_ended_prematurely'])
+                self.assertLessEqual(count, report['contiguous_video_frames'])
+
+    def test_complete_bframe_capture_keeps_every_frame(self):
+        self.numbered(self.root, 90, 1)
+        prepared = self.recovery.prepare(self.saved)
+        self.assertEqual(prepared['prefix_frames'], 90)
+        self.numbered(prepared['active_capture'], 30, 2)
+        self.recovery.finalize(self.saved)
+        self.assertEqual(self.identities(self.root/'video.mkv'), [(1, i) for i in range(90)] + [(2, i) for i in range(30)])
+
     def test_lost_ledger_cannot_fall_back_to_root_after_attempt_started(self):
         self.media(self.root, [100, 200])
         self.recovery.prepare(self.saved)
         (self.root/'.recovery/ledger.json').unlink()
         with self.assertRaises(RuntimeError):
             self.recovery.capture_directory(self.saved)
+
+
+class VideoPrefixSelectionTests(unittest.TestCase):
+    """Decode-order cut points on synthetic packet lists (no codec needed)."""
+    def prefix(self, packets, frames=None, limit=10**9, tail=False):
+        from orchestrator.recording_recovery import video_prefix
+        return video_prefix(packets, packets if frames is None else frames, limit, tail_suspect=tail)[0]
+
+    def test_cut_lands_on_mini_gop_boundaries(self):
+        order = [0, 4, 2, 1, 3, 8, 6, 5, 7, 12, 10, 9, 11]
+        self.assertEqual(self.prefix(order), 13)
+        self.assertEqual(self.prefix(order[:6]), 5)              # P8 without its B-frames
+        self.assertEqual(self.prefix(order[:3]), 1)              # I0 P4 B2: only frame 0 is complete
+        self.assertEqual(self.prefix(order, limit=7), 5)         # CSV/PCM stop inside a mini-GOP
+        self.assertEqual(self.prefix(order, limit=9), 9)
+
+    def test_undecodable_or_partial_tail_is_never_used(self):
+        order = [0, 4, 2, 1, 3, 8, 6, 5, 7]
+        self.assertEqual(self.prefix(order, frames=[0, 1, 2, 3, 4, 6, 7, 8]), 5)   # frame 5 did not decode
+        self.assertEqual(self.prefix(order, tail=True), 5)                          # last packet may be partial
+        self.assertEqual(self.prefix([0, 1, 2], tail=True), 2)
+
+    def test_duplicate_or_negative_timestamps_stop_the_prefix(self):
+        self.assertEqual(self.prefix([0, 1, 1, 2]), 2)
+        self.assertEqual(self.prefix([0, -1, 1]), 1)
+        self.assertEqual(self.prefix([]), 0)
+
+
+class FfprobeLocationTests(unittest.TestCase):
+    def test_beside_then_path(self):
+        from orchestrator.recording_recovery import ffprobe_path, RecoveryError
+        with tempfile.TemporaryDirectory() as folder:
+            ffmpeg = Path(folder)/'ffmpeg'
+            ffmpeg.write_bytes(b'')
+            with patch('orchestrator.recording_recovery.shutil.which', return_value='/opt/bin/ffprobe') as which:
+                self.assertEqual(ffprobe_path(str(ffmpeg)), '/opt/bin/ffprobe')
+                which.assert_called_with('ffprobe')
+            with patch('orchestrator.recording_recovery.shutil.which', return_value=None):
+                with self.assertRaises(RecoveryError):
+                    ffprobe_path(str(ffmpeg))
+            (Path(folder)/'ffprobe').write_bytes(b'')
+            self.assertEqual(ffprobe_path(str(ffmpeg)), str(Path(folder)/'ffprobe'))
