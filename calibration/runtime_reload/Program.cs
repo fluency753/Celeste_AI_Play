@@ -73,11 +73,13 @@ void Attach() {
         text => { Bridge.ImportReloadState(text); imports++; });
 }
 Attach(); BridgeRuntime.Active = true;
+Scene? reloadSceneOverride = null;
 using var reload = new Hook(typeof(Everest.Loader).GetMethod("ReloadMod", flags)!, (Action<EverestModuleMetadata>)(_ => {
     if (owner != Guid.Empty) { BridgeRuntime.Detach(owner); owner = Guid.Empty; }
     if (failReload) throw new InvalidOperationException("Injected loader failure");
     Attach();
-    if (!deferScene) Scene(NewLevel());
+    if (reloadSceneOverride != null) Scene(reloadSceneOverride);
+    else if (!deferScene) Scene(NewLevel());
     if (wrongSlot) SaveData.Instance.FileSlot = 11;
 }));
 void Pump() => BridgeRuntime.Tick(() => originalTicks++, () => originalTicks++);
@@ -92,9 +94,10 @@ long nextToken = 1;
 double[] receivedEnergy = new double[2];
 using var audioMapping = MemoryMappedFile.OpenExisting($@"Local\CelesteAIRecordAudio-{audioPort}");
 using var audioView = audioMapping.CreateViewAccessor();
-JsonElement Call(string command, string? lease = null) {
+JsonElement Call(string command, string? lease = null, bool? expectSceneChange = null) {
     var request = new Dictionary<string, object?> { ["id"] = ++requestId, ["cmd"] = command };
     if (lease != null) request["lease"] = lease;
+    if (expectSceneChange.HasValue) request["expect_scene_change"] = expectSceneChange.Value;
     writer.WriteLine(JsonSerializer.Serialize(request));
     long until = Environment.TickCount64 + 5000;
     while (ipc.Available == 0 && Environment.TickCount64 < until) { Pump(); Thread.Sleep(1); }
@@ -226,6 +229,41 @@ try {
     Check(Call("reload_finish", mismatchLease).GetProperty("ok").GetBoolean(), "Identity recovery finish rejected");
     ClockToken(nextToken++, false);
     Check(imports == 5 && ipc.Connected && clock.Connected && RecordingAudio.Enabled, "Resident session ownership changed");
+    // A preserve-scene handoff is generic: Runtime never interprets this game's
+    // results type or session. The real Bridge owns those identity checks.
+    var results = (AreaComplete)RuntimeHelpers.GetUninitializedObject(typeof(AreaComplete));
+    results.Session = session; Scene(results); deferScene = true;
+    string resultsSnapshot = Bridge.ExportReloadState();
+    Scene(NewLevel()); bool wrongKind = false;
+    try { Bridge.ImportReloadState(resultsSnapshot); } catch (InvalidOperationException) { wrongKind = true; }
+    Check(wrongKind, "Results snapshot accepted a different scene kind");
+    Scene(results);
+    long resultsFrame = BridgeRuntime.Frame, resultsAudio = RecordingAudio.RenderedFrames;
+    string resultsLease = Call("reload_prepare").GetProperty("lease").GetString()!;
+    Call("reload_commit", resultsLease, expectSceneChange: false); Pump();
+    Check(Call("reload_status", resultsLease).GetProperty("stage").GetString() == "ready",
+        "Same-scene reload waited for an unnecessary scene replacement");
+    Check(ReferenceEquals(Engine.Scene, results) && BridgeRuntime.Frame == resultsFrame &&
+        RecordingAudio.RenderedFrames == resultsAudio, "Results reload advanced or replaced its scene");
+    Call("reload_finish", resultsLease);
+    string changedLease = Call("reload_prepare").GetProperty("lease").GetString()!;
+    var otherResults = (AreaComplete)RuntimeHelpers.GetUninitializedObject(typeof(AreaComplete));
+    otherResults.Session = session; reloadSceneOverride = otherResults;
+    Call("reload_commit", changedLease, expectSceneChange: false); Pump();
+    Check(Call("reload_status", changedLease).GetProperty("stage").GetString() == "failed",
+        "Preserve-scene handoff accepted a different object with the same session");
+    reloadSceneOverride = null;
+    Call("reload_commit", changedLease, expectSceneChange: false); Pump();
+    Check(Call("reload_status", changedLease).GetProperty("stage").GetString() == "failed",
+        "Preserve-scene retry replaced the original lease identity with the wrong scene");
+    Check(!Call("reload_commit", changedLease, expectSceneChange: true).GetProperty("ok").GetBoolean(),
+        "Retry changed the scene completion contract");
+    reloadSceneOverride = null; Scene(results);
+    Call("reload_commit", changedLease, expectSceneChange: false); Pump();
+    Check(Call("reload_status", changedLease).GetProperty("stage").GetString() == "ready",
+        "Preserve-scene retry failed");
+    Call("reload_finish", changedLease);
+    Console.WriteLine("PASS: generic preserve-scene handoff retains actual AreaComplete, rejects another same-session scene and retries without frame/audio advance");
     Console.WriteLine("PASS: same real IPC/clock connections, token accounting, audio mixers and recording frame sequence survive three payload reloads");
     Console.WriteLine("PASS: failed loader remains frozen; old payload collectible contexts are released");
     Console.WriteLine("PASS: resident core imposes no player/cutscene rules; real bridge imports verify slot/room/time and accept legacy schema-1 snapshots");

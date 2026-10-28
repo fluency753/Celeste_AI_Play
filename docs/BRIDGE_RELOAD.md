@@ -1,6 +1,8 @@
 # 保持录像的桥接代码重载
 
-桥接 1.3.0 将常驻核心 `CelesteAIRuntime` 与可重载逻辑 `CelesteAIBridge` 拆成两个 Everest Mod。主控通过现有连接在动作边界重载桥接逻辑；常驻核心继续持有冻结门闸、帧号、IPC／OBS 时钟、注入按键绑定、双轨 FMOD 混音器及音频共享内存。主控不发送录制 stop/start，也不另开录制目录。当前版本为桥接 1.5.1、常驻核心 1.0.3，核心 ABI 仍为 1。
+桥接 1.3.0 将常驻核心 `CelesteAIRuntime` 与可重载逻辑 `CelesteAIBridge` 拆成两个 Everest Mod。主控通过现有连接在动作边界重载桥接逻辑；常驻核心继续持有冻结门闸、帧号、IPC／OBS 时钟、注入按键绑定、双轨 FMOD 混音器及音频共享内存。主控不发送录制 stop/start，也不另开录制目录。当前版本为桥接 1.6.0、常驻核心 1.0.4，核心 ABI 仍为 1。
+
+**1.6.0／1.0.4 需要一次维护重启升级。** 核心原先假定普通 Mod 重载一定更换场景对象，这会使保留原对象的结算页永远无法接回。现在由主控通过可选 `reload_commit.expect_scene_change` 声明完成条件：替换或保留。核心仅验证通用对象引用与交接生命周期，不解释关卡、结算或 Session；保留条件绑定 prepare 时的原对象，重试不能换基线或切换条件。ABI 仍为 1，旧调用默认替换模式；新 Bridge 依赖核心 1.0.4。不要覆盖在用核心。
 
 1.5.1 补充只读 `level.screenWipe`，维护退出在已知入场／转场期间有界等待，不再把转场本身当作禁止保存退出的理由；仅需更新 Bridge，Runtime 不变。
 
@@ -37,7 +39,7 @@
 也可单独提交已构建的桥接 DLL：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\reload_bridge.py --hud-port 47792 --dll "<构建目录>\CelesteAIBridge.dll" --expected-version 1.5.1
+.\.venv\Scripts\python.exe tools\reload_bridge.py --hud-port 47792 --dll "<构建目录>\CelesteAIBridge.dll" --expected-version 1.6.0
 ```
 
 该工具只访问现有 HUD 的 `/api/control`，不会创建第二条桥接连接顶掉主控。DLL 路径、可选 PDB 与哈希由主控检查；`--dll` 与部署脚本一样要求常驻核心逐字节相同：主控在 DLL 同目录或仓库 `game-runtime\bin` 查找一同构建的 `CelesteAIRuntime.dll`（也可用 `--runtime-dll` 指定），与游戏实际加载的核心（`hello.runtime_path`，旧桥接没有时按 `Mods\CelesteAIRuntime\bin` 推断）比较哈希，不同或找不到就拒绝，不替换文件。必须先拿到常驻核心确认的 lease 和实际安装路径，才备份并原子替换 payload。备份放在运行目录的 `bridge_reload_backups/<lease>/`，交接阶段保存在 `bridge_reload.json`。
@@ -46,9 +48,11 @@
 
 主控取得共享 action lock，等待当前 step、呈现确认和回放结束；从读取 `hello`／观测到常驻核心确认冻结之间持续占用游戏连接锁，回放线程不能插入一段回放。原录音计量（帧号、两路音频帧与回放帧）以核心冻结后在 prepare／status 回复中报告的数值为准；重试时若交接记录还是旧版的快照，也改用冻结中的数值，避免因准备前多画了一段回放而永远核验失败。重载空档由核心冻结关卡、向 OBS 回复 `N`，不推进桥接帧、录音帧或成片帧，并把冻结期间的游戏循环限制在约每秒 60 次（锁步录制会关闭固定帧率；冻结帧不进录像，限速只省 CPU／显卡）。新逻辑完成加载后，核验原存档、SID、side、房间、章节计时、桥接帧号、录音计量、注入按键绑定及原录制目录，再结束交接并恢复重载前的用户暂停状态。
 
-实际卸载／加载仍走 **`Everest.Loader.ReloadMod` 的普通生命周期**，包含其默认的 `ReloadLevel`：当前房间会重建，玩家状态回到 Normal，手持物、跟随物等按 Everest 原行为处理。这不是保持原 Level 对象和所有玩家内部状态的“无副作用热补丁”；它不重启整个章节、不返回地图。存档、SID、side、房间和章节计时由 Bridge 的快照导入与主控观测核验。重试时，核心只按本次提交时的场景对象判断是否完成本次加载，不会因为上一次失败尝试已替换场景而提前就绪。
+实际卸载／加载仍走 **`Everest.Loader.ReloadMod` 的普通生命周期**。在 `Level` 中，其默认 `ReloadLevel` 会重建房间，玩家状态回到 Normal，手持物、跟随物等按 Everest 原行为处理；`transitioning=true` 的换房过渡沿用 Everest 的复活点调整，不额外拒绝或代跑过渡。在 `AreaComplete` 结算页，Everest 的 `ReloadLevel` 不做房间重建，受控重载保留同一个结算对象及界面进度，不代按确认。主控分别核验房间身份，或结算 Session 与 UI；两种路径都核验冻结帧与录像计量。
 
-剧情、死亡、暂停、游戏冻结、结算标记或玩家暂不可操作，不再作为一刀切拒绝条件；维护重载接受普通房间重建带来的临时状态回退，并在 `bridge_reload.json.room_rebuild` 记录这一语义。主控仍要求可核验的已加载 Level 及冻结动作边界；Bridge 等待正在执行的动作、呈现确认、回放与真实加载／保存结束。当前范围不支持菜单、地图等非 Level 场景，这属于 Bridge／主控的接口范围，不是 Runtime 的场景策略。
+剧情、死亡、暂停、游戏冻结、结算标记或玩家暂不可操作，不作为一刀切拒绝条件；`bridge_reload.json.scene_mode` 与 `room_rebuild` 记录替换房间或保留结算的实际语义。若两次查询中的任一次仍在自动加载／退出场景，主控使用内部 `reload_ready` 截断等到目的场景，在其更新前停止，输入消耗必须为 0；加载帧单独计量，之后重新读取冻结状态及存档身份，再开始 prepare。不会凭过期 `hello.frozen` 拒绝刚完成的加载，也不确认明信片、结算或切换章节。加载等待使用原重载期限，超时会取消本次等待、不替换文件或停止录像；`--retry` 在新冻结边界重试，保留原更新请求与用户暂停状态。
+
+支持的重载目标为 `Level` 和 `AreaComplete`。加载结束到明信片、菜单或其他未适配场景时，停止并说明原因，仍不消费按键。任务 `done` 本身不禁止重载：原主控仍持有连接且桥接 Active 时可以维护；已结束的任务保持 done／暂停，不自动恢复模型或旧动作。原主控已关闭连接时不会为了重载另连接管游戏。
 
 Bridge 的 schema-1 快照新增可选 `identity`，新快照严格校验游戏身份，校验失败继续冻结；旧快照没有此字段时保留兼容并记录日志，仍由主控在 `reload_finish` 前核对观测。ABI 保持 1，不自动修改旧会话、存档或录制。
 

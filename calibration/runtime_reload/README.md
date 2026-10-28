@@ -1,5 +1,9 @@
 # 常驻运行时重载验收
 
+1.6.0／1.0.4 的新增边界：原生检查执行通用 preserve 模式，核验 AreaComplete 原对象保持、同 Session 的错误新对象拒绝，以及失败重试不能重定原引用或切换模式。`calibration/chapter_reset` 另执行普通／锁步真实 Tick，从 LevelLoader／LevelExit／OverworldLoader 到 Level／AreaComplete／Overworld 都以 `reload_ready`、0 输入消耗截断；旧 `chapter_loaded` 行为不变。Python 回归覆盖 hello/observe 加载完成竞争、真实 socket 超时取消、重试和 done 但仍持有连接的维护。
+
+本机私有验收证据位于 `local/reload-boundaries-private/`：实际普通 Everest ReloadMod、同 IPC／clock／双 PCM 接收句柄，加载等待与真实结算分别核验。正加载帧验收使用私有测试模块暂缓 LevelLoader.Update 60 ticks，让真实 StartLevel 延后；不改 Loaded、Scene 或生产代码，另保留无需延迟的 0 帧竞争窗口验收。该接收器替代 OBS，不代表重新验收了真实 OBS 编码器。
+
 构建元数据回归（仅构建，不安装或连接游戏）：
 
 ```powershell

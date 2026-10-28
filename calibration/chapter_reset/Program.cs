@@ -292,9 +292,35 @@ using (var snapshot = new Hook(typeof(StateExtractor).GetMethod("WriteSnapshot",
             false, "level", new SnapshotOptions(), false);
         Check(job.Finished && job.StopReason == "chapter_loaded", "Existing chapter did not stop before input");
     }
+    foreach (bool locked in new[] { false, true }) {
+        foreach (Scene loading in new Scene[] {
+                (LevelExit)RuntimeHelpers.GetUninitializedObject(typeof(LevelExit)),
+                (LevelLoader)RuntimeHelpers.GetUninitializedObject(typeof(LevelLoader)),
+                (OverworldLoader)RuntimeHelpers.GetUninitializedObject(typeof(OverworldLoader)) })
+        foreach (Scene loaded in new Scene[] { Level(),
+                (AreaComplete)RuntimeHelpers.GetUninitializedObject(typeof(AreaComplete)),
+                (Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld)) }) {
+            Scene(loading);
+            var job = new StepJob(101, new() { InputFrame.Parse("C") }, new[] { "reload_ready" }, 4,
+                false, "level", new SnapshotOptions(), false);
+            typeof(Bridge).GetField("job", flags)!.SetValue(null, job);
+            int updates = 0; received = null;
+            typeof(Bridge).GetMethod(locked ? "LockstepTick" : "NormalTick", flags)!.Invoke(null,
+                new object[] { (Action)(() => { updates++; Scene(loaded); }) });
+            using var response = System.Text.Json.JsonDocument.Parse(received!);
+            Check(updates == 1 && job.Finished && job.StopReason == "reload_ready" && job.LoadingFrames == 1 &&
+                response.RootElement.GetProperty("result").GetProperty("consumed").GetInt32() == 0,
+                "Reload boundary consumed input or advanced the loaded scene: " + loaded.GetType().Name);
+            typeof(Bridge).GetField("pendingAck", flags)!.SetValue(null, null);
+            var alreadyLoaded = new StepJob(102, new() { InputFrame.Parse("C") }, new[] { "reload_ready" }, 1,
+                false, "level", new SnapshotOptions(), false);
+            Check(alreadyLoaded.StopReason == "reload_ready", "Already loaded scene failed to stop before input");
+        }
+    }
     typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, false);
 }
 Console.WriteLine("PASS: production normal/lockstep loading ticks freeze at first chapter scene, preserve input plan and loading accounting");
+Console.WriteLine("PASS: reload_ready stops LevelLoader/LevelExit/OverworldLoader to Level/AreaComplete/Overworld before consuming confirmation in normal and lockstep ticks");
 
 // Install production hooks on both actual PICO-8 entry methods. The blocked path
 // uses the original methods, with no substituted interaction/cutscene callback.

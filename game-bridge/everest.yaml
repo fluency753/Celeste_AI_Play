@@ -1,9 +1,9 @@
 - Name: CelesteAIBridge
-  Version: 1.5.1
+  Version: 1.6.0
   DLL: bin/CelesteAIBridge.dll
   SupportsCodeReload: false
   Dependencies:
     - Name: CelesteAIRuntime
-      Version: 1.0.3
+      Version: 1.0.4
     - Name: EverestCore
       Version: 1.5935.0

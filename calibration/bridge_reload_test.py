@@ -8,6 +8,7 @@ import copy
 import json
 from pathlib import Path
 import socket
+import socketserver
 import tempfile
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from orchestrator.config import RunConfig
 from orchestrator.control import RunControl
 from orchestrator.metrics import Metrics
 from orchestrator.session_controls import SessionControls
+from tools.bridge_client import BridgeClient
 
 
 class Resident:
@@ -35,6 +37,7 @@ class Resident:
         self.busy = 0
         self.done = False
         self.cfg = SimpleNamespace()
+        self.client = SimpleNamespace(timeout=600, reconnect=lambda: None)
         self.resets = 0
         self.after_change = None
         self.replays = 3
@@ -53,7 +56,8 @@ class Resident:
     def bridge_call(self, command, **args):
         self.calls.append((command, args))
         if command == 'hello':
-            hello = {'bridge_reload': 1, 'bridge': self.version, 'frame': 18, 'frozen': True,
+            hello = {'bridge_reload': 1, 'bridge': self.version, 'frame': self.obs.get('frame', 18), 'frozen': True, 'active': True,
+                     'reload_scene_modes': True, 'chapter_loaded_stop': True, 'reload_ready_stop': True,
                      'entry_guard': True, 'chapter_reset_guard': True, 'action_policy': 1, 'pico8_entry_guard': True,
                      'input_reinit_guard': True, 'input_bindings_ok': self.bindings_ok,
                      'input_binding_mismatches': [] if self.bindings_ok else ['Grab', 'mod:SpeedrunTool.LoadState'],
@@ -97,7 +101,7 @@ class Resident:
         reply = {'stage': self.stage, 'lease': self.lease if self.stage != 'idle' else None,
                  'payload_path': self.target, 'payload_version': self.version, 'error': 'bad build' if self.fail else None,
                  'holding': self.holding(), 'abortable': self.stage == 'prepared', 'restart_required': False,
-                 'frame': 18, 'record_audio_active': True, 'record_audio_frames': 15, 'record_audio_replay_frames': self.replays}
+                 'frame': self.obs.get('frame', 18), 'record_audio_active': True, 'record_audio_frames': 15, 'record_audio_replay_frames': self.replays}
         if self.runtime:
             reply['runtime_path'] = self.runtime
         return reply
@@ -158,6 +162,225 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertEqual([c for c, _ in self.session.calls].count('reload_finish'), 1)
         self.assertEqual(self.session.resets, 1)
         self.assertFalse(any(c in {'record', 'step', 'advance', 'deactivate'} for c, _ in self.session.calls))
+
+    def test_loading_waits_at_first_loaded_boundary_before_prepare_and_file_replace(self):
+        original = self.session.bridge_call
+        loaded = copy.deepcopy(self.session.obs)
+        self.session.obs = {'scene': 'LevelLoader', 'frame': 17, 'save': loaded['save']}
+        def call(command, **args):
+            if command == 'step':
+                self.session.calls.append((command, args))
+                self.assertEqual(self.target.read_bytes(), b'previous payload')
+                self.assertEqual(args['inputs'], ['1'])
+                self.assertEqual(args['stop_on'], ['reload_ready'])
+                self.session.obs = loaded
+                return {'obs': loaded, 'result': {'stop': 'reload_ready', 'consumed': 0, 'loadingFrames': 1}}
+            value = original(command, **args)
+            if command == 'hello': value['frozen'] = self.session.obs['scene'] == 'Level'
+            return value
+        self.session.bridge_call = call
+        progress = []
+        result = reload_bridge(self.session, self.root, self.options, progress=progress.append)
+        commands = [command for command, _ in self.session.calls]
+        self.assertLess(commands.index('step'), commands.index('reload_prepare'))
+        self.assertEqual(result['loading_wait']['consumed'], 0)
+        self.assertEqual(result['loading_wait']['loading_frames'], 1)
+        self.assertEqual(result['before']['scene'], 'Level')
+        self.assertIn('加载', progress[0])
+
+    def test_loading_completion_between_hello_and_observe_refreshes_frozen_boundary(self):
+        original = self.session.bridge_call
+        first = True
+        def call(command, **args):
+            nonlocal first
+            if command == 'step':
+                self.session.calls.append((command, args))
+                return {'obs': self.session.obs, 'result': {'stop': 'reload_ready', 'consumed': 0, 'loadingFrames': 0}}
+            reply = original(command, **args)
+            if command == 'hello' and first:
+                first = False
+                reply.update(scene='LevelLoader', frozen=False)
+            return reply
+        self.session.bridge_call = call
+        result = reload_bridge(self.session, self.root, self.options)
+        self.assertEqual(result['phase'], 'finished')
+        self.assertEqual(result['loading_wait']['source_scene'], 'LevelLoader')
+        self.assertEqual(result['loading_wait']['consumed'], 0)
+
+    def test_loading_timeout_cancels_only_wait_and_retry_preserves_original_request(self):
+        original = self.session.bridge_call
+        loaded = copy.deepcopy(self.session.obs)
+        self.session.obs = {'scene': 'LevelLoader', 'frame': 17, 'save': loaded['save']}
+        timeout = True
+        def call(command, **args):
+            if command in {'step', 'cancel'}:
+                self.session.calls.append((command, args))
+                if command == 'cancel': return {'ok': True}
+                if timeout: raise TimeoutError('loading did not complete')
+                self.session.obs = loaded
+                return {'obs': loaded, 'result': {'stop': 'reload_ready', 'consumed': 0, 'loadingFrames': 1}}
+            value = original(command, **args)
+            if command == 'hello': value['frozen'] = self.session.obs['scene'] == 'Level'
+            return value
+        self.session.bridge_call = call
+        with self.assertRaisesRegex(BridgeReloadError, '已取消等待'):
+            reload_bridge(self.session, self.root, {**self.options, 'timeout_s': 1}, owner_was_paused=False)
+        self.assertEqual(self.target.read_bytes(), b'previous payload')
+        self.assertNotIn('reload_prepare', [command for command, _ in self.session.calls])
+        self.assertEqual([command for command, _ in self.session.calls].count('cancel'), 1)
+        timeout = False
+        result = reload_bridge(self.session, self.root, {'retry': True}, owner_was_paused=True)
+        self.assertEqual(result['phase'], 'finished')
+        self.assertIs(result['owner_was_paused'], False)
+        self.assertEqual(result['initial_timeout_s'], 1)
+        self.assertEqual(self.target.read_bytes(), b'new payload')
+        # An explicit new limit replaces the old one; later sparse retries
+        # inherit it rather than receiving producer-inserted defaults.
+        self.session.obs = {'scene': 'LevelLoader', 'frame': 17, 'save': loaded['save']}
+        timeout = True
+        with self.assertRaises(BridgeReloadError):
+            reload_bridge(self.session, self.root, {**self.options, 'timeout_s': 1})
+        with self.assertRaises(BridgeReloadError):
+            reload_bridge(self.session, self.root, {'retry': True, 'timeout_s': 2})
+        timeout = False
+        self.assertEqual(reload_bridge(self.session, self.root, {'retry': True})['initial_timeout_s'], 2)
+
+    def test_control_queue_preserves_explicit_fields_before_worker_defaults(self):
+        control = RunControl(self.root)
+        control.enqueue('bridge_reload', '{"retry":true}')
+        control.enqueue('bridge_reload', '{"retry":true,"timeout_s":2}')
+        values = [json.loads(row['text']) for row in control.pending()]
+        self.assertEqual(values, [{'retry': True}, {'retry': True, 'timeout_s': 2}])
+        self.assertEqual(options({}, fill_defaults=False), {})
+        self.assertEqual(options({})['timeout_s'], 120)
+
+    def test_real_socket_loading_timeout_reconnects_only_owner_cancels_and_retries(self):
+        resident = self.session
+        loaded = copy.deepcopy(resident.obs)
+        resident.obs = {'scene': 'LevelLoader', 'frame': 17, 'save': loaded['save']}
+        state = {'timeout': True, 'pending': False, 'cancels': 0, 'steps': 0}
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(handler):
+                for line in handler.rfile:
+                    request = json.loads(line)
+                    command = request.pop('cmd'); ident = request.pop('id')
+                    if command == 'step':
+                        state['steps'] += 1
+                        if state['timeout']:
+                            state['pending'] = True
+                            continue  # The real buffered socket reader must time out.
+                        resident.obs = loaded
+                        reply = {'obs': loaded, 'result': {'consumed': 0, 'loadingFrames': 1, 'stop': 'reload_ready'}}
+                    elif command == 'cancel':
+                        state.update(pending=False, cancels=state['cancels'] + 1)
+                        reply = {}
+                    else:
+                        reply = Resident.bridge_call(resident, command, **request)
+                        if command == 'hello': reply['frozen'] = resident.obs['scene'] == 'Level'
+                    handler.wfile.write((json.dumps({'ok': True, 'id': ident, **reply}) + '\n').encode())
+                    handler.wfile.flush()
+        class Server(socketserver.ThreadingTCPServer):
+            daemon_threads = True
+        with Server(('127.0.0.1', 0), Handler) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+            client = BridgeClient(port=server.server_address[1], timeout=30)
+            original_cancel = lambda: True  # A completed task must not cancel owner maintenance.
+            client.cancel_check = original_cancel
+            resident.client, resident.bridge_call = client, client.call
+            try:
+                with self.assertRaisesRegex(BridgeReloadError, '已取消等待'):
+                    reload_bridge(resident, self.root, {**self.options, 'timeout_s': 1})
+                self.assertFalse(state['pending'])
+                self.assertEqual(state['cancels'], 1)
+                self.assertEqual(client.reconnects, 1)
+                self.assertIs(client.cancel_check, original_cancel)
+                self.assertEqual(self.target.read_bytes(), b'previous payload')
+                state['timeout'] = False
+                result = reload_bridge(resident, self.root, {'retry': True})
+                self.assertEqual(result['phase'], 'finished')
+                self.assertEqual(state['steps'], 2)
+                self.assertIs(resident.client, client)
+            finally:
+                client.close()
+                server.shutdown(); thread.join(timeout=2)
+
+    def test_loading_never_confirms_a_postcard_or_accepts_another_save(self):
+        original = self.session.bridge_call
+        loaded = copy.deepcopy(self.session.obs)
+        self.session.obs = {'scene': 'LevelLoader', 'frame': 17, 'save': loaded['save']}
+        def call(command, **args):
+            if command == 'step':
+                self.session.calls.append((command, args))
+                self.session.obs = {'scene': 'LevelEnter', 'frame': 18, 'save': loaded['save'], 'storyInput': 'postcard'}
+                return {'obs': self.session.obs, 'result': {'stop': 'reload_ready', 'consumed': 0, 'loadingFrames': 1}}
+            return original(command, **args)
+        self.session.bridge_call = call
+        with self.assertRaisesRegex(BridgeReloadError, 'LevelEnter'):
+            reload_bridge(self.session, self.root, self.options)
+        self.assertEqual(self.target.read_bytes(), b'previous payload')
+        self.assertEqual([command for command, _ in self.session.calls].count('step'), 1)
+
+    def test_results_use_preserve_mode_and_verify_ui_without_any_input(self):
+        level = self.session.obs.pop('level')
+        self.session.obs.update(scene='AreaComplete', completion=level, ui={'type': 'AreaComplete', 'confirmReady': False})
+        result = reload_bridge(self.session, self.root, self.options)
+        commit = next(args for command, args in self.session.calls if command == 'reload_commit')
+        self.assertIs(commit['expect_scene_change'], False)
+        self.assertEqual(result['scene_mode'], 'preserve')
+        self.assertEqual(result['before']['completion']['ui']['confirmReady'], False)
+        self.assertFalse(any(command in {'step', 'advance', 'record'} for command, _ in self.session.calls))
+
+    def test_exit_loader_to_results_waits_without_advancing_or_confirming_results(self):
+        original = self.session.bridge_call
+        completion = self.session.obs.pop('level')
+        results = {**self.session.obs, 'scene': 'AreaComplete', 'completion': completion,
+                   'ui': {'type': 'AreaComplete', 'confirmReady': False}}
+        self.session.obs = {'scene': 'LevelExit', 'frame': 17, 'save': results['save']}
+        def call(command, **args):
+            if command == 'step':
+                self.session.calls.append((command, args))
+                self.assertEqual(args['stop_on'], ['reload_ready'])
+                self.session.obs = results
+                return {'obs': results, 'result': {'consumed': 0, 'loadingFrames': 1, 'stop': 'reload_ready'}}
+            value = original(command, **args)
+            if command == 'hello':
+                value['frozen'] = self.session.obs['scene'] == 'AreaComplete'
+            return value
+        self.session.bridge_call = call
+        result = reload_bridge(self.session, self.root, self.options)
+        self.assertEqual(result['phase'], 'finished')
+        self.assertEqual(result['scene_mode'], 'preserve')
+        self.assertEqual(result['loading_wait']['consumed'], 0)
+        self.assertFalse(self.session.obs['ui']['confirmReady'])
+
+    def test_results_need_new_core_and_changed_ui_stays_held(self):
+        level = self.session.obs.pop('level')
+        self.session.obs.update(scene='AreaComplete', completion=level, ui={'type': 'AreaComplete', 'confirmReady': False})
+        original = self.session.bridge_call
+        def no_cap(command, **args):
+            value = original(command, **args)
+            if command == 'hello': value.pop('reload_scene_modes')
+            return value
+        self.session.bridge_call = no_cap
+        with self.assertRaisesRegex(BridgeReloadError, '核心 1.0.4'):
+            reload_bridge(self.session, self.root, self.options)
+        self.assertNotIn('reload_prepare', [command for command, _ in self.session.calls])
+        def change_ui(command, **args):
+            value = original(command, **args)
+            if command == 'observe' and self.session.stage == 'ready':
+                value['obs']['ui']['confirmReady'] = True
+            return value
+        self.session.bridge_call = change_ui
+        with self.assertRaisesRegex(BridgeReloadError, '结算身份或 UI'):
+            reload_bridge(self.session, self.root, self.options)
+        self.assertTrue(self.session.holding())
+
+    def test_transitioning_level_keeps_native_replacement_mode(self):
+        self.session.obs['level']['transitioning'] = True
+        result = reload_bridge(self.session, self.root, self.options)
+        commit = next(args for command, args in self.session.calls if command == 'reload_commit')
+        self.assertTrue(commit['expect_scene_change'])
+        self.assertEqual(result['scene_mode'], 'replace')
 
     def test_missing_pico_guard_after_reload_keeps_hold_until_verified_retry(self):
         original = self.session.bridge_call
@@ -667,6 +890,42 @@ class Controls(SessionControls):
 
 
 class ReloadControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_task_with_owned_connection_can_reload_but_never_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root/'CelesteAIBridge.dll'; target.write_bytes(b'installed')
+            session = Resident(target)
+            session.done = True
+            session.bridge_reload_supported = True
+            owner = Controls(root, session)
+            owner.chat_only = True
+            self.assertTrue(owner._bridge_reload_status()['bridge_reload_control'])
+            owner.control.enqueue('bridge_reload', '{}')
+            await owner._reload_bridge(owner.control.pending()[0])
+            self.assertTrue(session.done)
+            self.assertTrue(owner.paused)
+            self.assertEqual(owner.pending_messages, [])
+            self.assertEqual(owner.control.snapshot()['actions'][0]['status'], 'submitted')
+            session.client.sock = SimpleNamespace(fileno=lambda: -1)
+            self.assertFalse(owner._bridge_reload_status()['bridge_reload_control'])
+            session.client = None
+            self.assertFalse(owner._bridge_reload_status()['bridge_reload_control'])
+            with self.assertRaisesRegex(ValueError, '没有游戏连接'):
+                await owner._reload_bridge({'id': 123, 'text': '{}'})
+
+    async def test_results_notification_describes_preserved_scene_not_room_rebuild(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root/'CelesteAIBridge.dll'; target.write_bytes(b'installed')
+            session = Resident(target)
+            session.obs.update(scene='AreaComplete', completion=session.obs.pop('level'),
+                               ui={'type': 'AreaComplete', 'confirmReady': True})
+            owner = Controls(root, session)
+            owner.control.enqueue('bridge_reload', '{}')
+            await owner._reload_bridge(owner.control.pending()[0])
+            self.assertIn('结算场景保持原对象', owner.pending_messages[-1]['text'])
+            self.assertNotIn('当前房间经', owner.pending_messages[-1]['text'])
+
     async def test_control_waits_for_current_action_and_preserves_pause_on_success(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

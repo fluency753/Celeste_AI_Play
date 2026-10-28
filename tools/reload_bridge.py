@@ -56,7 +56,7 @@ def main():
     parser.add_argument('--runtime-dll', help='与 --dll 一同构建的 CelesteAIRuntime.dll，只用于核对游戏里的核心是否相同'
                                               '（默认在 DLL 同目录或仓库 game-runtime/bin 查找）')
     parser.add_argument('--expected-version', help='要求新桥接的 major.minor.patch 版本')
-    parser.add_argument('--timeout', type=float, default=120, help='重载最长等待秒数（1–300）')
+    parser.add_argument('--timeout', type=float, help='重载最长等待秒数（1–300）；新请求默认120，加载等待重试沿用原值')
     parser.add_argument('--retry', action='store_true', help='用上次失败后保留的 lease 接回，不重复原动作')
     parser.add_argument('--abort', action='store_true',
                         help='撤销尚未提交的重载交接（只在常驻核心确认原桥接仍在、游戏未变化时生效），并还原已替换的桥接文件')
@@ -69,7 +69,9 @@ def main():
     try:
         if args.direct and not args.abort:
             raise ValueError('--direct 只用于 --abort')
-        data = {'timeout_s': args.timeout, 'retry': args.retry}
+        data = {'retry': args.retry}
+        if args.timeout is not None:
+            data['timeout_s'] = args.timeout
         if args.abort:
             data['abort'] = True
         if args.dll:
@@ -78,7 +80,7 @@ def main():
             data['runtime_dll'] = args.runtime_dll
         if args.expected_version:
             data['expected_version'] = args.expected_version
-        data = options(data)
+        data = options(data, fill_defaults=False)
         base = f'http://127.0.0.1:{args.hud_port}'
         if args.direct:
             if owner_alive(base):
@@ -86,7 +88,7 @@ def main():
             run_dir = Path(args.run_dir).resolve() if args.run_dir else None
             if run_dir is None:
                 print('未指定 --run-dir：若原主控已替换桥接文件，本次不会还原，下次启动游戏会载入替换后的文件', file=sys.stderr)
-            result = abort_direct(args.bridge_port, run_dir, args.timeout)
+            result = abort_direct(args.bridge_port, run_dir, args.timeout if args.timeout is not None else 120)
             print(f'已撤销尚未提交的重载交接（lease {result.get("lease")}），原桥接继续运行；'
                   + (f'已还原 {len(result.get("restored") or [])} 个文件。' if result.get('restored') else '没有需要还原的文件。'))
             return 0
@@ -104,7 +106,7 @@ def main():
             print(f'撤销请求已排入在用主控（指令 {ident}），等待当前动作结束。', flush=True)
         else:
             print(f'桥接重载已排入在用主控（指令 {ident}），等待安全动作边界；不停止录像。', flush=True)
-        deadline = time.monotonic() + args.timeout + 15
+        deadline = time.monotonic() + (args.timeout if args.timeout is not None else 300) + 15
         while time.monotonic() < deadline:
             current = request(base)
             if current.get('run') != run:

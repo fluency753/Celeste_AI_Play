@@ -340,11 +340,18 @@ class SessionControls:
         except asyncio.CancelledError:
             raise
 
+    def _owns_bridge_connection(self):
+        client = getattr(self.session, 'client', None) if self.session is not None else None
+        if client is None:
+            return False
+        sock = getattr(client, 'sock', None)
+        return sock is None or sock.fileno() >= 0
+
     async def _reload_bridge(self, row):
-        if self.session is None or self.session.done or self.chat_only:
-            raise ValueError('当前没有在试玩，不能重载桥接')
+        if not self._owns_bridge_connection():
+            raise ValueError('当前主控已没有游戏连接，不能重载桥接；不自动另连或接管游戏')
         from .bridge_reload import reload_bridge, options
-        request = options(json.loads(row['text'] or '{}'))
+        request = options(json.loads(row['text'] or '{}'), fill_defaults=False)
         was_paused = self.paused
         started_pause = self.pause_at is None
         self.paused, self.pausing = True, True
@@ -358,7 +365,8 @@ class SessionControls:
                 self.metrics.update(status='paused')
                 cancel = threading.Event()
                 worker = asyncio.create_task(asyncio.to_thread(reload_bridge, self.session, self.run_dir, request, cancel=cancel,
-                                                              owner_was_paused=was_paused))
+                                                              owner_was_paused=was_paused,
+                                                              progress=lambda text: self.control.mark(row['id'], 'waiting', text)))
                 try:
                     result = await asyncio.shield(worker)
                 except asyncio.CancelledError:
@@ -383,7 +391,7 @@ class SessionControls:
                                       else '重载等待已取消，原录像与交接保留，试玩保持暂停')
                     raise
                 self._bridge_reload_failed = False
-                self.paused = result.get('owner_was_paused', was_paused)
+                self.paused = True if self.session.done else result.get('owner_was_paused', was_paused)
                 if not self.paused and self.pause_at is not None:
                     self.paused_seconds += time.monotonic() - self.pause_at
                     self.pause_at = None
@@ -392,9 +400,15 @@ class SessionControls:
                 # Nothing was committed: the original bridge, room and observation stay valid.
                 self.control.mark(row['id'], 'submitted', '已撤销尚未提交的重载交接，原桥接继续运行，游戏与录像未改变')
                 return
-            self.control.mark(row['id'], 'submitted', f'桥接 {result.get("version")} 已接回，原录像继续')
-            self.pending_messages.append({**row, 'id': 'bridge_reload:' + str(row['id']), 'next_turn': True,
-                'text': '桥接代码已重载并接回，原录像保持连续。当前房间经 Everest 正常重载，主控仍核验原存档与房间。请先重新 observe 核对状态，不沿用旧实体编号，不重复已经执行的动作。'})
+            recording_note = ('原录像继续' if (result.get('before') or {}).get('recording', {}).get('active')
+                              else '原录制状态保持不变')
+            self.control.mark(row['id'], 'submitted', f'桥接 {result.get("version")} 已接回，{recording_note}')
+            if not self.session.done:
+                scene_note = ('结算场景保持原对象与进度，未代按确认。' if result.get('scene_mode') == 'preserve' else
+                              '当前房间经 Everest 正常重载，主控仍核验原存档与房间。')
+                self.pending_messages.append({**row, 'id': 'bridge_reload:' + str(row['id']), 'next_turn': True,
+                    'text': '桥接代码已重载并接回，' + recording_note + '。' + scene_note +
+                            '请先重新 observe 核对状态，不沿用旧实体编号，不重复已经执行的动作。'})
         except Exception as exc:
             self._bridge_reload_failed = getattr(exc, 'reload_held', False)
             self.paused = True
@@ -405,7 +419,7 @@ class SessionControls:
             self.pausing = False
 
     def _bridge_reload_status(self):
-        return {'bridge_reload_control': bool(self.session is not None and not self.session.done and not self.chat_only
+        return {'bridge_reload_control': bool(self._owns_bridge_connection()
                                              and getattr(self.session, 'bridge_reload_supported', False)),
                 'bridge_reload_failed': getattr(self, '_bridge_reload_failed', False)}
 

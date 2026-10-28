@@ -128,11 +128,15 @@ internal sealed class StepJob {
     // Loading frames do not consume the input plan. They still have to stop a
     // restore job at the first chapter scene, before its remaining menu inputs.
     public bool CheckChapterLoaded() {
+        // Owner maintenance can wait through an automatic loader to any scene
+        // without consuming its placeholder input (including results/menus).
+        if (StopReason == null && stopOn.Contains("reload_ready") && Engine.Scene != null && !Bridge.IsLoading())
+            StopReason = "reload_ready";
         if (StopReason == null && stopOn.Contains("chapter_loaded") &&
                 Engine.Scene is Level or IntroVignette or LevelEnter && !Bridge.IsLoading()) {
             StopReason = "chapter_loaded";
         }
-        return StopReason == "chapter_loaded";
+        return StopReason is "chapter_loaded" or "reload_ready";
     }
 
     public bool AllowMapEntry(OuiChapterPanel panel, string? checkpoint) {

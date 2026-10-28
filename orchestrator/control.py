@@ -35,7 +35,7 @@ class RunControl:
         text = str(text).strip()
         if kind == 'bridge_reload':
             from .bridge_reload import options
-            text = json.dumps(options(json.loads(text or '{}')), ensure_ascii=False)
+            text = json.dumps(options(json.loads(text or '{}'), fill_defaults=False), ensure_ascii=False)
         if kind == 'action_permissions':
             from .action_policy import validate_update
             validate_update(json.loads(text))

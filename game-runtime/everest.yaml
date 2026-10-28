@@ -1,5 +1,5 @@
 - Name: CelesteAIRuntime
-  Version: 1.0.3
+  Version: 1.0.4
   DLL: bin/CelesteAIRuntime.dll
   SupportsCodeReload: false
   Dependencies:

@@ -1,7 +1,8 @@
 """Owner-only payload reload, on the existing session connection and action lock.
 
-This module never starts/stops recording, creates a bridge connection, advances
-the game, or retries an act. The resident runtime owns the hold across failure.
+This module never starts/stops recording, creates a second owner, or retries an
+act. It can wait through automatic loading at a zero-input scene boundary.
+The resident runtime owns the hold across failure.
 An abort only releases a prepared, never-committed hold that the runtime itself
 reports as provably unchanged.
 """
@@ -21,7 +22,7 @@ class BridgeReloadError(RuntimeError):
     pass
 
 
-def options(data):
+def options(data, *, fill_defaults=True):
     if not isinstance(data, dict) or set(data) - {'dll', 'runtime_dll', 'expected_version', 'timeout_s', 'retry', 'abort'}:
         raise ValueError('桥接重载参数只支持 dll、runtime_dll、expected_version、timeout_s、retry、abort')
     result = dict(data)
@@ -52,7 +53,8 @@ def options(data):
         raise ValueError('timeout_s 须为 1–300 秒')
     if 'retry' in result and type(result['retry']) is not bool:
         raise ValueError('retry 须为布尔值')
-    return {**result, 'timeout_s': timeout, 'retry': result.get('retry', False), 'abort': result.get('abort', False)}
+    return ({**result, 'timeout_s': timeout, 'retry': result.get('retry', False), 'abort': result.get('abort', False)}
+            if fill_defaults else result)
 
 
 def _state(reply):
@@ -71,12 +73,15 @@ def _write(path, data):
 def _snapshot(hello, obs):
     level, save = obs.get('level') or {}, obs.get('save') or {}
     plugin = (hello.get('clock') or {}).get('plugin') or {}
-    return {'frame': hello.get('frame', obs.get('frame')), 'scene': obs.get('scene'),
+    result = {'frame': hello.get('frame', obs.get('frame')), 'scene': obs.get('scene'),
             'save': {'name': save.get('name'), 'slot': save.get('slot')},
             'level': {key: level.get(key) for key in ('sid', 'side', 'room', 'chapterTimeTicks')},
             'recording': {'dir': plugin.get('dir'), 'active': plugin.get('recording') is True or plugin.get('state') == 'recording',
                           'audio': hello.get('record_audio_active'),
                           'frames': hello.get('record_audio_frames'), 'replays': hello.get('record_audio_replay_frames')}}
+    if obs.get('scene') == 'AreaComplete':
+        result['completion'] = {**(obs.get('completion') or {}), 'ui': obs.get('ui')}
+    return result
 
 
 def _verify(before, hello, obs):
@@ -84,6 +89,8 @@ def _verify(before, hello, obs):
     for key in ('frame', 'scene', 'save', 'level'):
         if before[key] != after[key]:
             raise BridgeReloadError(f'重载核验失败：{key} 已变化（要求 {before[key]!r}，实际 {after[key]!r}）；保持暂停')
+    if before.get('completion') != after.get('completion'):
+        raise BridgeReloadError('重载核验失败：结算身份或 UI 已变化；保持暂停')
     if hello.get('frozen') is not True:
         raise BridgeReloadError('重载核验失败：游戏尚未保持冻结')
     if before['recording'] != after['recording']:
@@ -248,19 +255,31 @@ def _replace_payload(source, installed, directory):
     return records
 
 
-def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=None):
+def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=None, progress=None):
     """Called by SessionControls only while holding its action_lock."""
-    request = options(request)
+    explicit_request = options(request, fill_defaults=False)
+    request = options(explicit_request)
     run_dir = Path(run_dir) if run_dir is not None else None
     path = run_dir / 'bridge_reload.json' if run_dir is not None else None
     if path is None and not request['abort']:
         raise BridgeReloadError('缺少运行目录，不能记录重载交接')
+    # A wait before prepare has no lease or file replacement to resume. Retry
+    # its recorded request against a fresh loaded boundary, not an old snapshot.
+    cancel_pending_loading = False
+    if request['retry'] and path is not None and path.exists():
+        waiting = json.loads(path.read_text(encoding='utf-8'))
+        if (not waiting.get('lease') and not waiting.get('prepare_outcome_unknown')
+                and waiting.get('resume_phase', waiting.get('phase')) == 'waiting_loading'):
+            request = options({**waiting.get('request', {}), **explicit_request, 'retry': False})
+            if type(waiting.get('owner_was_paused')) is bool:
+                owner_was_paused = waiting['owner_was_paused']
+            cancel_pending_loading = waiting.get('connection_failed') is True
     deadline = time.monotonic() + request['timeout_s']
     record = {}
     already_finished = False
     reuse_ready_attempt = False
 
-    def call(command, **args):
+    def call(command, *, _loading=False, **args):
         if cancel is not None and cancel.is_set():
             raise BridgeReloadError('重载等待已取消；保留原交接与录像，不解除常驻核心的冻结')
         remaining = deadline - time.monotonic()
@@ -279,7 +298,7 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                     raise
             timeout, connect_timeout = sock.gettimeout(), client.timeout
             try:
-                client.timeout = min(remaining, 10)
+                client.timeout = remaining if _loading else min(remaining, 10)
                 sock.settimeout(client.timeout)
                 return session.bridge_call(command, **args)
             except OSError as exc:
@@ -293,6 +312,74 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                         current_socket.settimeout(timeout)
                     except OSError:
                         pass  # A failed connection must not hide the original control error.
+
+    def wait_for_loading(hello, obs):
+        nonlocal record
+        loading_scenes = {'LevelLoader', 'LevelExit', 'OverworldLoader', 'GameLoader'}
+        source_scene = hello.get('scene') if hello.get('scene') in loading_scenes else obs.get('scene')
+        if hello.get('reload_ready_stop') is not True:
+            raise BridgeReloadError('等待加载需要 Bridge 1.6.0 的 reload_ready 截断；未发送输入或替换文件')
+        record = {'phase': 'waiting_loading', 'request': dict(request), 'started_wall': time.time(),
+                  'owner_was_paused': owner_was_paused}
+        _write(path, record)
+        if progress:
+            progress('正在等待关卡加载完成，将在首个关卡冻结边界重载；不确认剧情或结算')
+        client = getattr(session, 'client', None)
+        previous_check = getattr(client, 'cancel_check', None)
+        try:
+            if client is not None:
+                client.cancel_check = lambda: (cancel is not None and cancel.is_set()) or time.monotonic() >= deadline
+            # The placeholder neutral frame must not execute: reload_ready
+            # stops before the destination scene updates, including results.
+            reply = call('step', _loading=True, inputs=['1'], stop_on=['reload_ready'], progress=0,
+                         image=False, entities=False, tiles=False, allow_reconnect=False)
+        except OSError as exc:
+            confirmed = False
+            try:
+                # A socket makefile cannot be reused after a read timeout.
+                # Reconnect only this owner, cancel the outstanding wait, and
+                # never resend its step or any agent action.
+                if client is not None and getattr(client, 'sock', None) is not None:
+                    old_timeout = client.timeout
+                    try:
+                        client.timeout = 3
+                        client.reconnect()
+                        session.bridge_call('cancel', allow_reconnect=False)
+                    finally:
+                        client.timeout = old_timeout
+                        client.sock.settimeout(old_timeout)
+                else:
+                    session.bridge_call('cancel', allow_reconnect=False)
+                confirmed = True
+            except Exception:
+                pass
+            error = BridgeReloadError('加载等待超时或连接中断；未准备重载、未替换文件、未停止录像。'
+                                      + ('已取消等待，可用 --retry 重试。' if confirmed else
+                                         '尚未确认等待取消，保持暂停，请恢复原连接后用 --retry。'))
+            error.bridge_connection_failed = not confirmed
+            raise error from exc
+        finally:
+            if client is not None:
+                client.cancel_check = previous_check
+        result = reply.get('result') or {}
+        record['loading_wait'] = {'source_scene': source_scene, 'stop': result.get('stop'),
+                                  'consumed': result.get('consumed'), 'loading_frames': result.get('loadingFrames', 0)}
+        _write(path, record)
+        if result.get('consumed') != 0 or result.get('stop') != 'reload_ready':
+            raise BridgeReloadError('加载等待未在首个关卡边界停止；保持暂停，未进入重载或替换文件')
+        if time.monotonic() >= deadline or (cancel is not None and cancel.is_set()):
+            raise BridgeReloadError('加载等待已超时或取消；未进入重载，可用 --retry 重试')
+        loaded_hello = call('hello')
+        loaded_obs = call('observe', image=False, scope='room', fields=True)['obs']
+        for key in ('slot', 'name'):
+            expected = (obs.get('save') or {}).get(key)
+            if expected is None:
+                expected = getattr(getattr(session, 'cfg', None), 'save_slot' if key == 'slot' else 'save', None)
+            if expected is not None and (loaded_obs.get('save') or {}).get(key) != expected:
+                raise BridgeReloadError('加载后存档身份改变；保持暂停，未进入重载')
+        if progress:
+            progress('加载已完成，正在核验冻结场景并准备重载')
+        return loaded_hello, loaded_obs
 
     def abort_after_rejection(exc):
         # Pre-commit validation failed while the runtime still reports the
@@ -309,6 +396,17 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
         return exc
 
     try:
+        if cancel_pending_loading:
+            client = getattr(session, 'client', None)
+            with getattr(session, 'lock', nullcontext()):
+                if client is not None and getattr(client, 'sock', None) is not None:
+                    old_timeout = client.timeout
+                    try:
+                        client.timeout = min(deadline - time.monotonic(), 3)
+                        client.reconnect()
+                    finally:
+                        client.timeout = old_timeout
+                call('cancel', allow_reconnect=False)
         if request['abort']:
             if path is not None and path.exists():
                 try:
@@ -406,20 +504,39 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                     mismatch = '、'.join(map(str, hello.get('input_binding_mismatches') or [])) or '未报告'
                     raise BridgeReloadError(f'重载前的注入按键绑定已与桥接不一致（{mismatch}）；请先排查，未进入交接')
                 obs = call('observe', image=False, scope='room', fields=True)['obs']
+                if hello.get('active') is not True:
+                    raise BridgeReloadError('桥接控制权已交还；当前主控不再拥有游戏，未进入重载')
+                loading_scenes = {'LevelLoader', 'LevelExit', 'OverworldLoader', 'GameLoader'}
+                if obs.get('scene') in loading_scenes or hello.get('scene') in loading_scenes:
+                    hello, obs = wait_for_loading(hello, obs)
                 if hello.get('frozen') is not True:
                     raise BridgeReloadError('只能在章节已冻结的动作边界重载；未发送游戏输入')
-                if obs.get('scene') != 'Level' or not (obs.get('level') or {}).get('sid'):
-                    raise BridgeReloadError('当前不在可核验的关卡内，暂不支持保持录像的桥接重载')
-                level, save = obs.get('level') or {}, obs.get('save') or {}
-                if (type(hello.get('frame')) is not int or type(save.get('slot')) is not int or not save.get('name')
+                kind = obs.get('scene')
+                if kind not in {'Level', 'AreaComplete'}:
+                    raise BridgeReloadError(f'场景 {kind} 尚无重载交接适配；未确认剧情或结算，未进入重载')
+                if kind == 'AreaComplete' and hello.get('reload_scene_modes') is not True:
+                    raise BridgeReloadError('保留结算场景需要核心 1.0.4 的通用场景交接支持；请先维护升级，未进入重载')
+                level = (obs.get('level') if kind == 'Level' else obs.get('completion')) or {}
+                save = obs.get('save') or {}
+                if (type(hello.get('frame')) is not int or type(save.get('slot')) is not int or not save.get('name') or not level.get('sid')
                         or not level.get('room') or not level.get('side') or type(level.get('chapterTimeTicks')) is not int):
                     raise BridgeReloadError('当前观测缺少完整帧号、存档或章节计时，不能核验无缝重载')
+                if kind == 'AreaComplete' and ((obs.get('ui') or {}).get('type') != 'AreaComplete'
+                                             or type((obs.get('ui') or {}).get('confirmReady')) is not bool):
+                    raise BridgeReloadError('当前结算观测不完整，未进入重载')
                 runtime_check = None
                 if request.get('dll') and hello.get('runtime_path'):
                     runtime_check = _check_runtime(request, _installed_runtime(hello, None))
+                loading_wait = record.get('loading_wait')
                 record = {'phase': 'preparing', 'before': _snapshot(hello, obs), 'started_wall': time.time(),
+                          'initial_timeout_s': request['timeout_s'],
                           'expected_version': request.get('expected_version'),
-                          'room_rebuild': 'Everest 普通重载会重建当前房间；临时剧情、玩家动作、手持物和跟随物不保证保留。'}
+                          'scene_mode': 'replace' if kind == 'Level' else 'preserve',
+                          'room_rebuild': ('Everest 普通重载会重建当前房间；临时剧情、玩家动作、手持物和跟随物不保证保留。'
+                                           if kind == 'Level' else 'Everest 保留原结算场景，不重建房间或确认结算。')}
+                if loading_wait is not None:
+                    record['loading_wait'] = loading_wait
+                record['reload_scene_modes'] = hello.get('reload_scene_modes') is True
                 if runtime_check:
                     record['runtime_check'] = runtime_check
                 if type(owner_was_paused) is bool:
@@ -468,6 +585,8 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
             record.update(phase='committing', commit_outcome_unknown=True)
             _write(path, record)
             args = {'lease': lease}
+            if record.get('reload_scene_modes'):
+                args['expect_scene_change'] = record.get('scene_mode', 'replace') == 'replace'
             if request.get('expected_version'):
                 args['expected_version'] = request['expected_version']
             call('reload_commit', **args)
@@ -491,6 +610,8 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
             raise BridgeReloadError('新桥接缺少受控重载能力，保持暂停')
         from .action_policy import require_capability, require_pico8_guard
         require_capability(hello)
+        if record.get('scene_mode') == 'preserve' and hello.get('reload_scene_modes') is not True:
+            raise BridgeReloadError('新桥接缺少保留场景交接能力；保持暂停')
         try:
             require_pico8_guard(hello)
         except ValueError as exc:

@@ -17,6 +17,7 @@ namespace CelesteAI.Bridge;
 /// </summary>
 public static class BridgeRuntime {
     public const int ContractVersion = 1;
+    public static bool SupportsSceneReloadModes => true;
     public const string PayloadName = "CelesteAIBridge";
     private static readonly object Gate = new();
     private static readonly ConcurrentQueue<Request> Inbox = new();
@@ -26,11 +27,15 @@ public static class BridgeRuntime {
         public string Id = Guid.NewGuid().ToString("N");
         public string Stage = "prepared", Error = "", Snapshot = "", Path = "", ExpectedVersion = "";
         public string SceneIdentity = Guid.NewGuid().ToString("N");
+        // The original held object remains the identity of a preserve-scene
+        // lease across every retry; never rebase it to the latest attempt.
         public Scene? Scene;
-        // The scene current when the latest commit started. Its own ordinary
-        // The loader must replace it before readiness, even on a retry.
+        // Replacement mode waits for this attempt's scene to be replaced,
+        // including when a previous failed attempt already rebuilt the room.
         public Scene? CommitScene;
         public bool ExpectSceneChange;
+        public bool PreserveScene;
+        public bool SceneModeInitialized;
         public long Frame, AttemptAt;
         public Guid PreviousOwner;
         public EverestModuleMetadata? Metadata;
@@ -227,6 +232,14 @@ public static class BridgeRuntime {
         if (current.Metadata == null) throw new InvalidOperationException("Reload metadata is unavailable");
         CheckReverseDependencies(current.Metadata);
         string expected = request.Args.TryGetProperty("expected_version", out var v) ? v.GetString() ?? "" : "";
+        bool expectSceneChange = !current.SceneModeInitialized || !current.PreserveScene;
+        if (request.Args.TryGetProperty("expect_scene_change", out var sceneMode)) {
+            if (sceneMode.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new InvalidOperationException("expect_scene_change must be boolean");
+            expectSceneChange = sceneMode.GetBoolean();
+        }
+        if (current.SceneModeInitialized && current.PreserveScene == expectSceneChange)
+            throw new InvalidOperationException("Scene completion mode cannot change within a lease");
         bool ordinary = FindPayload() != null && current.Metadata.AssemblyContext != null;
         lock (Gate) {
             current.ExpectedVersion = expected;
@@ -236,12 +249,14 @@ public static class BridgeRuntime {
             current.Imported = false;
             current.AttemptAt = Environment.TickCount64;
             current.CommitScene = Engine.Scene;
-            current.ExpectSceneChange = ordinary;
+            current.ExpectSceneChange = ordinary && expectSceneChange;
+            current.PreserveScene = !expectSceneChange;
+            current.SceneModeInitialized = true;
         }
         try {
             if (ordinary) {
-                // The ordinary Everest path intentionally reloads the room.
-                // The resident owner keeps recording and clocks across it.
+                // Follow Everest's ordinary lifecycle. The caller declares
+                // whether completion replaces or preserves the scene object.
                 Everest.Loader.ReloadMod(current.Metadata);
             } else {
                 // A failed ordinary reload can leave a context without a
@@ -301,6 +316,8 @@ public static class BridgeRuntime {
 
     private static void CheckHeldFrame(Lease current) {
         if (Frame != current.Frame) throw new InvalidOperationException("Bridge frame counter changed during reload");
+        if (current.PreserveScene && !ReferenceEquals(Engine.Scene, current.Scene))
+            throw new InvalidOperationException("The scene object changed during a preserve-scene reload");
     }
 
     private static void Finish(Request request) {
@@ -387,6 +404,7 @@ public static class BridgeRuntime {
 
     /// <summary>Caller holds Gate.</summary>
     private static void WriteHoldAdvice(System.Text.Json.Utf8JsonWriter w) {
+        w.WriteBoolean("reload_scene_modes", SupportsSceneReloadModes);
         w.WriteBoolean("abortable", lease != null && AbortBlocker(lease) == null);
         // A hold whose payload metadata is unknown can neither be retried nor released.
         w.WriteBoolean("restart_required", holdingReload && lease?.Stage == "failed" && lease.Metadata == null);

@@ -86,6 +86,15 @@ internal static class StateExtractor {
         if (Engine.Scene is Overworld overworld) {
             WriteMenu(w, overworld);
         }
+        if (Engine.Scene is AreaComplete results) {
+            Session session = results.Session;
+            w.WriteStartObject("completion");
+            w.WriteString("sid", session.Area.SID);
+            w.WriteString("side", session.Area.Mode switch { AreaMode.Normal => "A", AreaMode.BSide => "B", _ => "C" });
+            w.WriteString("room", session.Level);
+            w.WriteNumber("chapterTimeTicks", session.Time);
+            w.WriteEndObject();
+        }
 
         // 暂停菜单（关卡内或序章开场）：主控据此像玩家一样"暂停 → 下移 → 跳过剧情"
         TextMenu? pauseMenu = Engine.Scene switch {
