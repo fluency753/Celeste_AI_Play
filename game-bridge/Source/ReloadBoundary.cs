@@ -1,5 +1,7 @@
 using System;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
 using Celeste;
 using Celeste.Mod;
 using Monocle;
@@ -11,10 +13,17 @@ namespace CelesteAI.Bridge;
 internal static class ReloadBoundary {
     internal sealed record SaveIdentity(int slot, string name);
     internal sealed record SessionIdentity(string sid, string side, string room, long chapterTimeTicks);
-    internal sealed record Identity(string mode, string? scene, SaveIdentity? save, SessionIdentity? session);
+    internal sealed record Identity(string mode, string? scene, SaveIdentity? save, SessionIdentity? session,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool requires_origin_hold = false);
+
+    // loaded marks the end of native background construction. The postcard
+    // field survives RemoveSelf, so ownership is required, not just visibility.
+    internal static bool LoaderPrompt(Scene? scene) => scene is OverworldLoader && StoryText.ScenePostcard(scene) is { Visible: true };
+    internal static bool LoaderPresentation(Scene? scene) => scene is OverworldLoader loader &&
+        Volatile.Read(ref loader.loaded) && LoaderPrompt(loader);
 
     internal static bool AutomaticLoader => Engine.Scene is LevelLoader or LevelExit or GameLoader or
-        OverworldLoader or AssetReloadHelper;
+        AssetReloadHelper || Engine.Scene is OverworldLoader && !LoaderPresentation(Engine.Scene);
 
     internal static bool Waiting => UserIO.Saving || Engine.Scene == null || AutomaticLoader;
 
@@ -30,7 +39,7 @@ internal static class ReloadBoundary {
             SaveData.Instance is { } save ? new(save.FileSlot, save.Name) : null,
             session == null ? null : new(session.Area.SID,
                 session.Area.Mode switch { AreaMode.Normal => "A", AreaMode.BSide => "B", _ => "C" },
-                session.Level, session.Time));
+                session.Level, session.Time), LoaderPresentation(Engine.Scene));
     }
 
     internal static void Write(Utf8JsonWriter writer) {

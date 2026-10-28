@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.7.1";
+    public const string Version = "1.8.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get => BridgeRuntime.Active; private set => BridgeRuntime.Active = value; }
@@ -486,7 +486,8 @@ internal static class Bridge {
 
     internal static bool IsLoading() => Engine.Scene switch {
         Level level => level.Paused && UserIO.Saving,
-        LevelLoader or LevelExit or GameLoader or OverworldLoader => true,
+        OverworldLoader loader => !ReloadBoundary.LoaderPresentation(loader),
+        LevelLoader or LevelExit or GameLoader => true,
         _ => false,
     };
 
@@ -548,6 +549,7 @@ internal static class Bridge {
                 IpcServer.Send(Reply.Ok(req.Id, w => {
                     w.WriteString("bridge", Version);
                     w.WriteBoolean("reload_boundary_control", true);
+                    w.WriteBoolean("menu_prompt_stop", true);
                     w.WriteBoolean("reload_boundary_active", reloadBoundaryHeld);
                     ReloadBoundary.Write(w);
                     w.WriteNumber("process_id", Environment.ProcessId);
@@ -571,6 +573,7 @@ internal static class Bridge {
                     w.WriteNumber("bridge_reload", BridgeRuntime.Ready ? 1 : 0);
                     w.WriteNumber("runtime_contract", BridgeRuntime.ContractVersion);
                     w.WriteBoolean("reload_scene_modes", BridgeRuntime.SupportsSceneReloadModes);
+                    w.WriteBoolean("reload_origin_scene_hold", BridgeRuntime.SupportsOriginSceneHold);
                     w.WriteBoolean("reload_hold", BridgeRuntime.HoldingReload);
                     w.WriteString("runtime_version", RuntimeModule.Instance?.Metadata?.VersionString);
                     w.WriteString("runtime_path", RuntimeDllPath());

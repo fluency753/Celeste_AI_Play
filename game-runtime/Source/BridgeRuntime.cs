@@ -18,6 +18,7 @@ namespace CelesteAI.Bridge;
 public static class BridgeRuntime {
     public const int ContractVersion = 1;
     public static bool SupportsSceneReloadModes => true;
+    public static bool SupportsOriginSceneHold => true;
     public const string PayloadName = "CelesteAIBridge";
     private static readonly object Gate = new();
     private static readonly ConcurrentQueue<Request> Inbox = new();
@@ -109,8 +110,9 @@ public static class BridgeRuntime {
 
     internal static void Tick(Action runOriginal, Action runFixedOriginal) {
         // Everest's Mod reload re-initializes inputs on a worker thread. Re-apply
-        // the injected bindings on the main thread once the loader scenes are gone.
-        if (!holdingReload || !MaintenanceScene(Engine.Scene)) InputInjector.ServicePending();
+        // the injected bindings on the main thread once fresh maintenance
+        // objects finish, including when the original held object is a loader.
+        if (!holdingReload || !RunningMaintenanceScene(Engine.Scene)) InputInjector.ServicePending();
         DrainRequests();
         if (finishedThisTick) {
             finishedThisTick = false;
@@ -156,8 +158,11 @@ public static class BridgeRuntime {
     }
 
     private static bool MaintenanceScene(Scene? scene) => scene is AssetReloadHelper or LevelLoader or LevelExit or OverworldLoader or GameLoader;
+    // A loader can be the caller's preserved scene. Only maintenance objects
+    // introduced after prepare may advance; the original object stays frozen.
+    private static bool RunningMaintenanceScene(Scene? scene) => MaintenanceScene(scene) && !ReferenceEquals(scene, lease?.Scene);
     public static bool ShouldHaltEngineUpdate() {
-        if (holdingReload) return !MaintenanceScene(Engine.Scene);
+        if (holdingReload) return !RunningMaintenanceScene(Engine.Scene);
         return Active && (EngineHalted || FreeFrame && Engine.Scene is Level or AreaComplete or IntroVignette or LevelEnter);
     }
 
@@ -292,7 +297,7 @@ public static class BridgeRuntime {
         lock (Gate) { current = lease; next = attachment; }
         if (!holdingReload || current?.Stage != "reloading") return;
         if (Environment.TickCount64 - current.AttemptAt > 120000) { Fail(current, "Bridge reload did not become ready within 120 seconds"); return; }
-        if (MaintenanceScene(Engine.Scene)) return;
+        if (RunningMaintenanceScene(Engine.Scene)) return;
         bool awaitingScene = current.ExpectSceneChange && ReferenceEquals(Engine.Scene, current.CommitScene);
         if (next == null) {
             if (current.ExpectSceneChange && !awaitingScene)
@@ -405,6 +410,7 @@ public static class BridgeRuntime {
     /// <summary>Caller holds Gate.</summary>
     private static void WriteHoldAdvice(System.Text.Json.Utf8JsonWriter w) {
         w.WriteBoolean("reload_scene_modes", SupportsSceneReloadModes);
+        w.WriteBoolean("reload_origin_scene_hold", SupportsOriginSceneHold);
         w.WriteBoolean("abortable", lease != null && AbortBlocker(lease) == null);
         // A hold whose payload metadata is unknown can neither be retried nor released.
         w.WriteBoolean("restart_required", holdingReload && lease?.Stage == "failed" && lease.Metadata == null);

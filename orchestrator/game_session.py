@@ -42,6 +42,10 @@ FROZEN_GIVE_UP_FRAMES = 600          # 画面冻结等确认时，主控最多�
 AGENT_STORY_WAIT_FRAMES = 600        # 每次工具调用中，已确认播放阶段的等待总预算；未知状态不推进。
 
 
+def _automatic_loader_transition(obs: dict) -> bool:
+    return obs.get('scene') == 'OverworldLoader' and (obs.get('reload_boundary') or {}).get('mode') == 'wait'
+
+
 def awaiting_confirm(obs: dict, *, ending: bool = False) -> bool:
     """关卡画面冻结、角色不可操作，又不是剧情、对白、暂停菜单或转场：例如第一次拿到某章磁带后的"B 面已解锁"、
     吃心后的诗句。游戏在等确认键（MenuConfirm），不按就一直停着，章节计时却照走。
@@ -1318,6 +1322,7 @@ class GameSession:
                 notes.append('游戏暂停菜单已打开，主控停止自动播放。')
                 break
             scene = obs.get("scene")
+            automatic_transition = _automatic_loader_transition(obs)
             remember(obs)
             node = story_input(obs)
             if mode == 'agent' and node:
@@ -1333,11 +1338,11 @@ class GameSession:
                 break
             self._commit_completion(obs)
             if self.done or self.chapter_finished:break
-            if mode == 'agent' and (self._pending_complete or scene in END_SCENES) and not story_pending(obs):
+            if mode == 'agent' and (self._pending_complete or scene in END_SCENES) and not story_pending(obs) and not automatic_transition:
                 notes.append('结尾或结算由你操作：观察当前界面，用 act 发送确认 C、返回 B 或所需的空帧；回到选章地图才算完成。'
                              if self._pending_complete else '当前菜单或转场由你输入操作，按本次目标自行导航；主控不代选。')
                 break
-            if scene in END_SCENES:
+            if scene in END_SCENES and not story_pending(obs) and not automatic_transition:
                 self._mark_done(f"离开关卡（{scene}）")
                 break
             level = obs.get("level") or {}
@@ -1356,7 +1361,7 @@ class GameSession:
                 break
             if mode == 'agent':
                 playback = obs.get('storyPlaybackState') or {}
-                known_transition = (scene == 'LevelLoader' or level.get('transitioning')
+                known_transition = (automatic_transition or scene == 'LevelLoader' or level.get('transitioning')
                                     or (obs.get('player') or {}).get('dead'))
                 if playback.get('state') != 'playing' and not known_transition:
                     if idle_uncontrolled(obs):
@@ -1401,7 +1406,9 @@ class GameSession:
                              '为免空耗章节计时停止自动推进：请 observe 查看，可以用 act 发送按键（含 C 确认）尝试，'
                              '解决不了就调用 stop_run 报告。')
                 break
-            if mode == 'auto' and waiting:
+            if mode == 'auto' and node == 'postcard':
+                inputs = ["1,C", "29"]
+            elif mode == 'auto' and waiting:
                 inputs = ["1,C", "29"]       # 磁带、吃心等界面在等确认：照真人的做法按确认继续
                 confirms += 1
             else:
@@ -1658,7 +1665,8 @@ class GameSession:
         if self.cfg.cutscene_mode == 'agent' and not self._pending_complete and (obs.get('level') or {}).get('completed'):
             self._pending_complete = True
             self._persist_completion_pending()
-        ready = self._at_chapter_select(obs) if self.cfg.cutscene_mode == 'agent' else not story_pending(obs)
+        ready = (self._at_chapter_select(obs) if self.cfg.cutscene_mode == 'agent' else
+                 not story_pending(obs) and not _automatic_loader_transition(obs))
         if self._pending_complete and ready:
             self.end_scene = obs.get('scene')
             self._pending_complete=False
@@ -1789,7 +1797,8 @@ class GameSession:
                         elif reason != "no_pause":
                             continue
                         level = obs.get('level') or {}
-                    inputs=['1,C','29'] if level.get('dialogWaiting') or awaiting_confirm(obs, ending=True) else ['30']
+                    inputs=['1,C','29'] if (level.get('dialogWaiting') or awaiting_confirm(obs, ending=True)
+                                            or story_input(obs) == 'postcard') else ['30']
                     sig = (obs.get('scene'), level.get('room'), level.get('inCutscene'), level.get('dialogOpen'),
                            level.get('dialogWaiting'), level.get('frozen'), level.get('paused'), obs.get('storyInput'))
                     unchanged = unchanged + 1 if sig == last_sig else 0

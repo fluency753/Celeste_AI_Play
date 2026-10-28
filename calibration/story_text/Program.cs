@@ -128,6 +128,12 @@ level.Paused=false;
 var enter=(LevelEnter)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(LevelEnter));
 var card=(Postcard)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Postcard));
 enter.postcard=card;card.Visible=true;card.alpha=1;card.buttonEase=0;
+var initialEnterEntities=new Monocle.EntityList(enter);
+typeof(Monocle.Scene).GetField("<Entities>k__BackingField",System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+    .SetValue(enter,initialEnterEntities);
+typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(card,enter);
+var initialCardOwner=new Monocle.Entity();
+initialCardOwner.Add(new Monocle.Coroutine(card.DisplayRoutine()));initialEnterEntities.entities.Add(initialCardOwner);
 Check("",StoryText.InputNode(enter) ?? "");
 card.buttonEase=1;
 Check("postcard",StoryText.InputNode(enter)!);
@@ -356,6 +362,7 @@ var enterOwner=new Monocle.Entity();
 var cardRoutine=new Monocle.Coroutine(card.EaseIn());
 enterOwner.Add(cardRoutine);enterEntities.entities.Add(enterOwner);
 card.Visible=true;card.alpha=1;card.buttonEase=0;
+typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(card,enter);
 Check("playing",StoryText.PlaybackState(enter).State);
 Check("postcard_animation",StoryText.PlaybackState(enter).Source);
 cardRoutine.Replace(Celeste.Mod.SwapImmediatelyExtension.SafeEnumerate(card.DisplayRoutine()));
@@ -366,6 +373,48 @@ cardRoutine.waitTimer=0;card.buttonEase=1;
 Check("input",StoryText.PlaybackState(enter).State);
 card.buttonEase=0;cardRoutine.Replace(UnknownRoutine());
 Check("unknown",StoryText.PlaybackState(enter).State);
+var loader=(OverworldLoader)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(OverworldLoader));
+var loaderEntities=new Monocle.EntityList(loader);
+typeof(Monocle.Scene).GetField("<Entities>k__BackingField",System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+    .SetValue(loader,loaderEntities);
+loader.postcard=card;loader.loaded=true;loaderEntities.entities.Add(enterOwner);
+typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(card,loader);
+card.buttonEase=1;card.alpha=1;cardRoutine.Replace(card.DisplayRoutine());
+Check("postcard",StoryText.InputNode(loader)!);
+Check("input",StoryText.PlaybackState(loader).State);
+if(!ReloadBoundary.LoaderPresentation(loader) || !SceneControl.FreezeWhenIdle(loader)) throw new Exception("Native loader card did not freeze as a presentation");
+cardRoutine.Replace(card.EaseOut());
+Check("",StoryText.InputNode(loader) ?? "");
+Check("playing",StoryText.PlaybackState(loader).State);
+if(!ReloadBoundary.LoaderPresentation(loader)) throw new Exception("Attached closing card lost its preserve boundary");
+card.alpha=0;
+if(!ReloadBoundary.LoaderPresentation(loader)) throw new Exception("Zero-alpha animation was treated as a removed postcard");
+loaderEntities.current.Add(card);
+card.RemoveSelf();
+if(!ReferenceEquals(card.Scene,loader) || !loaderEntities.toRemove.Contains(card)) throw new Exception("Native RemoveSelf did not queue deferred removal");
+if(ReloadBoundary.LoaderPrompt(loader) || StoryText.ScenePostcard(loader)!=null) throw new Exception("Queued postcard removal retained stale presentation/UI");
+cardRoutine.Replace(card.DisplayRoutine());cardRoutine.waitTimer=1.2f;
+Check("playing",StoryText.PlaybackState(loader).State);
+Check("postcard_delay",StoryText.PlaybackState(loader).Source);
+using(var removedBuffer=new MemoryStream()) {
+    using(var writer=new System.Text.Json.Utf8JsonWriter(removedBuffer)) {
+        writer.WriteStartObject();StoryText.Write(writer,loader);writer.WriteEndObject();
+    }
+    using var removedJson=System.Text.Json.JsonDocument.Parse(removedBuffer.ToArray());
+    if(removedJson.RootElement.TryGetProperty("ui",out _)) throw new Exception("Deferred removed postcard remained in UI output");
+}
+loaderEntities.toRemove.Clear();loaderEntities.removing.Clear();
+typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(card,null);
+if(ReloadBoundary.LoaderPresentation(loader)) throw new Exception("Removed postcard field froze its old loader");
+Check("",StoryText.InputNode(loader) ?? "");
+card.Visible=true;typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(card,loader);loader.loaded=false;
+if(ReloadBoundary.LoaderPresentation(loader)) throw new Exception("Unfinished background loader was preserved");
+typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(card,enter);cardRoutine.Replace(card.DisplayRoutine());
+enterEntities.current.Add(card);card.alpha=0;cardRoutine.waitTimer=1.2f;card.RemoveSelf();
+if(StoryText.ScenePostcard(enter)!=null) throw new Exception("Queued LevelEnter postcard remained a rendered input node");
+Check("playing",StoryText.PlaybackState(enter).State);
+Check("postcard_delay",StoryText.PlaybackState(enter).Source);
+enterEntities.toRemove.Clear();enterEntities.removing.Clear();cardRoutine.waitTimer=0;
 // Restore the entities consumed by the optional StepJob integration below.
 entities.entities.Add(box);
 Console.WriteLine("PASS: memo iterator readiness, full-alpha entrance, Everest wrappers, closing/hidden state, UI facts, postcard phases and fail-closed story playback");

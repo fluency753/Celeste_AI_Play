@@ -14,7 +14,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.bridge_client import BridgeClient, summarize_obs
 from tools.cutscene import leave_level_by_pause_menu, skip_by_pause_menu, story_pending
-from tools.menu_navigation import checked_step, MenuActionBlocked
+from tools.menu_navigation import checked_step, MenuActionBlocked, MenuPromptRequired
 
 QUIET = dict(image=False, entities=False, tiles=False, trajectory=False)
 
@@ -307,7 +307,7 @@ def main() -> int:
             print(summarize_obs(obs))
             if args.destination != 'load' and not args.leave_active:
                 c.call("deactivate")
-    except MenuActionBlocked as exc:
+    except (MenuActionBlocked, MenuPromptRequired) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     finally:

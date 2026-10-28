@@ -114,14 +114,19 @@ class BoundaryResident(Resident):
         super().__init__(target, runtime)
         self.boundary = False
         self.busy_boundary = 0
+        self.prompt = False
+        self.origin_hold = True
         self.obs = {'scene': 'Overworld', 'frame': 18, 'save': None,
                     'menu': {'current': 'OuiMainMenu', 'selection': 2}}
 
     def descriptor(self):
-        return {'mode': ('wait' if self.obs['scene'] == 'OverworldLoader' else
+        result = {'mode': ('wait' if self.obs['scene'] == 'OverworldLoader' and not self.prompt else
                          'replace' if self.obs['scene'] == 'Level' else 'preserve'),
                 'scene': 'Celeste.' + self.obs['scene'], 'save': copy.deepcopy(self.obs.get('save')),
                 'session': copy.deepcopy(self.obs.get('completion') or self.obs.get('level'))}
+        if self.prompt:
+            result['requires_origin_hold'] = True
+        return result
 
     def bridge_call(self, command, **args):
         if not self.boundary and not self.holding() and self.obs['scene'] == 'Overworld':
@@ -138,6 +143,7 @@ class BoundaryResident(Resident):
             self.boundary = False  # Export transferred the hold to the resident.
         if command == 'hello':
             result.update(reload_boundary_control=True, reload_boundary=self.descriptor(),
+                          reload_origin_scene_hold=self.origin_hold,
                           frozen=self.boundary or self.holding() or self.obs['scene'] != 'Overworld')
         elif command == 'observe':
             result['obs']['reload_boundary'] = self.descriptor()
@@ -379,6 +385,88 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertFalse(session.boundary)
         self.assertFalse(next(args for command, args in session.calls if command == 'reload_commit')['expect_scene_change'])
         self.assertFalse(any(command in {'step', 'advance', 'record'} for command, _ in session.calls))
+
+    def prompt_session(self):
+        session = BoundaryResident(self.target, self.installed_runtime)
+        session.prompt = True
+        session.obs = {'scene': 'OverworldLoader', 'frame': 18, 'save': None,
+                       'storyInput': 'postcard', 'storyDecision': 'postcard',
+                       'story': [{'kind': 'postcard', 'text': 'unlocked'}],
+                       'ui': {'type': 'Postcard', 'inputReady': True},
+                       'storyPlaybackState': {'state': 'input', 'source': 'postcard'}}
+        return session
+
+    def test_loader_prompt_preserves_page_without_any_confirmation_or_wait(self):
+        session = self.prompt_session()
+        result = reload_bridge(session, self.root, self.options)
+        self.assertEqual(result['scene_mode'], 'preserve')
+        self.assertEqual(result['before']['presentation']['prompt']['story'], session.obs['story'])
+        self.assertFalse(next(args for cmd, args in session.calls if cmd == 'reload_commit')['expect_scene_change'])
+        self.assertFalse(any(cmd in {'step', 'advance', 'record'} for cmd, _ in session.calls))
+
+    def test_old_runtime_refuses_prompt_before_temporary_or_resident_hold(self):
+        session = self.prompt_session()
+        session.origin_hold = False
+        with self.assertRaisesRegex(BridgeReloadError, '1.0.5.*原场景冻结'):
+            reload_bridge(session, self.root, self.options)
+        self.assertFalse(any(cmd in {'reload_boundary', 'reload_prepare', 'step'} for cmd, _ in session.calls))
+        self.assertEqual(self.target.read_bytes(), b'previous payload')
+
+    def test_runtime_upgrade_mismatch_refuses_before_waiting_in_legacy_loader(self):
+        session = BoundaryResident(self.target, self.installed_runtime)
+        session.obs['scene'] = 'OverworldLoader'
+        self.installed_runtime.write_bytes(b'older resident')
+        with self.assertRaisesRegex(BridgeReloadError, '核心变化必须维护重启'):
+            reload_bridge(session, self.root, self.options)
+        self.assertFalse(any(cmd in {'step', 'reload_boundary', 'reload_prepare'} for cmd, _ in session.calls))
+
+    def test_loading_stops_at_prompt_then_reloads_without_consuming_input(self):
+        session = self.prompt_session()
+        session.prompt = False
+        original = session.bridge_call
+        def call(command, **args):
+            if command == 'step':
+                session.calls.append((command, args))
+                self.assertEqual(args['stop_on'], ['reload_ready'])
+                session.prompt = True
+                return {'result': {'consumed': 0, 'stop': 'reload_ready', 'loadingFrames': 5}}
+            return original(command, **args)
+        session.bridge_call = call
+        result = reload_bridge(session, self.root, self.options)
+        self.assertEqual(result['phase'], 'finished')
+        self.assertEqual(result['loading_wait']['consumed'], 0)
+        self.assertEqual(result['before']['presentation']['storyInput'], 'postcard')
+
+    def test_loader_prompt_changed_page_holds_and_retry_only_verifies(self):
+        session = self.prompt_session()
+        original = session.bridge_call
+        change = True
+        def call(command, **args):
+            value = original(command, **args)
+            if command == 'observe' and session.stage == 'ready' and change:
+                value['obs']['story'][0]['text'] = 'different page'
+            return value
+        session.bridge_call = call
+        with self.assertRaisesRegex(BridgeReloadError, 'presentation'):
+            reload_bridge(session, self.root, self.options)
+        self.assertTrue(session.holding())
+        change = False
+        self.assertEqual(reload_bridge(session, self.root, {'retry': True})['phase'], 'finished')
+        self.assertEqual(sum(cmd == 'reload_commit' for cmd, _ in session.calls), 1)
+
+    def test_prompt_failed_commit_and_missing_capability_retry_stay_held(self):
+        session = self.prompt_session()
+        session.fail = True
+        with self.assertRaisesRegex(BridgeReloadError, '桥接重载失败'):
+            reload_bridge(session, self.root, self.options)
+        session.fail = False
+        session.origin_hold = False
+        with self.assertRaisesRegex(BridgeReloadError, '未报告原场景冻结'):
+            reload_bridge(session, self.root, {'retry': True})
+        self.assertTrue(session.holding())
+        session.origin_hold = True
+        self.assertEqual(reload_bridge(session, self.root, {'retry': True})['phase'], 'finished')
+        self.assertEqual(sum(cmd == 'reload_commit' for cmd, _ in session.calls), 2)
 
     def test_legacy_payload_upgrades_to_boundary_capable_payload(self):
         original = self.session.bridge_call

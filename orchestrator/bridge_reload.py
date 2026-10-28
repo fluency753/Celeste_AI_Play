@@ -85,7 +85,16 @@ def _snapshot(hello, obs):
         result['boundary'] = obs['reload_boundary']
         if obs['reload_boundary'].get('mode') == 'preserve':
             result['presentation'] = {key: obs.get(key) for key in ('menu', 'ui', 'storyInput', 'storyDecision')}
+            if obs['reload_boundary'].get('requires_origin_hold') is True:
+                result['presentation']['prompt'] = {key: obs.get(key) for key in ('story', 'storyPlaybackState')}
     return result
+
+
+def _require_origin_hold(hello, obs):
+    if any((value.get('reload_boundary') or {}).get('requires_origin_hold') is True for value in (hello, obs)):
+        if hello.get('reload_origin_scene_hold') is not True:
+            raise BridgeReloadError('加载器内提示原地重载需要常驻核心 1.0.5 的原场景冻结能力；'
+                                    '请先维护重启升级核心，未确认提示、未准备重载或替换文件')
 
 
 def _verify(before, hello, obs):
@@ -543,6 +552,9 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                 if hello.get('input_bindings_ok') is not True:
                     mismatch = '、'.join(map(str, hello.get('input_binding_mismatches') or [])) or '未报告'
                     raise BridgeReloadError(f'重载前的注入按键绑定已与桥接不一致（{mismatch}）；请先排查，未进入交接')
+                runtime_check = None
+                if request.get('dll') and hello.get('runtime_path'):
+                    runtime_check = _check_runtime(request, _installed_runtime(hello, None))
                 obs = call('observe', image=False, scope='room', fields=True)['obs']
                 if hello.get('active') is not True:
                     raise BridgeReloadError('桥接控制权已交还；当前主控不再拥有游戏，未进入重载')
@@ -553,6 +565,7 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                     return obs.get('scene') in loading_scenes or hello.get('scene') in loading_scenes
                 if waiting():
                     hello, obs = wait_for_loading(hello, obs)
+                _require_origin_hold(hello, obs)
                 if hello.get('reload_boundary_control') is True:
                     record.update(phase='waiting_boundary', request=dict(request), owner_was_paused=owner_was_paused)
                     _write(path, record)
@@ -575,6 +588,7 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                     if (mode not in {'replace', 'preserve'} or not boundary.get('scene')
                             or hello.get('reload_boundary') != boundary):
                         raise BridgeReloadError('桥接维护边界描述缺失或不一致；未进入重载')
+                    _require_origin_hold(hello, obs)
                 else:
                     mode = 'replace' if obs.get('scene') == 'Level' else 'preserve'
                     if obs.get('scene') not in {'Level', 'AreaComplete'}:
@@ -594,9 +608,6 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                 if kind == 'AreaComplete' and ((obs.get('ui') or {}).get('type') != 'AreaComplete'
                                              or type((obs.get('ui') or {}).get('confirmReady')) is not bool):
                     raise BridgeReloadError('当前结算观测不完整，未进入重载')
-                runtime_check = None
-                if request.get('dll') and hello.get('runtime_path'):
-                    runtime_check = _check_runtime(request, _installed_runtime(hello, None))
                 loading_wait = record.get('loading_wait')
                 record = {'phase': 'preparing', 'before': _snapshot(hello, obs), 'started_wall': time.time(),
                           'request': dict(request), 'payload_boundary': boundary_may_hold,
@@ -695,6 +706,9 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
             raise BridgeReloadError(f'新桥接接回后注入按键绑定与桥接不一致（{mismatch}），继续会按玩家自己的绑定解释合成输入；'
                                     '保持暂停，可检查后用 --retry 重新核验')
         obs = call('observe', image=False, scope='room', fields=True)['obs']
+        if (record['before'].get('boundary') or {}).get('requires_origin_hold') is True:
+            if hello.get('reload_origin_scene_hold') is not True:
+                raise BridgeReloadError('新桥接未报告原场景冻结能力；继续保持交接，请用兼容核心与桥接接回')
         _verify(record['before'], hello, obs)
         if current.get('stage') != 'finished':
             call('reload_finish', lease=lease)

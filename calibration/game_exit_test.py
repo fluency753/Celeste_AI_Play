@@ -93,7 +93,7 @@ class EntryGame(MenuGame):
                                               and self.states[0]['scene'] == 'LevelLoader')):
             self.calls.append((cmd, args))
             if cmd == 'step':
-                if args['inputs'] != ['1'] or args.get('stop_on') != ['story_input']:
+                if args['inputs'] != ['1'] or set(args.get('stop_on', [])) != {'story_input', 'menu_prompt'}:
                     raise AssertionError('Entry wait must use one neutral frame and stop at story input')
             self.states.pop(0)
             return {'obs': self.observation(), 'result': {'consumed': int(cmd == 'step')}}
@@ -133,6 +133,13 @@ class GameExitTests(unittest.TestCase):
                     self.assertFalse(any(cmd == 'record' for cmd, _ in game.calls))
                     self.assertTrue(all(args['inputs'] == ['1'] for cmd, args in game.calls if cmd == 'step'))
                     self.assertEqual(progress[-1].get('transition_frames', 0), int(not immediate))
+
+    def test_maintenance_reports_loader_prompt_animation_without_polling(self):
+        client = Mock()
+        obs = {'scene': 'OverworldLoader', 'ui': {'type': 'Postcard', 'inputReady': False}}
+        with self.assertRaisesRegex(RuntimeError, '原生解锁提示.*不能仅靠等待'):
+            _wait_for_save_ready(client, obs, lambda _: None, lambda **_: None)
+        client.call.assert_not_called()
 
     def test_wait_frame_budget_includes_loading_and_wall_timeout(self):
         game = EntryGame([{'scene': 'LevelEnter', 'frame': i} for i in range(4)])

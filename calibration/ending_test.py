@@ -80,6 +80,38 @@ class EndingTests(unittest.TestCase):
         s._chapter_complete()                                     # 同一次通关不会记两次成绩
         self.assertEqual(len(s.metrics.state.splits), 1)
 
+    def test_auto_ending_waits_for_loader_postcard_input_then_confirms(self):
+        class PromptClient(EndingClient):
+            def __init__(self):
+                super().__init__()
+                self.stage = 0
+                self.obs = {'scene': 'OverworldLoader', 'frame': 10, 'level': None,
+                            'ui': {'type': 'Postcard', 'inputReady': False}, 'storyInput': None}
+
+            def call(self, cmd, **args):
+                if cmd != 'step':
+                    return super().call(cmd, **args)
+                inputs = args['inputs']
+                self.steps.append(inputs)
+                confirm = any(',C' in item for item in inputs)
+                if self.stage == 0:
+                    if confirm: raise AssertionError('Animation must not receive confirmation')
+                    self.obs['storyInput'] = 'postcard'
+                    self.obs['ui']['inputReady'] = True
+                elif self.stage == 1:
+                    if not confirm: raise AssertionError('Ready postcard needs explicit auto-mode confirmation')
+                    self.obs = {'scene': 'Overworld', 'frame': 40, 'menu': {'current': 'OuiChapterSelect'}}
+                elif confirm:
+                    raise AssertionError('Map must not receive confirmation')
+                self.stage += 1
+                consumed = sum(int(item.split(',')[0]) for item in inputs)
+                return {'obs': copy.deepcopy(self.obs), 'result': {'consumed': consumed, 'events': []}}
+
+        client = PromptClient()
+        s = self.session(client)
+        s._run_ending(client.obs)
+        self.assertEqual(client.steps, [['30'], ['1,C', '29'], ['60']])
+
     def test_skippable_ending_is_skipped_and_results_confirmed(self):
         client = EndingClient()
         s = self.session(client)

@@ -10,7 +10,7 @@ import unittest
 
 from tools.cutscene import leave_level_by_pause_menu, skip_by_pause_menu
 from tools.enter_save import enter_save, load_save_and_freeze, open_chapter_select, to_file_select
-from tools.menu_navigation import MenuActionBlocked
+from tools.menu_navigation import MenuActionBlocked, MenuPromptRequired
 
 
 def level(**updates):
@@ -69,6 +69,18 @@ def blocked(obs):
 
 
 class MenuNavigationTests(unittest.TestCase):
+    def test_load_macro_stops_on_native_loader_prompt_without_resending_input(self):
+        prompt = {'scene': 'OverworldLoader', 'save': None, 'level': None,
+                  'ui': {'type': 'Postcard', 'inputReady': False}}
+        ipc = GameIpc(file_select(), [reply(prompt, stop='menu_prompt', consumed=0, planned=13, loadingFrames=2)])
+        with self.assertRaises(MenuPromptRequired) as raised:
+            load_save_and_freeze(ipc, 'test', save_slot=10)
+        self.assertEqual(len(ipc.steps), 1)
+        self.assertIn('menu_prompt', ipc.steps[0]['stop_on'])
+        self.assertEqual(raised.exception.obs, prompt)
+        self.assertIn('未确认提示', str(raised.exception))
+        self.assertIn('0/13', str(raised.exception))
+
     def test_unknown_callback_explanation_applies_after_completion_too(self):
         obs = level()
         obs['level']['completed'] = True
@@ -91,7 +103,7 @@ class MenuNavigationTests(unittest.TestCase):
         self.assertEqual(load_save_and_freeze(ipc, 'test', save_slot=10), loaded)
         self.assertEqual(len(ipc.steps), 1)
         self.assertEqual(ipc.steps[0]['inputs'][0], '1,C')
-        self.assertEqual(ipc.steps[0]['stop_on'], ['chapter_loaded'])
+        self.assertCountEqual(ipc.steps[0]['stop_on'], ['chapter_loaded', 'menu_prompt'])
 
     def test_loaded_story_is_handed_back_without_skip_or_confirmation(self):
         for scene in ('IntroVignette', 'LevelEnter'):
@@ -193,9 +205,14 @@ class MenuCliTests(unittest.TestCase):
                             elif command == 'activate':
                                 data['obs'] = file_select()
                             elif command == 'step':
-                                self.assertEqual(request['stop_on'], ['chapter_loaded'])
+                                self.assertCountEqual(request['stop_on'], ['chapter_loaded', 'menu_prompt'])
                                 self.assertEqual(request['action_policy']['entry_target']['slot'], 10)
-                                data.update(blocked(file_select()) if denied else reply(loaded, stop='chapter_loaded'))
+                                if denied == 'prompt':
+                                    data.update(reply({'scene': 'OverworldLoader', 'save': None,
+                                                       'ui': {'type': 'Postcard', 'inputReady': False}},
+                                                      stop='menu_prompt', consumed=0, planned=13, loadingFrames=2))
+                                else:
+                                    data.update(blocked(file_select()) if denied else reply(loaded, stop='chapter_loaded'))
                             else:
                                 raise AssertionError('Unexpected command after macro terminal result: ' + command)
                             stream.write((json.dumps(data) + '\n').encode())
@@ -229,6 +246,16 @@ class MenuCliTests(unittest.TestCase):
         self.assertIn('permission.return_to_map', result.stderr)
         self.assertIn('本次不允许返回地图', result.stderr)
         self.assertIn('已推进输入 1/', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertEqual([c['cmd'] for c in commands], ['hello', 'activate', 'step'])
+
+    def test_cli_receiver_sees_loader_prompt_handback_without_traceback(self):
+        result, commands = self.invoke('prompt')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('原生解锁明信片', result.stderr)
+        self.assertIn('0/13', result.stderr)
+        self.assertIn('未确认提示', result.stderr)
+        self.assertIn('advance', result.stderr)
         self.assertNotIn('Traceback', result.stderr)
         self.assertEqual([c['cmd'] for c in commands], ['hello', 'activate', 'step'])
 

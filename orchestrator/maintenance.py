@@ -51,6 +51,9 @@ def _wait_for_save_ready(client, obs, validate, publish, *, max_frames=600, time
             if waited:
                 publish(phase='transition_ready', transition_frames=used, scene=scene)
             return obs
+        if scene == 'OverworldLoader' and (obs.get('ui') or {}).get('type') == 'Postcard':
+            stop('当前加载器正在呈现原生解锁提示，不能仅靠等待完成维护；请显式 watch／advance 处理后重试。'
+                 '未确认提示、未停止录制或退出游戏')
         if obs.get('storyInput') or any(row.get('waitingForInput') for row in obs.get('story', [])):
             stop(f'转场等待遇到剧情输入（{obs.get("storyInput") or "story"}）；'
                  '未确认或跳过剧情，未停止录制或退出游戏')

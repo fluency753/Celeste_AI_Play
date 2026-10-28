@@ -89,7 +89,7 @@ class ResumePositionTests(unittest.TestCase):
         with patch('tools.bridge_client.BridgeClient', return_value=client):
             self.assertTrue(check_resume_position(cfg))
         self.assertEqual(len(client.steps), 1)
-        self.assertEqual(client.steps[0]['stop_on'], ['chapter_loaded'])
+        self.assertCountEqual(client.steps[0]['stop_on'], ['chapter_loaded', 'menu_prompt'])
         self.assertEqual(client.policies[0]['action_policy']['entry_target'], {'sid': None, 'slot': 8})
         self.assertEqual(client.policies[0]['action_policy']['departure'], 'current_level')
         self.assertIsNone(client.step_options)

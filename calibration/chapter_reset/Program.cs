@@ -445,6 +445,70 @@ using (var snapshot = new Hook(typeof(StateExtractor).GetMethod("WriteSnapshot",
             "Save completion consumed placeholder input or recorded a frame");
     }
     typeof(Bridge).GetField("job", flags)!.SetValue(null, null);
+    foreach (bool locked in new[] { false, true }) {
+        var loader = (OverworldLoader)RuntimeHelpers.GetUninitializedObject(typeof(OverworldLoader));
+        typeof(Scene).GetField("<Entities>k__BackingField", flags)!.SetValue(loader, new EntityList(loader));
+        var card = (Postcard)RuntimeHelpers.GetUninitializedObject(typeof(Postcard));
+        card.Visible = true;
+        loader.postcard = card;
+        Scene(loader);
+        var wait = new StepJob(108, new() { InputFrame.Parse("C") }, new[] { "reload_ready" }, 4,
+            false, "level", new SnapshotOptions(), false);
+        typeof(Bridge).GetField("job", flags)!.SetValue(null, wait);
+        long frame = Bridge.Frame; int updates = 0; received = null;
+        typeof(Bridge).GetMethod(locked ? "LockstepTick" : "NormalTick", flags)!.Invoke(null,
+            new object[] { (Action)(() => {
+                updates++; loader.loaded = true;
+                typeof(Entity).GetProperty("Scene", flags)!.SetValue(card, loader);
+            }) });
+        using var response = System.Text.Json.JsonDocument.Parse(received!);
+        Check(updates == 1 && wait.StopReason == "reload_ready" && wait.LoadingFrames == 1 &&
+            response.RootElement.GetProperty("result").GetProperty("consumed").GetInt32() == 0,
+            "Loader postcard consumed its placeholder confirmation");
+        typeof(Bridge).GetField("pendingAck", flags)!.SetValue(null, null);
+        Check(Bridge.Frozen && Bridge.OwnsInput && !Bridge.IsLoading() && ReloadBoundary.Capture().requires_origin_hold,
+            "Stable loader presentation did not become a controlled preserve boundary");
+        typeof(Bridge).GetMethod(locked ? "LockstepTick" : "NormalTick", flags)!.Invoke(null,
+            new object[] { (Action)(() => Check(Bridge.ShouldHaltEngineUpdate(), "Idle loader presentation advanced")) });
+        Check(Bridge.Frame == frame + 1, "Idle loader presentation advanced a recording frame");
+        loader.Entities.current.Add(card);
+        card.alpha = 0;
+        Check(ReloadBoundary.LoaderPresentation(loader), "Zero-alpha attached animation lost its preserve boundary");
+        card.RemoveSelf();
+        Check(ReferenceEquals(card.Scene, loader) && loader.Entities.toRemove.Contains(card) && !ReloadBoundary.LoaderPrompt(loader) &&
+            Bridge.IsLoading(), "Queued postcard removal froze the update needed to detach it");
+        typeof(Entity).GetProperty("Scene", flags)!.SetValue(card, null);
+        Check(!ReloadBoundary.LoaderPresentation(loader) && Bridge.IsLoading(), "Removed postcard retained a stale preserve boundary");
+    }
+    Console.WriteLine("PASS: background loader becomes a controlled postcard boundary at zero consumed input, then remains frozen until explicit action");
+    foreach (bool locked in new[] { false, true }) {
+        var loader = (OverworldLoader)RuntimeHelpers.GetUninitializedObject(typeof(OverworldLoader));
+        typeof(Scene).GetField("<Entities>k__BackingField", flags)!.SetValue(loader, new EntityList(loader));
+        var card = (Postcard)RuntimeHelpers.GetUninitializedObject(typeof(Postcard));
+        card.Visible = true; loader.postcard = card;
+        Scene(loader);
+        var menuWait = new StepJob(109, new() { InputFrame.Parse("C") }, new[] { "menu_prompt", "chapter_loaded" }, 4,
+            false, "level", new SnapshotOptions(), false);
+        typeof(Bridge).GetField("job", flags)!.SetValue(null, menuWait);
+        int updates = 0; received = null;
+        typeof(Bridge).GetMethod(locked ? "LockstepTick" : "NormalTick", flags)!.Invoke(null,
+            new object[] { (Action)(() => {
+                updates++; typeof(Entity).GetProperty("Scene", flags)!.SetValue(card, loader);
+            }) });
+        using var response = System.Text.Json.JsonDocument.Parse(received!);
+        Check(updates == 1 && menuWait.StopReason == "menu_prompt" && menuWait.LoadingFrames == 1 &&
+            response.RootElement.GetProperty("result").GetProperty("consumed").GetInt32() == 0 && !loader.loaded,
+            "Menu macro consumed a retained confirm at the first attached loader prompt");
+        typeof(Bridge).GetField("pendingAck", flags)!.SetValue(null, null);
+        var alreadyPrompt = new StepJob(110, new() { InputFrame.Parse("C") }, new[] { "menu_prompt" }, 4,
+            false, "level", new SnapshotOptions(), false);
+        Check(alreadyPrompt.StopReason == "menu_prompt", "Existing loader prompt did not stop menu macro at zero input");
+        var legacyLoad = new StepJob(111, new() { InputFrame.Parse("C") }, new[] { "chapter_loaded" }, 4,
+            false, "level", new SnapshotOptions(), false);
+        Check(legacyLoad.StopReason == "chapter_loaded", "Legacy chapter boundary missed an attached loader prompt");
+    }
+    typeof(Bridge).GetField("job", flags)!.SetValue(null, null);
+    Console.WriteLine("PASS: menu-specific prompt stops discard no input and never confirm an attached loader card, even before background loading finishes");
     foreach (Scene preserved in new Scene[] {
             (Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld)),
             (LevelEnter)RuntimeHelpers.GetUninitializedObject(typeof(LevelEnter)),

@@ -19,6 +19,14 @@ def dialog(choices=False,ready=True):
         'dialogChoices':[{'index':0,'text':'选项甲','selected':True},{'index':1,'text':'选项乙','selected':False}] if choices else []}}
 
 
+def loader_postcard(ready=True, text='解锁提示'):
+    return {'scene': 'OverworldLoader', 'frame': 10, 'controllable': False, 'level': None,
+            'storyInput': 'postcard' if ready else None, 'storyDecision': 'postcard' if ready else None,
+            'ui': {'type': 'Postcard', 'inputReady': ready, 'backgroundLoaded': True},
+            'story': [{'kind': 'postcard', 'text': text}],
+            'storyPlaybackState': {'state': 'input' if ready else 'playing', 'source': 'postcard'}}
+
+
 class SceneClient:
     def __init__(self,obs,change_choices=False):
         self.obs=copy.deepcopy(obs);self.obs.setdefault('storyInput',None)
@@ -31,12 +39,12 @@ class SceneClient:
             if any(',D' in x for x in inputs):
                 self.obs['level']['dialogChoiceIndex']+=1
                 if self.change_choices:self.obs['level']['dialogChoices'][0]['text']='已变化'
-            if any(',C' in x for x in inputs):
+            if self.obs.get('level') and any(',C' in x for x in inputs):
                 self.obs['level'].update(inCutscene=False,dialogOpen=False,dialogWaiting=False,dialogChoices=[])
                 self.obs['controllable']=True
                 self.obs['storyInput']=None
             consumed=sum(int(x.split(',')[0]) for x in inputs)
-            if self.obs.get('level',{}).get('completed') and 'complete' in args.get('stop_on',[]):consumed=min(1,consumed)
+            if (self.obs.get('level') or {}).get('completed') and 'complete' in args.get('stop_on',[]):consumed=min(1,consumed)
             return {'result':{'consumed':consumed,'events':[]},'obs':copy.deepcopy(self.obs)}
         return {}
     def close(self):pass
@@ -321,6 +329,73 @@ class ScriptClient(SceneClient):
 class StoryFlowTests(unittest.TestCase):
     setUp=CutsceneTests.setUp
     tearDown=CutsceneTests.tearDown
+
+    def test_loader_postcard_watch_reaches_input_without_ending_or_confirming(self):
+        self.s.client = ScriptClient([loader_postcard(False), loader_postcard()])
+        obs, _, _ = self.s.cutscene('watch')
+        self.assertEqual(obs['storyInput'], 'postcard')
+        self.assertEqual(self.s.client.steps, [['30']])
+        self.assertFalse(self.s.done)
+
+    def test_loader_postcard_advance_confirms_once_and_waits_for_second_prompt(self):
+        self.s.client = ScriptClient([loader_postcard(), loader_postcard(False), loader_postcard(text='第二张')])
+        obs, _, _ = self.s.cutscene('advance')
+        self.assertEqual(obs['story'][0]['text'], '第二张')
+        self.assertEqual(self.s.client.steps, [['1,C', '1'], ['30']])
+        self.assertFalse(self.s.done)
+
+    def test_loader_postcard_auto_mode_confirms_only_ready_input(self):
+        self.s.cfg.cutscene_mode = 'auto'
+        animation, ready = loader_postcard(False), loader_postcard()
+        menu = {'scene': 'Overworld', 'frame': 80, 'menu': {'current': 'OuiChapterSelect'}}
+        self.s.client = ScriptClient([animation, ready, menu])
+        obs, _, _, _ = self.s._auto_advance(animation, None)
+        self.assertEqual(self.s.client.steps, [['30'], ['1,C', '29']])
+        self.assertEqual(obs['scene'], 'Overworld')
+
+    def test_explicit_watch_on_loader_postcard_never_confirms_in_auto_mode(self):
+        self.s.cfg.cutscene_mode = 'auto'
+        self.s.client = SceneClient(loader_postcard())
+        obs, _, _ = self.s.cutscene('watch')
+        self.assertEqual(obs['storyInput'], 'postcard')
+        self.assertEqual(self.s.client.steps, [])
+        self.assertFalse(self.s.done)
+
+    def test_loader_postcard_advance_crosses_tail_delay_to_next_prompt(self):
+        tail = {'scene': 'OverworldLoader', 'frame': 20, 'level': None, 'ui': None,
+                'storyInput': None, 'storyPlaybackState': {'state': 'none', 'source': 'no_cutscene'},
+                'reload_boundary': {'mode': 'wait'}}
+        self.s.client = ScriptClient([loader_postcard(), tail, tail, loader_postcard(text='下一张')])
+        obs, _, _ = self.s.cutscene('advance')
+        self.assertEqual(obs['story'][0]['text'], '下一张')
+        self.assertEqual(self.s.client.steps, [['1,C', '1'], ['30'], ['30']])
+        self.assertFalse(self.s.done)
+
+    def test_unknown_loader_without_boundary_remains_zero_input_handback(self):
+        self.s.client = SceneClient({'scene': 'OverworldLoader', 'frame': 20, 'level': None})
+        with self.assertRaisesRegex(ActError, '当前没有待处理的剧情'):
+            self.s.cutscene('watch')
+        self.assertEqual(self.s.client.steps, [])
+        self.assertFalse(self.s.done)
+
+    def test_auto_mode_waits_for_authoritative_loader_before_marking_done(self):
+        self.s.cfg.cutscene_mode = 'auto'
+        tail = {'scene': 'OverworldLoader', 'frame': 20, 'level': None,
+                'reload_boundary': {'mode': 'wait'}}
+        menu = {'scene': 'Overworld', 'frame': 50, 'menu': {'current': 'OuiChapterSelect'}}
+        self.s.client = ScriptClient([tail, menu])
+        self.s._auto_advance(tail, None)
+        self.assertEqual(self.s.client.steps, [['30']])
+
+    def test_pending_completion_stays_pending_during_auto_loader_tail(self):
+        self.s.cfg.cutscene_mode = 'auto'
+        self.s._pending_complete = True
+        tail = {'scene': 'OverworldLoader', 'frame': 20, 'level': None,
+                'reload_boundary': {'mode': 'wait'}}
+        self.s._commit_completion(tail)
+        self.assertTrue(self.s._pending_complete)
+        self.assertFalse(self.s.metrics.state.splits)
+        self.assertFalse(self.s.done)
 
     def test_act_hands_off_before_first_dialogue_then_watch_reaches_real_input(self):
         # Model only the external frame source: the real act/auto-play/watch

@@ -263,6 +263,44 @@ try {
     Check(Call("reload_status", changedLease).GetProperty("stage").GetString() == "ready",
         "Preserve-scene retry failed");
     Call("reload_finish", changedLease);
+    // The original scene can itself be a loader with a stable presentation.
+    // Runtime must use reference ownership, never interpret that presentation.
+    var originLoader = (OverworldLoader)RuntimeHelpers.GetUninitializedObject(typeof(OverworldLoader));
+    typeof(Scene).GetField("<Entities>k__BackingField", flags)!.SetValue(originLoader, new EntityList(originLoader));
+    originLoader.loaded = true;
+    var loaderCard = (Postcard)RuntimeHelpers.GetUninitializedObject(typeof(Postcard));
+    loaderCard.Visible = true; loaderCard.alpha = 1;
+    typeof(Entity).GetProperty("Scene", flags)!.SetValue(loaderCard, originLoader);
+    originLoader.postcard = loaderCard;
+    Scene(originLoader);
+    string loaderLease = Call("reload_prepare").GetProperty("lease").GetString()!;
+    Check(BridgeRuntime.ShouldHaltEngineUpdate(), "Prepared original loader escaped the freeze gate");
+    Scene((LevelLoader)RuntimeHelpers.GetUninitializedObject(typeof(LevelLoader)));
+    Check(!BridgeRuntime.ShouldHaltEngineUpdate(), "New maintenance loader could not run");
+    Scene(originLoader);
+    Check(Call("reload_abort", loaderLease).GetProperty("stage").GetString() == "aborted", "Original loader hold could not abort");
+    loaderLease = Call("reload_prepare").GetProperty("lease").GetString()!;
+    Check(Call("reload_status", loaderLease).GetProperty("reload_origin_scene_hold").GetBoolean(), "Origin hold capability missing");
+    long loaderFrame = BridgeRuntime.Frame, loaderAudio = RecordingAudio.RenderedFrames;
+    Call("reload_commit", loaderLease, expectSceneChange: false); Pump();
+    Check(Call("reload_status", loaderLease).GetProperty("stage").GetString() == "ready" && BridgeRuntime.ShouldHaltEngineUpdate(),
+        "Original maintenance-type scene was not ready and frozen after preserve handoff");
+    Check(ReferenceEquals(Engine.Scene, originLoader) && BridgeRuntime.Frame == loaderFrame && RecordingAudio.RenderedFrames == loaderAudio,
+        "Original loader was advanced or replaced during preserve handoff");
+    Call("reload_finish", loaderLease);
+    string loaderRetryLease = Call("reload_prepare").GetProperty("lease").GetString()!;
+    failReload = true;
+    Call("reload_commit", loaderRetryLease, expectSceneChange: false);
+    Check(Call("reload_status", loaderRetryLease).GetProperty("stage").GetString() == "failed" && BridgeRuntime.ShouldHaltEngineUpdate(),
+        "Failed original loader handoff released its scene freeze");
+    ClockToken(nextToken++, true);
+    failReload = false;
+    Call("reload_commit", loaderRetryLease, expectSceneChange: false); Pump();
+    Check(Call("reload_status", loaderRetryLease).GetProperty("stage").GetString() == "ready" &&
+        ReferenceEquals(Engine.Scene, originLoader) && BridgeRuntime.Frame == loaderFrame && RecordingAudio.RenderedFrames == loaderAudio,
+        "Failed original loader could not recover without replacing or advancing the original object");
+    Call("reload_finish", loaderRetryLease);
+    Console.WriteLine("PASS: original loader object freezes from prepare, new maintenance objects run, and preserve completion/abort retain reference and recording counters");
     Console.WriteLine("PASS: generic preserve-scene handoff retains actual AreaComplete, rejects another same-session scene and retries without frame/audio advance");
     Console.WriteLine("PASS: same real IPC/clock connections, token accounting, audio mixers and recording frame sequence survive three payload reloads");
     Console.WriteLine("PASS: failed loader remains frozen; old payload collectible contexts are released");

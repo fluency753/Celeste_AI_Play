@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from tools.menu_navigation import MenuActionBlocked, checked_step
+from tools.menu_navigation import MenuActionBlocked, MenuPromptRequired, checked_step
 
 SKIP_IDS = ("menu_pause_skip_cutscene", "intro_vignette_skip")
 QUIET = dict(image=False, entities=False, tiles=False)
@@ -18,6 +18,8 @@ StepHook = Callable[[list[str], dict], None]
 
 def story_pending(obs: dict) -> bool:
     if obs.get('scene') in {'IntroVignette', 'LevelEnter'}:
+        return True
+    if obs.get('scene') == 'OverworldLoader' and (obs.get('ui') or {}).get('type') == 'Postcard':
         return True
     level = obs.get('level') or {}
     return obs.get('scene') == 'Level' and not level.get('skippingCutscene') and bool(
@@ -63,7 +65,7 @@ def skip_by_pause_menu(client, on_step: StepHook | None = None, max_wait_frames:
         nonlocal used
         try:
             reply = checked_step(client, inputs, speed=1, **QUIET)
-        except MenuActionBlocked as exc:
+        except (MenuActionBlocked, MenuPromptRequired) as exc:
             if on_step:
                 on_step(inputs, exc.result)
             raise

@@ -1,10 +1,16 @@
 # 保持录像的桥接代码重载
 
-桥接 1.3.0 将常驻核心 `CelesteAIRuntime` 与可重载逻辑 `CelesteAIBridge` 拆成两个 Everest Mod。主控通过现有连接在动作边界重载桥接逻辑；常驻核心继续持有冻结门闸、帧号、IPC／OBS 时钟、注入按键绑定、双轨 FMOD 混音器及音频共享内存。主控不发送录制 stop/start，也不另开录制目录。当前版本为桥接 1.7.1、常驻核心 1.0.4，核心 ABI 仍为 1。
+桥接 1.3.0 将常驻核心 `CelesteAIRuntime` 与可重载逻辑 `CelesteAIBridge` 拆成两个 Everest Mod。主控通过现有连接在动作边界重载桥接逻辑；常驻核心继续持有冻结门闸、帧号、IPC／OBS 时钟、注入按键绑定、双轨 FMOD 混音器及音频共享内存。主控不发送录制 stop/start，也不另开录制目录。当前版本为桥接 1.8.0、常驻核心 1.0.5，核心 ABI 仍为 1。
+
+**1.8.0／1.0.5 需要一次维护升级，并同步更新主控。** Runtime 原来按类型将所有加载器当成可继续运行的维护场景，无法冻结并接回原本就是加载器的场景。现在只允许 prepare 原对象以外的新维护对象运行，原对象从 prepare 起冻结，返回后即可接回；输入绑定恢复、冻结和 ready 使用同一个引用判定。该规则必须跨 Bridge 卸载存活，因此属于核心调度修复，不在核心放入明信片、存档或剧情策略。不得覆盖在用核心；兼容 Bridge 后续更新仍可不停录重载。
+
+Bridge 统一识别后台完成且原生明信片仍附着于 `OverworldLoader`、未排队移除的呈现，动画、等待输入及淡出均可保留原对象重载；后台未完成和原生保存仍先等待。`RemoveSelf` 仅排入原生移除队列，`Scene` 引用下一次更新才清除，因此呈现、UI 和输入共同排除待移除卡片，不能只看引用或透明度。移除后的原生尾延迟仍按真实存活协程报告播放；加载器权威 `mode: wait` 允许中性过渡到下一提示／地图，不提前交回或提交章节完成。`hello.reload_origin_scene_hold` 声明核心能力，目标描述仅在需要时附 `requires_origin_hold: true`；旧核心在 prepare 前被明确拒绝。普通目标的快照字段保持兼容；已持有加载器提示快照的交接须用兼容的 1.8.x 桥接及核心 1.0.5 接回，不能降到不支持该边界的旧桥接。
+
+本次有菜单行为兼容要求：新主控的菜单宏必须附 `stop_on: ["menu_prompt"]`（与其他停止条件合并），提示出现时返回 `MenuPromptRequired`，包含实际观测、计量和显式处理说明，旧确认输入不再流入解锁提示。普通 agent 的显式 `watch`／`advance`／确认不受此菜单专用截断影响，自动剧情模式只在实际输入就绪时确认。旧主控不会自动增加该截断，因此不能只换 Bridge 后继续旧主控；按当前版本规则升级 minor 到 1.8.0，迁移时同时更新主控、Bridge 和核心。维护退出遇到此提示也会明确交回，不再将提示动画当加载空等。
 
 **1.7.0 仅更新 Bridge／主控，Runtime 不变。** Bridge 统一提供 `reload_boundary` 场景描述：真正后台加载或保存尚未结束为 `wait`，`Level` 为房间替换，其余非空场景为原对象保留。主控先取得短暂维护冻结，再读取稳定快照并交给核心；无存档主菜单、选档、地图、`LevelEnter` 明信片及 `IntroVignette` 序章均可重载，不要求虚构的关卡身份或代按确认。取消／失败时释放尚未交给核心的临时冻结，准备结果未知则先查询核心，不能提前释放或重复准备。
 
-1.7.0 的身份快照表示与旧 Bridge 导入器不兼容，按当前版本规则递增 minor；新版接受旧快照，可从旧版受控升级。旧版无法读取新版导出的完整场景身份，回退到 1.6.x 或更早版本须关闭游戏后按下文回滚，不能热降级。已持有新版快照的失败交接应先用兼容的 1.7.x 构建接回。
+1.7.0 的身份快照表示与旧 Bridge 导入器不兼容，按当前版本规则递增 minor；新版接受旧快照，可从旧版受控升级。旧版无法读取新版导出的完整场景身份，回退到 1.6.x 或更早版本须关闭游戏后按下文回滚，不能热降级。已持有 1.7.x 身份快照的失败交接应先用兼容该快照的构建接回。
 
 **1.6.0／1.0.4 需要一次维护重启升级。** 核心原先假定普通 Mod 重载一定更换场景对象，这会使保留原对象的结算页永远无法接回。现在由主控通过可选 `reload_commit.expect_scene_change` 声明完成条件：替换或保留。核心仅验证通用对象引用与交接生命周期，不解释关卡、结算或 Session；保留条件绑定 prepare 时的原对象，重试不能换基线或切换条件。ABI 仍为 1，旧调用默认替换模式；新 Bridge 依赖核心 1.0.4。不要覆盖在用核心。
 
@@ -43,7 +49,7 @@
 也可单独提交已构建的桥接 DLL：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\reload_bridge.py --hud-port 47792 --dll "<构建目录>\CelesteAIBridge.dll" --expected-version 1.7.1
+.\.venv\Scripts\python.exe tools\reload_bridge.py --hud-port 47792 --dll "<构建目录>\CelesteAIBridge.dll" --expected-version 1.8.0
 ```
 
 该工具只访问现有 HUD 的 `/api/control`，不会创建第二条桥接连接顶掉主控。DLL 路径、可选 PDB 与哈希由主控检查；`--dll` 与部署脚本一样要求常驻核心逐字节相同：主控在 DLL 同目录或仓库 `game-runtime\bin` 查找一同构建的 `CelesteAIRuntime.dll`（也可用 `--runtime-dll` 指定），与游戏实际加载的核心（`hello.runtime_path`，旧桥接没有时按 `Mods\CelesteAIRuntime\bin` 推断）比较哈希，不同或找不到就拒绝，不替换文件。必须先拿到常驻核心确认的 lease 和实际安装路径，才备份并原子替换 payload。备份放在运行目录的 `bridge_reload_backups/<lease>/`，交接阶段保存在 `bridge_reload.json`。
@@ -58,7 +64,7 @@
 
 非关卡场景沿用 Everest 原对象保留语义，由核心核验 prepare 时的同一场景引用，Bridge 核验完整场景类型、可空存档与章节身份，主控复核菜单选择及已有 UI／剧情输入节点。`LevelEnter`／`IntroVignette` 的入场协程直接留在原位置，不必先推进到关卡。所有场景保存中均先等原生保存协程完成；等待保存只冻结场景，不消费输入或增加录像计量，真正后台加载才推进并单独计量。旧桥接仍按原有 Level／AreaComplete 路径升级到新版，不要求旧快照凭空提供新增字段。任务 `done` 本身不禁止重载：原主控仍持有连接且桥接 Active 时可以维护；已结束的任务保持 done／暂停，不自动恢复模型或旧动作。原主控已关闭连接时不会为了重载另连接管游戏。
 
-加载器内部的交互仍有边界：`OverworldLoader` 可能显示解锁 C 面／变体明信片并等待确认，此时自动加载不会自行结束。当前不会代按，会在原期限到达后结束等待，尚未 prepare 或替换 DLL；应显式完成提示后重试。这类加载器内部交互的原地保留重载尚未适配，不能据上述普通非关卡场景验收推断已经支持。
+`OverworldLoader` 内的解锁 C 面／变体明信片已按原对象保留适配。Bridge 将后台加载完成与呈现／输入就绪分开报告；`ui.backgroundLoaded` 为真且卡片仍属于该 Scene 时，可以不确认提示而完成重载。重载后保留当前动画／页面／输入状态，agent 先 observe，再自行决定 watch 或 advance。后台还没完成时继续零输入等待；超时保持原请求供 retry，不代按提示。
 
 这些提示通常出现在通关后的返回流程，常规完成路径在进入 `AreaComplete` 前已经由 `LevelExit` 保存；它们不是已确认的章节进度丢失路径。源码入口也包括 `AreaQuit` 返回地图，旧版本设置迁移时标题画面会扫描原生槽位 0–2 的 24 心存档，可能补弹变体提示。因此不能将提示条件简化成“只会在结算之后出现”。
 
@@ -127,7 +133,13 @@ Bridge 的 schema-1 快照新增可选 `identity`，新快照严格校验游戏�
 
 ## 验证范围
 
-**1.7.0（本次）**：Python 回归覆盖无存档菜单、入场／序章／未知非关卡、取得冻结后失败释放、取消恰在 prepare 前、准备结果未知且核心 idle、释放断线及反复重连失败、保留场景 UI 改变时保持冻结、旧版升级后新增字段兼容。原生 `calibration/chapter_reset` 直接检查真实 Bridge：保存等待在普通和锁步节拍下不消费占位输入、不增帧，保存完成后在首个场景边界截断；新旧快照身份核验及维护冻结交接通过。Runtime 构建哈希保持不变。
+**1.8.0／1.0.5（本次）**：947 项 Python 回归通过（`local/loader-prompt-python-final-pass.log`），覆盖后台到提示的零输入等待、旧核心能力缺失、核心哈希变化提前拒绝、页面核验与失败重试、watch／advance 不提前结束任务、自动模式仅确认真实输入节点、菜单旧 C 截断、CLI 清楚交回及维护提示原因；尾延迟的权威自动过渡不会提前提交 pending 完成，未知旧加载器仍零输入拒绝。原生步骤、核心交接、剧情 fullBridge 三套检查均通过；初轮独立证据为 `local/loader-prompt-independent-step.log`、`local/loader-prompt-independent-runtime.log`、`local/loader-prompt-independent-story-final.log`，待移除卡片阶段为 `local/loader-removal-independent-*.log`，最终 37 构建与 LevelEnter 尾延迟复跑为 `local/loader-tail-independent-step.log`、`local/loader-tail-independent-runtime.log`、`local/loader-tail-independent-story.log`。覆盖原加载器从 prepare 起冻结、临时维护对象可运行、同引用接回／重试、输入绑定恢复、旧快照字段兼容，以及加载中已有提示时旧 C 零消耗。
+
+最终 Bridge `37F58DFB…`／核心 `E1A8698B…` 的私有实际游戏以原生 `OverworldLoader.Routine`／`Postcard.DisplayRoutine` 通过 C 面透明度 0 开场、C 面等待输入、变体等待输入三个普通 Everest 重载场景；Scene／卡片引用、alpha、buttonEase、帧号与音频计量保持不变，同 IPC／时钟／双 PCM 句柄累计 2160 帧无接收错误。三个真实模型经生产重载通知及工具直接观测／操作私有游戏，C 面与变体的 `advance` 都在一次工具内自然到达 Overworld，旧 UI 消失，不靠额外 raw 中性帧修复；变体设置已写盘。最终证据 `local/loader-prompt-private/acceptance.json`、`run-20261028-184550/report.json`。
+
+真实后台尚未完成时的菜单旧 C 零消耗、重载等待超时无 lease／未换 DLL／不停录、后台完成后原请求 retry，以及只读能力缺失注入在 hello／observe 后拒绝，另在同核心 E1、候选桥接 DA 版本完成，补充 PCM 562 帧无错误，版本范围在 acceptance 中单列。该候选先前的退出“通过”因测试清理补帧掩盖待移除卡片冻结而撤销；修复后才按上述最终构建重新验证自然退出。后台延迟仅用于接管前已开始的真实异步加载，因为接管内 RunThread 本就同步。辅助器不伪造 loaded／卡片状态，所有私有进程正常退出，存档恢复，用户实例未改。本轮接收器代替 OBS 编码器；非关卡默认图像缓冲不可用，实际接收只核验了原生文本／UI，不声称已验证新图片通道。初始化辅助器时序失败不计入通过。
+
+**1.7.0（历史）**：Python 回归覆盖无存档菜单、入场／序章／未知非关卡、取得冻结后失败释放、取消恰在 prepare 前、准备结果未知且核心 idle、释放断线及反复重连失败、保留场景 UI 改变时保持冻结、旧版升级后新增字段兼容。原生 `calibration/chapter_reset` 直接检查真实 Bridge：保存等待在普通和锁步节拍下不消费占位输入、不增帧，保存完成后在首个场景边界截断；新旧快照身份核验及维护冻结交接通过。Runtime 构建哈希保持不变。
 
 私有实际游戏通过无存档主菜单、选档页、地图、`LevelEnter` 入场呈现、`IntroVignette` 序章与 `Level` 普通重载；最终构建复测中连接、时钟与双轨 PCM 句柄连续，共 504 帧，无接收错误。实际取得维护冻结后注入一次读取错误，确认 worker 释放临时冻结且未 prepare／commit。两个私有进程均原生菜单正常退出，原游戏进程与 slot 10 哈希不变。最终证据 `local/reload-remaining-final-private/acceptance.json`（首轮 `local/reload-remaining-private/acceptance.json`）；本轮接收器代替 OBS 编码器，入场测试不声称明信片已达到可确认阶段。独立真实 Codex 接收 agent 经生产通知、执行器和工具入口先 observe；故意先 act 时实际收到“旧计划未执行，请先观测”的原因，随后观测，未推进。证据 `local/reload-remaining-receiver-20261028-172709/summary.json`；游戏／核心传输重放私有实测观测，未连接在用游戏。独立审查已复核完整调用链和失败恢复，回归与实测分别保留证据。
 

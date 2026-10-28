@@ -47,6 +47,40 @@ internal static class StoryText {
         && MemoRoutine(level, page) is { } routine && routine.waitTimer <= 0f
         && IsRoutine(Current(routine), typeof(CS03_Memo.MemoPage), "Wait");
 
+    private static Postcard? PostcardField(Scene? scene) => scene switch {
+        LevelEnter enter => enter.postcard,
+        OverworldLoader loader => loader.postcard,
+        _ => null,
+    };
+
+    internal static Postcard? ScenePostcard(Scene? scene) {
+        Postcard? card = PostcardField(scene);
+        // RemoveSelf queues removal; Scene is cleared only by the next native
+        // BeforeUpdate. A queued card must not freeze that very update forever.
+        return card != null && ReferenceEquals(card.Scene, scene) && scene?.Entities is { } entities &&
+            !entities.toRemove.Contains(card) ? card : null;
+    }
+
+    private static bool IsCardRoutine(IEnumerator? current, Postcard card, string method) =>
+        IsRoutine(current, typeof(Postcard), method) && ReferenceEquals(current!.GetType()
+            .GetField("<>4__this", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(current), card);
+
+    private static Coroutine? PostcardRoutine(Scene scene, Postcard card) {
+        if (scene.Entities == null) return null;
+        foreach (var entity in scene.Entities) foreach (var component in entity.Components) {
+            if (component is not Coroutine routine) continue;
+            var current = Current(routine);
+            if (IsCardRoutine(current, card, "DisplayRoutine") || IsCardRoutine(current, card, "EaseIn") ||
+                IsCardRoutine(current, card, "EaseOut")) return routine;
+        }
+        return null;
+    }
+
+    internal static bool PostcardReady(Scene scene, Postcard card) =>
+        ReferenceEquals(ScenePostcard(scene), card) && card is { Visible: true, alpha: >= 0.999f, buttonEase: > 0f } &&
+        PostcardRoutine(scene, card) is { waitTimer: <= 0f } routine &&
+        IsCardRoutine(Current(routine), card, "DisplayRoutine") && Current(routine)?.Current == null;
+
     internal static (string State, string Source) PlaybackState(Scene? scene) {
         if (InputNode(scene) is { } input) return ("input", input);
         if (scene is Level level) {
@@ -73,12 +107,14 @@ internal static class StoryText {
             }
             return level.InCutscene ? ("unknown", "unrecognized_cutscene") : ("none", "no_cutscene");
         }
-        if (scene is LevelEnter enter && enter.postcard is { } card) {
-            foreach (var entity in enter.Entities) foreach (var component in entity.Components) {
-                if (component is not Coroutine routine) continue;
+        if (scene != null && PostcardField(scene) is { } card) {
+            if (PostcardRoutine(scene, card) is { } routine) {
                 var current = Current(routine);
-                if (IsRoutine(current, typeof(Postcard), "EaseIn") || IsRoutine(current, typeof(Postcard), "EaseOut"))
+                if (ReferenceEquals(ScenePostcard(scene), card) &&
+                    (IsRoutine(current, typeof(Postcard), "EaseIn") || IsRoutine(current, typeof(Postcard), "EaseOut")))
                     return ("playing", "postcard_animation");
+                // DisplayRoutine has a final 1.2s delay after RemoveSelf. That
+                // live coroutine may still advance, without reviving its UI.
                 if (IsRoutine(current, typeof(Postcard), "DisplayRoutine") && routine.waitTimer > 0f)
                     return ("playing", "postcard_delay");
             }
@@ -110,7 +146,7 @@ internal static class StoryText {
                 && player != null && !PlayerControl.IsControllable(level, player)
                 && (level.InCutscene || player.StateMachine.State == Player.StDummy))
                 return "tutorial";
-        } else if (scene is LevelEnter enter && enter.postcard is { Visible: true, alpha: >= 0.999f, buttonEase: > 0f }) {
+        } else if (scene != null && ScenePostcard(scene) is { } card && PostcardReady(scene, card)) {
             return "postcard";
         }
         return null;
@@ -204,7 +240,7 @@ internal static class StoryText {
             }
         } else if (scene is IntroVignette intro) {
             Entry(w, "intro", ReadPage(intro.text, intro.textStart, intro.textAlpha * (1f - intro.pauseFade)));
-        } else if (scene is LevelEnter enter && enter.postcard is { Visible: true } card) {
+        } else if (scene != null && ScenePostcard(scene) is { Visible: true } card && ReferenceEquals(card.Scene, scene)) {
             Entry(w, "postcard", ReadPage(card.text, 0, card.alpha));
         }
         w.WriteEndArray();
@@ -214,7 +250,15 @@ internal static class StoryText {
     // UI observation supplies facts only. It does not press keys or assume a
     // visible/fading Poem is already accepting confirmation (fake hearts differ).
     internal static void WriteUi(Utf8JsonWriter w, Scene? scene) {
-        if (scene is Level memoLevel && !memoLevel.FrozenOrPaused && !memoLevel.SkippingCutscene && memoLevel.RetryPlayerCorpse == null
+        if (scene != null && ScenePostcard(scene) is { Visible: true } card && ReferenceEquals(card.Scene, scene)) {
+            w.WriteStartObject("ui");
+            w.WriteString("type", "Postcard");
+            w.WriteNumber("alpha", card.alpha);
+            w.WriteBoolean("inputReady", PostcardReady(scene, card));
+            if (scene is OverworldLoader loader) w.WriteBoolean("backgroundLoaded", System.Threading.Volatile.Read(ref loader.loaded));
+            w.WriteString("controls", "C: confirm when inputReady");
+            w.WriteEndObject();
+        } else if (scene is Level memoLevel && !memoLevel.FrozenOrPaused && !memoLevel.SkippingCutscene && memoLevel.RetryPlayerCorpse == null
             && memoLevel.Entities.FindFirst<CS03_Memo.MemoPage>() is { Visible: true, alpha: > 0f } memo) {
             w.WriteStartObject("ui");
             w.WriteString("type", "MemoPage");
