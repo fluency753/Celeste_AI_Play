@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import copy
 import json
 import re
 import time
@@ -93,14 +94,19 @@ class CodexRunner(SessionControls):
                       {"command": TEXT, "description": TEXT, "timeout_s": {"type": "number", "minimum": 1}},
                       ["command", "description"])]
         from .server import build_server
-        # 部分 CLI 会固定保存初建线程的动态工具；准备和游玩必须使用同一份 schema。
-        # 准备阶段只创建描述，不创建游戏连接；执行权限仍由下面的阶段门禁控制。
-        schema_source = self.game_server or build_server(SimpleNamespace(
-            cfg=self.cfg, metrics=self.metrics, workspace=self.cfg.workspace_dir))
+        # Codex persists the initial tool catalog across prepare/chat/play and
+        # later setting changes. Register the complete interface on a descriptor
+        # fixture; the real server and _request retain current execution policy.
+        schema_cfg = copy(self.cfg)
+        schema_cfg.live, schema_cfg.sim_assist, schema_cfg.cutscene_mode = True, True, 'agent'
+        schema_source = build_server(SimpleNamespace(
+            cfg=schema_cfg, metrics=self.metrics, workspace=self.cfg.workspace_dir))
         for tool in await schema_source.list_tools():
             data = tool.model_dump(by_alias=True)
             tools.append({"type": "function", "name": "celeste_" + data["name"],
-                          "description": data.get("description", ""), "inputSchema": data["inputSchema"]})
+                          "description": data.get("description", "") +
+                          "\n接口登记跨阶段保留；实际可用工具及动作权限由当前配置和阶段决定。",
+                          "inputSchema": data["inputSchema"]})
         tools.append(spec("celeste_finish_preparation", "仅准备模式可用：全库阅读完成后结束，不启动游戏。", {}))
         return tools
 
@@ -199,6 +205,8 @@ class CodexRunner(SessionControls):
                 raise ValueError("本次试玩已经结束，当前只提供聊天，不连接或操作游戏。")
             if self.paused and not workspace_program and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("用户已暂停试玩。请只回复用户，不推进游戏或运行规划；结束本轮并等待继续。")
+            if game and not self.prepare_only and not self.chat_only and name.removeprefix('celeste_') not in game_tools(self.cfg):
+                raise ValueError(f"当前试玩配置未启用 {name}，本次请求未执行；请使用当前已启用的工具。")
             if self.gate and self.gate.enabled and name != "celeste_stop_run":
                 # app-server 的动态调用没有 Claude 消息 ID；每次调用独立记一轮。
                 self.gate.note_tool_use(ident, ident)

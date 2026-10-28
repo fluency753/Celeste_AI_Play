@@ -126,17 +126,14 @@ def prepare_target(anchor, record):
         return target
     target.mkdir(parents=True, exist_ok=True)
     previous = read_json(source / "metrics.json")
-    current_state, metrics = read_json(anchor / "run_state.json"), read_json(anchor / "metrics.json")
+    # Configuration belongs to the selected conversation, including absent fields.
+    # Only the HUD's completed-play statistics come from the current anchor.
+    current_state, metrics = dict(state), read_json(anchor / "metrics.json")
     current_state.update(session_id=record["id"], model=state["model"],
                          conversation_source=record["id"],
                          effort=previous.get("effort", state["effort"]),
                          conversation_origin=source.name,
                          knowledge_profile=state.get("knowledge_profile", "explore"))
-    for key in ("engine", "provider", "runtime", "mcp_port", "requested_model", "agent", "save", "save_slot", "session_kind", "session_name", "prepared_dir"):
-        if key in state:
-            current_state[key] = state[key]
-        elif key in {"save_slot", "session_kind", "session_name", "prepared_dir", "requested_model", "mcp_port"}:
-            current_state.pop(key, None)
     for key in ("agent", "telemetry_source", "context_tokens", "context_window", "tool_calls", "compactions", "output_tokens", "thinking_tokens", "effort", "kb_progress", "study_s"):
         if key in previous:
             metrics[key] = previous[key]

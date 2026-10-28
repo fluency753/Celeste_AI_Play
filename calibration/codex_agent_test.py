@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import hashlib
 import json
 import sys
@@ -9,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mcp.types import CallToolResult
@@ -116,6 +117,88 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.chat_only=True
         denied=await self.runner._request('item/tool/call',{'tool':'celeste_stop_run','arguments':{'reason':'工具故障'}})
         self.assertFalse(denied['success'])
+
+    async def test_initial_catalog_covers_later_play_settings_without_mutating_live_server(self):
+        # The real MCP schema builder must describe all optional interfaces even
+        # when preparation starts with each capability disabled.
+        self.server.list_tools = AsyncMock(return_value=[])
+        expected_game = {'celeste_observe', 'celeste_act', 'celeste_narrate', 'celeste_set_effort',
+                         'celeste_stop_run', 'celeste_exit_level', 'celeste_cutscene', 'celeste_simulate'}
+        catalogs = []
+        for preparing, chat, live, simulate, cutscene in [
+                (True, False, False, False, 'auto'),
+                (False, True, True, False, 'auto'),
+                (False, False, False, True, 'agent'),
+                (False, False, True, True, 'agent')]:
+            with self.subTest(preparing=preparing, chat=chat, live=live, simulate=simulate):
+                self.runner.prepare_only, self.runner.chat_only = preparing, chat
+                self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = live, simulate, cutscene
+                original = deepcopy(vars(self.cfg))
+                tools = await self.runner.tool_specs()
+                catalogs.append({tool['name']: tool['inputSchema'] for tool in tools})
+                self.assertTrue(expected_game <= catalogs[-1].keys())
+                self.assertEqual(vars(self.cfg), original)
+                self.assertFalse(hasattr(self.server, 'cutscene_tool'))
+                self.assertFalse(hasattr(self.server, 'reset_observation_delivery'))
+        self.server.list_tools.assert_not_awaited()
+        self.assertTrue(all(catalog == catalogs[0] for catalog in catalogs[1:]))
+
+    async def test_preparation_registration_resumes_after_optional_capabilities_change(self):
+        self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = False, False, 'auto'
+        self.runner.prepare_only = True
+        registered = await self.runner.tool_specs()
+        path = self.root/'prepared-thread.jsonl'
+        path.write_text(json.dumps({'payload': {'dynamic_tools': registered}}), encoding='utf-8')
+        original = path.read_bytes()
+        for live, simulate, cutscene in [(True, True, 'agent'), (False, False, 'auto')]:
+            self.runner.prepare_only = False
+            self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = live, simulate, cutscene
+            self.runner._validate_resumed_tools({'path': str(path)})
+            self.assertEqual(path.read_bytes(), original)
+
+    async def test_optional_catalog_entries_do_not_enable_execution_or_spend_planning_budget(self):
+        self.runner.study = None
+        self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = False, False, 'auto'
+        self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(),
+                                           decide=AsyncMock(return_value=(True, '')))
+        arguments = {'celeste_simulate': {}, 'celeste_exit_level': {'reason': 'user requested'},
+                     'celeste_cutscene': {'action': 'advance'}}
+        for name, args in arguments.items():
+            with self.subTest(tool=name):
+                result = await self.runner._request('item/tool/call', {'tool': name, 'arguments': args})
+                self.assertFalse(result['success'])
+                text = result['contentItems'][0]['text']
+                self.assertIn('当前试玩配置未启用', text)
+                self.assertIn(name, text)
+                self.assertIn('未执行', text)
+        self.server.call_tool.assert_not_awaited()
+        self.runner.gate.note_tool_use.assert_not_called()
+        self.runner.gate.decide.assert_not_awaited()
+        self.runner.gate = None
+        self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = True, True, 'agent'
+        self.server.call_tool.return_value = CallToolResult.model_validate({
+            'content': [{'type': 'text', 'text': 'executed once'}]})
+        for name, args in arguments.items():
+            with self.subTest(enabled_tool=name):
+                self.server.call_tool.reset_mock()
+                result = await self.runner._request('item/tool/call', {'tool': name, 'arguments': args})
+                self.assertTrue(result['success'])
+                self.server.call_tool.assert_awaited_once_with(name.removeprefix('celeste_'), args)
+
+    async def test_phase_restrictions_still_explain_rejected_registered_optional_tools(self):
+        self.runner.study = None
+        self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = False, False, 'auto'
+        for preparing, chat, paused, explanation in [
+                (True, False, False, '知识库准备'),
+                (False, True, False, '只提供聊天'),
+                (False, False, True, '用户已暂停')]:
+            self.runner.prepare_only, self.runner.chat_only, self.runner.paused = preparing, chat, paused
+            for name in ('celeste_simulate', 'celeste_exit_level', 'celeste_cutscene'):
+                with self.subTest(phase=explanation, tool=name):
+                    result = await self.runner._request('item/tool/call', {'tool': name, 'arguments': {}})
+                    self.assertFalse(result['success'])
+                    self.assertIn(explanation, result['contentItems'][0]['text'])
+        self.server.call_tool.assert_not_awaited()
 
     async def test_exit_tool_is_forwarded_and_denied_when_paused_or_chat_only(self):
         self.runner.study=None

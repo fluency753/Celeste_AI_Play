@@ -65,6 +65,42 @@ class ConversationTests(unittest.TestCase):
         target=prepare_target(self.anchor,{'directory':str(self.source),'id':'older'})
         self.assertNotIn('save_slot',json.loads((target/'run_state.json').read_text()))
 
+    def test_selected_configuration_is_authoritative_including_missing_fields(self):
+        settings = {'sim_assist': True, 'sim': True, 'cutscene_mode': 'agent',
+                    'action_permissions': {'restart_chapter': True}, 'tuning': {'min_frames_per_act': 80},
+                    'kb_extra': 'old-only', 'kb_deny': ['old.md'], 'live_mode': True,
+                    'stiffness': True, 'formal_thought': True, 'save_context': True,
+                    'future_session_setting': 'must not leak'}
+        anchor_path = self.anchor/'run_state.json'
+        anchor_state = json.loads(anchor_path.read_text())
+        anchor_state.update(settings)
+        anchor_path.write_text(json.dumps(anchor_state))
+        source_path = self.source/'run_state.json'
+        source_state = json.loads(source_path.read_text())
+        source_state.update(sim_assist=False, sim=False, cutscene_mode='auto',
+                            session_kind='ready', prepared_dir=str(self.source),
+                            action_permissions={'restart_chapter': False})
+        source_path.write_text(json.dumps(source_state))
+        target = prepare_target(self.anchor, {'directory':str(self.source), 'id':'older'})
+        selected = json.loads((target/'run_state.json').read_text())
+        for key, value in source_state.items():
+            self.assertEqual(selected[key], value, key)
+        for key in settings.keys() - source_state.keys():
+            self.assertNotIn(key, selected, key)
+        self.assertEqual(json.loads(anchor_path.read_text()), anchor_state)
+        self.assertEqual(json.loads(source_path.read_text()), source_state)
+
+    def test_selected_enabled_settings_are_not_replaced_by_anchor_defaults(self):
+        path = self.source/'run_state.json'
+        state = json.loads(path.read_text())
+        state.update(sim_assist=True, cutscene_mode='agent', kb_deny=['source.md'],
+                     tuning={'min_frames_per_act': 80})
+        path.write_text(json.dumps(state))
+        target = prepare_target(self.anchor, {'directory':str(self.source), 'id':'older'})
+        selected = json.loads((target/'run_state.json').read_text())
+        for key in ('sim_assist', 'cutscene_mode', 'kb_deny', 'tuning'):
+            self.assertEqual(selected[key], state[key])
+
     def test_recovered_conversation_replaces_occupied_source_in_picker(self):
         target = prepare_target(self.anchor, {"directory":str(self.source), "id":"older"})
         state = json.loads((target / "run_state.json").read_text())
