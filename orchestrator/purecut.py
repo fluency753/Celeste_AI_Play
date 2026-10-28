@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import shlex
 import shutil
 import struct
@@ -122,13 +123,33 @@ def play_track(directory: Path, kept: int) -> Path | None:
     return path if size == kept * SAMPLES_PER_FRAME * 8 else None
 
 
+class FFmpegError(RuntimeError):
+    def __init__(self, code: int, log_path: Path, output: str):
+        super().__init__(f"ffmpeg 退出码 {code}，见 {log_path}")
+        self.output = output
+
+
 def _run(cmd: list[str], log_path: Path) -> None:
     with open(log_path, "ab") as log:
         log.write(("\n$ " + " ".join(cmd) + "\n").encode("utf-8"))
         log.flush()
+        start = log.tell()
         code = subprocess.run(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL).returncode
     if code != 0:
-        raise RuntimeError(f"ffmpeg 退出码 {code}，见 {log_path}")
+        with open(log_path, "rb") as log:
+            end = log.seek(0, os.SEEK_END)
+            log.seek(max(start, end - 8192))
+            output = log.read().decode("utf-8", errors="replace")
+        raise FFmpegError(code, log_path, output)
+
+
+def _select_expression(ranges: list[tuple[int, int]]) -> str:
+    """平衡相加，避免长录像的区间数触发 FFmpeg 表达式递归深度限制。"""
+    terms = [f"between(n,{a},{b})" for a, b in ranges]
+    while len(terms) > 1:
+        terms = [f"({terms[i]}+{terms[i + 1]})" if i + 1 < len(terms) else terms[i]
+                 for i in range(0, len(terms), 2)]
+    return terms[0] if terms else "0"
 
 
 def make_pure(directory: Path, ffmpeg: str, video_args: str, log: Callable[[str], None] = print,
@@ -175,13 +196,15 @@ def make_pure(directory: Path, ffmpeg: str, video_args: str, log: Callable[[str]
     video_tmp, audio_tmp, script = directory / "video_pure.mkv", directory / "audio_pure_cut.wav", directory / "pure_select.txt"
     try:
         # 画面：select 按帧序号挑出各段游玩，时间戳重排成连续的 60 帧/秒
-        expr = "+".join(f"between(n,{a},{b})" for a, b in ranges)
+        expr = _select_expression(ranges)
         script.write_text(f"select='{expr}',setpts=N/({fps}*TB)", encoding="ascii")
         tail = ["-an", "-fps_mode", "passthrough", *shlex.split(video_args), str(video_tmp)]
         head = [ffmpeg, "-hide_banner", "-loglevel", "warning", "-y", "-hwaccel", "auto", "-i", str(directory / "video.mkv")]
         try:   # 滤镜从文件读：ffmpeg 7 起写作 -/filter:v 文件（-filter_script 在新版里已删除），旧版退回 -filter_script
             _run(head + ["-/filter:v", str(script)] + tail, log_path)
-        except RuntimeError:
+        except FFmpegError as exc:
+            if not re.search(r"Unrecognized option ['\"]/?filter:v['\"]", exc.output):
+                raise
             _run(head + ["-filter_script:v", str(script)] + tail, log_path)
         if track is None:
             cut_audio(directory / "audio.wav", audio_tmp, ranges)
