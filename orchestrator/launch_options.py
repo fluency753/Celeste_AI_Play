@@ -325,6 +325,9 @@ def resume_args(run_dir: Path, fresh_session: bool = False, new_recording: bool 
     argv = ["--agent", str(state["agent"]), "--save", str(state["save"]), "--resume", str(run_dir)]
     if state.get("engine"):
         argv += ["--engine", str(state["engine"])]
+    for key in ('bridge_port', 'mcp_port'):
+        if key in state:
+            argv += ['--' + key.replace('_', '-'), str(state[key])]
     if fresh_session:
         argv.append("--fresh-session")
     if new_recording:

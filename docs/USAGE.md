@@ -799,7 +799,27 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC，`obs_mix
 | inputs.tas | 回放用的逐帧按键与系统事件 | 未实现 |
 | manifest.json | 版本、配置与哈希 | 未实现 |
 
-## 6. 常见问题
+## 6. 主控更新与检查
+
+普通状态检查只读取 HUD、运行记录与 Bridge 共享内存，不连接桥接、不创建录制，脚本不额外扫描进程或历史运行：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 tools/restart_controller.py check
+```
+
+修改主控 Python 后，在 HUD 暂停并等动作结束，再执行：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 tools/restart_controller.py restart
+```
+
+脚本经原主控中断入口保留游戏与录制，确认旧宿主退出后，以同一会话、存档、端口和原录制续跑。新主控保持暂停；核验宿主归属、会话、录制及游戏帧号后才报告成功。此命令不部署 Bridge／Runtime，不自动恢复试玩。仅支持已接管且确实冻结的场景；菜单／地图未冻结、录制锁步或音频断开时，预检拒绝，不中断主控。
+
+默认 HUD 端口为 47792，可用 `--hud-port` 指定，`--json` 输出简短结构化结果。旧主控尚未记录宿主及桥接端口时，首次需显式提供 `--host <local/background/宿主目录>` 和 `--bridge-port <端口>`；新主控会自动登记这些信息。
+
+交接记录在 `local/controller-restart.json`。默认等待 90 秒，`--timeout` 可设为 1–300 秒；超时或启动回执丢失后用 `restart --retry` 观察并接续同一次交接，不重复中断或另开宿主。若新宿主明确退出，脚本记录失败终态，报告宿主日志与标准 `--resume <原运行目录> --start-paused` 恢复路径；修复并人工续跑后，可以再次正常更新。明确的交接拒绝（中断被拒、其他宿主接管、录制身份或游戏帧号改变）也结束本次事务，须按报错检查现状；不会自动停止新宿主或回滚游戏。`--retry` 不替代修复失败的进程，也不自动恢复模型操作。
+
+## 7. 常见问题
 
 | 现象 | 处理 |
 | --- | --- |

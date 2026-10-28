@@ -24,13 +24,16 @@ def console_python() -> str:
     return sys.executable
 
 
-def launch(arguments, *, probe=False, service="play"):
+def launch(arguments, *, probe=False, service="play", directory=None):
     if os.name != "nt":
         raise RuntimeError("独立宿主目前只支持 Windows")
     if service not in {"play", "chat", "prepare", "hud", "hud-window"}:
         raise ValueError("未知后台服务")
-    directory = ROOT / "local" / "background" / (time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8])
-    directory.mkdir(parents=True)
+    base = (ROOT / "local" / "background").resolve()
+    directory = Path(directory).resolve() if directory is not None else base / (time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8])
+    if directory.parent != base:
+        raise ValueError("后台宿主目录必须直接位于 local/background")
+    directory.mkdir(parents=True, exist_ok=False)
     manifest = directory / "launch.json"
     manifest.write_text(json.dumps({"arguments": arguments, "probe": probe, "service": service,
         "codex_cli": os.environ.get("CODEX_APP_RUNTIME_CLI_PATH")}, ensure_ascii=False), encoding="utf-8")
@@ -89,6 +92,7 @@ def worker(manifest):
                     raise RuntimeError(f"游戏主控端口 {port} 已被占用，拒绝接管现有连接")
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"
+        env["CELESTE_CONTROLLER_HOST"] = str(directory.resolve())
         docker = Path("D:/Program Files/Docker/Docker/resources/bin")
         if docker.is_dir():
             env["PATH"] = str(docker) + os.pathsep + env.get("PATH", "")
