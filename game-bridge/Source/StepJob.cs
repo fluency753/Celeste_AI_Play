@@ -55,6 +55,9 @@ internal sealed class StepJob {
     private bool lastOnGround;
     private int lastDashes;
 
+    public bool WaitingForReloadSave => stopOn.Contains("reload_ready") && ReloadBoundary.Waiting && !ReloadBoundary.AutomaticLoader;
+    public bool AutomaticReloadLoading => stopOn.Contains("reload_ready") && ReloadBoundary.AutomaticLoader;
+
     public int LoadingFrames;
     public string? StopReason { get; private set; }
     public bool Finished => StopReason != null;
@@ -130,7 +133,7 @@ internal sealed class StepJob {
     public bool CheckChapterLoaded() {
         // Owner maintenance can wait through an automatic loader to any scene
         // without consuming its placeholder input (including results/menus).
-        if (StopReason == null && stopOn.Contains("reload_ready") && Engine.Scene != null && !Bridge.IsLoading())
+        if (StopReason == null && stopOn.Contains("reload_ready") && !ReloadBoundary.Waiting)
             StopReason = "reload_ready";
         if (StopReason == null && stopOn.Contains("chapter_loaded") &&
                 Engine.Scene is Level or IntroVignette or LevelEnter && !Bridge.IsLoading()) {

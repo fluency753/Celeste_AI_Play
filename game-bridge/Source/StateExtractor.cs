@@ -58,6 +58,7 @@ internal static class StateExtractor {
 
     public static void WriteSnapshot(Utf8JsonWriter w, SnapshotOptions opt) {
         w.WriteNumber("frame", Bridge.Frame);
+        ReloadBoundary.Write(w);
         w.WriteBoolean("saving", UserIO.Saving);
         w.WriteBoolean("frozen", Bridge.Frozen);
         w.WriteString("scene", Engine.Scene?.GetType().Name ?? "none");

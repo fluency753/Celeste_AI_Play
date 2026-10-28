@@ -317,8 +317,76 @@ using (var snapshot = new Hook(typeof(StateExtractor).GetMethod("WriteSnapshot",
             Check(alreadyLoaded.StopReason == "reload_ready", "Already loaded scene failed to stop before input");
         }
     }
+    // Native save completion belongs to Celeste.Update, before Engine.Update.
+    // Maintenance must let that outer update finish without consuming a menu
+    // placeholder or advancing gameplay/recording while disk I/O is pending.
+    foreach (bool locked in new[] { false, true })
+    foreach (Scene savingScene in new Scene[] { Level(), (Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld)) }) {
+        Scene(savingScene);
+        typeof(UserIO).GetProperty("Saving", flags)!.SetValue(null, true);
+        var waiting = new StepJob(103, new() { InputFrame.Parse("C") }, new[] { "reload_ready" }, 4,
+            false, "level", new SnapshotOptions(), false);
+        typeof(Bridge).GetField("job", flags)!.SetValue(null, waiting);
+        Check(waiting.WaitingForReloadSave && !waiting.Finished, "Pending save did not enter maintenance wait");
+        long frame = Bridge.Frame; received = null;
+        typeof(Bridge).GetMethod(locked ? "LockstepTick" : "NormalTick", flags)!.Invoke(null,
+            new object[] { (Action)(() => {
+                Check(Bridge.ShouldHaltEngineUpdate(), "Saving wait advanced the scene");
+                typeof(UserIO).GetProperty("Saving", flags)!.SetValue(null, false);
+            }) });
+        using var response = System.Text.Json.JsonDocument.Parse(received!);
+        Check(waiting.StopReason == "reload_ready" && waiting.LoadingFrames == 0 && Bridge.Frame == frame &&
+            response.RootElement.GetProperty("result").GetProperty("consumed").GetInt32() == 0,
+            "Save completion consumed placeholder input or recorded a frame");
+    }
+    typeof(Bridge).GetField("job", flags)!.SetValue(null, null);
+    foreach (Scene preserved in new Scene[] {
+            (Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld)),
+            (LevelEnter)RuntimeHelpers.GetUninitializedObject(typeof(LevelEnter)),
+            (IntroVignette)RuntimeHelpers.GetUninitializedObject(typeof(IntroVignette)),
+            (Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)) }) {
+        Scene(preserved); SaveData.Instance = null;
+        var boundary = ReloadBoundary.Capture();
+        Check(boundary.mode == "preserve" && boundary.save == null && boundary.session == null,
+            "Non-Level scene requires a save/session or gets room replacement");
+        using var acquireArgs = System.Text.Json.JsonDocument.Parse("{\"enabled\":true}");
+        typeof(Bridge).GetMethod("Handle", flags)!.Invoke(null, new object[] { new Request(104, "reload_boundary", acquireArgs.RootElement) });
+        using var acquireReply = System.Text.Json.JsonDocument.Parse(received!);
+        Check(acquireReply.RootElement.GetProperty("acquired").GetBoolean() && Bridge.Frozen && Bridge.OwnsInput && Bridge.ShouldHaltEngineUpdate(),
+            "Menu maintenance boundary failed to freeze/own input");
+        long frame = Bridge.Frame;
+        typeof(Bridge).GetMethod("NormalTick", flags)!.Invoke(null, new object[] { (Action)(() => Check(Bridge.ShouldHaltEngineUpdate(), "Boundary advanced menu")) });
+        Check(Bridge.Frame == frame, "Boundary incremented menu clock");
+        string exported = Bridge.ExportReloadState();
+        Check(!(bool)typeof(Bridge).GetField("reloadBoundaryHeld", flags)!.GetValue(null)!, "Export retained the payload boundary after transfer");
+        Bridge.ImportReloadState(exported);
+        using var identity = System.Text.Json.JsonDocument.Parse(exported);
+        Check(identity.RootElement.GetProperty("identity").GetProperty("scene").GetString() == preserved.GetType().FullName,
+            "Scene identity lost its full type");
+        Scene((OverworldLoader)RuntimeHelpers.GetUninitializedObject(typeof(OverworldLoader)));
+        try { Bridge.ImportReloadState(exported); throw new Exception("Changed reload identity was accepted"); }
+        catch (InvalidOperationException) { }
+    }
+    Scene((Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld)));
+    using (var acquireArgs = System.Text.Json.JsonDocument.Parse("{\"enabled\":true}"))
+    using (var releaseArgs = System.Text.Json.JsonDocument.Parse("{\"enabled\":false}")) {
+        typeof(Bridge).GetMethod("Handle", flags)!.Invoke(null, new object[] { new Request(105, "reload_boundary", acquireArgs.RootElement) });
+        typeof(Bridge).GetMethod("Handle", flags)!.Invoke(null, new object[] { new Request(106, "reload_boundary", releaseArgs.RootElement) });
+        Check(!Bridge.Frozen && !Bridge.OwnsInput, "Release retained menu freeze or input capture");
+        typeof(UserIO).GetProperty("Saving", flags)!.SetValue(null, true);
+        typeof(Bridge).GetMethod("Handle", flags)!.Invoke(null, new object[] { new Request(107, "reload_boundary", acquireArgs.RootElement) });
+        using var busyReply = System.Text.Json.JsonDocument.Parse(received!);
+        Check(!busyReply.RootElement.GetProperty("acquired").GetBoolean() && !Bridge.Frozen,
+            "Acquisition froze a pending save before it could finish");
+        typeof(UserIO).GetProperty("Saving", flags)!.SetValue(null, false);
+    }
+    Scene(Level());
+    Check(ReloadBoundary.Capture().mode == "replace", "Level failed native replacement policy");
+    Scene((LevelLoader)RuntimeHelpers.GetUninitializedObject(typeof(LevelLoader)));
+    Check(ReloadBoundary.Capture().mode == "wait" && !Bridge.CanReload(), "Loader was allowed to reload");
     typeof(Bridge).GetProperty("Active", flags)!.SetValue(null, false);
 }
+Console.WriteLine("PASS: save waits halt scenes without consuming/recording input; nullable menu/entry identity and short maintenance freeze transfer verified");
 Console.WriteLine("PASS: production normal/lockstep loading ticks freeze at first chapter scene, preserve input plan and loading accounting");
 Console.WriteLine("PASS: reload_ready stops LevelLoader/LevelExit/OverworldLoader to Level/AreaComplete/Overworld before consuming confirmation in normal and lockstep ticks");
 

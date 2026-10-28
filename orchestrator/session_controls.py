@@ -404,7 +404,7 @@ class SessionControls:
                               else '原录制状态保持不变')
             self.control.mark(row['id'], 'submitted', f'桥接 {result.get("version")} 已接回，{recording_note}')
             if not self.session.done:
-                scene_note = ('结算场景保持原对象与进度，未代按确认。' if result.get('scene_mode') == 'preserve' else
+                scene_note = ('游戏场景保持原对象与进度，未代按确认。' if result.get('scene_mode') == 'preserve' else
                               '当前房间经 Everest 正常重载，主控仍核验原存档与房间。')
                 self.pending_messages.append({**row, 'id': 'bridge_reload:' + str(row['id']), 'next_turn': True,
                     'text': '桥接代码已重载并接回，' + recording_note + '。' + scene_note +

@@ -81,6 +81,10 @@ def _snapshot(hello, obs):
                           'frames': hello.get('record_audio_frames'), 'replays': hello.get('record_audio_replay_frames')}}
     if obs.get('scene') == 'AreaComplete':
         result['completion'] = {**(obs.get('completion') or {}), 'ui': obs.get('ui')}
+    if isinstance(obs.get('reload_boundary'), dict):
+        result['boundary'] = obs['reload_boundary']
+        if obs['reload_boundary'].get('mode') == 'preserve':
+            result['presentation'] = {key: obs.get(key) for key in ('menu', 'ui', 'storyInput', 'storyDecision')}
     return result
 
 
@@ -91,6 +95,9 @@ def _verify(before, hello, obs):
             raise BridgeReloadError(f'重载核验失败：{key} 已变化（要求 {before[key]!r}，实际 {after[key]!r}）；保持暂停')
     if before.get('completion') != after.get('completion'):
         raise BridgeReloadError('重载核验失败：结算身份或 UI 已变化；保持暂停')
+    for key in ('boundary', 'presentation'):
+        if key in before and before[key] != after.get(key):
+            raise BridgeReloadError(f'重载核验失败：{key} 已变化；保持暂停')
     if hello.get('frozen') is not True:
         raise BridgeReloadError('重载核验失败：游戏尚未保持冻结')
     if before['recording'] != after['recording']:
@@ -266,18 +273,23 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
     # A wait before prepare has no lease or file replacement to resume. Retry
     # its recorded request against a fresh loaded boundary, not an old snapshot.
     cancel_pending_loading = False
+    reconnect_pending_boundary = False
+    preflight_retry_record = {}
     if request['retry'] and path is not None and path.exists():
         waiting = json.loads(path.read_text(encoding='utf-8'))
         if (not waiting.get('lease') and not waiting.get('prepare_outcome_unknown')
-                and waiting.get('resume_phase', waiting.get('phase')) == 'waiting_loading'):
+                and waiting.get('resume_phase', waiting.get('phase')) in {'waiting_loading', 'waiting_boundary'}):
             request = options({**waiting.get('request', {}), **explicit_request, 'retry': False})
             if type(waiting.get('owner_was_paused')) is bool:
                 owner_was_paused = waiting['owner_was_paused']
-            cancel_pending_loading = waiting.get('connection_failed') is True
+            cancel_pending_loading = waiting.get('connection_failed') is True and waiting.get('resume_phase', waiting.get('phase')) == 'waiting_loading'
+            reconnect_pending_boundary = waiting.get('connection_failed') is True and not cancel_pending_loading
+            preflight_retry_record = waiting
     deadline = time.monotonic() + request['timeout_s']
-    record = {}
+    record = preflight_retry_record
     already_finished = False
     reuse_ready_attempt = False
+    boundary_may_hold = record.get('boundary_release_unconfirmed') is True
 
     def call(command, *, _loading=False, **args):
         if cancel is not None and cancel.is_set():
@@ -323,7 +335,7 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                   'owner_was_paused': owner_was_paused}
         _write(path, record)
         if progress:
-            progress('正在等待关卡加载完成，将在首个关卡冻结边界重载；不确认剧情或结算')
+            progress('正在等待加载或保存完成，将在首个稳定场景边界重载；不确认剧情或结算')
         client = getattr(session, 'client', None)
         previous_check = getattr(client, 'cancel_check', None)
         try:
@@ -366,20 +378,41 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                                   'consumed': result.get('consumed'), 'loading_frames': result.get('loadingFrames', 0)}
         _write(path, record)
         if result.get('consumed') != 0 or result.get('stop') != 'reload_ready':
-            raise BridgeReloadError('加载等待未在首个关卡边界停止；保持暂停，未进入重载或替换文件')
+            raise BridgeReloadError('加载等待未在首个稳定场景边界停止；保持暂停，未进入重载或替换文件')
         if time.monotonic() >= deadline or (cancel is not None and cancel.is_set()):
             raise BridgeReloadError('加载等待已超时或取消；未进入重载，可用 --retry 重试')
         loaded_hello = call('hello')
         loaded_obs = call('observe', image=False, scope='room', fields=True)['obs']
         for key in ('slot', 'name'):
             expected = (obs.get('save') or {}).get(key)
-            if expected is None:
+            if expected is None and hello.get('reload_boundary_control') is not True:
                 expected = getattr(getattr(session, 'cfg', None), 'save_slot' if key == 'slot' else 'save', None)
             if expected is not None and (loaded_obs.get('save') or {}).get(key) != expected:
                 raise BridgeReloadError('加载后存档身份改变；保持暂停，未进入重载')
         if progress:
             progress('加载已完成，正在核验冻结场景并准备重载')
         return loaded_hello, loaded_obs
+
+    def release_boundary():
+        # Cleanup must run even after the request was cancelled or timed out.
+        # It uses only the existing owner connection and never touches a lease.
+        with getattr(session, 'lock', nullcontext()):
+            client = getattr(session, 'client', None)
+            previous_timeout = getattr(client, 'timeout', None)
+            sock = getattr(client, 'sock', None)
+            socket_timeout = sock.gettimeout() if sock is not None else None
+            try:
+                if client is not None: client.timeout = 3
+                if sock is not None: sock.settimeout(3)
+                session.bridge_call('reload_boundary', enabled=False, allow_reconnect=False)
+            finally:
+                if client is not None: client.timeout = previous_timeout
+                current_socket = getattr(client, 'sock', None)
+                if current_socket is not None:
+                    try:
+                        current_socket.settimeout(socket_timeout)
+                    except OSError:
+                        pass
 
     def abort_after_rejection(exc):
         # Pre-commit validation failed while the runtime still reports the
@@ -396,7 +429,7 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
         return exc
 
     try:
-        if cancel_pending_loading:
+        if cancel_pending_loading or reconnect_pending_boundary:
             client = getattr(session, 'client', None)
             with getattr(session, 'lock', nullcontext()):
                 if client is not None and getattr(client, 'sock', None) is not None:
@@ -406,7 +439,8 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                         client.reconnect()
                     finally:
                         client.timeout = old_timeout
-                call('cancel', allow_reconnect=False)
+                if cancel_pending_loading:
+                    call('cancel', allow_reconnect=False)
         if request['abort']:
             if path is not None and path.exists():
                 try:
@@ -452,6 +486,12 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                 lease = current.get('lease')
                 if current.get('stage') == 'idle' and not lease:
                     record['prepare_outcome_unknown'] = False
+                    if record.get('payload_boundary'):
+                        boundary_may_hold = True
+                        release_boundary()
+                        boundary_may_hold = False
+                        record.update(phase='waiting_boundary', payload_boundary=False, boundary_release_unconfirmed=False)
+                        raise BridgeReloadError('已确认常驻核心未进入重载，临时维护冻结已释放；可用 --retry 重新取得边界')
                     raise BridgeReloadError('已确认常驻核心未进入重载；试玩仍暂停，可继续试玩或重新发起重载')
                 if current.get('stage') not in {'prepared', 'reloading', 'ready', 'failed'} or not isinstance(lease, str) or not lease:
                     raise BridgeReloadError('常驻核心没有可接回的重载 lease')
@@ -507,18 +547,48 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                 if hello.get('active') is not True:
                     raise BridgeReloadError('桥接控制权已交还；当前主控不再拥有游戏，未进入重载')
                 loading_scenes = {'LevelLoader', 'LevelExit', 'OverworldLoader', 'GameLoader'}
-                if obs.get('scene') in loading_scenes or hello.get('scene') in loading_scenes:
+                def waiting():
+                    if hello.get('reload_boundary_control') is True:
+                        return any((value.get('reload_boundary') or {}).get('mode') == 'wait' for value in (hello, obs))
+                    return obs.get('scene') in loading_scenes or hello.get('scene') in loading_scenes
+                if waiting():
                     hello, obs = wait_for_loading(hello, obs)
+                if hello.get('reload_boundary_control') is True:
+                    record.update(phase='waiting_boundary', request=dict(request), owner_was_paused=owner_was_paused)
+                    _write(path, record)
+                    while True:
+                        # Menus normally animate while idle. Freeze in the payload
+                        # before reading the baseline, then transfer that hold to
+                        # the resident prepare in the same game-thread boundary.
+                        boundary_may_hold = True
+                        if call('reload_boundary', enabled=True).get('acquired') is True:
+                            break
+                        hello = call('hello')
+                        obs = call('observe', image=False, scope='room', fields=True)['obs']
+                        if waiting():
+                            hello, obs = wait_for_loading(hello, obs)
+                        time.sleep(.05)
+                    hello = call('hello')
+                    obs = call('observe', image=False, scope='room', fields=True)['obs']
+                    boundary = obs.get('reload_boundary') or {}
+                    mode = boundary.get('mode')
+                    if (mode not in {'replace', 'preserve'} or not boundary.get('scene')
+                            or hello.get('reload_boundary') != boundary):
+                        raise BridgeReloadError('桥接维护边界描述缺失或不一致；未进入重载')
+                else:
+                    mode = 'replace' if obs.get('scene') == 'Level' else 'preserve'
+                    if obs.get('scene') not in {'Level', 'AreaComplete'}:
+                        raise BridgeReloadError(f'场景 {obs.get("scene")} 需要 Bridge 1.7.0 的维护冻结边界；未进入重载')
                 if hello.get('frozen') is not True:
-                    raise BridgeReloadError('只能在章节已冻结的动作边界重载；未发送游戏输入')
+                    raise BridgeReloadError('只能在游戏已冻结的动作边界重载；未发送游戏输入')
                 kind = obs.get('scene')
-                if kind not in {'Level', 'AreaComplete'}:
-                    raise BridgeReloadError(f'场景 {kind} 尚无重载交接适配；未确认剧情或结算，未进入重载')
-                if kind == 'AreaComplete' and hello.get('reload_scene_modes') is not True:
-                    raise BridgeReloadError('保留结算场景需要核心 1.0.4 的通用场景交接支持；请先维护升级，未进入重载')
+                if mode == 'preserve' and hello.get('reload_scene_modes') is not True:
+                    raise BridgeReloadError('保留场景需要核心 1.0.4 的通用场景交接支持；请先维护升级，未进入重载')
                 level = (obs.get('level') if kind == 'Level' else obs.get('completion')) or {}
                 save = obs.get('save') or {}
-                if (type(hello.get('frame')) is not int or type(save.get('slot')) is not int or not save.get('name') or not level.get('sid')
+                if type(hello.get('frame')) is not int:
+                    raise BridgeReloadError('当前观测缺少完整帧号，不能核验无缝重载')
+                if kind in {'Level', 'AreaComplete'} and (type(save.get('slot')) is not int or not save.get('name') or not level.get('sid')
                         or not level.get('room') or not level.get('side') or type(level.get('chapterTimeTicks')) is not int):
                     raise BridgeReloadError('当前观测缺少完整帧号、存档或章节计时，不能核验无缝重载')
                 if kind == 'AreaComplete' and ((obs.get('ui') or {}).get('type') != 'AreaComplete'
@@ -529,11 +599,12 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                     runtime_check = _check_runtime(request, _installed_runtime(hello, None))
                 loading_wait = record.get('loading_wait')
                 record = {'phase': 'preparing', 'before': _snapshot(hello, obs), 'started_wall': time.time(),
+                          'request': dict(request), 'payload_boundary': boundary_may_hold,
                           'initial_timeout_s': request['timeout_s'],
                           'expected_version': request.get('expected_version'),
-                          'scene_mode': 'replace' if kind == 'Level' else 'preserve',
+                          'scene_mode': mode,
                           'room_rebuild': ('Everest 普通重载会重建当前房间；临时剧情、玩家动作、手持物和跟随物不保证保留。'
-                                           if kind == 'Level' else 'Everest 保留原结算场景，不重建房间或确认结算。')}
+                                           if mode == 'replace' else 'Everest 保留原场景对象与进度，不重建房间或代按确认。')}
                 if loading_wait is not None:
                     record['loading_wait'] = loading_wait
                 record['reload_scene_modes'] = hello.get('reload_scene_modes') is True
@@ -561,6 +632,7 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
                 if current.get('stage') != 'prepared' or not isinstance(lease, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', lease):
                     raise BridgeReloadError(current.get('error') or '常驻核心没有确认重载交接，未替换文件')
                 record.update(lease=lease, phase='prepared', payload_path=current.get('payload_path'), prepare_outcome_unknown=False)
+                boundary_may_hold = False  # Export transferred the payload boundary to the resident hold.
                 _held_counters(record, current)
                 _write(path, record)
 
@@ -653,14 +725,29 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
         return record
     except Exception as exc:
         reported = exc
+        if boundary_may_hold and not record.get('lease') and not record.get('prepare_outcome_unknown'):
+            try:
+                # Cleanup has its own short deadline: cancellation/timeout must
+                # still release a payload-only menu freeze. Never acquire a new
+                # connection or release an uncertain resident prepare here.
+                release_boundary()
+                record['boundary_release_unconfirmed'] = False
+            except Exception as cleanup_error:
+                record['boundary_release_unconfirmed'] = True
+                reported = BridgeReloadError(str(exc) + '；临时维护冻结尚未确认释放：' + str(cleanup_error)
+                                             + '。请恢复原连接后用 --retry 接回，不要另开主控。')
+                reported.bridge_connection_failed = isinstance(cleanup_error, OSError)
         if record.get('prepare_outcome_unknown') and not record.get('lease'):
             reported = BridgeReloadError('重载准备请求的结果尚未确认：' + str(exc)
                                          + '；保持暂停，请用 --retry 查询常驻核心，不重复准备或原动作')
         aborted = getattr(exc, 'reload_aborted', False)
-        reported.reload_held = bool(record.get('lease') or record.get('prepare_outcome_unknown')) and not already_finished and not aborted
+        reported.reload_held = bool(record.get('lease') or record.get('prepare_outcome_unknown') or
+                                    record.get('boundary_release_unconfirmed')) and not already_finished and not aborted
         if record and not already_finished and not aborted and path is not None:
-            record.update(resume_phase=record.get('phase'), phase='failed', error=str(reported),
-                          connection_failed=getattr(exc, 'bridge_connection_failed', False))
+            record.update(resume_phase=record.get('resume_phase') if record.get('phase') == 'failed' else record.get('phase'),
+                          phase='failed', error=str(reported),
+                          connection_failed=getattr(exc, 'bridge_connection_failed', False) or
+                                            getattr(reported, 'bridge_connection_failed', False))
             try:
                 _write(path, record)
             except OSError:

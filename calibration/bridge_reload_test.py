@@ -107,6 +107,43 @@ class Resident:
         return reply
 
 
+class BoundaryResident(Resident):
+    """External game boundary: menus advance unless explicitly held by a payload/core."""
+
+    def __init__(self, target, runtime=None):
+        super().__init__(target, runtime)
+        self.boundary = False
+        self.busy_boundary = 0
+        self.obs = {'scene': 'Overworld', 'frame': 18, 'save': None,
+                    'menu': {'current': 'OuiMainMenu', 'selection': 2}}
+
+    def descriptor(self):
+        return {'mode': ('wait' if self.obs['scene'] == 'OverworldLoader' else
+                         'replace' if self.obs['scene'] == 'Level' else 'preserve'),
+                'scene': 'Celeste.' + self.obs['scene'], 'save': copy.deepcopy(self.obs.get('save')),
+                'session': copy.deepcopy(self.obs.get('completion') or self.obs.get('level'))}
+
+    def bridge_call(self, command, **args):
+        if not self.boundary and not self.holding() and self.obs['scene'] == 'Overworld':
+            self.obs['frame'] += 1
+        if command == 'reload_boundary':
+            self.calls.append((command, args))
+            if args['enabled'] and self.busy_boundary:
+                self.busy_boundary -= 1
+                return {'acquired': False}
+            self.boundary = args['enabled']
+            return {'acquired': self.boundary}
+        result = super().bridge_call(command, **args)
+        if command == 'reload_prepare' and self.stage == 'prepared':
+            self.boundary = False  # Export transferred the hold to the resident.
+        if command == 'hello':
+            result.update(reload_boundary_control=True, reload_boundary=self.descriptor(),
+                          frozen=self.boundary or self.holding() or self.obs['scene'] != 'Overworld')
+        elif command == 'observe':
+            result['obs']['reload_boundary'] = self.descriptor()
+        return result
+
+
 class PlaybackGapLock:
     """session.lock stand-in. When the lock becomes completely free, a queued replay segment runs
     before the next owner continues: the exact window the real playback worker (holding only
@@ -329,6 +366,162 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertEqual(result['scene_mode'], 'preserve')
         self.assertEqual(result['before']['completion']['ui']['confirmReady'], False)
         self.assertFalse(any(command in {'step', 'advance', 'record'} for command, _ in self.session.calls))
+
+    def test_menu_freezes_before_baseline_without_save_or_session(self):
+        session = BoundaryResident(self.target, self.installed_runtime)
+        session.busy_boundary = 1
+        result = reload_bridge(session, self.root, self.options)
+        self.assertEqual(result['phase'], 'finished')
+        self.assertEqual(result['scene_mode'], 'preserve')
+        self.assertIsNone(result['before']['boundary']['save'])
+        self.assertEqual(result['before']['frame'], session.obs['frame'])
+        self.assertEqual(result['before']['presentation']['menu']['selection'], 2)
+        self.assertFalse(session.boundary)
+        self.assertFalse(next(args for command, args in session.calls if command == 'reload_commit')['expect_scene_change'])
+        self.assertFalse(any(command in {'step', 'advance', 'record'} for command, _ in session.calls))
+
+    def test_legacy_payload_upgrades_to_boundary_capable_payload(self):
+        original = self.session.bridge_call
+        def call(command, **args):
+            value = original(command, **args)
+            if self.session.stage == 'ready':
+                if command == 'hello':
+                    value['reload_boundary_control'] = True
+                elif command == 'observe':
+                    value['obs']['reload_boundary'] = {'mode': 'replace', 'scene': 'Celeste.Level',
+                                                       'save': value['obs']['save'], 'session': value['obs']['level']}
+            return value
+        self.session.bridge_call = call
+        result = reload_bridge(self.session, self.root, self.options)
+        self.assertEqual(result['phase'], 'finished')
+        self.assertNotIn('boundary', result['before'])
+
+    def test_loader_to_no_save_menu_uses_observed_identity_not_run_config(self):
+        session = BoundaryResident(self.target, self.installed_runtime)
+        session.cfg.save_slot, session.cfg.save = 10, 'configured-game-save'
+        session.obs['scene'] = 'OverworldLoader'
+        original = session.bridge_call
+        def call(command, **args):
+            if command == 'step':
+                session.calls.append((command, args))
+                session.obs['scene'] = 'Overworld'
+                return {'result': {'consumed': 0, 'stop': 'reload_ready', 'loadingFrames': 1}}
+            return original(command, **args)
+        session.bridge_call = call
+        result = reload_bridge(session, self.root, self.options)
+        self.assertEqual(result['phase'], 'finished')
+        self.assertIsNone(result['before']['boundary']['save'])
+        self.assertEqual(sum(cmd == 'step' for cmd, _ in session.calls), 1)
+
+    def test_nonlevel_scenes_preserve_without_implicit_input(self):
+        for scene in ('LevelEnter', 'IntroVignette', 'Overworld', 'ThirdPartyScene'):
+            with self.subTest(scene=scene):
+                session = BoundaryResident(self.target, self.installed_runtime)
+                session.obs.update(scene=scene, storyInput='postcard')
+                (self.root / scene).mkdir()
+                result = reload_bridge(session, self.root / scene, self.options)
+                self.assertEqual(result['scene_mode'], 'preserve')
+                self.assertEqual(result['before']['presentation']['storyInput'], 'postcard')
+                self.assertFalse(any(command == 'step' for command, _ in session.calls))
+
+    def test_preflight_failure_releases_payload_boundary_then_retry(self):
+        session = BoundaryResident(self.target, self.installed_runtime)
+        original = session.bridge_call
+        fail = True
+        def call(command, **args):
+            value = original(command, **args)
+            if command == 'observe' and session.boundary and fail:
+                value['obs']['reload_boundary']['mode'] = 'wait'
+            return value
+        session.bridge_call = call
+        with self.assertRaisesRegex(BridgeReloadError, '边界描述'):
+            reload_bridge(session, self.root, self.options)
+        self.assertFalse(session.boundary)
+        self.assertFalse(session.holding())
+        self.assertEqual(self.target.read_bytes(), b'previous payload')
+        fail = False
+        self.assertEqual(reload_bridge(session, self.root, {'retry': True})['phase'], 'finished')
+
+    def test_cancel_after_acquire_still_releases_payload_boundary(self):
+        session = BoundaryResident(self.target, self.installed_runtime)
+        original = session.bridge_call
+        cancel = threading.Event()
+        def call(command, **args):
+            value = original(command, **args)
+            if command == 'reload_boundary' and args['enabled']:
+                cancel.set()
+            return value
+        session.bridge_call = call
+        with self.assertRaisesRegex(BridgeReloadError, '取消'):
+            reload_bridge(session, self.root, self.options, cancel=cancel)
+        self.assertFalse(session.boundary)
+        self.assertNotIn('reload_prepare', [cmd for cmd, _ in session.calls])
+
+    def test_preserved_menu_change_rejected_until_verified_retry(self):
+        session = BoundaryResident(self.target, self.installed_runtime)
+        original = session.bridge_call
+        change = True
+        def call(command, **args):
+            value = original(command, **args)
+            if command == 'observe' and session.stage == 'ready' and change:
+                value['obs']['menu']['selection'] += 1
+            return value
+        session.bridge_call = call
+        with self.assertRaisesRegex(BridgeReloadError, 'presentation'):
+            reload_bridge(session, self.root, self.options)
+        self.assertTrue(session.holding())
+        change = False
+        self.assertEqual(reload_bridge(session, self.root, {'retry': True})['phase'], 'finished')
+        self.assertEqual(sum(cmd == 'reload_commit' for cmd, _ in session.calls), 1)
+
+    def test_cancel_just_before_prepare_resolves_idle_and_releases_boundary(self):
+        session = BoundaryResident(self.target, self.installed_runtime)
+        original = session.bridge_call
+        cancel = threading.Event()
+        def call(command, **args):
+            value = original(command, **args)
+            if command == 'observe' and session.boundary:
+                cancel.set()
+            return value
+        session.bridge_call = call
+        with self.assertRaisesRegex(BridgeReloadError, '结果尚未确认'):
+            reload_bridge(session, self.root, self.options, cancel=cancel)
+        self.assertTrue(session.boundary)
+        self.assertNotIn('reload_prepare', [cmd for cmd, _ in session.calls])
+        session.bridge_call = original
+        with self.assertRaisesRegex(BridgeReloadError, '临时维护冻结已释放'):
+            reload_bridge(session, self.root, {'retry': True})
+        self.assertFalse(session.boundary)
+        self.assertEqual(reload_bridge(session, self.root, {'retry': True})['phase'], 'finished')
+
+    def test_release_connection_failure_keeps_maintenance_gate_and_can_retry(self):
+        session = BoundaryResident(self.target, self.installed_runtime)
+        original = session.bridge_call
+        def call(command, **args):
+            value = original(command, **args) if command != 'reload_boundary' or args['enabled'] else None
+            if command == 'reload_boundary' and not args['enabled']:
+                raise OSError('release connection lost')
+            if command == 'observe' and session.boundary:
+                value['obs']['reload_boundary']['mode'] = 'wait'
+            return value
+        session.bridge_call = call
+        with self.assertRaisesRegex(BridgeReloadError, '冻结尚未确认释放') as raised:
+            reload_bridge(session, self.root, self.options)
+        self.assertTrue(raised.exception.reload_held)
+        state = json.loads((self.root / 'bridge_reload.json').read_text('utf-8'))
+        self.assertTrue(state['boundary_release_unconfirmed'])
+        self.assertTrue(state['connection_failed'])
+        session.client.sock = SimpleNamespace(gettimeout=lambda: 3, settimeout=lambda value: None)
+        def disconnected():
+            raise OSError('reconnect still unavailable')
+        session.client.reconnect = disconnected
+        with self.assertRaisesRegex(BridgeReloadError, 'reconnect still unavailable') as repeated:
+            reload_bridge(session, self.root, {'retry': True})
+        self.assertTrue(repeated.exception.reload_held)
+        self.assertTrue(json.loads((self.root / 'bridge_reload.json').read_text('utf-8'))['boundary_release_unconfirmed'])
+        session.client.sock = None
+        session.bridge_call = original
+        self.assertEqual(reload_bridge(session, self.root, {'retry': True})['phase'], 'finished')
 
     def test_exit_loader_to_results_waits_without_advancing_or_confirming_results(self):
         original = self.session.bridge_call
@@ -923,7 +1116,7 @@ class ReloadControlTests(unittest.IsolatedAsyncioTestCase):
             owner = Controls(root, session)
             owner.control.enqueue('bridge_reload', '{}')
             await owner._reload_bridge(owner.control.pending()[0])
-            self.assertIn('结算场景保持原对象', owner.pending_messages[-1]['text'])
+            self.assertIn('游戏场景保持原对象', owner.pending_messages[-1]['text'])
             self.assertNotIn('当前房间经', owner.pending_messages[-1]['text'])
 
     async def test_control_waits_for_current_action_and_preserves_pause_on_success(self):

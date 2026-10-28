@@ -216,7 +216,7 @@ try {
     Call("reload_commit", mismatchLease); Pump();
     JsonElement mismatch = Call("reload_status", mismatchLease);
     Check(mismatch.GetProperty("stage").GetString() == "failed" &&
-        mismatch.GetProperty("error").GetString()!.Contains("save slot"), "Wrong save identity was accepted");
+        mismatch.GetProperty("error").GetString()!.Contains("identity"), "Wrong save identity was accepted: " + mismatch);
     ClockToken(nextToken++, true);
     wrongSlot = false; SaveData.Instance.FileSlot = 10;
     // The failed attempt already rebuilt the room. The retry must wait for its own rebuild.

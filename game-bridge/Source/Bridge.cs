@@ -21,13 +21,15 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.6.0";
+    public const string Version = "1.7.0";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get => BridgeRuntime.Active; private set => BridgeRuntime.Active = value; }
-    public static bool Frozen => Active && SceneControl.FreezeWhenIdle(Engine.Scene) && job == null && !IsLoading();
-    public static bool OwnsInput => SceneControl.OwnInput(Active, Engine.Scene, job != null);
-    private static bool AdvanceWhenIdle => !SceneControl.FreezeWhenIdle(Engine.Scene) || IsLoading();
+    public static bool Frozen => Active && (BridgeRuntime.HoldingReload || reloadBoundaryHeld ||
+        (SceneControl.FreezeWhenIdle(Engine.Scene) && job == null && !IsLoading()));
+    public static bool OwnsInput => Active && reloadBoundaryHeld || SceneControl.OwnInput(Active, Engine.Scene, job != null);
+    private static bool AdvanceWhenIdle => !reloadBoundaryHeld && (!SceneControl.FreezeWhenIdle(Engine.Scene) || IsLoading());
+    private static bool reloadBoundaryHeld;
     public static bool FeedInputThisFrame { get => BridgeRuntime.FeedInputThisFrame; private set => BridgeRuntime.FeedInputThisFrame = value; }
     public static InputFrame CurrentInput { get => BridgeRuntime.CurrentInput; private set => BridgeRuntime.CurrentInput = value; }
     public static bool AllowMenuConfirmation(TextMenu.Item item) =>
@@ -47,12 +49,12 @@ internal static class Bridge {
 
     private sealed record RenderReply(long Id, Action<Utf8JsonWriter> Body, string Buffer);
 
-    public static bool ShouldHaltEngineUpdate() => SceneControl.HaltEngine(Active, engineHalted, freeFrame, Engine.Scene);
+    public static bool ShouldHaltEngineUpdate() => Active && reloadBoundaryHeld || SceneControl.HaltEngine(Active, engineHalted, freeFrame, Engine.Scene);
 
     public static void Enqueue(Request request) => Inbox.Enqueue(request);
 
     public static bool CanReload() => job == null && pendingAck == null && PendingRenders.Count == 0 &&
-        Inbox.IsEmpty && !Playback.Running && !Playback.Done && !IsLoading();
+        Inbox.IsEmpty && !Playback.Running && !Playback.Done && !ReloadBoundary.Waiting;
 
     public static void ServiceReloadRequests() => DrainInbox();
 
@@ -66,39 +68,22 @@ internal static class Bridge {
 
     public static string ExportReloadState() {
         if (!CanReload()) throw new InvalidOperationException("Bridge is busy; wait for the full step and present acknowledgement");
-        Session? session = ReloadSession();
-        if (session == null)
-            throw new InvalidOperationException("Bridge reload requires a loaded Level or AreaComplete with a session");
-        // Game identity belongs to the reloadable payload. The resident runtime
-        // keeps only this opaque snapshot, never gameplay types or policy.
-        var identity = new { scene = Engine.Scene.GetType().Name, sid = session.Area.SID, side = (int)session.Area.Mode,
-            room = session.Level, time = session.Time, slot = SaveData.Instance?.FileSlot };
+        // Capture before transferring the short payload boundary to Runtime's
+        // resident hold. No scene update can occur between export and prepare.
+        var identity = ReloadBoundary.Capture();
         SetAudio(IdleAudio);
-        return JsonSerializer.Serialize(new { schema = 1, continuousMusic, audioMode = (int)audioMode,
+        string data = JsonSerializer.Serialize(new { schema = 1, continuousMusic, audioMode = (int)audioMode,
             sfxPausedByUs, lockstepEngaged, DrawFrameMarker, idleTokens, identity });
+        reloadBoundaryHeld = false;
+        return data;
     }
-
-    private static Session? ReloadSession() => Engine.Scene switch {
-        Level level => level.Session,
-        AreaComplete results => results.Session,
-        _ => null,
-    };
 
     public static void ImportReloadState(string data) {
         using JsonDocument document = JsonDocument.Parse(data);
         JsonElement state = document.RootElement;
         if (state.GetProperty("schema").GetInt32() != 1) throw new InvalidOperationException("Unsupported bridge reload state");
         if (state.TryGetProperty("identity", out var identity)) {
-            Session? session = ReloadSession();
-            string scene = identity.TryGetProperty("scene", out var kind) ? kind.GetString() ?? "" : "Level";
-            if (session == null || Engine.Scene.GetType().Name != scene ||
-                    session.Area.SID != identity.GetProperty("sid").GetString() ||
-                    (int)session.Area.Mode != identity.GetProperty("side").GetInt32() ||
-                    session.Level != identity.GetProperty("room").GetString() ||
-                    session.Time != identity.GetProperty("time").GetInt64() ||
-                    (SaveData.Instance?.FileSlot) != (identity.GetProperty("slot").ValueKind == JsonValueKind.Null
-                        ? (int?)null : identity.GetProperty("slot").GetInt32()))
-                throw new InvalidOperationException("Reloaded map, side, room, save slot or chapter time does not match the bridge snapshot");
+            ReloadBoundary.Verify(identity);
         } else {
             // Older schema-1 payloads did not export identity. The controller
             // still verifies its observation snapshot before reload_finish.
@@ -143,6 +128,11 @@ internal static class Bridge {
     // ---- 普通节拍：每个游戏循环推进 FramesPerTick 帧 ----
 
     private static void NormalTick(Action runOriginal) {
+        if (job?.CheckChapterLoaded() == true) {
+            FinishJob();
+            Halt(runOriginal);
+            return;
+        }
         if (job == null) {
             if (AdvanceWhenIdle) {
                 AdvanceFrame(runOriginal, InputFrame.Neutral, feedInput: OwnsInput);
@@ -161,7 +151,13 @@ internal static class Bridge {
             if (i > 0) {
                 PollPlatformEventsSafe();
             }
-            if (IsLoading()) {
+            if (job.WaitingForReloadSave) {
+                Halt(runOriginal);
+                job.CheckChapterLoaded();
+                if (job.Finished) FinishJob();
+                break;
+            }
+            if (IsLoading() || job.AutomaticReloadLoading) {
                 AdvanceFrame(runOriginal, InputFrame.Neutral);
                 job.LoadingFrames++;
                 job.CheckChapterLoaded();
@@ -201,7 +197,20 @@ internal static class Bridge {
     public static bool DrawFrameMarker;
 
     private static void LockstepTick(Action runOriginal) {
+        if (job?.CheckChapterLoaded() == true) {
+            FinishJob();
+            ClockServer.AcknowledgeIdle();
+            HaltWithoutDrawing(runOriginal);
+            return;
+        }
         if (job != null && !job.AllowNextInput()) FinishJob();
+        if (job?.WaitingForReloadSave == true) {
+            ClockServer.AcknowledgeIdle();
+            HaltWithoutDrawing(runOriginal);
+            job.CheckChapterLoaded();
+            if (job.Finished) FinishJob();
+            return;
+        }
         bool wantsFrame = job != null || AdvanceWhenIdle || Playback.Running;
         // 没有要推进的帧时也要及时回复令牌；等待令牌的同时限制空转的循环频率
         if (!ClockServer.TryTakeToken(wantsFrame ? 6 : 3, out long token)) {
@@ -238,7 +247,7 @@ internal static class Bridge {
         // 推进之前恢复声音：恢复的指令在这一帧的 Audio.Update 里生效，这一段从第一帧开头就有声音
         //（之前在推进之后才恢复，要到第二帧才有声音，每段开头多一帧静音）
         SetAudio(AudioMode.Playing);
-        if (IsLoading()) {
+        if (IsLoading() || job?.AutomaticReloadLoading == true) {
             AdvanceFrame(runOriginal, InputFrame.Neutral);
             if (job != null) {
                 job.LoadingFrames++;
@@ -403,6 +412,7 @@ internal static class Bridge {
     }
 
     public static void Deactivate() {
+        reloadBoundaryHeld = false;
         RecordingAudio.Stop();
         if (job != null) {
             job.Cancel();
@@ -520,10 +530,26 @@ internal static class Bridge {
 
     private static void Handle(Request req) {
         JsonElement a = req.Args;
+        if (reloadBoundaryHeld && req.Cmd is not ("hello" or "observe" or "areas" or "reload_boundary" or "cancel" or "deactivate"))
+            throw new InvalidOperationException("Bridge reload boundary is held; no game operation was executed");
         switch (req.Cmd) {
+            case "reload_boundary":
+                if (!Active) throw new InvalidOperationException("Bridge is not active");
+                bool enabled = a.GetProperty("enabled").GetBoolean();
+                bool acquired = !enabled || reloadBoundaryHeld || CanReload();
+                if (acquired) reloadBoundaryHeld = enabled;
+                IpcServer.Send(Reply.Ok(req.Id, w => {
+                    w.WriteBoolean("acquired", acquired);
+                    w.WriteBoolean("enabled", reloadBoundaryHeld);
+                    w.WriteNumber("frame", Frame);
+                }));
+                break;
             case "hello":
                 IpcServer.Send(Reply.Ok(req.Id, w => {
                     w.WriteString("bridge", Version);
+                    w.WriteBoolean("reload_boundary_control", true);
+                    w.WriteBoolean("reload_boundary_active", reloadBoundaryHeld);
+                    ReloadBoundary.Write(w);
                     w.WriteNumber("process_id", Environment.ProcessId);
                     w.WriteStartArray("input_formats");
                     w.WriteStringValue("celeste_ai"); w.WriteStringValue("celeste_tas");
@@ -680,6 +706,7 @@ internal static class Bridge {
                 break;
 
             case "cancel":
+                reloadBoundaryHeld = false;
                 if (job != null) {
                     job.Cancel();
                     FinishJob();
