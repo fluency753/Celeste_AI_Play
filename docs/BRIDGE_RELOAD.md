@@ -108,7 +108,7 @@
 
 ## 验证范围
 
-**1.3.1／1.0.2（本次修复）**：Python 回归覆盖回放线程在快照与 prepare 之间插入一段回放（修复前必然核验失败、重试也无法完成）、旧交接记录的冻结计量重试、剧情／结算／暂停／死亡／不可操作时在 prepare 前拒绝、核心 `refused` 不进入冻结、旧核心缺少按键重新套用时拒绝发起、接回后按键绑定不一致时保持冻结、核心哈希不同时在 prepare 前拒绝或准备后自动撤销、撤销还原已替换文件、提交后的交接拒绝撤销并说明重试或重启、新主控拒绝接管冻结中的游戏，以及经真实 CLI 子进程的 `--abort --direct`。原生 `calibration/runtime_reload` 增加：缺少可操作玩家的关卡被拒绝、冻结期间只读 hello、只有未提交的交接可撤销、重试等待本次的房间重建。私有隔离游戏检查 `isolated_game_check.py` 在每次重载后核对 `input_bindings_ok`、`input_bindings_reapplied` 增加，并在结束交接后实际按一次抓与对话，确认没有被解释成冲刺或跳。**C# 改动尚未在本机编译，1.3.1／1.0.2 的原生检查、私有隔离游戏与真实 OBS 验收待实机重跑**，下面是 1.3.0／1.0.1 的记录。
+**1.3.1／1.0.2（本次修复）**：Python 回归覆盖回放线程在快照与 prepare 之间插入一段回放（修复前必然核验失败、重试也无法完成）、旧交接记录的冻结计量重试、剧情／结算／暂停／死亡／不可操作时在 prepare 前拒绝、核心 `refused` 不进入冻结、旧核心缺少按键重新套用时拒绝发起、接回后按键绑定不一致时保持冻结、核心哈希不同时在 prepare 前拒绝或准备后自动撤销、撤销还原已替换文件、提交后的交接拒绝撤销并说明重试或重启、新主控拒绝接管冻结中的游戏，以及经真实 CLI 子进程的 `--abort --direct`。原生 `calibration/runtime_reload` 增加：缺少可操作玩家的关卡被拒绝、冻结期间只读 hello、只有未提交的交接可撤销、重试等待本次的房间重建。私有隔离游戏检查 `isolated_game_check.py` 在每次重载后核对 `input_bindings_ok`、`input_bindings_reapplied` 增加，并在结束交接后实际按一次抓与对话，确认没有被解释成冲刺或跳。10-28 已在用户电脑编译（桥接与核心 0 警告 0 错误），原生 `calibration/runtime_reload`、`calibration/chapter_reset` 与 `resident_build_check.ps1` 均 PASS；**1.3.1／1.0.2 的私有隔离游戏与真实 OBS 验收待实机重跑**，下面是 1.3.0／1.0.1 的记录。
 
 789 项 Python 回归通过，覆盖生产 worker、文件备份替换、SQLite 控制消费者、动作锁、暂停／取消、确认丢失、版本约束和刷新失败补齐。实际 CLI 子进程经生产 HTTP 服务接收成功与失败结果，resident RPC 使用隔离替身，不连接在用主控。原生 `calibration/runtime_reload` 检查常驻核心的交接与冻结边界；双轨 FMOD 另有真实本机 bank 校准。私有隔离游戏连续两次普通重载期间，IPC 无重连，480 个 PCM 帧连续，同存档、SID、房间和章节计时，交接期间计量不增长。另以坏 DLL 触发旧模块已卸载、`payload_version=null` 的 orphan 状态，再用同一 lease 修复并恢复，验证 240 个连续 PCM 帧和 417 次冻结期间的 N 应答；证据见本机 `local/runtime-reload-game-v2/reload-acceptance-20261028-003117/report.json`。
 
