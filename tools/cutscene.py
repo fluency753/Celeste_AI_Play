@@ -23,7 +23,8 @@ def story_pending(obs: dict) -> bool:
         return True
     level = obs.get('level') or {}
     return obs.get('scene') == 'Level' and not level.get('skippingCutscene') and bool(
-        level.get('inCutscene') or level.get('dialogOpen') or level.get('dialogWaiting') or level.get('dialogChoices'))
+        level.get('inCutscene') or level.get('dialogOpen') or level.get('dialogWaiting') or level.get('dialogChoices')
+        or (not obs.get('controllable') and (obs.get('storyPlaybackState') or {}).get('state') == 'playing'))
 
 
 def story_input(obs: dict) -> str | None:

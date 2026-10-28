@@ -419,6 +419,414 @@ enterEntities.toRemove.Clear();enterEntities.removing.Clear();cardRoutine.waitTi
 entities.entities.Add(box);
 Console.WriteLine("PASS: memo iterator readiness, full-alpha entrance, Everest wrappers, closing/hidden state, UI facts, postcard phases and fail-closed story playback");
 
+// Exercise native iterators through Monocle.Coroutine.Update; no expected
+// playback state is injected. Graphics/audio construction remains external.
+var nativeFlags=System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static |
+    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+void ScenePlayback(Monocle.Scene scene,string expected,string source) {
+    var actual=StoryText.PlaybackState(scene);Check(expected,actual.State);Check(source,actual.Source);
+}
+var deltaProperty=typeof(Monocle.Engine).GetProperty("DeltaTime",nativeFlags)!;
+var rawDeltaProperty=typeof(Monocle.Engine).GetProperty("RawDeltaTime",nativeFlags)!;
+float oldDelta=Monocle.Engine.DeltaTime,oldRawDelta=Monocle.Engine.RawDeltaTime;
+try {
+    deltaProperty.SetValue(null,1f/60f);rawDeltaProperty.SetValue(null,1f/60f);
+    intro.menu=null;intro.exiting=false;intro.started=false;intro.timer=0;intro.textStart=0;
+    intro.text=new FancyText.Text {Nodes=new() {Glyph('序',0),Glyph('章',0)}};
+    intro.textCoroutine=new Monocle.Coroutine(intro.TextSequence(),removeOnComplete:false);
+    ScenePlayback(intro,"playing","intro_text_sequence");
+    intro.textCoroutine.Update();
+    if(intro.textCoroutine.waitTimer<2.9f) throw new Exception("Native intro initial delay did not start");
+    ScenePlayback(intro,"playing","intro_text_sequence");
+    intro.menu=(TextMenu)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(TextMenu));
+    ScenePlayback(intro,"unknown","intro_menu");
+    intro.menu=null;
+    int nativeFrames=0;
+    while(!intro.textCoroutine.Finished && nativeFrames++<900) {
+        ScenePlayback(intro,"playing","intro_text_sequence");
+        intro.textCoroutine.Update();intro.timer+=1f/60f;
+    }
+    if(!intro.textCoroutine.Finished || intro.textStart!=int.MaxValue || nativeFrames<180)
+        throw new Exception("Native intro text failed to advance from initial delay to its real finish");
+    intro.timer=16.683f;
+    ScenePlayback(intro,"playing","intro_text_sequence");
+    Check("",StoryText.DecisionNode(intro) ?? "");
+    intro.timer=16.682f;Check("skip",StoryText.DecisionNode(intro)!);
+    intro.timer=18.683f;ScenePlayback(intro,"unknown","intro_unrecognized_routine");
+    intro.timer=0;intro.textCoroutine.Replace(UnknownRoutine());
+    ScenePlayback(intro,"unknown","intro_unrecognized_routine");
+    intro.exiting=true;ScenePlayback(intro,"unknown","intro_unrecognized_exit");
+    var introRenderers=new Monocle.RendererList(intro);
+    typeof(Monocle.Scene).GetField("<RendererList>k__BackingField",nativeFlags)!.SetValue(intro,introRenderers);
+    var nativeComplete=typeof(IntroVignette).GetMethods(nativeFlags).Single(m=>m.Name.StartsWith("<StartGame>b__") && m.GetParameters().Length==0);
+    var nativeCallback=(Action)nativeComplete.CreateDelegate(typeof(Action),intro);
+    var wipe=new FadeWipe(intro,false,nativeCallback);
+    ScenePlayback(intro,"playing","intro_exit_wipe"); // queued addition
+    introRenderers.UpdateLists();
+    for(int i=0;i<40 && !wipe.Completed;i++) {
+        ScenePlayback(intro,"playing","intro_exit_wipe");wipe.Update(intro);
+    }
+    if(!wipe.Completed) throw new Exception("Native wipe did not finish its animation");
+    ScenePlayback(intro,"playing","intro_exit_wipe"); // callback runs next frame
+    wipe.ending=true;ScenePlayback(intro,"unknown","intro_unrecognized_exit");
+    wipe.ending=false;introRenderers.Remove(wipe);ScenePlayback(intro,"unknown","intro_unrecognized_exit");
+    introRenderers.UpdateLists();
+    var unrelatedWipe=new FadeWipe(intro,false,()=>{});
+    ScenePlayback(intro,"unknown","intro_unrecognized_exit");
+    introRenderers.UpdateLists();introRenderers.Remove(unrelatedWipe);introRenderers.UpdateLists();
+    Console.WriteLine("PASS: native intro initial wait, full text progression, finished timer tail, pause menu, skip cutoff, unknown replacement and native exit wipe timing");
+
+    // A native Granny initial delay and dialogue-trigger callback are automatic;
+    // an unrelated coroutine must not inherit that owner's authority.
+    entities.entities.Clear();level.InCutscene=true;level.Paused=false;level.Frozen=false;
+    level.SkippingCutscene=false;player.Dead=false;player.StateMachine.State=Player.StDummy;
+    var grannyNpc=(NPC00_Granny)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(NPC00_Granny));
+    grannyNpc.Position=new Vector2(100,0);player.Position=Vector2.Zero;
+    var grannyScene=new CS00_Granny(grannyNpc,player);
+    var grannyRoutine=new Monocle.Coroutine(grannyScene.Cutscene(),false);grannyScene.Add(grannyRoutine);
+    entities.entities.Add(player);entities.entities.Add(grannyScene);
+    grannyRoutine.Update();
+    if(grannyRoutine.waitTimer<.49f) throw new Exception("Native Granny lead-in did not produce its delay");
+    ScenePlayback(level,"playing","cutscene_animation");
+    box.Visible=true;box.isInTrigger=true;box.waitingForInput=false;
+    box.runRoutine=new Monocle.Coroutine(grannyScene.Meet(),false);entities.entities.Add(box);
+    box.runRoutine.Update();
+    if(box.runRoutine.waitTimer<.24f) throw new Exception("Native Granny Meet did not produce its delay");
+    ScenePlayback(level,"playing","dialogue_trigger_animation");
+    box.runRoutine.Replace(UnknownRoutine());
+    ScenePlayback(level,"unknown","dialogue_unrecognized_routine"); // owner routine cannot override the textbox
+    entities.entities.Remove(box);grannyRoutine.Replace(UnknownRoutine());
+    ScenePlayback(level,"unknown","unrecognized_cutscene");
+    grannyRoutine.Replace(grannyScene.Cutscene());
+    grannyRoutine.enumerators.Push(grannyScene.RunAlong());
+    grannyRoutine.enumerators.Push(level.ZoomTo(new Vector2(210,90),2f,.5f));
+    level.Zoom=1f;
+    for(int i=0;i<4;i++) {ScenePlayback(level,"playing","cutscene_animation");grannyRoutine.Update();}
+    if(level.Zoom<=1f) throw new Exception("Native nested Granny ZoomTo did not actually advance");
+    grannyRoutine.Replace(UnknownRoutine());
+
+    var endingScene=new CS00_Ending(player,null!,null!);
+    var endingNative=endingScene.Cutscene(level);
+    var endingRoutine=new Monocle.Coroutine(endingNative,false);endingScene.Add(endingRoutine);
+    entities.entities.Add(endingScene);
+    // The native ending itself owns this legacy global time factor.
+#pragma warning disable CS0618
+    float oldTimeRate=Monocle.Engine.TimeRate;
+    Monocle.Engine.TimeRate=1f;endingRoutine.Update();Monocle.Engine.TimeRate=oldTimeRate;
+#pragma warning restore CS0618
+    ScenePlayback(level,"playing","cutscene_animation");
+    // This is the exact native 1.4.0.0 iterator's input resume state (IL checked),
+    // deliberately with no GUI: losing GUI evidence must never authorize wait.
+    var endingState=endingNative.GetType().GetField("<>1__state",nativeFlags)!;
+    endingState.SetValue(endingNative,7);
+    ScenePlayback(level,"unknown","unrecognized_cutscene");
+    endingState.SetValue(endingNative,99);ScenePlayback(level,"unknown","unrecognized_cutscene");
+    endingRoutine.Replace(UnknownRoutine());
+    ScenePlayback(level,"unknown","unrecognized_cutscene");
+    entities.entities.Remove(endingScene);
+
+    // Cross-chapter boundaries use actual native iterator types and real
+    // component/owner chains. Resume states are from the audited 1.4.0.0 IL;
+    // independent private play verifies the transitions into these states.
+    Monocle.Entity BareEntity(Type type) {
+        var result=(Monocle.Entity)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type);
+        var baseline=new Monocle.Entity();
+        foreach(var field in typeof(Monocle.Entity).GetFields(nativeFlags | System.Reflection.BindingFlags.DeclaredOnly))
+            if(!field.IsStatic) field.SetValue(result,field.GetValue(baseline));
+        typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(result,level);
+        return result;
+    }
+    void ResumeAt(System.Collections.IEnumerator iterator,int state) => iterator.GetType().GetField("<>1__state",nativeFlags)!.SetValue(iterator,state);
+    void SingleStory(Monocle.Entity owner,Monocle.Coroutine routine) {
+        entities.entities.Clear();entities.entities.Add(player);entities.entities.Add(owner);owner.Add(routine);
+    }
+    void Yielded(System.Collections.IEnumerator iterator,object? value) => iterator.GetType().GetField("<>2__current",nativeFlags)!.SetValue(iterator,value);
+    // The parent really yields its child; Monocle really pops that child after
+    // completion. No Finished flag or expected playback state is injected.
+    entities.entities.Clear();entities.entities.Add(box);
+    box.Visible=true;box.Active=true;box.waitingForInput=false;box.isInTrigger=false;box.ease=0;box.portrait=null;
+    var handoffGlyph=Glyph('.');handoffGlyph.IsPunctuation=true;
+    box.text=new FancyText.Text {Nodes=new() {handoffGlyph}};box.index=0;
+    var nativeDialogue=box.RunRoutine();box.runRoutine=new Monocle.Coroutine(nativeDialogue,false);
+    box.runRoutine.Update();
+    ScenePlayback(level,"playing","dialogue_animation");
+    box.ease=1f; // avoid external audio opening resources, not completion
+    box.runRoutine.Update();
+    if(!ReferenceEquals(StoryText.Current(box.runRoutine),nativeDialogue) || nativeDialogue.Current is not System.Collections.IEnumerator completedOpen || !StoryText.IteratorFinished(completedOpen))
+        throw new Exception("Native dialogue did not reach its completed-child handoff");
+    ScenePlayback(level,"playing","dialogue_resume");
+    var unknownCompleted=UnknownRoutine();unknownCompleted.MoveNext();unknownCompleted.MoveNext();
+    Yielded(nativeDialogue,unknownCompleted);ScenePlayback(level,"unknown","dialogue_unrecognized_routine");
+    var wrongOwnerBox=(Textbox)BareEntity(typeof(Textbox));wrongOwnerBox.ease=1f;
+    var wrongOpen=wrongOwnerBox.EaseOpen();wrongOpen.MoveNext();
+    Yielded(nativeDialogue,wrongOpen);ScenePlayback(level,"unknown","dialogue_unrecognized_routine");
+    Yielded(nativeDialogue,completedOpen);
+
+    // Resume the native portrait loop past font/audio setup. MoveNext itself
+    // must continue yielding until the sprite's actual animation finishes.
+    var portrait=new FancyText.Portrait {Sprite="madeline",Animation="normal"};
+    box.text=new FancyText.Text {Nodes=new() {portrait}};box.index=0;box.portrait=portrait;
+    box.portraitExists=true;box.canSkip=false;box.portraitSprite=new Monocle.Sprite(null!,"");
+    typeof(Monocle.Sprite).GetProperty("Animating")!.SetValue(box.portraitSprite,true);
+    typeof(Monocle.Sprite).GetProperty("CurrentAnimationID")!.SetValue(box.portraitSprite,portrait.BeginAnimation);
+    var portraitNative=box.RunRoutine();ResumeAt(portraitNative,4);Yielded(portraitNative,null);
+    portraitNative.GetType().GetFields(nativeFlags).Single(field=>field.Name.StartsWith("<next>") && field.FieldType==typeof(FancyText.Portrait)).SetValue(portraitNative,portrait);
+    box.runRoutine=new Monocle.Coroutine(portraitNative,false);box.runRoutine.Update();
+    ScenePlayback(level,"playing","dialogue_portrait_animation");
+    typeof(Monocle.Sprite).GetProperty("Animating")!.SetValue(box.portraitSprite,false);
+    ScenePlayback(level,"playing","dialogue_portrait_animation");
+    typeof(Monocle.Sprite).GetProperty("Animating")!.SetValue(box.portraitSprite,true);
+    typeof(Monocle.Sprite).GetProperty("CurrentAnimationID")!.SetValue(box.portraitSprite,portrait.IdleAnimation);
+    ScenePlayback(level,"playing","dialogue_portrait_animation");
+    typeof(Monocle.Sprite).GetProperty("CurrentAnimationID")!.SetValue(box.portraitSprite,portrait.BeginAnimation);
+    box.text.Nodes[0]=new FancyText.Portrait {Sprite="madeline",Animation="normal"};
+    ScenePlayback(level,"unknown","dialogue_unrecognized_routine");
+    box.text.Nodes[0]=portrait;box.portraitExists=false;box.portrait=null;box.portraitSprite=null;
+
+    // A genuine callback finishes its nested camera animation before Textbox
+    // resumes. Exercise every native update through this handoff.
+    entities.entities.Clear();entities.entities.Add(box);entities.entities.Add(grannyScene);
+    typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(grannyScene,level);
+    grannyScene.Level=level;
+    grannyRoutine.Replace(grannyScene.Cutscene());
+    box.ease=0;box.index=0;box.waitingForInput=false;box.isInTrigger=false;
+    box.text=new FancyText.Text {Nodes=new() {new FancyText.Trigger {Silent=true,Index=0}}};
+    box.events=new Func<System.Collections.IEnumerator>[] {grannyScene.PanToMaddy};
+    var triggerParent=box.RunRoutine();box.runRoutine=new Monocle.Coroutine(triggerParent,false);
+    box.runRoutine.Update();int triggerFrames=0;
+    while(!ReferenceEquals(StoryText.Current(box.runRoutine),triggerParent) && triggerFrames++<180) {
+        ScenePlayback(level,"playing","dialogue_trigger_animation");box.runRoutine.Update();
+    }
+    if(triggerFrames<20 || !ReferenceEquals(StoryText.Current(box.runRoutine),triggerParent)) throw new Exception("Native callback did not finish its nested animation");
+    ScenePlayback(level,"playing","dialogue_resume");
+    box.events=null;box.isInTrigger=false;entities.entities.Clear();
+    if(!StoryText.IsRoutine(Textbox.Say("unused"),typeof(Textbox),"Say") ||
+        !StoryText.IsRoutine(CutsceneEntity.CameraTo(Vector2.Zero,.5f),typeof(CutsceneEntity),"CameraTo") ||
+        StoryText.IsRoutine(UnknownRoutine(),typeof(Textbox),"Say")) throw new Exception("Native static iterator lookup lost its type boundary");
+    Console.WriteLine("PASS: real dialogue EaseOpen and nested trigger completion resume, native portrait animation/null loop and static iterator identity");
+
+    // Only external input/audio/resources are supplied here. Native coroutine
+    // updates must cross EaseIn/Wait/EaseOut completion and timed-wait zeroes.
+    var previousConfirm=Input.MenuConfirm;var previousCancel=Input.MenuCancel;
+    var syntheticPress=(Monocle.VirtualButton)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Monocle.VirtualButton));
+    syntheticPress.bufferCounter=1f;
+    string[] silentEvents={"event:/ui/main/button_lowkey","event:/game/03_resort/memo_in","event:/game/03_resort/memo_out"};
+    var audioBefore=silentEvents.Select(path=>(Path:path,Had:Audio.cachedEventDescriptions.TryGetValue(path,out var sound),Sound:sound)).ToArray();
+    foreach(string path in silentEvents) Audio.cachedEventDescriptions[path]=null!;
+    try {
+        Input.MenuConfirm=syntheticPress;Input.MenuCancel=syntheticPress;
+        var flowEnter=(LevelEnter)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(LevelEnter));
+        var flowEntities=new Monocle.EntityList(flowEnter);
+        typeof(Monocle.Scene).GetField("<Entities>k__BackingField",nativeFlags)!.SetValue(flowEnter,flowEntities);
+        var flowCard=(Postcard)BareEntity(typeof(Postcard));flowEnter.postcard=flowCard;
+        typeof(Monocle.Entity).GetProperty("Scene")!.SetValue(flowCard,flowEnter);
+        flowEntities.entities.Add(flowCard);flowEntities.current.Add(flowCard);
+        var flowOwner=new Monocle.Entity();var display=flowCard.DisplayRoutine();
+        var flow=new Monocle.Coroutine(display,false);flowOwner.Add(flow);flowEntities.entities.Add(flowOwner);
+        var postcardSources=new HashSet<string>();int postcardZeroWaits=0;
+        for(int frame=0;frame<420 && !flow.Finished;frame++) {
+            flow.Update();flowCard.Update();
+            if(flow.Finished) break;
+            var actual=StoryText.PlaybackState(flowEnter);
+            if(actual.State=="unknown") throw new Exception("Native postcard flow stopped: "+actual.Source);
+            postcardSources.Add(actual.Source);
+            if(ReferenceEquals(StoryText.Current(flow),display) && display.Current is float && flow.waitTimer<=0) postcardZeroWaits++;
+        }
+        if(!flow.Finished || !postcardSources.Contains("postcard_resume") || postcardZeroWaits<2)
+            throw new Exception("Native postcard missed its completion or zero-timer handoffs");
+
+        var flowMemo=(CS03_Memo.MemoPage)BareEntity(typeof(CS03_Memo.MemoPage));
+        var flowMemoOwner=new CS03_Memo(player);flowMemoOwner.memo=flowMemo;flowMemoOwner.Level=level;
+        var memoParent=flowMemoOwner.Routine();ResumeAt(memoParent,3);
+        var memoIn=flowMemo.EaseIn();Yielded(memoParent,memoIn);
+        var memoFlow=new Monocle.Coroutine(memoParent,false);memoFlow.enumerators.Push(memoIn);flowMemoOwner.Add(memoFlow);
+        entities.entities.Clear();entities.entities.Add(flowMemo);entities.entities.Add(flowMemoOwner);entities.current.Add(flowMemo);
+        var memoSources=new HashSet<string>();int memoResumes=0;
+        for(int frame=0;frame<240;frame++) {
+            if(StoryText.Current(memoFlow) is { } active && StoryText.IsRoutine(active,typeof(CS03_Memo.MemoPage),"EaseOut") && StoryText.IteratorState(active)==0)
+                ResumeAt(active,1); // external render-target height is absent
+            memoFlow.Update();
+            var actual=StoryText.PlaybackState(level);
+            if(actual.State=="unknown") throw new Exception("Native memo flow stopped: "+actual.Source);
+            memoSources.Add(actual.Source);
+            if(level.Entities.toRemove.Contains(flowMemo)) {
+                if(StoryText.SceneEntity<CS03_Memo.MemoPage>(level)!=null)
+                    throw new Exception("Removed native memo still supplied its old UI");
+                if(flowMemo.alpha>0 && !StoryText.HasVisibleStoryHud(level))
+                    throw new Exception("Native memo's last rendered fade frame lost its HUD capture");
+                using(var retiredMemo=UiSnapshot(level))
+                    if(retiredMemo.RootElement.TryGetProperty("ui",out _)) throw new Exception("Queued memo remained a logical UI");
+                Check("cutscene_animation",actual.Source);break;
+            }
+            if(actual.Source=="memo_resume") {
+                memoResumes++;
+                if(memoParent.Current is System.Collections.IEnumerator child && StoryText.IsRoutine(child,typeof(CS03_Memo.MemoPage),"EaseOut")) break;
+            }
+        }
+        if(memoResumes!=2 || !memoSources.Contains("memo") || !memoSources.Contains("memo_animation") || !level.Entities.toRemove.Contains(flowMemo))
+            throw new Exception("Native memo did not complete EaseIn, real input Wait, and EaseOut handoffs");
+        Console.WriteLine("PASS: continuous native Postcard/Memo EaseIn, real confirm, EaseOut, completed-child resume and delay-zero transitions");
+    } finally {
+        Input.MenuConfirm=previousConfirm;Input.MenuCancel=previousCancel;
+        foreach(var entry in audioBefore) {
+            if(entry.Had) Audio.cachedEventDescriptions[entry.Path]=entry.Sound!;
+            else Audio.cachedEventDescriptions.Remove(entry.Path);
+        }
+    }
+
+    var journal=new CS02_Journal(player);
+    var journalNative=journal.Routine();var journalRoutine=new Monocle.Coroutine(journalNative,false);
+    SingleStory(journal,journalRoutine);ResumeAt(journalNative,3);
+    ScenePlayback(level,"playing","cutscene_animation");
+    ResumeAt(journalNative,4);Check("confirm",StoryText.InputNode(level)!);ScenePlayback(level,"input","confirm");
+    ResumeAt(journalNative,6);ScenePlayback(level,"unknown","unrecognized_cutscene");
+
+    var boss=(CS06_BossEnd)BareEntity(typeof(CS06_BossEnd));var bossNative=boss.WaitForPress();
+    var bossRoutine=new Monocle.Coroutine(boss.Cutscene(level),false);
+    bossRoutine.enumerators.Push(bossNative);SingleStory(boss,bossRoutine);
+    ResumeAt(bossNative,1);boss.waitForKeyPress=true;
+    Check("confirm",StoryText.InputNode(level)!);ScenePlayback(level,"input","confirm");
+
+    var campfire=(CS06_Campfire)BareEntity(typeof(CS06_Campfire));
+    var campNative=campfire.Cutscene(level);var campRoutine=new Monocle.Coroutine(campNative,false);
+    SingleStory(campfire,campRoutine);ResumeAt(campNative,16);
+    ScenePlayback(level,"unknown","unrecognized_cutscene"); // missing choice UI never authorizes waiting
+    ResumeAt(campNative,99);ScenePlayback(level,"unknown","unrecognized_cutscene");
+
+    foreach(var type in new[]{typeof(CS08_Ending),typeof(CS10_Ending)}) {
+        var owner=BareEntity(type);
+        var wrapper=(System.Collections.IEnumerator)type.GetMethod("EndingRoutine",nativeFlags)!.Invoke(owner,null)!;
+        var original=(System.Collections.IEnumerator)type.GetMethod("orig_EndingRoutine",nativeFlags)!.Invoke(owner,null)!;
+        var origField=wrapper.GetType().GetFields(nativeFlags).Single(field=>field.Name.StartsWith("<orig>"));
+        origField.SetValue(wrapper,original);ResumeAt(wrapper,1);
+        var routine=new Monocle.Coroutine(wrapper,false);SingleStory(owner,routine);
+        ResumeAt(original,1);ScenePlayback(level,"playing","cutscene_animation");
+        ResumeAt(original,type==typeof(CS08_Ending)?4:2);
+        Check("confirm",StoryText.InputNode(level)!);ScenePlayback(level,"input","confirm");
+        ResumeAt(original,99);ScenePlayback(level,"unknown","unrecognized_cutscene");
+    }
+
+    var npc=(NPC01_Theo)BareEntity(typeof(NPC01_Theo));
+    var talk=new Monocle.Coroutine(npc.Talk(player),false);SingleStory(npc,talk);
+    talk.enumerators.Push(npc.PlayerApproachRightSide(player));
+    ScenePlayback(level,"playing","cutscene_animation");
+    box.Visible=false;box.waitingForInput=true;box.runRoutine=new Monocle.Coroutine(box.RunRoutine(),false);
+    entities.entities.Add(box);ScenePlayback(level,"unknown","dialogue_unrecognized_routine");
+    entities.entities.Remove(box);
+    talk.Replace(UnknownRoutine());
+    var background=new Monocle.Coroutine(npc.Yolo(),false);npc.Add(background);
+    ScenePlayback(level,"unknown","unrecognized_cutscene"); // auxiliary animation cannot replace its lost driver
+
+    var game=(BreathingMinigame)BareEntity(typeof(BreathingMinigame));
+    var breathingNative=game.Routine();var breathingRoutine=new Monocle.Coroutine(breathingNative,false);
+    SingleStory(game,breathingRoutine);ResumeAt(breathingNative,1);
+    ScenePlayback(level,"playing","breathing_animation");
+    ResumeAt(breathingNative,9);Check("breathing",StoryText.InputNode(level)!);ScenePlayback(level,"input","breathing");
+    ResumeAt(breathingNative,10);game.Pausing=true;
+    ScenePlayback(level,"playing","breathing_animation");
+    var showText=game.ShowText(1);ResumeAt(showText,4);breathingRoutine.enumerators.Push(showText);
+    Check("confirm",StoryText.InputNode(level)!);ScenePlayback(level,"input","confirm");
+    var gondola=(CS04_Gondola)BareEntity(typeof(CS04_Gondola));
+    gondola.Add(new Monocle.Coroutine(gondola.Cutscene(),false));entities.entities.Add(gondola);
+    box.Active=true;box.Visible=true;box.waitingForInput=false;box.isInTrigger=true;
+    box.ease=0;box.runRoutine=new Monocle.Coroutine(gondola.StartBreathing(),false);entities.entities.Add(box);
+    Check("confirm",StoryText.InputNode(level)!);ScenePlayback(level,"input","confirm");
+    breathingRoutine.enumerators.Pop();ResumeAt(breathingNative,9);
+    Check("breathing",StoryText.InputNode(level)!);ScenePlayback(level,"input","breathing");
+    breathingRoutine.Replace(UnknownRoutine());
+    game.Add(new Monocle.Coroutine(game.FadeBoxIn(),false));
+    ScenePlayback(level,"unknown","breathing_unrecognized_routine");
+
+    entities.entities.Clear();entities.entities.Add(player);
+    var photoNpc=(NPC02_Theo)BareEntity(typeof(NPC02_Theo));
+    photoNpc.Add(new Monocle.Coroutine(photoNpc.Talk(player),false));entities.entities.Add(photoNpc);
+    var photo=(Selfie)BareEntity(typeof(Selfie));entities.entities.Add(photo);
+    var photoWait=photo.WaitForInput();ResumeAt(photoWait,1);photo.waitForKeyPress=true;
+    box.runRoutine=new Monocle.Coroutine(box.RunRoutine(),false);
+    box.runRoutine.enumerators.Push(photoNpc.Selfie());box.runRoutine.enumerators.Push(photoWait);entities.entities.Add(box);
+    Check("confirm",StoryText.InputNode(level)!);ScenePlayback(level,"input","confirm");
+    box.runRoutine.Replace(UnknownRoutine());
+    ScenePlayback(level,"unknown","selfie_unrecognized_routine");
+    entities.current.Add(photo);photo.RemoveSelf();
+    if(StoryText.SceneEntity<Selfie>(level)!=null || StoryText.InputNode(level)!=null)
+        throw new Exception("Queued removed selfie retained its input");
+    ScenePlayback(level,"unknown","dialogue_unrecognized_routine");
+    using(var removedPhoto=UiSnapshot(level))
+        if(removedPhoto.RootElement.TryGetProperty("ui",out _)) throw new Exception("Queued removed selfie retained its UI");
+
+    entities.entities.Clear();entities.entities.Add(player);entities.entities.Add(game);entities.entities.Add(gondola);
+    entities.current.Add(game);game.bgAlpha=0;game.Completed=false;
+    var finalBreathing=game.Routine();ResumeAt(finalBreathing,15);
+    var finalBreathingRoutine=new Monocle.Coroutine(finalBreathing,false);game.Add(finalBreathingRoutine);
+    finalBreathingRoutine.Update();
+    if(!game.Completed || !finalBreathingRoutine.Finished || !entities.toRemove.Contains(game))
+        throw new Exception("Native breathing final delay did not queue its own completed removal");
+    ScenePlayback(level,"playing","cutscene_animation");
+    if(StoryText.SceneEntity<BreathingMinigame>(level)!=null || StoryText.InputNode(level)!=null || StoryText.HasVisibleStoryHud(level))
+        throw new Exception("Queued removed breathing retained input or HUD");
+    using(var removedBreathing=UiSnapshot(level))
+        if(removedBreathing.RootElement.TryGetProperty("ui",out _)) throw new Exception("Queued removed breathing retained its UI");
+
+    // ShowTutorial can finish visually before the native Ending parent resumes
+    // its Dash loop. An early pulse must not be advertised as accepted input.
+    entities.entities.Clear();entities.entities.Add(player);player.StateMachine.State=Player.StDummy;
+    var dashBird=(BirdNPC)BareEntity(typeof(BirdNPC));
+    var dashGui=(BirdTutorialGui)BareEntity(typeof(BirdTutorialGui));
+    dashGui.controls=new() {"Dash"};dashGui.Scale=.8f;dashGui.Visible=true;
+    var dashEnding=(CS00_Ending)BareEntity(typeof(CS00_Ending));dashEnding.player=player;dashEnding.bird=dashBird;
+    var dashParent=dashEnding.Cutscene(level);ResumeAt(dashParent,6);
+    var showTutorial=dashBird.ShowTutorial(dashGui,false);Yielded(dashParent,showTutorial);
+    var dashFlow=new Monocle.Coroutine(dashParent,false);dashFlow.enumerators.Push(showTutorial);dashEnding.Add(dashFlow);
+    entities.entities.Add(dashBird);entities.entities.Add(dashGui);entities.entities.Add(dashEnding);entities.current.Add(dashGui);
+    var previousDash=Input.Dash;var previousAim=Input.Aim;var previousSession=level.Session;
+    var dashPress=(Monocle.VirtualButton)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Monocle.VirtualButton));
+    var dashAim=(Monocle.VirtualJoystick)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Monocle.VirtualJoystick));
+    typeof(Monocle.VirtualJoystick).GetProperty("Value")!.SetValue(dashAim,new Vector2(1,-1));
+    try {
+        Input.Dash=dashPress;Input.Aim=dashAim;
+        level.Session=(Session)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Session));
+        dashFlow.Update();Check("",StoryText.InputNode(level) ?? "");
+        dashGui.Scale=1f; // visual UI boundary; native coroutine still state 2
+        dashPress.bufferCounter=1f;dashFlow.Update();
+        if(dashEnding.keyOffed) throw new Exception("ShowTutorial consumed an early Dash unexpectedly");
+        Check("",StoryText.InputNode(level) ?? "");
+        dashPress.bufferCounter=0;dashPress.consumed=true;dashFlow.Update();
+        Check("tutorial",StoryText.InputNode(level)!);ScenePlayback(level,"input","tutorial");
+        dashBird.gui=(BirdTutorialGui)BareEntity(typeof(BirdTutorialGui));
+        Check("",StoryText.InputNode(level) ?? "");
+        dashBird.gui=dashGui;
+        dashPress.bufferCounter=1f;dashPress.consumed=false;
+        try {dashFlow.Update();}
+        catch(NullReferenceException) when(dashEnding.keyOffed && Audio.CurrentMusicEventInstance==null) {
+            // Native input was accepted. The headless fixture has no music
+            // event for the following external FMOD cue; private play does.
+        }
+        if(!dashEnding.keyOffed || player.StateMachine.State!=Player.StBirdDashTutorial || level.Session.Inventory.Dashes!=1)
+            throw new Exception("First Dash after the reported tutorial boundary was not accepted by the native parent");
+    } finally {Input.Dash=previousDash;Input.Aim=previousAim;level.Session=previousSession;}
+    Console.WriteLine("PASS: native ShowTutorial visual completion, child pop, parent Dash-loop readiness and first reported-frame direction+Dash acceptance");
+    Console.WriteLine("PASS: native cross-chapter NPC approach, journal/boss/8A/9A confirm boundaries and Everest wrapper, breathing confirm/control/script pause; hidden textbox and background-driver substitution rejected");
+    entities.entities.Clear();entities.entities.Add(player);
+
+    player.StateMachine=new Monocle.StateMachine(32);
+    player.StateMachine.SetCallbacks(Player.StIntroWalk,null,player.IntroWalkCoroutine);
+    player.StateMachine.State=Player.StIntroWalk;
+    ScenePlayback(level,"playing","player_intro_animation");
+    player.StateMachine.currentCoroutine.Replace(UnknownRoutine());
+    ScenePlayback(level,"unknown","unrecognized_cutscene");
+    player.StateMachine.SetCallbacks(Player.StIntroJump,null,player.IntroJumpCoroutine);
+    player.StateMachine.State=Player.StIntroJump;
+    ScenePlayback(level,"playing","player_intro_animation");
+    player.StateMachine.State=Player.StDummy;
+    ScenePlayback(level,"unknown","unrecognized_cutscene");
+    Console.WriteLine("PASS: real Granny lead-in/Meet progression, unknown textbox precedence, Ending automatic onset vs missing-GUI input state, native IntroWalk/Jump vs unknown/Dummy");
+} finally {
+    deltaProperty.SetValue(null,oldDelta);rawDeltaProperty.SetValue(null,oldRawDelta);
+    // Restore the original integration-test fixture.
+    entities.entities.Clear();entities.entities.Add(box);box.isInTrigger=false;
+    player.StateMachine=new Monocle.StateMachine(32);
+}
+
 // Optional integration check against the freshly built full bridge: execute the
 // real StepJob constructor/NextInput/AfterFrame path, not a copy of its edge rule.
 if (args.Length > 0) {

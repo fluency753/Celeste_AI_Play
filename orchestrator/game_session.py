@@ -17,7 +17,7 @@ from .action_policy import BLOCK_STOPS
 from .execution import workspace_capabilities
 from .collision_snapshot import current_collision, collision_summary
 from .collision_view import render_collision_view
-from .observation import enrich_obs, fmt_ticks
+from .observation import enrich_obs, fmt_ticks, skip_opportunity_hint
 from .sandbox import run_program
 from .goals import GoalManager
 from .modes import act_frame_cap, act_frame_min, is_explore
@@ -1330,11 +1330,13 @@ class GameSession:
                               'choice': '对话选项已就绪，请明确 choose，主控不会代选。',
                               'tutorial': '教学输入已就绪，请阅读提示并用 act 操作；不需要 wait。',
                               'memo': '旧纸页面正在等待输入：用 advance 或 act 发送 C 翻页，也可用 U/D 翻页、B 关闭；主控不代按。',
+                              'confirm': '当前剧情画面等待确认，请查看画面后用 advance 或 act 发送 C；主控不会代按。',
+                              'breathing': '当前是呼吸小游戏，需用 act 操作跳跃 J、冲刺 X 或向上 U 控制羽毛；watch 不会替你操作。',
                               'postcard': '明信片已显示完毕，请用 advance 确认。'}.get(node,
                               f'当前输入节点 {node} 尚未支持，主控停止等待；请查看观测后明确操作。'))
                 break
             if mode == 'agent' and stop_for_skip and story_decision(obs) == 'skip':
-                notes.append('剧情已可尝试暂停菜单跳过：用 cutscene(skip)，或 watch 观看到下一输入节点；主控不会替你跳过。')
+                notes.append(skip_opportunity_hint(obs))
                 break
             self._commit_completion(obs)
             if self.done or self.chapter_finished:break
@@ -1346,8 +1348,11 @@ class GameSession:
                 self._mark_done(f"离开关卡（{scene}）")
                 break
             level = obs.get("level") or {}
+            watching_while_controllable = (mode == 'agent' and not stop_for_skip and scene == 'Level'
+                                          and obs.get('controllable')
+                                          and (obs.get('storyPlaybackState') or {}).get('state') == 'playing')
             if (scene == "Level" and obs.get("controllable")
-                    and (mode == 'agent' or not level.get('inCutscene'))):
+                    and (mode == 'agent' or not level.get('inCutscene')) and not watching_while_controllable):
                 break
             if level.get("completed") and not story_pending(obs):
                 self._chapter_complete()
@@ -1367,7 +1372,8 @@ class GameSession:
                     if idle_uncontrolled(obs):
                         self._idle_handover = True
                     notes.append('当前不是已确认的剧情播放、死亡或转场阶段，主控停止自动等待；'
-                                 '未知界面可能在等按键，请查看当前观测后明确操作，不能靠空帧猜测。')
+                                 '未知界面可能在等按键，请查看当前观测后明确操作，不能靠空帧猜测。'
+                                 f'播放识别：{playback.get("state", "missing")} / {playback.get("source", "missing")}。')
                     break
                 if total >= wait_budget:
                     notes.append(f'本次已等待 {total} 帧，达到剧情播放等待预算；主控交回当前观测。'
@@ -1398,6 +1404,9 @@ class GameSession:
             if node == 'choice':
                 notes.append('当前需要明确选择对话选项，主控不会代选。')
                 break
+            if node == 'breathing':
+                notes.append('呼吸小游戏需要明确操作：用 act 的 J、X 或 U 控制羽毛；主控不以空帧代替游玩。')
+                break
             waiting = awaiting_confirm(obs)
             if not waiting:
                 frozen_frames = 0
@@ -1406,18 +1415,19 @@ class GameSession:
                              '为免空耗章节计时停止自动推进：请 observe 查看，可以用 act 发送按键（含 C 确认）尝试，'
                              '解决不了就调用 stop_run 报告。')
                 break
-            if mode == 'auto' and node == 'postcard':
+            if mode == 'auto' and node in {'postcard', 'confirm'}:
                 inputs = ["1,C", "29"]
             elif mode == 'auto' and waiting:
                 inputs = ["1,C", "29"]       # 磁带、吃心等界面在等确认：照真人的做法按确认继续
                 confirms += 1
             else:
                 inputs = (["1,C", "29"] if mode == 'auto' and level.get("dialogWaiting") and not level.get("paused")
-                          else [str(min(30, wait_budget - total))] if mode == 'agent' else ["30"])
+                          else [str(min(1 if watching_while_controllable else 30, wait_budget - total))]
+                          if mode == 'agent' else ["30"])
             stops = ["controllable", "story_input"] if mode == 'agent' else ["controllable", "complete", "story_input"]
             if mode == 'agent' and stop_for_skip:
                 stops.append('story_decision')
-            if mode == 'auto' and level.get('inCutscene') and obs.get('controllable'):
+            if watching_while_controllable or (mode == 'auto' and level.get('inCutscene') and obs.get('controllable')):
                 stops.remove('controllable')
             reply = self.client.call("step", inputs=inputs, stop_on=stops,
                                      speed=self.cfg.auto_speed, image=False, entities=False, tiles=False,
@@ -1539,8 +1549,8 @@ class GameSession:
                 refuse_input('当前暂停菜单尚未关闭，不能把菜单确认当作对话确认')
             if action == 'advance' and options:
                 refuse_input('当前有对话选项，必须用 choose 明确指定 choice，或等待/跳过整段剧情')
-            if action == 'advance' and story_input(obs) not in {'dialogue','postcard','memo'}:
-                refuse_input('当前不是对白、明信片或旧纸确认节点；角色或教学仍可操作时请用 act')
+            if action == 'advance' and story_input(obs) not in {'dialogue','postcard','memo','confirm'}:
+                refuse_input('当前不是对白、明信片、旧纸或剧情画面确认节点；角色、教学或小游戏操作请用 act')
             if action == 'choose' and story_input(obs) != 'choice':
                 refuse_input('主控尚未检测到可操作的对话选项，请检查剧情节点状态')
             used=0

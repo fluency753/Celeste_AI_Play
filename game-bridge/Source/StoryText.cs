@@ -12,11 +12,24 @@ namespace CelesteAI.Bridge;
 
 /// <summary>Read the rendered page, never the dialog script or unrevealed glyphs.</summary>
 internal static class StoryText {
-    private static readonly Dictionary<(Type, string), Type?> IteratorTypes = new();
+    internal static bool HasVisibleStoryHud(Scene? scene) => StoryPlayback.HasVisibleStoryHud(scene);
+    internal static IEnumerable<T> SceneEntities<T>(Scene scene) where T : Entity {
+        if (scene.Entities == null) yield break;
+        foreach (var entity in scene.Entities)
+            if (entity is T match && !scene.Entities.toRemove.Contains(entity)) yield return match;
+    }
+    internal static T? SceneEntity<T>(Scene scene) where T : Entity {
+        foreach (var entity in SceneEntities<T>(scene)) return entity;
+        return null;
+    }
+    // RenderOnly still draws a queued removal in this frame; its input and
+    // presentation are already retired, but its last pixels can remain visible.
+    internal static T? RenderedEntity<T>(Scene scene) where T : Entity => scene.Entities?.FindFirst<T>();
+    private static readonly Dictionary<(Type, string), HashSet<Type>> IteratorTypes = new();
 
     // Read the current iterator without running it. Everest wraps iterators in
     // Flattened, whose innermost enumerator is the routine actually executing.
-    private static IEnumerator? Current(Coroutine routine) {
+    internal static IEnumerator? Current(Coroutine routine) {
         if (!routine.Active || routine.Finished) return null;
         IEnumerator? current = routine.Current;
         for (int depth = 0; depth < 8 && current is Celeste.Mod.SwapImmediatelyExtension.Flattened flat; depth++)
@@ -24,19 +37,33 @@ internal static class StoryText {
         return current;
     }
 
-    private static bool IsRoutine(IEnumerator? current, Type owner, string method) {
+    internal static bool IsRoutine(IEnumerator? current, Type owner, string method) {
         var key = (owner, method);
-        if (!IteratorTypes.TryGetValue(key, out Type? iterator)) {
-            iterator = owner.GetMethod(method, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?
-                .GetCustomAttribute<IteratorStateMachineAttribute>()?.StateMachineType;
-            IteratorTypes[key] = iterator;
+        if (!IteratorTypes.TryGetValue(key, out var iterators)) {
+            iterators = new HashSet<Type>();
+            var native = owner.GetMethod(method, BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            if (native != null) foreach (var attribute in native.GetCustomAttributes<IteratorStateMachineAttribute>())
+                iterators.Add(attribute.StateMachineType);
+            IteratorTypes[key] = iterators;
         }
-        return iterator != null && current?.GetType() == iterator;
+        return current != null && iterators.Contains(current.GetType());
+    }
+
+    internal static int? IteratorState(IEnumerator iterator) => iterator.GetType()
+        .GetField("<>1__state", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(iterator) as int?;
+    internal static bool IteratorFinished(IEnumerator iterator) => IteratorState(iterator) == -1;
+
+    internal static bool CompletedChild(IEnumerator? parent, object owner, Type type, params string[] methods) {
+        if (parent?.Current is not IEnumerator child || !IteratorFinished(child)) return false;
+        if (!ReferenceEquals(child.GetType().GetField("<>4__this", BindingFlags.Instance |
+            BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(child), owner)) return false;
+        foreach (string method in methods) if (IsRoutine(child, type, method)) return true;
+        return false;
     }
 
     private static Coroutine? MemoRoutine(Level level, CS03_Memo.MemoPage page) {
         foreach (var entity in level.Entities) {
-            if (entity is not CS03_Memo owner || !ReferenceEquals(owner.memo, page) || owner.Components == null) continue;
+            if (entity is not CS03_Memo owner || level.Entities.toRemove.Contains(owner) || !ReferenceEquals(owner.memo, page) || owner.Components == null) continue;
             foreach (var component in owner.Components)
                 if (component is Coroutine routine && Current(routine) != null) return routine;
         }
@@ -81,29 +108,96 @@ internal static class StoryText {
         PostcardRoutine(scene, card) is { waitTimer: <= 0f } routine &&
         IsCardRoutine(Current(routine), card, "DisplayRoutine") && Current(routine)?.Current == null;
 
+    private static bool IntroExitCallback(IntroVignette intro, Action callback) {
+        Type? owner = callback.Method.DeclaringType;
+        if (owner != typeof(IntroVignette) && owner?.DeclaringType != typeof(IntroVignette)) return false;
+        if (!callback.Method.Name.StartsWith("<StartGame>b__", StringComparison.Ordinal) &&
+            !callback.Method.Name.StartsWith("<ReturnToMap>b__", StringComparison.Ordinal)) return false;
+        return ReferenceEquals(callback.Target, intro) || ReferenceEquals(callback.Target?.GetType()
+            .GetField("<>4__this", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(callback.Target), intro);
+    }
+
+    private static bool IntroExitWipe(IntroVignette intro) {
+        if (intro.RendererList is not { } renderers) return false;
+        bool Matches(Renderer renderer) => renderer is FadeWipe { WipeIn: false, ending: false, OnComplete: not null } wipe
+            && ReferenceEquals(wipe.Scene, intro) && IntroExitCallback(intro, wipe.OnComplete) && !renderers.removing.Contains(wipe);
+        // StartGame adds its wipe after base.Update has flushed the renderer
+        // list. Completed also needs one more native update to call OnComplete.
+        return renderers.Renderers.Exists(Matches) || renderers.adding.Exists(Matches);
+    }
+
+    private static (string State, string Source) IntroPlayback(IntroVignette intro) {
+        if (intro.menu != null) return ("unknown", "intro_menu");
+        if (intro.exiting)
+            return IntroExitWipe(intro) ? ("playing", "intro_exit_wipe") : ("unknown", "intro_unrecognized_exit");
+        // Native Update advances this timer even after TextSequence finishes.
+        // Verify its real routine as well: an unknown replacement may ask for
+        // input and must not inherit permission merely from this scene's type.
+        if (!intro.started && float.IsFinite(intro.timer) && intro.timer >= 0f && intro.timer < 18.683f &&
+            intro.textCoroutine is { } routine &&
+            (IsRoutine(Current(routine), typeof(IntroVignette), "TextSequence") ||
+                (routine.Finished && intro.textStart == int.MaxValue)))
+            return ("playing", "intro_text_sequence");
+        return ("unknown", "intro_unrecognized_routine");
+    }
+
     internal static (string State, string Source) PlaybackState(Scene? scene) {
         if (InputNode(scene) is { } input) return ("input", input);
+        if (scene is IntroVignette intro) return IntroPlayback(intro);
         if (scene is Level level) {
             if (level.FrozenOrPaused || level.SkippingCutscene || level.RetryPlayerCorpse != null)
                 return ("unknown", "level_blocked");
-            if (level.Entities.FindFirst<CS03_Memo.MemoPage>() is { Visible: true } memo) {
+            if (SceneEntity<CS03_Memo.MemoPage>(level) is { Visible: true } memo) {
                 var current = MemoRoutine(level, memo) is { } routine ? Current(routine) : null;
                 if (IsRoutine(current, typeof(CS03_Memo.MemoPage), "EaseIn") || IsRoutine(current, typeof(CS03_Memo.MemoPage), "EaseOut"))
                     return ("playing", "memo_animation");
+                if (IsRoutine(current, typeof(CS03_Memo), "Routine") &&
+                    CompletedChild(current, memo, typeof(CS03_Memo.MemoPage), "EaseIn", "Wait", "EaseOut"))
+                    return ("playing", "memo_resume");
                 return ("unknown", "memo_unrecognized_routine");
             }
-            if (level.Entities.FindFirst<Textbox>() is { Visible: true, runRoutine: { } textRoutine } box) {
+            var box = SceneEntity<Textbox>(level);
+            if (box != null && !level.Entities.toRemove.Contains(box) && (!box.Visible || box.runRoutine == null))
+                return ("unknown", "dialogue_unrecognized_routine");
+            if (box is { Visible: true, runRoutine: { } textRoutine } && !level.Entities.toRemove.Contains(box)) {
                 var current = Current(textRoutine);
                 if (IsRoutine(current, typeof(Textbox), "EaseOpen") || IsRoutine(current, typeof(Textbox), "EaseClose"))
                     return ("playing", "dialogue_animation");
+                if (IsRoutine(current, typeof(Textbox), "RunRoutine") &&
+                    StoryPlayback.CompletedDialogueChild(level, box, current!)) return ("playing", "dialogue_resume");
                 if (IsRoutine(current, typeof(Textbox), "RunRoutine") && !box.isInTrigger) {
                     if (box.waitingForInput && textRoutine.waitTimer > 0f) return ("playing", "dialogue_debounce");
                     // RunRoutine increments index before yielding its timed
                     // reveal/wait; Nodes[index] already refers to the next node.
                     if (!box.waitingForInput && current?.Current is float delay && delay >= 0f)
                         return ("playing", "dialogue_delay");
+                    // Portrait changes can hold RunRoutine on null while the
+                    // native begin animation plays. Its node has not advanced
+                    // yet, unlike the timed character/reveal yields above.
+                    if (!box.waitingForInput && !box.canSkip && box.portraitExists && current?.Current == null && IteratorState(current!) == 4 &&
+                        box.text?.Nodes is { } nodes && box.index >= 0 && box.index < nodes.Count &&
+                        nodes[box.index] is FancyText.Portrait portrait && ReferenceEquals(box.portrait, portrait) &&
+                        box.portraitSprite is { Active: true })
+                        // Textbox updates its sprite after RunRoutine. On the
+                        // last animation frame Animating may already be false;
+                        // native state 4 still needs to leave that same loop.
+                        return ("playing", "dialogue_portrait_animation");
+                }
+                if (box.isInTrigger) {
+                    if (StoryPlayback.Presentation(level) is { } triggerPresentation) return triggerPresentation;
+                    if (StoryPlayback.Automatic(level, textRoutine, true))
+                        return ("playing", "dialogue_trigger_animation");
                 }
                 return ("unknown", "dialogue_unrecognized_routine");
+            }
+            if (StoryPlayback.Presentation(level) is { } presentation) return presentation;
+            var player = SceneEntity<Player>(level);
+            if (player != null && StoryPlayback.PlayerIntro(player)) return ("playing", "player_intro_animation");
+            foreach (var entity in level.Entities) {
+                if (!entity.Active || entity.Components == null) continue;
+                foreach (var component in entity.Components)
+                    if (component is Coroutine routine && StoryPlayback.Automatic(level, routine))
+                        return ("playing", "cutscene_animation");
             }
             return level.InCutscene ? ("unknown", "unrecognized_cutscene") : ("none", "no_cutscene");
         }
@@ -117,10 +211,15 @@ internal static class StoryText {
                 // live coroutine may still advance, without reviving its UI.
                 if (IsRoutine(current, typeof(Postcard), "DisplayRoutine") && routine.waitTimer > 0f)
                     return ("playing", "postcard_delay");
+                if (IsCardRoutine(current, card, "DisplayRoutine")) {
+                    if (current?.Current is float delay && delay >= 0f) return ("playing", "postcard_delay");
+                    if (CompletedChild(current, card, typeof(Postcard), "EaseIn", "EaseOut"))
+                        return ("playing", "postcard_resume");
+                }
             }
             return ("unknown", "postcard_unrecognized_routine");
         }
-        return scene is IntroVignette or LevelEnter ? ("unknown", "unrecognized_story_scene") : ("none", "no_cutscene");
+        return scene is LevelEnter ? ("unknown", "unrecognized_story_scene") : ("none", "no_cutscene");
     }
     // Textbox sets waitingForInput before yielding a 0.1s debounce. During that
     // coroutine wait a confirm press is discarded, although the page is visible.
@@ -130,22 +229,24 @@ internal static class StoryText {
 
     public static string? InputNode(Scene? scene) {
         if (scene is Level level && !level.FrozenOrPaused && !level.SkippingCutscene && level.RetryPlayerCorpse == null) {
-            var campfire = level.Entities.FindFirst<CS06_Campfire>();
+            var campfire = SceneEntity<CS06_Campfire>(level);
             if (campfire?.currentOptions is { Count: > 0 })
                 return campfire.optionEase >= 0.999f ? "choice" : null;
-            var box = level.Entities.FindFirst<Textbox>();
+            var box = SceneEntity<Textbox>(level);
             if (box is { Visible: true })
-                return DialogueReady(box) ? "dialogue" : null;
-            var memo = level.Entities.FindFirst<CS03_Memo.MemoPage>();
+                return DialogueReady(box) ? "dialogue" : box.isInTrigger ? StoryPlayback.InputNode(level) : null;
+            var memo = SceneEntity<CS03_Memo.MemoPage>(level);
             if (memo != null && MemoReady(level, memo)) return "memo";
-            var tutorial = level.Entities.FindFirst<BirdTutorialGui>();
-            var player = level.Entities.FindFirst<Player>();
+            var tutorial = StoryPlayback.SceneTutorial(level);
+            var player = SceneEntity<Player>(level);
             // Only a tutorial that a cutscene is waiting on is an input node. Ambient birds (1A climbing)
             // stay open during respawn and room transitions, when the player is briefly not controllable.
             if (tutorial is { Visible: true, Open: true, Scale: >= 0.999f } && tutorial.controls.Count > 0
                 && player != null && !PlayerControl.IsControllable(level, player)
-                && (level.InCutscene || player.StateMachine.State == Player.StDummy))
+                && (level.InCutscene || player.StateMachine.State == Player.StDummy)
+                && StoryPlayback.TutorialReady(level, tutorial))
                 return "tutorial";
+            return StoryPlayback.InputNode(level);
         } else if (scene != null && ScenePostcard(scene) is { } card && PostcardReady(scene, card)) {
             return "postcard";
         }
@@ -158,10 +259,10 @@ internal static class StoryText {
     public static string? DecisionNode(Scene? scene) {
         string? input = InputNode(scene);
         if (input != null) return input;
-        if (scene is IntroVignette { exiting: false, menu: null }) return "skip";
+        if (scene is IntroVignette { exiting: false, menu: null, timer: >= 0f and < 16.683f }) return "skip";
         if (scene is Level level && level.InCutscene && level.CanPause
             && !level.FrozenOrPaused && !level.Transitioning && !level.SkippingCutscene && level.RetryPlayerCorpse == null) {
-            Player? player = level.Entities.FindFirst<Player>();
+            Player? player = SceneEntity<Player>(level);
             if (player is { Dead: false } && !PlayerControl.IsControllable(level, player)) return "skip";
         }
         return null;
@@ -214,16 +315,16 @@ internal static class StoryText {
         w.WriteEndObject();
         w.WriteStartArray("story");
         if (scene is Level level && !level.FrozenOrPaused && !level.SkippingCutscene && level.RetryPlayerCorpse == null) {
-            var box = level.Entities.FindFirst<Textbox>();
+            var box = SceneEntity<Textbox>(level);
             if (box is { Visible: true } && Ease.CubeInOut(box.ease) >= 0.05f) {
                 Entry(w, "dialogue", ReadPage(box.text, box.Start, Ease.CubeInOut(box.ease)), DialogueReady(box),
                     box.Page, box.portraitExists ? box.portrait : null);
             }
-            var ending = level.Entities.FindFirst<PrologueEndingText>();
+            var ending = SceneEntity<PrologueEndingText>(level);
             if (ending is { Visible: true }) Entry(w, "ending", ReadPage(ending.text, 0));
-            foreach (var memorial in level.Entities.FindAll<MemorialText>())
+            foreach (var memorial in SceneEntities<MemorialText>(level))
                 Entry(w, "memorial", ReadMemorial(memorial, level.Completed));
-            var tutorial = level.Entities.FindFirst<BirdTutorialGui>();
+            var tutorial = StoryPlayback.SceneTutorial(level);
             if (tutorial is { Visible: true, Scale: > 0f }) {
                 w.WriteStartObject();
                 w.WriteString("kind", "tutorial");
@@ -250,6 +351,8 @@ internal static class StoryText {
     // UI observation supplies facts only. It does not press keys or assume a
     // visible/fading Poem is already accepting confirmation (fake hearts differ).
     internal static void WriteUi(Utf8JsonWriter w, Scene? scene) {
+        if (scene is Level storyLevel && !storyLevel.FrozenOrPaused && !storyLevel.SkippingCutscene &&
+            storyLevel.RetryPlayerCorpse == null && StoryPlayback.WriteUi(w, storyLevel)) return;
         if (scene != null && ScenePostcard(scene) is { Visible: true } card && ReferenceEquals(card.Scene, scene)) {
             w.WriteStartObject("ui");
             w.WriteString("type", "Postcard");
@@ -259,14 +362,14 @@ internal static class StoryText {
             w.WriteString("controls", "C: confirm when inputReady");
             w.WriteEndObject();
         } else if (scene is Level memoLevel && !memoLevel.FrozenOrPaused && !memoLevel.SkippingCutscene && memoLevel.RetryPlayerCorpse == null
-            && memoLevel.Entities.FindFirst<CS03_Memo.MemoPage>() is { Visible: true, alpha: > 0f } memo) {
+            && SceneEntity<CS03_Memo.MemoPage>(memoLevel) is { Visible: true, alpha: > 0f } memo) {
             w.WriteStartObject("ui");
             w.WriteString("type", "MemoPage");
             w.WriteNumber("alpha", memo.alpha);
             w.WriteBoolean("inputReady", MemoReady(memoLevel, memo));
             w.WriteString("controls", "U: previous section; D/C: next section; C on final section or B: close");
             w.WriteEndObject();
-        } else if (scene is Level level && level.Entities.FindFirst<Poem>() is { Visible: true, Alpha: > 0f } poem) {
+        } else if (scene is Level level && SceneEntity<Poem>(level) is { Visible: true, Alpha: > 0f } poem) {
             w.WriteStartObject("ui");
             w.WriteString("type", "Poem");
             w.WriteNumber("alpha", poem.Alpha);

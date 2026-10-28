@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.8.0";
+    public const string Version = "1.8.1";
     private const int MaxPlanFrames = 60 * 60 * 10;
 
     public static bool Active { get => BridgeRuntime.Active; private set => BridgeRuntime.Active = value; }
@@ -47,7 +47,7 @@ internal static class Bridge {
     private static readonly ConcurrentQueue<Request> Inbox = new();
     private static readonly List<RenderReply> PendingRenders = new();
 
-    private sealed record RenderReply(long Id, Action<Utf8JsonWriter> Body, string Buffer);
+    private sealed record RenderReply(long Id, Action<Utf8JsonWriter> Body, string Buffer, Scene? Scene, long Frame, bool StoryHud);
 
     public static bool ShouldHaltEngineUpdate() => Active && reloadBoundaryHeld || SceneControl.HaltEngine(Active, engineHalted, freeFrame, Engine.Scene);
 
@@ -390,6 +390,8 @@ internal static class Bridge {
 
     /// <summary>这一帧画完要截图回复（观测）：规划回放这一帧不换镜头、不画线。</summary>
     public static bool CapturePending => PendingRenders.Count > 0;
+    internal static bool WantsStoryHudImage => PendingRenders.Exists(pending => pending.Buffer != "gameplay" && pending.StoryHud
+        && pending.Frame == Frame && ReferenceEquals(pending.Scene, Engine.Scene));
 
     /// <summary>绘制完成后调用：处理需要截图的回复。</summary>
     public static void AfterRender() {
@@ -397,14 +399,18 @@ internal static class Bridge {
             return;
         }
         foreach (RenderReply pending in PendingRenders) {
-            string? image = FrameGrabber.CapturePngBase64(pending.Buffer);
+            var capture = pending.Frame == Frame && ReferenceEquals(pending.Scene, Engine.Scene)
+                ? FrameGrabber.CapturePngBase64(pending.Buffer, pending.StoryHud)
+                : new FrameGrabber.Capture(null, null, "截图前游戏场景或帧已改变，本次不附错帧图片，请重新观测。");
             IpcServer.Send(Reply.Ok(pending.Id, w => {
                 pending.Body(w);
-                if (image != null) {
-                    w.WriteString("imageFormat", "png-base64-320x180");
-                    w.WriteString("image", image);
+                w.WriteString("imageScope", capture.StoryHud ? "story_hud" : "world");
+                if (capture.Image != null) {
+                    w.WriteString("imageFormat", capture.Format);
+                    w.WriteString("image", capture.Image);
                 } else {
                     w.WriteNull("image");
+                    w.WriteString("imageError", capture.Error);
                 }
             }));
         }
@@ -478,7 +484,8 @@ internal static class Bridge {
             w.WriteRawValue(obs, skipInputValidation: true);
         }
         if (finished.WantImage) {
-            PendingRenders.Add(new RenderReply(finished.RequestId, Body, finished.Buffer));
+            PendingRenders.Add(new RenderReply(finished.RequestId, Body, finished.Buffer, Engine.Scene, Frame,
+                StoryText.HasVisibleStoryHud(Engine.Scene)));
         } else {
             IpcServer.Send(Reply.Ok(finished.RequestId, Body));
         }
@@ -979,7 +986,7 @@ internal static class Bridge {
             w.WriteRawValue(obs, skipInputValidation: true);
         }
         if (image) {
-            PendingRenders.Add(new RenderReply(id, Body, buffer));
+            PendingRenders.Add(new RenderReply(id, Body, buffer, Engine.Scene, Frame, StoryText.HasVisibleStoryHud(Engine.Scene)));
         } else {
             IpcServer.Send(Reply.Ok(id, Body));
         }

@@ -1,6 +1,6 @@
 # 保持录像的桥接代码重载
 
-桥接 1.3.0 将常驻核心 `CelesteAIRuntime` 与可重载逻辑 `CelesteAIBridge` 拆成两个 Everest Mod。主控通过现有连接在动作边界重载桥接逻辑；常驻核心继续持有冻结门闸、帧号、IPC／OBS 时钟、注入按键绑定、双轨 FMOD 混音器及音频共享内存。主控不发送录制 stop/start，也不另开录制目录。当前版本为桥接 1.8.0、常驻核心 1.0.5，核心 ABI 仍为 1。
+桥接 1.3.0 将常驻核心 `CelesteAIRuntime` 与可重载逻辑 `CelesteAIBridge` 拆成两个 Everest Mod。主控通过现有连接在动作边界重载桥接逻辑；常驻核心继续持有冻结门闸、帧号、IPC／OBS 时钟、注入按键绑定、双轨 FMOD 混音器及音频共享内存。主控不发送录制 stop/start，也不另开录制目录。当前版本为桥接 1.8.1、常驻核心 1.0.5，核心 ABI 仍为 1。
 
 **1.8.0／1.0.5 需要一次维护升级，并同步更新主控。** Runtime 原来按类型将所有加载器当成可继续运行的维护场景，无法冻结并接回原本就是加载器的场景。现在只允许 prepare 原对象以外的新维护对象运行，原对象从 prepare 起冻结，返回后即可接回；输入绑定恢复、冻结和 ready 使用同一个引用判定。该规则必须跨 Bridge 卸载存活，因此属于核心调度修复，不在核心放入明信片、存档或剧情策略。不得覆盖在用核心；兼容 Bridge 后续更新仍可不停录重载。
 
@@ -49,7 +49,7 @@ Bridge 统一识别后台完成且原生明信片仍附着于 `OverworldLoader`�
 也可单独提交已构建的桥接 DLL：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\reload_bridge.py --hud-port 47792 --dll "<构建目录>\CelesteAIBridge.dll" --expected-version 1.8.0
+.\.venv\Scripts\python.exe tools\reload_bridge.py --hud-port 47792 --dll "<构建目录>\CelesteAIBridge.dll" --expected-version 1.8.1
 ```
 
 该工具只访问现有 HUD 的 `/api/control`，不会创建第二条桥接连接顶掉主控。DLL 路径、可选 PDB 与哈希由主控检查；`--dll` 与部署脚本一样要求常驻核心逐字节相同：主控在 DLL 同目录或仓库 `game-runtime\bin` 查找一同构建的 `CelesteAIRuntime.dll`（也可用 `--runtime-dll` 指定），与游戏实际加载的核心（`hello.runtime_path`，旧桥接没有时按 `Mods\CelesteAIRuntime\bin` 推断）比较哈希，不同或找不到就拒绝，不替换文件。必须先拿到常驻核心确认的 lease 和实际安装路径，才备份并原子替换 payload。备份放在运行目录的 `bridge_reload_backups/<lease>/`，交接阶段保存在 `bridge_reload.json`。

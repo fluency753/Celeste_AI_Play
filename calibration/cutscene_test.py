@@ -489,7 +489,7 @@ class StoryFlowTests(unittest.TestCase):
                 self.assertEqual(self.s.cfg.cutscene_mode,'auto')
 
     def test_watch_never_confirms_choices_or_tutorial_and_respects_user_pause(self):
-        for node in ('choice','tutorial','postcard'):
+        for node in ('choice','tutorial','postcard','confirm','breathing'):
             obs=dialog();obs.update(storyInput=node,storyDecision=node)
             self.s.client=SceneClient(obs)
             result=self.s.cutscene('watch')
@@ -500,6 +500,45 @@ class StoryFlowTests(unittest.TestCase):
         _,_,info=self.s.cutscene('watch')
         self.assertEqual(self.s.client.steps,[])
         self.assertIn('暂停',info['auto_notes'][0])
+
+    def test_advance_accepts_native_confirm_but_never_plays_breathing_for_agent(self):
+        ready=dialog();ready.update(storyInput='confirm',storyDecision='confirm')
+        ready['level'].update(dialogOpen=False,dialogWaiting=False)
+        self.s.client=SceneClient(ready)
+        _,_,info=self.s.cutscene('advance')
+        self.assertEqual(info['frames'],2)
+        self.assertEqual(self.s.client.steps,[['1,C','1']])
+        breathing=copy.deepcopy(ready);breathing.update(storyInput='breathing',storyDecision='breathing')
+        self.s.client=SceneClient(breathing)
+        with self.assertRaisesRegex(ActError,'小游戏操作请用 act'):
+            self.s.cutscene('advance')
+        self.assertEqual(self.s.client.steps,[])
+
+    def test_new_native_input_prompts_explain_actual_controls(self):
+        from orchestrator.observation import describe_obs
+        confirm=describe_obs({'scene':'Level','storyInput':'confirm'})
+        self.assertIn('advance 或 act 的 C',confirm)
+        breathing=describe_obs({'scene':'Level','storyInput':'breathing'})
+        self.assertIn('J、X 或 U',breathing)
+        self.assertIn('watch 不代替操作',breathing)
+
+    def test_auto_mode_confirms_native_confirm_but_hands_over_breathing(self):
+        self.s.cfg.cutscene_mode='auto'
+        ready=dialog();ready.update(storyInput='confirm',storyDecision='confirm')
+        ready['level'].update(dialogOpen=False,dialogWaiting=False)
+        self.s.client=SceneClient(ready)
+        with patch('orchestrator.game_session.skip_by_pause_menu',return_value=(False,ready,0,'no_pause')):
+            obs,_,frames,_=self.s._auto_advance(ready,None)
+        self.assertTrue(obs['controllable'])
+        self.assertEqual(frames,30)
+        self.assertEqual(self.s.client.steps,[['1,C','29']])
+        breathing=copy.deepcopy(ready);breathing.update(storyInput='breathing',storyDecision='breathing')
+        self.s.client=SceneClient(breathing)
+        with patch('orchestrator.game_session.skip_by_pause_menu',return_value=(False,breathing,0,'no_pause')):
+            _,_,frames,notes=self.s._auto_advance(breathing,None)
+        self.assertEqual(frames,0)
+        self.assertEqual(self.s.client.steps,[])
+        self.assertIn('不以空帧代替游玩',notes[0])
     def test_host_plays_typing_to_input_without_any_confirm(self):
         typing=dialog();typing['level']['dialogWaiting']=False;typing['storyInput']=None
         self.s.client=ScriptClient([typing,dialog()])
@@ -543,6 +582,109 @@ class StoryFlowTests(unittest.TestCase):
         obs,_,frames,_=self.s._auto_advance(a,None)
         self.assertEqual(frames,60)
         self.assertEqual([s['text'] for s in obs['storyPlayback']],['开始登山','相信自己'])
+
+    def test_watch_continues_intro_fade_loader_and_player_entry_without_inputs(self):
+        intro={'scene':'IntroVignette','storyInput':None,'storyDecision':'skip',
+               'storyPlaybackState':{'state':'playing','source':'intro_text'}}
+        fade=copy.deepcopy(intro);fade['storyDecision']=None
+        fade['storyPlaybackState']['source']='intro_fade_out'
+        loader={'scene':'LevelLoader','storyInput':None,'level':None}
+        entry={'scene':'Level','controllable':False,'storyInput':None,'level':{},
+               'storyPlaybackState':{'state':'playing','source':'player_intro'}}
+        play={'scene':'Level','controllable':True,'storyInput':None,'level':{}}
+        self.s.client=ScriptClient([intro,fade,loader,entry,play])
+        obs,_,info=self.s.cutscene('watch')
+        self.assertTrue(obs['controllable'])
+        self.assertEqual(info['auto_frames'],120)
+        self.assertEqual(info['frames'],0)
+        self.assertFalse(info['skipped'])
+        self.assertEqual(self.s.client.steps,[['30']]*4)
+
+    def test_watch_can_resume_after_budget_stops_in_native_player_entry(self):
+        intro={'scene':'IntroVignette','storyInput':None,'storyDecision':'skip',
+               'storyPlaybackState':{'state':'playing','source':'intro_text'}}
+        entry={'scene':'Level','controllable':False,'storyInput':None,'level':{'inCutscene':False},
+               'storyPlaybackState':{'state':'playing','source':'player_intro_animation'}}
+        play={'scene':'Level','controllable':True,'storyInput':None,'level':{}}
+        self.s.client=ScriptClient([intro,entry,play])
+        with patch('orchestrator.game_session.AGENT_STORY_WAIT_FRAMES',30):
+            obs,_,first=self.s.cutscene('watch')
+            self.assertFalse(obs['controllable'])
+            self.assertIn('等待预算',first['auto_notes'][0])
+            obs,_,second=self.s.cutscene('watch')
+        self.assertTrue(obs['controllable'])
+        self.assertEqual([first['auto_frames'],second['auto_frames']],[30,30])
+        self.assertEqual(self.s.client.steps,[['30'],['30']])
+
+    def test_explicit_watch_plays_controllable_cinematic_one_frame_at_a_time(self):
+        lead=dialog();lead.update(storyInput=None,storyDecision=None,controllable=True)
+        lead['level'].update(dialogOpen=False,dialogWaiting=False)
+        locked=copy.deepcopy(lead);locked['controllable']=False
+        ready=copy.deepcopy(locked);ready.update(storyInput='tutorial',storyDecision='tutorial')
+
+        class CheckedClient(ScriptClient):
+            def call(self,cmd,**args):
+                if cmd=='step' and self.obs.get('controllable'):
+                    self_test.assertNotIn('controllable',args['stop_on'])
+                return super().call(cmd,**args)
+
+        self_test=self
+        self.s.client=CheckedClient([lead,lead,locked,ready])
+        obs,_,info=self.s.cutscene('watch')
+        self.assertEqual(obs['storyInput'],'tutorial')
+        self.assertEqual(info['auto_frames'],32)
+        self.assertEqual(self.s.client.steps,[['1'],['1'],['30']])
+
+    def test_watch_does_not_overrun_cinematic_end_while_player_remains_controllable(self):
+        lead=dialog();lead.update(storyInput=None,storyDecision=None,controllable=True)
+        lead['level'].update(dialogOpen=False,dialogWaiting=False)
+        end=copy.deepcopy(lead);end['level']['inCutscene']=False
+        end['storyPlaybackState']={'state':'none','source':'no_cutscene'}
+        self.s.client=ScriptClient([lead,end])
+        _,_,info=self.s.cutscene('watch')
+        self.assertEqual(info['auto_frames'],1)
+        self.assertEqual(self.s.client.steps,[['1']])
+        # Without an explicit story tool, playable scenes keep their act handoff.
+        self.s.client=SceneClient(lead)
+        _,_,frames,_=self.s._auto_advance(lead,None)
+        self.assertEqual(frames,0)
+        self.assertEqual(self.s.client.steps,[])
+
+    def test_controllable_native_animation_prompt_offers_watch_without_forcing_it(self):
+        from orchestrator.observation import describe_obs
+        lead={'scene':'Level','controllable':True,'level':{'inCutscene':True,'room':'test','sid':'Celeste/0-Intro',
+                    'chapterTimeTicks':0,'deaths':0,'deathsInRoom':0,'camera':[0,0],'bounds':[0,0,320,180]},
+              'storyPlaybackState':{'state':'playing','source':'cutscene_animation'}}
+        self.assertIn('也可明确调用 watch',describe_obs(lead))
+        lead['storyPlaybackState']['state']='unknown'
+        self.assertIn('不需要等待或确认',describe_obs(lead))
+
+    def test_watch_plays_native_animation_until_dialogue_or_bird_input(self):
+        for node in ('dialogue','tutorial'):
+            with self.subTest(node=node):
+                animation=dialog();animation.update(storyInput=None,storyDecision='skip')
+                animation['level'].update(dialogOpen=False,dialogWaiting=False)
+                animation['storyPlaybackState']={'state':'playing','source':'native_cutscene_animation'}
+                ready=copy.deepcopy(animation);ready.update(storyInput=node,storyDecision=node)
+                ready['storyPlaybackState']={'state':'input','source':node}
+                self.s.client=ScriptClient([animation,ready])
+                obs,_,info=self.s.cutscene('watch')
+                self.assertEqual(obs['storyInput'],node)
+                self.assertEqual(info['auto_frames'],30)
+                self.assertEqual(self.s.client.steps,[['30']])
+                # Repeated watch at the real input boundary must not press or wait.
+                _,_,again=self.s.cutscene('watch')
+                self.assertEqual(again['auto_frames'],0)
+                self.assertEqual(self.s.client.steps,[['30']])
+
+    def test_unknown_watch_stays_frozen_and_reports_classifier_reason(self):
+        unknown=dialog();unknown.update(storyInput=None,storyDecision='skip')
+        unknown['storyPlaybackState']={'state':'unknown','source':'dialogue_unrecognized_routine'}
+        self.s.client=SceneClient(unknown)
+        _,_,info=self.s.cutscene('watch')
+        self.assertEqual(info['auto_frames'],0)
+        self.assertEqual(self.s.client.steps,[])
+        self.assertIn('unknown / dialogue_unrecognized_routine',info['auto_notes'][0])
 
     def test_ending_animation_does_not_stop_each_frame_on_completed_flag(self):
         typing=dialog();typing['level'].update(completed=True,dialogWaiting=False);typing['storyInput']=None
@@ -643,3 +785,17 @@ class StorySchemaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('剧情可尝试跳过',describe_obs(obs))
         self.assertNotIn('当前剧情输入节点',describe_obs(obs))
         self.assertEqual(json.loads(room_json(obs))['storyDecision'],'skip')
+
+    def test_observation_only_recommends_watch_for_confirmed_playback(self):
+        from orchestrator.observation import describe_obs,skip_opportunity_hint
+        for state in ('playing','unknown',None):
+            with self.subTest(state=state):
+                obs={'scene':'IntroVignette','storyInput':None,'storyDecision':'skip'}
+                if state:obs['storyPlaybackState']={'state':state,'source':'test'}
+                rendered=describe_obs(obs)
+                self.assertIn(skip_opportunity_hint(obs),rendered)
+                if state=='playing':
+                    self.assertIn('watch 不按键观看',rendered)
+                else:
+                    self.assertIn('watch 会停止',rendered)
+                    self.assertNotIn('watch 不按键观看',rendered)

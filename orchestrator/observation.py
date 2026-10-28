@@ -32,9 +32,10 @@ STOP_TEXT = {
 
 
 def upscale_png(b64: str, factor: int = 2) -> bytes:
-    """最近邻放大，像素边界保持锐利。"""
+    """放大低分辨率游戏画面；原生高分辨率剧情界面保持原尺寸。"""
     img = PILImage.open(io.BytesIO(base64.b64decode(b64)))
-    img = img.resize((img.width * factor, img.height * factor), PILImage.NEAREST)
+    if img.width <= 320 and img.height <= 180:
+        img = img.resize((img.width * factor, img.height * factor), PILImage.NEAREST)
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue()
@@ -253,6 +254,13 @@ def crop_to_view(obs: dict, margin: int = 16) -> tuple[list[dict], dict | None]:
     return shown, tiles
 
 
+def skip_opportunity_hint(obs: dict) -> str:
+    hint = '剧情可尝试跳过，尚不表示对白已完整显示：用 cutscene(action="skip") 尝试暂停菜单跳过。'
+    if (obs.get('storyPlaybackState') or {}).get('state') == 'playing':
+        return hint + '也可用 watch 不按键观看到下一输入节点；主控不会替你跳过。'
+    return hint + '当前播放阶段尚未识别，watch 会停止；请查看观测后明确操作。'
+
+
 def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, explore: bool = False,
                  compact_context: bool = False, file_context: bool = False, brief_room: bool = False) -> str:
     """full_room=True：整个房间的实体与地图（进入新房间、主动观察时）；False：只描述当前画面附近。
@@ -279,6 +287,11 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         lines.append('当前菜单：' + json.dumps(obs['menu'], ensure_ascii=False))
     if obs.get('ui'):
         lines.append('当前界面：' + json.dumps(obs['ui'], ensure_ascii=False))
+    screenshot = obs.get('screenshot') or {}
+    if screenshot.get('error'):
+        lines.append('本次没有可用截图：' + screenshot['error'])
+    elif screenshot.get('scope') == 'story_hud':
+        lines.append('截图包含当前原生剧情界面，按界面内容阅读；界面像素不代表世界坐标。')
     if obs.get('pauseMenu'):
         lines.append('暂停菜单：' + json.dumps(obs['pauseMenu'], ensure_ascii=False))
     for previous in obs.get('storyPlayback') or []:
@@ -286,12 +299,19 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     node = obs.get('storyInput')
     if node == 'memo':
         lines.append('旧纸页面正在等待输入：用 advance 或 act 的 C 翻页，U/D 翻页、B 关闭；主控不会自动等待或代按。')
+    elif node == 'confirm':
+        lines.append('当前剧情输入节点：confirm；画面等待确认，用 advance 或 act 的 C 继续；主控不代按。')
+    elif node == 'breathing':
+        lines.append('当前剧情输入节点：breathing；呼吸小游戏用 act 的 J、X 或 U 控制羽毛，松开使羽毛下落；watch 不代替操作。')
     elif node:
         lines.append('当前剧情输入节点：'+node+'；主控已停止自动播放，教学用 act；对白和选项可明确用 act 输入，或调用 advance / choose。')
     elif obs.get('storyDecision') == 'skip':
-        lines.append('剧情可尝试跳过，尚不表示对白已完整显示：用 cutscene(action="skip") 尝试暂停菜单跳过，或 watch 不按键观看到下一输入节点。')
+        lines.append(skip_opportunity_hint(obs))
     elif obs.get('controllable') and (level or {}).get('inCutscene'):
-        lines.append('虽然有剧情标记，角色当前仍可操作，请继续用 act；不需要等待或确认。')
+        if (obs.get('storyPlaybackState') or {}).get('state') == 'playing':
+            lines.append('角色当前可操作，同时原生自动剧情正在播放：可用 act 操作，也可明确调用 watch 观看到下一输入节点；主控不会因剧情标记自行代玩。')
+        else:
+            lines.append('虽然有剧情标记，角色当前仍可操作，请继续用 act；不需要等待或确认。')
     for story in obs.get('story') or []:
         portrait=story.get('speakerPortrait') or {}
         speaker=portrait.get('sprite')

@@ -203,7 +203,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                                       'sid': level.get('sid'), 'room': level.get('room')}}
             return block
         content = []
-        if screenshot and show_screenshot:
+        if screenshot and (show_screenshot or (obs.get('screenshot') or {}).get('scope') == 'story_hud'):
             content.append(tagged(upscale_png(screenshot), 'screenshot'))
         image_mode = collision_image_mode(session.cfg)
         if image_mode == 'off' or (image_mode == 'room' and not room_view):
@@ -349,7 +349,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             result = await asyncio.to_thread(session.exit_level, reason)
             return [json.dumps(result,ensure_ascii=False) + '\n已退出关卡，本次试玩结束，请结束本轮，不再调用游戏工具。']
 
-    @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段。watch只播放桥接明确识别的动画，未知状态立即返回，每次调用最多自动等待600帧；仍在播放可明确watch继续。advance确认当前完整对白、明信片或旧纸的一页，choose选择可见选项index；教学或其他输入用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
+    @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段。watch只播放桥接明确识别的动画，未知状态立即返回，每次调用最多自动等待600帧；仍在播放可明确watch继续。advance确认当前完整对白、明信片、旧纸的一页或confirm画面，choose选择可见选项index；教学和breathing呼吸小游戏用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
     async def cutscene(action: str, choice: int | None = None) -> list:
         ticket = reload_ticket()
         async with call_lock:

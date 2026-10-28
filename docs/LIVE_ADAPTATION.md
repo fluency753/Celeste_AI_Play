@@ -206,6 +206,16 @@ HUD 底部"会话管理"提供新建并准备、断开会话、章节选择、�
 
 桥接 1.3.2 起，`storyPlaybackState` 明确报告 `playing/input/unknown/none`。agent 模式只自动等待已识别播放或已知死亡／转场，未知（含旧桥接缺少此字段）立即交回观测，不凭剧情标记空推；每次工具调用的前后自动等待共用最多 600 帧，超限仍为播放时可明确 `watch` 继续。3A 旧纸按实际 `MemoPage.Wait` 协程报告 `storyInput=memo`；`advance` 只确认一页，亦可显式用 `act` 的 U/D 翻页、B 关闭。UI 只报告可见状态、输入就绪与按键，不读取整页未显示正文。失败结果保留最新观测并说明已等待、已移动与未发送确认的范围。
 
+桥接 1.8.1 将官图剧情的走位、镜头和对白回调纳入统一的原生协程识别，输入型界面优先于自动动画。照片、诗页及片尾等已就绪的原生确认报告 `storyInput=confirm`，可用 `advance` 或 `act` 的 C；呼吸小游戏的连续控制报告 `storyInput=breathing`，须用 `act` 的 J、X 或 U 控制羽毛，松开使其下落。教学、选项、旧纸和呼吸小游戏不会被外层剧情标记当成自动播放。未知／被替换的协程仍交回，并附具体分类来源；不承诺任意第三方 Mod 剧情都能自动识别。
+
+原生剧情 HUD 出现时，默认截图包含已绘制的界面并保持原分辨率；普通世界画面仍为原有低分辨率截图，显式 `buffer=gameplay` 不含 HUD。`obs.screenshot.scope=story_hud` 标明界面图，界面像素不可直接映射为世界坐标。截图绑定当前观测场景及帧，失败原因随观测返回，不用旧图替代；同房间的剧情操作也返回界面图，避免呼吸小游戏只能看见第一帧。
+
+该识别针对当前 Celeste 1.4.0.0／Everest 的官图剧情协程；升级游戏程序集后须复核原生恢复状态。吃心、磁带收集呈现仍沿既有约定用 `act` 显式推进及确认，本次未将其收集协程纳入 `watch`，后续范围见 [TODO](../TODO.md)。源码盘点、原生阶段回归和隔离实例代表剧情验收各自提供证据，均不等于已将所有章节的每条剧情实机走完。
+
+角色可操作与自动动画可以同时成立，例如序章坍塌前的慢动作。agent 显式调用 `watch` 时，已确认播放的这类阶段使用单帧中性输入并逐帧复核，不会因可操作而零帧退出，也不会跨过电影结束后继续空推普通玩法。普通 `observe`／`act` 前的自动处理仍将可玩场景交回，不凭剧情标记隐式代玩；教学与真实输入优先停止。
+
+1.8.1 验收：961 项 Python 回归、原生连续协程／完整 StepJob 检查及独立代码审查通过。隔离实例使用独立 Terra 经正式工具实际验证开场观看／跳过／暂停、无 `InCutscene` 的入场续看、奶奶十二页对白和走位、鸟慢动作至真实输入及首次 Dash、Theo 照片、呼吸五页说明和实际按键／目标框、原生 Poem 图像、片尾确认与单次 advance。分别检查模型最终收到的文字、图像通道和可识别内容；最后的鸟输入以 PID、端口所有者及内存 MVID 匹配候选 B2B56BE4 的进程验证。各候选增量、无效测试及恢复证明见本机 `local/intro-watch-private/acceptance-index.json`，Python／原生日志为 `local/intro-watch-python-final.log` 与 `local/intro-watch-native-final.log`。私有存档与旧 Bridge 已恢复，测试进程退出；未连接在用主控／Terra 或 OBS，未做本轮录像验收。
+
 验证：`calibration.story_wait_test` 保留真实 GameSession／MCP，仅替换外部桥接；原生 `calibration/story_text` 覆盖真实 Memo／Textbox／Postcard 协程和 StepJob 输入边沿。隔离游戏证据 `local/story-memo-game-20261028/memo-report.json` 覆盖等待零帧、逐页明确确认和关闭恢复控制，原存档／设置哈希未变；未测试任意 Mod 剧情。可选真实模型接收检查：`python -m calibration.story_wait_receiver_check --model <模型标识> --output local/<新目录>`，只使用独立线程和外部桥接 fixture，不连接在用游戏、主控或 OBS。
 
 HUD 底部的"剧情"下拉框提供"自动跳过"和"agent决定"，开始前或游玩中都可以切换，随当前会话保存、续跑时沿用；默认自动跳过（命令行 `--cutscene-mode auto/agent`）。自动模式用原生暂停菜单跳过剧情，跳不过时推进普通对白；agent 模式把开场和关卡内的剧情交给会话：剧情可尝试跳过时先交回，由它选择 skip 或 watch；继续观看后主控播放到真实输入节点，再由它推进或选择。加载、转场、死亡与重生仍由主控按正常速度处理。只有开放了 cutscene 工具（探索模式、直播模式或 `--cutscene-mode agent`）时，HUD 才能切到"agent决定"。

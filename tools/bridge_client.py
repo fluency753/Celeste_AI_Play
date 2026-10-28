@@ -113,6 +113,10 @@ class BridgeClient:
             if reply.get("id") == req_id:
                 if not reply.get("ok"):
                     raise RuntimeError(f"{cmd} failed: {reply.get('error')}")
+                if isinstance(reply.get('obs'), dict) and ('imageScope' in reply or 'imageError' in reply):
+                    reply['obs']['screenshot'] = {'scope': reply.get('imageScope'),
+                                                 'format': reply.get('imageFormat'),
+                                                 'error': reply.get('imageError')}
                 after = getattr(self, "after_step", None)
                 if cmd == "step" and after is not None:
                     after(args, reply)     # 例如记下最后真正喂给游戏的那一帧按键（思考僵直时保持它）

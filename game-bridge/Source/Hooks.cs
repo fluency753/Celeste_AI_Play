@@ -34,6 +34,8 @@ internal static class Hooks {
             Log.Error("Game.EndDraw not found; lockstep acks fall back to the next update");
         }
         On.Celeste.Celeste.RenderCore += OnRenderCore;
+        IL.Monocle.Engine.RenderCore += ILRenderCore;
+        IL.Celeste.Level.Render += ILLevelRender;
         On.Celeste.GameplayRenderer.Render += OnGameplayRender;
         On.Celeste.DustGraphic.Render += PlaybackDust.Render;
         IL.Monocle.EntityList.RenderExcept += ILEntityRenderExcept;
@@ -53,6 +55,11 @@ internal static class Hooks {
         endDrawHook?.Dispose();
         endDrawHook = null;
         On.Celeste.Celeste.RenderCore -= OnRenderCore;
+        IL.Monocle.Engine.RenderCore -= ILRenderCore;
+        IL.Celeste.Level.Render -= ILLevelRender;
+        FrameGrabber.CaptureHookAvailable = false;
+        FrameGrabber.LevelCaptureHookAvailable = false;
+        FrameGrabber.Unload();
         On.Celeste.GameplayRenderer.Render -= OnGameplayRender;
         On.Celeste.DustGraphic.Render -= PlaybackDust.Render;
         PlaybackDust.Clear();
@@ -160,19 +167,53 @@ internal static class Hooks {
         if (Bridge.AllowPico8Entry()) orig(self);
     }
 
+    private static void ILRenderCore(ILContext il) => FrameGrabber.CaptureHookAvailable = RedirectScreenTarget(il, false);
+    private static void ILLevelRender(ILContext il) => FrameGrabber.LevelCaptureHookAvailable = RedirectScreenTarget(il, true);
+
+    private static bool RedirectScreenTarget(ILContext il, bool level) {
+        var cursor = new ILCursor(il);
+        Instruction? screenAssignment = null;
+        int assignments = 0, beforeRender = -1, afterRender = -1, assignmentIndex = -1;
+        for (int index = 0; index < il.Body.Instructions.Count; index++) {
+            var instruction = il.Body.Instructions[index];
+            if (level ? instruction.MatchLdfld<Level>("GameplayRenderer") : instruction.MatchCallvirt<Scene>("BeforeRender"))
+                beforeRender = index;
+            if (level && instruction.MatchLdfld<Level>("HudRenderer")) afterRender = index;
+            if (instruction.MatchCallvirt<GraphicsDevice>("SetRenderTarget") && instruction.Previous?.OpCode == OpCodes.Ldnull
+                && instruction.Operand is Mono.Cecil.MethodReference method && method.Parameters.Count == 1
+                && method.Parameters[0].ParameterType.FullName == typeof(RenderTarget2D).FullName) {
+                assignments++; screenAssignment = instruction; assignmentIndex = index;
+            }
+        }
+        if (assignments != 1 || beforeRender < 0 || assignmentIndex <= beforeRender || screenAssignment == null ||
+            (level && (afterRender < 0 || assignmentIndex >= afterRender))) {
+            Log.Warn($"native {(level ? "Level.Render" : "Engine.RenderCore")} screen target not found; story HUD captures unavailable");
+            return false;
+        }
+        cursor.Goto(screenAssignment, MoveType.Before);
+        cursor.EmitDelegate<Func<RenderTarget2D?, RenderTarget2D?>>(FrameGrabber.ScreenTarget);
+        return true;
+    }
+
     private static void OnRenderCore(On.Celeste.Celeste.orig_RenderCore orig, global::Celeste.Celeste self) {
         // 规划回放：这一帧借用回放镜头与单独的随机数渲染，渲染完原样换回（见 Playback）
-        Playback.BeforeRender();
+        FrameGrabber.BeginFrame(Bridge.WantsStoryHudImage);
         try {
-            orig(self);
+            Playback.BeforeRender();
+            try {
+                orig(self);
+                FrameGrabber.MarkRendered();
+            } finally {
+                Playback.AfterRender();
+            }
+            Bridge.AfterRender();
         } finally {
-            Playback.AfterRender();
+            FrameGrabber.EndFrame();
         }
         if (Bridge.DrawFrameMarker) {
             DrawFrameMarker();
         }
         ModHud.DrawOverlay(); // 游戏内 HUD（--hud-mod）：画在后备缓冲上，观测截图里没有
-        Bridge.AfterRender();
     }
 
     private static void OnGameplayRender(On.Celeste.GameplayRenderer.orig_Render orig, GameplayRenderer self, Scene scene) {

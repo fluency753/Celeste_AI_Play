@@ -38,7 +38,7 @@ def auto_handling(cfg) -> str:
     if has_cutscene_tool(cfg):
         return ("屏幕转场、死亡动画与重生由系统自动推进。拿到磁带、吃心后画面冻结等确认的界面，auto 时系统替你按确认，agent 时交回由你用 act 发 C。"
                 "剧情按当前的剧情模式处理：auto 时系统自动推进并跳过；"
-                "agent 时剧情可尝试跳过便先交回，用 `cutscene` 的 skip 尝试跳过或 watch 观看到下一真实输入节点；对白用 advance，分支明确 choose，教学用 `act`，无需 wait。剧情标记不等于失控，角色可操作时继续用 `act`。"
+                "agent 时剧情可尝试跳过便先交回，用 `cutscene` 的 skip 尝试跳过或 watch 观看到下一真实输入节点；对白用 advance，分支明确 choose，教学用 `act`，无需 wait。剧情标记不等于失控，角色可操作时仍可用 `act`；桥接明确识别自动播放时，也可显式 `watch` 观看。"
                 "agent 模式下，吃心提示、结算确认及返回选章地图都由你观察界面后用 act 操作：C 确认、B 返回，纯帧数推进动画。"
                 "complete 事件或 completed=true 只是游戏登记了成绩，不是任务结束；回到选章地图后主控才确认章节完成，不会代按结算。")
     return ("剧情对话、屏幕转场、死亡动画与重生都由系统自动推进并跳过，拿到磁带、吃心后画面冻结等确认的界面也由系统按确认，"
@@ -416,7 +416,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
                                 f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式在可尝试跳过时先交回，无需wait；"
                                 "用skip尝试跳过，watch只播放明确识别的动画到下一输入节点或恢复控制，每次调用最多自动等待600帧；未知状态立即交回，不重复空等。"
-                                "advance确认对白、明信片或旧纸的一页，choose明确选择，教学和其他输入用act；旧纸可用U/D翻页、B关闭。"
+                                "advance确认对白、明信片、旧纸的一页或confirm画面，choose明确选择，教学和breathing呼吸小游戏用act；旧纸可用U/D翻页、B关闭。"
                                 "分支须先读选项后自行选择，不得用advance代选。旧桥接缺少storyDecision时仍只在实际输入节点交回。", None, "\n"))
     if is_explore(cfg) and workspace_capabilities(cfg).programs and getattr(cfg, "explore_program_runs", None):
         parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",
