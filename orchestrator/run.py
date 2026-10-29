@@ -957,7 +957,8 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
             (run_dir / 'summary.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8')
         if keep:
             print('[run] 游戏保持冻结在当前帧（章节计时不走）：可以用 --resume 续跑；'
-                  '不续跑时在控制台交还游戏控制，先收尾保留的录像', flush=True)
+                  '不续跑时在控制台交还游戏控制'
+                  + ('，先收尾保留的录像' if getattr(cfg, '_recording_retained', False) else ''), flush=True)
         else:
             print('[run] 已交还游戏控制，游戏恢复正常运行',flush=True)
 
@@ -972,12 +973,24 @@ def _previous_kept_frozen(previous: dict) -> bool:
 
 
 def _keeps_game_frozen(cfg, args, session, *, interrupted=False) -> bool:
-    """显式中断保留接管；Claude 另保留原有的提前退出策略。
+    """Compatibility query; game ownership and live recording retention differ."""
+    return _shutdown_mode(cfg, args, session, interrupted=interrupted) != 'release'
 
-    已通关、退出关卡、普通停止及 --no-agent 均不因中断标记而保留接管。
-    保留接管时仍由桥接按场景决定冻结，菜单继续正常运行。
+
+def _shutdown_mode(cfg, args, session, *, interrupted=False):
+    """An automatic goal ends capture while retaining the game's freeze gate.
+
+    Explicit interruption/legacy Claude early exit instead retains live capture;
+    ordinary user stop and natural completion still return manual control.
     """
-    return (interrupted or getattr(cfg, 'engine', 'claude') == 'claude') and not args.no_agent and not session.done
+    if args.no_agent:
+        return 'release'
+    goals = getattr(session, 'goals', None)
+    if goals is not None and not goals.immediate and goals.snapshot().get('reached') is True:
+        return 'freeze'
+    if (interrupted or getattr(cfg, 'engine', 'claude') == 'claude') and not session.done:
+        return 'retain'
+    return 'release'
 
 
 async def _run_connected_session(cfg, args, run_dir, token, previous, study, metrics, recorder, prepared, session):
@@ -1112,6 +1125,11 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         print(f'[run] 智能体异常，开始收尾：{type(exc).__name__}: {exc}', flush=True)
         raise
     finally:
+        # Commit the ownership decision before cleanup that may itself fail.
+        # The outer socket/error cleanup must never undo a reached goal's hold.
+        shutdown = _shutdown_mode(cfg, args, session,
+                                  interrupted=bool(runner and runner.interrupted_for_resume))
+        cfg._keep_frozen = shutdown != 'release'
         finish_error = None
         if session.done and session.done_reason in ("章节完成", "分段完成"):
             try:
@@ -1131,21 +1149,21 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         if live is not None:
             live.close()
         recording = None
-        cfg._keep_frozen = _keeps_game_frozen(cfg, args, session,
-            interrupted=bool(runner and runner.interrupted_for_resume))
         if recorder:
             try:
                 def release_after_capture():
                     session.bridge_call('deactivate')
                     cfg._game_released=True
                     print('[run] 锁步录制已停止，已交还游戏控制；视频后处理继续进行',flush=True)
-                if cfg._keep_frozen:
+                if shutdown == 'retain':
                     try:
                         recording = recorder.retain()
                         cfg._recording_retained = True
                     except Exception as exc:
                         print(f'[record] 保留录制失败，改为收尾本段：{exc}', flush=True)
                         recording = recorder.stop(defer_postprocessing=bool(runner and runner.interrupted_for_resume))
+                elif shutdown == 'freeze':
+                    recording = recorder.stop()
                 else:
                     recording = recorder.stop(on_capture_stopped=release_after_capture)
             except Exception as exc:  # noqa: BLE001（录制收尾失败不影响交还游戏控制与写总结）
