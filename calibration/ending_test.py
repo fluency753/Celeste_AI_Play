@@ -156,6 +156,45 @@ class EndingTests(unittest.TestCase):
         self.assertEqual(s.done_reason, '章节完成')
         self.assertTrue(any('主控确认本章完成' in n for n in notes))
 
+    def test_act_completing_final_chapter_runs_ending_instead_of_leaving_level(self):
+        """跳过片尾后先进 LevelExit 再进结算：这是最终章通关，按片尾流程确认结算，不算"离开关卡"。"""
+        class CompletingClient(EndingClient):
+            def __init__(self):
+                super().__init__()
+                self.obs = ending_scene()
+                self.obs.update(controllable=True, storyDecision=None)
+                self.obs['level'].update(inCutscene=False, completed=False, dialogOpen=False)
+                self.acted = self.exited = False
+
+            def call(self, cmd, **args):
+                if cmd == 'step' and not self.acted:          # 智能体这次 act 碰到终点：通关，片尾剧情开始
+                    self.acted = True
+                    self.steps.append(args['inputs'])
+                    consumed = sum(int(x.split(',')[0]) for x in args['inputs'])
+                    self.obs = ending_scene()
+                    self.obs['frame'] = 1000 + consumed
+                    return {'result': {'consumed': consumed, 'planned': consumed, 'stop': 'complete',
+                                       'events': [{'type': 'complete'}], 'trajectory': []},
+                            'obs': copy.deepcopy(self.obs)}
+                if cmd == 'step' and self.obs['scene'] == 'LevelExit':
+                    self.obs['scene'] = 'AreaComplete'      # LevelExit 存档完成后进结算
+                reply = super().call(cmd, **args)
+                if cmd == 'step' and reply['obs']['scene'] == 'AreaComplete' and not self.exited:
+                    self.exited = True
+                    self.obs.update(scene='LevelExit', level=None)  # 跳过片尾后先经过 LevelExit（已不在关卡里）
+                    reply['obs'] = copy.deepcopy(self.obs)
+                return reply
+
+        client = CompletingClient()
+        s = self.session(client)
+        s.last_obs = copy.deepcopy(client.obs)
+        s._execute(PlanSpec(inputs=['30']), [''] * 30, '冲向终点', ['death', 'room', 'complete'], None, 0)
+        self.assertTrue(s.done)
+        self.assertEqual(s.done_reason, '章节完成')
+        self.assertEqual(len(s.metrics.state.splits), 1)
+        self.assertIn(['120'], client.steps)                     # 结算展示后才确认
+        self.assertEqual(client.obs['scene'], 'Overworld')
+
     def test_user_stop_after_completion_still_finishes_as_chapter_complete(self):
         s = self.session(EndingClient(skippable=False))
         s._chapter_complete()

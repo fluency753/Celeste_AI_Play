@@ -1,4 +1,5 @@
 """Duration goals use real goal/controller state; only bridge and clocks are external."""
+import json
 from pathlib import Path
 import tempfile
 import threading
@@ -7,6 +8,7 @@ from unittest.mock import Mock,patch
 
 from calibration import goals_test
 from calibration.goals_test import BASE
+from calibration.collision_contract_test import observation
 from orchestrator.goals import GoalManager,describe_goal,validate_goal
 from orchestrator.metrics import Metrics
 
@@ -116,6 +118,75 @@ class DurationSessionTests(unittest.TestCase):
         self.assertEqual(session.goals.snapshot()['game_clock']['advanced_frames'],0)
         self.assertFalse(session.goals.check({**session.goal_values(),'frame':72089}))
         self.assertTrue(session.goals.check({**session.goal_values(),'frame':72090}))
+
+
+
+class ResumedClockTests(unittest.TestCase):
+    """A resumed game_elapsed goal after a game restart; only the bridge is external."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+
+    def resumed_session(self):
+        from orchestrator.config import RunConfig
+        from orchestrator.game_session import GameSession
+        # Previous run: 600 s goal, 30 s already played in process 111 (frames 48200→50000).
+        (self.root/'goal.json').write_text(json.dumps({'revision':1,'active':True,'reached':False,'text':'','match':'any',
+            'conditions':[{'field':'game_elapsed','op':'delta_gte','value':600}],
+            'baseline':{'frame':48200,'game_elapsed':48200/60,'game_epoch':111},
+            'game_clock':{'frame':50000,'epoch':111,'advanced_frames':1800}}),encoding='utf-8')
+        cfg=RunConfig(agent='clock',save='test',model='test',runtime='host',sim=False)
+        session=GameSession(cfg,self.root,Metrics(self.root/'metrics.json','clock','test','high',600))
+        self.addCleanup(session.close,release=False)
+        session.client=Mock();session.client.call.side_effect=AssertionError('no bridge before the first observe')
+        session.game_process_id=222          # the game was restarted between runs
+        session.last_obs=None                # connected; nothing observed yet
+        return session
+
+    def used(self,session):
+        return session.time_snapshot()['goal']['time_conditions'][0]['used_seconds']
+
+    def test_missing_observation_does_not_anchor_restarted_clock(self):
+        session=self.resumed_session()
+        # SessionControls._check_goal runs before the first observation.
+        self.assertFalse(session.goals.check(session.goal_values()))
+        self.assertEqual(session.goals.snapshot()['game_clock'],{'frame':50000,'epoch':111,'advanced_frames':1800})
+        self.assertIsNone(session.time_snapshot()['game']['frame'])
+        self.assertEqual(self.used(session),30)
+        # First real observation of the new process: its counter already reads
+        # 40000 (menus, loading). Those frames were not played under the goal.
+        session.client.call.side_effect=None
+        session.client.call.return_value={'obs':observation(40000),'image':None}
+        session.observe()
+        self.assertFalse(session.goals.check(session.goal_values()))
+        self.assertEqual(session.goals.snapshot()['game_clock'],{'frame':40000,'epoch':222,'advanced_frames':1800})
+        self.assertFalse(session.goals.stop_motion.is_set())
+        self.assertEqual(self.used(session),30)
+        session._on_progress({'event':'progress','frame':40060})
+        self.assertEqual(session.goals.snapshot()['game_clock']['advanced_frames'],1860)
+        self.assertEqual(self.used(session),31)
+        session._on_progress({'event':'progress'})          # a progress event without a frame adds nothing
+        self.assertEqual(session.goals.snapshot()['game_clock']['advanced_frames'],1860)
+
+    def test_counter_reset_without_process_identity_reanchors_without_inventing_time(self):
+        goal=GoalManager(self.root)
+        start={**BASE,'frame':50000,'game_elapsed':50000/60,'game_epoch':None}
+        goal.set({'conditions':[{'field':'game_elapsed','op':'delta_gte','value':2}]},start)
+        self.assertFalse(goal.check({**start,'frame':50030}))
+        self.assertFalse(goal.check({**start,'frame':None}))
+        self.assertFalse(goal.check({**start,'frame':100}))   # counter started over: no time added or lost
+        self.assertEqual(goal.snapshot()['game_clock'],{'frame':100,'epoch':None,'advanced_frames':30})
+        self.assertFalse(goal.check({**start,'frame':189}))
+        self.assertTrue(goal.check({**start,'frame':190}))
+
+    def test_goal_set_without_observation_waits_for_first_real_frame(self):
+        goal=GoalManager(self.root)
+        goal.set({'conditions':[{'field':'game_elapsed','op':'delta_gte','value':1}]},
+                 {**BASE,'frame':None,'game_elapsed':None,'game_epoch':5})
+        self.assertFalse(goal.check({**BASE,'frame':None,'game_epoch':5}))
+        self.assertFalse(goal.check({**BASE,'frame':40000,'game_epoch':5}))
+        self.assertEqual(goal.snapshot()['game_clock']['advanced_frames'],0)
+        self.assertTrue(goal.check({**BASE,'frame':40060,'game_epoch':5}))
 
 
 if __name__=='__main__':unittest.main()

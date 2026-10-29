@@ -163,5 +163,91 @@ class FreeRoamTests(unittest.TestCase):
         self.assertNotIn('运行结束', message)
 
 
+class ContinueAfterPlanTests(unittest.TestCase):
+    """整章／顺序范围 + 通关后继续：计划完成后重进、再通关时计时照常累计，每次通关只记一条成绩。"""
+
+    def make(self, chapters):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        cfg = RunConfig(agent='test', save='test', save_slot=14, model='test', runtime='host',
+                        chapter=chapters[0], chapters=chapters, cutscene_mode='agent', completion_policy='continue')
+        self.session = GameSession(cfg, self.root, Metrics(self.root/'metrics.json', 'test', 'test', 'low', 600))
+        self.addCleanup(self.session.close, release=False)
+        (self.root/'run_state.json').write_text('{}', encoding='utf-8')
+        return self.session
+
+    @staticmethod
+    def level(chapter, ticks, completed=False):
+        return {'scene': 'Level', 'frame': 1, 'storyInput': None, 'save': {'name': 'test', 'slot': 14},
+                'level': {'sid': CHAPTER_SIDS[chapter], 'side': 'A', 'completed': completed, 'room': 'start',
+                          'chapterTimeTicks': ticks}}
+
+    def see(self, obs):
+        self.session._commit_completion(obs)
+        self.session._update_metrics_from_obs(obs)
+
+    def clear(self, chapter, ticks):
+        """原生通关事件 → 结算 → agent 自己回到选章地图，走主控的真实确认链。"""
+        self.see(self.level(chapter, ticks, completed=True))
+        self.session._handle_events({'events': [{'type': 'complete'}]})
+        for obs in (self.level(chapter, ticks, completed=True), {'scene': 'AreaComplete', 'storyInput': None},
+                    {'scene': 'Overworld', 'menu': {'current': 'OuiChapterSelect'}},
+                    {'scene': 'Overworld', 'menu': {'current': 'OuiChapterSelect'}}):
+            self.see(obs)
+
+    def hud(self):
+        from overlay.modhud import view_model
+        return view_model(json.loads((self.root/'metrics.json').read_text(encoding='utf-8')), {}, [], 0)
+
+    def hud_timer(self):
+        """游戏内 HUD 的主计时：基数加上（计时进行中时）当前章节计时，与 ModHud.DrawTimer 相同。"""
+        vm = self.hud()
+        return vm.timer_base + (vm.timer_extra if vm.timer_live else 0)
+
+    def test_reentry_after_completed_plan_keeps_timer_running_and_records_each_clear_once(self):
+        s = self.make([1])
+        self.see(self.level(1, 600))
+        self.assertEqual(self.hud_timer(), 600)
+        self.clear(1, 1000)
+        self.assertFalse(s.done or s.chapter_finished)
+        self.assertEqual([split['ticks'] for split in s.metrics.state.splits], [1000])
+        self.assertEqual(self.hud_timer(), 1000)
+        self.see(self.level(1, 0))                 # 计划完成后重新进入同一章
+        self.assertFalse(s.metrics.state.piece_done)
+        self.see(self.level(1, 400))
+        self.assertEqual(self.hud_timer(), 1400)    # 不再停在上一次通关的总计时
+        self.clear(1, 900)
+        self.assertEqual([split['ticks'] for split in s.metrics.state.splits], [1000, 900])
+        self.assertEqual(s.metrics.state.completed_ticks, 1900)
+        self.assertEqual(self.hud_timer(), 1900)    # 当前章已计入成绩，不再重复加
+        self.see({'scene': 'Overworld', 'menu': {'current': 'OuiChapterSelect'}})
+        self.assertEqual(len(s.metrics.state.splits), 2)
+        self.assertFalse(s.done)
+
+    def test_switching_to_next_planned_chapter_is_not_reset_by_old_level_frames(self):
+        s = self.make([1, 2])
+        self.see(self.level(1, 600))
+        self.clear(1, 1000)
+        self.assertTrue(s.chapter_finished and s.metrics.state.piece_done)
+        self.see(self.level(1, 1000))               # 换章途中的旧关卡帧不能让上一章计时重复计入
+        self.assertTrue(s.metrics.state.piece_done)
+        self.assertEqual(self.hud_timer(), 1000)
+        s.client = Mock()
+        s.client.call.return_value = {'obs': self.level(2, 0), 'image': None}
+        s._observe_next_chapter()
+        self.assertFalse(s.chapter_finished or s.metrics.state.piece_done)
+        self.clear(2, 500)                          # 计划完成：继续探索
+        self.assertFalse(self.hud().timer_live)
+        self.see(self.level(2, 0))
+        self.see(self.level(2, 70))
+        self.assertTrue(self.hud().timer_live)      # 重进后当前计时照常走，不停在上一次的成绩
+        self.assertEqual(self.hud().timer_extra, 70)
+        self.clear(2, 450)
+        self.assertEqual([split['ticks'] for split in s.metrics.state.splits], [1000, 500, 450])
+        self.assertEqual(s.metrics.state.completed_ticks, 1950)
+        self.assertFalse(self.hud().timer_live)
+
+
 if __name__ == '__main__':
     unittest.main()

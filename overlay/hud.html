@@ -222,7 +222,8 @@
   <div class="thought" id="thought" tabindex="0" role="tabpanel" aria-label="公开解说历史，可滚动查看"></div>
   <div class="thought hidden" id="toolActivity" tabindex="0" role="tabpanel" aria-label="实际工具调用记录"><div id="toolNotice">选择工具记录后读取…</div><div id="toolRows"></div></div>
   <div class="meta" id="meta"></div>
-  <form id="agentControls">
+  <!-- novalidate：面板里的数字框（动作帧数、推演、目标等）各自在“应用”时校验，不能拦住聊天发送 -->
+  <form id="agentControls" novalidate>
     <select id="sessionSelect" aria-label="独立 agent 会话" title="选择本项目的 agent 会话；试玩结束后可切换聊天" disabled><option>正在读取会话…</option></select>
     <details id="sessionPanel">
       <summary>会话管理</summary>
@@ -287,7 +288,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 67;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 68;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -1156,6 +1157,9 @@ for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','R
 $('simApply').onclick=saveSimulation;
 $('simReset').onclick=()=>{simEdited.clear();$('simBalance').value='';simError='';simApplied=false;renderSimulation(controlData.control);};
 $('actLimitFrames').oninput=()=>{actLimitEdited=true;actLimitApplied=false;};
+$('actLimitFrames').onkeydown=event=>{   // 帧数框里按 Enter 只应用帧数（照常校验），不触发聊天发送
+  if(event.key==='Enter' && !event.isComposing){event.preventDefault();saveActLimit();}
+};
 $('actLimitSave').onclick=saveActLimit;
 $('actLimitReset').onclick=()=>{actLimitEdited=false;actLimitError='';actLimitApplied=false;renderActLimit(controlData.control);};
 $('liveEffort').onchange=async()=>{

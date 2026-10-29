@@ -40,10 +40,21 @@ END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
 ENDING_STUCK_STEPS = 40              # 最终章片尾连续 40 次（每次 30 帧，约 20 秒）画面状态不变就不再空等
 FROZEN_GIVE_UP_FRAMES = 600          # 画面冻结等确认时，主控最多推进这么多帧（10 秒，期间每 30 帧按一次确认）就交回
 AGENT_STORY_WAIT_FRAMES = 600        # 每次工具调用中，已确认播放阶段的等待总预算；未知状态不推进。
+MAP_TRANSITION_WAIT_FRAMES = 1200    # auto 剧情模式：回地图途中（LevelExit、OverworldLoader、菜单切换）最多空帧等 20 秒，仍未就绪就交回
 
 
 def _automatic_loader_transition(obs: dict) -> bool:
     return obs.get('scene') == 'OverworldLoader' and (obs.get('reload_boundary') or {}).get('mode') == 'wait'
+
+
+def map_transition(obs: dict) -> bool:
+    """离开关卡回地图或地图菜单切换的过渡帧：LevelExit、OverworldLoader，或 Overworld 的菜单正在切换
+    （menu.next 非空）、还没有当前菜单。这是导航途中，不是任务结束，也不是可以交给智能体的就绪菜单。"""
+    scene = obs.get('scene')
+    if scene in {'LevelExit', 'OverworldLoader'}:
+        return True
+    menu = obs.get('menu') or {}
+    return scene == 'Overworld' and (bool(menu.get('next')) or not menu.get('current'))
 
 
 def awaiting_confirm(obs: dict, *, ending: bool = False) -> bool:
@@ -1368,6 +1379,7 @@ class GameSession:
         menu_closes = 0  # 自动跳过剧情时关掉残留暂停菜单的次数
         frozen_frames, confirms = 0, 0  # 连续停在"画面冻结等确认"的帧数、主控按确认的次数
         idle_frames = 0  # 连续"不可操作又不在剧情里"（idle_uncontrolled）的帧数
+        map_wait = 0  # auto 模式回地图途中（map_transition）空帧等待的帧数
         self.metrics.update(status="auto")
         self._before_advance()
         t0 = time.monotonic()
@@ -1421,8 +1433,28 @@ class GameSession:
                              if self._pending_complete else '当前菜单或转场由你输入操作，按本次目标自行导航；主控不代选。')
                 break
             if scene in END_SCENES and not story_pending(obs) and not automatic_transition:
-                if self._at_chapter_menu(obs):
-                    break  # Returning to a ready menu is navigation, not task completion.
+                if self._at_chapter_menu(obs) or self._ending_pending:
+                    # 回到就绪的选章菜单只是导航，不是完成；最终章刚通关时片尾与结算交给 _finish_ending 收尾
+                    break
+                if map_transition(obs):
+                    # 不结束整次试玩的返回地图、地图上的菜单切换或加载：auto 模式只推进空帧等它就绪，
+                    # 就绪后把菜单交回智能体；不代按菜单，也不因离开关卡结束试玩、清空章节队列
+                    if map_wait >= MAP_TRANSITION_WAIT_FRAMES:
+                        notes.append(f'回地图途中的转场（{scene}）约 {round(map_wait / 60)} 秒仍未就绪，主控停止等待并交回；'
+                                     '本次试玩没有结束，请 observe 查看后再操作。')
+                        break
+                    reply = self.client.call("step", inputs=["10"], stop_on=["controllable", "complete", "story_input"],
+                                             speed=self.cfg.auto_speed, image=False, entities=False, tiles=False,
+                                             progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
+                    log_step(["10"], reply["result"])
+                    map_wait += reply["result"]["consumed"] + reply["result"].get("loadingFrames", 0)
+                    obs = reply["obs"]
+                    continue
+                if scene == 'Overworld':
+                    menu = obs.get('menu') or {}
+                    notes.append(f'已在地图菜单（{menu.get("current")}），本次试玩没有结束；菜单由你用 act 操作，主控不代选。')
+                    break
+                # 结算画面却没有记下通关（正常不会出现）：章节确已结束，照旧结束本次试玩
                 self._mark_done(f"离开关卡（{scene}）")
                 break
             level = obs.get("level") or {}
@@ -1518,6 +1550,8 @@ class GameSession:
                 idle_frames += reply["result"]["consumed"]
         if confirms and not awaiting_confirm(obs):
             notes.append(f"画面冻结等确认（如磁带、吃心后的提示），主控按了 {confirms} 次确认 C 继续")
+        if map_wait:
+            notes.append(f"回地图途中的菜单切换或加载：主控只推进了 {map_wait} 帧空帧等待，没有代按菜单")
         remember(obs)
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         if total:
@@ -1560,7 +1594,7 @@ class GameSession:
         values.update(frame=event.get("frame", values.get("frame")), room=event.get("room", values.get("room")),
                       deaths=event.get("deaths", values.get("deaths")), dead=event.get("dead", False),
                       chapter_time_ticks=event.get('chapterTimeTicks', values.get('chapter_time_ticks')))
-        values['game_elapsed'] = values['frame']/60
+        values['game_elapsed'] = values['frame']/60 if values['frame'] is not None else None
         values["map"] = f"{event.get('sid', self.metrics.state.chapter)}:{values['side']}"
         self._goal_progress = dict(values)
         if self._note_room(event.get("sid"), event.get("room"), event.get("chapterTimeTicks")):
@@ -1582,18 +1616,20 @@ class GameSession:
         complete = bool(level.get("completed")) and not story_pending(observation)
         if self.cfg.cutscene_mode == 'agent':
             complete = self._pending_complete and self._at_chapter_select(observation)
+        # 没有观测（例如续跑刚连上、还没 observe）时帧号未知：给 None，不用 0 冒充真实帧号，
+        # 否则游戏时长目标会锚在 0、把新进程启动以来的菜单与加载帧都算进去
         values = {"room": level.get("room", self.metrics.state.room), "map": f"{sid}:{side}", "side": side,
                 "map_complete": complete, "deaths": level.get("deaths", 0),
-                "frame": observation.get("frame", 0), "elapsed": self.metrics.elapsed(),
+                "frame": observation.get("frame"), "elapsed": self.metrics.elapsed(),
                 "chapter_time_ticks":level.get('chapterTimeTicks'),
                 "dead": bool((observation.get("player") or {}).get("dead"))}
         if obs is None:
             progress = self._current_goal_progress()
-            if progress.get('frame', -1) >= values['frame']:
+            if progress.get('frame') is not None and (values['frame'] is None or progress['frame'] >= values['frame']):
                 values.update(progress)
             values["elapsed"] = self.metrics.elapsed()
         values['game_epoch'] = getattr(self, 'game_process_id', None)
-        values['game_elapsed'] = values['frame']/60
+        values['game_elapsed'] = values['frame']/60 if values['frame'] is not None else None
         return values
 
     def set_goal(self, spec):
@@ -1616,8 +1652,7 @@ class GameSession:
     def time_snapshot(self):
         with self.lock:
             values = self.goal_values()
-            obs = self.last_obs or {}
-            frame = values['frame'] if obs.get('frame') is not None or self._current_goal_progress().get('frame') is not None else None
+            frame = values['frame']          # 没有观测也没有进度时为 None
             ticks = values.get('chapter_time_ticks')
             return {'version':1, 'game':{
                 'sample':'cached_observation_or_progress', 'frame':frame,
@@ -2286,7 +2321,12 @@ class GameSession:
         self._goal_progress = {}
         level = obs.get("level") or {}
         player = obs.get("player") or {}
-        if self.cfg.play_scope == 'visited' and obs.get('scene') == 'Level' and not level.get('completed'):
+        # 通关后继续（自由探索，或整章／顺序范围的计划已全部完成）：重新进入未通关的关卡就是新的一次游玩，
+        # 当前计时重新计入总计时；再次通关时只按这次的成绩记一条。换到计划里下一截的途中（chapter_finished）
+        # 由 _confirm_next_entry 负责清除，不在这里清。
+        continuing = (self.cfg.play_scope == 'visited'
+                      or getattr(self.cfg, 'completion_policy', 'stop') == 'continue') and not self.chapter_finished
+        if continuing and self.metrics.state.piece_done and obs.get('scene') == 'Level' and not level.get('completed'):
             self.metrics.update(piece_done=False)
         if self.sim_energy:
             if level.get("sid") and level.get("room") is not None and not player.get("dead"):

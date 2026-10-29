@@ -53,13 +53,17 @@ def validate_goal(data):
 
 
 def project_game_clock(clock, values):
-    """Project a cached frame onto the goal clock without changing its owner."""
+    """Project a cached frame onto the goal clock without changing its owner.
+
+    没有真实观测帧（frame 为 None）时既不锚定也不累计。换了游戏进程只在新进程的第一帧重新锚定，
+    不补算新进程启动后、主控观测前的菜单与加载帧。同一已知进程的帧号只增不减，较小的帧是迟到的旧样本，
+    忽略；进程身份未知时帧号回退说明计数器已重来，重新锚定、不累计。"""
     projected = dict(clock)
     frame, epoch = values.get('frame'), values.get('game_epoch')
     previous = projected.get('frame')
     if frame is None:
         return projected
-    if previous is None or epoch != projected.get('epoch'):
+    if previous is None or epoch != projected.get('epoch') or (epoch is None and frame < previous):
         projected.update(frame=frame, epoch=epoch)
     elif frame > previous:
         projected['advanced_frames'] += frame-previous
@@ -156,7 +160,7 @@ class GoalManager:
                 projected = project_game_clock(clock, values)
                 clock_changed = projected != clock
                 clock = self.data['game_clock'] = projected
-                values = {**values, 'game_elapsed':baseline.get('game_elapsed',0) + clock['advanced_frames']/60}
+                values = {**values, 'game_elapsed':(baseline.get('game_elapsed') or 0) + clock['advanced_frames']/60}
             matches = []
             for condition in self.data["conditions"]:
                 field, op = condition["field"], condition["op"]

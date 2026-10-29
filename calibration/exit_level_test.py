@@ -167,6 +167,97 @@ class ExitLevelTests(unittest.TestCase):
                 self.assertEqual(len(client.steps[-1]),1)
             finally:session.close(release=False)
 
+    def timed_session(self,folder,**transitions):
+        session,_=self.live_session(folder,pending=False)
+        client=TimedMapIpc(**transitions);session.client=client
+        return session,client
+
+    def test_auto_mode_waits_out_menu_transition_after_return_without_ending_run(self):
+        # Overworld.Goto<OuiChapterPanel> is still in flight when the agent's act
+        # returns: the run, queue and recording must survive the transition.
+        with tempfile.TemporaryDirectory() as folder:
+            session,client=self.timed_session(Path(folder),panel=[(24,{'scene':'Overworld','menu':{
+                'current':'OuiChapterSelect','next':'OuiChapterPanel','area':2}})])
+            try:
+                session.cfg.cutscene_mode='auto'
+                self.assertFalse(session.exit_level('回到地图换章')['run_finished'])
+                acted=len(client.steps)
+                outcome=session.act(['1,C','10'],'打开章节面板',None)
+                self.assertFalse(session.done,session.done_reason)
+                self.assertEqual(session.chapter_queue,[Piece(2)])
+                self.assertEqual(session.piece,Piece(1))
+                self.assertEqual(session.last_obs['menu']['current'],'OuiChapterPanel')
+                self.assertIsNone(session.last_obs['menu'].get('next'))
+                # Only empty frames after the agent's own input; nothing pressed for it.
+                self.assertEqual(client.steps[acted],['1,C','10'])
+                self.assertTrue(client.steps[acted+1:])
+                self.assertTrue(all(step==['10'] for step in client.steps[acted+1:]))
+                self.assertEqual(client.transition_keys,[])
+                self.assertTrue(any('没有代按菜单' in str(note) for note in outcome.auto_notes))
+                self.assertFalse(any(command in {'record','deactivate'} for command in client.commands))
+                self.assertEqual(session.metrics.state.splits or [],[])
+            finally:session.close(release=False)
+
+    def test_agent_mode_hands_menu_transition_back_without_inputs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            session,client=self.timed_session(Path(folder),panel=[(24,{'scene':'Overworld','menu':{
+                'current':'OuiChapterSelect','next':'OuiChapterPanel','area':2}})])
+            try:
+                session.exit_level('回到地图换章')
+                acted=len(client.steps)
+                outcome=session.act(['1,C','10'],'打开章节面板',None)
+                self.assertFalse(session.done)
+                self.assertEqual(client.steps[acted:],[['1,C','10']])
+                self.assertEqual(session.last_obs['menu']['next'],'OuiChapterPanel')
+                self.assertTrue(any('主控不代选' in str(note) for note in outcome.auto_notes))
+            finally:session.close(release=False)
+
+    def test_auto_mode_act_landing_in_level_exit_and_loader_keeps_run(self):
+        # A slow save outlasts the exit macro's wait; the agent's next act then
+        # returns inside LevelExit, followed by OverworldLoader and the mountain's
+        # own menu transition. None of these frames is a finishing exit.
+        with tempfile.TemporaryDirectory() as folder:
+            session,client=self.timed_session(Path(folder),map=[
+                (800,{'scene':'LevelExit'}),(90,{'scene':'OverworldLoader','level':None}),
+                (30,{'scene':'Overworld','menu':{'current':None,'next':'OuiChapterSelect'}})])
+            try:
+                session.cfg.cutscene_mode='auto'
+                with self.assertRaisesRegex(ActError,'未重发退出'):
+                    session.exit_level('回到地图换章')
+                self.assertEqual(session.last_obs['scene'],'LevelExit')
+                acted=len(client.steps)
+                session.act(['30'],'等待退出完成',None)
+                self.assertFalse(session.done,session.done_reason)
+                self.assertEqual(session.chapter_queue,[Piece(2)])
+                self.assertTrue(session._at_chapter_select(session.last_obs))
+                self.assertTrue(all(step==['10'] for step in client.steps[acted+1:]))
+                self.assertEqual(client.transition_keys,[])
+                self.assertFalse(any(command in {'record','deactivate'} for command in client.commands))
+            finally:session.close(release=False)
+
+    def test_auto_mode_stuck_transition_and_other_menus_hand_back_without_finishing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            session,_=self.live_session(Path(folder),pending=False)
+            client=MapMenuIpc(fail_mode='timeout');session.client=client   # LevelExit never ends
+            try:
+                session.cfg.cutscene_mode='auto'
+                with self.assertRaises(ActError):session.exit_level('回到地图')
+                acted=len(client.steps)
+                outcome=session.act(['30'],'等待退出完成',None)
+                self.assertFalse(session.done)
+                waited=sum(int(step[0]) for step in client.steps[acted+1:])
+                self.assertGreaterEqual(waited,1200);self.assertLess(waited,1300)
+                self.assertTrue(any('仍未就绪' in str(note) for note in outcome.auto_notes))
+                client.obs={'scene':'Overworld','frame':client.obs['frame'],'save':{'name':'same','slot':11},
+                            'menu':{'current':'OuiMainMenu','next':None}}
+                acted=len(client.steps)
+                outcome=session.act(['10'],'查看主菜单',None)
+                self.assertFalse(session.done)
+                self.assertEqual(client.steps[acted:],[['10']])
+                self.assertTrue(any('OuiMainMenu' in str(note) for note in outcome.auto_notes))
+                self.assertEqual(session.chapter_queue,[Piece(2)])
+            finally:session.close(release=False)
+
     def test_fresh_native_completion_is_not_lost_and_only_real_completion_counts(self):
         with tempfile.TemporaryDirectory() as folder:
             session,client=self.live_session(Path(folder),pending=False)
@@ -243,3 +334,33 @@ class MapMenuIpc:
         return {'obs':copy.deepcopy(self.obs)}
 
     def close(self):pass
+
+
+class TimedMapIpc(MapMenuIpc):
+    """Native map transitions last frames. Phases are entered when a stage is
+    reached ({stage: [(frames, observation), ...]}); until they elapse the game
+    shows them and ignores inputs. Any key sent during one is recorded."""
+    def __init__(self,**phases):
+        super().__init__();self.phases=phases;self.timeline=[];self.settled=None;self.transition_keys=[]
+
+    def _show(self,frame):
+        while self.timeline and self.timeline[0][0]<=frame:self.timeline.pop(0)
+        self.obs=copy.deepcopy(self.timeline[0][1] if self.timeline else self.settled)
+        self.obs.setdefault('save',{'name':'same','slot':11});self.obs['frame']=frame
+
+    def call(self,command,**options):
+        if command=='step' and self.timeline:
+            inputs=options['inputs'];self.commands.append(command);self.steps.append(inputs)
+            if any(part.split(',')[1:] for part in inputs):self.transition_keys.append(inputs)
+            count=sum(int(part.split(',')[0]) for part in inputs)
+            self._show(self.obs['frame']+count)
+            return {'obs':copy.deepcopy(self.obs),'result':{'consumed':count,'planned':count,
+                    'stop':'done','events':[],'trajectory':[]}}
+        stage=self.stage
+        reply=super().call(command,**options)
+        if command=='step' and self.stage!=stage and self.phases.get(self.stage):
+            start=self.obs['frame'];self.settled=copy.deepcopy(self.obs);self.timeline=[]
+            for frames,shown in self.phases[self.stage]:
+                start+=frames;self.timeline.append((start,shown))
+            self._show(self.obs['frame']);reply['obs']=copy.deepcopy(self.obs)
+        return reply
