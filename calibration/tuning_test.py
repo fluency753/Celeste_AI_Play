@@ -86,7 +86,7 @@ class TunableTests(unittest.TestCase):
         self.assertIn("实在拿不到才放弃", play_prompt(explore))          # 鼓励拿草莓
         self.assertIn("模拟器对象尽量只构造一次再复用", play_prompt(explore))   # /workspace 是主机挂载，读写慢
         # 自写程序的几句按执行器区分（用户要求）：Claude Code 执行器保留原来的"完全可以自由发挥"和详细的并行要点；
-        # Codex 执行器用协作者改写的版本（先评估程序是否比直接验证更省事、并行要点一句）
+        # Codex 执行器兼顾当前问题与持续建模，并行要点一句
         claude_text = play_prompt(explore)
         self.assertIn("禁用预设模拟器，但不限制你自行编写模拟器或搜索程序等，你完全可以自由发挥。", claude_text)
         self.assertIn("编写模拟器、搜索、穷举或批量计算等工具时用 C++ 写，不要用 Python；有多线程就用多线程来缩短计算时间"
@@ -98,7 +98,7 @@ class TunableTests(unittest.TestCase):
         explore.engine = "codex"
         codex_text = play_prompt(explore)
         self.assertIn("禁用预设模拟器。你也可以自行编写模拟器、搜索或其他辅助程序，自由发挥。", codex_text)
-        self.assertIn("辅助程序用于解决具体问题，先评估是否比直接验证更省事。需要较多计算时用 C++ 写、不要用 Python，"
+        self.assertIn("辅助程序可以解决当前问题，也可以持续积累可复用的模型与方法。需要较多计算时用 C++ 写、不要用 Python，"
                       "有多线程就用多线程缩短计算时间，本次最多可以用 1 个核，"
                       "用几个按实际环境决定；避免频繁的线程间同步，用相同输入核对多线程与单线程结果。", codex_text)
         for absent in ("去重与择优也要分片并行", "完全可以自由发挥"):

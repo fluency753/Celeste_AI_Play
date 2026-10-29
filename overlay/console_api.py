@@ -260,6 +260,17 @@ PLACEHOLDERS = {
 }
 
 
+def personal_prompt_read(scope='all') -> dict:
+    from orchestrator import personal_prompts
+    return {**personal_prompts.read(scope), 'catalog': personal_prompts.catalog(),
+            'max_chars': personal_prompts.MAX_TEXT_CHARS}
+
+
+def personal_prompt_write(scope, text, version) -> dict:
+    from orchestrator import personal_prompts
+    return personal_prompts.save(scope, text, version)
+
+
 def _prompt_name(name) -> str:
     from orchestrator.prompting import prompt_files
     if not isinstance(name, str) or name not in prompt_files():
@@ -292,13 +303,17 @@ def prompt_preview(options: dict) -> dict:
     overridden = set(overridden_parts())
     guided = workspace_capabilities(cfg).workspace_read
     from orchestrator.prompt_guide import guide_document
-    guide = guide_document(cfg) if guided else None
+    from orchestrator.personal_prompts import snapshot
+    personal = snapshot(cfg)
+    guide = {**(guide_document(cfg) if guided else {}), 'personal': personal}
     full_parts = ([{"label": p['label'], "text": p['text'], "source": p['source'], "sep": '',
                     "overridden": p['source'] in overridden} for p in guide['sections']] if guided else
                   [{"label": p.label, "text": p.text, "source": p.source, "sep": p.sep,
                     "overridden": p.source in overridden} for p in prompt_parts(cfg)])
     parts = ([{"label": "当前任务与配置", "text": runtime_prompt(cfg, guide=guide), "source": None,
-               "sep": "", "overridden": False}] if guided else full_parts)
+               "sep": "", "overridden": False}] if guided else [*full_parts, *([
+                   {"label": "本机个人追加要求", "text": personal['text'], "source": None,
+                    "sep": "\n\n", "overridden": False}] if personal['text'] else [])])
     if cfg.engine == "codex":
         from orchestrator.codex_agent import codex_tool_mapping
         for part in parts:
@@ -320,6 +335,9 @@ def prompt_preview(options: dict) -> dict:
             "guide_parts": full_parts if guided else [],
             "button_prompts": [{**item, 'overridden': item['name'] in overridden}
                                for item in catalog()],
+            "personal_applied": [{"scope": p['scope'], "label": p['label'], "version": p['version']}
+                                 for p in personal['entries']],
+            "personal_version": personal['version'],
             "first_message": first, "overridden": sorted(overridden)}
 
 

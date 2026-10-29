@@ -667,6 +667,20 @@
 
 <!-- ============================================================ 第四页：提示词 -->
 <main class="page" id="page-prompts" role="tabpanel" aria-label="提示词" hidden>
+  <section class="pane" style="grid-column:1 / -1" aria-labelledby="personalPromptTitle">
+    <h2 id="personalPromptTitle">个人追加要求 <span class="aside">仅本机</span></h2>
+    <p class="hint">补充共享提示词，通用要求与当前执行器／模式的要求一起加载。保存后在下次启动或重接模型时加载；普通暂停／继续不重新加载；不会放开任务范围、操作权限或工具限制。</p>
+    <label for="personalPromptScope">适用范围</label>
+    <select id="personalPromptScope" aria-label="个人要求适用范围"><option value="all">通用（全部执行器与模式）</option></select>
+    <label for="personalPromptText" style="display:block;margin-top:12px">追加内容</label>
+    <textarea id="personalPromptText" style="width:100%;min-height:180px" spellcheck="false" maxlength="12000" placeholder="默认留空，在这里填写你自己的要求" disabled></textarea>
+    <div class="presets" style="margin-top:10px">
+      <button class="btn small primary" id="personalPromptSave" type="button" disabled>保存</button>
+      <button class="btn small" id="personalPromptClear" type="button" disabled>清空并保存</button>
+      <button class="btn small" id="personalPromptReload" type="button">重新读取</button>
+    </div>
+    <p class="hint" id="personalPromptStatus" role="status">尚未加载</p>
+  </section>
   <section class="pane" aria-labelledby="promptTitle">
     <h2 id="promptTitle">提示词 <span class="aside">按运行页的当前设置生成</span></h2>
     <div class="kb-head">
@@ -797,7 +811,7 @@ function showPage(page) {
   if (location.hash !== "#" + page) history.replaceState(null, "", "#" + page);
   if (page === "saves") buildRoute();
   if (page === "kb") loadKb(ui.mode);
-  if (page === "prompts") loadPromptPreview();
+  if (page === "prompts") { loadPromptPreview(); loadPersonalPrompt(); }
   if (page === "about" && !ui.aboutLoaded) loadAbout();
 }
 
@@ -1735,6 +1749,58 @@ async function saveKbFile() {
 
 // 一版最多九个文件（速通 + 直播），各用一种颜色；自动加的部分统一用淡紫
 const SEG = ["#E0475B", "#5BC0EB", "#F2C14E", "#4CC38A", "#F08A4B", "#C9A389", "#E58FC4", "#2FB8AC", "#B9D46A"];
+// Each scope owns its draft and optimistic version. Late responses never replace typed text.
+const personalDrafts = new Map();
+let personalRequest = 0;
+function renderPersonalPrompt() {
+  const draft = personalDrafts.get($('personalPromptScope').value);
+  $('personalPromptText').disabled = !draft;
+  $('personalPromptText').value = draft?.text || '';
+  $('personalPromptSave').disabled = !draft || draft.saving || draft.text === draft.saved;
+  $('personalPromptClear').disabled = !draft || draft.saving || (!draft.text && !draft.saved);
+  $('personalPromptReload').disabled = !!draft?.saving;
+  $('personalPromptStatus').textContent = draft?.status || '读取中…';
+}
+async function loadPersonalPrompt(force = false) {
+  const scope = $('personalPromptScope').value;
+  const draft = personalDrafts.get(scope);
+  if (draft && !force) { renderPersonalPrompt(); return; }
+  if (draft?.saving) return;
+  if (force && draft && draft.text !== draft.saved && !confirm('丢弃当前范围未保存的修改并重新读取？')) return;
+  const originalText = draft?.text;
+  const request = ++personalRequest;
+  if (!draft) renderPersonalPrompt();
+  try {
+    const doc = await getJSON(`/api/console/personal-prompt?scope=${encodeURIComponent(scope)}`);
+    if (request !== personalRequest || scope !== $('personalPromptScope').value) return;
+    if (draft && draft.text !== originalText) { draft.status = '读取期间有新修改，已保留草稿；请再次重新读取。'; renderPersonalPrompt(); return; }
+    $('personalPromptScope').replaceChildren(...doc.catalog.map(item => {
+      const option = document.createElement('option'); option.value = item.scope; option.textContent = item.label; return option;
+    }));
+    $('personalPromptScope').value = scope;
+    $('personalPromptText').maxLength = doc.max_chars;
+    personalDrafts.set(scope, {text:doc.text, saved:doc.text, version:doc.version, saving:false, status:'仅保存在本机；下次启动或重接模型时加载；普通暂停／继续不重新加载。'});
+    renderPersonalPrompt();
+  } catch (e) {
+    if (request === personalRequest && scope === $('personalPromptScope').value) $('personalPromptStatus').textContent = '读取失败：' + e.message;
+  }
+}
+async function savePersonalPrompt(clear = false) {
+  const scope = $('personalPromptScope').value, draft = personalDrafts.get(scope);
+  if (!draft || draft.saving) return;
+  ++personalRequest; // A pending reload must not replace this draft or its saved version.
+  if (clear) draft.text = '';
+  const text = draft.text;
+  draft.saving = true; draft.status = '保存中…'; renderPersonalPrompt();
+  try {
+    const result = await postJSON('/api/console/personal-prompt', {scope, text, version:draft.version});
+    draft.saved = result.text; draft.version = result.version;
+    draft.status = draft.text === draft.saved ? '已保存；下次启动或重接模型时加载；普通暂停／继续不重新加载，当前运行不变。' : '已保存发送时的内容；还有未保存的修改。';
+    loadPromptPreview();
+  } catch (e) { draft.status = '保存失败：' + e.message + '。草稿已保留；版本冲突时可重新读取。'; }
+  finally { draft.saving = false; if (scope === $('personalPromptScope').value) renderPersonalPrompt(); }
+}
+
 function promptText(text) {
   const box = document.createElement("div"); box.className = "ptext";
   for (const line of text.split("\n")) {
@@ -1750,10 +1816,13 @@ function promptText(text) {
 
 function promptOptions() { return formOptions(); }
 
+let promptPreviewRequest = 0;
 async function loadPromptPreview() {
+  const request = ++promptPreviewRequest;
   let data;
   try { data = await postJSON("/api/console/prompt/preview", { options: promptOptions() }); }
   catch (e) {
+    if (request !== promptPreviewRequest) return;
     ui.prompt = null;
     $("promptWhat").textContent = "按当前设置生成不了提示词：" + e.message + "（到运行页改好设置后会自动刷新）";
     $("promptWhat").classList.add("warn");
@@ -1761,6 +1830,7 @@ async function loadPromptPreview() {
     $("promptExecutor").textContent = "";
     return;
   }
+  if (request !== promptPreviewRequest) return;
   $("promptWhat").classList.remove("warn");
   const previewParts = [...data.parts, ...(data.guide_parts || []).map(p => ({...p, label: "工作区指南 · " + p.label}))];
   if (ui.promptFile && !previewParts.some(part => part.source === ui.promptFile.name) && !(data.button_prompts || []).some(item => item.name === ui.promptFile.name)) {
@@ -1790,6 +1860,7 @@ async function loadPromptPreview() {
   if (o.mode === "speedrun" && o.limit_planning && o.sim) bits.push("限制规划轮次");
   bits.push(o.live ? "直播" : "不直播");
   if (o.runtime === "host") bits.push("本机运行方式");
+  if (data.personal_applied?.length) bits.push('个人要求：' + data.personal_applied.map(item => item.label).join('、'));
   const guideSize = (data.guide_parts || []).reduce((n, p) => n + p.text.length + p.sep.length, 0);
   $("promptWhat").textContent = `${bits.join(" · ")}；启动 ${data.text.length.toLocaleString("zh-CN")} 字符` + (guideSize ? `；工作区指南 ${guideSize.toLocaleString("zh-CN")} 字符（按需读取）` : "");
   $("promptExecutor").textContent = data.executor;
@@ -1998,6 +2069,21 @@ $("kbText").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) &&
 $("kbSave").addEventListener("click", saveKbFile);
 $("kbRevert").addEventListener("click", () => { if (ui.kbFile) { $("kbText").value = ui.kbFile.text ?? ""; ui.kbFile.dirty = false; updateKbSave(); setKbView(ui.kbView); } });
 $("aboutRefresh").addEventListener("click", loadAbout);
+$('personalPromptScope').addEventListener('change', () => { ++personalRequest; loadPersonalPrompt(); });
+$('personalPromptText').addEventListener('input', () => {
+  const draft = personalDrafts.get($('personalPromptScope').value);
+  if (!draft) return;
+  draft.text = $('personalPromptText').value;
+  draft.status = draft.text === draft.saved ? '和已保存的内容一致。' : '尚未保存；切换范围会保留草稿。';
+  // Do not rerender the textarea while typing, so selection and caret stay in place.
+  $('personalPromptSave').disabled = draft.saving || draft.text === draft.saved;
+  $('personalPromptClear').disabled = draft.saving || (!draft.text && !draft.saved);
+  $('personalPromptStatus').textContent = draft.status;
+});
+$('personalPromptSave').addEventListener('click', () => savePersonalPrompt());
+$('personalPromptClear').addEventListener('click', () => savePersonalPrompt(true));
+$('personalPromptReload').addEventListener('click', () => loadPersonalPrompt(true));
+
 $("promptCopy").addEventListener("click", async (e) => {
   const text = ui.prompt ? ui.prompt.text : "";
   try { await navigator.clipboard.writeText(text); toast("已复制提示词全文。"); }
@@ -2045,7 +2131,7 @@ $("releaseGame").addEventListener("click", releaseGame);
 $("resumeLatest").addEventListener("click", () => resumeRun());
 $("launchDismiss").addEventListener("click", () => { $("launchBanner").hidden = true; ui.dismissedLaunch = ui.status && ui.status.orchestrator.launched_wall; });
 window.addEventListener("beforeunload", (e) => {
-  if ((ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty)) { e.preventDefault(); e.returnValue = ""; }
+  if ((ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty) || [...personalDrafts.values()].some(draft => draft.text !== draft.saved)) { e.preventDefault(); e.returnValue = ""; }
 });
 
 // 危险操作点两次：第一次只把按钮换成确认文字，3 秒内再点才执行

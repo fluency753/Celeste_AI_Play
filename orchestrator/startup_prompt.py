@@ -43,8 +43,11 @@ def current_settings(cfg):
 
 def runtime_prompt(cfg, *, guide=None):
     from .prompting import play_prompt
+    from .personal_prompts import snapshot
+    personal = guide['personal'] if guide is not None and 'personal' in guide else snapshot(cfg)
+    addition = '\n\n' + personal['text'] if personal['text'] else ''
     if not workspace_capabilities(cfg).workspace_read:
-        return play_prompt(cfg)
+        return play_prompt(cfg) + addition
     from .prompt_guide import guide_document
     guide = guide if guide is not None else guide_document(cfg)
     return ('你是通过工具游玩 Celeste 的玩家。当前任务与配置：\n'
@@ -56,4 +59,4 @@ def runtime_prompt(cfg, *, guide=None):
               '\n当前任务配置、用户最新指令和实际工具反馈优先于指南及旧历史；实时权限与目标以主控反馈为准。'
               '先 observe 再操作；计时和目标剩余量用 observe(detail="time") 查询。'
               '仅使用本次登记的工具；按权限操作，不绕过限制。工具故障导致无法继续时用 stop_run 报告并等待，普通死亡不算阻塞。'
-              '\n本次游戏工具：' + '/'.join(game_tools(cfg)) + '。')
+              '\n本次游戏工具：' + '/'.join(game_tools(cfg)) + '。' + addition)

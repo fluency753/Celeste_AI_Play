@@ -108,3 +108,11 @@ def publish_guide(cfg):
                 raise ValueError('拒绝清理非本次发布目录')
             shutil.rmtree(temporary)
     return guide
+
+
+def startup_context(cfg):
+    """Capture local additions once, alongside the exact published shared guide."""
+    from .personal_prompts import snapshot
+    personal = snapshot(cfg)
+    guide = publish_guide(cfg)
+    return {**(guide or {}), 'personal': personal}

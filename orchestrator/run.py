@@ -1112,7 +1112,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
                 session.container = container
             note = opening_note(cfg, previous, resumed_session, getattr(args, "note_text", None),
-                                include_rules=not (cfg.engine == 'claude' and workspace_capabilities(cfg).workspace_read))
+                                include_rules=cfg.engine != 'claude')
             publish_user_note(run_dir, getattr(args, "note_text", None))
             from .runtimes import runtime
             runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,

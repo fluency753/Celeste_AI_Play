@@ -395,8 +395,8 @@ class CodexRunner(SessionControls):
                                + str(self.run_dir) + '" --apply 同步旧会话环境，再续跑。')
 
     async def run(self):
-        from .prompt_guide import publish_guide
-        guide = publish_guide(self.cfg)
+        from .prompt_guide import startup_context
+        guide = startup_context(self.cfg)
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self._events = (self.run_dir / "codex_events.jsonl").open("a", encoding="utf-8")
         self.metrics.update(telemetry_source="codex_app_server", chat_thread_id=None,

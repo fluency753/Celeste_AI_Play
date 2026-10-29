@@ -111,8 +111,10 @@ class NetWaitIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 return len(probes) >= 3        # 前两次连不上，之后恢复
 
             commands = []
+            original_command = ClaudeRunner._command
 
             def command(self):
+                original_command(self)  # Preserve startup snapshot; replace only the external process.
                 commands.append(list(self._common_args()))
                 return [sys.executable, "-X", "utf8", "-u", str(stub), str(mark)]
 
@@ -126,7 +128,9 @@ class NetWaitIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     return False
                 return await orig(self, fallback, **kwargs)
 
-            with patch.object(ClaudeRunner, "_command", command), \
+            with patch('orchestrator.agent.find_claude_exe', return_value=sys.executable), \
+                 patch('orchestrator.personal_prompts.STORE', root / 'personal.json'), \
+                 patch.object(ClaudeRunner, "_command", command), \
                  patch.object(ClaudeRunner, "_probe_network", probe), \
                  patch.object(ClaudeRunner, "_next_user_turn", next_turn):
                 reason = await asyncio.wait_for(runner.run(), 30)

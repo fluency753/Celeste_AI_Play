@@ -60,15 +60,15 @@ def cpu_rule(cfg) -> str:
     return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"
 
 
-# 探索模式里关于自写程序的几句按执行器区分（用户要求）：Codex 执行器用协作者改写的版本（先评估程序是否比直接
-# 验证更省事、并行要点只写一句）；Claude Code 执行器保留原来的"完全可以自由发挥"和详细的并行要点。
+# 探索模式里关于自写程序的几句按执行器区分：Codex 同时支持当前问题与持续建模，并行要点只写一句；
+# Claude Code 执行器保留原来的"完全可以自由发挥"和详细的并行要点。
 # 提示词里是 {preset_sim}{program_freedom}……{program_lead}{cpu_rule}{parallel_rule}
 PROGRAM_FREEDOM = {"claude": "，但不限制你自行编写模拟器或搜索程序等，你完全可以自由发挥。",
                    "codex": "。你也可以自行编写模拟器、搜索或其他辅助程序，自由发挥。"}
 # 自写工具用 C++、能用多线程就用多线程（用户 10-27 要求：Python 循环里逐个启动模拟器进程的穷举只用到不到一个核）
 PROGRAM_LEAD = {"claude": ("编写模拟器、搜索、穷举或批量计算等工具时用 C++ 写，不要用 Python；有多线程就用多线程来缩短计算时间"
                            "（例如 g++ -O2 -pthread），同一批推演放在一个进程里做，不要逐个启动进程，"),
-                "codex": ("辅助程序用于解决具体问题，先评估是否比直接验证更省事。需要较多计算时用 C++ 写、不要用 Python，"
+                "codex": ("辅助程序可以解决当前问题，也可以持续积累可复用的模型与方法。需要较多计算时用 C++ 写、不要用 Python，"
                           "有多线程就用多线程缩短计算时间，")}
 PARALLEL_RULE = {"claude": ("。并行时注意，单线程做的汇总与合并容易成为瓶颈（搜得越深 CPU 占用越低）。"
                             "以按层展开的搜索为例：去重与择优也要分片并行，不要每层由一个线程串行处理越来越大的去重集合；"
@@ -510,12 +510,12 @@ def current_rules_note(cfg, *, guide=None) -> str:
     # Codex thread/resume replaces baseInstructions. Only Claude needs a copy in history.
     if getattr(cfg, 'engine', 'claude') == 'codex':
         return ""
+    from .startup_prompt import runtime_prompt
     if workspace_capabilities(cfg).workspace_read:
-        from .startup_prompt import runtime_prompt
         return '\n\n（系统）续跑配置与指南如下，当前配置及指南内容替代旧快照中的任务与操作约定：\n' + runtime_prompt(cfg, guide=guide)
     return ("\n\n（系统）续跑的会话沿用之前保存的提示词快照：你看到的系统提示词与工具说明可能还是旧版本，要到下次压缩上下文后才会更新。"
             f"当前生效的完整规则如下，与旧版本不一致时以这里为准；act 一次至少推进 {act_frame_min(cfg)} 帧、最多 {act_frame_cap(cfg)} 帧，不在范围内会被主控退回。\n\n"
-            + play_prompt(cfg))
+            + runtime_prompt(cfg, guide=guide))
 
 
 def net_resume_prompt(minutes: float, chat: bool = False, study_note: str | None = None) -> str:

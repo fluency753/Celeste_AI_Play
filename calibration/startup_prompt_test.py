@@ -16,6 +16,13 @@ from orchestrator.startup_prompt import current_settings, runtime_prompt
 
 
 class StartupPromptTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        store = patch('orchestrator.personal_prompts.STORE', Path(folder.name)/'absent.json')
+        store.start()
+        self.addCleanup(store.stop)
+
     def test_workspace_capabilities_choose_delivery_and_preview_has_actual_prompt(self):
         from orchestrator.launch_options import config_for
         from overlay.console_api import prompt_preview

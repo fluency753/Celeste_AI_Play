@@ -254,9 +254,9 @@ class ClaudeRunner(SessionControls):
         return args
 
     def _command(self) -> list[str]:
-        from .prompt_guide import publish_guide
+        from .prompt_guide import startup_context
         from .startup_prompt import runtime_prompt
-        self._startup_guide = publish_guide(self.cfg)
+        self._startup_guide = startup_context(self.cfg)
         if workspace_capabilities(self.cfg).agent_location == "container":
             mcp = json.dumps({"mcpServers": {"celeste": {
                 "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
@@ -410,7 +410,7 @@ class ClaudeRunner(SessionControls):
     async def _run_process(self, workdir: Path, first: str) -> bool:
         """启动一个 Claude Code 进程并驱动到结束。返回 True 表示本次运行结束；False 表示因额度暂停，稍后续上。"""
         command = self._command()
-        if self.resume and workspace_capabilities(self.cfg).workspace_read:
+        if self.resume:
             from .prompting import current_rules_note
             first += current_rules_note(self.cfg, guide=self._startup_guide)
         stderr_log = open(self.run_dir / "claude_stderr.log", "ab")
