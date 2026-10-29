@@ -254,6 +254,7 @@
       <textarea id="goalText" aria-label="任务目标" placeholder="自由填写任务，例如探索支路、尝试收集眼前的草莓" maxlength="4000"></textarea>
       <div class="control-buttons"><span>自动停止：</span><select id="goalMatch" aria-label="条件组合"><option value="all">满足全部条件</option><option value="any">满足任一条件</option></select><button id="goalAdd" type="button">＋条件</button></div>
       <div id="goalConditions"></div>
+      <div class="goal-time-note" style="color:var(--label);font-size:calc(11 * var(--px))">时长单位为秒。“再增加至少”从本次更新起算。游戏时长只计实际推进，不含规划回放；现实时长包含思考及工具运行，不计准备、暂停及额度／网络等待。</div>
       <div class="control-buttons"><button id="goalSave" type="button" title="应用当前编辑；重复更新会重新记录停止条件的比较基线">更新</button><button id="goalClear" type="button">清除</button><button id="goalStop" type="button" title="取消正在执行的动作，结束试玩并保存录像">立即停止并保存</button></div>
       <div id="goalDraftStatus" role="status" hidden style="color:#b8822d;font-size:calc(11 * var(--px));margin-top:calc(5 * var(--px))"></div>
       <div id="goalStatus" role="status"></div>
@@ -278,7 +279,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 63;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 64;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -774,7 +775,8 @@ async function saveSimulation(){
   }catch(error){simError=error.message;}
   finally{simSending=false;await pollControl();}
 }
-const GOAL_FIELDS = {room:'房间',map_complete:'当前地图通关',map:'地图变化',side:'面别 A/B/C',deaths:'本地图死亡次数',frame:'游戏推进帧数',elapsed:'运行时间（秒）'};
+const GOAL_FIELDS = {room:'房间',map_complete:'当前地图通关',map:'地图变化',side:'面别 A/B/C',deaths:'本地图死亡次数',frame:'游戏推进帧数',game_elapsed:'游戏推进时长（秒）',elapsed:'现实运行时长（秒）'};
+const GOAL_NUMERIC = new Set(['deaths','frame','elapsed','game_elapsed']);
 function editGoal() {
   goalDirty=true; goalError='';
   if(controlData) renderGoal(controlData.control);
@@ -786,9 +788,9 @@ function goalRow(condition={field:'room',op:'changed'}) {
   for (const [key,label] of Object.entries(GOAL_FIELDS)) field.add(new Option(label,key));
   field.value=condition.field; remove.type='button'; remove.textContent='×'; remove.setAttribute('aria-label','删除条件');
   const update=()=>{
-    const numeric=['deaths','frame','elapsed'].includes(field.value);
-    op.replaceChildren(...(numeric ? [['delta_gte','再增加至少'],['gte','达到至少'],['lte','不高于'],['eq','等于']] : field.value==='map_complete' ? [['eq','为真']] : field.value==='map' ? [['changed','发生变化']] : [['changed','发生变化'],['eq','变为']]).map(([v,t])=>new Option(t,v)));
-    value.type=numeric?'number':'text'; value.min='0'; value.value=numeric?'1':'';
+    const numeric=GOAL_NUMERIC.has(field.value), duration=['game_elapsed','elapsed'].includes(field.value);
+    op.replaceChildren(...(field.value==='game_elapsed' ? [['delta_gte','从更新起运行至少']] : numeric ? [['delta_gte','再增加至少'],['gte','达到至少'],['lte','不高于'],['eq','等于']] : field.value==='map_complete' ? [['eq','为真']] : field.value==='map' ? [['changed','发生变化']] : [['changed','发生变化'],['eq','变为']]).map(([v,t])=>new Option(t,v)));
+    value.type=numeric?'number':'text'; value.min='0'; value.step=duration?'any':'1'; value.value=duration?'60':numeric?'1':'';
     value.placeholder=field.value==='room'?'房间名':field.value==='side'?'B':'';
     value.disabled=op.value==='changed'||field.value==='map_complete'; value.hidden=value.disabled;
   };
@@ -1122,12 +1124,12 @@ async function saveGoal(kind) {
     $('goalDraftStatus').hidden=false;
     return;
   }
-  if (kind==='goal' && Array.from($('goalConditions').children).some(row => ['deaths','frame','elapsed'].includes(row.children[0].value) && !row.children[2].value.trim())) {
+  if (kind==='goal' && Array.from($('goalConditions').children).some(row => GOAL_NUMERIC.has(row.children[0].value) && !row.children[2].value.trim())) {
     goalError='请填写数值条件。'; renderGoal(controlData.control); return;
   }
   const conditions=Array.from($('goalConditions').children).map(row=>{
     const [field,op,value]=row.children;
-    return {field:field.value,op:op.value,value:field.value==='map_complete'?true:['deaths','frame','elapsed'].includes(field.value)?Number(value.value):value.value.trim()};
+    return {field:field.value,op:op.value,value:field.value==='map_complete'?true:GOAL_NUMERIC.has(field.value)?Number(value.value):value.value.trim()};
   });
   const run=controlData.run, revision=controlData.control.goal?.revision||0;
   savingGoal=true;renderGoal(controlData.control);

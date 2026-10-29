@@ -4,6 +4,8 @@
 
 ## 2026-10-29
 
+- **目标增加游戏推进时长并澄清现实计时**：网页 HUD 可按秒设置“从更新起运行至少”的游戏时长，与现有现实运行时长按任一／全部组合。游戏时长只累计真实更新帧，不计规划回放，跨章／续跑保留，重启游戏后重建锚点；现实计时沿用暂停与等待扣除规则。更新目标空闲时刷新基线，执行中使用最近进度；agent 通知包含实际条件，到期拒绝说明具体时长原因和本次工具未执行。不新增建模阶段或改变轮内工具权限，Bridge／Runtime 不变。检查粒度及验证边界见 [目标与停止条件](docs/LIVE_ADAPTATION.md#目标与停止条件)。
+
 - **桥接 1.9.1：录制与观测健壮性修复**：`record start` 先完成全部校验（分章须 `game_nrt`、独立录音仍在运行、OBS 插件能力、启动录音）再修改录制状态，被拒的重复或重试启动不再改动正在录制的片段；规划回放帧与游玩帧一样计入分章首帧并同样过滤。首帧重建录音、分章身份查询都在游戏循环里执行，失败时只记录并停止独立录音，经 `hello.record_audio_error` 报告，不再抛入 `Celeste.Update`；分章身份只在分章录像时查询。剧情 HUD 截取未完成时原生重画该帧（重画使用独立随机数），关卡回退为世界画面；`hello` 新增 `story_hud_capture`／`story_hud_capture_level`。菜单、加载等会推进的场景里，带截图的 observe 改到本帧绘制后回复，同一帧最多为未答复的截图保持一次空闲帧。主菜单按钮及相邻按钮判空，结算页要求 Session 存在。chapter_reset 改为检查生产冻结门，删去未使用的 `Bridge.ShouldHaltEngineUpdate`。Runtime 仍为 1.0.5；未部署到在用游戏。
   验证：Python 1035 项回归；Windows 编译 0 警告 0 错误；chapter_reset、story_text、runtime_reload、audio_mixer、collision_snapshot、playback_lifecycle、playback_style、dust_visual 原生检查通过（tas_input 构建缺 MonoMod 引用，修复前即如此）。
 

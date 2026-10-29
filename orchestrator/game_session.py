@@ -361,6 +361,7 @@ class GameSession:
     def connect(self) -> dict:
         self.client = BridgeClient(port=self.cfg.bridge_port, timeout=600)
         hello = self.client.call('hello')
+        self.game_process_id = hello.get('process_id')
         from .bridge_reload import hold_message
         if held := hold_message(hello):
             # A previous controller's reload hold: never activate or send input into it.
@@ -1485,6 +1486,7 @@ class GameSession:
         values = self.goal_values()
         values.update(frame=event.get("frame", values.get("frame")), room=event.get("room", values.get("room")),
                       deaths=event.get("deaths", values.get("deaths")), dead=event.get("dead", False))
+        values['game_elapsed'] = values['frame']/60
         values["map"] = f"{event.get('sid', self.metrics.state.chapter)}:{values['side']}"
         self._goal_progress = dict(values)
         if self._note_room(event.get("sid"), event.get("room"), event.get("chapterTimeTicks")):
@@ -1509,7 +1511,26 @@ class GameSession:
         if obs is None:
             values.update(self._goal_progress)
             values["elapsed"] = self.metrics.elapsed()
+        values['game_epoch'] = getattr(self, 'game_process_id', None)
+        values['game_elapsed'] = values['frame']/60
         return values
+
+    def set_goal(self, spec):
+        from .goals import validate_goal
+        spec = validate_goal(spec)
+        # An in-flight action owns the connection: use its latest progress and
+        # do not wait for the whole action. Otherwise refresh a running menu's
+        # frame before anchoring relative durations.
+        if self.lock.acquire(blocking=False):
+            try:
+                obs = self.client.call('observe', image=False, entities=False, tiles=False)['obs']
+                values = self.goal_values(obs)
+                self._goal_progress = dict(values)
+                self.goals.set(spec, values)
+            finally:
+                self.lock.release()
+        else:
+            self.goals.set(spec, self.goal_values())
 
     def finish_user_stop(self):
         self.user_stopped = True

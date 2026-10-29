@@ -4,8 +4,17 @@ import math
 import threading
 import time
 
-FIELDS = {"room", "map", "side", "map_complete", "deaths", "frame", "elapsed"}
-NUMERIC = {"deaths", "frame", "elapsed"}
+FIELDS = {"room", "map", "side", "map_complete", "deaths", "frame", "elapsed", "game_elapsed"}
+NUMERIC = {"deaths", "frame", "elapsed", "game_elapsed"}
+LABELS = {'room':'房间','map':'地图','side':'面别','map_complete':'当前地图通关',
+          'deaths':'本地图死亡次数','frame':'游戏推进帧数','elapsed':'现实运行时长（秒）','game_elapsed':'游戏推进时长（秒）'}
+
+
+def describe_goal(spec):
+    operators = {'changed':'发生变化','delta_gte':'从本次更新起增加至少','gte':'累计达到至少','lte':'不高于','eq':'等于'}
+    conditions = [f"{LABELS[c['field']]}{operators[c['op']]}" + (f" {c['value']}" if c['op'] != 'changed' else '')
+                  for c in spec.get('conditions', [])]
+    return '；'.join(filter(None, [spec.get('text',''), ('任一条件：' if spec.get('match')=='any' else '全部条件：') + '，'.join(conditions) if conditions else '']))
 
 
 def validate_goal(data):
@@ -27,7 +36,8 @@ def validate_goal(data):
         field, op, value = condition.get("field"), condition.get("op"), condition.get("value")
         if not isinstance(field, str) or field not in FIELDS:
             raise ValueError("未知条件字段")
-        if not isinstance(op, str) or op not in ({"gte", "lte", "delta_gte", "eq"} if field in NUMERIC else {"eq", "changed"}):
+        allowed = {"delta_gte"} if field=='game_elapsed' else {"gte", "lte", "delta_gte", "eq"} if field in NUMERIC else {"eq", "changed"}
+        if not isinstance(op, str) or op not in allowed:
             raise ValueError("条件运算符不适用")
         if field in NUMERIC:
             if not isinstance(value, (float, int)) or isinstance(value, bool) or not math.isfinite(value) or value < 0:
@@ -69,6 +79,8 @@ class GoalManager:
                 raise ValueError("已经开始停止并保存，不能撤回")
             self.data = {**spec, "revision": self.data["revision"]+1, "active": True, "reached": False,
                          "baseline": dict(values), "updated_wall": time.time()}
+            if any(c['field']=='game_elapsed' for c in spec['conditions']):
+                self.data['game_clock'] = {'frame':values.get('frame'), 'epoch':values.get('game_epoch'), 'advanced_frames':0}
             self._save()
 
     def clear(self):
@@ -91,6 +103,20 @@ class GoalManager:
             if self.stop_motion.is_set() or not self.data["active"] or not self.data["conditions"]:
                 return self.stop_motion.is_set()
             baseline = self.data["baseline"]
+            clock = self.data.get('game_clock')
+            clock_changed = False
+            if clock is not None and values.get('frame') is not None:
+                frame, epoch = values['frame'], values.get('game_epoch')
+                previous = clock.get('frame')
+                if previous is None or epoch != clock.get('epoch'):
+                    # A restarted game has a new frame origin, not negative play time.
+                    clock.update(frame=frame, epoch=epoch)
+                    clock_changed = True
+                elif frame > previous:
+                    clock['advanced_frames'] += frame-previous
+                    clock['frame'] = frame
+                    clock_changed = True
+                values = {**values, 'game_elapsed':baseline.get('game_elapsed',0) + clock['advanced_frames']/60}
             matches = []
             for condition in self.data["conditions"]:
                 field, op = condition["field"], condition["op"]
@@ -105,7 +131,8 @@ class GoalManager:
                 elif op == "changed":
                     result = initial is not None and actual != initial
                 elif op == "delta_gte":
-                    result = initial is not None and actual-initial >= value
+                    result = (clock['advanced_frames']/60 >= value if field=='game_elapsed' and clock is not None
+                              else initial is not None and actual-initial >= value)
                 elif op == "gte":
                     result = actual >= value
                 elif op == "lte":
@@ -114,7 +141,10 @@ class GoalManager:
                     result = actual == value
                 matches.append(result)
             if (all(matches) if self.data["match"] == "all" else any(matches)):
-                self.data.update(active=False, reached=True, stop_reason="自定义停止条件已满足", updated_wall=time.time())
+                reached = '，'.join(LABELS[c['field']] for c, match in zip(self.data['conditions'],matches) if match)
+                self.data.update(active=False, reached=True, stop_reason="自定义停止条件已满足：" + reached, updated_wall=time.time())
                 self.stop_motion.set()
+                self._save()
+            elif clock_changed:
                 self._save()
             return self.stop_motion.is_set()

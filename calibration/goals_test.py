@@ -6,7 +6,7 @@ import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from orchestrator.goals import GoalManager, validate_goal
 from orchestrator.game_session import GameSession
@@ -205,6 +205,23 @@ class GoalTests(unittest.TestCase):
 
 
 class StopControlTest(unittest.IsolatedAsyncioTestCase):
+    async def test_wall_duration_expires_without_any_game_tool(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            with patch('orchestrator.metrics.time.monotonic',return_value=1000):
+                metrics=Metrics(root/'metrics.json','test','model','medium',600)
+                metrics.start_play()
+            goal=GoalManager(root)
+            goal.set({'conditions':[{'field':'elapsed','op':'delta_gte','value':2}]},{**BASE,'elapsed':0})
+            session=SimpleNamespace(done=False,goals=goal,goal_values=lambda:{**BASE,'elapsed':metrics.elapsed()})
+            session.finish_user_stop=Mock(side_effect=lambda:setattr(session,'done',True))
+            runner=CodexRunner(RunConfig(agent='test',save='test',model='model'),root,session,metrics,'container')
+            try:
+                with patch('orchestrator.metrics.time.monotonic',return_value=1002):await runner._check_goal()
+                self.assertTrue(session.done);self.assertTrue(runner.paused)
+                self.assertIn('现实运行时长',goal.snapshot()['stop_reason'])
+            finally:runner.close_events()
+
     async def test_immediate_stop_waits_for_current_action_before_finalizing(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);goal=GoalManager(root)

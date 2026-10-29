@@ -200,7 +200,8 @@ class CodexRunner(SessionControls):
             if name == 'celeste_set_effort' and self.manual_effort is not None:
                 raise ValueError(f'用户已手动固定推理强度为 {self.manual_effort}，请保留用户设置；恢复自动后才可自行调整。')
             if self.session is not None and hasattr(self.session, "goals") and self.session.goals.stop_motion.is_set() and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
-                raise ValueError("停止目标已触发，正在保存录像，请结束本轮。")
+                reason = self.session.goals.snapshot().get('stop_reason', '停止目标已触发')
+                raise ValueError("停止目标已触发（" + reason + "）。正在保存录像，本次工具未执行，请结束本轮。")
             if self.chat_only and not workspace_program and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run"}:
                 raise ValueError("本次试玩已经结束，当前只提供聊天，不连接或操作游戏。")
             if self.paused and not workspace_program and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:

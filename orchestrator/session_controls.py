@@ -185,8 +185,9 @@ class SessionControls:
                                     note = "用户已清除自定义目标及停止条件，撤回先前自定义要求；保留主控最初指定的章节范围。"
                                 else:
                                     goal = json.loads(row["text"])
-                                    self.session.goals.set(goal, self.session.goal_values())
-                                    note = "用户更新了目标：" + goal.get("text", "") + "。停止条件由主控核验；不要自行进入未指定章节。"
+                                    await asyncio.to_thread(self.session.set_goal, goal)
+                                    from .goals import describe_goal
+                                    note = "用户更新了目标：" + describe_goal(goal) + "。停止条件由主控核验；不要自行进入未指定章节。"
                                 await self._check_goal()
                                 if not self.session.done:
                                     self.pending_messages.append({**row, "text": note})

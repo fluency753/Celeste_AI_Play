@@ -35,6 +35,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
             goal_values=lambda: {'room': 'start', 'map_complete': False},
             sim_energy=SimpleNamespace(snapshot=lambda: {'balance': 40}),
             simulate=lambda data: {'cost': 13, 'candidates': data['candidates']})
+        self.session.set_goal=lambda spec:self.session.goals.set(spec,self.session.goal_values())
         def finish():
             self.session.done = True
         self.session.finish_user_stop = Mock(side_effect=finish)
