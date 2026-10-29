@@ -421,7 +421,8 @@ def prompt_parts(cfg) -> list[PromptPart]:
     parts.append(PromptPart("游戏操作权限", permissions_for(cfg).instructions(experiments=getattr(cfg, 'play_scope', 'chapter') == 'visited'), None, "\n\n"))
     if 'exit_level' in game_tools(cfg):
         parts.append(PromptPart("返回地图与结束任务",
-                                "用户要求返回地图时调用 exit_level，默认保留任务、后续章节和录制；返回后 observe，再自行选章。"
+                                "用户要求返回地图时调用 exit_level，默认保留任务、后续章节和录制；返回后 observe，"
+                                "只进入当前计划或许可允许的地图，换到计划外的章节须由用户在控制台调整范围。"
                                 "只有用户明确结束整次试玩才设 finish_run=true。按当前操作权限执行，不用保存退出绕过返回地图禁令；返回地图不算通关。", None, "\n\n"))
     if workspace_capabilities(cfg).programs and getattr(cfg, "live", False):
         parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）
@@ -466,13 +467,22 @@ def controller_turn_prompt(text):
     return notification('continue_prepare', facts=text)
 
 
-def study_prompt(study: KbStudy, sim: bool = False) -> str:
+def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = False) -> str:
+    """准备阶段的第一条消息。仅准备时不开始试玩（结束方式见 agent._lifecycle_prompt，这里不重复）；
+    准备后接着试玩时写明读完后的下一步，开了预置模拟器的速通另外要求先想清技巧与要写的程序并记进笔记。"""
     from .button_prompts import notification
     files = "\n".join(f"- {path}" for path in study.container_paths())
+    sim_note = "本次预置模拟器已开放，资料位于 /sim。\n" if sim else ""
+    if prepare_only:
+        return notification('prepare', facts=(
+            f"本次必读清单：\n{files}\n\n主控核对实际阅读进度。\n" + sim_note
+            + f"准备阶段最多 {study.minutes:g} 分钟，到时仍未读完则本次准备未完成。"))
+    after = ("读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些搜索与规划程序"
+             "（模拟器直接用 /sim 预置的）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
+             if sim else "读完后调用 observe 开始游玩。\n")
     return notification('prepare', facts=(
         f"本次必读清单：\n{files}\n\n"
-        "主控核对实际阅读进度，完成前 observe 与 act 不会执行。\n"
-        + ("本次预置模拟器已开放，资料位于 /sim。\n" if sim else "") +
+        "主控核对实际阅读进度，完成前 observe 与 act 不会执行。\n" + sim_note + after +
         f"准备阶段最多 {study.minutes:g} 分钟，到时游戏工具自动开放。"
         "游戏在你思考期间一直暂停，章节计时只算游戏真正推进的帧。"
     ))

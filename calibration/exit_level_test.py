@@ -70,6 +70,21 @@ class ExitLevelTests(unittest.TestCase):
         session.entry_guard_supported=True;session.action_policy_supported=1
         return session,client
 
+    def test_tool_and_prompt_say_only_planned_or_permitted_maps_can_be_entered(self):
+        # 章节／连续范围下返回地图后入场门闸仍指向当前未完成的目标；说明不能诱导 agent 自行换章
+        from orchestrator.prompting import play_prompt
+        with tempfile.TemporaryDirectory() as folder:
+            session,_=self.live_session(Path(folder))
+            try:
+                tools=asyncio.run(build_server(session).list_tools())
+                description=next(t.description for t in tools if t.name=='exit_level')
+                prompt=play_prompt(session.cfg)
+            finally:session.close()
+        for text in (description,prompt):
+            self.assertIn('只进入当前计划或许可允许的地图',text)
+            self.assertIn('由用户在控制台调整范围',text)
+            self.assertNotIn('自行选章',text)
+
     def test_default_return_uses_real_menu_macro_then_actual_entry_consumes_target(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);session,client=self.live_session(root)

@@ -19,5 +19,27 @@ class SaveNamingTests(unittest.TestCase):
         self.assertIn('玩家角色',PROMPT)
         self.assertIn('对话',PROMPT)
 
+    def test_request_comes_first_and_name_usage_is_stated_once(self):
+        from pathlib import Path
+        import tempfile
+        from unittest.mock import patch
+        from orchestrator import prompting
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(prompting,'OVERRIDES',Path(folder)/'prompts'):
+                text=name_prompt()
+            self.assertEqual(text.count('存档显示名'),1)
+            self.assertEqual(text.count('称呼'),1)
+            request=text.index('请为玩家角色取一个')
+            for limit in ('ASCII','拼音','最终回复只给名字本身','不创建存档'):
+                self.assertLess(request,text.index(limit),limit)
+            # 本机改写的取名请求同样排在主控的固定限制之前，限制仍然保留
+            overrides=Path(folder)/'prompts'
+            overrides.mkdir()
+            (overrides/'button_name_save_zh.md').write_text('给角色起个名字。',encoding='utf-8')
+            with patch.object(prompting,'OVERRIDES',overrides):
+                custom=name_prompt()
+            self.assertTrue(custom.startswith('【主控系统消息｜存档取名】\n给角色起个名字。\n'))
+            self.assertIn('ASCII',custom)
+
 
 if __name__=='__main__':unittest.main()

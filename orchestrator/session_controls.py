@@ -500,7 +500,7 @@ class SessionControls:
         if key == self._fast_yield_requested:
             return
         try:
-            await self._steer_user(notification('fast', facts=f'用户更新了 Fast 设置：{"开启" if self.fast_mode else "关闭"}，下一轮生效。当前暂停设置：{self.paused}。'))
+            await self._steer_user(notification('fast', facts=f'用户更新了 Fast 设置：{"开启" if self.fast_mode else "关闭"}，下一轮生效。当前试玩设置：{"暂停" if self.paused else "运行"}。'))
         except Exception:
             return  # a turn/start or turn/completed race; recheck state on the next control tick
         self._fast_yield_requested=key

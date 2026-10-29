@@ -27,6 +27,8 @@ _LABELS = {
 }
 
 _CONTINUATIONS = {'continue_play', 'continue_prepare'}
+# 请求类消息：先给可编辑正文里的请求，再列主控的固定限制（例如取名先请对方取名，再说明字符与回复格式）
+_BODY_FIRST = {'name_save'}
 _CONTINUATION_NOTE = '这不是用户新消息，不改变任务范围、权限或停止条件。'
 
 
@@ -54,10 +56,8 @@ def notification(key, facts=''):
         except (OSError, UnicodeError):
             body = '请依据当前状态与配置继续当前任务。'
     parts = [f'【主控系统消息｜{_LABELS[key]}】']
-    if facts.strip():
-        parts.append(facts.strip())
-    if body:
-        parts.append(body)
+    ordered = [body, facts.strip()] if key in _BODY_FIRST else [facts.strip(), body]
+    parts += [part for part in ordered if part]
     if failed:
         parts.append('本机消息模板读取失败，已用默认说明。')
     if key in _CONTINUATIONS:

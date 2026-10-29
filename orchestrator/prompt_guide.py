@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import stat
 import tempfile
+import uuid
 
 from .prompting import prompt_parts
 from .execution import workspace_capabilities
@@ -48,12 +49,18 @@ def guide_document(cfg):
             'sections': sections, 'documents': documents}
 
 
-def _reject_link(path):
+def _is_link(path):
+    """lstat only: a symbolic link or Windows reparse point (junction) is never followed."""
     try:
         metadata = path.lstat()
     except FileNotFoundError:
-        return
-    if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400):
+        return False
+    return bool(stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0)
+                & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400))
+
+
+def _reject_link(path):
+    if _is_link(path):
         raise ValueError(f'操作指南路径不能是符号链接或重解析点：{path}')
 
 
@@ -62,57 +69,108 @@ def _check_chain(path):
         _reject_link(component)
 
 
-def _verify(directory, documents):
-    _check_chain(directory)
-    if not directory.is_dir():
-        raise ValueError(f'操作指南目录冲突：{directory}')
-    if {p.name for p in directory.iterdir()} != set(documents):
-        raise ValueError(f'操作指南内容冲突，拒绝覆盖：{directory}')
-    for name, expected in documents.items():
-        path = directory / name
-        _reject_link(path)
-        if not path.is_file() or path.read_bytes() != expected.encode('utf-8'):
-            raise ValueError(f'操作指南内容冲突，拒绝覆盖：{path}')
+def _same_bytes(path, expected):
+    """True only for a regular, non-link file with exactly the published bytes."""
+    if _is_link(path):
+        return False
+    flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+             | getattr(os, 'O_BINARY', 0))
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return False
+    with os.fdopen(descriptor, 'rb') as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != len(expected):
+            return False
+        return stream.read(len(expected) + 1) == expected
+
+
+def _intact(directory, documents):
+    """Every file the controller published is present and unchanged.
+
+    The directory is agent-writable: entries the controller never published (for
+    example the .claude/ folder Claude Code creates in each Bash working directory)
+    are ignored instead of blocking startup.
+    """
+    try:
+        metadata = directory.lstat()
+    except FileNotFoundError:
+        return False
+    if _is_link(directory) or not stat.S_ISDIR(metadata.st_mode):
+        return False
+    return all(_same_bytes(directory / name, text.encode('utf-8')) for name, text in documents.items())
+
+
+def _set_aside(base, destination):
+    """Rename a tampered version entry within the guide base; links are renamed, never followed or deleted."""
+    _check_chain(base)
+    stale = base / f'.stale-{destination.name[:16]}-{uuid.uuid4().hex[:12]}'
+    os.rename(destination, stale)
+    return stale
 
 
 def publish_guide(cfg):
-    """Publish before starting a model; failures propagate instead of exposing a false path."""
+    """Publish before starting a model; failures propagate instead of exposing a false path.
+
+    A version directory whose published files were changed is moved aside and
+    published again, so an agent edit never prevents a later start or reconnect.
+    """
     if not workspace_capabilities(cfg).workspace_read:
         return None
     guide = guide_document(cfg)
+    documents = guide['documents']
     workspace = Path(cfg.workspace_dir).absolute()
     base = workspace / 'game' / 'instructions'
     destination = base / guide['version']
-    _check_chain(destination)
+    _check_chain(base)
     base.mkdir(parents=True, exist_ok=True)
     _check_chain(base)
-    if destination.exists():
-        _verify(destination, guide['documents'])
+    if _intact(destination, documents):
         return guide
-    temporary = Path(tempfile.mkdtemp(prefix='.publish-', dir=base))
-    try:
-        for name, content in guide['documents'].items():
-            _check_chain(temporary)
-            with (temporary / name).open('x', encoding='utf-8', newline='\n') as output:
-                output.write(content)
-        _check_chain(destination)
+    for _ in range(3):
+        if os.path.lexists(destination):
+            stale = _set_aside(base, destination)
+            print(f"[guide] 操作指南 {guide['version'][:12]} 的已发布文件被改动或缺失，"
+                  f"原目录已移到 {stale.name}，重新发布", flush=True)
+        temporary = Path(tempfile.mkdtemp(prefix='.publish-', dir=base))
         try:
-            os.rename(temporary, destination)
-        except FileExistsError:
-            _verify(destination, guide['documents'])
-        _verify(destination, guide['documents'])
-    finally:
-        if temporary.exists():
-            _check_chain(temporary)
-            if temporary.parent != base or not temporary.name.startswith('.publish-'):
-                raise ValueError('拒绝清理非本次发布目录')
-            shutil.rmtree(temporary)
-    return guide
+            for name, content in documents.items():
+                _check_chain(temporary)
+                with (temporary / name).open('x', encoding='utf-8', newline='\n') as output:
+                    output.write(content)
+            _check_chain(base)
+            try:
+                os.rename(temporary, destination)
+            except OSError:
+                if not os.path.lexists(destination):
+                    raise
+                # Another publisher won the rename; its result is verified below.
+        finally:
+            if temporary.exists():
+                _check_chain(temporary)
+                if temporary.parent != base or not temporary.name.startswith('.publish-'):
+                    raise ValueError('拒绝清理非本次发布目录')
+                shutil.rmtree(temporary)
+        if _intact(destination, documents):
+            return guide
+    raise ValueError(f'操作指南发布后仍与内容不一致：{destination}')
 
 
-def startup_context(cfg):
-    """Capture local additions once, alongside the exact published shared guide."""
+def startup_context(cfg, *, previous=None):
+    """Capture local additions once, alongside the exact published shared guide.
+
+    previous is this runner's last startup context. On a reconnect an unreadable
+    personal prompt file keeps the additions the session already received instead
+    of ending the run; a first start still fails before the model starts.
+    """
     from .personal_prompts import snapshot
-    personal = snapshot(cfg)
+    try:
+        personal = snapshot(cfg)
+    except (OSError, ValueError) as exc:
+        if not isinstance(previous, dict) or 'personal' not in previous:
+            raise
+        personal = previous['personal']
+        print(f'[guide] 本机个人追加要求读取失败，沿用本次运行上次送达的版本：{exc}', flush=True)
     guide = publish_guide(cfg)
     return {**(guide or {}), 'personal': personal}

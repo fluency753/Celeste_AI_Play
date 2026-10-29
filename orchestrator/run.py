@@ -529,6 +529,10 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     current_plan = cfg.plan or [Piece(c) for c in (cfg.chapters or ([] if cfg.chapter is None else [cfg.chapter]))]
     state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [[p.chapter,p.start,p.end] for p in map(Piece.of,current_plan)]
     state.update({key:getattr(cfg,key) for key in ('recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu')})
+    # 接着同一个会话续跑：带上这个会话最近一次送达的规则摘要（见 agent.ClaudeRunner），规则没变时首条不再重复附上
+    delivered = ((previous or {}).get("state") or {}).get("rules_delivered")
+    if session_id and isinstance(delivered, dict) and delivered.get("session_id") == session_id:
+        state["rules_delivered"] = delivered
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

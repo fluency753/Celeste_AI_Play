@@ -25,6 +25,7 @@ Max 额度：默认一直用到额度真正用完（Claude Code 报告限额拒�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 import json
 import os
@@ -137,6 +138,11 @@ class ClaudeRunner(SessionControls):
         self.session_id = session_id or str(uuid.uuid4())
         self.resume = resume                     # True：用 --resume 接着已有的会话
         self.resume_note = resume_note
+        # 这个会话最近一次送达的规则（runtime_prompt）摘要，记在 run_state.json 的 rules_delivered；
+        # 续跑、重接时规则没变就不再附一遍（None：不知道会话里是哪一版，照常附上）
+        self._rules_digest = self._delivered_rules_digest() if resume else None
+        # 续跑追加章节的开场消息（next_chapter_prompt）写明"以这条消息后面的规则为准"，第一条消息必须附上规则
+        self._force_rules = bool(resume and resume_note and getattr(cfg, '_extended_plan', None))
         self.quota_until: float | None = None    # 额度到上限：预计重置的时刻（墙钟，秒）
         self.quota_reason = ""
         self.net_down_since: float | None = None  # 模型第一次连不上的时刻（monotonic）；恢复后清空
@@ -155,6 +161,7 @@ class ClaudeRunner(SessionControls):
         self.stop_reason = ""
         self._command_active = False             # 正在执行主控自己发出的斜杠命令（/effort）
         self._command_reply = ""
+        self._sent_text = ""
         self.prepare_only, self.chat_only, self.naming_only = prepare_only, chat_only, naming_only
         self.name_result, self.naming_reply = None, None
         self.turn_done = self._turn_done
@@ -253,15 +260,49 @@ class ClaudeRunner(SessionControls):
             args += ["--autocompact", str(autocompact)]
         return args
 
+    def _delivered_rules_digest(self):
+        """run_state.json 里记下的、这个会话最近一次送达的规则摘要；会话编号不同或没有记录时返回 None。"""
+        try:
+            state = json.loads((self.run_dir / "run_state.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        record = state.get("rules_delivered") if isinstance(state, dict) else None
+        if isinstance(record, dict) and record.get("session_id") == self.session_id and isinstance(record.get("sha256"), str):
+            return record["sha256"]
+        return None
+
+    def _remember_rules(self, digest: str) -> None:
+        """规则已经送达这个会话（新会话的系统提示词，或续跑首条消息里附的当前规则）：记进内存与 run_state.json。"""
+        self._rules_digest = digest
+        path = self.run_dir / "run_state.json"
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return                               # 准备阶段等还没有 run_state.json：只记在内存
+        except (OSError, ValueError) as exc:
+            print(f"[agent] 未能读取 run_state.json，规则送达记录只保留在内存：{exc}", flush=True)
+            return
+        state["rules_delivered"] = {"session_id": self.session_id, "sha256": digest}
+        temporary = path.with_suffix(".rules.tmp")
+        try:
+            temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(path)
+        except OSError as exc:
+            print(f"[agent] 未能保存规则送达记录，只保留在内存：{exc}", flush=True)
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def _command(self) -> list[str]:
         from .prompt_guide import startup_context
         from .startup_prompt import runtime_prompt
-        self._startup_guide = startup_context(self.cfg)
+        # 重接时传入上次的快照：个人追加要求读取失败就沿用已送达的版本，不因此结束运行
+        self._startup_guide = startup_context(self.cfg, previous=getattr(self, "_startup_guide", None))
+        rules = runtime_prompt(self.cfg, guide=self._startup_guide)
+        self._startup_rules_digest = hashlib.sha256(rules.encode("utf-8")).hexdigest()
         if workspace_capabilities(self.cfg).agent_location == "container":
             mcp = json.dumps({"mcpServers": {"celeste": {
                 "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
-            prompt = runtime_prompt(self.cfg, guide=self._startup_guide)
-            prompt += self._lifecycle_prompt()
+            prompt = rules + self._lifecycle_prompt()
             (self.run_dir / "system_prompt.md").write_text(prompt, encoding="utf-8")
             return [
                 find_docker_exe(), "exec", "-i", "-u", "agent", "-w", "/workspace",
@@ -288,7 +329,7 @@ class ClaudeRunner(SessionControls):
         mcp_config.write_text(json.dumps({"mcpServers": {"celeste": {
             "type": "http", "url": f"http://127.0.0.1:{self.cfg.mcp_port}/mcp"}}}), encoding="utf-8")
         prompt_file = self.run_dir / "system_prompt.md"
-        prompt_file.write_text(runtime_prompt(self.cfg, guide=self._startup_guide) + self._lifecycle_prompt(), encoding="utf-8")
+        prompt_file.write_text(rules + self._lifecycle_prompt(), encoding="utf-8")
         return [
             find_claude_exe(), *self._common_args(),
             "--tools", "",
@@ -351,7 +392,8 @@ class ClaudeRunner(SessionControls):
         if self.resume_note:
             first = self.resume_note
         else:
-            first = study_prompt(self.study, self.cfg.sim) if self.study else first_play_prompt(self.cfg)
+            first = (study_prompt(self.study, self.cfg.sim, prepare_only=self.prepare_only) if self.study
+                     else first_play_prompt(self.cfg))
         if self.prepare_only:
             first += self._lifecycle_prompt()
         self.metrics.update(telemetry_source='claude_stream_json', chat_thread_id=self.session_id)
@@ -410,9 +452,12 @@ class ClaudeRunner(SessionControls):
     async def _run_process(self, workdir: Path, first: str) -> bool:
         """启动一个 Claude Code 进程并驱动到结束。返回 True 表示本次运行结束；False 表示因额度暂停，稍后续上。"""
         command = self._command()
-        if self.resume:
+        digest, rules_note = self._startup_rules_digest, ""
+        if self.resume and (self._force_rules or digest != self._rules_digest):
+            # 续跑同一个会话：规则与上次送达的不同（或不知道上次是哪一版）时才在第一条消息后附上当前规则
             from .prompting import current_rules_note
-            first += current_rules_note(self.cfg, guide=self._startup_guide)
+            rules_note = current_rules_note(self.cfg, guide=self._startup_guide)
+            first += rules_note
         stderr_log = open(self.run_dir / "claude_stderr.log", "ab")
         self.metrics.turn_end()  # 新的 Claude Code 进程：之前没收到结果的工具调用都不算了
         self._init_checked = False
@@ -427,6 +472,10 @@ class ClaudeRunner(SessionControls):
             if not await self._next_user_turn(first, opening=not self.chat_only):
                 self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                 return True
+            # 新会话的系统提示词带着规则；续跑时只有附上的规则确实随第一条消息发出（没被用户消息替换）才算送达
+            if not self.resume or (rules_note and rules_note in self._sent_text):
+                self._remember_rules(digest)
+                self._force_rules = False
             while True:
                 if self.session.done and getattr(self.session, "agent_stop", None):
                     self.stop_reason = self.session.done_reason
@@ -719,6 +768,7 @@ class ClaudeRunner(SessionControls):
         offered_notes = self.note_reminders.peek()
         text += ('\n\n' + '\n'.join(value for _, value in offered_notes) if offered_notes else '')
         await self._write(text)
+        self._sent_text = text                   # 最近一次实际发出的消息（核对续跑附上的规则有没有送达）
         self.note_reminders.acknowledge(offered_notes)
         self._begin_model_turn(runtime="claude")
         self.metrics.update(status=self._idle_status())

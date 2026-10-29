@@ -233,6 +233,17 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         await self.wait_for(lambda:self.runner.rpc.request.await_count==1)
         self.assertEqual(self.runner.rpc.request.await_args.args[1]['expectedTurnId'],'acknowledged-turn')
 
+    async def test_fast_notice_states_pause_setting_in_words(self):
+        self.runner.fast_mode=True;self.runner.turn_fast=False
+        for paused,expected in ((False,'当前试玩设置：运行。'),(True,'当前试玩设置：暂停。')):
+            with self.subTest(paused=paused):
+                self.runner.paused=paused;self.runner.turn_id=f'turn-{paused}'
+                await self.runner._yield_for_fast_change()
+                text=self.runner.rpc.request.await_args.args[1]['input'][0]['text']
+                self.assertIn('用户更新了 Fast 设置：开启',text)
+                self.assertIn(expected,text)
+                self.assertNotIn('True',text);self.assertNotIn('False',text)
+
     def test_disconnected_controller_never_reports_fast_pending(self):
         self.runner.control.heartbeat(stopped=True,fast_pending=True,fast=False)
         self.assertFalse(self.runner.control.snapshot()['fast_pending'])

@@ -142,6 +142,7 @@ class NetWaitIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sent[0], "第一条消息")
             self.assertIn("模型连不上", sent[1])
             self.assertIn("游戏一直冻结", sent[1])
+            self.assertNotIn("提示词快照", sent[1])   # 同一会话的规则没变：重接不再附一遍
             self.assertGreaterEqual(len(probes), 3)
             self.assertEqual(metrics.state.net_waits, 1)
             self.assertGreater(metrics.state.net_wait_s, 0)

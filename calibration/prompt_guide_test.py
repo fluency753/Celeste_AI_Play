@@ -1,6 +1,8 @@
-"""Workspace guide publication is complete, content addressed, and fail closed."""
+"""Workspace guide publication is complete, content addressed, and never follows links;
+agent edits inside a published version are republished instead of blocking startup."""
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -49,9 +51,82 @@ class PromptGuideTests(unittest.TestCase):
         self.assertEqual((destination / 'index.md').stat().st_mtime_ns, before)
         self.assertEqual(notes.read_text(encoding='utf-8'), 'user notes')
         (destination / 'index.md').write_text('changed by user', encoding='utf-8')
-        with self.assertRaisesRegex(ValueError, '拒绝覆盖'):
-            prompt_guide.publish_guide(self.cfg)
-        self.assertEqual((destination / 'index.md').read_text(encoding='utf-8'), 'changed by user')
+        self.assertEqual(prompt_guide.publish_guide(self.cfg), guide)
+        self.assert_published(destination, guide)
+        stale, = self.stale_dirs()
+        self.assertEqual((stale / 'index.md').read_text(encoding='utf-8'), 'changed by user')
+        self.assertEqual(notes.read_text(encoding='utf-8'), 'user notes')
+
+    def assert_published(self, destination, guide):
+        self.assertFalse(destination.is_symlink())
+        for name, text in guide['documents'].items():
+            self.assertFalse((destination / name).is_symlink(), name)
+            self.assertEqual((destination / name).read_bytes(), text.encode('utf-8'), name)
+
+    def stale_dirs(self):
+        base = self.cfg.workspace_dir / 'game' / 'instructions'
+        return sorted(p for p in base.iterdir() if p.name.startswith('.stale-'))
+
+    def test_files_the_agent_adds_inside_the_guide_are_ignored(self):
+        # Claude Code 在每个执行过 Bash 的工作目录里自动创建 .claude/.cc-writes；智能体也可能另存文件。
+        guide = prompt_guide.publish_guide(self.cfg)
+        destination = self.cfg.workspace_dir / 'game' / 'instructions' / guide['version']
+        (destination / '.claude').mkdir()
+        (destination / '.claude' / '.cc-writes').write_text('{}', encoding='utf-8')
+        (destination / 'scratch.txt').write_text('agent scratch', encoding='utf-8')
+        before = (destination / 'index.md').stat().st_mtime_ns
+        for _ in range(2):  # 每次启动、重接都能直接复用
+            self.assertEqual(prompt_guide.publish_guide(self.cfg), guide)
+        self.assert_published(destination, guide)
+        self.assertEqual((destination / 'index.md').stat().st_mtime_ns, before)
+        self.assertTrue((destination / '.claude' / '.cc-writes').is_file())
+        self.assertEqual((destination / 'scratch.txt').read_text(encoding='utf-8'), 'agent scratch')
+        self.assertEqual(self.stale_dirs(), [])
+
+    def test_modified_or_missing_section_is_republished_and_old_copy_kept_aside(self):
+        guide = prompt_guide.publish_guide(self.cfg)
+        destination = self.cfg.workspace_dir / 'game' / 'instructions' / guide['version']
+        section = destination / guide['sections'][1]['file']
+        section.write_text('edited by agent', encoding='utf-8')
+        (destination / '.claude').mkdir()
+        (destination / '.claude' / '.cc-writes').write_text('{}', encoding='utf-8')
+        with patch('builtins.print') as log:
+            self.assertEqual(prompt_guide.publish_guide(self.cfg), guide)
+        self.assertIn('重新发布', log.call_args.args[0])
+        self.assert_published(destination, guide)
+        self.assertFalse((destination / '.claude').exists())
+        stale, = self.stale_dirs()
+        self.assertEqual((stale / section.name).read_text(encoding='utf-8'), 'edited by agent')
+        self.assertTrue((stale / '.claude' / '.cc-writes').is_file())
+        (destination / 'manifest.json').unlink()
+        self.assertEqual(prompt_guide.publish_guide(self.cfg), guide)
+        self.assert_published(destination, guide)
+        self.assertEqual(len(self.stale_dirs()), 2)
+
+    def test_links_inside_the_guide_are_set_aside_without_following_them(self):
+        guide = prompt_guide.publish_guide(self.cfg)
+        base = self.cfg.workspace_dir / 'game' / 'instructions'
+        destination = base / guide['version']
+        outside = self.root / 'outside'
+        outside.mkdir()
+        target = outside / 'index.md'
+        target.write_text(guide['documents']['index.md'], encoding='utf-8')
+        (destination / 'index.md').unlink()
+        try:
+            (destination / 'index.md').symlink_to(target)
+        except OSError as exc:
+            self.skipTest(f'symlink unsupported: {exc}')
+        # 内容相同的链接也不算已发布：不能让主控读写链接指向的位置
+        self.assertEqual(prompt_guide.publish_guide(self.cfg), guide)
+        self.assert_published(destination, guide)
+        shutil.rmtree(destination)
+        destination.symlink_to(outside, target_is_directory=True)
+        self.assertEqual(prompt_guide.publish_guide(self.cfg), guide)
+        self.assert_published(destination, guide)
+        self.assertEqual([p.name for p in outside.iterdir()], ['index.md'])
+        self.assertEqual(target.read_text(encoding='utf-8'), guide['documents']['index.md'])
+        self.assertEqual(len(self.stale_dirs()), 2)
+        self.assertTrue(any(p.is_symlink() for p in self.stale_dirs()))
 
     def test_failed_publication_never_exposes_partial_final_directory(self):
         guide = prompt_guide.guide_document(self.cfg)
@@ -78,6 +153,12 @@ class PromptGuideTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '符号链接|重解析点'):
             prompt_guide.publish_guide(self.cfg)
         self.assertEqual(list(target.iterdir()), [])
+        # 重接时同样拒绝：不在链接指向的位置发布、移动或删除任何内容
+        (target / 'instructions').mkdir()
+        (target / 'instructions' / 'keep.txt').write_text('outside', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, '符号链接|重解析点'):
+            prompt_guide.publish_guide(self.cfg)
+        self.assertEqual([p.name for p in (target / 'instructions').iterdir()], ['keep.txt'])
 
     def test_no_workspace_reader_retains_inline_prompt_without_publication(self):
         self.cfg.engine, self.cfg.runtime = 'claude', 'host'
