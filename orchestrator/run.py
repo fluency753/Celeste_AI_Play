@@ -197,7 +197,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="与 --resume 一起用：原录像接不上时（OBS 关了或崩溃、独立音频停了）放弃它，这次续跑另起一段录像")
     ap.add_argument("--note-file", metavar="FILE",
                     help="与 --resume 一起用：把这个文件（UTF-8 文本）的内容作为用户留言，附在续跑发给智能体的第一条消息里"
-                         "（在主控的续跑说明之后；Claude另附当前完整规则），例如章节之间的说明与新增资料的阅读要求")
+                         "（在主控的续跑说明之后；Claude另附当前配置及指南，无文件工具时附完整规则），例如章节之间的说明与新增资料的阅读要求")
     args = ap.parse_args()
     previous = args.previous = load_previous(args.resume) if args.resume else None
     args.note_text = None
@@ -1111,7 +1111,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 container = await asyncio.to_thread(ensure_container, cfg, lambda m: print(m, flush=True))
                 print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
                 session.container = container
-            note = opening_note(cfg, previous, resumed_session, getattr(args, "note_text", None))
+            note = opening_note(cfg, previous, resumed_session, getattr(args, "note_text", None),
+                                include_rules=not (cfg.engine == 'claude' and workspace_capabilities(cfg).workspace_read))
             publish_user_note(run_dir, getattr(args, "note_text", None))
             from .runtimes import runtime
             runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
@@ -1256,7 +1257,7 @@ def publish_user_note(run_dir: Path, text: str | None) -> None:
         publish(run_dir, "user:note-file", text, role="user", kind="你 · 局间留言（附在开场消息里）")
 
 
-def opening_note(cfg, previous, resumed_session, user_note: str | None = None) -> str | None:
+def opening_note(cfg, previous, resumed_session, user_note: str | None = None, *, include_rules=True) -> str | None:
     """续跑时代替开局的第一条消息：追加了新章节（原计划已全部通关）时说开始新的一章，否则说中途被打断后接着玩。
     user_note（--note-file）放在主控说明之后；仅 Claude 续跑另附快照兼容规则。"""
     if not previous:
@@ -1264,10 +1265,10 @@ def opening_note(cfg, previous, resumed_session, user_note: str | None = None) -
     extra = f"\n\n（用户留言）\n{user_note}" if user_note else ""
     if getattr(cfg, "_extended_plan", None):
         note = next_chapter_prompt(cfg, fresh_session=not resumed_session) + extra
-        return note + current_rules_note(cfg) if resumed_session else note
+        return note + current_rules_note(cfg) if resumed_session and include_rules else note
     gap = max(0.0, time.time() - float(previous["metrics"].get("written_wall") or time.time())) / 60
     if resumed_session:
-        return resume_prompt("主控中断后续跑", gap) + extra + current_rules_note(cfg)
+        return resume_prompt("主控中断后续跑", gap) + extra + (current_rules_note(cfg) if include_rules else '')
     frozen = _previous_kept_frozen(previous)
     history = ("之前的对话不在了，但工作区里的笔记、程序与 game/ 文件都在。先查阅 /workspace/notes.md。"
                if workspace_capabilities(cfg).workspace_read else "之前的对话不在了；当前没有工作区文件工具，以最新观测为准。")

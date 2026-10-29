@@ -100,7 +100,7 @@ class PromptTests(unittest.TestCase):
     def test_frame_range_in_prompt_and_resume_note(self):
         c = explore()
         self.assertIn("至少 40 帧、最多 150 帧", play_prompt(c))
-        self.assertIn("act 一次至少推进 40 帧、最多 150 帧", current_rules_note(c))
+        self.assertIn('"act_frames":[40,150]', current_rules_note(c))
         c.explore_act_frames = 30                     # 下限不超过上限
         self.assertIn("至少 30 帧、最多 30 帧", play_prompt(c))
 

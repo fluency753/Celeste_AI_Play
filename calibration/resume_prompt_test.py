@@ -24,7 +24,7 @@ class ResumePromptTests(unittest.TestCase):
                 cfg._extended_plan = [Piece(2, 0, None)] if extended else None
                 note = opening_note(cfg, previous, None if fresh else 'existing-session', '保留用户留言。')
                 rules = play_prompt(cfg)
-                needs_snapshot = engine == 'claude' and not fresh
+                needs_snapshot = engine == 'claude' and runtime == 'host' and not fresh
                 self.assertEqual(rules in note, needs_snapshot)
                 self.assertEqual('提示词快照' in note, needs_snapshot)
                 self.assertEqual('后面附上的当前规则' in note, needs_snapshot and extended)

@@ -255,10 +255,13 @@ class ClaudeRunner(SessionControls):
         return args
 
     def _command(self) -> list[str]:
+        from .prompt_guide import publish_guide
+        from .startup_prompt import runtime_prompt
+        self._startup_guide = publish_guide(self.cfg)
         if workspace_capabilities(self.cfg).agent_location == "container":
             mcp = json.dumps({"mcpServers": {"celeste": {
                 "type": "http", "url": f"http://host.docker.internal:{self.cfg.mcp_port}/mcp"}}})
-            prompt = play_prompt(self.cfg)
+            prompt = runtime_prompt(self.cfg, guide=self._startup_guide)
             prompt += self._lifecycle_prompt()
             (self.run_dir / "system_prompt.md").write_text(prompt, encoding="utf-8")
             return [
@@ -286,7 +289,7 @@ class ClaudeRunner(SessionControls):
         mcp_config.write_text(json.dumps({"mcpServers": {"celeste": {
             "type": "http", "url": f"http://127.0.0.1:{self.cfg.mcp_port}/mcp"}}}), encoding="utf-8")
         prompt_file = self.run_dir / "system_prompt.md"
-        prompt_file.write_text(play_prompt(self.cfg) + self._lifecycle_prompt(), encoding="utf-8")
+        prompt_file.write_text(runtime_prompt(self.cfg, guide=self._startup_guide) + self._lifecycle_prompt(), encoding="utf-8")
         return [
             find_claude_exe(), *self._common_args(),
             "--tools", "",
@@ -406,12 +409,16 @@ class ClaudeRunner(SessionControls):
 
     async def _run_process(self, workdir: Path, first: str) -> bool:
         """启动一个 Claude Code 进程并驱动到结束。返回 True 表示本次运行结束；False 表示因额度暂停，稍后续上。"""
+        command = self._command()
+        if self.resume and workspace_capabilities(self.cfg).workspace_read:
+            from .prompting import current_rules_note
+            first += current_rules_note(self.cfg, guide=self._startup_guide)
         stderr_log = open(self.run_dir / "claude_stderr.log", "ab")
         self.metrics.turn_end()  # 新的 Claude Code 进程：之前没收到结果的工具调用都不算了
         self._init_checked = False
         self._turn_done.clear()
         self.proc = await asyncio.create_subprocess_exec(
-            *self._command(), cwd=str(workdir), env=self._env(),
+            *command, cwd=str(workdir), env=self._env(),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=stderr_log,
             limit=64 * 1024 * 1024)
         reader = asyncio.create_task(self._read_stdout())

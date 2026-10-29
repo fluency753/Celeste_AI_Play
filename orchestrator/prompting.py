@@ -494,6 +494,7 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
     head = ("（系统）之前指定的章节都已经通关。"
             + (fresh_context if fresh_session else "现在接着同一个会话，"))
     rules = ("本次的规则以当前的系统提示词为准" if fresh_session or getattr(cfg, 'engine', 'claude') == 'codex'
+             else "本次以这条消息后面的配置与指南版本为准" if workspace.workspace_read
              else "本次的规则以这条消息后面附上的当前规则为准")
     changed = "单次 act 与自写推演的帧数上限、思考语句的要求" if workspace.programs else "单次 act 的帧数上限、思考语句的要求"
     reuse = "之前写的程序与笔记按新规则检查后再用。" if workspace.workspace_read else "按当前规则核对后继续。"
@@ -504,12 +505,15 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
             "请先调用 observe 看清当前画面，再开始游玩。")
 
 
-def current_rules_note(cfg) -> str:
+def current_rules_note(cfg, *, guide=None) -> str:
     """续跑同一个 Claude Code 会话时附在第一条消息后面的当前规则。Claude Code 压缩上下文时会把当时的系统提示词与工具说明
     存成快照（prompt_snapshot），之后续跑沿用快照，要到下一次压缩才换成新的；所以续跑时改过的规则要在对话里再给一遍。"""
     # Codex thread/resume replaces baseInstructions. Only Claude needs a copy in history.
     if getattr(cfg, 'engine', 'claude') == 'codex':
         return ""
+    if workspace_capabilities(cfg).workspace_read:
+        from .startup_prompt import runtime_prompt
+        return '\n\n（系统）续跑配置与指南如下，当前配置及指南内容替代旧快照中的任务与操作约定：\n' + runtime_prompt(cfg, guide=guide)
     return ("\n\n（系统）续跑的会话沿用之前保存的提示词快照：你看到的系统提示词与工具说明可能还是旧版本，要到下次压缩上下文后才会更新。"
             f"当前生效的完整规则如下，与旧版本不一致时以这里为准；act 一次至少推进 {act_frame_min(cfg)} 帧、最多 {act_frame_cap(cfg)} 帧，不在范围内会被主控退回。\n\n"
             + play_prompt(cfg))

@@ -187,7 +187,7 @@ class PromptPreviewTests(unittest.TestCase):
             self.assertEqual(codex["text"], codex_prompt(config_for(options)))
 
             speed = console_api.prompt_preview({"mode": "speedrun", "agent": "a", "save": {"name": "s"}})
-            self.assertTrue(any(p["source"] == "hud_zh.md" for p in speed["parts"]))
+            self.assertTrue(any(p["source"] == "hud_zh.md" for p in speed["guide_parts"]))
 
 
 if __name__ == "__main__":

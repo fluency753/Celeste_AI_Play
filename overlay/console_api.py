@@ -279,6 +279,8 @@ def prompt_preview(options: dict) -> dict:
     from orchestrator.kb_study import CONTAINER_KB, required_files
     from orchestrator.launch_options import config_for
     from orchestrator.prompting import overridden_parts, prompt_parts, study_prompt
+    from orchestrator.startup_prompt import runtime_prompt
+    from orchestrator.execution import workspace_capabilities
     # 预览不需要真的起名字或选存档：没填的用占位值，免得运行页还没填完就看不了提示词
     options = dict(options or {})
     if not options.get("agent"):
@@ -287,8 +289,15 @@ def prompt_preview(options: dict) -> dict:
         options["save"] = {"name": "preview", "slot": None, "create": False}
     cfg = config_for(options)
     overridden = set(overridden_parts())
-    parts = [{"label": p.label, "text": p.text, "source": p.source, "sep": p.sep,
-              "overridden": p.source in overridden} for p in prompt_parts(cfg)]
+    guided = workspace_capabilities(cfg).workspace_read
+    from orchestrator.prompt_guide import guide_document
+    guide = guide_document(cfg) if guided else None
+    full_parts = ([{"label": p['label'], "text": p['text'], "source": p['source'], "sep": '',
+                    "overridden": p['source'] in overridden} for p in guide['sections']] if guided else
+                  [{"label": p.label, "text": p.text, "source": p.source, "sep": p.sep,
+                    "overridden": p.source in overridden} for p in prompt_parts(cfg)])
+    parts = ([{"label": "当前任务与配置", "text": runtime_prompt(cfg, guide=guide), "source": None,
+               "sep": "", "overridden": False}] if guided else full_parts)
     if cfg.engine == "codex":
         from orchestrator.codex_agent import codex_tool_mapping
         for part in parts:
@@ -307,6 +316,7 @@ def prompt_preview(options: dict) -> dict:
     executor = ("原生 GPT（Codex 的开发者指令）" if cfg.engine == "codex"
                 else "Claude Code（接在 Claude Code 自带的系统提示词之后）")
     return {"parts": parts, "text": "".join(p["sep"] + p["text"] for p in parts), "executor": executor,
+            "guide_parts": full_parts if guided else [],
             "first_message": first, "overridden": sorted(overridden)}
 
 

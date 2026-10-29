@@ -43,8 +43,9 @@ def codex_tool_mapping(cfg) -> str:
             "不要尝试从Base64文字看图或把图像编码打印进聊天。")
 
 
-def codex_prompt(cfg) -> str:
-    return play_prompt(cfg).replace("调用 simulate 工具", "调用 celeste_simulate 工具") + "\n\n" + codex_tool_mapping(cfg)
+def codex_prompt(cfg, *, guide=None) -> str:
+    from .startup_prompt import runtime_prompt
+    return runtime_prompt(cfg, guide=guide).replace("调用 simulate 工具", "调用 celeste_simulate 工具") + "\n\n" + codex_tool_mapping(cfg)
 
 
 def program_cap(cfg) -> float:
@@ -391,11 +392,13 @@ class CodexRunner(SessionControls):
                                + str(self.run_dir) + '" --apply 同步旧会话环境，再续跑。')
 
     async def run(self):
+        from .prompt_guide import publish_guide
+        guide = publish_guide(self.cfg)
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self._events = (self.run_dir / "codex_events.jsonl").open("a", encoding="utf-8")
         self.metrics.update(telemetry_source="codex_app_server", chat_thread_id=None,
                             tool_calls=self.metrics.state.tool_calls or 0)
-        prompt = codex_prompt(self.cfg)   # 剧情模式的说明已在 play_prompt 里
+        prompt = codex_prompt(self.cfg, guide=guide)
         if self.chat_only:
             prompt += (("\n\n# 试玩前聊天\n这是新会话，已完成入门资料准备，还没有开始试玩。" if getattr(self, "ready_to_play", False)
                         else "\n\n# 试玩结束后的聊天\n本次试玩已经结束。") +

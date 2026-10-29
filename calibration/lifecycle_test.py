@@ -57,7 +57,9 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 effort='high',knowledge='explore',max_minutes=1,output=str(directory),mcp_port=0,
                 hud_managed=True,hud_port=0,quick_check=False,fast=None)
             commands=[]
+            original_command = ClaudeRunner._command
             def command(runner):
+                original_command(runner)  # Keep guide publication and prompt preparation; replace only the child executable.
                 commands.append(runner._common_args())
                 return [sys.executable,'-X','utf8','-u',str(stub)]
             with patch('orchestrator.config.REPO_ROOT',root), patch('orchestrator.preparation.REPO_ROOT',root), \

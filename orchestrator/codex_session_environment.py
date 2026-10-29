@@ -145,8 +145,10 @@ async def synchronize(directory, state, output, *, apply=False, root=REPO_ROOT):
     if state['agent'] in active_agents(root):
         return {**report, 'status': 'busy', 'reason': '同一工作区仍有试玩或聊天宿主，已跳过'}
     cfg = configuration(state)
-    from .prompting import play_prompt
-    report['prompt_sha256'] = digest(play_prompt(cfg).encode())
+    from .codex_agent import codex_prompt
+    from .prompt_guide import guide_document
+    report['prompt_sha256'] = digest(codex_prompt(cfg).encode())
+    report['guide_version'] = guide_document(cfg)['version']
     # Prompts and KB are loaded from repository files on every launch. No copies of
     # stale prompts, preparation completion flags, metrics or user preferences are written.
     report['prompt_and_kb'] = 'loaded_from_repository_on_next_launch'

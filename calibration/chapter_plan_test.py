@@ -250,7 +250,9 @@ class ResumeExtensionTests(unittest.TestCase):
             self.assertNotIn("程序与笔记", note)
             cfg.runtime = 'container'
             program_note = opening_note(cfg, args.previous, "sess")
-            self.assertIn("自写的模拟器或搜索程序每次推演最多 150 帧", program_note)
+            self.assertIn('"self_written_max_frames":150', program_note)
+            self.assertIn('/workspace/game/instructions/', program_note)
+            self.assertNotIn('当前生效的完整规则', program_note)
             self.assertIn("程序与笔记", program_note)
             cfg.runtime = 'host'
             cfg.cutscene_mode = 'agent'

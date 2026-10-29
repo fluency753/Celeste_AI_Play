@@ -1752,7 +1752,8 @@ async function loadPromptPreview() {
     return;
   }
   $("promptWhat").classList.remove("warn");
-  if (ui.promptFile && !data.parts.some(part => part.source === ui.promptFile.name)) {
+  const previewParts = [...data.parts, ...(data.guide_parts || []).map(p => ({...p, label: "工作区指南 · " + p.label}))];
+  if (ui.promptFile && !previewParts.some(part => part.source === ui.promptFile.name)) {
     $("promptStatus").textContent = `这个文件不在当前设置（${promptOptions().mode === "explore" ? "探索" : "速通"}模式）的提示词里；点"返回预览"看当前这一版。`;
   }
   ui.prompt = data;
@@ -1766,7 +1767,8 @@ async function loadPromptPreview() {
   if (o.mode === "speedrun" && o.limit_planning && o.sim) bits.push("限制规划轮次");
   bits.push(o.live ? "直播" : "不直播");
   if (o.runtime === "host") bits.push("本机运行方式");
-  $("promptWhat").textContent = `${bits.join(" · ")}；共 ${data.text.length.toLocaleString("zh-CN")} 字符`;
+  const guideSize = (data.guide_parts || []).reduce((n, p) => n + p.text.length + p.sep.length, 0);
+  $("promptWhat").textContent = `${bits.join(" · ")}；启动 ${data.text.length.toLocaleString("zh-CN")} 字符` + (guideSize ? `；工作区指南 ${guideSize.toLocaleString("zh-CN")} 字符（按需读取）` : "");
   $("promptExecutor").textContent = data.executor;
   const colors = new Map();
   const colorOf = (p) => {
@@ -1776,7 +1778,7 @@ async function loadPromptPreview() {
   };
   const bar = $("promptBar"), list = $("promptParts"), preview = $("promptPreview");
   bar.replaceChildren(); list.replaceChildren(); preview.replaceChildren();
-  data.parts.forEach((p, i) => {
+  previewParts.forEach((p, i) => {
     if (!p.text.trim()) return;   // 只剩换行的部分（例如占位符后面的文件末尾）不单独列出，全文里照样有
     const color = colorOf(p), id = "pblock-" + i;
     bar.append(Object.assign(document.createElement("a"), { href: "#" + id, title: `${p.label}：${p.text.length} 字符`,
