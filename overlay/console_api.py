@@ -316,8 +316,6 @@ def prompt_preview(options: dict) -> dict:
                     "sep": "\n\n", "overridden": False}] if personal['text'] else [])])
     if cfg.engine == "codex":
         from orchestrator.codex_agent import codex_tool_mapping
-        for part in parts:
-            part["text"] = part["text"].replace("调用 simulate 工具", "调用 celeste_simulate 工具")
         parts.append({"label": "原生 Codex 工具映射（自动加）", "text": codex_tool_mapping(cfg), "source": None,
                       "sep": "\n\n", "overridden": False})
     first = None

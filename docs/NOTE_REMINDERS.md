@@ -9,5 +9,6 @@
 - 只观察本工作区的 `notes.md`，最多读取256 KiB；无法读取或超限时不宣称未更新。更新只说明检测到内容变化，不判断作者或整理质量，也不代表模型已阅读。
 - 窗口使用执行器实际报告值；Claude缺失报告值时，只有实际传给Claude Code的明确数值 `autocompact` 配置可作为已知预算；Codex缺少报告窗口时直接跳过前置检查，不硬编码模型窗口。未知窗口时不计算百分比，但压缩完成提醒仍有效。Claude目前可能要到结果事件提供 `modelUsage.contextWindow` 才能取得窗口。
 - Native工具结果追加系统文字；Claude使用现有PreToolUse钩子的 `additionalContext`；无下一工具时合并到下一自然轮次的输入。它不是新的用户任务，不打断已有生成。命名阶段和无工作区读取能力的执行器不发送文件提醒。
+- Codex 只在模型确定收到时才确认提醒已送达：主控动态工具（含失败、投递失败和异常）的结果直接附带；原生 Shell／补丁的钩子不再用 `additionalContext` 承载提醒，改经同轮 `turn/steer` 投递，Codex 把它记入历史（带回执编号的 userMessage 事件或轮次正常完成）后才确认。轮次中断导致投递被丢弃时提醒保持待发，直播解说计时放回。
 
 代码入口为 `orchestrator/note_reminders.py`；共享会话接线在 `session_controls.py`，执行器仅提供各自的真实用量、压缩事件和交付通道。

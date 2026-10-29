@@ -10,7 +10,7 @@ import subprocess
 import sys
 import signal
 
-from program_sandbox import SHELL, TIMEOUT, bwrap_args
+from program_sandbox import BASH, TIMEOUT, bwrap_args
 
 
 def command_args(command, seconds, cwd):
@@ -20,7 +20,7 @@ def command_args(command, seconds, cwd):
     # Codex already creates the zero-network namespace and blocks network syscalls.
     # A second --unshare-net would need NETLINK_ROUTE, which that sandbox denies.
     return [TIMEOUT, '-k', '2', f'{seconds:g}',
-            *bwrap_args(cwd=path.as_posix(), network_isolated=True), '--', SHELL, '-c', command]
+            *bwrap_args(cwd=path.as_posix(), network_isolated=True), '--', BASH, '-c', command]
 
 
 def parent_death_signal(parent):

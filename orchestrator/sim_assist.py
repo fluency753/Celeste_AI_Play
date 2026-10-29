@@ -40,10 +40,11 @@ class AssistRules:
                 f"每次花费{self.cost_base}+向上取整(总预测帧数/{self.cost_frames})+{self.cost_extra}×额外候选数；"
                 f"最多{self.max_candidates}条、每条{self.max_frames}帧、合计{self.max_total}帧。")
 
-    def instructions(self) -> str:
+    def instructions(self, tool: str = 'simulate') -> str:
+        """tool：本次执行器登记的模拟工具名（Codex 为 celeste_simulate），在生成处写对，不靠事后替换。"""
         return ("\n\n# 有限模拟辅助\nsimulate 从当前游戏帧预测候选输入，不推进真实游戏。它可为路线决策或自建模型提供对照；围绕待验证的问题使用结果，结合真实反馈验证并修正认识，不自动耗尽体力。"
                 + self.text() +
-                '\n调用 simulate 工具，参数为 {"candidates":[["30,R","1,R,J","29,R,J"]]}。'
+                f'\n调用 {tool} 工具，参数为 {{"candidates":[["30,R","1,R,J","29,R,J"]]}}。'
                 '省略 candidates 查询体力不扣费。只能从游戏当前帧预测；不会推进真实游戏。'
                 '结果包含逐帧位置、事件和近似/未模拟实体信息；不保证未知机制完全准确。'
                 '额度不足时依据已有资料、程序实验或合适的真实尝试继续当前任务，不寻找模拟器文件绕过额度。')

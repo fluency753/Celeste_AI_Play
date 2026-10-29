@@ -9,12 +9,13 @@ def _denied(reason):
 
 
 def _timeout(cfg, arguments):
+    """Same limits as Claude's Bash: no timeout uses the default, an explicit one is capped at the maximum."""
     from .agent import bash_limits_ms
-    maximum = bash_limits_ms(cfg)[1] / 1000
+    default, maximum = (value / 1000 for value in bash_limits_ms(cfg))
     requested = arguments.get('timeout_ms')
     if isinstance(requested, (int, float)) and not isinstance(requested, bool) and math.isfinite(requested) and requested > 0:
-        maximum = min(maximum, requested / 1000)
-    return max(0.001, maximum)
+        return max(0.001, min(maximum, requested / 1000))
+    return max(0.001, min(default, maximum))
 
 
 async def native_tool_hook(runner, data):
@@ -88,10 +89,14 @@ async def native_tool_hook(runner, data):
             if gate is None:
                 gate = runner._native_gate = PauseGate(runner.metrics, enabled=False)
         gate.note_tool_use(ident, ident)
-        decision = await decide_tool(gate, canonical, ident, metrics=runner.metrics,
-                live_remind_s=runner.cfg.live_remind_s if runner.cfg.live else None,
-                session=session)
+        # PreToolUse additionalContext 是否进入模型无法确认：提醒不在这里确认送达，
+        # 而由执行器经同轮 steer 投递，Codex 记入历史后才算收到（offer_native_reminders）。
+        decision = await decide_tool(gate, canonical, ident, metrics=runner.metrics, session=session,
+                                     reminders=False)
         if decision.get('decision') == 'allow':
+            offer = getattr(runner, 'offer_native_reminders', None)
+            if offer is not None:
+                offer(turn)
             decision = {**decision, 'timeout_s': _timeout(runner.cfg, arguments)}
             detail = arguments.get('description') or arguments.get('command') or arguments.get('path') or ''
             runner.metrics.tool_begin(ident, game_tool=False,

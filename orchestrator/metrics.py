@@ -193,6 +193,14 @@ class Metrics:
             self._write_locked()
             return waited
 
+    def restore_live_reminder(self, waited: float) -> None:
+        """取走的提醒没能送达模型（例如所在轮次被中断）：计时放回，下一次工具调用再提醒。"""
+        with self._lock:
+            self._flush_locked()
+            self._unnarrated += max(0.0, float(waited))
+            self.state.narrate_reminders = max(0, self.state.narrate_reminders - 1)
+            self._write_locked()
+
     def turn_begin(self, *, fast: bool | None = None, service_tier: str | None = None,
                    effort: str | None = None, runtime: str | None = None) -> None:
         """主控给智能体发出一条消息：一轮开始。"""

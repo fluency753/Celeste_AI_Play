@@ -151,7 +151,9 @@ class KbStudy:
             missing = self.unread(rel)
             if missing:
                 lines.append(f"- {self.container_path(rel)}：第 {_ranges(missing)} 行（共 {self.total[rel]} 行）")
-        lines.append(f"请用 {reader} 读完这些行再开始（文件长时用 offset 与 limit 分页接着读，截断的片段不算完整行）。")
+        lines.append("请用 Read 读完这些行再开始（文件长时 Read 会截断，用 offset 与 limit 接着读，直到最后一行）。"
+                     if reader == 'Read' else
+                     f"请用 {reader} 读完这些行再开始（文件长时用 offset 与 limit 分页接着读，截断的片段不算完整行）。")
         return "\n".join(lines)
 
     def summary(self) -> dict:

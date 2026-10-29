@@ -2,6 +2,8 @@
 
 PATH = '/opt/py/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 SHELL = '/bin/sh'
+# Codex native Shell matches Claude's Bash tool (pipefail, source, [[ ... ]]).
+BASH = '/bin/bash'
 TIMEOUT = '/usr/bin/timeout'
 
 

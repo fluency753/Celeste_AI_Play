@@ -261,7 +261,9 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             notes.write_bytes(b'original notes')
             codex_usage(runner, 900)
             self.assertEqual(runner.note_reminders.peek(), ())
-            runner.rpc.request.assert_not_awaited()
+            # Native-tool reminders travel only as same-turn steer input; nothing starts another turn.
+            await asyncio.gather(*runner._receipt_tasks)
+            self.assertEqual({call.args[0] for call in runner.rpc.request.call_args_list} - {'turn/steer'}, set())
 
     async def test_codex_paused_or_chat_only_events_do_not_wake_or_interrupt(self):
         for options in ({'start_paused': True}, {'chat_only': True}):

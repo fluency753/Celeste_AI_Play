@@ -8,5 +8,6 @@ _module = module_from_spec(_spec)
 _spec.loader.exec_module(_module)
 PATH = _module.PATH
 SHELL = _module.SHELL
+BASH = _module.BASH
 TIMEOUT = _module.TIMEOUT
 bwrap_args = _module.bwrap_args

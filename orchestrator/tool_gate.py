@@ -1,7 +1,9 @@
 """One pre-execution policy for Claude hooks and native Codex tools."""
 
 
-async def decide_tool(gate, tool_name, tool_use_id, *, metrics=None, live_remind_s=None, session=None):
+async def decide_tool(gate, tool_name, tool_use_id, *, metrics=None, live_remind_s=None, session=None,
+                      reminders=True):
+    """reminders=False：调用方自己把提醒放进模型确定会收到的结果，这里不取、不确认送达（Codex）。"""
     guard = getattr(session, 'program_guard', getattr(session, 'control_guard', None))
     if tool_name == 'Bash' and guard and (reason := guard()):
         return {'decision': 'deny', 'reason': reason, 'context': ''}
@@ -10,6 +12,8 @@ async def decide_tool(gate, tool_name, tool_use_id, *, metrics=None, live_remind
         if denied := session.program_run_denied():
             return {'decision': 'deny', 'reason': denied, 'context': ''}
     context = ''
+    if not reminders:
+        return {'decision': 'allow' if allow else 'deny', 'reason': reason, 'context': context}
     if allow and live_remind_s and metrics is not None:
         if tool_name.endswith('__narrate'):
             metrics.narrated()

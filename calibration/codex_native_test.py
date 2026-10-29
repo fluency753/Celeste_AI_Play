@@ -67,6 +67,33 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'deny')
         self.assertEqual(self.charges, ['program'])
 
+    async def test_omitted_timeout_uses_claude_default_and_explicit_timeout_is_capped(self):
+        from orchestrator.agent import bash_limits_ms
+        self.cfg.mode = 'speedrun'
+        self.cfg.bash_default_s, self.cfg.bash_max_s = 120, 600
+        self.assertEqual(bash_limits_ms(self.cfg), (120000, 600000))
+        for ident, tool_input, expected in (('default', {'command': 'make'}, 120),
+                                            ('explicit', {'command': 'make', 'timeout_ms': 300000}, 300),
+                                            ('capped', {'command': 'make', 'timeout_ms': 9000000}, 600)):
+            with self.subTest(ident=ident):
+                result = await native_tool_hook(self.runner, self.data(tool_use_id=ident, tool_input=tool_input))
+                self.assertEqual(result['decision'], 'allow')
+                self.assertEqual(result['timeout_s'], expected)
+        finish_native_tools(self.runner)
+
+    async def test_native_decision_does_not_consume_reminders_without_runner_delivery(self):
+        from orchestrator.note_reminders import NoteReminders
+        with tempfile.TemporaryDirectory() as folder:
+            notes = NoteReminders(Path(folder), lambda: 60)
+            notes.compacted('one')
+            self.session.note_reminders = notes
+            self.cfg.live = True
+            result = await native_tool_hook(self.runner, self.data())
+            self.assertEqual(result['decision'], 'allow')
+            self.assertEqual(result['context'], '')
+            self.assertTrue(notes.peek())
+            finish_native_tools(self.runner)
+
     async def test_claude_and_codex_receive_same_pause_or_program_denial(self):
         for reason in ('用户已暂停试玩', '停止目标已触发'):
             self.session.program_guard = lambda: reason
@@ -210,7 +237,12 @@ class NativeSandboxTests(unittest.TestCase):
         self.assertEqual(command[4:-4], bwrap_args(network_isolated=True))
         self.assertEqual(command[0], '/usr/bin/timeout')
         self.assertEqual(command[4], '/usr/bin/bwrap')
-        self.assertEqual(command[-3], '/bin/sh')
+        # Native Shell runs bash like Claude's Bash tool; the controller retry runner keeps its shell.
+        self.assertEqual(command[-3], '/bin/bash')
+        self.assertEqual(command[-4], '--')
+        from orchestrator.program_sandbox import BASH, SHELL
+        self.assertEqual(BASH, '/bin/bash')
+        self.assertEqual(SHELL, '/bin/sh')
         for option in ('--unshare-pid', '--clearenv'):
             self.assertIn(option, command)
         self.assertNotIn('--unshare-net', command)

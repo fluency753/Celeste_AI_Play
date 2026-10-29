@@ -166,7 +166,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             return '桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。'
         if study is None or study.ready():
             return None
-        return study.reminder()
+        return study.reminder(reader='celeste_read' if getattr(session.cfg, 'engine', None) == 'codex' else 'Read')
 
     def finish() -> None:
         metrics.update(status="thinking")

@@ -308,13 +308,26 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
 
 class CommonContracts(unittest.TestCase):
     def test_explore_and_metered_prompts_are_engine_independent(self):
-        for engine in ('codex', 'claude'):
+        prompts = {}
+        for engine, tool in (('codex', 'celeste_simulate'), ('claude', 'simulate')):
             cfg = RunConfig(agent='test', save='test', model='test', engine=engine,
                             knowledge_profile='explore', sim=False, sim_assist=True)
             prompt = play_prompt(cfg)
             self.assertIn('体力', prompt)
-            self.assertIn('调用 simulate 工具', prompt)
+            # The registered tool name is written where the sentence is generated (workspace guide too).
+            self.assertIn(f'调用 {tool} 工具', prompt)
             self.assertNotIn('通过 celeste_bash', prompt)
+            prompts[engine] = prompt
+        self.assertNotIn('调用 simulate 工具', prompts['codex'])
+
+    def test_codex_workspace_guide_and_console_preview_name_the_registered_simulate_tool(self):
+        from orchestrator.prompt_guide import guide_document
+        cfg = RunConfig(agent='test', save='test', model='test', engine='codex',
+                        knowledge_profile='explore', sim=False, sim_assist=True)
+        guide = guide_document(cfg)
+        sections = ''.join(section['text'] for section in guide['sections'])
+        self.assertIn('调用 celeste_simulate 工具', sections)
+        self.assertNotIn('调用 simulate 工具', sections)
 
     def test_protocol_logs_strip_both_engines_private_blocks(self):
         value = public_event([{'type': kind, 'text': 'PRIVATE', 'thinking': 'PRIVATE'}

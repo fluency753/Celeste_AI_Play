@@ -20,6 +20,11 @@ from orchestrator.config import RunConfig
 from orchestrator.kb_study import KbStudy
 from orchestrator.metrics import Metrics
 from orchestrator.codex_native import native_tool_hook
+from orchestrator.modes import game_tools
+
+
+def response_text(result):
+    return '\n'.join(part.get('text', '') for part in result['contentItems'])
 
 
 class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
@@ -60,13 +65,28 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 'file': {'filePath': path, 'startLine': offset, 'numLines': 1, 'totalLines': 2},
                 'images': images or []}
 
-    async def read(self, offset):
+    async def read(self, offset, *, record=True):
         with patch('orchestrator.codex_agent.read_file', return_value=self.file_result(offset)) as files:
             result = await self.runner._request('item/tool/call', {'callId': f'read-{offset}',
                 'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md', 'offset': offset, 'limit': 1}})
         files.assert_called_once_with('container', {'file_path': '/kb/README.md', 'offset': offset, 'limit': 1})
         self.assertTrue(result['success'])
+        if record:
+            self.record_steer()
         return result
+
+    def steer_params(self):
+        return next(call.args[1] for call in reversed(self.runner.rpc.request.call_args_list)
+                    if call.args[0] == 'turn/steer')
+
+    def record_steer(self, params=None):
+        """Codex drains the steered input into history before the next model request (pinned 0.165 probe)."""
+        params = params or self.steer_params()
+        self.runner._event('item/completed', {'threadId': 'session', 'turnId': 'turn', 'item': {
+            'type': 'userMessage', 'id': 'user-' + params['clientUserMessageId'],
+            'clientId': params['clientUserMessageId'],
+            'content': [{'type': 'text', 'text': part['text']} if part['type'] == 'text' else part
+                        for part in params['input']]}})
 
     def native_request(self, ident, **arguments):
         return {'token': self.runner.native_token, 'session_id': self.runner.session_id,
@@ -129,12 +149,14 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attachment['input'][1], {'type': 'image', 'url': 'data:image/png;base64,AAAA'})
         self.assertEqual(attachment['expectedTurnId'], 'turn')
 
-    async def test_kb_read_counts_only_after_direct_input_acknowledgement(self):
+    async def test_kb_read_counts_only_after_codex_records_steered_input(self):
         entered, release = asyncio.Event(), asyncio.Event()
+        steered = []
         async def steer(method, params, **kwargs):
             self.assertEqual(method, 'turn/steer')
             self.assertIn('one', json.dumps(params, ensure_ascii=False))
             self.assertEqual(self.study.read['README.md'], set())
+            steered.append(params)
             entered.set()
             await release.wait()
             return {'turnId': 'turn'}
@@ -147,9 +169,41 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             result = await task
         self.assertTrue(result['success'])
+        # The steer acknowledgement only queues the input; it can still be dropped.
+        self.assertFalse(self.study.read['README.md'])
+        self.assertIn('模型实际接收后计入', response_text(result))
+        self.record_steer(steered[0])
+        self.assertEqual(self.study.read['README.md'], {1})
+        self.record_steer(steered[0])
         self.assertEqual(self.study.read['README.md'], {1})
         # Code mode may hide the tool return; required content was independently
-        # delivered as current-turn input before its receipt was acknowledged.
+        # delivered as current-turn input and counted once Codex recorded it.
+
+    async def test_kb_steer_acknowledged_then_turn_interrupted_is_not_counted(self):
+        # Pinned Codex 0.165 clears queued steer input when the turn is interrupted
+        # before the next model request; the acknowledgement alone is not delivery.
+        await self.read(1, record=False)
+        self.assertTrue(self.runner._receipts)
+        self.runner._event('turn/completed', {'turn': {'id': 'turn', 'status': 'interrupted'}})
+        self.assertFalse(self.study.read['README.md'])
+        self.assertEqual(self.runner._receipts, {})
+        self.assertEqual(self.metrics.state.kb_progress, 0.0)
+
+    async def test_kb_steer_on_normally_completed_turn_counts_without_item_event(self):
+        await self.read(1, record=False)
+        self.runner._event('turn/completed', {'turn': {'id': 'turn', 'status': 'completed'}})
+        self.assertEqual(self.study.read['README.md'], {1})
+        self.assertEqual(self.runner._receipts, {})
+
+    async def test_pausing_turn_does_not_steer_reads(self):
+        self.runner.pausing = True
+        with patch('orchestrator.codex_agent.read_file', return_value=self.file_result()):
+            result = await self.runner._request('item/tool/call', {'callId': 'pausing-kb',
+                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}})
+        self.assertFalse(result['success'])
+        self.assertIn('交付失败', response_text(result))
+        self.runner.rpc.request.assert_not_awaited()
+        self.assertEqual(self.runner._receipts, {})
 
     async def test_kb_delivery_failure_does_not_credit_reading(self):
         self.runner.rpc.request = AsyncMock(side_effect=RuntimeError('attachment delivery failed'))
@@ -185,15 +239,30 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
         self.assertFalse(self.study.read['README.md'])
 
-    async def test_ordinary_text_read_returns_text_without_steering_and_is_allowed_in_paused_chat(self):
+    async def test_oversized_ordinary_text_is_steered_intact_not_left_to_tool_output_truncation(self):
+        # Pinned Codex 0.165 keeps only about 12–50k characters of a 96k dynamic-tool
+        # text, but keeps steered user input intact; the page must not live in the tool result.
+        from orchestrator import codex_read as reader
+        rows = ''.join(f'row {number} ' + 'x' * 60 + '\n' for number in range(1, 3001))
+        page = reader._text_result('/workspace/notes.md', rows.encode(), 1, 2000)
+        self.assertGreater(len(page['text']), 60000)
         self.runner.chat_only = self.runner.paused = True
-        with patch('orchestrator.codex_agent.read_file', return_value=self.file_result(
-                path='/workspace/notes.md', text='ordinary workspace text')):
+        with patch('orchestrator.codex_agent.read_file', return_value=page):
             result = await self.runner._request('item/tool/call', {'callId': 'notes',
                 'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/notes.md'}})
         self.assertTrue(result['success'])
-        self.assertIn('ordinary workspace text', json.dumps(result, ensure_ascii=False))
-        self.runner.rpc.request.assert_not_awaited()
+        text = response_text(result)
+        self.assertLess(len(text), 2000)
+        self.assertNotIn('row 1 x', text)
+        # The hint follows the rows actually delivered within the page budget.
+        self.assertLess(page['next_offset'], 2001)
+        self.assertIn(f"offset={page['next_offset']}", text)
+        self.assertEqual(text.count('offset='), 1)
+        params = self.steer_params()
+        self.assertIn(page['text'], params['input'][0]['text'])
+        self.assertTrue(params['input'][0]['text'].rstrip().endswith('x' * 60))
+        self.assertFalse(self.study.read['README.md'])
+        self.record_steer(params)
         self.assertFalse(self.study.read['README.md'])
 
     async def test_read_image_is_delivered_as_same_turn_image_in_paused_chat(self):
@@ -218,6 +287,199 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['success'])
         self.assertIn('file missing', json.dumps(result))
         self.runner.rpc.request.assert_not_awaited()
+
+    async def test_note_reminders_survive_read_error_exception_and_delivery_failure(self):
+        cases = [('worker-error', {'return_value': {'kind': 'error', 'error': 'file missing'}}, None),
+                 ('worker-exception', {'side_effect': ValueError('worker timeout')}, None),
+                 ('steer-failure', {'return_value': self.file_result(path='/workspace/x')},
+                  RuntimeError('steer failed'))]
+        for label, worker, steer_error in cases:
+            with self.subTest(label=label):
+                self.runner.note_reminders.pending['after'] = (1, 'NOTE-REMINDER-TEXT')
+                self.runner.rpc.request = (AsyncMock(side_effect=steer_error) if steer_error
+                                           else AsyncMock(return_value={'turnId': 'turn'}))
+                with patch('orchestrator.codex_agent.read_file', **worker):
+                    result = await self.runner._request('item/tool/call', {'callId': label,
+                        'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/x'}})
+                self.assertFalse(result['success'])
+                # The tool result is what the model receives; only then is the reminder delivered.
+                self.assertIn('NOTE-REMINDER-TEXT', response_text(result))
+                self.assertEqual(self.runner.note_reminders.peek(), ())
+
+    async def test_native_tool_reminders_are_steered_and_confirmed_only_when_recorded(self):
+        notes = self.runner.note_reminders
+        self.cfg.live = True
+        for outcome in ('recorded', 'interrupted'):
+            with self.subTest(outcome=outcome):
+                self.runner.turn_done.clear()
+                self.runner.turn_id, self.runner.turn_active = 'turn', True
+                notes.pending['after'] = (1, 'NOTE-REMINDER-TEXT')
+                self.runner.rpc.request = AsyncMock(return_value={'turnId': 'turn'})
+                with patch.object(self.metrics, 'take_live_reminder', return_value=45.0), \
+                        patch.object(self.metrics, 'restore_live_reminder') as restore:
+                    data = self.native_request('native-' + outcome)
+                    decision = await native_tool_hook(self.runner, data)
+                    self.assertEqual(decision['decision'], 'allow')
+                    self.assertNotIn('NOTE-REMINDER-TEXT', decision['context'])
+                    await asyncio.gather(*self.runner._receipt_tasks)
+                    params = self.steer_params()
+                    self.assertIn('NOTE-REMINDER-TEXT', params['input'][0]['text'])
+                    self.assertIn('直播提醒', params['input'][0]['text'])
+                    # Queued but not recorded: still pending, and not repeated by a tool result.
+                    self.assertTrue(notes.peek())
+                    other = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
+                    self.assertNotIn('NOTE-REMINDER-TEXT', response_text(other))
+                    if outcome == 'recorded':
+                        self.record_steer(params)
+                        self.assertEqual(notes.peek(), ())
+                        restore.assert_not_called()
+                    else:
+                        self.runner._event('turn/completed', {'turn': {'id': 'turn', 'status': 'interrupted'}})
+                        self.assertTrue(notes.peek())
+                        restore.assert_called_once_with(45.0)
+                        retry = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
+                        self.assertIn('NOTE-REMINDER-TEXT', response_text(retry))
+                await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
+
+    async def test_read_tools_carry_live_narration_reminder(self):
+        from orchestrator.codex_agent import LIVE_NOTE
+        self.cfg.live = True
+        for worker in ({'return_value': self.file_result(path='/workspace/notes.md')},
+                       {'return_value': {'kind': 'error', 'error': 'missing'}}):
+            with self.subTest(worker=worker), patch.object(self.metrics, 'take_live_reminder', return_value=40.0), \
+                    patch('orchestrator.codex_agent.read_file', **worker):
+                result = await self.runner._request('item/tool/call', {'callId': 'live-read',
+                    'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/notes.md'}})
+            self.assertIn(LIVE_NOTE, response_text(result))
+
+    async def test_glob_grep_and_listing_need_no_program_budget_in_readonly_chat_or_pause(self):
+        self.runner.chat_only = self.runner.paused = True
+        charges = []
+        self.runner.native_session = SimpleNamespace(cfg=self.cfg, program_guard=lambda: '当前为只读聊天',
+                                                     program_run_denied=lambda: charges.append('program'))
+        self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(), decide=AsyncMock(return_value=(True, '')))
+        for tool, operation in (('celeste_glob', 'glob'), ('celeste_grep', 'grep')):
+            found = {'kind': operation, 'path': '/workspace', 'text': '/workspace/notes.md', 'images': [],
+                     'matches': 1, 'truncated': False, 'next_offset': None}
+            with patch('orchestrator.codex_agent.search_files', return_value=found) as search:
+                result = await self.runner._request('item/tool/call', {'callId': tool, 'tool': tool,
+                    'arguments': {'pattern': '*.md'}})
+            self.assertTrue(result['success'], result)
+            search.assert_called_once_with('container', operation, {'pattern': '*.md'})
+            self.assertIn('/workspace/notes.md', self.steer_params()['input'][0]['text'])
+        listing = {'kind': 'directory', 'path': '/workspace', 'text': '目录 /workspace', 'images': [],
+                   'entries': 1, 'truncated': False, 'next_offset': None}
+        with patch('orchestrator.codex_agent.read_file', return_value=listing):
+            result = await self.runner._request('item/tool/call', {'callId': 'ls', 'tool': 'celeste_read',
+                'arguments': {'file_path': '/workspace'}})
+        self.assertTrue(result['success'])
+        self.assertIn('目录列表', response_text(result))
+        self.assertEqual(charges, [])
+        self.assertEqual([call.args[0] for call in self.runner.gate.decide.await_args_list], ['Glob', 'Grep', 'Read'])
+        # The native shell is still a program in the same chat.
+        denied = await native_tool_hook(self.runner, self.native_request('ls-shell', command='ls /workspace'))
+        self.assertEqual(denied['decision'], 'deny')
+
+    async def test_readonly_chat_keeps_workspace_edits_and_denies_programs(self):
+        runner = CodexRunner(self.cfg, self.root / 'chat', None, self.metrics, 'container', None, chat_only=True)
+        captured = {}
+        async def rpc_request(method, params, **kwargs):
+            captured[method] = params
+            raise RuntimeError('captured thread parameters')
+        runner.rpc.start, runner.rpc.close, runner.rpc.request = AsyncMock(), AsyncMock(), rpc_request
+        with self.assertRaisesRegex(RuntimeError, 'captured'):
+            await runner.run()
+        self.assertEqual(captured['thread/start']['permissions'], 'celeste-write')
+        self.assertIn('apply_patch', captured['thread/start']['baseInstructions'])
+        runner.session_id, runner.turn_id, runner.turn_active = 'session', 'turn', True
+        runner.turn_done.clear()
+        def hook(ident, tool, tool_input):
+            return {'token': runner.native_token, 'session_id': 'session', 'turn_id': 'turn', 'tool_use_id': ident,
+                    'tool_name': tool, 'hook_event_name': 'PreToolUse', 'tool_input': tool_input}
+        edit = await native_tool_hook(runner, hook('notes-edit', 'apply_patch', {'command': '*** Begin Patch'}))
+        self.assertEqual(edit['decision'], 'allow')
+        program = await native_tool_hook(runner, hook('notes-shell', 'Bash', {'command': 'python3 tidy.py'}))
+        self.assertEqual(program['decision'], 'deny')
+        self.assertIn('只读聊天', program['reason'])
+        runner.close_events()
+
+    def test_resume_without_read_registration_continues_when_no_unfinished_study(self):
+        path = self.root / 'window-thread.jsonl'
+        tools = ['celeste_' + name for name in ('observe', 'act', 'narrate',
+                 'set_effort', 'stop_run', 'exit_level', 'cutscene', 'simulate', 'finish_preparation')]
+        path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name}
+            for name in tools]}}), encoding='utf-8')
+        for study in (None, 'complete'):
+            with self.subTest(study=study):
+                self.runner.tool_notice = ''
+                if study == 'complete':
+                    self.study.read['README.md'] = {1, 2}
+                self.runner.study = self.study if study else None
+                with patch('builtins.print') as log:
+                    self.runner._validate_resumed_tools({'path': str(path)})
+                self.assertIn('celeste_read', self.runner.tool_notice)
+                self.assertIn('celeste_read', ' '.join(str(call.args[0]) for call in log.call_args_list))
+
+    async def test_resumed_session_without_file_tools_reaches_model_with_notice(self):
+        path = self.root / 'old-thread.jsonl'
+        tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)] + [{'name': 'celeste_read'}]
+        path.write_text(json.dumps({'payload': {'dynamic_tools': tools}}), encoding='utf-8')
+        runner = CodexRunner(self.cfg, self.root / 'resume', None, self.metrics, 'container', None,
+                             session_id='original', resume=True, resume_note='继续试玩。')
+        sent = []
+        async def rpc_request(method, params, **kwargs):
+            if method == 'thread/resume':
+                return {'thread': {'id': 'original', 'path': str(path)}, 'model': 'test-model',
+                        'activePermissionProfile': {'id': params['permissions']}}
+            if method == 'turn/start':
+                sent.append(params['input'][0]['text'])
+                raise RuntimeError('captured first turn')
+            return {}
+        runner.rpc.start, runner.rpc.close, runner.rpc.request = AsyncMock(), AsyncMock(), rpc_request
+        with patch('builtins.print'), self.assertRaisesRegex(RuntimeError, 'captured first turn'):
+            await runner.run()
+        self.assertIn('继续试玩。', sent[0])
+        self.assertIn('celeste_glob', sent[0])
+        self.assertIn('celeste_read 读取目录', sent[0])
+        runner.close_events()
+        # A resumed chat turn carries the user's message and the same notice.
+        chat = CodexRunner(self.cfg, self.root / 'resume-chat', None, self.metrics, 'container', None,
+                           session_id='original', resume=True, chat_only=True)
+        chat.rpc.start, chat.rpc.close, chat.rpc.request = AsyncMock(), AsyncMock(), rpc_request
+        chat.rpc.reader = asyncio.get_running_loop().create_future()
+        chat.control.enqueue('message', '复盘一下上一章')
+        with patch('builtins.print'), patch('orchestrator.model_catalog.load_models', return_value={'models': []}), \
+                self.assertRaisesRegex(RuntimeError, 'captured first turn'):
+            await asyncio.wait_for(chat.run(), 5)
+        self.assertIn('复盘一下上一章', sent[1])
+        self.assertIn('celeste_glob', sent[1])
+        chat.close_events()
+
+    async def test_codex_study_reminders_name_celeste_read_and_claude_keeps_read(self):
+        from calibration.collision_contract_test import FakeBridge
+        from orchestrator.game_session import GameSession
+        from orchestrator.server import build_server
+        expected = {'codex': '请用 celeste_read 读完这些行',
+                    'claude': '请用 Read 读完这些行再开始（文件长时 Read 会截断，用 offset 与 limit 接着读，直到最后一行）。'}
+        for engine, sentence in expected.items():
+            with self.subTest(engine=engine):
+                cfg = RunConfig(agent=f'remind-{engine}', save='test', model='test', engine=engine)
+                run = self.root / engine
+                run.mkdir()
+                metrics = Metrics(run / 'metrics.json', 'remind', 'test', 'high', 600)
+                session = GameSession(cfg, run, metrics)
+                session.client = FakeBridge()
+                try:
+                    server = build_server(session, KbStudy(self.kb, 10))
+                    result = await server.call_tool('observe', {})
+                finally:
+                    session.close(False)
+                text = json.dumps(result, ensure_ascii=False, default=str)
+                self.assertIn(sentence, text)
+                if engine == 'codex':
+                    self.assertNotIn('请用 Read', text)
+        # Claude's own reminder text is unchanged.
+        self.assertIn(expected['claude'], self.study.reminder())
 
     def test_preparation_prompt_requires_explicit_read_without_disabling_native_programming(self):
         self.runner.prepare_only = True

@@ -439,7 +439,9 @@ def prompt_parts(cfg) -> list[PromptPart]:
     if cfg.sim_assist:
         from .sim_assist import AssistRules
         parts.append(PromptPart("有限模拟辅助（开了限额预测时自动加）",
-                                AssistRules.of(cfg).instructions().lstrip("\n"), None, "\n\n"))
+                                AssistRules.of(cfg).instructions(
+                                    'celeste_simulate' if getattr(cfg, 'engine', None) == 'codex' else 'simulate'
+                                ).lstrip("\n"), None, "\n\n"))
     parts.append(PromptPart("工具异常与任务阻塞", "首次遇到大量编码串（如Base64）、乱码、无信息重复或关键内容截断时，公开报告工具名、现象及影响；不编造token数，不粘贴大块原文，不把编码当作已看到图像，不反复调用堆积。能从可靠局部查询或原始文件恢复时继续；信息不可靠或缺少必要能力导致任务无法继续时，调用stop_run说明原因，主控冻结暂停，结束本轮等待用户。正常长数据、普通死亡和仍可尝试的难点不算阻塞，也不能把阻塞当作通关。", None, "\n\n"))
     for part in parts:
         part.text = fill(part.text, cfg)
