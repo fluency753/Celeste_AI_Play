@@ -1,5 +1,6 @@
 """Button templates are edited through the real API and read at the next event."""
 import json
+import asyncio
 from pathlib import Path
 import tempfile
 import threading
@@ -12,7 +13,7 @@ from unittest.mock import patch
 from orchestrator import prompting
 from orchestrator.button_prompts import catalog, notification
 from orchestrator.config import RunConfig
-from orchestrator.prompting import first_play_prompt, continue_play_prompt, resume_prompt
+from orchestrator.prompting import first_play_prompt, continue_play_prompt, resume_prompt, net_resume_prompt
 from overlay import console_api
 from overlay.server import make_handler
 
@@ -71,15 +72,60 @@ class ButtonPromptIntegrationTests(unittest.TestCase):
     def test_start_continue_and_resume_read_current_body_and_preserve_resume_facts(self):
         for key, build in [('start_play', lambda: first_play_prompt(RunConfig(agent='test', save='test', model='test'))),
                            ('continue_play', lambda: continue_play_prompt(None)),
-                           ('resume', lambda: resume_prompt('原会话重接', 3))]:
+                           ('reconnect', lambda: resume_prompt('原会话重接', 3))]:
             name = f'button_{key}_zh.md'
             doc = console_api.prompt_read(name)
             console_api.prompt_write(name, '此按钮本机定制正文。', doc['version'])
             text = build()
             self.assertIn('此按钮本机定制正文。', text)
-            if key == 'resume':
+            if key == 'reconnect':
                 self.assertIn('原会话重接', text)
                 self.assertIn('约 3 分钟', text)
+
+    def test_pause_resume_and_reconnect_templates_do_not_leak_into_other_phases(self):
+        normal = notification('resume')
+        self.assertIn('自行选择下一步操作', normal)
+        self.assertNotIn('observe', normal)
+        doc = console_api.prompt_read('button_resume_zh.md')
+        console_api.prompt_write(doc['name'], '普通暂停后继续的本机正文。', doc['version'])
+        self.assertIn('普通暂停后继续的本机正文', notification('resume'))
+        for text in (resume_prompt('主控重接', 2), net_resume_prompt(2)):
+            self.assertIn('【主控系统消息｜主控中断后恢复】', text)
+            self.assertIn('observe', text)
+            self.assertNotIn('普通暂停后继续的本机正文', text)
+        self.assertIn('【主控系统消息｜恢复准备】', resume_prompt('重接', 2, '还有未读资料'))
+        self.assertIn('【主控系统消息｜恢复准备】', net_resume_prompt(2, study_note='还有未读资料'))
+        self.assertIn('【主控系统消息｜唤起聊天】', net_resume_prompt(2, chat=True))
+
+
+class PauseResumeNotificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hud_resume_uses_neutral_template_without_replacing_the_next_turn(self):
+        from orchestrator.codex_agent import CodexRunner
+        from orchestrator.game_session import GameSession
+        from orchestrator.metrics import Metrics
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with patch('orchestrator.config.REPO_ROOT', root), patch.object(prompting, 'OVERRIDES', root/'overrides'):
+                cfg = RunConfig(agent='test', save='test', model='test', engine='codex')
+                metrics = Metrics(root/'metrics.json', 'test', 'test', 'high', 60)
+                session = GameSession(cfg, root, metrics)
+                runner = CodexRunner(cfg, root, session, metrics, '', start_paused=True)
+                ident = runner.control.enqueue('resume')
+                task = asyncio.create_task(runner._controls())
+                try:
+                    async with asyncio.timeout(3):
+                        while runner.paused:
+                            await asyncio.sleep(.01)
+                    self.assertIn('【主控系统消息｜恢复试玩】', runner.resume_notice)
+                    self.assertIn('自行选择下一步操作', runner.resume_notice)
+                    self.assertNotIn('observe', runner.resume_notice)
+                    self.assertEqual(runner.pending_messages, [])
+                    row = next(r for r in runner.control.snapshot()['actions'] if r['id'] == ident)
+                    self.assertEqual(row['status'], 'submitted')
+                finally:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    session.close(release=False)
 
 
 if __name__ == '__main__':

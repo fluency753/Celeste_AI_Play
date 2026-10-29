@@ -18,7 +18,7 @@ class ButtonPromptTests(unittest.TestCase):
 
     def test_catalog_lists_known_editable_templates_and_returns_independent_records(self):
         catalog = button_prompts.catalog()
-        self.assertEqual(len(catalog), 21)
+        self.assertEqual(len(catalog), 22)
         self.assertEqual(len({item['key'] for item in catalog}), len(catalog))
         for item in catalog:
             self.assertEqual(set(item), {'key', 'name', 'label'})

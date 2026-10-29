@@ -528,7 +528,7 @@ def net_resume_prompt(minutes: float, chat: bool = False, study_note: str | None
     text += "这段时间游戏一直冻结，章节计时没有走，也不计入思考僵直。"
     if study_note:
         return notification('resume_prepare', facts=text + "准备阶段还没有结束：\n" + study_note)
-    return notification('resume', facts=text)
+    return notification('reconnect', facts=text)
 
 
 def resume_prompt(reason: str, minutes: float, study_note: str | None = None) -> str:
@@ -539,4 +539,4 @@ def resume_prompt(reason: str, minutes: float, study_note: str | None = None) ->
     from .button_prompts import notification
     if study_note:
         return notification('resume_prepare', facts=text + "准备阶段还没有结束：\n" + study_note)
-    return notification('resume', facts=text)
+    return notification('reconnect', facts=text)
