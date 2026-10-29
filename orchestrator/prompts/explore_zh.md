@@ -28,6 +28,7 @@
 
 游戏每秒 60 帧；思考时冻结。{stiffness_rule}{explore_reference_rule}
 {explore_environment_rule}游戏工具为 {game_tools}，具体前缀见执行器工具映射。
+需要计时时用 `observe(detail="time")` 按秒查询计时及各时长目标的已用／剩余时间。
 
 解说用自然中文，技巧与机制的专有名词用英文；说明当前障碍、准备尝试什么及实际结果即可，不必列举计算过程。{thought_mood}{thought_brief_rule}
 通关后的关底总结（章节完成后的最后一段回复）也用中文，最多 60 个汉字。

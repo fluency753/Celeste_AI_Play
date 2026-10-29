@@ -46,7 +46,7 @@ celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进�
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json）"
 SIM_NOTE = WORKSPACE_NOTE[:-1] + "；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
-OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}。{observation_delivery_rule}detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态。两种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
+OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}。{observation_delivery_rule}detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态；detail="time"按秒查询桥接/章节计时、现实用时及各时长目标已用/剩余时间，游戏帧取缓存，桥接时钟不是本轮任务时长。三种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
 
 # 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
 
@@ -227,6 +227,10 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         async with call_lock:
             if (note := gated()) is not None:
                 return [note]
+            if detail == 'time':
+                if region is not None or offset or limit != 32 or snapshot_id is not None:
+                    return ['时间查询只需 detail="time"，不接受区域或分页参数。']
+                return [json.dumps(session.time_snapshot(), ensure_ascii=False, separators=(',', ':'))]
             begin()
             try:
                 if detail == 'player':

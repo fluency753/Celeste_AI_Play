@@ -15,7 +15,7 @@ def remind_text(seconds: float) -> str:
 
 # 速通模式的系统提示词里逐个列出本次注册的游戏工具（随直播、剧情、限额预测等设置变化，见 modes.game_tools）
 TOOL_NOTES = {
-    "observe": "查看当前帧，不推进游戏",
+    "observe": '查看当前帧，不推进游戏；detail="time"按秒查询计时与各时长目标已用／剩余',
     "act": "推进若干帧",
     "narrate": "思考期间更新观众看到的思考，不推进游戏",
     "set_effort": "调整你自己的推理强度",

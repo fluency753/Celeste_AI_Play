@@ -52,6 +52,21 @@ def validate_goal(data):
     return {"text": text, "conditions": conditions, "match": match}
 
 
+def project_game_clock(clock, values):
+    """Project a cached frame onto the goal clock without changing its owner."""
+    projected = dict(clock)
+    frame, epoch = values.get('frame'), values.get('game_epoch')
+    previous = projected.get('frame')
+    if frame is None:
+        return projected
+    if previous is None or epoch != projected.get('epoch'):
+        projected.update(frame=frame, epoch=epoch)
+    elif frame > previous:
+        projected['advanced_frames'] += frame-previous
+        projected['frame'] = frame
+    return projected
+
+
 class GoalManager:
     def __init__(self, directory):
         self.path = directory / "goal.json"
@@ -71,6 +86,38 @@ class GoalManager:
     def snapshot(self):
         with self.lock:
             return json.loads(json.dumps(self.data))
+
+    def time_status(self, values):
+        """Read-only projections; a satisfied condition does not commit a stop."""
+        data = self.snapshot()
+        clock = data.get('game_clock')
+        if clock is not None and data['active']:
+            clock = project_game_clock(clock, values)
+        conditions = []
+        for condition in data['conditions']:
+            field, op, target = condition['field'], condition['op'], condition.get('value')
+            if field not in {'game_elapsed', 'elapsed'}:
+                continue
+            used = None
+            if field == 'game_elapsed' and clock is not None:
+                used = clock['advanced_frames']/60
+            elif data['active']:
+                actual = values.get(field)
+                initial = data.get('baseline', {}).get(field)
+                if actual is not None and (op != 'delta_gte' or initial is not None):
+                    used = max(0, actual-initial) if op == 'delta_gte' else actual
+            if used is None:
+                satisfied = None
+            elif op in {'gte', 'delta_gte'}:
+                satisfied = used >= target
+            elif op == 'lte':
+                satisfied = used <= target
+            else:
+                satisfied = used == target
+            conditions.append({'field':field, 'op':op, 'target_seconds':target, 'used_seconds':used,
+                'remaining_seconds':max(0,target-used) if used is not None and op in {'gte','delta_gte'} else None,
+                'satisfied_now':satisfied})
+        return {key:data[key] for key in ('revision','active','reached','match')} | {'time_conditions':conditions}
 
     def set(self, data, values):
         spec = validate_goal(data)
@@ -105,17 +152,10 @@ class GoalManager:
             baseline = self.data["baseline"]
             clock = self.data.get('game_clock')
             clock_changed = False
-            if clock is not None and values.get('frame') is not None:
-                frame, epoch = values['frame'], values.get('game_epoch')
-                previous = clock.get('frame')
-                if previous is None or epoch != clock.get('epoch'):
-                    # A restarted game has a new frame origin, not negative play time.
-                    clock.update(frame=frame, epoch=epoch)
-                    clock_changed = True
-                elif frame > previous:
-                    clock['advanced_frames'] += frame-previous
-                    clock['frame'] = frame
-                    clock_changed = True
+            if clock is not None:
+                projected = project_game_clock(clock, values)
+                clock_changed = projected != clock
+                clock = self.data['game_clock'] = projected
                 values = {**values, 'game_elapsed':baseline.get('game_elapsed',0) + clock['advanced_frames']/60}
             matches = []
             for condition in self.data["conditions"]:

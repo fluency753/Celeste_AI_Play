@@ -1485,7 +1485,8 @@ class GameSession:
         )
         values = self.goal_values()
         values.update(frame=event.get("frame", values.get("frame")), room=event.get("room", values.get("room")),
-                      deaths=event.get("deaths", values.get("deaths")), dead=event.get("dead", False))
+                      deaths=event.get("deaths", values.get("deaths")), dead=event.get("dead", False),
+                      chapter_time_ticks=event.get('chapterTimeTicks', values.get('chapter_time_ticks')))
         values['game_elapsed'] = values['frame']/60
         values["map"] = f"{event.get('sid', self.metrics.state.chapter)}:{values['side']}"
         self._goal_progress = dict(values)
@@ -1495,6 +1496,10 @@ class GameSession:
         if self.goals.stop_motion.is_set() and not self.goals.cancel_sent:
             self.goals.cancel_sent = True
             self.client.cancel_pending()
+
+    def _current_goal_progress(self):
+        epoch = getattr(self, 'game_process_id', None)
+        return self._goal_progress if self._goal_progress.get('game_epoch', epoch) == epoch else {}
 
     def goal_values(self, obs=None):
         observation = obs if obs is not None else self.last_obs or {}
@@ -1507,9 +1512,12 @@ class GameSession:
         values = {"room": level.get("room", self.metrics.state.room), "map": f"{sid}:{side}", "side": side,
                 "map_complete": complete, "deaths": level.get("deaths", 0),
                 "frame": observation.get("frame", 0), "elapsed": self.metrics.elapsed(),
+                "chapter_time_ticks":level.get('chapterTimeTicks'),
                 "dead": bool((observation.get("player") or {}).get("dead"))}
         if obs is None:
-            values.update(self._goal_progress)
+            progress = self._current_goal_progress()
+            if progress.get('frame', -1) >= values['frame']:
+                values.update(progress)
             values["elapsed"] = self.metrics.elapsed()
         values['game_epoch'] = getattr(self, 'game_process_id', None)
         values['game_elapsed'] = values['frame']/60
@@ -1531,6 +1539,20 @@ class GameSession:
                 self.lock.release()
         else:
             self.goals.set(spec, self.goal_values())
+
+    def time_snapshot(self):
+        with self.lock:
+            values = self.goal_values()
+            obs = self.last_obs or {}
+            frame = values['frame'] if obs.get('frame') is not None or self._current_goal_progress().get('frame') is not None else None
+            ticks = values.get('chapter_time_ticks')
+            return {'version':1, 'game':{
+                'sample':'cached_observation_or_progress', 'frame':frame,
+                'game_process_id':values.get('game_epoch'),
+                'bridge_elapsed_seconds':frame/60 if frame is not None else None,
+                'chapter_elapsed_seconds':ticks/10_000_000 if ticks is not None else None},
+                'real':{'elapsed_seconds':values['elapsed'], 'playing':self.metrics.playing},
+                'goal':self.goals.time_status(values)}
 
     def finish_user_stop(self):
         self.user_stopped = True
