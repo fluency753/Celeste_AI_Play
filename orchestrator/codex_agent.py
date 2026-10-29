@@ -37,7 +37,7 @@ def codex_tool_mapping(cfg) -> str:
             "所有自写程序都必须经 celeste_bash 在 Docker 中执行。不要调用任何宿主 shell、apply_patch、"
             "MCP、浏览器或子智能体；宿主文件系统是只读的。"
             "只输出给观众的简短公开解说，不输出内部推理正文。"
-            + ("用户要求退出关卡时调用 celeste_exit_level；" if "exit_level" in tools else "")
+            + ("用户要求返回地图时调用 celeste_exit_level，默认保留任务和后续章节；仅用户明确结束整次试玩才设finish_run=true；" if "exit_level" in tools else "")
             + ("剧情可尝试跳过时先交回；用 celeste_cutscene skip 尝试跳过或 watch 观看到输入节点，随后对白用 advance、分支用 choose，教学用 act，不调用 wait。" if "cutscene" in tools else "")
             + "公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
             "每次操作后仍应立即公开说明下一步打算，不要持续静默。"

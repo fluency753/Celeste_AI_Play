@@ -110,7 +110,7 @@ class ChapterResetTests(unittest.TestCase):
                 return {'obs':copy.deepcopy(client.obs)}
             def close(client): pass
         client = Menu(); session.client = client; session.last_obs = copy.deepcopy(client.obs)
-        result = session.exit_level('用户要求保存退出')
+        result = session.exit_level('用户要求保存并结束试玩',finish_run=True)
         self.assertEqual(client.exits, ['menu_pause_savequit'])
         self.assertTrue(result['exited'])
         self.assertFalse(result['completed'])

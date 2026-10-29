@@ -1086,7 +1086,7 @@ class GameSession:
     def _least_frames(self, plan: PlanSpec, planned: int) -> int:
         """这次 act 最少要推进的帧数。只管正常游玩：角色不可操作时（菜单、结算、对白等剧情输入）不限制；
         TAS 文件按游标分段时，文件的最后一段剩多少就放多少（不能补帧，补了会和输入来源对不上）。"""
-        if not self._agent_controls(self.last_obs or {}):
+        if (self.last_obs or {}).get('scene') != 'Level' or not self._agent_controls(self.last_obs or {}):
             return 1
         source = plan.input_source
         if source is not None and source['offset'] + planned >= source['total']:
@@ -1268,7 +1268,7 @@ class GameSession:
 
     def _agent_controls(self, obs: dict) -> bool:
         """按键由智能体操作：Madeline 可操作，或 _handed_over。"""
-        return bool(obs.get('controllable')) or self._handed_over(obs)
+        return bool(obs.get('controllable')) or self._at_chapter_menu(obs) or self._handed_over(obs)
 
     def _resume_auto_handling(self) -> list[str]:
         """（调用方持有连接锁）自动跳过剧情时，上一次的自动推进可能被用户暂停打断，游戏停在转场、剧情或对白中途：
@@ -1387,6 +1387,8 @@ class GameSession:
                              if self._pending_complete else '当前菜单或转场由你输入操作，按本次目标自行导航；主控不代选。')
                 break
             if scene in END_SCENES and not story_pending(obs) and not automatic_transition:
+                if self._at_chapter_menu(obs):
+                    break  # Returning to a ready menu is navigation, not task completion.
                 self._mark_done(f"离开关卡（{scene}）")
                 break
             level = obs.get("level") or {}
@@ -1710,32 +1712,76 @@ class GameSession:
         paused = bool(pause and pause(reason))
         return {'reason': reason, 'source': 'agent', 'paused': paused, 'finished': False, 'completed': False}
 
-    def exit_level(self, reason: str) -> dict:
+    def exit_level(self, reason: str, finish_run: bool = False) -> dict:
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 120:
             raise ActError('退出原因须为1～120字')
+        if type(finish_run) is not bool:
+            raise ActError('finish_run 须为布尔值；只有用户明确结束整次试玩时才设为 true')
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
                 raise ActError('本次试玩已停止，不能继续操作菜单')
             from .action_policy import permissions_for
             permissions = permissions_for(self.cfg)
-            if not (permissions.return_to_map or permissions.save_quit):
-                raise ActError('主控禁止未通关返回地图或保存退出；请寻找脱离路线，无法继续时用 stop_run 报告')
+            if not (permissions.return_to_map or (finish_run and permissions.save_quit)):
+                raise ActError('主控禁止本次返回地图；没有执行菜单输入。请先报告并等待用户开放返回地图权限，不能改用保存退出绕过。'
+                               if not finish_run else '主控禁止未通关返回地图或保存退出；没有执行菜单输入，请等待用户处理')
             self._before_advance()
             self.metrics.update(status='auto',thought=reason.strip())
             before = (self.last_obs or {}).get('frame',0)
             started = time.monotonic()
             exit_ids = (('menu_pause_return', 'intro_vignette_quit') if permissions.return_to_map else ()) + \
-                       (('menu_pause_savequit',) if permissions.save_quit else ())
-            obs = leave_level_by_pause_menu(self.client, allowed_exit_ids=exit_ids)
-            if obs.get('scene') != 'Overworld':
-                raise ActError('退出尚未完成，请重新观察当前菜单状态')
+                       (('menu_pause_savequit',) if finish_run and permissions.save_quit else ())
+            current = self.client.call('observe', image=False, entities=False, tiles=False)['obs']
+            before = current.get('frame', before)
+            if not finish_run:
+                self._commit_completion(current)
+                if self.done or self.goals.stop_motion.is_set():
+                    self._update_metrics_from_obs(current)
+                    self._write_workspace(self._track_motion(enrich_obs(current)))
+                    raise ActError('任务或停止目标已结束，退出菜单输入未发送；请查看当前状态')
+            already_exited = current.get('scene') == 'Overworld'
+            from tools.menu_navigation import MenuActionBlocked, MenuPromptRequired
+            try:
+                obs = current if already_exited else leave_level_by_pause_menu(self.client, allowed_exit_ids=exit_ids)
+                if obs.get('scene') != 'Overworld':
+                    raise RuntimeError('退出尚未完成')
+            except (RuntimeError, OSError) as exc:
+                # A failure can follow real menu inputs. Publish the observed
+                # state without retrying an exit or losing the pending target.
+                observed = exc.obs if isinstance(exc, (MenuActionBlocked, MenuPromptRequired)) else None
+                if not observed:
+                    try:
+                        observed = self.client.call('observe', image=False, entities=False, tiles=False)['obs']
+                    except (RuntimeError, OSError):
+                        observed = None
+                consumed = max(0, observed.get('frame', before)-before) if observed else None
+                if observed:
+                    self.metrics.add(auto_game_s=time.monotonic()-started, frames_auto=consumed)
+                    self.navigation.note_scene(observed)
+                    self._update_metrics_from_obs(observed)
+                    self._write_workspace(self._track_motion(enrich_obs(observed)))
+                    self.goals.check(self.goal_values(observed))
+                scope = f'已观测推进 {consumed} 帧' if consumed is not None else '无法确认已推进帧数'
+                raise ActError(f'{exc}；{scope}。退出未确认成功，任务未结束，未重发退出；先 observe 核对当前界面再决定操作。') from exc
             self.metrics.add(auto_game_s=time.monotonic()-started,
                              frames_auto=max(0,obs.get('frame',before)-before))
             self.last_obs, self.end_scene = obs, obs['scene']
-            self.chapter_queue.clear()
-            self.user_stopped = True
-            self._mark_done('agent 退出关卡')
-            result = {'exited':True,'scene':obs['scene'],'completed':False,'run_finished':True,
+            self.navigation.note_scene(obs)
+            if finish_run:
+                self.chapter_queue.clear()
+                self.user_stopped = True
+                self._mark_done('agent 退出关卡')
+            else:
+                # Returning is navigation, never evidence of completing a map.
+                # Only an already-observed native completion can commit here.
+                self._commit_completion(obs)
+            self._update_metrics_from_obs(obs)
+            self._write_workspace(self._track_motion(enrich_obs(obs)))
+            self.goals.check(self.goal_values(obs))
+            self._start_freeze()
+            result = {'exited':True,'scene':obs['scene'],'completed':False,'run_finished':self.done,
+                      'finish_run':finish_run,'already_exited':already_exited,
+                      'stop_requested':self.goals.stop_motion.is_set(),'navigation':self.chapter_plan(),
                       'save':self.cfg.save,'save_slot':self.cfg.save_slot,'reason':reason.strip()}
             (self.run_dir/'exit_level.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
             return result
@@ -1780,9 +1826,15 @@ class GameSession:
             print(f'[run] 未能保存待确认结算状态：{exc}', flush=True)
 
     @staticmethod
+    def _at_chapter_menu(obs):
+        menu = obs.get('menu') or {}
+        return (obs.get('scene') == 'Overworld' and menu.get('current') in
+                {'OuiChapterSelect','OuiChapterPanel'} and not menu.get('next'))
+
+    @staticmethod
     def _at_chapter_select(obs):
         menu = obs.get('menu') or {}
-        return obs.get('scene') == 'Overworld' and menu.get('current') == 'OuiChapterSelect' and not menu.get('next')
+        return GameSession._at_chapter_menu(obs) and menu.get('current') == 'OuiChapterSelect'
 
     def _chapter_complete(self) -> None:
         """当前章节通关：记下分段成绩；还有下一章就等进入下一章，否则本次运行完成。

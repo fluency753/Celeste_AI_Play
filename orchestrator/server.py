@@ -346,15 +346,23 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     else '主控已记下阻塞原因，等待用户处理。请结束本轮，不再调用工具。')
             return [json.dumps(result, ensure_ascii=False) + '\n' + tail]
 
-    @optional_tool(tool_exit_level, name='exit_level', description='仅在用户要求退出且主控允许返回地图或保存退出时调用：通过暂停菜单选择已允许的退出操作，结束试玩并保存录像。默认禁止，退出不算通关；受阻时用 stop_run 报告。', structured_output=False)
-    async def exit_level(reason: str) -> list:
+    @optional_tool(tool_exit_level, name='exit_level', description='按用户要求离开当前关卡。默认 finish_run=false：需返回地图权限，仅返回地图继续原任务，不算通关，不停止录像、不清除后续章节；返回后先 observe 再自行选章。只有用户明确要求结束整次试玩时才设 finish_run=true：按允许的返回地图或保存退出操作收尾整次任务。不得从“返回地图换章”推断为结束任务；权限不足时说明原因，不以保存退出绕过。', structured_output=False)
+    async def exit_level(reason: str, finish_run: bool = False) -> list:
         ticket = reload_ticket()
         async with call_lock:
             if (note := gated(ticket)) is not None:
                 return [note]
             begin()
-            result = await asyncio.to_thread(session.exit_level, reason)
-            return [json.dumps(result,ensure_ascii=False) + '\n已退出关卡，本次试玩结束，请结束本轮，不再调用游戏工具。']
+            try:
+                result = await asyncio.to_thread(session.exit_level, reason, finish_run)
+            except (ActError, RuntimeError) as err:
+                raise ToolError(str(err)) from err
+            finally:
+                finish()
+            tail = ('已离开关卡，本次任务已结束，请结束本轮，不再调用游戏工具。' if result['run_finished'] else
+                    '已离开关卡，停止目标已触发，请结束本轮，等待用户处理。' if result['stop_requested'] else
+                    '已返回地图，本次任务继续，后续章节目标与录制保持。请先 observe 查看当前菜单，再自行进入许可的目标地图。')
+            return [json.dumps(result,ensure_ascii=False) + '\n' + tail]
 
     @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段。watch只播放桥接明确识别的动画，未知状态立即返回，每次调用最多自动等待600帧；仍在播放可明确watch继续。advance确认当前完整对白、明信片、旧纸的一页或confirm画面，choose选择可见选项index；教学和breathing呼吸小游戏用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
     async def cutscene(action: str, choice: int | None = None) -> list:
