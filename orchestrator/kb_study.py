@@ -72,10 +72,10 @@ class KbStudy:
         for rel in self.files:
             source = self.extra.get(rel) or (kb_dir / rel)
             text = source.read_text(encoding="utf-8")
-            self.total[rel] = max(1, len(text.splitlines()))
+            self.total[rel] = len(text.splitlines())
         self.read: dict[str, set[int]] = {rel: set() for rel in self.files}
         self.started = time.monotonic()
-        self.finished: float | None = None   # 读完的时刻
+        self.finished: float | None = self.started if self.complete() else None
         self.forced = False                   # 准备时间用完、强制开放游戏工具
         self.has_reference = any(rel.startswith("reference/") for rel in self.files)
 
@@ -103,7 +103,13 @@ class KbStudy:
         count = int(info.get("numLines") or 0)
         if info.get("totalLines"):
             self.total[rel] = max(1, int(info["totalLines"]))
-        self.read[rel].update(range(start, start + count))
+        return self.note_lines(rel, range(start, start + count))
+
+    def note_lines(self, rel: str, lines) -> bool:
+        """Record verified received rows; adapters do not own completion policy."""
+        if rel not in self.read:
+            return False
+        self.read[rel].update(n for n in lines if 1 <= n <= self.total[rel])
         if self.finished is None and self.complete():
             self.finished = time.monotonic()
             return True
@@ -139,13 +145,14 @@ class KbStudy:
     def container_paths(self) -> list[str]:
         return [self.container_path(rel) for rel in self.files]
 
-    def reminder(self) -> str:
+    def reminder(self, *, native: bool = False) -> str:
         lines = ["知识库还没有读完，游戏工具暂不执行（没有消耗任何游戏帧，也没有开始计时）。还没读到的部分："]
         for rel in self.files:
             missing = self.unread(rel)
             if missing:
                 lines.append(f"- {self.container_path(rel)}：第 {_ranges(missing)} 行（共 {self.total[rel]} 行）")
-        lines.append("请用 Read 读完这些行再开始（文件长时 Read 会截断，用 offset 与 limit 接着读，直到最后一行）。")
+        lines.append("请用原生 cat 或 sed -n 分页显示这些行的原文，每次外层调用只读一个文件或一页；输出截断时缩小范围继续读。" if native else
+                     "请用 Read 读完这些行再开始（文件长时 Read 会截断，用 offset 与 limit 接着读，直到最后一行）。")
         return "\n".join(lines)
 
     def summary(self) -> dict:

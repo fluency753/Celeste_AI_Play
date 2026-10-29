@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from .config import find_docker_exe
 
-PATH = "/opt/py/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+from .program_sandbox import PATH, SHELL, TIMEOUT, bwrap_args
 PREVIEW_CHARS = 2000
 
 # Runs outside the command's bwrap, as the same container's unprivileged agent.
@@ -93,24 +93,11 @@ def _save_output(container: str, text: str) -> str:
     return path
 
 
-def bwrap_args(env: dict[str, str] | None = None) -> list[str]:
-    args = ["bwrap", "--ro-bind", "/", "/", "--bind", "/workspace", "/workspace", "--bind", "/tmp", "/tmp",
-            "--dev", "/dev", "--proc", "/proc",
-            "--unshare-net", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-            "--die-with-parent", "--new-session", "--clearenv",
-            "--setenv", "PATH", PATH, "--setenv", "HOME", "/tmp",
-            "--setenv", "LANG", "C.UTF-8", "--setenv", "LC_ALL", "C.UTF-8",
-            "--chdir", "/workspace"]
-    for key, value in (env or {}).items():
-        args += ["--setenv", key, str(value)]
-    return args
-
-
 def run_program(container: str, command: str, timeout_s: float, env: dict[str, str] | None = None, *,
                 save_output: bool = False) -> ProgramResult:
     timeout_s = max(1.0, float(timeout_s))
     argv = [find_docker_exe(), "exec", "-u", "agent", "-w", "/workspace", container,
-            "timeout", "-k", "2", f"{timeout_s:g}", *bwrap_args(env), "--", "sh", "-c", command]
+            TIMEOUT, "-k", "2", f"{timeout_s:g}", *bwrap_args(env), "--", SHELL, "-c", command]
     t0 = time.monotonic()
     try:
         proc = subprocess.run(argv, input="", capture_output=True, text=True, encoding="utf-8", errors="replace",

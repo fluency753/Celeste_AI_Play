@@ -21,7 +21,7 @@ class ChatActivityTests(unittest.TestCase):
                 root = Path(tmp)
                 metrics = Metrics(root / 'metrics.json', 'test', 'model', 'medium', 600)
                 cfg = RunConfig(agent='test', save='test', model='model', runtime='host')
-                runner = adapter(cfg, root, SimpleNamespace(done=False), metrics, '', chat_only=True)
+                runner = adapter(cfg, root, SimpleNamespace(done=False), metrics, 'unused', chat_only=True)
                 try:
                     metrics.pause()
                     metrics.update(status='chat_idle')
@@ -60,7 +60,7 @@ class CodexChatLoopTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             metrics = Metrics(root / 'metrics.json', 'test', 'model', 'medium', 600)
             cfg = RunConfig(agent='test', save='test', model='model', runtime='host')
-            runner = CodexRunner(cfg, root, None, metrics, '', chat_only=True)
+            runner = CodexRunner(cfg, root, None, metrics, 'unused', chat_only=True)
             for pending_tool in (False, True):
                 runner._begin_model_turn(runtime='test')
                 if pending_tool:
@@ -80,7 +80,7 @@ class CodexChatLoopTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             metrics = Metrics(root / 'metrics.json', 'test', 'model', 'medium', 600)
             cfg = RunConfig(agent='test', save='test', model='model', runtime='host')
-            runner = ClaudeRunner(cfg, root, SimpleNamespace(done=False), metrics, '', chat_only=True)
+            runner = ClaudeRunner(cfg, root, SimpleNamespace(done=False), metrics, 'unused', chat_only=True)
             runner._write = AsyncMock()
             metrics.pause()
             runner.pending_messages = [{'id': runner.control.enqueue('message', '整理笔记'), 'text': '整理笔记'}]
@@ -102,13 +102,13 @@ class CodexChatLoopTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             metrics = Metrics(root / 'metrics.json', 'test', 'model', 'medium', 600)
             cfg = RunConfig(agent='test', save='test', model='model', runtime='host')
-            runner = CodexRunner(cfg, root, None, metrics, '', chat_only=True)
+            runner = CodexRunner(cfg, root, None, metrics, 'unused', chat_only=True)
             started = asyncio.Event()
             messages = []
 
             async def request(method, params):
                 if method == 'thread/start':
-                    return {'thread': {'id': 'test'}, 'model': 'model', 'sandbox': {'type': 'readOnly'}}
+                    return {'thread': {'id': 'test'}, 'model': 'model', 'sandbox': {'type': 'readOnly'}, 'activePermissionProfile': {'id': params['permissions']}}
                 if method == 'turn/start':
                     messages.append(params['input'][0]['text'])
                     started.set()

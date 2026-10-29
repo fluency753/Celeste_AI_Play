@@ -169,6 +169,8 @@ class SessionControls:
         # the MCP game gate is still closed. Idle chat and user-paused play cannot run planners.
         if getattr(self, 'prepare_only', False) or getattr(self, 'allow_programs', False):
             return None
+        if self.chat_only:
+            return '当前为只读聊天，未开放程序运行；可以继续读取文件、复盘并回复用户。'
         return self._game_guard()
 
     async def _heartbeat(self):

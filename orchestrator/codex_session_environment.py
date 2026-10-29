@@ -140,6 +140,9 @@ async def thread_metadata(ident, scratch, *, resume=False):
 async def synchronize(directory, state, output, *, apply=False, root=REPO_ROOT):
     if state['engine'] != 'codex':
         raise ValueError('此脚本仅同步 Codex 会话')
+    if state.get('session_storage') == 'container':
+        raise ValueError('此脚本仅用于迁移前的宿主会话；容器会话不得用宿主 CODEX_HOME 同步。'
+                         '若容器会话缺少接口，请新建准备会话。')
     ident = state['session_id']
     report = {'run': str(directory), 'engine': state['engine'], 'session_id': ident}
     if state['agent'] in active_agents(root):

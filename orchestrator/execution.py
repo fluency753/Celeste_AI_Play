@@ -1,7 +1,7 @@
 """Actual execution locations, independent of the legacy ``runtime`` label.
 
-Codex always hosts its model client locally and forwards workspace tools to
-Docker. Claude's host client has only game MCP tools and no workspace access.
+Both agents run their programming tools in Docker. Codex app-server itself
+also runs there. Claude's legacy host client has only game MCP tools.
 Consumers use this contract instead of inferring permissions from placement.
 """
 from dataclasses import dataclass
@@ -33,8 +33,8 @@ class WorkspaceCapabilities:
 
 
 _CAPABILITIES = {
-    ('codex', 'host'): WorkspaceCapabilities('host', True, True, 'container'),
-    ('codex', 'container'): WorkspaceCapabilities('host', True, True, 'container'),
+    ('codex', 'host'): WorkspaceCapabilities('container', True, True, 'container', True),
+    ('codex', 'container'): WorkspaceCapabilities('container', True, True, 'container', True),
     ('claude', 'host'): WorkspaceCapabilities('host', False, False, None),
     ('claude', 'container'): WorkspaceCapabilities('container', True, True, 'container', True),
 }

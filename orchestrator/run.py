@@ -656,30 +656,14 @@ def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | No
             data = await request.json()
         except ValueError:
             data = {}
-        tool_name = str(data.get("tool_name") or "")
-        guard = getattr(session, 'program_guard', getattr(session, 'control_guard', None))
-        if tool_name == 'Bash' and guard and (reason := guard()):
-            return JSONResponse({'decision': 'deny', 'reason': reason, 'context': ''})
-        allow, reason = await gate.decide(tool_name, data.get("tool_use_id"))
-        if allow and tool_name == 'Bash' and session is not None and hasattr(session, 'program_run_denied'):
-            denied = session.program_run_denied()     # 探索模式：两次 act 之间的规划程序次数（explore_program_runs）
-            if denied:
-                return JSONResponse({'decision': 'deny', 'reason': denied, 'context': ''})
-        context = ""
-        if allow and live_remind_s and metrics is not None:
-            if tool_name.endswith("__narrate"):
-                metrics.narrated()
-            elif (waited := metrics.take_live_reminder(live_remind_s)) is not None:
-                context = narrate_reminder(getattr(session, "cfg", None), waited)
-                print(f"[live] 提醒更新 HUD 思考（已思考 {waited:.0f} 秒，调用 {tool_name}）", flush=True)
-        notes = getattr(session, 'note_reminders', None)
-        offered = notes.peek() if allow and notes is not None else ()
-        if offered:
-            context = '\n'.join(value for value in (context, '\n'.join(text for _, text in offered)) if value)
-        response = JSONResponse({"decision": "allow" if allow else "deny", "reason": reason, "context": context})
-        if offered:
-            notes.acknowledge(offered)
-        return response
+        if data.get('engine') == 'codex':
+            callback = getattr(session, 'native_tool_hook', None)
+            if callback is None:
+                return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Codex 会话', 'context': ''})
+            return JSONResponse(await callback(data))
+        from .tool_gate import decide_tool
+        return JSONResponse(await decide_tool(gate, str(data.get('tool_name') or ''), data.get('tool_use_id'),
+                                              metrics=metrics, live_remind_s=live_remind_s, session=session))
 
     app.router.routes.insert(0, Route("/gate", endpoint, methods=["POST"]))
 

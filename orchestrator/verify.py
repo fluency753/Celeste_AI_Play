@@ -16,12 +16,15 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import socket
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 
 from .config import RunConfig, find_docker_exe, load_dotenv, REPO_ROOT
 from .container import docker, ensure_container
@@ -68,6 +71,53 @@ def listen(port: int) -> socket.socket:
                 return
     threading.Thread(target=accept_loop, daemon=True).start()
     return s
+
+
+class DiagnosticGate:
+    """A game-free instance of the shared policy, never an existing controller."""
+    def __init__(self, port):
+        from .pausegate import PauseGate
+        from .tool_gate import decide_tool
+        gate = PauseGate(SimpleNamespace(update=lambda **values: None), enabled=False)
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                try:
+                    size = int(self.headers.get('Content-Length', '0'))
+                    if self.path != '/gate' or not 0 < size <= 65536:
+                        raise ValueError('Invalid gate request')
+                    data = json.loads(self.rfile.read(size))
+                    if not isinstance(data, dict) or data.get('engine') == 'codex':
+                        raise ValueError('Invalid diagnostic context')
+                    response = asyncio.run(decide_tool(gate, str(data.get('tool_name') or ''),
+                                                       data.get('tool_use_id')))
+                    code = 200
+                except (ValueError, TypeError):
+                    response, code = {'decision':'deny', 'reason':'诊断门禁请求无效，本次未执行'}, 400
+                payload = json.dumps(response).encode()
+                self.send_response(code)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+        class DiagnosticServer(ThreadingHTTPServer):
+            allow_reuse_address = False
+
+            def server_bind(self):
+                if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+                    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                super().server_bind()
+        self.server = DiagnosticServer(('127.0.0.1', port), Handler)
+        self.port = self.server.server_port
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.thread.join(timeout=5)
+        self.server.server_close()
 
 
 def sandbox_netcheck(container: str, token: str, mcp_port: int, bridge_port: int) -> tuple[dict[str, str], str]:
@@ -118,12 +168,19 @@ def main() -> int:
         raise SystemExit("缺少 CLAUDE_CODE_OAUTH_TOKEN（见使用说明 2.1 节）")
     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token  # docker exec -e CLAUDE_CODE_OAUTH_TOKEN 从本进程环境取值
     cfg = RunConfig(agent=args.agent, save="-", model="-", mcp_port=args.mcp_port)
-    container = ensure_container(cfg)
+    # Claim an isolated diagnostic gate first; never use an active controller.
+    diagnostic = DiagnosticGate(args.mcp_port)
+    cfg.mcp_port = args.mcp_port = diagnostic.port
+    try:
+        container = ensure_container(cfg)
+    except BaseException:
+        diagnostic.close()
+        raise
     report = Report()
 
     # 宿主机上临时监听主控端口与桥接端口（若游戏或主控正在运行，端口已被占用，就直接用现有服务）
-    listeners = []
-    for port in (args.mcp_port, args.bridge_port):
+    listeners = [diagnostic]
+    for port in (args.bridge_port,):
         try:
             listeners.append(listen(port))
         except OSError:

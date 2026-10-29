@@ -272,7 +272,7 @@ class NativeEntryTests(unittest.IsolatedAsyncioTestCase):
             from orchestrator.server import build_server
             runner = CodexRunner(cfg, root, session, metrics, "container", game_server=build_server(session))
             runner.turn_id, runner.turn_active = 'test-turn', True
-            with patch("orchestrator.codex_agent.run_program") as shell:
+            with patch("orchestrator.sandbox.run_program") as shell:
                 result = await runner._request("item/tool/call", {"tool": "celeste_simulate", "arguments": {"candidates": [["60,R"]]}})
                 self.assertTrue(result["success"])
                 self.assertEqual(json.loads(result["contentItems"][0]["text"])["cost"], 13)

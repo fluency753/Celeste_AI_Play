@@ -171,10 +171,18 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         await self.wait_for(lambda: not self.runner.control.pending())
         self.assertTrue(self.runner.paused)
         self.assertEqual(self.runner.control.snapshot()["actions"][0]["status"], "error")
-        for name in ("celeste_act", "celeste_observe", "celeste_bash"):
+        for name in ("celeste_act", "celeste_observe"):
             result = await self.runner._request("item/tool/call", {"tool": name, "arguments": {}})
             self.assertFalse(result["success"])
             self.assertIn("试玩已经结束", result["contentItems"][0]["text"])
+        from orchestrator.codex_native import native_tool_hook
+        self.metrics.update(tool_calls=0)
+        denied = await native_tool_hook(self.runner, {'token':self.runner.native_token,
+            'hook_event_name':'PreToolUse', 'tool_name':'Bash', 'tool_use_id':'chat-plan',
+            'session_id':'thread', 'turn_id':'turn', 'tool_input':{'command':'python planner.py'}})
+        self.assertEqual(denied['decision'], 'deny')
+        self.assertIn('只读聊天', denied['reason'])
+        self.assertFalse(self.metrics.tools_running)
         self.server.call_tool.assert_not_called()
 
     async def test_fast_toggle_persists_without_interrupting_active_reply(self):

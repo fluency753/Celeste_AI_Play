@@ -7,6 +7,7 @@ import time
 
 from .config import REPO_ROOT
 from .codex_rpc import CodexRPC
+from .codex_container import ensure_account_container
 from .efforts import normalize_efforts
 
 _lock = threading.Lock()
@@ -43,7 +44,8 @@ def normalize_models(rows):
 
 
 async def fetch_models():
-    rpc = CodexRPC(REPO_ROOT / 'local/model-catalog')
+    container = await asyncio.to_thread(ensure_account_container)
+    rpc = CodexRPC(REPO_ROOT / 'local/model-catalog', container=container)
     rows, cursor, cursors = [], None, set()
     try:
         await rpc.start()

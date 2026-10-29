@@ -75,6 +75,7 @@ async def prepare(args):
         from .session_store import write_json
         from .control import RunControl
         write_json(directory/'run_state.json', {
+            **({'session_storage':'container', 'session_container':container} if cfg.engine == 'codex' else {}),
             'engine':cfg.engine, 'provider':cfg.provider, 'runtime':cfg.runtime, 'mcp_port':cfg.mcp_port,
             'agent':cfg.agent, 'save':'', 'save_slot':None, 'model':metrics.state.model,
             'requested_model':cfg.model, 'effort':metrics.state.effort, 'knowledge_profile':cfg.knowledge_profile,

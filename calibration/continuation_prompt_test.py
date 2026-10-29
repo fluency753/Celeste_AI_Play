@@ -52,7 +52,7 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
 
             async def request(method, params):
                 if method == 'thread/start':
-                    return {'thread': {'id': 'fixture'}, 'model': 'test', 'sandbox': {'type': 'readOnly'}}
+                    return {'thread': {'id': 'fixture'}, 'model': 'test', 'sandbox': {'type': 'readOnly'}, 'activePermissionProfile': {'id': params['permissions']}}
                 if method == 'turn/start':
                     sent.append(params['input'][0]['text'])
                     if len(sent) == 2:
@@ -82,7 +82,7 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_preparation_fallback_identifies_controller(self):
         text = await self.run_two_turns(preparing=True)
-        self.assertEqual(text, controller_turn_prompt('继续准备，尚未完整读完的行必须用 celeste_read 阅读。'))
+        self.assertEqual(text, controller_turn_prompt('继续准备，用原生 Shell 分页显示尚未读完的原文。'))
 
     async def test_real_user_message_replaces_fallback_without_being_relabelled(self):
         text = await self.run_two_turns(user_message='先复盘笔记，不推进游戏。')

@@ -166,6 +166,8 @@ def normalize(options: dict) -> dict:
         raise ValueError("目前只支持蔚蓝官方章节")
     if o["runtime"] not in ("container", "host"):
         raise ValueError("运行方式须为容器或本机")
+    if o['engine'] == 'codex':
+        o['runtime'] = 'container'
     from types import SimpleNamespace
     capabilities = workspace_capabilities(SimpleNamespace(engine=o['engine'], runtime=o['runtime']))
     if not capabilities.programs and ((o["mode"] == SPEEDRUN and o["sim"]) or (o["mode"] == EXPLORE and o["sim_assist"])):

@@ -35,6 +35,7 @@ class PreparationModelTests(unittest.IsolatedAsyncioTestCase):
         for target, value in [('orchestrator.model_catalog._cached', None),
                               ('orchestrator.model_catalog._loaded', 0),
                               ('orchestrator.model_catalog.CodexRPC', Mock(return_value=self.rpc)),
+                              ('orchestrator.model_catalog.ensure_account_container', Mock(return_value='account-fixture')),
                               ('orchestrator.preparation.ensure_container', self.container)]:
             replacement = patch(target, value)
             replacement.start()

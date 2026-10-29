@@ -1,6 +1,6 @@
 # 原生 GPT 与直播接入
 
-这份文档说明为直播和原生 GPT 加入的功能：原生 GPT 执行器（经本机 Codex app-server）、探索模式、直播模式、可交互的网页 HUD（聊天、暂停 / 继续、会话管理、推理强度、目标与停止条件、剧情模式、存档选择）、录像专用的独立游戏声音、独立后台宿主，以及新建存档、剧情与退出关卡等游戏侧接口。部署步骤见 [DEPLOY.md](DEPLOY.md)，开关一览见 [README](../README.md#开关)。Claude 执行器速通正式运行与这些功能的边界见[最后一节](#与速通正式运行的边界)。
+这份文档说明为直播和原生 GPT 加入的功能：原生 GPT 执行器（经容器内 Codex app-server）、探索模式、直播模式、可交互的网页 HUD（聊天、暂停 / 继续、会话管理、推理强度、目标与停止条件、剧情模式、存档选择）、录像专用的独立游戏声音、独立后台宿主，以及新建存档、剧情与退出关卡等游戏侧接口。部署步骤见 [DEPLOY.md](DEPLOY.md)，开关一览见 [README](../README.md#开关)。Claude 执行器速通正式运行与这些功能的边界见[最后一节](#与速通正式运行的边界)。
 
 文中日期为北京时间。"实测"一行记的是开发中的实际验收，写明日期、模型与存档；存档名 `test` 是本项目的调试存档。
 
@@ -24,11 +24,11 @@
 
 ### 连接方式
 
-`--engine codex` 通过本机 Codex app-server 的持久连接调用 GPT，复用本机已有的 ChatGPT 登录，不经过"Anthropic 接口 → OpenAI 接口"转换网关，也不把账号凭据传进 Docker。模型进程在宿主机；它生成的程序经 `celeste_bash` 在 Docker / bubblewrap 的零网络环境里运行（探索模式每次最长 15 秒，与提示词一致；速通模式与 Claude Code 的 Bash 相同，最长 10 分钟；都可以用可调参数 `explore_program_s`、`bash_max_s` 修改）。文件工具只允许读 `/workspace`、`/kb`、`/sim`，只允许写 `/workspace`。app-server 启动时关掉了宿主机的 shell、浏览器、联网搜索等内置工具，宿主工具配置为只读；检测到意外的宿主工具事件会停止运行。
+`--engine codex` 的 App Server、原生 Shell 和补丁编辑工具都在 Docker 内，宿主主控仅通过受控 stdio 管理会话并分发游戏工具。与 Claude 复用容器生命周期、`tool_gate.decide_tool`、SessionControls 暂停／目标守卫，以及 `bash_limits_ms` 程序时长参数。Codex 的托管钩子只适配原生工具格式，不维护另一套业务许可规则。模型查询也使用专用账号容器，不依赖 Windows Codex 登录。安装和旧会话导入见 [部署说明](DEPLOY.md#411-原生-gpt可选)。
 
 HUD 直接使用 app-server 的公开消息、工具调用、tokenUsage 与 contextCompaction 事件。公开文字至多每 0.4 秒更新一次；模型没有输出时不能凭空生成解说。模型与推理强度采用服务器实际回报的值，上下文采用最近一次用量，不用累计输入量。内部推理正文不会进入 HUD 或事件日志。游戏工具由主控直接分发，只有一个桥接连接；规划回放和录制沿用同一个主控实现。
 
-`celeste_bash` 的 stdout/stderr 超过 2000 字符时返回带省略标记的首尾预览，并分别给出 `*_chars`、`*_truncated`、`*_path`。超长流的完整文本以同容器 agent 身份写入 `/workspace/program-output-<随机标识>/output.txt`，可通过 Read 分页，超长单行用 Bash 筛选或分段。写入失败时路径为空并报告 `output_save_errors`，不改变程序退出码；`seconds` 记录命令耗时，发布文件的额外时间由工具总耗时记录。自动重试／诊断读取完整原始输出，不混入展示标记。
+新会话不登记 `celeste_bash/read/write`；旧登记调用返回停用说明且零执行。日常编程使用原生工具，输出格式由 Codex 自身提供；原生单条文件读取进入共享 Read 门禁；知识库按模型实际收到的完整原文行计量，不再要求专用读取工具。主控自动重试仍使用既有 `run_program` 及其完整输出保存协议。原生 Shell 的包装与主控程序复用同一份 bwrap 规则；Claude 内置 Bash 继续使用 Claude 的 sandbox-runtime，底层沙箱实现不冒充统一。必要差异及验收边界见 [Codex 容器执行](CODEX_CONTAINER.md)。
 
 协议参考：[Codex app-server](https://developers.openai.com/codex/app-server/)。
 
@@ -47,7 +47,7 @@ HUD 直接使用 app-server 的公开消息、工具调用、tokenUsage 与 cont
 
 开始试玩时恢复同一个原生线程，先核对身份、运行环境、知识范围与文件没有变化；准备超时不会放开游戏工具，`--quick-check`（只测索引读取与遥测）的结果不能用来跳过必读。工具在新建线程时全部登记，准备阶段仍拒绝游戏操作。未显式覆盖模型和强度时沿用准备结果。
 
-Codex 在初建线程时持久化完整游戏接口，包含当前未开启的模拟辅助、剧情与退出工具；准备、聊天、暂停及当前试玩配置分别限制实际调用，未启用的接口会明确拒绝且不消耗规划额度。开始试玩时改变直播或模拟辅助选项不需要改写会话记录。此前已创建且缺少接口的旧线程仍需在停止宿主后显式运行 `python tools/sync_codex_session_env.py --run <目标运行目录> --apply`；不会自动修改在用线程。隔离真实模型验收可运行 `python -m calibration.session_lifecycle_check --model <模型标识> --output local/<新的证据目录>`，不连接游戏、OBS 或已有会话。
+Codex 在初建线程时持久化完整游戏接口，包含当前未开启的模拟辅助、剧情与退出工具；准备、聊天、暂停及当前试玩配置分别限制实际调用，未启用的接口会明确拒绝且不消耗规划额度。开始试玩时改变直播或模拟辅助选项不需要改写会话记录。迁移前的宿主旧记录可在停止主控后用 `tools/sync_codex_session_env.py` 离线补齐接口，再显式导入容器；容器记录不使用该宿主维护入口。旧 `calibration.session_lifecycle_check` 仅覆盖其原协议设施，不代表容器原生工具验收。不会自动修改在用线程。
 
 Codex 恢复线程时检查该线程实际持久化的动态工具。旧线程缺少后来新增的工具（例如 `celeste_simulate`、`celeste_exit_level`）时，需要关闭相应功能或新建准备会话；不会悄悄改用 Bash 里的隐藏入口。旧工作区、存档和录像都保留。
 
@@ -91,7 +91,7 @@ HUD 读取当前运行的 `metrics.json`、`control.sqlite3` 和 `public_events.
 
 HUD 的新建、准备、取玩家名、切换、断开、重新唤醒和开始试玩，都经 `orchestrator/runtimes.py` 的执行器接口调度，支持 Codex 与 Claude Code（包括经 Claude Code 使用的 Anthropic 兼容提供方）。后台的准备（`orchestrator.preparation`）与聊天（`orchestrator.chat`）是通用入口；`orchestrator/lifecycle.py` 按执行器是否需要 MCP，托管不建立游戏连接的准备与聊天环境。
 
-会话管理里先选"执行器与提供方"，再选模型和推理强度，点"新建并准备"。Codex 的模型来自它公开的模型目录（经 HUD 服务的 `/api/models` 读取 app-server 的 `model/list`，按隐藏标记与输入模态过滤，缓存 5 分钟，可手动刷新；读取不创建线程，也不读取或复制登录凭据；目录可能是服务端缓存或内置清单，实际能否访问仍以推理请求为准）。Claude Code 的模型来自 `configs/providers.json` 与本机 `configs/local.providers.json` 的 `models`，界面会标明来源，不冒充在线发现。部署向导填写的新模型会加入提供方配置，并要求声明该模型实际支持的推理档位。`models` 每项支持 `id`、`label`、`efforts`、`default_effort`；自定义平台没配置列表时报错，不拿其他执行器的列表兜底。认证或模型校验失败不会先断开当前会话。
+会话管理里先选"执行器与提供方"，再选模型和推理强度，点"新建并准备"。Codex 的模型来自它公开的模型目录（经 HUD 服务的 `/api/models` 读取 app-server 的 `model/list`，按隐藏标记与输入模态过滤，缓存 5 分钟，可手动刷新；读取不创建线程，认证由专用账号容器持有；目录可能是服务端缓存或内置清单，实际能否访问仍以推理请求为准）。Claude Code 的模型来自 `configs/providers.json` 与本机 `configs/local.providers.json` 的 `models`，界面会标明来源，不冒充在线发现。部署向导填写的新模型会加入提供方配置，并要求声明该模型实际支持的推理档位。`models` 每项支持 `id`、`label`、`efforts`、`default_effort`；自定义平台没配置列表时报错，不拿其他执行器的列表兜底。认证或模型校验失败不会先断开当前会话。
 
 推理档位没有全局固定名单：Codex 完整保留模型目录返回的 `supportedReasoningEfforts`，其他提供方完整保留模型配置的 `efforts`。创建会话、手动切换和智能体的 `set_effort` 都按当前模型的能力校验；HUD 的文字与档位条随这个列表显示。能力列表缺失时不猜测档位；配置声明也不能绕过底层执行器的实际支持，切换仍要执行器确认后才记为生效。
 
@@ -251,7 +251,7 @@ HUD 底部的"剧情"下拉框提供"自动跳过"和"agent决定"，开始前�
 
 ### 退出关卡（直播模式）
 
-`exit_level(reason, finish_run=false)`（Codex 里叫 `celeste_exit_level`）只在直播模式下注册，复用主控当前桥接连接。默认只在用户授权及返回地图权限下返回地图，保留任务、导航目标和录制，不算通关；agent 先 observe 再自行选章，不代按进入下一章。只有用户明确结束整次试玩才设 `finish_run=true`，按当前允许的返回地图／保存退出操作收尾。暂停、只聊天、准备和停止阶段禁止调用。旧线程须在宿主停止后用 `tools/sync_codex_session_env.py --run <运行目录> --apply` 同步工具参数和描述，不仅核验工具名。
+`exit_level(reason, finish_run=false)`（Codex 里叫 `celeste_exit_level`）只在直播模式下注册，复用主控当前桥接连接。默认只在用户授权及返回地图权限下返回地图，保留任务、导航目标和录制，不算通关；agent 先 observe 再自行选章，不代按进入下一章。只有用户明确结束整次试玩才设 `finish_run=true`，按当前允许的返回地图／保存退出操作收尾。暂停、只聊天、准备和停止阶段禁止调用。迁移前宿主旧线程可在停止主控后用 `tools/sync_codex_session_env.py` 同步，再显式导入容器；容器缺接口时明确报错并要求新建准备会话。
 
 旧接口实测（2026-10-24，Codex，测试用的新存档）：当时 `celeste_exit_level` 默认结束整次试玩，结束原因"agent 退出关卡"，`completed=false`，最后停在地图；没有游玩移动动作，没有新增主存档，其他主存档哈希不变；录像 430 帧约 7.17 秒，无缺帧无重复，结束后恢复正常游戏运行。现需显式 `finish_run=true` 才采用该整次收尾语义。
 

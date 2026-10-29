@@ -1,4 +1,4 @@
-"""Codex app-server 的 stdio JSON-RPC 客户端；不读取或复制登录凭据。"""
+"""生产会话通过容器 stdio；宿主 transport 仅用于显式维护迁移前记录。"""
 from __future__ import annotations
 
 import asyncio
@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import tomllib
+import uuid
 from pathlib import Path
 
 
@@ -21,15 +22,25 @@ def codex_executable() -> str:
     return str(candidate)
 
 
-def process_options() -> list[str]:
-    # 模型会话在宿主机，所有程序通过客户端动态工具进 Docker；禁止宿主 shell/MCP/浏览器。
+def process_options(*, container=False) -> list[str]:
+    # Native tools stay inside Docker. Legacy maintenance disables host tools.
     options = []
     for feature in ("shell_tool", "unified_exec", "view_image", "apps", "browser_use", "computer_use",
                     "in_app_browser", "skill_search", "multi_agent", "workspace_dependencies", "goals",
                     "sleep_tool", "image_generation", "code_mode"):
-        options += ["--disable", feature]
+        if container and feature in {'shell_tool', 'view_image'}:
+            options += ['--enable', feature]
+        else:
+            options += ["--disable", feature]
     options += ["-c", 'web_search="disabled"', "-c", "project_doc_max_bytes=0",
                 "-c", "features.skip_host_skill_discovery=true"]
+    if container:
+        from .program_sandbox import PATH
+        return options + ['--enable', 'hooks', '-c', 'shell_environment_policy.inherit="none"',
+                          '-c', 'shell_environment_policy.set.PATH=' + json.dumps(PATH),
+                          '-c', 'shell_environment_policy.set.HOME="/home/agent"',
+                          '-c', 'approval_policy="never"',
+                          '-c', 'projects={"/workspace"={trust_level="untrusted"}}']
     home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     try:
         config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
@@ -43,7 +54,8 @@ def process_options() -> list[str]:
 
 
 class CodexRPC:
-    def __init__(self, directory: Path, on_event=None, on_request=None):
+    def __init__(self, directory: Path, on_event=None, on_request=None, *, container=None,
+                 before_start=None, environment=None):
         self.directory = directory
         self.on_event, self.on_request = on_event, on_request
         self.proc = None
@@ -53,6 +65,10 @@ class CodexRPC:
         self.tasks = set()
         self.write_lock = asyncio.Lock()
         self.stderr = None
+        self.container = container
+        self.before_start = before_start
+        self.environment = environment or {}
+        self.owner = uuid.uuid4().hex
 
     async def start(self):
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -61,8 +77,18 @@ class CodexRPC:
         for key in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_APP_TOOLS_PIPE_PATH", "CODEX_TOOL_CALL_ID",
                     "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"):
             env.pop(key, None)
+        if self.container:
+            from .codex_container import ensure_runtime, launch_command
+            await asyncio.to_thread(ensure_runtime, self.container)
+            if self.before_start:
+                await self.before_start()
+            command = launch_command(self.container, self.owner, 'env',
+                *[f'{key}={value}' for key, value in self.environment.items()],
+                'codex', 'app-server', '--listen', 'stdio://', *process_options(container=True))
+        else:
+            command = [codex_executable(), 'app-server', '--listen', 'stdio://', *process_options()]
         self.proc = await asyncio.create_subprocess_exec(
-            codex_executable(), "app-server", "--listen", "stdio://", *process_options(),
+            *command,
             cwd=str(self.directory.resolve()), env=env, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=self.stderr, limit=32 * 1024 * 1024,
             creationflags=0x08000000 if os.name == "nt" else 0)
@@ -124,16 +150,34 @@ class CodexRPC:
                     future.set_exception(failure or ConnectionError("Codex app-server 已断开；检查 codex_stderr.log"))
 
     async def close(self):
-        if self.proc and self.proc.returncode is None:
-            self.proc.stdin.close()
-            try:
-                await asyncio.wait_for(self.proc.wait(), 5)
-            except asyncio.TimeoutError:
-                self.proc.terminate()
-                await self.proc.wait()
-        if self.reader:
-            await asyncio.gather(self.reader, return_exceptions=True)
-        if self.tasks:
-            await asyncio.gather(*self.tasks, return_exceptions=True)
-        if self.stderr:
-            self.stderr.close()
+        failure = None
+        try:
+            if self.proc and self.proc.returncode is None:
+                self.proc.stdin.close()
+                try:
+                    await asyncio.wait_for(self.proc.wait(), 5)
+                except asyncio.TimeoutError:
+                    if self.container:
+                        from .codex_container import terminate_owned_server
+                        try:
+                            await asyncio.to_thread(terminate_owned_server, self.container, self.owner)
+                        except Exception as exc:
+                            failure = exc
+                    if self.proc.returncode is None:
+                        self.proc.terminate()
+                        await self.proc.wait()
+            if self.container and self.proc is not None:
+                from .codex_container import terminate_owned_server
+                try:
+                    await asyncio.to_thread(terminate_owned_server, self.container, self.owner)
+                except Exception as exc:
+                    failure = failure or exc
+        finally:
+            if self.reader:
+                await asyncio.gather(self.reader, return_exceptions=True)
+            if self.tasks:
+                await asyncio.gather(*self.tasks, return_exceptions=True)
+            if self.stderr:
+                self.stderr.close()
+        if failure:
+            raise RuntimeError('Codex 容器进程收尾未确认，请保留容器检查，不要另起同一会话') from failure

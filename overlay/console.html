@@ -1859,7 +1859,7 @@ async function loadPromptPreview() {
   if (o.save_context) bits.push("节省上下文");
   if (o.mode === "speedrun" && o.limit_planning && o.sim) bits.push("限制规划轮次");
   bits.push(o.live ? "直播" : "不直播");
-  if (o.runtime === "host") bits.push("本机运行方式");
+  if (o.runtime === "host" && o.engine !== 'codex') bits.push("本机运行方式");
   if (data.personal_applied?.length) bits.push('个人要求：' + data.personal_applied.map(item => item.label).join('、'));
   const guideSize = (data.guide_parts || []).reduce((n, p) => n + p.text.length + p.sep.length, 0);
   $("promptWhat").textContent = `${bits.join(" · ")}；启动 ${data.text.length.toLocaleString("zh-CN")} 字符` + (guideSize ? `；工作区指南 ${guideSize.toLocaleString("zh-CN")} 字符（按需读取）` : "");

@@ -1,0 +1,58 @@
+# Installed as /etc/codex/requirements.toml, owned by root.
+# Keep agent-generated code inside the same workspace/network boundaries as Claude.
+allowed_approval_policies = ["never"]
+allowed_web_search_modes = ["disabled"]
+default_permissions = "celeste-write"
+allow_managed_hooks_only = true
+allow_login_shell = false
+
+[allowed_permission_profiles]
+celeste-write = true
+celeste-read = true
+
+[features]
+hooks = true
+shell_tool = true
+# Use the native foreground shell; persistent write_stdin sessions skip PreToolUse.
+unified_exec = false
+shell_snapshot = false
+shell_snapshot_v2 = false
+use_legacy_landlock = false
+
+[permissions.filesystem]
+# Codex's own arg0 executables live under CODEX_HOME/tmp and must remain usable.
+deny_read = ["/home/agent/.codex/auth.json", "/home/agent/.claude"]
+
+[permissions.celeste-write.filesystem]
+":root" = "read"
+"/workspace" = "write"
+"/tmp" = "write"
+
+[permissions.celeste-write.network]
+enabled = false
+
+[permissions.celeste-read.filesystem]
+":root" = "read"
+"/tmp" = "write"
+
+[permissions.celeste-read.network]
+enabled = false
+
+[hooks]
+managed_dir = "/usr/local/lib/celeste"
+
+[[hooks.PreToolUse]]
+matcher = "^(Bash|apply_patch|view_image)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/usr/bin/python3 /usr/local/lib/celeste/codex-tool-hook.py"
+timeout = 30
+
+[[hooks.PostToolUse]]
+matcher = "^(Bash|apply_patch|view_image)$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/usr/bin/python3 /usr/local/lib/celeste/codex-tool-hook.py"
+timeout = 30

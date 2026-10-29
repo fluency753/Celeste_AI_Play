@@ -2,6 +2,7 @@
 
 容器里：/workspace 挂载宿主机的 workspaces/<标签>/（可写），/kb 挂载仓库的 kb/（只读），
 /home/agent/.claude 是独立的数据卷（会话记录，便于中断后续跑）。游戏目录、存档、OBS 都不挂载。
+Codex 使用独立的 /home/agent/.codex 持久卷，普通启动不导入宿主登录或会话。
 开放预置模拟器（--sim）时，本机的 sim/dist 只读挂到 /sim。
 配置变了要重建容器时，旧容器 /tmp 里的东西（智能体常把程序和中间结果放在 Claude Code 的 /tmp/claude-<uid>）
 先打包到本机 local/container_tmp/，新容器建好后原样放回（保留属主与权限）。
@@ -47,7 +48,8 @@ def _labels(cfg: RunConfig) -> dict[str, str]:
             f"{LABEL}.host_ports": ",".join(str(p) for p in cfg.provider_host_ports),
             # /kb 挂的是知识库本身（0）还是同步出来的副本（1：有不给看的文件或本机追加资料，见 kb_access.py）；
             # 之前建的容器没有这个标签，按 0 算
-            f"{LABEL}.kb_view": "1" if cfg.kb_view else "0"}
+            f"{LABEL}.kb_view": "1" if cfg.kb_view else "0",
+            **({f"{LABEL}.codex_home": '1'} if cfg.engine == 'codex' else {})}
 
 
 LABEL_DEFAULTS = {f"{LABEL}.kb_view": "0"}
@@ -63,7 +65,7 @@ def _create(cfg: RunConfig, name: str) -> None:
             "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW",
             "-e", f"MCP_PORT={cfg.mcp_port}",
             # 防火墙放行哪些模型服务：Anthropic 订阅只放行 Anthropic；第三方提供方只放行它自己的域名，不放行 Anthropic
-            "-e", f"ALLOW_ANTHROPIC={'0' if cfg.third_party else '1'}",
+            "-e", f"ALLOW_ANTHROPIC={'0' if cfg.engine == 'codex' or cfg.third_party else '1'}",
             "-e", f"PROVIDER_DOMAINS={' '.join(cfg.provider_domains)}",
             # 第三方提供方经宿主机上的网关接入时（例如 GPT），另外放行宿主机上网关的端口（需要 2026-10-24 之后构建的镜像）
             "-e", f"PROVIDER_HOST_PORTS={' '.join(str(p) for p in cfg.provider_host_ports)}",
@@ -71,6 +73,9 @@ def _create(cfg: RunConfig, name: str) -> None:
             "-v", f"{cfg.kb_dir}:/kb:ro",
             "-v", f"celeste-claude-{slug(cfg.workspace_dir.name)}:/home/agent/.claude",
             "--label", f"{LABEL}=agent"]
+    if cfg.engine == 'codex':
+        args += ['-v', f'celeste-codex-{slug(cfg.workspace_dir.name)}:/home/agent/.codex',
+                 '-e', 'CODEX_HOME=/home/agent/.codex']
     if cfg.sim:
         args += ["-v", f"{cfg.sim_dir}:/sim:ro"]
     if cfg.seccomp_unconfined:

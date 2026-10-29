@@ -51,8 +51,10 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_read_only_discovery_pages_and_closes_without_creating_threads(self):
         rpc=SimpleNamespace(start=AsyncMock(),close=AsyncMock(),request=AsyncMock(side_effect=[
             {'data':[model('one')],'nextCursor':'page2'},{'data':[model('two')],'nextCursor':None}]))
-        with patch('orchestrator.model_catalog.CodexRPC',return_value=rpc):
+        with patch('orchestrator.container.ensure_container',return_value='account-fixture'), \
+             patch('orchestrator.model_catalog.CodexRPC',return_value=rpc) as factory:
             result=await fetch_models()
+        self.assertEqual(factory.call_args.kwargs['container'], 'account-fixture')
         self.assertEqual([m['id'] for m in result['models']],['one','two'])
         self.assertEqual([call.args[0] for call in rpc.request.call_args_list],['model/list','model/list'])
         self.assertEqual(rpc.request.call_args_list[1].args[1]['cursor'],'page2')
@@ -60,7 +62,8 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_discovery_failure_still_closes_app_server(self):
         rpc=SimpleNamespace(start=AsyncMock(),close=AsyncMock(),request=AsyncMock(side_effect=RuntimeError('offline')))
-        with patch('orchestrator.model_catalog.CodexRPC',return_value=rpc),self.assertRaises(RuntimeError):
+        with patch('orchestrator.container.ensure_container',return_value='account-fixture'), \
+             patch('orchestrator.model_catalog.CodexRPC',return_value=rpc),self.assertRaises(RuntimeError):
             await fetch_models()
         rpc.close.assert_awaited_once()
 

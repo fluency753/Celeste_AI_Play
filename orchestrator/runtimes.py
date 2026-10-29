@@ -37,11 +37,14 @@ class Runtime:
 
     def configure(self, cfg, provider=None):
         cfg.engine = self.engine
+        if self.engine == 'codex':
+            cfg.runtime = 'container'  # Keep legacy --runtime host as an input alias only.
         cfg.provider = 'codex' if self.engine == 'codex' else provider or 'anthropic'
         if not isinstance(cfg.provider, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,60}', cfg.provider):
             raise ValueError('提供方标识无效')
         try:
-            cfg.provider_info = ({'label':self.label, 'images':True, 'allowed_domains':['api.openai.com']}
+            cfg.provider_info = ({'label':self.label, 'images':True,
+                                  'allowed_domains':['chatgpt.com', 'auth.openai.com', 'api.openai.com']}
                                  if self.engine == 'codex' else load_provider(cfg.provider))
         except SystemExit as exc:
             raise ValueError(str(exc)) from exc
@@ -100,9 +103,11 @@ class Runtime:
         options.pop('game_server', None)
         return ClaudeRunner(cfg, directory, session, metrics, self.token(cfg) if token is None else token, container, study, **options)
 
-    def archived(self, ident, root=None):
+    def archived(self, ident, root=None, *, state=None):
         if self.engine != 'codex':
             return False
+        if state and state.get('session_storage') == 'container':
+            return bool(state.get('archived'))
         from pathlib import Path
         return any(ident in path.name for path in (root or Path.home()/'.codex/archived_sessions').glob('*.jsonl'))
 

@@ -1,9 +1,11 @@
-# 智能体容器：固定版本的 Claude Code + 离线科学计算环境 + 出站防火墙 + 托管配置。
+# 智能体容器：固定版本的 Claude Code / Codex + 离线科学计算环境 + 出站防火墙 + 托管配置。
 # 智能体以普通用户 agent 运行；防火墙与托管配置归 root 所有，智能体无权修改。
 FROM node:22-bookworm-slim
 
 ARG CLAUDE_CODE_VERSION=2.1.309
 ARG SANDBOX_RUNTIME_VERSION=0.0.81
+ARG CODEX_VERSION=0.165.0-alpha.1.2
+LABEL org.celeste-ai-play.codex-version=${CODEX_VERSION}
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -21,20 +23,34 @@ ENV PATH=/opt/py/bin:$PATH
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @anthropic-ai/sandbox-runtime@${SANDBOX_RUNTIME_VERSION} \
     && npm cache clean --force
 
+# 与宿主协议版本固定一致；模型客户端及原生编程工具直接在隔离容器运行。
+RUN npm install -g @openai/codex@${CODEX_VERSION} \
+    && codex --version \
+    && npm cache clean --force
+
 # 托管配置（最高优先级，归 root 所有）
 RUN mkdir -p /etc/claude-code
+RUN mkdir -p /etc/codex
 COPY managed-settings.json /etc/claude-code/managed-settings.json
+COPY codex-requirements.toml /etc/codex/requirements.toml
+COPY codex-tool-hook.py /usr/local/lib/celeste/codex-tool-hook.py
+COPY codex-shell.py /usr/local/lib/celeste/codex-shell.py
+COPY codex-app-server.py /usr/local/lib/celeste/codex-app-server.py
+COPY program_sandbox.py /usr/local/lib/celeste/program_sandbox.py
 COPY init-firewall.sh /usr/local/sbin/init-firewall.sh
 COPY entrypoint.sh /usr/local/sbin/entrypoint.sh
 COPY netcheck.py /opt/netcheck.py
 COPY celeste-gate.py /usr/local/lib/celeste/gate.py
 RUN chmod 644 /etc/claude-code/managed-settings.json /usr/local/lib/celeste/gate.py \
+    /etc/codex/requirements.toml /usr/local/lib/celeste/codex-tool-hook.py /usr/local/lib/celeste/codex-shell.py \
+    /usr/local/lib/celeste/codex-app-server.py \
+    /usr/local/lib/celeste/program_sandbox.py \
     && chmod 755 /usr/local/sbin/init-firewall.sh /usr/local/sbin/entrypoint.sh
 
 # 普通用户：工作区 /workspace（可写，挂载宿主目录），知识库 /kb（只读挂载）
 RUN useradd -m -s /bin/bash -u 1500 agent \
-    && mkdir -p /workspace /kb /home/agent/.claude \
-    && chown agent:agent /workspace /home/agent/.claude
+    && mkdir -p /workspace /kb /home/agent/.claude /home/agent/.codex \
+    && chown agent:agent /workspace /home/agent/.claude /home/agent/.codex
 
 ENV CLAUDE_CONFIG_DIR=/home/agent/.claude \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \

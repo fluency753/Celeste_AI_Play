@@ -11,7 +11,7 @@ class ProgramOutputTests(unittest.TestCase):
     def run_fake(self, stdout, stderr='', code=0, publish_failure=False):
         saved=[]
         def external(argv, **kwargs):
-            if 'timeout' in argv:
+            if '/usr/bin/timeout' in argv:
                 return subprocess.CompletedProcess(argv,code,stdout,stderr)
             self.assertIn('-I',argv)  # workspace modules cannot shadow trusted imports
             saved.append(kwargs['stdin'].read().decode('utf-8'))

@@ -17,7 +17,7 @@ from orchestrator.metrics import Metrics
 from orchestrator.note_reminders import NoteReminders
 from orchestrator.pausegate import PauseGate
 from orchestrator.run import add_gate_route
-from orchestrator.sandbox import ProgramResult
+from orchestrator.codex_native import native_tool_hook
 from orchestrator.server import build_server
 
 
@@ -37,7 +37,7 @@ def runner_fixture(engine='codex', **options):
         session = GameSession(cfg, run, metrics)
         session.client = FakeBridge()
         if engine == 'codex':
-            runner = CodexRunner(cfg, run, session, metrics, '', game_server=build_server(session), **options)
+            runner = CodexRunner(cfg, run, session, metrics, 'unused', game_server=build_server(session), **options)
             runner.rpc.request = AsyncMock(return_value={})
         else:
             runner = ClaudeRunner(cfg, run, session, metrics, '', **options)
@@ -203,7 +203,7 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             messages = []
             async def rpc_request(method, params):
                 if method == 'thread/start':
-                    return {'thread': {'id': 'test'}, 'model': 'stub', 'sandbox': {'type': 'readOnly'}}
+                    return {'thread': {'id': 'test'}, 'model': 'stub', 'sandbox': {'type': 'readOnly'}, 'activePermissionProfile': {'id': params['permissions']}}
                 if method == 'turn/start':
                     messages.append(params['input'][0]['text'])
                     started.set()
@@ -236,22 +236,28 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_codex_bash_mentions_do_not_count_as_update_but_actual_write_cancels_pre(self):
         with runner_fixture() as (runner, session, notes):
-            result = ProgramResult(returncode=0, stdout='notes.md was mentioned', stderr='', seconds=.01, timed_out=False)
-            with patch('orchestrator.codex_agent.run_program', return_value=result):
-                response = await runner._request('item/tool/call', {'callId': 'mention', 'tool': 'celeste_bash',
-                    'arguments': {'command': 'echo /workspace/notes.md', 'description': '提及文件名'}})
-            self.assertTrue(response['success'])
+            import subprocess
+            import sys
+            runner.session_id, runner.turn_id, runner.turn_active = 'notes-thread', 'notes-turn', True
+            runner.metrics.update(tool_calls=0)
+            async def program(ident, command, source):
+                data = {'token':runner.native_token, 'session_id':runner.session_id, 'turn_id':runner.turn_id,
+                        'tool_use_id':ident, 'tool_name':'Bash', 'hook_event_name':'PreToolUse',
+                        'tool_input':{'command':command}}
+                before = await native_tool_hook(runner, data)
+                self.assertEqual(before['decision'], 'allow')
+                # Only the external native process is replaced; execute a real isolated program.
+                subprocess.run([sys.executable, '-c', source], cwd=session.workspace,
+                               capture_output=True, check=True)
+                return await native_tool_hook(runner, {**data, 'hook_event_name':'PostToolUse'})
+            await program('mention', 'echo /workspace/notes.md', "print('/workspace/notes.md')")
             self.assertFalse(runner.note_reminders.updated)
             codex_usage(runner, 700)
-            def write_notes(*args, **kwargs):
-                notes.write_bytes(b'new content')
-                return result
-            with patch('orchestrator.codex_agent.run_program', write_notes):
-                response = await runner._request('item/tool/call', {'callId': 'changed', 'tool': 'celeste_bash',
-                    'arguments': {'command': 'python3 update_notes.py', 'description': '整理笔记'}})
-            self.assertTrue(response['success'])
+            response = await program('changed', 'python3 update_notes.py',
+                         f'from pathlib import Path;Path({str(notes)!r}).write_bytes(b"new content")')
+            self.assertEqual(response['decision'], 'allow')
             self.assertTrue(runner.note_reminders.updated)
-            self.assertNotIn('系统·笔记提醒', response_text(response))
+            self.assertNotIn('系统·笔记提醒', response['context'])
             notes.write_bytes(b'original notes')
             codex_usage(runner, 900)
             self.assertEqual(runner.note_reminders.peek(), ())

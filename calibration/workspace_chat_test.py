@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from orchestrator.chat import chat
 from orchestrator.metrics import Metrics
-from orchestrator.sandbox import ProgramResult
+from orchestrator.codex_native import native_tool_hook
 
 
 class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
@@ -45,20 +45,33 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
             async def host(cfg,directory,metrics,container,**options):
                 runner = CodexRunner(cfg,directory,None,metrics,container,**options)
                 async def run():
-                    received['reply'] = await runner._request('item/tool/call',{'tool':'celeste_bash',
-                        'callId':'offline','arguments':{'command':'echo OK','description':'离线验证'}})
+                    import subprocess
+                    import sys
+                    runner.session_id, runner.turn_id, runner.turn_active = 'original', 'offline-turn', True
+                    metrics.update(tool_calls=0)
+                    received['container'] = runner.rpc.container
+                    data = {'token':runner.native_token, 'session_id':runner.session_id, 'turn_id':runner.turn_id,
+                            'tool_use_id':'offline', 'tool_name':'Bash', 'hook_event_name':'PreToolUse',
+                            'tool_input':{'command':'echo OK', 'description':'离线验证'}}
+                    received['reply'] = await native_tool_hook(runner, data)
+                    if received['reply']['decision'] == 'allow':
+                        # Replace only the external native process with a real safe program.
+                        output = subprocess.run([sys.executable, '-c', 'print("OK")'], cwd=directory,
+                                                capture_output=True, text=True, check=True)
+                        received['stdout'] = output.stdout
+                        await native_tool_hook(runner, {**data, 'hook_event_name':'PostToolUse'})
+                    self.assertFalse(metrics.tools_running)
                 runner.run = run
                 try:
                     yield runner
                 finally:
                     runner.close_events()
-            fake = ProgramResult(returncode=0,stdout='OK',stderr='',seconds=.01,timed_out=False)
             with patch('orchestrator.chat.ensure_container',return_value='offline-container'), \
-                 patch('orchestrator.chat.host_runner',host), \
-                 patch('orchestrator.codex_agent.run_program',return_value=fake) as program:
+                 patch('orchestrator.chat.host_runner',host):
                 await chat(root,allow_programs=True,sim=True)
-            self.assertTrue(received['reply']['success'])
-            self.assertEqual(program.call_args.args[0],'offline-container')
+            self.assertEqual(received['reply']['decision'], 'allow')
+            self.assertEqual(received['container'], 'offline-container')
+            self.assertEqual(received['stdout'], 'OK\n')
 
     async def test_explicit_offline_sim_is_available_for_both_runtimes(self):
         for engine, execution in (('codex','container'), ('codex','host'), ('claude','container')):

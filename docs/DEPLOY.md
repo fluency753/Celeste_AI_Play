@@ -28,7 +28,7 @@
 | 桥接 Mod（CelesteAIBridge） | 游戏进程内 | 仓库 `game-bridge/`，本机编译安装 | 逐帧暂停与放行、注入按键、读取状态、截图、规划回放与 MOD 形式 HUD 的绘制、录制节拍与录像专用的游戏声音、新建存档 |
 | 主控（orchestrator） | 本机 Python | 仓库 `orchestrator/` | 连接游戏、智能体、HUD 与 OBS；游戏工具服务（MCP）；执行、日志、回放、录制控制 |
 | 智能体容器 | Docker Desktop | 仓库 `agent-container/` 构建镜像 | 断网沙箱里的 Claude Code（智能体），只能连模型平台与主控端口；原生 GPT 也在这里的零网络沙箱运行它生成的程序 |
-| Codex CLI（可选） | 本机 | OpenAI 官方安装 | 原生 GPT 执行器（`--engine codex`、`start_gpt.ps1`）通过它的 app-server 调用模型，复用 Codex 已有的登录 |
+| Codex CLI（可选） | 智能体镜像 | Dockerfile 固定版本安装 | 原生 GPT 的 App Server 与原生编程工具都在容器内；宿主无需安装 Codex |
 | 知识库 | 只读挂进容器 `/kb` | 仓库 `kb/`；参考资料原文本机生成 | 物理常量、机制、技巧；探索模式只挂 `kb/explore` |
 | 预置模拟器 | 只读挂进容器 `/sim` | **不在仓库里**，由游戏代码生成，只在开发者本机 | 逐帧精确的推演工具（速通模式开模拟器的版本用；探索模式的限额预测也用它） |
 | HUD | 游戏画面内（MOD 形式）或本机网页 + 独立窗口 + OBS 浏览器源（网页形式） | 仓库 `overlay/`（MOD 形式由桥接绘制） | 右上角信息卡片；网页形式另有聊天与会话管理 |
@@ -61,7 +61,7 @@
 | OBS Studio | 28 或更新（开发中用过 32 与 33） | 录制 | `winget install OBSProject.OBSStudio` 或 Steam | 录制时 |
 | ffmpeg | 开发中用 9.0 | 录像编码、成片、纯享版 | `winget install Gyan.FFmpeg` | 录制时 |
 | Claude Code（本机） | 任意新版 | 只用来生成订阅令牌（智能体用的是镜像里固定版本的 Claude Code） | `irm https://claude.ai/install.ps1 \| iex` | 用 Anthropic 平台时 |
-| Codex CLI | 任意新版 | 原生 GPT 执行器 | 按 OpenAI 官方说明安装，然后 `codex login` | 用原生 GPT 时 |
+| Codex CLI | 镜像内固定版本 | 原生 GPT 执行器 | 构建 agent-container，再运行账号容器设备登录 | 用原生 GPT 时 |
 | Git | 任意 | 获取与更新仓库 | `winget install Git.Git` | 建议 |
 | 草莓酱 Mod（Strawberry Jam） | — | 生成知识库参考资料里的训练场与机制库原文 | Olympus | 可选 |
 | NVIDIA 驱动 | 较新 | NVENC 编码 | — | 可选 |
@@ -72,7 +72,7 @@
 | --- | --- | --- |
 | Anthropic（默认） | Claude Max（或 Pro）订阅；用 `claude setup-token` 生成的长期令牌（有效期一年） | 仓库根目录 `.env` 的 `CLAUDE_CODE_OAUTH_TOKEN` |
 | DeepSeek | API 密钥 | 本机的密钥文件，由 `configs\local.providers.json` 的 `key_file` 指向；或环境变量 `DEEPSEEK_API_KEY` |
-| 原生 GPT（Codex） | 能使用 Codex 的 ChatGPT / OpenAI 账号，在本机 `codex login` 登录 | 留在 Codex 自己的本机配置里；主控不读取、不复制，也不传进容器 |
+| 原生 GPT（Codex） | 能使用 Codex 的 ChatGPT 账号，账号容器执行设备登录 | 专用账号卷及各工作区 Codex 卷，程序不可读；仅在工作区未登录时从已初始化账号缓存引入，不覆盖已有登录 |
 | 其他兼容 Anthropic 接口的平台 | API 密钥 | 同 DeepSeek，用 `key_file` 或 `key_env` 指定的环境变量 |
 
 令牌与密钥只在主控进程的内存里传给容器（`docker exec -e 变量名`，值不进命令行），智能体自写的程序在零网络的沙箱里运行并且看不到它们（见 8 节）。
@@ -272,9 +272,13 @@ winget install Gyan.FFmpeg
 
 ### 4.11 原生 GPT（可选）
 
-1. 按 OpenAI 官方说明在本机安装 Codex CLI，执行 `codex login` 登录。主控按 `CODEX_APP_RUNTIME_CLI_PATH` 环境变量、PATH、`%LOCALAPPDATA%\OpenAI\Codex\bin\<版本>\codex.exe`（取最新的一个）的顺序找 `codex`。原生执行器启动 app-server 时关掉了宿主机上的 shell、浏览器、联网搜索等内置工具，模型只能用主控提供的游戏工具与沙箱工具。
-2. Docker Desktop 与智能体镜像照常需要（4.5 节）：GPT 生成的程序在镜像的零网络沙箱里运行。
-3. 用 `start_gpt.ps1` 准备与试玩（5.5 节），或在网页 HUD 的"会话管理"里选"Codex"执行器新建会话。
+1. 构建或更新共享智能体镜像：`docker build -t celeste-agent:0.1 agent-container`。镜像同时安装 Claude Code 与固定版本 Codex；不会把宿主文件系统或 Docker socket 挂进容器。
+2. 初始化本仓库的 Codex 账号环境：`python -m orchestrator.codex_container --account login`，按 `codex login --device-auth` 提示在浏览器完成授权。也可显式执行 `--account import-auth --file <auth.json>` 导入已有文件缓存；普通启动不会读取宿主登录文件。`--account status` 只显示登录状态。
+3. 用 `start_gpt.ps1` 或 HUD 新建并准备。App Server、原生 Shell 与补丁工具都在对应工作区容器内；主控通过 `docker exec -i` 的 stdio 收发协议。工作区、知识库、模拟器挂载与 Claude 复用同一容器生命周期。
+
+旧宿主会话不会自动变为容器会话。停止原主控后，用 `python -m orchestrator.codex_container --container <对应容器> import-session --file <原 rollout.jsonl>` 显式导入原记录，再恢复原运行；导入保留原文件、拒绝覆盖已有目标，不导入宿主配置。工作区原有文件继续复用，容器缺少原会话时明确报错，不另建或回退宿主。旧 `--runtime host` 对 Codex 作为容器模式的兼容别名；host Claude 语义保持不变。
+
+账号缓存初始化到工作区后各自持久化并刷新。官方支持缓存复制，但本轮不保证长期并发刷新互不影响；刷新失败时可对具体容器显式 `login` 重新授权，不自动覆盖缓存或回落宿主。协议及必要差异见 [Codex 容器执行](CODEX_CONTAINER.md)。
 
 ## 5. 运行
 
@@ -351,7 +355,7 @@ winget install Gyan.FFmpeg
 | `--save <存档名>` | 必填 | 游戏内存档名；与当前存档不一致时拒绝开始 |
 | `--save-slot <槽位>` | 无（沿用） | 已有存档的槽位编号；同名存档按槽位区分 |
 | `--create-save` | 关 | 新建存档：放在现有最新存档的下一个槽位，名称允许重复；只能从序章开始，不能与 `--resume`、`--skip-enter`、`--save-slot` 合用 |
-| `--engine claude` / `codex` | `claude`（沿用） | 执行器：Docker 里的 Claude Code，或宿主机 Codex app-server 的原生 GPT |
+| `--engine claude` / `codex` | `claude`（沿用） | 执行器：Docker 里的 Claude Code，或Docker 内 Codex app-server 的原生 GPT |
 | `--mode speedrun` / `explore` | Claude 速通，原生 GPT 探索（沿用，续跑不能改） | 游玩模式；旧参数 `--knowledge full/explore` 等同 |
 | `--provider` | `anthropic`（沿用） | 模型平台：`anthropic`（订阅令牌）、`deepseek` 或 `configs\local.providers.json` 里自定义的；原生 GPT 不用它 |
 | `--model` | Claude：`opus`；原生 GPT：Codex 登录配置的默认模型（沿用） | Anthropic 用别名（`opus`、`fable`、`haiku`）；第三方用它自己的模型名（如 `deepseek-flash`）；原生 GPT 用 Codex 模型目录里的模型名 |
@@ -453,9 +457,9 @@ winget install Gyan.FFmpeg
 | 127.0.0.1:47790 | 主控：HUD 页面与数据 | HUD 窗口、OBS 浏览器源、浏览器 |
 | 127.0.0.1:47792 | `orchestrator.preparation` 默认启动的 HUD 服务 | 准备原生 GPT 会话时的 HUD |
 
-另外，桥接与主控、OBS 插件之间还用本机共享内存交换 MOD 形式 HUD 的图片（`Local\CelesteAIHud-<桥接端口>`）与录像声音（`Local\CelesteAIRecordAudio-47776`）。原生 GPT 的 Codex app-server 由主控作为子进程启动，用标准输入输出通信，不占端口。
+另外，桥接与主控、OBS 插件之间还用本机共享内存交换 MOD 形式 HUD 的图片（`Local\CelesteAIHud-<桥接端口>`）与录像声音（`Local\CelesteAIRecordAudio-47776`）。原生 GPT 的 Codex app-server 由主控通过容器 stdio 启动；App Server 不开放监听端口，工具钩子复用主控的门禁端口。
 
-容器的出站防火墙（`agent-container\init-firewall.sh`，容器启动时生效）只放行：所用模型平台的域名（Anthropic 平台放行 Anthropic 官方域名；第三方平台只放行它自己的域名，不放行 Anthropic）、宿主机上主控的端口、平台配置里的宿主机端口；其余一律拒绝，DNS 也封掉。智能体用 Bash 运行的程序在零网络的沙箱（bubblewrap）里，连模型平台也连不上，环境里也没有令牌与密钥。Claude Code 以受限模式启动，文件工具只能访问工作区、知识库与模拟器目录；联网工具在托管配置里被拒绝；不允许后台任务。原生 GPT 的模型进程在宿主机上，它的文件工具只能读 `/workspace`、`/kb`、`/sim`、只能写 `/workspace`，生成的程序同样在零网络沙箱里运行。改了 `agent-container\` 之后要重新构建镜像，主控发现镜像或平台设置变了会自动重建容器（工作区与会话数据卷保留）。
+容器的出站防火墙（`agent-container\init-firewall.sh`，容器启动时生效）只放行：所用模型平台的域名（Anthropic 平台放行 Anthropic 官方域名；第三方平台只放行它自己的域名，不放行 Anthropic）、宿主机上主控的端口、平台配置里的宿主机端口；其余一律拒绝，DNS 也封掉。智能体用 Bash 运行的程序在零网络的沙箱（bubblewrap）里，连模型平台也连不上，环境里也没有令牌与密钥。Claude Code 以受限模式启动，文件工具只能访问工作区、知识库与模拟器目录；联网工具在托管配置里被拒绝；不允许后台任务。原生 GPT 的 App Server 和原生编程工具也在容器内，使用相同主控门禁和程序额度；Codex 托管权限与共享程序沙箱阻止程序读取登录缓存或联网。改了 `agent-container\` 之后要重新构建镜像，主控发现镜像或平台设置变了会自动重建容器（工作区与会话数据卷保留）。
 
 ## 9. 接入其他平台的模型
 
@@ -475,7 +479,7 @@ winget install Gyan.FFmpeg
 
 ### 9.2 原生 GPT
 
-GPT 使用本机 Codex 已登录的原生执行器（`--engine codex`），不经过"Anthropic 接口 → OpenAI 接口"转换网关（旧的 `--provider openai` 预设已移除）。部署见 4.11 节；运行用 `start_gpt.ps1`（5.5 节），或在网页 HUD 里新建、准备并开始会话。详见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。
+GPT 使用容器内 Codex 已登录的原生执行器（`--engine codex`），不经过"Anthropic 接口 → OpenAI 接口"转换网关（旧的 `--provider openai` 预设已移除）。部署见 4.11 节；运行用 `start_gpt.ps1`（5.5 节），或在网页 HUD 里新建、准备并开始会话。详见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。
 
 ### 9.3 其他兼容 Anthropic 接口的平台
 
@@ -535,7 +539,7 @@ Remove-Item "<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll"
 | OBS 弹出"安全模式" | 用 `tools\obs_setup.py launch` 启动（会清掉崩溃标记）；已弹出时选正常模式 |
 | 录像里没有游戏画面 | 录制时游戏窗口被最小化；主控会自动还原，失败时手动还原后重录 |
 | 第三方平台提示找不到密钥 | 按 9 节写 `configs\local.providers.json` 的 `key_file`，或设环境变量 |
-| 原生 GPT 提示找不到 Codex CLI | 按 4.11 节安装并 `codex login`；装在非标准位置时设 `CODEX_APP_RUNTIME_CLI_PATH` |
+| 原生 GPT 提示容器缺少 Codex 或未登录 | 按 4.11 节更新镜像并执行 `python -m orchestrator.codex_container --account login` |
 | 后台试玩提示主控已经运行 / 端口被占用 | 已有一个后台主控在运行（同一时间只允许一个）；看 `local\background\` 下最新目录的 `status.json` 与 `output.log` |
 | 智能体想从零开始 | 删除 `workspaces\<标签>\`，再 `docker rm -f celeste-agent-<标签>`、`docker volume rm celeste-claude-<标签>` |
 | 存档进度不对 | 从运行目录的 `save_backup\` 恢复（先关游戏），并确认已关闭云同步 |

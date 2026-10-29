@@ -511,6 +511,8 @@ python tools/sync_codex_session_env.py --all --apply          # 备份后批量�
 python tools/sync_codex_session_env.py --run runs/<标签>/<时间戳> --apply
 ```
 
+此脚本仅用于迁移前的宿主 Codex 会话；容器会话明确拒绝宿主离线同步，参见 [Codex 容器执行](CODEX_CONTAINER.md)。
+
 脚本仅处理 Codex，按会话身份去重，使用该会话最近一次保存的设置生成当前工具定义；不改存档选择、模型、推理强度、模式、推演开关和额度。Codex 的旧工具登记由停用宿主后的离线迁移补齐，保留同一会话 ID 和原对话历史，再通过 app-server 恢复校验，不发起模型轮次。容器按当前镜像及原有运行设置校验，必要时重建，保留工作区和会话数据卷。
 
 正在试玩或聊天的工作区、已归档会话会跳过；不自动中断、切换或唤醒它们。报告及原始记录备份存于 `local/session-env-sync-*/`。提示词和知识库在下次启动时从仓库加载，脚本不伪造准备完成或知识库已读记录，也不连接游戏、启动录制或修改 OBS／CeleMod 配置。

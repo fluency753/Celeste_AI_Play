@@ -455,10 +455,14 @@ def about() -> dict:
         pass
     reference = REPO_ROOT / "kb" / "reference"
     try:
-        from orchestrator.codex_rpc import codex_executable
-        codex = codex_executable()
-    except Exception:  # noqa: BLE001（没装 Codex 时它会报错）
-        codex = ""
+        from orchestrator.codex_container import CODEX_VERSION
+        from orchestrator.config import RunConfig, find_docker_exe
+        image = RunConfig(agent='diagnostic', save='', model='').image
+        codex = _run([find_docker_exe(), 'image', 'inspect', '--format',
+                      '{{index .Config.Labels "org.celeste-ai-play.codex-version"}}', image])
+        codex_ready = codex == CODEX_VERSION
+    except (OSError, ValueError):
+        codex, codex_ready = '', False
 
     def read(name: str) -> str:
         try:
@@ -486,7 +490,8 @@ def about() -> dict:
             {"name": "Docker", "value": docker or "没找到", "ok": bool(docker)},
             {"name": "OBS", "value": str(obs_dir) if obs_dir else "没找到",
              "note": "锁步插件已安装" if plugin else ("锁步插件没装" if obs_dir else ""), "ok": bool(obs_dir and plugin)},
-            {"name": "Codex", "value": codex or "没找到", "note": "原生 GPT 执行器用", "ok": bool(codex)},
+            {"name": "Codex", "value": ('镜像内 ' + codex) if codex_ready else '镜像需要更新',
+             "note": '容器执行；账号需单独初始化，不检查宿主 CLI', "ok": codex_ready},
         ],
         "changelog": read("CHANGELOG.md"), "todo": read("TODO.md"),
     }

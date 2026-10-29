@@ -19,7 +19,7 @@ from orchestrator.prepared import load_preparation
 from orchestrator.config import RunConfig
 from orchestrator.kb_study import KbStudy
 from orchestrator.metrics import Metrics
-from orchestrator.sandbox import ProgramResult
+from orchestrator.codex_native import native_tool_hook
 
 
 class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
@@ -38,17 +38,79 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner = CodexRunner(self.cfg, self.root, None, self.metrics, "container", self.study,
                                   game_server=self.server)
         self.runner.session_id, self.runner.turn_id, self.runner.turn_active = 'session', 'turn', True
+        self.runner._event('turn/started', {'turn': {'id': 'turn'}})
+        self.runner.session = SimpleNamespace(done=False)
         self.runner.rpc.request = AsyncMock(return_value={'turnId': 'turn'})
+        self.metrics.update(tool_calls=0)
+        # Docker is the external filesystem boundary; keep metadata consumers real.
+        def metadata_process(container, *command, **kwargs):
+            self.assertEqual(command[:2], ('python3', '-c'))
+            payload = json.loads(Path(command[-1]).read_text(encoding='utf-8'))['payload']
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+        metadata = patch('orchestrator.codex_container._run', side_effect=metadata_process)
+        metadata.start()
+        self.addCleanup(metadata.stop)
 
     def tearDown(self):
         self.temp.cleanup()
 
-    async def read(self, offset):
-        result = {"path": "/kb/README.md", "startLine": offset, "numLines": 1,
-                  "totalLines": 2, "text": "one" if offset == 1 else "two"}
-        with patch("orchestrator.codex_agent.workspace_call", return_value=result):
-            return await self.runner._request("item/tool/call", {"callId": str(offset), "tool": "celeste_read",
-                                                                 "arguments": {"path": "/kb/README.md", "offset": offset}})
+    async def read(self, offset, *, visible=None):
+        ident = f'read-{offset}'
+        command = f"sed -n '{offset}p' /kb/README.md"
+        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
+            'type': 'custom_tool_call', 'call_id': ident, 'name': 'functions.exec',
+            'input': f'text((await tools.exec_command({json.dumps({"cmd": command})})).output)'}})
+        data = self.native_request(ident, command=command)
+        decision = await native_tool_hook(self.runner, data)
+        self.assertEqual(decision['decision'], 'allow')
+        text = ('one\n' if offset == 1 else 'two\n') if visible is None else visible
+        # Internal stdout alone is not evidence of what code mode returned.
+        self.runner._event('item/completed', {'item': {'type': 'commandExecution',
+            'id': ident, 'cwd': '/kb', 'aggregatedOutput': 'one\ntwo\n', 'exitCode': 0, 'status': 'completed'}})
+        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
+            'type': 'custom_tool_call_output', 'call_id': ident,
+            'output': [{'type': 'input_text', 'text': text}]}})
+        return await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
+
+    def native_request(self, ident, **arguments):
+        return {'token': self.runner.native_token, 'session_id': self.runner.session_id,
+                'turn_id': self.runner.turn_id, 'tool_use_id': ident, 'tool_name': 'Bash',
+                'hook_event_name': 'PreToolUse', 'tool_input': {'command': 'python offline.py', **arguments}}
+
+    async def test_native_read_uses_command_directory_and_retries_delayed_rollout(self):
+        self.runner._native_rollout_path = '/session/rollout.jsonl'
+        self.runner._event('turn/started', {'turn': {'id': 'turn'}})
+        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
+            'type': 'custom_tool_call', 'call_id': 'relative'}})
+        data = self.native_request('relative-command', command='cat README.md')
+        with patch('orchestrator.codex_container.read_rollout', side_effect=RuntimeError('not yet flushed')):
+            self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'allow')
+        self.assertEqual(self.runner._native_rollout_offset, 0)
+        self.runner._event('item/completed', {'item': {'type': 'commandExecution',
+            'id': 'relative-command', 'cwd': '/kb', 'exitCode': 0, 'status': 'completed'}})
+        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
+            'type': 'custom_tool_call_output', 'call_id': 'relative',
+            'output': [{'type': 'input_text', 'text': 'one\ntwo\n'}]}})
+        self.assertTrue(self.study.complete())
+        self.assertFalse(self.server.call_tool.called)
+        with patch('orchestrator.codex_container.read_rollout') as tail:
+            await self.runner._sync_native_reads()
+            await self.runner._sync_native_reads()
+        tail.assert_not_called()
+        self.assertTrue(self.runner._native_read_finished)
+
+    async def test_failed_native_read_does_not_credit_matching_error_output(self):
+        self.runner._event('turn/started', {'turn': {'id': 'turn'}})
+        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
+            'type': 'custom_tool_call', 'call_id': 'failed'}})
+        data = self.native_request('failed-command', command='cat /kb/README.md')
+        await native_tool_hook(self.runner, data)
+        self.runner._event('item/completed', {'item': {'type': 'commandExecution',
+            'id': 'failed-command', 'cwd': '/kb', 'exitCode': 1, 'status': 'completed'}})
+        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
+            'type': 'custom_tool_call_output', 'call_id': 'failed',
+            'output': [{'type': 'input_text', 'text': 'one\ntwo\n'}]}})
+        self.assertFalse(self.study.read['README.md'])
 
     async def test_interrupt_cancels_codex_turn_and_waits_for_active_action(self):
         runner = self.runner
@@ -91,6 +153,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.runner._stopped_reason(), '聊天会话切换')
 
     async def test_read_audit_gates_game_then_forwards_text_and_image(self):
+        self.assertIsNotNone(self.runner._native_reads)
         await self.read(1)
         self.assertEqual(self.study.read["README.md"], {1})
         denied = await self.runner._request("item/tool/call", {"tool": "celeste_observe", "arguments": {}})
@@ -105,6 +168,13 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         attachment = self.runner.rpc.request.call_args.args[1]
         self.assertEqual(attachment['input'][1], {'type': 'image', 'url': 'data:image/png;base64,AAAA'})
         self.assertEqual(attachment['expectedTurnId'], 'turn')
+
+    async def test_internal_read_output_not_forwarded_to_model_does_not_credit_study(self):
+        await self.read(1, visible='Read completed but content was not returned.\n')
+        self.assertEqual(self.study.read['README.md'], set())
+        denied = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
+        self.assertFalse(denied['success'])
+        self.server.call_tool.assert_not_called()
 
     async def test_stop_run_can_report_blockage_while_paused_or_study_incomplete(self):
         self.server.call_tool.return_value = CallToolResult.model_validate({'content': [{'type': 'text', 'text': 'paused'}]})
@@ -137,6 +207,9 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 tools = await self.runner.tool_specs()
                 catalogs.append({tool['name']: tool['inputSchema'] for tool in tools})
                 self.assertTrue(expected_game <= catalogs[-1].keys())
+                self.assertNotIn('celeste_bash', catalogs[-1])
+                self.assertNotIn('celeste_read', catalogs[-1])
+                self.assertNotIn('celeste_write', catalogs[-1])
                 self.assertEqual(vars(self.cfg), original)
                 self.assertFalse(hasattr(self.server, 'cutscene_tool'))
                 self.assertFalse(hasattr(self.server, 'reset_observation_delivery'))
@@ -158,6 +231,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_optional_catalog_entries_do_not_enable_execution_or_spend_planning_budget(self):
         self.runner.study = None
+        self.runner._native_reads = None
         self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = False, False, 'auto'
         self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(),
                                            decide=AsyncMock(return_value=(True, '')))
@@ -187,6 +261,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_phase_restrictions_still_explain_rejected_registered_optional_tools(self):
         self.runner.study = None
+        self.runner._native_reads = None
         self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = False, False, 'auto'
         for preparing, chat, paused, explanation in [
                 (True, False, False, '知识库准备'),
@@ -202,6 +277,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exit_tool_is_forwarded_and_denied_when_paused_or_chat_only(self):
         self.runner.study=None
+        self.runner._native_reads = None
         result=await self.runner._request('item/tool/call',{'tool':'celeste_exit_level','arguments':{'reason':'用户要求退出'}})
         self.assertTrue(result['success'])
         self.server.call_tool.assert_awaited_with('exit_level',{'reason':'用户要求退出'})
@@ -213,8 +289,9 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exit_tool_never_uses_container_shell(self):
         self.runner.study=None
+        self.runner._native_reads = None
         self.runner.session=SimpleNamespace()
-        with patch('orchestrator.codex_agent.run_program') as shell:
+        with patch('orchestrator.sandbox.subprocess.run') as shell:
             result=await self.runner._request('item/tool/call',{'tool':'celeste_exit_level',
                 'arguments':{'reason':'按用户要求退出'}})
         self.assertTrue(result['success'])
@@ -224,21 +301,21 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_workspace_chat_can_run_sandbox_programs_but_game_tools_stay_closed(self):
         self.runner.chat_only = self.runner.paused = True
         self.runner.allow_programs = True
-        with patch('orchestrator.codex_agent.run_program', return_value=ProgramResult(0, 'offline', '', .1, False)) as shell:
-            result = await self.runner._request('item/tool/call', {
-                'tool': 'celeste_bash', 'arguments': {'command': 'python offline.py'}})
-            self.assertTrue(result['success'])
-            shell.assert_called_once()
-            for name in ('celeste_act', 'celeste_observe', 'celeste_simulate', 'celeste_exit_level', 'celeste_cutscene'):
-                denied = await self.runner._request('item/tool/call', {'tool': name, 'arguments': {}})
-                self.assertFalse(denied['success'])
-            self.server.call_tool.assert_not_awaited()
-        self.runner.allow_programs = False
-        with patch('orchestrator.codex_agent.run_program') as shell:
-            denied = await self.runner._request('item/tool/call', {
-                'tool': 'celeste_bash', 'arguments': {'command': 'python offline.py'}})
+        data = self.native_request('offline-chat')
+        result = await native_tool_hook(self.runner, data)
+        self.assertEqual(result['decision'], 'allow')
+        self.assertTrue(self.metrics.tools_running)
+        await native_tool_hook(self.runner, {**data, 'hook_event_name':'PostToolUse'})
+        for name in ('celeste_act', 'celeste_observe', 'celeste_simulate', 'celeste_exit_level', 'celeste_cutscene'):
+            denied = await self.runner._request('item/tool/call', {'tool': name, 'arguments': {}})
             self.assertFalse(denied['success'])
-            shell.assert_not_called()
+        self.server.call_tool.assert_not_awaited()
+        self.runner.allow_programs = False
+        denied = await native_tool_hook(self.runner, self.native_request('closed-chat'))
+        self.assertEqual(denied['decision'], 'deny')
+        self.assertIn('只读聊天', denied['reason'])
+        self.assertIn('未开放程序运行', denied['reason'])
+        self.assertFalse(self.metrics.tools_running)
 
     async def test_resume_requests_metadata_only_without_mutating_parameters(self):
         expected = {"thread": {"id": "original", "path": str(self.root / "thread.jsonl")},
@@ -279,8 +356,9 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cutscene_tool_returns_screenshot_alongside_text(self):
         self.runner.study=None
+        self.runner._native_reads = None
         self.runner.session=SimpleNamespace()
-        with patch('orchestrator.codex_agent.run_program') as shell:
+        with patch('orchestrator.sandbox.subprocess.run') as shell:
             result=await self.runner._request('item/tool/call',{'tool':'celeste_cutscene',
                 'arguments':{'action':'advance','frames':30}})
         shell.assert_not_called()
@@ -292,6 +370,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_delivery_failure_keeps_executed_text_and_pauses_without_retry(self):
         self.runner.study = None
+        self.runner._native_reads = None
         self.runner.rpc.request = AsyncMock(side_effect=TimeoutError('attachment timeout'))
         result = await self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}})
         self.assertFalse(result['success'])
@@ -304,6 +383,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_delivery_never_targets_replacement_turn(self):
         self.runner.study = None
+        self.runner._native_reads = None
         async def changed_turn(*args):
             self.runner.turn_id = 'replacement'
             return self.server.call_tool.return_value
@@ -315,6 +395,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pause_during_game_call_does_not_deliver_images_or_resume(self):
         self.runner.study = None
+        self.runner._native_reads = None
         async def paused_during_action(*args):
             self.runner.paused = True
             return self.server.call_tool.return_value
@@ -326,6 +407,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_image_acknowledgment_is_not_reported_delivered(self):
         self.runner.study = None
+        self.runner._native_reads = None
         self.runner.rpc.request.return_value = {'turnId': 'another-turn'}
         result = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
         self.assertFalse(result['success'])
@@ -334,6 +416,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_action_lock_covers_image_delivery_before_next_game_call(self):
         self.runner.study = None
+        self.runner._native_reads = None
         sending, release = asyncio.Event(), asyncio.Event()
         async def send(*args, **kwargs):
             sending.set()
@@ -354,6 +437,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queued_pre_reload_action_is_rejected_after_baseline_ack(self):
         self.runner.study = None
+        self.runner._native_reads = None
         self.runner.session = SimpleNamespace(reload_epoch=0, reload_observation_required=False)
         await self.runner.action_lock.acquire()
         pending = asyncio.create_task(self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}}))
@@ -367,6 +451,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_reload_observation_image_keeps_fresh_observe_required(self):
         self.runner.study = None
+        self.runner._native_reads = None
         self.runner.session = SimpleNamespace(reload_epoch=1, reload_observation_required=False)
         self.runner.rpc.request.side_effect = RuntimeError('image transport failed')
         result = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
@@ -375,6 +460,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queued_old_turn_action_is_rejected_before_game_execution(self):
         self.runner.study = None
+        self.runner._native_reads = None
         sending, release = asyncio.Event(), asyncio.Event()
         async def send(*args, **kwargs):
             sending.set()
@@ -431,10 +517,11 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_bash_has_hard_time_limit(self):
         # 探索模式：单次规划程序的上限（explore_program_s，默认 15 秒，与提示词一致）；速通模式：Bash 最长时长 bash_max_s
         async def call():
-            with patch("orchestrator.codex_agent.run_program", return_value=ProgramResult(0, "ok", "", 0.1, False)) as run:
-                await self.runner._request("item/tool/call", {"tool": "celeste_bash", "arguments": {
-                    "command": "python3 planner.py", "description": "测试下一处落脚点", "timeout_s": 1000}})
-            return run.call_args.args[2]
+            data = self.native_request('cap-' + str(self.metrics.state.tool_calls), timeout_ms=1000000)
+            decision = await native_tool_hook(self.runner, data)
+            self.assertEqual(decision['decision'], 'allow')
+            await native_tool_hook(self.runner, {**data, 'hook_event_name':'PostToolUse'})
+            return decision['timeout_s']
         self.cfg.mode, self.cfg.knowledge_profile = "explore", "explore"
         self.assertEqual(await call(), 15)
         self.cfg.explore_program_s = 40
@@ -442,36 +529,50 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.mode, self.cfg.knowledge_profile = "speedrun", "full"
         self.assertEqual(await call(), 600)
 
-    async def test_bash_exposes_head_tail_and_recoverable_output_metadata(self):
-        import subprocess
+    async def test_native_program_output_keeps_its_app_server_result_without_legacy_repackaging(self):
+        import io
         self.cfg.live=False
         raw='frame=22 bounds=room exits=right\n'+'spinner\n'*1000+'LAST SPINNER'
-        replies=[subprocess.CompletedProcess([],0,raw,''),subprocess.CompletedProcess([],0,
-                 json.dumps({'path':'/workspace/program-output-'+'a'*24+'/output.txt'}),'')]
-        with patch('orchestrator.sandbox.find_docker_exe',return_value='docker'),patch('orchestrator.sandbox.subprocess.run',side_effect=replies):
-            response=await self.runner._request('item/tool/call',{'tool':'celeste_bash',
-                'arguments':{'command':'python geometry.py','description':'读取几何'}})
-        self.assertTrue(response['success'])
-        data=json.loads(response['contentItems'][0]['text'])
-        self.assertTrue(data['stdout'].startswith('frame=22 bounds='))
-        self.assertTrue(data['stdout'].endswith('LAST SPINNER'))
-        self.assertTrue(data['stdout_truncated'])
-        self.assertEqual(data['stdout_chars'],len(raw))
-        self.assertTrue(data['stdout_path'].startswith('/workspace/program-output-'))
+        data = self.native_request('geometry-output')
+        self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'allow')
+        event = {'item':{'type':'commandExecution', 'id':'geometry-output', 'aggregatedOutput':raw,
+                         'exitCode':0, 'status':'completed'}}
+        before = deepcopy(event)
+        self.runner._events = io.StringIO()
+        self.runner._event('item/completed', event)
+        await native_tool_hook(self.runner, {**data, 'hook_event_name':'PostToolUse'})
+        self.assertEqual(event, before)
+        self.assertIsNone(self.runner.fatal)
+        saved = json.loads(self.runner._events.getvalue())['params']['item']
+        self.assertEqual(saved['aggregatedOutput'], raw)
+        self.assertNotIn('stdout_truncated', saved)
+        self.assertFalse(self.metrics.tools_running)
+
+    async def test_legacy_programming_entries_explain_disabled_without_execution(self):
+        for name in ('celeste_bash', 'celeste_write', 'celeste_read'):
+            with self.subTest(tool=name), patch('orchestrator.codex_workspace.workspace_call') as files:
+                result = await self.runner._request('item/tool/call', {'tool':name,
+                    'arguments':{'command':'python3 old.py', 'path':'/workspace/old.py', 'content':'old'}})
+                self.assertFalse(result['success'])
+                text = result['contentItems'][0]['text']
+                self.assertIn('入口已停用', text)
+                self.assertIn('未执行', text)
+                self.assertIn('原生 Shell', text)
+                files.assert_not_called()
+                self.server.call_tool.assert_not_called()
 
     async def test_host_permission_request_is_never_approved(self):
         with self.assertRaises(RuntimeError):
             await self.runner._request("item/permissions/requestApproval", {})
 
     async def test_gate_denial_prevents_sandbox_program(self):
-        self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=lambda *args: None,
-                                          decide=AsyncMock(return_value=(False, "轮次已用完")))
-        with patch("orchestrator.codex_agent.run_program") as run:
-            result = await self.runner._request("item/tool/call", {"callId": "b1", "tool": "celeste_bash",
-                "arguments": {"command": "python3 planner.py", "description": "规划"}})
-        self.assertFalse(result["success"])
-        run.assert_not_called()
-        self.runner.gate.decide.assert_awaited_once_with("Bash", "b1")
+        from orchestrator.pausegate import PauseGate
+        self.runner.gate = PauseGate(self.metrics, enabled=True, started=True, sim_only=True)
+        result = await native_tool_hook(self.runner, self.native_request('b1'))
+        self.assertEqual(result['decision'], 'deny')
+        self.assertIn('轮次', result['reason'])
+        self.assertFalse(self.metrics.tools_running)
+        self.assertEqual(self.runner.gate.bank, 0)
 
     def test_usage_and_compaction_are_actual_events(self):
         self.runner._event("thread/tokenUsage/updated", {"tokenUsage": {

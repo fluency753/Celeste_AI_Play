@@ -50,7 +50,7 @@ def catalog(anchor, runs_root=None, archive_root=None):
     for path in sorted(set(candidates), key=lambda p: str(p.parent)):
         state = read_json(path)
         ident = state.get("session_id")
-        if state.get("engine") not in RUNTIMES or not isinstance(ident, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", ident) or runtime(state['engine']).archived(ident, archive_root):
+        if state.get("engine") not in RUNTIMES or not isinstance(ident, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", ident) or runtime(state['engine']).archived(ident, archive_root, state=state):
             continue
         stamp = state.get("conversation_origin", path.parent.name)
         if re.fullmatch(r"\d{8}-\d{6}", stamp):
