@@ -54,63 +54,24 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    async def read(self, offset, *, visible=None):
-        ident = f'read-{offset}'
-        command = f"sed -n '{offset}p' /kb/README.md"
-        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
-            'type': 'custom_tool_call', 'call_id': ident, 'name': 'functions.exec',
-            'input': f'text((await tools.exec_command({json.dumps({"cmd": command})})).output)'}})
-        data = self.native_request(ident, command=command)
-        decision = await native_tool_hook(self.runner, data)
-        self.assertEqual(decision['decision'], 'allow')
-        text = ('one\n' if offset == 1 else 'two\n') if visible is None else visible
-        # Internal stdout alone is not evidence of what code mode returned.
-        self.runner._event('item/completed', {'item': {'type': 'commandExecution',
-            'id': ident, 'cwd': '/kb', 'aggregatedOutput': 'one\ntwo\n', 'exitCode': 0, 'status': 'completed'}})
-        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
-            'type': 'custom_tool_call_output', 'call_id': ident,
-            'output': [{'type': 'input_text', 'text': text}]}})
-        return await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
+    def file_result(self, offset=1, *, path='/kb/README.md', text=None, images=None):
+        return {'kind': 'text', 'path': path,
+                'text': ('one' if offset == 1 else 'two') if text is None else text,
+                'file': {'filePath': path, 'startLine': offset, 'numLines': 1, 'totalLines': 2},
+                'images': images or []}
+
+    async def read(self, offset):
+        with patch('orchestrator.codex_agent.read_file', return_value=self.file_result(offset)) as files:
+            result = await self.runner._request('item/tool/call', {'callId': f'read-{offset}',
+                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md', 'offset': offset, 'limit': 1}})
+        files.assert_called_once_with('container', {'file_path': '/kb/README.md', 'offset': offset, 'limit': 1})
+        self.assertTrue(result['success'])
+        return result
 
     def native_request(self, ident, **arguments):
         return {'token': self.runner.native_token, 'session_id': self.runner.session_id,
                 'turn_id': self.runner.turn_id, 'tool_use_id': ident, 'tool_name': 'Bash',
                 'hook_event_name': 'PreToolUse', 'tool_input': {'command': 'python offline.py', **arguments}}
-
-    async def test_native_read_uses_command_directory_and_retries_delayed_rollout(self):
-        self.runner._native_rollout_path = '/session/rollout.jsonl'
-        self.runner._event('turn/started', {'turn': {'id': 'turn'}})
-        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
-            'type': 'custom_tool_call', 'call_id': 'relative'}})
-        data = self.native_request('relative-command', command='cat README.md')
-        with patch('orchestrator.codex_container.read_rollout', side_effect=RuntimeError('not yet flushed')):
-            self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'allow')
-        self.assertEqual(self.runner._native_rollout_offset, 0)
-        self.runner._event('item/completed', {'item': {'type': 'commandExecution',
-            'id': 'relative-command', 'cwd': '/kb', 'exitCode': 0, 'status': 'completed'}})
-        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
-            'type': 'custom_tool_call_output', 'call_id': 'relative',
-            'output': [{'type': 'input_text', 'text': 'one\ntwo\n'}]}})
-        self.assertTrue(self.study.complete())
-        self.assertFalse(self.server.call_tool.called)
-        with patch('orchestrator.codex_container.read_rollout') as tail:
-            await self.runner._sync_native_reads()
-            await self.runner._sync_native_reads()
-        tail.assert_not_called()
-        self.assertTrue(self.runner._native_read_finished)
-
-    async def test_failed_native_read_does_not_credit_matching_error_output(self):
-        self.runner._event('turn/started', {'turn': {'id': 'turn'}})
-        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
-            'type': 'custom_tool_call', 'call_id': 'failed'}})
-        data = self.native_request('failed-command', command='cat /kb/README.md')
-        await native_tool_hook(self.runner, data)
-        self.runner._event('item/completed', {'item': {'type': 'commandExecution',
-            'id': 'failed-command', 'cwd': '/kb', 'exitCode': 1, 'status': 'completed'}})
-        self.runner._event('rawResponseItem/completed', {'turnId': 'turn', 'item': {
-            'type': 'custom_tool_call_output', 'call_id': 'failed',
-            'output': [{'type': 'input_text', 'text': 'one\ntwo\n'}]}})
-        self.assertFalse(self.study.read['README.md'])
 
     async def test_interrupt_cancels_codex_turn_and_waits_for_active_action(self):
         runner = self.runner
@@ -153,7 +114,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.runner._stopped_reason(), '聊天会话切换')
 
     async def test_read_audit_gates_game_then_forwards_text_and_image(self):
-        self.assertIsNotNone(self.runner._native_reads)
         await self.read(1)
         self.assertEqual(self.study.read["README.md"], {1})
         denied = await self.runner._request("item/tool/call", {"tool": "celeste_observe", "arguments": {}})
@@ -169,12 +129,100 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attachment['input'][1], {'type': 'image', 'url': 'data:image/png;base64,AAAA'})
         self.assertEqual(attachment['expectedTurnId'], 'turn')
 
-    async def test_internal_read_output_not_forwarded_to_model_does_not_credit_study(self):
-        await self.read(1, visible='Read completed but content was not returned.\n')
-        self.assertEqual(self.study.read['README.md'], set())
-        denied = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
-        self.assertFalse(denied['success'])
-        self.server.call_tool.assert_not_called()
+    async def test_kb_read_counts_only_after_direct_input_acknowledgement(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def steer(method, params, **kwargs):
+            self.assertEqual(method, 'turn/steer')
+            self.assertIn('one', json.dumps(params, ensure_ascii=False))
+            self.assertEqual(self.study.read['README.md'], set())
+            entered.set()
+            await release.wait()
+            return {'turnId': 'turn'}
+        self.runner.rpc.request = steer
+        with patch('orchestrator.codex_agent.read_file', return_value=self.file_result()):
+            task = asyncio.create_task(self.runner._request('item/tool/call', {
+                'callId': 'hidden-kb', 'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}}))
+            await asyncio.wait_for(entered.wait(), 1)
+            self.assertFalse(self.study.read['README.md'])
+            release.set()
+            result = await task
+        self.assertTrue(result['success'])
+        self.assertEqual(self.study.read['README.md'], {1})
+        # Code mode may hide the tool return; required content was independently
+        # delivered as current-turn input before its receipt was acknowledged.
+
+    async def test_kb_delivery_failure_does_not_credit_reading(self):
+        self.runner.rpc.request = AsyncMock(side_effect=RuntimeError('attachment delivery failed'))
+        with patch('orchestrator.codex_agent.read_file', return_value=self.file_result()):
+            result = await self.runner._request('item/tool/call', {'callId': 'failed-kb',
+                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}})
+        self.assertFalse(result['success'])
+        self.assertFalse(self.study.read['README.md'])
+
+    async def test_kb_attachment_failure_does_not_credit_text_metadata(self):
+        self.runner.rpc.request = AsyncMock(side_effect=RuntimeError('image delivery failed'))
+        result_file = self.file_result(images=[{'mimeType': 'image/png', 'data': 'AAAA'}])
+        with patch('orchestrator.codex_agent.read_file', return_value=result_file):
+            result = await self.runner._request('item/tool/call', {'callId': 'failed-kb-image',
+                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}})
+        self.assertFalse(result['success'])
+        self.assertFalse(self.study.read['README.md'])
+
+    async def test_kb_acknowledgement_for_other_turn_does_not_credit_reading(self):
+        self.runner.rpc.request = AsyncMock(return_value={'turnId': 'replacement'})
+        with patch('orchestrator.codex_agent.read_file', return_value=self.file_result()):
+            result = await self.runner._request('item/tool/call', {'callId': 'wrong-turn-kb',
+                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}})
+        self.assertFalse(result['success'])
+        self.assertFalse(self.study.read['README.md'])
+
+    async def test_native_shell_kb_output_does_not_count_as_explicit_read(self):
+        data = self.native_request('native-cat', command='cat /kb/README.md')
+        self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'allow')
+        self.runner._event('item/completed', {'item': {'type': 'commandExecution',
+            'id': 'native-cat', 'cwd': '/kb', 'exitCode': 0, 'status': 'completed',
+            'aggregatedOutput': 'one\ntwo\n'}})
+        await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
+        self.assertFalse(self.study.read['README.md'])
+
+    async def test_ordinary_text_read_returns_text_without_steering_and_is_allowed_in_paused_chat(self):
+        self.runner.chat_only = self.runner.paused = True
+        with patch('orchestrator.codex_agent.read_file', return_value=self.file_result(
+                path='/workspace/notes.md', text='ordinary workspace text')):
+            result = await self.runner._request('item/tool/call', {'callId': 'notes',
+                'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/notes.md'}})
+        self.assertTrue(result['success'])
+        self.assertIn('ordinary workspace text', json.dumps(result, ensure_ascii=False))
+        self.runner.rpc.request.assert_not_awaited()
+        self.assertFalse(self.study.read['README.md'])
+
+    async def test_read_image_is_delivered_as_same_turn_image_in_paused_chat(self):
+        self.runner.chat_only = self.runner.paused = True
+        image = {'mimeType': 'image/png', 'data': 'AAAA'}
+        with patch('orchestrator.codex_agent.read_file', return_value={
+                'kind': 'image', 'path': '/workspace/picture.png', 'images': [image], 'text': 'picture'}):
+            result = await self.runner._request('item/tool/call', {'callId': 'picture',
+                'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/picture.png'}})
+        self.assertTrue(result['success'])
+        self.assertNotIn('AAAA', json.dumps(result))
+        params = self.runner.rpc.request.call_args.args[1]
+        self.assertEqual(params['expectedTurnId'], 'turn')
+        self.assertTrue(any(part.get('type') == 'image' and part.get('url') ==
+            'data:image/png;base64,AAAA' for part in params['input']))
+
+    async def test_read_worker_error_is_not_reported_as_success(self):
+        with patch('orchestrator.codex_agent.read_file', return_value={
+                'kind': 'error', 'text': 'file missing'}):
+            result = await self.runner._request('item/tool/call', {'callId': 'missing',
+                'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/missing'}})
+        self.assertFalse(result['success'])
+        self.assertIn('file missing', json.dumps(result))
+        self.runner.rpc.request.assert_not_awaited()
+
+    def test_preparation_prompt_requires_explicit_read_without_disabling_native_programming(self):
+        self.runner.prepare_only = True
+        prompt = self.runner._first_prompt()
+        self.assertIn('celeste_read', prompt)
 
     async def test_stop_run_can_report_blockage_while_paused_or_study_incomplete(self):
         self.server.call_tool.return_value = CallToolResult.model_validate({'content': [{'type': 'text', 'text': 'paused'}]})
@@ -208,7 +256,9 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 catalogs.append({tool['name']: tool['inputSchema'] for tool in tools})
                 self.assertTrue(expected_game <= catalogs[-1].keys())
                 self.assertNotIn('celeste_bash', catalogs[-1])
-                self.assertNotIn('celeste_read', catalogs[-1])
+                self.assertIn('celeste_read', catalogs[-1])
+                schema = catalogs[-1]['celeste_read']['properties']
+                self.assertTrue({'file_path', 'path', 'offset', 'limit', 'pages'} <= schema.keys())
                 self.assertNotIn('celeste_write', catalogs[-1])
                 self.assertEqual(vars(self.cfg), original)
                 self.assertFalse(hasattr(self.server, 'cutscene_tool'))
@@ -231,7 +281,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_optional_catalog_entries_do_not_enable_execution_or_spend_planning_budget(self):
         self.runner.study = None
-        self.runner._native_reads = None
         self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = False, False, 'auto'
         self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(),
                                            decide=AsyncMock(return_value=(True, '')))
@@ -261,7 +310,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_phase_restrictions_still_explain_rejected_registered_optional_tools(self):
         self.runner.study = None
-        self.runner._native_reads = None
         self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = False, False, 'auto'
         for preparing, chat, paused, explanation in [
                 (True, False, False, '知识库准备'),
@@ -277,7 +325,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exit_tool_is_forwarded_and_denied_when_paused_or_chat_only(self):
         self.runner.study=None
-        self.runner._native_reads = None
         result=await self.runner._request('item/tool/call',{'tool':'celeste_exit_level','arguments':{'reason':'用户要求退出'}})
         self.assertTrue(result['success'])
         self.server.call_tool.assert_awaited_with('exit_level',{'reason':'用户要求退出'})
@@ -289,7 +336,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exit_tool_never_uses_container_shell(self):
         self.runner.study=None
-        self.runner._native_reads = None
         self.runner.session=SimpleNamespace()
         with patch('orchestrator.sandbox.subprocess.run') as shell:
             result=await self.runner._request('item/tool/call',{'tool':'celeste_exit_level',
@@ -333,7 +379,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_metadata_only_resume_keeps_dynamic_tool_validation(self):
         from orchestrator.modes import game_tools
         path = self.root / 'resumed-thread.jsonl'
-        tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)]
+        tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)] + [{'name': 'celeste_read'}]
         path.write_text(json.dumps({'payload': {'dynamic_tools': tools}}), encoding='utf-8')
         response = {'thread': {'id': 'original', 'path': str(path)}, 'sandbox': {'type': 'readOnly'}}
         self.runner.rpc.request = AsyncMock(return_value=response)
@@ -341,7 +387,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner._validate_resumed_tools(result['thread'])
         self.assertNotIn('turns', result['thread'])
         path.write_text(json.dumps({'payload': {'dynamic_tools': []}}), encoding='utf-8')
-        with self.assertRaisesRegex(RuntimeError, '缺少正式游戏工具'):
+        with self.assertRaisesRegex(RuntimeError, '缺少当前必需工具'):
             self.runner._validate_resumed_tools(result['thread'])
 
     async def test_writer_conflict_forks_history_and_records_recovery(self):
@@ -356,7 +402,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cutscene_tool_returns_screenshot_alongside_text(self):
         self.runner.study=None
-        self.runner._native_reads = None
         self.runner.session=SimpleNamespace()
         with patch('orchestrator.sandbox.subprocess.run') as shell:
             result=await self.runner._request('item/tool/call',{'tool':'celeste_cutscene',
@@ -370,7 +415,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_delivery_failure_keeps_executed_text_and_pauses_without_retry(self):
         self.runner.study = None
-        self.runner._native_reads = None
         self.runner.rpc.request = AsyncMock(side_effect=TimeoutError('attachment timeout'))
         result = await self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}})
         self.assertFalse(result['success'])
@@ -383,7 +427,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_delivery_never_targets_replacement_turn(self):
         self.runner.study = None
-        self.runner._native_reads = None
         async def changed_turn(*args):
             self.runner.turn_id = 'replacement'
             return self.server.call_tool.return_value
@@ -395,7 +438,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pause_during_game_call_does_not_deliver_images_or_resume(self):
         self.runner.study = None
-        self.runner._native_reads = None
         async def paused_during_action(*args):
             self.runner.paused = True
             return self.server.call_tool.return_value
@@ -407,7 +449,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_image_acknowledgment_is_not_reported_delivered(self):
         self.runner.study = None
-        self.runner._native_reads = None
         self.runner.rpc.request.return_value = {'turnId': 'another-turn'}
         result = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
         self.assertFalse(result['success'])
@@ -416,7 +457,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_action_lock_covers_image_delivery_before_next_game_call(self):
         self.runner.study = None
-        self.runner._native_reads = None
         sending, release = asyncio.Event(), asyncio.Event()
         async def send(*args, **kwargs):
             sending.set()
@@ -437,7 +477,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queued_pre_reload_action_is_rejected_after_baseline_ack(self):
         self.runner.study = None
-        self.runner._native_reads = None
         self.runner.session = SimpleNamespace(reload_epoch=0, reload_observation_required=False)
         await self.runner.action_lock.acquire()
         pending = asyncio.create_task(self.runner._request('item/tool/call', {'tool': 'celeste_act', 'arguments': {}}))
@@ -451,7 +490,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_reload_observation_image_keeps_fresh_observe_required(self):
         self.runner.study = None
-        self.runner._native_reads = None
         self.runner.session = SimpleNamespace(reload_epoch=1, reload_observation_required=False)
         self.runner.rpc.request.side_effect = RuntimeError('image transport failed')
         result = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
@@ -460,7 +498,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queued_old_turn_action_is_rejected_before_game_execution(self):
         self.runner.study = None
-        self.runner._native_reads = None
         sending, release = asyncio.Event(), asyncio.Event()
         async def send(*args, **kwargs):
             sending.set()
@@ -491,10 +528,11 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     def test_resumed_session_reports_missing_dynamic_tools_without_bash_fallback(self):
         path = self.root / 'thread.jsonl'
-        tools = ['celeste_observe', 'celeste_act', 'celeste_cutscene', 'celeste_exit_level',
+        tools = ['celeste_read', 'celeste_observe', 'celeste_act', 'celeste_cutscene', 'celeste_exit_level',
                  'celeste_narrate', 'celeste_set_effort', 'celeste_stop_run']
         path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
         self.runner._validate_resumed_tools({'path': str(path)})
+
         self.cfg.sim_assist = True
         with self.assertRaisesRegex(RuntimeError, 'celeste_simulate'):
             self.runner._validate_resumed_tools({'path': str(path)})
@@ -502,12 +540,22 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
         self.runner._validate_resumed_tools({'path': str(path)})
 
+
+    def test_resume_without_explicit_read_registration_is_rejected(self):
+        path = self.root / 'native-only-thread.jsonl'
+        tools = ['celeste_' + name for name in ('observe', 'act', 'narrate',
+                 'set_effort', 'stop_run', 'exit_level', 'cutscene', 'simulate')]
+        path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name}
+            for name in tools]}}), encoding='utf-8')
+        with self.assertRaisesRegex(RuntimeError, 'celeste_read'):
+            self.runner._validate_resumed_tools({'path': str(path)})
+
     def test_resume_does_not_require_tools_disabled_by_play_mode(self):
         self.cfg.live = False
         self.cfg.mode = 'speedrun'
         self.cfg.cutscene_mode = 'auto'
         path = self.root / 'thread.jsonl'
-        tools = ['celeste_observe', 'celeste_act', 'celeste_narrate', 'celeste_set_effort', 'celeste_stop_run']
+        tools = ['celeste_read', 'celeste_observe', 'celeste_act', 'celeste_narrate', 'celeste_set_effort', 'celeste_stop_run']
         path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
         self.runner._validate_resumed_tools({'path': str(path)})
         self.cfg.live = True
@@ -549,8 +597,8 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.metrics.tools_running)
 
     async def test_legacy_programming_entries_explain_disabled_without_execution(self):
-        for name in ('celeste_bash', 'celeste_write', 'celeste_read'):
-            with self.subTest(tool=name), patch('orchestrator.codex_workspace.workspace_call') as files:
+        for name in ('celeste_bash', 'celeste_write'):
+            with self.subTest(tool=name), patch('orchestrator.codex_agent.read_file') as files:
                 result = await self.runner._request('item/tool/call', {'tool':name,
                     'arguments':{'command':'python3 old.py', 'path':'/workspace/old.py', 'content':'old'}})
                 self.assertFalse(result['success'])

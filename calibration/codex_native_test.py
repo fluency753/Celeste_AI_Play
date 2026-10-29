@@ -143,10 +143,9 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.charges, [])
         self.assertFalse(self.metrics.tools_running)
 
-    async def test_readonly_chat_native_file_reads_use_read_gate_without_program_charge(self):
-        guard_calls = []
+    async def test_all_native_shell_commands_use_shared_bash_policy_in_readonly_chat(self):
         self.runner.native_session = SimpleNamespace(cfg=self.cfg,
-            program_guard=lambda: guard_calls.append('guard') or '本次仅聊天，不允许运行程序',
+            program_guard=lambda: '本次仅聊天，不允许运行程序',
             program_run_denied=self.session.program_run_denied)
         for index, command in enumerate(("cat '/kb/file with spaces.md'",
                                          "sed -n '2,4p' /kb/README.md",
@@ -155,11 +154,19 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(command=command):
                 data = self.data(tool_use_id=f'read-{index}', tool_input={'command': command})
                 decision = await native_tool_hook(self.runner, data)
-                self.assertEqual(decision['decision'], 'allow')
-                self.assertEqual(self.runner._native_tool_calls[f'read-{index}']['canonical'], 'Read')
-                await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
-        self.assertEqual(guard_calls, [])
+                self.assertEqual(decision['decision'], 'deny')
+                self.assertIn('仅聊天', decision['reason'])
+                self.assertEqual(self.runner._native_tool_calls[f'read-{index}']['canonical'], 'Bash')
         self.assertEqual(self.charges, [])
+        self.assertFalse(self.metrics.tools_running)
+
+    async def test_native_cat_charges_program_budget_like_claude_bash(self):
+        data = self.data(tool_input={'command': 'cat /kb/README.md'})
+        result = await native_tool_hook(self.runner, data)
+        self.assertEqual(result['decision'], 'allow')
+        self.assertEqual(self.charges, ['program'])
+        self.assertEqual(self.runner._native_tool_calls['call-a']['canonical'], 'Bash')
+        await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
         self.assertFalse(self.metrics.tools_running)
 
     async def test_unsafe_read_expressions_keep_bash_policy_and_are_rejected_in_readonly_chat(self):

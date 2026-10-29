@@ -81,13 +81,6 @@ async def native_tool_hook(runner, data):
         runner.metrics.add(tool_calls=1)
         from .tool_gate import decide_tool
         canonical = {'Bash': 'Bash', 'apply_patch': 'Write', 'view_image': 'Read'}[name]
-        from .native_reading import parse_read_command
-        intent = parse_read_command(arguments['command'], data.get('cwd') or '/workspace') if name == 'Bash' else None
-        if intent is not None:
-            canonical = 'Read'
-        sync = getattr(runner, '_sync_native_reads', None)
-        if sync is not None:
-            await sync()
         gate = runner.gate
         if gate is None:
             from .pausegate import PauseGate
@@ -107,7 +100,6 @@ async def native_tool_hook(runner, data):
                 runner.playback.note_tool_use(ident, ident, 'Bash', arguments)
         calls[ident] = {'name': name, 'turn': turn, 'decision': decision,
                         'canonical': canonical,
-                        'read_command': arguments['command'] if intent is not None else None,
                         'input_keys': sorted(arguments),
                         'running': decision.get('decision') == 'allow'}
         # Keep in-flight calls, with a small retry window for completed requests.

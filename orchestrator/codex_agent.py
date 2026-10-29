@@ -7,13 +7,13 @@ import json
 import re
 import time
 import secrets
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 from .prompting import play_prompt
 from .modes import game_tools
 from .codex_rpc import CodexRPC
+from .codex_read import read_file
 from .session_controls import RuntimeCapabilities, SessionControls
 from .telemetry import public_event
 
@@ -32,8 +32,8 @@ def codex_tool_mapping(cfg) -> str:
     """原生 GPT 的提示词在 play_prompt 之后另加的工具映射（控制台的提示词预览也显示它）。"""
     return ("# 原生 Codex 工具映射\n"
             "你与原生 Shell、文件编辑工具都在 Docker 容器内，工作目录为 /workspace。"
-            "使用原生 Shell 读取、搜索、运行程序，使用原生 apply_patch 编辑文件；游戏工具加 celeste_ 前缀。"
-            "文件读取也使用原生 Shell，例如 cat 或 sed -n 分页；必读资料每次外层调用只读一个文件或一页并显示原文，按实际可见的完整行核验。"
+            "使用原生 Shell 搜索、读取和运行程序，使用原生 apply_patch 编辑文件；游戏工具加 celeste_ 前缀。"
+            "celeste_read 提供文件读取、文本分页与图像查看；必读知识库必须显式使用 celeste_read，Shell 读取不计入准备进度。"
             "原生工具与 Claude 共用主控门禁、程序额度和零网络沙箱；不得绕过这些限制。"
             "不连接宿主桥接、浏览器或其他服务，不启动子智能体。"
             "只输出给观众的简短公开解说，不输出内部推理正文。"
@@ -76,12 +76,6 @@ class CodexRunner(SessionControls):
         self.message_text = {}
         self.compacted = set()
         self.called_tools = []
-        from .native_read_receipts import NativeReadReceipts
-        self._native_reads = NativeReadReceipts(study) if study is not None else None
-        self._native_read_lock = asyncio.Lock()
-        self._native_rollout_path = None
-        self._native_rollout_offset = 0
-        self._native_read_finished = False
         self.native_token = secrets.token_urlsafe(32)
         self.native_session = session or SimpleNamespace(cfg=cfg, metrics=metrics, workspace=cfg.workspace_dir)
         self._native_web = None
@@ -123,7 +117,13 @@ class CodexRunner(SessionControls):
             self.rpc.environment['MCP_PORT'] = str(self.cfg.mcp_port)
 
     async def tool_specs(self):
-        tools = []
+        tools = [spec('celeste_read',
+            'Read：读取容器内文件。必读知识库必须使用本工具；文本带行号，offset为1起始行，limit为行数。'
+            '支持文本、PNG/JPEG/GIF/WebP、PDF及Jupyter notebook；PDF pages为1起始页范围（最多20页）。'
+            '正文或图像会直接送达当前轮次，不打印图像编码。仅读取/workspace、/kb、/sim，不执行程序、不消耗程序次数。',
+            {'file_path': TEXT, 'path': {**TEXT, 'description': '旧版file_path别名，二者不能冲突'},
+             'offset': {'type': 'integer', 'minimum': 1},
+             'limit': {'type': 'integer', 'minimum': 1}, 'pages': TEXT})]
         from .server import build_server
         # Codex persists the initial tool catalog across prepare/chat/play and
         # later setting changes. Register the complete interface on a descriptor
@@ -142,12 +142,8 @@ class CodexRunner(SessionControls):
         return tools
 
     def _event(self, method, params):
-        if method == 'turn/started' and self._native_reads is not None and not self._native_read_finished:
-            self._native_reads.begin_turn((params.get('turn') or {}).get('id'))
-        if method == 'rawResponseItem/completed':
-            if self._native_reads is not None and not self._native_read_finished:
-                self._native_reads.response_item(params.get('item') or {}, turn_id=params.get('turnId'))
-            return  # Raw messages may contain analysis; never put them into public logs.
+        if method.startswith('rawResponse'):
+            return  # Raw messages may include analysis; never publish them.
         # 不记录 reasoning 正文或摘要；公开消息和结构化用量可以用于 HUD。
         item = params.get("item") or {}
         if "reasoning" not in method.lower() and item.get("type") != "reasoning" and self._events:
@@ -178,19 +174,6 @@ class CodexRunner(SessionControls):
                     self.metrics.set_thought(latest)
                 self._last_public = time.monotonic()
         elif method in ("item/started", "item/completed"):
-            if method == 'item/completed' and item.get('type') == 'commandExecution':
-                call = self.__dict__.get('_native_tool_calls', {}).get(item.get('id'))
-                if (self._native_reads is not None and not self._native_read_finished
-                        and call is not None and call.get('read_command')
-                        and not call.get('read_noted') and call['turn'] == self._native_reads.turn_id
-                        and call['decision'].get('decision') == 'allow' and item.get('exitCode') == 0):
-                    from .native_reading import parse_read_command
-                    # Hook cwd is the session cwd, not exec_command's workdir.
-                    # Command execution identifies the actual directory and ID.
-                    intent = parse_read_command(call['read_command'], item.get('cwd'))
-                    if intent is not None:
-                        call['read_noted'] = True
-                        self._native_reads.note_read(intent)
             if method == "item/completed" and item.get("type") == "agentMessage" and self.control:
                 self._public_message(item.get("id", "reply"), item.get("text", ""))
                 if self.naming_only:
@@ -217,40 +200,15 @@ class CodexRunner(SessionControls):
             self.turn_result = params.get("turn") or {}
             self.turn_done.set()
 
-    async def _sync_native_reads(self):
-        receipts = self._native_reads
-        if receipts is None or self._native_read_finished:
-            return
-        async with self._native_read_lock:
-            if self._native_rollout_path and not self.study.complete():
-                from .codex_container import read_rollout
-                try:
-                    while True:
-                        offset, data = await asyncio.to_thread(read_rollout, self.container,
-                                            self._native_rollout_path, self._native_rollout_offset)
-                        receipts.ingest_rollout(data)
-                        self._native_rollout_offset = offset
-                        if len(data) < 4194304:
-                            break
-                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
-                    # A delayed rollout is missing evidence, not a prohibition
-                    # on reading again. Keep the cursor for the next flush.
-                    pass
-            self.metrics.update(kb_progress=round(self.study.progress(), 4))
-            if self.study.finished is not None and not self._native_read_finished:
-                self._native_read_finished = True
-                self.metrics.kb_finished()
-
     async def _request(self, method, params):
         if method != "item/tool/call":
             # 拒绝任何宿主权限扩张/工具授权请求；不代替用户批准。
             raise RuntimeError(f"只接受客户端动态工具请求，拒绝 {method}")
         name, args = params.get("tool", ""), params.get("arguments") or {}
-        if name in {'celeste_bash', 'celeste_write', 'celeste_read'}:
+        if name in {'celeste_bash', 'celeste_write'}:
             return self._notes_response({'contentItems': [{'type': 'inputText', 'text':
                 '此会话保留了旧编程工具登记，但该入口已停用，本次未执行。请用容器内原生 Shell 和 apply_patch；'
-                '只读聊天可用 cat/sed/head/tail 读取文件；运行程序须先由用户开放程序能力。'}], 'success': False})
-        await self._sync_native_reads()
+                '只读聊天可用 celeste_read 读取文件；运行程序须先由用户开放程序能力。'}], 'success': False})
         reload_ticket = (getattr(self.session, 'reload_epoch', 0),
                          getattr(self.session, 'reload_observation_required', False))
         if not isinstance(args, dict):
@@ -263,7 +221,7 @@ class CodexRunner(SessionControls):
         self.called_tools.append(name)
         self.metrics.add(tool_calls=1)
         game = name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_narrate", "celeste_stop_run", "celeste_exit_level", "celeste_cutscene", "celeste_simulate")
-        detail = args.get("description") or args.get("path") or ""
+        detail = args.get("description") or args.get("file_path") or args.get("path") or ""
         self.metrics.tool_begin(ident, game_tool=game, label=name + (" · " + detail if detail else ""))
         try:
             if name == 'celeste_set_effort' and self.manual_effort is not None:
@@ -277,13 +235,28 @@ class CodexRunner(SessionControls):
                 raise ValueError("用户已暂停试玩。请只回复用户，不推进游戏或运行规划；结束本轮并等待继续。")
             if game and not self.prepare_only and not self.chat_only and name.removeprefix('celeste_') not in game_tools(self.cfg):
                 raise ValueError(f"当前试玩配置未启用 {name}，本次请求未执行；请使用当前已启用的工具。")
-            if self.gate and self.gate.enabled and name != "celeste_stop_run":
-                # app-server 的动态调用没有 Claude 消息 ID；每次调用独立记一轮。
+            read_context = ''
+            if name == 'celeste_read':
+                from .tool_gate import decide_tool
+                gate = self.gate or getattr(self, '_native_gate', None)
+                if gate is None:
+                    from .pausegate import PauseGate
+                    gate = self._native_gate = PauseGate(self.metrics, enabled=False)
+                gate.note_tool_use(ident, ident)
+                decision = await decide_tool(gate, 'Read', ident, session=self.native_session)
+                if decision['decision'] != 'allow':
+                    raise ValueError(decision['reason'])
+                read_context = decision.get('context') or ''
+            elif self.gate and self.gate.enabled and name != 'celeste_stop_run':
+                # App Server has no Claude message ID: count each dynamic call.
                 self.gate.note_tool_use(ident, ident)
-                gate_name = "mcp__celeste__" + name.removeprefix("celeste_")
-                allowed, why = await self.gate.decide(gate_name, ident)
+                allowed, why = await self.gate.decide('mcp__celeste__' + name.removeprefix('celeste_'), ident)
                 if not allowed:
                     raise ValueError(why)
+            if name == 'celeste_read':
+                origin_turn = self.turn_id
+                result = await asyncio.to_thread(read_file, self.container, args)
+                return await self._read_response(result, ident, origin_turn, context=read_context)
             if name == "celeste_narrate" and self.game_server is None:
                 note = str(args.get("thought", ""))[:self.cfg.thought_max_chars]
                 if getattr(self.cfg, "formal_thought", False):
@@ -295,14 +268,14 @@ class CodexRunner(SessionControls):
                 text = "解说已更新"
             elif name == "celeste_finish_preparation" and self.prepare_only:
                 if self.study is None or not self.study.complete():
-                    raise ValueError(self.study.reminder(native=True) if self.study else "没有准备阶段")
+                    raise ValueError(self.study.reminder(reader='celeste_read') if self.study else "没有准备阶段")
                 text = "全部知识库已读完；结束本次准备，不启动游戏。"
             elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run") and self.prepare_only:
                 raise ValueError("本次只做知识库准备，不开放游戏操作，不会进入关卡。")
             elif game and self.game_server is not None and not self.prepare_only:
                 origin_turn = self.turn_id
                 if name in ("celeste_act", "celeste_observe") and self.study and not self.study.complete():
-                    raise ValueError(self.study.reminder(native=True))
+                    raise ValueError(self.study.reminder(reader='celeste_read'))
                 if name in {"celeste_act", "celeste_observe", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                     async with self.action_lock:
                         if self.paused:
@@ -330,6 +303,56 @@ class CodexRunner(SessionControls):
             return self._notes_response({"contentItems": [{"type": "inputText", "text": str(exc)}], "success": False})
         finally:
             self.metrics.tool_end(ident)
+
+    async def _read_response(self, result, call_id, origin_turn, *, context=''):
+        if result.get('kind') == 'error':
+            return self._notes_response({'contentItems': [{'type': 'inputText',
+                'text': result.get('error') or result['text']}], 'success': False})
+        info = result.get('file') or {}
+        path = result.get('path') or info.get('filePath')
+        kb_read = (self.study is not None and info.get('filePath') in self.study.container_paths()
+                   and result.get('kind') == 'text')
+        images = result.get('images') or []
+        text = result['text']
+        if context:
+            text += '\n' + context
+        attachments = []
+        label = json.dumps({'tool': 'celeste_read', 'call_id': str(call_id),
+                            'path': path, **info}, ensure_ascii=False)
+        if kb_read or images:
+            attachments.append({'type': 'text', 'text':
+                '【主控工具结果｜celeste_read】以下是本次读取的文件内容，不是新任务。' + label + '\n' + text})
+            for picture in images:
+                attachments.append({'type': 'image', 'url':
+                    f"data:{picture['mimeType']};base64,{picture['data']}"})
+            try:
+                if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
+                        or self.turn_done.is_set() or self.stop_requested):
+                    raise RuntimeError('发起读取的原轮次已结束')
+                response = await self.rpc.request('turn/steer', {'threadId': self.session_id,
+                    'expectedTurnId': origin_turn, 'input': attachments}, timeout=15)
+                if not isinstance(response, dict) or response.get('turnId') != origin_turn:
+                    raise RuntimeError('未确认内容送达原轮次')
+            except (RuntimeError, OSError, TimeoutError) as exc:
+                return self._notes_response({'contentItems': [{'type': 'inputText', 'text':
+                    f'文件内容交付失败：{exc}。本次未计入知识库阅读；可以重新调用 celeste_read，'
+                    '不需要重复任何游戏操作。'}], 'success': False})
+            text = f"{path}：文件正文／图像已作为本次工具结果直接送达当前轮次。"
+        if kb_read:
+            completed = self.study.note_result({'tool_use_result': {'file': info}})
+            self.metrics.update(kb_progress=round(self.study.progress(), 4))
+            if completed:
+                self.metrics.kb_finished()
+            text += f"\n已返回完整行：第 {info['startLine']} 行起 {info['numLines']} 行／共 {info['totalLines']} 行。"
+            text += f"知识库阅读进度：{self.study.progress():.1%}。"
+        if result.get('truncated'):
+            if result.get('next_offset') is not None:
+                text += f"\n内容已截断；下一次 offset={result['next_offset']}，缩小 limit 继续读取。"
+            else:
+                text += '\n' + (result.get('error') or '内容超过本次输出预算，请缩小范围读取。')
+        if result.get('notice'):
+            text += '\n' + result['notice']
+        return self._notes_response({'contentItems': [{'type': 'inputText', 'text': text}], 'success': True})
 
     async def _game_response(self, result, tool, call_id, origin_turn):
         """Code-mode may stringify any tool value: images must never enter that value."""
@@ -394,12 +417,12 @@ class CodexRunner(SessionControls):
         if self.study and not self.study.complete():
             from .button_prompts import notification
             paths = "\n".join(f"- {p}" for p in self.study.container_paths())
-            facts = "本次必读清单：\n" + paths + "\n使用原生 cat 或 sed -n 分页显示原文，主控只核验实际可见的完整行；不要仅返回摘要。"
+            facts = "本次必读清单：\n" + paths + "\n必读资料必须用 celeste_read 的 file_path 与 offset/limit 分页读取，按实际送达的完整行计量。"
             if self.cfg.sim:
                 facts += '\n本次预置模拟器已开放，资料位于 /sim。'
             facts += ('\n本次只准备，不启动游戏；完成后调用 celeste_finish_preparation 提交完成信号。'
                       if self.prepare_only else '\n本次准备完成后开放试玩工具。')
-            message = notification('prepare', facts=facts).replace('Read 工具', '原生 Shell 文件读取')
+            message = notification('prepare', facts=facts).replace('Read 工具', 'celeste_read 工具')
             if self.prepare_only and self.cfg.sim:
                 message += '\n' + notification('prepare_sim')
             return message
@@ -440,10 +463,10 @@ class CodexRunner(SessionControls):
         meta = read_metadata(self.container, path)
         names = {tool['name'] for tool in meta.get('dynamic_tools', [])}
         from .modes import game_tools
-        required = {'celeste_' + name for name in game_tools(self.cfg)}
+        required = {'celeste_' + name for name in game_tools(self.cfg)} | {'celeste_read'}
         missing = required - names
         if missing:
-            raise RuntimeError('旧会话缺少正式游戏工具：' + ', '.join(sorted(missing))
+            raise RuntimeError('旧会话缺少当前必需工具：' + ', '.join(sorted(missing))
                                + '。该容器记录的接口不完整，请新建准备会话；不会借用宿主工具绕过缺失接口。')
 
     async def run(self):
@@ -482,20 +505,10 @@ class CodexRunner(SessionControls):
                 result = await self._resume_thread(params)
                 await asyncio.to_thread(self._validate_resumed_tools, result['thread'])
             else:
-                if self._native_reads is not None:
-                    params["experimentalRawEvents"] = True
                 result = await self.rpc.request("thread/start", params)
             if (result.get('activePermissionProfile') or {}).get('id') != params['permissions']:
                 raise RuntimeError('Codex 未采用主控指定的容器权限配置，拒绝运行')
             self.session_id = result["thread"]["id"]
-            if self._native_reads is not None and result['thread'].get('path'):
-                from .codex_container import read_rollout
-                self._native_rollout_path = result['thread']['path']
-                # Fresh threads publish their path before creating the rollout.
-                # Resume must start after old history; fresh has no old rows.
-                if self.resume:
-                    self._native_rollout_offset, _ = await asyncio.to_thread(
-                        read_rollout, self.container, self._native_rollout_path)
             if self.fast_mode is None:
                 self.fast_mode = result.get("serviceTier") in {"priority", "fast"}
             self.metrics.update(model=result["model"], effort=result.get("reasoningEffort") or self.cfg.effort)
@@ -565,16 +578,12 @@ class CodexRunner(SessionControls):
                 self._begin_model_turn(fast=self.turn_fast, service_tier=tier, effort=effort, runtime="codex")
                 offered_notes = self.note_reminders.peek()
                 turn_input = message + ('\n\n' + '\n'.join(text for _, text in offered_notes) if offered_notes else '')
-                if self._native_reads is not None:
-                    self._native_reads.begin_turn(None)
                 response = await self.rpc.request("turn/start", {"threadId": self.session_id, "effort": effort,
                     "serviceTierForTurn": tier,
                     "input": [{"type": "text", "text": turn_input}]})
                 opening = False
                 self.note_reminders.acknowledge(offered_notes)
                 self.turn_id = response["turn"]["id"]
-                if self._native_reads is not None:
-                    self._native_reads.begin_turn(self.turn_id)
                 self.metrics.turn_acknowledged(self.turn_id)
                 for row in assigned:
                     self.control.mark(row["id"], "submitted", "已提交给当前 agent 会话")
@@ -590,7 +599,6 @@ class CodexRunner(SessionControls):
                         await self.rpc.request("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id})
                         return "现实时间预算用完"
                     await asyncio.sleep(0.1)
-                await self._sync_native_reads()
                 self._end_model_turn()
                 self.turn_active, self.turn_id = False, None
                 if self.fatal:
@@ -609,7 +617,7 @@ class CodexRunner(SessionControls):
                     self.completed_preparation = True
                     return "知识库准备完成"
                 from .prompting import continue_play_prompt, controller_turn_prompt
-                message = (controller_turn_prompt("继续准备，用原生 Shell 分页显示尚未读完的原文。")
+                message = (controller_turn_prompt("继续准备，用 celeste_read 分页读取尚未读完的资料。")
                            if self.study and not self.study.complete() else continue_play_prompt(self.cfg))
             return "现实时间预算用完"
         finally:

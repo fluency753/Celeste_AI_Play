@@ -145,14 +145,13 @@ class KbStudy:
     def container_paths(self) -> list[str]:
         return [self.container_path(rel) for rel in self.files]
 
-    def reminder(self, *, native: bool = False) -> str:
+    def reminder(self, *, reader: str = 'Read') -> str:
         lines = ["知识库还没有读完，游戏工具暂不执行（没有消耗任何游戏帧，也没有开始计时）。还没读到的部分："]
         for rel in self.files:
             missing = self.unread(rel)
             if missing:
                 lines.append(f"- {self.container_path(rel)}：第 {_ranges(missing)} 行（共 {self.total[rel]} 行）")
-        lines.append("请用原生 cat 或 sed -n 分页显示这些行的原文，每次外层调用只读一个文件或一页；输出截断时缩小范围继续读。" if native else
-                     "请用 Read 读完这些行再开始（文件长时 Read 会截断，用 offset 与 limit 接着读，直到最后一行）。")
+        lines.append(f"请用 {reader} 读完这些行再开始（文件长时用 offset 与 limit 分页接着读，截断的片段不算完整行）。")
         return "\n".join(lines)
 
     def summary(self) -> dict:

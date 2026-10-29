@@ -82,7 +82,7 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_preparation_fallback_identifies_controller(self):
         text = await self.run_two_turns(preparing=True)
-        self.assertEqual(text, controller_turn_prompt('继续准备，用原生 Shell 分页显示尚未读完的原文。'))
+        self.assertEqual(text, controller_turn_prompt('继续准备，用 celeste_read 分页读取尚未读完的资料。'))
 
     async def test_real_user_message_replaces_fallback_without_being_relabelled(self):
         text = await self.run_two_turns(user_message='先复盘笔记，不推进游戏。')

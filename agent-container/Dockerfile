@@ -28,6 +28,10 @@ RUN npm install -g @openai/codex@${CODEX_VERSION} \
     && codex --version \
     && npm cache clean --force
 
+# celeste_read renders bounded PDF pages through the same Poppler utilities as Read.
+RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 # 托管配置（最高优先级，归 root 所有）
 RUN mkdir -p /etc/claude-code
 RUN mkdir -p /etc/codex

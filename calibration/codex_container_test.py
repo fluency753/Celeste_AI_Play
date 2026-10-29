@@ -55,25 +55,6 @@ class ContainerCodexTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 codex.exec_command('-bad', 'codex')
 
-    def test_rollout_reader_tails_bytes_and_rejects_other_paths(self):
-        sessions = self.home / 'sessions'
-        sessions.mkdir()
-        path = sessions / 'fixture.jsonl'
-        path.write_bytes(b'old\n')
-        with patch.object(codex, 'exec_command', side_effect=self.worker_command), \
-             patch.dict(os.environ, {'CODEX_HOME': str(self.home)}):
-            cursor, data = codex.read_rollout('fixture', str(path))
-            self.assertEqual((cursor, data), (4, b''))
-            with path.open('ab') as stream:
-                stream.write('new中'.encode())
-            end, data = codex.read_rollout('fixture', str(path), cursor)
-            self.assertEqual(data, 'new中'.encode())
-            self.assertEqual(codex.read_rollout('fixture', str(path), end), (end, b''))
-            secret = self.home / 'auth.json'
-            secret.write_text('sensitive')
-            with self.assertRaisesRegex(RuntimeError, '无法核验'):
-                codex.read_rollout('fixture', str(secret), 0)
-
     def test_auth_is_explicit_stdin_atomic_and_failure_does_not_expose_secrets(self):
         source = self.root/'selected-auth.json'
         secret = {'tokens': {'access_token':'sensitive-fixture'}}

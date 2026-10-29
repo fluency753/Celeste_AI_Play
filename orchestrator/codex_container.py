@@ -172,32 +172,6 @@ def read_metadata(container: str, path: str) -> dict:
     return metadata
 
 
-ROLLOUT_READ = r'''
-import base64,json,os,sys
-from pathlib import Path
-root=Path(os.environ['CODEX_HOME']).resolve()
-p=Path(sys.argv[1]).resolve()
-if not any(p.is_relative_to(root/part) for part in ('sessions','archived_sessions')):
- raise ValueError('Not a Codex session path')
-offset=int(sys.argv[2])
-with p.open('rb') as stream:
- if offset<0:stream.seek(0,2)
- else:stream.seek(offset)
- data=stream.read(4194304) if offset>=0 else b''
- print(json.dumps({'offset':stream.tell(),'data':base64.b64encode(data).decode()}))
-'''
-
-
-def read_rollout(container: str, path: str, offset: int = -1) -> tuple[int, bytes]:
-    """Trusted incremental session reader; never exposes credentials or other paths."""
-    import base64
-    result = _run(container, 'python3', '-c', ROLLOUT_READ, path, str(offset))
-    if result.returncode:
-        raise RuntimeError('无法核验本轮 Codex 原生读取结果；知识库未读部分保持关闭')
-    value = json.loads(result.stdout)
-    return int(value['offset']), base64.b64decode(value['data'], validate=True)
-
-
 SESSION_IMPORT = r'''
 import json,os,sys,tempfile
 from pathlib import Path
