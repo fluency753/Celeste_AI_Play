@@ -135,8 +135,8 @@
   #agentInput { box-sizing: border-box; width: 100%; height: calc(54 * var(--px)); resize: none; padding: calc(7 * var(--px)); border: 1px solid #52678e; border-radius: 6px; background: #1b2436; color: var(--text); font: inherit; font-size: calc(13 * var(--px)); }
   #agentControls > .control-buttons select { min-width:0; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; font:inherit; font-size:calc(12 * var(--px)); padding:calc(3 * var(--px)); }
   #sessionSelect { box-sizing:border-box; width:100%; margin-bottom:calc(6 * var(--px)); padding:calc(4 * var(--px)); border:1px solid #52678e; border-radius:5px; background:#1b2436; color:var(--text); font:inherit; font-size:calc(12 * var(--px)); }
-  #sessionPanel, #recordingPanel { font-size:calc(12 * var(--px)); margin-bottom:calc(6 * var(--px)); }
-  #sessionPanel summary, #recordingPanel summary { cursor:pointer; color:var(--label); padding:calc(3 * var(--px)) 0; }
+  #agentControls > details { font-size:calc(12 * var(--px)); margin-bottom:calc(6 * var(--px)); }
+  #agentControls > details > summary { font-size:inherit; cursor:pointer; color:var(--label); padding:calc(3 * var(--px)) 0; }
   #sessionPanel input, #sessionPanel select, #recordingPanel select { box-sizing:border-box; min-width:0; max-width:100%; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; padding:calc(4 * var(--px)); }
   #recordingPanel label { display:block; margin:calc(4 * var(--px)) 0; }
   #recordingStatus { color:var(--label); font-size:calc(11 * var(--px)); }
@@ -144,19 +144,16 @@
   #sessionModel { flex:1; width:0; }
   #modelChoiceStatus { font-size:calc(11 * var(--px)); color:var(--warn); overflow-wrap:anywhere; }
   #sessionOperation { color:var(--label); overflow-wrap:anywhere; white-space:pre-wrap; }
-  #goalPanel { margin-bottom:calc(6 * var(--px)); font-size:calc(12 * var(--px)); max-height:38vh; overflow:auto; }
-  #goalPanel summary { cursor:pointer; color:var(--label); padding:calc(3 * var(--px)) 0; }
+  #goalPanel { max-height:38vh; overflow:auto; }
   #goalText { box-sizing:border-box; width:100%; height:calc(45 * var(--px)); resize:vertical; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:5px; }
   #goalPanel select, #goalPanel input { min-width:0; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; padding:calc(3 * var(--px)); }
   .goal-row { display:flex; gap:calc(3 * var(--px)); margin-top:calc(4 * var(--px)); }
   .goal-row select { flex:1; } .goal-row input { width:calc(60 * var(--px)); }
   #goalStatus { color:var(--label); font-size:calc(11 * var(--px)); margin-top:calc(5 * var(--px)); white-space:pre-wrap; }
   #goalStop { border-color:#ae665d; }
-  #simPanel { font-size:calc(12 * var(--px)); margin-bottom:calc(6 * var(--px)); }
-  #simPanel summary { cursor:pointer; color:var(--label); }
   #simFields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:calc(5 * var(--px)); }
   .sim-field { display:flex; flex-direction:column; gap:calc(2 * var(--px)); min-width:0; }
-  #simPanel input { box-sizing:border-box; width:100%; min-width:0; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; padding:calc(4 * var(--px)); }
+  .sim-field input { box-sizing:border-box; width:100%; min-width:0; font:inherit; color:var(--text); background:#1b2436; border:1px solid #52678e; border-radius:4px; padding:calc(4 * var(--px)); }
   #simStatus, #simCurrent { color:var(--label); font-size:calc(11 * var(--px)); margin:calc(5 * var(--px)) 0; }
   .control-buttons { display:flex; align-items:center; gap:calc(5 * var(--px)); margin-top:calc(5 * var(--px)); }
   .control-buttons button { font:inherit; font-size:calc(12 * var(--px)); border:1px solid #52678e; border-radius:5px; color:#dce8ff; background:#263652; padding:calc(4 * var(--px)) calc(8 * var(--px)); cursor:pointer; }
@@ -290,7 +287,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 66;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 67;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
