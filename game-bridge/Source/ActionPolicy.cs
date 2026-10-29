@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using Celeste;
 using Monocle;
@@ -88,6 +89,24 @@ internal sealed class ActionPolicy {
         if (target.ValueKind != JsonValueKind.Object) throw new FormatException(name + " must be an object");
         string? sid = target.TryGetProperty("sid", out var s) && s.ValueKind != JsonValueKind.Null ? s.GetString() : null;
         int? slot = target.TryGetProperty("slot", out var n) && n.ValueKind != JsonValueKind.Null ? n.GetInt32() : null;
-        return new(sid, slot);
+        List<MapIdentity>? maps = null;
+        if (target.TryGetProperty("maps", out var entries)) {
+            if (entries.ValueKind != JsonValueKind.Array) throw new FormatException("maps must be an array");
+            if (sid != null) throw new FormatException("sid and maps cannot both constrain the destination");
+            maps = new();
+            foreach (var map in entries.EnumerateArray()) {
+                if (map.ValueKind != JsonValueKind.Object || !map.TryGetProperty("sid", out var mapSid) ||
+                        mapSid.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(mapSid.GetString()) ||
+                        !map.TryGetProperty("side", out var mapSide) || mapSide.ValueKind != JsonValueKind.String ||
+                        mapSide.GetString() is not ("A" or "B" or "C"))
+                    throw new FormatException("Each map must contain a nonempty sid and side A/B/C");
+                foreach (var field in map.EnumerateObject())
+                    if (field.Name is not ("sid" or "side")) throw new FormatException("Unknown map identity field: " + field.Name);
+                var identity = new MapIdentity(mapSid.GetString()!, mapSide.GetString()!);
+                if (maps.Contains(identity)) throw new FormatException("Duplicate map identity");
+                maps.Add(identity);
+            }
+        }
+        return new(sid, slot, maps);
     }
 }

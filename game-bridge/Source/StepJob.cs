@@ -158,7 +158,45 @@ internal sealed class StepJob {
         AreaKey area = panel.Area;
         int split = checkpoint?.IndexOf('|') ?? -1;
         if (split >= 0) area = AreaData.Get(checkpoint!.Substring(0, split))?.ToKey(area.Mode) ?? area;
-        return Check(policy.Entry.Check(area.SID, SaveData.Instance?.FileSlot));
+        return AllowAreaEntry(area, SaveData.Instance?.FileSlot);
+    }
+
+    public bool AllowSaveEntry(SaveData? save, int slot) {
+        if (policy.Entry == null) return true;
+        if (!Check(policy.Entry.CheckSlot(slot))) return false;
+        // File slots hold deserialized data before SaveData.Start initializes
+        // the safe fields. Neither reading nor denying may switch the save.
+        var session = save?.CurrentSession_Safe ?? save?.CurrentSession;
+        if (session?.InArea == true) return AllowAreaEntry(session.Area, slot);
+        // OnContinueSelected synchronously chooses first-area entry unless the
+        // vanilla intro is complete or cheats allow chapter selection. Predict
+        // it before StartingGame/SaveData.Start, not at the later coroutine.
+        bool introComplete = save?.Areas is { Count: > 0 } areas &&
+            areas[0].Modes is { Length: > 0 } modes && modes[0]?.Completed == true;
+        if (save != null && !save.CheatMode && !introComplete) {
+            AreaKey area = save.LastArea_Safe.ID == 0 ? save.LastArea : save.LastArea_Safe;
+            // Mirror AfterInitialize's raw-to-safe restoration and fallback,
+            // without mutating candidate save data or initializing mod state.
+            if (AreaData.Get(area) == null || area.ID < 0 || area.ID >= AreaData.Areas.Count)
+                area = AreaKey.Default;
+            return AllowAreaEntry(area, slot);
+        }
+        return true;
+    }
+
+    public bool AllowNewSave(int slot) {
+        if (policy.Entry == null) return true;
+        if (!Check(policy.Entry.CheckSlot(slot))) return false;
+        if (policy.Entry.Maps != null)
+            return Check(new("entry_blocked", "target.new_save", "enter_map",
+                "Visited-map exploration requires an existing save; no save was created", "existing_save", "new_save"));
+        return true;
+    }
+
+    public bool AllowAreaEntry(AreaKey area, int? slot) {
+        if (policy.Entry == null) return true;
+        return Check(policy.Entry.Check(area.SID, slot,
+            area.Mode switch { AreaMode.Normal => "A", AreaMode.BSide => "B", _ => "C" }));
     }
 
     public bool AllowMenuConfirmation(TextMenu.Item item) {

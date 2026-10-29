@@ -335,6 +335,177 @@ foreach (bool tas in new[] { false, true }) {
 }
 Feed(""); var wrongSlot = Panel(1); var slotJob = Job(entry: new("test/target", 11)); int prior = entries;
 Feed("C"); wrongSlot.orig_Update(); Check(slotJob.Finished && entries == prior && wrongSlot.Focused, "Wrong-slot entry executed side effects");
+// The same SID has distinct A/B/C destinations. Retain native Panel.Update's
+// direction priority, checkpoint SID resolution and confirmation dispatch.
+foreach (bool tas in new[] { false, true }) {
+    foreach (AreaMode mode in new[] { AreaMode.Normal, AreaMode.BSide, AreaMode.CSide }) {
+        Feed("", tas); var panel = Panel(1); panel.Area = new AreaKey(0, mode);
+        var job = Job(entry: new(null, 10, new[] { new MapIdentity("test/target", "A") }));
+        int before = entries;
+        Feed(tas ? "J" : "C", tas); panel.orig_Update();
+        Check((entries == before + 1) == (mode == AreaMode.Normal), "Visited-map set failed to distinguish native map sides");
+        Check((job.StopReason == "entry_blocked") == (mode != AreaMode.Normal), "Wrong-side entry was not intercepted");
+        if (mode != AreaMode.Normal) Check(panel.Focused, "Blocked entry changed panel focus");
+        if (!tas && mode == AreaMode.BSide) {
+            using var bytes = new MemoryStream();
+            using (var writer = new System.Text.Json.Utf8JsonWriter(bytes)) {
+                writer.WriteStartObject(); job.WriteResult(writer); writer.WriteEndObject();
+            }
+            Console.WriteLine("VISITED_MAP_BLOCK_JSON:" + System.Text.Encoding.UTF8.GetString(bytes.ToArray()));
+        }
+    }
+    Feed("", tas); var compoundPanel = Panel();
+    var compoundJob = Job(entry: new(null, 10, new[] { new MapIdentity("test/target", "A") }));
+    int initial = entries;
+    Feed(tas ? "R,J" : "R,C", tas); compoundPanel.orig_Update();
+    Check(compoundPanel.checkpoint == 1 && entries == initial && !compoundJob.Finished,
+        "Visited-map policy rejected native direction priority in compound input");
+    Feed("", tas); Feed(tas ? "J" : "C", tas); compoundPanel.orig_Update();
+    Check(entries == initial + 1 && !compoundJob.Finished, "Visited checkpoint entry blocked after movement");
+}
+Check(new MapEntryGuard(null, 10, Array.Empty<MapIdentity>()).Check("test/target", 10)?.RuleId == "target.maps",
+    "Empty visited-map set opened entry");
+Check(new MapEntryGuard(null, 11, new[] { new MapIdentity("test/target", "A") }).Check("test/target", 10)?.RuleId == "target.save_slot",
+    "Visited-map set bypassed save-slot identity");
+foreach (string entry in new[] {
+    "{\"sid\":\"test/target\",\"maps\":[]}", "{\"maps\":null}", "{\"maps\":[{}]}",
+    "{\"maps\":[{\"sid\":\"test/target\",\"side\":\"D\"}]}",
+    "{\"maps\":[{\"sid\":\"\",\"side\":\"A\"}]}",
+    "{\"maps\":[{\"sid\":\"test/target\",\"side\":\"A\",\"extra\":1}]}",
+    "{\"maps\":[{\"sid\":\"test/target\",\"side\":\"A\"},{\"sid\":\"test/target\",\"side\":\"A\"}]}"
+}) {
+    using var data = System.Text.Json.JsonDocument.Parse("{\"entry_guard\":" + entry + "}");
+    try { ActionPolicy.Read(data.RootElement); throw new Exception("Malformed map set accepted: " + entry); }
+    catch (FormatException) { }
+}
+{
+    using var data = System.Text.Json.JsonDocument.Parse("""
+        {"action_policy":{"version":1,"permissions":{"restart_chapter":false,"return_to_map":false,"save_quit":false},
+         "departure":"none","entry_target":{"slot":10,"maps":[{"sid":"test/target","side":"B"}]}}}
+        """);
+    var policy = ActionPolicy.Read(data.RootElement);
+    Check(policy.Entry?.Check("test/target", 10, "B") == null && policy.Entry?.Check("test/target", 10, "A") != null,
+        "Canonical map set was not applied");
+}
+// Read production SaveData statistics, not a precomputed list of allowed maps.
+// New/unlocked/cheat saves have no positive entry evidence. CurrentSession is
+// the native committed identity even before its first counted gameplay tick.
+{
+    var save = new SaveData { Areas = new() { new AreaStats(0), new AreaStats(1) }, LevelSets = new(),
+        UnlockedAreas = 99, CheatMode = true };
+    Check(VisitedMaps.Read(save).Count == 0, "Unlocks or default LastArea were mistaken for map entry");
+    save.Areas[0].Modes[0].TimePlayed = 1;
+    save.Areas[1].Modes[1].Deaths = 1;
+    var visited = VisitedMaps.Read(save);
+    Check(visited.SequenceEqual(new[] { new MapIdentity("test/old", "A"), new MapIdentity("test/target", "B") }),
+        "Entered-map evidence lost SID/side identity");
+    var session = (Session)RuntimeHelpers.GetUninitializedObject(typeof(Session));
+    session.Area = new AreaKey(1, AreaMode.CSide); save.CurrentSession_Safe = session;
+    Check(VisitedMaps.Read(save).Contains(new("test/target", "C")), "Zero-time committed session was omitted");
+    save.CurrentSession_Safe = null;
+    save.CurrentSession = session;
+    Check(VisitedMaps.Read(save).Contains(new("test/target", "C")), "Deserialized raw saved Session was omitted before initialization");
+    save.CurrentSession = null;
+    save.LevelSets.Add(new LevelSetStats { Areas = new() { new AreaStats(1) } });
+    save.LevelSets[0].Areas[0].Modes[2].Checkpoints.Add("checkpoint");
+    Check(VisitedMaps.Read(save).Contains(new("test/target", "C")), "Active level-set statistics were omitted");
+    using var bytes = new MemoryStream();
+    using (var writer = new System.Text.Json.Utf8JsonWriter(bytes)) System.Text.Json.JsonSerializer.Serialize(writer, VisitedMaps.Read(save));
+    Check(System.Text.Encoding.UTF8.GetString(bytes.ToArray()).Contains("\"sid\":\"test/target\",\"side\":\"C\""),
+        "Visited map wire identity does not use lowercase sid/side");
+    var candidate = (OuiFileSelectSlot)RuntimeHelpers.GetUninitializedObject(typeof(OuiFileSelectSlot));
+    candidate.Exists = true; candidate.FileSlot = 10; candidate.SaveData = save;
+    var missing = (OuiFileSelectSlot)RuntimeHelpers.GetUninitializedObject(typeof(OuiFileSelectSlot));
+    missing.FileSlot = 11;
+    var corrupt = (OuiFileSelectSlot)RuntimeHelpers.GetUninitializedObject(typeof(OuiFileSelectSlot));
+    corrupt.Exists = true; corrupt.FileSlot = 12; corrupt.SaveData = save; corrupt.Corrupted = true;
+    var fileSelect = (OuiFileSelect)RuntimeHelpers.GetUninitializedObject(typeof(OuiFileSelect));
+    fileSelect.SlotIndex = -1; // No selected slot/button submenu is part of this snapshot.
+    fileSelect.Slots = new[] { candidate, missing, corrupt };
+    var overworld = (Overworld)RuntimeHelpers.GetUninitializedObject(typeof(Overworld)); overworld.Current = fileSelect;
+    using var menuBytes = new MemoryStream();
+    using (var writer = new System.Text.Json.Utf8JsonWriter(menuBytes)) {
+        writer.WriteStartObject();
+        typeof(StateExtractor).GetMethod("WriteMenu", flags)!.Invoke(null, new object[] { writer, overworld });
+        writer.WriteEndObject();
+    }
+    using var menu = System.Text.Json.JsonDocument.Parse(menuBytes.ToArray());
+    var slots = menu.RootElement.GetProperty("menu").GetProperty("slots");
+    Check(slots[0].GetProperty("visited_maps").GetArrayLength() == 3 &&
+        slots[1].GetProperty("visited_maps").ValueKind == System.Text.Json.JsonValueKind.Null &&
+        slots[2].GetProperty("visited_maps").ValueKind == System.Text.Json.JsonValueKind.Null,
+        "Candidate file-slot snapshot lost historical maps or granted missing/corrupt data");
+}
+Console.WriteLine("PASS: visited-map sets enforce native SID/side/slot before entry; compound inputs retain native dispatch; positive save evidence excludes unlocks");
+// A saved Session resumes from file selection without passing Panel.Start.
+// Reject before the real native handler changes SaveData.Instance or starts a
+// wipe; retain the actual candidate data, slot and Session identity.
+var fileContinue = typeof(OuiFileSelectSlot).GetMethod("OnContinueSelected", flags)!;
+using (var fileHook = new Hook(fileContinue, typeof(Hooks).GetMethod("OnFileContinue", flags)!)) {
+    foreach (var (slot, mode) in new[] { (11, AreaMode.Normal), (10, AreaMode.BSide) }) {
+        var candidate = new SaveData();
+        var savedSession = (Session)RuntimeHelpers.GetUninitializedObject(typeof(Session));
+        savedSession.Area = new AreaKey(1, mode); savedSession.InArea = true;
+        // Deserialized file data can still have only the vanilla CurrentSession.
+        candidate.CurrentSession = savedSession;
+        var file = (OuiFileSelectSlot)RuntimeHelpers.GetUninitializedObject(typeof(OuiFileSelectSlot));
+        file.SaveData = candidate; file.FileSlot = slot;
+        var currentSave = SaveData.Instance;
+        var job = Job(entry: new(null, 10, new[] { new MapIdentity("test/target", "A") }));
+        fileContinue.Invoke(file, null);
+        Check(job.StopReason == "entry_blocked" && ReferenceEquals(SaveData.Instance, currentSave) && !file.StartingGame,
+            "Saved-session file resume bypassed entry policy or changed native state before denial");
+    }
+    // No Session and an unfinished intro makes Continue enter the first area.
+    // The denial must happen at Continue, before StartingGame and SaveData.Start.
+    var emptyCandidate = new SaveData { Areas = new() { new AreaStats(0), new AreaStats(1) }, LevelSets = new() };
+    var emptyFile = (OuiFileSelectSlot)RuntimeHelpers.GetUninitializedObject(typeof(OuiFileSelectSlot));
+    emptyFile.SaveData = emptyCandidate; emptyFile.FileSlot = 10;
+    var instanceBefore = SaveData.Instance;
+    var emptyJob = Job(entry: new(null, 10, Array.Empty<MapIdentity>()));
+    fileContinue.Invoke(emptyFile, null);
+    Check(emptyJob.StopReason == "entry_blocked" && !emptyFile.StartingGame && ReferenceEquals(SaveData.Instance, instanceBefore),
+        "Empty-session first-area denial occurred after native Continue side effects");
+    // Match AfterInitialize's raw LastArea migration without writing safe fields.
+    emptyCandidate.LastArea = new AreaKey(1);
+    var rawAreaJob = Job(entry: new(null, 10, new[] { new MapIdentity("test/target", "A") }));
+    Check(rawAreaJob.AllowSaveEntry(emptyCandidate, 10) && emptyCandidate.LastArea_Safe.ID == 0,
+        "Pre-initialization destination did not use native raw-to-safe LastArea migration");
+}
+var fileNewGame = typeof(OuiFileSelectSlot).GetMethod("OnNewGameSelected", flags)!;
+using (var newFileHook = new Hook(fileNewGame, typeof(Hooks).GetMethod("OnFileNewGame", flags)!)) {
+    var file = (OuiFileSelectSlot)RuntimeHelpers.GetUninitializedObject(typeof(OuiFileSelectSlot)); file.FileSlot = 10;
+    var instanceBefore = SaveData.Instance;
+    var newJob = Job(entry: new(null, 10, Array.Empty<MapIdentity>()));
+    fileNewGame.Invoke(file, null);
+    Check(newJob.StopReason == "entry_blocked" && !file.StartingGame && ReferenceEquals(SaveData.Instance, instanceBefore),
+        "Visited-map mode created or switched a new save before refusing it");
+    using var bytes = new MemoryStream();
+    using (var writer = new System.Text.Json.Utf8JsonWriter(bytes)) {
+        writer.WriteStartObject(); newJob.WriteResult(writer); writer.WriteEndObject();
+    }
+    Console.WriteLine("NEW_SAVE_BLOCK_JSON:" + System.Text.Encoding.UTF8.GetString(bytes.ToArray()));
+}
+Check(Job(entry: new(null, null)).AllowNewSave(10), "Owner startup without visited-map restriction lost native new-save capability");
+foreach (string method in new[] { "EnterFirstArea", nameof(LevelEnter.Go) }) {
+    MethodInfo native = method == "EnterFirstArea" ? typeof(OuiFileSelectSlot).GetMethod(method, flags)! : typeof(LevelEnter).GetMethod(method, flags)!;
+    MethodInfo wrapper = typeof(Hooks).GetMethod(method == "EnterFirstArea" ? "OnFirstArea" : "OnLevelEnter", flags)!;
+    foreach (AreaMode mode in new[] { AreaMode.Normal, AreaMode.BSide }) {
+        SaveData.Instance.LastArea_Safe = new AreaKey(1, mode);
+        var session = (Session)RuntimeHelpers.GetUninitializedObject(typeof(Session)); session.Area = new AreaKey(1, mode);
+        int entered = 0;
+        using var effect = method == "EnterFirstArea"
+            ? new Hook(native, (Action<OuiFileSelectSlot>)(_ => entered++))
+            : new Hook(native, (Action<Session, bool>)((_, _) => entered++));
+        using var guarded = new Hook(native, wrapper);
+        var job = Job(entry: new(null, 10, new[] { new MapIdentity("test/target", "A") }));
+        if (method == "EnterFirstArea") native.Invoke(RuntimeHelpers.GetUninitializedObject(typeof(OuiFileSelectSlot)), null);
+        else LevelEnter.Go(session, true);
+        Check((entered == 1) == (mode == AreaMode.Normal) && (job.StopReason == "entry_blocked") == (mode != AreaMode.Normal),
+            "First-area/shared-entry path ignored map-side permission: " + method);
+    }
+}
+Console.WriteLine("PASS: file-selection saved/empty-session resume and new-save entry reject before StartingGame/SaveData.Start/wipe; first-area and LevelEnter.Go share SID/side/slot policy");
 foreach (string invalid in new[] {
     "{\"version\":2}", "{\"version\":true}", "{\"version\":\"1\"}",
     "{\"version\":1,\"permissions\":{\"restart_chapter\":false,\"return_to_map\":false,\"save_quit\":false,\"unknown\":true},\"departure\":\"none\"}",

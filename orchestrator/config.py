@@ -141,7 +141,9 @@ class RunConfig:
     action_permissions: dict | None = None  # canonical 三权限；None 仅用于兼容旧总开关
     save_slot: int | None = None    # 存档身份由槽位决定，名称可以重复
     cutscene_mode: str = 'auto'     # auto 自动跳过；agent 自行决定观看、推进或跳过
-    play_scope: str = 'chapter'     # independent of the user's dynamic stop goal
+    play_scope: str = 'chapter'     # chapter / campaign / visited; independent of stop goals
+    completion_policy: str = 'stop'  # stop at the end of the plan, or continue exploring
+    visited_maps: list | None = None  # fixed SID + side permission snapshot, bound to save_slot
     chapter: int | None = None      # 菜单宏进入的章节编号；None = 选章页当前章节
     chapters: list[int] | None = None  # 依次通关的章节（如 [0, 1, 2]）：一章完成后主控自动进入下一章，智能体接着玩
     plan: list | None = None           # 按段通关（--segments）：依次要玩的各截（segments.Piece）；None = 按 chapters 整章

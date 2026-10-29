@@ -19,6 +19,7 @@ internal static class Hooks {
     private static Hook? endDrawHook;
     private static ILHook? menuConfirmationHook;
     private static Hook? chapterEntryHook;
+    private static Hook? fileContinueHook, fileNewGameHook, firstAreaHook, levelEntryHook;
     private static Hook? picoConsoleHook, picoMenuHook;
     internal static bool Pico8GuardAvailable { get; private set; }
 
@@ -50,6 +51,10 @@ internal static class Hooks {
         MapEntryGuard.Available = false;
         try { chapterEntryHook?.Dispose(); } catch (Exception e) { Log.Error("map entry guard: removing the hook failed: " + e.Message); }
         chapterEntryHook = null;
+        fileContinueHook?.Dispose(); fileContinueHook = null;
+        fileNewGameHook?.Dispose(); fileNewGameHook = null;
+        firstAreaHook?.Dispose(); firstAreaHook = null;
+        levelEntryHook?.Dispose(); levelEntryHook = null;
         try { menuConfirmationHook?.Dispose(); } catch (Exception e) { Log.Error("chapter reset guard: removing the menu hook failed: " + e.Message); }
         menuConfirmationHook = null;
         endDrawHook?.Dispose();
@@ -109,11 +114,24 @@ internal static class Hooks {
                 return;
             }
             chapterEntryHook = new Hook(start, typeof(Hooks).GetMethod(nameof(OnChapterStart), BindingFlags.Static | BindingFlags.NonPublic)!);
+            const BindingFlags methods = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+            fileContinueHook = new Hook(typeof(OuiFileSelectSlot).GetMethod("OnContinueSelected", methods)!,
+                typeof(Hooks).GetMethod(nameof(OnFileContinue), methods)!);
+            fileNewGameHook = new Hook(typeof(OuiFileSelectSlot).GetMethod("OnNewGameSelected", methods)!,
+                typeof(Hooks).GetMethod(nameof(OnFileNewGame), methods)!);
+            firstAreaHook = new Hook(typeof(OuiFileSelectSlot).GetMethod("EnterFirstArea", methods)!,
+                typeof(Hooks).GetMethod(nameof(OnFirstArea), methods)!);
+            levelEntryHook = new Hook(typeof(LevelEnter).GetMethod(nameof(LevelEnter.Go), methods)!,
+                typeof(Hooks).GetMethod(nameof(OnLevelEnter), methods)!);
             MapEntryGuard.Available = true;
         } catch (Exception e) {
             MapEntryGuard.Available = false;
             try { chapterEntryHook?.Dispose(); } catch { /* already broken */ }
             chapterEntryHook = null;
+            fileContinueHook?.Dispose(); fileContinueHook = null;
+            fileNewGameHook?.Dispose(); fileNewGameHook = null;
+            firstAreaHook?.Dispose(); firstAreaHook = null;
+            levelEntryHook?.Dispose(); levelEntryHook = null;
             Log.Error("map entry guard unavailable: installing the hook failed: " + e);
         }
     }
@@ -140,6 +158,22 @@ internal static class Hooks {
     private delegate void OrigChapterStart(OuiChapterPanel self, string? checkpoint);
     private static void OnChapterStart(OrigChapterStart orig, OuiChapterPanel self, string? checkpoint) {
         if (Bridge.AllowMapEntry(self, checkpoint)) orig(self, checkpoint);
+    }
+
+    private delegate void OrigFileAction(OuiFileSelectSlot self);
+    private static void OnFileContinue(OrigFileAction orig, OuiFileSelectSlot self) {
+        // Check before SaveData.Start, audio changes and an asynchronous wipe.
+        if (Bridge.AllowSaveEntry(self)) orig(self);
+    }
+    private static void OnFileNewGame(OrigFileAction orig, OuiFileSelectSlot self) {
+        if (Bridge.AllowNewSave(self)) orig(self);
+    }
+    private static void OnFirstArea(OrigFileAction orig, OuiFileSelectSlot self) {
+        if (SaveData.Instance is not { } save || Bridge.AllowAreaEntry(save.LastArea_Safe)) orig(self);
+    }
+    private delegate void OrigLevelEnter(Session session, bool fromSaveData);
+    private static void OnLevelEnter(OrigLevelEnter orig, Session session, bool fromSaveData) {
+        if (session == null || Bridge.AllowAreaEntry(session.Area)) orig(session!, fromSaveData);
     }
 
     private static void InstallPico8Guard() {

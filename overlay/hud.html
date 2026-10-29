@@ -237,7 +237,7 @@
       <select id="sessionSave" aria-label="选择游戏存档"><option value="">选择存档…</option><option value="new">新建独立存档</option></select>
       <input id="sessionSaveName" aria-label="新存档名" placeholder="ASCII 玩家名（留空由 agent 取名）" maxlength="20" hidden>
       <div id="sessionSaveStatus" role="status" hidden></div>
-      <div class="control-buttons"><label>起始A面 <input id="sessionChapter" type="number" min="0" max="10" value="0" style="width:3.5em"></label><select id="sessionScope" aria-label="试玩范围"><option value="campaign">顺序游玩</option><option value="chapter">仅这一章</option></select><button id="sessionPlay" type="button" title="进入所选存档和章节后保持暂停，点击继续才开始操作">开始试玩</button></div>
+      <div class="control-buttons"><label>起始A面 <input id="sessionChapter" type="number" min="0" max="10" value="0" style="width:3.5em"></label><select id="sessionScope" aria-label="试玩范围"><option value="campaign">顺序游玩</option><option value="chapter">仅这一章</option><option value="visited">已到访地图自由探索</option></select><select id="sessionCompletion" aria-label="通关后行为"><option value="stop">计划通关后停止</option><option value="continue">计划通关后继续</option></select><button id="sessionPlay" type="button" title="进入所选存档和章节后保持暂停，点击继续才开始操作">开始试玩</button></div>
       <label><input id="sessionSimAssist" type="checkbox" disabled>有限模拟辅助<span id="simAvailability">（检查安装状态…）</span></label>
       <div id="sessionOperation" role="status" hidden></div>
     </details>
@@ -279,7 +279,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 64;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 65;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -1011,6 +1011,8 @@ async function pollControl() {
     for(const id of ['sessionSave','sessionSaveName'])$(id).disabled=busy || !manageable;
     syncRecordingOptions(controlData, busy || switchingSession || !!controlData.waking);
     $('sessionScope').disabled=busy || !manageable;
+    $('sessionChapter').disabled=busy || $('sessionScope').value==='visited';
+    $('sessionCompletion').disabled=busy || !manageable;
     $('sessionSimAssist').disabled=busy || !manageable || !controlData.sim_available;
     if(!controlData.sim_available)$('sessionSimAssist').checked=false;
     $('simAvailability').textContent=controlData.sim_available ? '' : '（未安装，可关闭此项直接试玩）';
@@ -1064,6 +1066,7 @@ async function sessionAction(kind, options) {
 }
 $('sessionNew').onclick=()=>sessionAction('new_session',{...chosenRuntime(),name:$('sessionName').value,model:$('sessionModel').value,effort:$('sessionEffort').value});
 $('sessionDisconnect').onclick=()=>sessionAction('disconnect');
+$('sessionScope').onchange=()=>{ $('sessionCompletion').value=$('sessionScope').value==='visited'?'continue':'stop'; $('sessionChapter').disabled=$('sessionScope').value==='visited'; };
 $('sessionPlay').onclick=()=>{
   const raw=$('sessionChapter').value.trim(), chapter=Number(raw);
   if(!raw || !Number.isInteger(chapter) || chapter<0 || chapter>10){
@@ -1072,7 +1075,7 @@ $('sessionPlay').onclick=()=>{
   const choice=selectedSave();
   if(!choice || (!choice.create_save && !choice.save)){lifecycleError='请显式选择存档。';pollControl();return;}
   if(choice.create_save && chapter!==0){lifecycleError='新存档须从序章（0）开始。';pollControl();return;}
-  sessionAction('play_session',{chapter,...choice,scope:$('sessionScope').value,sim_assist:$('sessionSimAssist').checked,...readRecordingOptions()});
+  sessionAction('play_session',{chapter,...choice,scope:$('sessionScope').value,completion_policy:$('sessionCompletion').value,sim_assist:$('sessionSimAssist').checked,...readRecordingOptions()});
 };
 async function sendControl(kind, text='', onAccepted=null) {
   if (!controlData) return false;

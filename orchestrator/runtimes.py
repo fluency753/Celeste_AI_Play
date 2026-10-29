@@ -129,6 +129,12 @@ def config_from_state(state, metrics=None):
                     effort=(metrics or {}).get('effort') or state['effort'],
                     knowledge_profile=state.get('knowledge_profile','explore'), runtime=state.get('runtime','container'))
     cfg.mcp_port = state.get('mcp_port', cfg.mcp_port)
+    cfg.play_scope = state.get('play_scope', 'chapter')
+    from .play_scope import completion_policy
+    cfg.completion_policy = completion_policy(cfg.play_scope, state.get('completion_policy'))
+    cfg.visited_maps = state.get('visited_maps')
+    cfg.save_slot = state.get('save_slot')
+    cfg.cutscene_mode = state.get('cutscene_mode', 'auto')
     # 挂给智能体的 /kb 与原运行相同（否则唤起会话时容器标签对不上，会被重建）
     cfg.kb_deny = list(state.get('kb_deny') or [])
     cfg.kb_extra = str(state.get('kb_extra') or '')

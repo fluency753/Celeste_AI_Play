@@ -216,6 +216,33 @@ class SessionActionTests(unittest.TestCase):
         self.assertNotIn('--create-save', arguments)
         self.assertEqual(arguments[arguments.index('--cutscene-mode')+1],'agent')
 
+    def test_visited_launch_preserves_scope_completion_and_agent_navigation(self):
+        operation = self.operation()
+        with patch('orchestrator.session_actions.start_chat'):
+            _finish(self.anchor, operation)
+        current = selected_run(self.anchor)
+        with patch('orchestrator.session_actions.release_chat'), \
+             patch('orchestrator.session_actions.launch',return_value=(self.root/'host-visited',{})) as launch, \
+             patch('orchestrator.session_actions._monitor'),patch('orchestrator.prepared.load_preparation'):
+            play_session(self.anchor,current,{'chapter':1,'save':'test','create_save':False,'save_slot':0,
+                                             'scope':'visited','completion_policy':'continue'})
+        args=launch.call_args.args[0]
+        self.assertEqual(args[args.index('--scope')+1],'visited')
+        self.assertEqual(args[args.index('--completion-policy')+1],'continue')
+        self.assertEqual(args[args.index('--cutscene-mode')+1],'agent')
+
+    def test_invalid_free_exploration_options_do_not_disconnect_prepared_session(self):
+        operation = self.operation()
+        with patch('orchestrator.session_actions.start_chat'):
+            _finish(self.anchor, operation)
+        current = selected_run(self.anchor)
+        with patch('orchestrator.session_actions.release_chat') as release:
+            for overrides in [{'scope':'visited','create_save':True}, {'completion_policy':'unknown'}]:
+                options={'chapter':0,'save':'test','create_save':False,'save_slot':0,**overrides}
+                with self.subTest(options=options),self.assertRaises(ValueError):
+                    play_session(self.anchor,current,options)
+        release.assert_not_called()
+
     def test_new_save_is_explicit_and_forwarded_without_touching_game_files(self):
         operation = self.operation()
         with patch('orchestrator.session_actions.start_chat'):

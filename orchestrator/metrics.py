@@ -431,13 +431,15 @@ class Metrics:
                 setattr(self.state, key, getattr(self.state, key) + value)
             self._write_locked()
 
-    def add_split(self, chapter: str, ticks: int, start: int | None = None, end: int | None = None) -> dict:
+    def add_split(self, chapter: str, ticks: int, start: int | None = None, end: int | None = None, *, side: str | None = None) -> dict:
         """记下一截（一章，或按段通关时的几段）的成绩：章节计时与其间的死亡次数，并加进已完成的总计时。
         start / end：按段通关时这一截的起止检查点（end 为 None = 到通关）；整章不写。"""
         with self._lock:
             splits = list(self.state.splits or [])
             deaths_before = sum(s["deaths"] for s in splits)
             split = {"chapter": chapter, "ticks": int(ticks), "deaths": self.state.deaths - deaths_before}
+            if side is not None:
+                split['side'] = side
             if start is not None:
                 split.update({"from": int(start), "to": end})
             splits.append(split)

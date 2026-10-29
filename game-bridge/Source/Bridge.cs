@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.9.1";
+    public const string Version = "1.10.0";
     internal static bool RecordOnlyChapters { get; private set; }
     internal static bool ChapterRecordingEnabled => RecordOnlyChapters && RecordingAudio.Enabled;
     internal static bool RecordingChapterActive { get; private set; }
@@ -46,6 +46,10 @@ internal static class Bridge {
         job?.AllowMenuConfirmation(item) ?? true;
     public static bool AllowMapEntry(OuiChapterPanel panel, string? checkpoint) =>
         job?.AllowMapEntry(panel, checkpoint) ?? true;
+    public static bool AllowSaveEntry(OuiFileSelectSlot slot) =>
+        job?.AllowSaveEntry(slot.SaveData, slot.FileSlot) ?? true;
+    public static bool AllowNewSave(OuiFileSelectSlot slot) => job?.AllowNewSave(slot.FileSlot) ?? true;
+    public static bool AllowAreaEntry(AreaKey area) => job?.AllowAreaEntry(area, SaveData.Instance?.FileSlot) ?? true;
     public static bool AllowPico8Entry() => !Active || (job?.AllowPico8Entry() ?? true);
 
     /// <summary>接管以来推进过的总帧数（含空闲菜单和加载帧）。</summary>
@@ -740,6 +744,7 @@ internal static class Bridge {
                     w.WriteBoolean("load_room_modes", true);
                     w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("entry_guard", MapEntryGuard.Available);
+                    w.WriteBoolean("map_entry_set", MapEntryGuard.Available);
                     w.WriteBoolean("chapter_loaded_stop", true);
                     w.WriteBoolean("reload_ready_stop", true);
                     w.WriteBoolean("chapter_reset_guard", ChapterResetGuard.Available);

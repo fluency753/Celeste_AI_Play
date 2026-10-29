@@ -59,6 +59,24 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.metrics.state.effort,'high')
         self.assertIsNone(self.metrics.state.effort_pending)
 
+    async def test_free_roam_rejects_auto_mode_without_changing_config_or_preferences(self):
+        self.cfg.play_scope = 'visited'
+        self.cfg.completion_policy = 'continue'
+        self.cfg.cutscene_mode = 'agent'
+        self.runner.turn_active = False
+        self.runner.turn_id = None
+        self.runner.control.set_cutscene_mode('agent')
+        self.runner.session = SimpleNamespace(done=False, cutscene_tool=True, cfg=self.cfg,
+            goals=SimpleNamespace(check=lambda values: False, snapshot=lambda: None), goal_values=lambda: {})
+        ident = self.runner.control.enqueue('cutscene_mode', 'auto')
+        self.task = asyncio.create_task(self.runner._controls())
+        await self.wait_for(lambda: not self.runner.control.pending())
+        row = next(r for r in self.runner.control.snapshot()['actions'] if r['id'] == ident)
+        self.assertEqual(row['status'], 'error')
+        self.assertIn('自由探索', row['detail'])
+        self.assertEqual(self.cfg.cutscene_mode, 'agent')
+        self.assertEqual(self.runner.control.cutscene_preference(), 'agent')
+
     async def test_codex_catalog_effort_is_not_blocked_by_shared_controls(self):
         self.runner.turn_active=False;self.runner.turn_id=None
         with patch('orchestrator.model_catalog.load_models',return_value={

@@ -362,7 +362,9 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
         if cfg.live:
             parts += _file_parts("live_zh.md")
     from .segments import describe_plan, plan_is_partial
-    if plan_is_partial(getattr(cfg, "plan", None)):
+    if getattr(cfg, 'play_scope', 'chapter') == 'visited':
+        pass  # shared free-exploration instructions below replace the traversal plan
+    elif plan_is_partial(getattr(cfg, "plan", None)):
         parts.append(PromptPart("本次的范围（按段通关时自动加）",
                                 "# 本次的范围\n\n" + describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, agent_navigation=cfg.cutscene_mode == 'agent')
                                 + reuse, None, "\n\n"))
@@ -392,7 +394,9 @@ def prompt_parts(cfg) -> list[PromptPart]:
             parts += _file_parts("explore_live_zh.md")
         chapters = cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else [])
         from .segments import describe_plan, plan_is_partial
-        if plan_is_partial(getattr(cfg, "plan", None)):
+        if getattr(cfg, 'play_scope', 'chapter') == 'visited':
+            pass
+        elif plan_is_partial(getattr(cfg, "plan", None)):
             parts.append(PromptPart("本次指定范围（按段通关时自动加）",
                                     describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, speedrun=False, agent_navigation=cfg.cutscene_mode == 'agent')
                                     + "不得自行扩展。", None, "\n"))
@@ -401,6 +405,10 @@ def prompt_parts(cfg) -> list[PromptPart]:
                                     + "；不得自行扩展。", None, "\n"))
     else:
         parts = _speedrun_parts(cfg)
+    if getattr(cfg, 'play_scope', 'chapter') == 'visited':
+        parts.append(PromptPart("已到访地图自由探索", "范围以本次主控保存的已到访地图许可集合为准，区分 A/B/C 面；先 observe 查看允许地图。可以通过原生菜单反复进出允许的地图、选择已解锁检查点，按操作权限做观测实验和寻找收集品。不要进入未授权地图；通关不扩大范围，主控不会代按选章。", None, "\n\n"))
+    if getattr(cfg, 'completion_policy', 'stop') == 'continue':
+        parts.append(PromptPart("通关后继续", "本条优先于通用提示词中的通关收尾约定：通关不是本次任务的停止条件。结算和选章由你显式操作；计划结束后仍在许可地图内继续探索、建模或收集，直到用户目标触发、用户停止或出现真正阻塞。可用 observe(detail='time') 查询时间和目标剩余量。", None, "\n\n"))
     parts += _file_parts("room_analysis_zh.md")
     if workspace_capabilities(cfg).workspace_read:
         threshold = getattr(cfg, 'notes_warn_percent', 60)
@@ -410,7 +418,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
     if cfg.cutscene_mode == 'agent':
         parts += _file_parts("agent_controls_zh.md")
     from .action_policy import permissions_for
-    parts.append(PromptPart("游戏操作权限", permissions_for(cfg).instructions(), None, "\n\n"))
+    parts.append(PromptPart("游戏操作权限", permissions_for(cfg).instructions(experiments=getattr(cfg, 'play_scope', 'chapter') == 'visited'), None, "\n\n"))
     if workspace_capabilities(cfg).programs and getattr(cfg, "live", False):
         parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）
     if has_cutscene_tool(cfg):
@@ -440,6 +448,16 @@ def play_prompt(cfg) -> str:
 
 
 FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关。"
+
+
+def first_play_prompt(cfg):
+    return ("开始本次探索。先调用 observe 查看当前画面与允许地图，按当前规则开展游戏实验、建模或收集；通关后继续，直到停止目标触发或用户停止。"
+            if getattr(cfg, 'completion_policy', 'stop') == 'continue' else FIRST_PROMPT)
+
+
+def continue_play_prompt(cfg):
+    return ("请在允许地图内继续当前探索、建模或收集任务，按需查询计时与停止目标；无需因已通关而结束。"
+            if getattr(cfg, 'completion_policy', 'stop') == 'continue' else CONTINUE_PROMPT)
 
 
 def study_prompt(study: KbStudy, sim: bool = False) -> str:

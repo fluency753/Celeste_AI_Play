@@ -353,7 +353,8 @@ class CodexRunner(SessionControls):
                         "验证模拟器模块可以导入（只导入，不读取游戏状态或运行推演）。" if self.cfg.sim else "") +
                      "最后调用 celeste_finish_preparation，再简短回复；本次只准备，不启动游戏。" if self.prepare_only
                      else "\n读完后整理 /workspace/notes.md，再调用 celeste_observe 开始试玩。"))
-        return self.resume_note or "知识库准备阶段已完成。现在开始本次指定章节的试玩，先调用 celeste_narrate 和 celeste_observe；剧情按当前模式使用 celeste_cutscene，正常游玩用 celeste_act。"
+        from .prompting import first_play_prompt
+        return self.resume_note or first_play_prompt(self.cfg).replace('observe', 'celeste_observe').replace('act ', 'celeste_act ')
 
     async def _resume_thread(self, params):
         # Resume the model's history without hydrating the complete transcript into
@@ -531,8 +532,9 @@ class CodexRunner(SessionControls):
                 if self.prepare_only and self.study and self.study.complete():
                     self.completed_preparation = True
                     return "知识库准备完成"
+                from .prompting import continue_play_prompt
                 message = ("继续准备，尚未完整读完的行必须用 celeste_read 阅读。" if self.study and not self.study.complete()
-                           else "继续调用游戏工具完成本次章节；先更新一句公开解说。")
+                           else continue_play_prompt(self.cfg).replace('act ', 'celeste_act ') + '先更新一句公开解说。')
             return "现实时间预算用完"
         finally:
             if self.heartbeat_task:

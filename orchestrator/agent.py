@@ -38,7 +38,7 @@ from .kb_study import KbStudy
 from .metrics import Metrics
 from .execution import workspace_capabilities
 from .session_controls import RuntimeCapabilities, SessionControls
-from .prompting import play_prompt, study_prompt, resume_prompt, net_resume_prompt, FIRST_PROMPT, CONTINUE_PROMPT
+from .prompting import play_prompt, study_prompt, resume_prompt, net_resume_prompt, first_play_prompt, continue_play_prompt
 from .telemetry import publish
 
 GAME_TOOLS = ['mcp__celeste__' + name for name in
@@ -348,7 +348,7 @@ class ClaudeRunner(SessionControls):
         if self.resume_note:
             first = self.resume_note
         else:
-            first = study_prompt(self.study, self.cfg.sim) if self.study else FIRST_PROMPT
+            first = study_prompt(self.study, self.cfg.sim) if self.study else first_play_prompt(self.cfg)
         if self.prepare_only:
             first += self._lifecycle_prompt()
         self.metrics.update(telemetry_source='claude_stream_json', chat_thread_id=self.session_id)
@@ -486,7 +486,7 @@ class ClaudeRunner(SessionControls):
                     self.stop_reason = "连续 3 轮没有调用工具"
                     return True
                 note = await self._switch_effort() if self.metrics.state.effort_pending else ""
-                next_prompt = self.study.reminder() if self.study is not None and not self.study.ready() else CONTINUE_PROMPT
+                next_prompt = self.study.reminder() if self.study is not None and not self.study.ready() else continue_play_prompt(self.cfg)
                 if not await self._next_user_turn(note + next_prompt):
                     self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                     return True

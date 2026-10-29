@@ -302,6 +302,8 @@ class GameSession:
         return getattr(self.cfg, "checkpoints", None) or {}
 
     def __init__(self, cfg: RunConfig, run_dir: Path, metrics: Metrics):
+        if (cfg.play_scope == 'visited' or getattr(cfg, 'completion_policy', 'stop') == 'continue') and cfg.cutscene_mode != 'agent':
+            raise ValueError('自由探索或通关后继续需要 agent 剧情模式，由智能体操作结算与选章')
         self.cfg = cfg
         self.run_dir = run_dir
         self.metrics = metrics
@@ -332,6 +334,8 @@ class GameSession:
         self._navigation = ChapterNavigation.start(plan,
             pending=cfg.cutscene_mode == 'agent' and cfg.resume_pending,
             resume_segment=cfg.resume_segment, previous_sid=self.metrics.state.chapter)
+        if cfg.play_scope == 'visited':
+            self._navigation = ChapterNavigation()
         self.metrics.update(piece_done=False)
         self._pending_complete = cfg.resume_completion_pending
         self._ending_pending = False    # auto 剧情模式：最终章刚通关，片尾还没走完（这次动作里由 _finish_ending 处理）
@@ -372,6 +376,9 @@ class GameSession:
         self.entry_guard_supported = hello.get('entry_guard') is True
         self.chapter_reset_guard_supported = hello.get('chapter_reset_guard') is True
         self.action_policy_supported = hello.get('action_policy')
+        self.map_entry_set_supported = hello.get('map_entry_set') is True
+        if self.cfg.play_scope == 'visited' and not self.map_entry_set_supported:
+            raise RuntimeError('自由探索需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
         self.client.step_options = self._step_options
         self.client.after_step = self._remember_held_input
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
@@ -396,12 +403,14 @@ class GameSession:
         slot = (obs.get('save') or {}).get('slot')
         if self.cfg.save_slot is not None and slot != self.cfg.save_slot:
             raise RuntimeError(f'当前存档槽位 {slot} 与指定槽位 {self.cfg.save_slot} 不一致')
+        if self.cfg.play_scope == 'visited':
+            self._bind_visited_maps(obs)
         if obs.get('scene') == 'Level' and not self.chapter_finished and self.piece is not None:
             sid = (obs.get('level') or {}).get('sid')
             if sid != CHAPTER_SIDS.get(self.piece.chapter):
                 raise RuntimeError(f'当前地图 {sid} 与指定章节不一致，请自行返回选章地图重新选择')
         self._pending_complete |= bool((obs.get('level') or {}).get('completed'))
-        if self.piece is None and not self.chapter_finished:        # 没指定章节（进入选章页当前选中的章节）：按游戏里的章节整章玩
+        if self.cfg.play_scope != 'visited' and self.piece is None and not self.chapter_finished:        # 没指定章节（进入选章页当前选中的章节）：按游戏里的章节整章玩
             chapter = next((i for i, s in CHAPTER_SIDS.items() if s == (obs.get('level') or {}).get('sid')), None)
             if chapter is not None:
                 self.piece = Piece(chapter)
@@ -411,7 +420,8 @@ class GameSession:
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
         self.navigation.note_scene(obs)
         self.cfg.save_slot = slot
-        self.start_sid = (obs.get('level') or {}).get('sid') or CHAPTER_SIDS.get(self.cfg.chapter) or self.metrics.state.chapter
+        self.start_sid = ((obs.get('level') or {}).get('sid') or
+                          (CHAPTER_SIDS.get(self.cfg.chapter) if self.cfg.play_scope != 'visited' else None) or self.metrics.state.chapter)
         if self.start_sid:self.metrics.update(chapter=self.start_sid,chapter_side=(obs.get('level') or {}).get('side',self.metrics.state.chapter_side))
         self._update_metrics_from_obs(obs)
         if self.workspace:
@@ -472,12 +482,36 @@ class GameSession:
             require_capability({'action_policy': getattr(self, 'action_policy_supported', None)})
         except ValueError as exc:
             raise ActError(str(exc)) from exc
+        if self.cfg.play_scope == 'visited':
+            if not getattr(self, 'map_entry_set_supported', False) or self.cfg.visited_maps is None or self.cfg.save_slot is None:
+                raise ActError('自由探索地图许可尚未核定或桥接不支持，未发送输入')
+            return step_options(self.cfg, maps=self.cfg.visited_maps, slot=self.cfg.save_slot)
         piece = self.navigation.target
         chapter = piece.chapter if piece else self.cfg.chapter
         if (chapter is not None or self.cfg.save_slot is not None) and not self.entry_guard_supported:
             raise ActError('进入地图的目标核验需要桥接 1.0.22，请更新桥接后继续；未发送输入')
         return step_options(self.cfg, sid=CHAPTER_SIDS.get(chapter), slot=self.cfg.save_slot,
                             departure=self.chapter_finished or (self.done and self.done_reason == '分段完成'))
+
+    def _bind_visited_maps(self, obs):
+        from .free_roam import validate_maps
+        maps = validate_maps(self.cfg.visited_maps if self.cfg.visited_maps is not None else
+                             (obs.get('save') or {}).get('visited_maps'))
+        level = obs.get('level') or {}
+        identity = (level if obs.get('scene') == 'Level' else
+                    (obs.get('reload_boundary') or {}).get('session') if obs.get('scene') in
+                    {'LevelEnter', 'IntroVignette', 'LevelLoader', 'LevelExit', 'AreaComplete'} else None)
+        if identity is not None and {'sid': identity.get('sid'), 'side': identity.get('side')} not in maps:
+            raise RuntimeError('当前关卡不在已核定的自由探索许可内；未发送游戏输入')
+        # Persist before exposing any action. A failed write must not publish an
+        # in-memory authorization that recovery cannot reproduce.
+        path = self.run_dir / 'run_state.json'
+        state = json.loads(path.read_text(encoding='utf-8'))
+        state['visited_maps'] = maps
+        temporary = path.with_suffix('.tmp')
+        temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.replace(path)
+        self.cfg.visited_maps = maps
 
     # ---- 思考僵直（探索模式 --stiffness） ----
 
@@ -673,6 +707,9 @@ class GameSession:
                 obs, image, more = self._enter_next_chapter()
                 notes = [*notes, *more]
             self._write_sim_state()
+        if self.cfg.play_scope == 'visited':
+            from .free_roam import instructions
+            notes.append(instructions(self.cfg))
         self.observe_notes = [str(n) for n in notes]
         obs = self._track_motion(enrich_obs(obs))
         self._update_metrics_from_obs(obs)
@@ -1758,8 +1795,16 @@ class GameSession:
         if self.goals.check(values):
             self.user_stopped = True
             self.chapter_queue.clear()
-        self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range())
-        if self.navigation.complete_current():
+        split_options = {'side': st.chapter_side} if getattr(self.cfg, 'play_scope', 'chapter') == 'visited' else {}
+        self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range(), **split_options)
+        if getattr(self.cfg, 'play_scope', 'chapter') == 'visited':
+            if self.user_stopped or self.goals.immediate:
+                self._mark_done('目标达成')
+            elif getattr(self.cfg, 'completion_policy', 'stop') == 'stop':
+                self._mark_done('章节完成')
+        elif self.navigation.complete_current():
+            self._save_chapter_plan()
+        elif getattr(self.cfg, 'completion_policy', 'stop') == 'continue' and not self.user_stopped and not self.goals.immediate:
             self._save_chapter_plan()
         elif self.cfg.cutscene_mode != 'agent' and not self.goals.immediate and not self.user_stopped:
             self._ending_pending = True     # 用户的停止目标触发时照旧立即结束，片尾由 finish_at_results 收尾
@@ -2047,11 +2092,13 @@ class GameSession:
         queue = [list(s) for s in self._rest_of_piece() + segments_of(self.chapter_queue, table)]
         current = self._current_segment()
         ids = {s: i for i, s in CHAPTER_SIDS.items()}
-        return {"done": [i for i in (ids.get(sp.get("chapter")) for sp in (self.metrics.state.splits or [])) if i is not None],
+        return {"play_scope": self.cfg.play_scope, "visited_maps": getattr(self.cfg, 'visited_maps', None),
+                "completion_policy": getattr(self.cfg, 'completion_policy', 'stop'),
+                "done": [i for i in (ids.get(sp.get("chapter")) for sp in (self.metrics.state.splits or [])) if i is not None],
                 "current": self.current_chapter_id(), "queue": chapters_of(self.chapter_queue),
                 "segments": {"done": done, "current": None if current is None or self.chapter_finished else list(current),
                              "queue": queue},
-                "switching": bool(self.chapter_finished), "editable": not self.done and not self.chapter_finished}
+                "switching": bool(self.chapter_finished), "editable": self.cfg.play_scope != 'visited' and not self.done and not self.chapter_finished}
 
     def set_chapter_queue(self, queue: list[int]) -> str:
         """（兼容旧控制台）当前章节之后要依次通关的整章；当前这一截不变。"""
@@ -2068,6 +2115,8 @@ class GameSession:
     def set_plan(self, segments) -> str:
         """运行中改之后要玩的段（[章节, 段] 的列表，按官方顺序；空 = 当前这一段完成后结束）。返回告诉智能体的说明。
         只能选当前所在段之后的段；和当前这一截紧接着的段并进这一截连续游玩，其余的分成截排进队列。"""
+        if self.cfg.play_scope == 'visited':
+            raise ValueError('自由探索不使用顺序通关计划；请在许可地图内自行导航，停止条件由目标单独设置')
         table = self._table
         segments = validate_segments(segments, table) if segments else []
         with self.lock:
@@ -2088,14 +2137,19 @@ class GameSession:
                 end += 1
             count = len(table.get(chapter) or []) or 1
             piece = self.piece
-            self.navigation.replace_future(Piece(piece.chapter, piece.start, None if end >= count else end),
-                                           pieces_of(sorted(rest), table))
+            new_current = Piece(piece.chapter, piece.start, None if end >= count else end)
+            new_queue = pieces_of(sorted(rest), table)
+            if getattr(self.cfg, 'completion_policy', 'stop') == 'continue' and any(not p.whole() for p in [new_current, *new_queue]):
+                raise ValueError('通关后继续目前支持整章范围，不能改为部分章节计划；原计划未改变')
+            self.navigation.replace_future(new_current, new_queue)
             self._save_chapter_plan()
         table_label = "、".join(piece_label(p, table) for p in self.chapter_queue)
         goal = self._piece_goal(self.piece)
         print(f"[run] 用户调整了要通关的范围：当前这一截 {piece_label(self.piece, table)}；之后 {table_label or '无'}", flush=True)
         if self.chapter_queue:
             return f"用户调整了本次要通关的范围。{goal}之后依次是：{table_label}，不要自行进入其他章节。"
+        if getattr(self.cfg, 'completion_policy', 'stop') == 'continue':
+            return f'用户调整了本次要通关的范围。{goal}计划完成后仍可在当前许可地图继续探索，直到独立停止目标触发或用户停止。'
         return f"用户调整了本次要通关的范围。{goal}这是本次的最后一截，完成后本次运行结束。"
 
     def _save_chapter_plan(self) -> None:
@@ -2115,6 +2169,8 @@ class GameSession:
         current = [] if self.chapter_finished or self.piece is None else [self.piece]
         pieces = done + current + [Piece.of(p) for p in self.chapter_queue]
         state["plan_pieces"] = [[p.chapter, p.start, p.end] for p in pieces]
+        state['navigation_remaining'] = [[p.chapter, p.start, p.end] for p in
+                                         current + [Piece.of(p) for p in self.chapter_queue]]
         state["all_chapters"] = chapters_of(pieces)
         state["piece_pending"] = bool(self.chapter_finished)
         state["segment_index"] = None if self.chapter_finished else self.segment_index
@@ -2142,6 +2198,8 @@ class GameSession:
         self._goal_progress = {}
         level = obs.get("level") or {}
         player = obs.get("player") or {}
+        if self.cfg.play_scope == 'visited' and obs.get('scene') == 'Level' and not level.get('completed'):
+            self.metrics.update(piece_done=False)
         if self.sim_energy:
             if level.get("sid") and level.get("room") is not None and not player.get("dead"):
                 self.sim_energy.reward(room=f"{level['sid']}:{level.get('mode', level.get('side', 0))}:{level['room']}")

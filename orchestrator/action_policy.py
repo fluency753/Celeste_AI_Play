@@ -34,10 +34,11 @@ class ActionPermissions:
     def snapshot(self):
         return asdict(self)
 
-    def instructions(self):
+    def instructions(self, *, experiments=False):
         return '操作权限：' + '；'.join(f'{label}={"允许" if getattr(self, key) else "禁止"}' for key, label in LABELS.items()) + \
             '。禁止项由主控在实际操作前拦截' + ('' if all(self.snapshot().values()) else f'，{MENU_WHITELIST}（选项、辅助等其他菜单项也会被拦）') + \
-            '。正常死亡和房间重试允许；已核验完成后的退出由主控授权。不得用重置代替路线求解，无法继续时用 stop_run 报告。'
+            '。正常死亡和房间重试允许；已核验完成后的退出由主控授权。' + \
+            ('可在获准范围与权限内重启或往返进行实验。' if experiments else '不得用重置代替路线求解，') + '无法继续时用 stop_run 报告。'
 
 
 def block_note(block):
@@ -47,6 +48,16 @@ def block_note(block):
         return ('主控拦下了小游戏入口：这是内置的 PICO-8 小游戏，暂不支持。未进入小游戏，'
                 '本次输入在触发入口的这一帧停止，后续按键没有执行；请继续本体关卡。')
     if action == 'enter_map':
+        if rule == 'target.new_save':
+            return ('主控拦下了新建存档：已到访地图自由探索只允许使用原有存档。'
+                    '本次没有创建或切换存档，后续输入未执行；请返回并选择已获许可的原存档。')
+        if rule == 'target.maps':
+            from .free_roam import describe_maps, validate_maps
+            expected = describe_maps(validate_maps(block.get('expected')))
+            actual = block.get('actual') or {}
+            return (f'主控拦下了这次进入地图：{actual.get("sid")} {actual.get("side")}面不在许可清单内。'
+                    f'允许反复进入：{expected}。本次没有进入地图，触发入口后的剩余输入未执行；'
+                    '请返回选章界面选择许可地图及已解锁的检查点，不要重试未授权入口。')
         what = '存档槽位' if rule == 'target.save_slot' else '地图'
         return (f'主控拦下了这次进入地图：{what}与任务不符（要求 {block.get("expected")}，实际 {block.get("actual")}），'
                 '没有进入。请退回去选对存档和章节再进。')
@@ -79,9 +90,14 @@ def permissions_from_state(state, preference=None):
     return ActionPermissions.read(data) if data is not None else ActionPermissions.legacy(state.get('allow_chapter_reset', False))
 
 
-def step_options(cfg, *, sid=None, slot=None, departure=False):
+def step_options(cfg, *, sid=None, slot=None, departure=False, maps=None):
     permissions = permissions_for(cfg).snapshot()
     target = {'sid': sid, 'slot': slot}
+    if maps is not None:
+        from .free_roam import validate_maps
+        if sid is not None:
+            raise ValueError('地图集合不能与单地图目标混用')
+        target['maps'] = validate_maps(maps)
     return {'action_policy': {'version': VERSION, 'permissions': permissions,
                               'entry_target': target, 'departure': 'current_level' if departure else 'none'},
             # Older menu clients/tests can still inspect these; the new bridge

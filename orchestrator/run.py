@@ -67,7 +67,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help='允许菜单重启章节和未通关返回地图/保存退出，默认禁止')
     for action, label in (('restart-chapter','重启章节'), ('return-to-map','返回地图'), ('save-quit','保存并退出')):
         ap.add_argument('--allow-' + action, action=argparse.BooleanOptionalAction, default=None, help=label + '权限，默认禁止')
-    ap.add_argument('--scope',choices=['chapter','campaign'],default=None,help='单章或按官方章节顺序游玩；独立于停止目标')
+    ap.add_argument('--scope',choices=['chapter','campaign','visited'],default=None,help='单章、顺序游玩或在已到访地图内自由进出；独立于停止目标')
+    ap.add_argument('--completion-policy',choices=['stop','continue'],default=None,help='计划通关后停止或继续探索；已到访地图默认继续，其他范围默认停止')
     ap.add_argument("--create-save", action="store_true", help="显式新建独立存档：放在现有最新存档的下一个槽位（不填中间的空位），只允许从序章开始；名称允许重复")
     ap.add_argument("--model", default="opus", help="Claude Code 模型别名：opus / fable 等（默认 opus）；第三方提供方写它的模型名")
     ap.add_argument("--provider", default="anthropic",
@@ -242,10 +243,17 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     if previous and cfg.recording_mode != previous['state'].get('recording_mode','continuous') and not args.new_recording:
         raise SystemExit('更改录像组织方式需先收尾旧录像，再显式使用 --new-recording；不会隐式拆分或合并原录像')
     from .action_policy import ActionPermissions, configure, permissions_from_state
+    cfg.play_scope=args.scope or (previous['state'].get('play_scope','chapter') if previous else 'chapter')
+    choosing_visited = cfg.play_scope == 'visited' and (not previous or previous['state'].get('play_scope') != 'visited')
+    from .play_scope import completion_policy
+    cfg.completion_policy = completion_policy(cfg.play_scope, args.completion_policy if args.completion_policy is not None else
+        previous['state'].get('completion_policy') if previous and not choosing_visited else None)
     permissions = ActionPermissions()
     if previous:
         from .control import RunControl
         permissions = permissions_from_state(previous['state'], RunControl(previous['dir']).action_permissions_preference())
+    if choosing_visited:
+        permissions = permissions.update({'restart_chapter':True, 'return_to_map':True})
     if args.allow_chapter_reset is not None:
         permissions = ActionPermissions.legacy(args.allow_chapter_reset)
     overrides = {key: getattr(args, 'allow_' + key) for key in ('restart_chapter', 'return_to_map', 'save_quit')
@@ -253,13 +261,23 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     if overrides:
         permissions = permissions.update(overrides)
     configure(cfg, permissions)
-    cfg.play_scope=args.scope or (previous['state'].get('play_scope','chapter') if previous else 'chapter')
     cfg.create_save = args.create_save
     cfg.cutscene_mode = args.cutscene_mode or (previous['state'].get('cutscene_mode','auto') if previous else 'auto')
     if previous and args.cutscene_mode is None:
         from .control import RunControl
         cfg.cutscene_mode=RunControl(previous['dir']).cutscene_preference() or cfg.cutscene_mode
+    if cfg.play_scope == 'visited' or cfg.completion_policy == 'continue':
+        if args.cutscene_mode == 'auto':
+            raise SystemExit('自由探索或通关后继续须使用 agent 剧情模式，由智能体操作结算与选章')
+        cfg.cutscene_mode = 'agent'
+    if cfg.play_scope == 'visited':
+        if args.create_save:
+            raise SystemExit('已到访地图自由探索需要已有存档；新存档请先正常游玩')
+        if args.chapters or args.segments:
+            raise SystemExit('已到访地图自由探索不使用 --chapters 或 --segments 顺序计划')
     cfg.save_slot = args.save_slot if args.save_slot is not None else previous['state'].get('save_slot') if previous else None
+    if cfg.play_scope == 'visited' and cfg.save_slot is None:
+        raise SystemExit('已到访地图自由探索须显式指定 --save-slot')
     if cfg.save_slot is not None and (cfg.save_slot < 0 or args.create_save):
         raise SystemExit('--save-slot 须为非负槽位编号，不能与 --create-save 合用')
     from .segments import fetch_table, load_table
@@ -383,48 +401,74 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if (args.agent, args.save) != (state["agent"], state["save"]):
             raise SystemExit(f"--resume 的运行是 --agent {state['agent']} --save {state['save']}，与这次给的不一致")
         cfg.resume_completion_pending = bool(state.get('completion_pending'))
-        done = len(previous["metrics"].get("splits") or [])
-        # 原计划已经全部完成时，--chapters / --segments 追加接下来要玩的部分：同一会话、设置与统计接着算
-        from .segments import Piece, chapters_of
-        extension = (list(cfg.plan) if args.segments else [Piece(c) for c in cfg.chapters] if args.chapters else None)
-        if extension is not None:
-            cfg.resume_completion_pending = False
-        if extension is not None and args.chapter is not None:
-            raise SystemExit("续跑追加章节用 --chapters 或 --segments，不用 --chapter")
-        if state.get("plan_pieces"):
-            # 按段通关（或运行中改过计划）：按已完成的截数从计划里接着走
-            pieces = [Piece(int(c), int(s), None if e is None else int(e)) for c, s, e in state["plan_pieces"]]
-            remaining_pieces = pieces[done:]
-            if extension is not None:
-                if remaining_pieces:
-                    raise SystemExit("原运行的计划还没有完成：续跑沿用原计划；要改范围请在运行中用控制台改")
-                pieces, remaining_pieces = pieces + extension, extension
-                cfg._extended_plan = pieces
-            if not remaining_pieces:
-                raise SystemExit("这次运行的计划已经全部完成，不需要续跑（要接着玩下一章：加 --chapters 或 --segments）")
-            if any(not p.whole() for p in pieces) and not cfg.checkpoints:
-                cfg.checkpoints = fetch_table(args.bridge_port)
-                if not cfg.checkpoints:
-                    raise SystemExit("续跑按段通关的运行需要检查点表（configs/checkpoints.json 或桥接 1.0.6）")
-            cfg.plan = remaining_pieces
-            cfg.chapters, cfg.chapter = chapters_of(remaining_pieces), remaining_pieces[0].chapter
-            cfg.resume_pending = bool(state.get("piece_pending")) and extension is None
-            # 追加的章节从开头玩：原运行记下的段号是上一章的
-            cfg.resume_segment = None if cfg.resume_pending or extension is not None else state.get("segment_index")
-            remaining = cfg.chapters
+        if cfg.play_scope == 'visited':
+            if cfg.save_slot is None or cfg.save_slot != state.get('save_slot'):
+                raise SystemExit('已到访地图自由探索续跑须沿用原存档槽位')
+            cfg.visited_maps = state.get('visited_maps') if state.get('play_scope') == 'visited' else None
+        if cfg.play_scope == 'visited':
+            cfg.plan = cfg.chapters = None
+            cfg.chapter = None
+            cfg.resume_pending = False
+            cfg.resume_segment = None
         else:
-            remaining = state["all_chapters"][done:] if state.get("all_chapters") else []
+            done = len(previous["metrics"].get("splits") or [])
+            # 原计划已经全部完成时，--chapters / --segments 追加接下来要玩的部分：同一会话、设置与统计接着算
+            from .segments import Piece, chapters_of
+            extension = (list(cfg.plan) if args.segments else [Piece(c) for c in cfg.chapters] if args.chapters else None)
             if extension is not None:
-                if remaining:
-                    raise SystemExit("原运行的章节还没有全部通关：续跑沿用原计划")
-                if any(not p.whole() for p in extension):
-                    raise SystemExit("这次运行没有按段的计划：续跑只能追加整章（--chapters）")
-                remaining = [p.chapter for p in extension]
-                cfg._extended_plan = [Piece(c) for c in state.get("all_chapters") or []] + extension
-            if state.get("all_chapters") and not remaining:
-                raise SystemExit("这次运行的章节已经全部通关，不需要续跑（要接着玩下一章：加 --chapters）")
-            cfg.chapters = remaining or None
-            cfg.chapter = remaining[0] if remaining else None
+                cfg.resume_completion_pending = False
+            if extension is not None and args.chapter is not None:
+                raise SystemExit("续跑追加章节用 --chapters 或 --segments，不用 --chapter")
+            if state.get("plan_pieces"):
+                # 按段通关（或运行中改过计划）：按已完成的截数从计划里接着走
+                pieces = [Piece(int(c), int(s), None if e is None else int(e)) for c, s, e in state["plan_pieces"]]
+                remaining_pieces = ([Piece(int(c),int(start),None if end is None else int(end)) for c,start,end in state['navigation_remaining']]
+                                    if cfg.completion_policy == 'continue' and state.get('navigation_remaining') is not None
+                                    else pieces[done:])
+                if not remaining_pieces and cfg.completion_policy == 'continue' and extension is None:
+                    remaining_pieces = [pieces[-1]]
+                    cfg.resume_completion_pending = False
+                if extension is not None:
+                    if remaining_pieces:
+                        raise SystemExit("原运行的计划还没有完成：续跑沿用原计划；要改范围请在运行中用控制台改")
+                    pieces, remaining_pieces = pieces + extension, extension
+                    cfg._extended_plan = pieces
+                if not remaining_pieces:
+                    raise SystemExit("这次运行的计划已经全部完成，不需要续跑（要接着玩下一章：加 --chapters 或 --segments）")
+                if any(not p.whole() for p in pieces) and not cfg.checkpoints:
+                    cfg.checkpoints = fetch_table(args.bridge_port)
+                    if not cfg.checkpoints:
+                        raise SystemExit("续跑按段通关的运行需要检查点表（configs/checkpoints.json 或桥接 1.0.6）")
+                cfg.plan = remaining_pieces
+                cfg.chapters, cfg.chapter = chapters_of(remaining_pieces), remaining_pieces[0].chapter
+                cfg.resume_pending = bool(state.get("piece_pending")) and extension is None
+                if cfg.completion_policy == 'continue' and not state.get('navigation_remaining') and done >= len(pieces):
+                    cfg.resume_pending = False
+                # 追加的章节从开头玩：原运行记下的段号是上一章的
+                cfg.resume_segment = None if cfg.resume_pending or extension is not None else state.get("segment_index")
+                remaining = cfg.chapters
+            else:
+                remaining = ([int(p[0]) for p in state['navigation_remaining']]
+                             if cfg.completion_policy == 'continue' and state.get('navigation_remaining') is not None else
+                             state["all_chapters"][done:] if state.get("all_chapters") else [])
+                if not remaining and cfg.completion_policy == 'continue' and extension is None and state.get('all_chapters'):
+                    remaining = [state['all_chapters'][-1]]
+                    cfg.resume_completion_pending = False
+                if extension is not None:
+                    if remaining:
+                        raise SystemExit("原运行的章节还没有全部通关：续跑沿用原计划")
+                    if any(not p.whole() for p in extension):
+                        raise SystemExit("这次运行没有按段的计划：续跑只能追加整章（--chapters）")
+                    remaining = [p.chapter for p in extension]
+                    cfg._extended_plan = [Piece(c) for c in state.get("all_chapters") or []] + extension
+                if state.get("all_chapters") and not remaining:
+                    raise SystemExit("这次运行的章节已经全部通关，不需要续跑（要接着玩下一章：加 --chapters）")
+                cfg.chapters = remaining or None
+                cfg.chapter = remaining[0] if remaining else None
+    if cfg.completion_policy == 'continue' and cfg.plan:
+        from .segments import plan_is_partial
+        if plan_is_partial(cfg.plan):
+            raise SystemExit('通关后继续目前适用于整章范围；按段计划请使用 stop 完成策略')
     if cfg.pause_limit and not cfg.sim:
         raise SystemExit("--limit-planning 只用于开模拟器的版本（关模拟器的版本不限制思考与调用）")
     if cfg.sim:
@@ -470,7 +514,9 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         plan_pieces = [[p.chapter, p.start, p.end] for p in cfg.plan]
     else:
         plan_pieces = None
-    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "play_scope":cfg.play_scope, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
+    if cfg.play_scope == 'visited':
+        all_chapters = plan_pieces = None
+    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "play_scope":cfg.play_scope, "completion_policy":cfg.completion_policy, "visited_maps":cfg.visited_maps, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": False, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
@@ -479,6 +525,9 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
              "controller_host": os.environ.get("CELESTE_CONTROLLER_HOST"), "controller_pid": os.getpid(),
              "controller_parent_pid": os.getppid(),
              "bridge_port": cfg.bridge_port}
+    from .segments import Piece
+    current_plan = cfg.plan or [Piece(c) for c in (cfg.chapters or ([] if cfg.chapter is None else [cfg.chapter]))]
+    state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [[p.chapter,p.start,p.end] for p in map(Piece.of,current_plan)]
     state.update({key:getattr(cfg,key) for key in ('recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu')})
     (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -506,10 +555,31 @@ def make_run_dir(agent: str) -> Path:
     return run_dir
 
 
+def startup_step_options(client, cfg):
+    """Bind visited permissions from native save facts before any entry input."""
+    from .action_policy import step_options
+    if getattr(cfg, 'play_scope', 'chapter') != 'visited':
+        return step_options(cfg, departure=True)
+    if type(cfg.save_slot) is not int or cfg.save_slot < 0:
+        raise ValueError('自由探索载入须明确指定存档槽位；未发送输入')
+    from .free_roam import validate_maps
+    if cfg.visited_maps is None:
+        obs = client.call('observe', image=False, entities=False, tiles=False)['obs']
+        save = obs.get('save') or {}
+        candidate = (save if save.get('slot') == cfg.save_slot and save.get('name') == cfg.save else
+                     next((row for row in (obs.get('menu') or {}).get('slots', [])
+                           if row.get('fileSlot') == cfg.save_slot and row.get('name') == cfg.save
+                           and row.get('exists') is True), None))
+        if candidate is not None and candidate.get('visited_maps') is not None:
+            cfg.visited_maps = validate_maps(candidate['visited_maps'])
+    maps = [] if cfg.visited_maps is None else cfg.visited_maps
+    return step_options(cfg, maps=maps, slot=cfg.save_slot, departure=True)
+
+
 def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     """菜单宏进入存档。录制时开局也录进去：先（不录、快进）退回选档页，从那里开始录制，
     再按正常速度选存档、进地图、选章节、进关卡、用暂停菜单跳过开场剧情。"""
-    from tools.enter_save import enter_save as macro, to_file_select  # noqa: WPS433（延迟导入，避免 --help 时连接游戏）
+    from tools.enter_save import enter_save as macro, load_save_and_freeze, to_file_select  # noqa: WPS433（延迟导入，避免 --help 时连接游戏）
     from tools.bridge_client import BridgeClient
     from .chapter_recording import ChapterRecording
 
@@ -522,10 +592,18 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     # Startup navigation is explicitly requested by the user, before the agent
     # owns this connection. Allow leaving a previously loaded map to enter the
     # selected save; the runtime session installs its own stricter policy.
-    from .action_policy import step_options
-    client.step_options = lambda: step_options(cfg, departure=True)
+    client.step_options = lambda: startup_step_options(client, cfg)
     from .chapter_recording import menu_options
+    if getattr(cfg, 'play_scope', 'chapter') == 'visited' and client.call('hello').get('map_entry_set') is not True:
+        client.close()
+        raise RuntimeError('已到访地图自由探索需要支持地图集合门禁的新版桥接；未发送游戏输入')
     client.call('activate', **menu_options(cfg))
+    def navigate(**options):
+        if getattr(cfg, 'play_scope', 'chapter') == 'visited':
+            return load_save_and_freeze(client, cfg.save, save_slot=cfg.save_slot, **options)
+        return macro(client, cfg.save, chapter=cfg.chapter, checkpoint=first_checkpoint(cfg),
+                     create_if_missing=cfg.create_save, save_slot=cfg.save_slot,
+                     cutscene_mode=cfg.cutscene_mode, **options)
     try:
         t0 = time.monotonic()
         if recorder is not None and recorder.started:
@@ -534,8 +612,7 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
             recorder.call = client.call
             if getattr(cfg,'recording_mode','continuous') == 'chapter':
                 client.before_step = recorder.before_step
-            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, create_if_missing=cfg.create_save,
-                        save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode, checkpoint=first_checkpoint(cfg))
+            obs = navigate(menu_speed=1)
         elif recorder is not None:
             to_file_select(client)
             recorder.call = client.call
@@ -546,13 +623,11 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
                 print("[record] 分章采集已准备：排除选档与选章，从章节第一帧开始录制", flush=True)
             else:
                 print("[record] 从选档页开始连续录制：选存档、进章节、跳过开场都按正常速度录进录像", flush=True)
-            obs = macro(client, cfg.save, chapter=cfg.chapter, menu_speed=1, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode,
-                        checkpoint=first_checkpoint(cfg))
+            obs = navigate(menu_speed=1)
         else:
             # 保留的原录制已经在写；菜单宏同样按正常速度推进，不再发送 record start。
             resume_options = {'menu_speed': 1} if getattr(cfg, '_recording_resume_manifest', None) else {}
-            obs = macro(client, cfg.save, chapter=cfg.chapter, create_if_missing=cfg.create_save, save_slot=cfg.save_slot, cutscene_mode=cfg.cutscene_mode, **resume_options,
-                        checkpoint=first_checkpoint(cfg))
+            obs = navigate(**resume_options)
         cfg.save_slot = (obs.get('save') or {}).get('slot', cfg.save_slot)
         print(f"[run] 已进入存档 {cfg.save}：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}"
               f"（菜单宏用时 {time.monotonic() - t0:.1f} 秒）", flush=True)
@@ -687,6 +762,8 @@ def check_resume_position(cfg: RunConfig) -> bool:
 
     client = BridgeClient(port=cfg.bridge_port, timeout=120)
     try:
+        if cfg.play_scope == 'visited' and client.call('hello').get('map_entry_set') is not True:
+            raise SystemExit('已到访地图自由探索需要支持地图集合门禁的新版桥接；未发送游戏输入')
         obs = client.call("observe", image=False, entities=False, tiles=False)["obs"]
         # A saved native Session may resume directly into its Level. Do not turn
         # "load this save" into "leave that Level to reach chapter select".
@@ -696,8 +773,12 @@ def check_resume_position(cfg: RunConfig) -> bool:
                 (obs.get('menu') or {}).get('current') not in {'OuiChapterSelect', 'OuiChapterPanel'}):
             from tools.enter_save import load_save_and_freeze
             from .action_policy import controller_navigation
-            with controller_navigation(client, cfg, slot=cfg.save_slot):
+            if cfg.play_scope == 'visited':
+                client.step_options = lambda: startup_step_options(client, cfg)
                 obs = load_save_and_freeze(client, cfg.save, save_slot=cfg.save_slot)
+            else:
+                with controller_navigation(client, cfg, slot=cfg.save_slot):
+                    obs = load_save_and_freeze(client, cfg.save, save_slot=cfg.save_slot)
         save = (obs.get("save") or {}).get("name")
         right_save = save == cfg.save and (cfg.save_slot is None or (obs.get('save') or {}).get('slot') == cfg.save_slot)
         sid = (obs.get("level") or {}).get("sid")
@@ -713,7 +794,7 @@ def check_resume_position(cfg: RunConfig) -> bool:
         if obs.get("scene") == "Level":
             if not right_save:
                 raise SystemExit(f"游戏当前在存档 {save!r} 的关卡里，不是 {cfg.save!r}：先退出那个关卡再续跑")
-            if sid != want:
+            if sid != want and cfg.play_scope != 'visited':
                 raise SystemExit(f"游戏当前在 {chapter_name(sid)}，续跑的章节是 {chapter_name(want)}：请确认 --resume 的目录")
             print(f"[run] 续跑：游戏停在 {chapter_name(sid)} 房间 {(obs.get('level') or {}).get('room')}", flush=True)
             return True
@@ -907,9 +988,13 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         if preference is not None:
             RunControl(run_dir).set_fast(preference)
         RunControl(run_dir).set_effort(source_control.effort_preference())
-        RunControl(run_dir).set_cutscene_mode(source_control.cutscene_preference() or cfg.cutscene_mode)
+        RunControl(run_dir).set_cutscene_mode(cfg.cutscene_mode)
         from .action_policy import permissions_for
         RunControl(run_dir).set_action_permissions(permissions_for(cfg).snapshot())
+    if cfg.play_scope == 'visited':
+        # The save-bound authorization is committed by connect before any input.
+        # Publish its run-state owner first; session identity is finalized below.
+        write_run_state(run_dir, cfg, None, previous)
     obs = session.connect()
     print(f"[run] 已接管游戏：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}，存档 {cfg.save}", flush=True)
     if previous:
@@ -1247,6 +1332,8 @@ def main() -> int:
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
     from .bridge_requirements import preflight_bridge
     hello = preflight_bridge(cfg.bridge_port)
+    if getattr(cfg, 'play_scope', 'chapter') == 'visited' and hello.get('map_entry_set') is not True:
+        raise RuntimeError('自由探索需要桥接 1.10.0 的地图集合门禁；未开始录制或进档')
     if (args.record and getattr(cfg,'recording_mode','continuous') == 'chapter' or any(getattr(cfg,key,False) for key in
             ('freeze_chapter_select','freeze_file_select','freeze_main_menu'))) and hello.get('chapter_recording') != 1:
         raise SystemExit('按章录制与菜单冻结设置需要桥接 1.9.0；请先更新 Bridge，未启动录制或游戏输入')

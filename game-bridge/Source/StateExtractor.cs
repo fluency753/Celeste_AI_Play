@@ -72,6 +72,8 @@ internal static class StateExtractor {
             w.WriteString("name", save.Name);
             w.WriteNumber("slot", save.FileSlot);
             w.WriteNumber("fileTimeTicks", save.Time);
+            w.WritePropertyName("visited_maps");
+            JsonSerializer.Serialize(w, VisitedMaps.Read(save));
             // 存档文件在磁盘上的位置（主控在开跑前备份它）
             try {
                 string file = UserIO.GetSaveFilePath(SaveData.GetFilename(save.FileSlot));
@@ -186,6 +188,8 @@ internal static class StateExtractor {
                 w.WriteString("name", slot.Name);
                 w.WriteBoolean("exists", slot.Exists);
                 w.WriteBoolean("startingGame", slot.StartingGame);
+                w.WritePropertyName("visited_maps");
+                JsonSerializer.Serialize(w, VisitedMaps.ReadCandidate(slot));
                 w.WriteEndObject();
             }
             w.WriteEndArray();

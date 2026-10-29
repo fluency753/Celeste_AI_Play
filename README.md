@@ -168,7 +168,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1          # 一键部署：�
 | `--effort` | Claude：`high`；原生 GPT：`medium`（沿用当时生效的） | 开局推理强度；可选档位由所选模型声明（Anthropic 与 DeepSeek 的模型都是 `low` / `medium` / `high` / `xhigh` / `max`）；智能体可以用 `set_effort` 自己调整 |
 | `--chapters 0,1,2` | 无 | 依次通关的章节（0 序章、1 1A、2 2A……），一章通关后自动进入下一章 |
 | `--chapter N` | 选章页当前章节 | 只玩一章（或作为 `--scope campaign` 的起始章节） |
-| `--scope chapter` / `campaign` | `chapter`（沿用） | 没给 `--chapters` 时：`chapter` 只玩一章，`campaign` 从起始章节起按官方章节顺序一直玩下去 |
+| `--scope chapter` / `campaign` / `visited` | `chapter`（沿用） | 没给 `--chapters` 时：`chapter` 只玩一章，`campaign` 从起始章节起按官方章节顺序一直玩下去；`visited` 在已有存档已到访地图内自由探索，默认通关后继续 |
 | `--prepared <准备目录>` | 无 | 用已准备好的会话新开一局（先核对知识库没有变化）；不能与 `--resume`、`--no-study` 合用 |
 | `--max-minutes` | 240（沿用） | 现实时间安全上限（不含准备阶段与等待额度），不显示给智能体 |
 | `--study-minutes` | 60 | 准备阶段上限，到时自动开放游戏工具 |

@@ -205,13 +205,16 @@ def play_session(anchor, current, options):
     if state.get('session_kind') != 'ready':
         raise ValueError('请先新建并准备会话；旧试玩请使用续跑入口')
     if (not isinstance(options, dict) or not {'chapter','save','create_save','save_slot'} <= set(options)
-            or set(options)-{'chapter','save','create_save','save_slot','scope','sim_assist',
+            or set(options)-{'chapter','save','create_save','save_slot','scope','completion_policy','sim_assist',
                              'recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu'}):
         raise ValueError('请显式选择存档及是否新建')
     from .launch_options import recording_options
     options = {**options, **recording_options(options)}
-    from .play_scope import chapter_sequence,sim_available
+    from .play_scope import chapter_sequence,sim_available,completion_policy
     chapter_sequence(options['chapter'],options.get('scope','chapter'))
+    options['completion_policy'] = completion_policy(options.get('scope','chapter'),options.get('completion_policy'))
+    if options.get('scope') == 'visited' and options['create_save']:
+        raise ValueError('已到访地图自由探索需要已有存档；新存档请先正常游玩')
     if type(options.get('sim_assist',False)) is not bool:
         raise ValueError('模拟辅助须为开或关')
     if options.get('sim_assist') and not sim_available(REPO_ROOT):
@@ -262,6 +265,12 @@ def play_session(anchor, current, options):
 
 def _launch_play(current, options):
     from .launch_options import recording_args
+    from .play_scope import chapter_sequence,completion_policy
+    scope = options.get('scope','chapter')
+    chapter_sequence(options['chapter'],scope)
+    completion = completion_policy(scope,options.get('completion_policy'))
+    if scope == 'visited' and (options.get('create_save') or type(options.get('save_slot')) is not int):
+        raise ValueError('已到访地图自由探索须选择已有存档槽位')
     capture_args = recording_args(options)  # validate before any preparation writes or launches
     state = read_json(current / 'run_state.json')
     directory = Path(state['prepared_dir']).resolve()
@@ -274,10 +283,12 @@ def _launch_play(current, options):
     manual_effort=RunControl(current).effort_preference()
     RunControl(directory).set_effort(manual_effort)
     mode=RunControl(current).cutscene_preference() or state.get('cutscene_mode','auto')
+    if scope == 'visited' or completion == 'continue':
+        mode = 'agent'
     RunControl(directory).set_cutscene_mode(mode)
     return launch(['--engine',state['engine'],'--provider',state['provider'],'--model',state.get('requested_model') or state['model'],
                           '--agent',state['agent'],'--save',options['save'],'--knowledge',state.get('knowledge_profile','explore'),
-                          '--scope',options.get('scope','chapter'),
+                          '--scope',scope,'--completion-policy',completion,
                           '--sim-assist' if options.get('sim_assist',False) else '--no-sim-assist',
                           '--prepared',str(directory),'--chapter',str(options['chapter']), '--effort',manual_effort or read_json(current/'metrics.json').get('effort',state['effort']),
                           '--live','--keep-obs-open','--playback','--continuous-music','--start-paused','--cutscene-mode',mode] +

@@ -701,6 +701,8 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
             raise BridgeReloadError(str(exc) + '保持暂停，修复后用 --retry 重新核验。') from exc
         if hello.get('entry_guard') is not True:
             raise BridgeReloadError('新桥接的地图入场门禁未加载，保持暂停')
+        if getattr(session.cfg, 'play_scope', 'chapter') == 'visited' and hello.get('map_entry_set') is not True:
+            raise BridgeReloadError('新桥接缺少自由探索地图集合门禁，保持暂停；请安装兼容桥接后重试')
         if hello.get('input_bindings_ok') is not True:
             mismatch = '、'.join(map(str, hello.get('input_binding_mismatches') or [])) or '未报告'
             raise BridgeReloadError(f'新桥接接回后注入按键绑定与桥接不一致（{mismatch}），继续会按玩家自己的绑定解释合成输入；'
@@ -717,6 +719,7 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
         session.entry_guard_supported = hello.get('entry_guard') is True
         session.chapter_reset_guard_supported = hello.get('chapter_reset_guard') is True
         session.action_policy_supported = hello.get('action_policy')
+        session.map_entry_set_supported = hello.get('map_entry_set') is True
         session.bridge_reload_supported = True
         refresh = getattr(session, 'after_bridge_reload', None)
         if refresh:

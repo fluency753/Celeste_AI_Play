@@ -206,6 +206,23 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertEqual(self.session.resets, 1)
         self.assertFalse(any(c in {'record', 'step', 'advance', 'deactivate'} for c, _ in self.session.calls))
 
+    def test_free_roam_cannot_reload_to_bridge_without_map_set_guard(self):
+        self.session.cfg.play_scope = 'visited'
+        with self.assertRaisesRegex(BridgeReloadError, '地图集合门禁'):
+            reload_bridge(self.session, self.root, self.options)
+        self.assertTrue(self.session.holding())
+        self.assertNotIn('reload_finish', [cmd for cmd, _ in self.session.calls])
+        original = self.session.bridge_call
+        def call(command, **args):
+            result = original(command, **args)
+            if command == 'hello':
+                result['map_entry_set'] = True
+            return result
+        self.session.bridge_call = call
+        self.assertEqual(reload_bridge(self.session, self.root, {'retry': True})['phase'], 'finished')
+        self.assertTrue(self.session.map_entry_set_supported)
+        self.assertEqual([cmd for cmd, _ in self.session.calls].count('reload_commit'), 1)
+
     def test_loading_waits_at_first_loaded_boundary_before_prepare_and_file_replace(self):
         original = self.session.bridge_call
         loaded = copy.deepcopy(self.session.obs)

@@ -218,7 +218,7 @@ class SessionControls:
                                 self.control.set_action_permissions(permissions.snapshot())
                                 configure(self.cfg, permissions)
                                 configure(self.session.cfg, permissions)
-                            note = '用户更新了' + permissions.instructions()
+                            note = '用户更新了' + permissions.instructions(experiments=getattr(self.session.cfg, 'play_scope', 'chapter') == 'visited')
                             self.pending_messages.append({**row, 'text': note})
                             self.control.mark(row['id'], 'waiting', '章节重置策略已生效，正在通知 agent')
                         elif row['kind'] == 'sim_update':
@@ -266,6 +266,8 @@ class SessionControls:
                                 raise ValueError('本次运行没有开放剧情工具，剧情由主控自动跳过')
                             if row['text'] == 'agent' and not getattr(self.session, 'story_input_supported', True):
                                 raise ValueError('剧情交给智能体需要桥接 Mod 1.0.4 或更新版本（按输入节点交接剧情），请更新桥接后重启游戏')
+                            if row['text'] == 'auto' and (getattr(self.cfg, 'play_scope', 'chapter') == 'visited' or getattr(self.cfg, 'completion_policy', 'stop') == 'continue'):
+                                raise ValueError('自由探索或通关后继续由智能体操作结算与选章，不能切换为自动剧情模式')
                             self.cfg.cutscene_mode=row['text']
                             self.control.set_cutscene_mode(row['text'])
                             self.control.mark(row['id'],'submitted','剧情模式已更新，当前菜单操作完成后生效')
