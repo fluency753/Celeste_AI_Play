@@ -419,14 +419,18 @@ def prompt_parts(cfg) -> list[PromptPart]:
         parts += _file_parts("agent_controls_zh.md")
     from .action_policy import permissions_for
     parts.append(PromptPart("游戏操作权限", permissions_for(cfg).instructions(experiments=getattr(cfg, 'play_scope', 'chapter') == 'visited'), None, "\n\n"))
+    if 'exit_level' in game_tools(cfg):
+        parts.append(PromptPart("返回地图与结束任务",
+                                "用户要求返回地图时调用 exit_level，默认保留任务、后续章节和录制；返回后 observe，再自行选章。"
+                                "只有用户明确结束整次试玩才设 finish_run=true。按当前操作权限执行，不用保存退出绕过返回地图禁令；返回地图不算通关。", None, "\n\n"))
     if workspace_capabilities(cfg).programs and getattr(cfg, "live", False):
         parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）
     if has_cutscene_tool(cfg):
         parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
-                                f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent模式在可尝试跳过时先交回，无需wait；"
-                                "用skip尝试跳过，watch只播放明确识别的动画到下一输入节点或恢复控制，每次调用最多自动等待600帧；未知状态立即交回，不重复空等。"
-                                "advance确认对白、明信片、旧纸的一页或confirm画面，choose明确选择，教学和breathing呼吸小游戏用act；旧纸可用U/D翻页、B关闭。"
-                                "分支须先读选项后自行选择，不得用advance代选。旧桥接缺少storyDecision时仍只在实际输入节点交回。", None, "\n"))
+                                f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent由你显式操作，无需wait："
+                                "skip尝试跳过，watch只播放已识别动画到下一输入节点或恢复控制，每次最多600帧，未知状态立即交回，不重复空等；"
+                                "advance确认对白、明信片、旧纸一页或confirm画面；分支先读选项再choose，不用advance代选。"
+                                "教学和breathing用act，角色可操作时不因inCutscene标记停下；旧纸U/D翻页、B关闭。", None, "\n"))
     if is_explore(cfg) and workspace_capabilities(cfg).programs and getattr(cfg, "explore_program_runs", None):
         parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",
                                 f"两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。",
@@ -435,8 +439,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
         from .sim_assist import AssistRules
         parts.append(PromptPart("有限模拟辅助（开了限额预测时自动加）",
                                 AssistRules.of(cfg).instructions().lstrip("\n"), None, "\n\n"))
-    parts.append(PromptPart("异常工具输出", "工具返回大量编码串（如 Base64）、乱码、无信息重复，或截断导致关键信息不可读时，第一次发现就用公开消息向用户报告工具名、异常现象及影响；有依据时附可见规模，不编造 token 数。不要粘贴大块原文，不把图片编码当作已看到图片，不反复调用同一工具继续堆积。能通过现有可靠的局部查询或原始文件恢复信息时，报告后继续；关键信息无法可靠恢复、继续操作可能依据错误状态时，调用 stop_run 说明原因并等待处理。正常可读的长数据或不熟悉游戏机制本身不算工具故障。", None, "\n\n"))
-    parts.append(PromptPart("任务阻塞处理", "任务因工具故障、缺少必要能力等无法继续时，调用 stop_run(reason=明确的阻塞原因) 报告给用户：主控暂停试玩、游戏保持冻结，由用户决定继续还是停止；然后结束本轮等待用户。不要无限重试失败工具，也不要把阻塞当作通关；普通死亡和仍可尝试的难点继续正常游玩。", None, "\n\n"))
+    parts.append(PromptPart("工具异常与任务阻塞", "首次遇到大量编码串（如Base64）、乱码、无信息重复或关键内容截断时，公开报告工具名、现象及影响；不编造token数，不粘贴大块原文，不把编码当作已看到图像，不反复调用堆积。能从可靠局部查询或原始文件恢复时继续；信息不可靠或缺少必要能力导致任务无法继续时，调用stop_run说明原因，主控冻结暂停，结束本轮等待用户。正常长数据、普通死亡和仍可尝试的难点不算阻塞，也不能把阻塞当作通关。", None, "\n\n"))
     for part in parts:
         part.text = fill(part.text, cfg)
     return parts
@@ -490,7 +493,7 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
         fresh_context += "工作区里的笔记与程序仍保留。"
     head = ("（系统）之前指定的章节都已经通关。"
             + (fresh_context if fresh_session else "现在接着同一个会话，"))
-    rules = ("本次的规则以当前的系统提示词为准" if fresh_session
+    rules = ("本次的规则以当前的系统提示词为准" if fresh_session or getattr(cfg, 'engine', 'claude') == 'codex'
              else "本次的规则以这条消息后面附上的当前规则为准")
     changed = "单次 act 与自写推演的帧数上限、思考语句的要求" if workspace.programs else "单次 act 的帧数上限、思考语句的要求"
     reuse = "之前写的程序与笔记按新规则检查后再用。" if workspace.workspace_read else "按当前规则核对后继续。"
@@ -504,6 +507,9 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
 def current_rules_note(cfg) -> str:
     """续跑同一个 Claude Code 会话时附在第一条消息后面的当前规则。Claude Code 压缩上下文时会把当时的系统提示词与工具说明
     存成快照（prompt_snapshot），之后续跑沿用快照，要到下一次压缩才换成新的；所以续跑时改过的规则要在对话里再给一遍。"""
+    # Codex thread/resume replaces baseInstructions. Only Claude needs a copy in history.
+    if getattr(cfg, 'engine', 'claude') == 'codex':
+        return ""
     return ("\n\n（系统）续跑的会话沿用之前保存的提示词快照：你看到的系统提示词与工具说明可能还是旧版本，要到下次压缩上下文后才会更新。"
             f"当前生效的完整规则如下，与旧版本不一致时以这里为准；act 一次至少推进 {act_frame_min(cfg)} 帧、最多 {act_frame_cap(cfg)} 帧，不在范围内会被主控退回。\n\n"
             + play_prompt(cfg))

@@ -30,16 +30,13 @@ TEXT = {"type": "string"}
 
 def codex_tool_mapping(cfg) -> str:
     """原生 GPT 的提示词在 play_prompt 之后另加的工具映射（控制台的提示词预览也显示它）。"""
-    tools = game_tools(cfg)
     return ("# 原生 Codex 工具映射\n"
             "这里的 Read/Write/Bash 分别是 celeste_read/celeste_write/celeste_bash；"
-            "observe/act/narrate/set_effort/stop_run 均加 celeste_ 前缀。Edit/Glob/Grep 用沙箱 Bash 完成。"
+            "游戏工具均加 celeste_ 前缀。Edit/Glob/Grep 用沙箱 Bash 完成。"
             "所有自写程序都必须经 celeste_bash 在 Docker 中执行。不要调用任何宿主 shell、apply_patch、"
             "MCP、浏览器或子智能体；宿主文件系统是只读的。"
             "只输出给观众的简短公开解说，不输出内部推理正文。"
-            + ("用户要求返回地图时调用 celeste_exit_level，默认保留任务和后续章节；仅用户明确结束整次试玩才设finish_run=true；" if "exit_level" in tools else "")
-            + ("剧情可尝试跳过时先交回；用 celeste_cutscene skip 尝试跳过或 watch 观看到输入节点，随后对白用 advance、分支用 choose，教学用 act，不调用 wait。" if "cutscene" in tools else "")
-            + "公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
+            "公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
             "每次操作后仍应立即公开说明下一步打算，不要持续静默。"
             "游戏图像由应用直接作为当前轮的图像附件提供，工具结果只含文字；"
             "附件的帧号、房间和screenshot/collision标签对应本次工具观测，不是新任务。"

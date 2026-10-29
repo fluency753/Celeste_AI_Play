@@ -92,7 +92,7 @@ class TunableTests(unittest.TestCase):
         self.assertIn("编写模拟器、搜索、穷举或批量计算等工具时用 C++ 写，不要用 Python；有多线程就用多线程来缩短计算时间"
                       "（例如 g++ -O2 -pthread），同一批推演放在一个进程里做，不要逐个启动进程，本次最多可以用 1 个核，"
                       "用几个按实际环境决定。并行时注意，单线程做的汇总与合并", claude_text)
-        self.assertIn("再由各线程从父节点重放生成。多线程版本要用同样的输入与单线程对比，确认结果完全一致。/workspace", claude_text)
+        self.assertIn("再由各线程从父节点重放生成。多线程版本要用同样的输入与单线程对比，确认结果完全一致。", claude_text)
         for absent in ("先评估是否比直接验证更省事", "避免频繁的线程间同步", "你也可以自行编写"):
             self.assertNotIn(absent, claude_text)
         explore.engine = "codex"
@@ -100,7 +100,7 @@ class TunableTests(unittest.TestCase):
         self.assertIn("禁用预设模拟器。你也可以自行编写模拟器、搜索或其他辅助程序，自由发挥。", codex_text)
         self.assertIn("辅助程序用于解决具体问题，先评估是否比直接验证更省事。需要较多计算时用 C++ 写、不要用 Python，"
                       "有多线程就用多线程缩短计算时间，本次最多可以用 1 个核，"
-                      "用几个按实际环境决定；避免频繁的线程间同步，用相同输入核对多线程与单线程结果。/workspace", codex_text)
+                      "用几个按实际环境决定；避免频繁的线程间同步，用相同输入核对多线程与单线程结果。", codex_text)
         for absent in ("去重与择优也要分片并行", "完全可以自由发挥"):
             self.assertNotIn(absent, codex_text)
         for placeholder in ("{program_freedom}", "{program_lead}", "{parallel_rule}"):

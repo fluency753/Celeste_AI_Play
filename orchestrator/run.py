@@ -197,7 +197,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="与 --resume 一起用：原录像接不上时（OBS 关了或崩溃、独立音频停了）放弃它，这次续跑另起一段录像")
     ap.add_argument("--note-file", metavar="FILE",
                     help="与 --resume 一起用：把这个文件（UTF-8 文本）的内容作为用户留言，附在续跑发给智能体的第一条消息里"
-                         "（在主控的续跑说明之后、当前完整规则之前），例如章节之间的说明与新增资料的阅读要求")
+                         "（在主控的续跑说明之后；Claude另附当前完整规则），例如章节之间的说明与新增资料的阅读要求")
     args = ap.parse_args()
     previous = args.previous = load_previous(args.resume) if args.resume else None
     args.note_text = None
@@ -1258,7 +1258,7 @@ def publish_user_note(run_dir: Path, text: str | None) -> None:
 
 def opening_note(cfg, previous, resumed_session, user_note: str | None = None) -> str | None:
     """续跑时代替开局的第一条消息：追加了新章节（原计划已全部通关）时说开始新的一章，否则说中途被打断后接着玩。
-    user_note（--note-file）是用户的留言，放在主控的说明之后、当前完整规则之前。"""
+    user_note（--note-file）放在主控说明之后；仅 Claude 续跑另附快照兼容规则。"""
     if not previous:
         return None
     extra = f"\n\n（用户留言）\n{user_note}" if user_note else ""
