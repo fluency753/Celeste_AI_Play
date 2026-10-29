@@ -282,6 +282,12 @@
   .pbar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 10px 0 12px; background: var(--line); }
   .pbar a { display: block; min-width: 3px; }
   .plist { display: grid; gap: 2px; }
+  .button-message-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:center; padding:7px 8px; border:1px solid transparent; border-radius:6px; }
+  .button-message-row:hover { background:rgba(236,239,248,.04); }
+  .button-message-row[data-selected="true"] { border-color:var(--blue); background:rgba(91,192,235,.08); }
+  .button-message-name { min-width:0; width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; border:0; background:none; padding:0; cursor:pointer; }
+  .button-message-actions { display:flex; gap:6px; align-items:center; white-space:nowrap; }
+  #promptEditor { scroll-margin-top:90px; }
   .prow { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 6px; }
   .prow:hover { background: rgba(236, 239, 248, 0.04); }
   .prow i { width: 10px; height: 10px; border-radius: 2px; }
@@ -673,6 +679,7 @@
     <div class="pbar" id="promptBar" role="img" aria-label="这一版由哪些部分组成，按长度"></div>
     <div class="plist" id="promptParts"></div>
     <div class="subhead">按钮与主控消息</div>
+    <p class="hint">选择消息或点“编辑” → 修改正文 → 保存。窄窗口会自动跳到下方编辑器；保存仅影响本机，下一次生成该消息时生效。</p>
     <div id="buttonPromptList" class="plist"></div>
     <p class="hint">正文可在运行中保存，下一次对应消息生成时生效；来源与实际状态由主控附加。暂停、停止等按钮的控制行为不由文本配置改变。唤起聊天不会额外发起模型轮次。</p>
     <div class="presets" style="margin-top:12px">
@@ -1761,11 +1768,16 @@ async function loadPromptPreview() {
   }
   ui.prompt = data;
   $('buttonPromptList').replaceChildren(...(data.button_prompts || []).map(item => {
-    const row = document.createElement('div'); row.className = 'prow';
-    const open = Object.assign(document.createElement('button'), {type:'button',textContent:item.label});
+    const label = item.key === 'continue_play' ? '自动续轮（试玩）' : item.key === 'continue_prepare' ? '自动续轮（准备）' : item.label;
+    const row = document.createElement('div'); row.className = 'button-message-row'; row.dataset.promptName = item.name;
+    row.dataset.selected = String(ui.promptFile?.name === item.name);
+    const open = Object.assign(document.createElement('button'), {type:'button',className:'button-message-name',textContent:label,title:label});
     open.onclick = () => openPromptFile(item.name);
-    row.append(open);
-    if (item.overridden) row.append(Object.assign(document.createElement('span'),{className:'tag gold',textContent:'本机修改'}));
+    const actions = document.createElement('div'); actions.className = 'button-message-actions';
+    if (item.overridden) actions.append(Object.assign(document.createElement('span'),{className:'tag gold',textContent:'本机修改'}));
+    const edit = Object.assign(document.createElement('button'), {type:'button',className:'btn small',textContent:'编辑'});
+    edit.setAttribute('aria-label','编辑消息：'+label); edit.onclick=open.onclick;
+    actions.append(edit);row.append(open,actions);
     return row;
   }));
   const o = promptOptions();
@@ -1838,6 +1850,7 @@ async function loadPromptPreview() {
 }
 
 async function openPromptFile(name) {
+  if (ui.promptFile?.dirty && ui.promptFile.name === name) { focusPromptEditor(); return; }
   if (ui.promptFile && ui.promptFile.dirty && ui.promptFile.name !== name && !confirmLeave()) return;
   let doc;
   try { doc = await getJSON(`/api/console/prompt/file?name=${encodeURIComponent(name)}`); }
@@ -1854,7 +1867,13 @@ async function openPromptFile(name) {
     Object.assign(document.createElement("span"), { textContent: p.meaning })]));
   $("promptReset").disabled = !doc.overridden;
   updatePromptButtons();
-  window.scrollTo({ top: 0 });
+  document.querySelectorAll('.button-message-row').forEach(row => {row.dataset.selected=String(row.dataset.promptName===name);});
+  focusPromptEditor();
+}
+
+function focusPromptEditor() {
+  $('promptEditor').scrollIntoView({block:'start'});
+  $('promptText').focus({preventScroll:true});
 }
 
 function confirmLeave() {
