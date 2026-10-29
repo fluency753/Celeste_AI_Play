@@ -147,8 +147,8 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False, fr
             runner.ready_to_play = state.get('session_kind') == 'ready'
             runner.allow_programs = bool(allow_programs)
             if name_request:
-                from .save_naming import PROMPT
-                runner.control.enqueue('message', PROMPT)
+                from .save_naming import name_prompt
+                runner.control.enqueue('message', name_prompt())
             try:
                 await runner.run()
             finally:

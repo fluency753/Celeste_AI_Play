@@ -259,6 +259,17 @@
       <div id="goalDraftStatus" role="status" hidden style="color:#b8822d;font-size:calc(11 * var(--px));margin-top:calc(5 * var(--px))"></div>
       <div id="goalStatus" role="status"></div>
     </details>
+    <details id="actLimitPanel">
+      <summary>动作帧数</summary>
+      <label class="sim-field">单次 act 最多推进（帧）<input id="actLimitFrames" type="number" step="1" required aria-label="单次动作最大帧数"></label>
+      <div class="control-buttons"><button id="actLimitSave" type="button">应用</button><button id="actLimitReset" type="button">撤销编辑</button></div>
+      <div id="actLimitStatus" role="status"></div>
+    </details>
+    <details id="buttonPromptsPanel">
+      <summary>按钮提示词</summary>
+      <div class="control-buttons"><button id="buttonPromptsOpen" type="button">配置默认消息</button></div>
+      <div>在控制台编辑本机默认正文；实际控制行为和状态由主控决定。</div>
+    </details>
     <details id="simPanel">
       <summary>推演设置</summary>
       <div id="simCurrent"></div>
@@ -279,7 +290,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 65;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 66;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -726,6 +737,42 @@ poll();
 let controlData = null, sendingMessage = false, wakingAgent = false, switchingSession = false, sessionSignature = '';
 let goalRevision = null, goalRun = null, goalDirty = false, savingGoal = false, goalPending = null, goalError = '', controlError = '';
 let simRun=null, simEdited=new Set(), simPending=null, simSending=false, simError='', simApplied=false;
+let actLimitRun=null, actLimitEdited=false, actLimitPending=null, actLimitSending=false, actLimitError='', actLimitApplied=false;
+function renderActLimit(c) {
+  if(actLimitRun!==controlData.run){
+    actLimitRun=controlData.run;actLimitEdited=false;actLimitPending=null;actLimitError='';actLimitApplied=false;
+  }
+  const settings=c.act_limit_settings;
+  const enabled=!!(c.connected && c.act_limit_control && settings && !switchingSession);
+  if(actLimitPending!=null){
+    const action=(c.actions||[]).find(a=>a.id===actLimitPending);
+    if(action && ['submitted','error'].includes(action.status)){
+      actLimitError=action.status==='error'?action.detail:'';actLimitApplied=action.status==='submitted';actLimitPending=null;
+      if(actLimitApplied)actLimitEdited=false;
+    }
+  }
+  if(settings){
+    $('actLimitFrames').min=String(settings.min);$('actLimitFrames').max=String(settings.max);
+    if(!actLimitEdited)$('actLimitFrames').value=String(settings.frames);
+  }
+  for(const item of $('actLimitPanel').querySelectorAll('input,button'))item.disabled=!enabled || actLimitSending || actLimitPending!=null;
+  $('actLimitStatus').textContent=actLimitError || (!enabled?'当前主控未提供在线动作帧数设置；请先更新主控。':
+    actLimitPending!=null || actLimitSending?'等待当前动作完成并应用…':
+    (actLimitApplied?'已生效。':'')+`当前 ${settings.frames} 帧；允许 ${settings.min}～${settings.max} 帧。只修改动作上限，不改变推演限制或录制。`);
+}
+async function saveActLimit(){
+  if(!controlData?.control.act_limit_control || actLimitSending || actLimitPending!=null)return;
+  if(!$('actLimitFrames').reportValidity())return;
+  const frames=Number($('actLimitFrames').value);
+  if(!Number.isInteger(frames)){actLimitError='请填写整数帧数。';renderActLimit(controlData.control);return;}
+  actLimitSending=true;actLimitError='';const run=controlData.run;renderActLimit(controlData.control);
+  try{
+    const response=await fetch(CONTROL_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run,kind:'act_limit',text:JSON.stringify({frames})})});
+    const result=await response.json();if(!response.ok)throw Error(result.error||'动作帧数设置提交失败');
+    if(controlData.run===run)actLimitPending=result.id;
+  }catch(error){actLimitError=error.message;}
+  finally{actLimitSending=false;await pollControl();}
+}
 function renderSimulation(c) {
   if(simRun!==controlData.run){
     simRun=controlData.run;simEdited.clear();simPending=null;simError='';simApplied=false;
@@ -957,6 +1004,7 @@ async function pollControl() {
     const c = controlData.control;
     renderGoal(c);
     renderSimulation(c);
+    renderActLimit(c);
     const sessions = controlData.sessions || [];
     const signature = JSON.stringify([sessions,controlData.selected_session]);
     if (signature !== sessionSignature && !switchingSession) {
@@ -1110,6 +1158,9 @@ for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','R
 }
 $('simApply').onclick=saveSimulation;
 $('simReset').onclick=()=>{simEdited.clear();$('simBalance').value='';simError='';simApplied=false;renderSimulation(controlData.control);};
+$('actLimitFrames').oninput=()=>{actLimitEdited=true;actLimitApplied=false;};
+$('actLimitSave').onclick=saveActLimit;
+$('actLimitReset').onclick=()=>{actLimitEdited=false;actLimitError='';actLimitApplied=false;renderActLimit(controlData.control);};
 $('liveEffort').onchange=async()=>{
   const level=$('liveEffort').value;
   changingEffort=true;$('liveEffort').disabled=true;
@@ -1147,6 +1198,7 @@ async function saveGoal(kind) {
 $('goalSave').onclick=()=>saveGoal('goal');
 $('goalClear').onclick=()=>saveGoal('goal_clear');
 $('goalStop').onclick=()=>saveGoal('stop');
+$('buttonPromptsOpen').onclick=()=>window.open(new URL('/console#prompts',CONTROL_URL).href,'_blank','noopener');
 $('sessionSelect').onchange = async () => {
   switchingSession = true; $('sessionSelect').disabled = true;
   const target = $('sessionSelect').value;

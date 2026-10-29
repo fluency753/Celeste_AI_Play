@@ -343,14 +343,17 @@ class CodexRunner(SessionControls):
 
     def _first_prompt(self):
         if self.study and not self.study.complete():
+            from .button_prompts import notification
             paths = "\n".join(f"- {p}" for p in self.study.container_paths())
-            return ("先调用 celeste_narrate 说明准备进度，再用 celeste_read 按顺序完整阅读下列每个文件。"
-                    "每页最多 500 行；按返回的实际行范围接着读到最后。不能用 Bash 扫描代替阅读。\n" + paths +
-                    ("\n全部读完后，用 celeste_write 把工具约定与试玩原则整理进 /workspace/notes.md。"
-                     + ("用 celeste_bash 执行 python3 -c \"import sys;sys.path.insert(0,'/sim');from sim import Sim;print('sim_import_ok')\" "
-                        "验证模拟器模块可以导入（只导入，不读取游戏状态或运行推演）。" if self.cfg.sim else "") +
-                     "最后调用 celeste_finish_preparation，再简短回复；本次只准备，不启动游戏。" if self.prepare_only
-                     else "\n读完后整理 /workspace/notes.md，再调用 celeste_observe 开始试玩。"))
+            facts = "本次必读清单：\n" + paths + "\n每页最多500行，主控核验实际完整阅读进度。"
+            if self.cfg.sim:
+                facts += '\n本次预置模拟器已开放，资料位于 /sim。'
+            facts += ('\n本次只准备，不启动游戏；完成后调用 celeste_finish_preparation 提交完成信号。'
+                      if self.prepare_only else '\n本次准备完成后开放试玩工具。')
+            message = notification('prepare', facts=facts).replace('Read 工具', 'celeste_read 工具')
+            if self.prepare_only and self.cfg.sim:
+                message += '\n' + notification('prepare_sim')
+            return message
         from .prompting import first_play_prompt
         return self.resume_note or first_play_prompt(self.cfg).replace('observe', 'celeste_observe').replace('act ', 'celeste_act ')
 
@@ -400,6 +403,7 @@ class CodexRunner(SessionControls):
                             tool_calls=self.metrics.state.tool_calls or 0)
         prompt = codex_prompt(self.cfg, guide=guide)
         if self.chat_only:
+            from .button_prompts import notification
             prompt += (("\n\n# 试玩前聊天\n这是新会话，已完成入门资料准备，还没有开始试玩。" if getattr(self, "ready_to_play", False)
                         else "\n\n# 试玩结束后的聊天\n本次试玩已经结束。") +
                        ("可以按用户要求用 Read/Write/Bash 整理工作区，在零网络沙箱里运行程序；"
@@ -407,6 +411,7 @@ class CodexRunner(SessionControls):
                         if getattr(self, 'allow_programs', False) else
                         "现在仅回答用户的消息、复盘试玩，可以读取原工作区笔记；不运行规划程序。") +
                        "不连接游戏，不调用游戏观察、动作或在线模拟工具，不自行开始下一章。用户没有发消息时安静等待。")
+            prompt += '\n' + notification('wake_chat')
         (self.run_dir / ("chat_system_prompt.md" if self.chat_only else "system_prompt.md")).write_text(prompt, encoding="utf-8")
         started = time.monotonic()
         try:
@@ -481,6 +486,9 @@ class CodexRunner(SessionControls):
                 self.pending_messages.clear()
                 if assigned:
                     message = "\n\n".join(row["text"] for row in assigned)
+                if self.resume_notice:
+                    message += '\n\n' + self.resume_notice
+                    self.resume_notice = ''
                 if self.paused and not self.chat_only:
                     message += "\n（用户已暂停试玩。只能回复用户，不调用 observe、act 或 Bash；回复后结束本轮，等待用户继续。）"
                 self.turn_done.clear()

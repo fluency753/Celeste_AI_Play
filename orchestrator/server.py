@@ -15,7 +15,7 @@ from .telemetry import publish
 from .kb_study import KbStudy
 from .observation import describe_attempts, describe_obs, describe_step, upscale_png
 from .efforts import valid_effort
-from .modes import collision_image_mode, game_tools, is_explore
+from .modes import act_frame_cap, act_frame_min, collision_image_mode, game_tools, is_explore
 from .prompting import fill
 from .collision_view import render_collision_view
 from .geometry_context import geometry_page
@@ -173,6 +173,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     def header_line(freeze: bool = True, levels_line: bool = True) -> str:
         line = effort_line(metrics)
+        if levels_line:
+            line += f"\n当前 act 帧数范围：{act_frame_min(session.cfg)}～{act_frame_cap(session.cfg)} 帧（以当前设置为准）"
         levels = getattr(session, 'effort_levels', lambda: [])() if levels_line else []
         if levels:
             line += "\n可选推理强度：" + "、".join(levels)

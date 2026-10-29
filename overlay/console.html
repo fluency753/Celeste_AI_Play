@@ -672,6 +672,9 @@
     <p class="hint" id="promptWhat" style="margin-top:0">—</p>
     <div class="pbar" id="promptBar" role="img" aria-label="这一版由哪些部分组成，按长度"></div>
     <div class="plist" id="promptParts"></div>
+    <div class="subhead">按钮与主控消息</div>
+    <div id="buttonPromptList" class="plist"></div>
+    <p class="hint">正文可在运行中保存，下一次对应消息生成时生效；来源与实际状态由主控附加。暂停、停止等按钮的控制行为不由文本配置改变。唤起聊天不会额外发起模型轮次。</p>
     <div class="presets" style="margin-top:12px">
       <button type="button" class="chip" id="promptCopy">复制全文</button>
       <button type="button" class="chip" data-goto="run">回到运行页修改设置</button>
@@ -1753,10 +1756,18 @@ async function loadPromptPreview() {
   }
   $("promptWhat").classList.remove("warn");
   const previewParts = [...data.parts, ...(data.guide_parts || []).map(p => ({...p, label: "工作区指南 · " + p.label}))];
-  if (ui.promptFile && !previewParts.some(part => part.source === ui.promptFile.name)) {
+  if (ui.promptFile && !previewParts.some(part => part.source === ui.promptFile.name) && !(data.button_prompts || []).some(item => item.name === ui.promptFile.name)) {
     $("promptStatus").textContent = `这个文件不在当前设置（${promptOptions().mode === "explore" ? "探索" : "速通"}模式）的提示词里；点"返回预览"看当前这一版。`;
   }
   ui.prompt = data;
+  $('buttonPromptList').replaceChildren(...(data.button_prompts || []).map(item => {
+    const row = document.createElement('div'); row.className = 'prow';
+    const open = Object.assign(document.createElement('button'), {type:'button',textContent:item.label});
+    open.onclick = () => openPromptFile(item.name);
+    row.append(open);
+    if (item.overridden) row.append(Object.assign(document.createElement('span'),{className:'tag gold',textContent:'本机修改'}));
+    return row;
+  }));
   const o = promptOptions();
   const bits = [o.mode === "explore" ? "探索" : "速通"];
   if (o.mode === "speedrun") bits.push(o.sim && o.runtime === "container" ? "开模拟器" : "关模拟器");
@@ -1860,9 +1871,10 @@ function closePromptEditor() {
 
 function updatePromptButtons() {
   const f = ui.promptFile;
-  $("promptSave").disabled = !f || !f.dirty || running();
+  const blocked = running() && !f?.live_editable;
+  $("promptSave").disabled = !f || !f.dirty || blocked;
   $("promptRevert").disabled = !f || !f.dirty;
-  $("promptSave").title = running() ? "有主控在运行时不能保存" : "";
+  $("promptSave").title = blocked ? "有主控在运行时不能保存稳定指南" : "";
 }
 
 async function savePromptFile() {
@@ -1874,7 +1886,7 @@ async function savePromptFile() {
     $("promptPath").textContent = "orchestrator/prompts/" + f.name + (result.overridden ? "（本机修改）" : "");
     $("promptReset").disabled = !result.overridden;
     const missing = result.missing_placeholders || [];
-    $("promptStatus").textContent = (result.overridden ? "已保存为本机修改，下一次运行生效。" : "和仓库里的版本相同，已删掉本机修改。")
+    $("promptStatus").textContent = (result.overridden ? (result.live_editable ? "已保存为本机修改，下一次对应消息生成时生效。" : "已保存为本机修改，下一次运行生效。") : "和仓库里的版本相同，已删掉本机修改。")
       + (missing.length ? ` 注意：删掉了占位符 ${missing.join("、")}，运行时这些位置不会再填入对应的内容。` : "");
     $("promptStatus").classList.toggle("warn", missing.length > 0);
     updatePromptButtons();

@@ -206,6 +206,9 @@ class ClaudeRunner(SessionControls):
             text = '\n'.join([fallback] + [row['text'] for row in rows])
         else:
             text = '\n'.join(row['text'] for row in rows) if rows else fallback
+        if self.resume_notice:
+            text += '\n\n' + self.resume_notice
+            self.resume_notice = ''
         if self.chat_only:
             if getattr(self, 'allow_programs', False):
                 text += '\n当前仅聊天，可以按要求修改、运行工作区程序；不连接或操作游戏。'
@@ -304,14 +307,15 @@ class ClaudeRunner(SessionControls):
         return GAME_TOOLS + [NARRATE_TOOL]
 
     def _lifecycle_prompt(self):
+        from .button_prompts import notification
         if self.prepare_only:
             return '\n本次仅准备：按要求完整读取知识库、整理工作区 notes.md 后结束本轮；不调用游戏工具，不开始试玩。'
         if self.chat_only and getattr(self, 'allow_programs', False):
-            return ('\n本次整理工作区：按用户的要求修改、运行工作区里的程序（可以用 Bash），回复用户；'
-                    '不观察或操作游戏，不自行开始试玩。没有用户消息时等待。')
+            return '\n' + notification('wake_chat', facts=('本次整理工作区：按用户的要求修改、运行工作区里的程序（可以用 Bash），回复用户；'
+                    '不观察或操作游戏，不自行开始试玩。没有用户消息时等待。'))
         if self.chat_only:
             reading = '回复用户、读取笔记' if workspace_capabilities(self.cfg).workspace_read else '依据已有对话回复用户，没有工作区文件工具'
-            return f'\n本次仅聊天：{reading}，不观察或操作游戏，不运行规划程序，不自行开始试玩。没有用户消息时等待。'
+            return '\n' + notification('wake_chat', facts=f'本次仅聊天：{reading}，不观察或操作游戏，不运行规划程序，不自行开始试玩。没有用户消息时等待。')
         return ''
 
     def _allowed_tool(self, name: str) -> bool:
@@ -515,7 +519,8 @@ class ClaudeRunner(SessionControls):
             return ""
         self.metrics.effort_applied(level, via="启动参数")
         print(f"[agent] 推理强度 {before} → {level}（重启 Claude Code 时生效）", flush=True)
-        return f"（系统）推理强度已从 {before} 切换为 {level}。"
+        from .button_prompts import notification
+        return notification('effort', facts=f"推理强度已从 {before} 切换为 {level}。") + '\n\n'
 
     async def _switch_effort(self) -> str:
         """两轮之间切换推理强度：在同一个会话里发送 /effort <强度>，等 Claude Code 确认。返回给智能体的说明。"""
@@ -542,10 +547,12 @@ class ClaudeRunner(SessionControls):
             if next_effort and next_effort != level:
                 self.metrics.request_effort(next_effort, '用户设置等待下一轮生效')
             print(f"[agent] 推理强度 {before} → {level}", flush=True)
-            return f"（系统）推理强度已从 {before} 切换为 {level}。"
+            from .button_prompts import notification
+            return notification('effort', facts=f"推理强度已从 {before} 切换为 {level}。") + '\n\n'
         self.metrics.request_effort(None)
         print(f"[agent] 推理强度切换失败（{reply[:120]!r}），保持 {before}", flush=True)
-        return f"（系统）推理强度切换没有成功，仍为 {before}。"
+        from .button_prompts import notification
+        return notification('effort', facts=f"推理强度切换没有成功，仍为 {before}。") + '\n\n'
 
     async def _wait_for_quota(self) -> float:
         """等到额度重置（再多等 2 分钟）；返回等待的分钟数。等待期间游戏冻结，现实用时不走。"""

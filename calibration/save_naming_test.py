@@ -1,5 +1,5 @@
 import unittest
-from orchestrator.save_naming import parse_name, PROMPT
+from orchestrator.save_naming import parse_name, name_prompt
 
 
 class SaveNamingTests(unittest.TestCase):
@@ -10,6 +10,7 @@ class SaveNamingTests(unittest.TestCase):
             with self.subTest(invalid=invalid),self.assertRaises(ValueError):parse_name(invalid)
 
     def test_prompt_explains_font_limits_without_choosing_a_name(self):
+        PROMPT = name_prompt()
         self.assertIn('ASCII',PROMPT)
         self.assertIn('拼音',PROMPT)
         self.assertNotIn('Xiaolan',PROMPT)

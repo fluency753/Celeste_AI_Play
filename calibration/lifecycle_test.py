@@ -16,6 +16,7 @@ from orchestrator.kb_study import KbStudy
 from orchestrator.preparation import prepare
 from orchestrator.prepared import load_preparation
 from orchestrator.runtimes import runtime
+from orchestrator import kb_access
 
 
 STUB = '''import sys,json,uuid
@@ -63,6 +64,7 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 commands.append(runner._common_args())
                 return [sys.executable,'-X','utf8','-u',str(stub)]
             with patch('orchestrator.config.REPO_ROOT',root), patch('orchestrator.preparation.REPO_ROOT',root), \
+                 patch.object(kb_access, 'KB_ROOT', root/'kb'), \
                  patch('orchestrator.runtimes.Runtime.token',return_value='stub'), \
                  patch('orchestrator.preparation.ensure_container',return_value=None), \
                  patch('orchestrator.chat.ensure_container',return_value=None), \

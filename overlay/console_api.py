@@ -280,6 +280,7 @@ def prompt_preview(options: dict) -> dict:
     from orchestrator.launch_options import config_for
     from orchestrator.prompting import overridden_parts, prompt_parts, study_prompt
     from orchestrator.startup_prompt import runtime_prompt
+    from orchestrator.button_prompts import catalog
     from orchestrator.execution import workspace_capabilities
     # 预览不需要真的起名字或选存档：没填的用占位值，免得运行页还没填完就看不了提示词
     options = dict(options or {})
@@ -317,6 +318,8 @@ def prompt_preview(options: dict) -> dict:
                 else "Claude Code（接在 Claude Code 自带的系统提示词之后）")
     return {"parts": parts, "text": "".join(p["sep"] + p["text"] for p in parts), "executor": executor,
             "guide_parts": full_parts if guided else [],
+            "button_prompts": [{**item, 'overridden': item['name'] in overridden}
+                               for item in catalog()],
             "first_message": first, "overridden": sorted(overridden)}
 
 
@@ -326,6 +329,7 @@ def prompt_read(name: str) -> dict:
     text = read_part(name)
     repo = (PROMPTS / name).read_text(encoding="utf-8")
     return {"name": name, "text": text, "version": _version(text), "overridden": (OVERRIDES / name).is_file(),
+            "live_editable": _button_template(name),
             "repo_text": repo, "placeholders": [{"name": k, "meaning": v} for k, v in PLACEHOLDERS.items() if k in repo]}
 
 
@@ -333,7 +337,7 @@ def prompt_write(name: str, text, version) -> dict:
     """保存提示词的本机修改（local/prompts/，不改仓库里的文件）；改回与仓库相同时删掉本机修改。"""
     from orchestrator.prompting import OVERRIDES, PROMPTS, read_part
     name = _prompt_name(name)
-    if orchestrator_status()["running"]:
+    if not _button_template(name) and orchestrator_status()["running"]:
         raise ValueError("有主控在运行：等运行结束再保存提示词")
     if not isinstance(text, str) or len(text.encode("utf-8")) > 300_000:
         raise ValueError("内容须为文本，最多 300 KB")
@@ -356,10 +360,15 @@ def prompt_write(name: str, text, version) -> dict:
 def prompt_reset(name: str) -> dict:
     from orchestrator.prompting import OVERRIDES
     name = _prompt_name(name)
-    if orchestrator_status()["running"]:
+    if not _button_template(name) and orchestrator_status()["running"]:
         raise ValueError("有主控在运行：等运行结束再恢复")
     (OVERRIDES / name).unlink(missing_ok=True)
     return prompt_read(name)
+
+
+def _button_template(name):
+    from orchestrator.button_prompts import catalog
+    return any(item['name'] == name for item in catalog())
 
 
 # ---------------------------------------------------------------- 关于页

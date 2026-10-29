@@ -450,38 +450,32 @@ def play_prompt(cfg) -> str:
     return "".join(part.sep + part.text for part in prompt_parts(cfg))
 
 
-FIRST_PROMPT = "开始游玩。先调用 observe 看清当前画面，然后用 act 推进，直到通关。"
-
-
 def first_play_prompt(cfg):
-    return ("开始本次探索。先调用 observe 查看当前画面与允许地图，按当前规则开展游戏实验、建模或收集；通关后继续，直到停止目标触发或用户停止。"
-            if getattr(cfg, 'completion_policy', 'stop') == 'continue' else FIRST_PROMPT)
+    from .button_prompts import notification
+    return notification('start_explore' if getattr(cfg, 'completion_policy', 'stop') == 'continue' else 'start_play')
 
 
 def continue_play_prompt(cfg):
-    return controller_turn_prompt("请依据当前状态、已有记录和用户指令继续当前任务，自行选择下一步操作。")
+    from .button_prompts import notification
+    return notification('continue_play')
 
 
 def controller_turn_prompt(text):
     """Label controller-generated turn fallbacks without relabeling real user input."""
-    return ("【主控系统消息｜自动续轮】\n" + text
-            + "\n这不是用户新消息，不改变任务范围、权限或停止条件。")
+    from .button_prompts import notification
+    return notification('continue_prepare', facts=text)
 
 
 def study_prompt(study: KbStudy, sim: bool = False) -> str:
+    from .button_prompts import notification
     files = "\n".join(f"- {path}" for path in study.container_paths())
-    return (
-        "开始游玩之前，先用 Read 工具把知识库从头到尾完整读一遍，按下面的顺序：\n"
-        f"{files}\n\n"
-        "要求：每个文件都读到最后一行。文件长时 Read 会按长度截断，看到截断就用 offset 与 limit 接着读，"
-        "不要只读开头，也不要用 Grep 或 Bash 代替阅读。同一资料的翻译副本不需要重复阅读。"
-        "主控会核对你读过的行，读完之前 observe 与 act 不会执行。\n\n"
-        + ("读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些搜索与规划程序"
-           "（模拟器直接用 /sim 预置的）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
-           if sim else "读完后调用 observe 开始游玩。\n") +
+    return notification('prepare', facts=(
+        f"本次必读清单：\n{files}\n\n"
+        "主控核对实际阅读进度，完成前 observe 与 act 不会执行。\n"
+        + ("本次预置模拟器已开放，资料位于 /sim。\n" if sim else "") +
         f"准备阶段最多 {study.minutes:g} 分钟，到时游戏工具自动开放。"
         "游戏在你思考期间一直暂停，章节计时只算游戏真正推进的帧。"
-    )
+    ))
 
 
 def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
@@ -504,9 +498,10 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
     reuse = "之前写的程序与笔记按新规则检查后再用。" if workspace.workspace_read else "按当前规则核对后继续。"
     entry = ("已进入存档，请先观察当前界面，再自行导航到本次指定的章节与起点。" if cfg.cutscene_mode == 'agent'
              else "主控已经进入这一章。")
-    return (head + f"开始新的范围：{items}。{entry}{rules}，和之前相比可能有变化"
+    from .button_prompts import notification
+    return notification('next_chapter', facts=(head + f"开始新的范围：{items}。{entry}{rules}，和之前相比可能有变化"
             + f"（例如{changed}），{reuse}"
-            "请先调用 observe 看清当前画面，再开始游玩。")
+            "请先调用 observe 看清当前画面，再开始游玩。"))
 
 
 def current_rules_note(cfg, *, guide=None) -> str:
@@ -527,12 +522,13 @@ def net_resume_prompt(minutes: float, chat: bool = False, study_note: str | None
     """模型连不上、主控暂停等待之后，网络恢复时接着同一个会话发出的第一条消息。"""
     text = (f"（系统）刚才模型连不上（断网或接口不可用），主控暂停了智能体约 {max(minutes, 0):.0f} 分钟，现在已经恢复，"
             "接着同一个会话继续。中断前已经完成的工具调用结果都在对话里；最后那次回复没有送达，需要的话重新想一遍。")
+    from .button_prompts import notification
     if chat:
-        return text + "请接着处理用户刚才的消息。"
+        return notification('wake_chat', facts=text + "请接着处理用户刚才的消息。")
     text += "这段时间游戏一直冻结，章节计时没有走，也不计入思考僵直。"
     if study_note:
-        return text + "准备阶段还没有结束：\n" + study_note
-    return text + "请先调用 observe 看清当前这一帧，再继续游玩。"
+        return notification('resume_prepare', facts=text + "准备阶段还没有结束：\n" + study_note)
+    return notification('resume', facts=text)
 
 
 def resume_prompt(reason: str, minutes: float, study_note: str | None = None) -> str:
@@ -540,6 +536,7 @@ def resume_prompt(reason: str, minutes: float, study_note: str | None = None) ->
     text = (f"（系统）{reason}，你的上一轮在中途被结束，暂停了约 {minutes:.0f} 分钟，现在接着同一个会话继续。"
             "这段时间游戏一直冻结，章节计时没有走；但如果被结束时有一个 act 正在执行，它已经执行完了，"
             "结果没能送回给你。")
+    from .button_prompts import notification
     if study_note:
-        return text + "准备阶段还没有结束：\n" + study_note
-    return text + "请先调用 observe 看清当前这一帧，再继续游玩。"
+        return notification('resume_prepare', facts=text + "准备阶段还没有结束：\n" + study_note)
+    return notification('resume', facts=text)

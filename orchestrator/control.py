@@ -30,9 +30,13 @@ class RunControl:
 
     def enqueue(self, kind, text=""):
         if kind not in {"message", "pause", "resume", "fast", "effort", "detach", "goal", "goal_clear", "stop", "cutscene_mode",
-                        "interrupt", "chapters", "sim_update", "chapter_reset", "action_permissions", "bridge_reload"}:
+                        "interrupt", "chapters", "sim_update", "act_limit", "chapter_reset", "action_permissions", "bridge_reload"}:
             raise ValueError("未知控制指令")
         text = str(text).strip()
+        if kind == 'act_limit':
+            data = json.loads(text)
+            if not isinstance(data, dict) or set(data) != {'frames'} or type(data['frames']) is not int:
+                raise ValueError('动作帧数上限须为整数 frames')
         if kind == 'bridge_reload':
             from .bridge_reload import options
             text = json.dumps(options(json.loads(text or '{}'), fill_defaults=False), ensure_ascii=False)

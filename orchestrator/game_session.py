@@ -844,6 +844,40 @@ class GameSession:
 
     # ---- 动作 ----
 
+    def act_limit_settings(self) -> dict:
+        from .tuning import BY_KEY
+        key = 'explore_act_frames' if is_explore(self.cfg) else 'max_frames_per_act'
+        item = BY_KEY[key]
+        return {'key': key, 'frames': act_frame_cap(self.cfg), 'min_frames': act_frame_min(self.cfg),
+                'min': item.low, 'max': item.high}
+
+    def update_act_limit(self, data: dict) -> dict:
+        """Apply the current mode's action cap only after its resume state is durable."""
+        from .tuning import coerce, overrides, DEFAULTS
+        if not isinstance(data, dict) or set(data) != {'frames'} or type(data['frames']) is not int:
+            raise ValueError('动作帧数上限须为整数 frames')
+        with self.lock:
+            if self.done or self.goals.stop_motion.is_set():
+                raise ActError('试玩已结束，不能修改动作帧数上限')
+            settings = self.act_limit_settings()
+            key = settings['key']
+            frames = coerce(key, data['frames'])
+            if frames == settings['frames']:
+                return {**settings, 'changed': False}
+            state_path = self.run_dir / 'run_state.json'
+            state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {}
+            tuning = {**overrides(self.cfg), key: frames}
+            state['tuning'] = {name: value for name, value in tuning.items() if value != DEFAULTS[name]}
+            temporary = state_path.with_suffix('.act-limit.tmp')
+            try:
+                temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+                temporary.replace(state_path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            setattr(self.cfg, key, frames)
+            self.cfg.tuning = state['tuning']
+            return {**self.act_limit_settings(), 'changed': True}
+
     def update_simulation(self, data: dict) -> dict:
         from dataclasses import fields
         from .sim_assist import AssistRules
