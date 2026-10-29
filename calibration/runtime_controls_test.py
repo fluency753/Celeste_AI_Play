@@ -23,6 +23,31 @@ from overlay.history import PublicHistory
 
 
 class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_opening_recovery_keeps_user_message_and_consumes_duplicate_resume(self):
+        ident = self.runner.control.enqueue('message', '用户原留言')
+        self.runner.pending_messages = [{'id': ident, 'text': '用户原留言'}]
+        self.runner.resume_notice = '普通恢复通知'
+        await self.runner._next_user_turn('主控重接说明', opening=True)
+        self.assertEqual(self.packets[-1]['message']['content'], '主控重接说明\n\n用户原留言')
+        self.assertEqual(self.runner.resume_notice, '')
+
+    async def test_ordinary_resume_replaces_fallback_but_keeps_effort_facts(self):
+        self.runner.resume_notice = '普通恢复通知'
+        await self.runner._next_user_turn('自动续轮', context='推理强度已生效')
+        self.assertEqual(self.packets[-1]['message']['content'], '推理强度已生效\n\n普通恢复通知')
+        await self.runner._next_user_turn('自动续轮')
+        self.assertEqual(self.packets[-1]['message']['content'], '自动续轮')
+
+    async def test_network_forced_turn_keeps_reconnect_facts_and_user_input(self):
+        ident = self.runner.control.enqueue('message', '用户新留言')
+        self.runner.pending_messages = [{'id': ident, 'text': '用户新留言'}]
+        self.runner.resume_notice = '普通恢复通知'
+        self.runner._net_force_first = True
+        await self.runner._next_user_turn('网络重接说明')
+        self.assertEqual(self.packets[-1]['message']['content'], '网络重接说明\n\n用户新留言')
+        self.assertFalse(self.runner._net_force_first)
+        self.assertEqual(self.runner.resume_notice, '')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

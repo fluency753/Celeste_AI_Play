@@ -118,13 +118,13 @@ class NetWaitIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
             stopped_after = []
 
-            async def next_turn(self, fallback, orig=ClaudeRunner._next_user_turn):
+            async def next_turn(self, fallback, orig=ClaudeRunner._next_user_turn, **kwargs):
                 # 第二个进程回复之后就结束本次运行
                 if mark.exists() and len(mark.read_text(encoding="utf-8").splitlines()) >= 2 and self.turns >= 2:
                     stopped_after.append(self.turns)
                     self.stop_reason = "测试结束"
                     return False
-                return await orig(self, fallback)
+                return await orig(self, fallback, **kwargs)
 
             with patch.object(ClaudeRunner, "_command", command), \
                  patch.object(ClaudeRunner, "_probe_network", probe), \

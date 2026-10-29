@@ -187,7 +187,7 @@ class ClaudeRunner(SessionControls):
         finally:
             self._interrupt_responses.pop(ident, None)
 
-    async def _next_user_turn(self, fallback):
+    async def _next_user_turn(self, fallback, *, opening=False, context=''):
         while self.paused and not self.pending_messages and not self._net_force_first:
             idle = 'chat_idle' if self.chat_only else 'paused'
             if self.metrics.state.status != idle:
@@ -200,15 +200,11 @@ class ClaudeRunner(SessionControls):
         if self.session.done or self.stop_requested:
             return False
         rows, self.pending_messages = self.pending_messages, []
+        retain_fallback = self._net_force_first
         if self._net_force_first:
             # 网络恢复：先把被打断的这一轮接上（用户这期间发的消息一起带上）
             self._net_force_first = False
-            text = '\n'.join([fallback] + [row['text'] for row in rows])
-        else:
-            text = '\n'.join(row['text'] for row in rows) if rows else fallback
-        if self.resume_notice:
-            text += '\n\n' + self.resume_notice
-            self.resume_notice = ''
+        text = self._turn_message(fallback, rows, opening=opening, retain_fallback=retain_fallback, context=context)
         if self.chat_only:
             if getattr(self, 'allow_programs', False):
                 text += '\n当前仅聊天，可以按要求修改、运行工作区程序；不连接或操作游戏。'
@@ -428,7 +424,7 @@ class ClaudeRunner(SessionControls):
         reader = asyncio.create_task(self._read_stdout())
         started = time.monotonic()
         try:
-            if not await self._next_user_turn(first):
+            if not await self._next_user_turn(first, opening=not self.chat_only):
                 self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                 return True
             while True:
@@ -500,7 +496,7 @@ class ClaudeRunner(SessionControls):
                 from .prompting import controller_turn_prompt
                 next_prompt = (controller_turn_prompt(self.study.reminder())
                                if self.study is not None and not self.study.ready() else continue_play_prompt(self.cfg))
-                if not await self._next_user_turn(note + next_prompt):
+                if not await self._next_user_turn(next_prompt, context=note):
                     self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                     return True
         finally:

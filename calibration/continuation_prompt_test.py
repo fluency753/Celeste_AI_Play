@@ -30,7 +30,7 @@ class ContinuationPromptTests(unittest.TestCase):
 
 
 class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
-    async def run_two_turns(self, *, preparing=False, user_message=None):
+    async def run_two_turns(self, *, preparing=False, user_message=None, initial_notice=False, later_notice=False, initial_user=None, return_all=False):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             cfg = RunConfig(agent='test', save='test', model='test', engine='codex', mode='explore')
@@ -43,6 +43,11 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
                 study = KbStudy(kb, 10)
             runner = CodexRunner(cfg, root, session, Metrics(root/'metrics.json', 'test', 'test', 'high', 60),
                                  'unused', study, resume_note='fixture first turn')
+            from orchestrator.button_prompts import notification
+            if initial_notice:
+                runner.resume_notice = notification('resume')
+            if initial_user:
+                runner.pending_messages.append({'id': -1, 'text': initial_user})
             sent = []
 
             async def request(method, params):
@@ -56,6 +61,8 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
                         runner._event('turn/completed', {'turn': {'status': 'completed'}})
                         if len(sent) == 1 and user_message:
                             runner.pending_messages.append({'id': -1, 'text': user_message})
+                        if len(sent) == 1 and later_notice:
+                            runner.resume_notice = notification('resume')
                     asyncio.get_running_loop().call_soon(complete)
                     return {'turn': {'id': str(len(sent))}}
                 return {}
@@ -67,7 +74,7 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
                  patch('orchestrator.model_catalog.load_models', return_value={'models': []}):
                 await asyncio.wait_for(runner.run(), 5)
             self.assertEqual(len(sent), 2)
-            return sent[1]
+            return sent if return_all else sent[1]
 
     async def test_normal_fallback_reaches_turn_input_without_extra_action_or_narration_command(self):
         text = await self.run_two_turns()
@@ -80,6 +87,14 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_user_message_replaces_fallback_without_being_relabelled(self):
         text = await self.run_two_turns(user_message='先复盘笔记，不推进游戏。')
         self.assertEqual(text, '先复盘笔记，不推进游戏。')
+
+    async def test_opening_and_later_resume_each_send_one_lifecycle_message_and_keep_user_note(self):
+        from orchestrator.button_prompts import notification
+        first, second = await self.run_two_turns(initial_notice=True, later_notice=True,
+            initial_user='保留用户本次任务。', return_all=True)
+        self.assertEqual(first, 'fixture first turn\n\n保留用户本次任务。')
+        self.assertEqual(second, notification('resume'))
+        self.assertNotIn('自动续轮', second)
 
 
 class ClaudeContinuationTests(unittest.IsolatedAsyncioTestCase):

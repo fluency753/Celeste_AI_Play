@@ -463,6 +463,7 @@ class CodexRunner(SessionControls):
                 self.control_task = asyncio.create_task(self._controls())
                 self.heartbeat_task = asyncio.create_task(self._heartbeat())
             message = self._first_prompt()
+            opening = not self.chat_only
             while self._elapsed(started) < self.cfg.budget_seconds:
                 if self.stop_requested:
                     return await self._stopped_reason()
@@ -484,11 +485,7 @@ class CodexRunner(SessionControls):
                     return self.session.done_reason
                 assigned = list(self.pending_messages)
                 self.pending_messages.clear()
-                if assigned:
-                    message = "\n\n".join(row["text"] for row in assigned)
-                if self.resume_notice:
-                    message += '\n\n' + self.resume_notice
-                    self.resume_notice = ''
+                message = self._turn_message(message, assigned, opening=opening)
                 if self.paused and not self.chat_only:
                     message += "\n（用户已暂停试玩。只能回复用户，不调用 observe、act 或 Bash；回复后结束本轮，等待用户继续。）"
                 self.turn_done.clear()
@@ -506,6 +503,7 @@ class CodexRunner(SessionControls):
                 response = await self.rpc.request("turn/start", {"threadId": self.session_id, "effort": effort,
                     "serviceTierForTurn": tier,
                     "input": [{"type": "text", "text": turn_input}]})
+                opening = False
                 self.note_reminders.acknowledge(offered_notes)
                 self.turn_id = response["turn"]["id"]
                 self.metrics.turn_acknowledged(self.turn_id)

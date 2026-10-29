@@ -135,6 +135,18 @@ class SessionControls:
             return '用户已中断本次运行，不能再执行游戏操作。'
         return None
 
+    def _turn_message(self, fallback, rows, *, opening=False, retain_fallback=False, context=''):
+        """Choose one lifecycle instruction, keeping user input and separate control facts."""
+        supplied = '\n\n'.join(row['text'] for row in rows)
+        notice, self.resume_notice = self.resume_notice, ''
+        if opening or retain_fallback:
+            parts = [fallback, supplied]
+        elif notice:
+            parts = [supplied, notice]
+        else:
+            parts = [supplied or fallback]
+        return '\n\n'.join(part for part in [context, *parts] if part)
+
     async def _stopped_reason(self):
         if self.interrupted_for_resume:
             await self.interrupt_ready.wait()
