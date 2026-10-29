@@ -11,6 +11,8 @@ from orchestrator.config import RunConfig
 from orchestrator.game_session import AGENT_STORY_WAIT_FRAMES, ActError, GameSession
 from orchestrator.metrics import Metrics
 from orchestrator.server import build_server
+from orchestrator.navigation import ChapterNavigation
+from orchestrator.segments import Piece
 
 
 def observation(*, node=None, playing=False, controllable=False, cutscene=True, **level):
@@ -84,6 +86,118 @@ class StoryWaitTests(unittest.TestCase):
         self.session.client = StoryBridge(obs, after_step)
         self.session.last_obs = copy.deepcopy(obs)
         return self.session.client
+
+    def pending_next_chapter(self):
+        self.session.cfg.chapter = 4
+        self.session._navigation = ChapterNavigation.start([Piece(4)], pending=True,
+                                                          previous_sid='Celeste/3-CelestialResort')
+
+    def test_pending_navigation_watch_reads_current_story_without_consuming_target(self):
+        self.pending_next_chapter()
+        def after(client, inputs):
+            client.obs.update(storyInput='dialogue', storyDecision='dialogue',
+                              story=[{'kind':'dialogue','text':'仍是当前章节的一句对白'}])
+        start=observation(playing=True)
+        start['story']=[{'kind':'dialogue','text':'播放途中刚出现的前一句'}]
+        client=self.bridge(start,after)
+        result=asyncio.run(build_server(self.session).call_tool('cutscene',{'action':'watch'}))
+        self.assertFalse(result.is_error)
+        self.assertEqual(client.steps,[['30']])
+        self.assertEqual(self.session.last_obs['storyInput'],'dialogue')
+        self.assertEqual(self.session.last_obs['frame'],130)
+        self.assertEqual(self.session.last_obs['storyPlayback'],[{'kind':'dialogue','text':'播放途中刚出现的前一句'}])
+        self.assertEqual(self.session.chapter_queue,[Piece(4)])
+        self.assertTrue(self.session.chapter_finished)
+
+    def test_pending_navigation_advance_waits_for_next_line_without_extra_confirmation(self):
+        self.pending_next_chapter()
+        def after(client, inputs):
+            if inputs==['1,C','1']:
+                client.obs.update(storyInput=None,storyDecision=None,
+                                  storyPlaybackState={'state':'playing','source':'dialogue_resume'})
+            else:
+                client.obs.update(storyInput='dialogue',storyDecision='dialogue')
+        client=self.bridge(observation(node='dialogue'),after)
+        _,_,info=self.session.cutscene('advance')
+        self.assertEqual(client.steps,[['1,C','1'],['30']])
+        self.assertEqual((info['frames'],info['auto_frames']),(2,30))
+        self.assertEqual(self.session.chapter_queue,[Piece(4)])
+
+    def test_pending_navigation_unknown_and_input_nodes_do_not_guess_inputs(self):
+        self.pending_next_chapter()
+        for node in (None,'choice','tutorial','confirm'):
+            with self.subTest(node=node):
+                client=self.bridge(observation(node=node))
+                _,_,info=self.session.cutscene('watch')
+                self.assertEqual(client.steps,[])
+                self.assertEqual(info['auto_frames'],0)
+                self.assertEqual(self.session.chapter_queue,[Piece(4)])
+                if node is None:self.assertIn('未知界面','；'.join(info['auto_notes']))
+
+    def test_pending_navigation_watch_preserves_pause_stop_and_wait_budget(self):
+        self.pending_next_chapter()
+        client=self.bridge(observation(playing=True))
+        self.session.control_guard=lambda:True
+        _,_,info=self.session.cutscene('watch')
+        self.assertEqual(client.steps,[])
+        self.assertIn('用户已暂停','；'.join(info['auto_notes']))
+        self.session.control_guard=None
+        _,_,info=self.session.cutscene('watch')
+        self.assertEqual(info['auto_frames'],AGENT_STORY_WAIT_FRAMES)
+        self.assertTrue(all(segment==['30'] for segment in client.steps))
+        self.session.goals.stop_now()
+        with self.assertRaisesRegex(ActError,'本次试玩已结束'):self.session.cutscene('watch')
+
+    def test_pending_navigation_observe_and_act_keep_current_story_playable(self):
+        for entry in ('observe','act'):
+            with self.subTest(entry=entry):
+                self.pending_next_chapter()
+                def after(client,inputs):
+                    if inputs==['40,R']:
+                        client.obs=observation(playing=True)
+                    else:
+                        client.obs.update(storyInput='dialogue',storyDecision='dialogue')
+                client=self.bridge(observation(playing=True) if entry=='observe' else
+                                   observation(controllable=True,cutscene=False),after)
+                if entry=='observe':self.session.observe()
+                else:self.session.act(['40,R'],'走到当前剧情节点',None)
+                self.assertIn(['30'],client.steps)
+                self.assertEqual(self.session.last_obs['storyInput'],'dialogue')
+                self.assertTrue(self.session.chapter_finished)
+
+    def test_auto_mode_still_stops_at_navigation_boundary(self):
+        self.pending_next_chapter()
+        self.session.cfg.cutscene_mode='auto'
+        client=self.bridge(observation(playing=True))
+        _,_,frames,_=self.session._auto_advance(client.obs,None)
+        self.assertEqual(frames,0)
+        self.assertEqual(client.steps,[])
+
+    def test_initial_state_write_preserves_pending_entry_on_controller_restart(self):
+        from orchestrator.run import write_run_state, parse_args
+        from unittest.mock import patch
+        import sys
+        self.pending_next_chapter()
+        self.session.cfg.resume_pending=True
+        self.session.cfg.plan=[Piece(4)]
+        self.session.cfg.chapters=[4]
+        write_run_state(self.root,self.session.cfg,'same-session',None)
+        state=json.loads((self.root/'run_state.json').read_text(encoding='utf-8'))
+        self.assertTrue(state['piece_pending'])
+        self.assertEqual(state['navigation_remaining'],[[4,0,None]])
+        self.session.metrics.update(splits=[])
+        argv=['run','--agent',self.session.cfg.agent,'--save','test','--resume',str(self.root),
+              '--engine','claude','--runtime','host','--no-sim','--no-sim-assist']
+        with patch.object(sys,'argv',argv):cfg,_=parse_args()
+        self.assertTrue(cfg.resume_pending)
+        self.assertEqual(cfg.plan,[Piece(4)])
+        # Automatic startup already enters its target before session creation;
+        # a consumed request flag must not make the next restart enter it again.
+        cfg.cutscene_mode='auto'
+        auto_root=self.root/'auto';auto_root.mkdir()
+        write_run_state(auto_root,cfg,'same-session',None)
+        auto_state=json.loads((auto_root/'run_state.json').read_text(encoding='utf-8'))
+        self.assertFalse(auto_state['piece_pending'])
 
     def test_observe_unknown_cutscene_is_read_only_and_saves_observation(self):
         client = self.bridge(observation())

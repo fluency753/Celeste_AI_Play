@@ -704,7 +704,7 @@ class GameSession:
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
             if not reload_observation and self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
-                obs, image, more = self._enter_next_chapter()
+                obs, image, more = self._enter_next_chapter(obs)
                 notes = [*notes, *more]
             self._write_sim_state()
         if self.cfg.play_scope == 'visited':
@@ -1207,7 +1207,7 @@ class GameSession:
             if self._seeker_death:
                 notes.append(SEEKER_DEATH_NOTE)
             ending_agent = self._ending_agent       # 片尾已交给智能体：主控不再自动推进
-            if not ending_agent and result['stop'] not in BLOCK_STOPS and plan.input_format != 'celeste_tas' and not self.done and not self.chapter_finished and not self.goals.stop_motion.is_set() and (not self._agent_controls(obs)
+            if not ending_agent and result['stop'] not in BLOCK_STOPS and plan.input_format != 'celeste_tas' and not self.done and (self.cfg.cutscene_mode == 'agent' or not self.chapter_finished) and not self.goals.stop_motion.is_set() and (not self._agent_controls(obs)
                     or story_pending(obs)):
                 obs, image, auto_frames, more = self._auto_advance(obs, image)
                 notes.extend(more)        # 接在执行前的说明（续推剧情、思考僵直）后面，不覆盖它们
@@ -1219,7 +1219,7 @@ class GameSession:
                 self._mark_done("章节完成")
                 notes.append("已回到选章地图，主控确认本章完成")
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
-                obs, image, more = self._enter_next_chapter()
+                obs, image, more = self._enter_next_chapter(obs)
                 notes.extend(more)
             self.goals.check(self.goal_values(obs))
             self._write_sim_state()
@@ -1346,7 +1346,7 @@ class GameSession:
             self._handle_events(result)
 
         for _ in range(600):
-            if self.done or self.chapter_finished or self.goals.stop_motion.is_set():
+            if self.done or (mode != 'agent' and self.chapter_finished) or self.goals.stop_motion.is_set():
                 break
             guard = getattr(self, 'control_guard', None)
             if guard and guard():
@@ -1381,7 +1381,7 @@ class GameSession:
                 notes.append(skip_opportunity_hint(obs))
                 break
             self._commit_completion(obs)
-            if self.done or self.chapter_finished:break
+            if self.done or (mode != 'agent' and self.chapter_finished):break
             if mode == 'agent' and (self._pending_complete or scene in END_SCENES) and not story_pending(obs) and not automatic_transition:
                 notes.append('结尾或结算由你操作：观察当前界面，用 act 发送确认 C、返回 B 或所需的空帧；回到选章地图才算完成。'
                              if self._pending_complete else '当前菜单或转场由你输入操作，按本次目标自行导航；主控不代选。')
@@ -1486,7 +1486,7 @@ class GameSession:
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         if total:
             notes.append(f"主控自动推进了 {total} 帧（转场、剧情、死亡与重生，均为正常速度）")
-            if not self.done and not self.chapter_finished:
+            if not self.done and (mode == 'agent' or not self.chapter_finished):
                 reply = self.client.call("observe", image=True, scope="room", fields=True)
                 obs, image = enrich_obs(reply["obs"]), reply.get("image")
         if total:
@@ -1674,12 +1674,12 @@ class GameSession:
             self.metrics.add(play_game_s=time.monotonic()-started,frames_played=used)
             self._commit_completion(obs)
             self._note_obs_room(obs)
-            if not self.done and not self.chapter_finished and (story_pending(obs) or not obs.get('controllable')):
+            if not self.done and (story_pending(obs) or not obs.get('controllable')):
                 obs,_,more,notes=self._auto_advance(obs,None,stop_for_skip=False,story_mode='agent',
                                                   wait_budget=max(0, AGENT_STORY_WAIT_FRAMES-auto_frames))
                 auto_frames += more; auto_notes.extend(notes)
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
-                obs,_,_=self._enter_next_chapter()
+                obs,_,_=self._enter_next_chapter(obs)
             playback = obs.get('storyPlayback')
             reply=self.client.call('observe',image=True,scope='room',fields=True)
             obs=self._track_motion(enrich_obs(reply['obs']))
@@ -1995,12 +1995,12 @@ class GameSession:
             self.metrics.add(auto_game_s=time.monotonic() - started)
             print(f"[run] 本次的最后一截已完成，已用暂停菜单返回地图（{self.end_scene}）", flush=True)
 
-    def _enter_next_chapter(self) -> tuple[dict, str | None, list[str]]:
+    def _enter_next_chapter(self, previous_obs=None) -> tuple[dict, str | None, list[str]]:
         """（调用方持有连接锁）换到计划里的下一截，停在可操作的第一帧：上一截在章节结尾结束时走完结算画面、
         回到地图再进入下一章（下一截从章节开头开始时走菜单，否则在地图上直接进入它的起点检查点）；
         上一截在检查点结束时，下一截在别的章节的开头就用暂停菜单返回地图再走菜单，否则直接传送到它的起点检查点。"""
         if self.cfg.cutscene_mode == 'agent':
-            return self._observe_next_chapter()
+            return self._observe_next_chapter(previous_obs)
         from enter_save import enter_save  # noqa: WPS433（tools 目录已在 sys.path 里）
 
         split = (self.metrics.state.splits or [])[-1]
@@ -2029,10 +2029,12 @@ class GameSession:
         note += f"之后还有：{remaining}。" if remaining else "这是本次的最后一截。"
         return obs, image, [note]
 
-    def _observe_next_chapter(self):
+    def _observe_next_chapter(self, previous_obs=None):
         """Agent owns menu navigation; only commit the configured next piece once observed."""
         reply = self.client.call('observe', image=True, scope='room', fields=True)
         obs, image = enrich_obs(reply['obs']), reply.get('image')
+        if previous_obs and previous_obs.get('storyPlayback'):
+            obs['storyPlayback'] = previous_obs['storyPlayback']
         piece = self.navigation.target
         if not self._confirm_next_entry(obs, require_departure=True):
             return obs, image, [f'上一段已完成。接下来请自行通过菜单进入{self._piece_place(piece)}；主控不会代按、跳过结算或传送。']

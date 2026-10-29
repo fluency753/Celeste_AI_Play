@@ -519,7 +519,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "play_scope":cfg.play_scope, "completion_policy":cfg.completion_policy, "visited_maps":cfg.visited_maps, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
-             "piece_pending": False, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
+             "piece_pending": cfg.cutscene_mode == 'agent' and cfg.resume_pending, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "kb_extra": cfg.kb_extra, "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None,
              "controller_host": os.environ.get("CELESTE_CONTROLLER_HOST"), "controller_pid": os.getpid(),
