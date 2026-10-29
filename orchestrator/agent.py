@@ -493,7 +493,9 @@ class ClaudeRunner(SessionControls):
                     self.stop_reason = "连续 3 轮没有调用工具"
                     return True
                 note = await self._switch_effort() if self.metrics.state.effort_pending else ""
-                next_prompt = self.study.reminder() if self.study is not None and not self.study.ready() else continue_play_prompt(self.cfg)
+                from .prompting import controller_turn_prompt
+                next_prompt = (controller_turn_prompt(self.study.reminder())
+                               if self.study is not None and not self.study.ready() else continue_play_prompt(self.cfg))
                 if not await self._next_user_turn(note + next_prompt):
                     self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                     return True

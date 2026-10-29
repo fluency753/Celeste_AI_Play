@@ -459,8 +459,13 @@ def first_play_prompt(cfg):
 
 
 def continue_play_prompt(cfg):
-    return ("请在允许地图内继续当前探索、建模或收集任务，按需查询计时与停止目标；无需因已通关而结束。"
-            if getattr(cfg, 'completion_policy', 'stop') == 'continue' else CONTINUE_PROMPT)
+    return controller_turn_prompt("请依据当前状态、已有记录和用户指令继续当前任务，自行选择下一步操作。")
+
+
+def controller_turn_prompt(text):
+    """Label controller-generated turn fallbacks without relabeling real user input."""
+    return ("【主控系统消息｜自动续轮】\n" + text
+            + "\n这不是用户新消息，不改变任务范围、权限或停止条件。")
 
 
 def study_prompt(study: KbStudy, sim: bool = False) -> str:
@@ -477,7 +482,6 @@ def study_prompt(study: KbStudy, sim: bool = False) -> str:
         f"准备阶段最多 {study.minutes:g} 分钟，到时游戏工具自动开放。"
         "游戏在你思考期间一直暂停，章节计时只算游戏真正推进的帧。"
     )
-CONTINUE_PROMPT = "本章还没有通关，请继续调用 act 游玩。"
 
 
 def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:

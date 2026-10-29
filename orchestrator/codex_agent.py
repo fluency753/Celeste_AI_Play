@@ -532,9 +532,9 @@ class CodexRunner(SessionControls):
                 if self.prepare_only and self.study and self.study.complete():
                     self.completed_preparation = True
                     return "知识库准备完成"
-                from .prompting import continue_play_prompt
-                message = ("继续准备，尚未完整读完的行必须用 celeste_read 阅读。" if self.study and not self.study.complete()
-                           else continue_play_prompt(self.cfg).replace('act ', 'celeste_act ') + '先更新一句公开解说。')
+                from .prompting import continue_play_prompt, controller_turn_prompt
+                message = (controller_turn_prompt("继续准备，尚未完整读完的行必须用 celeste_read 阅读。")
+                           if self.study and not self.study.complete() else continue_play_prompt(self.cfg))
             return "现实时间预算用完"
         finally:
             if self.heartbeat_task:
