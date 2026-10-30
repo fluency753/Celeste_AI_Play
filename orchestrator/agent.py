@@ -392,7 +392,7 @@ class ClaudeRunner(SessionControls):
         if self.resume_note:
             first = self.resume_note
         else:
-            first = (study_prompt(self.study, self.cfg.sim, prepare_only=self.prepare_only) if self.study
+            first = (study_prompt(self.study, self.cfg.sim, prepare_only=self.prepare_only, cfg=self.cfg) if self.study
                      else first_play_prompt(self.cfg))
         if self.prepare_only:
             first += self._lifecycle_prompt()

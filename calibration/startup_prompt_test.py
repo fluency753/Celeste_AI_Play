@@ -35,14 +35,14 @@ class StartupPromptTests(unittest.TestCase):
         name = 'runtime_zh.md'
         doc = console_api.prompt_read(name)
         self.assertEqual({p['name'] for p in doc['placeholders']},
-                         {'{current_settings}', '{guide_index_path}', '{game_tools}'})
+                         {'{current_settings}', '{guide_index_path}', '{game_tools}', '{agent_environment}'})
         self.assertFalse(doc['live_editable'])
         options = {'engine': 'codex', 'mode': 'explore', 'agent': 'test',
                    'save': {'name': '{game_tools}', 'slot': 14},
                    'sim': False, 'sim_assist': False}
         guide = guide_document(config_for(options))
         personal_prompts.save('all', 'PERSONAL {current_settings}', personal_prompts.read('all')['version'])
-        template = '自定义启动\n{current_settings}\n{guide_index_path}\n{game_tools}\n'
+        template = '自定义启动\n{current_settings}\n{guide_index_path}\n{game_tools}\n{agent_environment}\n'
         with patch.object(console_api, 'orchestrator_status', return_value={'running': False}):
             saved = console_api.prompt_write(name, template, doc['version'])
             self.assertTrue(saved['overridden'])

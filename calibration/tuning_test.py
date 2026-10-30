@@ -84,7 +84,8 @@ class TunableTests(unittest.TestCase):
         explore.agent_cpus_effective = 1
         self.assertNotIn("{cpu_rule}", play_prompt(explore))
         self.assertIn("实在拿不到才放弃", play_prompt(explore))          # 鼓励拿草莓
-        self.assertIn("模拟器对象尽量只构造一次再复用", play_prompt(explore))   # /workspace 是主机挂载，读写慢
+        self.assertIn('/kb/help/programs.md', play_prompt(explore))
+        self.assertNotIn('模拟器对象尽量只构造一次再复用', play_prompt(explore))
         self.assertNotIn("不要求全收集", play_prompt(explore))
         for placeholder in ("{act_max_frames}", "{bash_default}", "{explore_program}", "{explore_program_rule}", "{remind}",
                             "{playback_ratio}"):
@@ -117,11 +118,11 @@ class TunableTests(unittest.TestCase):
                 self.assertEqual(play_prompt(c).count("思考语句的语气不必一直冷静理智，可以自然流露真实的情绪"), 1, kw)
                 self.assertNotIn("{thought_mood", play_prompt(c))
         tools = descriptions(cfg(mode="explore", knowledge_profile="explore", chapter=1))
-        self.assertIn("thought：一两句中文（尽量简短，汉字不超过 30 个，英文术语不计），会显示给观众", tools["act"])
-        self.assertIn("thought：一两句中文（尽量简短，汉字不超过 30 个，英文术语不计），只写", tools["narrate"])
+        self.assertIn('汉字不超过 30 个，英文术语不计', tools['act'])
+        self.assertIn('汉字不超过 30 个，英文术语不计', tools['narrate'])
         tools = descriptions(cfg(mode="explore", knowledge_profile="explore", chapter=1, engine="codex"))
-        self.assertIn("thought：一两句中文，会显示给观众", tools["act"])
-        self.assertIn("thought：一两句中文（120 字以内），只写", tools["narrate"])
+        self.assertIn('显示给观众', tools['act'])
+        self.assertIn('120 字以内', tools['narrate'])
         for desc in (tools["act"], tools["narrate"]):
             self.assertIn("语气不必一直冷静理智，可以自然带点情绪，但不要夸张。", desc)
             self.assertNotIn("{thought_mood", desc)

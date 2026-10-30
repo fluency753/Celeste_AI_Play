@@ -83,7 +83,8 @@ class PromptTests(unittest.TestCase):
 
     def test_on_prompt_replaces_the_sentences_that_send_narrate_to_viewers(self):
         explore_on = play_prompt(explore(formal_thought=True))
-        self.assertIn("用 narrate 或公开 commentary 写下临时思考", explore_on)
+        self.assertIn('用 narrate 写下临时思考', explore_on)
+        self.assertNotIn('用 narrate 更新 HUD', explore_on)
         self.assertNotIn("告诉观众；", explore_on)
         speed_on = play_prompt(cfg(mode="speedrun", knowledge_profile="full", sim=True, formal_thought=True))
         self.assertIn("HUD 显示你最近一次 act 的 thought（正式思考）", speed_on)

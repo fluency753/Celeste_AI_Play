@@ -184,6 +184,32 @@ def check_program_placeholders(text: str) -> None:
                            '将固定说明直接写入正文并保留个人修改。迁移说明见 docs/USAGE.md“个人追加要求”。')
 
 
+def room_reference_rule(cfg):
+    from .prompt_environment import reference_path
+    path = reference_path(cfg, 'observation.md')
+    if path:
+        return (f'观测格式不明时查 {path}；需要程序分析通道时，可查 '
+                '/workspace/game/collision_matrix.md，再按具体场景验证，不预设来源始终阻挡。')
+    return '使用首次布局和后续变化，缺少基线时默认 observe 重建；依据身体尺寸与矩形边界，用短动作验证有歧义的连接。'
+
+
+def program_reference_rule(cfg):
+    from .prompt_environment import reference_path
+    paths = [reference_path(cfg, name) for name in ('programs.md', 'workspace.md')]
+    available = [path for path in paths if path]
+    return ('具体优化方法与文件／展示接口按需查阅 ' + '、'.join(available) + '，无需开局通读。'
+            if available else '当前未提供程序参考资料，按实际反馈自行优化，不假定有额外工具或预算。')
+
+
+def program_timeout_rule(cfg):
+    from .tuning import seconds_text
+    default = seconds_text(getattr(cfg, 'bash_default_s', 300))
+    maximum = seconds_text(getattr(cfg, 'bash_max_s', 600))
+    if getattr(cfg, 'engine', 'claude') == 'codex':
+        return f'原生 Shell 只在前台运行，默认最多 {default}；用 timeout_ms（毫秒）指定时限，最多 {maximum}。'
+    return f'Bash 命令只在前台运行，默认最多 {default}（用 Bash 的 timeout 参数最多加到 {maximum}）'
+
+
 def fill(text: str, cfg) -> str:
     """把提示词里的占位符换成本次的值：可调参数（orchestrator/tuning.py；默认值下与原来的文字完全相同），
     以及随设置变化的游戏工具清单与剧情处理说明。"""
@@ -202,13 +228,19 @@ def fill(text: str, cfg) -> str:
                                   if workspace.programs else ""),
         "{tas_cursor_rule}": ("`input_cursor.next`是选定输入文档从0开始的帧偏移，不是源文件行号；用同一load文档和window(offset=next)生成下一窗，或把remaining_inputs写入仍声明celeste_tas的JSON。旧工具不能把剩余数组直接交给默认格式的inputs。"
                                if workspace.programs else "继续TAS输入时保留 input_format=celeste_tas，按返回的input_cursor.next与remaining_inputs核对输入进度；不要把TAS剩余数组当成默认格式的inputs。"),
-        "{explore_reading_rule}": ("先读必读清单，再在 /workspace/notes.md 记录工具约定。help/ 里是操作提示，需要时随时可以读。"
+        "{explore_reading_rule}": ("准备只读必读清单；help/ 的格式、操作和优化参考在需要时再查。"
                                    if workspace.workspace_read and workspace.workspace_write else
                                    "根据当前观测、工具说明与真实尝试学习；当前没有文件工具，不要求读取知识库或工作区笔记。"),
-        "{explore_reference_rule}": ("基本规则见 /kb/basics.md，坐标与观测格式见 /kb/data.md，按键和工具约定见 /kb/tools.md。"
+        "{explore_reference_rule}": ("基本规则、观测要点和操作见 /kb/basics.md、data.md、tools.md；详细资料按 /kb/README.md 的 help/ 索引查阅。"
                                      if workspace.workspace_read else "按键和工具约定以本次提供的游戏工具说明为准。"),
         "{explore_environment_rule}": ("Read/Write/Bash 对应容器的文件读取、写入和断网命令；"
                                        if workspace.programs else "当前只有游戏工具，不能读取文件或运行程序；"),
+        "{explore_memory_rule}": ("/workspace/notes.md 保存当前目标、验证过的事实、失败原因与待验证问题。开局、续跑或压缩后，在首次真实动作前查阅并核对最新观测；不存在时建立简短索引。新发现、反例或目标变化时更新，区分事实与猜测，合并重复、标明失效结论；长记录拆文件并留链接，不逐帧抄数据。"
+                                   if workspace.workspace_read and workspace.workspace_write else
+                                   "依据当前观测与已有对话记录目标、已验证事实和待验证问题，不把旧状态当作当前事实。"),
+        "{public_feedback_rule}": ('有新判断时用 '
+                                   + ('公开 commentary 或 narrate' if getattr(cfg, 'engine', 'claude') == 'codex' else 'narrate')
+                                   + (' 写下临时思考；' if getattr(cfg, 'formal_thought', False) else ' 更新 HUD；')),
         "{observation_delivery_rule}": ("具备脚本能力且当前观测文件核对成功时，默认正文只给状态、快照身份及文件位置；程序优先读取latest_obs.json的obs，完整碰撞数据不重复进入正文。文件不可用或规划工具受限时回退完整布局baseline/同房delta。"
                                         if workspace.programs else "首次入房或默认observe返回完整布局baseline，同房act/cutscene返回变化delta；快照链缺失时默认observe重建。"),
         "{observation_source_rule}": ("优先从 `/workspace/game/latest_obs.json` 的 `obs` 读取当前原始数据；默认正文只给状态、快照身份和文件位置；若回退布局则按实际格式读取。"
@@ -218,6 +250,12 @@ def fill(text: str, cfg) -> str:
                                     if workspace.programs else "根据观测中的矩形边界和角色尺寸核对候选通道，用短动作验证存在歧义的连接。"),
         "{geometry_record_rule}": ("在笔记或程序里保留已验证的通道、连接依据、失败假设及适用条件。"
                                    if workspace.workspace_write else "在公开解说中简短总结已验证的通道、连接依据与失败假设。"),
+        "{room_reference_rule}": room_reference_rule(cfg),
+        "{program_reference_rule}": program_reference_rule(cfg),
+        "{program_timeout_rule}": program_timeout_rule(cfg),
+        "{program_progress_rule}": ('每轮运行搜索前用公开 commentary 简述验证目标，程序中用 show.status 报告真实进展。'
+                                      if getattr(cfg, 'engine', 'claude') == 'codex' else
+                                      '每一轮里运行搜索的那个 Bash，description 写一句给观众看的中文，说明想验证什么。'),
         "{act_max_frames}": str(act_frame_cap(cfg)),
         "{act_min_frames}": str(act_frame_min(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
@@ -266,7 +304,8 @@ def fill(text: str, cfg) -> str:
     }
     for key, value in values.items():
         text = text.replace(key, value)
-    return text
+    from .prompt_environment import render_tool_references
+    return render_tool_references(text, cfg)
 
 
 # 控制台"提示词"页保存的本机修改：local/prompts/<文件名>（不入库）。有这个文件时用它代替仓库里的同名文件，
@@ -373,10 +412,11 @@ def prompt_parts(cfg) -> list[PromptPart]:
     - 探索模式：explore_zh（工具清单按本次注册的工具生成）；直播时再加 explore_live_zh。
     剧情模式的说明只在开放了 cutscene 工具时加（见 modes.has_cutscene_tool）。可调参数的占位符在这里按本次的值填入。"""
     if is_explore(cfg):
-        tools = "/".join(game_tools(cfg))
+        from .prompt_environment import tool_name
+        tools = "/".join(tool_name(cfg, name) for name in game_tools(cfg))
         workspace = workspace_capabilities(cfg)
         slots = {
-            '{explore_notes}': _file_parts('explore_notes_zh.md') if workspace.workspace_read and workspace.workspace_write else [],
+            '{explore_notes}': _file_parts('explore_notes_zh.md'),
             '{explore_programs}': _file_parts('explore_programs_zh.md') if workspace.programs else [],
         }
         from .detour import SCOPE_FROM, SCOPE_TO, enabled as detour_enabled
@@ -399,6 +439,9 @@ def prompt_parts(cfg) -> list[PromptPart]:
                                        else "；不得自行扩展。"), None, "\n"))
     else:
         parts = _speedrun_parts(cfg)
+    if not workspace_capabilities(cfg).workspace_read:
+        from .prompt_environment import environment_instructions
+        parts.append(PromptPart('当前执行环境', environment_instructions(cfg), None, '\n\n'))
     if getattr(cfg, 'play_scope', 'chapter') == 'visited':
         parts.append(PromptPart("已到访地图自由探索", "范围以本次主控保存的已到访地图许可集合为准，区分 A/B/C 面；先 observe 查看允许地图。可以通过原生菜单反复进出允许的地图、选择已解锁检查点，按操作权限做观测实验和寻找收集品。不要进入未授权地图；通关不扩大范围，主控不会代按选章。", None, "\n\n"))
     if getattr(cfg, 'completion_policy', 'stop') == 'continue':
@@ -452,7 +495,7 @@ def play_prompt(cfg) -> str:
 
 def first_play_prompt(cfg):
     from .button_prompts import notification
-    return notification('start_explore' if getattr(cfg, 'completion_policy', 'stop') == 'continue' else 'start_play')
+    return notification('start_explore' if getattr(cfg, 'completion_policy', 'stop') == 'continue' else 'start_play', cfg=cfg)
 
 
 def continue_play_prompt(cfg):
@@ -466,7 +509,7 @@ def controller_turn_prompt(text):
     return notification('continue_prepare', facts=text)
 
 
-def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = False) -> str:
+def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = False, cfg=None) -> str:
     """准备阶段的第一条消息。仅准备时不开始试玩（结束方式见 agent._lifecycle_prompt，这里不重复）；
     准备后接着试玩时写明读完后的下一步，开了预置模拟器的速通另外要求先想清技巧与要写的程序并记进笔记。"""
     from .button_prompts import notification
@@ -475,7 +518,7 @@ def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = Fals
     if prepare_only:
         return notification('prepare', facts=(
             f"本次必读清单：\n{files}\n\n主控核对实际阅读进度。\n" + sim_note
-            + f"准备阶段最多 {study.minutes:g} 分钟，到时仍未读完则本次准备未完成。"))
+            + f"准备阶段最多 {study.minutes:g} 分钟，到时仍未读完则本次准备未完成。"), cfg=cfg)
     after = ("读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些搜索与规划程序"
              "（模拟器直接用 /sim 预置的）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
              if sim else "读完后调用 observe 开始游玩。\n")
@@ -484,7 +527,7 @@ def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = Fals
         "主控核对实际阅读进度，完成前 observe 与 act 不会执行。\n" + sim_note + after +
         f"准备阶段最多 {study.minutes:g} 分钟，到时游戏工具自动开放。"
         "游戏在你思考期间一直暂停，章节计时只算游戏真正推进的帧。"
-    ))
+    ), cfg=cfg)
 
 
 def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:

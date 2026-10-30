@@ -55,7 +55,7 @@ Codex 恢复线程时检查该线程实际持久化的动态工具。旧线程�
 
 ### 默认采用探索模式
 
-`start_gpt.ps1` 和新建的 `--engine codex` 运行默认使用探索模式。必读是 `kb/explore/` 的 README.md、basics.md（基本规则）、data.md（坐标与观测数据）与 tools.md（按键与工具）；`help/controls.md` 是选读的操作提示，随时可以读。目标是通过实际尝试探索并完成指定章节。知识库与提示词不提供技巧说明、实体说明、地图路线或隐藏内容位置，但不限制智能体用自己已有的知识，也不禁止高级技巧与自己写辅助程序（单次运行时长受 `explore_program_s` 限制）。
+`start_gpt.ps1` 和新建的 `--engine codex` 运行默认使用探索模式。必读是 `kb/explore/` 的 README.md、basics.md（基本规则）、data.md（坐标与观测数据）与 tools.md（按键与工具）；`help/` 包含选读的操作、观测格式、复杂输入、剧情、工作区与程序优化参考，需要时再查，不要求准备阶段通读。目标是通过实际尝试探索并完成指定章节。知识库与提示词不提供技巧说明、实体说明、地图路线或隐藏内容位置，但不限制智能体用自己已有的知识，也不禁止高级技巧与自己写辅助程序（单次运行时长受 `explore_program_s` 限制）。
 
 容器的 `/kb` 只挂载 `kb/explore/`，不提供 `/sim`。探索模式的工作区是 `workspaces/<标签>-explore`，容器与会话数据卷也与速通模式分开，防止读到旧的攻略笔记。切换知识范围必须新建准备会话，速通模式的 `--prepared` 或 `--resume` 不能混入探索模式。精确模拟器不开放；规划回放开关保持开启，只有提交了实际预测轨迹时才会出现回放。
 
@@ -298,7 +298,11 @@ HUD 把模拟体力显示为"推演额度"（余额 / 上限），网页 HUD 悬
 
 ### 提示词与知识库
 
-有工作区读取能力的执行器共用启动模板 `orchestrator/prompts/runtime_zh.md`，通过 `{current_settings}`、`{guide_index_path}`、`{game_tools}` 填入本次配置、指南索引和工具清单。探索与速通模式均使用它；控制台“提示词”页可从“当前任务与配置”编辑，保存到 `local/prompts/runtime_zh.md`，删除本机覆盖即可恢复默认。它与稳定指南模板一样须等主控结束后修改，下次启动或重接生成正文时生效；不属于工作区指南，不改变指南版本。无工作区读取能力的 host Claude 仍内联完整共享规则。
+探索模式开局只读根目录的 README、basics、data、tools 四份短资料；`data.md` 保留坐标、数据来源和身份／完整性核验，完整形状、baseline/delta、分页等迁到 `help/observation.md`。高级输入／计划、剧情边界、工作区查询与优化分别在 `help/actions.md`、`story.md`、`workspace.md`、`programs.md`。这些文件仍挂载在知识库中，但不进入必读计量或指南各节。`room_analysis_zh.md` 只保留通路与验证原则；`explore_notes_zh.md` 合并记忆与公开反馈，按读写能力降级。动态工具参数 schema 与门禁不变，常用声明简述调用语义并链接可读参考；无文件能力或参考被禁读时保留内联详细说明。
+
+`orchestrator/prompt_environment.py` 集中处理真实能力、工具名和参数差异。Codex 直接显示 read/glob/grep、apply_patch、原生 Shell（timeout_ms），Claude 显示 Read/Write/Edit/Bash（timeout）；不再在 Codex 正文尾部加一整段映射。兼容输入 `runtime=host` 的 Codex 仍使用容器工具，host Claude 则不要求读文件。旧会话实际文件工具登记仍由恢复通知校正。共享模板与本机覆盖中的独立能力名会按环境展开，已带前缀的名称和路径不重复改写；个人追加正文保持原文。现有本机覆盖不自动改写或覆盖，旧的长正文仍会保留；要获得精简版本，可对照控制台“仓库版本”迁移个人修改。自定义启动模板必须保留新增 `{agent_environment}` 槽位，缺失时保存与模型启动明确报迁移错误，不覆盖旧文件。
+
+有工作区读取能力的执行器共用启动模板 `orchestrator/prompts/runtime_zh.md`，通过 `{current_settings}`、`{guide_index_path}`、`{game_tools}`、`{agent_environment}` 填入本次配置、指南索引、工具清单与实际执行环境。探索与速通模式均使用它；控制台“提示词”页可从“当前任务与配置”编辑，保存到 `local/prompts/runtime_zh.md`，删除本机覆盖即可恢复默认。它与稳定指南模板一样须等主控结束后修改，下次启动或重接生成正文时生效；不属于工作区指南，不改变指南版本。无工作区读取能力的 host Claude 仍内联完整共享规则。
 
 个人追加要求使用独立的 `local/personal_prompts.json`，按通用和执行器／模式组合应用，默认空。当前启动正文直接附加一次，不复制到共享指南；修改个人要求不会改变共享指南版本。Claude 恢复时用于覆盖旧快照的消息与系统正文使用同一份启动快照，包括无文件能力的 host 模式。保存配置不改变运行中模型输入，损坏配置或版本冲突明确报错，不覆盖他人的修改；启动前读取失败不启动模型，运行中断网或额度等待后重接时则沿用本次已送达的个人要求并记日志，不因此结束运行。
 

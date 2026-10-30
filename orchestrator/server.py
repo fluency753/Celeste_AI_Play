@@ -51,22 +51,35 @@ OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}。{observa
 
 # 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
 
-SET_EFFORT_DESCRIPTION = """调整你自己的推理强度：传入当前模型能力列表中的档位标识，当前值与可选档位见观测头部。
-强度越高，每次思考越深入，但每次决策更慢、消耗的额度更多；简单的房间可以调低，需要精确规划的难房间可以调高。
-切换在本轮结束后生效：调用后直接结束本轮（回复一句话，不再调用工具），系统会立即切换，并发消息让你接着玩。
-不推进游戏，也不消耗游戏帧。reason：一句话说明为什么调整（记入日志）。"""
+SET_EFFORT_DESCRIPTION = '调整下一轮推理强度，不推进游戏。level取观测头部可选档位，reason说明原因。调用后结束本轮，不再调用工具；主控切换后通知继续。'
 
 
-NARRATE_DESCRIPTION = """更新 HUD 上给观众看的思考内容（实时展示）：观众在直播画面上看你此刻在想什么。不推进游戏，也不计入章节计时。
-thought：一两句中文（{thought_limit}），只写你对当前房间或这一段的分析与判断，不写具体数值（帧数、坐标、速度等），
-也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。{thought_mood_short}
-思考期间随时调用：一有初步判断就先写一句，之后想法每有进展再写一句，不要攒到 act 时才写。"""
+NARRATE_DESCRIPTION = "更新 HUD 公开解说，不推进游戏。thought 用一两句中文（{thought_limit}）写新判断和下一步；不写具体数值、算法或内部推理，技巧专名用英文。{thought_mood_short}有真实进展时更新，不重复空话。"
 
 # 开了"仅正式思考"（--formal-thought）时 narrate 的说明：写的是临时思考，只显示在控制台，游戏画面的 HUD 上没有
-NARRATE_TEMP_DESCRIPTION = """更新临时思考：本次开启了"仅正式思考"，你在冻结期间（两次 act 之间）写的临时思考{temp_thought_where}；游戏画面的 HUD 只显示每次 act 的 thought（正式思考）。不推进游戏，也不计入章节计时。
-thought：中文（{thought_temp_limit}），写你此刻的分析、尝试与判断，不写具体数值（帧数、坐标、速度等），
-也不写用了什么算法、程序算出了什么路线；技巧与机制的专有名词用英文。{thought_mood_short}
-思考期间随时调用：一有初步判断就先写一句，之后想法每有进展再写一句。"""
+NARRATE_TEMP_DESCRIPTION = '更新临时思考，{temp_thought_where}；游戏 HUD 只显示 act 的正式 thought。不推进游戏。thought 用中文（{thought_temp_limit}）写实际判断，不写数值、算法或内部推理，技巧专名用英文。'
+
+COMPACT_ACT_DESCRIPTION = '''推进输入并返回新状态{act_collision_image}。
+inputs 为按键段数组，如 ["12,R","1,R,J","27,R"]；与工作区 JSON plan_file 二选一。至少 {act_min_frames}、最多 {act_max_frames} 帧，截断可提前停下。方向 LRUD，J跳/X冲刺/G抓墙/T交互，Z蹲冲，K/Y/V为第二键；纯帧数松键，重复触发须松开1帧。C确认；agent剧情另可B返回/P暂停/N日志。
+stop_on 可选 death/room/uncontrollable/controllable/land/refill/complete/story_input/story_decision，默认 death/room/complete；death总生效，触发后剩余输入不执行；agent已登记通关后不因complete反复截断结算。
+thought 一两句中文{thought_brief}，显示给观众，简述判断，不写数值、算法或内部推理。{thought_mood_short}{formal_thought_act}
+input_format 默认celeste_ai；TAS须显式celeste_tas且agent剧情，TAS不自动推进转场／重生，不能混用键义。复杂计划和TAS使用前查 {actions_reference}；数据格式查 {observation_reference}。'''
+
+COMPACT_OBSERVE_DESCRIPTION = '''获取新观测{observe_collision_image}，不推进游戏。文件可用时返回状态与latest_obs.json位置，否则baseline/delta。detail="geometry"用region=[x,y,w,h]精查缓存，offset/limit分页最多64，后续页带同一snapshot_id；观测更新后重查第一页。detail="player"查完整玩家；detail="time"按秒查章节／现实计时及目标剩余量，桥接累计时钟不等于任务时长。三种详情不改变布局基线。身份、覆盖和形状完整性须核对，未知或局部空结果不证明安全。格式查 {observation_reference}。'''
+
+
+def observation_tool_description(cfg, name):
+    from .prompt_environment import reference_path
+    observation = reference_path(cfg, 'observation.md')
+    actions = reference_path(cfg, 'actions.md')
+    if observation and (name != 'act' or actions):
+        text = COMPACT_ACT_DESCRIPTION if name == 'act' else COMPACT_OBSERVE_DESCRIPTION
+        return text.replace('{observation_reference}', observation).replace('{actions_reference}', actions or '')
+    text = ACT_DESCRIPTION if name == 'act' else OBSERVE_DESCRIPTION
+    if name == 'act' and not workspace_capabilities(cfg).workspace_read:
+        before, after = text.split('plan_file：', 1)
+        text = before + 'plan_file 当前无文件能力，不可用。\nthought：' + after.split('thought：', 1)[1]
+    return text
 
 # 实时展示的解说更新计时器：思考状态累计满 RunConfig.live_remind_s 秒没有 narrate，就在智能体下一次调用任何工具时
 # 由容器里的 PreToolUse 钩子把这句提醒放到那次工具结果旁边（见 run.add_gate_route 与 agent-container/celeste-gate.py）
@@ -234,7 +247,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             content.append(tagged(collision, 'collision'))
         return content
 
-    @server.tool(name="observe", description=fill(OBSERVE_DESCRIPTION, session.cfg), structured_output=False)
+    @server.tool(name="observe", description=fill(observation_tool_description(session.cfg, 'observe'), session.cfg), structured_output=False)
     async def observe(detail: str = 'overview', region: list[float] | None = None, offset: int = 0,
                       limit: int = 32, snapshot_id: str | None = None) -> list:
         async with journal.execution(call_lock):
@@ -285,7 +298,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 finish()
 
     rule = RULE_SIM if session.cfg.sim else RULE_ALL
-    act_description = ACT_DESCRIPTION + (NO_RETRY_NOTE.format(n=session.cfg.rounds_per_room, d=session.cfg.death_bonus, rule=rule)
+    act_description = observation_tool_description(session.cfg, 'act') + (NO_RETRY_NOTE.format(n=session.cfg.rounds_per_room, d=session.cfg.death_bonus, rule=rule)
                                          if session.cfg.pause_limit else "")
     if session.cfg.playback and session.cfg.sim:
         act_description += PLAYBACK_NOTE
@@ -354,6 +367,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 finish()
 
     def optional_tool(enabled: bool, **kw):
+        if 'description' in kw:
+            kw['description'] = fill(kw['description'], session.cfg)
         # 不需要的工具不注册：装饰器原样返回函数，不进 MCP 工具列表
         return server.tool(**kw) if enabled else (lambda fn: fn)
 

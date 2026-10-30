@@ -210,7 +210,9 @@ class PromptPreviewTests(unittest.TestCase):
 
             options = {"mode": "explore", "engine": "codex", "agent": "a", "save": {"name": "s"}}
             codex = console_api.prompt_preview(options)
-            self.assertEqual(codex["parts"][-1]["label"], "原生 Codex 工具映射（自动加）")
+            self.assertEqual(codex["parts"][0]["source"], "runtime_zh.md")
+            self.assertIn('文件用 read/glob/grep', codex['parts'][0]['text'])
+            self.assertNotIn('原生 Codex 工具映射', codex['text'])
             self.assertEqual(codex["text"], codex_prompt(config_for(options)))
 
             speed = console_api.prompt_preview({"mode": "speedrun", "agent": "a", "save": {"name": "s"}})

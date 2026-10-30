@@ -47,6 +47,12 @@ def current_settings(cfg):
     return settings
 
 
+def validate_runtime_template(text):
+    if '{agent_environment}' not in text:
+        raise ValueError('runtime_zh.md 缺少 {agent_environment}：请在控制台“提示词”中保留个人修改并补入该槽位，'
+                         '以接收当前执行器的工具与环境约定；原模板未覆盖。迁移说明见 docs/USAGE.md 4.13。')
+
+
 def runtime_prompt_parts(cfg, *, guide=None):
     """Render the editable startup template and keep local additions separate."""
     from .prompting import PromptPart, prompt_parts, read_part
@@ -56,15 +62,19 @@ def runtime_prompt_parts(cfg, *, guide=None):
         parts = prompt_parts(cfg)
     else:
         from .prompt_guide import guide_document
+        from .prompt_environment import environment_instructions, render_tool_references, tool_name
         guide = guide if guide is not None else guide_document(cfg)
         values = {
             '{current_settings}': json.dumps(current_settings(cfg), ensure_ascii=False, separators=(',', ':')),
             '{guide_index_path}': guide['index_path'],
-            '{game_tools}': '/'.join(game_tools(cfg)),
+            '{game_tools}': '/'.join(tool_name(cfg, name) for name in game_tools(cfg)),
+            '{agent_environment}': environment_instructions(cfg),
         }
+        template = read_part('runtime_zh.md').removesuffix('\n')
+        validate_runtime_template(template)
         # Replace only template tokens, never tokens inside inserted configuration/user text.
         text = re.sub('|'.join(re.escape(key) for key in values), lambda match: values[match.group()],
-                      read_part('runtime_zh.md').removesuffix('\n'))
+                      render_tool_references(template, cfg))
         parts = [PromptPart('当前任务与配置', text, 'runtime_zh.md')]
     if personal['text']:
         parts.append(PromptPart('本机个人追加要求', personal['text'], None, '\n\n'))

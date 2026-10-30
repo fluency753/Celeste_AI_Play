@@ -211,8 +211,15 @@ def kb_write(mode: str, path: str, text: str, mtime=None) -> dict:
 PLACEHOLDERS = {
     "{current_settings}": "本次任务与配置的 JSON 快照（存档、范围、权限、程序额度等）",
     "{guide_index_path}": "本次已发布的工作区操作指南索引路径",
+    "{agent_environment}": "按实际执行器与文件／程序能力生成工具名称、容器、阅读计量和图像送达约定",
+    "{explore_memory_rule}": "有工作区时维护 notes.md，否则依据当前观测与对话记录进展",
+    "{public_feedback_rule}": "当前执行器的公开解说入口：Codex commentary／narrate，Claude narrate",
+    "{room_reference_rule}": "可读观测参考入口；无文件能力时按当前观测核验",
+    "{program_reference_rule}": "本次可读的选读程序优化及工作区接口资料入口",
+    "{program_timeout_rule}": "当前执行器的程序时限参数（Claude timeout／Codex timeout_ms）与前台约定",
+    "{program_progress_rule}": "当前执行器的搜索进度说明入口（Claude description／Codex commentary）",
     "{interface}": "在这里插入 interface_zh.md（工具接口）",
-    "{explore_notes}": "在这里插入 explore_notes_zh.md（探索模式的笔记维护；执行器能读写工作区时才有）",
+    "{explore_notes}": "在这里插入 explore_notes_zh.md（记忆与公开反馈；笔记部分按工作区能力调整）",
     "{explore_programs}": "在这里插入 explore_programs_zh.md（探索模式的辅助程序；执行器能运行程序时才有）",
     "{explore_reading_rule}": "探索模式开局读什么：能读写工作区时先读必读清单并在笔记里记工具约定，否则按观测与工具说明学习",
     "{explore_reference_rule}": "探索模式基本规则、坐标格式与工具约定的出处（能读工作区时指向 /kb 的几份文件）",
@@ -311,10 +318,6 @@ def prompt_preview(options: dict) -> dict:
                     "overridden": p.source in overridden} for p in prompt_parts(cfg)])
     parts = [{"label": p.label, "text": p.text, "source": p.source, "sep": p.sep,
               "overridden": p.source in overridden} for p in runtime_prompt_parts(cfg, guide=guide)]
-    if cfg.engine == "codex":
-        from orchestrator.codex_agent import codex_tool_mapping
-        parts.append({"label": "原生 Codex 工具映射（自动加）", "text": codex_tool_mapping(cfg), "source": None,
-                      "sep": "\n\n", "overridden": False})
     first = None
     from orchestrator.execution import workspace_capabilities
     if cfg.study and workspace_capabilities(cfg).workspace_read:
@@ -323,7 +326,7 @@ def prompt_preview(options: dict) -> dict:
         if cfg.sim:
             k = next((i for i, rel in enumerate(files) if rel.startswith("reference/")), len(files))
             paths.insert(k, "/sim/README.md")
-        first = study_prompt(SimpleNamespace(container_paths=lambda: paths, minutes=cfg.study_minutes), cfg.sim)
+        first = study_prompt(SimpleNamespace(container_paths=lambda: paths, minutes=cfg.study_minutes), cfg.sim, cfg=cfg)
     executor = ("原生 GPT（Codex 的开发者指令）" if cfg.engine == "codex"
                 else "Claude Code（接在 Claude Code 自带的系统提示词之后）")
     return {"parts": parts, "text": "".join(p["sep"] + p["text"] for p in parts), "executor": executor,
@@ -358,6 +361,9 @@ def prompt_write(name: str, text, version) -> dict:
         raise ValueError("这个文件在你打开之后被改过，请重新打开再编辑")
     text = text.replace("\r\n", "\n")
     check_program_placeholders(text)
+    if name == 'runtime_zh.md':
+        from orchestrator.startup_prompt import validate_runtime_template
+        validate_runtime_template(text)
     repo = (PROMPTS / name).read_text(encoding="utf-8")
     override = OVERRIDES / name
     if text == repo:

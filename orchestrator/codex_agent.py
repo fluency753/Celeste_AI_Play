@@ -33,29 +33,9 @@ FILE_TOOLS = {'read': 'Read', 'glob': 'Glob', 'grep': 'Grep'}
 LEGACY_FILE_TOOLS = {'celeste_' + name: name for name in FILE_TOOLS}
 
 
-def codex_tool_mapping(cfg) -> str:
-    """原生 GPT 的提示词在 play_prompt 之后另加的工具映射（控制台的提示词预览也显示它）。"""
-    return ("# 原生 Codex 工具映射\n"
-            "你与原生 Shell、文件编辑工具都在 Docker 容器内，工作目录为 /workspace。"
-            "使用原生 Shell 运行程序，使用原生 apply_patch 编辑文件；游戏工具加 celeste_ 前缀。"
-            "读取与查找文件用 read（文件、目录列表、文本分页、图像）、glob（按文件名模式查找）"
-            "和 grep（按正则搜索内容），它们与 Claude 的 Read/Glob/Grep 对应：不运行程序、不消耗程序次数，"
-            "只读聊天和暂停时也可用；内容直接送达当前轮次。原生 Shell（包括 cat、ls、grep）一律按 Bash 管理并计次。"
-            "必读知识库必须显式使用专用读取工具，Shell 读取不计入准备进度。"
-            "恢复旧会话时，以主控本轮给出的文件工具名称映射及实际登记为准；不要调用未登记名称。"
-            "原生工具与 Claude 共用主控门禁、程序额度和零网络沙箱；不得绕过这些限制。"
-            "不连接宿主桥接、浏览器或其他服务，不启动子智能体。"
-            "只输出给观众的简短公开解说，不输出内部推理正文。"
-            "公开 commentary 会自动实时送到 HUD，可替代单纯为了更新文字的 narrate 调用；"
-            "每次操作后仍应立即公开说明下一步打算，不要持续静默。"
-            "游戏图像由应用直接作为当前轮的图像附件提供，工具结果只含文字；"
-            "附件的帧号、房间和screenshot/collision标签对应本次工具观测，不是新任务。"
-            "不要尝试从Base64文字看图或把图像编码打印进聊天。")
-
-
 def codex_prompt(cfg, *, guide=None) -> str:
     from .startup_prompt import runtime_prompt
-    return runtime_prompt(cfg, guide=guide) + "\n\n" + codex_tool_mapping(cfg)
+    return runtime_prompt(cfg, guide=guide)
 
 
 def program_cap(cfg) -> float:
@@ -147,20 +127,16 @@ class CodexRunner(ModelRecovery, SessionControls):
     async def tool_specs(self):
         page = {'offset': {'type': 'integer', 'minimum': 1}, 'limit': {'type': 'integer', 'minimum': 1}}
         tools = [spec('read',
-            'Read：读取容器内文件或列出目录。必读知识库必须使用本工具；文本带行号，offset为1起始行，limit为行数；'
-            '目录按目录项分页，符号链接只列出、不跟随。'
-            '支持文本、PNG/JPEG/GIF/WebP、PDF及Jupyter notebook；PDF pages为1起始页范围（最多20页）。'
-            '正文或图像会直接送达当前轮次，不打印图像编码。仅读取/workspace、/kb、/sim，不执行程序、不消耗程序次数。',
+            '读取文件／目录，限/workspace、/kb、/sim，不跟随符号链接、不计程序次数。准备必读须用本工具。'
+            'offset从1起、limit按行／目录项分页；文本或图像直接送达本轮。支持文本、图像、PDF、notebook；PDF pages从1起最多20页。',
             {'file_path': TEXT, 'path': {**TEXT, 'description': '旧版file_path别名，二者不能冲突'},
              **page, 'pages': TEXT}),
             spec('glob',
-                 'Glob：按文件名模式查找文件（如 "**/*.md"、"game/*.json"），结果按修改时间从新到旧。'
-                 'path 为起始目录，默认 /workspace；仅限 /workspace、/kb、/sim，不跟随符号链接，不运行程序、不消耗程序次数。',
+                 '按pattern通配符查找文件，修改时间倒序；path默认/workspace，范围同read，不跟随链接、不计程序次数。offset从1起、limit分页。',
                  {'pattern': TEXT, 'path': TEXT, **page}, ['pattern']),
             spec('grep',
-                 'Grep：按 Python 正则搜索文件内容。path 为文件或目录（默认 /workspace），glob 过滤文件名（如 "*.md"）；'
-                 'output_mode 为 files_with_matches（默认，文件列表）、content（匹配行，带行号与 context 上下文）或 count。'
-                 '仅限 /workspace、/kb、/sim，不跟随符号链接，跳过二进制文件，不运行程序、不消耗程序次数；不计入知识库阅读进度。',
+                 '按Python正则搜索；path默认/workspace，glob过滤文件。output_mode为files_with_matches（默认）、content或count；'
+                 'context给上下文行数，offset从1起。范围同read，跳过链接与二进制，不计程序次数或必读进度。',
                  {'pattern': TEXT, 'path': TEXT, 'glob': TEXT,
                   'output_mode': {'type': 'string', 'enum': ['files_with_matches', 'content', 'count']},
                   'ignore_case': {'type': 'boolean'}, 'context': {'type': 'integer', 'minimum': 0, 'maximum': 20},
@@ -584,12 +560,13 @@ class CodexRunner(ModelRecovery, SessionControls):
                 facts += '\n本次预置模拟器已开放，资料位于 /sim。'
             facts += ('\n本次只准备，不启动游戏；完成后调用 celeste_finish_preparation 提交完成信号。'
                       if self.prepare_only else '\n本次准备完成后开放试玩工具。')
-            message = notification('prepare', facts=facts).replace('Read 工具', self._reader_name() + ' 工具')
+            message = notification('prepare', facts=facts, cfg=self.cfg)
+            message = re.sub(r'(?<![A-Za-z0-9_])read(?=\s+工具)', lambda _: self._reader_name(), message)
             if self.prepare_only and self.cfg.sim:
                 message += '\n' + notification('prepare_sim')
             return message
         from .prompting import first_play_prompt
-        return self.resume_note or first_play_prompt(self.cfg).replace('observe', 'celeste_observe').replace('act ', 'celeste_act ')
+        return self.resume_note or first_play_prompt(self.cfg)
 
     async def _resume_thread(self, params):
         # Resume the model's history without hydrating the complete transcript into

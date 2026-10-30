@@ -38,7 +38,7 @@ def catalog():
             for key, label in _LABELS.items()]
 
 
-def notification(key, facts=''):
+def notification(key, facts='', *, cfg=None):
     """Render an event body without letting editable prose replace controller facts."""
     if not isinstance(key, str) or key not in _LABELS:
         raise ValueError('未知按钮提示词')
@@ -62,4 +62,8 @@ def notification(key, facts=''):
         parts.append('本机消息模板读取失败，已用默认说明。')
     if key in _CONTINUATIONS:
         parts.append(_CONTINUATION_NOTE)
-    return '\n'.join(parts)
+    text = '\n'.join(parts)
+    if cfg is not None:
+        from .prompt_environment import render_tool_references
+        text = render_tool_references(text, cfg)
+    return text
