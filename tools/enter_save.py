@@ -182,40 +182,93 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
 
 
 MAP_MENUS = ("OuiChapterSelect", "OuiChapterPanel")
+PANEL_SETTLE = 40          # 章节面板切换 A/B 面与检查点列表要半秒（OuiChapterPanel.SwapRoutine），期间不接受按键
+CONFIRM_WAIT = 90          # 面板确认进入后 0.7 秒（StartRoutine）才开始载入；超过这么多帧还停在面板才重按确认
 
 
-def travel_to(c: BridgeClient, save_name: str, chapter: int, checkpoint: int = 0, *, save_slot: int | None = None,
-              cutscene_mode: str = 'auto', should_stop=None, max_actions: int = 120, on_map=None) -> dict:
-    """主控代为换图（智能体的 travel 请求）：在关卡里先用暂停菜单"返回地图"（与玩家相同，游戏照常保存进度），
-    结算画面先确认；回到选章地图、存档写完之后，用桥接 enter_checkpoint 进入第 chapter 章 A 面的第 checkpoint 个
-    检查点（0 = 章节开头；与在选章面板里选它相同），再照常走到第一帧可操作（入场明信片、开场剧情按剧情模式处理）。
-    全程正常速度，录像不快进。目标是否已解锁由调用方按存档核对；离开关卡的许可由调用方给（controller_navigation）。
-    on_map(obs)：回到选章地图、进入目标之前，用这一帧地图观测回调一次（调用方据此确认已离开原关卡）。"""
-    if not c.call("hello").get("checkpoints"):
-        raise RuntimeError("主控代为换图需要 CelesteAIBridge 1.0.6 或更新版本（enter_checkpoint）")
+def travel_to(c: BridgeClient, save_name: str, chapter: int, panel_slot, *, save_slot: int | None = None,
+              cutscene_mode: str = 'auto', should_stop=None, max_actions: int = 160, on_map=None) -> dict:
+    """主控代为换图（智能体的 travel 请求），按玩家的那几步走，全程正常速度、录像不快进：
+    关卡里用暂停菜单"返回地图"（游戏照常保存进度），结算画面先确认；回到地图、存档写完后，在选章页左右选到第 chapter 章，
+    打开章节面板，选 A 面，确认后在检查点列表里左右选到目标、确认进入，再照常走到第一帧可操作（入场明信片、开场剧情按剧情模式处理）。
+    panel_slot(map_obs) -> (序号, 列表长度)：目标在面板检查点列表里的位置，回到地图、存档写完后调用一次（调用方据此重读存档；
+    列表第一项是章节开头，之后是存档里到过的检查点）。面板实际列出的项数与此不符时停下，不猜。
+    目标是否已解锁由调用方按存档核对；离开关卡与进入目标的许可由调用方给（controller_navigation）。
+    on_map(obs)：回到地图、开始选章之前，用这一帧地图观测回调一次（调用方据此确认已离开原关卡）。
+    面板只在空闲（Focused）时接受按键：返回地图后的成绩动画、面板切换期间按下的键游戏直接忽略，这里按观测到的状态重按；
+    确认进入后面板立刻不再接受按键，重按不会再进一次。"""
     obs = c.call("observe", **QUIET)["obs"]
+    target = None
+    confirms = waited = 0
     for _ in range(max_actions):
         if should_stop is not None and should_stop():
             return obs
         scene, menu = obs.get("scene"), obs.get("menu") or {}
+        if confirms and scene != "Overworld":
+            break                                      # 已开始载入目标章节
         if scene in ("Level", "IntroVignette"):
             obs = leave_level_by_pause_menu(c, allowed_exit_ids=("menu_pause_return", "intro_vignette_quit"))
             continue
         if scene == "AreaComplete":
-            obs = press(c, "C", settle=30)["obs"]   # 结算画面：确认后回到地图
+            obs = press(c, "C", settle=30)["obs"]       # 结算画面：确认后回到地图
             continue
-        if scene == "Overworld" and not menu.get("next") and menu.get("current") in MAP_MENUS and not obs.get("saving"):
-            break
-        obs = step(c, ["10"], speed=1)["obs"]       # 转场、载入、存档写入中
+        current = menu.get("current")
+        if scene != "Overworld" or menu.get("next") or obs.get("saving"):
+            obs = step(c, ["10"], speed=1)["obs"]       # 转场、载入、存档写入中
+            continue
+        if current not in MAP_MENUS:
+            raise RuntimeError(f"现在停在 {current}，不是选章地图，没有换图")
+        if target is None:
+            if (obs.get("save") or {}).get("name") != save_name or (
+                    save_slot is not None and (obs.get("save") or {}).get("slot") != save_slot):
+                raise RuntimeError("当前载入的不是本次任务的存档，没有换图")
+            if on_map is not None:
+                on_map(obs)
+            target = tuple(panel_slot(obs)) if callable(panel_slot) else tuple(panel_slot)
+        want, count = target
+        if current == "OuiChapterSelect":
+            area = menu.get("area")
+            if type(area) is not int:
+                raise RuntimeError("选章页没有报告光标所在的章节，没有换图")
+            obs = press(c, "R" if chapter > area else "L" if chapter < area else "C", settle=20 if area != chapter else 30)["obs"]
+            continue
+        if menu.get("panelArea") != chapter:
+            obs = press(c, "B", settle=30)["obs"]        # 打开的是别的章节面板（返回地图后停在刚离开的那一章）：退回选章页
+            continue
+        if menu.get("panelSide") != "Normal" and not menu.get("panelSelectingMode"):
+            obs = press(c, "B", settle=PANEL_SETTLE)["obs"]   # 停在别的面（B/C 面）的检查点列表：先退回选面
+            continue
+        if menu.get("panelSelectingMode"):
+            if menu.get("panelSide") != "Normal":
+                obs = press(c, "L", settle=PANEL_SETTLE)["obs"]   # A 面在最左
+                continue
+            if count == 1:                               # 存档里这一章没有到过的检查点：确认即从开头进入
+                if confirms and waited < CONFIRM_WAIT:
+                    obs = step(c, ["10"], speed=1)["obs"]
+                    waited += 10
+                    continue
+                confirms, waited = confirms + 1, 0
+            obs = press(c, "C", settle=PANEL_SETTLE)["obs"]
+        else:
+            listed = menu.get("panelCheckpointCount")
+            if listed != count:
+                raise RuntimeError(f"章节面板列出 {listed} 项，按存档应为 {count} 项（开头加到过的检查点），没有进入")
+            at = menu.get("panelCheckpoint")
+            if type(at) is not int:
+                raise RuntimeError("章节面板没有报告选中的检查点，没有进入")
+            if at != want:
+                obs = press(c, "R" if want > at else "L", settle=PANEL_SETTLE)["obs"]
+                continue
+            if confirms and waited < CONFIRM_WAIT:
+                obs = step(c, ["10"], speed=1)["obs"]    # 确认后约 0.7 秒才开始载入：先等，仍停在面板才重按
+                waited += 10
+                continue
+            confirms, waited = confirms + 1, 0
+            obs = press(c, "C", settle=PANEL_SETTLE)["obs"]
+        if confirms > 6:
+            raise RuntimeError("在章节面板上确认进入后一直没有开始载入，没有换图")
     else:
-        raise RuntimeError(f"未能在 {max_actions} 步内回到选章地图：\n{summarize_obs(obs)}")
-    if (obs.get("save") or {}).get("name") != save_name or (
-            save_slot is not None and (obs.get("save") or {}).get("slot") != save_slot):
-        raise RuntimeError("当前载入的不是本次任务的存档，没有换图")
-    if on_map is not None:
-        on_map(obs)
-    c.call("enter_checkpoint", chapter=chapter, checkpoint=checkpoint)
-    step(c, ["10"], speed=1)
+        raise RuntimeError(f"未能在 {max_actions} 步内进入目标：\n{summarize_obs(obs)}")
     return _enter_save(c, save_name, max_actions, chapter, 1, should_stop, False, save_slot, cutscene_mode, 0)
 
 

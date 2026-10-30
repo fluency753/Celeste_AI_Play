@@ -2033,10 +2033,11 @@ class GameSession:
 
     def travel(self, chapter, checkpoint, thought: str) -> tuple[dict, str | None, list[str]]:
         """智能体请求主控代为换图（travel 工具，计划外地图开关打开时注册，见 travel.py）。核对目标在存档里已解锁，
-        在关卡里先用暂停菜单返回地图，再从选章地图进入目标检查点，停在第一帧可操作时交回。换图期间智能体不操作，
-        地图上不再出现它边看边想的空转画面。思考僵直不在这里结算：换图前后的思考照常算进下一次 act。"""
+        然后按玩家的那几步代按：关卡里用暂停菜单返回地图，在选章地图上选章节、打开面板、选 A 面和检查点、进入，
+        停在第一帧可操作时交回。换图期间智能体不操作，地图上不再出现它边看边想的空转画面。
+        思考僵直不在这里结算：换图前后的思考照常算进下一次 act。"""
         from .action_policy import controller_navigation, permissions_for
-        from .travel import available, locked_reason, read_progress, resolve
+        from .travel import available, locked_reason, panel_position, read_progress, resolve
         from enter_save import travel_to  # noqa: WPS433（tools 目录已在 sys.path 里）
         self._require_reload_observation()
         if self.done:
@@ -2103,11 +2104,18 @@ class GameSession:
             def on_map(map_obs):
                 passed_map.append(True)
                 self.navigation.note_scene(map_obs)     # 已经离开原关卡（换下一截时的确认要求先离开）
+
+            def panel_slot(map_obs):
+                # 返回地图时游戏刚写完存档：重读一次，面板按存档里检查点的记录顺序列出（含这次离开前新到的）
+                try:
+                    return panel_position(table, read_progress((map_obs.get('save') or {}).get('file')), dest)
+                except (OSError, ValueError, ET_ERRORS) as exc:
+                    raise RuntimeError(f'回到地图后读不到存档里的检查点（{exc}）') from exc
             started = time.monotonic()
             print(f"[run] 智能体请求换图：{dest.label}", flush=True)
             try:
                 with controller_navigation(self.client, self.cfg, sid=dest.sid, slot=self.cfg.save_slot):
-                    travel_to(self.client, self.cfg.save, dest.chapter, dest.checkpoint, save_slot=self.cfg.save_slot,
+                    travel_to(self.client, self.cfg.save, dest.chapter, panel_slot, save_slot=self.cfg.save_slot,
                               cutscene_mode=self.cfg.cutscene_mode, should_stop=self.goals.stop_motion.is_set,
                               on_map=on_map)
                 failure = None
@@ -2134,6 +2142,8 @@ class GameSession:
             else:
                 room = (obs.get('level') or {}).get('room')
                 notes = [f'主控已把你送到{dest.label}：现在在房间 {room}，第一帧可操作，游戏冻结中；继续游玩。']
+                if dest.checkpoint > 0 and dest.room and room != dest.room:
+                    notes.append(f'注意：进到的房间 {room} 不是这个检查点的房间 {dest.room}，请先看观测确认位置。')
             if self.chapter_finished and not self.done and obs.get('scene') == 'Level':
                 piece = self.navigation.target
                 if piece is not None and self._confirm_next_entry(obs, require_departure=True):

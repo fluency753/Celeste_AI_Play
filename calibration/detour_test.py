@@ -154,6 +154,19 @@ class DetourGame:
                 self.map, self.state, self.wait = self.panel_target, 'loading', 15
         return None
 
+    def _frame(self, before, events):
+        """每帧按键之后调用（子类在这里推进菜单动画等计时）。"""
+
+    def _wait_done(self, events):
+        """转场等待结束：返回地图到选章页，心的动画到结算，载入到关卡第一帧。"""
+        if self.state == 'exit':
+            self.state = 'select'
+        elif self.state == 'heart':
+            self.state = 'results'
+        else:
+            self._enter(*self.map)
+            events.append({'type': 'controllable'})
+
     def call(self, command, on_event=None, **options):
         self.commands.append(command)
         if command == 'hello':
@@ -188,18 +201,13 @@ class DetourGame:
                     if block:
                         stop = block['stop']
                         break
+                self._frame(before, events)
                 if self.state == 'level' and before == 'level' and not self.completed:
                     self.ticks += 170_000
                 if self.state in {'exit', 'loading', 'heart'} and before == self.state:
                     self.wait -= 1
                     if self.wait <= 0:
-                        if self.state == 'exit':
-                            self.state = 'select'
-                        elif self.state == 'heart':
-                            self.state = 'results'
-                        else:
-                            self._enter(*self.map)
-                            events.append({'type': 'controllable'})
+                        self._wait_done(events)
                 if self.completed and self.state in {'ending', 'pause', 'heart'}:
                     events.append({'type': 'complete'})
                 for event in events:

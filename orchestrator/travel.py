@@ -1,10 +1,10 @@
 """主控代为换图（travel 工具，只在计划外地图开关打开时注册）。
 
 智能体自己用暂停菜单回地图、在选章界面里一步步选，地图不冻结，思考的全程都会被录进录像。改为智能体发请求：
-主控核对目标在存档里已解锁，在关卡里先用暂停菜单返回地图（与玩家相同，游戏照常保存进度），再从选章地图进入
-指定章节 A 面的检查点，走完入场与开场剧情，停在第一帧可操作时交回。
+主控核对目标在存档里已解锁，然后替它按玩家的那几步——关卡里用暂停菜单"返回地图"（游戏照常保存进度），
+在选章地图上左右选到目标章节、打开章节面板、选 A 面、选检查点、进入——走完入场与开场剧情，停在第一帧可操作时交回。
 
-这里只放目标解析、存档进度读取与核对、说明文字；执行在 GameSession.travel 与 tools/enter_save.travel_to。
+这里只放目标解析、存档进度读取与核对、面板位置、说明文字；执行在 GameSession.travel 与 tools/enter_save.travel_to。
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class Destination:
 @dataclass(frozen=True)
 class SaveProgress:
     unlocked_areas: int                       # 存档的 UnlockedAreas：A 面已解锁到第几章
-    checkpoints: dict                         # {章节编号: A 面已到过的检查点房间}
+    checkpoints: dict                         # {章节编号: A 面已到过的检查点房间（按存档里记录的顺序）}
 
 
 def _points(table: dict, chapter: int) -> list[dict]:
@@ -121,7 +121,7 @@ def read_progress(path) -> SaveProgress:
         unlocked = int((root.findtext('UnlockedAreas') or '0').strip())
     except ValueError:
         unlocked = 0
-    reached: dict[int, frozenset] = {}
+    reached: dict[int, tuple] = {}
     areas = root.find('Areas')
     for area in (list(areas) if areas is not None else []):
         try:
@@ -134,8 +134,8 @@ def read_progress(path) -> SaveProgress:
         modes = area.find('Modes')
         first = list(modes)[0] if modes is not None and len(list(modes)) else None
         found = first.find('Checkpoints') if first is not None else None
-        reached[ident] = frozenset((item.text or '').strip() for item in (list(found) if found is not None else [])
-                                   if (item.text or '').strip())
+        rooms = [(item.text or '').strip() for item in (list(found) if found is not None else [])]
+        reached[ident] = tuple(dict.fromkeys(room for room in rooms if room))
     return SaveProgress(unlocked, reached)
 
 
@@ -143,7 +143,7 @@ def locked_reason(progress: SaveProgress, dest: Destination) -> str | None:
     """目标在存档里还没解锁时的说明；已解锁返回 None。"""
     if dest.chapter > progress.unlocked_areas:
         return f'{chapter_name(dest.sid)}在存档里还没有解锁'
-    if dest.checkpoint > 0 and dest.room not in progress.checkpoints.get(dest.chapter, frozenset()):
+    if dest.checkpoint > 0 and dest.room not in progress.checkpoints.get(dest.chapter, ()):
         return f'存档里还没有到过{dest.label}'
     return None
 
@@ -155,10 +155,22 @@ def available(table: dict, progress: SaveProgress) -> str:
         if chapter in EXCLUDED or chapter > progress.unlocked_areas:
             continue
         points = _points(table, chapter)
-        reached = progress.checkpoints.get(chapter, frozenset())
+        reached = progress.checkpoints.get(chapter, ())
         names = ['0 开头'] + [f'{i} {p.get("level")}' for i, p in enumerate(points) if i > 0 and str(p.get('level')) in reached]
         parts.append(f'{chapter}（{chapter_name_by_id(chapter)}）：' + '、'.join(names))
     return '；'.join(parts)
+
+
+def panel_position(table: dict, progress: SaveProgress, dest: Destination) -> tuple[int, int]:
+    """目标在选章面板检查点列表里的位置：(序号, 列表长度)。与游戏 OuiChapterPanel 相同：第一项是章节开头，
+    后面按存档 A 面 Checkpoints 记录的顺序（不是章节里的先后）列出本章确有的检查点。"""
+    rooms = {str(p.get('level')) for p in _points(table, dest.chapter)[1:]}
+    listed = [room for room in progress.checkpoints.get(dest.chapter, ()) if room in rooms]
+    if dest.checkpoint == 0:
+        return 0, 1 + len(listed)
+    if dest.room not in listed:
+        raise ValueError(f'存档里还没有到过{dest.label}')
+    return 1 + listed.index(dest.room), 1 + len(listed)
 
 
 def description() -> str:
@@ -166,6 +178,6 @@ def description() -> str:
     return ('请主控代为换图：离开当前地图，进入另一章（或同一章）A 面的某个检查点。chapter 为章节编号（游戏内部编号，'
             '核心与告别名称里的序号与编号不同）：' + chapter_numbers() + '；也可写章节名称。checkpoint 写整数是检查点序号'
             '（0 = 章节开头，1 起依次为各检查点），写字符串按检查点的房间名或名称匹配（"6" 是房间 6，不是序号 6）。只限存档里已解锁章节的 A 面、已到过的检查点。'
-            '主控在关卡里先用暂停菜单返回地图（游戏照常保存进度，与玩家相同），再从选章地图进入目标，走完入场与开场剧情，'
-            '停在第一帧可操作时交回并返回新地图的完整观测；换图过程不需要你操作。thought：一两句话说明为什么去，'
+            '主控替你按玩家的那几步：关卡里用暂停菜单返回地图（游戏照常保存进度），在选章地图上选章节、打开面板、选 A 面和检查点、'
+            '进入，走完入场与开场剧情，停在第一帧可操作时交回并返回新地图的完整观测；换图过程不需要你操作。thought：一两句话说明为什么去，'
             '规则与 act 的 thought 相同，会显示给观众。不要自己用暂停菜单返回地图或在选章界面操作。')
