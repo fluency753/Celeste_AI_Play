@@ -68,8 +68,11 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
     async def read(self, offset, *, record=True):
         with patch('orchestrator.codex_agent.read_file', return_value=self.file_result(offset)) as files:
             result = await self.runner._request('item/tool/call', {'callId': f'read-{offset}',
-                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md', 'offset': offset, 'limit': 1}})
-        files.assert_called_once_with('container', {'file_path': '/kb/README.md', 'offset': offset, 'limit': 1})
+                'tool': 'read', 'arguments': {'file_path': '/kb/README.md', 'offset': offset, 'limit': 1}})
+        files.assert_called_once()
+        self.assertEqual(files.call_args.args[0], 'container')
+        self.assertEqual(files.call_args.args[1], {'file_path': '/kb/README.md', 'offset': offset, 'limit': 1,
+            '_tool_names': {'read': 'read', 'glob': 'glob', 'grep': 'grep'}})
         self.assertTrue(result['success'])
         if record:
             self.record_steer()
@@ -163,7 +166,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.rpc.request = steer
         with patch('orchestrator.codex_agent.read_file', return_value=self.file_result()):
             task = asyncio.create_task(self.runner._request('item/tool/call', {
-                'callId': 'hidden-kb', 'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}}))
+                'callId': 'hidden-kb', 'tool': 'read', 'arguments': {'file_path': '/kb/README.md'}}))
             await asyncio.wait_for(entered.wait(), 1)
             self.assertFalse(self.study.read['README.md'])
             release.set()
@@ -199,7 +202,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.pausing = True
         with patch('orchestrator.codex_agent.read_file', return_value=self.file_result()):
             result = await self.runner._request('item/tool/call', {'callId': 'pausing-kb',
-                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}})
+                'tool': 'read', 'arguments': {'file_path': '/kb/README.md'}})
         self.assertFalse(result['success'])
         self.assertIn('交付失败', response_text(result))
         self.runner.rpc.request.assert_not_awaited()
@@ -209,7 +212,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.rpc.request = AsyncMock(side_effect=RuntimeError('attachment delivery failed'))
         with patch('orchestrator.codex_agent.read_file', return_value=self.file_result()):
             result = await self.runner._request('item/tool/call', {'callId': 'failed-kb',
-                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}})
+                'tool': 'read', 'arguments': {'file_path': '/kb/README.md'}})
         self.assertFalse(result['success'])
         self.assertFalse(self.study.read['README.md'])
 
@@ -218,7 +221,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         result_file = self.file_result(images=[{'mimeType': 'image/png', 'data': 'AAAA'}])
         with patch('orchestrator.codex_agent.read_file', return_value=result_file):
             result = await self.runner._request('item/tool/call', {'callId': 'failed-kb-image',
-                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}})
+                'tool': 'read', 'arguments': {'file_path': '/kb/README.md'}})
         self.assertFalse(result['success'])
         self.assertFalse(self.study.read['README.md'])
 
@@ -226,7 +229,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.rpc.request = AsyncMock(return_value={'turnId': 'replacement'})
         with patch('orchestrator.codex_agent.read_file', return_value=self.file_result()):
             result = await self.runner._request('item/tool/call', {'callId': 'wrong-turn-kb',
-                'tool': 'celeste_read', 'arguments': {'file_path': '/kb/README.md'}})
+                'tool': 'read', 'arguments': {'file_path': '/kb/README.md'}})
         self.assertFalse(result['success'])
         self.assertFalse(self.study.read['README.md'])
 
@@ -249,7 +252,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.chat_only = self.runner.paused = True
         with patch('orchestrator.codex_agent.read_file', return_value=page):
             result = await self.runner._request('item/tool/call', {'callId': 'notes',
-                'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/notes.md'}})
+                'tool': 'read', 'arguments': {'file_path': '/workspace/notes.md'}})
         self.assertTrue(result['success'])
         text = response_text(result)
         self.assertLess(len(text), 2000)
@@ -271,7 +274,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         with patch('orchestrator.codex_agent.read_file', return_value={
                 'kind': 'image', 'path': '/workspace/picture.png', 'images': [image], 'text': 'picture'}):
             result = await self.runner._request('item/tool/call', {'callId': 'picture',
-                'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/picture.png'}})
+                'tool': 'read', 'arguments': {'file_path': '/workspace/picture.png'}})
         self.assertTrue(result['success'])
         self.assertNotIn('AAAA', json.dumps(result))
         params = self.runner.rpc.request.call_args.args[1]
@@ -283,7 +286,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         with patch('orchestrator.codex_agent.read_file', return_value={
                 'kind': 'error', 'text': 'file missing'}):
             result = await self.runner._request('item/tool/call', {'callId': 'missing',
-                'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/missing'}})
+                'tool': 'read', 'arguments': {'file_path': '/workspace/missing'}})
         self.assertFalse(result['success'])
         self.assertIn('file missing', json.dumps(result))
         self.runner.rpc.request.assert_not_awaited()
@@ -300,7 +303,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                                            else AsyncMock(return_value={'turnId': 'turn'}))
                 with patch('orchestrator.codex_agent.read_file', **worker):
                     result = await self.runner._request('item/tool/call', {'callId': label,
-                        'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/x'}})
+                        'tool': 'read', 'arguments': {'file_path': '/workspace/x'}})
                 self.assertFalse(result['success'])
                 # The tool result is what the model receives; only then is the reminder delivered.
                 self.assertIn('NOTE-REMINDER-TEXT', response_text(result))
@@ -349,7 +352,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(worker=worker), patch.object(self.metrics, 'take_live_reminder', return_value=40.0), \
                     patch('orchestrator.codex_agent.read_file', **worker):
                 result = await self.runner._request('item/tool/call', {'callId': 'live-read',
-                    'tool': 'celeste_read', 'arguments': {'file_path': '/workspace/notes.md'}})
+                    'tool': 'read', 'arguments': {'file_path': '/workspace/notes.md'}})
             self.assertIn(LIVE_NOTE, response_text(result))
 
     async def test_glob_grep_and_listing_need_no_program_budget_in_readonly_chat_or_pause(self):
@@ -358,19 +361,20 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.native_session = SimpleNamespace(cfg=self.cfg, program_guard=lambda: '当前为只读聊天',
                                                      program_run_denied=lambda: charges.append('program'))
         self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(), decide=AsyncMock(return_value=(True, '')))
-        for tool, operation in (('celeste_glob', 'glob'), ('celeste_grep', 'grep')):
+        for tool, operation in (('glob', 'glob'), ('grep', 'grep')):
             found = {'kind': operation, 'path': '/workspace', 'text': '/workspace/notes.md', 'images': [],
                      'matches': 1, 'truncated': False, 'next_offset': None}
             with patch('orchestrator.codex_agent.search_files', return_value=found) as search:
                 result = await self.runner._request('item/tool/call', {'callId': tool, 'tool': tool,
                     'arguments': {'pattern': '*.md'}})
             self.assertTrue(result['success'], result)
-            search.assert_called_once_with('container', operation, {'pattern': '*.md'})
+            search.assert_called_once_with('container', operation, {'pattern': '*.md',
+                '_tool_names': {'read': 'read', 'glob': 'glob', 'grep': 'grep'}})
             self.assertIn('/workspace/notes.md', self.steer_params()['input'][0]['text'])
         listing = {'kind': 'directory', 'path': '/workspace', 'text': '目录 /workspace', 'images': [],
                    'entries': 1, 'truncated': False, 'next_offset': None}
         with patch('orchestrator.codex_agent.read_file', return_value=listing):
-            result = await self.runner._request('item/tool/call', {'callId': 'ls', 'tool': 'celeste_read',
+            result = await self.runner._request('item/tool/call', {'callId': 'ls', 'tool': 'read',
                 'arguments': {'file_path': '/workspace'}})
         self.assertTrue(result['success'])
         self.assertIn('目录列表', response_text(result))
@@ -417,12 +421,12 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 self.runner.study = self.study if study else None
                 with patch('builtins.print') as log:
                     self.runner._validate_resumed_tools({'path': str(path)})
-                self.assertIn('celeste_read', self.runner.tool_notice)
-                self.assertIn('celeste_read', ' '.join(str(call.args[0]) for call in log.call_args_list))
+                self.assertIn('read', self.runner.tool_notice)
+                self.assertIn('read', ' '.join(str(call.args[0]) for call in log.call_args_list))
 
     async def test_resumed_session_without_file_tools_reaches_model_with_notice(self):
         path = self.root / 'old-thread.jsonl'
-        tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)] + [{'name': 'celeste_read'}]
+        tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)] + [{'name': 'read'}]
         path.write_text(json.dumps({'payload': {'dynamic_tools': tools}}), encoding='utf-8')
         runner = CodexRunner(self.cfg, self.root / 'resume', None, self.metrics, 'container', None,
                              session_id='original', resume=True, resume_note='继续试玩。')
@@ -436,11 +440,12 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError('captured first turn')
             return {}
         runner.rpc.start, runner.rpc.close, runner.rpc.request = AsyncMock(), AsyncMock(), rpc_request
-        with patch('builtins.print'), self.assertRaisesRegex(RuntimeError, 'captured first turn'):
+        with patch('builtins.print'), patch('orchestrator.model_catalog.load_models', return_value={'models': []}), \
+                self.assertRaisesRegex(RuntimeError, 'captured first turn'):
             await runner.run()
         self.assertIn('继续试玩。', sent[0])
-        self.assertIn('celeste_glob', sent[0])
-        self.assertIn('celeste_read 读取目录', sent[0])
+        self.assertIn('glob', sent[0])
+        self.assertIn('read 读取目录', sent[0])
         runner.close_events()
         # A resumed chat turn carries the user's message and the same notice.
         chat = CodexRunner(self.cfg, self.root / 'resume-chat', None, self.metrics, 'container', None,
@@ -452,23 +457,29 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 self.assertRaisesRegex(RuntimeError, 'captured first turn'):
             await asyncio.wait_for(chat.run(), 5)
         self.assertIn('复盘一下上一章', sent[1])
-        self.assertIn('celeste_glob', sent[1])
+        self.assertIn('glob', sent[1])
         chat.close_events()
 
-    async def test_codex_study_reminders_name_celeste_read_and_claude_keeps_read(self):
+    async def test_codex_study_reminders_name_read_and_claude_keeps_read(self):
         from calibration.collision_contract_test import FakeBridge
         from orchestrator.game_session import GameSession
         from orchestrator.server import build_server
-        expected = {'codex': '请用 celeste_read 读完这些行',
+        expected = {'codex': '请用 read 读完这些行',
                     'claude': '请用 Read 读完这些行再开始（文件长时 Read 会截断，用 offset 与 limit 接着读，直到最后一行）。'}
-        for engine, sentence in expected.items():
-            with self.subTest(engine=engine):
+        cases = [('codex', 'read', expected['codex']),
+                 ('codex', 'celeste_read', '请用 celeste_read 读完这些行'),
+                 ('claude', 'Read', expected['claude'])]
+        for engine, reader, sentence in cases:
+            with self.subTest(engine=engine, reader=reader):
                 cfg = RunConfig(agent=f'remind-{engine}', save='test', model='test', engine=engine)
-                run = self.root / engine
+                run = self.root / (engine + '-' + reader)
                 run.mkdir()
                 metrics = Metrics(run / 'metrics.json', 'remind', 'test', 'high', 600)
                 session = GameSession(cfg, run, metrics)
                 session.client = FakeBridge()
+                if engine == 'codex':
+                    self.runner.registered_tools = {reader}
+                    session.file_tool_name = self.runner._file_tool_name
                 try:
                     server = build_server(session, KbStudy(self.kb, 10))
                     result = await server.call_tool('observe', {})
@@ -478,13 +489,94 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(sentence, text)
                 if engine == 'codex':
                     self.assertNotIn('请用 Read', text)
+                if reader == 'celeste_read':
+                    self.assertNotIn('请用 read ', text)
         # Claude's own reminder text is unchanged.
         self.assertIn(expected['claude'], self.study.reminder())
 
     def test_preparation_prompt_requires_explicit_read_without_disabling_native_programming(self):
         self.runner.prepare_only = True
         prompt = self.runner._first_prompt()
-        self.assertIn('celeste_read', prompt)
+        self.assertIn('read', prompt)
+
+    def register_file_tools(self, names):
+        path = self.root / 'file-registration.jsonl'
+        registered = {'celeste_' + name for name in game_tools(self.cfg)} | set(names)
+        path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name}
+            for name in sorted(registered)]}}), encoding='utf-8')
+        self.runner._validate_resumed_tools({'path': str(path)})
+        self.assertEqual(self.runner.registered_tools, registered)
+        return registered
+
+    def test_complete_legacy_catalog_preserves_names_and_uses_registered_reader_in_prompt(self):
+        self.register_file_tools({'celeste_read', 'celeste_glob', 'celeste_grep'})
+        self.assertEqual({name: self.runner._file_tool_name(name) for name in ('read', 'glob', 'grep')},
+                         {'read': 'celeste_read', 'glob': 'celeste_glob', 'grep': 'celeste_grep'})
+        self.runner.prepare_only = True
+        prompt = self.runner._first_prompt()
+        self.assertIn('用 celeste_read', prompt)
+        self.assertNotRegex(prompt, r'用 read(?:\s|，|的)')
+        self.assertIn('celeste_glob', self.runner.tool_notice)
+        self.assertIn('celeste_grep', self.runner.tool_notice)
+
+    def test_mixed_catalog_resolves_each_file_tool_and_prefers_canonical(self):
+        self.register_file_tools({'read', 'celeste_read', 'celeste_glob', 'grep', 'celeste_grep'})
+        self.assertEqual({name: self.runner._file_tool_name(name) for name in ('read', 'glob', 'grep')},
+                         {'read': 'read', 'glob': 'celeste_glob', 'grep': 'grep'})
+        self.assertEqual(self.runner._reader_name(), 'read')
+
+    def test_missing_single_search_tool_does_not_disable_registered_reader(self):
+        for missing in ('glob', 'grep'):
+            with self.subTest(missing=missing):
+                self.runner.tool_notice = ''
+                self.register_file_tools({'read', 'glob', 'grep'} - {missing})
+                self.assertIsNone(self.runner._file_tool_name(missing))
+                self.assertEqual(self.runner._file_tool_name('read'), 'read')
+                self.assertIn(missing, self.runner.tool_notice)
+                self.runner.prepare_only = True
+                self.assertIn('用 read', self.runner._first_prompt())
+
+    def test_missing_only_read_blocks_unfinished_study_but_allows_post_study_resume(self):
+        with self.assertRaisesRegex(RuntimeError, '没有登记 read'):
+            self.register_file_tools({'glob', 'grep'})
+        self.assertIsNone(self.runner._file_tool_name('read'))
+        self.assertEqual(self.runner._file_tool_name('glob'), 'glob')
+        self.assertEqual(self.runner._file_tool_name('grep'), 'grep')
+        self.runner.study = None
+        self.register_file_tools({'glob', 'grep'})
+        self.assertIn('本会话未登记', self.runner._reader_name())
+        self.assertIn('只读聊天中无法读取文件', self.runner.tool_notice)
+
+    async def test_canonical_and_legacy_file_requests_share_backend_gate_and_kb_receipt(self):
+        self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(),
+                                          decide=AsyncMock(return_value=(True, '')))
+        self.register_file_tools({'celeste_read', 'celeste_glob', 'celeste_grep'})
+        before = self.metrics.state.tool_calls
+        for name in ('read', 'celeste_read'):
+            with self.subTest(name=name), patch('orchestrator.codex_agent.read_file',
+                    return_value=self.file_result()) as worker:
+                result = await self.runner._request('item/tool/call', {'callId': name,
+                    'tool': name, 'arguments': {'file_path': '/kb/README.md'}})
+            self.assertTrue(result['success'], result)
+            self.assertEqual(worker.call_args.args[0], 'container')
+            self.assertEqual(worker.call_args.args[1]['file_path'], '/kb/README.md')
+            self.assertEqual(worker.call_args.args[1]['_tool_names']['read'], 'celeste_read')
+            self.assertIn('"tool": "' + name + '"', self.steer_params()['input'][0]['text'])
+            self.record_steer()
+            self.assertEqual(self.study.read['README.md'], {1})
+        self.assertEqual(self.metrics.state.tool_calls - before, 2)
+        self.assertEqual([call.args[0] for call in self.runner.gate.decide.await_args_list], ['Read', 'Read'])
+        for canonical in ('glob', 'grep'):
+            for name in (canonical, 'celeste_' + canonical):
+                with self.subTest(name=name), patch('orchestrator.codex_agent.search_files', return_value={
+                        'kind': canonical, 'text': 'match', 'path': '/workspace', 'images': [], 'matches': 1}) as worker:
+                    result = await self.runner._request('item/tool/call', {'callId': name,
+                        'tool': name, 'arguments': {'pattern': 'test'}})
+                self.assertTrue(result['success'], result)
+                self.assertEqual(worker.call_args.args[:2], ('container', canonical))
+                self.assertEqual(worker.call_args.args[2]['_tool_names']['read'], 'celeste_read')
+        self.assertEqual([call.args[0] for call in self.runner.gate.decide.await_args_list],
+                         ['Read', 'Read', 'Glob', 'Glob', 'Grep', 'Grep'])
 
     async def test_stop_run_can_report_blockage_while_paused_or_study_incomplete(self):
         self.server.call_tool.return_value = CallToolResult.model_validate({'content': [{'type': 'text', 'text': 'paused'}]})
@@ -518,8 +610,8 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 catalogs.append({tool['name']: tool['inputSchema'] for tool in tools})
                 self.assertTrue(expected_game <= catalogs[-1].keys())
                 self.assertNotIn('celeste_bash', catalogs[-1])
-                self.assertIn('celeste_read', catalogs[-1])
-                schema = catalogs[-1]['celeste_read']['properties']
+                self.assertIn('read', catalogs[-1])
+                schema = catalogs[-1]['read']['properties']
                 self.assertTrue({'file_path', 'path', 'offset', 'limit', 'pages'} <= schema.keys())
                 self.assertNotIn('celeste_write', catalogs[-1])
                 self.assertEqual(vars(self.cfg), original)
@@ -641,7 +733,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_metadata_only_resume_keeps_dynamic_tool_validation(self):
         from orchestrator.modes import game_tools
         path = self.root / 'resumed-thread.jsonl'
-        tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)] + [{'name': 'celeste_read'}]
+        tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)] + [{'name': 'read'}]
         path.write_text(json.dumps({'payload': {'dynamic_tools': tools}}), encoding='utf-8')
         response = {'thread': {'id': 'original', 'path': str(path)}, 'sandbox': {'type': 'readOnly'}}
         self.runner.rpc.request = AsyncMock(return_value=response)
@@ -790,7 +882,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     def test_resumed_session_reports_missing_dynamic_tools_without_bash_fallback(self):
         path = self.root / 'thread.jsonl'
-        tools = ['celeste_read', 'celeste_observe', 'celeste_act', 'celeste_cutscene', 'celeste_exit_level',
+        tools = ['read', 'celeste_observe', 'celeste_act', 'celeste_cutscene', 'celeste_exit_level',
                  'celeste_narrate', 'celeste_set_effort', 'celeste_stop_run']
         path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
         self.runner._validate_resumed_tools({'path': str(path)})
@@ -809,7 +901,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                  'set_effort', 'stop_run', 'exit_level', 'cutscene', 'simulate')]
         path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name}
             for name in tools]}}), encoding='utf-8')
-        with self.assertRaisesRegex(RuntimeError, 'celeste_read'):
+        with self.assertRaisesRegex(RuntimeError, 'read'):
             self.runner._validate_resumed_tools({'path': str(path)})
 
     def test_resume_does_not_require_tools_disabled_by_play_mode(self):
@@ -817,7 +909,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.mode = 'speedrun'
         self.cfg.cutscene_mode = 'auto'
         path = self.root / 'thread.jsonl'
-        tools = ['celeste_read', 'celeste_observe', 'celeste_act', 'celeste_narrate', 'celeste_set_effort', 'celeste_stop_run']
+        tools = ['read', 'celeste_observe', 'celeste_act', 'celeste_narrate', 'celeste_set_effort', 'celeste_stop_run']
         path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
         self.runner._validate_resumed_tools({'path': str(path)})
         self.cfg.live = True

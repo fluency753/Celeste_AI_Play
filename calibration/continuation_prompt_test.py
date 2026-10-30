@@ -30,7 +30,7 @@ class ContinuationPromptTests(unittest.TestCase):
 
 
 class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
-    async def run_two_turns(self, *, preparing=False, user_message=None, initial_notice=False, later_notice=False, initial_user=None, return_all=False):
+    async def run_two_turns(self, *, preparing=False, user_message=None, initial_notice=False, later_notice=False, initial_user=None, return_all=False, legacy_files=False):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             cfg = RunConfig(agent='test', save='test', model='test', engine='codex', mode='explore')
@@ -43,6 +43,11 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
                 study = KbStudy(kb, 10)
             runner = CodexRunner(cfg, root, session, Metrics(root/'metrics.json', 'test', 'test', 'high', 60),
                                  'unused', study, resume_note='fixture first turn')
+            if legacy_files:
+                runner.resume, runner.session_id = True, 'fixture'
+            from orchestrator.modes import game_tools
+            registration = [{'name': 'celeste_' + name} for name in game_tools(cfg)] + [
+                {'name': 'celeste_' + name} for name in ('read', 'glob', 'grep')]
             from orchestrator.button_prompts import notification
             if initial_notice:
                 runner.resume_notice = notification('resume')
@@ -53,6 +58,9 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
             async def request(method, params):
                 if method == 'thread/start':
                     return {'thread': {'id': 'fixture'}, 'model': 'test', 'sandbox': {'type': 'readOnly'}, 'activePermissionProfile': {'id': params['permissions']}}
+                if method == 'thread/resume':
+                    return {'thread': {'id': 'fixture', 'path': '/fixture/rollout.jsonl'}, 'model': 'test',
+                            'activePermissionProfile': {'id': params['permissions']}}
                 if method == 'turn/start':
                     sent.append(params['input'][0]['text'])
                     if len(sent) == 2:
@@ -71,6 +79,7 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
             runner.rpc.request = AsyncMock(side_effect=request)
             runner.rpc.reader = asyncio.get_running_loop().create_future()
             with patch('orchestrator.config.REPO_ROOT', root), \
+                 patch('orchestrator.codex_container.read_metadata', return_value={'dynamic_tools': registration}), \
                  patch('orchestrator.model_catalog.load_models', return_value={'models': []}):
                 await asyncio.wait_for(runner.run(), 5)
             self.assertEqual(len(sent), 2)
@@ -82,7 +91,12 @@ class CodexContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_preparation_fallback_identifies_controller(self):
         text = await self.run_two_turns(preparing=True)
+        self.assertEqual(text, controller_turn_prompt('继续准备，用 read 分页读取尚未读完的资料。'))
+
+    async def test_legacy_preparation_fallback_uses_only_registered_reader(self):
+        text = await self.run_two_turns(preparing=True, legacy_files=True)
         self.assertEqual(text, controller_turn_prompt('继续准备，用 celeste_read 分页读取尚未读完的资料。'))
+        self.assertNotIn('用 read ', text)
 
     async def test_real_user_message_replaces_fallback_without_being_relabelled(self):
         text = await self.run_two_turns(user_message='先复盘笔记，不推进游戏。')

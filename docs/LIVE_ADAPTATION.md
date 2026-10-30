@@ -28,7 +28,7 @@
 
 HUD 直接使用 app-server 的公开消息、工具调用、tokenUsage 与 contextCompaction 事件。公开文字至多每 0.4 秒更新一次；模型没有输出时不能凭空生成解说。模型与推理强度采用服务器实际回报的值，上下文采用最近一次用量，不用累计输入量。内部推理正文不会进入 HUD 或事件日志。游戏工具由主控直接分发，只有一个桥接连接；规划回放和录制沿用同一个主控实现。
 
-新会话保留 `celeste_read`，不登记 `celeste_bash/write`；旧登记调用返回停用说明且零执行。日常编程使用原生工具，输出格式由 Codex 自身提供；必读知识库必须显式调用 `celeste_read`，正文经 steer 送达、Codex 记入历史（带回执的 userMessage 事件或轮次正常完成）后才计量完整行，轮次被中断时不计；`celeste_read` 也可列目录，另有 `celeste_glob`、`celeste_grep`，三者走同一只读沙箱，不算程序，只读聊天和暂停时可用；原生 Shell 与 Claude Bash 一样按 Bash 管理，不计 KB。主控自动重试仍使用既有 `run_program` 及其完整输出保存协议。原生 Shell 的包装与主控程序复用同一份 bwrap 规则；Claude 内置 Bash 继续使用 Claude 的 sandbox-runtime，底层沙箱实现不冒充统一。必要差异及验收边界见 [Codex 容器执行](CODEX_CONTAINER.md)。
+新会话保留 `read`，不登记 `celeste_bash/write`；旧登记调用返回停用说明且零执行。日常编程使用原生工具，输出格式由 Codex 自身提供；必读知识库必须显式调用 `read`，正文经 steer 送达、Codex 记入历史（带回执的 userMessage 事件或轮次正常完成）后才计量完整行，轮次被中断时不计；`read` 也可列目录，另有 `glob`、`grep`，三者走同一只读沙箱，不算程序，只读聊天和暂停时可用；原生 Shell 与 Claude Bash 一样按 Bash 管理，不计 KB。主控自动重试仍使用既有 `run_program` 及其完整输出保存协议。原生 Shell 的包装与主控程序复用同一份 bwrap 规则；Claude 内置 Bash 继续使用 Claude 的 sandbox-runtime，底层沙箱实现不冒充统一。必要差异及验收边界见 [Codex 容器执行](CODEX_CONTAINER.md)。
 
 协议参考：[Codex app-server](https://developers.openai.com/codex/app-server/)。
 

@@ -28,6 +28,18 @@ class ReadWorkerTests(unittest.TestCase):
         opened.assert_called_once_with(result['path'])
         return result
 
+    def test_diagnostic_names_follow_catalog_without_rewriting_source(self):
+        source = b'read glob grep celeste_read celeste_glob celeste_grep\n'
+        for names in ({'grep': 'grep'}, {'grep': 'celeste_grep'}, {'grep': None}):
+            with self.subTest(names=names):
+                result = self.read(source, _tool_names=names)
+                self.assertIn(source.decode().rstrip(), result['text'])
+                self.assertEqual(result['file']['numLines'], 1)
+                long_line = self.read(b'x' * (reader.MAX_CHARS + 1), _tool_names=names)
+                self.assertEqual(long_line['file']['numLines'], 0)
+                expected = names['grep'] or '本会话未登记内容搜索工具'
+                self.assertIn(expected, long_line['text'])
+
     def test_text_alias_paging_line_receipt_and_crlf(self):
         result = self.read(b'one\r\ntwo\r\nthree', file_path='/kb/README.md',
                            path='/kb/README.md', offset=2, limit=1)

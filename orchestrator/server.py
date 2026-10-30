@@ -166,7 +166,11 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             return '桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。'
         if study is None or study.ready():
             return None
-        return study.reminder(reader='celeste_read' if getattr(session.cfg, 'engine', None) == 'codex' else 'Read')
+        reader = 'Read'
+        if getattr(session.cfg, 'engine', None) == 'codex':
+            naming = getattr(session, 'file_tool_name', None)
+            reader = (naming('read') if naming else 'read') or '专用读取工具（本会话未登记）'
+        return study.reminder(reader=reader)
 
     def finish() -> None:
         metrics.update(status="thinking")

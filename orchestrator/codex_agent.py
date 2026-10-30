@@ -27,8 +27,9 @@ def spec(name, description, properties, required=()):
 
 TEXT = {"type": "string"}
 LIVE_NOTE = "（直播提醒）请先更新一句公开解说，再继续规划。"
-# celeste_read/glob/grep 与 Claude 的 Read/Glob/Grep 共用门禁名：都不算 Bash，不消耗程序次数。
-FILE_TOOLS = {'celeste_read': 'Read', 'celeste_glob': 'Glob', 'celeste_grep': 'Grep'}
+# read/glob/grep 与 Claude 的 Read/Glob/Grep 共用门禁名：都不算 Bash，不消耗程序次数。
+FILE_TOOLS = {'read': 'Read', 'glob': 'Glob', 'grep': 'Grep'}
+LEGACY_FILE_TOOLS = {'celeste_' + name: name for name in FILE_TOOLS}
 
 
 def codex_tool_mapping(cfg) -> str:
@@ -36,10 +37,11 @@ def codex_tool_mapping(cfg) -> str:
     return ("# 原生 Codex 工具映射\n"
             "你与原生 Shell、文件编辑工具都在 Docker 容器内，工作目录为 /workspace。"
             "使用原生 Shell 运行程序，使用原生 apply_patch 编辑文件；游戏工具加 celeste_ 前缀。"
-            "读取与查找文件用 celeste_read（文件、目录列表、文本分页、图像）、celeste_glob（按文件名模式查找）"
-            "和 celeste_grep（按正则搜索内容），它们与 Claude 的 Read/Glob/Grep 对应：不运行程序、不消耗程序次数，"
+            "读取与查找文件用 read（文件、目录列表、文本分页、图像）、glob（按文件名模式查找）"
+            "和 grep（按正则搜索内容），它们与 Claude 的 Read/Glob/Grep 对应：不运行程序、不消耗程序次数，"
             "只读聊天和暂停时也可用；内容直接送达当前轮次。原生 Shell（包括 cat、ls、grep）一律按 Bash 管理并计次。"
-            "必读知识库必须显式使用 celeste_read，Shell 读取不计入准备进度。"
+            "必读知识库必须显式使用专用读取工具，Shell 读取不计入准备进度。"
+            "恢复旧会话时，以主控本轮给出的文件工具名称映射及实际登记为准；不要调用未登记名称。"
             "原生工具与 Claude 共用主控门禁、程序额度和零网络沙箱；不得绕过这些限制。"
             "不连接宿主桥接、浏览器或其他服务，不启动子智能体。"
             "只输出给观众的简短公开解说，不输出内部推理正文。"
@@ -102,6 +104,16 @@ class CodexRunner(SessionControls):
         self.native_session.program_guard = self._program_guard
         self.native_session.note_reminders = self.note_reminders
         self.native_session.native_tool_hook = self._native_hook
+        self.native_session.file_tool_name = self._file_tool_name
+
+    def _file_tool_name(self, canonical):
+        if self.registered_tools is None or canonical in self.registered_tools:
+            return canonical
+        legacy = 'celeste_' + canonical
+        return legacy if legacy in self.registered_tools else None
+
+    def _reader_name(self):
+        return self._file_tool_name('read') or '专用读取工具（本会话未登记）'
 
     async def _native_hook(self, data):
         from .codex_native import native_tool_hook
@@ -131,18 +143,18 @@ class CodexRunner(SessionControls):
 
     async def tool_specs(self):
         page = {'offset': {'type': 'integer', 'minimum': 1}, 'limit': {'type': 'integer', 'minimum': 1}}
-        tools = [spec('celeste_read',
+        tools = [spec('read',
             'Read：读取容器内文件或列出目录。必读知识库必须使用本工具；文本带行号，offset为1起始行，limit为行数；'
             '目录按目录项分页，符号链接只列出、不跟随。'
             '支持文本、PNG/JPEG/GIF/WebP、PDF及Jupyter notebook；PDF pages为1起始页范围（最多20页）。'
             '正文或图像会直接送达当前轮次，不打印图像编码。仅读取/workspace、/kb、/sim，不执行程序、不消耗程序次数。',
             {'file_path': TEXT, 'path': {**TEXT, 'description': '旧版file_path别名，二者不能冲突'},
              **page, 'pages': TEXT}),
-            spec('celeste_glob',
+            spec('glob',
                  'Glob：按文件名模式查找文件（如 "**/*.md"、"game/*.json"），结果按修改时间从新到旧。'
                  'path 为起始目录，默认 /workspace；仅限 /workspace、/kb、/sim，不跟随符号链接，不运行程序、不消耗程序次数。',
                  {'pattern': TEXT, 'path': TEXT, **page}, ['pattern']),
-            spec('celeste_grep',
+            spec('grep',
                  'Grep：按 Python 正则搜索文件内容。path 为文件或目录（默认 /workspace），glob 过滤文件名（如 "*.md"）；'
                  'output_mode 为 files_with_matches（默认，文件列表）、content（匹配行，带行号与 context 上下文）或 count。'
                  '仅限 /workspace、/kb、/sim，不跟随符号链接，跳过二进制文件，不运行程序、不消耗程序次数；不计入知识库阅读进度。',
@@ -332,11 +344,13 @@ class CodexRunner(SessionControls):
         if method != "item/tool/call":
             # 拒绝任何宿主权限扩张/工具授权请求；不代替用户批准。
             raise RuntimeError(f"只接受客户端动态工具请求，拒绝 {method}")
-        name, args = params.get("tool", ""), params.get("arguments") or {}
+        requested = params.get('tool', '')
+        name = LEGACY_FILE_TOOLS.get(requested, requested)
+        args = params.get('arguments') or {}
         if name in {'celeste_bash', 'celeste_write'}:
             return self._notes_response({'contentItems': [{'type': 'inputText', 'text':
                 '此会话保留了旧编程工具登记，但该入口已停用，本次未执行。请用容器内原生 Shell 和 apply_patch；'
-                '只读聊天可用 celeste_read 读取文件；运行程序须先由用户开放程序能力。'}], 'success': False})
+                f'只读聊天可用 {self._reader_name()} 读取文件；运行程序须先由用户开放程序能力。'}], 'success': False})
         reload_ticket = (getattr(self.session, 'reload_epoch', 0),
                          getattr(self.session, 'reload_observation_required', False))
         if not isinstance(args, dict):
@@ -346,13 +360,13 @@ class CodexRunner(SessionControls):
             # Waiting now belongs to the host; the cached frame field has no effect.
             args = {key: value for key, value in args.items() if key != 'frames'}
         ident = params.get("callId") or name
-        self.called_tools.append(name)
+        self.called_tools.append(requested)
         self.metrics.add(tool_calls=1)
         game = name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_narrate", "celeste_stop_run", "celeste_exit_level", "celeste_cutscene", "celeste_simulate")
         detail = (args.get("description") or args.get("file_path") or
                   (f"{args.get('pattern')} @ {args.get('path') or '/workspace'}" if name in FILE_TOOLS and args.get('pattern')
                    else args.get("path")) or "")
-        self.metrics.tool_begin(ident, game_tool=game, label=name + (" · " + detail if detail else ""))
+        self.metrics.tool_begin(ident, game_tool=game, label=requested + (" · " + detail if detail else ""))
         try:
             if name == 'celeste_set_effort' and self.manual_effort is not None:
                 raise ValueError(f'用户已手动固定推理强度为 {self.manual_effort}，请保留用户设置；恢复自动后才可自行调整。')
@@ -385,12 +399,13 @@ class CodexRunner(SessionControls):
                     raise ValueError(why)
             if name in FILE_TOOLS:
                 origin_turn = self.turn_id
+                worker_args = {**args, '_tool_names': {key: self._file_tool_name(key) for key in FILE_TOOLS}}
                 try:
-                    result = await (asyncio.to_thread(read_file, self.container, args) if name == 'celeste_read' else
-                                    asyncio.to_thread(search_files, self.container, name.removeprefix('celeste_'), args))
+                    result = await (asyncio.to_thread(read_file, self.container, worker_args) if name == 'read' else
+                                    asyncio.to_thread(search_files, self.container, name, worker_args))
                 except (ValueError, OSError, subprocess.SubprocessError) as exc:
                     result = {'kind': 'error', 'error': str(exc) or type(exc).__name__}
-                return await self._file_response(result, name, ident, origin_turn)
+                return await self._file_response(result, requested, ident, origin_turn)
             if name == "celeste_narrate" and self.game_server is None:
                 note = str(args.get("thought", ""))[:self.cfg.thought_max_chars]
                 if getattr(self.cfg, "formal_thought", False):
@@ -402,14 +417,14 @@ class CodexRunner(SessionControls):
                 text = "解说已更新"
             elif name == "celeste_finish_preparation" and self.prepare_only:
                 if self.study is None or not self.study.complete():
-                    raise ValueError(self.study.reminder(reader='celeste_read') if self.study else "没有准备阶段")
+                    raise ValueError(self.study.reminder(reader=self._reader_name()) if self.study else "没有准备阶段")
                 text = "全部知识库已读完；结束本次准备，不启动游戏。"
             elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run") and self.prepare_only:
                 raise ValueError("本次只做知识库准备，不开放游戏操作，不会进入关卡。")
             elif game and self.game_server is not None and not self.prepare_only:
                 origin_turn = self.turn_id
                 if name in ("celeste_act", "celeste_observe") and self.study and not self.study.complete():
-                    raise ValueError(self.study.reminder(reader='celeste_read'))
+                    raise ValueError(self.study.reminder(reader=self._reader_name()))
                 if name in {"celeste_act", "celeste_observe", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
                     async with self.action_lock:
                         if self.paused:
@@ -439,7 +454,7 @@ class CodexRunner(SessionControls):
             self.metrics.tool_end(ident)
 
     async def _file_response(self, result, tool, call_id, origin_turn):
-        """celeste_read/glob/grep：正文与图像经同轮 steer 送达，工具结果只带确认摘要。
+        """read/glob/grep：正文与图像经同轮 steer 送达，工具结果只带确认摘要。
 
         Codex 会按截断策略缩短动态工具文本（实测 9.6 万字符只保留约 1.2–5 万），用户输入则原样保留；
         所以内容不放进工具结果。知识库行在 Codex 确认把这条输入记入历史后才计量（见 _input_recorded）。
@@ -560,12 +575,12 @@ class CodexRunner(SessionControls):
         if self.study and not self.study.complete():
             from .button_prompts import notification
             paths = "\n".join(f"- {p}" for p in self.study.container_paths())
-            facts = "本次必读清单：\n" + paths + "\n必读资料必须用 celeste_read 的 file_path 与 offset/limit 分页读取，按实际送达的完整行计量。"
+            facts = "本次必读清单：\n" + paths + f"\n必读资料必须用 {self._reader_name()} 的 file_path 与 offset/limit 分页读取，按实际送达的完整行计量。"
             if self.cfg.sim:
                 facts += '\n本次预置模拟器已开放，资料位于 /sim。'
             facts += ('\n本次只准备，不启动游戏；完成后调用 celeste_finish_preparation 提交完成信号。'
                       if self.prepare_only else '\n本次准备完成后开放试玩工具。')
-            message = notification('prepare', facts=facts).replace('Read 工具', 'celeste_read 工具')
+            message = notification('prepare', facts=facts).replace('Read 工具', self._reader_name() + ' 工具')
             if self.prepare_only and self.cfg.sim:
                 message += '\n' + notification('prepare_sim')
             return message
@@ -612,19 +627,24 @@ class CodexRunner(SessionControls):
             raise RuntimeError('旧会话缺少当前必需工具：' + ', '.join(sorted(missing))
                                + '。该容器记录的接口不完整，请新建准备会话；不会借用宿主工具绕过缺失接口。')
         self.registered_tools = names
-        absent = [name for name in FILE_TOOLS if name not in names]
-        if 'celeste_read' in absent and self.study is not None and not self.study.complete():
-            raise RuntimeError('旧会话没有登记 celeste_read，无法按实际送达的内容计量必读知识库；'
+        available = {name: self._file_tool_name(name) for name in FILE_TOOLS}
+        absent = [name for name, actual in available.items() if actual is None]
+        if 'read' in absent and self.study is not None and not self.study.complete():
+            raise RuntimeError('旧会话没有登记 read（旧名 celeste_read），无法按实际送达的内容计量必读知识库；'
                                '本版本协议不能在恢复时补登记工具，请新建准备会话。')
+        notes = []
+        if any(actual is not None and actual != name for name, actual in available.items()):
+            mapping = '、'.join(f'{name} → {actual}' for name, actual in available.items() if actual is not None)
+            notes.append('（系统）本会话沿用持久化的文件工具登记，请按实际名称调用：' + mapping + '。'
+                         '指南中的 read/glob/grep 是规范能力名；本会话应使用上述已登记名称，未补登记新工具。')
         if absent:
-            # 动态工具随原会话持久化，恢复时不能补登记；照常续接，并在首条消息里说明可用范围。
             print('[codex] 旧会话未登记 ' + '、'.join(absent) + '；继续恢复原会话，未登记的工具不可用', flush=True)
-            notes = ['（系统）本会话创建较早，未登记 ' + '、'.join(absent) + '，恢复后仍不可调用。']
-            if 'celeste_read' in absent:
+            notes.append('（系统）本会话未登记 ' + '、'.join(absent) + '，恢复后仍不可调用。')
+            if available['read'] is None:
                 notes.append('读取文件只能在开放程序能力时用原生 Shell（按 Bash 管理计次）；只读聊天中无法读取文件。')
             else:
-                notes.append('列目录可用 celeste_read 读取目录路径；按模式查找或搜索内容需在开放程序时用原生 Shell。')
-            self.tool_notice = ''.join(notes)
+                notes.append(f"列目录可用 {available['read']} 读取目录路径；未登记的查找或搜索工具需在开放程序时用原生 Shell。")
+        self.tool_notice = ''.join(notes)
 
     async def run(self):
         if not self.container:
@@ -640,10 +660,10 @@ class CodexRunner(SessionControls):
             from .button_prompts import notification
             prompt += (("\n\n# 试玩前聊天\n这是新会话，已完成入门资料准备，还没有开始试玩。" if getattr(self, "ready_to_play", False)
                         else "\n\n# 试玩结束后的聊天\n本次试玩已经结束。") +
-                       ("可以按用户要求用 celeste_read/原生 Shell/apply_patch 整理工作区，在零网络沙箱里运行程序；"
+                       ("可以按用户要求用 read/原生 Shell/apply_patch 整理工作区，在零网络沙箱里运行程序；"
                         "若已挂载 /sim，可从显式保存的快照做离线模拟。"
                         if getattr(self, 'allow_programs', False) else
-                        "现在仅回答用户的消息、复盘试玩，可以用 celeste_read/celeste_glob/celeste_grep 查阅工作区，"
+                        "现在仅回答用户的消息、复盘试玩，可以用 read/glob/grep 查阅工作区，"
                         "并按要求用 apply_patch 读取、整理工作区笔记；不运行程序（原生 Shell 不开放）。") +
                        "不连接游戏，不调用游戏观察、动作或在线模拟工具，不自行开始下一章。用户没有发消息时安静等待。")
             prompt += '\n' + notification('wake_chat')
@@ -779,7 +799,7 @@ class CodexRunner(SessionControls):
                     self.completed_preparation = True
                     return "知识库准备完成"
                 from .prompting import continue_play_prompt, controller_turn_prompt
-                message = (controller_turn_prompt("继续准备，用 celeste_read 分页读取尚未读完的资料。")
+                message = (controller_turn_prompt(f"继续准备，用 {self._reader_name()} 分页读取尚未读完的资料。")
                            if self.study and not self.study.complete() else continue_play_prompt(self.cfg))
             return "现实时间预算用完"
         finally:

@@ -36,21 +36,21 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 | 项目 | Claude Code | Codex |
 | --- | --- | --- |
 | agent 循环与压缩 | Claude Code 管理 | App Server 管理 |
-| 原生编程工具 | Bash、Read、Write、Edit、Glob、Grep | Codex 原生 Shell、补丁，以及主控登记的 `celeste_read`／`celeste_glob`／`celeste_grep` |
+| 原生编程工具 | Bash、Read、Write、Edit、Glob、Grep | Codex 原生 Shell、补丁，以及主控登记的 `read`／`glob`／`grep` |
 | 工具协议 | MCP 与 Claude 钩子 | App Server 事件、动态游戏工具与 Codex 钩子 |
 | 图像交付 | 工具结果图像 | 将游戏图像送入同轮原生 image 通道，工具文字不序列化图像 |
-| 知识库阅读核验 | Claude Read 结果中的完整行 | 必须使用 celeste_read；完整行正文经同轮 steer 投递，Codex 把它记入历史后，用相同行元数据计量 |
+| 知识库阅读核验 | Claude Read 结果中的完整行 | 必须使用 read；完整行正文经同轮 steer 投递，Codex 把它记入历史后，用相同行元数据计量 |
 | 规划轮次分组 | 同一 assistant 消息内工具归为一组 | 当前协议按工具调用归组；不能用整个 turn 冒充一条消息而少计 |
-| 普通文件查询 | Read／Glob／Grep 不属于 Bash | celeste_read／celeste_glob／celeste_grep 走共享 Read／Glob／Grep 门禁，不算程序；原生 Shell（包括 cat、ls、grep）统一按 Bash 检查、计次 |
+| 普通文件查询 | Read／Glob／Grep 不属于 Bash | read／glob／grep 走共享 Read／Glob／Grep 门禁，不算程序；原生 Shell（包括 cat、ls、grep）统一按 Bash 检查、计次 |
 | 订阅认证 | Claude 登录方式 | Codex 设备登录与独立缓存，刷新机制不同 |
 
-这些是协议或产品设施差异，不据此维护不同的游戏规则。新会话登记 `celeste_read`、`celeste_glob`、`celeste_grep`，原生 Shell 和补丁工具继续负责编程；旧 `celeste_bash/write` 返回停用说明，不执行。两边通过 Bash 读取都不计入 KB 阅读进度。只读聊天和用户暂停时这三个工具照常可用，不消耗探索模式的程序次数，也不会因此开放程序运行。
+这些是协议或产品设施差异，不据此维护不同的游戏规则。新会话登记 `read`、`glob`、`grep`，原生 Shell 和补丁工具继续负责编程；旧 `celeste_bash/write` 返回停用说明，不执行。两边通过 Bash 读取都不计入 KB 阅读进度。只读聊天和用户暂停时这三个工具照常可用，不消耗探索模式的程序次数，也不会因此开放程序运行。
 
 笔记提醒与直播解说提醒只放进模型确定会收到的地方：动态工具（含读取失败、投递失败和异常）的结果、新一轮的输入，或原生工具执行时经同轮 steer 投递并在 Codex 记入历史后才确认。原生工具钩子的 `additionalContext` 不再承载提醒；轮次中断导致投递丢弃时，提醒保持待发，直播计时放回。
 
-## celeste_read
+## read
 
-必读知识库必须显式使用 `celeste_read`。接口以 `file_path` 指定文件或目录，兼容旧参数 `path`（同时提供时必须一致）。例如：
+必读知识库必须显式使用 `read`。接口以 `file_path` 指定文件或目录，兼容旧参数 `path`（同时提供时必须一致）。例如：
 
 ```json
 {"file_path":"/kb/README.md","offset":1,"limit":200}
@@ -70,12 +70,12 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 
 `turn/steer` 的确认只表示输入已排队：固定版本实测在下一次模型请求前中断轮次时，排队输入被丢弃且不会出现在后续请求中。所以 KB 行只在 Codex 把这条输入记入历史（发出 `clientId` 等于回执编号的 `userMessage` 事件，或轮次正常完成）后才计量；轮次中断、失败或正在暂停时不计量，允许重试读取，不隐式执行或重做游戏动作。即使 code-mode 不打印工具返回，正文也不会被隐藏。已移除原生 Shell 的原文匹配、raw 回执和 rollout 尾读计量，只有这一个 KB 读取入口。
 
-## celeste_glob 与 celeste_grep
+## glob 与 grep
 
 与 Claude 的 Glob／Grep 对应，同一只读工作器、同样的根目录和逐级不跟随符号链接的遍历；不运行程序，不消耗程序次数，不计入 KB 阅读进度。
 
-- `celeste_glob`：`pattern` 支持 `*`、`?`、`**`、`[...]`、`{a,b}`，相对 `path`（默认 `/workspace`）匹配完整相对路径；以 `/` 开头的模式自带起始目录。结果按修改时间从新到旧，`offset/limit` 分页（默认 250 条）。
-- `celeste_grep`：`pattern` 为 Python 正则，`path` 为文件或目录，`glob` 过滤文件名（不含 `/` 时只比较文件名），`output_mode` 为 `files_with_matches`（默认）、`content`（带行号，可加 `context` 行上下文）或 `count`，`ignore_case` 忽略大小写。跳过二进制、硬链接和超过 8 MiB 的文件；遍历超过 10 万项或读取超过 256 MiB 时停止并说明结果可能不完整。
+- `glob`：`pattern` 支持 `*`、`?`、`**`、`[...]`、`{a,b}`，相对 `path`（默认 `/workspace`）匹配完整相对路径；以 `/` 开头的模式自带起始目录。结果按修改时间从新到旧，`offset/limit` 分页（默认 250 条）。
+- `grep`：`pattern` 为 Python 正则，`path` 为文件或目录，`glob` 过滤文件名（不含 `/` 时只比较文件名），`output_mode` 为 `files_with_matches`（默认）、`content`（带行号，可加 `context` 行上下文）或 `count`，`ignore_case` 忽略大小写。跳过二进制、硬链接和超过 8 MiB 的文件；遍历超过 10 万项或读取超过 256 MiB 时停止并说明结果可能不完整。
 
 ## 旧会话迁移
 
@@ -85,9 +85,9 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 .\.venv\Scripts\python.exe -m orchestrator.codex_container --container NAME import-session --file <原会话.jsonl>
 ```
 
-只导入该份会话记录，不复制宿主配置或其他会话。导入保留原文件，目标已存在时拒绝覆盖。之后按原运行目录恢复，继续同一会话 ID 和工作区；不存在或工具登记不完整（包括缺少 `celeste_read`）时明确报错，不另建会话、不回落宿主执行。旧 `--runtime host` 对 Codex 规范为 container；host Claude 的既有含义不变。
+只导入该份会话记录，不复制宿主配置或其他会话。导入保留原文件，目标已存在时拒绝覆盖。之后按原运行目录恢复，继续同一会话 ID 和工作区；不存在或游戏工具登记不完整时明确报错；文件工具按下面的兼容规则处理，不另建会话、不回落宿主执行。旧 `--runtime host` 对 Codex 规范为 container；host Claude 的既有含义不变。
 
-动态工具登记随原会话持久化，固定版本协议的 `thread/resume` 也没有 `dynamicTools` 字段，新增接口不会在恢复时补入。缺少 `celeste_read`／`celeste_glob`／`celeste_grep` 的旧会话仍可恢复：主控记录日志，并在恢复后的第一条消息里说明哪些工具不可用；只有还要按行核验必读知识库（准备未完成）却没有 `celeste_read` 时才拒绝，须新建准备会话。具有旧 `path/offset/limit` 登记的会话可继续兼容读取（含目录列表），但新增 PDF `pages` 参数和搜索工具需要使用新建会话的完整登记。
+动态工具登记随原会话持久化，固定版本协议的 `thread/resume` 也没有 `dynamicTools` 字段，新增接口不会在恢复时补入。新会话只登记无前缀的 `read/glob/grep`；旧会话的 `celeste_read/celeste_glob/celeste_grep` 保留兼容，进入同一后端和门禁，不双登记或重复计量。恢复时按每个工具实际登记选择名称（同时存在时优先无前缀名），首条消息给出旧名映射，KB 提醒与重试建议也使用实际登记名；不会改写文件原文中的工具名称。缺少 `read`／`glob`／`grep` 的旧会话仍可恢复：主控记录日志，并在恢复后的第一条消息里说明哪些工具不可用；只有还要按行核验必读知识库（准备未完成）却没有 `read` 时才拒绝，须新建准备会话。具有旧 `path/offset/limit` 登记的会话可继续兼容读取（含目录列表），但新增 PDF `pages` 参数和搜索工具需要使用新建会话的完整登记。
 
 `tools/sync_codex_session_env.py` 是迁移前的宿主记录维护工具，不得用于容器记录。容器会话在运行状态里记录 `session_storage=container`，不再用宿主归档目录推断其状态。容器会话也不因宿主存在同 ID 的归档副本而从 HUD 隐藏。
 

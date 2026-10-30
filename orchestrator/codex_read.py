@@ -138,7 +138,14 @@ def _visible(line):
     return _CONTROL.sub(lambda match: f'\\x{ord(match.group()):02x}', line)
 
 
-def _text_result(path, data, offset, limit):
+def _display_tool(arguments, name):
+    """Trusted caller names affect diagnostics only, never displayed file bytes."""
+    names = arguments.get('_tool_names') or {}
+    value = names.get(name, name) if isinstance(names, dict) else name
+    return value if value in (None, name, 'celeste_' + name) else name
+
+
+def _text_result(path, data, offset, limit, *, grep_name='grep'):
     # Rows use the same splitlines() boundaries as KbStudy's host-side totals.
     lines = _decode(data).splitlines()
     selected = lines[offset - 1:offset - 1 + limit]
@@ -158,7 +165,9 @@ def _text_result(path, data, offset, limit):
               'images': [], 'truncated': truncated, 'next_offset': next_offset if truncated else None}
     if selected and not returned:
         prefix = f'{offset:6}\t'
-        suffix = '\n[该行超过字符上限，仅显示片段，0 个完整行；请用 celeste_grep 定位或在获准的 Bash 中按字符切片。]'
+        advice = (f'请用 {grep_name} 定位或在获准的 Bash 中按字符切片。' if grep_name else
+                  '本会话未登记内容搜索工具，可在获准的 Bash 中按字符切片。')
+        suffix = '\n[该行超过字符上限，仅显示片段，0 个完整行；' + advice + ']'
         result.update(text=prefix + _visible(selected[0])[:MAX_CHARS - len(prefix) - len(suffix)] + suffix,
                       error='单行过长，未返回完整行，不计入 KB 阅读进度', next_offset=None)
     elif truncated:
@@ -417,7 +426,7 @@ def _read(arguments):
         return presentation.result
     if suffix == '.ipynb':
         return _notebook_result(path, data, offset, limit)
-    return _text_result(path, data, offset, limit)
+    return _text_result(path, data, offset, limit, grep_name=_display_tool(arguments, 'grep'))
 
 
 # ---------------- 目录遍历与搜索（与 Claude 的 Glob/Grep 对应，不运行程序）
@@ -571,7 +580,7 @@ def _glob(arguments):
     target, info = _open(base)
     try:
         if not stat.S_ISDIR(info.st_mode):
-            raise ValueError('celeste_glob 的 path 必须是目录')
+            raise ValueError(f"{_display_tool(arguments, 'glob') or 'glob'} 的 path 必须是目录")
         found = [(entry.st_mtime, f'{base}/{relative}') for _, _, relative, entry in _walk(target, '', scan)
                  if matcher.match(relative)]
     finally:
@@ -755,7 +764,7 @@ def read_file(container: str, arguments: dict) -> dict:
 
 
 def search_files(container: str, operation: str, arguments: dict) -> dict:
-    """celeste_glob / celeste_grep: the same read-only worker, roots and no-follow walk."""
+    """glob / grep: the same read-only worker, roots and no-follow walk."""
     if operation not in {'glob', 'grep'}:
         raise ValueError('未知的搜索操作')
     return _run_worker(container, operation, arguments)
