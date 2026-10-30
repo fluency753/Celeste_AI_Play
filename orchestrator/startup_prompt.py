@@ -1,6 +1,7 @@
 """Small current-task envelope; durable operating instructions live in the workspace."""
 from dataclasses import asdict
 import json
+import re
 
 from .execution import workspace_capabilities
 from .modes import act_frame_cap, act_frame_min, collision_image_mode, game_tools, is_explore
@@ -46,22 +47,29 @@ def current_settings(cfg):
     return settings
 
 
-def runtime_prompt(cfg, *, guide=None):
-    from .prompting import play_prompt
+def runtime_prompt_parts(cfg, *, guide=None):
+    """Render the editable startup template and keep local additions separate."""
+    from .prompting import PromptPart, prompt_parts, read_part
     from .personal_prompts import snapshot
     personal = guide['personal'] if guide is not None and 'personal' in guide else snapshot(cfg)
-    addition = '\n\n' + personal['text'] if personal['text'] else ''
     if not workspace_capabilities(cfg).workspace_read:
-        return play_prompt(cfg) + addition
-    from .prompt_guide import guide_document
-    guide = guide if guide is not None else guide_document(cfg)
-    return ('你是通过工具游玩 Celeste 的玩家。当前任务与配置：\n'
-            + json.dumps(current_settings(cfg), ensure_ascii=False, separators=(',', ':'))
-            + '\n工作区操作指南：' + guide['index_path']
-            + '\n首次正式游玩接手本会话时，先读索引及各节；仅聊天或取名时按需查阅。同会话已读且版本未变时不重复阅读。'
-              '版本变化时对照索引，只补读内容hash变化的章节。压缩后或遗忘时按需补查，并在动作前查阅 /workspace/notes.md、核对最新观测。'
-              '工作区的已读记录不能代替新会话自己阅读。指南是操作约定，不是知识库；准备阶段仍按必读清单执行。'
-              '\n当前任务配置、用户最新指令和实际工具反馈优先于指南及旧历史；实时权限与目标以主控反馈为准。'
-              '先 observe 再操作；计时和目标剩余量用 observe(detail="time") 查询。'
-              '仅使用本次登记的工具；按权限操作，不绕过限制。工具故障导致无法继续时用 stop_run 报告并等待，普通死亡不算阻塞。'
-              '\n本次游戏工具：' + '/'.join(game_tools(cfg)) + '。' + addition)
+        parts = prompt_parts(cfg)
+    else:
+        from .prompt_guide import guide_document
+        guide = guide if guide is not None else guide_document(cfg)
+        values = {
+            '{current_settings}': json.dumps(current_settings(cfg), ensure_ascii=False, separators=(',', ':')),
+            '{guide_index_path}': guide['index_path'],
+            '{game_tools}': '/'.join(game_tools(cfg)),
+        }
+        # Replace only template tokens, never tokens inside inserted configuration/user text.
+        text = re.sub('|'.join(re.escape(key) for key in values), lambda match: values[match.group()],
+                      read_part('runtime_zh.md').removesuffix('\n'))
+        parts = [PromptPart('当前任务与配置', text, 'runtime_zh.md')]
+    if personal['text']:
+        parts.append(PromptPart('本机个人追加要求', personal['text'], None, '\n\n'))
+    return parts
+
+
+def runtime_prompt(cfg, *, guide=None):
+    return ''.join(part.sep + part.text for part in runtime_prompt_parts(cfg, guide=guide))

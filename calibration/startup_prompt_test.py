@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import replace
 import itertools
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,9 +20,70 @@ class StartupPromptTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        store = patch('orchestrator.personal_prompts.STORE', Path(folder.name)/'absent.json')
-        store.start()
-        self.addCleanup(store.stop)
+        self.root = Path(folder.name)
+        for name, value in [('orchestrator.personal_prompts.STORE', self.root/'personal.json'),
+                            ('orchestrator.prompting.OVERRIDES', self.root/'prompts')]:
+            context = patch(name, value)
+            context.start()
+            self.addCleanup(context.stop)
+
+    def test_runtime_template_editor_override_preview_and_reset(self):
+        from orchestrator import personal_prompts
+        from orchestrator.launch_options import config_for
+        from orchestrator.prompting import current_rules_note
+        from overlay import console_api
+        name = 'runtime_zh.md'
+        doc = console_api.prompt_read(name)
+        self.assertEqual({p['name'] for p in doc['placeholders']},
+                         {'{current_settings}', '{guide_index_path}', '{game_tools}'})
+        self.assertFalse(doc['live_editable'])
+        options = {'engine': 'codex', 'mode': 'explore', 'agent': 'test',
+                   'save': {'name': '{game_tools}', 'slot': 14},
+                   'sim': False, 'sim_assist': False}
+        guide = guide_document(config_for(options))
+        personal_prompts.save('all', 'PERSONAL {current_settings}', personal_prompts.read('all')['version'])
+        template = '自定义启动\n{current_settings}\n{guide_index_path}\n{game_tools}\n'
+        with patch.object(console_api, 'orchestrator_status', return_value={'running': False}):
+            saved = console_api.prompt_write(name, template, doc['version'])
+            self.assertTrue(saved['overridden'])
+            self.assertFalse(saved['missing_placeholders'])
+            for engine, mode, runtime in itertools.product(('codex', 'claude'), ('explore', 'speedrun'),
+                                                         ('host', 'container')):
+                with self.subTest(engine=engine, mode=mode, runtime=runtime):
+                    selected = {**options, 'engine': engine, 'mode': mode, 'runtime': runtime}
+                    cfg = config_for(selected)
+                    preview = console_api.prompt_preview(selected)
+                    actual = codex_prompt(cfg) if engine == 'codex' else runtime_prompt(cfg)
+                    self.assertEqual(preview['text'], actual)
+                    self.assertEqual(actual.count('PERSONAL {current_settings}'), 1)
+                    if engine == 'claude':
+                        self.assertIn(runtime_prompt(cfg), current_rules_note(cfg))
+                    self.assertFalse(any(p['source'] == name for p in preview['guide_parts']))
+                    if engine == 'claude' and runtime == 'host':
+                        self.assertNotIn('自定义启动', actual)
+                        self.assertTrue(actual.startswith(play_prompt(cfg)))
+                        continue
+                    part = preview['parts'][0]
+                    self.assertEqual(part['source'], name)
+                    self.assertTrue(part['overridden'])
+                    lines = part['text'].splitlines()
+                    self.assertEqual(lines[0], '自定义启动')
+                    self.assertEqual(json.loads(lines[1]), current_settings(cfg))
+                    self.assertEqual(lines[2], guide_document(cfg)['index_path'])
+                    self.assertEqual(preview['parts'][1]['label'], '本机个人追加要求')
+                    self.assertTrue(actual.startswith(part['text'] + '\n\n# 本机个人追加要求'))
+            self.assertEqual(guide_document(config_for(options))['version'], guide['version'])
+            reset = console_api.prompt_reset(name)
+            self.assertFalse(reset['overridden'])
+            preview = console_api.prompt_preview(options)
+            self.assertEqual(preview['parts'][0]['source'], name)
+            self.assertFalse(preview['parts'][0]['overridden'])
+            self.assertTrue(preview['text'].startswith('你是通过工具游玩 Celeste 的玩家。'))
+        with patch.object(console_api, 'orchestrator_status', return_value={'running': True}):
+            with self.assertRaisesRegex(ValueError, '主控在运行'):
+                console_api.prompt_write(name, template, reset['version'])
+            with self.assertRaisesRegex(ValueError, '主控在运行'):
+                console_api.prompt_reset(name)
 
     def test_workspace_capabilities_choose_delivery_and_preview_has_actual_prompt(self):
         from orchestrator.launch_options import config_for

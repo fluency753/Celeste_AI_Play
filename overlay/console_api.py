@@ -209,6 +209,8 @@ def kb_write(mode: str, path: str, text: str, mtime=None) -> dict:
 # ---------------------------------------------------------------- 提示词页
 
 PLACEHOLDERS = {
+    "{current_settings}": "本次任务与配置的 JSON 快照（存档、范围、权限、程序额度等）",
+    "{guide_index_path}": "本次已发布的工作区操作指南索引路径",
     "{interface}": "在这里插入 interface_zh.md（工具接口）",
     "{explore_notes}": "在这里插入 explore_notes_zh.md（探索模式的笔记维护；执行器能读写工作区时才有）",
     "{explore_programs}": "在这里插入 explore_programs_zh.md（探索模式的辅助程序；执行器能运行程序时才有）",
@@ -287,7 +289,7 @@ def prompt_preview(options: dict) -> dict:
     from orchestrator.kb_study import CONTAINER_KB, required_files
     from orchestrator.launch_options import config_for
     from orchestrator.prompting import overridden_parts, prompt_parts, study_prompt
-    from orchestrator.startup_prompt import runtime_prompt
+    from orchestrator.startup_prompt import runtime_prompt_parts
     from orchestrator.button_prompts import catalog
     from orchestrator.execution import workspace_capabilities
     # 预览不需要真的起名字或选存档：没填的用占位值，免得运行页还没填完就看不了提示词
@@ -307,10 +309,8 @@ def prompt_preview(options: dict) -> dict:
                     "overridden": p['source'] in overridden} for p in guide['sections']] if guided else
                   [{"label": p.label, "text": p.text, "source": p.source, "sep": p.sep,
                     "overridden": p.source in overridden} for p in prompt_parts(cfg)])
-    parts = ([{"label": "当前任务与配置", "text": runtime_prompt(cfg, guide=guide), "source": None,
-               "sep": "", "overridden": False}] if guided else [*full_parts, *([
-                   {"label": "本机个人追加要求", "text": personal['text'], "source": None,
-                    "sep": "\n\n", "overridden": False}] if personal['text'] else [])])
+    parts = [{"label": p.label, "text": p.text, "source": p.source, "sep": p.sep,
+              "overridden": p.source in overridden} for p in runtime_prompt_parts(cfg, guide=guide)]
     if cfg.engine == "codex":
         from orchestrator.codex_agent import codex_tool_mapping
         parts.append({"label": "原生 Codex 工具映射（自动加）", "text": codex_tool_mapping(cfg), "source": None,
