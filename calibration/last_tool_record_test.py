@@ -121,7 +121,7 @@ class LastToolRecordTests(unittest.IsolatedAsyncioTestCase):
     async def test_plain_return_is_not_confused_with_successful_action(self):
         await self.act()
         previous_action = self.document()['last_action']
-        result = await self.act(inputs=['200,R'])
+        result = await self.act(inputs=['700,R'])     # 超过默认上限 600 帧：退回、不执行
         self.assertFalse(result.is_error)  # Existing ActError consumer returns a normal refusal text.
         self.assertIn('动作未执行', text_of(result))
         record = self.document()['last_call']
@@ -248,6 +248,14 @@ class LastToolRecordTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancelled_call_keeps_execution_unconfirmed_while_bridge_thread_can_finish(self):
         self.bridge.entered, self.bridge.release = threading.Event(), threading.Event()
+        # 取消的只是等待；执行线程还会把工作区文件写完。等它真正结束再收尾，免得临时目录删到一半又被写入
+        finished, act = threading.Event(), self.session.act
+        def tracked(*args, **kwargs):
+            try:
+                return act(*args, **kwargs)
+            finally:
+                finished.set()
+        self.session.act = tracked
         task = asyncio.create_task(self.act())
         try:
             self.assertTrue(await asyncio.to_thread(self.bridge.entered.wait, 3))
@@ -271,6 +279,7 @@ class LastToolRecordTests(unittest.IsolatedAsyncioTestCase):
         finally:
             self.bridge.release.set()
             await asyncio.gather(task, return_exceptions=True)
+            self.assertTrue(await asyncio.to_thread(finished.wait, 3))
 
     async def test_old_unlocked_effort_finish_does_not_overwrite_new_action(self):
         entered, release = asyncio.Event(), asyncio.Event()
@@ -317,21 +326,64 @@ class LastToolRecordTests(unittest.IsolatedAsyncioTestCase):
             self.bridge.release.set()
             await asyncio.gather(*[task for task in (action, observe) if task is not None], return_exceptions=True)
 
-    async def test_start_persistence_failure_prevents_dispatch_and_keeps_previous_record(self):
+    async def test_start_persistence_failure_still_executes_and_completion_rewrites(self):
+        # 记录只是恢复参考：开始时写不进去也照常执行，完成时写成功就是完整记录、不另加提醒
         await self.call('observe', {})
-        original = self.path.read_bytes()
         replace = Path.replace
         def fail(source, target):
             if Path(target) == self.path:
-                raise OSError('journal start unavailable')
+                payload = json.loads(source.read_text(encoding='utf-8'))
+                if payload['last_call']['status'] == 'running':
+                    raise OSError('journal start unavailable')
             return replace(source, target)
         with patch.object(Path, 'replace', fail):
             result = await self.handle('act', {'inputs': ['1,R'], 'thought': '核对起始落盘失败'})
-        self.assertTrue(result.is_error)
-        self.assertEqual(self.bridge.steps, [])
-        self.assertEqual(self.path.read_bytes(), original)
+        self.assertFalse(result.is_error)
+        self.assertEqual(len(self.bridge.steps), 1)
+        self.assertNotIn('记录写入失败', text_of(result))
+        record = self.document()['last_action']
+        self.assertEqual(record['tool'], 'act')
+        self.assertEqual(record['status'], 'returned')
+        self.assertIn('journal start unavailable', record['start_write_failed'])
+
+    async def test_persistence_failure_never_blocks_stop_run_or_actions(self):
         await self.call('observe', {})
-        self.assertIsNone(self.document()['last_action'])
+        original = self.path.read_bytes()
+        def fail(source, target):
+            raise OSError('journal unavailable')
+        with patch.object(Path, 'replace', fail):
+            result = await self.handle('act', {'inputs': ['1,R'], 'thought': '记录一直写不进去'})
+        self.assertFalse(result.is_error)
+        self.assertEqual(len(self.bridge.steps), 1)
+        self.assertIn('记录写入失败', text_of(result))     # 完成时也没写进去：结果里提醒以观察为准
+        self.assertEqual(self.path.read_bytes(), original)
+
+    async def test_transient_permission_error_is_retried(self):
+        replace, failures = Path.replace, []
+        def flaky(source, target):
+            if Path(target) == self.path and len(failures) < 2:
+                failures.append(target)
+                raise PermissionError('file in use')
+            return replace(source, target)
+        with patch.object(Path, 'replace', flaky), patch('orchestrator.tool_record.time.sleep'):
+            result = await self.act()
+        self.assertFalse(result.is_error)
+        self.assertEqual(len(failures), 2)
+        self.assertEqual(self.document()['last_action']['status'], 'returned')
+        self.assertEqual(list(self.path.parent.glob('.last_tool-*.tmp')), [])
+
+    async def test_act_record_omits_trajectories_and_host_paths(self):
+        await self.act()
+        text = self.path.read_text(encoding='utf-8')
+        record = json.loads(text)
+        self.assertGreater(len(text.splitlines()), 10)              # 分行写，Read 能逐行读
+        result = record['last_action']['detail']['result']
+        for key in ('trajectory', 'entityTrajectory'):
+            if key in result:
+                self.assertTrue(result[key]['omitted'])
+                self.assertEqual(result[key]['see'], '/workspace/game/last_act.json')
+        self.assertEqual(record['run_id'], f'{self.root.name}/first')
+        self.assertNotIn(str(self.root), text)
 
     async def test_completion_persistence_failure_keeps_running_record_and_actual_result(self):
         replace = Path.replace

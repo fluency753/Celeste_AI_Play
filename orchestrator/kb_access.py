@@ -1,7 +1,8 @@
 """知识库的阅读权限与编辑（控制台的"知识库"页）。
 
 每种游玩模式给智能体挂进容器 /kb 的目录不同：速通模式是整个 kb/（含本机的 kb/reference/ 社区原文），
-探索模式只有 kb/explore/。用户可以取消勾选某些文件（RunConfig.kb_deny，命令行 --kb-deny），
+探索模式只有 kb/explore/。用户可以取消勾选某些文件（RunConfig.kb_deny，命令行 --kb-deny）；探索模式还可以
+勾选开放速通知识库里的文件（RunConfig.kb_allow，命令行 --kb-allow，默认一个都不开放），挂在 /kb/speedrun/ 下；
 也可以给某个系列赛追加本机资料（RunConfig.kb_extra，命令行 --kb-extra，目录放在 local/ 下、不入库；
 同名文件覆盖默认版本）。这两种情况下主控把最终的文件同步到 local/kb_views/<工作区标签>/，挂进容器的是这个副本，
 准备阶段也只要求读这些文件。全部可读且没有追加（默认）时直接挂知识库本身，与之前完全相同。
@@ -18,6 +19,7 @@ from .modes import EXPLORE, SPEEDRUN
 
 KB_ROOT = REPO_ROOT / "kb"
 TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv"}
+SPEEDRUN_PREFIX = "speedrun/"     # 探索模式里开放的速通知识库文件在 /kb 下的位置
 MAX_EDIT_BYTES = 2 * 1024 * 1024
 
 
@@ -57,8 +59,15 @@ def _group(rel: str, mode: str = SPEEDRUN) -> str:
     return "知识库正文"
 
 
+def speedrun_files() -> list[str]:
+    """速通知识库里不属于探索资料的文件（kb/ 内的相对路径）：探索模式可以逐个勾选开放。"""
+    return [rel for rel in (path.relative_to(KB_ROOT).as_posix() for path in _files(KB_ROOT))
+            if not rel.startswith("explore/")]
+
+
 def documents(mode: str) -> list[dict]:
-    """这个模式下智能体能读到的全部文件（知识库内的相对路径）、是否要求在准备阶段读完、能否在控制台编辑。"""
+    """这个模式下智能体能读到的全部文件（知识库内的相对路径）、是否要求在准备阶段读完、能否在控制台编辑。
+    探索模式另列速通知识库的文件（opt_in，路径带 speedrun/ 前缀）：默认不开放，勾选了才挂进 /kb/speedrun/。"""
     root = root_of(mode)
     required = set(required_files(root)) if root.is_dir() else set()
     rows = []
@@ -67,6 +76,13 @@ def documents(mode: str) -> list[dict]:
         rows.append({"path": rel, "size": path.stat().st_size, "group": _group(rel, mode), "required": rel in required,
                      "editable": path.suffix.lower() in TEXT_SUFFIXES and path.stat().st_size <= MAX_EDIT_BYTES,
                      "local_only": rel.startswith("reference/")})
+    if mode == EXPLORE:
+        for rel in speedrun_files():
+            path = KB_ROOT / rel
+            rows.append({"path": SPEEDRUN_PREFIX + rel, "size": path.stat().st_size,
+                         "group": "速通知识库（默认不开放）· " + _group(rel), "required": False, "opt_in": True,
+                         "editable": path.suffix.lower() in TEXT_SUFFIXES and path.stat().st_size <= MAX_EDIT_BYTES,
+                         "local_only": rel.startswith("reference/")})
     return rows
 
 
@@ -76,7 +92,7 @@ def normalize_deny(mode: str, deny) -> list[str]:
         return []
     if not isinstance(deny, list) or not all(isinstance(x, str) for x in deny):
         raise ValueError("知识库权限须为文件路径列表")
-    known = {row["path"] for row in documents(mode)}
+    known = {row["path"] for row in documents(mode) if not row.get("opt_in")}
     out = sorted({x.strip().replace("\\", "/") for x in deny if x.strip()})
     unknown = [x for x in out if x not in known]
     if unknown:
@@ -84,10 +100,30 @@ def normalize_deny(mode: str, deny) -> list[str]:
     return out
 
 
+def normalize_allow(mode: str, allow) -> list[str]:
+    """校验探索模式开放的速通知识库文件（speedrun/ 加 kb/ 内的相对路径）；速通模式本来就全部可读，只能为空。"""
+    if allow is None:
+        return []
+    if not isinstance(allow, list) or not all(isinstance(x, str) for x in allow):
+        raise ValueError("开放的速通资料须为文件路径列表")
+    out = sorted({x.strip().replace("\\", "/") for x in allow if x.strip()})
+    if out and mode != EXPLORE:
+        raise ValueError("只有探索模式需要单独开放速通知识库的文件")
+    known = {SPEEDRUN_PREFIX + rel for rel in speedrun_files()}
+    unknown = [x for x in out if x not in known]
+    if unknown:
+        raise ValueError("速通知识库里没有这些文件：" + "、".join(unknown[:5]))
+    return out
+
+
 def _resolve(mode: str, rel: str) -> Path:
     root = root_of(mode).resolve()
     if not isinstance(rel, str) or not rel or rel.startswith(("/", "\\")) or ".." in Path(rel).parts:
         raise ValueError("文件路径无效")
+    if mode == EXPLORE and rel.startswith(SPEEDRUN_PREFIX):   # 探索页里列出的速通知识库文件
+        root, rel = KB_ROOT.resolve(), rel[len(SPEEDRUN_PREFIX):]
+        if rel.startswith("explore/"):
+            raise ValueError("文件路径无效")
     path = (root / rel).resolve()
     if root not in path.parents:
         raise ValueError("只能访问知识库里的文件")
@@ -145,6 +181,11 @@ def prepare_view(cfg, log=print) -> Path:
             raise RuntimeError(f"找不到本机追加资料的目录：{extra_dir}")
         extra = {path.relative_to(extra_dir).as_posix(): path for path in _files(extra_dir)}
         files.update(extra)
+    allow = [rel for rel in getattr(cfg, "kb_allow", None) or [] if rel.startswith(SPEEDRUN_PREFIX)]
+    for rel in allow:
+        source_file = KB_ROOT / rel[len(SPEEDRUN_PREFIX):]
+        if source_file.is_file():
+            files[rel] = source_file
     allowed = {rel: path for rel, path in files.items() if rel not in deny}
     missing = sorted(deny - set(files))
     if missing:
@@ -168,6 +209,8 @@ def prepare_view(cfg, log=print) -> Path:
             Path(dirpath).rmdir()
     if deny:
         log(f"[kb] 知识库有 {len(deny)} 个文件不给智能体看，挂进容器的是只含允许文件的副本（{view}）")
+    if allow:
+        log(f"[kb] 探索模式开放了速通知识库的 {len(allow)} 个文件，挂在 /kb/{SPEEDRUN_PREFIX}下")
     if extra:
         log(f"[kb] 追加本机资料 {len(extra)} 个（{extra_dir}）：{'、'.join(sorted(extra))}；挂进容器的是合并后的副本（{view}）")
     return view

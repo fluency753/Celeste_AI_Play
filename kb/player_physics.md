@@ -72,7 +72,7 @@
 | DashRefillCooldown | 0.1 | s | 冲刺开始后，站地补充冲刺次数之前的等待 |
 | DashHJumpThruNudge | 6 | px | 水平冲刺时，若脚陷入单向平台不超过 6 px，直接抬到平台上 |
 | DashCornerCorrection | 4 | px | 水平冲刺撞墙角时，上下最多挪 4 px |
-| DashVFloorSnapDist | 3 | px | 水平 dash attack 中、离地且下方 3 px 内有地面时，向下贴地 |
+| DashVFloorSnapDist | 3 | px | 水平 dash attack 中、离地且与地面间隙 ≤ 2 px（下移 3 px 会重叠）时，向下贴地 |
 | DashAttackTime | 0.3 | s | dash attack 窗口（DashAttacking），从冲刺开始算 |
 | DodgeSlideSpeedMult | 1.2 | 倍 | 斜下冲刺在地面上转为水平时 vx × 1.2 |
 | SuperJumpSpeed | −105 | px/s | super 跳垂直速度 |
@@ -81,7 +81,7 @@
 | DuckSuperJumpYMult | 0.5 | 倍 | hyper：vy × 0.5 |
 | ReboundSpeedX / Y | 120 / −120 | px/s | 冲碎冲刺砖后的反弹速度 |
 | ReboundVarJumpTime | 0.15 | s | 反弹后的 variable jump 时间 |
-| ReflectBoundSpeed | 220 | px/s | "反射弹开"速度（本三章少见） |
+| ReflectBoundSpeed | 220 | px/s | "反射弹开"速度（序章/1A/2A 少见） |
 | DreamDashSpeed | 240 | px/s | 梦境冲刺速度 |
 | DreamDashEndWiggle | 5 | px | 冲进实心物时的挤出搜索范围 |
 | DreamDashMinTime | 0.1 | s | 梦境冲刺最短持续 |
@@ -109,28 +109,28 @@
 | ClimbHopX | 100 | px/s | 翻上去后（越过墙顶时）水平速度 |
 | ClimbHopForceTime | 0.2 | s | 翻上去后强制水平输入为 0 的时间 |
 | ClimbJumpBoostTime | 0.2 | s | climbjump（无水平输入）后，按反方向可转为 walljump 速度的窗口 |
-| ClimbHopNoWindTime | 0.3 | s | climb hop 后不受风的时间（本三章无风） |
+| ClimbHopNoWindTime | 0.3 | s | climb hop 后不受风的时间（序章/1A/2A 未出现风） |
 
-### 1.5 其他（本三章基本用不到，列出以求完整）
+### 1.5 其他（多数在序章/1A/2A 未出现，列出以求完整）
 
 | 名称 | 值 | 含义 |
 | --- | --- | --- |
-| HoldingMaxRun / HoldMinTime / ThrowRecoil / CarryOffsetTarget | 70 / 0.35 / 80 / (0,−12) | 搬运物体（本三章无） |
+| HoldingMaxRun / HoldMinTime / ThrowRecoil / CarryOffsetTarget | 70 / 0.35 / 80 / (0,−12) | 搬运物体（序章/1A/2A 未出现） |
 | BounceAutoJumpTime | 0.1 | `Bounce()` 的 AutoJump 持续时间 |
 | BounceSpeed / BounceVarJumpTime | −140 / 0.2 | `Bounce()` |
 | SuperBounceSpeed / SuperBounceVarJumpTime | −185 / 0.2 | 地面弹簧 |
 | SideBounceSpeed / SideBounceThreshold / SideBounceForceMoveXTime | 240 / 240 / 0.3 | 墙面弹簧 |
-| LaunchSpeed / LaunchCancelThreshold | 280 / 220 | 爆炸弹射（本三章无） |
+| LaunchSpeed / LaunchCancelThreshold | 280 / 220 | 爆炸弹射（序章/1A/2A 未出现） |
 | HitSquashNoMoveTime / HitSquashFriction | 0.1 / 800 | 红泡泡撞墙后的硬直 |
 | ChaserStateMaxTime | 4 | 记录 Madeline 历史状态（给追逐者用）的最长时长，秒 |
-| DuckWindMult / WindWallDistance | 0 / 3 | 风（本三章无） |
-| LowFriction*、Hiccup*、Glider*、Swim*、StarFly*、WallBooster*、IceBooster*、SpacePhysicsMult | — | 辅助模式、水、羽毛、传送带、太空等，本三章不出现 |
+| DuckWindMult / WindWallDistance | 0 / 3 | 风（序章/1A/2A 未出现） |
+| LowFriction*、Hiccup*、Glider*、Swim*、StarFly*、WallBooster*、IceBooster*、SpacePhysicsMult | — | 辅助模式、水、羽毛、传送带、太空等，序章/1A/2A 未出现 |
 
 ---
 
 ## 2. 状态编号
 
-| 编号 | 名称 | 本三章是否出现 | 玩家可控（InControl） |
+| 编号 | 名称 | 序章/1A/2A 是否出现 | 玩家可控（InControl） |
 | --- | --- | --- | --- |
 | 0 | StNormal | 是 | 是 |
 | 1 | StClimb | 是 | 是 |
@@ -172,7 +172,7 @@
 Madeline 的 Depth = 0，在大多数平台之前、背景类实体之后更新（见 `README.md` §6.1）。一帧内：
 
 1. `PreviousPosition = Position`；`climbTriggerDir = 0`（本帧是否"wallslide 并按住抓"导致算作骑在墙上，见第 30 步）。
-2. 几个与本三章无关的计时器（滑翔、低摩擦、爆炸弹射等）递减。
+2. 几个对应机制在序章/1A/2A 未出现的计时器（滑翔、低摩擦、爆炸弹射等）递减。
 3. 若 `JustRespawned` 且速度非零，清除 `JustRespawned`。
 4. **地面判定 `onGround`**：
    - 若处于 StDreamDash：`onGround = false`。
@@ -196,7 +196,7 @@ Madeline 的 Depth = 0，在大多数平台之前、背景类实体之后更新�
 17. **瞄准**：`lastAim = 根据本帧瞄准输入得到的 8 向单位向量；若无方向输入则为 (Facing, 0)`（见 `input.md`）。冲刺方向就取自它。
 18. wall speed retention（见 §6.3）。
 19. climb hop 水平速度等待（hopWait）：若在等待中：若 `sign(Speed.X) == −hopWaitX` 或 `Speed.Y > 0` 则取消；否则若"碰撞箱沿 hopWaitX 方向平移 1 px 后不再与实心物重叠"（已越过墙顶），则 `Speed.X = hopWaitXSpeed`（100 × Facing），结束等待。
-20. 其他与本三章无关的计时（风、头发、持物）。
+20. 其他在序章/1A/2A 不影响物理的计时（风、头发、持物）。
 21. **组件更新**：状态机在这里运行——先当前状态的更新函数（§5、§6……），再协程（见 §2）。
 22. Actor 收尾：`currentLiftSpeed = 0`（平台给的速度的"当前值"清零，但"最近值"按 0.16 s 宽限保留，见 §7）；宽限计时 `−= dt`，到期清除最近值。
 23. **单向平台上推**：若 `!onGround` 且 `Speed.Y <= 0` 且（不在 StClimb，或攀爬中上一步是向上爬）且当前碰撞箱与某个单向平台重叠，且没有尖刺等"防边缘"实体在头顶 2 px 内：额外 `MoveV(−40 × dt)`（每帧约 −0.667 px，经余量累积）。
@@ -204,7 +204,7 @@ Madeline 的 Depth = 0，在大多数平台之前、背景类实体之后更新�
 25. **空中自动起身**：若 `Speed.Y > 0` 且可以起身（换回普通碰撞箱不与实心物重叠）且 `!onGround` 且 `jumpGraceTimer <= 0`：取消下蹲。
 26. **水平移动**：若不在 StDreamDash / StAttract：`MoveH(Speed.X × dt)`，撞墙时调用水平碰撞回调（§6.1）。
 27. **垂直移动**：同上 `MoveV(Speed.Y × dt)`，碰撞时调用垂直碰撞回调（§6.2）。
-28. 水的进入/离开检查（本三章无水）。
+28. 水的进入/离开检查（序章/1A/2A 未出现水）。
 29. 动画、持物位置。
 30. **触发器**：与每个触发器做（当前碰撞箱，普通或下蹲）重叠检测：新进入则 OnEnter，持续则 OnStay，离开则 OnLeave。
 31. 相机跟随（InControl 时）。
@@ -254,7 +254,7 @@ Madeline 的 Depth = 0，在大多数平台之前、背景类实体之后更新�
 
 1. **离地继承平台向上速度**：若"平台给的速度"（LiftBoost，§7）的 Y < 0，且上一帧在地面、本帧不在地面，且 `Speed.Y >= 0`：`Speed.Y = LiftBoost.Y`。
 2. **抓墙**（不持物时）：若 `GrabCheck` 且不疲劳（体力 + 加成 ≥ 20）且不下蹲：
-   1. （拾取可搬运物体，本三章无。）
+   1. （拾取可搬运物体，序章/1A/2A 未出现。）
    2. 若 `Speed.Y >= 0` 且 `sign(Speed.X) ≠ −Facing`（不在背离朝向方向移动）：
       - 若 ClimbCheck(Facing)（§5.11）：取消下蹲，**进入 StClimb**，返回。
       - 否则，若没有按住下（MoveY < 1）：对 i = 1、2：若头顶上移 i px 无实心物，且 ClimbCheck(Facing, 上移 i)：整像素上移 i px，取消下蹲，进入 StClimb，返回。（抓墙辅助）
@@ -287,7 +287,7 @@ Madeline 的 Depth = 0，在大多数平台之前、背景类实体之后更新�
         - 否则若 DashAttacking 且冲刺方向为正上（|DashDir.X| ≤ 0.2 且 DashDir.Y ≤ −0.75）：**super walljump** SuperWallJump(−1)。
         - 否则：**walljump** WallJump(−1)（向左跳离）。
       - 否则若 WallJumpCheck(−1)：镜像处理（Facing 为左时 climbjump；SuperWallJump(+1)；WallJump(+1)）。
-      - （否则若脚下 2 px 是水面，起跳；本三章无水。）
+      - （否则若脚下 2 px 是水面，起跳；序章/1A/2A 未出现水。）
    - 先检查右墙再检查左墙。
 10. 返回 0（保持 StNormal）。
 
@@ -409,7 +409,7 @@ Madeline 每帧先 `MoveH` 后 `MoveV`。逐像素移动中，下一步将与实
 ### 6.4 其他每帧修正（§3 第 23–25 步）
 
 - **单向平台上推**：上升（或静止）中与单向平台重叠时每帧额外上移 40 px/s × dt，帮助"跳穿"单向平台站上去。
-- **冲刺贴地**：水平 dash attack 中离地不超过 3 px 时直接落到地面（便于贴地冲刺保持 onGround）。
+- **冲刺贴地**：水平 dash attack 中离地间隙 ≤ 2 px（下移 3 px 会重叠）时直接落到地面（便于贴地冲刺保持 onGround）。
 - **空中起身**：下落且 coyote time 已过时自动起身（若空间允许）。
 - **水平冲刺抬上单向平台**：见 §8.5 第 2 步。
 
@@ -446,7 +446,7 @@ Madeline 每帧先 `MoveH` 后 `MoveV`。逐像素移动中，下一步将与实
 
 | 帧 | 发生的事 |
 | --- | --- |
-| F0 | 状态更新中受理冲刺：`Speed += LiftBoost` → StartDash → **DashBegin**：登记冻结 0.05 s（时间倍率 > 0.25 时）；`dashCooldownTimer = 0.2`；`dashRefillCooldownTimer = 0.1`；`dashAttackTimer = 0.3`；`wallSlideTimer = 1.2`；记录 `dashStartedOnGround = onGround`；**`beforeDashSpeed = Speed`；`Speed = (0,0)`；`DashDir = (0,0)`**；下蹲处理（§8.11）。协程执行到第一个让步点。本帧速度为 0，不按速度移动（但 §3 第 24 步的"冲刺贴地"此时已可能生效：DashDir = (0,0) 被视为水平，空中离地 ≤ 3 px 会被吸到地面）。 |
+| F0 | 状态更新中受理冲刺：`Speed += LiftBoost` → StartDash → **DashBegin**：登记冻结 0.05 s（时间倍率 > 0.25 时）；`dashCooldownTimer = 0.2`；`dashRefillCooldownTimer = 0.1`；`dashAttackTimer = 0.3`；`wallSlideTimer = 1.2`；记录 `dashStartedOnGround = onGround`；**`beforeDashSpeed = Speed`；`Speed = (0,0)`；`DashDir = (0,0)`**；下蹲处理（§8.11）。协程执行到第一个让步点。本帧速度为 0，不按速度移动（但 §3 第 24 步的"冲刺贴地"此时已可能生效：DashDir = (0,0) 被视为水平，空中离地间隙 ≤ 2 px（下移 3 px 会重叠）会被吸到地面）。 |
 | F1–F3 | **冻结**：Madeline 与几乎所有实体都不更新；输入照常读取（input buffer 照常递减）。 |
 | F4 | 第一个正常帧。§3 前半照常（读取本帧 moveX、Facing、`lastAim`）。状态更新：**先 DashUpdate，此时 DashDir 仍为 (0,0)**（§8.6 的特殊情况），然后协程：用 `lastAim`（即 **F4 的方向输入**）确定方向与速度（§8.3、§8.4），开始 0.15 s 等待。本帧按冲刺速度移动。 |
 | F5–F13 | DashUpdate；按当前速度移动。冲刺速度共作用于 F4–F13 **10 帧**：直线冲刺位移 40 px，斜向每轴 28.28 px。 |
@@ -474,7 +474,7 @@ Madeline 每帧先 `MoveH` 后 `MoveV`。逐像素移动中，下一步将与实
 
 ### 8.5 DashUpdate（F4–F14 每帧，状态更新时执行）
 
-1. （拾取物体，本三章无。）
+1. （拾取物体，序章/1A/2A 未出现。）
 2. 若 `|DashDir.Y| < 0.1`（水平冲刺，**或 F4 时 DashDir 仍为 (0,0)**）：
    1. 对每个单向平台：若与之重叠且 `碰撞箱底 − 平台顶 <= 6`，且抬升后受击箱不会碰到尖刺：整像素上移到平台顶上。
    2. **super 跳**：若可以起身、`Jump.Pressed`、`jumpGraceTimer > 0`：SuperJump()，切回 StNormal（冲刺立即结束）。
@@ -635,9 +635,9 @@ DreamDashBegin：`Speed = DashDir × 240`（覆盖原速度，包括冲刺保留
 
 ## 11. 其他状态
 
-- **StBoost（4）/ StRedDash（5）**：泡泡。本三章 A 面地图中没有泡泡。规则摘要：进入泡泡时补满冲刺与体力；每帧以 80 px/s 向泡泡中心（+瞄准方向 × 3 px）移动；按冲刺键或 0.25 s 后自动发射，进入 StDash（绿）或 StRedDash（红），**不消耗冲刺次数**；方向同样取冻结结束后第一帧的 `lastAim`。
+- **StBoost（4）/ StRedDash（5）**：泡泡。序章/1A/2A 的 A 面地图中未出现泡泡。规则摘要：进入泡泡时补满冲刺与体力；每帧以 80 px/s 向泡泡中心（+瞄准方向 × 3 px）移动；按冲刺键或 0.25 s 后自动发射，进入 StDash（绿）或 StRedDash（红），**不消耗冲刺次数**；方向同样取冻结结束后第一帧的 `lastAim`。
 - **StHitSquash（6）**：红泡泡冲刺撞墙后的硬直：速度以 800 px/s² 趋向 0，0.1 s 后回到 StNormal；期间可跳、冲刺、抓墙。
-- **StLaunch（7）**：被爆炸类物体弹射（本三章无）：上升时 vy 以 450、下降时以 225 趋向 160；vx 以 200 趋向 0；速度大小 < 220 时回到 StNormal；可冲刺。
+- **StLaunch（7）**：被爆炸类物体弹射（序章/1A/2A 未出现）：上升时 vy 以 450、下降时以 225 趋向 160；vx 以 200 趋向 0；速度大小 < 220 时回到 StNormal；可冲刺。
 - **StDummy（11）**：剧情控制。不可控；默认：可起身则起身；若不在地面受重力（同 StNormal 的半重力规则，目标 160）；variable jump 规则同样适用；不在剧情行走时水平以 1000 减速到 0、超过 90 时以 2500 压回 90。
 - **StIntroRespawn（14）**：死亡后重生的入场动画，约 0.6 s 后自动回到 StNormal。不受重力，不能操作。
 - **StIntroWalk（12）/ StIntroJump（13）/ StIntroWakeUp（15）**：章节开头的入场方式，脚本控制，结束后回到 StNormal。
@@ -653,7 +653,7 @@ DreamDashBegin：`Speed = DashDir × 240`（覆盖原速度，包括冲刺保留
 | --- | --- | --- |
 | SuperBounce(顶边y) | 地面弹簧 | 换成普通碰撞箱，按 `顶边y − 碰撞箱底` 垂直移动（带碰撞）；补满冲刺（章节允许时）与体力；状态 StNormal；`Speed.X = 0`；`Speed.Y = −185`；variable jump 0.2 s；`AutoJump = true`（保持到落地）；清 dashAttack、wallSlide 等 |
 | SideBounce(dir, x, y) | 墙面弹簧 | 若已经以 > 240 的速度朝 dir 移动则无效（返回失败）；否则换成普通碰撞箱，先把碰撞箱底边向弹簧中心高度移动（最多 ±4 px），再把碰撞箱的近侧边缘移到弹簧外侧边缘（均为带碰撞的移动）；补满冲刺与体力；StNormal；`Speed = (240 × dir, −140)`；variable jump 0.2 s；AutoJump 保持；`forceMoveX = dir` 持续 0.3 s（18 帧） |
-| Bounce(顶边y) | （本三章少见） | 同 SuperBounce 但 `Speed.Y = −140`，`Speed.X` 不变，AutoJump 只持续 0.1 s |
+| Bounce(顶边y) | （序章/1A/2A 少见） | 同 SuperBounce 但 `Speed.Y = −140`，`Speed.X` 不变，AutoJump 只持续 0.1 s |
 | Rebound(dir) | 冲碎冲刺砖 | `Speed = (120 × dir, −120)`（垂直撞碎时 dir = 0）；variable jump 0.15 s；AutoJump 保持；清强制水平输入；StNormal |
 | ReflectBounce(d) | 部分实体 | d 的非零分量把对应速度设为 ±220；StNormal |
 | PointBounce(点) | 未冲刺触碰水晶之心 | 结束冲刺；补满冲刺与体力；速度 = 从点指向身体中心的单位向量 × 220，若该单位向量 y ∈ (−0.2, 0.4] 则先把 y 设为 −0.2；vx × 1.5；若 \|vx\| < 100 则设为 100（vx 为 0 时取 −Facing 方向） |
@@ -663,7 +663,7 @@ DreamDashBegin：`Speed = DashDir × 240`（覆盖原速度，包括冲刺保留
 
 ## 13. 死亡、房间边界、换房、重生
 
-### 13.1 死亡原因（本三章）
+### 13.1 死亡原因（序章/1A/2A）
 
 1. **尖刺**：受击箱与尖刺重叠且满足方向条件（见 `entities.md` Spikes）。
 2. **追逐的 Badeline** 碰到受击箱。
@@ -703,7 +703,7 @@ DreamDashBegin：`Speed = DashDir × 240`（覆盖原速度，包括冲刺保留
 - 两个实体相撞需要：双方都有碰撞体、不是同一实体、**被检测的一方**可碰撞（Collidable 为真）。（检测方自己的 Collidable 不影响。）
 - 矩形与矩形：严格相交（A 右 > B 左 且 A 底 > B 顶 且 A 左 < B 右 且 A 顶 < B 底）。贴边不算。
 - 矩形与地形网格：取矩形的整数包围盒，检查覆盖到的 8×8 格中是否有实心格。位置为整数时等价于与实心格做严格矩形相交。
-- 圆形碰撞体（刺球、泡泡）：矩形与圆相交（本三章不涉及）。
+- 圆形碰撞体（刺球、泡泡）：矩形与圆相交（序章/1A/2A 未出现）。
 - "外部重叠"（CollideCheckOutside）：当前不重叠、移动到目标位置后重叠。单向平台的落地与地面判定都用它。
 - 碰撞列表（多个碰撞箱组合）：任一部分相交即相交。
 

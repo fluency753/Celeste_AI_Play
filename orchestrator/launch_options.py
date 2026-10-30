@@ -38,7 +38,7 @@ DEFAULTS = {
     "play_speed": 1, "auto_speed": 1, "rounds_per_room": 3, "room_scale": 2.0, "record_marker": False,
     "skip_enter": False, "no_agent": False, "hud_window": True, "hud": True, "bridge_port": 47774,
     "mcp_port": 47780, "hud_port": 47790, "ffmpeg": "", "record_video_args": "", "audio_offset_ms": None,
-    "tune": {}, "kb_deny": [],
+    "tune": {}, "kb_deny": [], "kb_allow": [],
 }
 
 
@@ -202,9 +202,10 @@ def normalize(options: dict) -> dict:
         clean[key] = coerce(key, value)
     check_relations(clean)
     o["tune"] = {k: v for k, v in clean.items() if v != BY_KEY[k].default}
-    from .kb_access import normalize_deny
+    from .kb_access import normalize_allow, normalize_deny
     o["kb_deny"] = normalize_deny(o["mode"], o["kb_deny"])
-    if any("," in x for x in o["kb_deny"]):
+    o["kb_allow"] = normalize_allow(o["mode"], o["kb_allow"]) if o["mode"] == "explore" else []
+    if any("," in x for x in o["kb_deny"] + o["kb_allow"]):
         raise ValueError("知识库文件名里不能有逗号")
     return o
 
@@ -288,6 +289,8 @@ def build(options: dict) -> list[str]:
     argv += tune_argv(o["tune"])
     if o["kb_deny"]:
         argv += ["--kb-deny", ",".join(o["kb_deny"])]
+    if o["kb_allow"]:
+        argv += ["--kb-allow", ",".join(o["kb_allow"])]
     return argv
 
 
@@ -326,6 +329,9 @@ def config_for(options: dict):
     cfg.save_context = bool(o["save_context"])
     cfg.collision_image = o["collision_image"]
     cfg.live, cfg.playback, cfg.cutscene_mode = o["live"], o["playback"], o["cutscene_mode"]
+    # 与主控相同：游戏内 HUD 不开直播时默认开；录像方式按设置（预览里的提示词与实际运行一致）
+    cfg.hud_mod = (not cfg.live) if o["hud_mod"] is None else bool(o["hud_mod"])
+    cfg.record, cfg.recording_mode = bool(o["record"]), o["recording_mode"]
     cfg.allow_chapter_reset = o["allow_chapter_reset"]
     cfg.action_permissions = o['action_permissions']
     cfg.allow_detour = o['allow_detour']
@@ -338,6 +344,7 @@ def config_for(options: dict):
         cfg.plan = pieces_of([tuple(s) for s in o["segments"]], cfg.checkpoints)
     cfg.study, cfg.study_minutes = o["study"], o["study_minutes"]
     cfg.kb_deny = list(o["kb_deny"])
+    cfg.kb_allow = list(o["kb_allow"])
     apply(cfg, o["tune"])
     cfg.live_remind_s = cfg.remind_live_s if cfg.live else cfg.remind_s
     return cfg

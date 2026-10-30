@@ -192,7 +192,7 @@ class PromptOverrideTests(unittest.TestCase):
                     program = ''.join(p['text'] for p in preview['guide_parts']
                                       if p['source'] == path.name)
                     self.assertIn('个人修改。', program)
-                    self.assertIn('使用 C++', program)
+                    self.assertIn('建议用编译型语言（如 C++）', program)
 
 
 class PromptPreviewTests(unittest.TestCase):

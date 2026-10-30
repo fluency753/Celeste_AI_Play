@@ -91,7 +91,15 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=47790, help="HUD 服务端口（默认 47790）")
     ap.add_argument("--browser", action="store_true", help="用默认浏览器打开，不开独立窗口")
     ap.add_argument("--restart-service", action="store_true", help="端口上是旧版 HUD 服务时结束它、启动新版（没有主控在运行时）")
+    ap.add_argument("--respawn-service", action="store_true",
+                    help="（控制台一键更新后自动调用）等端口上的 HUD 服务退出，再启动新的，不开窗口")
     args = ap.parse_args()
+    if args.respawn_service:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and _status(args.port, "/console") is not None:
+            time.sleep(0.3)
+        ensure_service(args.port)
+        return 0
     ensure_service(args.port, restart=args.restart_service)
     url = f"http://127.0.0.1:{args.port}/console"
     try:

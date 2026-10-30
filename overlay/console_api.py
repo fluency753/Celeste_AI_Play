@@ -147,15 +147,18 @@ PREFS = REPO_ROOT / "configs" / "local.console.json"
 def load_prefs() -> dict:
     data = _read_json(PREFS)
     deny = data.get("kb_deny") if isinstance(data.get("kb_deny"), dict) else {}
+    allow = data.get("kb_allow") if isinstance(data.get("kb_allow"), dict) else {}
     return {"celeste_dir": data.get("celeste_dir") or "",
-            "kb_deny": {mode: list(deny.get(mode) or []) for mode in ("speedrun", "explore")}}
+            "kb_deny": {mode: list(deny.get(mode) or []) for mode in ("speedrun", "explore")},
+            # 探索模式额外开放的速通知识库文件（默认一个都不开放）
+            "kb_allow": {"explore": list(allow.get("explore") or [])}}
 
 
 def save_prefs(update: dict) -> dict:
     """保存控制台的本机设置：游戏位置（空 = 自动查找）与各模式不给智能体看的知识库文件。"""
     from orchestrator.gamepaths import is_game_dir
-    from orchestrator.kb_access import normalize_deny
-    if not isinstance(update, dict) or set(update) - {"celeste_dir", "kb_deny"}:
+    from orchestrator.kb_access import normalize_allow, normalize_deny
+    if not isinstance(update, dict) or set(update) - {"celeste_dir", "kb_deny", "kb_allow"}:
         raise ValueError("设置无效")
     data = _read_json(PREFS)
     if "celeste_dir" in update:
@@ -174,6 +177,13 @@ def save_prefs(update: dict) -> dict:
         for mode, files in deny.items():
             current[mode] = normalize_deny(mode, files)
         data["kb_deny"] = current
+    if "kb_allow" in update:
+        allow = update["kb_allow"]
+        if not isinstance(allow, dict) or set(allow) - {"explore"}:
+            raise ValueError("开放速通资料的设置无效（只有探索模式）")
+        current = data.get("kb_allow") if isinstance(data.get("kb_allow"), dict) else {}
+        current["explore"] = normalize_allow("explore", allow.get("explore"))
+        data["kb_allow"] = current
     PREFS.parent.mkdir(parents=True, exist_ok=True)
     tmp = PREFS.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -188,9 +198,11 @@ def kb_list(mode: str) -> dict:
     root = root_of(mode)
     docs = documents(mode)
     known = {d["path"] for d in docs}
-    deny = [x for x in load_prefs()["kb_deny"].get(mode, []) if x in known]
+    prefs = load_prefs()
+    deny = [x for x in prefs["kb_deny"].get(mode, []) if x in known]
+    allow = [x for x in prefs["kb_allow"].get(mode, []) if x in known]
     sim_readme = REPO_ROOT / "sim" / "dist" / "README.md"
-    return {"mode": mode, "root": root.relative_to(REPO_ROOT).as_posix(), "documents": docs, "deny": deny,
+    return {"mode": mode, "root": root.relative_to(REPO_ROOT).as_posix(), "documents": docs, "deny": deny, "allow": allow,
             "sim_readme": mode == "speedrun" and sim_readme.is_file()}
 
 
@@ -211,6 +223,7 @@ def kb_write(mode: str, path: str, text: str, mtime=None) -> dict:
 PLACEHOLDERS = {
     "{current_settings}": "本次任务与配置的 JSON 快照（存档、范围、权限、程序额度等）",
     "{guide_index_path}": "本次已发布的工作区操作指南索引路径",
+    "{kb_reference_rule}": "本机生成了 kb/reference/ 社区资料时的一句（没有时为空）",
     "{agent_environment}": "按实际执行器与文件／程序能力生成工具名称、容器、阅读计量和图像送达约定",
     "{explore_memory_rule}": "有工作区时维护 notes.md，否则依据当前观测与对话记录进展",
     "{public_feedback_rule}": "当前执行器的公开解说入口：Codex commentary／narrate，Claude narrate",
@@ -410,14 +423,109 @@ def _run(args: list[str], timeout: float = 5) -> str:
         return ""
 
 
-def _bridge_source_version() -> str | None:
+def _bridge_source_version(text: str | None = None) -> str | None:
     import re
-    try:
-        text = (REPO_ROOT / "game-bridge" / "Source" / "Bridge.cs").read_text(encoding="utf-8")
-    except OSError:
-        return None
+    if text is None:
+        try:
+            text = (REPO_ROOT / "game-bridge" / "Source" / "Bridge.cs").read_text(encoding="utf-8")
+        except OSError:
+            return None
     match = re.search(r'Version\s*=\s*"([^"]+)"', text)
     return match.group(1) if match else None
+
+
+# ---------------------------------------------------------------- 检查更新与一键更新（关于页）
+
+def _git(args: list[str], timeout: float = 30) -> tuple[int, str, str]:
+    import subprocess
+    try:
+        result = subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                timeout=timeout, cwd=REPO_ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return result.returncode, result.stdout.rstrip(), result.stderr.strip()   # 行首空格有意义（status --porcelain）
+    except FileNotFoundError:
+        return 127, "", "没找到 git"
+    except subprocess.TimeoutExpired:
+        return 124, "", "git 超时"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, "", str(exc)
+
+
+def _console_version_of(text: str) -> str | None:
+    import re
+    match = re.search(r'^CONSOLE_VERSION\s*=\s*"([^"]+)"', text, re.M)
+    return match.group(1) if match else None
+
+
+def _version_at(ref: str) -> dict:
+    """某个提交的版本信息：提交号、日期、说明、控制台与桥接 Mod 的版本。"""
+    code, out, _ = _git(["log", "-1", "--format=%h|%cs|%s", ref], timeout=10)
+    commit, date, subject = (out.split("|", 2) + ["", "", ""])[:3] if code == 0 and out else ("", "", "")
+    _, console_text, _ = _git(["show", f"{ref}:overlay/console_api.py"], timeout=10)
+    _, bridge_text, _ = _git(["show", f"{ref}:game-bridge/Source/Bridge.cs"], timeout=10)
+    return {"commit": commit, "date": date, "subject": subject,
+            "console": _console_version_of(console_text) if console_text else None,
+            "bridge": _bridge_source_version(bridge_text) if bridge_text else None}
+
+
+def update_check(fetch: bool = True) -> dict:
+    """从 GitHub 取最新版本（git fetch），与本机比较。不改动本机文件。"""
+    code, upstream, _ = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=10)
+    if code != 0 or not upstream:
+        upstream = "origin/main"
+    remote, _, branch = upstream.partition("/")
+    out = {"upstream": upstream, "current": _version_at("HEAD"), "latest": None, "behind": 0, "ahead": 0,
+           "dirty": [], "can_update": False, "reason": ""}
+    if not out["current"]["commit"]:
+        out["reason"] = "这个目录不是 git 克隆（或没装 git），不能检查更新；请从 GitHub 重新下载"
+        return out
+    if fetch:
+        code, _, err = _git(["fetch", "--quiet", remote, branch], timeout=60)
+        if code != 0:
+            out["reason"] = f"连不上 GitHub：{err or '未知错误'}"
+            return out
+    out["latest"] = _version_at(upstream)
+    code, counts, _ = _git(["rev-list", "--left-right", "--count", f"HEAD...{upstream}"], timeout=10)
+    if code == 0 and counts:
+        ahead, behind = (int(x) for x in counts.split()[:2])
+        out.update(ahead=ahead, behind=behind)
+    _, dirty, _ = _git(["status", "--porcelain", "--untracked-files=no"], timeout=10)
+    out["dirty"] = [line[3:] for line in dirty.splitlines() if line.strip()][:20]
+    if out["behind"] == 0:
+        out["reason"] = "已经是最新版本"
+    elif out["ahead"]:
+        out["reason"] = f"本机有 {out['ahead']} 个 GitHub 上没有的提交，不能直接快进；请手动合并"
+    elif out["dirty"]:
+        out["reason"] = "本机改过仓库里的文件（" + "、".join(out["dirty"][:5]) + "）；先提交或撤销这些改动再更新"
+    else:
+        out["can_update"] = True
+    return out
+
+
+def update_apply() -> dict:
+    """一键更新：没有主控在运行、本机没有未提交的改动、只能快进时，从 GitHub 拉取（git merge --ff-only），
+    然后重启 HUD 服务（控制台接口在里面）让新代码生效。"""
+    if orchestrator_status()["running"]:
+        raise ValueError("有主控在运行：等运行结束再更新（运行中换代码可能出错）")
+    check = update_check(fetch=True)
+    if not check["can_update"]:
+        raise ValueError(check["reason"] or "现在不能更新")
+    before = check["current"]
+    code, changed, _ = _git(["diff", "--name-only", "HEAD", check["upstream"]], timeout=20)
+    changed = changed.splitlines() if code == 0 else []
+    code, _, err = _git(["merge", "--ff-only", check["upstream"]], timeout=120)
+    if code != 0:
+        raise ValueError(f"更新失败：{err or '未知错误'}")
+    after = _version_at("HEAD")
+    notes = []
+    if before.get("bridge") != after.get("bridge"):
+        notes.append(f"桥接 Mod 有新版本 {after.get('bridge')}：按 docs/DEPLOY.md 重新编译部署到游戏")
+    if "requirements.txt" in changed:
+        notes.append("Python 依赖有变化：运行 pip install -r requirements.txt")
+    if any(path.startswith("agent-container/") for path in changed):
+        notes.append("智能体容器有改动：按 docs/DEPLOY.md 重建镜像")
+    if any(path.startswith(("tools/launcher/", "CelesteAIConsole.exe", "overlay/console.py")) for path in changed):
+        notes.append("控制台窗口本身有改动：关掉控制台窗口再打开")
+    return {"updated": True, "before": before, "after": after, "files": len(changed), "notes": notes, "restart": True}
 
 
 def about() -> dict:

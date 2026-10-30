@@ -353,7 +353,7 @@ class StiffnessSettingsTests(unittest.TestCase):
         self.assertIn("思考时冻结。本次开启了思考僵直", text)
         self.assertIn("思考时间满 2.5 分钟后，每 2.5 分钟僵直 0.2 秒", text)   # 默认值
         self.assertIn("每 2.5 分钟另外僵直 0.4 秒", text)
-        self.assertIn("不计入每次 act 的 150 帧上限", text)
+        self.assertIn("不计入每次 act 的 600 帧上限", text)
         self.assertIn("僵直期间死亡会立刻松开所有按键", text)
         self.assertNotIn("每次最多僵直", text)                         # 默认不另设上限，文字与原来相同
         cfg.engine = "codex"                      # 两种执行器都适用

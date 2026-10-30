@@ -100,6 +100,9 @@ class PromptTests(unittest.TestCase):
 
     def test_frame_range_in_prompt_and_resume_note(self):
         c = explore()
+        self.assertIn("至少 1 帧、最多 600 帧", play_prompt(c))       # 默认
+        self.assertIn('"act_frames":[1,600]', current_rules_note(c))
+        c.min_frames_per_act, c.explore_act_frames = 40, 150
         self.assertIn("至少 40 帧、最多 150 帧", play_prompt(c))
         self.assertIn('"act_frames":[40,150]', current_rules_note(c))
         c.explore_act_frames = 30                     # 下限不超过上限
@@ -164,6 +167,7 @@ class ActMinimumTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.cfg = RunConfig(agent="t", save="test", model="m", runtime="host", mode="explore",
                              knowledge_profile="explore", chapter=4, thought_lead_s=0)
+        self.cfg.min_frames_per_act = 40          # 默认是 1；这里核对设了下限之后的行为
         self.s = GameSession(self.cfg, root, Metrics(root / "metrics.json", "t", "m", "high", 600))
         self.addCleanup(self.s.close, False)
 

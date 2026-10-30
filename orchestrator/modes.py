@@ -41,14 +41,14 @@ def collision_image_mode(cfg) -> str:
 
 
 def act_frame_min(cfg) -> int:
-    """单次 act 最少推进的帧数（可调参数 min_frames_per_act，默认 40；不超过本模式的上限）。"""
-    return max(1, min(int(getattr(cfg, "min_frames_per_act", 40)), act_frame_cap(cfg)))
+    """单次 act 最少推进的帧数（可调参数 min_frames_per_act，默认 1；不超过本模式的上限）。"""
+    return max(1, min(int(getattr(cfg, "min_frames_per_act", 1)), act_frame_cap(cfg)))
 
 
 def act_frame_cap(cfg) -> int:
-    """单次 act 最多推进的帧数：探索模式用 explore_act_frames（默认 150），速通模式用 max_frames_per_act（默认 600）。"""
+    """单次 act 最多推进的帧数：探索模式用 explore_act_frames（默认 600），速通模式用 max_frames_per_act（默认 600）。"""
     if is_explore(cfg):
-        return int(getattr(cfg, "explore_act_frames", 150))
+        return int(getattr(cfg, "explore_act_frames", 600))
     return int(getattr(cfg, "max_frames_per_act", 600))
 
 

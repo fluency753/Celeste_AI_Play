@@ -32,7 +32,7 @@ GROUPS = ("执行与解说", "规划回放", "速通：程序与规划", "探索
 TUNABLES: tuple[Tunable, ...] = (
     Tunable("max_frames_per_act", "单次 act 最多推进的帧数", "执行与解说", int, 600, 60, 3600, "帧",
             "提示词与 act 的说明里的上限跟着变（探索模式用\"探索：规划程序\"里的那一项）", ("speedrun",)),
-    Tunable("min_frames_per_act", "单次 act 最少推进的帧数", "执行与解说", int, 40, 1, 600, "帧",
+    Tunable("min_frames_per_act", "单次 act 最少推进的帧数", "执行与解说", int, 1, 1, 600, "帧",
             "两种模式都用（超过本模式的上限时按上限算）：inputs 或计划文件合计不足就退回，让智能体在末尾补空帧或继续保持按键；"
             "死亡、换房等截断条件照样提前停下"),
     Tunable("thought_max_chars", "思考语句最长字数", "执行与解说", int, 120, 20, 400, "字",
@@ -77,9 +77,9 @@ TUNABLES: tuple[Tunable, ...] = (
     Tunable("agent_cpus", "自写程序最多用几个 CPU 核", "探索：规划程序", int, HOST_CPUS, 1, HOST_CPUS, "核",
             f"默认是本机的核数（{HOST_CPUS}）；探索模式的提示词写明最多可以用几个核，容器运行方式同时按它限制智能体容器能用的核",
             ("explore",)),
-    Tunable("explore_act_frames", "单次 act 最多推进的帧数", "探索：规划程序", int, 150, 30, 3600, "帧",
+    Tunable("explore_act_frames", "单次 act 最多推进的帧数", "探索：规划程序", int, 600, 30, 3600, "帧",
             "探索模式用这一项；提示词与 act 的说明里的上限跟着变", ("explore",)),
-    Tunable("explore_search_frames", "自写模拟器与搜索程序每次最多推演", "探索：规划程序", int, 150, 1, 36000, "帧",
+    Tunable("explore_search_frames", "自写模拟器与搜索程序每次最多推演", "探索：规划程序", int, None, 1, 36000, "帧",
             "从游戏当前的真实状态算起的总推演帧数，不能接着模拟出来的中间状态分段拼长；写进提示词，由智能体遵守"
             "（主控检查不了它自己程序里的推演帧数）；空着 = 不限", ("explore",), optional=True),
     Tunable("stiff_unit_s", "计时单位", "探索：思考僵直", float, 150, 10, 3600, "秒",

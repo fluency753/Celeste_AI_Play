@@ -2,7 +2,7 @@
 
 本文件收录"怎样利用规则移动得更快/更远/更高"的技巧：Strawberry Jam（草莓酱）训练场 Beginner→Grandmaster 五个 gym 教授的全部技巧，加上 Celeste Community Wiki（celeste.ink）技巧页列出的全部原版技巧（只存在于 mod 的机制除外），去重后每个技巧一个条目，别名并列。机制库（SJ Library：collision leniency、摩擦、freeze frames、计时等"规则本身"）以及后续章节实体的交互规则放在 `mechanics.md`。
 
-本文件只写技巧的定义、条件、帧窗口和数值，不写任何房间布局、路线、解法或收集品位置。原始常量与更新顺序以 `player_physics.md`、`input.md`、`entities.md` 为准，本文只引用其章节，不重复常量表。每个原文小节（celeste.ink 技巧页及子页面、SJ 各 gym 与机制库）对应本文哪一节，见 §9 覆盖对照表；原文副本在 `/kb/reference/`。
+本文件只写技巧的定义、条件、帧窗口和数值，不写任何房间布局、路线、解法或收集品位置。原始常量与更新顺序以 `player_physics.md`、`input.md`、`entities.md` 为准，本文只引用其章节，不重复常量表。每个原文小节（celeste.ink 技巧页及子页面、SJ 各 gym 与机制库）对应本文哪一节，见 §9 覆盖对照表；原文副本在 `/kb/reference/`（可选资料，由部署者在本机生成，没有时忽略这些路径，见 `README.md` §1）。
 
 ---
 
@@ -26,16 +26,16 @@
 
 - **【代码已核实】**：条件与数值逐条对照反编译代码确认。
 - **【由规则推算】**：用本知识库的规则（float32、dt = 0.0166667）算出的数值，没有在游戏里实测；位置按连续值近似，不含 subpixel 取整，误差约 ±1 px。
-- **（未核实）**：只有社区来源，代码里没有找到或没有查。项目作者已逐条核对过这些条目（2026-10-22），基本正确：**默认按正确处理**，实测不符时再以实测为准。
+- **（未核实）**：只有社区来源，代码里没有找到或没有查。标（未核实）以外的条目经过人工对照，默认可用；实测不符时以实测为准。
 - **【社区说法与代码不符】**：社区来源与代码不一致，以代码为准。这类差异大多只是"当前帧算不算在内"之类的数帧口径不同，不是机制本身不同。
 
-### 0.4 本轮章节可用性
+### 0.4 序章/1A/2A 可用性
 
 格式：`序章 / 1A / 2A`。✓ 可用；△ 有条件可用（括号写条件）；✗ 不可用（括号写缺什么）。判断只看章节里**物理上有没有**所需的东西（冲刺次数、墙、移动块、梦境块……）。
 
 - 序章：冲刺上限为 0，直到剧情里的小鸟冲刺教学之后才变为 1（`player_physics.md` §11）。所以需要冲刺的技巧在序章记为 △（教学后）。
 - 1A、2A：冲刺上限 1；没有泡泡、羽毛、果冻（水母）、Theo、云、岩浆块、弹球、河豚、水、月亮块、风（`entities.md` §9）。
-- 本三章各有哪些实体，见 `entities.md`。
+- 序章/1A/2A 各有哪些实体，见 `entities.md`。
 
 ### 0.5 IGT 速记（详见 `mechanics.md` §1）
 
@@ -94,7 +94,7 @@
 - **前置**：起跳帧的 moveX ≠ 0（被强制水平输入期间取强制值）。super、hyper、walljump、wallbounce 直接**赋值**水平速度，不加 40。
 - **输入**：`["1,R,J", "11,R,J"]`。
 - **结果**：90 → 130。是 bunnyhop、cornerboost、梦境双跳拿速度的来源。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Jump Boosts"；celeste.ink；【代码已核实】（普通起跳函数在设置 −105 之前先加 40·moveX）。
 
 ### 2.2 Bunnyhop（bhop；chained bunnyhop / chained bhop）
@@ -104,7 +104,7 @@
 - **输入**：`["1,R,J", "<a>,R", "5,R,J"]`。第一跳只按 1 帧，空中松开；在落地帧 L 的下一帧之前 ≤4 帧开始按住 J（缓冲），J 就会在 L+1 执行。
 - **帧窗口**：L 帧的移动里撞到地面；L+1 帧开始时 onGround 为真，同一帧里先算地面水平摩擦，再执行起跳（+40）。
 - **结果**【由规则推算】：从 90 起，每跳只按 1 帧（滞空 14 帧），平均水平速度约 104 px/s，比跑步快约 15%；每跳按满时约 96 px/s。速度高于约 130 时，每跳净变化为 `40 − 6.67 − 4.33 × 滞空帧数`：滞空 ≥ 8 帧就净减速。所以 bunnyhop 只能**减缓**超速衰减，不能无限加速。
-- **本轮章节**：✓ / ✓ / ✓（序章不能冲刺，这是最快的平地移动方式）
+- **序章/1A/2A**：✓ / ✓ / ✓（序章不能冲刺，这是最快的平地移动方式）
 - **来源 / 核实**：celeste.ink、BWIKI、NamuWiki；【代码已核实】（StNormal 里水平速度更新先于跳跃判定）；平均速度【由规则推算】。
 
 ### 2.3 Jump control 与 float jump
@@ -113,7 +113,7 @@
 - **规则**：variable jump 期间（起跳帧及之后 11 帧，共 12 帧）只要按住跳，vy 不大于起跳速度；**某帧没按住就永久取消本次 variable jump**。|vy| < 40 时，按住跳（或 AutoJump）重力减半：每帧 +7.5，否则 +15（`player_physics.md` §5.2 第 7–8 步）。冲刺结束后 AutoJump 自动为真，一直保持到落地。
 - **float jump 输入**：`["1,R,J", "1,R", "20,R,J"]`。起跳后松开 1 帧（取消 variable jump），再按住（进入半重力区时减慢下落）。
 - **结果**【由规则推算】：按满 27 px / 39 帧；只按 1 帧 7 px / 15 帧；float jump 7.5 px / 20 帧。float jump 与只按 1 帧高度相同，但多飞 5 帧，水平多约 7 px（在 130 时）。hyper、super、wallbounce 同样适用，例如"受控 hyper"：hyper 后很快松开跳。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Jump Control"；NamuWiki（slowfall）；【代码已核实】。
 
 ### 2.4 Coyote time（coyote jump）
@@ -123,7 +123,7 @@
 - **其他来源**：水平或斜向穿出梦境块（0.1 s）；后续章节的岩浆块（碎裂把人甩开时）、消失中的碎裂平台。
 - **coyote super/hyper**：离地后的第 g 帧（第一个空中帧）到 g+3 帧之间受理冲刺，并让跳键在 F4 处于"按下"，F4 就会执行 super（下蹲时为 hyper），见 7.1。更晚的冲刺需要冲刺方向是水平的，并且在 coyote 计时 > 0 时按跳。
 - **输入**：走下平台后 `["<k≤4>,R", "1,R,J", "11,R,J"]`。
-- **本轮章节**：✓ / ✓ / ✓（super/hyper 序章 △ 教学后）
+- **序章/1A/2A**：✓ / ✓ / ✓（super/hyper 序章 △ 教学后）
 - **来源 / 核实**：SJ Library "Coyote Time"；celeste.ink；【代码已核实】。
 
 ### 2.5 Input buffering
@@ -136,7 +136,7 @@
   - 缓冲冲刺：冷却中、落地前（补冲刺）、吃水晶时。吃到水晶会冻结 3 帧，冻结会消耗缓冲，所以冲刺键最好在吃到水晶的那一帧或之后（freeze frames 里）按下并按住（冻结起始帧为推断，未核实）。
   - 缓冲冲刺接弹簧（buffered spring cancel）：地面弹簧会补满冲刺并把状态设为 Normal；冷却允许时，下一帧就能冲刺。
   - 缓冲 climbjump：上升中（vy < 0）不会抓墙，所以按住抓 + 缓冲跳会在 ≤ 2 px 处直接 climbjump，不进入攀爬状态。这样不会"骑"在墙上，不触发交通块、坠落块这类骑乘机关（见 `mechanics.md` Collision Leniency）。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Input Buffering"；NamuWiki；【代码已核实】（缓冲规则见 `input.md`）。
 
 ### 2.6 Fastfall
@@ -144,7 +144,7 @@
 - **作用**：下落速度已达 160 时按住下，上限每帧 +5，16 帧后到 240。
 - **输入**：`["<n>,D"]`（空中）。注意：按住 D 会让 wallslide 失效、让下一次冲刺变成 crouch dash（F0 按住 D）、地面上会下蹲。
 - **结果**【由规则推算】：从 vy = 0 落 100 px：43 帧 → 35 帧；落 200 px：80 → 60；落 400 px：155 → 110。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Falling Speed"；【代码已核实】（`player_physics.md` §5.5）。
 
 ### 2.7 下蹲、crouch jump、crouch climbjump
@@ -157,7 +157,7 @@
   - 地面冲刺撞到前方只有 6 px 高的缝时，会自动进入下蹲继续冲刺，不损失速度。
   - 注意：climbjump、walljump、super/hyper 都要求起跳那一刻"能起身"（当前位置放得下 8×11 的站立碰撞箱）。所以在 1 格（8 px）高的通道**里面**不能起跳。SJ 的"crouch jump 后连续 climbjump 穿过 1 格高的缝"是：每次在缝外能起身的位置起跳，靠 8×6 的下蹲碰撞箱上升穿过缝【代码已核实】。
 - **输入**：crouch jump `["1,D,J", "11,J"]`（同一帧先下蹲、后起跳，两者在 StNormal 里按此顺序判定）。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Advanced Gym "Crouch Jump"、Library "Crouching"；celeste.ink；【代码已核实】。
 
 ### 2.8 摩擦与速度保持（Friction）
@@ -173,7 +173,7 @@
 | 地面，不按或按反方向 | 16.667 |
 
 - **实用结论**：高速时在空中一直按住前进方向；尽量少接触地面（bunnyhop）；地面滑行时不要按下。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Friction"；【代码已核实】。
 
 ### 2.9 Failed hyper / failed wavedash
@@ -182,7 +182,7 @@
 - **前置**：斜下（或任何会在地面转成水平的）冲刺在 F14 时仍在地面上；不在 F14 之前按跳。
 - **输入**：`["1,R,X", "3,R,D", "1,R,D", "10,R", "1,R,J", "11,R,J"]`。F4 斜下，F5–F14 只按 R（F14 结束时速度变为 160），F15 起跳。起跳帧不要按 D，否则保持下蹲，摩擦变成 8.333。
 - **结果**【由规则推算】：F15 先吃一帧地面摩擦 160 → 153.3，再 +40 → 193.3；按满跳水平约 80 px（跑跳 62 px，super 116 px）。冲刺在 F10 之后已站地补满。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Library "Dash Speed"；NamuWiki；【代码已核实】。
 
 ### 2.10 Cornerslip 与 jasig jump
@@ -190,7 +190,7 @@
 - **作用**：擦过地面边缘而**不发生落地碰撞**：照样补满冲刺、获得 coyote time，但竖直速度不被清零，继续下落或上升。
 - **规则**【代码已核实（由更新顺序推出）】：地面判定、补冲刺、coyote 计时都在本帧开头、移动之前做（`player_physics.md` §3 第 4、9、11 步）。若某帧开头脚恰好贴在平台边缘上（vy ≥ 0），这一帧就算在地面上。随后本帧的水平移动先把人带离边缘，竖直移动就没有撞到地面。
 - **jasig jump**：在 cornerslip 给的 coyote time 里做 crouch jump（社区名）。
-- **本轮章节**：✓ / ✓ / ✓（需要像素级对齐）
+- **序章/1A/2A**：✓ / ✓ / ✓（需要像素级对齐）
 - **来源 / 核实**：celeste.ink Tech「Cornerslip」；机制由代码推出，可用性（未实测）。
 
 ---
@@ -208,7 +208,7 @@
 - **距离**【由规则推算】：水平冲刺 F4–F13 共 40 px，F14 以 160 再走 2.7 px。正上冲刺 40 px，加上结束后的惯性约 49.5 px。斜下冲刺每轴 28.3 px。
 - **dash spacing**：水平冲刺结束后速度是 160 而不是 0，所以连续水平冲刺时，等几帧再冲刺比冷却一到就冲刺走得更远（多出的帧以 160 而非 0 计）。正上冲刺结束后有 −120 的上升惯性。
 - **输入**：`["1,X", "3", "1,R", "10,R"]`。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Library "Dash Speed"、"Dash Spacing"；【代码已核实】。
 
 ### 3.2 Super（superdash）与 extended super
@@ -221,7 +221,7 @@
   - 立即 super（冲刺与跳同一帧按下）：`["1,R,X,J", "15,R,J"]`。F0 受理冲刺，J 缓冲到 F4，F4 执行 super，冲刺方向根本没有被应用。这是最早的 super。
   - Extended super：`["1,R,X", "3,R", "6,R", "1,R,J", "11,R,J"]`。F4–F9 向右冲刺 24 px，F10 super 并补满冲刺。
 - **取舍**：super 越早（F4），越早获得 260 的水平速度；extended 晚 6 帧，那几帧以 240 移动，每帧少约 0.33 px，但换回一次冲刺。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Intermediate Gym "Super"；celeste.ink；BWIKI；NamuWiki；【代码已核实】。
 
 ### 3.3 Hyper（hyperdash）与 extended hyper
@@ -235,7 +235,7 @@
   - 经典写法：`["1,R,X", "3,R,D", "1,R,D", "5,R", "1,R,J", "11,R,J"]`。斜下冲刺在 F4 转成水平，速度 169.71 × 1.2 = 203.6。
 - **比较**【由规则推算】：从静止做 extended hyper 时，Z + 水平冲刺在 F4–F9 以 240 移动，比斜下（203.6）每帧多 0.6 px。但如果冲刺前已有更快的水平速度，斜下更好：保留的速度会被再乘 1.2（3.12 grounded ultra）。
 - **注意**：需要能起身（头顶空间放得下站立碰撞箱）。完全在 1 格高的通道里不能 super/hyper，要等出了通道再跳【代码已核实；SJ Library "Crouching" 里"在缝里起跳"的说法要按此理解】。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Intermediate Gym "Hyper"；celeste.ink；BWIKI；NamuWiki；【代码已核实】。BWIKI 和 NamuWiki 写的 vy = −55 有误，代码是 −105 × 0.5 = −52.5【社区说法与代码不符】。
 
 ### 3.4 Wavedash
@@ -247,7 +247,7 @@
 - **输入**（h ≤ 16 px）：`["1,X", "3,R,D", "6,R,D", "1,R,J", "11,R,J"]`。F0 不要按 D（避免变成 crouch dash；无害但没必要）。
 - **结果**：hyper，325 / −52.5。
 - **失败情形**：落地前 3 px 内有墙时，提前按的跳会变成 walljump；h > 28 px 时冲刺在空中结束，就是 ultra（3.10）。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Intermediate Gym "Hyper"（wavedash 小节）；celeste.ink；BWIKI；NamuWiki；【代码已核实】。
 
 ### 3.5 Midair super（mid-air super）
@@ -259,7 +259,7 @@
   3. 单向平台抬升：水平冲刺中脚陷入单向平台 ≤ 6 px，直接抬到平台顶上。
 - **帧窗口**：贴上平台后的帧起，到 F14 为止，按跳即 super。在地面上的 F10–F14 起跳为 extended。冲刺起点离平台太近时贴地太晚，来不及 extended。
 - **输入**：`["1,R,X", "3,R", "<k>,R", "1,R,J", "11,R,J"]`。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Advanced Gym "Midair Super"、Library "Collision Leniency"；NamuWiki；【代码已核实】。NamuWiki 的容错"上 1 px、下 3 px"与代码（侧撞上抬最多 4 px；贴地要求脚离表面 ≤ 2 px；单向平台 6 px）不符【社区说法与代码不符】。
 
 ### 3.6 Reverse tech（reverse super / hyper / wavedash / midair super）
@@ -269,7 +269,7 @@
 - **用途**：小平台一侧有墙时，向墙冲刺（撞墙后 vx = 0，但冲刺继续，站在地面上到 F10 补冲刺），然后反向 extended super/hyper 离开墙。
 - **反向 wavedash**：必须先落地再按跳，否则 3 px 内有墙时会变成 walljump。
 - **输入**（反向 extended super）：`["1,L,X", "3,L", "6,L", "1,R,J", "11,R,J"]`。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Advanced Gym "Reverse Tech"；celeste.ink；NamuWiki；【代码已核实】。
 
 ### 3.7 Hyper bunnyhop（hbhop；wave bunnyhop）
@@ -277,7 +277,7 @@
 - **作用**：短 hyper 落地后立即做一个满高度的 bunnyhop，速度几乎是 hyper 的，高度是普通跳的。
 - **输入**：`["1,R,Z,J", "3,R,J", "1,R,J", "3,R", "5,R,J", "11,R,J"]`。F4 立即 hyper；F5 起松开（短 hyper）；hyper 在第 7 个空中帧落地（L = F11），F8–F12 按住 J，于是在 F12 起跳。
 - **结果**【由规则推算】：325 − 7 × 4.333 = 294.7（空中 7 帧），起跳帧地面摩擦 −6.667，再 +40 → **328**，顶点 27 px。F12 站地时冲刺也已补满。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Advanced Gym "Hyper Bunnyhop"；NamuWiki（同一算式 ≈ 328）；【代码已核实】；数值【由规则推算】。
 
 ### 3.8 Superwave 与 grounded superwave
@@ -287,7 +287,7 @@
 - **规则**：第二次冲刺方向与原水平速度反号，不保留原速度；落地转换后按住前进方向起跳 → hyper（325）。第二次冲刺要补回，也要在它的 F10–F14 起跳。
 - **Grounded superwave**：空中水平冲刺贴上平台后不跳，等到 F15 再向反方向斜下冲刺，做反向 extended hyper。
 - **输入**：`["1,R,X", "3,R", "<k>,R", "1,R,J", "<m>,R,J", "1,R,X", "3,L,D", "1,L,D", "5,L", "1,R,J", "11,R,J"]`。第一段的跳要在 F10–F14（extended）；第二次冲刺方向左下；落地后按 R 起跳。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Grandmaster Gym "Superwave"；NamuWiki；规则【代码已核实】，组合本身（未核实）。
 
 ### 3.9 Crouch dash（demodash，demo，dd）及变体；Demohyper
@@ -301,7 +301,7 @@
   - 冲刺前水平速度 < 200 时，下蹲水平冲刺比地面斜下冲刺快（斜下：max(169.7, v) × 1.2；水平：max(240, v)，在 v = 200 时相等）【由规则推算，与 celeste.ink Demodash 页一致】。
 - **保持下蹲进入下一次冲刺**：在地面上下蹲（例如地面斜下冲刺之后），紧接着从地面开始的冲刺不会起身（起身分支只在空中生效），可以带着下蹲碰撞箱向上冲刺（Archie 的一种做法）【代码已核实】。
 - **输入**：`["1,R,Z", "3,R", "10,R"]`；手动：`["1,D,X", "3,R", "10,R"]`；demohyper（落地或贴地后）：`[..., "1,R,J", "11,R,J"]`。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Grandmaster Gym "Crouch Dash"；celeste.ink（Demodash、Diag demo、Up demo、Undemo）；BWIKI；【代码已核实】。
 - **社区说法核对**：celeste.ink Tech 页说"冲刺前 4 帧内按下"，代码只看 F0 那一帧是否按住下（或用 Z），之后 F1–F3 改方向不影响下蹲【社区说法与代码不符（表述不精确）】。celeste.ink Demodash 子页的说法（"冲刺第 1 帧按住下，第 5 帧之前改方向"）与代码一致。BWIKI 说"dd 后玛德琳抬高 2px"，代码中切换碰撞箱时底边不变，没有找到这一效果（未核实，疑为泡泡 Archie 的效果，见 6.2）。
 
@@ -317,7 +317,7 @@
 - **结果**：落地 vx = (325 − 4.333 × 冲刺结束到落地的空中帧数) × 1.2 ≈ 390；起跳 −6.667 + 40 → ≈ 423。比 hyper 快约 20–30%。普通空中斜下冲刺（无前置速度）：169.7 → 203.6，起跳后 ≈ 237。
 - **排查**：落地后速度变成 160 → 冲刺在地面上结束了（起点太低）；落地没有 ×1.2 → 在"贴地未撞"的那一帧起跳了（celeste.ink 估计缓冲起跳有约 3/8 的概率出现这种情况，未核实）；速度仍然掉得快 → 在地面上停留太久（地面摩擦大于空中，冲刺中没有摩擦）。
 - **Heart ultra**（表演性质）：碰到水晶之心后、被弹开之前的几帧里斜下冲刺（未核实）。
-- **本轮章节**：△（教学后，需要落差）/ ✓（需要 ≥ 28 px 的落差）/ ✓（同）
+- **序章/1A/2A**：△（教学后，需要落差）/ ✓（需要 ≥ 28 px 的落差）/ ✓（同）
 - **来源 / 核实**：SJ Expert Gym "Ultra"、Library "Ultra Mechanics"；celeste.ink；BWIKI；【代码已核实】。
 
 ### 3.11 Chained ultra（Chained ultras）
@@ -326,19 +326,19 @@
 - **前置**：每一跳都要有 ≥ 28 px 的下降空间（平地不行：满跳顶点只有 27 px，不够让斜下冲刺在空中结束）；每次落地站地会补回冲刺（冲刺已开始 ≥ 6 个正常帧）。
 - **规则**：`v(k+1) = (v(k) − 地面摩擦 − 空中摩擦) × 1.2 (+40 起跳)`。前几次做得好最重要，后面的乘数作用在更高的基数上。落地后至少滑 1 帧，见 3.10。
 - **数值**（理想、忽略摩擦与 +40）：325 → 390 → 468 → 562 → 674。
-- **本轮章节**：△ / △ / △（需要连续的落差地形）
+- **序章/1A/2A**：△ / △ / △（需要连续的落差地形）
 - **来源 / 核实**：SJ Grandmaster Gym "Chained Ultra"；celeste.ink；BWIKI；【代码已核实】。
 
 ### 3.12 Grounded ultra（gultra）与连续 grounded ultra
 
 - **作用**：在地面上（或冲刺开始时被吸到地面）斜下冲刺，F4 转水平时保留的高水平速度 ×1.2。
-- **规则**【代码已核实】：F4 时在地面上、斜下 → vx ×1.2、下蹲、方向改为水平。之后若冲刺正常结束（F14）→ 速度被重置为 160；在冲刺中起跳 → hyper（固定 325，加成丢失）。**必须用别的方式取消冲刺才能保住 390**：本三章可用的取消方式是 climbjump（cornerboost，+40 → 430）、向下换房（保留 vx），见 3.14。
+- **规则**【代码已核实】：F4 时在地面上、斜下 → vx ×1.2、下蹲、方向改为水平。之后若冲刺正常结束（F14）→ 速度被重置为 160；在冲刺中起跳 → hyper（固定 325，加成丢失）。**必须用别的方式取消冲刺才能保住 390**：序章/1A/2A 里可用的取消方式是 climbjump（cornerboost，+40 → 430）、向下换房（保留 vx），见 3.14。
 - **冲刺开始时的贴地**：hyper 起跳后 1–2 帧内冲刺，F0 时脚离地 ≤ 2 px，冲刺贴地会把人拉回地面，所以 F4 在地面上【代码已核实】。
 - **ultra → gultra**：ultra 落地（已 ×1.2）后滑至少 1 帧，再在地面上斜下冲刺 → 再 ×1.2。注意：若在"已贴地但还没撞地"的那一帧冲刺，冲刺开始会清零冲刺方向，第一次 ×1.2 就丢了。
 - **连续 grounded ultra**：F14 hyper（325），F15 斜下冲刺（贴地）→ F4' 起 390 → F14' hyper → F15' 再冲……
 - **输入**（一个循环）：`["1,R,X", "3,R,D", "1,R,D", "9,R", "1,R,J"]`，接在一个 F14 的 hyper 之后重复。
 - **结果**【由规则推算】：每个循环 12 个 IGT 帧走 70.4 px，即 **352 px/s（按 IGT）**。对比：F14 hyper 后接"Z + 水平地面冲刺"（保留 325）的循环是 59.6 px，即 298 px/s。约快 1.18 倍，是平地上最快的移动方式。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Grandmaster Gym "Grounded Ultra"；celeste.ink（Grounded Ultra，"冲刺须在起跳后 2 帧内以获得贴地"）；BWIKI（grounded ultra：hyper 第 14 帧起跳，390）；【代码已核实】。
 
 ### 3.13 Delayed ultra（du）
@@ -347,14 +347,14 @@
 - **前置**：取消方式不改变冲刺方向，并且尽量保住水平速度。最好的是 climbjump（cornerboost：保留 vx + 40）；walljump（vx = 130，损失大）。后续章节还有拾取物品、弹跳实体。
 - **由代码推出的同类情况**：斜下方向穿过梦境块后（冲刺方向仍为斜下），落地也 ×1.2（推断，未在游戏中验证）。
 - **输入**：`["1,X", "3,R,D", "<k>,R,D", "5,R,G,J", "1,R", "<m>,R"]`（在墙角处缓冲 climbjump，之后落地）。
-- **本轮章节**：△ / ✓（需墙角）/ ✓
+- **序章/1A/2A**：△ / ✓（需墙角）/ ✓
 - **来源 / 核实**：celeste.ink、BWIKI；【代码已核实】（落地转换不检查状态，只看冲刺方向与 vy）。
 
 ### 3.14 Dash cancel 一览
 
 冲刺状态在 F14 之前可被以下方式结束【代码已核实，除注明外】：
 
-| 方式 | 结束后的速度 | 条件 / 备注 | 本三章 |
+| 方式 | 结束后的速度 | 条件 / 备注 | 序章/1A/2A |
 | --- | --- | --- | --- |
 | super / hyper | (260 / 325·Facing, −105 / −52.5) + 平台加成 | 水平型冲刺 + coyote 计时 > 0 | ✓ |
 | wallbounce | (170·dir, −160) | 正上冲刺 + 5 px 内有墙 | ✓ |
@@ -368,7 +368,7 @@
 | 侧向换房 | 不打断（冲刺继续） | | ✓ |
 | 拾取物品 | 原速度（vy 截到 ≤ 0），中间约 10 帧不动 | 后续章节 | ✗ |
 | 弹跳类实体（河豚、雪球、Oshiro 等） | vx 保留，vy = −140 | 后续章节 | ✗ |
-| 剧情跳过 | （未核实） | harness 自动跳过剧情，无法控制时机 | — |
+| 剧情跳过 | （未核实） | auto 剧情模式由主控自动跳过，无法控制时机；agent 剧情模式可用 `cutscene` 的 skip 或 act 的 `P`（暂停菜单）自行选择时机 | — |
 
 - BWIKI 的"dash cancel：前进 + 跳 + 抓"就是表中的 climbjump 取消。
 - **冷却不因取消而重置**：取消后仍要等到 F15 才能再冲刺（SJ Library "Dash Spacing"）。
@@ -378,7 +378,7 @@
 - **规则**【代码已核实】：dash attack 从 F0 持续到 **F20**（F4–F20 共 17 个正常帧），即冲刺状态结束后还有 6 帧。任何起跳类函数、水平/垂直碰撞、弹簧都会把它清零。
 - **用途**：冲碎冲刺砖、进入梦境块、正上冲刺结束后的 wallbounce（4.3）、5 px wallbounce 检测、冲刺贴地。
 - **反用**：在 dash attack 期间先起跳、climbjump 或抓墙（不碰撞），就能接触冲刺类机关而不触发它（清零了攻击计时）。
-- **本轮章节**：△ / ✓ / ✓
+- **序章/1A/2A**：△ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Dash Attack"（"冲刺结束后 6 帧"与代码一致）；NamuWiki（"到第 21 帧"，从 1 数，与代码一致）。
 
 ---
@@ -400,7 +400,7 @@
 - 地面起跳优先于一切墙跳：coyote 计时 > 0 时按跳是普通起跳。
 - wallslide：下落上限在 72 帧内从 20 线性升到 160（每帧约 +1.94）。
 - **输入**：缓冲 walljump（向右墙）`["5,R,J", "10,R,J"]`。在间隙 ≤ 2 px 的第一帧执行；起跳时有水平输入，所以之后 10 帧水平输入被强制为离墙方向。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Collision Leniency"；NamuWiki；【代码已核实】。
 
 ### 4.2 Wallbounce（WB）
@@ -413,7 +413,7 @@
 - **高度**【由规则推算】：从起跳点算按满跳 +54 px（普通 walljump +27）。从冲刺起点算：F5 wallbounce ≈ 58 px，F14 wallbounce ≈ 94 px，F20 wallbounce ≈ 102 px。越晚 wallbounce 越高（SJ："初速相同，但起点更高"）。
 - **输入**（右侧有墙）：`["1,U,X", "3,U", "1,U", "1,U,J", "14,J"]`，F5 wallbounce；晚 wallbounce：`["1,U,X", "3,U", "10,U", "1,J", "14,J"]`，F14 wallbounce。
 - **变体**：泡泡 wallbounce（后续章节）、换房 wallbounce（6.5）、梦境块后 wallbounce（6.3）、冲刺砖/移动块 wallbounce（墙在动时 + liftboost）。
-- **本轮章节**：△（教学后）/ ✓ / ✓
+- **序章/1A/2A**：△（教学后）/ ✓ / ✓
 - **来源 / 核实**：SJ Intermediate Gym "Wallbounce"；celeste.ink；BWIKI；NamuWiki（"第 1–15 帧成功、16–21 帧延迟成功"，从 1 数，与代码一致）；【代码已核实】。
 
 ### 4.3 Wallbounce variants（wallbounce leniency；spiked wallbounce；wallbounce cancel）
@@ -423,9 +423,9 @@
 - **冲刺后靠近**：冲刺开始时离墙太远（> 4 px）也没关系，冲刺结束后在 F15–F20 内水平靠近到 4 px 以内再按跳。
 - **spiked wallbounce**：墙面有朝向自己的尖刺时，5 px 容错失效（只剩 2 px），而尖刺区域本身是 3 px 宽。冲刺中 vx = 0，按"vx ≥ 0 即致死"（以朝左尖刺为例）会死；冲刺结束后按离墙方向，vx 变为离墙方向（不再满足致死条件），这时可以与尖刺区域重叠并在 F15–F20 内 wallbounce。对竖直位置要求很精确【原理已由代码核实；具体位置要求（未核实）】。
 - **wallbounce cancel**：wallbounce 在帧 W 设置了 0.25 s 的 variable jump。如果在 W+1 或 W+2 开始新的冲刺，冲刺期间计时器照走（freeze frames 不走）；新冲刺在 F14 结束时设 AutoJump 为真，于是 F15（和 F16）里 variable jump 仍然有效，把 vy 钳到 ≤ −160（+平台加成）【代码已核实：冲刺开始不清零 variable jump 计时】。效果：冲刺结束后再多 1–2 帧 −160 的上升。斜下冲刺接 wallbounce cancel 时，F15–F16 不下降，水平 speed retention。SJ 说"wallbounce 的恒定上升持续 18 帧"，就是起跳帧 + 冲刺 15 帧（含 3 freeze frames）+ 2 帧【与代码一致】。
-  - **前置**：需要第二次冲刺。dash cooldown 要求 W+1 ≥ 前一次冲刺的 F15，即 wallbounce 在 F14 或之后；还要有可用的冲刺次数（本三章需要吃水晶补冲刺）。
+  - **前置**：需要第二次冲刺。dash cooldown 要求 W+1 ≥ 前一次冲刺的 F15，即 wallbounce 在 F14 或之后；还要有可用的冲刺次数（序章/1A/2A 需要吃水晶补冲刺）。
   - **输入**：`["1,U,X", "3,U", "10,U", "1,J", "1,R,D,X", ...]`（F14 wallbounce，下一帧冲刺；需要先补回冲刺）。
-- **本轮章节**：△ / ✓（wallbounce cancel 需水晶）/ ✓（同）
+- **序章/1A/2A**：△ / ✓（wallbounce cancel 需水晶）/ ✓（同）
 - **来源 / 核实**：SJ Grandmaster Gym "Wallbounce Leniency"、"Spiked Wallbounce"；SJ Library "Collision Leniency"；【代码已核实】，带刺部分为推断。
 
 ### 4.4 Neutral jump（neutral）
@@ -434,7 +434,7 @@
 - **前置**：StNormal（空中或 wallslide），间隙 ≤ 2 px；不按抓或不朝墙（否则变成 climbjump）；攀爬状态里不按方向按跳是**climbjump**（耗体力），所以要先松开抓。
 - **输入**（右侧墙）：`["1,J", "11,R,J", "<k>,R", "1,J", ...]`。
 - **结果**【由规则推算】：按满跳的循环约 26 帧上升约 19 px，约 **43.5 px/s**。攀爬是 45 px/s 但耗体力，neutral jump 不耗体力。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Advanced Gym "Neutral Jump"；celeste.ink；BWIKI（无体力上墙）；NamuWiki；【代码已核实】（walljump 只在起跳时 moveX ≠ 0 才强制方向）。
 
 ### 4.5 Wallboost、overclock、no-stamina climb、half-stamina climb
@@ -450,7 +450,7 @@
   - **cornerboost 偷体力（cornerboost wallboost，cobwob）**：用无方向的 climbjump 做 cornerboost，再偷体力：速度被重置为 130，朝反方向跳出。
   - **walljump 后偷体力（wallkick wallboost）**：带着水平速度做无方向 climbjump（例如先中性 walljump、再无方向 climbjump），偷体力可以在离墙更远处（celeste.ink：最远约 14 px）才触发。窗口内任何时刻按离墙方向都会把 vx 设为 130。
 - **输入**（攀爬在右墙上）：`["1,G,J", "1,L,J", "10,J"]`。C 帧 climbjump（无方向），C+1 按 L，C+2 生效。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Grandmaster Gym "Wallboost"（11 帧窗口、overclock，与代码一致）；celeste.ink（138，代码 137.5）；BWIKI（偷体力，"10 帧"有误差）；【代码已核实】。
 
 ### 4.6 Stamina management（Stamina）与 climbjump 连发
@@ -460,7 +460,7 @@
 - **结果**【由规则推算】：每 12 帧重按一次（按 11 帧、松 1 帧），近似保持 −105，约 105 px/s；4 次 climbjump 约 84 px 用 48 帧，爬同样高度要约 111 帧。以体力换时间。
 - **体力为 0 也能触发机关**：wallslide 时按住抓，即使不能抓墙，也算"骑"在墙上，照样触发交通块等骑乘机关（`player_physics.md` §5.2 第 7 步）【代码已核实】。
 - **Stamina cancel**（celeste.ink）：爬墙时按住上、反复点按抓，据称比一直按住更省体力。代码里重新抓墙后有 5 帧不扣体力也不能移动；上升中不能抓墙，所以每次松开后要等 vy ≥ 0 才能再抓。这种做法速度慢，对计时无益（未核实）。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Stamina"；【代码已核实】。
 
 ### 4.7 Corner jump、5-jump、6-jump
@@ -474,7 +474,7 @@
   - **带刺墙角跳（spiked cornerjump，SJ"corner jump"）**：墙面布满尖刺时，从墙顶最上面 2 px 起跳：碰撞箱底部只与墙重叠 1–2 px（可以蹬），而受击箱底部比碰撞箱高 2 px，完全在墙顶之上，碰不到墙面的尖刺。死于尖刺说明跳晚了【代码已核实（几何由碰撞箱/受击箱定义推出）】。社区常把它误称为 spike jump（那是 5.4 的另一个技巧）。
 - **社区给出的数值**（celeste.ink，未逐一核实）：爬墙时停在墙顶下第 7 个像素；5-jump 必须在墙顶以下约 5.54 px 以内起跳，最优是最上面约 0.21 px（5/24 px），水平可走约 54.6 px；6-jump 必须在最上面约 2.87 px 以内，最优时约 59.75 px。
 - **输入**：`["1,G,J", "<k>,G", "5,G,J", "11,J"]`（第二段在下落中缓冲）。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Expert Gym "Corner Jump"；celeste.ink Tech「Cornerjump」「5jump」「Spiked Cornerjump」「6jump」；BWIKI（5-jump）；规则【代码已核实】，像素数【社区数值，未核实】。
 
 ### 4.8 Overhangs（4tile / 5tile / crouched 5tile / 6tile / k×1）
@@ -485,7 +485,7 @@
   - **5tile**：几乎完美的 4tile（竖直窗口约 0.12 px，水平窗口约 0.42 px），只能用反向抓角或中性 cornerkick 收尾。
   - **crouched 5tile / 6tile**：crouch jump 后用偷体力代替 walljump（walljump 会起身），以下蹲碰撞箱从悬出部分下穿过；越过边缘的下一帧自动起身，再 cornerkick 或抓墙。6tile 需要连续两次偷体力，输入极密。
   - **k×1**：墙只往下延伸 1 格时，从离天花板不到 1 格处做短跳越过 2 格（蹲着可 3 格）悬出。
-- **本轮章节**：✓ / ✓ / ✓（无冲刺爬升用；数值为社区给出）
+- **序章/1A/2A**：✓ / ✓ / ✓（无冲刺爬升用；数值为社区给出）
 - **来源 / 核实**：celeste.ink Tech「Overhangs」及其子节；规则依据（顶角修正、抓墙距离、自动起身）【代码已核实】，具体像素窗口（未核实）。
 
 ---
@@ -500,7 +500,7 @@
 - 不是从地面开始的冲刺落地：可以向左右最多 4 px 滑下边缘。
 - 只朝运动方向修正（vx ≈ 0 时两边都试，左优先）。
 - 修正后会碰到尖刺时不修正。
-- 本三章：✓ / ✓ / ✓。
+- 序章/1A/2A：✓ / ✓ / ✓。
 
 ### 5.2 Cornerboost（CB，"cb"）及全部变体
 
@@ -528,7 +528,7 @@
   - **中性反向抓角（neutral RCB）**：起跳帧朝向墙但 moveX = 0 → 没有 −40；但会开启 11 帧偷体力窗口，其间一旦按运动方向（离墙），vx 会被设为 130。所以要 11 帧不按方向，空中减速变为 10.833/帧。
   - **消失方块抓角（disappearing block cornerboost）**：方块（磁带块、门等）在 climbjump 后立刻消失，不会撞上，保留 原速 + 40。
   - **mod 抓角方块 / Cornerboost Protection**：见附录 A（原版没有）。
-- **本轮章节**：✓ / ✓ / ✓（序章用无冲刺版）
+- **序章/1A/2A**：✓ / ✓ / ✓（序章用无冲刺版）
 - **来源 / 核实**：SJ Expert Gym "Corner Boost"；celeste.ink（全部变体）；BWIKI；【代码已核实】。BWIKI 写"靠近墙 4 像素内"，代码是间隙 ≤ 2 px【社区说法与代码不符】。
 
 ### 5.3 Coffee jump / cornerkick
@@ -537,7 +537,7 @@
 - **规则**【代码已核实】：上升中顶到角时，若向运动方向（或 vx ≈ 0 时两侧）挪 ≤ 4 px 就能越过，直接挪过去，不损失速度。之后若这面墙在 2 px 间隙内，按跳即 walljump。墙面上有尖刺时，只要运动方向与刺尖同向就不会死。
 - **变体**：中性 cornerkick（不按方向，水平距离小）；无冲刺 cornerkick（两次跳很近，相邻两帧时交替用 J、K）；crouch dashcornerkick（crouch dash 从角下穿过，按跳时需要能起身）。
 - **输入**：`["...", "5,R,J", "11,R,J"]`（在经过角之前缓冲跳）。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Grandmaster Gym "Corner Kick"；celeste.ink（Cornerkick，别名 coffee jump）；BWIKI；【代码已核实】。
 
 ### 5.4 碰撞箱、方向性尖刺与 spike jump（Hitboxes / Directional spikes / Spike jump）
@@ -549,20 +549,20 @@
 - **spike jump**：带刺的表面向你移动（移动块推着尖刺）或风把你压向尖刺时，只要你在朝离开尖刺的方向运动，就可以与尖刺重叠并从那个表面起跳、walljump。块要移动得足够快，否则在起跳前就会死。补体力、不补冲刺。风版本需要特定的竖直位置。
 - **尖刺攀爬（spike climb，narrow spiked climb）**：致死条件是"速度朝向尖刺或为 0"，所以只要速度**严格**朝离开尖刺的方向（哪怕极小），就可以贴着带刺的墙上升，最后 walljump 或 climbjump 离开。社区做法是每帧左右交替来维持极小的离墙速度；按代码，速度一旦为 0 或朝墙就会死，所以交替的时序必须保证每帧结束时速度离墙（未核实）。
 - **尖刺穿越（spike clip）**：朝上尖刺只有在受击箱底边 ≤ 尖刺底边时才致死，并且每帧只检测一次。下方没有地面的悬空尖刺，若下落足够快，一帧在尖刺区之上、下一帧已在其下，就穿过去了（5.5）【代码已核实（判定规则）】。
-- **本轮章节**：方向性尖刺 ✓ / ✓ / ✓；尖刺攀爬 △ / △ / △（TAS 级）；尖刺穿越 △ / △ / △（需悬空尖刺）；spike jump ✗ / △（仅当尖刺附着在会动的块上，未核实是否存在）/ △（同）；风 ✗。
+- **序章/1A/2A**：方向性尖刺 ✓ / ✓ / ✓；尖刺攀爬 △ / △ / △（TAS 级）；尖刺穿越 △ / △ / △（需悬空尖刺）；spike jump ✗ / △（仅当尖刺附着在会动的块上，未核实是否存在）/ △（同）；风 ✗。
 - **来源 / 核实**：SJ Grandmaster Gym "Spike Jump"、Library "Hitboxes"；celeste.ink；BWIKI（踩刺跳）；方向规则【代码已核实】，移动块推刺的时序（未核实）。
 
 ### 5.5 帧与穿越（Frames / 0-framing / clipping）
 
 - **规则**：危险物、拾取物每帧只在移动后的位置检测一次（`player_physics.md` §3 第 32 步）；实心物逐像素检测。所以速度足够高时（每帧位移 > 危险物厚度，尖刺 3 px），可以跳过薄危险物而不触发。反过来，若某个动作需要在某个位置的那一帧执行，而高速下没有任何一帧落在那个位置，这个动作就做不成（"被 0 帧了"）。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Frames"；【代码已核实（检测时机）】。
 
 ### 5.6 Ceiling pop（cpop，cp）
 
 - **作用**：在墙的下端下方 climbjump：climbjump 的 +40 朝墙方向，而前方已经没有墙，于是人钻到悬出的墙下面，得到更多水平距离。
 - **规则**【代码已核实（机制）】：攀爬状态每帧**先**处理跳，**后**检查"面前 1 px 还有没有墙"。所以向下爬滑出墙底后的那一帧仍在攀爬状态，这一帧按跳仍是 climbjump。水平移动先于竖直移动，所以 +40 的水平速度先把人带到墙下，竖直上升随后被墙底挡住。带向下速度抓墙时，竖直速度乘 0.2，subpixel 合适时也能立刻得到这一帧。这一帧通常是帧精确的：缓冲的跳会在更早一帧执行，变成普通 climbjump。
-- **本轮章节**：△ / △ / △（需要像素级与 subpixel 设置）
+- **序章/1A/2A**：△ / △ / △（需要像素级与 subpixel 设置）
 - **来源 / 核实**：celeste.ink Tech「Ceiling Pop (cpop)」；BWIKI；机制【代码已核实】，subpixel 窗口（未核实）。
 
 ---
@@ -585,7 +585,7 @@
 - **delayed liftboost 的常见用法**（celeste.ink）：抓着交通块或冲刺砖时斜向冲向另一面墙，在 9 帧内 walljump，保留块的速度。
 - **数值**：交通块去程最高速约 π × 路径长度 px/s（`entities.md` ZipMover），即使超过 250 也截断到 250。
 - **输入**（交通块上起跳后冲刺）：`["1,R,J", "1,R", "1,R,X", "3,R,D", "1,R,D", "10,R"]`。起跳后 9 帧内冲刺。
-- **本轮章节**：✗（序章只有向下的巨石，没有向上或水平的加成）/ ✓（交通块）/ ✓（交通块、开关门、移动梦境块）
+- **序章/1A/2A**：✗（序章只有向下的巨石，没有向上或水平的加成）/ ✓（交通块）/ ✓（交通块、开关门、移动梦境块）
 - **来源 / 核实**：SJ Expert Gym "Multiboost"、Library "Block Boosts"、"Delayed Block Boosts"；celeste.ink（Liftboost）；NamuWiki（Block boost，其中 825 的算式有误，按代码截断后应为 637.5）；【代码已核实】。
 
 ### 6.2 Dream block tech（2A）
@@ -614,22 +614,22 @@
 - **Splipped droosts**：在带刺梦境块的上角做梦境冲刺而不进入块（celeste.ink 梗名）（未核实）。
 - **梦境穿角（dream corner clip）**：梦境块的碰撞范围较宽，冲进梦境块与其他实心物夹出的角落，可以穿过 1 格宽的墙（celeste.ink；代码中出口卡进实心物时会向对角方向最多 5 px 搜索空位，可能与此有关，未核实）。
 - **梦境中带物品（dream smuggle 等）**：见 6.7。
-- **本轮章节**：✗ / ✗ / ✓（梦境块激活后）
+- **序章/1A/2A**：✗ / ✗ / ✓（梦境块激活后）
 - **来源 / 核实**：SJ Beginner Gym "Dream Jump"、"Dream Grab"；Expert Gym "Dream Hyper"、"Dream Super"；Grandmaster Gym "Dream Double Jump"；celeste.ink；BWIKI。
 
 ### 6.3 坠落块与碎裂平台（Falling / crumble blocks）
 
 - **规则**（`entities.md`）：坠落块站上 0.2–0.6 s 后坠落，离开后立刻坠落，下落最高 160 px/s，向下运动**不给**起跳加成；碎裂平台站上 0.2–0.6 s、抓侧面约 1 s 后消失，被挡住时不恢复。
 - **技巧**：在它们开始动或消失之前完成落地、起跳、wavedash。碎裂平台抓侧面触发更慢，给 wavedash 留更多时间（SJ）。
-- **本轮章节**：✗ / ✓ / ✓
+- **序章/1A/2A**：✗ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Falling Blocks"、"Crumble Blocks"；数值以 `entities.md` 为准【代码已核实（entities.md）】。SJ 文本给出 36 / 60 / 12 帧，与 `entities.md` 的区间一致。
 
 ### 6.4 弹簧、冲刺砖、冲刺水晶
 
-- **地面弹簧**：(0, −185)，水平速度**清零**，补冲刺与体力，取消冲刺，AutoJump 保持到落地；之后 dash cooldown 允许时可以立刻冲刺（缓冲冲刺接弹簧，2.5）【代码已核实】。墙面弹簧 (±240, −140)，强制水平 18 帧（本三章未登记墙面弹簧）。
+- **地面弹簧**：(0, −185)，水平速度**清零**，补冲刺与体力，取消冲刺，AutoJump 保持到落地；之后 dash cooldown 允许时可以立刻冲刺（缓冲冲刺接弹簧，2.5）【代码已核实】。墙面弹簧 (±240, −140)，强制水平 18 帧（序章/1A/2A 未登记墙面弹簧）。
 - **冲刺砖**：dash attack 中朝冲刺方向撞上 → 碎；反弹 (∓120, −120)（竖直撞碎为 (0, −120)），variable jump 0.15 s 自动保持；不补冲刺；冻结 3 帧（不计 IGT）。dash attack 在冲刺结束后还有 6 帧，晚到也能撞碎。
 - **冲刺水晶**：冲刺中也能吃；吃到冻结 3 帧（不计 IGT）；冲刺次数未满或体力 < 20 时才生效。
-- **本轮章节**：弹簧 ✗ / ✓ / ✓（视地图）；冲刺砖 ✗ / ✓ / ✓；水晶 ✗ / ✓ / ✓
+- **序章/1A/2A**：弹簧 ✗ / ✓ / ✓（视地图）；冲刺砖 ✗ / ✓ / ✓；水晶 ✗ / ✓ / ✓
 - **来源 / 核实**：`entities.md`、`player_physics.md` §12；【代码已核实】。
 
 ### 6.5 Screen transition tech（补冲刺、换房 wallbounce / super / hyper、Kermit dash）
@@ -643,7 +643,7 @@
 - **换房 wallbounce（transition wallbounce，Kermit tech）**：正上冲刺穿过向上换房，到新房间后仍在 dash attack 中、冲刺方向仍为正上 → 在 StNormal 里贴墙按跳即 wallbounce。冲刺已被换房补满。
 - **换房 super/hyper**：水平冲刺穿过侧向换房，dash attack；到新房间后要**落在地面上**再按跳（coyote 计时被清零了）；冲刺次数已被补满，相当于免费 extended。
 - **Kermit dash**（celeste.ink）：冲刺穿过**竖直**换房时，冲刺状态被结束，但 dash attack 计时和冲刺方向都保留。所以到新房间后仍能做冲刺类动作（wallbounce、撞碎冲刺砖、进梦境块），并且冲刺已经被换房补满。与代码一致：向上换房把状态设为 Normal，向下换房同样；两者都不清零 dash attack 计时，也不改冲刺方向。
-- **本轮章节**：✓ / ✓ / ✓
+- **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Library "Screen Transitions"；celeste.ink；BWIKI（切板）；【代码已核实】。SJ 说向上换房"只在上升速度不足时才把人往上推"，代码是无条件设为 −105，向上冲刺穿过时也会被压到 −105，而且 vx 清零【社区说法与代码不符】。
 
 ### 6.6 Reform tech（reform boost / cassette boost / reform kick）
@@ -655,10 +655,10 @@
 - **磁带块抬升（cassette raise）**：在磁带块激活和取消激活的整个过程中都待在块里，块会上移 2 px，可重复（celeste.ink；与上面"恢复时上移 1 px"、预告时各移 1 px 的规则有关，具体机制未核实）。
 - **换房磁带偏移（screen transition cassette offset）**：在磁带块切换的那一刻换房，新房间该颜色的块高 1 px，旧颜色的低 1 px（celeste.ink，未核实）。
 - move block、core block 版本见 `mechanics.md` §3（后续章节）。
-- **本轮章节**：✗ / △（只有隐藏的磁带房间有磁带块）/ △（同）
+- **序章/1A/2A**：✗ / △（只有隐藏的磁带房间有磁带块）/ △（同）
 - **来源 / 核实**：SJ Grandmaster Gym "Reform Tech"；celeste.ink（Cassoosted fuper 为梗技巧，需要羽毛，不收录细节）；磁带块部分【代码已核实】。
 
-### 6.7 后续章节实体的技巧（本轮章节用不到，但规则已整理）
+### 6.7 后续章节实体的技巧（序章/1A/2A 未出现这些实体，但规则已整理）
 
 以下技巧需要序章、1A、2A 里没有的实体，三列都记为 ✗。实体交互规则与代码核实见 `mechanics.md` §3。
 
@@ -684,7 +684,7 @@
 | 岩浆块技巧（Core boost / core hyper / core super） | 抓着的岩浆块弹完时把人甩开：设为方块速度并给 5 帧 coyote；这 5 帧内跳/super/hyper 拿加成；F4 立即 hyper 要求在前 4 个 coyote 帧内冲刺（4 帧窗口） | 岩浆块 | 代码已核实 |
 | 羽毛技巧（Feather boost / shielded feather / feather bump / feather super） | 羽毛起飞初速 250 × 方向；撞墙按 −0.5 反弹；离地 3 px 内按跳 → 普通起跳保留羽毛速度（"feather super"） | 羽毛 | 代码已核实 |
 | 月亮块加速（Moonboost） | 冲刺撞月亮块，把块推开（最多 8 px，缓动）并被角修正送到块顶；块还在动时起跳拿平台加成 | 月亮块 | 部分核实 |
-| 水面加速（Waterboost） | 水面上每次起跳 +40；水中冲刺不消耗冲刺次数；harness 只能隔帧起跳 | 水 | 代码已核实 |
+| 水面加速（Waterboost） | 水面上每次起跳 +40；水中冲刺不消耗冲刺次数；harness 用 J/K 交替可以每帧起跳（7.5） | 水 | 代码已核实 |
 | 望远镜卡刺（Bino clip） | 用望远镜把镜头移远，使屏幕外刺球卸载，再快速冲过 | 刺球+望远镜 | 未核实 |
 | 熔岩攀爬 / 熔岩 wallbounce（Lava climbing / wallbounce） | 熔岩墙的实心区在伤害区内 2 px，留出 1 px 的 walljump/攀爬窗口；wallbounce 5 px | 熔岩墙 | 未核实 |
 | Seeker 反弹（Seeker bounce） | seeker 撞墙后的短暂状态里撞它：约 hyper 速度并补冲刺 | seeker | 未核实 |
@@ -737,14 +737,14 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 
 ### 7.6 其他高级技巧
 
-| 技巧 | 规则 | 本轮章节 | 核实 |
+| 技巧 | 规则 | 序章/1A/2A | 核实 |
 | --- | --- | --- | --- |
 | 回图重开（Bubsdrop） | 用 walljump/climbjump 抵消向上换房带来的上升，不落到入口的单向平台上，掉回上一个房间；重生点改为该房间上部最近的出生点 | ✗（依赖特定房间结构，对计时无益） | 未核实 |
-| 剧情跳过取消冲刺 / 剧情 ultra / 剧情位移（Cutscene skip, cutscene ultra, cutscene warp） | 剧情开始时减速，首帧跳过可保速但取消冲刺状态；部分剧情跳过只改 x | ✗（剧情由 harness 自动跳过，agent 无法控制时机） | 未核实 |
-| 暂停缓冲（Pause buffering） | 解除暂停后约 10 帧内还没有恢复控制，其中最后 5 帧里的按键会在恢复后的第一帧执行，用来逐帧输入（celeste.ink：缓冲窗口 6 帧） | ✗（harness 本身逐帧；暂停期间 IGT 照走） | 未核实 |
+| 剧情跳过取消冲刺 / 剧情 ultra / 剧情位移（Cutscene skip, cutscene ultra, cutscene warp） | 剧情开始时减速，首帧跳过可保速但取消冲刺状态；部分剧情跳过只改 x | auto 剧情模式 ✗（主控自动跳过，时机不由智能体控制）；agent 剧情模式 △（可用 `cutscene` 的 skip 或 act 的 `P` 自选时机，帧精度未核实） | 未核实 |
+| 暂停缓冲（Pause buffering） | 解除暂停后约 10 帧内还没有恢复控制，其中最后 5 帧里的按键会在恢复后的第一帧执行，用来逐帧输入（celeste.ink：缓冲窗口 6 帧） | ✗（harness 本身逐帧输入，用不着暂停缓冲；agent 剧情模式虽可用 `P` 暂停，暂停期间 IGT 照走） | 未核实 |
 | half-stamina climb（Half stamina climbing） | 见 4.5 | ✓（TAS 级） | 未核实 |
 | Kermit dash | 见 6.5 | ✓ | 代码已核实 |
-| 望远镜技巧（Bino clip / bino control storage / bino interaction storage / bino extensions） | 卡刺：用望远镜让屏幕外刺球卸载；控制存储：在望远镜里移动（需暂停缓冲）；交互存储：进入望远镜行走后一旦离地，"正在用望远镜"的标记不清除，下一次换房时会把状态设为 Normal（可取消冲刺，例如保住 grounded ultra 的速度）；延长：反复进出扩大镜头范围 | △（1A/2A 有望远镜；harness 不能暂停，交互存储理论上可行）（未核实） | 未核实 |
+| 望远镜技巧（Bino clip / bino control storage / bino interaction storage / bino extensions） | 卡刺：用望远镜让屏幕外刺球卸载；控制存储：在望远镜里移动（需暂停缓冲）；交互存储：进入望远镜行走后一旦离地，"正在用望远镜"的标记不清除，下一次换房时会把状态设为 Normal（可取消冲刺，例如保住 grounded ultra 的速度）；延长：反复进出扩大镜头范围 | △（1A/2A 有望远镜；控制存储要暂停缓冲，只有 agent 剧情模式能用 `P` 暂停；交互存储理论上可行）（未核实） | 未核实 |
 | Roboboost | 在移动块上做 6 帧 hyper bunnyhop + 反向 cornerboost（TAS） | △ / △ / △ | 未核实 |
 | subpixel 操纵（Subpixel manipulation） | 不是独立技巧：通过组合动作把余量（`README.md` §5）调到特定值，以满足像素级技巧。模拟器可以直接枚举 | ✓ | — |
 | 仅见名称的条目 | NamuWiki 列有 Jasig jump（2.10）、Bino storage（本表望远镜技巧）、Oshiro super（6.7 弹跳）、Overclock（4.5）、Climb jump cancel（按"用 climbjump 取消冲刺"理解，3.14、5.2）、Yep（无定义）。celeste.ink Tech/aurora 草稿页里另有一批只有名字的条目，见 §9.3 | — | — |
@@ -821,7 +821,7 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 
 ## 9. 来源覆盖对照表（原文小节 → 本知识库位置）
 
-原文副本放在 `/kb/reference/`（只读，与本文件或代码冲突时以本文件和代码为准）。下表中「」里是原文的小节标题，可以直接在对应文件里搜索。"本三章"一栏只在与条目本身不同或需要强调时填写。
+原文副本放在 `/kb/reference/`（可选，本机生成；只读，与本文件或代码冲突时以本文件和代码为准）。下表中「」里是原文的小节标题，可以直接在对应文件里搜索。备注里的"序章/1A/2A"可用性只在与条目本身不同或需要强调时填写。
 
 ### 9.1 celeste.ink Tech 页：`/kb/reference/celeste_wiki/Tech.md`
 
@@ -833,12 +833,12 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 | 「Coyote Time/Jump」 | 2.4 | |
 | 「Dash Attack」 | 3.15 | |
 | 「Directional Spikes」 | 5.4 | |
-| 「Fastbubbling」 | 6.7；`mechanics.md` 3.2 | 本三章 ✗（无泡泡） |
+| 「Fastbubbling」 | 6.7；`mechanics.md` 3.2 | 序章/1A/2A ✗（未出现泡泡） |
 | 「Fastfalling (Fastfall)」 | 2.6 | |
 | 「Input Buffering」 | 2.5 | 原文"之后 4 帧" = 按下帧 + 4 帧，与代码的 5 帧一致 |
 | 「Liftboost」 | 6.1；`mechanics.md` 2.3、2.22 | 一致（10 帧计时 = 停下后 9 帧） |
 | 「Screen Transition」 | 6.5；`mechanics.md` 2.23 | 原文"竖直换房后给少量竖直速度"：代码是向上换房**设为** −105，向下换房只保证 vy ≥ 0 |
-| 「Wind Resistance」 | `mechanics.md` 2.8 | 本三章 ✗（无风） |
+| 「Wind Resistance」 | `mechanics.md` 2.8 | 序章/1A/2A ✗（未出现风） |
 | 「Spring Cancel」 | 2.5；6.4 | |
 | 「Superdash (Super)」 | 3.2 | |
 | 「Hyperdash (Hyper)」 | 3.3；3.7 | |
@@ -870,30 +870,30 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 | 「Spike Climb」「Narrow Spiked Climb」「Spike Clip」「Spike Jumps」 | 5.4；5.5 | |
 | 「Stamina Cancel」 | 4.6 | |
 | 「Cornerslip」 | 2.10 | |
-| 「Archie」「Bubble Super / Hyper」 | 6.7；`mechanics.md` 3.2 | 本三章 ✗ |
+| 「Archie」「Bubble Super / Hyper」 | 6.7；`mechanics.md` 3.2 | 序章/1A/2A ✗ |
 | 「Bumper Clip」「Launch Boost」 | 6.7；`mechanics.md` 3.4 | 原文"约 +50"与代码 ×1.2（280 → 336）一致 |
-| 「Fish / Iceball / Oshiro / Seeker / Snowball Jump」 | 6.7；`mechanics.md` 2.4 | 本三章 ✗ |
-| 「Cloud Jump / Spiked Cloud Jump」「Cloud Hyper/Super」「Cloud Hyper Bunnyhop」 | 6.7；`mechanics.md` 3.5 | 本三章 ✗ |
-| 「Core Hyper/Super」「Holdable Core Super/Hyper」「Core Block Entity Displacement (ced)」 | 6.7；`mechanics.md` 3.6 | 本三章 ✗ |
+| 「Fish / Iceball / Oshiro / Seeker / Snowball Jump」 | 6.7；`mechanics.md` 2.4 | 序章/1A/2A ✗ |
+| 「Cloud Jump / Spiked Cloud Jump」「Cloud Hyper/Super」「Cloud Hyper Bunnyhop」 | 6.7；`mechanics.md` 3.5 | 序章/1A/2A ✗ |
+| 「Core Hyper/Super」「Holdable Core Super/Hyper」「Core Block Entity Displacement (ced)」 | 6.7；`mechanics.md` 3.6 | 序章/1A/2A ✗ |
 | 「Delayed Blockboost」「Multiboost」 | 6.1 | 1A / 2A ✓ |
 | 「Dream Grab」「Dream Jump」「Dream Double-Jump」「Dream Hyper」 | 6.2 | 2A ✓ |
 | 「Dream Smuggle」「Dream Grab Hyper」「Holdable Dream Hyper」「Holdable Grabless Dream Hyper」 | 6.2（反抓 hyper）；6.7 | 不带物品的反抓 hyper 2A ✓；带物品的 ✗。原文"拾取要 12 帧"，代码的拾取动画是 0.16 s ≈ 10 帧，另有状态切换帧（未实测） |
-| 「Featherboost」「Feather Super」「Feather Clip」「Feather Hitbox Preservation」 | 6.7；`mechanics.md` 3.3 | 本三章 ✗ |
+| 「Featherboost」「Feather Super」「Feather Clip」「Feather Hitbox Preservation」 | 6.7；`mechanics.md` 3.3 | 序章/1A/2A ✗ |
 | 「Heart Ultras」 | 3.10；6.7 | 表演性质 |
 | 「Jumpthrough Clip」 | 6.7 | 未核实 |
-| 「Lava Neutrals」 | 6.7 | 本三章 ✗ |
-| 「Moon Boost」 | 6.7；`mechanics.md` 3.7 | 本三章 ✗ |
+| 「Lava Neutrals」 | 6.7 | 序章/1A/2A ✗ |
+| 「Moon Boost」 | 6.7；`mechanics.md` 3.7 | 序章/1A/2A ✗ |
 | 「Reform Tech」「Reform Kick」「Reform Boost (Cassette Boost)」「Cassoosted Fuper」 | 6.6 | 1A / 2A 只有磁带房间有磁带块（△）；Cassoosted fuper 需羽毛（✗） |
-| 「Seeker Bounce」 | 6.7 | 本三章 ✗ |
-| 「Theo/Jelly Regrabs」「Holdable Slash」「Neutral Drop」「Holdable Stall」「Holdable Climb」「Holdable Neutral Jump」「Holdable Laddering」「Theo/Jelly Ultras」「Holdable Dash Smuggle (From bumpers)」「Throwable Backboost (Backboost)」「Jellyvator / Theovator」「Springboost cancel」 | 6.7；`mechanics.md` 3.1 | 本三章 ✗（无可拾取物） |
-| 「Waterboost」 | 6.7；`mechanics.md` 2.26 | 本三章 ✗ |
+| 「Seeker Bounce」 | 6.7 | 序章/1A/2A ✗ |
+| 「Theo/Jelly Regrabs」「Holdable Slash」「Neutral Drop」「Holdable Stall」「Holdable Climb」「Holdable Neutral Jump」「Holdable Laddering」「Theo/Jelly Ultras」「Holdable Dash Smuggle (From bumpers)」「Throwable Backboost (Backboost)」「Jellyvator / Theovator」「Springboost cancel」 | 6.7；`mechanics.md` 3.1 | 序章/1A/2A ✗（未出现可拾取物） |
+| 「Waterboost」 | 6.7；`mechanics.md` 2.26 | 序章/1A/2A ✗ |
 | 「Koral Clip」 | 6.7 | △，未核实 |
 | 「Bino Tech」「Bino Clip」「Bino Control Storage」「Bino Interaction Storage」「Bino Extensions」 | 7.6 | △，未核实 |
 | 「Bubsdrop」「Cutscene Warps」「Pause Buffering」「Roboboost」「Subpixel Manipulation」 | 7.6 | |
 | 「Cassette Raise」「Screen Transition Cassette Offset」 | 6.6 | 未核实 |
 | 「Half Stamina Climbing」 | 4.5 | |
 | 「Kermit Dash」 | 6.5 | 与代码一致 |
-| 「Spinner Stunning」「Spinner Freeze」 | 6.7 | 本三章 ✗（无刺球） |
+| 「Spinner Stunning」「Spinner Freeze」 | 6.7 | 序章/1A/2A ✗（未出现刺球） |
 | 「Undemo (omed) Dashing」 | 3.9 | |
 | 「Trivia」「References」 | 不收录 | |
 
@@ -992,7 +992,7 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 
 ---
 
-## 附录 A. 训练场 / 机制库里出现的自定义实体与工具（原版没有，本轮章节用不到）
+## 附录 A. 训练场 / 机制库里出现的自定义实体与工具（原版没有）
 
 | 名称 | 一句话 |
 | --- | --- |

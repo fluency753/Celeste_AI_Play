@@ -34,12 +34,12 @@ class ActLimitTests(unittest.TestCase):
         self.state.write_text(json.dumps({'agent': 'test', 'tuning': {}}), encoding='utf-8')
 
     def test_cap_changes_real_plan_validation_and_resumes_without_changing_prediction_limit(self):
-        with self.assertRaisesRegex(ActError, '最多推进 150'):
-            self.session._check_plan(PlanSpec(['200,R']))
+        with self.assertRaisesRegex(ActError, '最多推进 600'):
+            self.session._check_plan(PlanSpec(['700,R']))
         result = self.session.update_act_limit({'frames': 300})
         self.assertEqual(result['frames'], 300)
         self.assertEqual(len(self.session._check_plan(PlanSpec(['200,R']))), 200)
-        self.assertEqual(self.cfg.explore_search_frames, 150)
+        self.assertIsNone(self.cfg.explore_search_frames)
         state = json.loads(self.state.read_text(encoding='utf-8'))
         self.assertEqual(state['agent'], 'test')
         self.assertEqual(state['tuning'], {'explore_act_frames': 300})
@@ -54,7 +54,7 @@ class ActLimitTests(unittest.TestCase):
         self.cfg.mode = 'speedrun'
         self.session.update_act_limit({'frames': 900})
         self.assertEqual(self.cfg.max_frames_per_act, 900)
-        self.assertEqual(self.cfg.explore_act_frames, 150)
+        self.assertEqual(self.cfg.explore_act_frames, 600)
         self.assertEqual(self.session.act_limit_settings()['min'], 60)
         self.session.update_act_limit({'frames': 600})
         self.assertEqual(json.loads(self.state.read_text())['tuning'], {})
@@ -68,14 +68,14 @@ class ActLimitTests(unittest.TestCase):
         with patch.object(Path, 'replace', side_effect=OSError('disk unavailable')):
             with self.assertRaisesRegex(OSError, 'disk unavailable'):
                 self.session.update_act_limit({'frames': 300})
-        self.assertEqual(act_frame_cap(self.cfg), 150)
+        self.assertEqual(act_frame_cap(self.cfg), 600)
         self.assertEqual(self.cfg.tuning, {})
         self.assertEqual(self.state.read_bytes(), before)
         self.assertFalse(self.state.with_suffix('.act-limit.tmp').exists())
 
     def test_same_value_is_idempotent_and_stopped_session_rejects_update(self):
         before = self.state.stat().st_mtime_ns
-        self.assertFalse(self.session.update_act_limit({'frames': 150})['changed'])
+        self.assertFalse(self.session.update_act_limit({'frames': 600})['changed'])
         self.assertEqual(self.state.stat().st_mtime_ns, before)
         self.session.done = True
         with self.assertRaisesRegex(ActError, '试玩已结束'):
@@ -99,7 +99,7 @@ class ActLimitTests(unittest.TestCase):
         self.session.update_act_limit({'frames': 300})
         result = asyncio.run(server.call_tool('observe', {}))
         text = '\n'.join(item.text for item in result.content if getattr(item, 'type', None) == 'text')
-        self.assertIn('当前 act 帧数范围：40～300', text)
+        self.assertIn('当前 act 帧数范围：1～300', text)
 
     def test_real_http_endpoint_checks_capability_and_queues_payload(self):
         control = RunControl(self.root)
@@ -145,7 +145,7 @@ class ActLimitControlTests(unittest.IsolatedAsyncioTestCase):
                 ident = runner.control.enqueue('act_limit', '{"frames":300}')
                 task = asyncio.create_task(runner._controls())
                 await asyncio.sleep(.05)
-                self.assertEqual(act_frame_cap(cfg), 150)
+                self.assertEqual(act_frame_cap(cfg), 600)
                 runner.action_lock.release()
                 async with asyncio.timeout(3):
                     while True:

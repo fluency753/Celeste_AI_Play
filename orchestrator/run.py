@@ -75,7 +75,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--create-save", action="store_true", help="显式新建独立存档：放在现有最新存档的下一个槽位（不填中间的空位），只允许从序章开始；名称允许重复")
     ap.add_argument("--model", default="opus", help="Claude Code 模型别名：opus / fable 等（默认 opus）；第三方提供方写它的模型名")
     ap.add_argument("--provider", default="anthropic",
-                    help="模型提供方（configs/providers.json）：anthropic（默认，Max 订阅）、deepseek 等。"
+                    help="模型提供方（configs/providers.json）：anthropic（默认，Claude 订阅）、deepseek 等。"
                          "第三方提供方的 API 密钥只从本机读取（configs/local.providers.json 的 key_file，或环境变量）")
     ap.add_argument("--effort", default="high", help="推理强度标识，支持的档位由所选模型决定")
     ap.add_argument("--max-minutes", type=float, default=240.0, help="现实时间上限（分钟）；目标以游戏内计时为主，这里只防止无限运行")
@@ -99,7 +99,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--study-minutes", type=float, default=60.0,
                     help="准备阶段（读知识库、写笔记）的上限分钟数，不计入现实用时；到时自动开放游戏工具")
     ap.add_argument("--max-usage", type=float, default=None,
-                    help="可选：Max 套餐 5 小时或 7 天窗口的已用比例达到该值（0~1）就提前暂停智能体、等额度重置后接着玩；"
+                    help="可选：订阅额度 5 小时或 7 天窗口的已用比例达到该值（0~1）就提前暂停智能体、等额度重置后接着玩；"
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--limit-planning", action="store_true",
@@ -141,7 +141,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--record-video-args", help="ffmpeg 视频编码参数（默认见 configs/recording.json）")
     ap.add_argument("--audio-offset-ms", type=float, help="声音相对画面的偏移毫秒数（默认用校准结果，见 configs/local.recording.json）")
     ap.add_argument("--sim", dest="sim", action="store_true", default=None,
-                    help="开放预置模拟器（容器运行方式下默认开启，写不写都一样）：本机 sim/dist 只读挂到容器的 /sim，"
+                    help="开放预置模拟器（速通模式、容器运行方式下，本机构建了 sim/dist 时默认开启）：本机 sim/dist 只读挂到容器的 /sim，"
                          "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
     ap.add_argument("--sim-assist", action=argparse.BooleanOptionalAction, default=None,
                     help="只用于探索模式：有额度的短路线预测（探索模式默认开启）；不向智能体开放模拟器文件")
@@ -187,6 +187,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--kb-deny", metavar="文件,...",
                     help="不给智能体看的知识库文件（知识库内的相对路径，逗号分隔，例如 techniques.md,reference/celeste_wiki/Tech.md）："
                          "这些文件不挂进容器，也不在准备阶段要求阅读。默认全部可读。续跑沿用")
+    ap.add_argument("--kb-allow", metavar="文件,...",
+                    help="探索模式额外开放的速通知识库文件（写成 speedrun/<kb 内的相对路径>，逗号分隔，例如 "
+                         "speedrun/techniques.md）：挂在 /kb/speedrun/ 下，选读、不要求准备阶段读完。默认不开放。续跑沿用")
     ap.add_argument("--kb-extra", metavar="目录",
                     help="追加本机资料：把这个目录（相对路径按仓库根目录算，例如 local/kb_extra/<系列>）里的文件加进挂给"
                          "智能体的 /kb，同名文件覆盖默认版本。用于某个系列赛自己加的资料，不入库、不影响别的运行。"
@@ -366,8 +369,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.net_wait_max_h = args.net_wait_max_hours
     cfg.net_wait_cap_s = args.net_wait_cap_seconds
     capabilities = workspace_capabilities(cfg)
-    if args.sim is None:
-        args.sim = capabilities.programs and cfg.mode == SPEEDRUN
+    if args.sim is None:     # 新运行：本机构建了预置模拟器（sim/dist，不入库）才默认开放
+        args.sim = capabilities.programs and cfg.mode == SPEEDRUN and (cfg.sim_dir / 'celeste-sim').is_file()
     if cfg.mode == EXPLORE and args.sim:
         raise SystemExit("探索模式不开放模拟器文件（只能用 --sim-assist 的限额短路线预测）；要开模拟器请用速通模式 --mode speedrun")
     if cfg.mode == SPEEDRUN and args.sim_assist:
@@ -407,6 +410,14 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         cfg.kb_deny = sorted({x.strip().replace("\\", "/") for x in args.kb_deny.split(",") if x.strip()})
     elif previous:
         cfg.kb_deny = list(previous["state"].get("kb_deny") or [])
+    if args.kb_allow is not None:
+        from .kb_access import normalize_allow
+        try:
+            cfg.kb_allow = normalize_allow(cfg.mode, [x for x in args.kb_allow.split(",")])
+        except ValueError as exc:
+            raise SystemExit(f"--kb-allow：{exc}") from None
+    elif previous:
+        cfg.kb_allow = list(previous["state"].get("kb_allow") or [])
     cfg.kb_extra = kb_extra_choice(previous, args.kb_extra)
     if cfg.kb_extra and not cfg.kb_extra_dir.is_dir():
         raise SystemExit(f"--kb-extra：找不到目录 {cfg.kb_extra_dir}")
@@ -547,7 +558,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": cfg.cutscene_mode == 'agent' and cfg.resume_pending, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
-             "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "kb_extra": cfg.kb_extra, "prompt_overrides": prompt_override_hashes(),
+             "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "kb_allow": list(cfg.kb_allow), "kb_extra": cfg.kb_extra, "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None,
              "controller_host": os.environ.get("CELESTE_CONTROLLER_HOST"), "controller_pid": os.getpid(),
              "controller_parent_pid": os.getppid(),

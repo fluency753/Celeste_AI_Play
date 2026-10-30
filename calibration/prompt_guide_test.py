@@ -174,7 +174,7 @@ class PromptGuideTests(unittest.TestCase):
                 patch.object(prompt_guide, 'prompt_parts', prompting.prompt_parts):
             guide = prompt_guide.guide_document(cfg)
             self.assertEqual(''.join(s['text'] for s in guide['sections']), prompting.play_prompt(cfg))
-            self.assertEqual(guide['sections'][0]['text'], 'custom 40 / 150')
+            self.assertEqual(guide['sections'][0]['text'], 'custom 1 / 600')
 
 
 if __name__ == '__main__':

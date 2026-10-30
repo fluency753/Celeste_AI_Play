@@ -2,7 +2,7 @@
 
 本知识库只回答"游戏规则是什么"：Madeline 的物理常量、状态机、每帧更新顺序、输入语义、实体行为。它**不包含**任何房间布局、路线、解法或收集品位置。所有内容都以文字、表格、公式和有序步骤描述，没有游戏源代码。
 
-依据：Everest 修补后的 Celeste 1.4 程序集（反编译阅读）。凡是没有逐行核实、或由多处代码推断出的结论，都标注 **（未核实）** 或 **（推断）**。项目作者已审核整个知识库（2026-10-22）：内容基本正确，标为"未核实"的条目默认按正确处理；社区资料与代码不符时以代码为准（多数只是数帧口径不同）。
+依据：Everest 修补后的 Celeste 1.4 程序集（反编译阅读）。凡是没有逐行核实、或由多处代码推断出的结论，都标注 **（未核实）** 或 **（推断）**。标（未核实）以外的条目经过人工对照，默认可用；实测不符时以实测为准。社区资料与代码不符时以代码为准（多数只是数帧口径不同）。
 
 ## 1. 文件索引
 
@@ -12,11 +12,13 @@
 | `player_physics.md` | 核心：Player 全部常量、每帧更新顺序、各状态（Normal / Dash / Climb / DreamDash 等）的完整规则、碰撞回调、死亡与换房、Monocle 碰撞与平台运动 |
 | `input.md` | 游戏侧的输入语义：按键"按下"与缓冲、抓取、方向与瞄准、8 向吸附、crouch dash；以及"哪一帧的输入决定什么" |
 | `entities.md` | 序章、1A（Forsaken City）、2A（Old Site）里会遇到的实体类型：碰撞箱、计时、交互规则 |
-| `game_data.md` | （已有文件）工作区里观测与轨迹数据的格式说明 |
-| `techniques.md` | 移动技巧：Strawberry Jam 各训练场（Beginner→Grandmaster）与 celeste.ink 收录的全部原版技巧（super/hyper/wavedash/ultra/cornerboost/wallbounce/dream block tech 等）的条件、帧窗口、数值、harness 输入例、本三章可用性；SJ 各大厅技巧对照表 |
+| `game_data.md` | 工作区里观测与轨迹数据的格式说明 |
+| `collision_matrix.md` | `/workspace/game/collision_matrix.py` 生成的文件型碰撞矩阵：生成方法、文件格式与 Python 查询接口（不含通行判断） |
+| `techniques.md` | 移动技巧：Strawberry Jam 各训练场（Beginner→Grandmaster）与 celeste.ink 收录的全部原版技巧（super/hyper/wavedash/ultra/cornerboost/wallbounce/dream block tech 等）的条件、帧窗口、数值、harness 输入例、序章/1A/2A 可用性；SJ 各大厅技巧对照表 |
 | `search_methods.md` | 搜索方法：为什么纯随机拼按键效率低，以及在有限知识下更高效地找出更优路线的七种做法（按状态去重的逐层搜索、评分、交叉熵法调整抽样、只在关键时刻分支、补全动作集、分段复用中间状态、对照真实游戏校准模拟器），每种都写原理、为什么有效、具体做法与伪代码、参数经验值、常见错误和配合方式；附组合流程与实现上的常见坑 |
 | `mechanics.md` | 机制库：章节计时与 freeze frames（freeze frames 不计 IGT）、SJ 机制库（Library）全部小节的规则、后续章节实体（Theo、水母、泡泡、羽毛、云、岩浆块、弹球/河豚、水、月亮块）的交互规则 |
-| `reference/` | 外部资料原文照录：Celeste Wiki（celeste.ink）全部技巧页面，草莓酱训练场（Beginner → Grandmaster）与机制库的全部文本（英文、简体中文），以及项目作者提供的社区资料（反向钟《Celeste 机制详解》源码解读、岩浆块机制说明，附原 PDF）。索引见 `reference/README.md`；默认正确，数值不一致时以本知识库里对照代码核实的文件为准 |
+| `reference/`（可选，本机生成） | 外部资料原文照录：Celeste Wiki（celeste.ink）全部技巧页面，草莓酱训练场（Beginner → Grandmaster）与机制库的全部文本（英文、简体中文），以及在本机导入的社区资料（例如反向钟《Celeste 机制详解》源码解读、岩浆块机制说明，附原 PDF）。索引见 `reference/README.md`；默认正确，数值不一致时以本知识库里对照代码核实的文件为准。原文不入公开仓库，由部署者在本机用 `tools/fetch_reference.py`、`tools/import_reference_pdf.py` 生成（见 `docs/USAGE.md`）；没有生成时 `/kb/reference/` 不存在，各文件里指向它的引用可以忽略 |
+| `explore/` | 探索模式的新手资料（探索模式默认只把这个目录挂载为 `/kb`）：必读的 `README.md`、`basics.md`、`data.md`、`tools.md`，按需查阅的 `help/`（观测格式、高级输入与计划文件、剧情与结算、工作区文件、程序优化） |
 
 ## 2. 坐标与单位
 
@@ -71,7 +73,7 @@
 | 下蹲碰撞箱 duckHitbox | 8 × 6 | (−4, −6) | x ∈ [−4, +4)，y ∈ [−6, 0) | 下蹲时替换普通碰撞箱 |
 | 普通受击箱 normalHurtbox | 8 × 9 | (−4, −11) | x ∈ [−4, +4)，y ∈ [−11, −2) | 与危险物/收集品等"PlayerCollider"判定 |
 | 下蹲受击箱 duckHurtbox | 8 × 4 | (−4, −6) | x ∈ [−4, +4)，y ∈ [−6, −2) | 下蹲时的受击箱 |
-| 羽毛飞行碰撞箱 / 受击箱 | 8 × 8 / 6 × 6 | (−4, −10) / (−3, −9) | — | 仅羽毛状态（本三章无羽毛） |
+| 羽毛飞行碰撞箱 / 受击箱 | 8 × 8 / 6 × 6 | (−4, −10) / (−3, −9) | — | 仅羽毛状态（序章/1A/2A 未出现羽毛） |
 
 - **受击箱比碰撞箱底部短 2 像素**：脚下最底 2 行像素不参与危险物判定。
 - 是否"下蹲"（`Ducking`）就是"当前碰撞箱是不是下蹲碰撞箱"。切换下蹲只换碰撞箱，底边不变。

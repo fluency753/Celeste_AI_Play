@@ -124,7 +124,7 @@ class RunConfig:
     agent: str                      # 智能体标签，如 opus5.5
     save: str                       # 存档名，如 test
     model: str                      # Claude Code 模型别名：opus / fable；第三方提供方写它的模型名
-    provider: str = "anthropic"     # 模型提供方（configs/providers.json）：anthropic 用 Max 订阅，其他用本机保存的 API 密钥
+    provider: str = "anthropic"     # 模型提供方（configs/providers.json）：anthropic 用 Claude 订阅令牌，其他用本机保存的 API 密钥
     provider_info: dict | None = None  # load_provider(provider) 的结果
     engine: str = "claude"          # claude：原有执行器；codex：原生 app-server + 客户端沙箱工具
     effort: str = "high"
@@ -132,7 +132,7 @@ class RunConfig:
     mcp_port: int = 47780
     max_minutes: float = 240.0      # 现实时间上限（宽松；主要指标是游戏内计时）
     max_frames_per_act: int = 600   # 单次 act 最多推进的帧数（速通模式；探索模式用 explore_act_frames，见 modes.act_frame_cap）
-    min_frames_per_act: int = 40    # 单次 act 最少推进的帧数（两种模式；不超过上限，见 modes.act_frame_min）
+    min_frames_per_act: int = 1     # 单次 act 最少推进的帧数（两种模式；不超过上限，见 modes.act_frame_min）
     play_speed: int = 1             # 智能体动作块的推进速度（1 = 实时 60 帧/秒）
     auto_speed: int = 1             # 转场、剧情、重生等自动推进段的速度（1 = 与原版一致；大于 1 只用于调试）
     skip_enter: bool = False        # 已在关卡内时跳过菜单宏
@@ -217,8 +217,8 @@ class RunConfig:
     explore_program_runs: int | None = None  # 探索模式：两次 act 之间最多运行几次规划程序；None = 不限
     agent_cpus: int = os.cpu_count() or 1   # 探索模式：自写程序最多用几个 CPU 核（写进提示词；容器按它设置 cpuset），默认本机核数
     agent_cpus_effective: int | None = None  # 容器实际能用的核数（apply_cpu_limit 设置，写进提示词）
-    explore_act_frames: int = 150    # 探索模式：单次 act 最多推进的帧数
-    explore_search_frames: int | None = 150  # 探索模式：自写模拟器与搜索程序每次最多推演的帧数（只写进提示词）；None = 不限
+    explore_act_frames: int = 600    # 探索模式：单次 act 最多推进的帧数
+    explore_search_frames: int | None = None  # 探索模式：自写模拟器与搜索程序每次最多推演的帧数（只写进提示词）；None = 不限
     stiffness: bool = False          # 探索模式的思考僵直（--stiffness）：冻结期间的思考与工具时间按比例变成下一次 act 前的僵直
     stiff_unit_s: float = 150.0      # 思考僵直：计时单位（思考、工具时间各自满一份才开始僵直，之后按比例）
     stiff_think_s: float = 0.2       # 每份思考时间的僵直秒数
@@ -237,6 +237,7 @@ class RunConfig:
     assist_max_total: int = 600      # 每次合计最多预测几帧
     tuning: dict = field(default_factory=dict)   # 与默认值不同的可调参数（记进 run_state，续跑沿用）
     kb_deny: list = field(default_factory=list)  # 不给智能体看的知识库文件（知识库内的相对路径；控制台的"知识库"页）
+    kb_allow: list = field(default_factory=list)  # 探索模式额外开放的速通知识库文件（speedrun/<kb 内路径>，挂在 /kb/speedrun/ 下）
     # 本机追加的资料目录（例如某个系列赛自己加的资料，放在 local/ 下、不入库）：里面的文件加进挂给智能体的 /kb，
     # 与默认知识库同名的文件覆盖默认版本。空字符串表示不追加。命令行 --kb-extra，续跑沿用
     kb_extra: str = ""
@@ -281,8 +282,8 @@ class RunConfig:
 
     @property
     def kb_view(self) -> bool:
-        """/kb 挂的是不是同步出来的副本：有不给看的文件（kb_deny）或有本机追加资料（kb_extra）时是。"""
-        return bool(self.kb_deny or self.kb_extra)
+        """/kb 挂的是不是同步出来的副本：有不给看的文件（kb_deny）、开放了速通资料（kb_allow）或有本机追加资料（kb_extra）时是。"""
+        return bool(self.kb_deny or self.kb_extra or self.kb_allow)
 
     @property
     def kb_dir(self) -> Path:

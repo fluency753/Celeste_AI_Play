@@ -111,7 +111,7 @@ class StartupPromptTests(unittest.TestCase):
         updated = replace(cfg, min_frames_per_act=55, action_permissions={
             'restart_chapter': False, 'return_to_map': True, 'save_quit': False})
         new = guide_document(updated)
-        self.assertEqual(current_settings(updated)['act_frames'], [55, 150])
+        self.assertEqual(current_settings(updated)['act_frames'], [55, 600])
         self.assertTrue(current_settings(updated)['permissions']['return_to_map'])
         old_sections = {s['id']: s['sha256'] for s in old['sections']}
         unchanged = [s for s in new['sections'] if old_sections.get(s['id']) == s['sha256']]

@@ -45,7 +45,7 @@ class TunableTests(unittest.TestCase):
     def test_prompt_numbers_follow_tunables(self):
         speed = cfg(mode="speedrun", knowledge_profile="full", sim=True, playback=True, live=True, live_remind_s=10.0)
         base = play_prompt(speed)
-        self.assertIn("一次至少 40 帧、最多 600 帧", base)
+        self.assertIn("一次至少 1 帧、最多 600 帧", base)
         self.assertIn("默认最多 5 分钟（用 Bash 的 timeout 参数最多加到 10 分钟）", base)
         self.assertIn("大约每 100 条画 1 条，至少 40 条", base)
         self.assertIn("解说计时缩短为 10 秒", base)
@@ -57,19 +57,21 @@ class TunableTests(unittest.TestCase):
                      "大约每 50 条画 1 条，至少 20 条", "解说计时缩短为 15 秒"):
             self.assertIn(text, changed)
         explore = cfg(mode="explore", knowledge_profile="explore", chapter=1)
-        self.assertIn("单次规划程序最多 15 秒", play_prompt(explore))
+        self.assertIn("每条程序命令（含编译）最多 15 秒", play_prompt(explore))
         self.assertNotIn("两次 act 之间最多运行", play_prompt(explore))
         tuning.apply(explore, {"explore_program_s": 40, "explore_program_runs": 2})
         text = play_prompt(explore)
-        self.assertIn("单次规划程序最多 40 秒", text)
+        self.assertIn("每条程序命令（含编译）最多 40 秒", text)
         self.assertIn("两次 act 之间最多运行 2 次规划程序", text)
         tuning.apply(explore, {"explore_program_s": None})
         self.assertIn("单次规划程序不限时长；", play_prompt(explore))
-        # 探索模式：act 单次上限与自写模拟器、搜索程序的推演帧数（默认都是 150 帧）
+        # 探索模式：act 单次上限默认 600 帧；自写模拟器、搜索程序的推演帧数默认不限，设了才写进提示词
         from orchestrator.modes import act_frame_cap
         from orchestrator.prompting import fill
-        self.assertEqual((act_frame_cap(explore), act_frame_cap(speed)), (150, 900))
-        self.assertEqual(fill("一次最多 {act_max_frames} 帧", explore), "一次最多 150 帧")
+        self.assertEqual((act_frame_cap(explore), act_frame_cap(speed)), (600, 900))
+        self.assertEqual(fill("一次最多 {act_max_frames} 帧", explore), "一次最多 600 帧")
+        self.assertNotIn("自写的模拟器或搜索程序每次推演", play_prompt(explore))
+        tuning.apply(explore, {"explore_search_frames": 150})
         self.assertIn("自写的模拟器或搜索程序每次推演最多 150 帧：从游戏里当前的真实状态算起", play_prompt(explore))
         self.assertIn("自己加的等待帧也计入", play_prompt(explore))          # 没开思考僵直：不提僵直帧
         explore.stiffness = True
@@ -240,10 +242,23 @@ class KbAccessTests(unittest.TestCase):
         self.assertTrue(speed["techniques.md"]["required"])
         self.assertFalse(speed["explore/tools.md"]["required"])
         explore = {d["path"]: d for d in kb_access.documents("explore")}
-        self.assertEqual(set(explore), {"README.md", "tools.md", "help/controls.md"})
+        own = {path for path, d in explore.items() if not d.get("opt_in")}
+        self.assertEqual(own, {"README.md", "tools.md", "help/controls.md"})
         self.assertEqual(explore["help/controls.md"]["group"], "操作提示（选读）")
+        # 探索页另列速通知识库的文件（不含探索资料本身）：默认不开放，勾选了才挂进 /kb/speedrun/
+        extra = {path for path, d in explore.items() if d.get("opt_in")}
+        self.assertIn("speedrun/techniques.md", extra)
+        self.assertFalse(any(path.startswith("speedrun/explore/") for path in extra))
+        self.assertFalse(explore["speedrun/techniques.md"]["required"])
         with self.assertRaises(ValueError):
             kb_access.normalize_deny("explore", ["techniques.md"])
+        with self.assertRaises(ValueError):
+            kb_access.normalize_deny("explore", ["speedrun/techniques.md"])      # 开放与否不走“不给看”的列表
+        self.assertEqual(kb_access.normalize_allow("explore", ["speedrun/techniques.md"]), ["speedrun/techniques.md"])
+        with self.assertRaises(ValueError):
+            kb_access.normalize_allow("explore", ["speedrun/explore/tools.md"])
+        with self.assertRaises(ValueError):
+            kb_access.normalize_allow("speedrun", ["speedrun/techniques.md"])
 
     def test_read_write_stays_inside_kb(self):
         (self.root / "kb/explore/tools.md").write_bytes(b"d\r\n")
@@ -274,6 +289,26 @@ class KbAccessTests(unittest.TestCase):
         kb_access.prepare_view(c, log=lambda *_: None)
         self.assertTrue((view / "techniques.md").is_file())
         self.assertFalse((view / "README.md").exists())
+
+    def test_explore_view_adds_only_allowed_speedrun_files(self):
+        from orchestrator.kb_study import required_files
+        from orchestrator.prompting import speedrun_allow_rule
+        c = cfg(mode="explore", knowledge_profile="explore")
+        self.assertEqual(kb_access.prepare_view(c, log=lambda *_: None), self.root / "kb" / "explore")   # 默认不开放
+        self.assertEqual(speedrun_allow_rule(c), "")
+        c.kb_allow = ["speedrun/techniques.md"]
+        view = kb_access.prepare_view(c, log=lambda *_: None)
+        self.assertEqual(view, c.kb_dir)
+        self.assertTrue((view / "speedrun" / "techniques.md").is_file())
+        self.assertFalse((view / "speedrun" / "README.md").exists())
+        self.assertTrue((view / "tools.md").is_file())
+        self.assertNotIn("speedrun/techniques.md", required_files(view))          # 选读，不进必读清单
+        self.assertIn("/kb/speedrun/", speedrun_allow_rule(c))
+        c.kb_allow, c.kb_deny = [], ["help/controls.md"]                         # 取消开放：副本里删掉
+        kb_access.prepare_view(c, log=lambda *_: None)
+        self.assertFalse((view / "speedrun").exists())
+        c.kb_deny = []                                                             # 都不设：直接挂探索资料本身
+        self.assertEqual(kb_access.prepare_view(c, log=lambda *_: None), self.root / "kb" / "explore")
 
     def test_container_kb_view_label(self):
         from orchestrator.container import LABEL, LABEL_DEFAULTS, _labels

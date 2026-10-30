@@ -16,7 +16,7 @@ from orchestrator.metrics import Metrics
 from orchestrator.modes import describe
 from orchestrator.prompting import SAVE_CONTEXT_ACT, SAVE_CONTEXT_PRINT, fill, play_prompt
 from orchestrator.run import save_context_choice
-from orchestrator.server import ACT_DESCRIPTION, FILE_JSON_HEADER, build_server
+from orchestrator.server import ACT_DESCRIPTION, FILE_JSON_HEADER, build_server, observation_tool_description
 
 
 class SwitchTests(unittest.TestCase):
@@ -46,6 +46,24 @@ class SwitchTests(unittest.TestCase):
         self.assertNotIn(SAVE_CONTEXT_PRINT, play_prompt(off))
         for cfg in (on, off):
             self.assertEqual(re.findall(r"\{[a-z_]+\}", fill(ACT_DESCRIPTION, cfg)), [])
+
+    def test_registered_act_description_follows_the_switch(self):
+        """实际注册的 act 说明：有 help 资料时用的是精简版，精简版也要按开关写节省上下文那句。"""
+        caps = WorkspaceCapabilities("host", True, True, "host")
+        with patch("orchestrator.prompt_environment.workspace_capabilities", lambda cfg: caps), \
+                patch("orchestrator.server.workspace_capabilities", lambda cfg: caps):
+            for engine in ("claude", "codex"):
+                on = RunConfig(agent="a", save="s", model="m", engine=engine, runtime="host", mode="explore",
+                               knowledge_profile="explore", chapter=4, save_context=True)
+                off = RunConfig(agent="a", save="s", model="m", engine=engine, runtime="host", mode="explore",
+                                knowledge_profile="explore", chapter=4, save_context=False)
+                text_on = fill(observation_tool_description(on, "act"), on)
+                text_off = fill(observation_tool_description(off, "act"), off)
+                self.assertIn("/kb/help/actions.md", text_on)          # 确实走的是精简版
+                self.assertIn("本次开启了节省上下文：同一房间里的", text_on)    # Codex 会把工具名换成 celeste_act
+                self.assertNotIn("节省上下文", text_off)
+                for text in (text_on, text_off):
+                    self.assertEqual(re.findall(r"\{[a-z_]+\}", text), [])
 
     def test_no_stiffness_note_only_when_off(self):
         with tempfile.TemporaryDirectory() as folder:

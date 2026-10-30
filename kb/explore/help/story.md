@@ -4,7 +4,7 @@
 
 载入、转场和重生由主控处理。剧情有 auto 与 agent 两种模式；agent 模式下主控在可尝试跳过时先交回，由你决定跳过或继续观看。
 观测中的story提供当前画面已显示的对白、说话者头像标识、教学提示与纪念碑文字；结合返回截图理解内容，再决定是否推进或跳过，不能只盯等待标志翻页。它不是完整剧本，不包含未显示的后文。
-截图为游戏画面层，不含对话等HUD层；当前对白与选项应读取story及dialogChoices，不能因截图里没有对白就当作没有剧情信息。
+有原生剧情界面（对白、明信片等）可见时，截图范围为 story_hud：包含该界面并保持原尺寸，像素不对应世界坐标；否则截图只是游戏画面层。当前对白与选项仍以story及dialogChoices为准，不能因截图里没有对白就当作没有剧情信息。
 storyDecision=skip 表示剧情目前可尝试通过暂停菜单跳过（不保证存在跳过选项），不表示对白已显示完整。桥接 1.0.25 起支持此提前交接；旧版仍等实际输入节点。
 cutscene(action="advance") 确认当前完整对白、明信片、旧纸的一页或 confirm 画面；choose(choice=index) 明确选择可见选项；skip 尝试跳过整段。watch 只播放桥接明确识别的动画，到下一输入节点或恢复控制即返回，每次工具调用最多自动等待600帧；超限且仍明确播放时可再次watch，未知状态立即交回，不重复空等。确认后的等待也遵守同一预算，不需要 wait。
 storyInput 标明 dialogue / choice / tutorial / postcard / memo / confirm / breathing；confirm 表示照片、诗页或片尾等真实确认节点，可用 advance 或 C；教学使用 act，breathing 呼吸小游戏用 act 的 J、X 或 U 控制羽毛，松开使羽毛下落；旧纸可用 advance 或 C 翻页、U/D 翻页、B 关闭。storyPlaybackState 区分 playing / input / unknown / none；inCutscene 标记本身不证明动画正在播放，也不代表角色不能操作。桥接1.3.2起提供此事实，1.8.1补齐官图原生剧情及确认／小游戏边界，旧桥接缺字段时agent模式不猜测播放。

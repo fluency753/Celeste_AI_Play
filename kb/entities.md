@@ -75,7 +75,7 @@
 ## 3. 弹射与补给
 
 ### Spring（弹簧）
-- 观测属性 `orient`：Floor（放在地面上，向上弹）、WallLeft（贴在左侧墙上，向右弹）、WallRight（贴在右侧墙上，向左弹）。本三章地图里只登记了地面弹簧。
+- 观测属性 `orient`：Floor（放在地面上，向上弹）、WallLeft（贴在左侧墙上，向右弹）、WallRight（贴在右侧墙上，向左弹）。序章/1A/2A 地图里只登记了地面弹簧。
 - 碰撞箱：Floor `16×6 @ (−8, −6)`；WallLeft `6×16 @ (0, −8)`；WallRight `6×16 @ (−6, −8)`。
 - 受击箱判定（梦境冲刺中无效；`playerCanUse` 为假时无效）：
   - **Floor**：仅当 `Speed.Y >= 0`（不在上升）时触发 SuperBounce：Madeline 底边移到弹簧顶边；`Speed = (0, −185)`；variable jump 0.2 s 且自动保持（不必按跳）；AutoJump 保持到落地（顶点附近半重力）；**补满冲刺与体力**；状态变为 StNormal（打断冲刺）。
@@ -127,7 +127,7 @@
 ### DashBlock（冲刺砖 / 可撞碎墙）
 - 实心物，碰撞箱 = 宽×高。Depth −12999（`blendin` 时 −10501）。
 - **撞碎条件**：Madeline 处于 dash attack（DashAttacking：从冲刺受理帧起约 21 帧内，含 3 个 freeze frames，且未被起跳/碰撞清零），且撞上它的方向与冲刺方向同号（水平碰撞看 `sign(DashDir.X)`，垂直碰撞看 `sign(DashDir.Y)`）。注意冲刺状态结束后（F15–F20）DashAttacking 仍可能为真，此时撞上也会碎。
-- `canDash` 属性为假的冲刺砖，普通冲刺撞不碎（按普通实心物处理）。观测里看不到这个属性；本三章是否有这样的块未核实，撞不碎时就当作普通墙。
+- `canDash` 属性为假的冲刺砖，普通冲刺撞不碎（按普通实心物处理）。观测实体的 `canDash` 字段给出这个属性（`game_data.md` §1.3）；序章/1A/2A 是否有这样的块未核实。
 - **撞碎后**：砖立即不可碰撞并被移除；Madeline 反弹：水平撞碎 `Speed = (−120 × 原水平方向, −120)`，垂直撞碎 `Speed = (0, −120)`；variable jump 0.15 s 并自动保持；状态 StNormal（冲刺结束）；冲刺次数**不**补充。之后冻结 0.05 s：冻结是在砖真正被移除时（下一帧开始处理实体增删时）才登记的，所以撞碎帧 N 之后，第 N+1 帧照常更新，第 N+2–N+4 帧冻结（推断）。
 - `permanent`（默认真）：撞碎后在本次游玩中不再出现（死亡重生也不恢复）。
 - 关卡载入时若与 Madeline 重叠则直接移除。
@@ -192,11 +192,11 @@
 ## 7. 可交互物与装饰
 
 - **Lookout**（望远镜）、**NPC**（各类 NPC）、**Payphone**、**Memorial**（纪念碑）、**Bonfire**、**Checkpoint**、告示等：没有阻挡效果。可交互的对象在 Madeline 处于其范围内时，按交互键 `T` 会进入剧情/观察（此时起跳与冲刺不触发）。
-- **会按 Madeline 的位置自动开始剧情的 NPC**：它们不是触发器，不在 `triggers` 里，而是在 `entities` 里（位置见实体的坐标）；条件满足的那一帧开始剧情（Madeline 变为不可控，系统跳过剧情；剧情期间章节计时照常走，跳过也要花时间）。有的剧情结束后还在同一个房间接着玩。预置模拟器会在同一帧以 `cutscene` 停下（`detail` 为 `npc:类型名`）。条件（x、y 指 Madeline 的位置，NPC 的 x、y 指它的实体坐标）：
+- **会按 Madeline 的位置自动开始剧情的 NPC**：它们不是触发器，不在 `triggers` 里，而是在 `entities` 里（位置见实体的坐标）；条件满足的那一帧开始剧情（Madeline 变为不可控；auto 剧情模式由主控跳过，agent 剧情模式交回由你用 `cutscene` 跳过或观看；剧情期间章节计时照常走，跳过也要花时间）。有的剧情结束后还在同一个房间接着玩。预置模拟器会在同一帧以 `cutscene` 停下（`detail` 为 `npc:类型名`）。条件（x、y 指 Madeline 的位置，NPC 的 x、y 指它的实体坐标）：
   - **NPC00_Granny**（序章的老奶奶）：Madeline 站在地面上，x ≥ 房间左边界 + 96 且 x ≤ 老奶奶 x + 16，与老奶奶的 y 相差不到 4，并且面朝她（她在右边时面朝右）。会话里已有标记 `granny`（对话过）时不再触发。
   - **BirdNPC** 冲刺教学模式（序章结尾）：见 §5。
   - **DreamMirror**（2A 的镜子）：Madeline 先碰到镜子的判定范围（实体碰撞箱）；碰到后范围左右各加宽 16 像素，等她离开加宽后的范围时开始剧情。镜子已碎（会话里已有梦境冲刺能力）时不触发。
-  - 第 3 章以后（本次不涉及，仅供参考）：NPC03_Oshiro_Hallway1/2（x > 他的 x − 60）、NPC03_Theo_Escaping（x > 他的 x − 100）、NPC04_Granny（x > 她的 x − 40）、NPC04_Theo（x > 缆车左边 − 16）、NPC05_Theo_Mirror（x > 他的 x − 64）、NPC06_Badeline_Crying（x > 她的 x − 32）、NPC06_Granny（x > 她的 x − 60）、NPC06_Granny_Ending（站到地面上）、NPC03_Oshiro_Breakdown、NPC03_Oshiro_Cluttter 等。
+  - 第 3 章以后（序章/1A/2A 未出现，仅供参考）：NPC03_Oshiro_Hallway1/2（x > 他的 x − 60）、NPC03_Theo_Escaping（x > 他的 x − 100）、NPC04_Granny（x > 她的 x − 40）、NPC04_Theo（x > 缆车左边 − 16）、NPC05_Theo_Mirror（x > 他的 x − 64）、NPC06_Badeline_Crying（x > 她的 x − 32）、NPC06_Granny（x > 她的 x − 60）、NPC06_Granny_Ending（站到地面上）、NPC03_Oshiro_Breakdown、NPC03_Oshiro_Cluttter 等。
 - **FlutterBird**、**HangingLamp**、**LightBeam**、**Wire**、漂浮碎屑、梦境镜子等：纯装饰，不影响移动（未逐一核实）。
 - 观测只列出有碰撞箱的实体；装饰类出现在 `entities` 里时一般归入 `other` 或 `interactive`，可忽略。
 
@@ -204,14 +204,14 @@
 
 - **ChangeRespawnTrigger**：Madeline 进入时，若其目标点没有实心物，就把重生点改为该点。
 - **RespawnTargetTrigger**：换房完成时若 Madeline 站在其中，重生点取它指定的目标附近的出生点。
-- **EventTrigger / 剧情触发器**：进入后开始剧情（Madeline 变为 StDummy，不可控），主控会按"暂停 → 跳过剧情"处理。章节结尾的剧情（例如 1A、2A 的终点）就是这种触发器。
-- **WindTrigger 等风的触发器**：进入后改变房间的风向与风力，影响移动（本次的三章没有风）。
+- **EventTrigger / 剧情触发器**：进入后开始剧情（Madeline 变为 StDummy，不可控），auto 剧情模式下主控按"暂停 → 跳过剧情"处理；agent 剧情模式交回由你用 `cutscene` 的 skip/watch 或 act 的 `P` 自行处理。章节结尾的剧情（例如 1A、2A 的终点）就是这种触发器。
+- **WindTrigger 等风的触发器**：进入后改变房间的风向与风力，影响移动（序章/1A/2A 未出现风）。
 - 相机、音乐、光照类触发器不影响物理，给你的文字里省略，工作区文件里保留。
 - 注意：序章的两段剧情（老奶奶、结尾的鸟）与 2A 的镜子不是触发器，而是 NPC 自己判断的，见 §7。
 
 ---
 
-## 9. 本三章地图中未出现的类型（若在观测里看到，按此处理）
+## 9. 序章/1A/2A 地图中未出现的类型（若在观测里看到，按此处理）
 
 依据三张 A 面地图登记的实体种类，以下类型不出现；仅简述代码中的要点：
 

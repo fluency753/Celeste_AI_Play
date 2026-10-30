@@ -267,6 +267,11 @@
   .about-title { font: 700 30px/1.15 "Barlow Semi Condensed", "Bahnschrift", sans-serif; margin: 0; letter-spacing: 0.01em; }
   .version { color: var(--muted); margin: 6px 0 14px; }
   .version b { color: var(--text); font-weight: 500; }
+  .update { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: -6px 0 14px; }
+  .update .latest { color: var(--muted); flex-basis: 100%; }
+  .update .latest b { color: var(--text); font-weight: 500; }
+  .update .latest.new b { color: var(--gold); }
+  .update small { color: var(--muted); font-size: 12px; }
   .authors { font-size: 15px; margin: 0 0 14px; }
   .authors a { color: var(--blue); text-decoration: none; font-weight: 500; }
   .authors a:hover { text-decoration: underline; }
@@ -366,10 +371,10 @@
       <fieldset>
         <legend>游玩模式</legend>
         <div class="modes" role="radiogroup" aria-label="游玩模式">
-          <button type="button" class="mode" role="radio" data-mode="speedrun" aria-checked="true">
-            <b>速通</b><span>以最短的章节计时通关。完整知识库，可开放预置模拟器。</span></button>
-          <button type="button" class="mode" role="radio" data-mode="explore" aria-checked="false">
-            <b>探索</b><span>新手式探索与学习。只有基本操作与工具说明，可用限额短路线预测。</span></button>
+          <button type="button" class="mode" role="radio" data-mode="speedrun" aria-checked="false">
+            <b>速通（需自配标准模拟器）</b><span>以最短的章节计时通关。完整知识库，可开放预置模拟器。</span></button>
+          <button type="button" class="mode" role="radio" data-mode="explore" aria-checked="true">
+            <b>探索（默认）</b><span>新手式探索与学习。只有基本操作与工具说明，可用限额短路线预测。</span></button>
         </div>
         <div class="switches" style="margin-top:8px">
           <label class="switch wide"><span class="text"><b>直播</b><span id="liveNote">观众实时观看：解说更勤，可按要求退出关卡，HUD 默认用可交互的网页形式；不改变速通目标</span></span><input type="checkbox" id="live"></label>
@@ -426,7 +431,7 @@
         <summary>更多设置</summary>
         <div class="group-title">时间与额度</div>
         <div class="switches">
-          <label class="switch wide"><span class="text"><b>额度用完时等待</b><span>游戏冻结，额度重置后接着同一个会话（Max 订阅）</span></span><input type="checkbox" id="quotaWait" checked></label>
+          <label class="switch wide"><span class="text"><b>额度用完时等待</b><span>游戏冻结，额度重置后接着同一个会话</span></span><input type="checkbox" id="quotaWait" checked></label>
         </div>
         <div class="row thirds" style="margin-top:8px">
           <label class="field">准备阶段上限（分钟）<input type="number" id="studyMinutes" min="1" max="600" placeholder="60"></label>
@@ -637,8 +642,8 @@
     <h2 id="kbTitle">知识库 <span class="aside" id="kbRoot"></span></h2>
     <div class="kb-head">
       <div class="segmented" role="radiogroup" aria-label="按哪种游玩模式显示">
-        <button type="button" role="radio" data-kbmode="speedrun" aria-checked="true">速通</button>
-        <button type="button" role="radio" data-kbmode="explore" aria-checked="false">探索</button>
+        <button type="button" role="radio" data-kbmode="speedrun" aria-checked="false">速通</button>
+        <button type="button" role="radio" data-kbmode="explore" aria-checked="true">探索</button>
       </div>
       <span class="kb-count" id="kbCount"></span>
     </div>
@@ -687,8 +692,8 @@
     <h2 id="promptTitle">提示词 <span class="aside">按运行页的当前设置生成</span></h2>
     <div class="kb-head">
       <div class="segmented" role="radiogroup" aria-label="游玩模式（与运行页同步）">
-        <button type="button" role="radio" data-pmode="speedrun" aria-checked="true">速通</button>
-        <button type="button" role="radio" data-pmode="explore" aria-checked="false">探索</button>
+        <button type="button" role="radio" data-pmode="speedrun" aria-checked="false">速通</button>
+        <button type="button" role="radio" data-pmode="explore" aria-checked="true">探索</button>
       </div>
     </div>
     <p class="hint" id="promptWhat" style="margin-top:0">—</p>
@@ -736,6 +741,12 @@
     <section class="pane">
       <p class="about-title">Celeste AI Play</p>
       <p class="version" id="aboutVersion">读取中…</p>
+      <div class="update" id="aboutUpdate">
+        <span class="latest" id="latestVersion" role="status">最新版本：还没检查</span>
+        <button class="btn small" type="button" id="checkUpdate">检查更新</button>
+        <button class="btn small primary" type="button" id="applyUpdate" disabled>一键更新</button>
+        <small>从github拉取</small>
+      </div>
       <p class="authors">作者：<a id="authorFluency" href="https://space.bilibili.com/490510003" target="_blank" rel="noopener">Fluency</a>、<a id="authorPig" href="https://space.bilibili.com/384651096" target="_blank" rel="noopener">Mechanic Pig</a></p>
       <p style="margin:0">项目地址：<a id="githubLink" href="https://github.com/fluency753/Celeste_AI_Play" target="_blank" rel="noopener">github.com/fluency753/Celeste_AI_Play</a></p>
     </section>
@@ -770,7 +781,7 @@ const SHORT = ["序", "1A", "2A", "3A", "4A", "5A", "6A", "7A", "终", "8A", "9"
 const EXPLORE_KEYS = ["explore_program_s", "explore_program_runs"];   // 在"探索：规划程序"一栏单独显示
 
 const ui = { options: null, segOff: {}, status: null, control: null, controlRun: null, hud: null, runs: [], models: [],
-             chapters: [0], mode: "speedrun", map: "celeste", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "",
+             chapters: [0], mode: "explore", map: "celeste", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "",
              tune: {}, kb: {}, kbFile: null, kbView: "edit", page: "run", aboutLoaded: false };
 
 async function getJSON(path) {
@@ -1167,9 +1178,11 @@ function updateSummary() {
   $("sumChapters").textContent = ui.chapters.length ? chapterText(false) : "还没选";
   const list = ui.kb[ui.mode];
   if (list) {
-    const deny = kbDeny(ui.mode);
-    $("sumKb").textContent = deny.length ? `${list.documents.length - deny.length} / ${list.documents.length} 个文件可读（${deny.length} 个不给看）`
-                                         : `全部 ${list.documents.length} 个文件可读`;
+    const own = list.documents.filter(d => !d.opt_in), extra = list.documents.filter(d => d.opt_in);
+    const deny = kbDeny(ui.mode), allow = kbAllow(ui.mode);
+    $("sumKb").textContent = (deny.length ? `${own.length - deny.length} / ${own.length} 个文件可读（${deny.length} 个不给看）`
+                                          : `全部 ${own.length} 个文件可读`)
+      + (allow.length ? `；另开放速通资料 ${allow.length} / ${extra.length} 个` : "");
   }
 }
 
@@ -1260,7 +1273,7 @@ function formOptions() {
     record_video_args: $("videoArgs").value.trim(), audio_offset_ms: numberOrNull("audioOffset"),
     recording_mode: $("recordingMode").value, freeze_chapter_select: $("freezeChapterSelect").checked,
     freeze_file_select: $("freezeFileSelect").checked, freeze_main_menu: $("freezeMainMenu").checked,
-    tune, kb_deny: kbDeny(ui.mode),
+    tune, kb_deny: kbDeny(ui.mode), kb_allow: ui.mode === "explore" ? kbAllow(ui.mode) : [],
   };
   if ($("continuousMusic").checked) options.continuous_music = true;
   if ($("collisionImage").value) options.collision_image = $("collisionImage").value;
@@ -1644,6 +1657,17 @@ function kbDeny(mode) {
   return list ? list.deny.slice() : ((ui.options && ui.options.prefs && ui.options.prefs.kb_deny[mode]) || []);
 }
 
+// 探索模式另列的速通知识库文件（opt_in）：默认不开放，勾选了才挂进 /kb/speedrun/
+function kbAllow(mode) {
+  const list = ui.kb[mode];
+  const prefs = ui.options && ui.options.prefs && ui.options.prefs.kb_allow;
+  return list ? (list.allow || []).slice() : ((prefs && prefs[mode]) || []);
+}
+
+function kbReadable(list, d) {
+  return d.opt_in ? (list.allow || []).includes(d.path) : !list.deny.includes(d.path);
+}
+
 async function loadKbList(mode) {
   ui.kb[mode] = await getJSON(`/api/console/kb?mode=${mode}`);
   return ui.kb[mode];
@@ -1657,10 +1681,12 @@ async function loadKb(mode) {
 function renderKb() {
   const list = ui.kb[ui.mode];
   if (!list) return;
-  const deny = new Set(list.deny);
+  const readable = (d) => kbReadable(list, d);
   $("kbRoot").textContent = `${list.root}/ → 容器里的 /kb`;
   const required = list.documents.filter(d => d.required);
-  $("kbCount").textContent = `${list.documents.length - deny.size} / ${list.documents.length} 个文件可读，其中必读 ${required.filter(d => !deny.has(d.path)).length} 个`
+  const own = list.documents.filter(d => !d.opt_in), extra = list.documents.filter(d => d.opt_in);
+  $("kbCount").textContent = `${own.filter(readable).length} / ${own.length} 个文件可读，其中必读 ${required.filter(readable).length} 个`
+    + (extra.length ? `；速通资料开放 ${extra.filter(readable).length} / ${extra.length} 个（挂在 /kb/speedrun/）` : "")
     + (list.sim_readme ? "；开模拟器时另有 /sim/README.md" : "");
   const groups = [];
   for (const d of list.documents) {
@@ -1671,20 +1697,21 @@ function renderKb() {
   $("kbList").replaceChildren(...groups.map(g => {
     const wrap = document.createElement("div"); wrap.className = "kb-group";
     const h = document.createElement("h3"); h.textContent = g.name;
-    const allowed = g.docs.filter(d => !deny.has(d.path)).length;
+    const allowed = g.docs.filter(readable).length;
     h.appendChild(Object.assign(document.createElement("span"), { className: "tag", textContent: `${allowed}/${g.docs.length}` }));
     const toggle = document.createElement("button");
     toggle.type = "button"; toggle.className = "chip"; toggle.textContent = allowed === g.docs.length ? "全部取消" : "全部可读";
-    toggle.addEventListener("click", () => setDeny(g.docs.map(d => d.path), allowed === g.docs.length));
+    toggle.addEventListener("click", () => setReadable(g.docs, allowed !== g.docs.length));
     h.appendChild(toggle);
     wrap.appendChild(h);
     for (const d of g.docs) {
       const row = document.createElement("div");
-      row.className = "kb-item" + (deny.has(d.path) ? " denied" : "") + (ui.kbFile && ui.kbFile.mode === ui.mode && ui.kbFile.path === d.path ? " open" : "");
+      row.className = "kb-item" + (readable(d) ? "" : " denied") + (ui.kbFile && ui.kbFile.mode === ui.mode && ui.kbFile.path === d.path ? " open" : "");
       const box = document.createElement("input");
-      box.type = "checkbox"; box.checked = !deny.has(d.path); box.title = "智能体能不能读这个文件";
+      box.type = "checkbox"; box.checked = readable(d);
+      box.title = d.opt_in ? "开放给探索模式的智能体（挂在 /kb/speedrun/ 下，选读）" : "智能体能不能读这个文件";
       box.setAttribute("aria-label", `${d.path} 可读`);
-      box.addEventListener("change", () => setDeny([d.path], !box.checked));
+      box.addEventListener("change", () => setReadable([d], box.checked));
       const name = document.createElement("button");
       name.type = "button"; name.className = "name"; name.textContent = d.path;
       name.addEventListener("click", () => openKbFile(ui.mode, d.path));
@@ -1702,12 +1729,24 @@ function renderKb() {
 
 async function setDeny(paths, denied) {
   const list = ui.kb[ui.mode];
-  const deny = new Set(list.deny);
-  for (const p of paths) { if (denied) deny.add(p); else deny.delete(p); }
+  await setReadable(list.documents.filter(d => paths.includes(d.path)), !denied);
+}
+
+// 勾选 / 取消：本模式自己的文件改不给看的列表；探索模式另列的速通资料改开放列表
+async function setReadable(docs, readable) {
+  const list = ui.kb[ui.mode];
+  const deny = new Set(list.deny), allow = new Set(list.allow || []);
+  for (const d of docs) {
+    if (d.opt_in) { if (readable) allow.add(d.path); else allow.delete(d.path); }
+    else if (readable) deny.delete(d.path); else deny.add(d.path);
+  }
+  const update = { kb_deny: { [ui.mode]: [...deny].sort() } };
+  if (ui.mode === "explore") update.kb_allow = { explore: [...allow].sort() };
   try {
-    const prefs = await postJSON("/api/console/prefs", { kb_deny: { [ui.mode]: [...deny].sort() } });
+    const prefs = await postJSON("/api/console/prefs", update);
     ui.options.prefs = prefs;
     list.deny = prefs.kb_deny[ui.mode] || [];
+    list.allow = (prefs.kb_allow && prefs.kb_allow[ui.mode]) || [];
     renderKb(); updateSummary(); schedulePreview();
   } catch (e) { toast(e.message, true); renderKb(); }
 }
@@ -2035,7 +2074,57 @@ async function loadAbout() {
   }));
   const base = a.github + "/blob/main/";
   $("todo").innerHTML = markdown(a.todo.replace(/^# .*\n/, ""), base) || "<p class='hint'>没有 TODO.md。</p>";
+  if (!ui.updateChecked) checkUpdate();
   $("changelog").innerHTML = markdown(a.changelog.replace(/^# .*\n/, ""), base) || "<p class='hint'>没有 CHANGELOG.md。</p>";
+}
+
+// 检查更新：git fetch 后与 GitHub 上的最新版本比较；一键更新：只在能快进、没有主控在运行时拉取，然后重启 HUD 服务
+function versionText(v) {
+  if (!v || !v.commit) return "—";
+  const bits = [];
+  if (v.console) bits.push(`控制台 <b>${escapeHtml(v.console)}</b>`);
+  if (v.bridge) bits.push(`桥接 Mod <b>${escapeHtml(v.bridge)}</b>`);
+  bits.push(`提交 <b>${escapeHtml(v.commit)}</b>（${escapeHtml(v.date || "")}）`);
+  return bits.join("，");
+}
+
+async function checkUpdate() {
+  ui.updateChecked = true;
+  const line = $("latestVersion");
+  line.className = "latest"; line.textContent = "最新版本：检查中…";
+  $("checkUpdate").disabled = true; $("applyUpdate").disabled = true;
+  let u;
+  try { u = await getJSON("/api/console/update"); }
+  catch (e) { line.textContent = "最新版本：检查失败（" + e.message + "）"; $("checkUpdate").disabled = false; ui.updateChecked = false; return; }
+  $("checkUpdate").disabled = false;
+  if (!u.latest) { line.textContent = "最新版本：" + (u.reason || "读不到"); return; }
+  line.innerHTML = "最新版本：" + versionText(u.latest)
+    + (u.behind ? `；比本机新 ${u.behind} 个提交` : "；本机已是最新");
+  if (u.behind) line.classList.add("new");
+  if (u.latest.subject) line.title = "最新一次提交：" + u.latest.subject;
+  if (u.behind && !u.can_update) line.innerHTML += `<br><small>${escapeHtml(u.reason)}</small>`;
+  $("applyUpdate").disabled = !u.can_update;
+}
+
+async function applyUpdate() {
+  if (!confirmTwice("applyUpdate", "再点一次：从 GitHub 更新")) return;
+  $("applyUpdate").disabled = true; $("checkUpdate").disabled = true;
+  const line = $("latestVersion");
+  line.textContent = "正在从 GitHub 拉取…";
+  let r;
+  try { r = await postJSON("/api/console/update", {}); }
+  catch (e) { toast("更新失败：" + e.message, true); line.textContent = "更新失败：" + e.message; $("checkUpdate").disabled = false; return; }
+  line.innerHTML = `已更新到 ${versionText(r.after)}（${r.files} 个文件有变化）；正在重启 HUD 服务，控制台稍后自动刷新…`
+    + (r.notes.length ? "<br><small>" + r.notes.map(escapeHtml).join("<br>") + "</small>" : "");
+  if (r.notes.length) toast(r.notes.join("；"));
+  const started = Date.now();
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  while (Date.now() - started < 60000) {
+    try { const a = await getJSON("/api/console/about"); if (a.version && a.version.commit === r.after.commit) { location.reload(); return; } }
+    catch (e) { /* 服务正在重启 */ }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  line.innerHTML += "<br><small>HUD 服务没有自动起来：关掉控制台窗口再打开。</small>";
 }
 
 // ---------------------------------------------------------------- 事件
@@ -2073,12 +2162,14 @@ document.querySelectorAll("[data-preset]").forEach(b => b.addEventListener("clic
   ui.segOff = {};
   buildRoute(); updateSummary(); schedulePreview();
 }));
-$("kbAllowAll").addEventListener("click", () => { const list = ui.kb[ui.mode]; if (list) setDeny(list.deny.slice(), false); });
+$("kbAllowAll").addEventListener("click", () => { const list = ui.kb[ui.mode]; if (list) setReadable(list.documents.filter(d => !d.opt_in), true); });
 $("kbText").addEventListener("input", () => { if (ui.kbFile) { ui.kbFile.dirty = $("kbText").value !== (ui.kbFile.text ?? ""); updateKbSave(); } });
 $("kbText").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); if (!$("kbSave").disabled) saveKbFile(); } });
 $("kbSave").addEventListener("click", saveKbFile);
 $("kbRevert").addEventListener("click", () => { if (ui.kbFile) { $("kbText").value = ui.kbFile.text ?? ""; ui.kbFile.dirty = false; updateKbSave(); setKbView(ui.kbView); } });
 $("aboutRefresh").addEventListener("click", loadAbout);
+$("checkUpdate").addEventListener("click", checkUpdate);
+$("applyUpdate").addEventListener("click", applyUpdate);
 $('personalPromptScope').addEventListener('change', () => { ++personalRequest; loadPersonalPrompt(); });
 $('personalPromptText').addEventListener('input', () => {
   const draft = personalDrafts.get($('personalPromptScope').value);
@@ -2159,6 +2250,7 @@ function confirmTwice(id, text) {
 
 (async function boot() {
   try { await loadOptions(); } catch (e) { toast("读取设置失败：" + e.message, true); }
+  try { setMode(ui.mode); } catch (e) { /* 设置没读到时保持页面原样 */ }     // 默认探索：按默认模式显示/隐藏模式相关的选项
   showPage((location.hash || "").slice(1) || recall("page") || "run");
   await refreshRuns(); await refreshStatus(); await refreshRun(); await refreshFeed();
   setInterval(refreshStatus, 1500);

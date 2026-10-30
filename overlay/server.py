@@ -90,6 +90,27 @@ def read_metrics(run_dir: Path | None) -> dict | None:
         return None   # 文件正在被替换的瞬间读不到：页面保留上一帧
 
 
+def restart_service(port: int) -> None:
+    """一键更新之后换成新代码：另起一个独立的小进程等这个服务退出、再按控制台的方式重新启动它，
+    然后本进程退出（控制台窗口开着时，它每 5 秒的检查也会把服务拉起来，两边谁先都行）。"""
+    import os
+    import subprocess
+    flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+             | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    root = Path(__file__).resolve().parent.parent
+    try:
+        subprocess.Popen([sys.executable, "-X", "utf8", "-m", "overlay.console", "--respawn-service", "--port", str(port)],
+                         cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=flags, start_new_session=os.name != "nt")
+    except OSError as exc:
+        print(f"[hud] 没能启动重启助手：{exc}；控制台窗口开着时会自动重新启动服务", flush=True)
+
+    def leave():
+        time.sleep(1.0)          # 先让这次的回复发出去
+        os._exit(0)
+    threading.Thread(target=leave, daemon=True).start()
+
+
 def make_handler(pinned: Path | None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # 安静运行
@@ -126,6 +147,7 @@ def make_handler(pinned: Path | None):
                     handler = {"/api/console/status": console_api.status, "/api/console/options": console_api.options,
                                "/api/console/runs": console_api.runs, "/api/console/about": console_api.about,
                                "/api/console/prefs": console_api.load_prefs,
+                               "/api/console/update": console_api.update_check,
                                "/api/console/kb": lambda: console_api.kb_list(query.get("mode", "speedrun")),
                                "/api/console/kb/file": lambda: console_api.kb_read(query.get("mode", "speedrun"),
                                                                                    query.get("path", "")),
@@ -260,9 +282,13 @@ def make_handler(pinned: Path | None):
                         elif self.path == "/api/console/kb/file":
                             result = console_api.kb_write(str(data.get("mode", "")), str(data.get("path", "")),
                                                           data.get("text"), data.get("mtime"))
+                        elif self.path == "/api/console/update":
+                            result = console_api.update_apply()
                         else:
                             raise ValueError("未知控制台接口")
                     self._json(200, result, cors=False)
+                    if self.path == "/api/console/update" and result.get("restart"):
+                        restart_service(self.server.server_address[1])
                 except (ValueError, TypeError, RuntimeError, OSError, KeyError) as exc:
                     self._json(400, {"error": str(exc)}, cors=False)
                 return

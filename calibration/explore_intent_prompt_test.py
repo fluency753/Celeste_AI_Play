@@ -27,7 +27,8 @@ class ExploreIntentPromptTests(unittest.TestCase):
         parts = prompt_parts(self.config())
         shared = ''.join(p.text for p in parts if p.source == 'explore_zh.md')
         self.assertIn('以用户当前任务为准', shared)
-        self.assertIn('不让默认的收集或通关倾向取代当前任务', shared)
+        self.assertIn('不让默认的通关倾向取代当前任务', shared)
+        self.assertIn('没有指定时以完成本次章节为主', shared)
         self.assertNotIn('必须建立', shared)
         text = play_prompt(self.config())
         self.assertIn('持续积累可复用的模型与方法', text)
@@ -39,7 +40,7 @@ class ExploreIntentPromptTests(unittest.TestCase):
         text = play_prompt(cfg)
         for expected in ('最多 300 帧', '每次推演最多 240 帧', '往后总共最多推演 240 帧', '不能把模拟出来的中间状态',
                          '240 帧内走不完的，先执行推演好的这一段', '最多 20 秒',
-                         '本次最多可以用 2 个核', '自写模拟器、搜索、穷举或批量计算工具使用 C++'):
+                         '本次最多可以用 2 个核', '建议用编译型语言（如 C++）'):
             self.assertIn(expected, text)
 
     def test_program_limits_are_initial_and_optimization_is_discoverable_on_demand(self):
@@ -56,7 +57,7 @@ class ExploreIntentPromptTests(unittest.TestCase):
                     continue
                 sections.append(program)
                 self.assertIn('你可以自行编写模拟器、搜索或其他辅助程序，自由发挥', text)
-                for expected in ('本次最多可以用 1 个核', '适合并行的计算使用多线程',
+                for expected in ('本次最多可以用 1 个核', '多线程完成',
                                  '/kb/help/programs.md', '/kb/help/workspace.md'):
                     self.assertIn(expected, program)
                 reference = (PROMPTS.parent.parent / 'kb/explore/help/programs.md').read_text(encoding='utf-8')
@@ -74,7 +75,7 @@ class ExploreIntentPromptTests(unittest.TestCase):
         for marker in ('{program_freedom}', '{program_lead}', '{parallel_rule}'):
             self.assertNotIn(marker, intro + programs)
             self.assertNotIn(marker, PLACEHOLDERS)
-        for expected in ('你可以自行编写', '使用 C++', '{program_reference_rule}'):
+        for expected in ('你可以自行编写', '建议用编译型语言（如 C++）', '{program_reference_rule}'):
             self.assertIn(expected, programs)
         self.assertIn('{cpu_rule}', programs)
         self.assertIn('{explore_program_rule}', programs)

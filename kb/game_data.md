@@ -10,7 +10,10 @@
 | --- | --- | --- |
 | `latest_obs.json` | 每次 `observe`、每次 `act` 结束 | `{"decision": n, "obs": 观测}`，当前帧的完整观测 |
 | `collision.json` | 每次观测、动作和剧情操作结束 | 当前统一碰撞快照及 `image` 路径；图像只保留当前和前一代，旧路径失效时重读本文件 |
+| `collision/<帧号>-<哈希>.png` | 同 `collision.json` | 同帧碰撞图，文件名不可变；目录里只保留当前和前一代，以 `collision.json` 的 `image` 为准 |
 | `last_act.json` | 每次 `act` 结束 | 上一次 `act` 的输入与逐帧轨迹（全精度） |
+| `last_tool.json` | 每次游戏工具调用开始与返回时 | 最近一次游戏工具调用（`last_call`）与最近一次推进动作（`last_action`：`act`、`cutscene` 等）的执行记录，含 `run_id`、`save`、`save_slot`、前后快照与状态。`running`/`raised`/`unconfirmed` 时先观察核实，不盲目重放；`returned` 只表示工具已返回，不证明动作成功或模型已收到；观察与解说不覆盖 `last_action` |
+| `retry.json` | 自动重试每次运行重算命令之前 | 本次重试的原因、第几次、上限、计划文件路径、偏差、事件与已执行帧数（§3.3） |
 | `rooms/<章节>__<房间>.json` | 第一次在某个房间得到观测时 | 历史首次观测，`snapshot.historical=true`；可回看初始几何，不能作为当前实体位置 |
 | `sim_state.json` | 只在开放预置模拟器的运行里：每次游戏停下（`observe`、`act` 结束、自动重试之前） | 当前帧的完整场景，是 `/sim` 里预置模拟器的起始状态；格式不需要读懂，直接交给模拟器（见 `/sim/README.md`） |
 
@@ -23,7 +26,7 @@
   "frame": 12345,
   "scene": "Level",
   "controllable": true,
-  "save": {"name": "test", "slot": 7, "fileTimeTicks": 0},
+  "save": {"name": "Madeline", "slot": 0, "fileTimeTicks": 0},
   "level": {...},
   "player": {...},
   "entities": [...],
@@ -54,11 +57,7 @@
 
 ### 工具布局、变化与查询
 
-默认工具使用 `room-context-v2`，首次入房或默认 `observe` 返回 `mode=baseline` 的完整布局，替换旧基线。`groups` 只共用相同属性，不省略实例：每组 `instances` 的行按本组 `instanceColumns`（省略时为 `[id,x,y]`）读取，可能另有 `shape/state` 列；共同的形状或状态写在组上。`shape` 引用同包 `shapes`，形状及所有嵌套 x/y 加实例 x/y 还原世界坐标。所有实例位置保留，组不是实心包围区域，不判定可达性。默认 `stateDetail` 明示仅精选游戏状态，完整反射仍可精查。
-
-同房 `act/cutscene` 返回 `mode=delta`：核对 `base_snapshot_id`，应用 `added/changed` 中的完整替换对象（按 source/id），`removed` 是本覆盖范围内不再观测的 `[source,id]`，不表示永久消失。每条变化自带所需形状定义；`roomChanges` 按同名字段替换首次布局外层的 `exits/spawns/respawnPoint/triggers/entities`，空值也必须应用。地形不变就不重复发送，移动、生成、形状或碰撞状态变化照常报告；范围变化、缓存失效或变化过大时重发 baseline。快照链缺失、历史压缩后记不清布局时默认 `observe` 重建，不猜测缺失数据。
-
-`observe(detail="geometry", region=[x,y,w,h], limit=32)` 只读最近观测缓存，返回区域精确对象与完整反射状态，格式为 `shared-shapes-v1`（独立的本包形状表）。后续页带 `offset=next_offset` 与同一 `snapshot_id`；动作或新观测后重新从第一页查。`observe(detail="player")` 读取完整玩家内部状态。两种详情都不推进游戏，也不改变变化基线。局部查询超出来源范围、来源缺失或存在未知形状时，空结果不证明安全。完整原始工作区与完整碰撞图不变，不必把整房 JSON 打印进聊天。
+工具返回的 `workspace-files-v1` 文件引用、回退格式 `room-context-v2`（baseline/delta）与区域精查 `shared-shapes-v1`（含 `at` 锚点规则）的说明见 `/kb/explore/help/observation.md`，不在这里重复。
 
 ### 1.1 `level`
 
@@ -72,7 +71,7 @@
 | `inCutscene` / `skippingCutscene` / `paused` / `transitioning` / `frozen` / `completed` | 剧情中、正在跳过剧情、暂停、房间转场中、游戏冻结（如冲刺开始的几帧）、章节已完成 |
 | `freezeTimer` / `freezeFrames` | freeze frames：剩余冻结秒数，以及接下来还会冻结几帧（冲刺开始、吃冲刺水晶、撞碎冲刺砖、离开梦境块等，见 `README.md` §3.3）。例如 `act` 在吃到水晶那一帧停下（`stop_on` 含 `refill`）时，这里会告诉你接下来还有几帧 Madeline 不动 |
 | `wind` | 当前风的速度 `[x, y]`（像素/秒）；没有风时为 `[0, 0]` |
-| `canPause`、`dialogOpen`、`dialogWaiting` | 主控跳过剧情时使用，可以忽略 |
+| `canPause`、`dialogOpen`、`dialogWaiting` | 能否暂停、对白是否打开、对白是否在等确认；auto 剧情模式下由主控用来跳过剧情 |
 | `chapterTimeTicks` | 章节计时，1 tick = 100 纳秒（÷ 10 000 000 得秒） |
 | `deaths` / `deathsInRoom` | 本章死亡次数 / 本房间死亡次数 |
 
@@ -111,7 +110,7 @@
 | `wallSpeedRetentionTimer` / `wallSpeedRetained` | 撞墙后保留水平速度的剩余时间与被保留的速度 |
 | `wallBoostDir` / `wallBoostTimer` | climbjump 后的反向加速窗口 |
 | `climbNoMoveTimer`、`hopWaitX`、`hopWaitXSpeed` | 攀爬相关计时与爬到墙顶后的跳跃等待 |
-| `noWindTimer`、`lowFrictionStopTimer`、`minHoldTimer` | 风、低摩擦地面与抓取相关的计时（本轮章节基本用不到） |
+| `noWindTimer`、`lowFrictionStopTimer`、`minHoldTimer` | 风、低摩擦地面与抓取相关的计时（序章/1A/2A 未出现相应机制） |
 
 这些字段的含义与更新规则见 `player_physics.md`。用观测里的 `internal` 作为模拟器的初始状态，就能从任意一帧接着推演。
 
@@ -190,7 +189,7 @@
 ```
 
 - `attempt`：0 是你提交的计划；1、2…是自动重试时重算出的计划（§3.3）。
-- `stop`：停止原因：`done` 全部执行完、`death`、`room` 换房、`land` 落地、`refill` 冲刺恢复、`uncontrollable`、`controllable`、`complete`，以及 `deviate` 偏离预期轨迹（计划里给了 `expect` 时，见 §3.2；此时 `result` 里还有 `deviation`）。
+- `stop`：停止原因：`done` 全部执行完、`death`、`room` 换房、`land` 落地、`refill` 冲刺恢复、`uncontrollable`、`controllable`、`complete`、`story_input` 到达剧情输入节点、`story_decision` 到达剧情决策机会，以及 `deviate` 偏离预期轨迹（计划里给了 `expect` 时，见 §3.2；此时 `result` 里还有 `deviation`）。
 - `consumed` / `planned`：实际执行 / 计划执行的帧数（提前停下时前者更小）。
 - `trajectory`：每个执行帧一行，全精度。**第 j 行（从 1 数）是按下第 j 帧的按键、游戏更新完这一帧之后的状态**，帧号 = `startFrame + j`。所以 `obs.frame` 等于下一次 `act` 的 `startFrame`，轨迹第一行反映的是第一帧输入的效果。
 - `events`：该段内发生的事件及其帧号。
@@ -220,17 +219,17 @@
 ### 3.1 按键段
 
 JSON计划或act可显式声明 `input_format="celeste_tas"`（agent剧情模式、桥接1.0.20起）。此时字母按TAS按键解释：J/K双跳、X/C双冲刺、Z/V双蹲冲、G/H双抓、S暂停、Q重试、N日志、O确认，并保留跳跃兼确认、冲刺兼取消/交互等绑定。省略仍用下列本项目格式，不按文件扩展名猜测。
-工作区 `game/tas.py` 可读取明确选定的纯输入行并按帧窗口写JSON计划，保留来源行与游标；拒绝console/Set/Read等命令。执行后读取input_cursor与remaining_inputs，按实际consumed续接；TAS模式不自动补剧情/转场帧。详见系统输入职责说明。F摇杆、A/M独立方向、自定义键暂不支持。
+工作区 `/workspace/game/tas.py` 可读取明确选定的纯输入行并按帧窗口写JSON计划，保留来源行与游标；拒绝console/Set/Read等命令。执行后读取input_cursor与remaining_inputs，按实际consumed续接；TAS模式不自动补剧情/转场帧。详见 `/kb/explore/help/actions.md` 与 `act` 的工具说明。F摇杆、A/M独立方向、自定义键暂不支持。
 
 写法与 `act` 的 `inputs` 完全一样：
 
 - `"帧数"`：这些帧什么都不按；`"帧数,按键,按键…"`：这些帧按住列出的键。
 - 按键：`L R U D` 方向，`J` 跳，`X` 冲刺，`Z` crouch dash（以下蹲姿态冲刺，见 `input.md`），`G` 抓，`T` 交互；`K`、`Y`、`V` 分别是第二个跳、冲刺、crouch dash 键；`A:角度` 表示左摇杆模拟方向（0 为右、90 为上、180 为左、270 为下，满幅度），出现时取代方向键。
-- agent 剧情模式另开放 `C` 确认、`B` 返回、`P` 暂停、`N` 日志。菜单、重试、剧情和结算同样由智能体下指令；这套字母映射与 CelesteTAS 不完全相同。
+- `C` 确认，两种剧情模式都可用：auto 剧情模式下画面冻结等确认（拿到磁带、吃心后等）时主控先替你按，按了仍卡住才交回；agent 剧情模式主控不代按，另开放 `B` 返回、`P` 暂停、`N` 日志，菜单、重试、剧情和结算同样由智能体下指令。这套字母映射与 CelesteTAS 不完全相同。
 - `ui` 报告当前 Poem 的显示状态或 AreaComplete 的 `confirmReady`（桥接 1.0.19 起）；Poem 可见不保证已接受确认。`menu` 和 `pauseMenu` 给出当前菜单及选项，不替智能体选择。
 - 原生 `completed=true` 仅表示登记成绩；agent 模式仍须自行走完结算并回到稳定的选章地图，主控才确认整章完成。
 - 段与段之间不会自动松键：`"1,R,J"` 后接 `"14,R,J"` 等于连续按住跳 15 帧，只算一次起跳。同一个键要再"按下"一次，中间至少要有 1 帧不按它；**换另一个键就不用**：按住 J 时按下 K 也算一次新的起跳输入（冲刺 X/Y、crouch dash Z/V 同理），所以相邻两帧可以各跳一次（`techniques.md` 7.5）。
-- 单次 `act` 最多 600 帧，超过就拆成几次；角色可以操作时至少 40 帧（不足时在末尾补空帧，截断条件照样提前停下）。
+- 单次 `act` 的帧数上下限按本次设置，见 `act` 的工具说明与观测开头的"当前 act 帧数范围"；超过上限就拆成几次。角色可以操作时，不足下限的计划会被退回（不消耗游戏帧），请在末尾补空帧或继续保持按键；只有自动重试重算出的计划不足时由主控在末尾补空帧（截断条件照样提前停下）。
 
 ### 3.2 预期轨迹 `expect` 与容差 `tolerance`
 
@@ -249,8 +248,8 @@ JSON计划或act可显式声明 `input_format="celeste_tas"`（agent剧情模式
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `command` | 必填 | 在 `/workspace` 里用 `sh -c` 运行的命令，最多 500 字符（长的写成脚本） |
-| `max` | 3 | 本次 `act` 最多重算几次（1～5） |
-| `timeout_s` | 20 | 每次重算的时限（1～60 秒），超时连同子进程一起结束 |
+| `max` | 3 | 本次 `act` 最多重算几次（1 至上限，上限按本次设置，默认 5） |
+| `timeout_s` | 20 | 每次重算的时限（1 秒至上限，上限按本次设置，默认 60 秒），超时连同子进程一起结束 |
 | `on` | `["death", "deviate"]` | 哪些情况触发：`death` 死亡（主控先推进到重生、可操作之后再运行）、`deviate` 偏离预期、`done` 按键用完但仍在本房间（用来"先走一段、再算下一段"） |
 
 - 触发条件还要满足：Madeline 可操作，并且仍在本次 `act` 开始时的房间里。换了房间、章节完成、或停在其他原因（例如 `land`）都直接返回给你。

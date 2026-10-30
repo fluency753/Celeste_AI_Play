@@ -240,7 +240,7 @@ class ClaudeRunner(SessionControls):
 
     def _provider_env(self) -> dict[str, str]:
         """第三方提供方：接口地址、API 密钥与模型槽位。都经 docker exec -e 名字 从环境传进容器，值不进命令行；
-        不传 Max 订阅令牌，所以订阅令牌不会发给第三方。"""
+        不传 Claude 订阅令牌，所以订阅令牌不会发给第三方。"""
         info = self.cfg.provider_info or {}
         env = {"ANTHROPIC_BASE_URL": info["base_url"], "ANTHROPIC_AUTH_TOKEN": self.token}
         for key, value in (info.get("env") or {}).items():

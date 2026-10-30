@@ -17,6 +17,22 @@ from mcp.types import TextContent
 ACTION_TOOLS = {'act', 'cutscene', 'travel', 'exit_level'}
 
 
+# act 结果里的逐帧轨迹很大（几百 KB 到几 MB），完整的在 /workspace/game/last_act.json，调用记录里只留行数和最后一帧
+TRAJECTORY_KEYS = ('trajectory', 'entityTrajectory')
+
+
+def compact_step(result):
+    if not isinstance(result, dict):
+        return result
+    out = dict(result)
+    for key in TRAJECTORY_KEYS:
+        rows = out.get(key)
+        if isinstance(rows, list):
+            out[key] = {'omitted': True, 'rows': len(rows), 'see': '/workspace/game/last_act.json',
+                        'last': rows[-1] if rows and key == 'trajectory' else None}
+    return out
+
+
 class ToolJournal:
     def __init__(self, session):
         self.session = session
@@ -35,7 +51,11 @@ class ToolJournal:
     @property
     def run_id(self):
         directory = getattr(self.session, 'run_dir', None)
-        return str(Path(directory).resolve()) if directory is not None else None
+        if directory is None:
+            return None
+        # 只写"智能体目录/运行目录名"，不把主机上的绝对路径暴露给容器里的智能体
+        path = Path(directory).resolve()
+        return f'{path.parent.name}/{path.name}'
 
     def snapshot(self):
         obs = getattr(self.session, 'last_obs', None) or {}
@@ -88,20 +108,27 @@ class ToolJournal:
                     'agent': self.session.cfg.agent, 'last_call': self.last_call, 'last_action': self.last_action,
                     'meaning': 'returned 表示工具已返回，不代表动作执行成功或模型收到结果；以 detail 和 result 为准。'
                                'running/执行未确认不可直接重放；前后快照不是独占执行帧数。'}
-        temporary = path.with_name('.last_tool-' + uuid.uuid4().hex + '.tmp')
-        try:
-            temporary.write_text(json.dumps(document, ensure_ascii=False), encoding='utf-8')
-            temporary.replace(path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        text = json.dumps(document, ensure_ascii=False, indent=1)   # 分行写，Read 工具能逐行读
+        for attempt in range(3):
+            temporary = path.with_name('.last_tool-' + uuid.uuid4().hex + '.tmp')
+            try:
+                temporary.write_text(text, encoding='utf-8')
+                temporary.replace(path)
+                return
+            except PermissionError:
+                # Windows 上容器正在读这个文件或杀毒软件在扫临时文件时，替换会短暂失败：稍等再试
+                if attempt == 2:
+                    raise
+                time.sleep(0.05)
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def start(self, record, *, handler_entered=True):
         if 'sequence' in record:
             return
         self._load()
         self.sequence += 1
-        previous_call, previous_action = self.last_call, self.last_action
-        self.previous_actions[record['id']] = previous_action
+        self.previous_actions[record['id']] = self.last_action
         record.update(sequence=self.sequence, started_at=time.time(), status='running',
                       handler_entered=handler_entered, before=self.snapshot(),
                       execution_status='unconfirmed' if handler_entered else 'not_started')
@@ -111,12 +138,10 @@ class ToolJournal:
         try:
             self._publish()
         except (OSError, ValueError, TypeError) as exc:
-            self.last_call, self.last_action = previous_call, previous_action
-            self.previous_actions.pop(record['id'], None)
-            record.update(handler_entered=False, execution_status='not_started')
-            record['record_write_failed'] = True
-            raise ToolError(f'调用记录写入失败，本次游戏工具未执行：{exc}。'
-                            '请先修复工作区写入；last_tool.json 可能仍是旧记录。') from exc
+            # 记录只是恢复时的参考：写不进去也照常执行（连 stop_run 都不能因此被拒），
+            # 完成时再写一次；那次也失败才在结果里提醒（见 finish）
+            record['start_write_failed'] = str(exc) or type(exc).__name__
+            print(f'[tools] 调用记录开始时未能写入，照常执行：{exc}', flush=True)
 
     @asynccontextmanager
     async def execution(self, lock):
@@ -149,8 +174,6 @@ class ToolJournal:
                 self.last_action = self.previous_actions.get(record['id'])
 
     def finish(self, record, *, result=None, error=None):
-        if record.get('record_write_failed'):
-            return None
         try:
             if 'sequence' not in record:
                 self.start(record, handler_entered=False)

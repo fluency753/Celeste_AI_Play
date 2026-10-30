@@ -1,5 +1,6 @@
 """Shared play, knowledge preparation and resume prompts."""
 from dataclasses import dataclass
+import re
 
 from .config import REPO_ROOT, chapter_name_by_id
 from .kb_study import KbStudy
@@ -7,6 +8,9 @@ from .execution import workspace_capabilities
 from .modes import act_frame_cap, act_frame_min, collision_image_mode, game_tools, has_cutscene_tool, is_explore
 
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
+
+
+CJK_GAP = re.compile(r"(?<=[\u4e00-\u9fff，。；：、）]) (?=[\u4e00-\u9fff（])")
 
 
 def remind_text(seconds: float) -> str:
@@ -29,7 +33,11 @@ CN_COUNT = {1: "一", 2: "两", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七"
 
 
 def game_tool_list(cfg) -> str:
-    items = [f"`{name}`（{TOOL_NOTES.get(name, '见工具说明')}）" for name in game_tools(cfg)]
+    from .thought import temp_thoughts
+    notes = dict(TOOL_NOTES)
+    if temp_thoughts(cfg):     # 开了“仅正式思考”：narrate 写的是临时思考，观众看不到
+        notes["narrate"] = "思考期间写临时思考（只在控制台显示，观众看不到），不推进游戏"
+    items = [f"`{name}`（{notes.get(name, '见工具说明')}）" for name in game_tools(cfg)]
     listed = items[0] if len(items) == 1 else "、".join(items[:-1]) + "和 " + items[-1]
     return f"游戏工具有{CN_COUNT.get(len(items), str(len(items)))}个：{listed}。"
 
@@ -50,7 +58,8 @@ def explore_program_rule(cfg) -> str:
     """探索模式提示词里单次程序时长的一句（explore_program_s 为 None 时不限时）。"""
     from .tuning import seconds_text
     seconds = getattr(cfg, "explore_program_s", 15)
-    return "单次规划程序不限时长；" if seconds is None else f"单次规划程序最多 {seconds_text(seconds)}；"
+    return ("单次规划程序不限时长；" if seconds is None
+            else f"每条程序命令（含编译）最多 {seconds_text(seconds)}，超时就被结束；")
 
 
 def cpu_rule(cfg) -> str:
@@ -106,6 +115,31 @@ SAVE_CONTEXT_ACT = ("本次开启了节省上下文：同一房间里的 act 结
 SAVE_CONTEXT_PRINT = "字符地图等大块输出只打印关心的区域，没变化的内容不必重复打印，需要时再读文件。"
 
 
+def kb_reference_rule(cfg) -> str:
+    """知识库里社区资料原文（kb/reference/，不入库、在本机生成）的一句：本机没有或不给看时为空。"""
+    root = getattr(cfg, "kb_source", None)
+    deny = set(getattr(cfg, "kb_deny", None) or [])
+    if root is None or not (root / "reference").is_dir():
+        return ""
+    files = [p for p in (root / "reference").rglob("*") if p.is_file()
+             and p.relative_to(root).as_posix() not in deny]
+    if not files:
+        return ""
+    text = "`/kb/reference/` 收录了社区资料原文，可以用 Grep 查技巧名"
+    if any(p.suffix.lower() == ".pdf" and "community" in p.parts for p in files):
+        text += "；文字版看不到的插图，可以用 Read 打开 `/kb/reference/community/pdf/` 里的原 PDF"
+    return text + "。"
+
+
+def speedrun_allow_rule(cfg) -> str:
+    """探索模式在控制台知识库页勾选开放了速通知识库的文件时的一句；默认不开放，为空。"""
+    allow = [rel for rel in getattr(cfg, "kb_allow", None) or [] if rel.startswith("speedrun/")]
+    if not allow or getattr(cfg, "mode", "speedrun") != "explore":
+        return ""
+    names = "、".join(rel[len("speedrun/"):] for rel in allow[:12]) + ("等" if len(allow) > 12 else "")
+    return f"本次另外开放了速通知识库的 {len(allow)} 个文件（/kb/speedrun/ 下：{names}），按需查阅，不要求准备阶段读完。"
+
+
 def save_context_act(cfg) -> str:
     """开了"节省上下文"（--save-context）时 act 说明里的一句；没开时为空。"""
     return SAVE_CONTEXT_ACT if getattr(cfg, "save_context", False) else ""
@@ -151,7 +185,7 @@ def explore_search_rule(cfg) -> str:
     """探索模式提示词里自写模拟器与搜索程序推演帧数的一句（explore_search_frames 为 None 时不写）。"""
     if not workspace_capabilities(cfg).programs:
         return ""
-    frames = getattr(cfg, "explore_search_frames", 150)
+    frames = getattr(cfg, "explore_search_frames", None)
     if frames is None:
         return ""
     waits = ("等着执行的思考僵直帧不计入，自己加的等待帧计入" if getattr(cfg, "stiffness", False)
@@ -212,7 +246,7 @@ def program_timeout_rule(cfg):
     default = seconds_text(getattr(cfg, 'bash_default_s', 300))
     maximum = seconds_text(getattr(cfg, 'bash_max_s', 600))
     if getattr(cfg, 'engine', 'claude') == 'codex':
-        return f'原生 Shell 只在前台运行，默认最多 {default}；用 timeout_ms（毫秒）指定时限，最多 {maximum}。'
+        return f'原生 Shell 只在前台运行，默认最多 {default}；用 timeout_ms（毫秒）指定时限，最多 {maximum}'   # 模板后面接“，超时就被结束”
     return f'Bash 命令只在前台运行，默认最多 {default}（用 Bash 的 timeout 参数最多加到 {maximum}）'
 
 
@@ -225,8 +259,8 @@ def fill(text: str, cfg) -> str:
     if "{game_tool_list}" in text:
         text = text.replace("{game_tool_list}", game_tool_list(cfg))
     if "{preset_sim}" in text:     # 探索模式：开了限额预测时预设模拟器只能经 simulate 按额度用，否则完全不开放
-        text = text.replace("{preset_sim}", "预设模拟器只能通过 simulate 按额度使用" if getattr(cfg, "sim_assist", False)
-                            else "禁用预设模拟器")
+        text = text.replace("{preset_sim}", "预置模拟器只能通过 simulate 按额度使用" if getattr(cfg, "sim_assist", False)
+                            else "本次不提供预置模拟器")
     if "{auto_handling}" in text:
         text = text.replace("{auto_handling}", auto_handling(cfg))
     values = {
@@ -238,10 +272,11 @@ def fill(text: str, cfg) -> str:
                                    if workspace.workspace_read and workspace.workspace_write else
                                    "根据当前观测、工具说明与真实尝试学习；当前没有文件工具，不要求读取知识库或工作区笔记。"),
         "{explore_reference_rule}": ("基本规则、观测要点和操作见 /kb/basics.md、data.md、tools.md；详细资料按 /kb/README.md 的 help/ 索引查阅。"
+                                     + speedrun_allow_rule(cfg)
                                      if workspace.workspace_read else "按键和工具约定以本次提供的游戏工具说明为准。"),
         "{explore_environment_rule}": ("Read/Write/Bash 对应容器的文件读取、写入和断网命令；"
                                        if workspace.programs else "当前只有游戏工具，不能读取文件或运行程序；"),
-        "{explore_memory_rule}": ("/workspace/notes.md 保存当前目标、验证过的事实、失败原因与待验证问题。开局、续跑或压缩后，在首次真实动作前查阅并核对最新观测；不存在时建立简短索引。新发现、反例或目标变化时更新，区分事实与猜测，合并重复、标明失效结论；长记录拆文件并留链接，不逐帧抄数据。"
+        "{explore_memory_rule}": ("/workspace/notes.md 按房间或机制整理，保存当前目标、验证过的事实、失败原因、待验证问题以及收集品与支线待办。开局、续跑或压缩后，在首次真实动作前查阅并核对最新观测；不存在时建立简短索引。换房、换目标或连续几次尝试后查相关条目；新发现、反例或目标变化时主动更新，不等用户提醒，区分事实与猜测，合并重复、标明失效结论；长记录拆文件并留链接，不逐帧抄数据。"
                                    if workspace.workspace_read and workspace.workspace_write else
                                    "依据当前观测与已有对话记录目标、已验证事实和待验证问题，不把旧状态当作当前事实。"),
         "{public_feedback_rule}": ('有新判断时用 '
@@ -277,6 +312,7 @@ def fill(text: str, cfg) -> str:
         "{formal_thought_act}": formal_thought_act(cfg),
         "{save_context_rule}": save_context_act(cfg),
         "{save_context_print}": save_context_print(cfg),
+        "{kb_reference_rule}": kb_reference_rule(cfg),
         # 碰撞图什么时候附在工具结果里（--collision-image；默认只在进新房间与 observe 时）
         "{act_collision_image}": {
             "always": "和完整碰撞图（开启图像时）",
@@ -311,7 +347,9 @@ def fill(text: str, cfg) -> str:
     for key, value in values.items():
         text = text.replace(key, value)
     from .prompt_environment import render_tool_references
-    return render_tool_references(text, cfg)
+    text = render_tool_references(text, cfg)
+    # 占位符换进来的中文前后留着模板里的空格（如“满 半分钟 未更新”“不用 原生 Shell”）：两边都是中文时去掉
+    return CJK_GAP.sub("", text)
 
 
 # 控制台"提示词"页保存的本机修改：local/prompts/<文件名>（不入库）。有这个文件时用它代替仓库里的同名文件，
@@ -385,9 +423,12 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
         parts += _file_parts("container_sim_zh.md") + _file_parts("sim_zh.md")
         # 默认不限制思考与调用（free_zh.md，可以把规划程序写成自动重试命令）；--limit-planning 时按章节记账（pause_zh.md）
         if cfg.pause_limit:
+            import math
             n, d = cfg.rounds_per_room, cfg.death_bonus
-            parts += _file_parts("pause_zh.md", lambda t: t.replace("{rounds4}", str(n * 4)).replace(
-                "{rounds}", str(n)).replace("{death}", str(d)))
+            scale = float(getattr(cfg, "room_scale", 2.0) or 2.0)
+            scale_text = f"{scale:g}"
+            parts += _file_parts("pause_zh.md", lambda t: t.replace("{rounds4}", str(math.ceil(n * scale * scale))).replace(
+                "{rounds}", str(n)).replace("{death}", str(d)).replace("{scale}", scale_text))
         else:
             parts += _file_parts("free_zh.md") + _file_parts("retry_zh.md")
         if cfg.playback:
@@ -528,6 +569,9 @@ def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = Fals
     after = ("读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些搜索与规划程序"
              "（模拟器直接用 /sim 预置的）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
              if sim else "读完后调用 observe 开始游玩。\n")
+    if cfg is not None and workspace_capabilities(cfg).workspace_read:   # 规则在工作区操作指南里：开始游玩前先读它
+        after = after.replace("然后调用 observe 开始游玩", "再读工作区操作指南（索引及各节），然后调用 observe 开始游玩").replace(
+            "读完后调用 observe 开始游玩", "读完后先读工作区操作指南（索引及各节），再调用 observe 开始游玩")
     return notification('prepare', facts=(
         f"本次必读清单：\n{files}\n\n"
         "主控核对实际阅读进度，完成前 observe 与 act 不会执行。\n" + sim_note + after +
@@ -552,7 +596,7 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
     rules = ("本次的规则以当前的系统提示词为准" if fresh_session or getattr(cfg, 'engine', 'claude') == 'codex'
              else "本次以这条消息后面的配置与指南版本为准" if workspace.workspace_read
              else "本次的规则以这条消息后面附上的当前规则为准")
-    changed = "单次 act 与自写推演的帧数上限、思考语句的要求" if workspace.programs else "单次 act 的帧数上限、思考语句的要求"
+    changed = "帧数上限、工具或权限设置" if workspace.programs else "帧数上限或权限设置"
     reuse = "之前写的程序与笔记按新规则检查后再用。" if workspace.workspace_read else "按当前规则核对后继续。"
     entry = ("已进入存档，请先观察当前界面，再自行导航到本次指定的章节与起点。" if cfg.cutscene_mode == 'agent'
              else "主控已经进入这一章。")
@@ -583,7 +627,7 @@ def net_resume_prompt(minutes: float, chat: bool = False, study_note: str | None
     from .button_prompts import notification
     if chat:
         return notification('wake_chat', facts=text + "请接着处理用户刚才的消息。")
-    text += "这段时间游戏一直冻结，章节计时没有走，也不计入思考僵直。"
+    text += "这段时间游戏一直冻结，章节计时没有走（开了思考僵直时也不计入僵直）。"
     if study_note:
         return notification('resume_prepare', facts=text + "准备阶段还没有结束：\n" + study_note)
     return notification('reconnect', facts=text)

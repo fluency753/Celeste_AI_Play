@@ -21,7 +21,7 @@ from .collision_view import render_collision_view
 from .geometry_context import geometry_page
 from .observation_delivery import ObservationDelivery, FILE_JSON_HEADER, ROOM_JSON_HEADER
 from .execution import workspace_capabilities
-from .tool_record import RecordedMCPServer
+from .tool_record import RecordedMCPServer, compact_step
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果、角色状态{act_collision_image}。{observation_delivery_rule} observe(detail="geometry",region=[x,y,w,h])可按需查看最近缓存的局部精确对象；detail="player"查询完整玩家内部状态。不把当帧阻挡当成永久不可达。{save_context_rule}
 
@@ -51,15 +51,15 @@ OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}。{observa
 
 # 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
 
-SET_EFFORT_DESCRIPTION = '调整下一轮推理强度，不推进游戏。level取观测头部可选档位，reason说明原因。调用后结束本轮，不再调用工具；主控切换后通知继续。'
+SET_EFFORT_DESCRIPTION = '调整下一轮推理强度，不推进游戏。level取观测头部可选档位，reason说明原因；简单房间可调低、难房间调高。调用后结束本轮，不再调用工具；主控切换后通知继续。'
 
 
-NARRATE_DESCRIPTION = "更新 HUD 公开解说，不推进游戏。thought 用一两句中文（{thought_limit}）写新判断和下一步；不写具体数值、算法或内部推理，技巧专名用英文。{thought_mood_short}有真实进展时更新，不重复空话。"
+NARRATE_DESCRIPTION = "更新 HUD 公开解说，不推进游戏。thought 用一两句中文（{thought_limit}）写新判断和下一步；不写具体数值、算法或内部推理，技巧专名用英文。{thought_mood_short}一有初步判断就先写一句，不要攒到 act 时才写；有真实进展时更新，不重复空话。"
 
 # 开了"仅正式思考"（--formal-thought）时 narrate 的说明：写的是临时思考，只显示在控制台，游戏画面的 HUD 上没有
 NARRATE_TEMP_DESCRIPTION = '更新临时思考，{temp_thought_where}；游戏 HUD 只显示 act 的正式 thought。不推进游戏。thought 用中文（{thought_temp_limit}）写实际判断，不写数值、算法或内部推理，技巧专名用英文。'
 
-COMPACT_ACT_DESCRIPTION = '''推进输入并返回新状态{act_collision_image}。
+COMPACT_ACT_DESCRIPTION = '''推进输入并返回新状态{act_collision_image}。{save_context_rule}
 inputs 为按键段数组，如 ["12,R","1,R,J","27,R"]；与工作区 JSON plan_file 二选一。至少 {act_min_frames}、最多 {act_max_frames} 帧，截断可提前停下。方向 LRUD，J跳/X冲刺/G抓墙/T交互，Z蹲冲，K/Y/V为第二键；纯帧数松键，重复触发须松开1帧。C确认；agent剧情另可B返回/P暂停/N日志。
 stop_on 可选 death/room/uncontrollable/controllable/land/refill/complete/story_input/story_decision，默认 death/room/complete；death总生效，触发后剩余输入不执行；agent已登记通关后不因complete反复截断结算。
 thought 一两句中文{thought_brief}，显示给观众，简述判断，不写数值、算法或内部推理。{thought_mood_short}{formal_thought_act}
@@ -110,13 +110,13 @@ TRANSPORT_SECURITY = TransportSecuritySettings(
 )
 
 
-NO_RETRY_NOTE = ("\n本次运行限制规划轮次：本章每进入一个没来过的房间按房间大小存入轮次（一屏大小的房间 {n} 轮，房间的长、高每加倍"
-                 "轮次翻倍，向上取整，至少 {n} 轮），在游戏里死亡补 {d} 轮，没用完的留给本章后面的房间；剩余轮数写在观测头部。{rule}"
+NO_RETRY_NOTE = ("\n本次运行限制规划轮次：本章每进入一个没来过的房间按房间大小存入轮次（一屏大小的房间 {n} 轮，房间的长、高每变成 {s} 倍"
+                 "轮次就乘 {s}，向上取整，至少 {n} 轮），在游戏里死亡补 {d} 轮，没用完的留给本章后面的房间；剩余轮数写在观测头部。{rule}"
                  "自动重试关闭：计划文件里的 retry 会被忽略。")
 RULE_SIM = ("只有调用了模拟器的消息占一轮，其他工具不占；任何时候（任何位置、任何一帧停下时）都可以调用模拟器，只要还有剩余轮次。"
             "剩余轮数也写在每次调用模拟器的输出末尾，随时可读 /workspace/game/rounds.json。用完后 Bash 被拒绝（模拟器只能通过它调用），请直接 act。")
 RULE_ALL = "act 与 set_effort 以外的工具每条消息占一轮，用完后只能 act。"
-PLAYBACK_NOTE = "每一轮规划（一条调用了模拟器的消息）在模拟器里推演过的路线，系统会在下一轮之前画进游戏给观众看（不推进游戏、不计入章节计时）。"
+PLAYBACK_NOTE = "用模拟器推演过的路线，系统会按已刷新的记录画进游戏给观众看（搜索进行中也会画；不推进游戏、不计入章节计时），详见\"规划回放\"。"
 
 
 def build_server(session: GameSession, study: KbStudy | None = None, gate=None) -> MCPServer:
@@ -298,7 +298,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 finish()
 
     rule = RULE_SIM if session.cfg.sim else RULE_ALL
-    act_description = observation_tool_description(session.cfg, 'act') + (NO_RETRY_NOTE.format(n=session.cfg.rounds_per_room, d=session.cfg.death_bonus, rule=rule)
+    act_description = observation_tool_description(session.cfg, 'act') + (NO_RETRY_NOTE.format(n=session.cfg.rounds_per_room, d=session.cfg.death_bonus, rule=rule,
+                                                                                                s=f"{float(session.cfg.room_scale or 2.0):g}")
                                          if session.cfg.pause_limit else "")
     if session.cfg.playback and session.cfg.sim:
         act_description += PLAYBACK_NOTE
@@ -321,7 +322,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     options = {'input_format':input_format} if input_format is not None else {}
                     outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file, **options)
                     result = outcome.result
-                    journal.detail({'result': outcome.result, 'attempts': outcome.attempts,
+                    journal.detail({'result': compact_step(outcome.result), 'attempts': outcome.attempts,
                                     'auto_frames': outcome.auto_frames, 'auto_notes': outcome.auto_notes})
                 finally:
                     metrics.decision_end(result)
