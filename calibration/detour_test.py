@@ -1057,9 +1057,15 @@ class DetourPromptTests(unittest.TestCase):
         self.assertNotIn('计划外', off)
         self.assertIn('不得自行扩展。', off)
         self.assertIn(instructions(self.cfg(allow_detour=True)), on)
-        for phrase in ('返回地图', '主控不代选', '计划章节仍是本次任务', '不计入分段成绩与总计时', 'B 返回、P 暂停'):
+        for phrase in ('返回地图', '用 travel 工具请主控代为换图', '计划章节仍是本次任务', '不计入分段成绩与总计时',
+                       '不要自己用暂停菜单返回地图'):
             self.assertIn(phrase, on)
-        self.assertNotIn('B 返回、P 暂停', instructions(self.cfg(allow_detour=True, cutscene_mode='agent')))
+        self.assertIn('travel', on)
+        self.assertNotIn('结算后停在选章地图交给你', instructions(self.cfg(allow_detour=True, cutscene_mode='agent')))
+        # 运行中才打开（会话开始时没有 travel 工具）：仍按自己操作菜单写
+        manual = instructions(self.cfg(allow_detour=True), travel=False)
+        for phrase in ('主控不代选', 'B 返回、P 暂停'):
+            self.assertIn(phrase, manual)
         # 不向 agent 透露心门：绕行的说明、运行中开关的通知与返回地图的说法都不提心门或以水晶之心为理由
         from orchestrator.detour import map_rule, notice
         self.assertNotIn('心门', on)
@@ -1089,8 +1095,10 @@ class DetourPromptTests(unittest.TestCase):
         self.assertIn('计划不得自行扩展，计划外地图只作绕行（见“计划外地图”一节）。', partial_on)
         self.assertNotIn('不得自行扩展。', partial_on)
         self.assertEqual(act_note(self.cfg()), '')
-        self.assertEqual(act_note(self.cfg(allow_detour=True, cutscene_mode='agent')), '')   # agent 模式本来就有全部按键
-        self.assertIn('B 返回、P 暂停、N 日志', act_note(self.cfg(allow_detour=True)))
+        self.assertIn('换图用 travel', act_note(self.cfg(allow_detour=True, cutscene_mode='agent')))
+        self.assertNotIn('B、P、N', act_note(self.cfg(allow_detour=True, cutscene_mode='agent')))   # agent 模式本来就有全部按键
+        self.assertIn('换图用 travel', act_note(self.cfg(allow_detour=True)))
+        self.assertIn('B、P、N 只在主控交回的结算或菜单界面里用', act_note(self.cfg(allow_detour=True)))
         self.assertIn('以这里为准', notice(self.cfg(allow_detour=True), True))          # 运行中开启：说明以通知为准
         descriptions = {}
         for detour in (False, True):

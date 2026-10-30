@@ -8,6 +8,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from xml.etree.ElementTree import ParseError as ET_ERRORS
 
 from .telemetry import publish
 from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, CHAPTER_SIDS
@@ -2030,6 +2031,131 @@ class GameSession:
             (self.run_dir/'exit_level.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
             return result
 
+    def travel(self, chapter, checkpoint, thought: str) -> tuple[dict, str | None, list[str]]:
+        """智能体请求主控代为换图（travel 工具，计划外地图开关打开时注册，见 travel.py）。核对目标在存档里已解锁，
+        在关卡里先用暂停菜单返回地图，再从选章地图进入目标检查点，停在第一帧可操作时交回。换图期间智能体不操作，
+        地图上不再出现它边看边想的空转画面。思考僵直不在这里结算：换图前后的思考照常算进下一次 act。"""
+        from .action_policy import controller_navigation, permissions_for
+        from .travel import available, locked_reason, read_progress, resolve
+        from enter_save import travel_to  # noqa: WPS433（tools 目录已在 sys.path 里）
+        self._require_reload_observation()
+        if self.done:
+            raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
+        thought = (thought or "").strip()
+        if not thought:
+            raise ActError("thought 不能为空：用一两句话说明为什么去")
+        problem = thought_problem(self.cfg, thought)
+        if problem:
+            raise ActError(problem)
+        from .segments import load_table
+        table = self._table or load_table()
+        try:
+            dest = resolve(table, chapter, checkpoint)
+        except ValueError as exc:
+            raise ActError(str(exc)) from exc
+        with self.lock:
+            if self.goals.stop_motion.is_set():
+                raise ActError('已请求停止，本次换图未执行')
+            plan_sids = {CHAPTER_SIDS.get(p.chapter) for p in (self.navigation.current, self.navigation.target) if p}
+            if not detour_enabled(self.cfg) and dest.sid not in plan_sids:
+                raise ActError('计划外地图已被用户关闭：travel 只能回到计划章节')
+            if self._pending_complete or self._ending_pending or self._ending_agent or self._detour_ending:
+                # 通关待确认或片尾还没走完：先按原来的流程收尾，主控要看见选章地图那一帧才能正确记成绩、结束或换截
+                raise ActError('刚通关的章节还在收尾（片尾、结算或回地图没走完），换图未执行；先按当前剧情模式走完结算'
+                               '（auto 模式先 observe，主控会代为走完），回到选章地图后再用 travel')
+            current = self.client.call('observe', image=False, entities=False, tiles=False)['obs']
+            level = current.get('level') or {}
+            if self.cfg.cutscene_mode == 'agent' and current.get('scene') == 'AreaComplete':
+                raise ActError('现在是结算画面：agent 剧情模式下结算由你自己确认，确认回到选章地图后再用 travel')
+            if (current.get('scene') == 'Level' and level.get('sid') == dest.sid and (level.get('side') or 'A') == 'A'
+                    and dest.sid in plan_sids and not permissions_for(self.cfg).restart_chapter):
+                raise ActError('你正在计划章节里：用 travel 重进计划章节等于重启章节，本次没有这项权限，换图未执行')
+            target_piece = next((p for p in (self.navigation.target, self.navigation.current)
+                                 if p is not None and CHAPTER_SIDS.get(p.chapter) == dest.sid), None)
+            if target_piece is not None and target_piece.end is not None and dest.checkpoint >= target_piece.end:
+                raise ActError('计划这一截在这个检查点或之前结束，travel 不能直接进到终点，换图未执行；请从这一截的起点或其间的检查点进入')
+            try:
+                progress = read_progress((current.get('save') or {}).get('file'))
+            except (OSError, ValueError, ET_ERRORS) as exc:
+                raise ActError(f'读不到存档的解锁进度（{exc}），换图未执行') from exc
+            locked = locked_reason(progress, dest)
+            if locked:
+                raise ActError(f'{locked}，换图未执行。存档里可去的：{available(table, progress)}')
+            self._commit_completion(current)
+            if self.done or self.goals.stop_motion.is_set():
+                self._update_metrics_from_obs(current)
+                raise ActError('任务或停止目标已结束，换图未执行；请查看当前状态')
+            self._before_advance()
+            self.metrics.set_thought(thought, formal=True)
+            self.travels = getattr(self, 'travels', 0) + 1
+            try:
+                publish(self.run_dir, f"travel:{self.travels}", thought,
+                        kind="正式思考" if getattr(self.cfg, "formal_thought", False) else "尝试")
+            except OSError:
+                pass
+            self.metrics.update(status='auto')
+            # 从计划章节 A 面的会话里离开：这段会话的章节计时在离开时就结算（不靠回来时"计时倒退"去认）
+            departing_plan = (self._classifying() and current.get('scene') == 'Level' and level.get('sid') in plan_sids
+                              and (level.get('side') or 'A') == 'A' and not level.get('completed'))
+            plan_ticks = int(level.get('chapterTimeTicks') or 0) if departing_plan else 0
+            passed_map = []
+
+            def on_map(map_obs):
+                passed_map.append(True)
+                self.navigation.note_scene(map_obs)     # 已经离开原关卡（换下一截时的确认要求先离开）
+            started = time.monotonic()
+            print(f"[run] 智能体请求换图：{dest.label}", flush=True)
+            try:
+                with controller_navigation(self.client, self.cfg, sid=dest.sid, slot=self.cfg.save_slot):
+                    travel_to(self.client, self.cfg.save, dest.chapter, dest.checkpoint, save_slot=self.cfg.save_slot,
+                              cutscene_mode=self.cfg.cutscene_mode, should_stop=self.goals.stop_motion.is_set,
+                              on_map=on_map)
+                failure = None
+            except (RuntimeError, OSError) as exc:
+                failure = exc
+            self.metrics.add(auto_game_s=time.monotonic() - started)
+            reply = self.client.call('observe', image=True, scope='room', fields=True)
+            obs, image = enrich_obs(reply['obs']), reply.get('image')
+            state = self.metrics.state
+            if departing_plan and passed_map and not state.piece_done:
+                banked = int(state.plan_banked_ticks or 0) + max(int(state.plan_session_ticks or 0), plan_ticks)
+                self.metrics.update(plan_banked_ticks=banked, plan_session_ticks=0)
+                print(f"[run] 离开计划章节：此前累计 {fmt_ticks(banked)}", flush=True)
+            self.navigation.note_scene(obs)
+            self._note_map(obs)
+            entering = obs.get('scene') in ('LevelEnter', 'IntroVignette') and self.cfg.cutscene_mode == 'agent'
+            arrived = entering or (obs.get('scene') == 'Level' and (obs.get('level') or {}).get('sid') == dest.sid
+                                   and ((obs.get('level') or {}).get('side') or 'A') == 'A')
+            if failure is not None or not arrived:
+                why = str(failure) if failure is not None else '没有停在目标地图里'
+                notes = [f'主控换图没有完成（{why}）；没有重试。请先看这次观测确认停在哪里，再决定下一步。']
+            elif entering:
+                notes = [f'主控已进入{dest.label}，停在入场画面：agent 剧情模式下由你自己确认（cutscene 或 act）。']
+            else:
+                room = (obs.get('level') or {}).get('room')
+                notes = [f'主控已把你送到{dest.label}：现在在房间 {room}，第一帧可操作，游戏冻结中；继续游玩。']
+            if self.chapter_finished and not self.done and obs.get('scene') == 'Level':
+                piece = self.navigation.target
+                if piece is not None and self._confirm_next_entry(obs, require_departure=True):
+                    notes.append(f'已确认你进入{self._piece_place(piece)}。{self._piece_goal(piece)}')
+            notes += self._take_detour_notes()
+            self.goals.check(self.goal_values(obs))
+            self._write_sim_state()
+        record = {'travel': self.travels, 'wall': time.time(), 'chapter': dest.chapter, 'checkpoint': dest.checkpoint,
+                  'room': dest.room, 'arrived': arrived and failure is None,
+                  'at': {'scene': obs.get('scene'), 'sid': (obs.get('level') or {}).get('sid'),
+                         'room': (obs.get('level') or {}).get('room')},
+                  'error': None if failure is None else str(failure), 'thought': thought}
+        try:
+            with (self.run_dir / 'travel.jsonl').open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps(record, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+        obs = self._track_motion(obs)
+        self._update_metrics_from_obs(obs)
+        self._write_workspace(obs)
+        return obs, image, notes
+
     def _handle_events(self, result: dict) -> None:
         for e in result.get("events", []):
             if e["type"] == "death":
@@ -2536,6 +2662,8 @@ class GameSession:
             obs['storyPlayback'] = previous_obs['storyPlayback']
         piece = self.navigation.target
         if not self._confirm_next_entry(obs, require_departure=True):
+            if getattr(self, 'travel_tool', False):
+                return obs, image, [f'上一段已完成。接下来请用 travel 进入{self._piece_place(piece)}，由主控代为换图。']
             return obs, image, [f'上一段已完成。接下来请自行通过菜单进入{self._piece_place(piece)}；主控不会代按、跳过结算或传送。']
         return obs, image, [f'已确认你进入{self._piece_place(piece)}。{self._piece_goal(piece)}']
 

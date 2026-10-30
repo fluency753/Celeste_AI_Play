@@ -263,7 +263,7 @@ class SessionControls:
                                     permissions_note = '同时开启了返回地图权限。' + permissions.instructions()
                                 self.control.set_detour(allowed)
                                 self.cfg.allow_detour = self.session.cfg.allow_detour = allowed
-                            self.pending_messages.append({**row, 'text': notification('action_permissions', facts=notice(self.session.cfg, allowed, permissions_note))})
+                            self.pending_messages.append({**row, 'text': notification('action_permissions', facts=notice(self.session.cfg, allowed, permissions_note, travel=bool(getattr(self.session, 'travel_tool', False))))})
                             self.control.mark(row['id'], 'waiting', '计划外地图许可已生效，正在通知 agent')
                         elif row['kind'] == 'act_limit':
                             if not self._act_limit_status()['act_limit_control']:

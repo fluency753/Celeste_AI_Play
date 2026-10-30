@@ -362,7 +362,7 @@ class CodexRunner(SessionControls):
         ident = params.get("callId") or name
         self.called_tools.append(requested)
         self.metrics.add(tool_calls=1)
-        game = name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_narrate", "celeste_stop_run", "celeste_exit_level", "celeste_cutscene", "celeste_simulate")
+        game = name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_narrate", "celeste_stop_run", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate")
         detail = (args.get("description") or args.get("file_path") or
                   (f"{args.get('pattern')} @ {args.get('path') or '/workspace'}" if name in FILE_TOOLS and args.get('pattern')
                    else args.get("path")) or "")
@@ -370,12 +370,12 @@ class CodexRunner(SessionControls):
         try:
             if name == 'celeste_set_effort' and self.manual_effort is not None:
                 raise ValueError(f'用户已手动固定推理强度为 {self.manual_effort}，请保留用户设置；恢复自动后才可自行调整。')
-            if self.session is not None and hasattr(self.session, "goals") and self.session.goals.stop_motion.is_set() and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
+            if self.session is not None and hasattr(self.session, "goals") and self.session.goals.stop_motion.is_set() and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate"}:
                 reason = self.session.goals.snapshot().get('stop_reason', '停止目标已触发')
                 raise ValueError("停止目标已触发（" + reason + "）。正在保存录像，本次工具未执行，请结束本轮。")
-            if self.chat_only and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run"}:
+            if self.chat_only and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate", "celeste_stop_run"}:
                 raise ValueError("本次试玩已经结束，当前只提供聊天，不连接或操作游戏。")
-            if self.paused and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
+            if self.paused and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("用户已暂停试玩。请只回复用户，不推进游戏或运行规划；结束本轮并等待继续。")
             if game and not self.prepare_only and not self.chat_only and name.removeprefix('celeste_') not in game_tools(self.cfg):
                 raise ValueError(f"当前试玩配置未启用 {name}，本次请求未执行；请使用当前已启用的工具。")
@@ -419,13 +419,13 @@ class CodexRunner(SessionControls):
                 if self.study is None or not self.study.complete():
                     raise ValueError(self.study.reminder(reader=self._reader_name()) if self.study else "没有准备阶段")
                 text = "全部知识库已读完；结束本次准备，不启动游戏。"
-            elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_cutscene", "celeste_simulate", "celeste_stop_run") and self.prepare_only:
+            elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate", "celeste_stop_run") and self.prepare_only:
                 raise ValueError("本次只做知识库准备，不开放游戏操作，不会进入关卡。")
             elif game and self.game_server is not None and not self.prepare_only:
                 origin_turn = self.turn_id
                 if name in ("celeste_act", "celeste_observe") and self.study and not self.study.complete():
                     raise ValueError(self.study.reminder(reader=self._reader_name()))
-                if name in {"celeste_act", "celeste_observe", "celeste_exit_level", "celeste_cutscene", "celeste_simulate"}:
+                if name in {"celeste_act", "celeste_observe", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate"}:
                     async with self.action_lock:
                         if self.paused:
                             raise ValueError("用户已暂停试玩，不能执行游戏动作")

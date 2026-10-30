@@ -181,6 +181,44 @@ def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter:
                        save_slot, cutscene_mode, checkpoint)
 
 
+MAP_MENUS = ("OuiChapterSelect", "OuiChapterPanel")
+
+
+def travel_to(c: BridgeClient, save_name: str, chapter: int, checkpoint: int = 0, *, save_slot: int | None = None,
+              cutscene_mode: str = 'auto', should_stop=None, max_actions: int = 120, on_map=None) -> dict:
+    """主控代为换图（智能体的 travel 请求）：在关卡里先用暂停菜单"返回地图"（与玩家相同，游戏照常保存进度），
+    结算画面先确认；回到选章地图、存档写完之后，用桥接 enter_checkpoint 进入第 chapter 章 A 面的第 checkpoint 个
+    检查点（0 = 章节开头；与在选章面板里选它相同），再照常走到第一帧可操作（入场明信片、开场剧情按剧情模式处理）。
+    全程正常速度，录像不快进。目标是否已解锁由调用方按存档核对；离开关卡的许可由调用方给（controller_navigation）。
+    on_map(obs)：回到选章地图、进入目标之前，用这一帧地图观测回调一次（调用方据此确认已离开原关卡）。"""
+    if not c.call("hello").get("checkpoints"):
+        raise RuntimeError("主控代为换图需要 CelesteAIBridge 1.0.6 或更新版本（enter_checkpoint）")
+    obs = c.call("observe", **QUIET)["obs"]
+    for _ in range(max_actions):
+        if should_stop is not None and should_stop():
+            return obs
+        scene, menu = obs.get("scene"), obs.get("menu") or {}
+        if scene in ("Level", "IntroVignette"):
+            obs = leave_level_by_pause_menu(c, allowed_exit_ids=("menu_pause_return", "intro_vignette_quit"))
+            continue
+        if scene == "AreaComplete":
+            obs = press(c, "C", settle=30)["obs"]   # 结算画面：确认后回到地图
+            continue
+        if scene == "Overworld" and not menu.get("next") and menu.get("current") in MAP_MENUS and not obs.get("saving"):
+            break
+        obs = step(c, ["10"], speed=1)["obs"]       # 转场、载入、存档写入中
+    else:
+        raise RuntimeError(f"未能在 {max_actions} 步内回到选章地图：\n{summarize_obs(obs)}")
+    if (obs.get("save") or {}).get("name") != save_name or (
+            save_slot is not None and (obs.get("save") or {}).get("slot") != save_slot):
+        raise RuntimeError("当前载入的不是本次任务的存档，没有换图")
+    if on_map is not None:
+        on_map(obs)
+    c.call("enter_checkpoint", chapter=chapter, checkpoint=checkpoint)
+    step(c, ["10"], speed=1)
+    return _enter_save(c, save_name, max_actions, chapter, 1, should_stop, False, save_slot, cutscene_mode, 0)
+
+
 def open_chapter_select(c: BridgeClient, save_name: str, *, save_slot: int | None = None,
                         max_actions: int = 120, menu_speed: int = 4, should_stop=None) -> dict:
     """明确退出当前章节并打开指定存档的选章地图；不得用于恢复关卡进度。"""

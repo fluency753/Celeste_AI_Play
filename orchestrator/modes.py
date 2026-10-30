@@ -71,6 +71,9 @@ def game_tools(cfg) -> list[str]:
         tools.append("cutscene")
     if getattr(cfg, "sim_assist", False):
         tools.append("simulate")            # 探索模式的限额短路线预测
+    from .detour import enabled as detour_enabled
+    if detour_enabled(cfg):
+        tools.append("travel")              # 计划外地图：请主控代为换图（travel.py）
     return tools
 
 

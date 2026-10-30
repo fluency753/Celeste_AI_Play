@@ -118,7 +118,9 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     tool_exit_level = "exit_level" in tools
     tool_cutscene = "cutscene" in tools
     tool_simulate = "simulate" in tools
+    tool_travel = "travel" in tools            # 计划外地图开着时：请主控代为换图（travel.py）
     session.cutscene_tool = tool_cutscene      # 没有剧情工具时，HUD 不提供"剧情交给智能体"的切换
+    session.travel_tool = tool_travel          # 运行中打开计划外地图时，说明按有没有 travel 写（detour.notice）
     # 截图只在进入新房间时（以及主动 observe 时）附上；同时给出整个房间的实体与地图，平时只描述画面附近
     # 思考与工具时间由主控按 Claude Code 输出流里的 tool_use / tool_result 事件统计（见 metrics.py），这里不计时
     state = {"described_room": None}
@@ -372,6 +374,38 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     '已离开关卡，停止目标已触发，请结束本轮，等待用户处理。' if result['stop_requested'] else
                     '已返回地图，本次任务继续，后续章节目标与录制保持。请先 observe 查看当前菜单，再自行进入许可的目标地图。')
             return [json.dumps(result,ensure_ascii=False) + '\n' + tail]
+
+    from .travel import description as travel_description
+    @optional_tool(tool_travel, name='travel', description=travel_description(), structured_output=False)
+    async def travel(chapter: int | str, thought: str, checkpoint: int | str = 0) -> list:
+        ticket = reload_ticket()
+        async with call_lock:
+            if (note := gated(ticket)) is not None:
+                return [note]
+            begin()
+            try:
+                metrics.decision_begin()
+                try:
+                    obs, image, notes = await asyncio.to_thread(session.travel, chapter, checkpoint, thought)
+                finally:
+                    metrics.decision_end(None)
+                credit(obs)
+                context, file_context, candidate = observation_context(obs, force=True)
+                content = images(obs, image)
+                content.append(("主控：" + "；".join(notes) + "\n\n" if notes else "")
+                               + describe_obs(obs, full_room=True, effort=header_line(), explore=explore,
+                                              compact_context=True, file_context=file_context)
+                               + "\n\n" + context
+                               + ("\n" + ws_note if session.workspace and not file_context else ""))
+                delivery.commit(candidate)
+                state["described_room"] = room_key(obs)
+                return content
+            except RecordingHalt as err:
+                return [f'录制交接未完成：{err}。换图请求未发送，试玩已暂停，等待处理。']
+            except ActError as err:
+                return [f"换图未执行：{err}"]
+            finally:
+                finish()
 
     @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段。watch只播放桥接明确识别的动画，未知状态立即返回，每次调用最多自动等待600帧；仍在播放可明确watch继续。advance确认当前完整对白、明信片、旧纸的一页或confirm画面，choose选择可见选项index；教学和breathing呼吸小游戏用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
     async def cutscene(action: str, choice: int | None = None) -> list:
