@@ -65,6 +65,7 @@ class ObservationContextTest(unittest.TestCase):
     def test_real_tool_dispatch_keeps_data_without_reactive_geometry_hints(self):
         from calibration.formal_run_test import _observation
         from orchestrator.config import RunConfig
+        from orchestrator.game_session import ActOutcome
         from orchestrator.metrics import Metrics
         from orchestrator.server import build_server, ROOM_JSON_HEADER
         for mode in ('explore','speedrun'):
@@ -73,8 +74,8 @@ class ObservationContextTest(unittest.TestCase):
                               knowledge_profile='explore' if mode=='explore' else 'full',sim=False)
                 obs=enrich_obs(_observation())
                 metrics=Metrics(Path(folder)/'metrics.json','test','test','high',60)
-                outcome=SimpleNamespace(result={'consumed':30,'planned':30,'stop':'done','events':[]},
-                    obs=obs,attempts=[{}],auto_notes=[],image_b64=None)
+                outcome=ActOutcome(result={'consumed':30,'planned':30,'stop':'done','events':[]},
+                    obs=obs,attempts=[{}],auto_notes=[],image_b64=None,auto_frames=0,game_s=.5)
                 session=SimpleNamespace(cfg=cfg,metrics=metrics,workspace=None,done=False,
                     observe=Mock(return_value=(obs,None)),act=Mock(return_value=outcome))
                 server=build_server(session)

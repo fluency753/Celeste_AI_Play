@@ -21,6 +21,7 @@ from .collision_view import render_collision_view
 from .geometry_context import geometry_page
 from .observation_delivery import ObservationDelivery, FILE_JSON_HEADER, ROOM_JSON_HEADER
 from .execution import workspace_capabilities
+from .tool_record import RecordedMCPServer
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果、角色状态{act_collision_image}。{observation_delivery_rule} observe(detail="geometry",region=[x,y,w,h])可按需查看最近缓存的局部精确对象；detail="player"查询完整玩家内部状态。不把当帧阻挡当成永久不可达。{save_context_rule}
 
@@ -43,7 +44,7 @@ stop_on：提前停下的条件，可选 death room uncontrollable controllable 
   默认 ["death", "room", "complete"]，death 总会生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。
 celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控在可尝试跳过时先交回，可选skip或watch继续观看到实际输入节点或恢复控制。celeste_tas格式下不自动补这些帧，由明确输入推进。读取storyDecision、storyInput与story；inCutscene标记本身不表示角色失控。"""
 
-WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json）"
+WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json；最近游戏工具调用：/workspace/game/last_tool.json）"
 SIM_NOTE = WORKSPACE_NOTE[:-1] + "；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
 OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}。{observation_delivery_rule}detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态；detail="time"按秒查询桥接/章节计时、现实用时及各时长目标已用/剩余时间，游戏帧取缓存，桥接时钟不是本轮任务时长。三种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
@@ -106,9 +107,10 @@ PLAYBACK_NOTE = "每一轮规划（一条调用了模拟器的消息）在模拟
 
 
 def build_server(session: GameSession, study: KbStudy | None = None, gate=None) -> MCPServer:
-    server = MCPServer(name="celeste", instructions="《蔚蓝》游戏工具：observe 查看当前帧，act 推进若干帧。",
+    server = RecordedMCPServer(session, name="celeste", instructions="《蔚蓝》游戏工具：observe 查看当前帧，act 推进若干帧。",
                        log_level="WARNING")
     metrics = session.metrics
+    journal = server.journal
     ws_note = SIM_NOTE if session.cfg.sim else WORKSPACE_NOTE
     explore = is_explore(session.cfg)
     # 工具按模式注册（modes.game_tools）：narrate 所有模式都有；exit_level 只在直播模式（用户要求时退出关卡）；
@@ -162,9 +164,11 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         """知识库没读完时不执行游戏工具，返回提示。"""
         guard = getattr(session, 'control_guard', None)
         if guard and (note := guard()):
+            journal.not_executed()
             return note
         if ticket is not None and (ticket[1] or ticket[0] != getattr(session, 'reload_epoch', 0)
                                    or getattr(session, 'reload_observation_required', False)):
+            journal.not_executed()
             return '桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。'
         if study is None or study.ready():
             return None
@@ -172,6 +176,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         if getattr(session.cfg, 'engine', None) == 'codex':
             naming = getattr(session, 'file_tool_name', None)
             reader = (naming('read') if naming else 'read') or '专用读取工具（本会话未登记）'
+        journal.not_executed()
         return study.reminder(reader=reader)
 
     def finish() -> None:
@@ -232,7 +237,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     @server.tool(name="observe", description=fill(OBSERVE_DESCRIPTION, session.cfg), structured_output=False)
     async def observe(detail: str = 'overview', region: list[float] | None = None, offset: int = 0,
                       limit: int = 32, snapshot_id: str | None = None) -> list:
-        async with call_lock:
+        async with journal.execution(call_lock):
             if (note := gated()) is not None:
                 return [note]
             if detail == 'time':
@@ -291,7 +296,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
                   stop_on: list[str] | None = None, input_format: str | None = None) -> list:
         ticket = reload_ticket()
-        async with call_lock:
+        async with journal.execution(call_lock):
             if (note := gated(ticket)) is not None:
                 return [note]
             begin()
@@ -303,6 +308,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     options = {'input_format':input_format} if input_format is not None else {}
                     outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file, **options)
                     result = outcome.result
+                    journal.detail({'result': outcome.result, 'attempts': outcome.attempts,
+                                    'auto_frames': outcome.auto_frames, 'auto_notes': outcome.auto_notes})
                 finally:
                     metrics.decision_end(result)
                 parts = [describe_step(outcome.result, max_rows=8)]
@@ -334,7 +341,15 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             except RecordingHalt as err:
                 return [f'录制交接未完成：{err}。出错的推进请求未发送，之前已执行的输入不重复；试玩已暂停，等待处理。']
             except ActError as err:
-                return [f"动作未执行（没有消耗任何游戏帧）：{err}"]
+                current = journal.current.get()
+                if (current is not None and current['before'].get('decision') is not None
+                        and current['before']['decision'] == getattr(session, 'decision_index', None)):
+                    # GameSession validates plans before incrementing decision_index;
+                    # failures after that boundary may already have sent inputs.
+                    journal.not_executed()
+                    return [f"动作未执行（没有消耗任何游戏帧）：{err}"]
+                return [f"动作处理失败：{err}。执行范围未确认，可能已有输入执行；"
+                        "请核对调用记录和最新观测，不要重发原动作。"]
             finally:
                 finish()
 
@@ -344,9 +359,10 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     @server.tool(name='stop_run', description='任务被工具故障、缺少能力或其他无法继续的条件阻塞时，用 reason 说明原因（200 字以内）报告给用户：主控暂停试玩，章节内保持冻结，菜单正常运行，由用户决定继续还是停止。不是通关，不退出关卡，不用于普通死亡或仍可尝试的难点。调用后结束本轮，等待用户处理；暂停或知识库未读完也能报告。', structured_output=False)
     async def stop_run(reason: str) -> list:
-        async with call_lock:
+        async with journal.execution(call_lock):
             try:
                 result = await asyncio.to_thread(session.stop_run, reason)
+                journal.detail(result)
             except ActError as err:
                 return [str(err)]
             publish(session.run_dir, f"system:agent-stop:{len(session.agent_stop['reports'])}",
@@ -360,12 +376,13 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     @optional_tool(tool_exit_level, name='exit_level', description='按用户要求离开当前关卡。默认 finish_run=false：需返回地图权限，仅返回地图继续原任务，不算通关，不停止录像、不清除后续章节；返回后先 observe，只进入当前计划或许可允许的地图，' + map_rule(session.cfg) + '。只有用户明确要求结束整次试玩时才设 finish_run=true：按允许的返回地图或保存退出操作收尾整次任务。不得从“返回地图换章”推断为结束任务；权限不足时说明原因，不以保存退出绕过。', structured_output=False)
     async def exit_level(reason: str, finish_run: bool = False) -> list:
         ticket = reload_ticket()
-        async with call_lock:
+        async with journal.execution(call_lock):
             if (note := gated(ticket)) is not None:
                 return [note]
             begin()
             try:
                 result = await asyncio.to_thread(session.exit_level, reason, finish_run)
+                journal.detail(result)
             except (ActError, RuntimeError) as err:
                 raise ToolError(str(err)) from err
             finally:
@@ -379,7 +396,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     @optional_tool(tool_travel, name='travel', description=travel_description(), structured_output=False)
     async def travel(chapter: int | str, thought: str, checkpoint: int | str = 0) -> list:
         ticket = reload_ticket()
-        async with call_lock:
+        async with journal.execution(call_lock):
             if (note := gated(ticket)) is not None:
                 return [note]
             begin()
@@ -387,6 +404,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 metrics.decision_begin()
                 try:
                     obs, image, notes = await asyncio.to_thread(session.travel, chapter, checkpoint, thought)
+                    journal.detail({'notes': notes})
                 finally:
                     metrics.decision_end(None)
                 credit(obs)
@@ -410,11 +428,12 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段。watch只播放桥接明确识别的动画，未知状态立即返回，每次调用最多自动等待600帧；仍在播放可明确watch继续。advance确认当前完整对白、明信片、旧纸的一页或confirm画面，choose选择可见选项index；教学和breathing呼吸小游戏用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
     async def cutscene(action: str, choice: int | None = None) -> list:
         ticket = reload_ticket()
-        async with call_lock:
+        async with journal.execution(call_lock):
             if (note := gated(ticket)) is not None:return [note]
             begin()
             try:
                 obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
+                journal.detail(info)
             except ActError as err:
                 raise ToolError(str(err)) from err
             new_room = room_key(obs) != state['described_room']
@@ -428,7 +447,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     @optional_tool(tool_simulate, name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)
     async def simulate(candidates: list[list[str]] | None = None, input_format: str = 'celeste_ai') -> list:
         ticket = reload_ticket()
-        async with call_lock:
+        async with journal.execution(call_lock):
             if (note := gated(ticket)) is not None:
                 return [note]
             if not getattr(session, 'sim_energy', None):
@@ -440,6 +459,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 request = {'candidates':candidates}
                 if input_format != 'celeste_ai':request['input_format'] = input_format
                 result = await asyncio.to_thread(session.simulate, request)
+            journal.detail(result)
             return [json.dumps(result, ensure_ascii=False)]
 
     # narrate 在所有模式都有：思考期间更新 HUD 的思考语句
@@ -448,6 +468,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     @server.tool(name="narrate", description=fill(NARRATE_TEMP_DESCRIPTION if temp_thoughts else NARRATE_DESCRIPTION,
                                                   session.cfg), structured_output=False)
     async def narrate(thought: str) -> list:
+        journal.start_current()
         # 不推进游戏、不受准备阶段限制、不开始计现实用时；只换 HUD 上的思考语句
         # 开了"仅正式思考"时写的是临时思考：只进公开历史（控制台），不换游戏内 HUD 上的正式思考
         text = " ".join((thought or "").split())
@@ -471,6 +492,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
     async def set_effort(level: str, reason: str = "") -> list:
+        journal.start_current()
         # 不推进游戏、不受准备阶段限制，也不开始计现实用时；耗时可以忽略
         level = (level or "").strip()
         if not valid_effort(level):

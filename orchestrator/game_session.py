@@ -1214,6 +1214,8 @@ class GameSession:
             notes.extend(auto_notes)
             attempts.append({"kind": "execute", "attempt": attempt, "stop": result["stop"],
                              "consumed": result["consumed"], "planned": result["planned"],
+                             "inputs": list(plan.inputs), "input_format": plan.input_format,
+                             "input_source": plan.input_source,
                              "deviation": result.get("deviation")})
             retry = plan.retry
             reason = result["stop"]

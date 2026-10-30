@@ -371,6 +371,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                   (f"{args.get('pattern')} @ {args.get('path') or '/workspace'}" if name in FILE_TOOLS and args.get('pattern')
                    else args.get("path")) or "")
         self.metrics.tool_begin(ident, game_tool=game, label=requested + (" · " + detail if detail else ""))
+        dispatched = False
         try:
             if name == 'celeste_set_effort' and self.manual_effort is not None:
                 raise ValueError(f'用户已手动固定推理强度为 {self.manual_effort}，请保留用户设置；恢复自动后才可自行调整。')
@@ -440,15 +441,21 @@ class CodexRunner(ModelRecovery, SessionControls):
                         if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
                                 or self.turn_done.is_set() or self.stop_requested or self.pausing):
                             raise ValueError('发起此请求的轮次已结束，动作未执行；等待当前轮次的新指令。')
+                        dispatched = True
                         result = await self.game_server.call_tool(name.removeprefix("celeste_"), args)
                         return await self._game_response(result, name, ident, origin_turn)
                 else:
+                    dispatched = True
                     result = await self.game_server.call_tool(name.removeprefix("celeste_"), args)
                     return await self._game_response(result, name, ident, origin_turn)
             else:
                 raise ValueError(f"未开放的工具：{name}")
             return await self._notes_response({"contentItems": [{"type": "inputText", "text": text}], "success": True}, origin_turn)
         except Exception as exc:
+            if game and not dispatched and (journal := getattr(self.game_server, 'journal', None)) is not None:
+                warning = journal.refused(name.removeprefix('celeste_'), args, str(exc))
+                if warning:
+                    exc = ValueError(str(exc) + '；' + warning)
             return await self._notes_response({"contentItems": [{"type": "inputText", "text": str(exc)}], "success": False}, origin_turn)
         finally:
             self.metrics.tool_end(ident)

@@ -33,7 +33,7 @@ def observation_file(session, obs):
         'encoding': 'workspace-files-v1', 'frame': obs.get('frame'),
         'sid': level.get('sid'), 'room': level.get('room'), 'snapshot_id': observation_id(obs),
         'snapshot_id_scope': 'geometry-cache',
-        'files': {'observation': '/workspace/game/latest_obs.json'},
+        'files': {'observation': '/workspace/game/latest_obs.json', 'last_tool': '/workspace/game/last_tool.json'},
         'collision': ({**{key: collision[key] for key in
                           ('scope', 'bounds', 'coverage', 'complete', 'geometryComplete')},
                        'object_count': len(collision['objects'])} if collision is not None else None),
