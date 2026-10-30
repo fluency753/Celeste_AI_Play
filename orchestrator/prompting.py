@@ -61,25 +61,13 @@ def cpu_rule(cfg) -> str:
     return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"
 
 
-# 探索模式里关于自写程序的几句按执行器区分：Codex 同时支持当前问题与持续建模，并行要点只写一句；
-# Claude Code 执行器保留原来的"完全可以自由发挥"和详细的并行要点。
-# 提示词里是 {preset_sim}{program_freedom}……{program_lead}{cpu_rule}{parallel_rule}
-PROGRAM_FREEDOM = {"claude": "，但不限制你自行编写模拟器或搜索程序等，你完全可以自由发挥。",
-                   "codex": "。你也可以自行编写模拟器、搜索或其他辅助程序，自由发挥。"}
-# 自写工具用 C++、能用多线程就用多线程（用户 10-27 要求：Python 循环里逐个启动模拟器进程的穷举只用到不到一个核）
-PROGRAM_LEAD = {"claude": ("编写模拟器、搜索、穷举或批量计算等工具时用 C++ 写，不要用 Python；有多线程就用多线程来缩短计算时间"
-                           "（例如 g++ -O2 -pthread），同一批推演放在一个进程里做，不要逐个启动进程，"),
-                "codex": ("辅助程序可以解决当前问题，也可以持续积累可复用的模型与方法。需要较多计算时用 C++ 写、不要用 Python，"
-                          "有多线程就用多线程缩短计算时间，")}
-PARALLEL_RULE = {"claude": ("。并行时注意，单线程做的汇总与合并容易成为瓶颈（搜得越深 CPU 占用越低）。"
-                            "以按层展开的搜索为例：去重与择优也要分片并行，不要每层由一个线程串行处理越来越大的去重集合；"
-                            "各线程把候选的分数、序号和去重键全部交回，不要各自先截取前几名；"
-                            "选定保留的节点后，再由各线程从父节点重放生成。多线程版本要用同样的输入与单线程对比，确认结果完全一致。"),
-                 "codex": "；避免频繁的线程间同步，用相同输入核对多线程与单线程结果。"}
-
-
-def _engine_text(table: dict, cfg) -> str:
-    return table["codex" if getattr(cfg, "engine", "claude") == "codex" else "claude"]
+# 两种执行器共用自写程序约定；保留占位符，兼容 local/prompts 中的模板覆盖。
+PROGRAM_FREEDOM = "。你可以自行编写模拟器、搜索或其他辅助程序，自由发挥。"
+# C++ 要求源于 Python 循环逐个启动模拟器进程的性能问题；资源效率总述见 explore_programs_zh.md。
+PROGRAM_LEAD = ("自写模拟器、搜索、穷举或批量计算工具使用 C++；适合并行的计算使用多线程，"
+                "遵守本次 CPU 与计算额度限制，")
+PARALLEL_RULE = ("；并行优化同时关注去重、择优和汇总阶段，避免串行处理或频繁同步成为瓶颈；"
+                 "用相同输入核对多线程与单线程结果，确认结果一致。")
 
 
 # 思考语句的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
@@ -233,9 +221,9 @@ def fill(text: str, cfg) -> str:
         "{act_min_frames}": str(act_frame_min(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
-        "{program_freedom}": _engine_text(PROGRAM_FREEDOM, cfg) if workspace.programs else "。",
-        "{program_lead}": _engine_text(PROGRAM_LEAD, cfg),
-        "{parallel_rule}": _engine_text(PARALLEL_RULE, cfg),
+        "{program_freedom}": PROGRAM_FREEDOM if workspace.programs else "。",
+        "{program_lead}": PROGRAM_LEAD,
+        "{parallel_rule}": PARALLEL_RULE,
         "{stiffness_rule}": stiffness_rule(cfg),
         "{thought_brief_rule}": thought_brief_rule(cfg),
         "{thought_mood}": THOUGHT_MOOD,
