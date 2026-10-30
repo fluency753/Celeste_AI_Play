@@ -70,7 +70,11 @@ class TunableTests(unittest.TestCase):
         from orchestrator.prompting import fill
         self.assertEqual((act_frame_cap(explore), act_frame_cap(speed)), (150, 900))
         self.assertEqual(fill("一次最多 {act_max_frames} 帧", explore), "一次最多 150 帧")
-        self.assertIn("自写的模拟器或搜索程序每次推演最多 150 帧", play_prompt(explore))
+        self.assertIn("自写的模拟器或搜索程序每次推演最多 150 帧：从游戏里当前的真实状态算起", play_prompt(explore))
+        self.assertIn("自己加的等待帧也计入", play_prompt(explore))          # 没开思考僵直：不提僵直帧
+        explore.stiffness = True
+        self.assertIn("等着执行的思考僵直帧不计入，自己加的等待帧计入", play_prompt(explore))
+        explore.stiffness = False
         tuning.apply(explore, {"explore_act_frames": 240, "explore_search_frames": None})
         self.assertEqual(act_frame_cap(explore), 240)
         self.assertNotIn("自写的模拟器或搜索程序每次推演", play_prompt(explore))

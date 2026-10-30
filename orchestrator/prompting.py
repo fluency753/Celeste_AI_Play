@@ -152,7 +152,13 @@ def explore_search_rule(cfg) -> str:
     if not workspace_capabilities(cfg).programs:
         return ""
     frames = getattr(cfg, "explore_search_frames", 150)
-    return "" if frames is None else f"自写的模拟器或搜索程序每次推演最多 {frames} 帧（从起始状态往后模拟的帧数）。"
+    if frames is None:
+        return ""
+    waits = ("等着执行的思考僵直帧不计入，自己加的等待帧计入" if getattr(cfg, "stiffness", False)
+             else "自己加的等待帧也计入")
+    return (f"自写的模拟器或搜索程序每次推演最多 {frames} 帧：从游戏里当前的真实状态算起，往后总共最多推演 {frames} 帧"
+            f"（{waits}）；不能把模拟出来的中间状态（上一段搜索的终点、导出再导入的模拟终态）当作新的起点接着往后推、"
+            f"拼成更长的路线。{frames} 帧内走不完的，先执行推演好的这一段，停下后从新的真实状态再推演。")
 
 
 def stiffness_rule(cfg) -> str:
