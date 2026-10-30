@@ -41,12 +41,18 @@ class ActionPermissions:
             ('可在获准范围与权限内重启或往返进行实验。' if experiments else '不得用重置代替路线求解，') + '无法继续时用 stop_run 报告。'
 
 
-def block_note(block):
-    """桥接 result.block 的中文说明，附在 act 结果后面给智能体。"""
+def block_note(block, *, detour=False):
+    """桥接 result.block 的中文说明，附在 act 结果后面给智能体。detour：本次用的是计划外地图的官方地图集合门禁。"""
     action, rule = block.get('action'), block.get('rule_id') or ''
     if action == 'enter_pico8':
         return ('主控拦下了小游戏入口：这是内置的 PICO-8 小游戏，暂不支持。未进入小游戏，'
                 '本次输入在触发入口的这一帧停止，后续按键没有执行；请继续本体关卡。')
+    if action == 'enter_map' and detour and rule in {'target.maps', 'target.new_save'}:
+        actual = block.get('actual') or {}
+        what = ('新建存档' if rule == 'target.new_save' else
+                f'进入 {actual.get("sid")} {actual.get("side")}面：计划外地图只限蔚蓝官方章节')
+        return (f'主控拦下了{what}。本次没有进入地图或创建存档，触发入口后的剩余输入未执行；'
+                '请在原存档的选章界面选择官方章节已解锁的面与检查点。')
     if action == 'enter_map':
         if rule == 'target.new_save':
             return ('主控拦下了新建存档：已到访地图自由探索只允许使用原有存档。'

@@ -62,6 +62,9 @@ class SessionControls:
             if permissions is not None:
                 from .action_policy import ActionPermissions, configure
                 configure(self.cfg, ActionPermissions.read(permissions))
+            detour = self.control.detour_preference()
+            if detour is not None:
+                self.cfg.allow_detour = detour
         self.fast_mode = self.control.fast_preference() if self.control else None
         self.manual_effort = self.control.effort_preference() if self.control else None
         self.turn_fast = None
@@ -179,7 +182,7 @@ class SessionControls:
                 phase="pausing" if self.pausing else "chatting" if self.turn_active else "idle",
                 session_id=self.session_id, chat_only=self.chat_only,
                 **self._fast_status(),
-                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._act_limit_status(), **self._chapter_reset_status(), **self._bridge_reload_status())
+                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._act_limit_status(), **self._chapter_reset_status(), **self._detour_status(), **self._bridge_reload_status())
             await asyncio.sleep(.5)
 
     async def _controls(self):
@@ -230,6 +233,9 @@ class SessionControls:
                             from .action_policy import ActionPermissions, configure, permissions_for
                             permissions = (ActionPermissions.legacy(row['text'] == 'allow') if row['kind'] == 'chapter_reset'
                                            else permissions_for(self.cfg).update(json.loads(row['text'])))
+                            from .detour import enabled as detour_enabled
+                            if detour_enabled(self.cfg) and not permissions.return_to_map:
+                                raise ValueError('计划外地图开着时必须允许返回地图；要禁止返回地图，请先关闭计划外地图')
                             async with self.action_lock:
                                 self.control.set_action_permissions(permissions.snapshot())
                                 configure(self.cfg, permissions)
@@ -237,6 +243,28 @@ class SessionControls:
                             note = notification('action_permissions', facts='用户更新了' + permissions.instructions(experiments=getattr(self.session.cfg, 'play_scope', 'chapter') == 'visited'))
                             self.pending_messages.append({**row, 'text': note})
                             self.control.mark(row['id'], 'waiting', '章节重置策略已生效，正在通知 agent')
+                        elif row['kind'] == 'detour':
+                            if not self._detour_status()['detour_control']:
+                                raise ValueError('当前没有在单章或顺序范围内试玩，或会话未加载新版操作策略，不能修改计划外地图许可')
+                            allowed = row['text'] == 'on'
+                            if allowed and not getattr(self.session, 'map_entry_set_supported', False):
+                                raise ValueError('计划外地图需要桥接 1.10.0 的地图集合门禁，请更新桥接后再开启')
+                            from .action_policy import configure, permissions_for
+                            from .detour import notice
+                            permissions_note = ''
+                            async with self.action_lock:    # 与权限相同：只在动作之间生效，正在执行的动作沿用原门禁
+                                permissions = permissions_for(self.cfg)
+                                if allowed and not permissions.return_to_map:
+                                    # 开启时一并允许暂停菜单的"返回地图"，其他两项不变
+                                    permissions = permissions.update({'return_to_map': True})
+                                    self.control.set_action_permissions(permissions.snapshot())
+                                    configure(self.cfg, permissions)
+                                    configure(self.session.cfg, permissions)
+                                    permissions_note = '同时开启了返回地图权限。' + permissions.instructions()
+                                self.control.set_detour(allowed)
+                                self.cfg.allow_detour = self.session.cfg.allow_detour = allowed
+                            self.pending_messages.append({**row, 'text': notification('action_permissions', facts=notice(self.session.cfg, allowed, permissions_note))})
+                            self.control.mark(row['id'], 'waiting', '计划外地图许可已生效，正在通知 agent')
                         elif row['kind'] == 'act_limit':
                             if not self._act_limit_status()['act_limit_control']:
                                 raise ValueError('当前没有在试玩，不能修改动作帧数上限')
@@ -369,7 +397,7 @@ class SessionControls:
                 self.control.heartbeat(paused=self.paused, phase="chatting" if self.turn_active else "idle",
                     session_id=self.session_id, chat_only=self.chat_only,
                     **self._fast_status(),
-                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._act_limit_status(), **self._chapter_reset_status(), **self._bridge_reload_status())
+                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._act_limit_status(), **self._chapter_reset_status(), **self._detour_status(), **self._bridge_reload_status())
                 await asyncio.sleep(.1)
         except asyncio.CancelledError:
             raise
@@ -492,6 +520,15 @@ class SessionControls:
                 'action_policy_supported': getattr(self.session, 'action_policy_supported', None) == 1,
                 'allow_chapter_reset': all(permissions.values()),
                 'chapter_reset_guard_supported': bool(getattr(self.session, 'chapter_reset_guard_supported', False))}
+
+    def _detour_status(self):
+        """计划外地图开关：与三项权限同样只在试玩期间、新版操作策略下可改；已到访地图自由探索不使用。"""
+        session = self.session
+        enabled = (session is not None and not session.done and not self.chat_only
+                   and getattr(self.cfg, 'play_scope', 'chapter') != 'visited'
+                   and getattr(session, 'action_policy_supported', None) == 1)
+        return {'detour_control': bool(enabled), 'allow_detour': bool(getattr(self.cfg, 'allow_detour', False)),
+                'detour_supported': bool(getattr(session, 'map_entry_set_supported', False))}
 
     async def _yield_for_fast_change(self):
         if not self.capabilities.fast or not self.capabilities.live_steering or self.turn_fast == self.fast_mode:

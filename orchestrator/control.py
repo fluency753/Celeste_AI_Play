@@ -30,7 +30,8 @@ class RunControl:
 
     def enqueue(self, kind, text=""):
         if kind not in {"message", "pause", "resume", "fast", "effort", "detach", "goal", "goal_clear", "stop", "cutscene_mode",
-                        "interrupt", "chapters", "sim_update", "act_limit", "chapter_reset", "action_permissions", "bridge_reload"}:
+                        "interrupt", "chapters", "sim_update", "act_limit", "chapter_reset", "action_permissions", "bridge_reload",
+                        "detour"}:
             raise ValueError("未知控制指令")
         text = str(text).strip()
         if kind == 'act_limit':
@@ -45,6 +46,8 @@ class RunControl:
             validate_update(json.loads(text))
         if kind == 'chapter_reset' and text not in {'allow', 'deny'}:
             raise ValueError('章节重置策略须为 allow 或 deny')
+        if kind == 'detour' and text not in {'on', 'off'}:
+            raise ValueError('计划外地图许可须为 on 或 off')
         if kind == 'cutscene_mode' and text not in {'auto','agent'}:
             raise ValueError('剧情模式须为 auto 或 agent')
         if kind == "goal":
@@ -100,6 +103,19 @@ class RunControl:
         value = ActionPermissions.read(data).snapshot()
         with self._db() as db:
             db.execute("INSERT OR REPLACE INTO preferences VALUES('action_permissions',?)", (json.dumps(value),))
+
+    def detour_preference(self):
+        """运行中改过的计划外地图许可（True/False）；没改过时为 None，按 run_state 与命令行决定。"""
+        with self._db() as db:
+            row = db.execute("SELECT data FROM preferences WHERE key='allow_detour'").fetchone()
+            value = json.loads(row[0]) if row else None
+            return value if type(value) is bool else None
+
+    def set_detour(self, enabled):
+        if type(enabled) is not bool:
+            raise ValueError('计划外地图许可须为布尔值')
+        with self._db() as db:
+            db.execute("INSERT OR REPLACE INTO preferences VALUES('allow_detour',?)", (json.dumps(enabled),))
 
     def set_fast(self, enabled):
         with self._db() as db:

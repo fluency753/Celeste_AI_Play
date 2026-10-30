@@ -2,7 +2,7 @@
 
 主控默认禁止 `restart_chapter`（重启章节）、`return_to_map`（未通关返回地图）、`save_quit`（未通关保存退出），三项权限分别配置。正常死亡、暂停菜单 Retry、TAS QuickRestart（当前房间重试）、继续游戏和跳过剧情不受影响。真实章节完成，或主控已核验用户指定分段终点后的退出保留；交接许可不允许重启章节。
 
-命令行提供 `--allow-restart-chapter`、`--allow-return-to-map`、`--allow-save-quit`，各自也支持 `--no-allow-...`；控制台开局与运行中、HUD 均显示三个开关。默认全关。旧 `--allow-chapter-reset`/`--no-allow-chapter-reset` 仍可一次设置全部三项；同次命令中独立选项覆盖旧总开关。
+命令行提供 `--allow-restart-chapter`、`--allow-return-to-map`、`--allow-save-quit`，各自也支持 `--no-allow-...`；控制台开局与运行中、HUD 均显示三个开关。默认全关。旧 `--allow-chapter-reset`/`--no-allow-chapter-reset` 仍可一次设置全部三项；同次命令中独立选项覆盖旧总开关。计划外地图开关 `--allow-detour`（见 [USAGE.md](USAGE.md)“计划外地图（绕行收集）”）开着时必须允许返回地图（开启时一并打开，另两项不变；命令行与 `--no-allow-return-to-map` 或 `--no-allow-chapter-reset` 合用时拒绝启动，运行中控制台与 HUD 拒绝单独禁止返回地图，先关掉计划外地图才行）；它把入场目标从计划章节换成原存档槽位里的官方地图集合（`entry_target.maps`，`sid` 为空），菜单策略不变。
 
 配置及 `run_state.json` 的权威字段是 `action_permissions: {restart_chapter: bool, return_to_map: bool, save_quit: bool}`。旧运行没有此字段时迁移旧总开关；有此字段后不受旧布尔摘要覆盖。运行中 `POST /api/control` 使用 `kind: "action_permissions"`，`text` 为 JSON 字符串，可部分更新，例如 `{"save_quit":true}`。未知键、非布尔值及空更新拒绝。旧 `chapter_reset` 指令作为全量别名保留。
 

@@ -223,6 +223,14 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertTrue(self.session.map_entry_set_supported)
         self.assertEqual([cmd for cmd, _ in self.session.calls].count('reload_commit'), 1)
 
+    def test_detour_cannot_reload_to_bridge_without_map_set_guard(self):
+        # 计划外地图的门禁依赖地图集合：接回的桥接没有它就保持暂停，不退回只认计划章节以外的旧门禁
+        self.session.cfg.allow_detour = True
+        with self.assertRaisesRegex(BridgeReloadError, '计划外地图'):
+            reload_bridge(self.session, self.root, self.options)
+        self.assertTrue(self.session.holding())
+        self.assertNotIn('reload_finish', [cmd for cmd, _ in self.session.calls])
+
     def test_loading_waits_at_first_loaded_boundary_before_prepare_and_file_replace(self):
         original = self.session.bridge_call
         loaded = copy.deepcopy(self.session.obs)

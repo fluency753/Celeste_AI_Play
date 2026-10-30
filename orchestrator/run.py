@@ -67,6 +67,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help='允许菜单重启章节和未通关返回地图/保存退出，默认禁止')
     for action, label in (('restart-chapter','重启章节'), ('return-to-map','返回地图'), ('save-quit','保存并退出')):
         ap.add_argument('--allow-' + action, action=argparse.BooleanOptionalAction, default=None, help=label + '权限，默认禁止')
+    ap.add_argument('--allow-detour', action=argparse.BooleanOptionalAction, default=None,
+                    help='允许去计划外的已解锁地图：单章或顺序范围下，智能体可自行用暂停菜单返回地图，去别的已解锁官方章节、面与'
+                         '检查点（例如收集水晶之心）再回来，计划不变，计划章节通关才结束；开启时一并允许返回地图。默认禁止，续跑沿用')
     ap.add_argument('--scope',choices=['chapter','campaign','visited'],default=None,help='单章、顺序游玩或在已到访地图内自由进出；独立于停止目标')
     ap.add_argument('--completion-policy',choices=['stop','continue'],default=None,help='计划通关后停止或继续探索；已到访地图默认继续，其他范围默认停止')
     ap.add_argument("--create-save", action="store_true", help="显式新建独立存档：放在现有最新存档的下一个槽位（不填中间的空位），只允许从序章开始；名称允许重复")
@@ -260,6 +263,26 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                  if getattr(args, 'allow_' + key) is not None}
     if overrides:
         permissions = permissions.update(overrides)
+    # 计划外地图：续跑沿用运行中最后一次设置（控制台改过时以它为准），再按这次的命令行覆盖
+    previous_detour = None
+    if previous:
+        from .control import RunControl
+        previous_detour = RunControl(previous['dir']).detour_preference()
+        if previous_detour is None:
+            previous_detour = bool(previous['state'].get('allow_detour', False))
+    if cfg.play_scope == 'visited':
+        if args.allow_detour:
+            raise SystemExit('已到访地图自由探索不使用计划，不需要 --allow-detour')
+        cfg.allow_detour = False
+    else:
+        cfg.allow_detour = bool(args.allow_detour if args.allow_detour is not None else previous_detour)
+    if cfg.allow_detour:
+        # 开着计划外地图就必须允许暂停菜单的"返回地图"（其他两项不变），否则智能体离不开计划章节
+        if args.allow_return_to_map is False or args.allow_chapter_reset is False:
+            raise SystemExit('计划外地图开着时需要返回地图权限：不能与 --no-allow-return-to-map（或 --no-allow-chapter-reset）合用，'
+                             '要禁止返回地图请同时加 --no-allow-detour')
+        if not permissions.return_to_map:
+            permissions = permissions.update({'return_to_map': True})
     configure(cfg, permissions)
     cfg.create_save = args.create_save
     cfg.cutscene_mode = args.cutscene_mode or (previous['state'].get('cutscene_mode','auto') if previous else 'auto')
@@ -516,7 +539,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         plan_pieces = None
     if cfg.play_scope == 'visited':
         all_chapters = plan_pieces = None
-    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "play_scope":cfg.play_scope, "completion_policy":cfg.completion_policy, "visited_maps":cfg.visited_maps, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
+    state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "allow_detour":bool(getattr(cfg,"allow_detour",False)), "play_scope":cfg.play_scope, "completion_policy":cfg.completion_policy, "visited_maps":cfg.visited_maps, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": cfg.cutscene_mode == 'agent' and cfg.resume_pending, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
@@ -782,7 +805,8 @@ def check_resume_position(cfg: RunConfig) -> bool:
         if obs.get("scene") == "Level":
             if not right_save:
                 raise SystemExit(f"游戏当前在存档 {save!r} 的关卡里，不是 {cfg.save!r}：先退出那个关卡再续跑")
-            if sid != want and cfg.play_scope != 'visited':
+            # 开了计划外地图时可以停在别的官方地图里续跑（主控连上后按实际地图记为计划外，计划不变）
+            if sid != want and cfg.play_scope != 'visited' and not getattr(cfg, 'allow_detour', False):
                 raise SystemExit(f"游戏当前在 {chapter_name(sid)}，续跑的章节是 {chapter_name(want)}：请确认 --resume 的目录")
             print(f"[run] 续跑：游戏停在 {chapter_name(sid)} 房间 {(obs.get('level') or {}).get('room')}", flush=True)
             return True
@@ -793,6 +817,11 @@ def check_resume_position(cfg: RunConfig) -> bool:
             return True
         if cfg.cutscene_mode == 'agent' and right_save and cfg.resume_completion_pending and obs.get('scene') in {'AreaComplete','LevelExit','OverworldLoader','Overworld'}:
             return True
+        completion = obs.get('completion') or {}
+        if (cfg.cutscene_mode == 'agent' and right_save and getattr(cfg, 'allow_detour', False) and cfg.play_scope != 'visited'
+                and obs.get('scene') == 'AreaComplete' and completion.get('sid')
+                and (completion.get('sid'), completion.get('side') or 'A') != (want, 'A')):
+            return True   # 停在计划外地图的结算：agent 自己确认，主控连上后按实际地图记为计划外（计划章节自己的结算走原来的路）
         if cfg.chapter is None:
             raise SystemExit(f"游戏当前不在关卡里（{obs.get('scene')}），无法续跑")
         print(f"[run] 续跑：游戏在 {obs.get('scene')}（存档 {save!r}），用菜单宏进入{cfg.save} 的"
@@ -992,6 +1021,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         RunControl(run_dir).set_cutscene_mode(cfg.cutscene_mode)
         from .action_policy import permissions_for
         RunControl(run_dir).set_action_permissions(permissions_for(cfg).snapshot())
+        RunControl(run_dir).set_detour(bool(getattr(cfg, 'allow_detour', False)))
     if cfg.play_scope == 'visited':
         # The save-bound authorization is committed by connect before any input.
         # Publish its run-state owner first; session identity is finalized below.
@@ -1163,15 +1193,25 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                        user_stopped=session.user_stopped, agent_stop=getattr(session, "agent_stop", None), goal=session.goals.snapshot(),
                        chapters=cfg.chapters, splits=metrics.state.splits or [],
                        plan=[[p.chapter, p.start, p.end] for p in cfg.plan] if cfg.plan else None,
-                       total_time_ticks=metrics.state.completed_ticks + (0 if metrics.state.piece_done or session.chapter_finished
-                                                                         or session.done_reason in ("章节完成", "分段完成")
-                                                                         else metrics.state.chapter_time_ticks),
+                       total_time_ticks=total_time_ticks(metrics.state, session),
                        start_sid=session.start_sid, end_scene=session.end_scene, finish_error=finish_error, turns=runner.turns if runner else 0,
                        session_id=runner.session_id if runner else None, run_dir=str(run_dir),
                        resumed_from=str(previous["dir"]) if previous else None,
                        kb_study=study.summary() if study else None, recording=recording)
         (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
+
+
+def total_time_ticks(state, session) -> int:
+    """总结里的总计时：已完成各截之和，加上没完成的这一截在计划章节里已经用掉的计时（各段会话之和）。
+    这一截已完成时不再加；停在计划外地图时不加它的章节计时，只加计划章节此前各段会话（含离开前最后那段）。
+    没有绕行时与原来相同。"""
+    if state.piece_done or session.chapter_finished or session.done_reason in ("章节完成", "分段完成"):
+        return state.completed_ticks
+    banked = int(getattr(state, 'plan_banked_ticks', 0) or 0)
+    if getattr(session, 'off_plan', lambda: False)():
+        return state.completed_ticks + banked + int(getattr(state, 'plan_session_ticks', 0) or 0)
+    return state.completed_ticks + banked + state.chapter_time_ticks
 
 
 def choose_session(previous: dict | None, fresh: bool, prepared: dict | None = None) -> tuple[str | None, str]:
@@ -1341,6 +1381,8 @@ def main() -> int:
     hello = preflight_bridge(cfg.bridge_port)
     if getattr(cfg, 'play_scope', 'chapter') == 'visited' and hello.get('map_entry_set') is not True:
         raise RuntimeError('自由探索需要桥接 1.10.0 的地图集合门禁；未开始录制或进档')
+    if getattr(cfg, 'allow_detour', False) and getattr(cfg, 'play_scope', 'chapter') != 'visited' and hello.get('map_entry_set') is not True:
+        raise RuntimeError('计划外地图需要桥接 1.10.0 的地图集合门禁；未开始录制或进档')
     if (args.record and getattr(cfg,'recording_mode','continuous') == 'chapter' or any(getattr(cfg,key,False) for key in
             ('freeze_chapter_select','freeze_file_select','freeze_main_menu'))) and hello.get('chapter_recording') != 1:
         raise SystemExit('按章录制与菜单冻结设置需要桥接 1.9.0；请先更新 Bridge，未启动录制或游戏输入')

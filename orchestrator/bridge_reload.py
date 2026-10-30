@@ -703,6 +703,9 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
             raise BridgeReloadError('新桥接的地图入场门禁未加载，保持暂停')
         if getattr(session.cfg, 'play_scope', 'chapter') == 'visited' and hello.get('map_entry_set') is not True:
             raise BridgeReloadError('新桥接缺少自由探索地图集合门禁，保持暂停；请安装兼容桥接后重试')
+        from .detour import enabled as detour_enabled
+        if detour_enabled(session.cfg) and hello.get('map_entry_set') is not True:
+            raise BridgeReloadError('新桥接缺少计划外地图所需的地图集合门禁，保持暂停；请安装兼容桥接后重试')
         if hello.get('input_bindings_ok') is not True:
             mismatch = '、'.join(map(str, hello.get('input_binding_mismatches') or [])) or '未报告'
             raise BridgeReloadError(f'新桥接接回后注入按键绑定与桥接不一致（{mismatch}），继续会按玩家自己的绑定解释合成输入；'

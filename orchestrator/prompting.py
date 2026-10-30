@@ -389,7 +389,9 @@ def prompt_parts(cfg) -> list[PromptPart]:
             '{explore_notes}': _file_parts('explore_notes_zh.md') if workspace.workspace_read and workspace.workspace_write else [],
             '{explore_programs}': _file_parts('explore_programs_zh.md') if workspace.programs else [],
         }
-        parts = _file_parts("explore_zh.md", lambda t: t.replace("{game_tools}", tools), sep="", slots=slots)
+        from .detour import SCOPE_FROM, SCOPE_TO, enabled as detour_enabled
+        detour_scope = (lambda t: t.replace(SCOPE_FROM, SCOPE_TO)) if detour_enabled(cfg) else (lambda t: t)
+        parts = _file_parts("explore_zh.md", lambda t: detour_scope(t.replace("{game_tools}", tools)), sep="", slots=slots)
         if cfg.live:
             parts += _file_parts("explore_live_zh.md")
         chapters = cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else [])
@@ -399,10 +401,12 @@ def prompt_parts(cfg) -> list[PromptPart]:
         elif plan_is_partial(getattr(cfg, "plan", None)):
             parts.append(PromptPart("本次指定范围（按段通关时自动加）",
                                     describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, speedrun=False, agent_navigation=cfg.cutscene_mode == 'agent')
-                                    + "不得自行扩展。", None, "\n"))
+                                    + ("计划不得自行扩展，计划外地图只作绕行（见“计划外地图”一节）。" if detour_enabled(cfg)
+                                       else "不得自行扩展。"), None, "\n"))
         elif chapters:
             parts.append(PromptPart("本次指定章节（自动加）", "本次指定章节：" + "、".join(chapter_name_by_id(c) for c in chapters)
-                                    + "；不得自行扩展。", None, "\n"))
+                                    + ("；计划不得自行扩展，计划外地图只作绕行（见“计划外地图”一节）。" if detour_enabled(cfg)
+                                       else "；不得自行扩展。"), None, "\n"))
     else:
         parts = _speedrun_parts(cfg)
     if getattr(cfg, 'play_scope', 'chapter') == 'visited':
@@ -418,11 +422,14 @@ def prompt_parts(cfg) -> list[PromptPart]:
     if cfg.cutscene_mode == 'agent':
         parts += _file_parts("agent_controls_zh.md")
     from .action_policy import permissions_for
+    from .detour import enabled as detour_enabled, instructions as detour_instructions, map_rule
     parts.append(PromptPart("游戏操作权限", permissions_for(cfg).instructions(experiments=getattr(cfg, 'play_scope', 'chapter') == 'visited'), None, "\n\n"))
+    if detour_enabled(cfg):
+        parts.append(PromptPart("计划外地图（开了才加）", detour_instructions(cfg), None, "\n\n"))
     if 'exit_level' in game_tools(cfg):
         parts.append(PromptPart("返回地图与结束任务",
                                 "用户要求返回地图时调用 exit_level，默认保留任务、后续章节和录制；返回后 observe，"
-                                "只进入当前计划或许可允许的地图，换到计划外的章节须由用户在控制台调整范围。"
+                                f"只进入当前计划或许可允许的地图，{map_rule(cfg)}。"
                                 "只有用户明确结束整次试玩才设 finish_run=true。按当前操作权限执行，不用保存退出绕过返回地图禁令；返回地图不算通关。", None, "\n\n"))
     if workspace_capabilities(cfg).programs and getattr(cfg, "live", False):
         parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）

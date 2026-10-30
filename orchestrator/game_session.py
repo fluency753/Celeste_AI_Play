@@ -14,6 +14,7 @@ from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, CHAP
 from .metrics import Metrics
 from .navigation import ChapterNavigation
 from .action_policy import BLOCK_STOPS
+from .detour import OFFICIAL_MAPS, enabled as detour_enabled, map_label
 from .execution import workspace_capabilities
 from .collision_snapshot import current_collision, collision_summary
 from .collision_view import render_collision_view
@@ -55,6 +56,18 @@ def map_transition(obs: dict) -> bool:
         return True
     menu = obs.get('menu') or {}
     return scene == 'Overworld' and (bool(menu.get('next')) or not menu.get('current'))
+
+
+def map_identity(obs: dict):
+    """观测里正在玩（或刚结算）的地图：(sid, 面, 是否已通关)；不在关卡或结算画面时为 None。"""
+    scene = obs.get('scene')
+    if scene == 'Level':
+        level = obs.get('level') or {}
+        return (level['sid'], level.get('side') or 'A', bool(level.get('completed'))) if level.get('sid') else None
+    if scene == 'AreaComplete':
+        done = obs.get('completion') or {}
+        return (done['sid'], done.get('side') or 'A', True) if done.get('sid') else None
+    return None
 
 
 def awaiting_confirm(obs: dict, *, ending: bool = False) -> bool:
@@ -267,6 +280,12 @@ def expand_inputs(inputs: list[str], max_frames: int, allowed: set[str] = AGENT_
 class GameSession:
     _ending_pending = False   # 见 __init__
     _ending_agent = False
+    _detour = None            # 计划外地图（--allow-detour）：正在玩的非计划地图 {sid, side, completed, deaths}
+    _detour_ending = False    # auto 剧情模式：计划外地图刚通关，片尾与结算还没走完（这次动作里由 _finish_detour 处理）
+    _detour_agent = False     # 计划外地图的片尾主控没能走完，已交给智能体：不再自动推进，回到选章地图或进入新地图时清除
+    _detour_notes = ()        # 进出计划外地图、计划外通关时给智能体的说明，附在这次动作或观测的结果后面
+    _detour_latched = False   # 本次会话里开关打开过：之后关掉也继续区分计划内外，地图分类不随开关来回变
+    _plan_progress_ok = False # 上一次完整观测停在计划章节 A 面的进行中会话里：这一步的进度事件可以跟上它的章节计时
 
     @property
     def navigation(self):
@@ -390,8 +409,10 @@ class GameSession:
         self.map_entry_set_supported = hello.get('map_entry_set') is True
         if self.cfg.play_scope == 'visited' and not self.map_entry_set_supported:
             raise RuntimeError('自由探索需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
+        if detour_enabled(self.cfg) and not self.map_entry_set_supported:
+            raise RuntimeError('计划外地图需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
         self.client.step_options = self._step_options
-        self.client.after_step = self._remember_held_input
+        self.client.after_step = self._after_step
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
         from .chapter_recording import menu_options
         reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music,
@@ -418,15 +439,21 @@ class GameSession:
             self._bind_visited_maps(obs)
         if obs.get('scene') == 'Level' and not self.chapter_finished and self.piece is not None:
             sid = (obs.get('level') or {}).get('sid')
-            if sid != CHAPTER_SIDS.get(self.piece.chapter):
+            # 开了计划外地图时可以停在别的官方地图里续跑：由 _note_map 记为计划外，计划不变
+            if sid != CHAPTER_SIDS.get(self.piece.chapter) and not detour_enabled(self.cfg):
                 raise RuntimeError(f'当前地图 {sid} 与指定章节不一致，请自行返回选章地图重新选择')
-        self._pending_complete |= bool((obs.get('level') or {}).get('completed'))
+        state = self.metrics.state
+        if getattr(self.cfg, '_extended_plan', None) and (state.plan_banked_ticks or state.plan_session_ticks):
+            # 续跑追加了新计划：上一个计划最后那段会话的计时不累加进新计划的第一截（没开过计划外地图时两项都是 0）
+            self.metrics.update(plan_banked_ticks=0, plan_session_ticks=0)
+        self._note_map(obs)
+        self._pending_complete |=bool((obs.get('level') or {}).get('completed')) and not self._in_detour()
         if self.cfg.play_scope != 'visited' and self.piece is None and not self.chapter_finished:        # 没指定章节（进入选章页当前选中的章节）：按游戏里的章节整章玩
             chapter = next((i for i, s in CHAPTER_SIDS.items() if s == (obs.get('level') or {}).get('sid')), None)
             if chapter is not None:
                 self.piece = Piece(chapter)
         if obs.get("scene") != "Level" and not (self.cfg.cutscene_mode == 'agent' and (
-                story_pending(obs) or ((self._pending_complete or self.chapter_finished) and obs.get('scene') in END_SCENES)
+                story_pending(obs) or ((self._pending_complete or self.chapter_finished or self._in_detour()) and obs.get('scene') in END_SCENES)
                 or (obs.get('scene') == 'Overworld' and (obs.get('menu') or {}).get('current') in {'OuiChapterSelect','OuiChapterPanel'}))):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
         self.navigation.note_scene(obs)
@@ -434,6 +461,9 @@ class GameSession:
         self.start_sid = ((obs.get('level') or {}).get('sid') or
                           (CHAPTER_SIDS.get(self.cfg.chapter) if self.cfg.play_scope != 'visited' else None) or self.metrics.state.chapter)
         if self.start_sid:self.metrics.update(chapter=self.start_sid,chapter_side=(obs.get('level') or {}).get('side',self.metrics.state.chapter_side))
+        if getattr(self.cfg, '_extended_plan', None):
+            self.metrics.take_run_base()      # 续跑追加了新计划：新的一局，统计与关卡内时长从这里起算
+        self._start_level_clock(obs)
         self._update_metrics_from_obs(obs)
         if self.workspace:
             # 上一次运行留下的观测与动作记录已经过时：先换成当前这一帧，避免智能体在准备阶段读到旧数据
@@ -501,8 +531,25 @@ class GameSession:
         chapter = piece.chapter if piece else self.cfg.chapter
         if (chapter is not None or self.cfg.save_slot is not None) and not self.entry_guard_supported:
             raise ActError('进入地图的目标核验需要桥接 1.0.22，请更新桥接后继续；未发送输入')
-        return step_options(self.cfg, sid=CHAPTER_SIDS.get(chapter), slot=self.cfg.save_slot,
-                            departure=self.chapter_finished or (self.done and self.done_reason == '分段完成'))
+        departure = self.chapter_finished or (self.done and self.done_reason == '分段完成')
+        if detour_enabled(self.cfg):
+            # 计划外地图：入场只核对存档槽位与官方地图集合（桥接 MapEntryGuard 的 Maps，sid 为空即不限定计划章节）；
+            # 计划目标仍由 navigation 持有，入场后按实际观测区分计划内外
+            if not getattr(self, 'map_entry_set_supported', False):
+                raise ActError('计划外地图需要桥接 1.10.0 的地图集合门禁；未发送输入')
+            return self._detour_exit_policy(step_options(self.cfg, maps=OFFICIAL_MAPS, slot=self.cfg.save_slot,
+                                                         departure=departure))
+        return self._detour_exit_policy(step_options(self.cfg, sid=CHAPTER_SIDS.get(chapter), slot=self.cfg.save_slot,
+                                                     departure=departure))
+
+    def _detour_exit_policy(self, options):
+        """还在计划外地图里（开关可能已经关掉）：暂停菜单的"返回地图"始终可用，让智能体能离开它回到计划章节。"""
+        if not self._in_detour():
+            return options
+        permissions = dict(options['action_policy']['permissions'], return_to_map=True)
+        options['action_policy']['permissions'] = permissions
+        options['allow_chapter_reset'] = all(permissions.values())
+        return options
 
     def _bind_visited_maps(self, obs):
         from .free_roam import validate_maps
@@ -525,6 +572,83 @@ class GameSession:
         self.cfg.visited_maps = maps
 
     # ---- 思考僵直（探索模式 --stiffness） ----
+
+    # ---- HUD 主计时：本局在关卡里真正执行的帧（见 MetricsState.game_clock） ----
+
+    @staticmethod
+    def _clock_level(obs: dict):
+        """观测停在关卡里时：(sid, 面, 章节计时, 帧号)；否则 None。"""
+        level = obs.get('level') or {}
+        if obs.get('scene') != 'Level' or not level.get('sid'):
+            return None
+        return (level['sid'], level.get('side') or 'A', int(level.get('chapterTimeTicks') or 0), obs.get('frame'))
+
+    def _start_level_clock(self, obs: dict) -> None:
+        """连上游戏时接着本局已核实的帧数（续跑沿用，新的一局从 0 起算），从这一刻的状态开始计。"""
+        clock = self.metrics.state.game_clock or {}
+        self._clock_committed = int(clock.get('committed') or 0)
+        self._clock_at = self._clock_level(obs)
+        self._clock_dead = False
+        self._clock_progress = self._clock_at[3] if self._clock_at else None
+        self._publish_level_clock(self._clock_committed, self._clock_at[2] if self._clock_at else 0, self._clock_at is not None)
+
+    def _publish_level_clock(self, frames: int, session_ticks: int, level: bool) -> None:
+        """level：这一刻停在关卡里（网页 HUD 只在关卡里执行时外推，菜单里不走）。"""
+        clock = {'frames': int(frames), 'committed': int(getattr(self, '_clock_committed', 0)),
+                 'session_ticks': int(session_ticks), 'level': bool(level), 'wall': time.time()}
+        self.metrics.update(game_clock=clock)
+
+    def _count_level_frames(self, reply: dict) -> None:
+        """每次推进之后（所有经本会话连接的推进：动作、自动推进、菜单宏、片尾）核实关卡里执行了几帧。
+        有逐帧轨迹时按帧算：有 Madeline 的帧，加上死亡之后到新角色出现之前的帧（死亡动画仍在关卡里）；
+        菜单、地图、加载与结算画面没有角色，不算。没有轨迹的推进（开局菜单宏）只在前后都停在同一关卡会话时整段计入。
+        规划回放不推进游戏、不经过 step，本来就不计。"""
+        if not hasattr(self, '_clock_committed'):
+            return
+        result = (reply or {}).get('result') or {}
+        obs = (reply or {}).get('obs') or {}
+        consumed = int(result.get('consumed') or 0)
+        end = self._clock_level(obs)
+        rows = result.get('trajectory')
+        frames = 0
+        if isinstance(rows, list) and rows:
+            deaths = sorted(e.get('frame') for e in result.get('events') or []
+                            if e.get('type') == 'death' and e.get('frame') is not None)
+            dead, index = self._clock_dead, 0
+            for row in rows:
+                frame = row[0] if row else None
+                while index < len(deaths) and frame is not None and deaths[index] <= frame:
+                    dead, index = True, index + 1
+                if len(row) > 1 and row[1] is not None:
+                    frames, dead = frames + 1, False
+                elif dead:
+                    frames += 1
+            self._clock_dead = dead
+        elif consumed and self._clock_at and end and self._clock_at[:2] == end[:2] and end[2] >= self._clock_at[2]:
+            frames = consumed
+        self._clock_committed += frames
+        self._clock_at = end
+        self._clock_progress = end[3] if end else None
+        self._publish_level_clock(self._clock_committed, end[2] if end else 0, end is not None)
+
+    def _level_clock_progress(self, event: dict) -> dict:
+        """执行中的进度事件只在关卡里发出：相邻两次相差不超过推送间隔的帧都在关卡里，先估进显示用的帧数，
+        推进结束后由 _count_level_frames 按实际结果核实。"""
+        if not hasattr(self, '_clock_committed'):
+            return {}
+        frame, previous = event.get('frame'), getattr(self, '_clock_progress', None)
+        clock = self.metrics.state.game_clock or {}
+        shown = int(clock.get('frames') or self._clock_committed)
+        if frame is not None and previous is not None and 0 < frame - previous <= PROGRESS_EVERY:
+            shown += frame - previous
+        self._clock_progress = frame
+        return {'game_clock': {'frames': shown, 'committed': self._clock_committed,
+                               'session_ticks': int(event.get('chapterTimeTicks') or 0), 'level': True, 'wall': time.time()}}
+
+    def _after_step(self, args: dict, reply: dict) -> None:
+        """BridgeClient.after_step：核实关卡内帧数，再记下最后按住的键。"""
+        self._count_level_frames(reply)
+        self._remember_held_input(args, reply)
 
     def _remember_held_input(self, args: dict, reply: dict) -> None:
         """桥接每次推进之后：记下最后真正喂给游戏的那一帧按键（主控的自动推进也算），并存进运行目录供续跑接上。
@@ -659,6 +783,7 @@ class GameSession:
         self.metrics.add(auto_game_s=game_s, stiff_frames=used, stiff_s=used / 60)
         self._start_freeze()               # 僵直已经执行：即使后面的按键出错，也不会再为同一段冻结僵直一次
         self._log_frames(result, [keys] * used, "思考僵直", auto=True, input_format=fmt)
+        self._note_map(obs)
         self._handle_events(result)
         self._commit_completion(obs)
         self._note_obs_room(obs)
@@ -714,9 +839,14 @@ class GameSession:
                 # 自动跳过剧情：剧情（含跳过的淡出）还没结束就先推进完，不让智能体看着黑屏或剧情画面判断
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
+            if not reload_observation and self._detour_ending and not self.done and not self.goals.stop_motion.is_set():
+                obs, image, more = self._finish_detour()
+                notes = [*notes, *more]
             if not reload_observation and self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs, image, more = self._enter_next_chapter(obs)
                 notes = [*notes, *more]
+            self._note_map(obs)
+            notes = [*notes, *self._take_detour_notes()]
             self._write_sim_state()
         if self.cfg.play_scope == 'visited':
             from .free_roam import instructions
@@ -1120,13 +1250,22 @@ class GameSession:
             raise ActError(f"未知的截断条件 {bad}；可用：{sorted(VALID_STOP_ON)}")
         # Completed remains true throughout the heart prompt and results. Once
         # reported, it must not truncate every subsequent agent confirmation.
-        ending = (self.cfg.cutscene_mode == 'agent' and self._pending_complete) or self._ending_agent
+        ending = ((self.cfg.cutscene_mode == 'agent' and self._pending_complete) or self._ending_agent
+                  or self._detour_completed())
         if ending:
             stop = [item for item in stop if item != 'complete']
         for must in ("death", *(("complete",) if not ending else ()), *forced):
             if must not in stop:
                 stop.append(must)
         return stop
+
+    def _allowed_letters(self) -> set[str]:
+        """这次 act 可用的按键：agent 剧情模式、片尾交给智能体时，以及开了计划外地图（要自己用 P、B 操作暂停菜单与
+        选章界面）时开放桥接的全部按键；其余 auto 剧情模式只开放游玩按键与 C。"""
+        if (self.cfg.cutscene_mode == 'agent' or self._ending_agent or self._detour_agent
+                or detour_enabled(self.cfg) or self._in_detour()):   # 开关关掉时还在计划外地图里：照样能离开
+            return LETTERS
+        return AGENT_LETTERS
 
     def _least_frames(self, plan: PlanSpec, planned: int) -> int:
         """这次 act 最少要推进的帧数。只管正常游玩：角色不可操作时（菜单、结算、对白等剧情输入）不限制；
@@ -1143,7 +1282,7 @@ class GameSession:
         if plan.input_format != 'celeste_ai' or plan.input_source is not None:
             return plan
         try:
-            allowed = LETTERS if self.cfg.cutscene_mode == 'agent' or self._ending_agent else AGENT_LETTERS
+            allowed = self._allowed_letters()
             planned = len(expand_inputs(plan.inputs, act_frame_cap(self.cfg), allowed))
         except ActError:
             return plan                      # 不合法的计划交给 _check_plan 报错
@@ -1159,7 +1298,7 @@ class GameSession:
                 if self._input_formats is None:self._input_formats = self.client.call('hello').get('input_formats', ['celeste_ai'])
             if 'celeste_tas' not in self._input_formats:raise ActError('TAS输入需要桥接1.0.20或更新版本')
         else:
-            allowed = LETTERS if self.cfg.cutscene_mode == 'agent' or self._ending_agent else AGENT_LETTERS
+            allowed = self._allowed_letters()
             frames = expand_inputs(plan.inputs, act_frame_cap(self.cfg), allowed)
         least = self._least_frames(plan, len(frames))
         if len(frames) < least:
@@ -1238,6 +1377,7 @@ class GameSession:
                 self.sim_energy.reward(moving_frames=moving_frames(result.get("trajectory") or [], previous.get("pos")))
             if not skipped:
                 self._log_frames(result, frames, thought, auto=False, input_format=plan.input_format)
+                self._note_map(obs)            # 先认清这一步停在哪张地图：计划外地图的通关、死亡与房间不算进计划
                 self._handle_events(result)
                 self._commit_completion(obs)
                 self._note_obs_room(obs)
@@ -1252,7 +1392,9 @@ class GameSession:
             if self._seeker_death:
                 notes.append(SEEKER_DEATH_NOTE)
             ending_agent = self._ending_agent       # 片尾已交给智能体：主控不再自动推进
-            if not ending_agent and result['stop'] not in BLOCK_STOPS and plan.input_format != 'celeste_tas' and not self.done and (self.cfg.cutscene_mode == 'agent' or not self.chapter_finished) and not self.goals.stop_motion.is_set() and (not self._agent_controls(obs)
+            # 计划外地图的片尾交给了智能体，或智能体自己打开了暂停菜单（auto 模式开了计划外地图）：同样不自动推进
+            handed = ending_agent or self._detour_agent or self._agent_menu(obs)
+            if not handed and result['stop'] not in BLOCK_STOPS and plan.input_format != 'celeste_tas' and not self.done and (self.cfg.cutscene_mode == 'agent' or not self.chapter_finished) and not self.goals.stop_motion.is_set() and (not self._agent_controls(obs)
                     or story_pending(obs)):
                 obs, image, auto_frames, more = self._auto_advance(obs, image)
                 notes.extend(more)        # 接在执行前的说明（续推剧情、思考僵直）后面，不覆盖它们
@@ -1263,15 +1405,22 @@ class GameSession:
                 self.end_scene, self._ending_agent = obs.get('scene'), False
                 self._mark_done("章节完成")
                 notes.append("已回到选章地图，主控确认本章完成")
+            if self._detour_ending and not self.done and not self.goals.stop_motion.is_set():
+                obs, image, more = self._finish_detour()
+                notes.extend(more)
+            elif self._detour_agent and self._at_chapter_menu(obs):
+                self._detour_agent = False      # 智能体自己走完了计划外地图的片尾：之后照常自动推进
             if self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs, image, more = self._enter_next_chapter(obs)
                 notes.extend(more)
             self.goals.check(self.goal_values(obs))
             self._write_sim_state()
+            self._note_map(obs)
+            notes.extend(self._take_detour_notes())
 
             if result.get('block'):
                 from .action_policy import block_note
-                notes.append(block_note(result['block']))
+                notes.append(block_note(result['block'], detour=detour_enabled(self.cfg)))
 
         self.metrics.update(last_stop=result["stop"])
         obs = self._track_motion(obs)
@@ -1320,10 +1469,10 @@ class GameSession:
         先接着自动推进到可操作，再执行智能体的按键，不把按键落在剧情上。推进后仍不可操作（又被暂停）就不执行这次动作。"""
         last = self.last_obs or {}
         if (self.cfg.cutscene_mode != 'auto' or self._ending_agent or not last or self._settled(last)
-                or self._handed_over(last)):
+                or self._handed_over(last) or self._detour_agent or self._agent_menu(last)):
             return []
         obs = enrich_obs(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
-        if obs.get('scene') != 'Level' or self._settled(obs) or self._handed_over(obs):
+        if obs.get('scene') != 'Level' or self._settled(obs) or self._handed_over(obs) or self._agent_menu(obs):
             return []
         obs, _, _, notes = self._auto_advance(obs, None)
         self.last_obs = obs
@@ -1332,6 +1481,11 @@ class GameSession:
             notes = [*notes, *more]
             raise ActError('执行前主控接着推进了上次被打断的转场或剧情，章节已通关：' + '；'.join(map(str, notes))
                            + ('。这次动作没有执行，请结束本轮。' if self.done else '。这次动作没有执行，请先 observe 再按上面的说明处理片尾。'))
+        if self._detour_ending and not self.done:
+            self.last_obs, _, more = self._finish_detour()
+            notes = [*notes, *more, *self._take_detour_notes()]
+            raise ActError('执行前主控接着推进了上次被打断的转场或剧情，计划外地图已通关：' + '；'.join(map(str, notes))
+                           + '。这次动作没有执行，请先 observe 再操作。')
         if self.done:
             raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
         if self.chapter_finished:
@@ -1399,7 +1553,7 @@ class GameSession:
                 notes.append('用户已暂停，主控停止自动播放。')
                 break
             if (obs.get('level') or {}).get('paused') or obs.get('pauseMenu'):
-                if mode == 'auto' and menu_closes < 3:
+                if mode == 'auto' and menu_closes < 3 and not self._agent_menu(obs):
                     # 自动跳过剧情时暂停菜单只会是跳过剧情留下的（智能体按不了暂停键）：关掉后接着推进
                     menu_closes += 1
                     reply = self.client.call("step", inputs=["1,B", "20"], stop_on=[], speed=self.cfg.auto_speed,
@@ -1433,8 +1587,13 @@ class GameSession:
                              if self._pending_complete else '当前菜单或转场由你输入操作，按本次目标自行导航；主控不代选。')
                 break
             if scene in END_SCENES and not story_pending(obs) and not automatic_transition:
-                if self._at_chapter_menu(obs) or self._ending_pending:
-                    # 回到就绪的选章菜单只是导航，不是完成；最终章刚通关时片尾与结算交给 _finish_ending 收尾
+                if self._at_chapter_menu(obs) or self._ending_pending or self._detour_ending:
+                    # 回到就绪的选章菜单只是导航，不是完成；最终章刚通关时片尾与结算交给 _finish_ending 收尾，
+                    # 计划外地图刚通关时交给 _finish_detour
+                    break
+                if scene == 'AreaComplete' and self._in_detour():
+                    # 计划外地图的结算画面（通关事件没被看到时，例如续跑）：不结束本次试玩，片尾与结算交给 _finish_detour
+                    self._chapter_complete()
                     break
                 if map_transition(obs):
                     # 不结束整次试玩的返回地图、地图上的菜单切换或加载：auto 模式只推进空帧等它就绪，
@@ -1589,6 +1748,8 @@ class GameSession:
             chapter=event.get("sid", self.metrics.state.chapter),
             dashes=event.get("dashes", 0),
             max_dashes=event.get("maxDashes", 0),
+            **self._plan_time_progress(event.get("sid"), event.get("chapterTimeTicks")),
+            **self._level_clock_progress(event),
         )
         values = self.goal_values()
         values.update(frame=event.get("frame", values.get("frame")), room=event.get("room", values.get("room")),
@@ -1597,7 +1758,10 @@ class GameSession:
         values['game_elapsed'] = values['frame']/60 if values['frame'] is not None else None
         values["map"] = f"{event.get('sid', self.metrics.state.chapter)}:{values['side']}"
         self._goal_progress = dict(values)
-        if self._note_room(event.get("sid"), event.get("room"), event.get("chapterTimeTicks")):
+        # 开过计划外地图时进度事件不带面别：只有上一次完整观测确认的计划章节 A 面会话还在接着走（_plan_time_progress）
+        # 才按它推进段与终点；这一步里换了地图或会话时，等推进结束后的完整观测（_note_obs_room）再判断
+        if ((not self._classifying() or self._plan_progress_ok)
+                and self._note_room(event.get("sid"), event.get("room"), event.get("chapterTimeTicks"))):
             self.client.cancel_pending()      # 这一截在终点检查点结束：立即停下（桥接按 stop_rooms 已经停下时多发一次也无妨）
         self.goals.check(values)
         if self.goals.stop_motion.is_set() and not self.goals.cancel_sent:
@@ -1664,7 +1828,8 @@ class GameSession:
 
     def finish_user_stop(self):
         self.user_stopped = True
-        if not self.goals.immediate and (self.cfg.cutscene_mode != 'agent' or self._at_chapter_select(self.last_obs or {})) and (self._pending_complete or
+        # 停在计划外地图（哪怕已通关）不是计划通关：不清后续章节、不记分段成绩
+        if not self.goals.immediate and not self._in_detour() and (self.cfg.cutscene_mode != 'agent' or self._at_chapter_select(self.last_obs or {})) and (self._pending_complete or
                 bool(((self.last_obs or {}).get('level') or {}).get('completed'))):
             self.chapter_queue.clear()
             self._pending_complete=False
@@ -1755,6 +1920,7 @@ class GameSession:
             reply=self.client.call('observe',image=True,scope='room',fields=True)
             obs=self._track_motion(enrich_obs(reply['obs']))
             if playback:obs['storyPlayback']=playback
+            self._note_map(obs);auto_notes.extend(self._take_detour_notes())
             self._update_metrics_from_obs(obs);self._write_workspace(obs)
             info={'action':action,'frames':used,'auto_frames':auto_frames,'auto_notes':auto_notes,
                   'story_input':story_input(obs),'story_decision':story_decision(obs),
@@ -1791,6 +1957,8 @@ class GameSession:
                 raise ActError('本次试玩已停止，不能继续操作菜单')
             from .action_policy import permissions_for
             permissions = permissions_for(self.cfg)
+            if self._in_detour() and not permissions.return_to_map:
+                permissions = permissions.update({'return_to_map': True})   # 还在计划外地图里：总能返回地图离开它
             if not (permissions.return_to_map or (finish_run and permissions.save_quit)):
                 raise ActError('主控禁止本次返回地图；没有执行菜单输入。请先报告并等待用户开放返回地图权限，不能改用保存退出绕过。'
                                if not finish_run else '主控禁止未通关返回地图或保存退出；没有执行菜单输入，请等待用户处理')
@@ -1864,14 +2032,20 @@ class GameSession:
                     continue
                 self.metrics.add(deaths=1)
             elif e["type"] == "complete":
-                if self.cfg.cutscene_mode == 'agent':
+                if self._in_detour():
+                    # 计划外地图通关：只记绕行成绩，不登记计划的待确认通关、不结束本次试玩
+                    if not self.done:
+                        self._detour_complete()
+                elif self.cfg.cutscene_mode == 'agent':
                     if not self._pending_complete:
                         self._pending_complete=True
                         self._persist_completion_pending()
                 else:self._chapter_complete()
 
     def _commit_completion(self, obs):
-        if self.cfg.cutscene_mode == 'agent' and not self._pending_complete and (obs.get('level') or {}).get('completed'):
+        self._note_map(obs)
+        if (self.cfg.cutscene_mode == 'agent' and not self._pending_complete and (obs.get('level') or {}).get('completed')
+                and not self._in_detour()):
             self._pending_complete = True
             self._persist_completion_pending()
         ready = (self._at_chapter_select(obs) if self.cfg.cutscene_mode == 'agent' else
@@ -1907,7 +2081,12 @@ class GameSession:
 
     def _chapter_complete(self) -> None:
         """当前章节通关：记下分段成绩；还有下一章就等进入下一章，否则本次运行完成。
-        auto 剧情模式的最终章：先不结束，片尾在这次动作里走完（_finish_ending），走不完交给智能体。"""
+        auto 剧情模式的最终章：先不结束，片尾在这次动作里走完（_finish_ending），走不完交给智能体。
+        计划外地图（--allow-detour）的通关另记一条绕行成绩，不动分段成绩与计划（_detour_complete）。"""
+        if self._in_detour():
+            if not self.done:
+                self._detour_complete()
+            return
         if self.done or self.chapter_finished or self._ending_pending or self._ending_agent:
             return
         st = self.metrics.state
@@ -1917,7 +2096,7 @@ class GameSession:
             self.user_stopped = True
             self.chapter_queue.clear()
         split_options = {'side': st.chapter_side} if getattr(self.cfg, 'play_scope', 'chapter') == 'visited' else {}
-        self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range(), **split_options)
+        self.metrics.add_split(st.chapter, self._plan_ticks(), **self._split_range(), **split_options)
         if getattr(self.cfg, 'play_scope', 'chapter') == 'visited':
             if self.user_stopped or self.goals.immediate:
                 self._mark_done('目标达成')
@@ -1953,6 +2132,168 @@ class GameSession:
                             "请观察画面后用 act 自行处理：C 确认、B 返回、P 打开暂停菜单（菜单里可选跳过剧情）、方向键选择，"
                             "纯帧数等待动画；回到选章地图才算完成，主控不再代按。"]
 
+    # ---------------------------------------------------------------- 计划外地图（--allow-detour，见 detour.py）
+
+    def _plan_map(self, sid, side) -> bool:
+        """这张地图是不是计划里的：当前这一截（换下一截途中还有下一截）的章节 A 面。没有计划时一律算计划内。"""
+        if getattr(self.cfg, 'play_scope', 'chapter') == 'visited':
+            return True
+        pieces = [p for p in (self.navigation.current, self.navigation.target) if p is not None]
+        if not pieces:
+            return True
+        return side == 'A' and sid in {CHAPTER_SIDS.get(p.chapter) for p in pieces}
+
+    def _in_detour(self) -> bool:
+        """正在计划外地图里（或刚从它结算回到地图、还没进入别的地图）。开关关掉后仍按实际地图结束。"""
+        return self._detour is not None
+
+    def _classifying(self) -> bool:
+        """区分计划内外：开关打开着，或本次会话里打开过（关掉后地图分类不跟着变，计划章节的 B/C 面仍是计划外）。"""
+        return detour_enabled(self.cfg) or self._detour_latched
+
+    def off_plan(self) -> bool:
+        """总结用：最后停在计划外地图，当前章节计时不计入总计时。"""
+        return self._in_detour()
+
+    def _detour_completed(self) -> bool:
+        return self._detour is not None and bool(self._detour.get('completed'))
+
+    def _add_detour_note(self, text: str) -> None:
+        self._detour_notes = [*self._detour_notes, text]
+
+    def _take_detour_notes(self) -> list[str]:
+        notes, self._detour_notes = list(self._detour_notes), []
+        return notes
+
+    def _agent_menu(self, obs: dict) -> bool:
+        """auto 剧情模式开了计划外地图（或还在计划外地图里）时，智能体在正常游玩中自己按 P 打开的暂停菜单
+        （不在剧情里）：由它操作，主控不当作跳过剧情留下的菜单关掉，也不自动推进。"""
+        level = obs.get('level') or {}
+        return (self.cfg.cutscene_mode == 'auto' and (detour_enabled(self.cfg) or self._in_detour())
+                and obs.get('scene') == 'Level'
+                and bool(level.get('paused') or obs.get('pauseMenu')) and not level.get('inCutscene')
+                and not level.get('skippingCutscene'))
+
+    # ---- 计划章节的计时：每段会话（返回地图后重进、重启章节、游戏重启）的章节计时累加，计划外地图不算 ----
+
+    def _plan_ticks(self) -> int:
+        """这一截的成绩计时：此前各段会话之和加当前这段（没有累加过时与原来相同，就是当前章节计时）。"""
+        state = self.metrics.state
+        return int(state.chapter_time_ticks) + int(getattr(state, 'plan_banked_ticks', 0) or 0)
+
+    def _note_plan_time(self, ticks, live: bool) -> None:
+        """完整观测停在计划章节 A 面：计时倒退说明开始了新的一段会话，把上一段最后看到的计时存起来
+        （这一截已经完成时不再累加，例如通关后继续时重新进入）。"""
+        state = self.metrics.state
+        last = int(state.plan_session_ticks or 0)
+        if ticks is not None:
+            ticks = int(ticks)
+            if ticks < last:
+                banked = 0 if state.piece_done else int(state.plan_banked_ticks or 0) + last
+                self.metrics.update(plan_banked_ticks=banked, plan_session_ticks=ticks)
+                print(f"[run] 计划章节开始新的一段会话：此前累计 {fmt_ticks(banked)}", flush=True)
+            elif ticks > last:
+                self.metrics.update(plan_session_ticks=ticks)
+        self._plan_progress_ok = live
+
+    def _plan_time_progress(self, sid, ticks) -> dict:
+        """进度事件：上一次完整观测确认还在计划章节 A 面的会话里时，跟上它的章节计时（离开关卡前最后几帧也算进去）。
+        进度事件不带面别：sid 变了或计时倒退说明这一步里离开了这段会话，之后等完整观测再判断。"""
+        if not self._plan_progress_ok or ticks is None:
+            return {}
+        pieces = [p for p in (self.navigation.current, self.navigation.target) if p is not None]
+        if sid not in {CHAPTER_SIDS.get(p.chapter) for p in pieces} or int(ticks) < int(self.metrics.state.plan_session_ticks or 0):
+            self._plan_progress_ok = False
+            return {}
+        return {'plan_session_ticks': int(ticks)}
+
+    def _note_map(self, obs) -> None:
+        """按实际观测（关卡或结算画面）认出正在玩的地图：不是计划章节 A 面的就是计划外地图。
+        开关打开过就一直区分（关掉后也按实际地图结束绕行）；从没打开过时与原来相同，不做任何记录。"""
+        if detour_enabled(self.cfg):
+            self._detour_latched = True
+        identity = map_identity(obs) if isinstance(obs, dict) else None
+        if identity is None:
+            self._plan_progress_ok = False
+            return
+        sid, side, completed = identity
+        current = self._detour
+        if self._plan_map(sid, side):
+            if self._classifying():
+                ticks = ((obs.get('level') or {}).get('chapterTimeTicks') if obs.get('scene') == 'Level'
+                         else (obs.get('completion') or {}).get('chapterTimeTicks'))
+                self._note_plan_time(ticks, live=obs.get('scene') == 'Level' and not completed)
+            if current is not None:
+                self._detour = None
+                self._detour_ending = self._detour_agent = False
+                self.metrics.update(detour=None)
+                print(f"[run] 回到计划章节 {chapter_name(sid)}", flush=True)
+                self._add_detour_note(f'已回到计划章节{chapter_name(sid)}：继续本次任务，计划章节的计时接着此前累计；'
+                                      '计划章节通关后本次任务结束。')
+            return
+        self._plan_progress_ok = False
+        if current is not None and (current['sid'], current['side']) == (sid, side) and (completed or not current['completed']):
+            return                              # 同一次进入
+        if not self._classifying():
+            return
+        if self._pending_complete:
+            # agent 模式：计划章节已通关、还没确认就一次走进了计划外地图。先按计划确认那次通关，不把它算成绕行。
+            # 这一步的进度事件已把章节与章节计时换成了新地图的：成绩按计划章节与它最后看到的计时记
+            self._pending_complete = False
+            plan_sid = CHAPTER_SIDS.get(self.piece.chapter) if self.piece is not None else None
+            self.metrics.update(chapter=plan_sid or self.metrics.state.chapter,
+                                chapter_time_ticks=int(self.metrics.state.plan_session_ticks or 0))
+            self._chapter_complete()
+            self._persist_completion_pending()
+            if self.done:
+                return
+        self._detour = {'sid': sid, 'side': side, 'completed': completed}
+        self._detour_agent = False
+        # 第一次看到就已通关（续跑停在计划外地图的片尾或结算）：照常走完收尾，不补记成绩
+        self._detour_ending = completed and self.cfg.cutscene_mode != 'agent'
+        self.metrics.update(detour={'chapter': sid, 'side': side})
+        print(f"[run] 进入计划外地图 {map_label(sid, side)}", flush=True)
+        self._add_detour_note(f'已进入计划外地图{map_label(sid, side)}：这里的通关不完成计划、不计入分段成绩与总计时；'
+                              '计划章节仍是本次任务。')
+
+    def _detour_complete(self) -> None:
+        """计划外地图通关：另记一条绕行成绩（metrics.detours），不动分段成绩、总计时、piece_done 与章节队列，
+        不结束本次试玩。auto 剧情模式在这次动作里照常跳过片尾、确认结算（_finish_detour）。"""
+        detour = self._detour
+        if not detour['completed']:
+            detour['completed'] = True
+            record = self.metrics.add_detour(detour['sid'], detour['side'], self.metrics.state.chapter_time_ticks)
+            label = map_label(detour['sid'], detour['side'])
+            print(f"[run] 计划外地图 {label} 通关：章节计时 {fmt_ticks(record['ticks'])}（不计入分段成绩与总计时）", flush=True)
+            self._add_detour_note(f'计划外地图{label}已通关（章节计时 {fmt_ticks(record["ticks"])}）：不计入本次计划、分段成绩与总计时，'
+                                  '本次任务没有结束。' + ('结算与返回选章由你用 act 操作，主控不代按。'
+                                                 if self.cfg.cutscene_mode == 'agent' else ''))
+        if self.cfg.cutscene_mode != 'agent' and not self._detour_agent:
+            self._detour_ending = True
+
+    def _finish_detour(self) -> tuple[dict, str | None, list[str]]:
+        """（调用方持有连接锁）auto 剧情模式下计划外地图刚通关：与最终章相同，跳过片尾剧情、确认结算，回到选章地图后
+        交给智能体；不结束本次运行、不选章节。走不完时交给智能体（开放确认、返回、暂停等按键）。"""
+        self._detour_ending = False
+        problem = None
+        try:
+            self._run_ending(self.client.call("observe", image=False, entities=False, tiles=False)["obs"], final=False)
+        except RuntimeError as exc:
+            problem = str(exc)
+        reply = self.client.call("observe", image=True, scope="room", fields=True)
+        obs, image = enrich_obs(reply["obs"]), reply.get("image")
+        self._note_map(obs)
+        if self.goals.immediate:
+            return obs, image, []
+        if self._at_chapter_menu(obs):
+            return obs, image, ['计划外地图的片尾与结算已按 auto 剧情模式由主控跳过、确认，已回到选章地图；'
+                                '本次计划尚未完成，接下来选哪张地图由你用 act 操作，主控不代选。']
+        self._detour_agent = True
+        print(f"[run] 计划外地图的片尾主控没能走完（{problem}），交给智能体处理", flush=True)
+        return obs, image, [f"计划外地图已通关；片尾或结算主控没能自动走完（{problem or '没有回到选章地图'}）。"
+                            "请观察画面后用 act 自行处理：C 确认、B 返回、P 打开暂停菜单（菜单里可选跳过剧情）、方向键选择，"
+                            "纯帧数等待动画；回到选章地图后自行选择下一张地图，主控不再代按。"]
+
     def finish_at_results(self) -> None:
         """最终章走完片尾，展示并确认结算，停在选章地图，不进入下一章。"""
         if not self.done or self.done_reason != "章节完成" or self.chapter_queue:
@@ -1968,25 +2309,34 @@ class GameSession:
                 return
             self._run_ending(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
 
-    def _run_ending(self, obs: dict) -> None:
+    def _run_ending(self, obs: dict, *, final: bool = True) -> None:
         """（调用方持有连接锁）最终章通关后走完片尾：剧情能跳过就用暂停菜单跳过，对白和等确认的界面按确认，
-        展示并确认结算，停在选章地图。走不完抛 RuntimeError。"""
+        展示并确认结算，停在选章地图。走不完抛 RuntimeError。
+        final=False：计划外地图通关后的同一套 auto 收尾（_finish_detour）：不记 end_scene，回到选章地图就交回，
+        不在地图上停留。"""
         started = time.monotonic()
         results_shown = False
         skip_tries = menu_closes = 0
         last_sig, unchanged = None, 0        # 片尾画面连续没有变化的次数（每次 30 帧）
+        what = "最终章" if final else "计划外地图"
 
         def log_step(inputs, result):
-            self._log_frames(result, expand_inputs(inputs, 10000, LETTERS), "(最终章结算)", auto=True)
+            self._log_frames(result, expand_inputs(inputs, 10000, LETTERS), f"({what}结算)", auto=True)
             self.metrics.add(frames_auto=result["consumed"])
 
         for _ in range(600):
-            self.end_scene = obs.get('scene')
+            scene = obs.get('scene')
+            if final:
+                self.end_scene = scene
             if self.goals.immediate:
                 return
-            if self.end_scene == 'Overworld':
+            if scene == 'Overworld':
                 menu=obs.get('menu') or {}
                 if menu.get('current') == 'OuiChapterSelect' and not menu.get('next'):
+                    if not final:
+                        self.metrics.add(auto_game_s=time.monotonic() - started)
+                        print('[run] 计划外地图的结算已确认，停在选章地图交给智能体', flush=True)
+                        return
                     self._before_advance()
                     reply=self.client.call('step',inputs=['60'],stop_on=[],speed=1,
                                            image=False,entities=False,tiles=False)
@@ -2001,9 +2351,9 @@ class GameSession:
                 # 先展示结算，再确认；确认只在AreaComplete内发送，地图中绝不按确认。
                 inputs=['120'] if not results_shown else ['1,C','29']
                 results_shown=True
-            elif self.end_scene != 'Overworld':
-                if self.end_scene not in {'Level','LevelExit','OverworldLoader'}:
-                    raise RuntimeError(f"最终章结算出现意外场景：{self.end_scene}")
+            elif scene != 'Overworld':
+                if scene not in {'Level','LevelExit','OverworldLoader'}:
+                    raise RuntimeError(f"{what}结算出现意外场景：{scene}")
                 level=obs.get('level') or {}
                 if (level.get('paused') or obs.get('pauseMenu')) and menu_closes < 3:
                     menu_closes += 1                 # 跳过剧情留下的暂停菜单：关掉后接着推进
@@ -2033,7 +2383,8 @@ class GameSession:
                                      image=False, entities=False, tiles=False)
             log_step(inputs, reply["result"])
             obs = reply["obs"]
-        raise RuntimeError("最终章节片尾尚未返回选章地图，已停止自动推进")
+        raise RuntimeError("最终章节片尾尚未返回选章地图，已停止自动推进" if final
+                           else "计划外地图的片尾尚未返回选章地图，已停止自动推进")
 
     # ---------------------------------------------------------------- 按段通关：一截的终点与换到下一截
 
@@ -2047,6 +2398,9 @@ class GameSession:
     def _stop_rooms(self) -> dict:
         """推进时让桥接在进入终点检查点的房间那一帧停下（桥接 1.0.6 起的 stop_rooms；旧桥接忽略，靠进度事件停下）。"""
         room = self._end_room()
+        # 在计划外地图里也照常发：桥接只按房间名停下，同名房间在计划外地图里只是提前停一步（_note_room 按完整观测
+        # 判断不算终点，进度事件在离开计划会话后不再判断，见 _on_progress）；这样一次动作里从计划外地图回到计划章节、
+        # 经过终点房间时不会错过
         return {"stop_rooms": [room]} if room and not self.chapter_finished and not self.done else {}
 
     def _note_obs_room(self, obs: dict) -> None:
@@ -2056,7 +2410,8 @@ class GameSession:
     def _note_room(self, sid, room, ticks=None) -> bool:
         """换房间时：更新当前所在的段；进入这一截终点检查点的房间时完成这一截（返回 True）。"""
         piece = self.piece
-        if piece is None or room is None or self.done or self.chapter_finished or sid != CHAPTER_SIDS.get(piece.chapter):
+        if (piece is None or room is None or self.done or self.chapter_finished or sid != CHAPTER_SIDS.get(piece.chapter)
+                or self._in_detour()):     # 计划外地图（包括计划章节的 B/C 面）的房间不推进计划的段
             return False
         points = self._table.get(piece.chapter) or []
         stop = piece.end if piece.end is not None else len(points)
@@ -2083,8 +2438,9 @@ class GameSession:
     def _piece_complete(self) -> None:
         """这一截在终点检查点结束：记下分段成绩；还有下一截就等着换过去，否则本次运行完成。"""
         st = self.metrics.state
-        self.metrics.add_split(st.chapter, st.chapter_time_ticks, **self._split_range())
-        print(f"[run] {piece_label(self.piece, self._table)}完成：章节计时 {fmt_ticks(st.chapter_time_ticks)}", flush=True)
+        ticks = self._plan_ticks()
+        self.metrics.add_split(st.chapter, ticks, **self._split_range())
+        print(f"[run] {piece_label(self.piece, self._table)}完成：章节计时 {fmt_ticks(ticks)}", flush=True)
         if self.navigation.complete_current():
             self._save_chapter_plan()
         else:
@@ -2163,11 +2519,17 @@ class GameSession:
 
     def _confirm_next_entry(self, obs, *, require_departure=False):
         """All navigation paths publish metrics/persistence after the same commit."""
+        if self._classifying() and obs.get('scene') == 'Level' and ((obs.get('level') or {}).get('side') or 'A') != 'A':
+            return False     # 开了计划外地图时，计划章节的 B/C 面是计划外地图，不算进入下一截
         piece = self.navigation.confirm_entry(obs, self._table, require_departure=require_departure)
         if piece is None:
             return False
         level = obs['level']
         self.start_sid = level['sid']
+        if self._classifying() or self.metrics.state.plan_banked_ticks:
+            # 新的一截从这段会话开始累计计划章节的计时
+            self.metrics.update(plan_banked_ticks=0, plan_session_ticks=int(level.get('chapterTimeTicks') or 0))
+            self._plan_progress_ok = True
         self.metrics.update(chapter=level['sid'], room=level.get('room', ''), piece_done=False,
                             chapter_time_ticks=level.get('chapterTimeTicks', 0),
                             formal_thought="", formal_thought_wall=0.0)   # 新的一段：上一章最后的正式思考不留在 HUD 上
@@ -2215,8 +2577,12 @@ class GameSession:
         queue = [list(s) for s in self._rest_of_piece() + segments_of(self.chapter_queue, table)]
         current = self._current_segment()
         ids = {s: i for i, s in CHAPTER_SIDS.items()}
+        detour = self._detour
         return {"play_scope": self.cfg.play_scope, "visited_maps": getattr(self.cfg, 'visited_maps', None),
                 "completion_policy": getattr(self.cfg, 'completion_policy', 'stop'),
+                "allow_detour": detour_enabled(self.cfg),
+                "detour": None if detour is None else {'chapter': detour['sid'], 'side': detour['side'],
+                                                       'completed': detour['completed']},
                 "done": [i for i in (ids.get(sp.get("chapter")) for sp in (self.metrics.state.splits or [])) if i is not None],
                 "current": self.current_chapter_id(), "queue": chapters_of(self.chapter_queue),
                 "segments": {"done": done, "current": None if current is None or self.chapter_finished else list(current),
@@ -2270,7 +2636,8 @@ class GameSession:
         goal = self._piece_goal(self.piece)
         print(f"[run] 用户调整了要通关的范围：当前这一截 {piece_label(self.piece, table)}；之后 {table_label or '无'}", flush=True)
         if self.chapter_queue:
-            return f"用户调整了本次要通关的范围。{goal}之后依次是：{table_label}，不要自行进入其他章节。"
+            return (f"用户调整了本次要通关的范围。{goal}之后依次是：{table_label}，不要自行进入其他章节"
+                    + ("（计划外地图仍可按“计划外地图”一节绕行）。" if detour_enabled(self.cfg) else "。"))
         if getattr(self.cfg, 'completion_policy', 'stop') == 'continue':
             return f'用户调整了本次要通关的范围。{goal}计划完成后仍可在当前许可地图继续探索，直到独立停止目标触发或用户停止。'
         return f"用户调整了本次要通关的范围。{goal}这是本次的最后一截，完成后本次运行结束。"
@@ -2324,8 +2691,9 @@ class GameSession:
         # 通关后继续（自由探索，或整章／顺序范围的计划已全部完成）：重新进入未通关的关卡就是新的一次游玩，
         # 当前计时重新计入总计时；再次通关时只按这次的成绩记一条。换到计划里下一截的途中（chapter_finished）
         # 由 _confirm_next_entry 负责清除，不在这里清。
-        continuing = (self.cfg.play_scope == 'visited'
-                      or getattr(self.cfg, 'completion_policy', 'stop') == 'continue') and not self.chapter_finished
+        continuing = ((self.cfg.play_scope == 'visited'
+                       or getattr(self.cfg, 'completion_policy', 'stop') == 'continue') and not self.chapter_finished
+                      and not self._in_detour())   # 进入计划外地图不是重新游玩计划章节
         if continuing and self.metrics.state.piece_done and obs.get('scene') == 'Level' and not level.get('completed'):
             self.metrics.update(piece_done=False)
         if self.sim_energy:

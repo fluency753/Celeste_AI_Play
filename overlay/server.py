@@ -328,6 +328,8 @@ def make_handler(pinned: Path | None):
                     raise ValueError('当前主控不支持实时章节重置策略')
                 if data.get('kind') == 'action_permissions' and control.snapshot().get('action_policy_supported') is not True:
                     raise ValueError('当前会话未加载新版操作策略，不能独立修改三项权限')
+                if data.get('kind') == 'detour' and not control.snapshot().get('detour_control'):
+                    raise ValueError('当前主控不支持实时修改计划外地图许可（需要单章或顺序范围的试玩与新版操作策略）')
                 if data.get('kind')=='cutscene_mode' and not control.snapshot().get('cutscene_control'):
                     raise ValueError('请断开并重新连接会话后再切换剧情模式')
                 if data.get('kind') == 'sim_update' and not control.snapshot().get('sim_control'):

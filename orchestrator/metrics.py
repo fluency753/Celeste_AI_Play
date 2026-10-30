@@ -94,8 +94,19 @@ class MetricsState:
     chapter_time_ticks: int = 0
     completed_ticks: int = 0          # 本次运行里已经通关的章节的计时之和（依次通关多章时，总计时 = 它 + 当前章节计时）
     splits: list | None = None        # 已完成各截的成绩：[{"chapter": sid, "ticks": n, "deaths": n}, ...]；按段通关时另有 from/to（起止检查点，to 为 null = 通关）
-    chapter_base: dict | None = None  # 进入当前章节那一刻的各项累计值（HUD 显示本章的值 = 累计值 − 它）；None = 还没换过章
+    chapter_base: dict | None = None  # 这一局开始时的各项累计值（HUD 显示本局的值 = 累计值 − 它）；None = 新运行，从 0 起算。
+                                      # 一局 = 这次运行的任务（指定的计划章节加智能体自己去的地图）：换图、换章、绕行都不重置，
+                                      # 中断后续跑沿用；续跑追加新计划（--resume … --chapters）才重新取（take_run_base）
     piece_done: bool | None = None    # 当前这一截已完成、成绩已计入 completed_ticks（换到下一截之前，HUD 不再把当前计时加进总计时）
+    # 计划外地图（--allow-detour，见 orchestrator/detour.py）
+    detour: dict | None = None        # 正在玩的计划外地图 {"chapter": sid, "side": "A"/"B"/"C"}；None = 在计划内
+    detours: list | None = None       # 计划外地图的通关记录 [{"chapter", "side", "ticks"}, ...]：与 splits 分开，不计入总计时
+    plan_banked_ticks: int = 0        # 当前这一截在计划章节里此前各段会话（返回地图后重进、游戏重启等）的章节计时之和
+    plan_session_ticks: int = 0       # 计划章节当前这段会话最近看到的章节计时（倒退说明换了新会话，上一段并进 plan_banked_ticks）
+    game_clock: dict | None = None    # 本局 HUD 主计时：游戏在关卡里真正执行的帧（计划与计划外地图都算，含关卡内的剧情与冻结帧；
+                                      # 地图、选章、选档等菜单与规划回放不算）。{"frames": 显示用（含执行中按进度估的帧）,
+                                      # "committed": 已按每次推进的结果核实的帧, "session_ticks": 同一刻的章节计时,
+                                      # "level": 这一刻是否停在关卡里, "wall": 墙钟}
     dashes: int = 0
     max_dashes: int = 0
     thought: str = ""
@@ -122,6 +133,18 @@ class MetricsState:
     thinking_since_wall: float = 0.0  # 当前这一段（思考，或运行容器工具）开始的时刻
     chapter_time_wall: float = 0.0    # chapter_time_ticks 最近一次更新的时刻
     written_wall: float = 0.0         # 本文件最近一次写出的时刻
+
+
+def legacy_game_clock(previous: dict, now: float) -> dict:
+    """旧版主控写的统计没有 game_clock：续跑同一局时从旧 HUD 当时显示的主计时接着算（与 overlay/modhud.level_timer
+    的旧口径相同：换过章时只显示本章计时，否则是已通关各截加当前这一截），不让主计时在录像里跳回 0。"""
+    splits = previous.get("splits") or []
+    done = (bool(previous["piece_done"]) if previous.get("piece_done") is not None
+            else any(s.get("chapter") == previous.get("chapter") for s in splits))
+    ticks = ((0 if previous.get("chapter_base") else int(previous.get("completed_ticks") or 0))
+             + (0 if done else int(previous.get("chapter_time_ticks") or 0)))
+    frames = int(round(ticks * 60 / 10_000_000))
+    return {"frames": frames, "committed": frames, "session_ticks": 0, "level": False, "wall": now}
 
 
 class Metrics:
@@ -379,13 +402,14 @@ class Metrics:
     RESTORED = ("thinking_s", "tool_s", "play_game_s", "auto_game_s", "decisions", "frames_played", "frames_auto",
                 "stiff_frames", "stiff_s",
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
-                "completed_ticks", "splits", "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
+                "completed_ticks", "splits", "detours", "plan_banked_ticks", "plan_session_ticks", "game_clock",
+                "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
                 "net_wait_s", "net_waits",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "formal_thought",
                 "formal_thought_wall", "context_tokens",
                 "effort_pending", "effort_changes", "effort_log", "pause_denials", "plan_rounds_used", "replays", "replay_s", "replay_act_s",
                 "sim_calls", "sim_rollouts", "tool_calls", "context_window", "chapter_base")
-    # 进入新的一章时 HUD 清零的累计值（知识库、上下文与压缩次数不清零；章节计时本来就从 0 开始）
+    # 新的一局开始时 HUD 清零的累计值（知识库、上下文与压缩次数不清零）
     CHAPTER_COUNTERS = ("thinking_s", "tool_s", "deaths", "decisions", "tool_calls", "sim_calls", "sim_rollouts",
                         "retries", "frames_played", "frames_auto", "play_game_s", "auto_game_s", "narrates",
                         "output_tokens", "thinking_tokens", "replays", "replay_s", "elapsed_s")
@@ -402,6 +426,8 @@ class Metrics:
             self.playing = True
             now = time.time()
             self.state.started_wall = float(previous.get("started_wall") or now)
+            if "game_clock" not in previous:
+                self.state.game_clock = legacy_game_clock(previous, now)
             self.state.resumed_from = resumed_from
             self.state.status = "starting"
             self.state.phase_since_wall = self.state.thinking_since_wall = now
@@ -417,15 +443,27 @@ class Metrics:
                 self.state.phase_since_wall = now
             if "chapter_time_ticks" in changes and changes["chapter_time_ticks"] != self.state.chapter_time_ticks:
                 self.state.chapter_time_wall = now
-            new_chapter = changes.get("chapter")
-            if new_chapter and self.state.chapter and new_chapter != self.state.chapter:
-                # 进入新的一章：记下这一刻的累计值，HUD 从这里起显示本章的值（统计与总结仍是整次运行的累计）
-                self.state.elapsed_s = self.elapsed()
-                self.state.chapter_base = {"chapter": new_chapter,
-                                           **{k: getattr(self.state, k) for k in self.CHAPTER_COUNTERS}}
             for key, value in changes.items():
                 setattr(self.state, key, value)
             self._write_locked()
+
+    def take_run_base(self) -> None:
+        """续跑追加新计划（--resume … --chapters／--segments）开始新的一局：记下这一刻的累计值作为本局统计的基准，
+        关卡内游戏时长也从 0 重新算。中途中断后的续跑接着原来的一局，沿用原基准与时长。"""
+        with self._lock:
+            self.state.elapsed_s = self.elapsed()
+            self.state.chapter_base = {"chapter": self.state.chapter,
+                                       **{k: getattr(self.state, k) for k in self.CHAPTER_COUNTERS}}
+            self.state.game_clock = None
+            self._write_locked()
+
+    def add_detour(self, chapter: str, side: str, ticks: int) -> dict:
+        """记下一次计划外地图的通关：只进 detours，不动 splits、completed_ticks 与 piece_done。"""
+        with self._lock:
+            record = {"chapter": chapter, "side": side, "ticks": int(ticks)}
+            self.state.detours = [*(self.state.detours or []), record]
+            self._write_locked()
+            return record
 
     def mark_thinking(self) -> None:
         """一段思考开始（工具结果刚送回，或刚发出一条消息）。"""

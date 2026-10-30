@@ -378,7 +378,7 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     pending_text = f"→ {effort_names.get(pending, pending)}" if pending and pending != effort else ""
     effort_color = colors.get("effort_high", "#F5B841") if level >= 3 else colors.get("effort", "#7FA6F5")
 
-    # 进入新的一章后各项从 0 起算（知识库、上下文与压缩次数不清零）：显示 累计值 − 进入本章时的值
+    # 各项统计按一局算（知识库、上下文与压缩次数不清零）：显示 累计值 − 这一局开始时的值；换图、换章、绕行都不清零
     base = m.get("chapter_base") or {}
 
     def since(key):
@@ -452,8 +452,26 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
         effort=effort_names.get(effort, effort) if level >= 0 else None, effort_level=level,
         effort_pending=pending_text, effort_color=effort_color, stats=tuple(stats), tool_call=call,
         history=tuple(entries), meta=meta,
-        timer_base=0 if base else int(m.get("completed_ticks") or 0), timer_extra=int(m.get("chapter_time_ticks") or 0),
-        timer_live=not chapter_done)
+        **level_timer(m, chapter_done, ended))
+
+
+TICKS_PER_FRAME = 10_000_000 / 60
+
+
+def level_timer(m: dict, chapter_done: bool, ended: bool) -> dict:
+    """主计时：本局在关卡里真正执行的帧（game_clock，计划与计划外地图都算，菜单与规划回放不算），换图不清零。
+    桥接画计时：live 时在关卡里加上当前章节计时，所以底数先减去取样那一刻的章节计时，两次取样之间随游戏逐帧走，
+    不在关卡里时加 timer_extra（就是那一刻的章节计时），合起来正好是取样值。旧主控没有 game_clock 时按原来的章节计时显示。"""
+    clock = m.get("game_clock")
+    if not isinstance(clock, dict):
+        base = m.get("chapter_base")
+        return {"timer_base": 0 if base else int(m.get("completed_ticks") or 0),
+                "timer_extra": int(m.get("chapter_time_ticks") or 0), "timer_live": not chapter_done}
+    ticks = int(round((clock.get("frames") or 0) * TICKS_PER_FRAME))
+    if ended:
+        return {"timer_base": ticks, "timer_extra": 0, "timer_live": False}
+    session = int(clock.get("session_ticks") or 0)
+    return {"timer_base": ticks - session, "timer_extra": session, "timer_live": True}
 
 
 # ---------------------------------------------------------------- 画卡片

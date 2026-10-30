@@ -393,6 +393,7 @@
           <label class="switch"><span class="text"><b>允许重启章节</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowRestartChapter"></label>
           <label class="switch"><span class="text"><b>允许返回地图</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowReturnToMap"></label>
           <label class="switch"><span class="text"><b>允许保存退出</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowSaveQuit"></label>
+          <label class="switch"><span class="text"><b>允许去计划外的已解锁地图</b><span>agent 可自行返回地图，去其他已解锁的官方章节、面与检查点（例如收集水晶之心）再回来；计划不变，开启时一并允许返回地图</span></span><input type="checkbox" id="allowDetour"></label>
         </div>
       </fieldset>
 
@@ -532,6 +533,7 @@
         <select id="liveRestartChapter" aria-label="重启章节权限"><option value="deny">重启章节：禁止</option><option value="allow">重启章节：允许</option></select>
         <select id="liveReturnToMap" aria-label="返回地图权限"><option value="deny">返回地图：禁止</option><option value="allow">返回地图：允许</option></select>
         <select id="liveSaveQuit" aria-label="保存退出权限"><option value="deny">保存退出：禁止</option><option value="allow">保存退出：允许</option></select>
+        <select id="liveDetour" aria-label="计划外地图许可" title="允许 agent 自行返回地图去其他已解锁的官方章节、面与检查点，计划不变；开启时一并允许返回地图"><option value="deny">计划外地图：禁止</option><option value="allow">计划外地图：允许</option></select>
         <button class="btn" type="button" id="fastToggle" hidden>Fast：关</button>
       </div>
       <div class="controls" style="margin-top:10px">
@@ -1244,6 +1246,7 @@ function formOptions() {
     study: $("study").checked, limit_planning: $("limitPlanning").checked, quota_wait: $("quotaWait").checked,
     keep_obs_open: $("keepObs").checked, start_paused: $("startPaused").checked,
     action_permissions: {restart_chapter: $("allowRestartChapter").checked, return_to_map: $("allowReturnToMap").checked, save_quit: $("allowSaveQuit").checked},
+    allow_detour: $("allowDetour").checked,
     cutscene_mode: $("cutsceneAgent").checked ? "agent" : "auto", chapters: ui.chapters, segments: selectedSegments(), save,
     max_minutes: Number($("maxMinutes").value), autocompact: $("autocompact").value.trim(), map: ui.map,
     runtime: $("runMode").value, study_minutes: withDefault("studyMinutes", "study_minutes"),
@@ -1448,9 +1451,11 @@ function renderRun(m) {
   const chapter = (cfg.chapters || {})[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
   $("runWhere").replaceChildren(document.createTextNode(chapter || ""), Object.assign(document.createElement("small"), { textContent: m.room || "" }));
   const done = m.piece_done != null ? !!m.piece_done : (m.splits || []).some(s => s.chapter === m.chapter);
-  const base = m.chapter_base || {};       // 进入新的一章后从 0 起算（与 HUD 相同）
+  const base = m.chapter_base || {};       // 按一局算，换图、换章不清零（与 HUD 相同）
   const since = (key) => Math.max(0, (m[key] || 0) - (base[key] || 0));
-  const ticks = m.chapter_base ? (m.chapter_time_ticks || 0) : (m.completed_ticks || 0) + (done ? 0 : (m.chapter_time_ticks || 0));
+  // 本局在关卡里真正执行的帧（与 HUD 相同）；旧主控没有 game_clock 时按原来的章节计时
+  const ticks = m.game_clock && typeof m.game_clock === "object" ? Math.round((m.game_clock.frames || 0) * 1e7 / 60)
+    : m.chapter_base ? (m.chapter_time_ticks || 0) : (m.completed_ticks || 0) + (done ? 0 : (m.chapter_time_ticks || 0));
   const t = ticksText(ticks);
   $("runClock").replaceChildren(document.createTextNode(t.slice(0, -4)), Object.assign(document.createElement("small"), { textContent: t.slice(-4) }));
   $("runMode").textContent = [m.play_mode, m.hud_mod ? "游戏内 HUD" : "网页 HUD"].filter(Boolean).join(" · ");
@@ -1483,8 +1488,12 @@ function renderControls() {
   for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {
     const input = $('live'+id);
     if (document.activeElement !== input) input.value = (c.action_permissions?.[key] ?? c.allow_chapter_reset) ? 'allow' : 'deny';
-    input.disabled = !connected || !c.chapter_reset_control || c.action_policy_supported !== true;
+    // 计划外地图开着时返回地图必须允许：先关计划外地图才能单独禁止它
+    input.disabled = !connected || !c.chapter_reset_control || c.action_policy_supported !== true || (key === 'return_to_map' && c.allow_detour === true);
   }
+  const detourInput = $("liveDetour");     // 计划外地图：与三项权限同样在动作之间生效；开启需要桥接的地图集合门禁
+  if (document.activeElement !== detourInput) detourInput.value = c.allow_detour ? "allow" : "deny";
+  detourInput.disabled = !connected || !c.detour_control || (!c.allow_detour && c.detour_supported === false);
   $("fastToggle").hidden = !c.fast_control;
   $("fastToggle").textContent = `Fast：${c.fast ? "开" : "关"}${c.connected && c.fast_pending ? "（待换轮）" : ""}`;
   $("fastToggle").title = c.connected && c.fast_pending ? "等待当前模型轮次结束后切换，当前动作不会被中断" : "设置下次模型请求是否使用 Fast";
@@ -1514,7 +1523,8 @@ function renderPlan(c) {
   const draft = ui.planDraft.queue, has = (list, s) => list.some(x => x[0] === s[0] && x[1] === s[1]);
   const cur = seg.current, curKey = cur ? key(cur) : -1;
   const segText = (s) => `${chapterLabel(s[0])}${segInfo(s[0]).n > 1 ? " " + segInfo(s[0]).label(s[1]) : ""}`;
-  $("planSummary").textContent = cur ? `正在玩：${segText(cur)}；之后 ${seg.queue.length} 段` : (plan.switching ? "正在换过去" : "");
+  $("planSummary").textContent = (cur ? `正在玩：${segText(cur)}；之后 ${seg.queue.length} 段` : (plan.switching ? "正在换过去" : ""))
+    + (plan.detour ? `；正在计划外地图 ${plan.detour.chapter.replace("Celeste/", "")} ${plan.detour.side}面${plan.detour.completed ? "（已通关）" : ""}` : "");
   const rows = [];
   for (const ch of ((ui.options && ui.options.chapters) || [])) {
     const info = segInfo(ch.id);
@@ -2101,6 +2111,9 @@ $("liveCutscene").addEventListener("change", (e) => sendControl("cutscene_mode",
 for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {
   $('live'+id).addEventListener('change', e => sendControl('action_permissions', JSON.stringify({[key]:e.target.value==='allow'})));
 }
+$("liveDetour").addEventListener("change", (e) => sendControl("detour", e.target.value === "allow" ? "on" : "off"));
+$("allowDetour").addEventListener("change", (e) => { if (e.target.checked) $("allowReturnToMap").checked = true; });
+$("allowReturnToMap").addEventListener("change", (e) => { if (!e.target.checked) $("allowDetour").checked = false; });
 $("fastToggle").addEventListener("click", () => sendControl("fast", ui.control && ui.control.fast ? "off" : "on"));
 $("stopRun").addEventListener("click", () => {
   if (confirmTwice("stopRun", "再点一次确认：结束运行、保存录像并交还游戏控制")) sendControl("stop");

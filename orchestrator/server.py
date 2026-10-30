@@ -278,6 +278,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                                          if session.cfg.pause_limit else "")
     if session.cfg.playback and session.cfg.sim:
         act_description += PLAYBACK_NOTE
+    from .detour import act_note
+    act_description += act_note(session.cfg)      # 开了计划外地图才有；关时与原来相同
 
     @server.tool(name="act", description=fill(act_description, session.cfg), structured_output=False)
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
@@ -348,7 +350,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                     else '主控已记下阻塞原因，等待用户处理。请结束本轮，不再调用工具。')
             return [json.dumps(result, ensure_ascii=False) + '\n' + tail]
 
-    @optional_tool(tool_exit_level, name='exit_level', description='按用户要求离开当前关卡。默认 finish_run=false：需返回地图权限，仅返回地图继续原任务，不算通关，不停止录像、不清除后续章节；返回后先 observe，只进入当前计划或许可允许的地图，换到计划外的章节须由用户在控制台调整范围。只有用户明确要求结束整次试玩时才设 finish_run=true：按允许的返回地图或保存退出操作收尾整次任务。不得从“返回地图换章”推断为结束任务；权限不足时说明原因，不以保存退出绕过。', structured_output=False)
+    from .detour import map_rule
+    @optional_tool(tool_exit_level, name='exit_level', description='按用户要求离开当前关卡。默认 finish_run=false：需返回地图权限，仅返回地图继续原任务，不算通关，不停止录像、不清除后续章节；返回后先 observe，只进入当前计划或许可允许的地图，' + map_rule(session.cfg) + '。只有用户明确要求结束整次试玩时才设 finish_run=true：按允许的返回地图或保存退出操作收尾整次任务。不得从“返回地图换章”推断为结束任务；权限不足时说明原因，不以保存退出绕过。', structured_output=False)
     async def exit_level(reason: str, finish_run: bool = False) -> list:
         ticket = reload_ticket()
         async with call_lock:

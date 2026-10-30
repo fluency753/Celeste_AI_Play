@@ -68,6 +68,9 @@ def successor_run(directory):
     from .control import RunControl
     preference = RunControl(directory).action_permissions_preference() if (directory / 'control.sqlite3').exists() else None
     state['action_permissions'] = permissions_from_state(state, preference).snapshot()
+    detour = RunControl(directory).detour_preference() if (directory / 'control.sqlite3').exists() else None
+    if detour is not None:
+        state['allow_detour'] = detour
     stamp = time.strftime("%Y%m%d-%H%M%S")
     target, number = directory.parent / stamp, 1
     while target.exists():

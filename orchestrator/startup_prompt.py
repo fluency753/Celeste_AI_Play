@@ -29,6 +29,9 @@ def current_settings(cfg):
     }
     if cfg.play_scope == 'visited':
         settings['task']['allowed_maps'] = getattr(cfg, 'visited_maps', None)
+    from .detour import enabled as detour_enabled
+    if detour_enabled(cfg):
+        settings['task']['detour'] = 'official_unlocked'   # 允许绕行计划外的已解锁官方地图，计划不变
     if cfg.sim_assist:
         from .sim_assist import AssistRules
         settings['prediction']['assist_budget'] = asdict(AssistRules.of(cfg))
