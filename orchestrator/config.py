@@ -195,7 +195,7 @@ class RunConfig:
     live: bool = False               # 直播模式（--live）：网页 HUD、解说计时 10 秒、可按用户要求退出关卡；narrate 在所有模式都有
     hud_mod: bool = False            # HUD 以 MOD 形式画在游戏画面里（overlay/modhud.py；不开直播时默认开）
     collision_image: str | None = None  # 工具结果里附碰撞图：always 每次 / room 只在进新房间与 observe 时 / off 不附；
-                                        # None = 按执行器默认（Codex 每次，其余只在进房与 observe 时）。工作区里每次照样写图
+                                        # None = 默认 room（只在进房与 observe 时）。工作区里每次照样写图
     formal_thought: bool = False     # 仅正式思考（--formal-thought，默认关）：冻结期间 narrate 写临时思考，只进控制台；
                                      # act 的 thought 是正式思考，概括整个冻结期间的思考，游戏内 HUD 只显示当前这一句
     save_context: bool = False       # 节省上下文（--save-context；新运行默认开，续跑沿用原运行，没记过的旧运行按关）：

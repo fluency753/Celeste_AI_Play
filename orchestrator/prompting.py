@@ -233,7 +233,7 @@ def fill(text: str, cfg) -> str:
         "{formal_thought_act}": formal_thought_act(cfg),
         "{save_context_rule}": save_context_act(cfg),
         "{save_context_print}": save_context_print(cfg),
-        # 碰撞图什么时候附在工具结果里（--collision-image；默认 Codex 每次，其余只在进新房间与 observe 时）
+        # 碰撞图什么时候附在工具结果里（--collision-image；默认只在进新房间与 observe 时）
         "{act_collision_image}": {
             "always": "和完整碰撞图（开启图像时）",
             "room": "；进入新房间时另附截图与完整碰撞图（开启图像时），同一房间里的碰撞图只写进工作区"

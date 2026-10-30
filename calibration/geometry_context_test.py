@@ -264,7 +264,7 @@ class GeometryContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, patch('orchestrator.config.REPO_ROOT', Path(folder)):
             root = Path(folder)
             cfg = RunConfig(agent='geometry', save='test', model='stub', engine='codex', runtime='host',
-                            sim=False, chapter=3, cutscene_mode='agent')
+                            sim=False, chapter=3, cutscene_mode='agent', collision_image='always')
             cfg.min_frames_per_act = 1
             metrics = Metrics(root/'metrics.json', 'geometry', 'stub', 'high', 60)
             session = GameSession(cfg, root, metrics)

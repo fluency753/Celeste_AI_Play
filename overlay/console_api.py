@@ -225,7 +225,7 @@ PLACEHOLDERS = {
     "{narrate_target}": "探索提示词里 narrate 的用途：没开“仅正式思考”时为“告诉观众”，开了为“写下临时思考”",
     "{hud_thought_shown}": "速通 hud_zh.md 里 HUD 显示哪句思考：没开“仅正式思考”时为最新写下的一句，开了为最近一次 act 的正式思考",
     "{narrate_viewers}": "速通 hud_zh.md 里 narrate 给谁看的一句：没开“仅正式思考”时为原文，开了改为临时思考的说明",
-    "{act_collision_image}": "act 说明里碰撞图什么时候附在结果里（--collision-image：always / room / off；默认 Codex 每次，其余只在进新房间与 observe 时）",
+    "{act_collision_image}": "act 说明里碰撞图什么时候附在结果里（--collision-image：always / room / off；默认 room，只在进新房间与 observe 时）",
     "{observe_collision_image}": "observe 说明里是否附碰撞图（--collision-image off 时只写进工作区）",
     "{collision_image_when}": "速通 interface_zh.md 里碰撞图什么时候返回（随 --collision-image）",
     "{formal_thought_act}": "开了“仅正式思考”时 act 工具说明里 thought 的补充；没开时为空",

@@ -32,12 +32,12 @@ COLLISION_IMAGE_MODES = ("always", "room", "off")
 
 
 def collision_image_mode(cfg) -> str:
-    """工具结果里什么时候附碰撞图（--collision-image）：没指定时 Codex 执行器每次都附（协作者为 GPT 设的），
-    其余执行器只在进新房间与 observe 时附（同房间的图仍写进工作区，需要时自己读）。"""
+    """工具结果里什么时候附碰撞图（--collision-image）：默认只在进新房间与 observe 时附，
+    同房间的图仍写进工作区，需要时自己读。"""
     mode = getattr(cfg, "collision_image", None)
     if mode in COLLISION_IMAGE_MODES:
         return mode
-    return "always" if getattr(cfg, "engine", "claude") == "codex" else "room"
+    return "room"
 
 
 def act_frame_min(cfg) -> int:

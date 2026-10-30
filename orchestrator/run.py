@@ -151,7 +151,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "见可调参数 stiff_unit_s、stiff_think_s、stiff_tool_s），不计入 act 的帧数上限")
     ap.add_argument("--collision-image", choices=("always", "room", "off"), default=None,
                     help="工具结果里附碰撞图：always 每次，room 只在进新房间与 observe 时，off 不附（工作区里每次照样写图）；"
-                         "不写时续跑沿用原运行，新运行按执行器默认（Codex 每次，其余 room）")
+                         "不写时续跑沿用原配置；未配置时统一默认 room")
     ap.add_argument("--formal-thought", action=argparse.BooleanOptionalAction, default=None,
                     help="仅正式思考（默认关；续跑沿用原运行）：冻结期间 narrate 写的临时思考只显示在控制台（Claude Code 执行器"
                          "汉字不超过 120 个，可调参数 thought_temp_max_hanzi）；act 的 thought 是正式思考，概括整个冻结期间的"

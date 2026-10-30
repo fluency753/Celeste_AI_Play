@@ -24,11 +24,18 @@ def collision_images(result):
 
 
 class ModeTests(unittest.TestCase):
-    def test_defaults_follow_the_executor(self):
-        self.assertEqual(collision_image_mode(RunConfig(agent='a', save='s', model='m')), 'room')
-        self.assertEqual(collision_image_mode(RunConfig(agent='a', save='s', model='m', engine='codex')), 'always')
-        self.assertEqual(collision_image_mode(RunConfig(agent='a', save='s', model='m', engine='codex',
-                                                        collision_image='off')), 'off')
+    def test_defaults_are_room_for_all_executors(self):
+        from orchestrator.startup_prompt import current_settings
+        for engine in ('claude', 'codex'):
+            for mode in ('explore', 'speedrun'):
+                cfg = config_for({'agent': 'a', 'engine': engine, 'mode': mode})
+                self.assertIsNone(cfg.collision_image)
+                self.assertEqual(collision_image_mode(cfg), 'room')
+                self.assertEqual(current_settings(cfg)['presentation']['collision_image'], 'room')
+                self.assertIn('同一房间里的碰撞图只写进工作区', fill(ACT_DESCRIPTION, cfg))
+                for value in ('always', 'room', 'off'):
+                    cfg.collision_image = value
+                    self.assertEqual(collision_image_mode(cfg), value)
 
     def test_texts_describe_the_chosen_mode(self):
         c = RunConfig(agent='a', save='s', model='m', mode='explore', knowledge_profile='explore', chapter=4)
@@ -64,10 +71,10 @@ class ModeTests(unittest.TestCase):
 
 @patch('orchestrator.server.workspace_capabilities', lambda cfg: WorkspaceCapabilities('host', True, True, None))
 class AttachmentTests(unittest.TestCase):
-    def run_calls(self, mode):
+    def run_calls(self, mode, engine='claude'):
         with tempfile.TemporaryDirectory() as folder, patch('orchestrator.config.REPO_ROOT', Path(folder)):
             root = Path(folder)
-            cfg = RunConfig(agent='img', save='test', model='stub', engine='claude', runtime='host', sim=False,
+            cfg = RunConfig(agent='img', save='test', model='stub', engine=engine, runtime='host', sim=False,
                             chapter=3, collision_image=mode)
             cfg.min_frames_per_act = 1
             session = GameSession(cfg, root, Metrics(root/'metrics.json', 'img', 'stub', 'high', 60))
@@ -94,10 +101,11 @@ class AttachmentTests(unittest.TestCase):
                 session.close(False)
 
     def test_each_mode(self):
-        self.assertEqual(self.run_calls('always'), [1, 1, 1])
-        self.assertEqual(self.run_calls('room'), [1, 0, 1])
-        self.assertEqual(self.run_calls('off'), [0, 0, 0])
-        self.assertEqual(self.run_calls(None), [1, 0, 1])          # Claude 执行器默认：只在进房与 observe 时
+        for engine in ('claude', 'codex'):
+            for mode, expected in (('always', [1, 1, 1]), ('room', [1, 0, 1]),
+                                   ('off', [0, 0, 0]), (None, [1, 0, 1])):
+                with self.subTest(engine=engine, mode=mode):
+                    self.assertEqual(self.run_calls(mode, engine), expected)
 
 
 if __name__ == '__main__':

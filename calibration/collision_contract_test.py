@@ -114,7 +114,7 @@ class CollisionContractTests(unittest.TestCase):
                 self.assertFalse(acted.is_error)
                 text = '\n'.join(b.text for b in acted.content if hasattr(b, 'text'))
                 self.assertIn('当前帧的统一碰撞数据', text)
-                self.assertEqual(sum(getattr(b, 'type', '') == 'image' for b in acted.content), 1)
+                self.assertEqual(sum(getattr(b, 'type', '') == 'image' for b in acted.content), 0)
                 after = json.loads(manifest.read_text(encoding='utf-8'))
                 self.assertEqual(after['collision']['frame'], 13)
                 self.assertEqual(after['collision']['objects'][1]['geometry']['x'], 8)
@@ -133,7 +133,7 @@ class CollisionContractTests(unittest.TestCase):
                 session.client.obs['level'].update(inCutscene=True, dialogOpen=True, dialogWaiting=True, dialogChoices=[])
                 advanced = asyncio.run(server.call_tool('cutscene', {'action': 'advance'}))
                 self.assertFalse(advanced.is_error)
-                self.assertEqual(sum(getattr(b, 'type', '') == 'image' for b in advanced.content), 1)
+                self.assertEqual(sum(getattr(b, 'type', '') == 'image' for b in advanced.content), 0)
                 current = json.loads(manifest.read_text(encoding='utf-8'))
                 self.assertEqual(current['collision']['frame'], session.client.obs['frame'])
                 del session.client.obs['collision']  # Older bridge: don't keep the last good map as current.
