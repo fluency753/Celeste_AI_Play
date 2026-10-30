@@ -210,6 +210,64 @@ class EndingTests(unittest.TestCase):
         self.assertEqual(s.end_scene, 'Overworld')
         self.assertIn(['1,P'], client.steps)
 
+    def test_playable_epilogue_after_final_ending_is_handed_over_at_once(self):
+        """首次通关 7A：登顶片尾（不能跳过）之后游戏自己进入终章，角色走进来后可以操作，要走到小屋。
+        这段是游玩：一旦可操作就交给智能体，不再空推等"画面约 20 秒没有变化"（7A 实测空推 1566 帧）。"""
+        class EpilogueClient(EndingClient):
+            def __init__(self):
+                super().__init__(skippable=False)
+                self.obs['level']['sid'] = 'Celeste/7-Summit'
+                self.obs['level']['room'] = 'g-03'
+                self.walked = 0
+
+            def call(self, cmd, **args):
+                if cmd != 'step':
+                    return super().call(cmd, **args)
+                inputs = args['inputs']
+                self.steps.append(inputs)
+                if any(',C' in x for x in inputs):
+                    raise AssertionError('可操作的终章里主控不能代按确认')
+                consumed = sum(int(x.split(',')[0]) for x in inputs)
+                o = self.obs
+                if o['level']['sid'] == 'Celeste/7-Summit' and len(self.steps) >= 4:
+                    # 登顶片尾放完：进终章，先走进场（不可操作）
+                    self.obs = {'scene': 'Level', 'frame': o['frame'], 'controllable': False, 'storyInput': None,
+                                'level': {'sid': 'Celeste/8-Epilogue', 'room': 'outside', 'inCutscene': False,
+                                          'skippingCutscene': False, 'completed': False, 'dialogOpen': False,
+                                          'dialogWaiting': False, 'paused': False, 'canPause': True, 'frozen': False,
+                                          'transitioning': False}}
+                elif o['level']['sid'] == 'Celeste/8-Epilogue':
+                    self.walked += consumed
+                    if self.walked >= 60:
+                        self.obs['controllable'] = True            # 走进场结束，角色可操作
+                self.obs['frame'] += consumed
+                return {'result': {'consumed': consumed, 'planned': consumed, 'stop': 'done', 'events': [],
+                                   'trajectory': []}, 'obs': copy.deepcopy(self.obs)}
+
+        client = EpilogueClient()
+        s = self.session(client)
+        s._chapter_complete()
+        obs, _, notes = s._finish_ending()
+        self.assertFalse(s.done)
+        self.assertTrue(s._ending_agent)
+        self.assertEqual(obs['level']['sid'], 'Celeste/8-Epilogue')
+        self.assertTrue(any('终章' in n and '主控不代走' in n for n in notes), notes)
+        frames = sum(int(x.split(',')[0]) for st in client.steps for x in st)
+        self.assertLess(frames, 300)                              # 片尾 4 步 + 走进场约 60 帧，不再等 1200 帧
+        self.assertEqual(s._resume_auto_handling(), [])           # 交回后主控不再抢着推进
+
+    def test_controllable_moment_inside_the_finished_chapter_is_not_treated_as_a_new_map(self):
+        """角色在刚通关的同一张地图里可操作：不算"进入了另一张需要操作的关卡"，按原来的片尾流程处理。"""
+        client = EndingClient(skippable=False)
+        s = self.session(client)
+        client.obs['controllable'] = True
+        client.obs['level']['inCutscene'] = False
+        client.obs['level']['dialogOpen'] = False
+        s._chapter_complete()
+        _, _, notes = s._finish_ending()
+        self.assertFalse(any('主控不代走' in n for n in notes), notes)
+        self.assertTrue(any('没能自动走完' in n for n in notes), notes)
+
 
 if __name__ == '__main__':
     unittest.main()

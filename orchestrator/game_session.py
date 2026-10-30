@@ -234,6 +234,10 @@ class ActError(ValueError):
     """动作不合法：退回给智能体重写，不消耗游戏帧。"""
 
 
+class EndingNeedsAgent(RuntimeError):
+    """片尾之后游戏进入了另一张需要操作的关卡（例如首次通关 7A 后的终章）：不是主控走不完，而是轮到智能体游玩。"""
+
+
 @dataclass
 class ActOutcome:
     result: dict
@@ -2115,9 +2119,11 @@ class GameSession:
         """（调用方持有连接锁）auto 剧情模式的最终章刚通关：在这次动作里跳过片尾剧情、确认结算并回到选章地图，
         回到了就结束本次运行；走不完就把剩下的片尾交给智能体（开放确认、返回、暂停等按键），回到选章地图才算完成。"""
         self._ending_pending = False
-        problem = None
+        problem, playable = None, None
         try:
             self._run_ending(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
+        except EndingNeedsAgent as exc:
+            playable = str(exc)
         except RuntimeError as exc:
             problem = str(exc)
         reply = self.client.call("observe", image=True, scope="room", fields=True)
@@ -2127,6 +2133,11 @@ class GameSession:
             self._mark_done("章节完成")
             return obs, image, ["通关后主控走完了片尾、确认了结算，已回到选章地图"]
         self._ending_agent = True
+        if playable:
+            print(f"[run] 最终章{playable}，交给智能体", flush=True)
+            return obs, image, [f"章节已通关，章节计时已经停止；{playable}，角色可以操作，主控不代走。"
+                                "请用 act 自己操作：走动、C 确认、B 返回、P 打开暂停菜单（菜单里可选跳过剧情）、方向键选择，"
+                                "纯帧数等待动画；回到选章地图才算完成。"]
         print(f"[run] 最终章片尾主控没能走完（{problem}），交给智能体处理", flush=True)
         return obs, image, [f"章节已通关，章节计时已经停止；片尾主控没能自动走完（{problem or '没有回到选章地图'}）。"
                             "请观察画面后用 act 自行处理：C 确认、B 返回、P 打开暂停菜单（菜单里可选跳过剧情）、方向键选择，"
@@ -2319,6 +2330,10 @@ class GameSession:
         skip_tries = menu_closes = 0
         last_sig, unchanged = None, 0        # 片尾画面连续没有变化的次数（每次 30 帧）
         what = "最终章" if final else "计划外地图"
+        # 刚通关的地图：片尾之后游戏自己进了另一张地图、角色已可操作（例如首次通关 7A 后进入终章，要走到小屋），
+        # 这段是游玩不是片尾，立即交给智能体，不再空推等"画面没有变化"超时
+        finished_sid = ((obs.get('level') or {}).get('sid')
+                        or (CHAPTER_SIDS.get(self.piece.chapter) if self.piece is not None else None))
 
         def log_step(inputs, result):
             self._log_frames(result, expand_inputs(inputs, 10000, LETTERS), f"({what}结算)", auto=True)
@@ -2370,6 +2385,10 @@ class GameSession:
                         elif reason != "no_pause":
                             continue
                         level = obs.get('level') or {}
+                    if (scene == 'Level' and finished_sid and level.get('sid') not in (None, finished_sid)
+                            and self._settled(obs) and not level.get('dialogOpen')):
+                        self.metrics.add(auto_game_s=time.monotonic() - started)
+                        raise EndingNeedsAgent(f"片尾之后进入了需要操作的关卡（{chapter_name(level.get('sid'))}）")
                     inputs=['1,C','29'] if (level.get('dialogWaiting') or awaiting_confirm(obs, ending=True)
                                             or story_input(obs) == 'postcard') else ['30']
                     sig = (obs.get('scene'), level.get('room'), level.get('inCutscene'), level.get('dialogOpen'),
