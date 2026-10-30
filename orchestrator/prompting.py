@@ -57,7 +57,7 @@ def auto_handling(cfg) -> str:
 def explore_program_rule(cfg) -> str:
     """探索模式提示词里单次程序时长的一句（explore_program_s 为 None 时不限时）。"""
     from .tuning import seconds_text
-    seconds = getattr(cfg, "explore_program_s", 15)
+    seconds = getattr(cfg, "explore_program_s", 120)
     return ("单次规划程序不限时长；" if seconds is None
             else f"每条程序命令（含编译）最多 {seconds_text(seconds)}，超时就被结束；")
 
@@ -337,8 +337,8 @@ def fill(text: str, cfg) -> str:
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
         "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
         "{explore_program_rule}": explore_program_rule(cfg),
-        "{explore_program}": ("不限" if getattr(cfg, "explore_program_s", 15) is None
-                              else seconds_text(getattr(cfg, "explore_program_s", 15))),
+        "{explore_program}": ("不限" if getattr(cfg, "explore_program_s", 120) is None
+                              else seconds_text(getattr(cfg, "explore_program_s", 120))),
         "{playback_ratio}": str(getattr(cfg, "playback_ratio", 100)),
         "{playback_min_tracks}": str(getattr(cfg, "playback_min_tracks", 40)),
         "{thought_max}": str(getattr(cfg, "thought_max_chars", 120)),

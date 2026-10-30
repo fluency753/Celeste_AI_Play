@@ -135,7 +135,7 @@ def options() -> dict:
             "saves": saves, "saves_error": saves_error, "sim_available": sim_available(REPO_ROOT),
             "defaults": {**DEFAULTS, "hud_mod": None}, "deploy": {k: deploy.get(k) for k in ("agent", "save", "chapters")},
             "maps": [{"id": k, "label": v, "enabled": True} for k, v in MAPS.items()]
-                    + [{"id": "mod", "label": "MOD 地图", "enabled": False, "note": "以后支持"}],
+                    + [{"id": "mod", "label": "MOD 地图", "enabled": False, "note": "未来版本中支持"}],
             "tunables": catalog(), "tunable_groups": list(GROUPS), "prefs": load_prefs(), "game": celeste_dir_info()}
 
 
@@ -262,7 +262,7 @@ PLACEHOLDERS = {
     "{bash_default}": "Bash 不写 timeout 时的上限（可调参数 bash_default_s）",
     "{bash_max}": "Bash 最长时长（可调参数 bash_max_s）",
     "{explore_program}": "探索模式单次规划程序最长（可调参数 explore_program_s；不限时写\"不限\"）",
-    "{explore_program_rule}": "探索模式单次规划程序时长的一句（\"单次规划程序最多 15 秒；\"，不限时为\"单次规划程序不限时长；\"）",
+    "{explore_program_rule}": "探索模式单次规划程序时长的一句（\"单次规划程序最多 2 分钟；\"，不限时为\"单次规划程序不限时长；\"）",
     "{playback_ratio}": "规划回放每多少条推演画一条（可调参数 playback_ratio）",
     "{playback_min_tracks}": "规划回放每轮至少画几条（可调参数 playback_min_tracks）",
     "{thought_max}": "思考语句最长字数（可调参数 thought_max_chars）",
@@ -406,7 +406,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.2.1"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.3.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

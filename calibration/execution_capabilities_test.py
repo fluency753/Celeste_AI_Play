@@ -68,7 +68,7 @@ class WorkspaceCapabilityTests(unittest.TestCase):
                     preview = config_for({'engine': 'codex', 'agent': 'test', 'runtime': 'host',
                         'save': {'name': 'test', 'slot': 10, 'create': False}, 'mode': mode})
                 self.assertEqual(launched.sim, mode == 'speedrun')
-                self.assertEqual(launched.sim_assist, mode == 'explore')
+                self.assertFalse(launched.sim_assist)   # 限额短路线预测默认关闭（需自配标准模拟器）
                 self.assertEqual((preview.sim, preview.sim_assist), (launched.sim, launched.sim_assist))
                 self.assertTrue(workspace_capabilities(launched).needs_container)
                 self.assertNotIn('你没有其他工具，也不能执行代码', play_prompt(launched))

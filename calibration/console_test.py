@@ -33,9 +33,26 @@ class LaunchOptionsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build(options(recording_mode='other'))
 
+    def test_public_defaults(self):
+        # 控制台与命令行的默认值一致：现实时间上限 1000 分钟，限额短路线预测与规划回放默认关，
+        # 探索模式单次规划程序最长 120 秒（提示词写"2 分钟"）
+        from orchestrator.launch_options import DEFAULTS
+        from orchestrator.run import parse_args
+        from orchestrator.tuning import BY_KEY
+        self.assertEqual((DEFAULTS["max_minutes"], DEFAULTS["sim_assist"], DEFAULTS["playback"]), (1000, False, False))
+        self.assertEqual(BY_KEY["explore_program_s"].default, 120)
+        self.assertEqual(BY_KEY["thought_max_hanzi"].default, 30)
+        argv = build(options(mode="explore"))
+        self.assertIn("--no-playback", argv)
+        self.assertIn("--no-sim-assist", argv)
+        self.assertEqual(argv[argv.index("--max-minutes") + 1], "1000")
+        with patch("sys.argv", ["run", "--agent", "dev-x", "--save", "test", "--mode", "explore", "--runtime", "host"]):
+            launched, _ = parse_args()
+        self.assertEqual((launched.max_minutes, launched.playback, launched.sim_assist), (1000.0, False, False))
+
     def test_default_speedrun(self):
         argv = build(options())
-        for flag in ("--mode", "speedrun", "--no-live", "--sim", "--playback", "--record", "--hud-mod",
+        for flag in ("--mode", "speedrun", "--no-live", "--sim", "--no-playback", "--record", "--hud-mod",
                      "--chapter", "--save-slot"):
             self.assertIn(flag, argv)
         self.assertEqual(argv[argv.index("--agent") + 1], "dev-opus")

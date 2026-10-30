@@ -593,7 +593,7 @@ def step_switches(a: Answers) -> None:
     a["agent"] = ask("智能体标签（决定容器、工作区与日志目录；同一模型准备与正式用同一个标签）",
                      a.get("agent") or (a.get("model") or "agent").replace("/", "-"))
     a["chapters"] = ask("依次通关的章节（逗号分隔：0 序章、1 1A、2 2A……）", a.get("chapters", "0,1,2"))
-    a["max_minutes"] = ask("现实时间上限（分钟；只是安全上限，不显示给智能体）", str(a.get("max_minutes", 600)))
+    a["max_minutes"] = ask("现实时间上限（分钟；只是安全上限，不显示给智能体）", str(a.get("max_minutes", 1000)))
     from orchestrator.runtimes import runtime
     catalog = runtime(a.get('engine', 'claude')).models(a.get('provider', 'anthropic'))
     selected = next((row for row in catalog['models'] if row['id'] == a.get('model')), None)
@@ -608,7 +608,7 @@ def step_switches(a: Answers) -> None:
         note("没有预置模拟器：用关模拟器的版本（--no-sim）")
     # 旧版向导的 "live" 指"实时展示"（现在所有模式都有），与直播模式不是一回事，所以直播模式另用 live_mode 记
     a["live_mode"] = ask_yes("直播模式（观众实时观看，智能体加快节奏、频繁解说；正式挑战一般不开）？", a.get("live_mode", False))
-    a["playback"] = ask_yes("规划回放（把推演过的路线画进游戏给观众看）？", a.get("playback", True))
+    a["playback"] = ask_yes("规划回放（把推演过的路线画进游戏给观众看；需通过提示词让智能体主动写推演程序并适配绘制接口，一般不开）？", a.get("playback", False))
     a["record"] = ask_yes("OBS 录屏（主控自己启动 OBS 锁步录制，生成完整版与纯享版；结束时关掉它）？", a.get("record", True))
     a["study"] = ask_yes("开局先读完知识库（准备阶段）？", a.get("study", True))
     a["limit_planning"] = sim_ok and a["sim"] and ask_yes("限制规划轮次（一般不开）？", a.get("limit_planning", False))
@@ -626,7 +626,7 @@ def launcher_args(a: Answers, save: str, chapters: str, minutes: str) -> list[st
     args += ["--live"] if a.get("live_mode") else []
     if a.get("hud_mod") is not None:
         args.append("--hud-mod" if a["hud_mod"] else "--no-hud-mod")
-    args += [] if a.get("playback", True) else ["--no-playback"]
+    args += ["--playback"] if a.get("playback", False) else []
     args += [] if a.get("record", True) else ["--no-record"]
     args += [] if a.get("study", True) else ["--no-study"]
     args += ["--limit-planning"] if a.get("limit_planning") else []
@@ -639,7 +639,7 @@ def ps_quote(s: str) -> str:
 
 
 def write_launcher(a: Answers) -> None:
-    formal = launcher_args(a, a.get("save", "opus5.5"), a.get("chapters", "0,1,2"), a.get("max_minutes", 600))
+    formal = launcher_args(a, a.get("save", "opus5.5"), a.get("chapters", "0,1,2"), a.get("max_minutes", 1000))
     # 试跑用单独的标签（dev-<标签>）：正式挑战的工作区保持干净；想把试跑写的程序带进正式挑战，就把两个标签改成一样
     trial = launcher_args({**a, "agent": "dev-" + a["agent"]}, a.get("test_save", "test"), a.get("chapters", "0,1,2").split(",")[0], 30)
     text = f"""\ufeff# 由 tools/setup_wizard.py 生成（本机文件，不入库）。重新运行向导会覆盖它；也可以直接改下面的参数。

@@ -314,7 +314,7 @@ class ClaudeRunner(SessionControls):
                 # Bash 等子进程里清掉凭据变量（ANTHROPIC_AUTH_TOKEN 等）：第三方的 API 密钥不能让智能体的程序看到。
                 # 不设时 Claude Code 只清订阅令牌，实测 Bash 里能读到 ANTHROPIC_AUTH_TOKEN
                 "-e", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
-                # Bash 的时长上限（可调参数）：速通模式默认 5 分钟、最长 10 分钟；探索模式两者都是单次规划程序的上限（默认 15 秒）
+                # Bash 的时长上限（可调参数）：速通模式默认 5 分钟、最长 10 分钟；探索模式两者都是单次规划程序的上限（默认 120 秒）
                 "-e", f"BASH_DEFAULT_TIMEOUT_MS={bash_limits_ms(self.cfg)[0]}",
                 "-e", f"BASH_MAX_TIMEOUT_MS={bash_limits_ms(self.cfg)[1]}",
                 self.container, "claude", *self._common_args(),

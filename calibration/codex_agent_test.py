@@ -1007,7 +1007,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             self.runner._validate_resumed_tools({'path': str(path)})
 
     async def test_bash_has_hard_time_limit(self):
-        # 探索模式：单次规划程序的上限（explore_program_s，默认 15 秒，与提示词一致）；速通模式：Bash 最长时长 bash_max_s
+        # 探索模式：单次规划程序的上限（explore_program_s，默认 120 秒，与提示词一致）；速通模式：Bash 最长时长 bash_max_s
         async def call():
             data = self.native_request('cap-' + str(self.metrics.state.tool_calls), timeout_ms=1000000)
             decision = await native_tool_hook(self.runner, data)
@@ -1015,7 +1015,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             await native_tool_hook(self.runner, {**data, 'hook_event_name':'PostToolUse'})
             return decision['timeout_s']
         self.cfg.mode, self.cfg.knowledge_profile = "explore", "explore"
-        self.assertEqual(await call(), 15)
+        self.assertEqual(await call(), 120)
         self.cfg.explore_program_s = 40
         self.assertEqual(await call(), 40)
         self.cfg.mode, self.cfg.knowledge_profile = "speedrun", "full"

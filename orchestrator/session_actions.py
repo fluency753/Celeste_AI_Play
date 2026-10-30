@@ -116,7 +116,7 @@ def _finish(anchor, operation):
                  'model': metrics['model'], 'requested_model':prepared.get('requested_model', metrics['model']), 'effort': metrics['effort'], 'session_id': prepared['session_id'],
                  'knowledge_profile': 'explore', 'session_kind': 'ready', 'session_name': operation['name'],
                  'prepared_dir': str(directory), 'runtime': 'container', 'sim': False, 'sim_assist': False,
-                 'max_minutes': 240}
+                 'max_minutes': 1000}
         write_json(directory / 'run_state.json', state)
         if runtime(engine).fast:
             RunControl(directory).set_fast(operation['fast'])

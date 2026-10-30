@@ -27,12 +27,12 @@ MAPS = {"celeste": "蔚蓝官方章节"}      # 以后可能加 MOD 地图
 
 DEFAULTS = {
     "engine": "claude", "provider": "anthropic", "model": "opus", "effort": "high", "agent": "",
-    "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": True, "stiffness": False, "formal_thought": False, "save_context": True, "collision_image": None, "playback": True, "record": True,
+    "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": False, "stiffness": False, "formal_thought": False, "save_context": True, "collision_image": None, "playback": False, "record": True,
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
     "start_paused": False, "quota_wait": True, "allow_chapter_reset": False, "cutscene_mode": "auto", "chapters": [0], "segments": None,
     "action_permissions": None, "allow_detour": False,
     "recording_mode": "chapter", "freeze_chapter_select": True, "freeze_file_select": False, "freeze_main_menu": False,
-    "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 240, "autocompact": "",
+    "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 1000, "autocompact": "",
     # 以下是"更多设置"里的参数，默认值与命令行相同
     "map": "celeste", "runtime": "container", "study_minutes": 60, "max_usage": None, "quota_wait_max_hours": 24,
     "play_speed": 1, "auto_speed": 1, "rounds_per_room": 3, "room_scale": 2.0, "record_marker": False,

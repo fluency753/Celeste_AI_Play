@@ -57,7 +57,7 @@ class TunableTests(unittest.TestCase):
                      "大约每 50 条画 1 条，至少 20 条", "解说计时缩短为 15 秒"):
             self.assertIn(text, changed)
         explore = cfg(mode="explore", knowledge_profile="explore", chapter=1)
-        self.assertIn("每条程序命令（含编译）最多 15 秒", play_prompt(explore))
+        self.assertIn("每条程序命令（含编译）最多 2 分钟", play_prompt(explore))
         self.assertNotIn("两次 act 之间最多运行", play_prompt(explore))
         tuning.apply(explore, {"explore_program_s": 40, "explore_program_runs": 2})
         text = play_prompt(explore)
@@ -181,7 +181,7 @@ class TunableTests(unittest.TestCase):
         from orchestrator.agent import bash_limits_ms
         from orchestrator.codex_agent import program_cap
         self.assertEqual(bash_limits_ms(cfg()), (300000, 600000))
-        self.assertEqual(bash_limits_ms(cfg(mode="explore")), (15000, 15000))
+        self.assertEqual(bash_limits_ms(cfg(mode="explore")), (120000, 120000))
         self.assertEqual(program_cap(cfg(mode="explore", explore_program_s=30)), 30)
         # 不限时：上限放到 24 小时，实际由整次运行的现实时间上限约束
         self.assertEqual(bash_limits_ms(cfg(mode="explore", explore_program_s=None)), (86400000, 86400000))

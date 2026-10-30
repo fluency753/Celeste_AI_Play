@@ -78,7 +78,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="模型提供方（configs/providers.json）：anthropic（默认，Claude 订阅）、deepseek 等。"
                          "第三方提供方的 API 密钥只从本机读取（configs/local.providers.json 的 key_file，或环境变量）")
     ap.add_argument("--effort", default="high", help="推理强度标识，支持的档位由所选模型决定")
-    ap.add_argument("--max-minutes", type=float, default=240.0, help="现实时间上限（分钟）；目标以游戏内计时为主，这里只防止无限运行")
+    ap.add_argument("--max-minutes", type=float, default=1000.0, help="现实时间上限（分钟，默认 1000）；目标以游戏内计时为主，这里只防止无限运行")
     ap.add_argument("--bridge-port", type=int, default=47774)
     ap.add_argument('--recording-mode', choices=('chapter','continuous'), default=None, help='新运行默认按章独立录像；continuous跨章连续录制')
     for menu in ('chapter-select','file-select','main-menu'):
@@ -111,10 +111,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--room-scale", type=float, default=2.0,
                     help="房间的长、高每变成这么多倍，存入的轮次乘这么多（默认 2，即与面积成正比），向上取整")
     ap.add_argument("--playback", dest="playback", action="store_true", default=None,
-                    help="规划回放（默认开启，写不写都一样）：把推演过的路线按轮画进游戏给观众看（开模拟器时画 /sim 的推演，"
-                         "关模拟器时画智能体用 show.trajectory() 交来的轨迹）；回放不推进游戏、不计章节计时")
+                    help="规划回放（新运行默认关闭；续跑沿用原运行）：把推演过的路线按轮画进游戏给观众看（开模拟器时画 /sim 的推演，"
+                         "关模拟器时画智能体用 show.trajectory() 交来的轨迹，需要在提示词里让智能体主动写推演程序并按这个接口交轨迹）；"
+                         "回放不推进游戏、不计章节计时")
     ap.add_argument("--no-playback", dest="playback", action="store_false",
-                    help="关闭规划回放：不把推演过的路线画进游戏")
+                    help="关闭规划回放（新运行的默认）：不把推演过的路线画进游戏")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
     ap.add_argument("--hud-mod", dest="hud_mod", action="store_true", default=None,
                     help="HUD 以 MOD 形式显示在游戏画面右上角（不开直播时默认开启）：旧版卡片加思考语句历史，章节计时逐帧准确；"
@@ -144,7 +145,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="开放预置模拟器（速通模式、容器运行方式下，本机构建了 sim/dist 时默认开启）：本机 sim/dist 只读挂到容器的 /sim，"
                          "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
     ap.add_argument("--sim-assist", action=argparse.BooleanOptionalAction, default=None,
-                    help="只用于探索模式：有额度的短路线预测（探索模式默认开启）；不向智能体开放模拟器文件")
+                    help="只用于探索模式：有额度的短路线预测（默认关闭；需自配标准模拟器 sim/dist；续跑沿用原运行）；不向智能体开放模拟器文件")
     ap.add_argument("--stiffness", action=argparse.BooleanOptionalAction, default=None,
                     help="只用于探索模式：思考僵直（默认关；续跑沿用原运行）。一次冻结里思考、运行工具的时间各自满 2.5 分钟后，"
                          "按比例在下一次 act 前让角色保持上一帧的按键僵直（思考每 2.5 分钟 0.2 秒、工具每 2.5 分钟另加 0.4 秒，"
@@ -376,9 +377,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     if cfg.mode == SPEEDRUN and args.sim_assist:
         raise SystemExit("--sim-assist 只用于探索模式；速通模式用 --sim / --no-sim 决定是否开放预置模拟器")
     cfg.sim = args.sim
-    cfg.sim_assist = (bool(previous["state"].get("sim_assist", False)) if previous else
-                      cfg.knowledge_profile == "explore" and capabilities.programs
-                      and (cfg.sim_dir / 'celeste-sim').is_file()) if args.sim_assist is None else args.sim_assist
+    # 新运行默认关闭（要自配标准模拟器 sim/dist）；续跑沿用原运行
+    cfg.sim_assist = (bool(previous["state"].get("sim_assist", False)) if previous else False) \
+        if args.sim_assist is None else args.sim_assist
     if cfg.sim_assist and (cfg.sim or not capabilities.programs):
         raise SystemExit("限额模拟辅助仅支持容器模式，不能同时开放无限制 --sim")
     if cfg.sim_assist and not (cfg.sim_dir / "celeste-sim").is_file():
@@ -395,7 +396,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.pause_limit = bool(args.limit_planning) and not args.free_planning
     cfg.rounds_per_room = max(1, args.rounds_per_room)
     cfg.room_scale = max(1.0, args.room_scale)
-    cfg.playback = args.playback is not False   # 默认开启
+    cfg.playback = bool(args.playback)   # 新运行默认关闭；续跑沿用原运行（旧运行没记录时按开）
     cfg.live = bool(args.live)            # 直播模式，默认关
     cfg.hud_mod = (not cfg.live) if args.hud_mod is None else bool(args.hud_mod)   # 游戏内 HUD：不开直播时默认开
     from .tuning import apply as apply_tuning, parse_pairs  # 可调参数：续跑沿用原运行改过的，再叠加这次写的 --tune
