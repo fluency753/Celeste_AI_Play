@@ -176,10 +176,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="额度重置还要等超过这么多小时就停止本次运行（之后可用 --resume 续跑），默认 24")
     ap.add_argument("--quota-wait-cap-seconds", type=float, help=argparse.SUPPRESS)  # 只用于测试：等待额度的最长秒数
     ap.add_argument("--no-net-wait", action="store_true",
-                    help="模型连不上（断网、接口不可用）时不暂停等待（默认：暂停智能体，游戏保持冻结，现实用时与思考僵直停表，"
-                         "网络恢复后自动接着同一个会话继续）")
+                    help="关闭模型服务不可用时的自动等待（含 Codex 容量不足；默认保留接管和录制、暂停计时并重试原会话；"
+                         "Codex 关闭等待后仍保留接管供手动续跑）")
     ap.add_argument("--net-wait-max-hours", type=float, default=24.0,
-                    help="模型连续这么多小时连不上就停止本次运行（之后可用 --resume 续跑），默认 24")
+                    help="模型服务连续这么多小时不可用就停止本次运行并保留接管（之后可用 --resume 续跑），默认 24")
     ap.add_argument("--net-wait-cap-seconds", type=float, help=argparse.SUPPRESS)  # 只用于测试：每次网络等待的最长秒数
     ap.add_argument("--tune", action="append", metavar="名称=值", default=[],
                     help="修改一个可调参数（可以写多个），例如 --tune playback_speed=4 --tune explore_program_s=20；"
@@ -1000,10 +1000,10 @@ def _keeps_game_frozen(cfg, args, session, *, interrupted=False) -> bool:
     return _shutdown_mode(cfg, args, session, interrupted=interrupted) != 'release'
 
 
-def _shutdown_mode(cfg, args, session, *, interrupted=False):
+def _shutdown_mode(cfg, args, session, *, interrupted=False, model_failed=False):
     """An automatic goal ends capture while retaining the game's freeze gate.
 
-    Explicit interruption/legacy Claude early exit instead retains live capture;
+    Explicit interruption/model failure/legacy Claude early exit retains capture;
     ordinary user stop and natural completion still return manual control.
     """
     if args.no_agent:
@@ -1011,7 +1011,7 @@ def _shutdown_mode(cfg, args, session, *, interrupted=False):
     goals = getattr(session, 'goals', None)
     if goals is not None and not goals.immediate and goals.snapshot().get('reached') is True:
         return 'freeze'
-    if (interrupted or getattr(cfg, 'engine', 'claude') == 'claude') and not session.done:
+    if (interrupted or model_failed or getattr(cfg, 'engine', 'claude') == 'claude') and not session.done:
         return 'retain'
     return 'release'
 
@@ -1153,7 +1153,9 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         # Commit the ownership decision before cleanup that may itself fail.
         # The outer socket/error cleanup must never undo a reached goal's hold.
         shutdown = _shutdown_mode(cfg, args, session,
-                                  interrupted=bool(runner and runner.interrupted_for_resume))
+                                  interrupted=bool(runner and runner.interrupted_for_resume),
+                                  model_failed=bool(runner and getattr(runner, 'retain_on_model_failure', False)
+                                                    and not runner.stop_requested))
         cfg._keep_frozen = shutdown != 'release'
         finish_error = None
         if session.done and session.done_reason in ("章节完成", "分段完成"):

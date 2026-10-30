@@ -163,7 +163,7 @@ class RunConfig:
     quota_wait: bool = True          # 额度用完（或到 max_usage）时等重置后接着同一个会话；False 则直接停止
     quota_wait_max_h: float = 24.0   # 重置还要等更久时直接停止
     quota_wait_cap_s: float | None = None  # 只用于测试：等待额度的最长秒数
-    net_wait: bool = True            # 模型连不上（断网、接口不可用）时暂停智能体，游戏保持冻结，恢复后接着同一个会话
+    net_wait: bool = True            # 模型服务不可用（含 Codex 容量不足）时保留接管，等待后重试原会话
     net_wait_max_h: float = 24.0     # 连续等这么久仍连不上就结束本次运行（之后可 --resume 续跑）
     net_retry_attempts: int = 4      # Claude Code 因连接类错误重试到第几次时认定断网（之前的几次交给它自己重试）
     net_probe_s: float = 15.0        # 等待期间多久探测一次能否连上模型接口

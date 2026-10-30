@@ -65,7 +65,7 @@ STATUS = {
     "starting": ("等待", "idle"), "studying": ("读知识库", "studying"), "thinking": ("思考中", "thinking"),
     "tool": ("运行工具", "tool"), "compacting": ("压缩上下文", "thinking"), "executing": ("执行中", "executing"),
     "auto": ("自动推进", "idle"), "retrying": ("自动重试", "retrying"), "replaying": ("规划回放", "replay"),
-    "quota_wait": ("等待额度重置", "idle"), "net_wait": ("网络中断，等待恢复", "retrying"), "done": ("已完成", "idle"), "stopped": ("已结束", "idle"),
+    "quota_wait": ("等待额度重置", "idle"), "net_wait": ("模型服务不可用，等待恢复", "retrying"), "done": ("已完成", "idle"), "stopped": ("已结束", "idle"),
 }
 EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 DEFAULT_COLORS = {

@@ -128,6 +128,8 @@ class SessionControls:
                 role='system', kind='系统')
 
     def _game_guard(self):
+        if getattr(self, 'model_waiting', False):
+            return '模型服务恢复等待中，不能执行游戏操作。'
         if getattr(self, 'prepare_only', False):
             return '本次仅准备知识库，不允许操作游戏。'
         if self.paused or self.chat_only:
@@ -168,6 +170,8 @@ class SessionControls:
         return True
 
     def _program_guard(self):
+        if getattr(self, 'model_waiting', False):
+            return '模型服务恢复等待中，不能运行程序。'
         # Preparation (and chat with --allow-programs) can organize notes and programs in the sandbox;
         # the MCP game gate is still closed. Idle chat and user-paused play cannot run planners.
         if getattr(self, 'prepare_only', False) or getattr(self, 'allow_programs', False):
@@ -352,7 +356,7 @@ class SessionControls:
                                 if self.pause_at is None:
                                     self.pause_at = time.monotonic()
                                     self.metrics.pause()
-                                self.metrics.update(status="paused")
+                                self.metrics.update(status="net_wait" if getattr(self, 'model_waiting', False) else "paused")
                             self.control.mark(row["id"], "submitted", "当前动作已结束，试玩已暂停")
                         elif row["kind"] == "resume":
                             if getattr(self, '_bridge_reload_failed', False):
@@ -360,7 +364,7 @@ class SessionControls:
                             if self.chat_only:
                                 raise ValueError("本次试玩已经完成。当前只能聊天，开始新试玩需要另行指定目标。")
                             was_paused = self.paused
-                            if self.pause_at is not None:
+                            if self.pause_at is not None and not getattr(self, 'model_waiting', False):
                                 self.paused_seconds += time.monotonic() - self.pause_at
                                 self.pause_at = None
                                 self.metrics.resume(quota=False)

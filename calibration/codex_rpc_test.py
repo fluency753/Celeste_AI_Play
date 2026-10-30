@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from orchestrator.codex_rpc import CodexRPC
+from orchestrator.codex_rpc import CodexRPC, CodexRPCError
 
 
 class CodexRPCReadTests(unittest.IsolatedAsyncioTestCase):
@@ -46,6 +46,18 @@ class CodexRPCReadTests(unittest.IsolatedAsyncioTestCase):
         rpc = self.rpc_with_stream(b'{"id":1,"result":{"thread":{"id":"original"}}}\n')
         await rpc._read()
         self.assertEqual(await rpc.pending[1], {'thread': {'id': 'original'}})
+
+    async def test_explicit_refusal_retains_structured_error_for_retry_classification(self):
+        import json
+        from orchestrator.codex_recovery import is_model_unavailable
+        error = {'code': -32000, 'message': 'Selected model is at capacity',
+                 'data': {'httpStatusCode': 503}}
+        rpc = self.rpc_with_stream((json.dumps({'id': 1, 'error': error}) + '\n').encode())
+        await rpc._read()
+        with self.assertRaises(CodexRPCError) as caught:
+            await rpc.pending[1]
+        self.assertEqual(caught.exception.error, error)
+        self.assertTrue(is_model_unavailable(caught.exception))
 
 
 if __name__ == '__main__':

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from .prompting import play_prompt
 from .modes import game_tools
 from .codex_rpc import CodexRPC
+from .codex_recovery import ModelRecovery, is_model_unavailable
 from .codex_read import read_file, search_files
 from .session_controls import RuntimeCapabilities, SessionControls
 from .telemetry import public_event
@@ -63,7 +64,7 @@ def program_cap(cfg) -> float:
     from .agent import bash_limits_ms
     return bash_limits_ms(cfg)[1] / 1000
 
-class CodexRunner(SessionControls):
+class CodexRunner(ModelRecovery, SessionControls):
     capabilities = RuntimeCapabilities(fast=True, live_steering=True)
     supports_interrupt = True
 
@@ -81,6 +82,8 @@ class CodexRunner(SessionControls):
         self.turn_done = asyncio.Event()
         self.turn_result = None
         self.fatal = None
+        self.model_waiting = False
+        self.retain_on_model_failure = False
         self.message_text = {}
         self.compacted = set()
         self.called_tools = []
@@ -376,6 +379,8 @@ class CodexRunner(SessionControls):
                 raise ValueError("停止目标已触发（" + reason + "）。正在保存录像，本次工具未执行，请结束本轮。")
             if self.chat_only and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate", "celeste_stop_run"}:
                 raise ValueError("本次试玩已经结束，当前只提供聊天，不连接或操作游戏。")
+            if self.model_waiting and game:
+                raise ValueError('模型服务恢复等待中，本次游戏工具未执行。')
             if self.paused and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate"}:
                 raise ValueError("用户已暂停试玩。请只回复用户，不推进游戏或运行规划；结束本轮并等待继续。")
             if game and not self.prepare_only and not self.chat_only and name.removeprefix('celeste_') not in game_tools(self.cfg):
@@ -539,8 +544,6 @@ class CodexRunner(SessionControls):
         return await self._notes_response({'contentItems':content,'success':not result.is_error}, origin_turn)
 
     def _elapsed(self, started):
-        if self.naming_only:
-            return time.monotonic() - started
         now = time.monotonic()
         return now - started - self.paused_seconds - (now - self.pause_at if self.pause_at else 0)
 
@@ -716,6 +719,7 @@ class CodexRunner(SessionControls):
                 self.heartbeat_task = asyncio.create_task(self._heartbeat())
             message = self._first_prompt()
             opening = not self.chat_only
+            retry_rows, retry_input = [], False
             while self._elapsed(started) < self.cfg.budget_seconds:
                 if self.stop_requested:
                     return await self._stopped_reason()
@@ -735,10 +739,12 @@ class CodexRunner(SessionControls):
                     await asyncio.sleep(.2)
                 if self.session is not None and self.session.done:
                     return self.session.done_reason
-                assigned = list(self.pending_messages)
+                fresh = list(self.pending_messages)
+                assigned = retry_rows + fresh
                 self.pending_messages.clear()
                 # 旧会话缺少的文件工具说明只随恢复后的第一轮送达，聊天轮次也带上。
-                message = self._turn_message(message, assigned, opening=opening, context=self.tool_notice)
+                message = self._turn_message(message, fresh, opening=opening,
+                                             retain_fallback=retry_input, context=self.tool_notice)
                 self.tool_notice = ''
                 if self.paused and not self.chat_only:
                     message += "\n（用户已暂停试玩。只能回复用户，不调用 observe、act 或 Bash；回复后结束本轮，等待用户继续。）"
@@ -754,10 +760,20 @@ class CodexRunner(SessionControls):
                 self._begin_model_turn(fast=self.turn_fast, service_tier=tier, effort=effort, runtime="codex")
                 offered_notes = self._fresh_notes()
                 turn_input = message + ('\n\n' + '\n'.join(text for _, text in offered_notes) if offered_notes else '')
-                response = await self.rpc.request("turn/start", {"threadId": self.session_id, "effort": effort,
-                    "serviceTierForTurn": tier,
-                    "input": [{"type": "text", "text": turn_input}]})
+                try:
+                    response = await self.rpc.request("turn/start", {"threadId": self.session_id, "effort": effort,
+                        "serviceTierForTurn": tier,
+                        "input": [{"type": "text", "text": turn_input}]})
+                except RuntimeError as exc:
+                    if not is_model_unavailable(exc):
+                        raise
+                    # An explicit RPC refusal did not accept these inputs. Keep user rows
+                    # until an actual acknowledgement; do not duplicate their text.
+                    retry_rows, retry_input = assigned, True
+                    await self._wait_for_model(exc)
+                    continue
                 opening = False
+                retry_rows, retry_input = [], False
                 self.note_reminders.acknowledge(offered_notes)
                 self.turn_id = response["turn"]["id"]
                 self.metrics.turn_acknowledged(self.turn_id)
@@ -782,7 +798,13 @@ class CodexRunner(SessionControls):
                 interrupted = self.turn_result.get("status") == "interrupted" and self.user_interrupted
                 self.user_interrupted = False
                 if self.turn_result.get("status") != "completed" and not interrupted:
+                    if is_model_unavailable(self.turn_result.get('error')):
+                        await self._wait_for_model(self.turn_result['error'])
+                        message, retry_input = self._model_recovery_prompt(), True
+                        continue
                     raise RuntimeError(f"Codex 轮次未完成：{self.turn_result.get('error') or self.turn_result}")
+                if not interrupted:
+                    self._model_recovered()
                 if self.naming_only:
                     if self.turn_result.get('status') != 'completed':
                         raise RuntimeError('存档命名被中断，没有开始试玩')
@@ -796,6 +818,15 @@ class CodexRunner(SessionControls):
                 message = (controller_turn_prompt(f"继续准备，用 {self._reader_name()} 分页读取尚未读完的资料。")
                            if self.study and not self.study.complete() else continue_play_prompt(self.cfg))
             return "现实时间预算用完"
+        except (ConnectionError, TimeoutError):
+            # Without an acknowledgement the turn might already have run tools.
+            # Retain ownership for explicit recovery, never resend blindly.
+            self._hold_model_failure()
+            raise
+        except RuntimeError as exc:
+            if is_model_unavailable(exc):
+                self._hold_model_failure()
+            raise
         finally:
             for task in list(self._receipt_tasks):
                 task.cancel()

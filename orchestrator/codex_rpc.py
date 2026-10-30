@@ -53,6 +53,13 @@ def process_options(*, container=False) -> list[str]:
     return options
 
 
+class CodexRPCError(RuntimeError):
+    """A definite JSON-RPC refusal, retaining the server's error fields."""
+    def __init__(self, error):
+        self.error = error
+        super().__init__(str(error))
+
+
 class CodexRPC:
     def __init__(self, directory: Path, on_event=None, on_request=None, *, container=None,
                  before_start=None, environment=None):
@@ -138,7 +145,7 @@ class CodexRPC:
                         self.on_event(message["method"], message.get("params") or {})
                 elif (future := self.pending.get(message.get("id"))) is not None and not future.done():
                     if "error" in message:
-                        future.set_exception(RuntimeError(str(message["error"])))
+                        future.set_exception(CodexRPCError(message["error"]))
                     else:
                         future.set_result(message.get("result"))
         except Exception as exc:
