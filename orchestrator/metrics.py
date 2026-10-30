@@ -99,7 +99,8 @@ class MetricsState:
                                       # 中断后续跑沿用；续跑追加新计划（--resume … --chapters）才重新取（take_run_base）
     piece_done: bool | None = None    # 当前这一截已完成、成绩已计入 completed_ticks（换到下一截之前，HUD 不再把当前计时加进总计时）
     # 计划外地图（--allow-detour，见 orchestrator/detour.py）
-    detour: dict | None = None        # 正在玩的计划外地图 {"chapter": sid, "side": "A"/"B"/"C"}；None = 在计划内
+    detour: dict | None = None        # 计划外地图 {chapter, side, completed?}；无地图身份的结算/菜单仍保留归属
+    detour_classifying: bool = False  # 已启用过绕行分类；关闭入场许可及续跑后仍保留
     detours: list | None = None       # 计划外地图的通关记录 [{"chapter", "side", "ticks"}, ...]：与 splits 分开，不计入总计时
     plan_banked_ticks: int = 0        # 当前这一截在计划章节里此前各段会话（返回地图后重进、游戏重启等）的章节计时之和
     plan_session_ticks: int = 0       # 计划章节当前这段会话最近看到的章节计时（倒退说明换了新会话，上一段并进 plan_banked_ticks）
@@ -402,7 +403,7 @@ class Metrics:
     RESTORED = ("thinking_s", "tool_s", "play_game_s", "auto_game_s", "decisions", "frames_played", "frames_auto",
                 "stiff_frames", "stiff_s",
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
-                "completed_ticks", "splits", "detours", "plan_banked_ticks", "plan_session_ticks", "game_clock",
+                "completed_ticks", "splits", "detour", "detour_classifying", "detours", "plan_banked_ticks", "plan_session_ticks", "game_clock",
                 "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
                 "net_wait_s", "net_waits",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "formal_thought",

@@ -151,6 +151,7 @@ class RunConfig:
     checkpoints: dict = field(default_factory=dict)  # 检查点表（segments.load_table / 桥接 areas）
     resume_pending: bool = False       # 续跑：上次在两截之间中断（这一截已完成、还没换到下一截）
     resume_completion_pending: bool = False  # agent 尚未自行确认结算、返回选章地图
+    resume_detour_classifying: bool = False  # 从前次统计恢复的分类事实，不授予新的绕行入场许可
     resume_segment: int | None = None  # 续跑：上次在当前这一截里已经走到的段
     runtime: str = "container"      # Claude客户端位置；Codex客户端始终在本机，工作区工具始终走容器（见execution.py）
     image: str = "celeste-agent:0.1"

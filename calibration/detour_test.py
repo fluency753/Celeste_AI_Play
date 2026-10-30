@@ -242,7 +242,7 @@ class DetourGame:
 
 class DetourSessionTests(unittest.TestCase):
     def session(self, *, detour=True, mode='auto', chapters=(9,), start=(CORE, 'A'), return_to_map=None, restore=None,
-                extended=False, plan=None, checkpoints=None, game_ticks=0):
+                extended=False, plan=None, checkpoints=None, game_ticks=0, bridge=None):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
@@ -262,8 +262,9 @@ class DetourSessionTests(unittest.TestCase):
             metrics.restore(restore, 'previous')        # 续跑：接着上一段运行的统计
         session = GameSession(cfg, root, metrics)
         self.addCleanup(session.close, release=False)
-        game = DetourGame(start=start)
-        game.ticks = game_ticks
+        game = bridge if bridge is not None else DetourGame(start=start)
+        if bridge is None:
+            game.ticks = game_ticks
         with patch('orchestrator.game_session.BridgeClient', return_value=game):
             session.connect()
         return session, game
@@ -666,6 +667,70 @@ class DetourSessionTests(unittest.TestCase):
         self.assertTrue(session.done)
         self.assertEqual([s['chapter'] for s in state.splits], [CORE])
 
+    def test_disabled_detour_classification_survives_repeated_resume_and_completion(self):
+        for sid, side in ((CORE, 'B'), (RIDGE, 'A')):
+            with self.subTest(sid=sid, side=side):
+                session, game = self.session(mode='agent', chapters=(9, 10))
+                self.leave_to_map(session, game)
+                self.enter(session, game, sid, side)
+                session.cfg.allow_detour = False
+                # Restore only serialized state, twice, with the entry permission still disabled.
+                for _ in range(2):
+                    previous = json.loads((session.run_dir / 'metrics.json').read_text(encoding='utf-8'))
+                    session.close(release=False)
+                    session, game = self.session(detour=False, mode='agent', chapters=(9, 10),
+                                                 restore=previous, bridge=game)
+                    self.assertTrue(session._in_detour())
+                    self.assertTrue(session._classifying())
+                    self.assertFalse(session.cfg.allow_detour)
+                    self.assertEqual(session._step_options()['action_policy']['entry_target'], {'sid': CORE, 'slot': 7})
+                self.act(session, ['40,R'], '完成绕行')
+                state = session.metrics.state
+                self.assertFalse(session._pending_complete or session.done or state.piece_done)
+                self.assertEqual(state.splits or [], [])
+                self.assertEqual(state.completed_ticks, 0)
+                self.assertEqual(session.piece, Piece(9))
+                self.assertEqual(session.chapter_queue, [Piece(10)])
+                self.assertEqual([(d['chapter'], d['side']) for d in state.detours], [(sid, side)])
+                if side == 'A':
+                    self.act(session, ['1,P', '20'])
+                    self.act(session, ['1,D', '1,C', '5'])
+                else:
+                    self.act(session, ['40'])
+                self.assertEqual(game.state, 'results')
+                # Completed detour identity also survives the results screen and the identity-less map.
+                for _ in range(2):
+                    previous = json.loads((session.run_dir / 'metrics.json').read_text(encoding='utf-8'))
+                    session.close(release=False)
+                    session, game = self.session(detour=False, mode='agent', chapters=(9, 10),
+                                                 restore=previous, bridge=game)
+                    self.assertTrue(session.off_plan())
+                    self.assertTrue(session._detour_completed())
+                    if game.state == 'results':
+                        self.act(session, ['1,C', '5'])
+                self.assertEqual(len(session.metrics.state.detours), 1)
+                self.enter(session, game, CORE, 'A')
+                self.assertFalse(session.off_plan())
+                self.finish_core_agent(session)
+                self.assertEqual([s['chapter'] for s in session.metrics.state.splits], [CORE])
+                self.assertEqual(session.navigation.target, Piece(10))
+
+    def test_disabled_detour_auto_resume_keeps_completion_out_of_plan(self):
+        session, game = self.session(start=(CORE, 'B'))
+        session.cfg.allow_detour = False
+        previous = json.loads((session.run_dir / 'metrics.json').read_text(encoding='utf-8'))
+        session.close(release=False)
+        session, game = self.session(detour=False, restore=previous, bridge=game)
+        self.act(session, ['40,R'])
+        self.assertFalse(session.done or session._pending_complete)
+        self.assertEqual(session.metrics.state.splits or [], [])
+        self.assertEqual(len(session.metrics.state.detours), 1)
+        self.assertEqual(game.state, 'select')
+        self.enter(session, game, CORE, 'A')
+        self.act(session, ['40,R'])
+        self.assertTrue(session.done)
+        self.assertEqual([s['chapter'] for s in session.metrics.state.splits], [CORE])
+
     def test_plan_chapter_b_side_is_a_detour(self):
         session, game = self.session()
         self.leave_to_map(session, game)
@@ -995,6 +1060,26 @@ class DetourConfigurationTests(unittest.TestCase):
                 check_resume_position(cfg)
             cfg.allow_detour = True
             self.assertTrue(check_resume_position(cfg))
+
+    def test_resume_classification_uses_saved_fact_without_reopening_entry_permission(self):
+        from orchestrator.run import check_resume_position, write_run_state
+        previous = self.previous(all_chapters=[9], plan_pieces=[[9, 0, None]], cutscene_mode='agent')
+        previous['metrics'] = {'detour_classifying': True, 'detour': {'chapter': RIDGE, 'side': 'A'}}
+        cfg = self.parse('--resume', str(previous['dir']), previous=previous)
+        self.assertFalse(cfg.allow_detour)
+        self.assertTrue(cfg.resume_detour_classifying)
+        for start, state in (((RIDGE, 'A'), 'level'), ((CORE, 'B'), 'level'), ((CORE, 'B'), 'results')):
+            game = DetourGame(start=start)
+            game.state = state
+            with self.subTest(start=start, state=state), patch('tools.bridge_client.BridgeClient', return_value=game):
+                self.assertTrue(check_resume_position(cfg))
+                self.assertEqual(game.steps, [])
+        # A second run saves/restores the same metrics fact with allow_detour still false.
+        write_run_state(previous['dir'], cfg, 'session', previous)
+        previous['state'] = json.loads((previous['dir'] / 'run_state.json').read_text(encoding='utf-8'))
+        cfg = self.parse('--resume', str(previous['dir']), previous=previous)
+        self.assertFalse(cfg.allow_detour)
+        self.assertTrue(cfg.resume_detour_classifying)
 
     def test_detour_records_and_plan_time_restore_without_death_split(self):
         metrics = Metrics(self.root / 'metrics.json', 'a', 'b', 'high', 60)

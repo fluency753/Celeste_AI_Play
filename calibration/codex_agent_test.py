@@ -55,6 +55,14 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         metadata = patch('orchestrator.codex_container._run', side_effect=metadata_process)
         metadata.start()
         self.addCleanup(metadata.stop)
+        # Model discovery is an external account-container boundary too, including runner.run().
+        catalog = patch('orchestrator.model_catalog.load_models', return_value={'models': []})
+        self.models = catalog.start()
+        self.addCleanup(catalog.stop)
+        account = patch('orchestrator.model_catalog.ensure_account_container',
+                        side_effect=AssertionError('Unit tests must not create an account container'))
+        account.start()
+        self.addCleanup(account.stop)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -305,8 +313,16 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                     result = await self.runner._request('item/tool/call', {'callId': label,
                         'tool': 'read', 'arguments': {'file_path': '/workspace/x'}})
                 self.assertFalse(result['success'])
-                # The tool result is what the model receives; only then is the reminder delivered.
-                self.assertIn('NOTE-REMINDER-TEXT', response_text(result))
+                self.assertNotIn('NOTE-REMINDER-TEXT', response_text(result))
+                self.assertTrue(self.runner.note_reminders.peek())
+                if steer_error:
+                    self.assertEqual(self.runner._inflight_notes, set())
+                    self.runner.rpc.request = AsyncMock(return_value={'turnId': 'turn'})
+                    # The failed reminder is retried by another tool, without repeating the read/game action.
+                    await self.runner._request('item/tool/call', {'tool': 'unknown', 'arguments': {}})
+                params = self.steer_params()
+                self.assertIn('NOTE-REMINDER-TEXT', params['input'][0]['text'])
+                self.record_steer(params)
                 self.assertEqual(self.runner.note_reminders.peek(), ())
 
     async def test_native_tool_reminders_are_steered_and_confirmed_only_when_recorded(self):
@@ -340,8 +356,10 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                         self.runner._event('turn/completed', {'turn': {'id': 'turn', 'status': 'interrupted'}})
                         self.assertTrue(notes.peek())
                         restore.assert_called_once_with(45.0)
-                        retry = await self.runner._request('item/tool/call', {'tool': 'celeste_observe', 'arguments': {}})
-                        self.assertIn('NOTE-REMINDER-TEXT', response_text(retry))
+                        self.runner.turn_done.clear()
+                        await self.runner._request('item/tool/call', {'tool': 'unknown', 'arguments': {}})
+                        self.assertIn('NOTE-REMINDER-TEXT', self.steer_params()['input'][0]['text'])
+                        self.record_steer()
                 await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
 
     async def test_read_tools_carry_live_narration_reminder(self):
@@ -353,7 +371,79 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                     patch('orchestrator.codex_agent.read_file', **worker):
                 result = await self.runner._request('item/tool/call', {'callId': 'live-read',
                     'tool': 'read', 'arguments': {'file_path': '/workspace/notes.md'}})
-            self.assertIn(LIVE_NOTE, response_text(result))
+            self.assertNotIn(LIVE_NOTE, response_text(result))
+            self.assertIn(LIVE_NOTE, self.steer_params()['input'][0]['text'])
+            self.record_steer()
+
+    async def test_dynamic_reminders_cover_success_and_early_rejections_without_return_visibility(self):
+        cases = [('celeste_narrate', {'thought': 'test'}), ('celeste_write', {}),
+                 ('read', ['invalid']), ('unknown', {}), ('celeste_observe', {})]
+        self.runner.study = None
+        for tool, args in cases:
+            with self.subTest(tool=tool):
+                self.runner.note_reminders.pending['after'] = (1, 'HIDDEN-RETURN-NOTICE')
+                result = await self.runner._request('item/tool/call', {'tool': tool, 'arguments': args})
+                self.assertNotIn('HIDDEN-RETURN-NOTICE', response_text(result))
+                params = self.steer_params()
+                self.assertIn('HIDDEN-RETURN-NOTICE', params['input'][0]['text'])
+                self.assertTrue(self.runner.note_reminders.peek())
+                # Ignore the entire dynamic tool return, as a code-mode wrapper may do.
+                self.record_steer(params)
+                self.assertEqual(self.runner.note_reminders.peek(), ())
+
+    async def test_dynamic_reminder_delivery_failure_timeout_and_turn_end_keep_retryable_state(self):
+        from orchestrator.codex_agent import LIVE_NOTE
+        for error in (RuntimeError('rejected'), TimeoutError('unknown queue state')):
+            with self.subTest(error=type(error).__name__):
+                self.runner.turn_done.clear()
+                self.runner.rpc.request = AsyncMock(side_effect=error)
+                self.runner.note_reminders.pending['after'] = (1, 'RETRY-NOTICE')
+                with patch.object(self.metrics, 'take_live_reminder', return_value=40.0), \
+                        patch.object(self.metrics, 'restore_live_reminder') as restore:
+                    result = await self.runner._request('item/tool/call', {'tool': 'unknown', 'arguments': {}})
+                    self.assertFalse(result['success'])
+                    self.assertTrue(self.runner.note_reminders.peek())
+                    self.assertEqual(bool(self.runner._inflight_notes), isinstance(error, TimeoutError))
+                    if isinstance(error, TimeoutError):
+                        restore.assert_not_called()
+                    self.runner._event('turn/completed', {'turn': {'id': 'turn', 'status': 'interrupted'}})
+                    self.assertEqual(self.runner._inflight_notes, set())
+                    restore.assert_called_once_with(40.0)
+                # An ended originating turn must never forward the reminder into another turn.
+                self.runner.rpc.request = AsyncMock(return_value={'turnId': 'turn'})
+                await self.runner._request('item/tool/call', {'tool': 'unknown', 'arguments': {}})
+                self.runner.rpc.request.assert_not_awaited()
+                self.runner.turn_done.clear()
+                with patch.object(self.metrics, 'take_live_reminder', return_value=40.0):
+                    await self.runner._request('item/tool/call', {'tool': 'unknown', 'arguments': {}})
+                params = self.steer_params()
+                self.assertIn('RETRY-NOTICE', params['input'][0]['text'])
+                self.assertIn(LIVE_NOTE, params['input'][0]['text'])
+                self.record_steer(params)
+                self.assertEqual(self.runner.note_reminders.peek(), ())
+
+    async def test_gate_wait_cannot_rebind_old_dynamic_result_or_reminder_to_new_turn(self):
+        self.runner.study = None
+        for tool in ('read', 'celeste_observe'):
+            with self.subTest(tool=tool):
+                self.runner.turn_id = 'turn'
+                self.runner.rpc.request.reset_mock()
+                self.server.call_tool.reset_mock()
+                self.runner.note_reminders.pending['after'] = (1, 'OLD-TURN-REMINDER')
+
+                async def decide(*args):
+                    self.runner.turn_id = 'successor'
+                    return True, ''
+
+                self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(), decide=decide)
+                with patch('orchestrator.codex_agent.read_file', return_value=self.file_result(path='/workspace/x')):
+                    result = await self.runner._request('item/tool/call', {'tool': tool,
+                        'arguments': {'file_path': '/workspace/x'} if tool == 'read' else {}})
+                self.assertFalse(result['success'])
+                self.runner.rpc.request.assert_not_awaited()
+                self.server.call_tool.assert_not_awaited()
+                self.assertTrue(self.runner.note_reminders.peek())
+                self.assertEqual(self.runner._inflight_notes, set())
 
     async def test_glob_grep_and_listing_need_no_program_budget_in_readonly_chat_or_pause(self):
         self.runner.chat_only = self.runner.paused = True

@@ -185,16 +185,23 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(runner.turns, 0)
             self.assertEqual(runner.pending_messages, [])
             runner.rpc.request.assert_not_awaited()
+            runner.rpc.request.return_value = {'turnId': 'turn'}
             response = await runner._request('item/tool/call', {'callId': 'observe-one',
                 'tool': 'celeste_observe', 'arguments': {}})
             self.assertTrue(response['success'])
-            self.assertIn('上下文刚完成压缩', response_text(response))
+            self.assertNotIn('上下文刚完成压缩', response_text(response))
+            sent = runner.rpc.request.call_args.args[1]
+            self.assertIn('上下文刚完成压缩', sent['input'][0]['text'])
+            self.assertTrue(runner.note_reminders.peek())
+            runner._event('item/completed', {'item': {'type': 'userMessage',
+                'clientId': sent['clientUserMessageId']}})
+            self.assertEqual(runner.note_reminders.peek(), ())
             self.assertNotIn('本监测周期尚未', response_text(response))
             response = await runner._request('item/tool/call', {'callId': 'observe-two',
                 'tool': 'celeste_observe', 'arguments': {}})
             self.assertNotIn('系统·笔记提醒', response_text(response))
             self.assertEqual(runner.turns, 0)
-            runner.rpc.request.assert_not_awaited()
+            runner.rpc.request.assert_awaited_once()
 
     async def test_codex_natural_user_turn_includes_pending_note_without_creating_another_turn(self):
         with runner_fixture(chat_only=True) as (runner, session, notes):

@@ -373,6 +373,15 @@ class GameSession:
             self._navigation = ChapterNavigation()
         self.metrics.update(piece_done=False)
         self._pending_complete = cfg.resume_completion_pending
+        # 统计是绕行分类的持久化来源；当前许可关闭不改变已经归属的地图。
+        self._detour_latched = cfg.play_scope != 'visited' and bool(
+            cfg.resume_detour_classifying or metrics.state.detour_classifying or metrics.state.detour)
+        previous_detour = metrics.state.detour if self._detour_latched else None
+        self._detour = ({'sid': previous_detour['chapter'], 'side': previous_detour['side'],
+                         'completed': bool(previous_detour.get('completed'))} if previous_detour else None)
+        self._detour_ending = bool(previous_detour and previous_detour.get('completed')) and cfg.cutscene_mode != 'agent'
+        if self._detour_latched:
+            self.metrics.update(detour_classifying=True)
         self._ending_pending = False    # auto 剧情模式：最终章刚通关，片尾还没走完（这次动作里由 _finish_ending 处理）
         self._ending_agent = False      # 片尾主控没能走完，交给智能体：开放全部按键，回到选章地图才算完成
         self._idle_handover = False     # 不可操作又不在剧情里等满 IDLE_GIVE_UP_FRAMES，已交给智能体（状态变了就清掉）
@@ -445,7 +454,7 @@ class GameSession:
         if obs.get('scene') == 'Level' and not self.chapter_finished and self.piece is not None:
             sid = (obs.get('level') or {}).get('sid')
             # 开了计划外地图时可以停在别的官方地图里续跑：由 _note_map 记为计划外，计划不变
-            if sid != CHAPTER_SIDS.get(self.piece.chapter) and not detour_enabled(self.cfg):
+            if sid != CHAPTER_SIDS.get(self.piece.chapter) and not self._classifying():
                 raise RuntimeError(f'当前地图 {sid} 与指定章节不一致，请自行返回选章地图重新选择')
         state = self.metrics.state
         if getattr(self.cfg, '_extended_plan', None) and (state.plan_banked_ticks or state.plan_session_ticks):
@@ -2362,6 +2371,8 @@ class GameSession:
         开关打开过就一直区分（关掉后也按实际地图结束绕行）；从没打开过时与原来相同，不做任何记录。"""
         if detour_enabled(self.cfg):
             self._detour_latched = True
+            if not self.metrics.state.detour_classifying:
+                self.metrics.update(detour_classifying=True)
         identity = map_identity(obs) if isinstance(obs, dict) else None
         if identity is None:
             self._plan_progress_ok = False
@@ -2401,7 +2412,7 @@ class GameSession:
         self._detour_agent = False
         # 第一次看到就已通关（续跑停在计划外地图的片尾或结算）：照常走完收尾，不补记成绩
         self._detour_ending = completed and self.cfg.cutscene_mode != 'agent'
-        self.metrics.update(detour={'chapter': sid, 'side': side})
+        self.metrics.update(detour={'chapter': sid, 'side': side, **({'completed': True} if completed else {})})
         print(f"[run] 进入计划外地图 {map_label(sid, side)}", flush=True)
         self._add_detour_note(f'已进入计划外地图{map_label(sid, side)}：这里的通关不完成计划、不计入分段成绩与总计时；'
                               '计划章节仍是本次任务。')
@@ -2413,6 +2424,7 @@ class GameSession:
         if not detour['completed']:
             detour['completed'] = True
             record = self.metrics.add_detour(detour['sid'], detour['side'], self.metrics.state.chapter_time_ticks)
+            self.metrics.update(detour={'chapter': detour['sid'], 'side': detour['side'], 'completed': True})
             label = map_label(detour['sid'], detour['side'])
             print(f"[run] 计划外地图 {label} 通关：章节计时 {fmt_ticks(record['ticks'])}（不计入分段成绩与总计时）", flush=True)
             self._add_detour_note(f'计划外地图{label}已通关（章节计时 {fmt_ticks(record["ticks"])}）：不计入本次计划、分段成绩与总计时，'

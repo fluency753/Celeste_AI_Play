@@ -303,26 +303,22 @@ class CodexRunner(SessionControls):
     def _fresh_notes(self):
         return tuple(row for row in self.note_reminders.peek() if row[0] not in self._inflight_notes)
 
-    def _notes_response(self, response):
-        # 正在经 steer 投递、尚未确认记入历史的提醒不重复附加。
-        offered = self._fresh_notes()
-        if offered:
-            self.note_reminders.acknowledge(offered)
-            response['contentItems'].append({'type': 'inputText', 'text': '\n'.join(text for _, text in offered)})
+    async def _notes_response(self, response, origin_turn):
+        # code-mode 可以隐藏整个工具返回；所有工具的提醒走同一条带回执的输入渠道。
+        task = self.offer_native_reminders(origin_turn)
+        if task is not None:
+            await task
         return response
 
-    def _live_note(self):
-        if self.cfg.live and self.cfg.live_remind_s and self.metrics.take_live_reminder(self.cfg.live_remind_s):
-            return '\n' + LIVE_NOTE
-        return ''
-
     def offer_native_reminders(self, turn):
-        """原生 Shell／补丁的结果由 Codex 生成：提醒改经同轮 steer 投递，确认记入历史后才算送达。"""
+        """原生及动态工具共用同轮 steer；确认记入历史后才算送达。"""
         if not self._steerable(turn) or not self.note_reminders:
             return
         offered = self._fresh_notes()
+        live_inflight = any(entry['kind'] == 'reminder' and entry.get('waited') is not None
+                            for entry in self._receipts.values())
         waited = (self.metrics.take_live_reminder(self.cfg.live_remind_s)
-                  if self.cfg.live and self.cfg.live_remind_s else None)
+                  if self.cfg.live and self.cfg.live_remind_s and not live_inflight else None)
         if not offered and waited is None:
             return
         text = '\n'.join([text for _, text in offered] + ([LIVE_NOTE] if waited is not None else []))
@@ -333,10 +329,14 @@ class CodexRunner(SessionControls):
         task = asyncio.create_task(self._send_reminder(turn, receipt, text))
         self._receipt_tasks.add(task)
         task.add_done_callback(self._receipt_tasks.discard)
+        return task
 
     async def _send_reminder(self, turn, receipt, text):
         try:
             await self._steer_receipt(turn, [{'type': 'text', 'text': '（系统提醒｜' + receipt + '）' + text}], receipt)
+        except TimeoutError:
+            # 请求可能已排队，保留回执等历史事件或轮次结算，避免并发重复投递。
+            pass
         except (RuntimeError, OSError):
             self._drop_receipt(receipt)
 
@@ -347,14 +347,15 @@ class CodexRunner(SessionControls):
         requested = params.get('tool', '')
         name = LEGACY_FILE_TOOLS.get(requested, requested)
         args = params.get('arguments') or {}
+        origin_turn = self.turn_id
         if name in {'celeste_bash', 'celeste_write'}:
-            return self._notes_response({'contentItems': [{'type': 'inputText', 'text':
+            return await self._notes_response({'contentItems': [{'type': 'inputText', 'text':
                 '此会话保留了旧编程工具登记，但该入口已停用，本次未执行。请用容器内原生 Shell 和 apply_patch；'
-                f'只读聊天可用 {self._reader_name()} 读取文件；运行程序须先由用户开放程序能力。'}], 'success': False})
+                f'只读聊天可用 {self._reader_name()} 读取文件；运行程序须先由用户开放程序能力。'}], 'success': False}, origin_turn)
         reload_ticket = (getattr(self.session, 'reload_epoch', 0),
                          getattr(self.session, 'reload_observation_required', False))
         if not isinstance(args, dict):
-            return self._notes_response({"contentItems": [{"type": "inputText", "text": "工具参数必须是 JSON 对象"}], "success": False})
+            return await self._notes_response({"contentItems": [{"type": "inputText", "text": "工具参数必须是 JSON 对象"}], "success": False}, origin_turn)
         if name == 'celeste_cutscene' and 'frames' in args:
             # Existing Codex threads retain their original optional tool fields on resume.
             # Waiting now belongs to the host; the cached frame field has no effect.
@@ -386,7 +387,7 @@ class CodexRunner(SessionControls):
                     from .pausegate import PauseGate
                     gate = self._native_gate = PauseGate(self.metrics, enabled=False)
                 gate.note_tool_use(ident, ident)
-                # 提醒由本次工具结果（_notes_response 与直播提醒）带回，不在决策时提前确认送达。
+                # 提醒由 _notes_response 经带回执的同轮输入投递，不在决策时确认。
                 decision = await decide_tool(gate, FILE_TOOLS[name], ident, session=self.native_session,
                                              reminders=False)
                 if decision['decision'] != 'allow':
@@ -398,7 +399,6 @@ class CodexRunner(SessionControls):
                 if not allowed:
                     raise ValueError(why)
             if name in FILE_TOOLS:
-                origin_turn = self.turn_id
                 worker_args = {**args, '_tool_names': {key: self._file_tool_name(key) for key in FILE_TOOLS}}
                 try:
                     result = await (asyncio.to_thread(read_file, self.container, worker_args) if name == 'read' else
@@ -422,7 +422,6 @@ class CodexRunner(SessionControls):
             elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate", "celeste_stop_run") and self.prepare_only:
                 raise ValueError("本次只做知识库准备，不开放游戏操作，不会进入关卡。")
             elif game and self.game_server is not None and not self.prepare_only:
-                origin_turn = self.turn_id
                 if name in ("celeste_act", "celeste_observe") and self.study and not self.study.complete():
                     raise ValueError(self.study.reminder(reader=self._reader_name()))
                 if name in {"celeste_act", "celeste_observe", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate"}:
@@ -443,13 +442,9 @@ class CodexRunner(SessionControls):
                     return await self._game_response(result, name, ident, origin_turn)
             else:
                 raise ValueError(f"未开放的工具：{name}")
-            if self.cfg.live and name != "celeste_narrate":
-                elapsed = self.metrics.take_live_reminder(self.cfg.live_remind_s)
-                if elapsed:
-                    text += "\n" + LIVE_NOTE
-            return self._notes_response({"contentItems": [{"type": "inputText", "text": text}], "success": True})
+            return await self._notes_response({"contentItems": [{"type": "inputText", "text": text}], "success": True}, origin_turn)
         except Exception as exc:
-            return self._notes_response({"contentItems": [{"type": "inputText", "text": str(exc)}], "success": False})
+            return await self._notes_response({"contentItems": [{"type": "inputText", "text": str(exc)}], "success": False}, origin_turn)
         finally:
             self.metrics.tool_end(ident)
 
@@ -459,10 +454,9 @@ class CodexRunner(SessionControls):
         Codex 会按截断策略缩短动态工具文本（实测 9.6 万字符只保留约 1.2–5 万），用户输入则原样保留；
         所以内容不放进工具结果。知识库行在 Codex 确认把这条输入记入历史后才计量（见 _input_recorded）。
         """
-        live = self._live_note()
         if result.get('kind') == 'error':
-            return self._notes_response({'contentItems': [{'type': 'inputText',
-                'text': (result.get('error') or result.get('text') or '读取失败') + live}], 'success': False})
+            return await self._notes_response({'contentItems': [{'type': 'inputText',
+                'text': (result.get('error') or result.get('text') or '读取失败')}], 'success': False}, origin_turn)
         info = result.get('file') or {}
         path = result.get('path') or info.get('filePath')
         kb_read = (self.study is not None and info.get('filePath') in self.study.container_paths()
@@ -486,9 +480,9 @@ class CodexRunner(SessionControls):
             self._receipts.pop(receipt, None)
             failure = exc
         if failure is not None:
-            return self._notes_response({'contentItems': [{'type': 'inputText', 'text':
+            return await self._notes_response({'contentItems': [{'type': 'inputText', 'text':
                 f'文件内容交付失败：{failure}。本次未计入知识库阅读；可以重新调用 {tool}，'
-                '不需要重复任何游戏操作。' + live}], 'success': False})
+                '不需要重复任何游戏操作。'}], 'success': False}, origin_turn)
         kind = result.get('kind')
         if kind == 'text' and info.get('numLines'):
             last = info['startLine'] + info['numLines'] - 1
@@ -510,7 +504,7 @@ class CodexRunner(SessionControls):
         elif result.get('truncated'):
             text += (f"\n内容未全部返回；下一次 offset={result['next_offset']} 继续读取。"
                      if result.get('next_offset') is not None else '\n内容超过本次输出预算，请缩小范围读取。')
-        return self._notes_response({'contentItems': [{'type': 'inputText', 'text': text + live}], 'success': True})
+        return await self._notes_response({'contentItems': [{'type': 'inputText', 'text': text}], 'success': True}, origin_turn)
 
     async def _game_response(self, result, tool, call_id, origin_turn):
         """Code-mode may stringify any tool value: images must never enter that value."""
@@ -540,9 +534,9 @@ class CodexRunner(SessionControls):
                 content.append({'type': 'inputText', 'text':
                     '图像交付失败：' + str(exc) + '。上面的游戏执行结果仍有效，勿重复已执行动作；'
                     '试玩保持暂停，请结束本轮并等待处理。恢复后重新observe，不沿用旧图。'})
-                return self._notes_response({'contentItems': content, 'success': False})
+                return await self._notes_response({'contentItems': content, 'success': False}, origin_turn)
             content.append({'type': 'inputText', 'text': '观测图像已作为同轮图像附件送达。'})
-        return self._notes_response({'contentItems':content,'success':not result.is_error})
+        return await self._notes_response({'contentItems':content,'success':not result.is_error}, origin_turn)
 
     def _elapsed(self, started):
         if self.naming_only:

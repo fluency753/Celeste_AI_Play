@@ -19,6 +19,11 @@ def enabled(cfg) -> bool:
     return bool(getattr(cfg, 'allow_detour', False)) and getattr(cfg, 'play_scope', 'chapter') != 'visited'
 
 
+def classifying(cfg) -> bool:
+    """续跑预检也须保留分类；当前入场权限仍只由 enabled 决定。"""
+    return (enabled(cfg) or bool(getattr(cfg, 'resume_detour_classifying', False))) and getattr(cfg, 'play_scope', 'chapter') != 'visited'
+
+
 def map_label(sid, side) -> str:
     return f'{chapter_name(sid)} {side or "A"}面'
 

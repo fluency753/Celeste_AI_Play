@@ -424,6 +424,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if (args.agent, args.save) != (state["agent"], state["save"]):
             raise SystemExit(f"--resume 的运行是 --agent {state['agent']} --save {state['save']}，与这次给的不一致")
         cfg.resume_completion_pending = bool(state.get('completion_pending'))
+        # 分类事实与当前许可独立。旧记录仍可由原开关或已记录的绕行身份/成绩恢复。
+        cfg.resume_detour_classifying = cfg.play_scope != 'visited' and bool(
+            previous['metrics'].get('detour_classifying') or previous['metrics'].get('detour')
+            or previous['metrics'].get('detours') or state.get('allow_detour'))
         if cfg.play_scope == 'visited':
             if cfg.save_slot is None or cfg.save_slot != state.get('save_slot'):
                 raise SystemExit('已到访地图自由探索续跑须沿用原存档槽位')
@@ -806,7 +810,8 @@ def check_resume_position(cfg: RunConfig) -> bool:
             if not right_save:
                 raise SystemExit(f"游戏当前在存档 {save!r} 的关卡里，不是 {cfg.save!r}：先退出那个关卡再续跑")
             # 开了计划外地图时可以停在别的官方地图里续跑（主控连上后按实际地图记为计划外，计划不变）
-            if sid != want and cfg.play_scope != 'visited' and not getattr(cfg, 'allow_detour', False):
+            from .detour import classifying
+            if sid != want and cfg.play_scope != 'visited' and not classifying(cfg):
                 raise SystemExit(f"游戏当前在 {chapter_name(sid)}，续跑的章节是 {chapter_name(want)}：请确认 --resume 的目录")
             print(f"[run] 续跑：游戏停在 {chapter_name(sid)} 房间 {(obs.get('level') or {}).get('room')}", flush=True)
             return True
@@ -818,7 +823,8 @@ def check_resume_position(cfg: RunConfig) -> bool:
         if cfg.cutscene_mode == 'agent' and right_save and cfg.resume_completion_pending and obs.get('scene') in {'AreaComplete','LevelExit','OverworldLoader','Overworld'}:
             return True
         completion = obs.get('completion') or {}
-        if (cfg.cutscene_mode == 'agent' and right_save and getattr(cfg, 'allow_detour', False) and cfg.play_scope != 'visited'
+        from .detour import classifying
+        if (cfg.cutscene_mode == 'agent' and right_save and classifying(cfg) and cfg.play_scope != 'visited'
                 and obs.get('scene') == 'AreaComplete' and completion.get('sid')
                 and (completion.get('sid'), completion.get('side') or 'A') != (want, 'A')):
             return True   # 停在计划外地图的结算：agent 自己确认，主控连上后按实际地图记为计划外（计划章节自己的结算走原来的路）
