@@ -182,9 +182,12 @@ def stiffness_rule(cfg) -> str:
     unit = float(getattr(cfg, "stiff_unit_s", 150.0))
     unit_text = f"{unit / 60:g} 分钟" if unit >= 60 and (unit * 2) % 60 == 0 else f"{unit:g} 秒"
     think, tool = getattr(cfg, "stiff_think_s", 0.2), getattr(cfg, "stiff_tool_s", 0.4)
+    cap = getattr(cfg, "stiff_max_s", None)
     return (f"本次开启了思考僵直：游戏冻结期间花掉的现实时间会按比例变成角色的僵直。从上一次 act 结束（本次运行的第一次从第一次调用游戏工具算起）"
             f"到下一次 act 执行，思考时间满 {unit_text}后，每 {unit_text}僵直 {think:g} 秒；运行工具（Bash 程序、观测等）的时间满 {unit_text}后，"
             f"每 {unit_text}另外僵直 {tool:g} 秒。两部分各自计算：不满 {unit_text}的那部分不僵直，满了之后按实际时长等比例计算。"
+            + (f"两部分加起来每次最多僵直 {float(cap):g} 秒。" if cap is not None else "")
+            +
             "用户暂停、等待额度和上下文压缩的时间不算。"
             f"僵直发生在下一次 act 执行你的按键之前，不计入每次 act 的 {act_frame_cap(cfg)} 帧上限：角色保持上一帧的按键不变（例如一直按着方向或抓墙）；"
             "僵直期间死亡会立刻松开所有按键；死亡、进入别的房间、通关或进入剧情时僵直结束，这次 act 的按键（包括自动重试）都不执行；角色不可操作时（剧情等）不僵直。"

@@ -114,6 +114,20 @@ class StiffnessTests(unittest.TestCase):
         self.freeze(90, 60)
         self.assertAlmostEqual(self.s.freeze_stats()["seconds"], 1.5 + 2, places=3)
 
+    def test_max_stiffness_caps_the_sum_of_both_parts(self):
+        """8A 的设置：思考与工具各每 2.5 分钟 0.2 / 0.25 秒，两部分加起来每次最多 1.5 秒（stiff_max_s）。"""
+        self.s.cfg.stiff_think_s, self.s.cfg.stiff_tool_s, self.s.cfg.stiff_max_s = 0.2, 0.25, 1.5
+        for (think, tool), seconds in (((750, 0), 1.0), ((150, 150), 0.45), ((1500, 0), 1.5), ((900, 900), 1.5),
+                                       ((3000, 3000), 1.5), ((100, 100), 0)):
+            with self.subTest(think=think, tool=tool):
+                self.freeze(think, tool)
+                stats = self.s.freeze_stats()
+                self.assertAlmostEqual(stats["seconds"], seconds, places=3)
+                self.assertEqual(stats["frames"], round(seconds * 60))
+        self.s.cfg.stiff_max_s = None                       # 空着 = 不另设上限
+        self.freeze(3000, 3000)
+        self.assertAlmostEqual(self.s.freeze_stats()["seconds"], 4 + 5, places=3)
+
     def test_holds_last_frame_before_the_agent_inputs_and_outside_the_frame_cap(self):
         self.s._remember_held_input({"inputs": ["10,R", "5,R,G"]}, {"result": {"consumed": 15}})
         self.freeze(300, 150)                      # 0.6 + 0.6 = 1.2 秒 = 72 帧
@@ -341,8 +355,23 @@ class StiffnessSettingsTests(unittest.TestCase):
         self.assertIn("每 2.5 分钟另外僵直 0.4 秒", text)
         self.assertIn("不计入每次 act 的 150 帧上限", text)
         self.assertIn("僵直期间死亡会立刻松开所有按键", text)
+        self.assertNotIn("每次最多僵直", text)                         # 默认不另设上限，文字与原来相同
         cfg.engine = "codex"                      # 两种执行器都适用
         self.assertIn("本次开启了思考僵直", play_prompt(cfg))
+
+    def test_max_stiffness_is_a_tunable_and_appears_in_the_rule_only_when_set(self):
+        from orchestrator.tuning import apply, coerce, parse_pairs
+        cfg = RunConfig(agent="t", save="t", model="m", mode="explore", knowledge_profile="explore", chapter=9,
+                        stiffness=True)
+        apply(cfg, parse_pairs(["stiff_tool_s=0.25", "stiff_max_s=1.5"]))
+        self.assertEqual((cfg.stiff_unit_s, cfg.stiff_think_s, cfg.stiff_tool_s, cfg.stiff_max_s), (150, 0.2, 0.25, 1.5))
+        self.assertEqual(cfg.tuning, {"stiff_tool_s": 0.25, "stiff_max_s": 1.5})   # 续跑沿用
+        text = play_prompt(cfg)
+        self.assertIn("每 2.5 分钟另外僵直 0.25 秒", text)
+        self.assertIn("两部分加起来每次最多僵直 1.5 秒", text)
+        self.assertIsNone(coerce("stiff_max_s", ""))                               # 空着 = 不限
+        with self.assertRaises(ValueError):
+            coerce("stiff_max_s", -1)
 
     def test_console_switch_is_explore_only_and_off_by_default(self):
         base = {"agent": "opus5.5", "mode": "explore", "save": {"name": "opus5.5", "slot": 8, "create": False},

@@ -733,6 +733,9 @@ class GameSession:
         unit = float(getattr(self.cfg, "stiff_unit_s", 150.0))
         seconds = ((self.cfg.stiff_think_s * think_s / unit if think_s >= unit else 0.0)
                    + (self.cfg.stiff_tool_s * tool_s / unit if tool_s >= unit else 0.0))
+        cap = getattr(self.cfg, "stiff_max_s", None)
+        if cap is not None:
+            seconds = min(seconds, float(cap))     # 每次最多僵直（可调参数 stiff_max_s）
         frames = min(STIFF_MAX_FRAMES, int(round(seconds * 60)))
         return {"think_s": round(think_s, 1), "tool_s": round(tool_s, 1), "seconds": round(frames / 60, 3),
                 "frames": frames}

@@ -222,6 +222,7 @@ class RunConfig:
     stiff_unit_s: float = 150.0      # 思考僵直：计时单位（思考、工具时间各自满一份才开始僵直，之后按比例）
     stiff_think_s: float = 0.2       # 每份思考时间的僵直秒数
     stiff_tool_s: float = 0.4        # 每份工具时间（Bash 程序、观测等）另外僵直的秒数
+    stiff_max_s: float | None = None  # 一次冻结最多僵直多少秒；None = 不另设上限（仍受单次推进上限约束）
     assist_capacity: int = 100       # 探索模式的限额预测：体力上限
     assist_initial: int = 60         # 初始体力
     assist_regen_frames: int = 60    # 真实操作每多少个移动帧恢复 1 点

@@ -39,6 +39,8 @@ def current_settings(cfg):
         settings['planning'] = {key: getattr(cfg, key) for key in ('rounds_per_room', 'room_scale', 'death_bonus')}
     if cfg.stiffness:
         settings['stiffness'] = {key: getattr(cfg, key) for key in ('stiff_unit_s', 'stiff_think_s', 'stiff_tool_s')}
+        if getattr(cfg, 'stiff_max_s', None) is not None:      # 没设上限时与原来的设置快照相同
+            settings['stiffness']['stiff_max_s'] = cfg.stiff_max_s
     if getattr(cfg, 'tuning', None):
         settings['tuning'] = cfg.tuning
     return settings

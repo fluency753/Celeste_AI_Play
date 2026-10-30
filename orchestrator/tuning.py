@@ -88,6 +88,8 @@ TUNABLES: tuple[Tunable, ...] = (
             "思考时间每满一个计时单位，下一次 act 前僵直这么久", ("explore",)),
     Tunable("stiff_tool_s", "每份工具时间的僵直", "探索：思考僵直", float, 0.4, 0, 30, "秒",
             "运行工具（Bash 程序、观测等）的时间每满一个计时单位，另外僵直这么久", ("explore",)),
+    Tunable("stiff_max_s", "每次最多僵直", "探索：思考僵直", float, None, 0, 600, "秒",
+            "一次冻结按比例算出的僵直超过它就按它算；提示词里的说明跟着变。空着 = 不另设上限", ("explore",), optional=True),
     Tunable("assist_capacity", "体力上限", "探索：限额预测", int, 100, 1, 10000, "点", modes=("explore",)),
     Tunable("assist_initial", "初始体力", "探索：限额预测", int, 60, 0, 10000, "点", modes=("explore",)),
     Tunable("assist_regen_frames", "每多少个移动帧恢复 1 点", "探索：限额预测", int, 60, 1, 3600, "帧", modes=("explore",)),
