@@ -167,6 +167,33 @@ class PromptOverrideTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "主控在运行"):
                 console_api.prompt_reset("hud_zh.md")
 
+    def test_removed_program_placeholders_can_be_read_and_explicitly_migrated(self):
+        from orchestrator import personal_prompts
+        from overlay import console_api
+        self.overrides.mkdir()
+        with patch.object(console_api, 'orchestrator_status', return_value={'running': False}), \
+                patch.object(personal_prompts, 'STORE', Path(self.folder.name) / 'personal.json'):
+            for marker in ('{program_freedom}', '{program_lead}', '{parallel_rule}'):
+                with self.subTest(marker=marker):
+                    path = self.overrides / 'explore_programs_zh.md'
+                    original = '个人修改。' + marker
+                    path.write_text(original, encoding='utf-8')
+                    doc = console_api.prompt_read(path.name)
+                    self.assertEqual(doc['text'], original)
+                    with self.assertRaisesRegex(ValueError, '已移除的占位符'):
+                        console_api.prompt_preview({'mode': 'explore'})
+                    with self.assertRaisesRegex(ValueError, '已移除的占位符'):
+                        console_api.prompt_write(path.name, original + '新修改', doc['version'])
+                    self.assertEqual(path.read_text(encoding='utf-8'), original)
+                    migrated = doc['repo_text'] + '\n个人修改。'
+                    saved = console_api.prompt_write(path.name, migrated, doc['version'])
+                    self.assertEqual(saved['text'], migrated)
+                    preview = console_api.prompt_preview({'mode': 'explore'})
+                    program = ''.join(p['text'] for p in preview['guide_parts']
+                                      if p['source'] == path.name)
+                    self.assertIn('个人修改。', program)
+                    self.assertIn('使用 C++', program)
+
 
 class PromptPreviewTests(unittest.TestCase):
     def test_preview_matches_what_executors_send(self):

@@ -61,15 +61,6 @@ def cpu_rule(cfg) -> str:
     return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"
 
 
-# 两种执行器共用自写程序约定；保留占位符，兼容 local/prompts 中的模板覆盖。
-PROGRAM_FREEDOM = "。你可以自行编写模拟器、搜索或其他辅助程序，自由发挥。"
-# C++ 要求源于 Python 循环逐个启动模拟器进程的性能问题；资源效率总述见 explore_programs_zh.md。
-PROGRAM_LEAD = ("自写模拟器、搜索、穷举或批量计算工具使用 C++；适合并行的计算使用多线程，"
-                "遵守本次 CPU 与计算额度限制，")
-PARALLEL_RULE = ("；并行优化同时关注去重、择优和汇总阶段，避免串行处理或频繁同步成为瓶颈；"
-                 "用相同输入核对多线程与单线程结果，确认结果一致。")
-
-
 # 思考语句的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
 THOUGHT_MOOD = ("思考语句的语气不必一直冷静理智，可以自然流露真实的情绪，比如找到好路线时的高兴、反复失败后的懊恼、"
                "面对难关时的紧张；但不要夸张，像正常人说话一样就好。")
@@ -184,10 +175,20 @@ def stiffness_rule(cfg) -> str:
             "打算长时间思考或运行程序之前，先让角色停在保持当前按键也安全的位置。")
 
 
+def check_program_placeholders(text: str) -> None:
+    """旧本机模板须显式迁移，不能把已移除的标记原样送给模型。"""
+    removed = [key for key in ('{program_freedom}', '{program_lead}', '{parallel_rule}') if key in text]
+    if removed:
+        raise ValueError('提示词使用了已移除的占位符：' + '、'.join(removed)
+                         + '；请在控制台“提示词”中对照 explore_zh.md 与 explore_programs_zh.md 的共享模板，'
+                           '将固定说明直接写入正文并保留个人修改。迁移说明见 docs/USAGE.md“个人追加要求”。')
+
+
 def fill(text: str, cfg) -> str:
     """把提示词里的占位符换成本次的值：可调参数（orchestrator/tuning.py；默认值下与原来的文字完全相同），
     以及随设置变化的游戏工具清单与剧情处理说明。"""
     from .tuning import seconds_text
+    check_program_placeholders(text)
     workspace = workspace_capabilities(cfg)
     if "{game_tool_list}" in text:
         text = text.replace("{game_tool_list}", game_tool_list(cfg))
@@ -221,9 +222,6 @@ def fill(text: str, cfg) -> str:
         "{act_min_frames}": str(act_frame_min(cfg)),
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
-        "{program_freedom}": PROGRAM_FREEDOM if workspace.programs else "。",
-        "{program_lead}": PROGRAM_LEAD,
-        "{parallel_rule}": PARALLEL_RULE,
         "{stiffness_rule}": stiffness_rule(cfg),
         "{thought_brief_rule}": thought_brief_rule(cfg),
         "{thought_mood}": THOUGHT_MOOD,

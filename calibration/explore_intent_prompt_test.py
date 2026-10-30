@@ -2,7 +2,7 @@
 import unittest
 
 from orchestrator.config import RunConfig
-from orchestrator.prompting import fill, play_prompt, prompt_parts
+from orchestrator.prompting import PROMPTS, play_prompt, prompt_parts
 from orchestrator.sim_assist import AssistRules
 
 
@@ -67,13 +67,17 @@ class ExploreIntentPromptTests(unittest.TestCase):
                 self.assertNotIn('先评估是否比直接验证更省事', text)
         self.assertTrue(all(section == sections[0] for section in sections))
 
-    def test_legacy_program_placeholders_still_expand_for_both_engines(self):
-        template = '{preset_sim}{program_freedom}{program_lead}{cpu_rule}{parallel_rule}'
-        texts = [fill(template, self.config(engine=engine, agent_cpus_effective=2))
-                 for engine in ('codex', 'claude')]
-        self.assertEqual(texts[0], texts[1])
-        self.assertNotIn('{', texts[0])
-        self.assertIn('本次最多可以用 2 个核，用几个按实际环境决定；并行优化', texts[0])
+    def test_fixed_program_guidance_lives_in_editable_templates(self):
+        from overlay.console_api import PLACEHOLDERS
+        intro = (PROMPTS / 'explore_zh.md').read_text(encoding='utf-8')
+        programs = (PROMPTS / 'explore_programs_zh.md').read_text(encoding='utf-8')
+        for marker in ('{program_freedom}', '{program_lead}', '{parallel_rule}'):
+            self.assertNotIn(marker, intro + programs)
+            self.assertNotIn(marker, PLACEHOLDERS)
+        for expected in ('你可以自行编写', '使用 C++', '去重、择优和汇总阶段'):
+            self.assertIn(expected, programs)
+        self.assertIn('{cpu_rule}', programs)
+        self.assertIn('{explore_program_rule}', programs)
 
     def test_limited_assist_supports_model_comparison_with_unchanged_budget_and_origin(self):
         rules = AssistRules(capacity=75, initial=33, max_candidates=4, max_frames=120, max_total=240)
