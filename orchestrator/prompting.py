@@ -437,20 +437,28 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
         parts += _file_parts("hud_zh.md")
         if cfg.live:
             parts += _file_parts("live_zh.md")
-    from .segments import describe_plan, plan_is_partial
+    from .segments import describe_plan, plan_has_sides, plan_is_partial
     if getattr(cfg, 'play_scope', 'chapter') == 'visited':
         pass  # shared free-exploration instructions below replace the traversal plan
     elif plan_is_partial(getattr(cfg, "plan", None)):
         parts.append(PromptPart("本次的范围（按段通关时自动加）",
                                 "# 本次的范围\n\n" + describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, agent_navigation=cfg.cutscene_mode == 'agent')
                                 + reuse, None, "\n\n"))
-    elif cfg.chapters and len(cfg.chapters) > 1:
-        names = " → ".join(chapter_name_by_id(c) for c in cfg.chapters)
+    elif plan_has_sides(getattr(cfg, "plan", None)) or (cfg.chapters and len(cfg.chapters) > 1):
+        # 计划里有 B／C 面时一章也写出来：智能体要知道玩的是哪一面（只有 A 面时与原来相同）
+        names = " → ".join(plan_names(cfg))
         parts.append(PromptPart("本次的章节（多章时自动加）",
                                 "# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
                                 + ("一章结算并返回选章地图后，按主控报告的下一目标自行导航；主控只核对章节和起点。" if cfg.cutscene_mode == 'agent' else "一章通关后系统自动进入下一章，你接着玩。")
                                 + reuse, None, "\n\n"))
     return parts
+
+
+def plan_names(cfg) -> list[str]:
+    """计划里各截的章节名（B／C 面写"4 黄金山脊 B 面"）；没有带面的计划时按章节编号。"""
+    if getattr(cfg, "plan", None):
+        return [chapter_name_by_id(p.chapter, p.side) for p in cfg.plan]
+    return [chapter_name_by_id(c) for c in (cfg.chapters or [])]
 
 
 def prompt_parts(cfg) -> list[PromptPart]:
@@ -472,7 +480,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
         if cfg.live:
             parts += _file_parts("explore_live_zh.md")
         chapters = cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else [])
-        from .segments import describe_plan, plan_is_partial
+        from .segments import describe_plan, plan_has_sides, plan_is_partial
         if getattr(cfg, 'play_scope', 'chapter') == 'visited':
             pass
         elif plan_is_partial(getattr(cfg, "plan", None)):
@@ -481,7 +489,8 @@ def prompt_parts(cfg) -> list[PromptPart]:
                                     + ("计划不得自行扩展，计划外地图只作绕行（见“计划外地图”一节）。" if detour_enabled(cfg)
                                        else "不得自行扩展。"), None, "\n"))
         elif chapters:
-            parts.append(PromptPart("本次指定章节（自动加）", "本次指定章节：" + "、".join(chapter_name_by_id(c) for c in chapters)
+            parts.append(PromptPart("本次指定章节（自动加）", "本次指定章节：" + "、".join(plan_names(cfg) if plan_has_sides(getattr(cfg, "plan", None))
+                                                                             else [chapter_name_by_id(c) for c in chapters])
                                     + ("；计划不得自行扩展，计划外地图只作绕行（见“计划外地图”一节）。" if detour_enabled(cfg)
                                        else "；不得自行扩展。"), None, "\n"))
     else:

@@ -26,7 +26,8 @@ from .modes import act_frame_cap, act_frame_min, is_explore
 from .thought import thought_problem
 from .workspace_files import tas
 from .workspace_setup import install_game_helpers
-from .segments import Piece, checkpoint_name, checkpoint_room, chapters_of, piece_label, pieces_of, segments_of, split_segments, validate_segments
+from .segments import (Piece, checkpoint_name, checkpoint_room, chapters_of, piece_label, pieces_of, plan_has_sides, segment_key,
+                       segments_of, split_segments, validate_segments)
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
@@ -371,6 +372,9 @@ class GameSession:
             resume_segment=cfg.resume_segment, previous_sid=self.metrics.state.chapter)
         if cfg.play_scope == 'visited':
             self._navigation = ChapterNavigation()
+        # 计划里有 B／C 面：同一章的其他面是另一张地图，按章节＋面区分计划内外（没开计划外地图时也区分，
+        # 计划是 4B 时进了 4A 不算完成计划；只有 A 面的计划与原来相同）
+        self._side_plan = cfg.play_scope != 'visited' and (plan_has_sides(plan) or bool(getattr(cfg, '_side_plan', False)))
         self.metrics.update(piece_done=False)
         self._pending_complete = cfg.resume_completion_pending
         # 统计是绕行分类的持久化来源；当前许可关闭不改变已经归属的地图。
@@ -454,8 +458,15 @@ class GameSession:
         if obs.get('scene') == 'Level' and not self.chapter_finished and self.piece is not None:
             sid = (obs.get('level') or {}).get('sid')
             # 开了计划外地图时可以停在别的官方地图里续跑：由 _note_map 记为计划外，计划不变
-            if sid != CHAPTER_SIDS.get(self.piece.chapter) and not self._classifying():
+            # （只看计划外地图开关：计划里有 B／C 面本身不放宽这项核对）
+            detouring = detour_enabled(self.cfg) or self._detour_latched
+            if sid != CHAPTER_SIDS.get(self.piece.chapter) and not detouring:
                 raise RuntimeError(f'当前地图 {sid} 与指定章节不一致，请自行返回选章地图重新选择')
+            side = (obs.get('level') or {}).get('side') or 'A'
+            if self.piece.side != 'A' and sid == CHAPTER_SIDS.get(self.piece.chapter) and side != self.piece.side \
+                    and not detouring:
+                raise RuntimeError(f'当前地图是 {sid} {side} 面，指定的是{piece_label(self.piece, self._table)}：'
+                                   '面不一致，请自行返回选章地图重新选择')
         state = self.metrics.state
         if getattr(self.cfg, '_extended_plan', None) and (state.plan_banked_ticks or state.plan_session_ticks):
             # 续跑追加了新计划：上一个计划最后那段会话的计时不累加进新计划的第一截（没开过计划外地图时两项都是 0）
@@ -2068,7 +2079,8 @@ class GameSession:
         with self.lock:
             if self.goals.stop_motion.is_set():
                 raise ActError('已请求停止，本次换图未执行')
-            plan_sids = {CHAPTER_SIDS.get(p.chapter) for p in (self.navigation.current, self.navigation.target) if p}
+            plan_maps = self._plan_maps()
+            plan_sids = {sid for sid, side in plan_maps if side == 'A'}     # travel 只去 A 面
             if not detour_enabled(self.cfg) and dest.sid not in plan_sids:
                 raise ActError('计划外地图已被用户关闭：travel 只能回到计划章节')
             if self._pending_complete or self._ending_pending or self._ending_agent or self._detour_ending:
@@ -2083,7 +2095,7 @@ class GameSession:
                     and dest.sid in plan_sids and not permissions_for(self.cfg).restart_chapter):
                 raise ActError('你正在计划章节里：用 travel 重进计划章节等于重启章节，本次没有这项权限，换图未执行')
             target_piece = next((p for p in (self.navigation.target, self.navigation.current)
-                                 if p is not None and CHAPTER_SIDS.get(p.chapter) == dest.sid), None)
+                                 if p is not None and p.side == 'A' and CHAPTER_SIDS.get(p.chapter) == dest.sid), None)
             if target_piece is not None and target_piece.end is not None and dest.checkpoint >= target_piece.end:
                 raise ActError('计划这一截在这个检查点或之前结束，travel 不能直接进到终点，换图未执行；请从这一截的起点或其间的检查点进入')
             try:
@@ -2107,8 +2119,8 @@ class GameSession:
                 pass
             self.metrics.update(status='auto')
             # 从计划章节 A 面的会话里离开：这段会话的章节计时在离开时就结算（不靠回来时"计时倒退"去认）
-            departing_plan = (self._classifying() and current.get('scene') == 'Level' and level.get('sid') in plan_sids
-                              and (level.get('side') or 'A') == 'A' and not level.get('completed'))
+            departing_plan = (self._classifying() and current.get('scene') == 'Level'
+                              and (level.get('sid'), level.get('side') or 'A') in plan_maps and not level.get('completed'))
             plan_ticks = int(level.get('chapterTimeTicks') or 0) if departing_plan else 0
             passed_map = []
 
@@ -2249,7 +2261,8 @@ class GameSession:
         if self.goals.check(values):
             self.user_stopped = True
             self.chapter_queue.clear()
-        split_options = {'side': st.chapter_side} if getattr(self.cfg, 'play_scope', 'chapter') == 'visited' else {}
+        split_options = ({'side': st.chapter_side} if getattr(self.cfg, 'play_scope', 'chapter') == 'visited'
+                         else {'side': self.piece.side} if self.piece is not None and self.piece.side != 'A' else {})
         self.metrics.add_split(st.chapter, self._plan_ticks(), **self._split_range(), **split_options)
         if getattr(self.cfg, 'play_scope', 'chapter') == 'visited':
             if self.user_stopped or self.goals.immediate:
@@ -2295,22 +2308,29 @@ class GameSession:
 
     # ---------------------------------------------------------------- 计划外地图（--allow-detour，见 detour.py）
 
+    def _plan_maps(self) -> set:
+        """当前这一截（换下一截途中还有下一截）的地图：{(sid, 面)}。"""
+        return {(CHAPTER_SIDS.get(p.chapter), p.side) for p in (self.navigation.current, self.navigation.target)
+                if p is not None}
+
     def _plan_map(self, sid, side) -> bool:
-        """这张地图是不是计划里的：当前这一截（换下一截途中还有下一截）的章节 A 面。没有计划时一律算计划内。"""
+        """这张地图是不是计划里的：当前这一截（换下一截途中还有下一截）的章节与面（计划是 4B 时 4A 是计划外，
+        反之亦然）。没有计划时一律算计划内。"""
         if getattr(self.cfg, 'play_scope', 'chapter') == 'visited':
             return True
         pieces = [p for p in (self.navigation.current, self.navigation.target) if p is not None]
         if not pieces:
             return True
-        return side == 'A' and sid in {CHAPTER_SIDS.get(p.chapter) for p in pieces}
+        return (sid, side or 'A') in self._plan_maps()
 
     def _in_detour(self) -> bool:
         """正在计划外地图里（或刚从它结算回到地图、还没进入别的地图）。开关关掉后仍按实际地图结束。"""
         return self._detour is not None
 
     def _classifying(self) -> bool:
-        """区分计划内外：开关打开着，或本次会话里打开过（关掉后地图分类不跟着变，计划章节的 B/C 面仍是计划外）。"""
-        return detour_enabled(self.cfg) or self._detour_latched
+        """区分计划内外：开关打开着，或本次会话里打开过（关掉后地图分类不跟着变，计划章节的 B/C 面仍是计划外），
+        或计划里有 B／C 面（同一章的其他面不算计划）。"""
+        return detour_enabled(self.cfg) or self._detour_latched or getattr(self, '_side_plan', False)
 
     def off_plan(self) -> bool:
         """总结用：最后停在计划外地图，当前章节计时不计入总计时。"""
@@ -2358,18 +2378,17 @@ class GameSession:
         self._plan_progress_ok = live
 
     def _plan_time_progress(self, sid, ticks) -> dict:
-        """进度事件：上一次完整观测确认还在计划章节 A 面的会话里时，跟上它的章节计时（离开关卡前最后几帧也算进去）。
+        """进度事件：上一次完整观测确认还在计划章节（章节＋面）的会话里时，跟上它的章节计时（离开关卡前最后几帧也算进去）。
         进度事件不带面别：sid 变了或计时倒退说明这一步里离开了这段会话，之后等完整观测再判断。"""
         if not self._plan_progress_ok or ticks is None:
             return {}
-        pieces = [p for p in (self.navigation.current, self.navigation.target) if p is not None]
-        if sid not in {CHAPTER_SIDS.get(p.chapter) for p in pieces} or int(ticks) < int(self.metrics.state.plan_session_ticks or 0):
+        if sid not in {map_sid for map_sid, _ in self._plan_maps()} or int(ticks) < int(self.metrics.state.plan_session_ticks or 0):
             self._plan_progress_ok = False
             return {}
         return {'plan_session_ticks': int(ticks)}
 
     def _note_map(self, obs) -> None:
-        """按实际观测（关卡或结算画面）认出正在玩的地图：不是计划章节 A 面的就是计划外地图。
+        """按实际观测（关卡或结算画面）认出正在玩的地图：不是计划章节（章节＋面，通常是 A 面）的就是计划外地图。
         开关打开过就一直区分（关掉后也按实际地图结束绕行）；从没打开过时与原来相同，不做任何记录。"""
         if detour_enabled(self.cfg):
             self._detour_latched = True
@@ -2583,7 +2602,8 @@ class GameSession:
         """换房间时：更新当前所在的段；进入这一截终点检查点的房间时完成这一截（返回 True）。"""
         piece = self.piece
         if (piece is None or room is None or self.done or self.chapter_finished or sid != CHAPTER_SIDS.get(piece.chapter)
-                or self._in_detour()):     # 计划外地图（包括计划章节的 B/C 面）的房间不推进计划的段
+                or self._in_detour()       # 计划外地图（包括计划章节的 B/C 面）的房间不推进计划的段
+                or piece.side != 'A'):     # B／C 面的计划段整章游玩：检查点表只有 A 面，不按房间推进段
             return False
         points = self._table.get(piece.chapter) or []
         stop = piece.end if piece.end is not None else len(points)
@@ -2660,7 +2680,9 @@ class GameSession:
         t0 = time.monotonic()
         enter_save(self.client, self.cfg.save, chapter=piece.chapter, checkpoint=piece.start, menu_speed=1,
                    save_slot=self.cfg.save_slot, cutscene_mode=self.cfg.cutscene_mode,
-                   should_stop=self.goals.stop_motion.is_set)  # 正常速度，录像里不快进
+                   should_stop=self.goals.stop_motion.is_set,
+                   # 计划里有 B／C 面时明确给出面：菜单宏在面板里选面、从开头进入，进入后核对面（只有 A 面的计划与原来相同）
+                   **({'side': piece.side} if getattr(self, '_side_plan', False) else {}))  # 正常速度，录像里不快进
         self.metrics.add(auto_game_s=time.monotonic() - t0)
         reply = self.client.call("observe", image=True, scope="room", fields=True)
         obs, image = enrich_obs(reply["obs"]), reply.get("image")
@@ -2670,6 +2692,8 @@ class GameSession:
             raise ActError('自动换图尚未进入目标章节，保留当前计划以便续跑')
         table = self._table
         done = piece_label(previous, table) if previous is not None else chapter_name(split["chapter"])
+        if previous is None and split.get("side") not in (None, "A"):
+            done += " " + split["side"] + " 面"
         how = ("系统已自动走完结算画面并进入" if previous is None or previous.end is None else "系统已把你送到")
         note = (f"【{done}完成】章节计时 {fmt_ticks(split['ticks'])}，死亡 {split['deaths']} 次。"
                 f"{how}{self._piece_place(piece)}（新的计时从 0 开始），下面是这一截的第一个房间；继续游玩。"
@@ -2693,8 +2717,11 @@ class GameSession:
 
     def _confirm_next_entry(self, obs, *, require_departure=False):
         """All navigation paths publish metrics/persistence after the same commit."""
-        if self._classifying() and obs.get('scene') == 'Level' and ((obs.get('level') or {}).get('side') or 'A') != 'A':
-            return False     # 开了计划外地图时，计划章节的 B/C 面是计划外地图，不算进入下一截
+        target = self.navigation.target
+        want = target.side if target is not None else 'A'
+        if (obs.get('scene') == 'Level' and ((obs.get('level') or {}).get('side') or 'A') != want
+                and (self._classifying() or want != 'A')):
+            return False     # 下一截是 4A 时 4B 是计划外地图（开了计划外地图或计划里有 B／C 面），反之亦然，都不算进入下一截
         piece = self.navigation.confirm_entry(obs, self._table, require_departure=require_departure)
         if piece is None:
             return False
@@ -2705,6 +2732,7 @@ class GameSession:
             self.metrics.update(plan_banked_ticks=0, plan_session_ticks=int(level.get('chapterTimeTicks') or 0))
             self._plan_progress_ok = True
         self.metrics.update(chapter=level['sid'], room=level.get('room', ''), piece_done=False,
+                            chapter_side=level.get('side', self.metrics.state.chapter_side),
                             chapter_time_ticks=level.get('chapterTimeTicks', 0),
                             formal_thought="", formal_thought_wall=0.0)   # 新的一段：上一章最后的正式思考不留在 HUD 上
         self._save_chapter_plan()
@@ -2712,7 +2740,7 @@ class GameSession:
 
     def _piece_place(self, piece: Piece) -> str:
         if piece.start == 0:
-            return chapter_name_by_id(piece.chapter)
+            return chapter_name_by_id(piece.chapter, piece.side)
         room = checkpoint_room(self._table, piece.chapter, piece.start)
         return (f"{chapter_name_by_id(piece.chapter)}的检查点"
                 f"“{checkpoint_name(self._table, piece.chapter, piece.start)}”（房间 {room}）")
@@ -2733,8 +2761,10 @@ class GameSession:
         sid = self.metrics.state.chapter or getattr(self, "start_sid", None)
         return next((i for i, s in CHAPTER_SIDS.items() if s == sid), None)
 
-    def _current_segment(self) -> tuple[int, int] | None:
+    def _current_segment(self) -> tuple | None:
         chapter = self.current_chapter_id()
+        if chapter is not None and self.piece is not None and self.piece.side != 'A':
+            return (chapter, 0, self.piece.side)       # B／C 面整章：写成 (章节, 0, 面)
         return None if chapter is None else (chapter, self.segment_index)
 
     def _rest_of_piece(self) -> list[tuple[int, int]]:
@@ -2790,18 +2820,23 @@ class GameSession:
             current = self._current_segment()
             if current is None or self.piece is None:
                 raise ValueError("还不知道当前位置，稍后再改")
-            if any(s <= current for s in segments):
-                raise ValueError(f"只能选当前所在段（{chapter_name_by_id(current[0])}第 {current[1]} 段）之后的段")
-            chapter, k = current
+            if any(segment_key(s) <= segment_key(current) for s in segments):
+                where = (piece_label(self.piece, table) if len(current) > 2
+                         else f"{chapter_name_by_id(current[0])}第 {current[1]} 段")
+                raise ValueError(f"只能选当前所在段（{where}）之后的段")
             rest = set(segments)
-            end = k + 1
-            while (chapter, end) in rest:          # 紧接着当前段的段：并进当前这一截
-                rest.discard((chapter, end))
-                end += 1
-            count = len(table.get(chapter) or []) or 1
             piece = self.piece
-            new_current = Piece(piece.chapter, piece.start, None if end >= count else end)
-            new_queue = pieces_of(sorted(rest), table)
+            if piece.side != 'A':
+                new_current = piece                # B／C 面整章游玩：当前这一截不变，选中的段都排进队列
+            else:
+                chapter, k = current
+                end = k + 1
+                while (chapter, end) in rest:          # 紧接着当前段的段：并进当前这一截
+                    rest.discard((chapter, end))
+                    end += 1
+                count = len(table.get(chapter) or []) or 1
+                new_current = Piece(piece.chapter, piece.start, None if end >= count else end)
+            new_queue = pieces_of(sorted(rest, key=segment_key), table)
             if getattr(self.cfg, 'completion_policy', 'stop') == 'continue' and any(not p.whole() for p in [new_current, *new_queue]):
                 raise ValueError('通关后继续目前支持整章范围，不能改为部分章节计划；原计划未改变')
             self.navigation.replace_future(new_current, new_queue)
@@ -2829,12 +2864,12 @@ class GameSession:
         for split in self.metrics.state.splits or []:
             chapter = ids.get(split.get("chapter"))
             if chapter is not None:
-                done.append(Piece(chapter, int(split.get("from") or 0), split.get("to")))
+                done.append(Piece(chapter, int(split.get("from") or 0), split.get("to"), split.get("side") or "A"))
         current = [] if self.chapter_finished or self.piece is None else [self.piece]
         pieces = done + current + [Piece.of(p) for p in self.chapter_queue]
-        state["plan_pieces"] = [[p.chapter, p.start, p.end] for p in pieces]
-        state['navigation_remaining'] = [[p.chapter, p.start, p.end] for p in
-                                         current + [Piece.of(p) for p in self.chapter_queue]]
+        # A 面写成 [章节, 起, 止]（与原来相同），B／C 面另加面
+        state["plan_pieces"] = [p.row() for p in pieces]
+        state['navigation_remaining'] = [p.row() for p in current + [Piece.of(p) for p in self.chapter_queue]]
         state["all_chapters"] = chapters_of(pieces)
         state["piece_pending"] = bool(self.chapter_finished)
         state["segment_index"] = None if self.chapter_finished else self.segment_index

@@ -58,10 +58,13 @@ class RunControl:
             data = json.loads(text)
             if isinstance(data, dict) and "segments" in data:
                 segments = data["segments"]
+                # A 面的段是 [章节, 段号]；计划里已有的 B／C 面整章是 [章节, 0, "B"|"C"]
                 if (not isinstance(segments, list) or len(segments) > 200
-                        or any(not isinstance(s, list) or len(s) != 2 or any(type(v) is not int or not 0 <= v <= 50 for v in s)
+                        or any(not isinstance(s, list) or len(s) not in (2, 3)
+                               or any(type(v) is not int or not 0 <= v <= 50 for v in s[:2])
+                               or (len(s) == 3 and s[2] not in ("B", "C"))
                                for s in segments)):
-                    raise ValueError("段须为 [章节编号, 段号] 的列表")
+                    raise ValueError("段须为 [章节编号, 段号] 或 [章节编号, 0, 面] 的列表")
             else:
                 queue = data.get("queue") if isinstance(data, dict) else None
                 if not isinstance(queue, list) or len(queue) > 20 or any(type(c) is not int or not 0 <= c <= 20 for c in queue):

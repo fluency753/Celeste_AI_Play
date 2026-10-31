@@ -54,9 +54,13 @@ class ChapterNavigation:
         level = obs.get('level') or {}
         if obs.get('scene') != 'Level' or level.get('completed') or level.get('sid') != CHAPTER_SIDS.get(piece.chapter):
             return None
-        start_room = checkpoint_room(table, piece.chapter, piece.start)
-        same_chapter = (self.current.chapter == piece.chapter if self.current else
-                        self.previous_sid == CHAPTER_SIDS.get(piece.chapter))
+        if piece.side != 'A' and (level.get('side') or 'A') != piece.side:
+            return None     # B／C 面的计划段只认同一章的同一面（A 面的计划段由调用方按是否区分计划内外判断）
+        # 检查点表只有 A 面：B／C 面整章从开头进入，不核对起点房间
+        start_room = checkpoint_room(table, piece.chapter, piece.start) if piece.side == 'A' else None
+        # 同一张地图（章节与面都相同）的重新进入要先离开原关卡；4A 之后的 4B 是另一张地图
+        same_chapter = ((self.current.chapter, self.current.side) == (piece.chapter, piece.side) if self.current else
+                        self.previous_sid == CHAPTER_SIDS.get(piece.chapter) and piece.side == 'A')
         if start_room is not None:
             if str(level.get('room')) != str(start_room):
                 return None

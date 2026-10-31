@@ -30,6 +30,7 @@ DEFAULTS = {
     "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": False, "stiffness": False, "formal_thought": False, "save_context": True, "collision_image": None, "playback": False, "record": True,
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
     "start_paused": False, "quota_wait": True, "allow_chapter_reset": False, "cutscene_mode": "auto", "chapters": [0], "segments": None,
+    "sides": [],      # 另外要玩的 B／C 面（整章）：[[章节编号, "B"], ...]；空 = 只玩 A 面（命令与原来相同）
     "action_permissions": None, "allow_detour": False,
     "recording_mode": "chapter", "freeze_chapter_select": True, "freeze_file_select": False, "freeze_main_menu": False,
     "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 1000, "autocompact": "",
@@ -134,10 +135,14 @@ def normalize(options: dict) -> dict:
     if o["cutscene_mode"] not in ("auto", "agent"):
         raise ValueError("剧情处理须为自动跳过或交给智能体")
     chapters = o["chapters"]
-    if (not isinstance(chapters, list) or not chapters or len(chapters) > len(CHAPTER_SIDS)
+    o["sides"] = normalize_sides(o["sides"])
+    # 只选 B／C 面时 A 面可以一章都不选
+    if (not isinstance(chapters, list) or (not chapters and not o["sides"]) or len(chapters) > len(CHAPTER_SIDS)
             or any(type(c) is not int or c not in CHAPTER_SIDS for c in chapters) or len(set(chapters)) != len(chapters)):
         raise ValueError("请选择要游玩的章节（官方章节编号，不重复）")
     o["chapters"] = sorted(chapters)
+    if o["sides"] and o.get("segments") is not None:
+        raise ValueError("B／C 面只能整章游玩：选了 B／C 面时不能再按检查点取消 A 面的段")
     if o.get("segments") is not None:
         # 按段通关：[[章节, 段], ...]；要玩的章节由选中的段决定
         from .segments import chapters_of, load_table, pieces_of, validate_segments
@@ -152,6 +157,8 @@ def normalize(options: dict) -> dict:
         raise ValueError("请选择存档，或填写新存档名（1～20 个字符）")
     if type(save["create"]) is not bool or (save["slot"] is not None and (type(save["slot"]) is not int or save["slot"] < 0)):
         raise ValueError("存档槽位无效")
+    if save["create"] and o["sides"]:
+        raise ValueError("新建存档不能计划 B／C 面：B 面要先在该章 A 面拿到磁带，C 面要先拿到 8 个 B 面的心")
     if save["create"] and (save["slot"] is not None or o["chapters"][0] != 0
                            or (o.get("segments") and o["segments"][0] != [0, 0])):
         raise ValueError("新建存档只能从序章开始，且不指定槽位")
@@ -239,6 +246,8 @@ def build(options: dict) -> list[str]:
     argv.append("--hud-mod" if o["hud_mod"] else "--no-hud-mod")
     if o.get("segments"):
         argv += ["--segments", segments_arg(o["segments"])]
+    elif o["sides"]:
+        argv += ["--chapters", chapters_arg(o["chapters"], o["sides"])]
     elif len(o["chapters"]) == 1:
         argv += ["--chapter", str(o["chapters"][0])]
     else:
@@ -294,6 +303,33 @@ def build(options: dict) -> list[str]:
     return argv
 
 
+def normalize_sides(value) -> list:
+    """控制台选的 B／C 面：[[章节编号, "B"|"C"], ...] → 按官方顺序排好、去重；只有第 1～7 章与核心有 B／C 面。"""
+    from .config import SIDE_CHAPTERS
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 2 * len(SIDE_CHAPTERS):
+        raise ValueError("B／C 面须为 [章节编号, 面] 的列表")
+    out = set()
+    for item in value:
+        if (not isinstance(item, (list, tuple)) or len(item) != 2 or type(item[0]) is not int
+                or item[1] not in ("B", "C")):
+            raise ValueError("B／C 面须写成 [章节编号, \"B\" 或 \"C\"]")
+        if item[0] not in SIDE_CHAPTERS:
+            raise ValueError("只有第 1～7 章与核心有 B／C 面；序章、终章与告别没有")
+        out.add((item[0], item[1]))
+    return [list(x) for x in sorted(out)]
+
+
+def chapters_arg(chapters, sides) -> str:
+    """有 B／C 面时 --chapters 的写法：按官方顺序，同一章 A、B、C 面依次；A 面写章节编号（与原来相同），
+    B／C 面按游戏里的章节序号写成 4B、8C（8 是核心）。"""
+    from .config import SIDES, side_code
+    items = [(c, "A") for c in chapters] + [tuple(x) for x in sides]
+    items.sort(key=lambda x: (x[0], SIDES.index(x[1])))
+    return ",".join(str(c) if side == "A" else side_code(c, side) for c, side in items)
+
+
 def segments_arg(segments) -> str:
     """[[章节, 段], ...] → --segments 的写法（同一章里连续的段写成 章节.起-止）。"""
     out, run = [], []
@@ -337,7 +373,11 @@ def config_for(options: dict):
     cfg.allow_detour = o['allow_detour']
     cfg.pause_limit = o["limit_planning"] and cfg.sim
     cfg.rounds_per_room, cfg.room_scale = o["rounds_per_room"], o["room_scale"]
-    cfg.chapters, cfg.chapter = list(o["chapters"]), o["chapters"][0]
+    cfg.chapters, cfg.chapter = list(o["chapters"]), (o["chapters"] or [None])[0]
+    if o["sides"]:
+        from .segments import parse_chapters
+        cfg.plan = parse_chapters(chapters_arg(o["chapters"], o["sides"]))
+        cfg.chapters, cfg.chapter = [p.chapter for p in cfg.plan], cfg.plan[0].chapter
     if o.get("segments"):
         from .segments import load_table, pieces_of
         cfg.checkpoints = load_table()

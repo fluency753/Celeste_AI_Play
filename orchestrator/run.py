@@ -322,10 +322,23 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             raise SystemExit(str(exc)) from None
         cfg.chapters, cfg.chapter = chapters_of(cfg.plan), cfg.plan[0].chapter
     elif args.chapters:
-        cfg.chapters = [int(x) for x in args.chapters.split(",") if x.strip()]
-        if not cfg.chapters:
+        from .segments import parse_chapters, plan_has_sides
+        try:
+            pieces = parse_chapters(args.chapters)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
+        if not pieces:
             raise SystemExit("--chapters 至少要给一个章节编号")
+        cfg.chapters = [p.chapter for p in pieces]
         cfg.chapter = cfg.chapters[0]
+        if plan_has_sides(pieces):
+            # 有 B／C 面：计划按段（Piece 带面）保存；只写 A 面时与原来相同，不设 cfg.plan
+            if cfg.play_scope == 'campaign':
+                raise SystemExit('顺序游玩（--scope campaign）只按 A 面的官方顺序；要玩 B／C 面请用单章范围列出各章，'
+                                 '例如 --chapters 4B,8C')
+            if len({(p.chapter, p.side) for p in pieces}) != len(pieces):
+                raise SystemExit('--chapters 里同一章的同一面写了两次')
+            cfg.plan = pieces
     elif cfg.play_scope=='campaign' and not previous:
         from .play_scope import chapter_sequence
         cfg.chapters=chapter_sequence(cfg.chapter if cfg.chapter is not None else 0,'campaign')
@@ -453,15 +466,17 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             done = len(previous["metrics"].get("splits") or [])
             # 原计划已经全部完成时，--chapters / --segments 追加接下来要玩的部分：同一会话、设置与统计接着算
             from .segments import Piece, chapters_of
-            extension = (list(cfg.plan) if args.segments else [Piece(c) for c in cfg.chapters] if args.chapters else None)
+            extension = (list(cfg.plan) if args.segments or (args.chapters and cfg.plan) else
+                         [Piece(c) for c in cfg.chapters] if args.chapters else None)
             if extension is not None:
                 cfg.resume_completion_pending = False
             if extension is not None and args.chapter is not None:
                 raise SystemExit("续跑追加章节用 --chapters 或 --segments，不用 --chapter")
             if state.get("plan_pieces"):
                 # 按段通关（或运行中改过计划）：按已完成的截数从计划里接着走
-                pieces = [Piece(int(c), int(s), None if e is None else int(e)) for c, s, e in state["plan_pieces"]]
-                remaining_pieces = ([Piece(int(c),int(start),None if end is None else int(end)) for c,start,end in state['navigation_remaining']]
+                # 每项是 [章节, 起, 止]（A 面；旧运行都是这样）或 [章节, 起, 止, 面]
+                pieces = [Piece.from_row(row) for row in state["plan_pieces"]]
+                remaining_pieces = ([Piece.from_row(row) for row in state['navigation_remaining']]
                                     if cfg.completion_policy == 'continue' and state.get('navigation_remaining') is not None
                                     else pieces[done:])
                 if not remaining_pieces and cfg.completion_policy == 'continue' and extension is None:
@@ -474,6 +489,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     cfg._extended_plan = pieces
                 if not remaining_pieces:
                     raise SystemExit("这次运行的计划已经全部完成，不需要续跑（要接着玩下一章：加 --chapters 或 --segments）")
+                if any(p.side != 'A' for p in pieces):
+                    cfg._side_plan = True     # 整个计划里有 B／C 面：剩下的只有 A 面时也按章节＋面区分计划内外
                 if any(not p.whole() for p in pieces) and not cfg.checkpoints:
                     cfg.checkpoints = fetch_table(args.bridge_port)
                     if not cfg.checkpoints:
@@ -500,6 +517,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                         raise SystemExit("这次运行没有按段的计划：续跑只能追加整章（--chapters）")
                     remaining = [p.chapter for p in extension]
                     cfg._extended_plan = [Piece(c) for c in state.get("all_chapters") or []] + extension
+                    if any(p.side != 'A' for p in extension):
+                        cfg.plan = list(extension)      # 追加了 B／C 面：按带面的计划走（只有 A 面时与原来相同）
                 if state.get("all_chapters") and not remaining:
                     raise SystemExit("这次运行的章节已经全部通关，不需要续跑（要接着玩下一章：加 --chapters）")
                 cfg.chapters = remaining or None
@@ -545,12 +564,12 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     extended = getattr(cfg, "_extended_plan", None)     # 续跑时追加了章节（见 parse_args）
     if extended:
         from .segments import chapters_of
-        plan_pieces = [[p.chapter, p.start, p.end] for p in extended]
+        plan_pieces = [p.row() for p in extended]     # A 面 [章节, 起, 止]，B／C 面另加面
         all_chapters = chapters_of(extended)
     elif previous:
         plan_pieces = previous["state"].get("plan_pieces")
     elif cfg.plan:
-        plan_pieces = [[p.chapter, p.start, p.end] for p in cfg.plan]
+        plan_pieces = [p.row() for p in cfg.plan]
     else:
         plan_pieces = None
     if cfg.play_scope == 'visited':
@@ -566,7 +585,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
              "bridge_port": cfg.bridge_port}
     from .segments import Piece
     current_plan = cfg.plan or [Piece(c) for c in (cfg.chapters or ([] if cfg.chapter is None else [cfg.chapter]))]
-    state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [[p.chapter,p.start,p.end] for p in map(Piece.of,current_plan)]
+    state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [p.row() for p in map(Piece.of,current_plan)]
     state.update({key:getattr(cfg,key) for key in ('recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu')})
     # 接着同一个会话续跑：带上这个会话最近一次送达的规则摘要（见 agent.ClaudeRunner），规则没变时首条不再重复附上
     delivered = ((previous or {}).get("state") or {}).get("rules_delivered")
@@ -644,9 +663,12 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     def navigate(**options):
         if getattr(cfg, 'play_scope', 'chapter') == 'visited':
             return load_save_and_freeze(client, cfg.save, save_slot=cfg.save_slot, **options)
+        # 计划里有 B／C 面时明确给出第一截的面：菜单宏在面板里选面、从开头进入并核对面（只有 A 面时与原来相同）
+        from .segments import plan_has_sides
+        sided = {'side': first_side(cfg)} if plan_has_sides(cfg.plan) else {}
         return macro(client, cfg.save, chapter=cfg.chapter, checkpoint=first_checkpoint(cfg),
                      create_if_missing=cfg.create_save, save_slot=cfg.save_slot,
-                     cutscene_mode=cfg.cutscene_mode, **options)
+                     cutscene_mode=cfg.cutscene_mode, **sided, **options)
     try:
         t0 = time.monotonic()
         if recorder is not None and recorder.started:
@@ -814,7 +836,7 @@ def check_resume_position(cfg: RunConfig) -> bool:
             if cfg.cutscene_mode == 'agent' and right_save:
                 return True  # retain agent-owned navigation, including the previous chapter's menu
             # 上次在两截之间中断（这一截已完成、还没换过去）：先进入下一截的起点
-            print(f"[run] 续跑：上次停在两截之间，进入{chapter_name_by_id(cfg.chapter)}第 {first_checkpoint(cfg)} 个检查点", flush=True)
+            print(f"[run] 续跑：上次停在两截之间，进入{chapter_name_by_id(cfg.chapter, first_side(cfg))}第 {first_checkpoint(cfg)} 个检查点", flush=True)
             if obs.get("scene") == "Level" and not right_save:
                 raise SystemExit(f"游戏当前在存档 {save!r} 的关卡里，不是 {cfg.save!r}：先退出那个关卡再续跑")
             return False
@@ -838,12 +860,12 @@ def check_resume_position(cfg: RunConfig) -> bool:
         from .detour import classifying
         if (cfg.cutscene_mode == 'agent' and right_save and classifying(cfg) and cfg.play_scope != 'visited'
                 and obs.get('scene') == 'AreaComplete' and completion.get('sid')
-                and (completion.get('sid'), completion.get('side') or 'A') != (want, 'A')):
+                and (completion.get('sid'), completion.get('side') or 'A') != (want, first_side(cfg))):
             return True   # 停在计划外地图的结算：agent 自己确认，主控连上后按实际地图记为计划外（计划章节自己的结算走原来的路）
         if cfg.chapter is None:
             raise SystemExit(f"游戏当前不在关卡里（{obs.get('scene')}），无法续跑")
         print(f"[run] 续跑：游戏在 {obs.get('scene')}（存档 {save!r}），用菜单宏进入{cfg.save} 的"
-              f"{chapter_name_by_id(cfg.chapter)}", flush=True)
+              f"{chapter_name_by_id(cfg.chapter, first_side(cfg))}", flush=True)
         return False
     except BaseException:
         # This connection either only observed an existing state, or performed
@@ -852,6 +874,24 @@ def check_resume_position(cfg: RunConfig) -> bool:
         raise
     finally:
         client.close()
+
+
+def check_sides(cfg: RunConfig) -> None:
+    """开跑前（录像、连接游戏之前）核对计划里的 B／C 面在所选存档里已经解锁（只读存档文件）；没有 B／C 面时什么都不做。"""
+    from .segments import plan_has_sides
+    plan = getattr(cfg, 'plan', None)
+    if not plan_has_sides(plan):
+        return
+    from .saves import validate_sides
+    try:
+        validate_sides(plan, create=bool(getattr(cfg, 'create_save', False)), slot=cfg.save_slot, name=cfg.save)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def first_side(cfg: RunConfig) -> str:
+    """计划里第一截的面（没有带面的计划时为 A 面）。"""
+    return cfg.plan[0].side if cfg.plan else 'A'
 
 
 def first_checkpoint(cfg: RunConfig) -> int:
@@ -1212,7 +1252,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         summary.update(stop_reason=reason, completed=session.done and session.done_reason in ("章节完成", "分段完成"),
                        user_stopped=session.user_stopped, agent_stop=getattr(session, "agent_stop", None), goal=session.goals.snapshot(),
                        chapters=cfg.chapters, splits=metrics.state.splits or [],
-                       plan=[[p.chapter, p.start, p.end] for p in cfg.plan] if cfg.plan else None,
+                       plan=[p.row() for p in cfg.plan] if cfg.plan else None,
                        total_time_ticks=total_time_ticks(metrics.state, session),
                        start_sid=session.start_sid, end_scene=session.end_scene, finish_error=finish_error, turns=runner.turns if runner else 0,
                        session_id=runner.session_id if runner else None, run_dir=str(run_dir),
@@ -1388,6 +1428,7 @@ def main() -> int:
     if cfg.create_save:
         from .saves import validate_selection
         validate_selection(cfg.save, True, cfg.chapter)
+    check_sides(cfg)
     if args.prepared:
         # 在选档、录制或连接游戏前验证，错误的准备目录不能导致游戏动作。
         from .prepared import load_preparation

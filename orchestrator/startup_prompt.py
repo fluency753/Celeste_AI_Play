@@ -14,7 +14,9 @@ def current_settings(cfg):
     settings = {
         'task': {'mode': cfg.mode, 'save': cfg.save, 'slot': cfg.save_slot,
                  'scope': cfg.play_scope, 'completion': cfg.completion_policy,
-                 'targets': [asdict(p) for p in plan] if plan else cfg.chapters or [cfg.chapter]},
+                 # A 面的一截仍是 {chapter, start, end}（与原来相同），B／C 面另加 side
+                 'targets': [{k: v for k, v in asdict(p).items() if k != 'side' or v != 'A'} for p in plan]
+                            if plan else cfg.chapters or [cfg.chapter]},
         'story': cfg.cutscene_mode,
         'permissions': permissions_for(cfg).snapshot(),
         'act_frames': [act_frame_min(cfg), act_frame_cap(cfg)],

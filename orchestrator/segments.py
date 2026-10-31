@@ -1,4 +1,4 @@
-"""按段通关：官方章节（A 面）按检查点分段，可以只玩其中几段。
+"""按段通关：官方章节（A 面）按检查点分段，可以只玩其中几段；B／C 面只整章游玩（见 Piece.side）。
 
 - 段 k：从检查点 k 到检查点 k+1；最后一段到章节结尾（通关）。检查点 0 是章节开头。
   例如 1A 有两个检查点，分成三段：开头 → 渡口、渡口 → 深渊、深渊 → 通关。
@@ -16,26 +16,53 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import CHAPTER_SIDS, REPO_ROOT, chapter_name_by_id
+from .config import CHAPTER_SIDS, REPO_ROOT, SIDE_CHAPTERS, SIDES, chapter_name_by_id
 
 CHECKPOINTS_FILE = REPO_ROOT / "configs" / "checkpoints.json"
 
-Segment = tuple[int, int]          # (章节编号, 段号)
+# A 面的段是 (章节编号, 段号)；B／C 面只整章游玩，写成 (章节编号, 0, 面)。检查点表只有 A 面。
+Segment = tuple
+
+
+def segment_side(segment) -> str:
+    return segment[2] if len(segment) > 2 else "A"
+
+
+def segment_key(segment) -> tuple:
+    """官方顺序：先按章节，同一章里 A 面各段、B 面、C 面。"""
+    return (segment[0], SIDES.index(segment_side(segment)), segment[1])
 
 
 @dataclass(frozen=True)
 class Piece:
-    """连续游玩的一截：章节 chapter 里从检查点 start 开始，进入检查点 end 的房间时结束；end 为 None 时到章节通关。"""
+    """连续游玩的一截：章节 chapter 里从检查点 start 开始，进入检查点 end 的房间时结束；end 为 None 时到章节通关。
+    side：A／B／C 面（默认 A）。B／C 面只整章游玩（start=0、end=None）。"""
     chapter: int
     start: int = 0
     end: int | None = None
+    side: str = "A"
 
     @staticmethod
     def of(item) -> "Piece":
         """队列里的一项：整章（章节编号）或 Piece。"""
         return item if isinstance(item, Piece) else Piece(int(item))
 
+    @staticmethod
+    def from_row(row) -> "Piece":
+        """run_state 里的一项：[章节, 起, 止]（A 面，旧运行也是这样）或 [章节, 起, 止, 面]。"""
+        chapter, start, end = int(row[0]), int(row[1]), None if row[2] is None else int(row[2])
+        side = str(row[3]) if len(row) > 3 and row[3] else "A"
+        if side not in SIDES:
+            raise ValueError(f"计划里的面 {side!r} 无效")
+        return Piece(chapter, start, end, side)
+
+    def row(self) -> list:
+        """写进 run_state／总结的一项：A 面仍是 [章节, 起, 止]（与原来逐字节相同），B／C 面另加面。"""
+        return [self.chapter, self.start, self.end] if self.side == "A" else [self.chapter, self.start, self.end, self.side]
+
     def segments(self, table: dict | None = None) -> list[Segment]:
+        if self.side != "A":
+            return [(self.chapter, 0, self.side)]
         stop = self.end if self.end is not None else segment_count(table or {}, self.chapter)
         return [(self.chapter, k) for k in range(self.start, max(stop, self.start + 1))]
 
@@ -99,6 +126,9 @@ def parse_segments(text: str, table: dict) -> list[Segment]:
         if not item:
             continue
         match = SEGMENT_ITEM.match(item)
+        if not match and re.match(r"^\d+\s*[ABCabc]", item):
+            raise ValueError(f"--segments 的 {item!r} 不对：按检查点分段只支持 A 面；B／C 面只能整章游玩，"
+                             "请用 --chapters（例如 --chapters 4B,8C）")
         if not match:
             raise ValueError(f"--segments 的 {item!r} 不对：写成 章节、章节.段 或 章节.起-止，例如 1.1-2")
         chapter = int(match.group(1))
@@ -119,22 +149,29 @@ def parse_segments(text: str, table: dict) -> list[Segment]:
 
 
 def validate_segments(segments, table: dict) -> list[Segment]:
-    """控制台给的 [[章节, 段], ...] → 排好序的段列表；格式或范围不对时报错。"""
+    """控制台给的 [[章节, 段], ...] → 排好序的段列表；格式或范围不对时报错。
+    B／C 面整章写成 [章节, 0, "B"]（运行中保留计划里已有的 B／C 面；按段只支持 A 面）。"""
     if not isinstance(segments, list) or not segments or len(segments) > 200:
         raise ValueError("请至少选择一段")
     out: set[Segment] = set()
     for item in segments:
+        if (isinstance(item, (list, tuple)) and len(item) == 3 and type(item[0]) is int and type(item[1]) is int
+                and item[2] in ("B", "C")):
+            if item[0] not in SIDE_CHAPTERS or item[1] != 0:
+                raise ValueError("B／C 面只能整章游玩，写成 [章节编号, 0, 面]，且只有第 1～7 章与核心有 B／C 面")
+            out.add((item[0], 0, item[2]))
+            continue
         if (not isinstance(item, (list, tuple)) or len(item) != 2
                 or any(type(v) is not int for v in item) or item[0] not in CHAPTER_SIDS):
             raise ValueError("段须写成 [章节编号, 段号]")
         if not 0 <= item[1] < segment_count(table, item[0]):
             raise ValueError(f"{chapter_name_by_id(item[0])}没有第 {item[1]} 段")
         out.add((item[0], item[1]))
-    return sorted(out)
+    return sorted(out, key=segment_key)
 
 
 def pieces_of(segments: list[Segment], table: dict) -> list[Piece]:
-    """把排好序的段连成截：同一章里相邻的段连在一起。"""
+    """把排好序的段连成截：同一章里相邻的 A 面段连在一起；B／C 面各自是一整章。"""
     pieces: list[Piece] = []
     run: list[Segment] = []
 
@@ -144,7 +181,12 @@ def pieces_of(segments: list[Segment], table: dict) -> list[Piece]:
             end = None if last + 1 >= segment_count(table, chapter) else last + 1
             pieces.append(Piece(chapter, first, end))
 
-    for seg in sorted(set(segments)):
+    for seg in sorted(set(segments), key=segment_key):
+        if segment_side(seg) != "A":
+            close()
+            run = []
+            pieces.append(Piece(seg[0], 0, None, segment_side(seg)))
+            continue
         if run and not (seg[0] == run[-1][0] and seg[1] == run[-1][1] + 1):
             close()
             run = []
@@ -170,10 +212,27 @@ def chapters_of(pieces) -> list[int]:
     return out
 
 
+def plan_has_sides(pieces) -> bool:
+    """计划里有没有 B／C 面。"""
+    return any(Piece.of(p).side != "A" for p in pieces or [])
+
+
+def parse_chapters(text: str) -> list[Piece]:
+    """命令行 --chapters：逗号分隔，纯数字是章节编号（A 面），带面的写法如 4B、8C（不分大小写，8 是核心），
+    按给出的顺序依次游玩。"""
+    from .config import parse_chapter_item
+    pieces = []
+    for item in (x.strip() for x in str(text).split(",")):
+        if item:
+            chapter, side = parse_chapter_item(item)
+            pieces.append(Piece(chapter, 0, None, side))
+    return pieces
+
+
 def piece_label(piece, table: dict) -> str:
-    """给人看的一截：整章写章节名，否则写"章节名 起点 → 终点"。"""
+    """给人看的一截：整章写章节名（B／C 面加"B 面"），否则写"章节名 起点 → 终点"。"""
     piece = Piece.of(piece)
-    name = chapter_name_by_id(piece.chapter)
+    name = chapter_name_by_id(piece.chapter, piece.side)
     if piece.whole():
         return name
     start = checkpoint_name(table, piece.chapter, piece.start)
@@ -186,7 +245,7 @@ def split_segments(split: dict, table: dict) -> list[Segment]:
     chapter = next((i for i, s in CHAPTER_SIDS.items() if s == split.get("chapter")), None)
     if chapter is None:
         return []
-    return Piece(chapter, int(split.get("from") or 0), split.get("to")).segments(table)
+    return Piece(chapter, int(split.get("from") or 0), split.get("to"), split.get("side") or "A").segments(table)
 
 
 def fetch_table(port: int, timeout: float = 10) -> dict[int, list[dict]]:
@@ -209,7 +268,7 @@ def fetch_table(port: int, timeout: float = 10) -> dict[int, list[dict]]:
 def describe_piece(piece, table: dict) -> str:
     """提示词里的一截：起点与终点（带房间名，智能体据此知道到哪里为止）。"""
     piece = Piece.of(piece)
-    name = chapter_name_by_id(piece.chapter)
+    name = chapter_name_by_id(piece.chapter, piece.side)
     if piece.whole():
         return f"{name}（整章，到通关为止）"
     start = ("章节开头" if piece.start == 0 else

@@ -129,8 +129,12 @@ def options() -> dict:
     checkpoints = {str(c): [{"index": int(p.get("index", i)), "level": p.get("level"),
                              "name": p.get("name_zh") or p.get("name") or p.get("level")} for i, p in enumerate(points)]
                    for c, points in load_table().items()}
+    from orchestrator.config import SIDE_CHAPTERS, side_code, side_label
     return {"runtimes": configured_runtimes(), "chapters": [{"id": i, "label": CHAPTER_LABELS.get(i, sid)}
                                                            for i, sid in sorted(CHAPTER_SIDS.items())],
+            # 有 B／C 面的章节（第 1～7 章与核心）：控制台按 A／B／C 分行选；B／C 面只整章游玩
+            "sides": [{"id": i, "side": side, "code": side_code(i, side), "label": side_label(i, side)}
+                      for side in ("B", "C") for i in SIDE_CHAPTERS],
             "checkpoints": checkpoints,
             "saves": saves, "saves_error": saves_error, "sim_available": sim_available(REPO_ROOT),
             "defaults": {**DEFAULTS, "hud_mod": None}, "deploy": {k: deploy.get(k) for k in ("agent", "save", "chapters")},
@@ -708,6 +712,7 @@ def runs(limit: int = 40) -> list[dict]:
                         movie=finished_movie(Path(item['dir']))
                         if movie:
                             chapter_videos.append({'id':item['id'],'sid':item.get('sid'),'side':item.get('side'),
+                                                   'label':video_label(item.get('sid'),item.get('side')),
                                                    'movie':str(movie),'pure':str(finished_movie(Path(item['dir']),True) or '')})
         except RecordingError:
             pass  # 不可读的会话在接管时明确报错；不使整个运行列表不可用。
@@ -729,6 +734,18 @@ def runs(limit: int = 40) -> list[dict]:
     return rows
 
 
+def video_label(sid, side) -> str:
+    """分章录像的显示名，区分面：4A、4B 是两段录像（"4A 黄金山脊"、"4B 黄金山脊 B 面"、"8C 核心 C 面"）。"""
+    from orchestrator.config import SIDE_CHAPTERS, side_label
+    ids = {s: i for i, s in CHAPTER_SIDS.items()}
+    chapter = ids.get(sid)
+    if chapter is None:
+        return str(sid or "")
+    if side in ("B", "C") and chapter in SIDE_CHAPTERS:
+        return side_label(chapter, side)
+    return CHAPTER_LABELS.get(chapter, sid)
+
+
 def _launch(argv: list[str]) -> dict:
     from orchestrator.background import launch
     if orchestrator_status()["running"]:
@@ -743,8 +760,15 @@ def _launch(argv: list[str]) -> dict:
 
 
 def start(options: dict) -> dict:
-    from orchestrator.launch_options import build, command_line
+    from orchestrator.launch_options import build, command_line, normalize
     argv = build(options)
+    o = normalize(options)
+    if o["sides"]:
+        # 计划了 B／C 面：启动前就按存档核对这些面已解锁（与主控开跑前的核对相同），没解锁时在控制台直接报错
+        from orchestrator.saves import validate_sides
+        from orchestrator.segments import Piece
+        validate_sides([Piece(c, 0, None, side) for c, side in o["sides"]], create=o["save"]["create"],
+                       slot=o["save"]["slot"], name=o["save"]["name"])
     return {**_launch(argv), "command": command_line(argv)}
 
 

@@ -360,7 +360,7 @@ winget install Gyan.FFmpeg
 | `--provider` | `anthropic`（沿用） | 模型平台：`anthropic`（订阅令牌）、`deepseek` 或 `configs\local.providers.json` 里自定义的；原生 GPT 不用它 |
 | `--model` | Claude：`opus`；原生 GPT：Codex 登录配置的默认模型（沿用） | Anthropic 用别名（`opus`、`fable`、`haiku`）；第三方用它自己的模型名（如 `deepseek-flash`）；原生 GPT 用 Codex 模型目录里的模型名 |
 | `--effort` | Claude：`high`；原生 GPT：`medium`（沿用当时生效的） | 开局推理强度，可选档位由所选模型声明；智能体可以用 `set_effort` 自己调整 |
-| `--chapters 0,1,2` | 无 | 依次通关的章节（0 序章、1 1A、2 2A……）；给了它就不用 `--chapter` |
+| `--chapters 0,1,2` | 无 | 依次通关的章节（0 序章、1 1A、2 2A……）；B/C 面写章节序号加面，例如 `4B,8C`（8 是核心，不分大小写，只有第 1～7 章与核心有，开跑前按存档核对已解锁）；给了它就不用 `--chapter` |
 | `--chapter N` | 选章页当前章节 | 只玩一章（或作为 `--scope campaign` 的起始章节） |
 | `--scope chapter` / `campaign` | `chapter`（沿用） | 没给 `--chapters` 时：只玩一章，或从起始章节起按官方章节顺序一直玩下去 |
 | `--max-minutes` | 1000（沿用） | 现实时间安全上限（不含准备阶段与等待额度）；**不显示给智能体** |

@@ -28,12 +28,53 @@ CHAPTER_SIDS = {i:'Celeste/'+name for i,name in enumerate([
     '5-MirrorTemple','6-Reflection','7-Summit','8-Epilogue','9-Core','LostLevels'])}
 
 
+SIDES = ("A", "B", "C")
+# 有 B／C 面的官方章节（内部编号）：1～7 与核心（9）。序章、终章是插曲（Interlude），告别只有 A 面
+SIDE_CHAPTERS = (1, 2, 3, 4, 5, 6, 7, 9)
+
+
 def chapter_name(sid: str) -> str:
     return CHAPTER_NAMES.get(sid, sid or "?")
 
 
-def chapter_name_by_id(chapter: int) -> str:
-    return chapter_name(CHAPTER_SIDS.get(chapter, f"第 {chapter} 号章节"))
+def chapter_name_by_id(chapter: int, side: str = "A") -> str:
+    """章节名；B／C 面在后面加"B 面"（A 面与原来相同，例如"4 黄金山脊"、"4 黄金山脊 B 面"、"8 核心 C 面"）。"""
+    name = chapter_name(CHAPTER_SIDS.get(chapter, f"第 {chapter} 号章节"))
+    return name if (side or "A") == "A" else f"{name} {side} 面"
+
+
+def chapter_number(chapter: int) -> int:
+    """游戏里显示的章节序号：1～7 与内部编号相同，核心（内部 9）是第 8 章。只用于有 B／C 面的章节。"""
+    return 8 if chapter == 9 else chapter
+
+
+def side_code(chapter: int, side: str) -> str:
+    """按游戏习惯的简写：4A、4B、8C（核心）。"""
+    return f"{chapter_number(chapter)}{side}"
+
+
+def side_label(chapter: int, side: str) -> str:
+    """控制台里 B／C 面的显示名，例如"4B 黄金山脊 B 面"、"8B 核心 B 面"（与"8A 核心"一致）。"""
+    name = chapter_name(CHAPTER_SIDS[chapter]).split(" ", 1)[-1]
+    return f"{side_code(chapter, side)} {name} {side} 面"
+
+
+def parse_chapter_item(text: str) -> tuple[int, str]:
+    """--chapters 的一项 → (内部章节编号, 面)。纯数字是内部编号（A 面，与原来相同）；带面写法按游戏里的章节序号，
+    不分大小写：1A～8A、1B～8B、1C～8C（8 是核心）。序章、终章、告别没有 B／C 面，写纯编号 0、8、10。"""
+    item = str(text).strip()
+    if item.isdigit():
+        return int(item), "A"
+    head, side = item[:-1].strip(), item[-1:].upper()
+    if not head.isdigit() or side not in SIDES:
+        raise ValueError(f"--chapters 的 {item!r} 不对：写成章节编号（如 4）或章节序号加面（如 4B、8C）")
+    number = int(head)
+    if not 1 <= number <= 8:
+        if side == "A":
+            raise ValueError(f"--chapters 的 {item!r} 不对：带面的写法只用于 1A～8A；序章、终章、告别写纯编号 0、8、10")
+        raise ValueError(f"--chapters 的 {item!r} 不对：只有第 1～7 章与核心（8B、8C）有 B／C 面，"
+                         "序章、终章与告别没有")
+    return (9 if number == 8 else number), side
 
 
 def load_dotenv(path: Path) -> dict[str, str]:

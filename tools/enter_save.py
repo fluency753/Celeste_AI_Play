@@ -37,10 +37,18 @@ def area_id(sid: str | None) -> int | None:
         return None
 
 
+PANEL_SIDES = {"A": "Normal", "B": "BSide", "C": "CSide"}   # 面板报告的 panelSide（AreaMode 的名字）
+SIDE_ORDER = ("Normal", "BSide", "CSide")                     # 面板里各面从左到右的顺序（OuiChapterPanel.Reset）
+
+
+def level_side(obs: dict) -> str:
+    return (obs.get("level") or {}).get("side") or "A"
+
+
 def _enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None,
                menu_speed: int = 4, should_stop=None, create_if_missing: bool = False,
                save_slot: int | None = None, cutscene_mode: str = 'auto', checkpoint: int = 0,
-               destination: str = 'play') -> dict:
+               destination: str = 'play', side: str | None = None) -> dict:
     """chapter 为章节编号（0 序章、1 被遗弃之城、2 旧址）；None 表示进入选章页当前选中的章节。
     也可以从通关之后接着用：结算画面、回到地图、选下一章、进入，一路处理到可操作的第一帧。
     checkpoint > 0（按段通关）：载入存档后，在关卡里或选章地图上用桥接的 enter_checkpoint 直接进入这一章的
@@ -50,6 +58,11 @@ def _enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter
         raise RuntimeError("新建存档需要 CelesteAIBridge 0.12.4 或更新版本，请更新桥接 Mod。")
     if checkpoint and chapter is None:
         raise ValueError("进入检查点需要指定章节")
+    # side：None = 原来的 A 面行为（不核对面）；明确给出 A／B／C 时进入后核对关卡的面（计划里有 B／C 面时主控都会给）
+    if side is not None and side not in PANEL_SIDES:
+        raise ValueError(f"面须为 A、B 或 C，不是 {side!r}")
+    if side in ('B', 'C') and (chapter is None or checkpoint):
+        raise ValueError("进入 B／C 面需要指定章节，且只从章节开头进入（检查点分段只支持 A 面）")
     stop_at_chapter_select = destination == 'chapter_select'
     if destination != 'play' and (chapter is not None or checkpoint):
         raise ValueError('仅进入存档时不指定章节或检查点，由智能体自行导航')
@@ -61,6 +74,7 @@ def _enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter
     tried_skip: set[str] = set()
     vignette_tries = 0
     selected_save_slot = save_slot
+    side_panel = SidePanel(c, side) if side is not None and chapter is not None and not checkpoint else None
     for _ in range(max_actions):
         if should_stop is not None and should_stop():
             return obs
@@ -93,6 +107,11 @@ def _enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter
         if scene == "Level":
             level = obs["level"]
             elsewhere = stop_at_chapter_select or wrong_save or (chapter is not None and area_id(level.get("sid")) != chapter)
+            if side_panel is not None and not elsewhere and level_side(obs) != side:
+                if side_panel.confirmed:
+                    # 面板里确认的是目标面，进来的却是别的面：停下报告，不再退出重进
+                    raise RuntimeError(f"进入的是第 {chapter} 章的 {level_side(obs)} 面，不是要求的 {side} 面；已停下，没有继续")
+                elsewhere = True            # 停在同一章的别的面里（续跑、换章）：先返回地图，再在面板里选面
             if elsewhere and (obs.get("controllable") or level.get("paused")):
                 obs = leave_level_by_pause_menu(c)  # 在别的存档或别的章节里：先返回地图
                 continue
@@ -151,6 +170,12 @@ def _enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter
             obs = press(c, "R" if chapter > menu["area"] else "L", settle=20)["obs"]
         elif current == "OuiChapterPanel" and chapter is not None and menu.get("panelArea", chapter) != chapter:
             obs = press(c, "B", settle=30)["obs"]  # 打开的是别的章节面板：退回选章页
+        elif current == "OuiChapterPanel" and side_panel is not None:
+            obs = side_panel.step(obs)            # B／C 面：在面板里按原生步骤选面、从开头进入
+        elif (current == "OuiChapterPanel" and chapter is not None and side is None
+              and menu.get("panelSide") not in (None, "Normal")):
+            # 要进 A 面，面板却停在 B／C 面（刚从那一面返回地图）：先退回选面、左移到 A 面，再按原来的步骤进入
+            obs = press(c, "L" if menu.get("panelSelectingMode") else "B", settle=PANEL_SETTLE)["obs"]
         elif current in ("OuiTitleScreen", "OuiMainMenu", "OuiChapterSelect", "OuiChapterPanel"):
             obs = press(c, "C", settle=30)["obs"]
         elif current == "OuiFileSelect":
@@ -172,18 +197,87 @@ def _enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter
 def enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter: int | None = None,
                menu_speed: int = 4, should_stop=None, create_if_missing: bool = False,
                save_slot: int | None = None, cutscene_mode: str = 'auto', checkpoint: int = 0,
-               stop_at_chapter_select: bool = False) -> dict:
-    """进入并准备游玩章节；恢复存档请用 load_save_and_freeze，打开选章页请用 open_chapter_select。"""
+               stop_at_chapter_select: bool = False, side: str | None = None) -> dict:
+    """进入并准备游玩章节；恢复存档请用 load_save_and_freeze，打开选章页请用 open_chapter_select。
+    side：B／C 面时在章节面板里按原生步骤选面，从章节开头进入（见 SidePanel）；进入后核对关卡的面，不对就停下报错。"""
     if stop_at_chapter_select:
         raise ValueError('stop_at_chapter_select 已停用：打开选章地图请用 open_chapter_select；'
                          '恢复存档并立即冻结请用 load_save_and_freeze，不能先退出关卡')
-    return _enter_save(c, save_name, max_actions, chapter, menu_speed, should_stop, create_if_missing,
-                       save_slot, cutscene_mode, checkpoint)
+    obs = _enter_save(c, save_name, max_actions, chapter, menu_speed, should_stop, create_if_missing,
+                      save_slot, cutscene_mode, checkpoint, side=side)
+    if side is not None and obs.get('scene') == 'Level' and not (should_stop is not None and should_stop()):
+        level = obs.get('level') or {}
+        if area_id(level.get('sid')) != chapter or level_side(obs) != side:
+            raise RuntimeError(f"进入的地图是 {level.get('sid')} {level_side(obs)} 面，不是第 {chapter} 章的 {side} 面；已停下")
+    return obs
 
 
 MAP_MENUS = ("OuiChapterSelect", "OuiChapterPanel")
 PANEL_SETTLE = 40          # 章节面板切换 A/B 面与检查点列表要半秒（OuiChapterPanel.SwapRoutine），期间不接受按键
 CONFIRM_WAIT = 90          # 面板确认进入后 0.7 秒（StartRoutine）才开始载入；超过这么多帧还停在面板才重按确认
+
+
+class SidePanel:
+    """在章节面板里选 B／C 面并从章节开头进入，按原生 OuiChapterPanel 的行为（只按观测到的状态决定，不看画面）：
+    - 选面状态（panelSelectingMode）下左右在已解锁的面之间移动：A、B、C 从左到右，panelSide 就是光标所在的面
+      （B 面要该章磁带，C 面要 UnlockedModes ≥ 3，没解锁的面不在列表里）。从地图返回时面板停在刚玩过的那一面。
+    - 选面状态下确认：这一面存档里没有到过的检查点时直接开始（StartRoutine）；有检查点时先切到检查点列表
+      （SwapRoutine，半秒内不接受按键）。列表第一项是章节开头；这一面没通关时光标停在最后一项，通关过停在开头。
+      这里左移到第 0 项（开头）再确认，所以总是从章节开头进入。
+    - 面板只在空闲（Focused）时接受按键：返回地图后的成绩动画、切换动画期间按下的键被忽略，下一次按观测重按。
+      确认开始后面板立刻不再接受按键，0.7 秒后才开始载入：先等 CONFIRM_WAIT 帧，仍停在同一状态才重按（重按不会再进一次）。
+    - 一直按不动（面板空闲时按到头了）说明目标面不在列表里：停下报错，不猜。"""
+    STUCK = 30                  # 同一状态下连续按键都没变化的次数上限（约 20 秒：返回地图后的成绩、解锁动画期间按键被忽略）
+
+    def __init__(self, client, side: str):
+        self.client, self.side, self.want = client, side, PANEL_SIDES[side]
+        self.confirmed = False      # 已在目标面上按过确认（之后进了别的面就是出错，停下）
+        self.confirms = self.waited = self.stuck = 0
+        self.pending = None         # 按确认时的面板状态；还停在这个状态时先等载入
+
+    @staticmethod
+    def _state(menu):
+        return (menu.get("panelSelectingMode"), menu.get("panelSide"), menu.get("panelCheckpoint"))
+
+    def step(self, obs: dict) -> dict:
+        menu = obs.get("menu") or {}
+        state = self._state(menu)
+        if self.pending == state and self.waited < CONFIRM_WAIT:
+            self.waited += 10
+            return step(self.client, ["10"], speed=1)["obs"]       # 确认后约 0.7 秒才开始载入：先等
+        self.pending = None
+        selecting, at, index = state
+        if not selecting:
+            if at != self.want:
+                return self._press("B", state)        # 停在别的面的检查点列表：先退回选面
+            if type(index) is not int:
+                raise RuntimeError("章节面板没有报告选中的检查点，没有进入")
+            if index > 0:
+                return self._press("L", state)        # 列表第一项是章节开头
+            return self._confirm(state)
+        if at == self.want:
+            return self._confirm(state)
+        if at not in SIDE_ORDER:
+            raise RuntimeError(f"章节面板报告的面 {at!r} 无法识别，没有进入")
+        return self._press("R" if SIDE_ORDER.index(self.want) > SIDE_ORDER.index(at) else "L", state)
+
+    def _press(self, key, state) -> dict:
+        after = press(self.client, key, settle=PANEL_SETTLE)["obs"]
+        menu = after.get("menu") or {}
+        if after.get("scene") == "Overworld" and menu.get("current") == "OuiChapterPanel" and self._state(menu) == state:
+            self.stuck += 1
+            if self.stuck >= self.STUCK:
+                raise RuntimeError(f"章节面板里选不到 {self.side} 面（存档里还没有解锁，或面板一直不接受按键），没有进入")
+        else:
+            self.stuck = 0
+        return after
+
+    def _confirm(self, state) -> dict:
+        self.confirms += 1
+        if self.confirms > 6:
+            raise RuntimeError("在章节面板上确认进入后一直没有开始载入，没有进入")
+        self.confirmed, self.pending, self.waited = True, state, 0
+        return press(self.client, "C", settle=PANEL_SETTLE)["obs"]
 
 
 def travel_to(c: BridgeClient, save_name: str, chapter: int, panel_slot, *, save_slot: int | None = None,
