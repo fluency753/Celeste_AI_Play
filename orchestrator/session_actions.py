@@ -292,4 +292,5 @@ def _launch_play(current, options):
                           '--sim-assist' if options.get('sim_assist',False) else '--no-sim-assist',
                           '--prepared',str(directory),'--chapter',str(options['chapter']), '--effort',manual_effort or read_json(current/'metrics.json').get('effort',state['effort']),
                           '--live','--keep-obs-open','--playback','--continuous-music','--start-paused','--cutscene-mode',mode] +
-                         capture_args + (['--create-save'] if options['create_save'] else ['--save-slot',str(options['save_slot'])]))
+                         capture_args + (['--create-save'] if options['create_save'] else ['--save-slot',str(options['save_slot'])])
+                         + (['--profile', str(state['profile'])] if state.get('profile') else []))

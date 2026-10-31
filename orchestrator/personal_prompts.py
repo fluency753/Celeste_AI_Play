@@ -11,7 +11,7 @@ import threading
 from .config import REPO_ROOT
 
 
-STORE = REPO_ROOT / 'local' / 'personal_prompts.json'
+STORE = REPO_ROOT / 'local' / 'personal_prompts.json'   # 本机原有设置的文件；别的配置见 orchestrator/profiles.py
 MAX_TEXT_CHARS = 12000
 MAX_FILE_BYTES = 512000
 _LABELS = {
@@ -22,6 +22,12 @@ _LABELS = {
     'claude:speedrun': 'Claude 执行器 · 速通',
 }
 _thread_lock = threading.RLock()
+
+
+def store_path():
+    """当前配置的个人追加要求文件（命令行不写 --profile 时就是 STORE）。"""
+    from .profiles import personal_store
+    return personal_store()
 
 
 def catalog():
@@ -119,12 +125,12 @@ def _write_lock(path):
 
 def read(scope):
     scope = _scope(scope)
-    return _record(scope, _load(Path(STORE).absolute()).get(scope, ''))
+    return _record(scope, _load(Path(store_path()).absolute()).get(scope, ''))
 
 
 def save(scope, text, version):
     scope, text = _scope(scope), _text(text)
-    path = Path(STORE).absolute()
+    path = Path(store_path()).absolute()
     with _write_lock(path):
         values = _load(path)
         old = values.get(scope, '')
@@ -157,7 +163,7 @@ def snapshot(cfg):
     """Read the effective scopes once for a coherent startup text and version."""
     from .modes import mode_of
     specific = _scope(f"{getattr(cfg, 'engine', 'claude')}:{mode_of(cfg)}")
-    values = _load(Path(STORE).absolute())
+    values = _load(Path(store_path()).absolute())
     entries = [_record(scope, values[scope]) for scope in ('all', specific)
                if values.get(scope, '').strip()]
     content = [{'scope': item['scope'], 'text': item['text']} for item in entries]

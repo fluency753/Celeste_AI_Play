@@ -1,5 +1,6 @@
 """Shared play, knowledge preparation and resume prompts."""
 from dataclasses import dataclass
+from pathlib import Path
 import re
 
 from .config import REPO_ROOT, chapter_name_by_id
@@ -354,7 +355,14 @@ def fill(text: str, cfg) -> str:
 
 # 控制台"提示词"页保存的本机修改：local/prompts/<文件名>（不入库）。有这个文件时用它代替仓库里的同名文件，
 # 删掉它就恢复仓库版本。这样更新仓库（git pull）不会和本机修改冲突，每次运行也会记下用了哪些本机修改。
+# 这是"本机原有设置"的目录；用别的配置（--profile）时换成那份配置的 prompts/（orchestrator/profiles.py）。
 OVERRIDES = REPO_ROOT / "local" / "prompts"
+
+
+def overrides_dir() -> Path:
+    """当前配置的提示词修改目录（命令行不写 --profile 时就是 OVERRIDES）。"""
+    from .profiles import prompts_dir
+    return prompts_dir()
 
 
 def prompt_files() -> list[str]:
@@ -363,7 +371,7 @@ def prompt_files() -> list[str]:
 
 def read_part(name: str) -> str:
     """提示词文件的当前内容：有本机修改时用本机修改。"""
-    override = OVERRIDES / name
+    override = overrides_dir() / name
     if override.is_file():
         return override.read_text(encoding="utf-8")
     return (PROMPTS / name).read_text(encoding="utf-8")
@@ -371,7 +379,8 @@ def read_part(name: str) -> str:
 
 def overridden_parts() -> list[str]:
     known = set(prompt_files())
-    return sorted(p.name for p in OVERRIDES.glob("*.md") if p.name in known) if OVERRIDES.is_dir() else []
+    root = overrides_dir()
+    return sorted(p.name for p in root.glob("*.md") if p.name in known) if root.is_dir() else []
 
 
 @dataclass

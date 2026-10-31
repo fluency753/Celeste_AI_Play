@@ -6,6 +6,9 @@
 也可以给某个系列赛追加本机资料（RunConfig.kb_extra，命令行 --kb-extra，目录放在 local/ 下、不入库；
 同名文件覆盖默认版本）。这两种情况下主控把最终的文件同步到 local/kb_views/<工作区标签>/，挂进容器的是这个副本，
 准备阶段也只要求读这些文件。全部可读且没有追加（默认）时直接挂知识库本身，与之前完全相同。
+
+控制台编辑知识库文件时不改仓库里的文件：修改存在当前配置的目录（orchestrator/profiles.kb_edits_dir，结构与 kb/ 相同；
+本机原有设置是 local/kb_edits/）。有修改时挂进容器的同样是合并后的副本（RunConfig.kb_overlay）；改回与仓库相同就删掉修改。
 """
 from __future__ import annotations
 
@@ -65,6 +68,21 @@ def speedrun_files() -> list[str]:
             if not rel.startswith("explore/")]
 
 
+def _edits_root() -> Path:
+    from .profiles import kb_edits_dir
+    return kb_edits_dir()
+
+
+def _edit_of(path: Path) -> Path:
+    """仓库知识库文件在当前配置里的修改版本的位置（不一定存在）。"""
+    return _edits_root() / path.resolve().relative_to(KB_ROOT.resolve())
+
+
+def _effective(path: Path) -> Path:
+    edit = _edit_of(path)
+    return edit if edit.is_file() else path
+
+
 def documents(mode: str) -> list[dict]:
     """这个模式下智能体能读到的全部文件（知识库内的相对路径）、是否要求在准备阶段读完、能否在控制台编辑。
     探索模式另列速通知识库的文件（opt_in，路径带 speedrun/ 前缀）：默认不开放，勾选了才挂进 /kb/speedrun/。"""
@@ -73,16 +91,18 @@ def documents(mode: str) -> list[dict]:
     rows = []
     for path in _files(root):
         rel = path.relative_to(root).as_posix()
-        rows.append({"path": rel, "size": path.stat().st_size, "group": _group(rel, mode), "required": rel in required,
-                     "editable": path.suffix.lower() in TEXT_SUFFIXES and path.stat().st_size <= MAX_EDIT_BYTES,
-                     "local_only": rel.startswith("reference/")})
+        effective = _effective(path)
+        rows.append({"path": rel, "size": effective.stat().st_size, "group": _group(rel, mode), "required": rel in required,
+                     "editable": path.suffix.lower() in TEXT_SUFFIXES and effective.stat().st_size <= MAX_EDIT_BYTES,
+                     "local_only": rel.startswith("reference/"), "edited": effective != path})
     if mode == EXPLORE:
         for rel in speedrun_files():
             path = KB_ROOT / rel
-            rows.append({"path": SPEEDRUN_PREFIX + rel, "size": path.stat().st_size,
+            effective = _effective(path)
+            rows.append({"path": SPEEDRUN_PREFIX + rel, "size": effective.stat().st_size,
                          "group": "速通知识库（默认不开放）· " + _group(rel), "required": False, "opt_in": True,
-                         "editable": path.suffix.lower() in TEXT_SUFFIXES and path.stat().st_size <= MAX_EDIT_BYTES,
-                         "local_only": rel.startswith("reference/")})
+                         "editable": path.suffix.lower() in TEXT_SUFFIXES and effective.stat().st_size <= MAX_EDIT_BYTES,
+                         "local_only": rel.startswith("reference/"), "edited": effective != path})
     return rows
 
 
@@ -131,22 +151,26 @@ def _resolve(mode: str, rel: str) -> Path:
 
 
 def read_document(mode: str, rel: str) -> dict:
+    """读一个文件：当前配置改过时读修改后的版本（edited）。"""
     path = _resolve(mode, rel)
     if not path.is_file():
         raise ValueError(f"找不到 {rel}")
+    effective = _effective(path)
+    edited = effective != path
     if path.suffix.lower() not in TEXT_SUFFIXES:
-        return {"path": rel, "editable": False, "text": None, "size": path.stat().st_size}
-    data = path.read_bytes()
+        return {"path": rel, "editable": False, "text": None, "size": path.stat().st_size, "edited": False}
+    data = effective.read_bytes()
     text = (data[:200000] if len(data) > MAX_EDIT_BYTES else data).decode("utf-8", errors="replace").replace("\r\n", "\n")
     if len(data) > MAX_EDIT_BYTES:
         return {"path": rel, "editable": False, "text": text,
-                "size": len(data), "truncated": True}
+                "size": len(data), "truncated": True, "edited": edited}
     return {"path": rel, "editable": True, "text": text, "size": len(data),
-            "mtime": path.stat().st_mtime}
+            "mtime": effective.stat().st_mtime, "edited": edited}
 
 
 def write_document(mode: str, rel: str, text: str, expected_mtime: float | None = None) -> dict:
-    """保存编辑：只允许文本文件；文件在打开之后被别处改过时拒绝（expected_mtime 对不上）。"""
+    """保存编辑：只允许文本文件；修改存进当前配置的目录（仓库里的文件不变），改回与仓库相同就删掉修改；
+    文件在打开之后被别处改过时拒绝（expected_mtime 对不上）。"""
     path = _resolve(mode, rel)
     if path.suffix.lower() not in TEXT_SUFFIXES:
         raise ValueError("只能编辑文本文件（.md、.txt、.json、.csv）")
@@ -157,12 +181,35 @@ def write_document(mode: str, rel: str, text: str, expected_mtime: float | None 
         raise ValueError("文件太大（最多 2 MB）")
     if not path.is_file():
         raise ValueError(f"找不到 {rel}（控制台只编辑已有的文件）")
-    if expected_mtime is not None and abs(path.stat().st_mtime - float(expected_mtime)) > 1e-3:
+    edit = _edit_of(path)
+    effective = edit if edit.is_file() else path
+    if expected_mtime is not None and abs(effective.stat().st_mtime - float(expected_mtime)) > 1e-3:
         raise ValueError("这个文件在你打开之后被改过，请重新打开再编辑")
-    tmp = path.with_name(path.name + ".tmp")
+    if data == path.read_bytes().replace(b"\r\n", b"\n"):
+        edit.unlink(missing_ok=True)          # 改回与仓库相同：删掉修改
+        _prune(edit.parent)
+        return {"path": rel, "size": len(data), "mtime": path.stat().st_mtime, "edited": False}
+    edit.parent.mkdir(parents=True, exist_ok=True)
+    tmp = edit.with_name(edit.name + ".tmp")
     tmp.write_bytes(data)
-    tmp.replace(path)
-    return {"path": rel, "size": len(data), "mtime": path.stat().st_mtime}
+    tmp.replace(edit)
+    return {"path": rel, "size": len(data), "mtime": edit.stat().st_mtime, "edited": True}
+
+
+def reset_document(mode: str, rel: str) -> dict:
+    """恢复仓库版本：删掉当前配置对这个文件的修改。"""
+    path = _resolve(mode, rel)
+    edit = _edit_of(path)
+    edit.unlink(missing_ok=True)
+    _prune(edit.parent)
+    return read_document(mode, rel)
+
+
+def _prune(directory: Path) -> None:
+    root = _edits_root()
+    while directory != root and root in directory.parents and directory.is_dir() and not any(directory.iterdir()):
+        directory.rmdir()
+        directory = directory.parent
 
 
 def prepare_view(cfg, log=print) -> Path:
@@ -174,6 +221,17 @@ def prepare_view(cfg, log=print) -> Path:
     view = cfg.kb_dir
     deny = set(cfg.kb_deny)
     files = {path.relative_to(source).as_posix(): path for path in _files(source)}
+    overlay = getattr(cfg, "kb_overlay_dir", None)
+    edited = {}
+    if overlay is not None:
+        # 配置里的知识库修改（目录结构与仓库 kb/ 相同）：同名文件换成修改后的版本
+        try:
+            base = overlay / Path(source).resolve().relative_to(KB_ROOT.resolve())
+        except ValueError:
+            base = overlay
+        for rel in list(files):
+            if (base / rel).is_file():
+                files[rel] = edited[rel] = base / rel
     extra_dir = cfg.kb_extra_dir
     extra = {}
     if extra_dir is not None:
@@ -184,6 +242,8 @@ def prepare_view(cfg, log=print) -> Path:
     allow = [rel for rel in getattr(cfg, "kb_allow", None) or [] if rel.startswith(SPEEDRUN_PREFIX)]
     for rel in allow:
         source_file = KB_ROOT / rel[len(SPEEDRUN_PREFIX):]
+        if overlay is not None and (overlay / rel[len(SPEEDRUN_PREFIX):]).is_file() and source_file.is_file():
+            source_file = edited[rel] = overlay / rel[len(SPEEDRUN_PREFIX):]
         if source_file.is_file():
             files[rel] = source_file
     allowed = {rel: path for rel, path in files.items() if rel not in deny}
@@ -211,6 +271,8 @@ def prepare_view(cfg, log=print) -> Path:
         log(f"[kb] 知识库有 {len(deny)} 个文件不给智能体看，挂进容器的是只含允许文件的副本（{view}）")
     if allow:
         log(f"[kb] 探索模式开放了速通知识库的 {len(allow)} 个文件，挂在 /kb/{SPEEDRUN_PREFIX}下")
+    if edited:
+        log(f"[kb] 用了配置里的知识库修改 {len(edited)} 个（{overlay}）：{'、'.join(sorted(edited))}")
     if extra:
         log(f"[kb] 追加本机资料 {len(extra)} 个（{extra_dir}）：{'、'.join(sorted(extra))}；挂进容器的是合并后的副本（{view}）")
     return view

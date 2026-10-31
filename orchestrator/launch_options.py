@@ -217,8 +217,9 @@ def normalize(options: dict) -> dict:
     return o
 
 
-def build(options: dict) -> list[str]:
-    """新运行的命令行参数（不含 python -m orchestrator.run）。"""
+def build(options: dict, profile: str | None = None) -> list[str]:
+    """新运行的命令行参数（不含 python -m orchestrator.run）。profile 是控制台选中的配置：
+    本机原有设置（"local"）或不给时不写 --profile，命令与没有配置功能时相同。"""
     o = normalize(options)
     argv = ["--engine", o["engine"], "--provider", o["provider"], "--model", o["model"], "--effort", o["effort"],
             "--agent", o["agent"], "--mode", o["mode"], "--max-minutes", f"{o['max_minutes']:g}",
@@ -300,6 +301,9 @@ def build(options: dict) -> list[str]:
         argv += ["--kb-deny", ",".join(o["kb_deny"])]
     if o["kb_allow"]:
         argv += ["--kb-allow", ",".join(o["kb_allow"])]
+    if profile and profile != "local":
+        from .profiles import check
+        argv += ["--profile", check(profile)]
     return argv
 
 
@@ -348,8 +352,9 @@ def _segment_text(run) -> str:
     return f"{chapter}.{first}" if first == last else f"{chapter}.{first}-{last}"
 
 
-def config_for(options: dict):
-    """按运行设置构造与主控相同的 RunConfig（只用于控制台的提示词预览，不连游戏、不建容器）。"""
+def config_for(options: dict, profile: str | None = None):
+    """按运行设置构造与主控相同的 RunConfig（只用于控制台的提示词预览，不连游戏、不建容器）。
+    profile 是控制台选中的配置（提示词修改与个人追加要求由调用方在 profiles.using 里读）。"""
     from .config import RunConfig
     from .modes import KNOWLEDGE_OF_MODE
     from .tuning import apply
@@ -387,6 +392,10 @@ def config_for(options: dict):
     cfg.kb_allow = list(o["kb_allow"])
     apply(cfg, o["tune"])
     cfg.live_remind_s = cfg.remind_live_s if cfg.live else cfg.remind_s
+    if profile:
+        from .profiles import check, kb_overlay_for
+        cfg.profile = check(profile)
+        cfg.kb_overlay = kb_overlay_for(cfg.profile)
     return cfg
 
 

@@ -289,6 +289,10 @@ class RunConfig:
     # 本机追加的资料目录（例如某个系列赛自己加的资料，放在 local/ 下、不入库）：里面的文件加进挂给智能体的 /kb，
     # 与默认知识库同名的文件覆盖默认版本。空字符串表示不追加。命令行 --kb-extra，续跑沿用
     kb_extra: str = ""
+    # 用哪份配置（控制台的"配置"，orchestrator/profiles.py）："local" = 本机原有设置（命令行不写 --profile 时）。
+    # kb_overlay 是这份配置的知识库修改目录（没有修改时为空）：挂给智能体的 /kb 要合并它
+    profile: str = "local"
+    kb_overlay: str = ""
 
     @property
     def third_party(self) -> bool:
@@ -329,9 +333,15 @@ class RunConfig:
         return path if path.is_absolute() else REPO_ROOT / path
 
     @property
+    def kb_overlay_dir(self) -> Path | None:
+        """这份配置的知识库修改目录（结构与仓库 kb/ 相同）；没有修改时为 None。"""
+        return Path(self.kb_overlay) if self.kb_overlay else None
+
+    @property
     def kb_view(self) -> bool:
-        """/kb 挂的是不是同步出来的副本：有不给看的文件（kb_deny）、开放了速通资料（kb_allow）或有本机追加资料（kb_extra）时是。"""
-        return bool(self.kb_deny or self.kb_extra or self.kb_allow)
+        """/kb 挂的是不是同步出来的副本：有不给看的文件（kb_deny）、开放了速通资料（kb_allow）、有本机追加资料（kb_extra）
+        或配置里有知识库修改（kb_overlay）时是。"""
+        return bool(self.kb_deny or self.kb_extra or self.kb_allow or self.kb_overlay)
 
     @property
     def kb_dir(self) -> Path:

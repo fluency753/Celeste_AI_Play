@@ -105,8 +105,12 @@ class PromptOverrideTests(unittest.TestCase):
         self.overrides = Path(self.folder.name) / "prompts"
         self.patch = patch.object(prompting, "OVERRIDES", self.overrides)
         self.patch.start()
+        from orchestrator import profiles      # 这些测试改的是本机原有设置（local/prompts/）
+        self.selected = patch.object(profiles, "selected", return_value=profiles.LEGACY)
+        self.selected.start()
 
     def tearDown(self):
+        self.selected.stop()
         self.patch.stop()
         self.folder.cleanup()
 

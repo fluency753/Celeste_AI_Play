@@ -153,6 +153,13 @@ def config_from_state(state, metrics=None):
     cfg.kb_deny = list(state.get('kb_deny') or [])
     cfg.kb_allow = list(state.get('kb_allow') or [])
     cfg.kb_extra = str(state.get('kb_extra') or '')
+    # 原运行用的配置（没记的是本机原有设置）：提示词修改与个人追加要求在唤起的会话里也从它读（chat.py 激活）
+    from .profiles import check, kb_overlay_for, state_profile
+    cfg.profile = state_profile(state)
+    try:
+        cfg.kb_overlay = kb_overlay_for(check(cfg.profile))
+    except ValueError:
+        cfg.kb_overlay = ''            # 配置已被删除：唤起会话时 activate 会报错
     from .action_policy import configure, permissions_from_state
     configure(cfg, permissions_from_state(state))
     cfg.allow_detour = bool(state.get('allow_detour', False)) and cfg.play_scope != 'visited'

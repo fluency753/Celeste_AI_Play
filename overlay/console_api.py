@@ -140,7 +140,8 @@ def options() -> dict:
             "defaults": {**DEFAULTS, "hud_mod": None}, "deploy": {k: deploy.get(k) for k in ("agent", "save", "chapters")},
             "maps": [{"id": k, "label": v, "enabled": True} for k, v in MAPS.items()]
                     + [{"id": "mod", "label": "MOD 地图", "enabled": False, "note": "未来版本中支持"}],
-            "tunables": catalog(), "tunable_groups": list(GROUPS), "prefs": load_prefs(), "game": celeste_dir_info()}
+            "tunables": catalog(), "tunable_groups": list(GROUPS), "prefs": load_prefs(), "game": celeste_dir_info(),
+            "profiles": profiles_payload()}
 
 
 # ---------------------------------------------------------------- 控制台的本机设置（configs/local.console.json，不入库）
@@ -148,14 +149,28 @@ def options() -> dict:
 PREFS = REPO_ROOT / "configs" / "local.console.json"
 
 
-def load_prefs() -> dict:
-    data = _read_json(PREFS)
+def _legacy_kb(data: dict) -> dict:
     deny = data.get("kb_deny") if isinstance(data.get("kb_deny"), dict) else {}
     allow = data.get("kb_allow") if isinstance(data.get("kb_allow"), dict) else {}
-    return {"celeste_dir": data.get("celeste_dir") or "",
-            "kb_deny": {mode: list(deny.get(mode) or []) for mode in ("speedrun", "explore")},
+    return {"kb_deny": {mode: list(deny.get(mode) or []) for mode in ("speedrun", "explore")},
             # 探索模式额外开放的速通知识库文件（默认一个都不开放）
             "kb_allow": {"explore": list(allow.get("explore") or [])}}
+
+
+def _kb_permissions(pid: str, data: dict | None = None) -> dict:
+    """一份配置的知识库阅读权限：本机原有设置的在 configs/local.console.json，默认配置全部可读，新建配置的在它的 profile.json。"""
+    from orchestrator import profiles
+    if pid == profiles.LEGACY:
+        return _legacy_kb(_read_json(PREFS) if data is None else data)
+    m = profiles.meta(pid)
+    return {"kb_deny": m["kb_deny"], "kb_allow": m["kb_allow"]}
+
+
+def load_prefs() -> dict:
+    """游戏位置（本机环境，所有配置共用）与当前配置的知识库阅读权限。"""
+    from orchestrator import profiles
+    data = _read_json(PREFS)
+    return {"celeste_dir": data.get("celeste_dir") or "", **_kb_permissions(profiles.selected(), data)}
 
 
 def save_prefs(update: dict) -> dict:
@@ -173,26 +188,127 @@ def save_prefs(update: dict) -> dict:
         if value and not is_game_dir(value):
             raise ValueError(f"{value} 里没有 Celeste.exe：请填《蔚蓝》的安装目录（含 Celeste.exe 的那一层）")
         data["celeste_dir"] = str(Path(value)) if value else ""
+    deny_update = allow_update = None
     if "kb_deny" in update:
         deny = update["kb_deny"]
         if not isinstance(deny, dict) or set(deny) - {"speedrun", "explore"}:
             raise ValueError("知识库权限设置无效")
-        current = data.get("kb_deny") if isinstance(data.get("kb_deny"), dict) else {}
-        for mode, files in deny.items():
-            current[mode] = normalize_deny(mode, files)
-        data["kb_deny"] = current
+        deny_update = {mode: normalize_deny(mode, files) for mode, files in deny.items()}
     if "kb_allow" in update:
         allow = update["kb_allow"]
         if not isinstance(allow, dict) or set(allow) - {"explore"}:
             raise ValueError("开放速通资料的设置无效（只有探索模式）")
+        allow_update = {"explore": normalize_allow("explore", allow.get("explore"))}
+    if deny_update is not None or allow_update is not None:
+        from orchestrator import profiles
+        pid = _editable_profile("知识库的阅读权限")
+        if pid != profiles.LEGACY:        # 新建配置的权限存在它自己的 profile.json
+            profiles.set_kb_permissions(pid, deny_update, allow_update)
+            deny_update = allow_update = None
+    if deny_update is not None:
+        current = data.get("kb_deny") if isinstance(data.get("kb_deny"), dict) else {}
+        current.update(deny_update)
+        data["kb_deny"] = current
+    if allow_update is not None:
         current = data.get("kb_allow") if isinstance(data.get("kb_allow"), dict) else {}
-        current["explore"] = normalize_allow("explore", allow.get("explore"))
+        current.update(allow_update)
         data["kb_allow"] = current
     PREFS.parent.mkdir(parents=True, exist_ok=True)
     tmp = PREFS.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(PREFS)
     return load_prefs()
+
+
+# ---------------------------------------------------------------- 配置（顶部的"配置"：表单设置、知识库、提示词）
+
+def _profile() -> str:
+    from orchestrator import profiles
+    return profiles.selected()
+
+
+def _editable_profile(what: str) -> str:
+    from orchestrator import profiles
+    pid = profiles.selected()
+    if profiles.readonly(pid):
+        raise ValueError(f"现在选的是默认配置（仓库原样），不能修改{what}：先在顶部“配置”里点“新建”，再改")
+    return pid
+
+
+def _profile_usage() -> dict:
+    """每份新建配置被几次运行记着用过（续跑要用它）。"""
+    counts = {}
+    root = REPO_ROOT / "runs"
+    for state in root.glob("*/*/run_state.json") if root.is_dir() else []:
+        pid = _read_json(state).get("profile")
+        if isinstance(pid, str):
+            counts[pid] = counts.get(pid, 0) + 1
+    return counts
+
+
+def profiles_payload() -> dict:
+    from orchestrator import profiles
+    listing = profiles.listing()
+    usage = _profile_usage()
+    for row in listing["profiles"]:
+        row["runs"] = usage.get(row["id"], 0)
+    pid = listing["selected"]
+    m = profiles.meta(pid)
+    return {**listing, "current": {"id": pid, "name": m["name"], "readonly": profiles.readonly(pid),
+                                   "builtin": pid in profiles.BUILTIN, "form": m["form"]}}
+
+
+def profile_select(pid) -> dict:
+    from orchestrator import profiles
+    profiles.select(pid)
+    return profiles_payload()
+
+
+def profile_create(data) -> dict:
+    """新建配置：基于当前配置（复制它的提示词修改、个人追加要求、知识库修改与权限，表单设置用运行页现在的）或基于默认。"""
+    from orchestrator import profiles
+    if not isinstance(data, dict) or set(data) - {"name", "base", "form"}:
+        raise ValueError("新建配置的参数无效")
+    base = data.get("base", "current")
+    if base not in ("current", "default"):
+        raise ValueError("新建配置须基于当前配置或默认配置")
+    if base == "current":
+        source = profiles.selected()
+        pid = profiles.create(data.get("name"), source, data.get("form"), _kb_permissions(source))
+    else:
+        pid = profiles.create(data.get("name"), profiles.DEFAULT)
+    profiles.select(pid)
+    return profiles_payload()
+
+
+def profile_save(data) -> dict:
+    """保存配置：把运行页现在的表单设置存进当前配置（知识库与提示词的修改在各自的页面保存时就存进去了）。"""
+    from orchestrator import profiles
+    if not isinstance(data, dict) or set(data) - {"form"}:
+        raise ValueError("保存配置的参数无效")
+    profiles.save_form(_editable_profile("配置"), data.get("form"))
+    return profiles_payload()
+
+
+def profile_rename(data) -> dict:
+    from orchestrator import profiles
+    if not isinstance(data, dict) or set(data) - {"id", "name"}:
+        raise ValueError("改名的参数无效")
+    profiles.rename(data.get("id"), data.get("name"))
+    return profiles_payload()
+
+
+def profile_delete(data) -> dict:
+    from orchestrator import profiles
+    if not isinstance(data, dict) or set(data) - {"id"}:
+        raise ValueError("删除配置的参数无效")
+    pid = profiles.check(data.get("id"))
+    orchestrator = orchestrator_status()
+    if orchestrator["running"] and orchestrator.get("run"):
+        if _read_json(Path(orchestrator["run"]) / "run_state.json").get("profile") == pid:
+            raise ValueError("正在运行的主控用着这份配置：等运行结束再删除")
+    profiles.delete(pid)
+    return profiles_payload()
 
 
 # ---------------------------------------------------------------- 模型提供方（运行页"管理提供方"）
@@ -261,28 +377,57 @@ def providers_test(data) -> dict:
 # ---------------------------------------------------------------- 知识库页
 
 def kb_list(mode: str) -> dict:
+    """当前配置下这个模式的知识库：文件（edited = 这份配置改过）与阅读权限。"""
+    from orchestrator import profiles
     from orchestrator.kb_access import documents, root_of
+    pid = _profile()
     root = root_of(mode)
-    docs = documents(mode)
+    with profiles.using(pid):
+        docs = documents(mode)
     known = {d["path"] for d in docs}
     prefs = load_prefs()
     deny = [x for x in prefs["kb_deny"].get(mode, []) if x in known]
     allow = [x for x in prefs["kb_allow"].get(mode, []) if x in known]
     sim_readme = REPO_ROOT / "sim" / "dist" / "README.md"
     return {"mode": mode, "root": root.relative_to(REPO_ROOT).as_posix(), "documents": docs, "deny": deny, "allow": allow,
-            "sim_readme": mode == "speedrun" and sim_readme.is_file()}
+            "sim_readme": mode == "speedrun" and sim_readme.is_file(), "profile": pid, "readonly": profiles.readonly(pid),
+            "edits_dir": _rel(profiles.kb_edits_dir(pid))}
+
+
+def _rel(path: Path) -> str:
+    try:
+        return path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path)
 
 
 def kb_read(mode: str, path: str) -> dict:
+    from orchestrator import profiles
     from orchestrator.kb_access import read_document
-    return read_document(mode, path)
+    with profiles.using(_profile()):
+        return read_document(mode, path)
 
 
 def kb_write(mode: str, path: str, text: str, mtime=None) -> dict:
+    """保存知识库文件的修改：存进当前配置（仓库里的文件不变）。"""
+    from orchestrator import profiles
     from orchestrator.kb_access import write_document
+    pid = _editable_profile("知识库")
     if orchestrator_status()["running"]:
         raise ValueError("有主控在运行：知识库正挂在智能体的容器里，等运行结束再保存修改")
-    return write_document(mode, path, text, mtime)
+    with profiles.using(pid):
+        return write_document(mode, path, text, mtime)
+
+
+def kb_reset(mode: str, path: str) -> dict:
+    """恢复仓库版本：删掉当前配置对这个文件的修改。"""
+    from orchestrator import profiles
+    from orchestrator.kb_access import reset_document
+    pid = _editable_profile("知识库")
+    if orchestrator_status()["running"]:
+        raise ValueError("有主控在运行：等运行结束再恢复")
+    with profiles.using(pid):
+        return reset_document(mode, path)
 
 
 # ---------------------------------------------------------------- 提示词页
@@ -347,14 +492,18 @@ PLACEHOLDERS = {
 
 
 def personal_prompt_read(scope='all') -> dict:
-    from orchestrator import personal_prompts
-    return {**personal_prompts.read(scope), 'catalog': personal_prompts.catalog(),
-            'max_chars': personal_prompts.MAX_TEXT_CHARS}
+    from orchestrator import personal_prompts, profiles
+    pid = _profile()
+    with profiles.using(pid):
+        return {**personal_prompts.read(scope), 'catalog': personal_prompts.catalog(),
+                'max_chars': personal_prompts.MAX_TEXT_CHARS, 'readonly': profiles.readonly(pid),
+                'store': _rel(profiles.personal_store(pid))}
 
 
 def personal_prompt_write(scope, text, version) -> dict:
-    from orchestrator import personal_prompts
-    return personal_prompts.save(scope, text, version)
+    from orchestrator import personal_prompts, profiles
+    with profiles.using(_editable_profile('个人追加要求')):
+        return personal_prompts.save(scope, text, version)
 
 
 def _prompt_name(name) -> str:
@@ -370,22 +519,29 @@ def _version(text: str) -> str:
 
 
 def prompt_preview(options: dict) -> dict:
-    """按运行页的当前设置，生成智能体会收到的提示词（分块，标出来源文件与本机修改）和准备阶段的第一条消息。"""
-    from types import SimpleNamespace
-    from orchestrator.kb_access import root_of
-    from orchestrator.kb_study import CONTAINER_KB, required_files
+    """按运行页的当前设置与选中的配置，生成智能体会收到的提示词（分块，标出来源文件与本机修改）和准备阶段的第一条消息。"""
     from orchestrator.launch_options import config_for
-    from orchestrator.prompting import overridden_parts, prompt_parts, study_prompt
-    from orchestrator.startup_prompt import runtime_prompt_parts
-    from orchestrator.button_prompts import catalog
-    from orchestrator.execution import workspace_capabilities
     # 预览不需要真的起名字或选存档：没填的用占位值，免得运行页还没填完就看不了提示词
     options = dict(options or {})
     if not options.get("agent"):
         options["agent"] = "preview"
     if not (options.get("save") or {}).get("name"):
         options["save"] = {"name": "preview", "slot": None, "create": False}
-    cfg = config_for(options)
+    from orchestrator import profiles
+    pid = _profile()
+    with profiles.using(pid):
+        return {**_prompt_preview(config_for(options, pid)), "profile": pid, "readonly": profiles.readonly(pid),
+                "overrides_dir": _rel(profiles.prompts_dir(pid))}
+
+
+def _prompt_preview(cfg) -> dict:
+    from types import SimpleNamespace
+    from orchestrator.kb_access import root_of
+    from orchestrator.kb_study import CONTAINER_KB, required_files
+    from orchestrator.prompting import overridden_parts, prompt_parts, study_prompt
+    from orchestrator.startup_prompt import runtime_prompt_parts
+    from orchestrator.button_prompts import catalog
+    from orchestrator.execution import workspace_capabilities
     overridden = set(overridden_parts())
     guided = workspace_capabilities(cfg).workspace_read
     from orchestrator.prompt_guide import guide_document
@@ -420,18 +576,33 @@ def prompt_preview(options: dict) -> dict:
 
 
 def prompt_read(name: str) -> dict:
-    from orchestrator.prompting import OVERRIDES, PROMPTS, read_part
+    from orchestrator import profiles
+    pid = _profile()
+    with profiles.using(pid):
+        return _prompt_read(name, pid)
+
+
+def _prompt_read(name: str, pid: str) -> dict:
+    from orchestrator import profiles
+    from orchestrator.prompting import PROMPTS, overrides_dir, read_part
     name = _prompt_name(name)
     text = read_part(name)
     repo = (PROMPTS / name).read_text(encoding="utf-8")
-    return {"name": name, "text": text, "version": _version(text), "overridden": (OVERRIDES / name).is_file(),
-            "live_editable": _button_template(name),
+    return {"name": name, "text": text, "version": _version(text), "overridden": (overrides_dir() / name).is_file(),
+            "live_editable": _button_template(name), "readonly": profiles.readonly(pid),
             "repo_text": repo, "placeholders": [{"name": k, "meaning": v} for k, v in PLACEHOLDERS.items() if k in repo]}
 
 
 def prompt_write(name: str, text, version) -> dict:
-    """保存提示词的本机修改（local/prompts/，不改仓库里的文件）；改回与仓库相同时删掉本机修改。"""
-    from orchestrator.prompting import OVERRIDES, PROMPTS, check_program_placeholders, read_part
+    """保存提示词的修改（当前配置的目录，本机原有设置是 local/prompts/；不改仓库里的文件）；改回与仓库相同时删掉修改。"""
+    from orchestrator import profiles
+    pid = _editable_profile("提示词")
+    with profiles.using(pid):
+        return _prompt_write(name, text, version, pid)
+
+
+def _prompt_write(name: str, text, version, pid: str) -> dict:
+    from orchestrator.prompting import PROMPTS, check_program_placeholders, overrides_dir, read_part
     name = _prompt_name(name)
     if not _button_template(name) and orchestrator_status()["running"]:
         raise ValueError("有主控在运行：等运行结束再保存提示词")
@@ -445,25 +616,29 @@ def prompt_write(name: str, text, version) -> dict:
         from orchestrator.startup_prompt import validate_runtime_template
         validate_runtime_template(text)
     repo = (PROMPTS / name).read_text(encoding="utf-8")
-    override = OVERRIDES / name
+    root = overrides_dir()
+    override = root / name
     if text == repo:
         override.unlink(missing_ok=True)
     else:
-        OVERRIDES.mkdir(parents=True, exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True)
         tmp = override.with_name(override.name + ".tmp")
         tmp.write_text(text, encoding="utf-8", newline="\n")
         tmp.replace(override)
     missing = [k for k in PLACEHOLDERS if k in repo and k not in text]
-    return {**prompt_read(name), "missing_placeholders": missing}
+    return {**_prompt_read(name, pid), "missing_placeholders": missing}
 
 
 def prompt_reset(name: str) -> dict:
-    from orchestrator.prompting import OVERRIDES
+    from orchestrator import profiles
+    from orchestrator.prompting import overrides_dir
+    pid = _editable_profile("提示词")
     name = _prompt_name(name)
     if not _button_template(name) and orchestrator_status()["running"]:
         raise ValueError("有主控在运行：等运行结束再恢复")
-    (OVERRIDES / name).unlink(missing_ok=True)
-    return prompt_read(name)
+    with profiles.using(pid):
+        (overrides_dir() / name).unlink(missing_ok=True)
+        return _prompt_read(name, pid)
 
 
 def _button_template(name):
@@ -473,7 +648,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.3.1"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.4.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -761,7 +936,7 @@ def _launch(argv: list[str]) -> dict:
 
 def start(options: dict) -> dict:
     from orchestrator.launch_options import build, command_line, normalize
-    argv = build(options)
+    argv = build(options, profile=_profile())
     o = normalize(options)
     if o["sides"]:
         # 计划了 B／C 面：启动前就按存档核对这些面已解锁（与主控开跑前的核对相同），没解锁时在控制台直接报错
@@ -774,7 +949,7 @@ def start(options: dict) -> dict:
 
 def preview(options: dict) -> dict:
     from orchestrator.launch_options import build, command_line, normalize
-    return {"command": command_line(build(options)), "options": normalize(options)}
+    return {"command": command_line(build(options, profile=_profile())), "options": normalize(options)}
 
 
 def resume(run_dir: str, fresh_session: bool = False, new_recording: bool = False) -> dict:

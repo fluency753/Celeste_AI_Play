@@ -19,7 +19,7 @@ const ids={};let scrolling=0,focused=0,requests=0,confirmed=false;
 const $=id=>ids[id] ||= {hidden:true,textContent:'',value:'',classList:{remove(){}},replaceChildren(){},scrollIntoView(options){assert.equal(options.block,'start');scrolling++;},focus(options){assert.equal(options.preventScroll,true);focused++;}};
 const row={dataset:{promptName:'button_resume_zh.md'}};
 const document={querySelectorAll:()=>[row]};
-const ui={promptFile:null};const confirmLeave=()=>confirmed;const updatePromptButtons=()=>{};
+const ui={promptFile:null};const confirmLeave=()=>confirmed;const updatePromptButtons=()=>{};const profileReadonly=()=>false;
 const getJSON=async url=>{requests++;assert(url.includes('button_resume_zh.md'));return {name:'button_resume_zh.md',text:'当前消息正文',placeholders:[],overridden:false,live_editable:true};};
 const toast=message=>{throw Error(message);};
 eval(JSON.parse(fs.readFileSync(0,'utf8')).function+`

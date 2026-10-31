@@ -69,6 +69,19 @@
   .banner.error { background: rgba(224, 71, 91, 0.10); border-color: rgba(224, 71, 91, 0.4); }
   .banner pre { flex-basis: 100%; margin: 4px 0 0; max-height: 180px; overflow: auto; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
 
+  /* 配置栏：选中的配置决定运行页的表单设置、知识库与提示词（orchestrator/profiles.py） */
+  .profile-bar { margin: 14px 22px 0; padding: 9px 14px; border-radius: var(--radius); display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap;
+                 background: var(--panel); border: 1px solid var(--line); }
+  .profile-bar > label { font-weight: 700; font-size: 14px; }
+  .profile-bar select { width: auto; min-width: 210px; max-width: 340px; }
+  .profile-state { font-size: 13px; color: var(--muted); }
+  .profile-state.dirty { color: var(--gold); }
+  .profile-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  .profile-bar .hint { flex-basis: 100%; margin: 0; }
+  #profileDialog .inline-check { display: flex; align-items: flex-start; margin-top: 10px; color: var(--text); }
+  #profileDialog .inline-check input { margin-top: 3px; }
+  #profileDialog .inline-check small { display: block; color: var(--muted); }
+
   main.page { display: grid; gap: 18px; padding: 18px 22px 28px; align-items: start; }
   #page-run { grid-template-columns: minmax(360px, 1.05fr) minmax(340px, 1fr) minmax(320px, 0.95fr); }
   #page-saves { grid-template-columns: minmax(340px, 0.9fr) minmax(420px, 1.25fr); }
@@ -78,7 +91,8 @@
   @media (max-width: 1240px) { #page-run { grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr); } #chatPane { grid-column: 2; } #runPane { grid-row: span 2; } }
   @media (max-width: 960px) { #page-saves, #page-kb, #page-about, #page-prompts { grid-template-columns: 1fr; } }
   @media (max-width: 860px) { #page-run { grid-template-columns: 1fr; } main.page { padding: 14px 12px 24px; } #chatPane { grid-column: auto; }
-                              header { padding: 0 12px; } .banner { margin: 12px 12px 0; } .lights { justify-content: flex-start; } }
+                              header { padding: 0 12px; } .banner { margin: 12px 12px 0; } .lights { justify-content: flex-start; }
+                              .profile-bar { margin: 12px 12px 0; } .profile-actions { margin-left: 0; } }
 
   section.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 20px; min-width: 0; }
   .pane > h2, .pane > div > h2 { margin: 0 0 14px; font-size: 17px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -388,6 +402,19 @@
     <a class="link" href="/hud" target="_blank" rel="noopener">打开 HUD 页面</a>
   </div>
 </header>
+
+<div class="profile-bar" id="profileBar">
+  <label for="profile">配置</label>
+  <select id="profile" aria-describedby="profileHint"><option>读取中…</option></select>
+  <span class="profile-state" id="profileState" role="status"></span>
+  <div class="profile-actions">
+    <button class="btn small primary" type="button" id="profileSave" disabled>保存</button>
+    <button class="btn small" type="button" id="profileNew" aria-haspopup="dialog">新建…</button>
+    <button class="btn small" type="button" id="profileRename" aria-haspopup="dialog" disabled>改名…</button>
+    <button class="btn small danger" type="button" id="profileDelete" disabled>删除</button>
+  </div>
+  <p class="hint" id="profileHint"></p>
+</div>
 
 <div class="banner" id="frozenBanner" hidden>
   <p id="frozenText">游戏被接管、停在当前帧（章节计时不走），没有主控在运行。</p>
@@ -714,7 +741,7 @@
 
   <section class="pane" aria-labelledby="kbEditorTitle">
     <h2 id="kbEditorTitle">查看与编辑</h2>
-    <div id="kbEmpty" class="empty"><b>从左边选一个文件</b>文本文件可以直接编辑；保存后下一次运行生效。</div>
+    <div id="kbEmpty" class="empty"><b>从左边选一个文件</b>文本文件可以直接编辑：修改存进当前配置，仓库里的文件不变；保存后下一次运行生效。</div>
     <div id="kbEditor" hidden>
       <div class="editor-head">
         <span class="path" id="kbPath"></span>
@@ -723,6 +750,7 @@
           <button type="button" role="radio" data-view="preview" aria-checked="false">预览</button>
         </div>
         <button class="btn small" type="button" id="kbRevert" disabled>放弃修改</button>
+        <button class="btn small" type="button" id="kbReset" hidden>恢复仓库版本</button>
         <button class="btn small primary" type="button" id="kbSave" disabled>保存</button>
       </div>
       <textarea class="code" id="kbText" spellcheck="false"></textarea>
@@ -735,7 +763,7 @@
 <!-- ============================================================ 第四页：提示词 -->
 <main class="page" id="page-prompts" role="tabpanel" aria-label="提示词" hidden>
   <section class="pane" style="grid-column:1 / -1" aria-labelledby="personalPromptTitle">
-    <h2 id="personalPromptTitle">个人追加要求 <span class="aside">仅本机</span></h2>
+    <h2 id="personalPromptTitle">个人追加要求 <span class="aside" id="personalPromptAside">仅本机，存在当前配置里</span></h2>
     <p class="hint">补充共享提示词，通用要求与当前执行器／模式的要求一起加载。保存后在下次启动或重接模型时加载；普通暂停／继续不重新加载；不会放开任务范围、操作权限或工具限制。</p>
     <label for="personalPromptScope">适用范围</label>
     <select id="personalPromptScope" aria-label="个人要求适用范围"><option value="all">通用（全部执行器与模式）</option></select>
@@ -769,7 +797,7 @@
     </div>
     <div class="subhead">本机修改过的文件</div>
     <div id="promptOverrides" class="plist"></div>
-    <p class="hint">编辑保存的内容放在 local/prompts/（本机文件，不入库），仓库里的提示词文件不变，更新仓库也不会冲突；恢复仓库版本就是删掉本机修改。每次运行会在日志与 run_state.json 里记下用了哪些本机修改。</p>
+    <p class="hint" id="promptOverridesNote">编辑保存的内容放在当前配置的目录（本机文件，不入库），仓库里的提示词文件不变，更新仓库也不会冲突；恢复仓库版本就是删掉本机修改。每次运行会在日志与 run_state.json 里记下用了哪些本机修改。</p>
   </section>
 
   <section class="pane" aria-labelledby="promptViewTitle">
@@ -918,6 +946,23 @@
   </div>
 </dialog>
 
+<dialog class="sheet small" id="profileDialog" aria-labelledby="profileDialogTitle">
+  <form id="profileForm" autocomplete="off">
+    <h2 id="profileDialogTitle">新建配置</h2>
+    <label class="field" style="margin-top:12px">名字<input type="text" id="profileName" maxlength="40" placeholder="例如 探索·长期系列"></label>
+    <div id="profileBaseRow">
+      <label class="inline-check"><input type="radio" name="profileBase" value="current" checked>
+        <span>基于当前配置（<b id="profileBaseName"></b>）<small>复制它的知识库修改与阅读权限、提示词修改、个人追加要求；表单设置用运行页现在的</small></span></label>
+      <label class="inline-check"><input type="radio" name="profileBase" value="default">
+        <span>基于默认配置<small>从仓库原样开始：默认设置、仓库知识库与提示词、没有个人追加要求</small></span></label>
+    </div>
+    <div class="launch" style="margin-top:16px">
+      <button class="btn primary" type="submit" id="profileOk">创建</button>
+      <button class="btn" type="button" id="profileCancel">取消</button>
+    </div>
+  </form>
+</dialog>
+
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script>
@@ -935,7 +980,8 @@ const EXPLORE_KEYS = ["explore_program_s", "explore_program_runs"];   // 在"探
 
 const ui = { options: null, segOff: {}, status: null, control: null, controlRun: null, hud: null, runs: [], models: [],
              chapters: [0], sides: [], mode: "explore", map: "celeste", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "",
-             tune: {}, kb: {}, kbFile: null, kbView: "edit", page: "run", aboutLoaded: false };
+             tune: {}, kb: {}, kbFile: null, kbView: "edit", page: "run", aboutLoaded: false,
+             profiles: null, profileBaseline: null, profileDirty: false, leaving: false };
 
 async function getJSON(path) {
   const res = await fetch(path, { cache: "no-store" });
@@ -1085,6 +1131,14 @@ async function loadOptions() {
   await Promise.all(["speedrun", "explore"].map(m => loadKbList(m).catch(() => null)));
   updateSummary();
   await loadModels();
+  ui.profiles = o.profiles || null;
+  // 第一次打开（还没选过配置）：把按情况挑出的那份记下来，免得之后本机原有设置清空时自动换成默认
+  if (ui.profiles && !ui.profiles.stored) postJSON("/api/console/profiles/select", { id: ui.profiles.selected }).catch(() => null);
+  if (ui.profiles && ui.profiles.current.form) {
+    try { await applyProfileForm(ui.profiles.current.form); }
+    catch (e) { toast("这份配置的表单设置有一部分用不了：" + e.message, true); }
+  }
+  renderProfiles();
   schedulePreview();
 }
 
@@ -1474,6 +1528,7 @@ function formOptions() {
 }
 
 function schedulePreview() {
+  updateProfileDirty();
   clearTimeout(ui.previewTimer);
   ui.previewTimer = setTimeout(() => { preview(); if (ui.page === "prompts") loadPromptPreview(); }, 200);
 }
@@ -1509,6 +1564,198 @@ async function startRun(event) {
   } catch (e) {
     toast(e.message, true); updateStartButton();
   }
+}
+
+// ---------------------------------------------------------------- 配置（顶部的配置栏；后端 orchestrator/profiles.py）
+// 选中的配置决定：运行页的表单设置（点"保存"时存进去）、知识库的阅读权限与修改、提示词修改、个人追加要求
+// （这三样在各自页面保存时直接存进当前配置）。默认配置是仓库原样、只读。切换、新建、删除配置后重新载入页面。
+
+function profileReadonly() { return !!(ui.profiles && ui.profiles.current && ui.profiles.current.readonly); }
+
+// 存进配置的表单设置：运行页的全部选项（知识库权限另存），另记分段选择
+function profileForm() {
+  const o = formOptions();
+  delete o.kb_deny; delete o.kb_allow;
+  o.seg_off = JSON.parse(JSON.stringify(ui.segOff || {}));
+  return o;
+}
+function profileSnapshot() { try { return JSON.stringify(profileForm()); } catch (e) { return null; } }
+function profileBaseline() { ui.profileBaseline = profileSnapshot(); updateProfileDirty(); }
+
+function updateProfileDirty() {
+  if (!ui.profiles || ui.profileBaseline == null || !ui.options) return;
+  const now = profileSnapshot();
+  if (now == null) return;
+  ui.profileDirty = now !== ui.profileBaseline;
+  const st = $("profileState"), locked = profileReadonly();
+  st.classList.toggle("dirty", ui.profileDirty);
+  st.textContent = !ui.profileDirty ? (locked || !ui.profiles.current.saved_form ? "" : "表单设置已保存")
+    : locked ? "运行页有改动：默认配置不能保存，要留下就新建一份" : "运行页有未保存的改动";
+  $("profileSave").disabled = locked || !ui.profileDirty;
+}
+
+function renderProfiles() {
+  const p = ui.profiles;
+  if (!p) return;
+  const sel = $("profile");
+  sel.replaceChildren(...p.profiles.map(r => {
+    const opt = new Option(r.name + (r.readonly ? "（只读）" : ""), r.id);
+    opt.title = r.builtin ? r.name : `local/profiles/${r.id}/`;
+    return opt;
+  }));
+  sel.value = p.selected;
+  const cur = p.current, row = p.profiles.find(r => r.id === p.selected) || {};
+  cur.saved_form = !!cur.form;
+  $("profileRename").disabled = cur.builtin;
+  $("profileDelete").disabled = cur.builtin;
+  const bits = [];
+  if (row.prompts && row.prompts.length) bits.push(`提示词修改 ${row.prompts.length} 个`);
+  if (row.personal) bits.push(`个人追加要求 ${row.personal} 处`);
+  if (row.kb) bits.push(`知识库修改 ${row.kb} 个`);
+  if (!cur.readonly && !cur.form) bits.push("表单设置还没保存过（用默认设置）");
+  const has = bits.length ? "这份配置里：" + bits.join("、") + "。" : "";
+  $("profileHint").textContent = cur.readonly
+    ? "仓库原样：默认设置、仓库知识库与提示词、没有个人追加要求；只读。要改动先点“新建…”。"
+    : cur.id === "local"
+      ? `沿用旧版本的本机文件（local/prompts/、local/personal_prompts.json、local/kb_edits/ 与知识库权限）；命令行不写 --profile 时用它。${has}`
+      : `保存在 local/profiles/${cur.id}/；命令行开跑用 --profile ${cur.id}，续跑沿用。${has}`;
+  updateProfileDirty();
+}
+
+// 把配置里存的表单设置填回运行页（缺的项保持默认；存档、模型等不存在了就跳过）
+async function applyProfileForm(form) {
+  if (!form || typeof form !== "object") return;
+  const d = ui.options.defaults, has = (k) => Object.prototype.hasOwnProperty.call(form, k);
+  const pick = (id, value) => { if ([...$(id).options].some(o => o.value === value)) { $(id).value = value; return true; } return false; };
+  const check = (id, value) => { if (typeof value === "boolean" && !$(id).disabled) $(id).checked = value; };
+  if (has("engine")) {
+    const runtime = `${form.engine}:${form.engine === "codex" ? "codex" : (form.provider || "anthropic")}`;
+    if (runtime !== $("runtime").value && pick("runtime", runtime)) { ui.prov.lastRuntime = runtime; updateRuntimeNote(); await loadModels(); }
+  }
+  if (has("model") && pick("model", form.model)) fillEfforts();
+  if (has("effort")) pick("effort", form.effort);
+  if (has("agent")) $("agent").value = form.agent || "";
+  if (form.mode === "speedrun" || form.mode === "explore") ui.mode = form.mode;    // boot 里按 ui.mode 切换显示
+  for (const [key, id] of [["live", "live"], ["sim", "sim"], ["sim_assist", "simAssist"], ["stiffness", "stiffness"],
+      ["formal_thought", "formalThought"], ["save_context", "saveContext"], ["playback", "playback"], ["record", "record"],
+      ["hud_mod", "hudMod"], ["study", "study"], ["limit_planning", "limitPlanning"], ["quota_wait", "quotaWait"],
+      ["keep_obs_open", "keepObs"], ["start_paused", "startPaused"], ["allow_detour", "allowDetour"],
+      ["record_marker", "recordMarker"], ["skip_enter", "skipEnter"], ["no_agent", "noAgent"], ["hud_window", "hudWindow"],
+      ["hud", "hudService"], ["freeze_chapter_select", "freezeChapterSelect"], ["freeze_file_select", "freezeFileSelect"],
+      ["freeze_main_menu", "freezeMainMenu"]]) check(id, form[key]);
+  if (has("hud_mod")) ui.hudTouched = true;
+  if (has("study")) $("study").dataset.touched = "1";
+  const perms = form.action_permissions || {};
+  check("allowRestartChapter", perms.restart_chapter); check("allowReturnToMap", perms.return_to_map); check("allowSaveQuit", perms.save_quit);
+  if (has("cutscene_mode")) $("cutsceneAgent").checked = form.cutscene_mode === "agent";
+  $("continuousMusic").checked = !!form.continuous_music;          // 表单只在勾选时带这两项
+  if (!pick("collisionImage", form.collision_image || "")) $("collisionImage").value = "";
+  if (has("max_minutes")) $("maxMinutes").value = form.max_minutes;
+  if (has("autocompact")) $("autocompact").value = form.autocompact || "";
+  if (has("runtime")) pick("runMode", form.runtime);
+  if (has("recording_mode")) pick("recordingMode", form.recording_mode);
+  for (const [key, id] of [["study_minutes", "studyMinutes"], ["quota_wait_max_hours", "quotaHours"], ["play_speed", "playSpeed"],
+      ["auto_speed", "autoSpeed"], ["rounds_per_room", "roundsPerRoom"], ["room_scale", "roomScale"], ["bridge_port", "bridgePort"],
+      ["mcp_port", "mcpPort"], ["hud_port", "hudPort"]]) {
+    if (has(key)) $(id).value = form[key] == null || form[key] === d[key] ? "" : form[key];   // 等于默认值时留空（灰色占位）
+  }
+  for (const [key, id] of [["max_usage", "maxUsage"], ["audio_offset_ms", "audioOffset"]]) if (has(key)) $(id).value = form[key] ?? "";
+  for (const [key, id] of [["ffmpeg", "ffmpeg"], ["record_video_args", "videoArgs"]]) if (has(key)) $(id).value = form[key] || "";
+  if (has("map") && (ui.options.maps || []).some(m => m.id === form.map && m.enabled)) ui.map = form.map;
+  const chapterIds = (ui.options.chapters || []).map(c => c.id);
+  if (Array.isArray(form.chapters)) ui.chapters = form.chapters.filter(c => chapterIds.includes(c));
+  if (Array.isArray(form.sides)) ui.sides = form.sides.filter(x => Array.isArray(x)
+    && (ui.options.sides || []).some(o => o.id === x[0] && o.side === x[1])).map(x => [x[0], x[1]]);
+  ui.segOff = form.seg_off && typeof form.seg_off === "object" ? JSON.parse(JSON.stringify(form.seg_off)) : {};
+  if (form.save && typeof form.save === "object") {
+    if (form.save.create) { $("save").value = "new"; $("newSave").value = form.save.name || ""; }
+    else if ((ui.options.saves || []).some(x => x.slot === form.save.slot && x.name === form.save.name)) $("save").value = `slot:${form.save.slot}`;
+  }
+  if (form.tune && typeof form.tune === "object") {
+    ui.tune = {};
+    for (const [k, v] of Object.entries(form.tune)) if (ui.options.tunables.some(t => t.key === k)) ui.tune[k] = v;
+  }
+  onSaveChange();
+  fillMaps();
+  buildRoute();
+  buildTunables();
+  onLive();
+  updateSummary();
+}
+
+function unsavedEdits() {
+  return (ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty)
+    || [...personalDrafts.values()].some(draft => draft.text !== draft.saved);
+}
+
+function reloadForProfile() {
+  ui.leaving = true;
+  location.reload();
+}
+
+async function switchProfile(id) {
+  if (!ui.profiles || id === ui.profiles.selected) return;
+  const lost = [];
+  if (ui.profileDirty) lost.push("运行页的改动");
+  if (unsavedEdits()) lost.push("正在编辑的知识库、提示词或个人追加要求");
+  if (lost.length && !confirm(`${lost.join("和")}还没保存，切换配置会丢掉。继续切换？`)) { $("profile").value = ui.profiles.selected; return; }
+  try { await postJSON("/api/console/profiles/select", { id }); reloadForProfile(); }
+  catch (e) { toast(e.message, true); $("profile").value = ui.profiles.selected; }
+}
+
+async function saveProfile() {
+  if (profileReadonly()) return;
+  try {
+    const form = profileForm();
+    ui.profiles = await postJSON("/api/console/profiles/save", { form });
+    ui.profileBaseline = JSON.stringify(form);
+    renderProfiles();
+    toast(`已保存配置“${ui.profiles.current.name}”的表单设置。`);
+  } catch (e) { toast(e.message, true); }
+}
+
+function openProfileDialog(kind) {
+  if (!ui.profiles) return;
+  ui.profileDialogKind = kind;
+  const cur = ui.profiles.current;
+  $("profileDialogTitle").textContent = kind === "new" ? "新建配置" : "配置改名";
+  $("profileBaseRow").hidden = kind !== "new";
+  $("profileBaseName").textContent = cur.name;
+  $("profileOk").textContent = kind === "new" ? "创建" : "改名";
+  $("profileName").value = kind === "new" ? "" : cur.name;
+  document.querySelector('input[name="profileBase"][value="current"]').checked = true;
+  const dialog = $("profileDialog");
+  if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
+  $("profileName").focus();
+}
+function closeProfileDialog() { const dialog = $("profileDialog"); if (dialog.close) dialog.close(); else dialog.removeAttribute("open"); }
+
+async function submitProfileDialog(event) {
+  event.preventDefault();
+  const name = $("profileName").value.trim();
+  if (!name) { toast("请填写配置名。", true); $("profileName").focus(); return; }
+  try {
+    if (ui.profileDialogKind === "rename") {
+      ui.profiles = await postJSON("/api/console/profiles/rename", { id: ui.profiles.selected, name });
+      closeProfileDialog(); renderProfiles(); toast("已改名。");
+      return;
+    }
+    const base = document.querySelector('input[name="profileBase"]:checked').value;
+    if (unsavedEdits() && !confirm("正在编辑的知识库、提示词或个人追加要求还没保存，新建后会丢掉。继续？")) return;
+    await postJSON("/api/console/profiles/create", base === "current" ? { name, base, form: profileForm() } : { name, base });
+    closeProfileDialog();
+    reloadForProfile();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteProfile() {
+  const cur = ui.profiles && ui.profiles.current;
+  if (!cur || cur.builtin) return;
+  const row = ui.profiles.profiles.find(r => r.id === cur.id) || {};
+  const runs = row.runs ? `\n有 ${row.runs} 次运行记着用了这份配置，删除后它们不能再续跑。` : "";
+  if (!confirm(`删除配置“${cur.name}”？\n它的表单设置、知识库修改与阅读权限、提示词修改、个人追加要求都会删掉（local/profiles/${cur.id}/），不能恢复。${runs}`)) return;
+  try { await postJSON("/api/console/profiles/delete", { id: cur.id }); reloadForProfile(); }
+  catch (e) { toast(e.message, true); }
 }
 
 // ---------------------------------------------------------------- 状态灯、冻结提示与运行记录
@@ -1902,7 +2149,9 @@ function renderKb() {
   const list = ui.kb[ui.mode];
   if (!list) return;
   const readable = (d) => kbReadable(list, d);
-  $("kbRoot").textContent = `${list.root}/ → 容器里的 /kb`;
+  const locked = profileReadonly();
+  const editedCount = list.documents.filter(d => d.edited).length;
+  $("kbRoot").textContent = `${list.root}/ → 容器里的 /kb` + (editedCount ? `（这份配置改了 ${editedCount} 个文件，存在 ${list.edits_dir}/）` : "");
   const required = list.documents.filter(d => d.required);
   const own = list.documents.filter(d => !d.opt_in), extra = list.documents.filter(d => d.opt_in);
   $("kbCount").textContent = `${own.filter(readable).length} / ${own.length} 个文件可读，其中必读 ${required.filter(readable).length} 个`
@@ -1921,6 +2170,7 @@ function renderKb() {
     h.appendChild(Object.assign(document.createElement("span"), { className: "tag", textContent: `${allowed}/${g.docs.length}` }));
     const toggle = document.createElement("button");
     toggle.type = "button"; toggle.className = "chip"; toggle.textContent = allowed === g.docs.length ? "全部取消" : "全部可读";
+    toggle.disabled = locked;
     toggle.addEventListener("click", () => setReadable(g.docs, allowed !== g.docs.length));
     h.appendChild(toggle);
     wrap.appendChild(h);
@@ -1928,7 +2178,7 @@ function renderKb() {
       const row = document.createElement("div");
       row.className = "kb-item" + (readable(d) ? "" : " denied") + (ui.kbFile && ui.kbFile.mode === ui.mode && ui.kbFile.path === d.path ? " open" : "");
       const box = document.createElement("input");
-      box.type = "checkbox"; box.checked = readable(d);
+      box.type = "checkbox"; box.checked = readable(d); box.disabled = locked;
       box.title = d.opt_in ? "开放给探索模式的智能体（挂在 /kb/speedrun/ 下，选读）" : "智能体能不能读这个文件";
       box.setAttribute("aria-label", `${d.path} 可读`);
       box.addEventListener("change", () => setReadable([d], box.checked));
@@ -1938,12 +2188,14 @@ function renderKb() {
       const size = document.createElement("span"); size.className = "size";
       if (d.required) size.appendChild(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "必读" }));
       if (d.local_only) size.appendChild(Object.assign(document.createElement("span"), { className: "tag", textContent: "本机" }));
+      if (d.edited) size.appendChild(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "已改", title: "这份配置改过这个文件（仓库里的文件不变）" }));
       size.appendChild(document.createTextNode(bytes(d.size)));
       row.append(box, name, size);
       wrap.appendChild(row);
     }
     return wrap;
   }));
+  $("kbAllowAll").disabled = locked;
   if (!list.documents.length) $("kbList").replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "这个模式的知识库目录是空的。" }));
 }
 
@@ -1975,14 +2227,16 @@ async function openKbFile(mode, path) {
   if (ui.kbFile && ui.kbFile.dirty && !confirm("当前文件的修改还没保存，放弃修改并打开另一个文件？")) return;
   try {
     const doc = await getJSON(`/api/console/kb/file?mode=${mode}&path=${encodeURIComponent(path)}`);
-    ui.kbFile = { mode, path, text: doc.text, mtime: doc.mtime, editable: doc.editable, dirty: false };
+    ui.kbFile = { mode, path, text: doc.text, mtime: doc.mtime, editable: doc.editable, edited: !!doc.edited, dirty: false };
     $("kbEmpty").hidden = true; $("kbEditor").hidden = false;
     $("kbPath").textContent = "/kb/" + path;
     const text = $("kbText");
     text.value = doc.text ?? "";
     text.readOnly = !doc.editable;
     $("kbStatus").textContent = doc.text == null ? "这不是文本文件，不能在这里查看或编辑。"
-      : !doc.editable ? (doc.truncated ? "文件太大，只显示开头，不能在这里编辑。" : "只读。") : "";
+      : !doc.editable ? (doc.truncated ? "文件太大，只显示开头，不能在这里编辑。" : "只读。")
+      : profileReadonly() ? "默认配置是仓库原样、只读：要修改先在顶部“配置”里新建一份。"
+      : doc.edited ? "这份配置改过这个文件，正在编辑的是修改后的版本。" : "";
     setKbView(doc.text == null ? "edit" : ui.kbView);
     renderKb(); updateKbSave();
   } catch (e) { toast(e.message, true); }
@@ -1998,8 +2252,10 @@ function setKbView(view) {
 
 function updateKbSave() {
   const f = ui.kbFile;
-  $("kbSave").disabled = !f || !f.editable || !f.dirty || running();
+  $("kbSave").disabled = !f || !f.editable || !f.dirty || running() || profileReadonly();
   $("kbRevert").disabled = !f || !f.dirty;
+  $("kbReset").hidden = !f || !f.edited || profileReadonly();
+  $("kbReset").disabled = running();
 }
 
 async function saveKbFile() {
@@ -2007,9 +2263,23 @@ async function saveKbFile() {
   if (!f) return;
   try {
     const result = await postJSON("/api/console/kb/file", { mode: f.mode, path: f.path, text: $("kbText").value, mtime: f.mtime });
-    f.mtime = result.mtime; f.text = $("kbText").value; f.dirty = false;
-    $("kbStatus").textContent = `已保存（${bytes(result.size)}）。下一次运行生效。`;
+    f.mtime = result.mtime; f.text = $("kbText").value; f.dirty = false; f.edited = !!result.edited;
+    $("kbStatus").textContent = result.edited ? `已保存到这份配置（${bytes(result.size)}），仓库里的文件不变。下一次运行生效。`
+      : "和仓库里的版本相同，已删掉这份配置的修改。";
     updateKbSave();
+    loadKbList(f.mode).then(renderKb).catch(() => null);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function resetKbFile() {
+  const f = ui.kbFile;
+  if (!f) return;
+  try {
+    const doc = await postJSON("/api/console/kb/reset", { mode: f.mode, path: f.path });
+    Object.assign(f, { text: doc.text, mtime: doc.mtime, edited: !!doc.edited, dirty: false });
+    $("kbText").value = doc.text ?? "";
+    $("kbStatus").textContent = "已恢复成仓库里的版本。";
+    setKbView(ui.kbView); updateKbSave();
     loadKbList(f.mode).then(renderKb).catch(() => null);
   } catch (e) { toast(e.message, true); }
 }
@@ -2023,10 +2293,11 @@ const personalDrafts = new Map();
 let personalRequest = 0;
 function renderPersonalPrompt() {
   const draft = personalDrafts.get($('personalPromptScope').value);
-  $('personalPromptText').disabled = !draft;
+  const locked = profileReadonly();
+  $('personalPromptText').disabled = !draft || locked;
   $('personalPromptText').value = draft?.text || '';
-  $('personalPromptSave').disabled = !draft || draft.saving || draft.text === draft.saved;
-  $('personalPromptClear').disabled = !draft || draft.saving || (!draft.text && !draft.saved);
+  $('personalPromptSave').disabled = !draft || locked || draft.saving || draft.text === draft.saved;
+  $('personalPromptClear').disabled = !draft || locked || draft.saving || (!draft.text && !draft.saved);
   $('personalPromptReload').disabled = !!draft?.saving;
   $('personalPromptStatus').textContent = draft?.status || '读取中…';
 }
@@ -2048,7 +2319,9 @@ async function loadPersonalPrompt(force = false) {
     }));
     $('personalPromptScope').value = scope;
     $('personalPromptText').maxLength = doc.max_chars;
-    personalDrafts.set(scope, {text:doc.text, saved:doc.text, version:doc.version, saving:false, status:'仅保存在本机；下次启动或重接模型时加载；普通暂停／继续不重新加载。'});
+    $('personalPromptAside').textContent = doc.readonly ? '默认配置没有个人追加要求（只读）' : `仅本机，存在 ${doc.store}`;
+    personalDrafts.set(scope, {text:doc.text, saved:doc.text, version:doc.version, saving:false,
+      status: doc.readonly ? '默认配置是仓库原样、只读：要写个人追加要求先在顶部“配置”里新建一份。' : '仅保存在本机；下次启动或重接模型时加载；普通暂停／继续不重新加载。'});
     renderPersonalPrompt();
   } catch (e) {
     if (request === personalRequest && scope === $('personalPromptScope').value) $('personalPromptStatus').textContent = '读取失败：' + e.message;
@@ -2101,6 +2374,9 @@ async function loadPromptPreview() {
   }
   if (request !== promptPreviewRequest) return;
   $("promptWhat").classList.remove("warn");
+  $("promptOverridesNote").textContent = data.readonly
+    ? "默认配置用仓库里的提示词、不能修改；要修改先在顶部“配置”里新建一份。"
+    : `编辑保存的内容放在 ${data.overrides_dir}/（当前配置的本机文件，不入库），仓库里的提示词文件不变，更新仓库也不会冲突；恢复仓库版本就是删掉本机修改。每次运行会在日志与 run_state.json 里记下用了哪些本机修改。`;
   const previewParts = [...data.parts, ...(data.guide_parts || []).map(p => ({...p, label: "工作区指南 · " + p.label}))];
   if (ui.promptFile && !previewParts.some(part => part.source === ui.promptFile.name) && !(data.button_prompts || []).some(item => item.name === ui.promptFile.name)) {
     $("promptStatus").textContent = `这个文件不在当前设置（${promptOptions().mode === "explore" ? "探索" : "速通"}模式）的提示词里；点"返回预览"看当前这一版。`;
@@ -2199,7 +2475,8 @@ async function openPromptFile(name) {
   $("promptPreviewBox").hidden = true; $("promptEditor").hidden = false;
   $("promptPath").textContent = "orchestrator/prompts/" + name + (doc.overridden ? "（本机修改）" : "");
   $("promptText").value = doc.text;
-  $("promptStatus").textContent = doc.overridden ? "这个文件有本机修改，正在编辑的是本机修改。" : "正在编辑仓库里的版本；保存后存为本机修改。";
+  $("promptStatus").textContent = profileReadonly() ? "默认配置是仓库原样、只读：要修改先在顶部“配置”里新建一份。"
+    : doc.overridden ? "这个文件有本机修改，正在编辑的是本机修改。" : "正在编辑仓库里的版本；保存后存为这份配置里的本机修改。";
   $("promptStatus").classList.remove("warn");
   $("promptPlaceholderBox").hidden = !doc.placeholders.length;
   $("promptPlaceholders").replaceChildren(...doc.placeholders.flatMap(p => [
@@ -2595,9 +2872,11 @@ function closePromptEditor() {
 function updatePromptButtons() {
   const f = ui.promptFile;
   const blocked = running() && !f?.live_editable;
-  $("promptSave").disabled = !f || !f.dirty || blocked;
+  const locked = profileReadonly();
+  $("promptSave").disabled = !f || !f.dirty || blocked || locked;
   $("promptRevert").disabled = !f || !f.dirty;
-  $("promptSave").title = blocked ? "有主控在运行时不能保存稳定指南" : "";
+  $("promptReset").disabled = !f || !f.overridden || locked;
+  $("promptSave").title = locked ? "默认配置只读：先新建一份配置" : blocked ? "有主控在运行时不能保存稳定指南" : "";
 }
 
 async function savePromptFile() {
@@ -2780,6 +3059,14 @@ $("kbText").addEventListener("input", () => { if (ui.kbFile) { ui.kbFile.dirty =
 $("kbText").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); if (!$("kbSave").disabled) saveKbFile(); } });
 $("kbSave").addEventListener("click", saveKbFile);
 $("kbRevert").addEventListener("click", () => { if (ui.kbFile) { $("kbText").value = ui.kbFile.text ?? ""; ui.kbFile.dirty = false; updateKbSave(); setKbView(ui.kbView); } });
+$("kbReset").addEventListener("click", () => { if (ui.kbFile && confirmTwice("kbReset", "再点一次：删掉这份配置的修改")) resetKbFile(); });
+$("profile").addEventListener("change", (e) => switchProfile(e.target.value));
+$("profileSave").addEventListener("click", saveProfile);
+$("profileNew").addEventListener("click", () => openProfileDialog("new"));
+$("profileRename").addEventListener("click", () => openProfileDialog("rename"));
+$("profileDelete").addEventListener("click", deleteProfile);
+$("profileCancel").addEventListener("click", closeProfileDialog);
+$("profileForm").addEventListener("submit", submitProfileDialog);
 $("aboutRefresh").addEventListener("click", loadAbout);
 $("checkUpdate").addEventListener("click", checkUpdate);
 $("applyUpdate").addEventListener("click", applyUpdate);
@@ -2848,6 +3135,7 @@ $("releaseGame").addEventListener("click", releaseGame);
 $("resumeLatest").addEventListener("click", () => resumeRun());
 $("launchDismiss").addEventListener("click", () => { $("launchBanner").hidden = true; ui.dismissedLaunch = ui.status && ui.status.orchestrator.launched_wall; });
 window.addEventListener("beforeunload", (e) => {
+  if (ui.leaving) return;      // 切换、新建或删除配置后重新载入：已经问过了
   if ((ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty) || provDirty() || [...personalDrafts.values()].some(draft => draft.text !== draft.saved)) { e.preventDefault(); e.returnValue = ""; }
 });
 
@@ -2864,6 +3152,7 @@ function confirmTwice(id, text) {
 (async function boot() {
   try { await loadOptions(); } catch (e) { toast("读取设置失败：" + e.message, true); }
   try { setMode(ui.mode); } catch (e) { /* 设置没读到时保持页面原样 */ }     // 默认探索：按默认模式显示/隐藏模式相关的选项
+  profileBaseline();
   showPage((location.hash || "").slice(1) || recall("page") || "run");
   await refreshRuns(); await refreshStatus(); await refreshRun(); await refreshFeed();
   setInterval(refreshStatus, 1500);

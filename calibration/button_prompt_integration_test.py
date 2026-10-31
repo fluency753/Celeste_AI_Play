@@ -26,6 +26,10 @@ class ButtonPromptIntegrationTests(unittest.TestCase):
         replacement = patch.object(prompting, 'OVERRIDES', self.root/'overrides')
         replacement.start()
         self.addCleanup(replacement.stop)
+        from orchestrator import profiles      # 改的是本机原有设置（local/prompts/）
+        selected = patch.object(profiles, 'selected', return_value=profiles.LEGACY)
+        selected.start()
+        self.addCleanup(selected.stop)
         status = patch.object(console_api, 'orchestrator_status', return_value={'running': True})
         status.start()
         self.addCleanup(status.stop)

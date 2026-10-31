@@ -264,10 +264,24 @@ class KbAccessTests(unittest.TestCase):
         (self.root / "kb/explore/tools.md").write_bytes(b"d\r\n")
         doc = kb_access.read_document("explore", "tools.md")
         self.assertEqual(doc["text"], "d\n")
-        kb_access.write_document("explore", "tools.md", "new\r\n", doc["mtime"])
-        self.assertEqual((self.root / "kb/explore/tools.md").read_text(encoding="utf-8"), "new\n")
+        saved = kb_access.write_document("explore", "tools.md", "new\r\n", doc["mtime"])
+        # 修改存进当前配置（本机原有设置：local/kb_edits/），仓库里的文件不变
+        self.assertTrue(saved["edited"])
+        self.assertEqual((self.root / "kb/explore/tools.md").read_bytes(), b"d\r\n")
+        edit = self.root / "local/kb_edits/explore/tools.md"
+        self.assertEqual(edit.read_text(encoding="utf-8"), "new\n")
+        again = kb_access.read_document("explore", "tools.md")
+        self.assertEqual((again["text"], again["edited"]), ("new\n", True))
+        self.assertTrue(next(d for d in kb_access.documents("explore") if d["path"] == "tools.md")["edited"])
         with self.assertRaises(ValueError):
             kb_access.write_document("explore", "tools.md", "x", doc["mtime"] - 100)   # 打开之后被改过
+        back = kb_access.write_document("explore", "tools.md", "d\n", again["mtime"])   # 改回与仓库相同：删掉修改
+        self.assertFalse(back["edited"])
+        self.assertFalse(edit.exists())
+        self.assertFalse((self.root / "local/kb_edits/explore").exists())   # 空目录一并删掉
+        kb_access.write_document("explore", "tools.md", "z\n")
+        self.assertEqual(kb_access.reset_document("explore", "tools.md")["text"], "d\n")
+        self.assertFalse(edit.exists())
         for bad in ("../README.md", "/etc/passwd", "..\\x.md", ""):
             with self.assertRaises(ValueError, msg=bad):
                 kb_access.read_document("explore", bad)
@@ -368,7 +382,9 @@ class ConsolePrefsTests(unittest.TestCase):
             (game / "Saves").mkdir(parents=True)
             (game / "Celeste.exe").write_bytes(b"")
             prefs = root / "configs" / "local.console.json"
+            from orchestrator import profiles      # 本机原有设置的知识库权限在 configs/local.console.json
             with patch.object(console_api, "PREFS", prefs), patch.object(gamepaths, "CONSOLE_PREFS", prefs), \
+                 patch.object(profiles, "selected", return_value=profiles.LEGACY), \
                  patch.object(gamepaths, "DEPLOY_ANSWERS", root / "none.json"), patch.dict("os.environ", {}, clear=False):
                 import os
                 os.environ.pop("CELESTE_DIR", None)

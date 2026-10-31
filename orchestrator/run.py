@@ -195,6 +195,10 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="追加本机资料：把这个目录（相对路径按仓库根目录算，例如 local/kb_extra/<系列>）里的文件加进挂给"
                          "智能体的 /kb，同名文件覆盖默认版本。用于某个系列赛自己加的资料，不入库、不影响别的运行。"
                          "续跑沿用；传空字符串取消")
+    ap.add_argument("--profile", metavar="编号",
+                    help="用哪份配置（控制台顶部的\"配置\"，local/profiles/<编号>/）：提示词修改、个人追加要求与知识库修改从这份配置读取；"
+                         "default = 仓库默认。不写时用本机原有设置（local/prompts/、local/personal_prompts.json、local/kb_edits/），"
+                         "与没有配置功能时相同。续跑沿用原运行的配置")
     ap.add_argument("--resume", metavar="RUN_DIR",
                     help="续跑一次中断的运行（主控退出、断电以外的意外）：游戏须仍冻结在原处；接着原来的章节队列、"
                          "统计与 Claude Code 会话。模型、推理强度、章节、--sim 等沿用原运行的设置")
@@ -435,6 +439,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.kb_extra = kb_extra_choice(previous, args.kb_extra)
     if cfg.kb_extra and not cfg.kb_extra_dir.is_dir():
         raise SystemExit(f"--kb-extra：找不到目录 {cfg.kb_extra_dir}")
+    use_profile(cfg, previous, args.profile)
     args.record = args.record is not False  # 默认开启
     cfg.record = args.record
     from .recording import load_config
@@ -552,10 +557,11 @@ def load_previous(path: str) -> dict:
 
 
 def prompt_override_hashes() -> dict[str, str]:
-    """这次用到的提示词本机修改（控制台"提示词"页保存在 local/prompts/ 的文件）：文件名 → 内容的 sha256 前 12 位。"""
+    """这次用到的提示词本机修改（控制台"提示词"页保存在 local/prompts/ 或配置的 prompts/ 的文件）：文件名 → 内容的 sha256 前 12 位。"""
     import hashlib
-    from .prompting import OVERRIDES, overridden_parts
-    return {name: hashlib.sha256((OVERRIDES / name).read_bytes()).hexdigest()[:12] for name in overridden_parts()}
+    from .prompting import overridden_parts, overrides_dir
+    root = overrides_dir()
+    return {name: hashlib.sha256((root / name).read_bytes()).hexdigest()[:12] for name in overridden_parts()}
 
 
 def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None) -> None:
@@ -587,6 +593,8 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     current_plan = cfg.plan or [Piece(c) for c in (cfg.chapters or ([] if cfg.chapter is None else [cfg.chapter]))]
     state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [p.row() for p in map(Piece.of,current_plan)]
     state.update({key:getattr(cfg,key) for key in ('recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu')})
+    if getattr(cfg, "profile", "local") != "local":
+        state["profile"] = cfg.profile     # 用了配置（--profile）；没记的是本机原有设置，与旧运行相同
     # 接着同一个会话续跑：带上这个会话最近一次送达的规则摘要（见 agent.ClaudeRunner），规则没变时首条不再重复附上
     delivered = ((previous or {}).get("state") or {}).get("rules_delivered")
     if session_id and isinstance(delivered, dict) and delivered.get("session_id") == session_id:
@@ -782,6 +790,21 @@ def write_placeholder_metrics(run_dir: Path, cfg: RunConfig) -> None:
             "phase_since_wall": now, "thinking_since_wall": now, "hud_mod": bool(getattr(cfg, "hud_mod", False)),
             "formal_only": bool(getattr(cfg, "formal_thought", False))}
     (run_dir / "metrics.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def use_profile(cfg: RunConfig, previous: dict | None, flag: str | None) -> None:
+    """这次用哪份配置：命令行写了就按命令行；续跑沿用原运行（没记配置的旧运行是本机原有设置）；新运行默认本机原有设置。
+    提示词修改、个人追加要求在这个进程里都从这份配置读；有知识库修改时挂给智能体的 /kb 合并它。"""
+    from . import profiles
+    pid = flag.strip() if flag is not None and flag.strip() else profiles.state_profile(previous["state"] if previous else None)
+    try:
+        profiles.activate(pid)
+    except ValueError as exc:
+        raise SystemExit(f"--profile：{exc}") from None
+    cfg.profile = pid
+    cfg.kb_overlay = profiles.kb_overlay_for(pid)
+    if pid != profiles.LEGACY:
+        print(f"[run] 配置：{profiles.meta(pid)['name']}（{pid}）", flush=True)
 
 
 def kb_extra_choice(previous: dict | None, flag: str | None) -> str:
@@ -1147,7 +1170,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                    sim_stats=not (cfg.mode == "explore" and not cfg.sim_assist))
     print(f"[run] 模式：{describe_mode(cfg)}", flush=True)
     if (overrides := prompt_override_hashes()):
-        print(f"[run] 提示词有本机修改（local/prompts）：{'、'.join(overrides)}", flush=True)
+        where = "local/prompts" if cfg.profile == "local" else f"配置 {cfg.profile}"
+        print(f"[run] 提示词有本机修改（{where}）：{'、'.join(overrides)}", flush=True)
     if session.workspace is not None:
         live = LiveStatus(session.workspace / "game" / "hud_status.json", metrics).start()
     server = build_server(session, study, gate)

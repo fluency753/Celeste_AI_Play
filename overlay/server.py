@@ -149,6 +149,7 @@ def make_handler(pinned: Path | None):
                                "/api/console/runs": console_api.runs, "/api/console/about": console_api.about,
                                "/api/console/prefs": console_api.load_prefs,
                                "/api/console/providers": console_api.providers_list,
+                               "/api/console/profiles": console_api.profiles_payload,
                                "/api/console/update": console_api.update_check,
                                "/api/console/kb": lambda: console_api.kb_list(query.get("mode", "speedrun")),
                                "/api/console/kb/file": lambda: console_api.kb_read(query.get("mode", "speedrun"),
@@ -258,7 +259,9 @@ def make_handler(pinned: Path | None):
                 from . import console_api
                 try:
                     data = self._body(3_500_000 if self.path == "/api/console/kb/file"
-                                      else 700_000 if self.path in {"/api/console/prompt/file", "/api/console/personal-prompt"} else 60000)
+                                      else 700_000 if self.path in {"/api/console/prompt/file", "/api/console/personal-prompt",
+                                                                    "/api/console/profiles/create", "/api/console/profiles/save"}
+                                      else 60000)
                     if pinned is not None:
                         raise ValueError("固定预览模式的 HUD 服务不提供控制台操作")
                     if self.path == "/api/console/providers/test":
@@ -288,6 +291,18 @@ def make_handler(pinned: Path | None):
                         elif self.path == "/api/console/kb/file":
                             result = console_api.kb_write(str(data.get("mode", "")), str(data.get("path", "")),
                                                           data.get("text"), data.get("mtime"))
+                        elif self.path == "/api/console/kb/reset":
+                            result = console_api.kb_reset(str(data.get("mode", "")), str(data.get("path", "")))
+                        elif self.path == "/api/console/profiles/select":
+                            result = console_api.profile_select(data.get("id"))
+                        elif self.path == "/api/console/profiles/create":
+                            result = console_api.profile_create(data)
+                        elif self.path == "/api/console/profiles/save":
+                            result = console_api.profile_save(data)
+                        elif self.path == "/api/console/profiles/rename":
+                            result = console_api.profile_rename(data)
+                        elif self.path == "/api/console/profiles/delete":
+                            result = console_api.profile_delete(data)
                         elif self.path == "/api/console/update":
                             result = console_api.update_apply()
                         elif self.path == "/api/console/providers":

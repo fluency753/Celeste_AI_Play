@@ -22,6 +22,10 @@ class PersonalPromptHTTPTests(unittest.TestCase):
         self.store_patch = patch.object(personal_prompts, 'STORE', self.path)
         self.store_patch.start()
         self.addCleanup(self.store_patch.stop)
+        from orchestrator import profiles      # 改的是本机原有设置（local/personal_prompts.json）
+        selected = patch.object(profiles, 'selected', return_value=profiles.LEGACY)
+        selected.start()
+        self.addCleanup(selected.stop)
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(None))
         self.worker = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.worker.start()
@@ -139,7 +143,7 @@ eval(JSON.parse(fs.readFileSync(0,'utf8')).function+`
         harness = r'''
 const assert=require('assert'), fs=require('fs');
 const elements={};const $=id=>elements[id] ||= {value:'',disabled:false,textContent:'',replaceChildren(...options){this.options=options;}};
-const document={createElement:()=>({})}; const confirm=()=>true; const loadPromptPreview=()=>{};
+const document={createElement:()=>({})}; const confirm=()=>true; const loadPromptPreview=()=>{}; const profileReadonly=()=>false;
 const reads=[],writes=[];
 const getJSON=url=>new Promise((resolve,reject)=>reads.push({url,resolve,reject}));
 const postJSON=(url,body)=>new Promise((resolve,reject)=>writes.push({url,body,resolve,reject}));

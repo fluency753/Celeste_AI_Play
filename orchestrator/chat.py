@@ -119,6 +119,8 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False, fr
         raise ValueError('自动取名仅用于准备完成、尚未开始的新试玩')
     previous = json.loads((directory / "metrics.json").read_text(encoding="utf-8"))
     cfg = config_from_state(state, previous)
+    from .profiles import activate
+    activate(cfg.profile)          # 与原运行相同的配置（提示词修改、个人追加要求）
     capabilities = workspace_capabilities(cfg)
     capabilities.validate(programs=allow_programs, sim=sim)
     # 与原运行相同的游玩模式与可调参数（提示词按模式生成；探索模式的程序时长等跟原运行一致）
