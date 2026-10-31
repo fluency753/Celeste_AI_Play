@@ -43,6 +43,7 @@ END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
 ENDING_STUCK_STEPS = 40              # 最终章片尾连续 40 次（每次 30 帧，约 20 秒）画面状态不变就不再空等
 FROZEN_GIVE_UP_FRAMES = 600          # 画面冻结等确认时，主控最多推进这么多帧（10 秒，期间每 30 帧按一次确认）就交回
 AGENT_STORY_WAIT_FRAMES = 600        # 每次工具调用中，已确认播放阶段的等待总预算；未知状态不推进。
+PAUSE_WAIT_FRAMES = 180              # auto 模式剧情里游戏暂时不让暂停时，前 3 秒每 10 帧看一次能不能暂停跳过（之后每 30 帧）
 MAP_TRANSITION_WAIT_FRAMES = 1200    # auto 剧情模式：回地图途中（LevelExit、OverworldLoader、菜单切换）最多空帧等 20 秒，仍未就绪就交回
 
 
@@ -1560,6 +1561,7 @@ class GameSession:
                 if not history or entry != history[-1]:
                     history.append(entry)
         skip_tries = 0  # 本段剧情已尝试跳过的次数
+        pause_waited = 0  # 剧情里游戏暂时不让暂停（淡入淡出、转场）时已等的帧数
         menu_closes = 0  # 自动跳过剧情时关掉残留暂停菜单的次数
         frozen_frames, confirms = 0, 0  # 连续停在"画面冻结等确认"的帧数、主控按确认的次数
         idle_frames = 0  # 连续"不可操作又不在剧情里"（idle_uncontrolled）的帧数
@@ -1687,17 +1689,24 @@ class GameSession:
                              f'主控已等约 {round(idle_frames / 60)} 秒仍未恢复，为免空耗章节计时停止自动推进：请 observe 查看；'
                              '之后的 act 按键照常执行（主控不再先自动推进），解决不了就调用 stop_run 报告。')
                 break
+            pause_wait = False
             if not level.get("inCutscene"):
-                skip_tries = 0  # 一段剧情结束，下一段剧情可以重新尝试
+                skip_tries, pause_waited = 0, 0  # 一段剧情结束，下一段剧情可以重新尝试
             elif mode == 'auto' and not level.get("skippingCutscene") and skip_tries < 3:
                 skip_tries += 1
-                skipped, obs, _, reason = skip_by_pause_menu(self.client, on_step=log_step)
+                skipped, obs, used, reason = skip_by_pause_menu(self.client, on_step=log_step)
                 if skipped:
                     notes.append("用暂停菜单跳过剧情")
+                    pause_waited = 0
                     continue
                 if reason == "no_skip":
                     skip_tries = 3  # 菜单里没有"跳过"：这段剧情只能看完，不再反复打开菜单
                     notes.append("这段剧情不能跳过，按正常速度播放")
+                elif reason == "no_pause" and not used:
+                    # 游戏这一刻不让暂停（剧情开头的淡入淡出、转场等，Level.CanPause 为假），一个键都没按：
+                    # 不算一次尝试，推进几帧再看（原来算一次，几次机会耗在淡入里，之后整段剧情按正常速度播完）
+                    skip_tries -= 1
+                    pause_wait = True
                 elif reason != "no_pause":
                     continue
             if node == 'choice':
@@ -1720,9 +1729,11 @@ class GameSession:
                 inputs = ["1,C", "29"]       # 磁带、吃心等界面在等确认：照真人的做法按确认继续
                 confirms += 1
             else:
+                # 等游戏允许暂停时步子小一点（最多等 3 秒），能暂停了就尽早跳过
+                short = pause_wait and pause_waited < PAUSE_WAIT_FRAMES
                 inputs = (["1,C", "29"] if mode == 'auto' and level.get("dialogWaiting") and not level.get("paused")
                           else [str(min(1 if watching_while_controllable else 30, wait_budget - total))]
-                          if mode == 'agent' else ["30"])
+                          if mode == 'agent' else ["10" if short else "30"])
             stops = ["controllable", "story_input"] if mode == 'agent' else ["controllable", "complete", "story_input"]
             if mode == 'agent' and stop_for_skip:
                 stops.append('story_decision')
@@ -1733,6 +1744,8 @@ class GameSession:
                                      progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
             log_step(inputs, reply["result"])
             obs = reply["obs"]
+            if pause_wait:
+                pause_waited += reply["result"]["consumed"]
             if waiting:
                 frozen_frames += reply["result"]["consumed"]
             if idle:
@@ -2549,11 +2562,13 @@ class GameSession:
                     if cutscene_skippable(obs) and skip_tries < 3:
                         skip_tries += 1
                         self._before_advance()
-                        skipped, obs, _, reason = skip_by_pause_menu(self.client, on_step=log_step)
+                        skipped, obs, used, reason = skip_by_pause_menu(self.client, on_step=log_step)
                         if skipped:
                             continue
                         if reason == "no_skip":
                             skip_tries = 3           # 这段片尾不能跳过：按正常速度播放
+                        elif reason == "no_pause" and not used:
+                            skip_tries -= 1          # 这一刻游戏不让暂停（淡入淡出等），没按键：不算一次尝试
                         elif reason != "no_pause":
                             continue
                         level = obs.get('level') or {}

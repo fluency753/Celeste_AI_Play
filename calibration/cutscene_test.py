@@ -116,6 +116,42 @@ class CutsceneTests(unittest.TestCase):
             self.s._auto_advance(dialog(),None)
         skip.assert_called_once()
 
+    def test_auto_skip_waits_for_pause_without_spending_attempts(self):
+        # 9A 月球开场：剧情开头约 1.4 秒淡入，游戏不让暂停（canPause 为假，没按任何键）；
+        # 这几次不算尝试，能暂停时照样跳过（原来 3 次机会耗在淡入里，整段剧情按正常速度播完）
+        self.s.cfg.cutscene_mode='auto'
+        scene=dialog();scene['storyInput']=None
+        scene['level'].update(dialogOpen=False,dialogWaiting=False,canPause=False)
+        end=copy.deepcopy(scene);end['controllable']=True
+        end['level'].update(inCutscene=False,canPause=True)
+        self.s.client=SceneClient(scene)
+        results=[(False,scene,0,'no_pause')]*5+[(True,end,30,'skipped')]
+        with patch('orchestrator.game_session.skip_by_pause_menu',side_effect=results) as skip:
+            _,_,_,notes=self.s._auto_advance(scene,None)
+        self.assertEqual(skip.call_count,6)
+        self.assertIn('用暂停菜单跳过剧情',notes)
+        self.assertEqual(self.s.client.steps,[['10']]*5)       # 等能暂停时每 10 帧看一次
+
+    def test_auto_skip_still_gives_up_after_three_real_attempts(self):
+        # 真按了暂停却没打开菜单（消耗了帧）仍算一次尝试：3 次后不再反复按暂停
+        self.s.cfg.cutscene_mode='auto'
+        scene=dialog();scene['storyInput']=None
+        scene['level'].update(dialogOpen=False,dialogWaiting=False)
+        end=copy.deepcopy(scene);end['controllable']=True;end['level'].update(inCutscene=False)
+        client=SceneClient(scene);steps=[0]
+        original=client.call
+        def call(cmd,**args):
+            reply=original(cmd,**args)
+            if cmd=='step':
+                steps[0]+=1
+                if steps[0]>=6:client.obs=copy.deepcopy(end)
+            return reply
+        client.call=call;self.s.client=client
+        with patch('orchestrator.game_session.skip_by_pause_menu',return_value=(False,scene,62,'no_pause')) as skip:
+            self.s._auto_advance(scene,None)
+        self.assertEqual(skip.call_count,3)
+        self.assertTrue(all(step==['30'] for step in client.steps))
+
     def test_advance_never_confirms_a_branch_choice(self):
         self.s.client=SceneClient(dialog(True))
         with self.assertRaisesRegex(ActError,'明确指定'):self.s.cutscene('advance')

@@ -350,8 +350,9 @@ class StoryWaitTests(unittest.TestCase):
         start = observation()
         client = self.bridge(start, after)
         _, _, count, _ = self.session._auto_advance(start, None)
-        self.assertEqual(client.steps, [['30']])
-        self.assertEqual(count, 30)
+        # 剧情里游戏这一刻不让暂停（canPause 为假）：不算跳过尝试，每 10 帧看一次能不能暂停跳过
+        self.assertEqual(client.steps, [['10']])
+        self.assertEqual(count, 10)
 
 
 if __name__ == '__main__':
