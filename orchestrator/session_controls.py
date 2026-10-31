@@ -54,7 +54,9 @@ class SessionControls:
         if readable and workspace is None:
             workspace = getattr(self.cfg, 'workspace_dir', None)
         self.note_reminders = NoteReminders(workspace if readable else None,
-                                            lambda: getattr(self.cfg, 'notes_warn_percent', 60))
+                                            lambda: getattr(self.cfg, 'notes_warn_percent', 60),
+                                            None if getattr(self, 'naming_only', False)
+                                            else getattr(self.cfg, '_user_note', None))
         self.completed_preparation = False
         self.control = None if disabled else RunControl(self.run_dir)
         if self.control:
@@ -120,11 +122,13 @@ class SessionControls:
         """ident：历史里这次压缩的编号（开始与完成用同一个，完成时替换"正在压缩"那一条）；
         reminder_key：笔记提醒按它去重（Claude Code 的 compact_boundary 带 uuid），不给时用 ident。"""
         notes = getattr(self, 'note_reminders', None)
+        resend = False
         if completed and notes is not None:
-            notes.compacted(ident if reminder_key is None else reminder_key)
+            resend = notes.compacted(ident if reminder_key is None else reminder_key)
         from .telemetry import publish
+        done = '上下文压缩完成。' + ('局间留言原文会随下一次提醒重发给智能体。' if resend else '')
         publish(self.run_dir, 'system:compaction:' + str(ident),
-                '上下文压缩完成。' if completed else '正在压缩上下文，完成后继续处理对话…',
+                done if completed else '正在压缩上下文，完成后继续处理对话…',
                 role='system', kind='系统')
 
     def _game_guard(self):

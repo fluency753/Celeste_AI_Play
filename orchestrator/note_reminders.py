@@ -5,10 +5,17 @@ import threading
 from pathlib import Path
 
 
+USER_NOTE_RESEND = ('（系统·留言重发）上下文刚完成压缩，开场消息里附的用户留言可能只剩摘要。下面重发原文，'
+                    '其中的要求和规则继续有效；按当前进度继续，不要因此重新开始章节或重做已经完成的开局步骤，'
+                    '也不因此自行恢复游戏。\n（用户留言）\n')
+
+
 class NoteReminders:
-    def __init__(self, workspace, threshold):
+    def __init__(self, workspace, threshold, user_note=None):
         self.path = Path(workspace) / 'notes.md' if workspace is not None else None
         self.threshold = threshold
+        # --note-file 的原文：开场消息压缩后只剩摘要，每次压缩完成后随笔记提醒重发一次。
+        self.user_note = (user_note or '').strip() or None
         self.lock = threading.RLock()
         self.cycle = 0
         self.seen = set()
@@ -53,23 +60,30 @@ class NoteReminders:
             self.observable = True
 
     def compacted(self, ident):
-        if self.path is None:
-            return
+        """压缩完成：排队笔记提醒（有工作区时）与留言原文重发（有 --note-file 时），同一次压缩只排一次。
+        返回这次是否排了留言重发。"""
+        if self.path is None and self.user_note is None:
+            return False
         with self.lock:
             key = str(ident)
             if key in self.seen:
-                return
+                return False
             self.seen.add(key)
             self.cycle += 1
-            self.baseline = self.last_hash = self._fingerprint()
-            self.observable = self.baseline is not None
-            self.updated = self.warned = False
-            self.percent = None
-            self.pending.pop('before', None)
-            self.pending['after'] = (self.cycle,
-                '（系统·笔记提醒）上下文刚完成压缩。请读取 /workspace/notes.md，'
-                '与最新观测、最近动作结果核对；笔记缺失则建立简短索引，过期或矛盾则更新整理。'
-                '遵守当前暂停或仅聊天状态，不因此自行恢复游戏。')
+            if self.path is not None:
+                self.baseline = self.last_hash = self._fingerprint()
+                self.observable = self.baseline is not None
+                self.updated = self.warned = False
+                self.percent = None
+                self.pending.pop('before', None)
+                self.pending['after'] = (self.cycle,
+                    '（系统·笔记提醒）上下文刚完成压缩。请读取 /workspace/notes.md，'
+                    '与最新观测、最近动作结果核对；笔记缺失则建立简短索引，过期或矛盾则更新整理。'
+                    '遵守当前暂停或仅聊天状态，不因此自行恢复游戏。')
+            if self.user_note is not None:
+                self.pending.pop('note', None)   # 重新插入，排在笔记提醒之后
+                self.pending['note'] = (self.cycle, USER_NOTE_RESEND + self.user_note)
+            return self.user_note is not None
 
     def usage(self, used, window):
         """Only call for a fresh usage event, not restored or pre-compaction metrics."""

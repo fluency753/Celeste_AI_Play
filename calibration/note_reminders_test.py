@@ -22,13 +22,14 @@ from orchestrator.server import build_server
 
 
 @contextmanager
-def runner_fixture(engine='codex', **options):
+def runner_fixture(engine='codex', user_note=None, **options):
     with tempfile.TemporaryDirectory() as folder, patch('orchestrator.config.REPO_ROOT', Path(folder)):
         root = Path(folder)
         run = root / 'run'
         run.mkdir()
         cfg = RunConfig(agent='notes', save='test', model='stub', engine=engine, runtime='container',
                         provider_info={'images': False}, sim=False, chapter=3, cutscene_mode='agent')
+        cfg._user_note = user_note
         cfg.min_frames_per_act = 1
         cfg.workspace_dir.mkdir(parents=True)
         notes = cfg.workspace_dir / 'notes.md'
@@ -171,6 +172,30 @@ class NoteReminderStateTests(unittest.TestCase):
         notes.usage(900, 1000)
         notes.compacted('one')
         self.assertEqual(notes.take(), '')
+
+    def test_user_note_is_resent_once_per_compaction_after_the_notes_reminder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            notes = NoteReminders(Path(folder), lambda: 60, user_note='  9A 留言：中文解说\n先建模再执行  ')
+            self.assertEqual(notes.take(), '')
+            self.assertTrue(notes.compacted('one'))
+            self.assertEqual([key[0] for key, _ in notes.peek()], ['after', 'note'])
+            text = notes.take()
+            self.assertLess(text.index('上下文刚完成压缩。请读取'), text.index('（系统·留言重发）'))
+            self.assertTrue(text.endswith('（用户留言）\n9A 留言：中文解说\n先建模再执行'))
+            self.assertFalse(notes.compacted('one'))
+            self.assertEqual(notes.take(), '')
+            self.assertTrue(notes.compacted('two'))
+            self.assertEqual(notes.take().count('（用户留言）'), 1)
+
+    def test_user_note_resend_works_without_workspace_and_blank_note_is_ignored(self):
+        notes = NoteReminders(None, lambda: 60, user_note='留言原文')
+        notes.usage(900, 1000)
+        self.assertTrue(notes.compacted('one'))
+        self.assertEqual([key[0] for key, _ in notes.peek()], ['note'])
+        self.assertIn('留言原文', notes.take())
+        blank = NoteReminders(None, lambda: 60, user_note='  \n ')
+        self.assertFalse(blank.compacted('one'))
+        self.assertEqual(blank.take(), '')
 
 
 class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
@@ -324,6 +349,29 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(runner.turns, 1)
             self.assertEqual(runner.note_reminders.peek(), ())
             self.assertEqual(runner.pending_messages, [])
+
+    async def test_claude_compaction_resends_note_file_with_next_send_and_public_notice(self):
+        with runner_fixture('claude', user_note='9A 留言：新机制先建模') as (runner, session, notes):
+            claude_compaction(runner, 'c1')
+            self.assertEqual([key[0] for key, _ in runner.note_reminders.peek()], ['after', 'note'])
+            await runner._send('用户的自然消息')
+            text = runner._write.call_args.args[0]
+            self.assertIn('用户的自然消息', text)
+            self.assertIn('（系统·留言重发）', text)
+            self.assertIn('（用户留言）\n9A 留言：新机制先建模', text)
+            self.assertEqual(runner.note_reminders.peek(), ())
+            events = (runner.run_dir / 'public_events.jsonl').read_text(encoding='utf-8')
+            self.assertIn('局间留言原文会随下一次提醒重发', events)
+        with runner_fixture('claude') as (runner, session, notes):
+            claude_compaction(runner, 'c1')
+            self.assertEqual([key[0] for key, _ in runner.note_reminders.peek()], ['after'])
+            events = (runner.run_dir / 'public_events.jsonl').read_text(encoding='utf-8')
+            self.assertNotIn('局间留言', events)
+
+    async def test_naming_runner_does_not_resend_note_file(self):
+        with runner_fixture('claude', user_note='留言', naming_only=True) as (runner, session, notes):
+            claude_compaction(runner)
+            self.assertEqual(runner.note_reminders.take(), '')
 
     async def test_failed_claude_send_keeps_pending_note_for_later_delivery(self):
         with runner_fixture('claude') as (runner, session, notes):

@@ -1214,6 +1214,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             note = opening_note(cfg, previous, resumed_session, getattr(args, "note_text", None),
                                 include_rules=cfg.engine != 'claude')
             publish_user_note(run_dir, getattr(args, "note_text", None))
+            cfg._user_note = getattr(args, "note_text", None)   # 每次上下文压缩后重发原文（note_reminders）
             from .runtimes import runtime
             runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
                 game_server=server, token=token, session_id=session_id,
