@@ -4,7 +4,7 @@
 
 > **项目尚未完成。** 桥接 Mod、主控、断网的智能体容器、工作区与知识库、分层执行、HUD、OBS 锁步录制与预置模拟器的接入都已可用：智能体在断网容器里先读完知识库，再独立游玩指定章节，可以调用预置模拟器或自己写程序规划路线，按计划文件执行并自动重试。尚未实现的条目在文中标注"未实现"。
 >
-> 最后更新：2026-10-24。在新电脑上部署整套系统见 [DEPLOY.md](DEPLOY.md)（含一键部署脚本 `setup.ps1`、全部命令与开关）；主控全部开关的一览表也在 README 的"开关"一节。
+> 最后更新：2026-10-30。在新电脑上部署整套系统见 [DEPLOY.md](DEPLOY.md)（含一键部署脚本 `setup.ps1`、全部命令与开关）；主控参数的一览表见本文 [4.1 节](#41-让智能体游玩一个章节)的"常用参数"表。
 >
 > 文中的 `<Celeste 安装目录>`、`<OBS 安装目录>` 指你自己电脑上的安装位置。部署向导会把它们记在 `configs\local.deploy.json`、`configs\local.recording.json` 等本机配置里（`configs\local*` 不入库）。
 
@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | 1 | 备份整个游戏目录 | 可执行 |
 | 2 | 安装 Everest | 可执行 |
-| 3 | 准备存档：在游戏里手动建好要用的存档，记下各自的槽位。本项目的正式挑战用 `opus5.5`、`fable5.1` 两个新存档，调试与工具准备用 `test` 存档；你可以用自己的存档名。也可以在运行时加 `--create-save`，由主控新建存档（见 4.1 节） | 可执行 |
+| 3 | 准备存档：在游戏里手动建好要用的存档，记下各自的槽位。建议正式运行给每个智能体用一个新存档，调试与工具准备另用一个测试存档（下文的例子叫 `test`），存档名可以自取。也可以在运行时加 `--create-save`，由主控新建存档（见 4.1 节） | 可执行 |
 | 4 | 在 Steam 中关闭本游戏的云同步，避免存档被覆盖 | 可执行 |
 | 5 | 游戏设为窗口化或无边框全屏，分辨率 1920×1080；辅助模式与变体保持关闭 | 可执行 |
 | 6 | 在 Mod 管理器里建一个只启用 CelesteAIBridge 的配置，避免其他 Mod 改变手感、画面或抢占按键 | 可执行 |
@@ -119,7 +119,7 @@ docker build -t celeste-agent:0.1 agent-container
 .\.venv\Scripts\python.exe tools\import_reference_pdf.py 资料.pdf --name celeste_mechanics_explained --title "Celeste 机制详解（反向钟）" --note "来源：……"
 ```
 
-提取文字需要 poppler 的 `pdftotext` 或 `pip install pypdf`。导入的文字版放在 `kb\reference\community\`，准备阶段会要求智能体把它们也读完。本项目实测时导入了两份：反向钟《Celeste 机制详解》（125 页，源码解读与机制详解，文字版约 240 KB）与《岩浆块机制说明》，加上这两份后整份知识库约 34 万 token。只重新生成索引：`tools\fetch_reference.py --index-only`。
+提取文字需要 poppler 的 `pdftotext` 或 `pip install pypdf`。导入的文字版放在 `kb\reference\community\`，准备阶段会要求智能体把它们也读完。开发中实测时导入了两份：反向钟《Celeste 机制详解》（125 页，源码解读与机制详解，文字版约 240 KB）与《岩浆块机制说明》，加上这两份后整份知识库约 34 万 token。只重新生成索引：`tools\fetch_reference.py --index-only`。
 
 ## 3. 桥接 Mod：构建、安装与测试
 
@@ -198,8 +198,8 @@ agent 操作触发关卡街机或主菜单 PICO-8 入口时，在切场景及解
 
 | 模式 | 内容 |
 | --- | --- |
-| 速通模式 `--mode speedrun`（Claude 执行器默认） | 以最短的游戏内章节计时通关。完整知识库 `kb/`；`--sim`（默认）/ `--no-sim` 决定是否开放预置模拟器，把速通模式分成两个版本（4.5 节）。游戏工具：`observe`、`act`、`narrate`、`set_effort`、`stop_run` |
-| 探索模式 `--mode explore`（原生 GPT 执行器默认） | 新手探索、学习并完成指定章节，不以速通为目标。只读 `kb/explore`（基本操作与工具说明），不开放模拟器文件；`--sim-assist`（默认开）提供有额度的短路线预测。另有 `cutscene`，开了限额预测时有 `simulate`。详见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md) |
+| 速通模式 `--mode speedrun`（Claude 执行器默认） | 以最短的游戏内章节计时通关。完整知识库 `kb/`；`--sim`（本机有 `sim\dist` 时默认）/ `--no-sim` 决定是否开放预置模拟器，把速通模式分成两个版本（4.5 节）。游戏工具：`observe`、`act`、`narrate`、`set_effort`、`stop_run` |
+| 探索模式 `--mode explore`（原生 GPT 执行器默认） | 新手探索、学习并完成指定章节，不以速通为目标。只读 `kb/explore`（基本操作与工具说明），不开放模拟器文件；`--sim-assist`（默认关，需自配标准模拟器）提供有额度的短路线预测。另有 `cutscene`，开了限额预测时有 `simulate`。详见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md) |
 | 直播模式 `--live`（叠加，默认关） | 观众实时观看：解说计时 10 秒（不开直播时半分钟）、用户可以要求退出关卡（另有 `exit_level`、`cutscene`），HUD 默认用网页形式。速通 + 直播不改变速通目标 |
 
 本节以下按速通模式说明。
@@ -208,7 +208,7 @@ agent 操作触发关卡街机或主菜单 PICO-8 入口时，在切场景及解
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--agent` | 必填 | 智能体标签，决定容器 `celeste-agent-<标签>`、工作区 `workspaces/<标签>/`（探索模式是 `workspaces/<标签>-explore/`）与日志目录 `runs/<标签>/`。同一个模型在 test 存档准备、正式存档挑战时用同一个标签，准备好的程序就能带进正式挑战 |
+| `--agent` | 必填 | 智能体标签，决定容器 `celeste-agent-<标签>`、工作区 `workspaces/<标签>/`（探索模式是 `workspaces/<标签>-explore/`）与日志目录 `runs/<标签>/`。在测试存档上准备、在正式存档上运行时用同一个标签，准备好的程序就能带进正式运行 |
 | `--save` | 必填 | 游戏内存档名；与当前存档不一致时拒绝开始。同名的存档用 `--save-slot <槽位>` 区分 |
 | `--create-save` | 关 | 新建一个存档：放在现有最新存档的下一个槽位（不填中间的空位），名字可以与已有存档重复；只能从序章开始，不能与 `--resume`、`--skip-enter` 合用 |
 | `--mode` | 见上表 | 游玩模式：`speedrun` 或 `explore`；续跑不能改。旧参数 `--knowledge full/explore` 等同 |
@@ -222,11 +222,11 @@ agent 操作触发关卡街机或主菜单 PICO-8 入口时，在切场景及解
 | `--quota-wait-max-hours` | 24 | 额度重置还要等超过这么多小时时直接停止本次运行（之后可以续跑） |
 | `--no-quota-wait` | 关 | 额度到上限时直接停止，不等待 |
 | `--no-net-wait` / `--net-wait-max-hours` | 关 / 24 | 关闭模型服务不可用（含 Codex 容量不足）时的自动等待 / 最多连续等多少小时（4.8 节） |
-| `--chapters` | 无 | 依次通关的章节编号，例如 `0,1,2`（正式挑战），见 4.6 节；给了它就不用 `--chapter` |
+| `--chapters` | 无 | 依次通关的章节编号，例如 `0,1,2`（序章、1A、2A），见 4.6 节；给了它就不用 `--chapter` |
 | `--scope` | `chapter` | `visited`：已有存档中已实际进入过的地图内自由进出（区分 A/B/C 面，首次接管建立固定快照，续跑不自动扩大）；`campaign`：从 `--chapter` 起按官方章节顺序一直玩下去；`chapter`：只玩一章（或 `--chapters` 列出的章节）。续跑沿用 |
 | `--completion-policy` | `stop`（`visited` 默认 `continue`） | 计划通关后停止，或继续在许可范围探索；`continue` 要求 agent 剧情模式，由 agent 操作结算与选章。独立于时长等停止目标 |
 | `--allow-detour` / `--no-allow-detour` | 关（续跑沿用） | 允许去计划外的已解锁地图：单章或顺序范围下，智能体用 `travel` 工具请主控代为换到别的已解锁官方章节 A 面与已到过的检查点（例如收集水晶之心）再回来；计划不变，计划外的通关另记在 `detours`，不计入分段成绩与总计时。开着时必须允许返回地图（开启时一并打开，不能与 `--no-allow-return-to-map` 合用）；需要桥接 1.10.0，见第 7 章“计划外地图（绕行收集）” |
-| `--sim` / `--no-sim` | 速通模式开（容器方式） | 预置模拟器的开关，把速通模式分成两个版本（见 4.5 节）：开时智能体可以随意调用模拟器寻找并优化路线；`--no-sim` 时智能体不能调用模拟器，只能用自己的办法通关，提示词换成不教打法的版本。续跑沿用 |
+| `--sim` / `--no-sim` | 速通模式、容器方式且本机有 `sim\dist` 时开 | 预置模拟器的开关，把速通模式分成两个版本（见 4.5 节）：开时智能体可以随意调用模拟器寻找并优化路线；`--no-sim` 时智能体不能调用模拟器，只能用自己的办法通关，提示词换成不教打法的版本。续跑沿用 |
 | `--sim-assist` / `--no-sim-assist` | 关（续跑沿用） | 只用于探索模式：有额度的短路线预测，不开放模拟器文件；需自配标准模拟器（本机 `sim\dist\celeste-sim`） |
 | `--stiffness` / `--no-stiffness` | 关（续跑沿用） | 只用于探索模式：思考僵直。一次冻结（上一次 act 结束到下一次 act）里思考、运行工具的时间各自满 2.5 分钟后按比例换成僵直（思考每 2.5 分钟 0.2 秒、工具每 2.5 分钟另加 0.4 秒，可调参数 `stiff_unit_s`、`stiff_think_s`、`stiff_tool_s`；`stiff_max_s` 设一次冻结最多僵直多少秒，默认不另设上限），下一次 act 执行前角色保持上一帧的按键僵直这么久，不计入 act 的帧数上限；僵直期间死亡立刻松开按键，死亡、换房或通关时这次的按键不执行。用户暂停、等待额度和上下文压缩不算。提示词写明规则，observe 与 act 的返回开头显示这次冻结已累计的时间和预计僵直。控制台“开关”里的“思考僵直”（探索模式才显示） |
 | `--live` / `--no-live` | 关 | 直播模式（见上表）。不论开不开，智能体思考期间都用 `narrate` 随时更新 HUD 上的思考，运行程序期间用 `show.status()` 报告进度（见 4.2 节）。续跑沿用 |
@@ -456,7 +456,7 @@ M5 验收（2026-10-23，桥接 0.7.0，当时的网页 HUD）：`python calibra
 
 ```powershell
 # 启动游戏（桥接 0.12.7 以上；游戏内 HUD 需要 0.13.0）后直接运行主控：录屏默认开启
-.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus --save <存档名> --model opus
 # 不录屏
 .\.venv\Scripts\python.exe -m orchestrator.run --agent dev-opus --save test --model opus --no-record
 ```
@@ -533,15 +533,15 @@ python tools/sync_codex_session_env.py --run runs/<标签>/<时间戳> --apply
 
 M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC，`obs_mix`）：校准测试全部通过——2219 帧画面与条码逐帧一致，40 段全部量到声音延迟，对齐误差中位数 0 毫秒、最大 12.7 毫秒。实测 Opus 5.5 游玩 4 分 31 秒（15 次决策、死亡 4 次），成片 1633 帧（27.2 秒），帧号连续、无缺帧无重复，19 段中 15 段量到声音延迟（130～152 毫秒），HUD 一同录入。录 2219 帧期间游戏进程内存只增长约 30 MB。
 
-### 4.5 预置模拟器（速通模式默认开启；`--no-sim` 关闭）
+### 4.5 预置模拟器（速通模式在本机有模拟器时默认开启；`--no-sim` 关闭）
 
 预置模拟器是由完整游戏代码逐帧推演的《蔚蓝》模拟器：从游戏某一帧的完整场景出发，给出任意按键之后每一帧 Madeline 与房间里实体的结果，与真实游戏逐帧一致（序章与第 1–9 章 A 面的校准用例全部通过）。它含有游戏代码，**只在开发者本机构建，不在仓库里**；发布目录是 `sim\dist\`（`celeste-sim` 单文件程序、资源表、说明 `README.md` 与 Python 接口 `sim.py`）。新电脑上没有模拟器时，把整个文件夹从构建它的电脑复制过来，或用 `--no-sim` 运行关模拟器的版本。
 
-- 开关与两个版本：只用于速通模式，容器方式下默认开启（`--no-sim` 关闭；本机运行方式没有模拟器）。开关把速通模式分成两个版本，目标都是以最短的章节计时通关，提示词各一套：
+- 开关与两个版本：只用于速通模式，容器方式下本机有 `sim\dist\celeste-sim` 时默认开启（`--no-sim` 关闭；本机运行方式没有模拟器）。开关把速通模式分成两个版本，目标都是以最短的章节计时通关，提示词各一套：
   - **开模拟器**（`orchestrator/prompts/system_sim_zh.md`、`container_sim_zh.md`、`sim_zh.md`、`free_zh.md`、`retry_zh.md`、`playback_zh.md`）：智能体可以随意调用模拟器寻找并优化路线；提示词写明做法（整个房间推演到出口、按帧数优化完再一次执行）、建议的工作方式、物理参数简表、自动重试与规划回放。
   - **关模拟器**（`system_nosim_zh.md`、`container_nosim_zh.md`）：不挂 `/sim`，提示词删掉所有教它怎么玩的部分（做法、建议的工作方式、物理参数简表、写模拟器与搜索的建议、规划与优化的要求、自动重试的用法建议），只写目标、规则（不得调用或破解模拟器，不读、不反编译游戏程序，断网）、游戏工具与观测的格式、工作区里有什么，其余由智能体自由发挥。它算出的逐帧轨迹可以用 `show.trajectory()` 交给系统画出来（只用于展示，见 4.1 节"规划回放"）。准备阶段仍要求读完知识库（知识库本身两个版本相同）。
   - 两套共用 `interface_zh.md`（推理强度、坐标与画面、act 的输入格式、系统自动处理的部分），也都加上 HUD 一节 `hud_zh.md`。`--limit-planning` 只用于开模拟器的版本。
-  - 探索模式不开放模拟器文件；`--sim-assist` 的限额短路线预测由主控在后台调用模拟器，智能体只能通过 `simulate` 工具花模拟体力使用。
+  - 探索模式不开放模拟器文件；`--sim-assist` 的限额短路线预测（默认关闭，开它需要本机有预置模拟器）由主控在后台调用模拟器，智能体只能通过 `simulate` 工具花模拟体力使用。
 - 开模拟器时，主控会把 `sim\dist` 只读挂到容器的 `/sim`，开局要求智能体把 `/sim/README.md` 和知识库一起读完；之后游戏每次停下（每次 `act`、`observe` 之后，自动重试之前），主控都会把当前帧的完整场景写到工作区的 `game/sim_state.json`，作为模拟器的起始状态。
 - 智能体用 `/sim/sim.py`（`Sim`、`SimPool`）或 `/sim/celeste-sim` 命令行推演候选按键，把选中的按键与预测的逐帧位置写成计划文件交给 `act`；自动重试的重算程序也能调用它。
 - **检查点**：任何一次推演的任何一帧都可以存成检查点（`r.save(路径, 第几帧)`），之后 `Sim(检查点)`、`SimPool(检查点)`、`sim.load`、`celeste-sim --state` 都从那一帧接着推演，存哪条路线、存到第几帧由智能体决定；检查点上还能再存检查点。检查点文件嵌着它所依据的快照、从快照出发的完整按键与每帧 expect，读入时从快照把按键重放一遍（几百帧只多几毫秒）；`r.full_inputs()`、`r.full_expect()` 拼出从快照算起的完整路线，`r.write_plan(路径)` 直接写成计划文件，并核对快照就是游戏当前停下的这一帧（否则不能从当前帧执行）。这样分段搜索、拼接都在模拟器里做，不必为了拿新起点先在游戏里走一段。实现在本机的 `sim\engine\Sim\SimStart.cs`（读入快照或检查点）与 `sim\package\sim.py`。实测（2026-10-24，容器里）：校准用例里随机 155 个（加序章 172 个）各在随机一帧存检查点再接着推演、再在后半段随机一帧存第二层检查点，与整段推演逐帧完全相同；`SimPool`、命令行、`info` 都能读检查点；同一个起点重复推演结果相同。
@@ -558,13 +558,13 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC，`obs_mix
 自检（不调用模型，只用 test 存档，不碰正式存档）：
 
 ```powershell
-# 可选：先关掉游戏，把 test 存档重置成某个正式存档的初始进度（这里是 opus5.5；只读它的存档文件；test 存档先备份到 runs\test_save_backups\<时间戳>\）
-.\.venv\Scripts\python.exe calibration\reset_test_save.py --saves-dir "<Celeste 安装目录>\Saves" --like opus5.5
+# 可选：先关掉游戏，把 test 存档重置成某个正式存档的初始进度（--like 写那个正式存档的名字；只读它的存档文件；test 存档先备份到 runs\test_save_backups\<时间戳>\）
+.\.venv\Scripts\python.exe calibration\reset_test_save.py --saves-dir "<Celeste 安装目录>\Saves" --like <正式存档名>
 # 启动游戏后（停在任意画面）：进入 test 存档的序章，在每章把 Madeline 放到终点前走进去，确认主控自动进入下一章
 .\.venv\Scripts\python.exe calibration\chain_check.py
 ```
 
-实测（2026-10-23，test 存档重置成 opus5.5 的初始进度：1A 没通关过、2A 尚未解锁，与正式挑战开跑时相同）：通过。序章的结尾剧情用暂停菜单跳过，17 秒后停在 1A 第一个房间；1A 通关后经过结算画面与地图，22 秒后停在 2A 第一个房间；分段成绩两条。菜单宏也能从别的存档的关卡里退回选档页再选目标存档。要把 test 存档还原成重置前的样子：关掉游戏后运行 `reset_test_save.py --saves-dir ... --restore runs\test_save_backups\<时间戳>`。
+实测（2026-10-23，test 存档重置成一个新正式存档的初始进度：1A 没通关过、2A 尚未解锁，与正式运行开跑时相同）：通过。序章的结尾剧情用暂停菜单跳过，17 秒后停在 1A 第一个房间；1A 通关后经过结算画面与地图，22 秒后停在 2A 第一个房间；分段成绩两条。菜单宏也能从别的存档的关卡里退回选档页再选目标存档。要把 test 存档还原成重置前的样子：关掉游戏后运行 `reset_test_save.py --saves-dir ... --restore runs\test_save_backups\<时间戳>`。
 
 ### 4.6.1 按检查点分段（`--segments`）
 
@@ -591,27 +591,28 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC，`obs_mix
 .\.venv\Scripts\python.exe calibration\segment_check.py       # 进入检查点、一截完成、换到下一截、最后一截返回地图
 ```
 
-### 4.7 正式挑战
+### 4.7 一次完整挑战怎么跑
 
-流程已全部由主控串联，并在 test 存档上彩排通过（见 4.6 节）。本项目的正式挑战是：Opus 5.5 与 Fable 5.1 各用自己的新存档（`opus5.5`、`fable5.1`）从序章开始，依次通关序章、1A、2A，分开时段各跑一次。你可以换成自己的存档名、标签与章节。
+下面以"用一个新存档从序章开始，依次通关序章、1A、2A，以章节计时为成绩"为例。整条流程由主控串联，可以先在测试存档上彩排（见 4.6 节）。存档名、标签、模型与章节都换成你自己的。
 
 1. **开跑前**
-   - 在 Claude Code 里用 `/usage` 看一下余量。额度用完时主控会让游戏冻结、等额度重置后接着玩（不计时，见 4.8 节），所以余量不足不会毁掉成绩，只会拉长现实时间；Fable 占每周额度更多。注意运行期间同一账号的其他会话也会被用完的额度挡住。
+   - 用 Claude 订阅时，在 Claude Code 里用 `/usage` 看一下余量。额度用完时主控会让游戏冻结、等额度重置后接着玩（不计时，见 4.8 节），所以余量不足不会毁掉成绩，只会拉长现实时间。不同模型占用额度的速度不同；运行期间同一账号的其他会话也会被用完的额度挡住。
    - 启动 Docker Desktop；建议重启一次游戏（用只启用 CelesteAIBridge 的 Mod 配置），停在标题画面即可。游戏停在别的存档或章节里也可以，菜单宏会先退回选档页。
-   - 确认本机有预置模拟器 `sim\dist\celeste-sim`（见 4.5 节）；没有时加 `--no-sim`。
+   - 速通模式想开预置模拟器时，确认本机有 `sim\dist\celeste-sim`（见 4.5 节）；没有时主控运行关模拟器的版本。
+   - 在游戏里新建一个存档，或在命令里加 `--create-save` 让主控新建（只能从序章开始）。
 2. OBS 不用手动启动：录屏默认开启，主控会自己启动 OBS、结束时关掉（见 4.4 节）。
-3. **启动主控**（以 Opus 5.5 为例）：
+3. **启动主控**：
 
    ```powershell
-   .\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --max-minutes 600
+   .\.venv\Scripts\python.exe -m orchestrator.run --agent opus --save <存档名> --model opus --mode speedrun --chapters 0,1,2
    ```
 
-   Fable 5.1 把前三个参数换成 `--agent fable5.1 --save fable5.1 --model fable`，其余相同。`--max-minutes` 是现实用时上限（不含准备阶段与等待额度的时间），按需要放宽。
-4. 主控依次：用菜单宏进入存档的序章并跳过开场剧情；核对存档名；把存档的全部文件备份到本次运行目录的 `save_backup\`；开始录制；创建智能体容器 `celeste-agent-<标签>` 并启动 Claude Code。智能体先读完知识库与 `/sim/README.md`（准备阶段，不计时，上限 60 分钟），第一次执行游戏工具时开始计现实用时。
+   换模型时改 `--model`（例如 `fable`），或用 `--provider` 接入其他平台（4.9 节），建议每个模型用自己的 `--agent` 标签。`--max-minutes` 是现实用时上限（默认 1000 分钟，不含准备阶段与等待额度的时间），按需要调整。长时间运行建议用控制台，或用 `python -m orchestrator.background -- <上面的参数>` 在独立后台宿主里启动。
+4. 主控依次：用菜单宏进入存档的序章并跳过开场剧情；核对存档名；把存档的全部文件备份到本次运行目录的 `save_backup\`；开始录制；创建智能体容器 `celeste-agent-<标签>` 并启动 Claude Code。智能体先读完知识库（开了预置模拟器时还有 `/sim/README.md`；准备阶段，不计时，上限 60 分钟），第一次执行游戏工具时开始计现实用时。
 5. 成绩以游戏内章节计时为主：序章、1A、2A 的章节计时之和（`summary.json` 的 `splits` 与 `total_time_ticks`；HUD 主计时是关卡内游戏时长，另含暂停菜单、片尾等章节计时不走的帧）。剧情能跳过的一律通过暂停菜单跳过；推理强度默认 high，智能体可以用 `set_effort` 自己调整。
-6. 一章通关后主控自动进入下一章；2A 通关后结束：停止录制、交还游戏控制，产出写入 `runs\<标签>\<时间戳>\`。中途出意外时见 4.8 节续跑。
+6. 一章通关后主控自动进入下一章；最后一章通关后结束：停止录制、交还游戏控制，产出写入 `runs\<标签>\<时间戳>\`。中途出意外时见 4.8 节续跑。
 
-智能体标签决定工作区：新标签的工作区是空的。想让智能体带着准备好的程序开跑，就先用同一个标签在 test 存档上跑一次准备（工作区跨存档、跨运行保留）。本项目的正式挑战给两个模型各用一个新的标签（`opus5.5`、`fable5.1`），两者从同样的空工作区起步。
+智能体标签决定工作区：新标签的工作区是空的。想让智能体带着准备好的程序开跑，就先用同一个标签在测试存档上跑一次准备（工作区跨存档、跨运行保留）。想比较几个模型时，给每个模型各用一个新的标签，让它们从同样的空工作区起步。
 
 ### 4.8 额度等待与中断续跑
 
@@ -628,7 +629,7 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC，`obs_mix
 **中断续跑**：Claude 执行器的运行没通关就停下（时间预算用完、主控报错、Ctrl+C）时不交还游戏控制，游戏冻结在原处——游戏在暂停菜单里章节计时也照样会走，所以不能靠暂停菜单。原生 GPT 在控制台显式选择“中断（保持冻结，可续跑）”，或模型服务故障后停止重试时，也保留接管；两种执行器在用户设置的自动停止条件（包括时长目标）触发后都正常收尾录像、但保留接管与冻结（见 4.10 节“两种结束方式”）；其他退出方式照常交还控制。用同样的 `--agent`、`--save` 加 `--resume <运行目录>` 续跑：
 
 ```powershell
-.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs\opus5.5\<时间戳>
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus --save <存档名> --resume runs\opus\<时间戳>
 ```
 
 - 模型、提供方、章节、`--sim`、时间预算沿用原运行，推理强度沿用中断时生效的那个（这些都可以显式改，例如加大 `--max-minutes`）；游玩模式不能改；直播、录屏、规划回放、HUD 形式与剧情处理方式不写就沿用。续跑不跑准备阶段。
@@ -662,7 +663,7 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC，`obs_mix
 **运行**（DeepSeek V4.1 Flash；存档先在游戏里建好，或加 `--create-save` 让主控新建）：
 
 ```powershell
-.\.venv\Scripts\python.exe -m orchestrator.run --agent deepseek-flash --save <存档名> --provider deepseek --model deepseek-flash --chapters 0,1,2 --max-minutes 600
+.\.venv\Scripts\python.exe -m orchestrator.run --agent deepseek-flash --save <存档名> --provider deepseek --model deepseek-flash --chapters 0,1,2
 ```
 
 - 模型名：`deepseek-flash`（DeepSeek 官方接口里这个名字目前指向 V4.1 Flash 1017）、`deepseek-v4-pro`。主控在模型名后加 `[1m]`，让 Claude Code 按 100 万 token 的上下文压缩（压缩窗口 786432 token），Claude Code 的各个模型槽位与子智能体都指向这个模型，与 DeepSeek 文档里的 Claude Code 配置一致。HUD 显示的名字在 `configs\hud.json` 的 `names` 里。
@@ -725,7 +726,7 @@ M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC，`obs_mix
 
 ### 4.11 可调参数（`--tune`）
 
-主控里原本写死的一些数值可以按运行调整：命令行写 `--tune 名称=值`（可以写多个），控制台在"新运行"的"可调参数"一栏（探索模式的两项在"探索：规划程序"一栏）。默认值就是一直以来的数值，不改时行为与提示词都与之前完全相同；改了之后，提示词与工具说明里提到的数字跟着变（例如"一次最多 600 帧""默认最多 5 分钟""单次规划程序最多 15 秒"）。续跑沿用原运行改过的参数，续跑时再写 `--tune` 可以覆盖。
+主控里原本写死的一些数值可以按运行调整：命令行写 `--tune 名称=值`（可以写多个），控制台在"新运行"的"可调参数"一栏（探索模式的两项在"探索：规划程序"一栏）。不改时用下表的默认值；改了之后，提示词与工具说明里提到的数字跟着变（例如"一次最多 600 帧""默认最多 5 分钟""单次规划程序最多 2 分钟"）。续跑沿用原运行改过的参数，续跑时再写 `--tune` 可以覆盖。
 
 ```powershell
 .\.venv\Scripts\python.exe -m orchestrator.run --agent dev-opus --save test --chapter 0 --tune playback_speed=4 --tune playback_round_s=2.5
@@ -922,7 +923,7 @@ HUD“动作帧数”可实时调整单次 `act` 上限：探索模式 `explore_
 开关记在 `run_state.json` 的 `allow_detour`，运行中改过时以控制台的最后设置为准，续跑沿用；续跑时也可以显式打开或关闭，例如续跑一次已通关的运行、追加 8A（章节编号 9，核心）并允许绕行：
 
 ```powershell
-.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs\opus5.5\<上一次的运行目录> --chapters 9 --allow-detour
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus --save <存档名> --resume runs\opus\<上一次的运行目录> --chapters 9 --allow-detour
 ```
 
 关时行为与原来完全相同：入场门禁仍只认当前计划的章节，auto 模式仍不开放 B、P、N。续跑时游戏停在计划外地图里也能接上（只在开关打开时）；停在选章界面时，auto 剧情模式与原来一样由开局菜单宏进入计划章节。

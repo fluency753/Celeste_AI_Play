@@ -2,9 +2,9 @@
 
 这份文档讲怎样把整套系统部署到一台 Windows 电脑上：需要什么环境、怎样一键部署、怎样逐步手动部署、要运行哪些命令、有哪些开关与配置文件。日常使用的细节（每个功能的原理与实测）见 [USAGE.md](USAGE.md)，设计见 [DESIGN.md](DESIGN.md)，原生 GPT 与直播见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。
 
-> 项目尚未完成，部署流程会随开发更新。本文最后更新：2026-10-24。
+> 项目尚未完成，部署流程会随开发更新。本文最后更新：2026-10-30。第一次部署可以先看简明的[使用指南](GUIDE.md)；让 AI 助手代你部署时，请它阅读[操作手册](AI_GUIDE.md)。
 
-文中的 `<Celeste 安装目录>`、`<OBS 安装目录>` 等尖括号内容换成你电脑上的实际路径。存档名 `test`、`opus5.5`、`fable5.1`、`dsflashv4.1` 是本项目调试与正式挑战用的名字，你可以用自己的存档名。
+文中的 `<Celeste 安装目录>`、`<OBS 安装目录>` 等尖括号内容换成你电脑上的实际路径。文中的调试存档叫 `test`，正式运行的存档写作 `<存档名>`，都换成你自己游戏里的存档名。
 
 ## 目录
 
@@ -155,8 +155,8 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only platform,switches # �
 
 主控只会进入 `--save` 指定的存档，存档名不一致时拒绝开始；开局把这个存档的全部文件备份到运行目录的 `save_backup\`。不要让 AI 碰你自己的存档。
 
-- 一个调试用存档（本项目叫 `test`；菜单宏、校准、试跑都只用它）；
-- 每个参加正式挑战的智能体一个新存档（本项目用 `opus5.5`、`fable5.1`、`dsflashv4.1`）。
+- 一个调试用存档（下文叫 `test`；菜单宏、校准、试跑都只用它）；
+- 正式运行时，每个智能体一个新存档（名字自取）。
 
 可以在游戏里手动新建（新存档会先播开场，建好后退回标题即可），也可以让主控新建：`--create-save --save <名字> --chapter 0` 把新存档放在现有最新存档的下一个槽位（不填中间的空位，不会覆盖已有存档），名称允许重复，只能从序章开始。同名存档用 `--save-slot <槽位>` 区分。
 
@@ -177,7 +177,7 @@ winget install Microsoft.DotNet.SDK.8
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本构建桥接及其常驻核心依赖，备份并安装 `Mods\CelesteAIBridge\` 与 `Mods\CelesteAIRuntime\` 两个 Mod；首次安装与核心更新必须关闭游戏。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.3.1，要求常驻核心 1.0.2），以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。1.3.0 是不兼容的部署结构变化，旧版需维护重启迁移；1.3.1／核心 1.0.2 同样需要维护重启安装。已经安装相同常驻核心的兼容逻辑更新，可用 `-HotReload -HudPort 47792` 经在用主控保持原录像重载；正常 Everest 重载仍会重建当前房间。回滚在关闭游戏后用 `-Rollback "<部署时打印的备份目录>"`：当前两个 Mod 先移到 `<Celeste 安装目录>\CelesteAI-backups\`（不删除），备份里没有常驻核心时核心不再加载，避免旧桥接与核心争用端口。完整流程、撤销、失败重试与验收边界见 [桥接重载](BRIDGE_RELOAD.md)。
+Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本构建桥接及其常驻核心依赖，备份并安装 `Mods\CelesteAIBridge\` 与 `Mods\CelesteAIRuntime\` 两个 Mod；首次安装与核心更新必须关闭游戏。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.10.0，要求常驻核心 1.0.5，以 `game-bridge/everest.yaml` 为准），以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。1.3.0 是不兼容的部署结构变化，旧版需维护重启迁移；1.3.1／核心 1.0.2 同样需要维护重启安装。已经安装相同常驻核心的兼容逻辑更新，可用 `-HotReload -HudPort 47792` 经在用主控保持原录像重载；正常 Everest 重载仍会重建当前房间。回滚在关闭游戏后用 `-Rollback "<部署时打印的备份目录>"`：当前两个 Mod 先移到 `<Celeste 安装目录>\CelesteAI-backups\`（不删除），备份里没有常驻核心时核心不再加载，避免旧桥接与核心争用端口。完整流程、撤销、失败重试与验收边界见 [桥接重载](BRIDGE_RELOAD.md)。
 
 冒烟测试（游戏停在标题画面即可）：
 
@@ -254,7 +254,7 @@ winget install Gyan.FFmpeg
 预置模拟器由游戏代码生成，**不在仓库里，也不应公开分发**。在新电脑上有两种选择：
 
 - 如果你有一台已经构建好模拟器的开发机，把 `sim\dist` 整个目录（`celeste-sim`、`sim.py`、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`）复制到新电脑仓库的 `sim\dist`；它是 Linux 单文件程序，只在容器里运行，与 Windows 版本无关。自检：游戏在 test 存档的关卡里时运行 `.\.venv\Scripts\python.exe tools\sim_check.py`，应"逐帧一致"。
-- 没有模拟器时用**关模拟器的版本**：运行时加 `--no-sim`（提示词换成不教打法的版本，见 6 节）。探索模式的限额预测（`--sim-assist`）也需要它，没有时自动关闭。
+- 没有模拟器时用**关模拟器的版本**：速通模式新运行在本机没有 `sim\dist` 时自动按 `--no-sim` 运行（提示词换成不教打法的版本，见 6 节）。探索模式的限额预测（`--sim-assist`）默认关闭，开它需要预置模拟器。
 
 ### 4.9 知识库参考资料（可选）
 
@@ -285,7 +285,7 @@ winget install Gyan.FFmpeg
 ### 5.1 用启动脚本
 
 ```powershell
-.\start_local.ps1                                   # 正式挑战（向导里选的正式存档、章节与开关）
+.\start_local.ps1                                   # 正式运行（向导里选的正式存档、章节与开关）
 .\start_local.ps1 -Trial                            # 在调试存档上试跑 30 分钟（标签 dev-<标签>，第一个章节）
 .\start_local.ps1 -Resume runs\<标签>\<时间戳>       # 续跑一次中断的运行
 ```
@@ -295,16 +295,16 @@ winget install Gyan.FFmpeg
 ### 5.2 直接用命令
 
 ```powershell
-# 正式挑战（Anthropic Opus，速通模式；预置模拟器、规划回放、OBS 录屏、游戏内 HUD 都是默认开启，OBS 由主控自己启动和关闭）
-.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --max-minutes 600
+# 速通模式依次通关序章、1A、2A（Anthropic Opus；OBS 录屏与游戏内 HUD 默认开启，OBS 由主控自己启动和关闭；本机有预置模拟器时默认开放）
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus --save <存档名> --model opus --mode speedrun --chapters 0,1,2
 # DeepSeek
-.\.venv\Scripts\python.exe -m orchestrator.run --agent dsflashv4.1 --save dsflashv4.1 --provider deepseek --model deepseek-flash --chapters 0,1,2 --max-minutes 600
+.\.venv\Scripts\python.exe -m orchestrator.run --agent deepseek-flash --save <存档名> --provider deepseek --model deepseek-flash --chapters 0,1,2
 # 关模拟器的版本
 .\.venv\Scripts\python.exe -m orchestrator.run --agent opus-nosim --save <存档名> --model opus --chapters 0,1,2 --no-sim
 # 不录屏的试跑
 .\.venv\Scripts\python.exe -m orchestrator.run --agent dev-opus --save test --model opus --chapter 0 --max-minutes 30 --no-record
 # 速通 + 直播（HUD 改为可交互的网页形式；直播时保留 OBS）
-.\.venv\Scripts\python.exe -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2 --live --keep-obs-open --continuous-music
+.\.venv\Scripts\python.exe -m orchestrator.run --agent opus --save <存档名> --model opus --chapters 0,1,2 --live --keep-obs-open --continuous-music
 ```
 
 主控依次：检查桥接版本；（录屏时）OBS 没开就启动它、退回选档页、开始录制；用菜单宏进入存档的章节并跳过开场；核对存档名、备份存档；启动游戏工具服务（`127.0.0.1:47780`）与 HUD 服务（`http://127.0.0.1:47790/hud`）；不用 MOD 形式 HUD 时打开 HUD 窗口；创建或复用容器 `celeste-agent-<标签>` 并启动智能体。智能体先读完知识库（准备阶段），之后游玩；一章通关后自动进入下一章。
@@ -363,15 +363,15 @@ winget install Gyan.FFmpeg
 | `--chapters 0,1,2` | 无 | 依次通关的章节（0 序章、1 1A、2 2A……）；给了它就不用 `--chapter` |
 | `--chapter N` | 选章页当前章节 | 只玩一章（或作为 `--scope campaign` 的起始章节） |
 | `--scope chapter` / `campaign` | `chapter`（沿用） | 没给 `--chapters` 时：只玩一章，或从起始章节起按官方章节顺序一直玩下去 |
-| `--max-minutes` | 240（沿用） | 现实时间安全上限（不含准备阶段与等待额度）；**不显示给智能体** |
-| `--sim` / `--no-sim` | 速通模式且容器运行方式时开（沿用） | 预置模拟器开关，把速通模式分成两个版本：开时智能体可以随意调用模拟器寻找并优化路线（提示词写明做法）；关时不能调用模拟器，提示词只写目标、规则与工具接口，不教打法 |
-| `--sim-assist` / `--no-sim-assist` | 探索模式且本机有预置模拟器时开（沿用） | 只用于探索模式：有额度的短路线预测，不开放模拟器文件 |
+| `--max-minutes` | 1000（沿用） | 现实时间安全上限（不含准备阶段与等待额度）；**不显示给智能体** |
+| `--sim` / `--no-sim` | 速通模式、容器运行方式且本机有 `sim\dist` 时开（沿用） | 预置模拟器开关，把速通模式分成两个版本：开时智能体可以随意调用模拟器寻找并优化路线（提示词写明做法）；关时不能调用模拟器，提示词只写目标、规则与工具接口，不教打法 |
+| `--sim-assist` / `--no-sim-assist` | 关（沿用） | 只用于探索模式：有额度的短路线预测，不开放模拟器文件；需自配标准模拟器（本机 `sim\dist\celeste-sim`） |
 | `--live` / `--no-live` | 关（沿用） | 直播模式：提示词加直播一节，解说计时 10 秒，可按用户要求退出关卡，HUD 默认用网页形式。`narrate` 与思考提醒在所有模式下都有（不开直播时解说计时半分钟，`RunConfig.live_remind_s`） |
 | `--hud-mod` / `--no-hud-mod` | 不开直播时开，直播模式关（沿用） | HUD 以 MOD 形式画在游戏画面右上角（需要桥接 0.13.0，旧桥接自动改用网页 HUD）；关时用网页 HUD |
 | `--cutscene-mode auto` / `agent` | `auto`（沿用） | 剧情由主控跳过，或交给智能体用 cutscene 工具处理 |
 | `--allow-restart-chapter`、`--allow-return-to-map`、`--allow-save-quit` | 均禁止（续跑沿用） | 各有 `--no-allow-...` 形式，三权限独立配置；需桥接 1.1.1 的 `action_policy=1`，详见[策略契约](CHAPTER_RESET_GUARD.md) |
 | `--allow-chapter-reset` / `--no-allow-chapter-reset` | 兼容别名 | 设置全部三项权限，独立选项覆盖它，旧运行自动迁移 |
-| `--playback` / `--no-playback` | 开（沿用） | 规划回放：把推演过的路线按轮画进游戏（开模拟器时画 `/sim` 的推演，关模拟器时画智能体用 `show.trajectory()` 交来的轨迹） |
+| `--playback` / `--no-playback` | 关（沿用） | 规划回放：把推演过的路线按轮画进游戏（开模拟器时画 `/sim` 的推演，关模拟器时画智能体用 `show.trajectory()` 交来的轨迹）。需要通过提示词让智能体主动写推演程序并按 `show.trajectory()` 交轨迹，否则没有内容可画 |
 | `--record` / `--no-record` | 开（沿用） | OBS 录屏开关：开时 OBS 没在运行就由主控自己启动（专用配置、最小化到托盘），锁步录制完整版与纯享版，结束时关掉它启动的 OBS；OBS 已经开着就直接用、结束时不关；`--no-record` 不启动也不调用 OBS |
 | `--keep-obs-open` | 关 | 结束时保留主控启动的 OBS（直播用）；手动关闭 OBS 后可用 `tools\obs_setup.py restore` 还原配置选择 |
 | `--continuous-music` / `--freeze-music` | `configs\local.recording.json` 的 `continuous_music`，没写时冻结 | 冻结游戏逻辑时游戏本身的 BGM 继续播放（直播用）还是一起暂停；默认的 `game_nrt` 录像声音不受影响 |
@@ -544,4 +544,4 @@ Remove-Item "<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll"
 | 智能体想从零开始 | 删除 `workspaces\<标签>\`，再 `docker rm -f celeste-agent-<标签>`、`docker volume rm celeste-claude-<标签>` |
 | 存档进度不对 | 从运行目录的 `save_backup\` 恢复（先关游戏），并确认已关闭云同步 |
 
-更多问题见 [USAGE.md 第 6 节](USAGE.md#6-常见问题)。
+更多问题见 [USAGE.md 第 7 节](USAGE.md#7-常见问题) 与[使用指南的常见问题](GUIDE.md#7-常见问题qa)。
