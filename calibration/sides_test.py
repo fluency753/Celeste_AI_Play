@@ -562,6 +562,17 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn('id="sideList"', html)
         self.assertIn('sides: ui.sides', html)
 
+    def test_options_load_sets_sides_before_filling_saves(self):
+        # fillSaves 会调 onSaveChange，它读 ui.sides.length：ui.sides 没先定好时 loadOptions 中途抛错，
+        # 模型列表永远停在"读取中…"（2026-10-30 控制台实测）
+        html = (Path(__file__).resolve().parent.parent / 'overlay' / 'console.html').read_text(encoding='utf-8')
+        self.assertIn('chapters: [0], sides: [],', html)
+        body = html[html.index('async function loadOptions()'):]
+        body = body[:body.index('\n}\n')]
+        self.assertLess(body.index('ui.sides = [];'), body.index('fillSaves();'))
+        self.assertLess(body.index('ui.chapters = [0];'), body.index('fillSaves();'))
+        self.assertIn('await loadModels();', body)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -934,7 +934,7 @@ const SHORT = ["序", "1A", "2A", "3A", "4A", "5A", "6A", "7A", "终", "8A", "9"
 const EXPLORE_KEYS = ["explore_program_s", "explore_program_runs"];   // 在"探索：规划程序"一栏单独显示
 
 const ui = { options: null, segOff: {}, status: null, control: null, controlRun: null, hud: null, runs: [], models: [],
-             chapters: [0], mode: "explore", map: "celeste", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "",
+             chapters: [0], sides: [], mode: "explore", map: "celeste", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "",
              tune: {}, kb: {}, kbFile: null, kbView: "edit", page: "run", aboutLoaded: false };
 
 async function getJSON(path) {
@@ -1068,12 +1068,13 @@ async function loadOptions() {
   const d = o.defaults;
   $("maxMinutes").value = d.max_minutes;
   $("agent").value = (o.deploy && o.deploy.agent) || "";
-  fillSaves();
-  fillMaps();
-  fillGameDir();
+  // 先定章节选择再填存档：fillSaves 会调 onSaveChange，它要读 ui.chapters／ui.sides
   ui.chapters = [0];
   ui.sides = [];           // 另外要玩的 B／C 面：[[章节编号, "B"|"C"], ...]
   ui.segOff = {};          // 章节编号 → 取消的段号
+  fillSaves();
+  fillMaps();
+  fillGameDir();
   buildRoute();
   $("simNote").textContent = o.sim_available ? "逐帧精确地推演路线" : "没有安装预置模拟器（sim/dist）";
   $("sim").disabled = !o.sim_available; if (!o.sim_available) $("sim").checked = false;
