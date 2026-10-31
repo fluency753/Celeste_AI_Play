@@ -191,6 +191,69 @@ def save_prefs(update: dict) -> dict:
     return load_prefs()
 
 
+# ---------------------------------------------------------------- 模型提供方（运行页"管理提供方"）
+
+def _providers_in_use() -> tuple[bool, frozenset | None]:
+    """(有没有主控在运行, 它用着的 Claude Code 提供方)。在运行但读不出用的是哪个时返回 None：全部不许改。
+    来源：控制台这次启动的命令行（--engine / --provider），以及最新运行目录里还没写总结的 run_state.json。"""
+    orchestrator = orchestrator_status()
+    if not orchestrator["running"]:
+        return False, frozenset()
+    found, known = set(), False
+    argv = orchestrator.get("launched") if orchestrator.get("host_state") in {"starting", "running"} else None
+    if isinstance(argv, list) and "--resume" not in argv:
+        values = {argv[i]: argv[i + 1] for i in range(len(argv) - 1) if argv[i] in ("--engine", "--provider")}
+        if values.get("--engine", "claude") == "claude":
+            found.add(values.get("--provider", "anthropic"))
+        known = True
+    run = Path(orchestrator["run"]) if orchestrator.get("run") else None
+    state = _read_json(run / "run_state.json") if run else {}
+    if state and not (run / "summary.json").exists():
+        if state.get("engine", "claude") == "claude":
+            found.add(state.get("provider") or "anthropic")
+        known = True
+    return True, frozenset(found) if known else None
+
+
+def providers_list() -> dict:
+    from orchestrator import provider_settings
+    running, in_use = _providers_in_use()
+    return provider_settings.listing(running=running, in_use=in_use)
+
+
+def _provider_call(action, data):
+    """保存 / 删除提供方：意外的格式错误不带原始内容（请求里可能有粘贴的密钥）。"""
+    from orchestrator import provider_settings
+    running, in_use = _providers_in_use()
+    try:
+        ident = action(data, in_use=in_use)
+    except ValueError:
+        raise
+    except (TypeError, KeyError, AttributeError):
+        raise ValueError("提供方设置的格式无效") from None
+    return {**provider_settings.listing(running=running, in_use=in_use), "saved": ident}
+
+
+def providers_save(data) -> dict:
+    from orchestrator import provider_settings
+    return _provider_call(provider_settings.save, data)
+
+
+def providers_remove(data) -> dict:
+    from orchestrator import provider_settings
+    return _provider_call(provider_settings.remove, data)
+
+
+def providers_test(data) -> dict:
+    from orchestrator import provider_settings
+    try:
+        return provider_settings.connectivity(data)
+    except ValueError:
+        raise
+    except (TypeError, KeyError, AttributeError):
+        raise ValueError("请求格式无效") from None
+
+
 # ---------------------------------------------------------------- 知识库页
 
 def kb_list(mode: str) -> dict:

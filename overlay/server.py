@@ -3,7 +3,8 @@
 - GET /hud         HUD 页面（OBS 浏览器源与置顶窗口用同一个页面）
 - GET /hud/state   当前运行的统计（metrics.json）、HUD 配置与服务器时间
 - GET /console     控制台：选模式、开关、模型与推理强度，启动 / 续跑 / 暂停 / 中断运行，与沙箱里的智能体对话
-- /api/console/*   控制台的后端（overlay/console_api.py）
+- /api/console/*   控制台的后端（overlay/console_api.py）；/api/console/providers 是"管理提供方"面板
+                   （orchestrator/provider_settings.py：本机覆盖 configs/local.providers.json，密钥不回显）
 
 默认显示最近一次运行（runs/latest.txt 指向的目录），每次请求都重新读取，所以 OBS 浏览器源可以一直开着，
 换一局运行也不用刷新。主控运行时会在进程内自动启动它（端口被占用时说明已经有一个在跑，直接复用）。
@@ -147,6 +148,7 @@ def make_handler(pinned: Path | None):
                     handler = {"/api/console/status": console_api.status, "/api/console/options": console_api.options,
                                "/api/console/runs": console_api.runs, "/api/console/about": console_api.about,
                                "/api/console/prefs": console_api.load_prefs,
+                               "/api/console/providers": console_api.providers_list,
                                "/api/console/update": console_api.update_check,
                                "/api/console/kb": lambda: console_api.kb_list(query.get("mode", "speedrun")),
                                "/api/console/kb/file": lambda: console_api.kb_read(query.get("mode", "speedrun"),
@@ -259,6 +261,10 @@ def make_handler(pinned: Path | None):
                                       else 700_000 if self.path in {"/api/console/prompt/file", "/api/console/personal-prompt"} else 60000)
                     if pinned is not None:
                         raise ValueError("固定预览模式的 HUD 服务不提供控制台操作")
+                    if self.path == "/api/console/providers/test":
+                        # 连通测试只读配置、最多等 20 秒：不占用控制台操作的锁，免得其他操作跟着等
+                        self._json(200, console_api.providers_test(data), cors=False)
+                        return
                     with _wake_lock:
                         if self.path == "/api/console/start":
                             result = console_api.start(data.get("options"))
@@ -284,6 +290,10 @@ def make_handler(pinned: Path | None):
                                                           data.get("text"), data.get("mtime"))
                         elif self.path == "/api/console/update":
                             result = console_api.update_apply()
+                        elif self.path == "/api/console/providers":
+                            result = console_api.providers_save(data)
+                        elif self.path == "/api/console/providers/remove":
+                            result = console_api.providers_remove(data)
                         else:
                             raise ValueError("未知控制台接口")
                     self._json(200, result, cors=False)

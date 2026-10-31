@@ -72,6 +72,13 @@ def load_provider(name: str) -> dict:
     return merged
 
 
+def key_file_path(key_file: str) -> Path:
+    """key_file 的实际位置：展开 ~ 与环境变量；相对路径按仓库根目录算（控制台保存的密钥写成
+    configs/local.keys/<标识>.key，仓库目录整体搬走也不失效；主控本来就在仓库根目录运行）。"""
+    path = Path(os.path.expandvars(os.path.expanduser(key_file)))
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
 def load_api_key(provider: dict) -> str:
     """第三方提供方的 API 密钥：先看环境变量 key_env，再读本机 key_file（只含密钥，或 KEY=VALUE 形式的 .env）。
     密钥只在内存里传给容器，不写进任何文件、日志或命令行。"""
@@ -80,7 +87,7 @@ def load_api_key(provider: dict) -> str:
         return os.environ[env_name].strip()
     key_file = provider.get("key_file") or ""
     if key_file:
-        path = Path(os.path.expandvars(os.path.expanduser(key_file)))
+        path = key_file_path(key_file)
         if not path.is_file():
             raise SystemExit(f"找不到 {provider['name']} 的密钥文件（configs/local.providers.json 的 key_file）")
         text = path.read_text(encoding="utf-8-sig").strip()

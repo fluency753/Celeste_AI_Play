@@ -315,6 +315,57 @@
   .toast { position: fixed; right: 22px; bottom: 22px; max-width: 420px; padding: 10px 14px; border-radius: 10px; background: var(--raised);
            border: 1px solid var(--line-strong); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); z-index: 20; }
   .toast.error { border-color: rgba(224, 71, 91, 0.6); }
+
+  /* 管理提供方：运行页"执行器与提供方"旁的按钮打开的面板；左边是提供方列表，右边是表单 */
+  .field-inline { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+  dialog.sheet { width: min(1060px, calc(100vw - 32px)); max-height: calc(100vh - 40px); padding: 18px 20px 20px; border-radius: 14px;
+                 background: var(--panel); color: var(--text); border: 1px solid var(--line-strong);
+                 box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45); overflow: auto; }
+  dialog.sheet::backdrop { background: rgba(8, 10, 22, 0.66); }
+  dialog.sheet.small { width: min(540px, calc(100vw - 32px)); }
+  dialog.sheet h2 { margin: 0; font-size: 17px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  dialog.sheet h2 .aside { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .sheet-head { display: flex; align-items: flex-start; gap: 12px; }
+  .sheet-head h2 { flex: 1; }
+  .sheet-body { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 14px; }
+  @media (max-width: 780px) { .sheet-body { grid-template-columns: 1fr; } }
+  .prov-list { display: grid; gap: 4px; }
+  .prov-item { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; text-align: left; width: 100%;
+               padding: 8px 10px; border-radius: 8px; border: 1px solid transparent; background: none; cursor: pointer; }
+  .prov-item:hover { background: rgba(236, 239, 248, 0.04); }
+  .prov-item[aria-current="true"] { border-color: rgba(224, 71, 91, 0.6); background: rgba(224, 71, 91, 0.08); }
+  .prov-item b { font-weight: 500; overflow-wrap: anywhere; }
+  .prov-item small { grid-column: 1 / -1; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .prov-list .chip { justify-self: start; margin-top: 6px; }
+  .prov-list .chip[aria-current="true"] { color: var(--text); border-color: var(--red); }
+  #providerForm .field { margin-top: 10px; }
+  #providerForm .row .field { margin-top: 0; }
+  #providerForm .group-title { margin-top: 18px; }
+  #providerForm input[type=password] { width: 100%; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 8px;
+                                        padding: 7px 9px; color: var(--text); }
+  #providerForm .segmented { margin-top: 8px; }
+  .key-state { margin: 0; padding: 8px 11px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
+  .key-state.ok::before { content: "●"; color: var(--green); margin-right: 6px; }
+  .key-state.missing::before { content: "●"; color: var(--warn); margin-right: 6px; }
+  .model-head, .model-row { display: grid; grid-template-columns: 1.25fr 1fr 1.7fr 0.95fr 30px; gap: 6px; align-items: center; }
+  .model-head { color: var(--muted); font-size: 12px; margin: 2px 0 4px; }
+  .model-row { margin-bottom: 6px; }
+  .model-row input, .model-row select { padding: 5px 7px; font-size: 13px; }
+  .model-row button { width: 30px; height: 30px; padding: 0; border-radius: 8px; border: 1px solid var(--line-strong); background: none;
+                      color: var(--muted); cursor: pointer; }
+  .model-row button:hover:not(:disabled) { color: #FF9AA8; border-color: rgba(224, 71, 91, 0.55); }
+  @media (max-width: 620px) { .model-head { display: none; } .model-row { grid-template-columns: 1fr 1fr; padding-bottom: 6px; border-bottom: 1px solid var(--line); } }
+  textarea.envjson { font: 12.5px/1.55 Consolas, "Cascadia Mono", monospace; min-height: 132px; }
+  .prov-lock { margin: 0 0 12px; padding: 9px 12px; border-radius: 8px; background: rgba(91, 192, 235, 0.10); border: 1px solid rgba(91, 192, 235, 0.35); font-size: 13px; }
+  .prov-lock.error { background: rgba(224, 71, 91, 0.10); border-color: rgba(224, 71, 91, 0.4); }
+  .prov-test { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .prov-test select { width: auto; max-width: 220px; padding: 4px 7px; }
+  .prov-test .result { font-size: 13px; color: var(--muted); flex: 1; min-width: 180px; overflow-wrap: anywhere; }
+  .prov-test .result.ok { color: var(--green); }
+  .prov-test .result.bad { color: var(--warn); }
+  .launch .push { margin-left: auto; }
+  #provConfirm p { margin: 10px 0 0; }
+  #provConfirm .inline-check { display: flex; margin-top: 12px; color: var(--text); }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
@@ -356,7 +407,11 @@
     <form id="setup" autocomplete="off">
       <fieldset id="fsAgent">
         <legend>智能体与模型</legend>
-        <label class="field">执行器与提供方<select id="runtime"></select></label>
+        <div class="field-inline">
+          <label class="field">执行器与提供方<select id="runtime"></select></label>
+          <button class="btn" type="button" id="manageProviders" aria-haspopup="dialog">管理提供方</button>
+        </div>
+        <p class="hint" id="runtimeNote" hidden></p>
         <div class="row" style="margin-top:10px">
           <label class="field">模型<select id="model"><option>读取中…</option></select></label>
           <label class="field">推理强度<select id="effort"></select></label>
@@ -765,6 +820,99 @@
   </section>
 </main>
 
+<!-- ============================================================ 管理提供方（运行页"执行器与提供方"旁的按钮打开） -->
+<dialog class="sheet" id="providerDialog" aria-labelledby="providerTitle">
+  <div class="sheet-head">
+    <h2 id="providerTitle">模型提供方 <span class="aside">Claude Code 执行器经 Anthropic 兼容接口接入的第三方模型</span></h2>
+    <button class="btn small" type="button" id="providerClose">关闭</button>
+  </div>
+  <p class="hint" id="providerIntro">修改写进本机的 <code>configs/local.providers.json</code>（不入库）；入库的 <code>configs/providers.json</code> 不变，内置提供方可以随时"恢复默认"。Anthropic 订阅与 Codex 不在这里设置。保存后下一次运行生效。</p>
+  <div class="sheet-body">
+    <nav class="prov-list" aria-label="提供方列表">
+      <div id="providerList" class="prov-list"></div>
+      <button class="chip" type="button" id="providerNew">＋ 新建提供方</button>
+    </nav>
+    <form id="providerForm" autocomplete="off" novalidate>
+      <p class="prov-lock" id="providerLock" role="status" hidden></p>
+      <fieldset id="provFields">
+        <div class="row">
+          <label class="field">标识<input type="text" id="provId" maxlength="40" spellcheck="false" placeholder="例如 myprovider"></label>
+          <label class="field">显示名<input type="text" id="provLabel" maxlength="40" placeholder="下拉框里显示的名字"></label>
+        </div>
+        <p class="hint" id="provIdHint"></p>
+        <label class="field">接口地址（Anthropic 兼容接口的 base_url）<input type="text" id="provUrl" maxlength="300" spellcheck="false" placeholder="https://api.example.com/anthropic"></label>
+        <p class="hint" id="provUrlHint"></p>
+        <label class="field">追加放行域名<input type="text" id="provDomains" spellcheck="false" placeholder="可选，逗号分隔，例如 cdn.example.com"></label>
+        <p class="hint">容器防火墙只放行这些域名的 443 端口；接口地址的主机名自动放行，不用写在这里。</p>
+
+        <div class="group-title">API 密钥</div>
+        <p class="key-state" id="provKeyState" role="status"></p>
+        <div class="segmented" role="radiogroup" aria-label="密钥的设置方式" id="provKeyModes">
+          <button type="button" role="radio" data-keymode="keep" aria-checked="true">保留现有</button>
+          <button type="button" role="radio" data-keymode="file" aria-checked="false">密钥文件路径</button>
+          <button type="button" role="radio" data-keymode="paste" aria-checked="false">粘贴密钥</button>
+        </div>
+        <label class="field" id="provKeyFileField" hidden>密钥文件路径<input type="text" id="provKeyFile" maxlength="400" spellcheck="false" placeholder="例如 C:\Users\你\secrets\deepseek.key"></label>
+        <label class="field" id="provKeyValueField" hidden>粘贴密钥<input type="password" id="provKeyValue" maxlength="4096" autocomplete="new-password" spellcheck="false" placeholder="保存后不再显示"></label>
+        <p class="hint" id="provKeyHint"></p>
+        <label class="field">环境变量名（设了这个环境变量时优先用它）<input type="text" id="provKeyEnv" maxlength="64" spellcheck="false"></label>
+
+        <div class="group-title">模型</div>
+        <div class="model-head" aria-hidden="true"><span>模型标识</span><span>显示名</span><span>可选推理强度</span><span>默认强度</span><span></span></div>
+        <div id="provModels"></div>
+        <div class="presets"><button type="button" class="chip" id="provAddModel">＋ 添加模型</button></div>
+        <p class="hint">模型标识按平台文档填写（传给 Claude Code 的模型名）。推理强度用逗号分隔，默认 low, medium, high, xhigh, max（与 deepseek 相同），按平台实际支持的档位填写。</p>
+
+        <details class="more" id="provAdvanced" style="margin-top:14px">
+          <summary>高级</summary>
+          <div class="row">
+            <label class="field">模型名后缀<input type="text" id="provSuffix" maxlength="12" spellcheck="false" placeholder="空，或例如 [1m]"></label>
+            <label class="field">自动压缩窗口<input type="text" id="provCompact" maxlength="10" spellcheck="false" placeholder="空、auto 或 100000～1000000"></label>
+          </div>
+          <p class="hint">后缀 [1m] 让 Claude Code 按 100 万 token 的上下文压缩（deepseek 用的是 [1m] 与 786432）。</p>
+          <label class="field">env：传给容器里 Claude Code 的模型槽位等环境变量（JSON 对象）<textarea class="envjson" id="provEnv" spellcheck="false"></textarea></label>
+          <p class="hint"><code>{model}</code> 是带后缀的模型名，<code>{model_base}</code> 不带后缀。密钥与接口地址由主控设置，不能写在这里。
+            <button type="button" class="chip" id="provEnvDefault">换成默认写法</button></p>
+          <label class="field">网关检查地址（可选，本机网关用）<input type="text" id="provGateway" maxlength="300" spellcheck="false" placeholder="例如 http://127.0.0.1:4000/health"></label>
+          <p class="hint">主控开跑前在主机上访问这个地址，连不上就不开跑。</p>
+          <div class="switches" style="margin-top:6px">
+            <label class="switch wide"><span class="text"><b>支持图片</b><span>关掉后观测里不附截图（只支持文字的模型）；观测里另有字符地图与精确数据</span></span><input type="checkbox" id="provImages"></label>
+          </div>
+          <p class="hint" id="provExtra" hidden></p>
+        </details>
+
+        <div class="group-title">状态</div>
+        <div class="switches">
+          <label class="switch wide"><span class="text"><b>已实测可用</b><span id="provStatusNote"></span></span><input type="checkbox" id="provReady"></label>
+        </div>
+      </fieldset>
+      <div class="prov-test">
+        <button class="btn small blue" type="button" id="provTest">连通测试</button>
+        <select id="provTestModel" aria-label="测试用的模型"></select>
+        <span class="result" id="provTestResult" role="status">用已保存的接口地址与密钥，在本机发一个最小的请求（max_tokens 8）。</span>
+        <button class="btn small" type="button" id="provMarkReady" hidden>标为已实测</button>
+      </div>
+      <div class="launch">
+        <button class="btn primary" type="submit" id="provSave">保存</button>
+        <button class="btn" type="button" id="provRevert">放弃修改</button>
+        <span class="note" id="provNote"></span>
+        <button class="btn danger push" type="button" id="provRemove">删除</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="sheet small" id="provConfirm" aria-labelledby="provConfirmTitle">
+  <h2 id="provConfirmTitle"></h2>
+  <div id="provConfirmBody"></div>
+  <label class="inline-check" id="provConfirmKeepRow"><input type="checkbox" id="provConfirmKeep"> <span>保留密钥设置（key_file、key_env），只恢复其他设置</span></label>
+  <label class="inline-check" id="provConfirmDeleteRow"><input type="checkbox" id="provConfirmDelete"> <span id="provConfirmDeleteText"></span></label>
+  <div class="launch">
+    <button class="btn danger" type="button" id="provConfirmOk"></button>
+    <button class="btn" type="button" id="provConfirmCancel">取消</button>
+  </div>
+</dialog>
+
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script>
@@ -910,9 +1058,8 @@ function markdown(src, base = "") {
 
 async function loadOptions() {
   const o = ui.options = await getJSON("/api/console/options");
-  const runtime = $("runtime");
-  runtime.replaceChildren(...o.runtimes.map(r => new Option(r.label, r.id)));
-  runtime.value = o.runtimes.some(r => r.id === "claude:anthropic") ? "claude:anthropic" : (o.runtimes[0] || {}).id;
+  fillRuntimes(o.runtimes, "claude:anthropic");
+  ui.prov.lastRuntime = $("runtime").value;
   const d = o.defaults;
   $("maxMinutes").value = d.max_minutes;
   $("agent").value = (o.deploy && o.deploy.agent) || "";
@@ -2001,6 +2148,370 @@ function confirmLeave() {
   return confirm("当前文件的修改还没保存，放弃修改？");
 }
 
+// ---------------------------------------------------------------- 管理提供方（Claude Code 执行器的第三方提供方）
+// 后端是 /api/console/providers（orchestrator/provider_settings.py）：密钥只回传"已配置、来源、末尾 4 位"，
+// 粘贴的密钥只在保存请求里发一次，保存后输入框清空；表单里不保留、不显示密钥。
+
+const PROV_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$/;
+ui.prov = { data: null, current: null, isNew: false, keyMode: "keep", baseline: "", busy: false, lastRuntime: "" };
+
+function fillRuntimes(list, keep) {
+  const sel = $("runtime"), previous = keep === undefined ? sel.value : keep;
+  sel.replaceChildren(...list.map(r => new Option(r.label, r.id)));
+  sel.value = list.some(r => r.id === previous) ? previous
+    : list.some(r => r.id === "claude:anthropic") ? "claude:anthropic" : (list[0] || {}).id;
+  if (ui.options) ui.options.runtimes = list;
+  updateRuntimeNote();
+}
+
+function updateRuntimeNote() {
+  const list = (ui.options && ui.options.runtimes) || [];
+  const r = list.find(x => x.id === $("runtime").value);
+  const note = $("runtimeNote");
+  note.hidden = !r || !r.status || r.status === "ready";
+  if (!note.hidden) note.textContent = `${r.label}：${r.status}。主控开跑前会提示；可在"管理提供方"里做连通测试后标为已实测。`;
+}
+
+function provById(id) { return ((ui.prov.data && ui.prov.data.providers) || []).find(p => p.id === id) || null; }
+
+async function openProviders() {
+  const dialog = $("providerDialog");
+  if (!dialog.open) { if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", ""); }
+  const [engine, provider] = ($("runtime").value || "").split(":");
+  await loadProviders(engine === "claude" && provider !== "anthropic" ? provider : undefined);
+}
+
+function closeProviders() {
+  if (provDirty() && !confirm("提供方的修改还没保存，放弃修改并关闭？")) return;
+  ui.prov.baseline = provSnapshot();   // 关掉时丢弃草稿
+  $("provKeyValue").value = "";
+  const dialog = $("providerDialog");
+  if (dialog.close) dialog.close(); else dialog.removeAttribute("open");
+}
+
+async function loadProviders(select) {
+  try {
+    ui.prov.data = await getJSON("/api/console/providers");
+  } catch (e) { toast("读取提供方失败：" + e.message, true); return; }
+  if (ui.prov.data.runtimes) { fillRuntimes(ui.prov.data.runtimes); await afterProvidersChanged(null); }
+  renderProviderList();
+  const want = select !== undefined ? select : ui.prov.isNew ? null : ui.prov.current;
+  const target = want && provById(want) ? want : ((ui.prov.data.providers || [])[0] || {}).id;
+  if (target) selectProvider(target, true); else newProvider(true);
+}
+
+function renderProviderList() {
+  const list = (ui.prov.data && ui.prov.data.providers) || [];
+  $("providerList").replaceChildren(...list.map(p => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "prov-item";
+    b.setAttribute("aria-current", String(!ui.prov.isNew && p.id === ui.prov.current));
+    const name = document.createElement("b"); name.textContent = p.label;
+    const tag = document.createElement("span");
+    tag.className = "tag" + (p.ready ? " ok" : " gold"); tag.textContent = p.ready ? "已实测" : "未实测";
+    const meta = document.createElement("small");
+    meta.textContent = `${p.id} · ${p.builtin ? (p.overridden ? "内置，有本机修改" : "内置") : "自建"}` + (p.in_use ? " · 运行中" : "");
+    b.append(name, tag, meta);
+    b.addEventListener("click", () => selectProvider(p.id));
+    return b;
+  }));
+  $("providerNew").setAttribute("aria-current", String(ui.prov.isNew));
+  $("providerNew").disabled = !!(ui.prov.data && (ui.prov.data.locked_all || ui.prov.data.local_error));
+}
+
+function selectProvider(id, force = false) {
+  if (!force && provDirty() && !confirm("当前提供方的修改还没保存，放弃修改？")) return;
+  const p = provById(id);
+  if (!p) return;
+  ui.prov.current = id; ui.prov.isNew = false;
+  fillProviderForm(p);
+}
+
+function newProvider(force = false) {
+  if (!force && provDirty() && !confirm("当前提供方的修改还没保存，放弃修改？")) return;
+  const d = (ui.prov.data && ui.prov.data.defaults) || {};
+  ui.prov.current = null; ui.prov.isNew = true;
+  fillProviderForm({
+    id: "", label: "", builtin: false, overridden: false, base_url: "", auto_domain: null, extra_domains: [], allowed_host_ports: [],
+    key_env: "", key_file: "", key_saved_by_console: false, key: { configured: false, text: "未配置", tail: "" },
+    models: [{ id: "", label: "", efforts: d.efforts || ["low", "medium", "high", "xhigh", "max"], default_effort: "" }],
+    model_suffix: "", autocompact: "", env: d.env || {}, env_hidden: [], unknown_fields: [], local_fields: [],
+    images: true, status: d.status || "未实测", ready: false, gateway_check: "", in_use: false,
+  });
+}
+
+function fillProviderForm(p) {
+  const data = ui.prov.data || {};
+  renderProviderList();
+  $("provId").value = p.id; $("provId").disabled = !ui.prov.isNew;
+  $("provKeyEnv").dataset.touched = "";
+  $("provIdHint").textContent = ui.prov.isNew
+    ? "标识用于命令行 --provider 与密钥文件名：只能用字母、数字、点、下划线与连字符，不能用 anthropic、codex；保存后不能改。"
+    : p.builtin ? "内置提供方：标识不能改；这里改的设置写进本机覆盖，入库的 configs/providers.json 不变。"
+                : "自建提供方：标识保存后不能改（要换标识就新建一个，再删掉这个）。";
+  $("provLabel").value = p.label;
+  $("provUrl").value = p.base_url;
+  $("provDomains").value = (p.extra_domains || []).join(", ");
+  $("provKeyEnv").value = p.key_env || "";
+  $("provKeyFile").value = p.key_file && !p.key_saved_by_console ? p.key_file : "";
+  $("provKeyValue").value = "";
+  setKeyState(p);
+  setKeyMode(ui.prov.isNew ? "paste" : "keep");
+  $("provModels").replaceChildren();
+  for (const m of p.models || []) addModelRow(m);
+  if (!(p.models || []).length) addModelRow();
+  $("provSuffix").value = p.model_suffix || "";
+  $("provCompact").value = p.autocompact || "";
+  $("provEnv").value = JSON.stringify(p.env || {}, null, 2);
+  $("provGateway").value = p.gateway_check || "";
+  $("provImages").checked = p.images !== false;
+  $("provReady").checked = !!p.ready;
+  const extra = [];
+  if ((p.unknown_fields || []).length) extra.push(`本机覆盖里这一项还有表单不管的字段：${p.unknown_fields.join("、")}，保存时原样保留。`);
+  if ((p.env_hidden || []).length) extra.push(`env 里还有 ${p.env_hidden.length} 个凭据类变量（${p.env_hidden.join("、")}）不在表单里显示，保存时原样保留。`);
+  $("provExtra").textContent = extra.join(" "); $("provExtra").hidden = !extra.length;
+  $("provStatusNote").textContent = p.ready ? "主控开跑前不再提示"
+    : `现在是"${p.status}"：主控开跑前会提示"注意：模型提供方 ${p.label || p.id || "…"} ${p.status}"。连通测试通过后可以勾选`;
+  // 运行中正在用的提供方、或读不出本机覆盖文件时不能改
+  const locked = !!(p.in_use || data.locked_all || data.local_error);
+  const lock = $("providerLock");
+  lock.hidden = !locked; lock.classList.toggle("error", !!data.local_error);
+  lock.textContent = data.local_error ? data.local_error
+    : data.locked_all ? "有主控在运行，读不到它用的是哪个提供方：等运行结束再修改。连通测试照样可以做。"
+    : p.in_use ? `有主控正在用 ${p.id} 运行：等运行结束再修改它的设置。连通测试照样可以做。` : "";
+  $("provFields").disabled = locked;
+  $("provSave").disabled = locked;
+  $("provRevert").disabled = false;
+  $("provRemove").hidden = ui.prov.isNew;
+  $("provRemove").textContent = p.builtin ? "恢复默认" : "删除";
+  $("provRemove").disabled = locked || (p.builtin && !p.overridden);
+  $("provRemove").title = p.builtin && !p.overridden ? "没有本机修改，已经是默认设置" : "";
+  $("provTest").disabled = ui.prov.isNew;
+  $("provTestModel").replaceChildren(...(p.models || []).filter(m => m.id).map(m => new Option(m.label || m.id, m.id)));
+  $("provTestModel").disabled = ui.prov.isNew;
+  $("provTestResult").className = "result";
+  $("provTestResult").textContent = ui.prov.isNew ? "保存之后才能做连通测试。"
+    : "用已保存的接口地址与密钥，在本机发一个最小的请求（max_tokens 8）。";
+  $("provMarkReady").hidden = true;
+  $("provNote").textContent = "";
+  updateUrlHint();
+  ui.prov.baseline = provSnapshot();
+}
+
+function setKeyState(p) {
+  const k = p.key || {}, el = $("provKeyState");
+  el.className = "key-state " + (k.configured ? "ok" : "missing");
+  el.textContent = k.configured ? `已配置（来源：${k.text}）` + (k.tail ? `，末尾 ${k.tail}` : "") : (k.text || "未配置");
+}
+
+function setKeyMode(mode) {
+  ui.prov.keyMode = mode;
+  document.querySelectorAll("[data-keymode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.keymode === mode)));
+  const keep = document.querySelector('[data-keymode="keep"]');
+  keep.textContent = ui.prov.isNew ? "暂不设置" : "保留现有";
+  $("provKeyFileField").hidden = mode !== "file";
+  $("provKeyValueField").hidden = mode !== "paste";
+  if (mode !== "paste") $("provKeyValue").value = "";
+  const dir = (ui.prov.data && ui.prov.data.keys_dir) || "configs/local.keys";
+  $("provKeyHint").textContent = mode === "file"
+    ? "适合已有的密钥文件（只有密钥一行，或 KEY=VALUE 形式）：文件留在原处，只记下路径。留空 = 不用文件，只用环境变量。"
+    : mode === "paste"
+      ? `保存到本机的 ${dir}/<标识>.key（不入库，尽量只让当前用户可读），key_file 指向它。保存后输入框清空，界面只显示末尾 4 位。`
+      : ui.prov.isNew ? "之后再设置：可以设环境变量，或回来粘贴密钥、填密钥文件路径。" : "密钥设置不变。";
+}
+
+function addModelRow(m = {}) {
+  const d = (ui.prov.data && ui.prov.data.defaults) || {};
+  const row = document.createElement("div");
+  row.className = "model-row";
+  row.innerHTML = '<input type="text" class="m-id" maxlength="100" spellcheck="false" placeholder="模型标识" aria-label="模型标识">'
+    + '<input type="text" class="m-label" maxlength="60" placeholder="可选" aria-label="显示名">'
+    + '<input type="text" class="m-efforts" spellcheck="false" aria-label="可选推理强度（逗号分隔）">'
+    + '<select class="m-default" aria-label="默认推理强度"></select>'
+    + '<button type="button" class="m-remove" title="删掉这个模型" aria-label="删掉这个模型">×</button>';
+  row.querySelector(".m-id").value = m.id || "";
+  row.querySelector(".m-label").value = m.label || "";
+  row.querySelector(".m-efforts").value = (m.efforts && m.efforts.length ? m.efforts : d.efforts || []).join(", ");
+  const sync = () => {
+    const sel = row.querySelector(".m-default"), previous = sel.value || m.default_effort || "";
+    const efforts = splitList(row.querySelector(".m-efforts").value);
+    sel.replaceChildren(new Option("自动", ""), ...efforts.map(e => new Option(e, e)));
+    sel.value = efforts.includes(previous) ? previous : "";
+  };
+  row.querySelector(".m-efforts").addEventListener("input", sync);
+  row.querySelector(".m-remove").addEventListener("click", () => {
+    if ($("provModels").children.length <= 1) { toast("至少要有一个模型", true); return; }
+    row.remove(); updateProvNote();
+  });
+  $("provModels").append(row);
+  sync();
+  row.querySelector(".m-default").value = (m.efforts || []).includes(m.default_effort) ? m.default_effort : "";
+  return row;
+}
+
+function splitList(text) { return (text || "").split(/[\s,，;；]+/).map(s => s.trim()).filter(Boolean); }
+
+function updateUrlHint() {
+  const text = $("provUrl").value.trim(), el = $("provUrlHint");
+  let hint = "Anthropic 兼容接口的地址，要求 https（例如 https://api.deepseek.com/anthropic）；本机网关可写 http://localhost:端口。";
+  const local = text.match(/^http:\/\/(localhost|127\.0\.0\.1|host\.docker\.internal):(\d{1,5})(\/.*)?$/i);
+  const remote = text.match(/^https:\/\/([^/:?#@]+)/i);
+  if (local) hint = `本机网关：容器里换成 http://host.docker.internal:${local[2]}${(local[3] || "").replace(/\/+$/, "")}，防火墙放行宿主机的 ${local[2]} 端口（allowed_host_ports）。`;
+  else if (remote) hint = `容器防火墙自动放行 ${remote[1].toLowerCase()} 的 443 端口。`;
+  else if (/^http:\/\//i.test(text)) hint = "http 只能用于本机网关（localhost、127.0.0.1 或 host.docker.internal 加端口）；其他接口请用 https。";
+  el.textContent = hint;
+}
+
+function provPayload() {
+  const models = [...$("provModels").children].map(row => {
+    const m = { id: row.querySelector(".m-id").value.trim(), efforts: splitList(row.querySelector(".m-efforts").value) };
+    const label = row.querySelector(".m-label").value.trim(), def = row.querySelector(".m-default").value;
+    if (label) m.label = label;
+    if (def) m.default_effort = def;
+    return m;
+  });
+  let env;
+  try { env = JSON.parse($("provEnv").value || "{}"); } catch (e) { env = undefined; }
+  const key = { mode: ui.prov.keyMode };
+  if (ui.prov.keyMode === "file") key.file = $("provKeyFile").value.trim();
+  return {
+    id: ui.prov.isNew ? $("provId").value.trim() : ui.prov.current, create: ui.prov.isNew,
+    version: (ui.prov.data && ui.prov.data.version) || "missing",
+    label: $("provLabel").value.trim(), base_url: $("provUrl").value.trim(), extra_domains: splitList($("provDomains").value),
+    key, key_env: $("provKeyEnv").value.trim(), models, model_suffix: $("provSuffix").value.trim(),
+    autocompact: $("provCompact").value.trim(), env, images: $("provImages").checked, ready: $("provReady").checked,
+    gateway_check: $("provGateway").value.trim(),
+  };
+}
+
+// 比较草稿用的快照：不含粘贴的密钥（密钥栏单独看是否为空）
+function provSnapshot() { const p = provPayload(); delete p.version; return JSON.stringify(p) + "|" + $("provEnv").value; }
+function provDirty() {
+  const dialog = $("providerDialog");
+  return !!(dialog.open && (provSnapshot() !== ui.prov.baseline || $("provKeyValue").value));
+}
+function updateProvNote() { $("provNote").textContent = provDirty() ? "有未保存的修改" : ""; }
+
+function checkProvForm(body) {
+  if (body.create && !PROV_ID.test(body.id)) return "标识只能用字母、数字、点、下划线与连字符，以字母或数字开头，最多 40 个字符";
+  if (body.create && ["anthropic", "codex"].includes(body.id.toLowerCase())) return "标识不能用 anthropic 或 codex";
+  if (!body.base_url) return "请填写接口地址";
+  if (body.env === undefined || typeof body.env !== "object" || Array.isArray(body.env) || body.env === null) return "env 须为 JSON 对象，例如 {\"API_TIMEOUT_MS\": \"600000\"}";
+  if (!body.models.length || body.models.some(m => !m.id)) return "每个模型都要填模型标识";
+  if (body.models.some(m => !m.efforts.length)) return "每个模型至少要有一个推理强度";
+  if (body.key.mode === "paste" && !$("provKeyValue").value.trim()) return `请粘贴密钥，或换成「${ui.prov.isNew ? "暂不设置" : "保留现有"}」`;
+  return "";
+}
+
+async function saveProvider(event) {
+  if (event) event.preventDefault();
+  if (ui.prov.busy) return;
+  const body = provPayload();
+  const problem = checkProvForm(body);
+  if (problem) { toast(problem, true); return; }
+  if (body.key.mode === "paste") body.key.value = $("provKeyValue").value.trim();
+  ui.prov.busy = true; $("provSave").disabled = true;
+  try {
+    const result = await postJSON("/api/console/providers", body);
+    delete body.key.value;
+    $("provKeyValue").value = "";
+    ui.prov.data = result;
+    if (result.runtimes) fillRuntimes(result.runtimes);
+    ui.prov.isNew = false; ui.prov.current = result.saved;
+    renderProviderList();
+    selectProvider(result.saved, true);
+    toast(`已保存 ${result.saved}：下一次运行生效。`);
+    await afterProvidersChanged(result.saved);
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    ui.prov.busy = false;
+    const p = provById(ui.prov.current);
+    $("provSave").disabled = !!(ui.prov.data && (ui.prov.data.locked_all || ui.prov.data.local_error)) || !!(p && p.in_use);
+  }
+}
+
+// 保存或删除之后：下拉框已按返回的列表重建；选中的正是改动的提供方（或它没了）时重新读模型列表，并刷新命令预览
+async function afterProvidersChanged(ident) {
+  const [engine, provider] = ($("runtime").value || "").split(":");
+  const moved = ui.prov.lastRuntime !== $("runtime").value;      // 选中的提供方被删掉了，下拉框换回了默认
+  if (moved || (engine === "claude" && provider === ident)) await loadModels();
+  ui.prov.lastRuntime = $("runtime").value;
+  updateRuntimeNote();
+  schedulePreview();
+}
+
+function removeProvider() {
+  const p = provById(ui.prov.current);
+  if (!p) return;
+  const file = (ui.prov.data && ui.prov.data.local_file) || "configs/local.providers.json";
+  const body = $("provConfirmBody");
+  const para = (text) => { const el = document.createElement("p"); el.textContent = text; return el; };
+  $("provConfirmTitle").textContent = p.builtin ? `把 ${p.label}（${p.id}）恢复默认？` : `删除提供方 ${p.label}（${p.id}）？`;
+  const keyFields = (p.local_fields || []).filter(f => f === "key_file" || f === "key_env");
+  const other = (p.local_fields || []).filter(f => f !== "key_file" && f !== "key_env");
+  if (p.builtin) {
+    body.replaceChildren(
+      para(`会删掉本机 ${file} 里 ${p.id} 这一项${other.length ? "的这些字段：" + other.join("、") : ""}，恢复成入库的 configs/providers.json 里的设置。`),
+      para(keyFields.length ? `本机覆盖里的密钥设置（${keyFields.join("、")}）是否保留，用下面的勾选决定。`
+                            : "本机覆盖里没有密钥设置（密钥来自环境变量，或没有配置），不受影响。"));
+  } else {
+    body.replaceChildren(para(`会从本机 ${file} 删掉 ${p.id} 这一项（接口地址、放行域名、模型列表、密钥设置等全部设置），下拉框里不再有它。`));
+  }
+  const keepRow = $("provConfirmKeepRow"), delRow = $("provConfirmDeleteRow");
+  keepRow.hidden = !(p.builtin && keyFields.length);
+  $("provConfirmKeep").checked = keepRow.hidden ? false : true;
+  const syncDelete = () => {
+    const keep = !keepRow.hidden && $("provConfirmKeep").checked;
+    delRow.hidden = keep || !p.key_saved_by_console || !p.local_fields.includes("key_file");
+    $("provConfirmDelete").checked = false;
+    $("provConfirmDeleteText").textContent = `同时删除控制台保存的密钥文件（${(ui.prov.data && ui.prov.data.keys_dir) || "configs/local.keys"}/${p.id}.key）；不勾选时文件留在本机`;
+    $("provConfirmNote") && $("provConfirmNote").remove();
+    if (!keep && p.key_file && !p.key_saved_by_console && p.local_fields.includes("key_file")) {
+      const note = para(`你自己的密钥文件（${p.key_file}）不会被删除，只是不再记它的路径。`);
+      note.id = "provConfirmNote"; note.className = "hint"; body.append(note);
+    }
+  };
+  $("provConfirmKeep").onchange = syncDelete;
+  syncDelete();
+  $("provConfirmOk").textContent = p.builtin ? "恢复默认" : "删除";
+  $("provConfirmOk").onclick = async () => {
+    const request = { id: p.id, version: (ui.prov.data && ui.prov.data.version) || "missing",
+                      keep_key: !keepRow.hidden && $("provConfirmKeep").checked,
+                      delete_key_file: !delRow.hidden && $("provConfirmDelete").checked };
+    try {
+      const result = await postJSON("/api/console/providers/remove", request);
+      $("provConfirm").close();
+      ui.prov.data = result;
+      if (result.runtimes) fillRuntimes(result.runtimes);
+      ui.prov.baseline = provSnapshot();
+      const target = provById(p.id) ? p.id : ((result.providers || [])[0] || {}).id;
+      renderProviderList();
+      if (target) selectProvider(target, true); else newProvider(true);
+      toast(p.builtin ? `${p.id} 已恢复默认。` : `已删除 ${p.id}。`);
+      await afterProvidersChanged(p.id);
+    } catch (e) { toast(e.message, true); }
+  };
+  $("provConfirm").showModal();
+}
+
+async function testProvider() {
+  if (ui.prov.isNew || !ui.prov.current) return;
+  if (provDirty()) { toast("先保存修改再测试：连通测试用的是已保存的接口地址与密钥", true); return; }
+  const el = $("provTestResult");
+  el.className = "result"; el.textContent = "测试中…";
+  $("provTest").disabled = true; $("provMarkReady").hidden = true;
+  try {
+    const r = await postJSON("/api/console/providers/test", { id: ui.prov.current, model: $("provTestModel").value });
+    el.className = "result " + (r.ok ? "ok" : "bad");
+    el.textContent = (r.ok ? "成功" : "失败") + (r.status ? `（HTTP ${r.status}）` : "") + `：${r.reason}` + (r.elapsed_ms != null ? `，${r.elapsed_ms} 毫秒` : "");
+    const p = provById(ui.prov.current);
+    $("provMarkReady").hidden = !(r.ok && p && !p.ready && !p.in_use && !(ui.prov.data || {}).locked_all);
+  } catch (e) {
+    el.className = "result bad"; el.textContent = e.message;
+  } finally { $("provTest").disabled = false; }
+}
+
 function closePromptEditor() {
   if (ui.promptFile && ui.promptFile.dirty && !confirmLeave()) return false;
   ui.promptFile = null;
@@ -2139,7 +2650,35 @@ document.querySelectorAll("[data-pmode]").forEach(b => b.addEventListener("click
   setMode(b.dataset.pmode);
 }));
 document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => setKbView(b.dataset.view)));
-$("runtime").addEventListener("change", async () => { $("agent").value = ""; await loadModels(); schedulePreview(); });
+$("runtime").addEventListener("change", async () => { $("agent").value = ""; ui.prov.lastRuntime = $("runtime").value; updateRuntimeNote(); await loadModels(); schedulePreview(); });
+$("manageProviders").addEventListener("click", openProviders);
+$("providerClose").addEventListener("click", closeProviders);
+$("providerDialog").addEventListener("cancel", (e) => { e.preventDefault(); closeProviders(); });   // Esc 也先问有没有没保存的修改
+$("providerNew").addEventListener("click", () => newProvider());
+document.querySelectorAll("[data-keymode]").forEach(b => b.addEventListener("click", () => { setKeyMode(b.dataset.keymode); updateProvNote(); }));
+$("provAddModel").addEventListener("click", () => { addModelRow().querySelector(".m-id").focus(); updateProvNote(); });
+$("provEnvDefault").addEventListener("click", () => {
+  $("provEnv").value = JSON.stringify(((ui.prov.data || {}).defaults || {}).env || {}, null, 2); updateProvNote();
+});
+$("provUrl").addEventListener("input", updateUrlHint);
+$("provKeyEnv").addEventListener("input", () => { $("provKeyEnv").dataset.touched = "1"; });
+$("provId").addEventListener("input", () => {   // 新建时按标识给出默认的环境变量名（与部署向导相同：标识大写 + _API_KEY）
+  if (!ui.prov.isNew || $("provKeyEnv").dataset.touched) return;
+  const id = $("provId").value.trim();
+  let name = id ? id.toUpperCase().replace(/[^A-Z0-9_]/g, "_") + "_API_KEY" : "";
+  if (/^[0-9]/.test(name)) name = "P_" + name;
+  $("provKeyEnv").value = /^(CLAUDE|ANTHROPIC)/.test(name) ? "" : name;
+});
+$("providerForm").addEventListener("input", updateProvNote);
+$("providerForm").addEventListener("change", updateProvNote);
+$("providerForm").addEventListener("submit", saveProvider);
+$("provRevert").addEventListener("click", () => {
+  if (ui.prov.isNew) newProvider(true); else selectProvider(ui.prov.current, true);
+});
+$("provRemove").addEventListener("click", removeProvider);
+$("provTest").addEventListener("click", testProvider);
+$("provMarkReady").addEventListener("click", () => { $("provReady").checked = true; saveProvider(); });
+$("provConfirmCancel").addEventListener("click", () => $("provConfirm").close());
 $("model").addEventListener("change", () => { fillEfforts(); schedulePreview(); });
 $("live").addEventListener("change", onLive);
 $("hudMod").addEventListener("change", () => { ui.hudTouched = true; onLive(); });
@@ -2236,7 +2775,7 @@ $("releaseGame").addEventListener("click", releaseGame);
 $("resumeLatest").addEventListener("click", () => resumeRun());
 $("launchDismiss").addEventListener("click", () => { $("launchBanner").hidden = true; ui.dismissedLaunch = ui.status && ui.status.orchestrator.launched_wall; });
 window.addEventListener("beforeunload", (e) => {
-  if ((ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty) || [...personalDrafts.values()].some(draft => draft.text !== draft.saved)) { e.preventDefault(); e.returnValue = ""; }
+  if ((ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty) || provDirty() || [...personalDrafts.values()].some(draft => draft.text !== draft.saved)) { e.preventDefault(); e.returnValue = ""; }
 });
 
 // 危险操作点两次：第一次只把按钮换成确认文字，3 秒内再点才执行

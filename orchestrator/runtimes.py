@@ -28,12 +28,21 @@ class Runtime:
     def providers(self):
         if self.engine == 'codex':
             return [{'id':'codex','label':self.label}]
+        from . import config as _config  # 按模块属性取路径：测试可以换成临时目录
         names = set()
-        for path in (REPO_ROOT / 'configs/providers.json', REPO_ROOT / 'configs/local.providers.json'):
-            if path.exists():
-                names.update(k for k,v in json.loads(path.read_text(encoding='utf-8-sig')).items()
-                             if not k.startswith('_') and isinstance(v,dict))
-        return [{'id':name,'label':load_provider(name).get('label',name)} for name in sorted(names)]
+        for path in (_config.PROVIDERS, _config.LOCAL_PROVIDERS):
+            try:
+                data = json.loads(path.read_text(encoding='utf-8-sig'))
+            except (OSError, ValueError):
+                continue   # 与 load_provider 相同：读不出的文件跳过（本机覆盖手改坏了也不至于整个下拉框读不出来）
+            if isinstance(data, dict):
+                names.update(k for k,v in data.items() if not k.startswith('_') and isinstance(v,dict))
+        rows = []
+        for name in sorted(names):
+            info = load_provider(name)
+            # status 不是 ready：尚未实测（控制台在下拉框下面提示，主控开跑前也会提示）
+            rows.append({'id':name, 'label':info.get('label',name), 'status':str(info.get('status') or 'ready')})
+        return rows
 
     def configure(self, cfg, provider=None):
         cfg.engine = self.engine
@@ -125,7 +134,7 @@ def runtime(engine):
 
 def configured_runtimes():
     return [{'id':adapter.engine+':'+provider['id'], 'engine':adapter.engine, 'provider':provider['id'],
-             'label':adapter.label+' · '+provider['label'], 'fast':adapter.fast}
+             'label':adapter.label+' · '+provider['label'], 'fast':adapter.fast, 'status':provider.get('status', 'ready')}
             for adapter in RUNTIMES.values() for provider in adapter.providers()]
 
 
