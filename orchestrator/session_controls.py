@@ -126,7 +126,7 @@ class SessionControls:
         if completed and notes is not None:
             resend = notes.compacted(ident if reminder_key is None else reminder_key)
         from .telemetry import publish
-        done = '上下文压缩完成。' + ('局间留言原文会随下一次提醒重发给智能体。' if resend else '')
+        done = '上下文压缩完成。' + ('局间留言原文会在智能体压缩后的第一次工具调用时重发给它。' if resend else '')
         publish(self.run_dir, 'system:compaction:' + str(ident),
                 done if completed else '正在压缩上下文，完成后继续处理对话…',
                 role='system', kind='系统')

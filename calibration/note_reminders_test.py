@@ -361,7 +361,7 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('（用户留言）\n9A 留言：新机制先建模', text)
             self.assertEqual(runner.note_reminders.peek(), ())
             events = (runner.run_dir / 'public_events.jsonl').read_text(encoding='utf-8')
-            self.assertIn('局间留言原文会随下一次提醒重发', events)
+            self.assertIn('局间留言原文会在智能体压缩后的第一次工具调用时重发', events)
         with runner_fixture('claude') as (runner, session, notes):
             claude_compaction(runner, 'c1')
             self.assertEqual([key[0] for key, _ in runner.note_reminders.peek()], ['after'])
