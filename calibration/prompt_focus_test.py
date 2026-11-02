@@ -59,7 +59,11 @@ class PromptFocusTests(unittest.TestCase):
         labels = [p.label for p in prompt_parts(self.cfg)]
         self.assertNotIn('剧情模式说明（有剧情工具时自动加）', labels)
         self.assertEqual(text.count('当前为 agent 剧情模式'), 1)
-        self.assertIn('主控才确认整章完成', text)
+        self.assertIn('返回选章地图，等待主控确认整章完成', text)
+        self.assertNotIn('menu.current=OuiChapterSelect', text)
+        self.assertNotIn('有额度的预测', text)
+        self.assertNotIn('速通仍须先推演整房路线', text)
+        self.assertIn('压缩或遗忘后按需补查', runtime_prompt(self.cfg))
         self.assertIn('组织方式由你决定', text)
         auto = play_prompt(replace(self.cfg, cutscene_mode='auto'))
         self.assertNotIn('当前为 agent 剧情模式', auto)
@@ -67,6 +71,12 @@ class PromptFocusTests(unittest.TestCase):
         reference = (REPO_ROOT/'kb/explore/help/actions.md').read_text(encoding='utf-8')
         for fact in ('input_cursor.next', 'remaining_inputs', '原格式', '松键', 'LRUDJKXCZVG'):
             self.assertIn(fact, reference)
+
+        # 整房推演属于启用模拟器的速通要求，不由共享房间分析施加。
+        for sim in (False, True):
+            speedrun = play_prompt(replace(self.cfg, mode='speedrun', knowledge_profile='full', sim=sim))
+            self.assertEqual('整个房间在模拟器里推演到出口，再动手' in speedrun, sim)
+            self.assertNotIn('速通仍须先推演整房路线', speedrun)
 
     def test_actual_tool_and_observation_use_configured_frames_without_guide_copy(self):
         from calibration.workspace_observation_test import game_session
