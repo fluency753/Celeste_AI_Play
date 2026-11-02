@@ -41,7 +41,7 @@
   a { color: var(--blue); }
 
   /* 顶栏：标题、四个页面、三盏状态灯（游戏、OBS、主控） */
-  header {
+  body > header {
     position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px 18px; flex-wrap: wrap;
     padding: 0 22px; min-height: 56px; background: rgba(20, 23, 41, 0.94); border-bottom: 1px solid var(--line);
     backdrop-filter: blur(6px);
@@ -91,7 +91,7 @@
   @media (max-width: 1240px) { #page-run { grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr); } #chatPane { grid-column: 2; } #runPane { grid-row: span 2; } }
   @media (max-width: 960px) { #page-saves, #page-kb, #page-about, #page-prompts { grid-template-columns: 1fr; } }
   @media (max-width: 860px) { #page-run { grid-template-columns: 1fr; } main.page { padding: 14px 12px 24px; } #chatPane { grid-column: auto; }
-                              header { padding: 0 12px; } .banner { margin: 12px 12px 0; } .lights { justify-content: flex-start; }
+                              body > header { padding: 0 12px; } .banner { margin: 12px 12px 0; } .lights { justify-content: flex-start; }
                               .profile-bar { margin: 12px 12px 0; } .profile-actions { margin-left: 0; } }
 
   section.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 20px; min-width: 0; }
