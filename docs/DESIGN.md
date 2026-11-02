@@ -244,7 +244,7 @@ Mod 内置一个只监听 127.0.0.1 的 TCP 服务（默认端口 47774，每行
 
 - 章节地图、房间布局、路线与解法、收集品位置、任何文字或视频攻略。
 
-探索模式只挂 `kb/explore`：基本规则（basics.md）、坐标与观测数据（data.md）、按键与工具（tools.md），详细观测格式、复杂输入、剧情及程序优化放在选读 help/，根 data.md/tools.md 仅保留开局要点；不含技巧、实体说明与地图。
+探索模式共用 `kb/shared` 并加入 `kb/explore`：基本规则（basics.md）、坐标与观测数据（data.md）、按键与工具（tools.md），详细观测格式、复杂输入、剧情及程序优化放在选读 help/，根 data.md/tools.md 仅保留开局要点；不含技巧、实体说明与地图。
 
 ### 5.7 任务目标与游玩模式（写入系统提示词）
 
@@ -253,7 +253,7 @@ Mod 内置一个只监听 127.0.0.1 的 TCP 服务（默认端口 47774，每行
 | 模式 | 目标 | 知识库与模拟器 | 提示词 | 游戏工具 |
 | --- | --- | --- | --- | --- |
 | 速通 `--mode speedrun`（Claude 执行器默认） | 以最短的游戏内章节计时通关 | 完整 `kb/`；`--sim`（本机有 `sim\dist` 时默认）开放预置模拟器，`--no-sim` 不开放 | 开模拟器：system\_sim、container\_sim、sim、free（或限制轮次时的 pause）、retry、playback；关模拟器：system\_nosim、container\_nosim；两者都加 interface 与 HUD 一节 hud\_zh | observe、act、narrate、set\_effort |
-| 探索 `--mode explore`（原生 GPT 执行器默认） | 新手探索、学习并完成指定章节，不以速通为目标 | 只有 `kb/explore`；不开放模拟器文件，`--sim-assist`（默认关，需自配标准模拟器）提供有额度的短路线预测 | explore\_zh | 另有 cutscene，开了限额预测时有 simulate |
+| 探索 `--mode explore`（原生 GPT 执行器默认） | 新手探索、学习并完成指定章节，不以速通为目标 | `kb/shared` 与 `kb/explore`；不开放模拟器文件，`--sim-assist`（默认关，需自配标准模拟器）提供有额度的短路线预测 | explore\_zh | 另有 cutscene，开了限额预测时有 simulate |
 | 直播 `--live`（叠加，默认关） | 不改变所叠加模式的目标 | — | 速通 + 直播加 live\_zh（观众实时观看、解说计时 10 秒、用户可要求退出关卡）；探索 + 直播加 explore\_live\_zh | 另有 exit\_level、cutscene |
 
 速通模式开模拟器版本的提示词写明：

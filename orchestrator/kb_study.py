@@ -18,6 +18,10 @@ CORE_ORDER = ["README.md", "player_physics.md", "input.md", "entities.md", "tech
 
 def required_files(kb_dir: Path) -> list[str]:
     """需要读完的文件（知识库内的相对路径）。草莓酱文本只要求英文原版，中文版是同一内容的翻译。"""
+    from .kb_layout import read_manifest
+    manifest = read_manifest(kb_dir)
+    if manifest is not None:
+        return manifest['required']
     files = [name for name in CORE_ORDER if (kb_dir / name).exists()]
     files += sorted(p.name for p in kb_dir.glob("*.md") if p.name not in files)
     ref = kb_dir / "reference"

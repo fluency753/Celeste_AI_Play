@@ -17,18 +17,25 @@ def tool_name(cfg, name):
             'Write': 'apply_patch', 'Edit': 'apply_patch', 'Bash': '原生 Shell'}.get(name, name)
 
 
-def render_tool_references(text, cfg):
+def render_tool_references(text, cfg, *, legacy=True):
     """Resolve standalone capability names, preserving paths and explicit prefixes.
 
     Shared templates (including local overrides) use capability names. Personal
     additions and tool arguments are never passed through this renderer.
     """
     names = (*GAME_NAMES, 'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep')
+    text = re.sub(r'\{tool:(' + '|'.join(names) + r')\}', lambda m: tool_name(cfg, m[1]), text)
+    if not legacy:
+        return text
     alternatives = '|'.join(names)
     groups = r'(?<![A-Za-z0-9_/.-])(?:' + alternatives + r')(?:/(?:' + alternatives + r'))+(?![A-Za-z0-9_/.-])'
-    text = re.sub(groups, lambda match: '/'.join(tool_name(cfg, name) for name in match.group().split('/')), text)
-    pattern = r'(?<![A-Za-z0-9_/.-])(' + alternatives + r')(?![A-Za-z0-9_/.-])'
-    return re.sub(pattern, lambda match: tool_name(cfg, match.group()), text)
+    pattern = r'(?<![A-Za-z0-9_/.:{-])(' + alternatives + r')(?![A-Za-z0-9_/.-])'
+    def prose(piece):
+        piece = re.sub(groups, lambda m: '/'.join(tool_name(cfg, name) for name in m[0].split('/')), piece)
+        return re.sub(pattern, lambda m: tool_name(cfg, m[0]), piece)
+    # Old prose overrides remain compatible; JSON/string values and fenced programs are data.
+    protected = r'(```[\s\S]*?```|~~~[\s\S]*?~~~|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')'
+    return ''.join(piece if i % 2 else prose(piece) for i, piece in enumerate(re.split(protected, text)))
 
 
 def environment_instructions(cfg):
@@ -49,6 +56,19 @@ def reference_path(cfg, name):
     """Return a mounted optional reference, or None when it is unavailable."""
     if not workspace_capabilities(cfg).workspace_read:
         return None
+    from .kb_access import KB_ROOT
+    from . import kb_layout
+    rel = kb_layout.TOOL_REFERENCES.get(name, 'shared/tools/'+name)
+    if getattr(cfg, '_kb_bound_view', None) is not None:
+        manifest = kb_layout.read_manifest(cfg.kb_dir)
+        return '/kb/'+rel if manifest and rel in manifest['hashes'] else None
+    if kb_layout.enabled(KB_ROOT):
+        old = kb_layout.SHARED_ALIASES.get(rel, ())
+        aliases = (*old, *('explore/'+path for path in old))
+        deny = set(getattr(cfg, 'kb_deny', None) or [])
+        if not (KB_ROOT/rel).is_file() or deny.intersection((rel, *aliases)):
+            return None
+        return '/kb/' + rel
     rel = ('help/' if getattr(cfg, 'mode', 'speedrun') == 'explore' else 'explore/help/') + name
     if rel in (getattr(cfg, 'kb_deny', None) or []):
         return None

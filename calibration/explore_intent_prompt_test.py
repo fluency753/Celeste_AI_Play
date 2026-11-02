@@ -2,7 +2,7 @@
 import unittest
 
 from orchestrator.config import RunConfig
-from orchestrator.prompting import PROMPTS, play_prompt, prompt_parts
+from orchestrator.prompting import PROMPTS, play_prompt, prompt_parts, repo_part_path
 from orchestrator.sim_assist import AssistRules
 
 
@@ -59,9 +59,9 @@ class ExploreIntentPromptTests(unittest.TestCase):
                 sections.append(program)
                 self.assertIn('你可以自行编写模拟器、搜索或其他辅助程序，自由发挥', text)
                 for expected in ('本次最多可以用 1 个核', '多线程完成',
-                                 '/kb/help/programs.md', '/kb/help/workspace.md'):
+                                 '/kb/shared/tools/programs.md', '/kb/shared/tools/files.md'):
                     self.assertIn(expected, program)
-                reference = (PROMPTS.parent.parent / 'kb/explore/help/programs.md').read_text(encoding='utf-8')
+                reference = (PROMPTS.parent.parent / 'kb/shared/tools/programs.md').read_text(encoding='utf-8')
                 for detail in ('去重、择优和汇总', '避免逐个启动进程', '循环中不反复读写工作区'):
                     self.assertNotIn(detail, program)
                     self.assertIn(detail, reference)
@@ -71,8 +71,8 @@ class ExploreIntentPromptTests(unittest.TestCase):
 
     def test_fixed_program_guidance_lives_in_editable_templates(self):
         from overlay.console_api import PLACEHOLDERS
-        intro = (PROMPTS / 'explore_zh.md').read_text(encoding='utf-8')
-        programs = (PROMPTS / 'explore_programs_zh.md').read_text(encoding='utf-8')
+        intro = repo_part_path('explore_zh.md').read_text(encoding='utf-8')
+        programs = repo_part_path('explore_programs_zh.md').read_text(encoding='utf-8')
         for marker in ('{program_freedom}', '{program_lead}', '{parallel_rule}'):
             self.assertNotIn(marker, intro + programs)
             self.assertNotIn(marker, PLACEHOLDERS)

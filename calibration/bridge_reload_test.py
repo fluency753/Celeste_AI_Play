@@ -1227,10 +1227,13 @@ class ReloadControlTests(unittest.IsolatedAsyncioTestCase):
             session.obs.update(scene='AreaComplete', completion=session.obs.pop('level'),
                                ui={'type': 'AreaComplete', 'confirmReady': True})
             owner = Controls(root, session)
+            owner.cfg.engine = 'codex'
             owner.control.enqueue('bridge_reload', '{}')
             await owner._reload_bridge(owner.control.pending()[0])
             self.assertIn('游戏场景保持原对象', owner.pending_messages[-1]['text'])
             self.assertNotIn('当前房间经', owner.pending_messages[-1]['text'])
+            self.assertIn('celeste_observe', owner.pending_messages[-1]['text'])
+            self.assertNotIn('{tool:', owner.pending_messages[-1]['text'])
 
     async def test_control_waits_for_current_action_and_preserves_pause_on_success(self):
         with tempfile.TemporaryDirectory() as directory:

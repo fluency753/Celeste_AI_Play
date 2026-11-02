@@ -1084,9 +1084,20 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("公开解说", json.dumps(data, ensure_ascii=False))
 
     def preparation(self):
+        # This fixture intentionally exercises the supported legacy layout.
+        self.enterContext(patch('orchestrator.config.REPO_ROOT', self.root))
+        self.enterContext(patch('orchestrator.kb_access.KB_ROOT', self.kb))
         return {"quick_check": False, "native_game_tools": True, "session_id": "native-thread", "metrics": {"agent": self.cfg.agent},
                 "kb_study": {"complete": True, "files": {"README.md": [2, 2]}},
                 "kb_hashes": {"README.md": hashlib.sha256((self.kb / "README.md").read_bytes()).hexdigest()}}
+
+    def test_recovery_notice_uses_this_executors_tool_names(self):
+        from orchestrator import profiles
+        self.runner.study = None
+        with profiles.using(profiles.DEFAULT):
+            notice = self.runner._model_recovery_prompt()
+        self.assertIn('celeste_observe', notice)
+        self.assertNotIn('{tool:', notice)
 
     def test_prepared_session_requires_same_files_and_complete_reading(self):
         data = self.preparation()
@@ -1116,10 +1127,12 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         old_workspace = self.cfg.workspace_dir
         self.cfg.knowledge_profile = "explore"
         self.assertNotEqual(old_workspace, self.cfg.workspace_dir)
-        self.assertEqual(self.cfg.kb_dir.name, "explore")
+        self.assertEqual(self.cfg.kb_source.name, 'explore')
+        from orchestrator.kb_access import prepare_view
+        prepare_view(self.cfg)
         self.assertNotIn("reference", str(self.cfg.kb_dir))
         study = KbStudy(self.cfg.kb_dir, 10)
-        self.assertEqual(set(study.files), {"README.md", "basics.md", "data.md", "tools.md"})   # 系列赛自己加的资料走 --kb-extra
+        self.assertEqual(set(study.files), {'README.md', 'basics.md', 'shared/data.md', 'shared/tools.md'})
         self.assertNotIn("help/controls.md", study.files)
         data = self.preparation()
         (self.root / "prepare_summary.json").write_text(json.dumps(data), encoding="utf-8")

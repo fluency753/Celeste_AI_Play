@@ -161,9 +161,17 @@ def _kb_permissions(pid: str, data: dict | None = None) -> dict:
     """一份配置的知识库阅读权限：本机原有设置的在 configs/local.console.json，默认配置全部可读，新建配置的在它的 profile.json。"""
     from orchestrator import profiles
     if pid == profiles.LEGACY:
-        return _legacy_kb(_read_json(PREFS) if data is None else data)
-    m = profiles.meta(pid)
-    return {"kb_deny": m["kb_deny"], "kb_allow": m["kb_allow"]}
+        permissions = _legacy_kb(_read_json(PREFS) if data is None else data)
+    else:
+        m = profiles.meta(pid)
+        permissions = {'kb_deny': m['kb_deny'], 'kb_allow': m['kb_allow']}
+    from orchestrator import kb_layout
+    from orchestrator.kb_access import KB_ROOT
+    if kb_layout.enabled(KB_ROOT):
+        for mode, names in permissions['kb_deny'].items():
+            permissions['kb_deny'][mode] = sorted({doc.path if (doc := kb_layout.lookup(KB_ROOT, mode, name)) else name
+                                                   for name in names})
+    return permissions
 
 
 def load_prefs() -> dict:
@@ -389,7 +397,10 @@ def kb_list(mode: str) -> dict:
     deny = [x for x in prefs["kb_deny"].get(mode, []) if x in known]
     allow = [x for x in prefs["kb_allow"].get(mode, []) if x in known]
     sim_readme = REPO_ROOT / "sim" / "dist" / "README.md"
-    return {"mode": mode, "root": root.relative_to(REPO_ROOT).as_posix(), "documents": docs, "deny": deny, "allow": allow,
+    from orchestrator.kb_layout import enabled
+    from orchestrator.kb_access import KB_ROOT
+    source_label = 'kb/shared + kb/'+mode if enabled(KB_ROOT) else root.relative_to(REPO_ROOT).as_posix()
+    return {"mode": mode, "root": source_label, "documents": docs, "deny": deny, "allow": allow,
             "sim_readme": mode == "speedrun" and sim_readme.is_file(), "profile": pid, "readonly": profiles.readonly(pid),
             "edits_dir": _rel(profiles.kb_edits_dir(pid))}
 
@@ -433,6 +444,13 @@ def kb_reset(mode: str, path: str) -> dict:
 # ---------------------------------------------------------------- 提示词页
 
 PLACEHOLDERS = {
+    '{tool_sections}': '按实际登记的游戏工具及文件／程序能力插入对应章节',
+    '{observe_files_rule}': '观测文件入口；无文件能力时改为内联核验说明',
+    '{observe_reference_rule}': '观测格式参考；无文件能力时提供必要格式',
+    '{act_files_rule}': '计划、轨迹、重试和TAS文件入口（有文件能力时）',
+    '{act_reference_rule}': '当前可读的完整动作参考',
+    '{file_tool_names}': '当前执行器实际可用的文件读取、查找和编辑工具名',
+    '{files_reference_rule}': '当前可读的工作区文件参考',
     "{task_brief}": "本次任务的简短摘要：模式、存档、计划起止与停止边界，不展开完整配置 JSON",
     "{current_settings}": "本次任务与配置的 JSON 快照（存档、范围、权限、程序额度等）",
     "{guide_index_path}": "本次已发布的工作区操作指南索引路径",
@@ -491,6 +509,10 @@ PLACEHOLDERS = {
     "{preset_sim}": "探索模式里预设模拟器的开放情况（关限额预测时为\"禁用预设模拟器\"，开时为\"预设模拟器只能通过 simulate 按额度使用\"）",
     "{auto_handling}": "系统自动处理哪些画面（剧情是否交给智能体，按本次设置生成）",
 }
+
+from orchestrator.prompt_environment import GAME_NAMES as _GAME_NAMES
+PLACEHOLDERS.update({'{tool:'+name+'}': '按实际执行器插入 '+name+' 工具名'
+                     for name in (*_GAME_NAMES, 'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep')})
 
 
 def personal_prompt_read(scope='all') -> dict:
@@ -559,7 +581,10 @@ def _prompt_preview(cfg) -> dict:
     first = None
     from orchestrator.execution import workspace_capabilities
     if cfg.study and workspace_capabilities(cfg).workspace_read:
-        files = [rel for rel in required_files(root_of(cfg.mode)) if rel not in set(cfg.kb_deny)]
+        from orchestrator import kb_layout
+        from orchestrator.kb_access import KB_ROOT
+        files = (kb_layout.selected(cfg, KB_ROOT)[1] if kb_layout.enabled(KB_ROOT) else
+                 [rel for rel in required_files(root_of(cfg.mode)) if rel not in set(cfg.kb_deny)])
         paths = [f"{CONTAINER_KB}/{rel}" for rel in files]
         if cfg.sim:
             k = next((i for i, rel in enumerate(files) if rel.startswith("reference/")), len(files))
@@ -586,11 +611,12 @@ def prompt_read(name: str) -> dict:
 
 def _prompt_read(name: str, pid: str) -> dict:
     from orchestrator import profiles
-    from orchestrator.prompting import PROMPTS, overrides_dir, read_part
+    from orchestrator.prompting import overrides_dir, read_part, repo_part_path
     name = _prompt_name(name)
     text = read_part(name)
-    repo = (PROMPTS / name).read_text(encoding="utf-8")
+    repo = repo_part_path(name).read_text(encoding='utf-8')
     return {"name": name, "text": text, "version": _version(text), "overridden": (overrides_dir() / name).is_file(),
+            "source_path": _rel(repo_part_path(name)),
             "live_editable": _button_template(name), "readonly": profiles.readonly(pid),
             "repo_text": repo, "placeholders": [{"name": k, "meaning": v} for k, v in PLACEHOLDERS.items() if k in repo or k in text]}
 
@@ -604,7 +630,7 @@ def prompt_write(name: str, text, version) -> dict:
 
 
 def _prompt_write(name: str, text, version, pid: str) -> dict:
-    from orchestrator.prompting import PROMPTS, check_program_placeholders, overrides_dir, read_part
+    from orchestrator.prompting import check_program_placeholders, overrides_dir, read_part, repo_part_path
     name = _prompt_name(name)
     if not _button_template(name) and orchestrator_status()["running"]:
         raise ValueError("有主控在运行：等运行结束再保存提示词")
@@ -617,7 +643,7 @@ def _prompt_write(name: str, text, version, pid: str) -> dict:
     if name == 'runtime_zh.md':
         from orchestrator.startup_prompt import validate_runtime_template
         validate_runtime_template(text)
-    repo = (PROMPTS / name).read_text(encoding="utf-8")
+    repo = repo_part_path(name).read_text(encoding='utf-8')
     root = overrides_dir()
     override = root / name
     if text == repo:

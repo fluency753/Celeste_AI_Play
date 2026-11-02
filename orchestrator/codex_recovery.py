@@ -120,8 +120,8 @@ class ModelRecovery:
         if self.naming_only:
             return facts + '请继续原来的存档命名请求，不操作游戏。'
         if self.chat_only:
-            return notification('wake_chat', facts=facts + '请继续处理原用户任务，不操作游戏。')
+            return notification('wake_chat', facts=facts + '请继续处理原用户任务，不操作游戏。', cfg=self.cfg)
         if self.study and not self.study.complete():
-            return notification('resume_prepare', facts=facts + '准备阶段仍未完成，请继续核对必读资料。')
+            return notification('resume_prepare', facts=facts + '准备阶段仍未完成，请继续核对必读资料。', cfg=self.cfg)
         return notification('reconnect', facts=facts + '有文件工具时，先检查 /workspace/game/last_tool.json 的 last_action（若存在），'
-                            '核对运行／存档槽位与执行详情，再用 observe 核对当前帧。文件缺失或执行未确认也不能认定动作没执行。')
+                            '核对运行／存档槽位与执行详情，再用 observe 核对当前帧。文件缺失或执行未确认也不能认定动作没执行。', cfg=self.cfg)

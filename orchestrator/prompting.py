@@ -45,9 +45,9 @@ def game_tool_list(cfg) -> str:
 
 def auto_handling(cfg) -> str:
     """Current playback facts; agent responsibilities live in one section."""
-    text = '默认 celeste_ai 输入的转场、死亡与重生由主控推进；celeste_tas 不自动补帧。'
+    text = '默认输入的转场、死亡与重生由主控推进。'
     if getattr(cfg, 'cutscene_mode', 'auto') == 'agent':
-        return text + '当前剧情由你决定，主控不代按确认、菜单或剧情选项；结算边界见“剧情与任务边界”。'
+        return text + '当前剧情的操作责任与结算边界见“剧情与任务边界”。'
     return text + '当前 auto 模式由主控推进和跳过剧情，并处理已识别的确认界面；仍卡在确认处时可用 act 发 C。'
 
 
@@ -114,6 +114,12 @@ SAVE_CONTEXT_PRINT = "字符地图等大块输出只打印关心的区域，没�
 def kb_reference_rule(cfg) -> str:
     """知识库里社区资料原文（kb/reference/，不入库、在本机生成）的一句：本机没有或不给看时为空。"""
     root = getattr(cfg, "kb_source", None)
+    from .kb_access import KB_ROOT
+    from .kb_layout import enabled
+    if getattr(cfg, '_kb_bound_view', None) is not None:
+        root = cfg.kb_dir
+    elif enabled(KB_ROOT) and not is_explore(cfg):
+        root = KB_ROOT
     deny = set(getattr(cfg, "kb_deny", None) or [])
     if root is None or not (root / "reference").is_dir():
         return ""
@@ -258,6 +264,16 @@ def fill(text: str, cfg) -> str:
     from .tuning import seconds_text
     check_program_placeholders(text)
     workspace = workspace_capabilities(cfg)
+    from .prompt_environment import reference_path, tool_name
+    def reference(name):
+        path = reference_path(cfg, name)
+        return f'详细格式按需查阅 {path}。' if path else '详细参数以本次工具声明和实际返回为准。'
+    observe_reference = reference('observation.md')
+    if not workspace.workspace_read:
+        from .kb_access import KB_ROOT, _effective
+        geometry = KB_ROOT/'shared/tools/observe/geometry.md'
+        if geometry.is_file():
+            observe_reference = _effective(geometry).read_text(encoding='utf-8')
     if "{game_tool_list}" in text:
         text = text.replace("{game_tool_list}", game_tool_list(cfg))
     if "{preset_sim}" in text:     # 探索模式：开了限额预测时预设模拟器只能经 simulate 按额度用，否则完全不开放
@@ -266,14 +282,22 @@ def fill(text: str, cfg) -> str:
     if "{auto_handling}" in text:
         text = text.replace("{auto_handling}", auto_handling(cfg))
     values = {
+        '{observe_files_rule}': ('相关文件：/workspace/game/latest_obs.json 的 obs 为当前完整观测；collision.json 的 image 指向同帧碰撞图；rooms/ 只保存历史首次观测。'
+                                 if workspace.workspace_read else '按当前观测的布局和变化核对几何；缺少基线时重新观察，不猜测缺失数据。'),
+        '{observe_reference_rule}': observe_reference,
+        '{act_files_rule}': ('相关文件：plan_file 是你提交的 JSON 计划；/workspace/game/last_act.json 保存输入及逐帧轨迹；retry.json 记录自动重算原因；tas.py 用于显式读取 TAS 输入。last_tool.json 记录最近调用与最近推进动作，状态未确认时先核实，不盲目重放。'
+                             if workspace.workspace_read else ''),
+        '{act_reference_rule}': reference('actions.md'),
+        '{files_reference_rule}': reference('workspace.md'),
+        '{file_tool_names}': '/'.join(dict.fromkeys(tool_name(cfg, name) for name in ('Read','Glob','Grep','Write','Edit'))),
         "{tas_workspace_rule}": ("`/workspace/game/tas.py` 提供 `load(path,start_line=...)`、`window(document,offset,count)` 和 `to_sim(inputs)`。前两者只生成计划，不操作游戏；不执行 console/Set/Read 等命令，需显式选取纯输入区。模拟转换拒绝不能表达的菜单键，不忽略它们。"
                                   if workspace.programs else ""),
         "{tas_cursor_rule}": ("`input_cursor.next`是选定输入文档从0开始的帧偏移，不是源文件行号；用同一load文档和window(offset=next)生成下一窗，或把remaining_inputs写入仍声明celeste_tas的JSON。旧工具不能把剩余数组直接交给默认格式的inputs。"
                                if workspace.programs else "继续TAS输入时保留 input_format=celeste_tas，按返回的input_cursor.next与remaining_inputs核对输入进度；不要把TAS剩余数组当成默认格式的inputs。"),
-        "{explore_reading_rule}": ("准备只读必读清单；help/ 的格式、操作和优化参考在需要时再查。"
+        "{explore_reading_rule}": ("准备只读必读清单；shared/tools/ 的操作与格式参考在需要时再查。"
                                    if workspace.workspace_read and workspace.workspace_write else
                                    "根据当前观测、工具说明与真实尝试学习；当前没有文件工具，不要求读取知识库或工作区笔记。"),
-        "{explore_reference_rule}": ("基本规则、观测要点和操作见 /kb/basics.md、data.md、tools.md；详细资料按 /kb/README.md 的 help/ 索引查阅。"
+        "{explore_reference_rule}": ("基本规则见 /kb/basics.md；通用观测与操作见 /kb/shared/data.md、shared/tools.md，完整参考按工具入口查阅。"
                                      + speedrun_allow_rule(cfg)
                                      if workspace.workspace_read else "按键和工具约定以本次提供的游戏工具说明为准。"),
         "{explore_environment_rule}": ("Read/Write/Bash 对应容器的文件读取、写入和断网命令；"
@@ -368,7 +392,16 @@ def overrides_dir() -> Path:
 
 
 def prompt_files() -> list[str]:
-    return sorted(p.name for p in PROMPTS.glob("*.md"))
+    return sorted(p.name for p in PROMPTS.rglob('*.md'))
+
+
+def repo_part_path(name: str) -> Path:
+    matches = list(PROMPTS.rglob(name)) if Path(name).name == name else []
+    if not matches:
+        raise FileNotFoundError(f'提示词文件不存在：{name}')
+    if len(matches) > 1:
+        raise ValueError(f'提示词文件重名：{name}')
+    return matches[0]
 
 
 def read_part(name: str) -> str:
@@ -376,7 +409,7 @@ def read_part(name: str) -> str:
     override = overrides_dir() / name
     if override.is_file():
         return override.read_text(encoding="utf-8")
-    return (PROMPTS / name).read_text(encoding="utf-8")
+    return repo_part_path(name).read_text(encoding='utf-8')
 
 
 def overridden_parts() -> list[str]:
@@ -394,14 +427,22 @@ class PromptPart:
     sep: str = ""
 
 
-def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None) -> list[PromptPart]:
+def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None, cfg=None) -> list[PromptPart]:
     """Expand explicit slots and the shared interface, retaining each source for preview."""
     text = read_part(name)
     if transform:
         text = transform(text)
     blocks = dict(slots or {})
     if '{interface}' in text:
-        blocks['{interface}'] = [PromptPart('interface_zh.md', read_part('interface_zh.md'), 'interface_zh.md')]
+        sections = []
+        if cfg is not None:
+            for tool in game_tools(cfg):
+                sections += _file_parts(f'tool_{tool}_zh.md')
+            if workspace_capabilities(cfg).workspace_read:
+                sections += _file_parts('tool_files_zh.md')
+            if workspace_capabilities(cfg).programs:
+                sections += _file_parts('tool_programs_zh.md')
+        blocks['{interface}'] = _file_parts('interface_zh.md', slots={'{tool_sections}': sections})
     if not any(key in text for key in blocks):
         return [PromptPart(name, text, name, sep)]
     import re
@@ -410,7 +451,8 @@ def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None) -> lis
         if i % 2:
             parts.extend(blocks[piece])
         else:
-            parts.append(PromptPart(name + ('（接上）' if i else ''), piece, name, sep if i == 0 else ''))
+            if piece.strip():
+                parts.append(PromptPart(name + ('（接上）' if i else ''), piece, name, sep if i == 0 else ''))
     return parts
 
 
@@ -427,10 +469,10 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
     reuse = "之前写的程序与笔记都在工作区里，可以继续用。" if workspace.workspace_read else "以当前观测和已有对话核对进度后继续。"
     parts: list[PromptPart] = []
     if not (cfg.sim and workspace.programs):
-        parts += _file_parts("system_nosim_zh.md", sep="")
+        parts += _file_parts("system_nosim_zh.md", sep="", cfg=cfg)
         parts += _file_parts("container_nosim_zh.md" if workspace.programs else "host_zh.md")
     else:
-        parts += _file_parts("system_sim_zh.md", sep="")
+        parts += _file_parts("system_sim_zh.md", sep="", cfg=cfg)
         parts += _file_parts("container_sim_zh.md") + _file_parts("sim_zh.md")
         # 默认不限制思考与调用（free_zh.md，可以把规划程序写成自动重试命令）；--limit-planning 时按章节记账（pause_zh.md）
         if cfg.pause_limit:
@@ -487,7 +529,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
         }
         from .detour import SCOPE_FROM, SCOPE_TO, enabled as detour_enabled
         detour_scope = (lambda t: t.replace(SCOPE_FROM, SCOPE_TO)) if detour_enabled(cfg) else (lambda t: t)
-        parts = _file_parts("explore_zh.md", lambda t: detour_scope(t.replace("{game_tools}", tools)), sep="", slots=slots)
+        parts = _file_parts("explore_zh.md", lambda t: detour_scope(t.replace("{game_tools}", tools)), sep="", slots=slots, cfg=cfg)
         if cfg.live:
             parts += _file_parts("explore_live_zh.md")
         chapters = cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else [])
@@ -558,13 +600,13 @@ def first_play_prompt(cfg):
 
 def continue_play_prompt(cfg):
     from .button_prompts import notification
-    return notification('continue_play')
+    return notification('continue_play', cfg=cfg)
 
 
-def controller_turn_prompt(text):
+def controller_turn_prompt(text, cfg=None):
     """Label controller-generated turn fallbacks without relabeling real user input."""
     from .button_prompts import notification
-    return notification('continue_prepare', facts=text)
+    return notification('continue_prepare', facts=text, cfg=cfg)
 
 
 def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = False, cfg=None) -> str:
@@ -614,7 +656,7 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
     from .button_prompts import notification
     return notification('next_chapter', facts=(head + f"开始新的范围：{items}。{entry}{rules}，和之前相比可能有变化"
             + f"（例如{changed}），{reuse}"
-            "请先调用 observe 看清当前画面，再开始游玩。"))
+            "请先调用 observe 看清当前画面，再开始游玩。"), cfg=cfg)
 
 
 def current_rules_note(cfg, *, guide=None) -> str:

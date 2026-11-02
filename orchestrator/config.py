@@ -321,8 +321,12 @@ class RunConfig:
 
     @property
     def kb_source(self) -> Path:
-        """这个模式的知识库：速通模式是整个 kb/，探索模式只有 kb/explore/。"""
-        return REPO_ROOT / "kb" / "explore" if self.knowledge_profile == "explore" else REPO_ROOT / "kb"
+        """模式专属源码目录；实际挂载使用含共享资料的 kb_dir 固定快照。"""
+        from .kb_layout import enabled
+        root = REPO_ROOT / 'kb'
+        if enabled(root):
+            return root / ('explore' if self.knowledge_profile == 'explore' else 'speedrun')
+        return root / 'explore' if self.knowledge_profile == 'explore' else root
 
     @property
     def kb_extra_dir(self) -> Path | None:
@@ -339,15 +343,22 @@ class RunConfig:
 
     @property
     def kb_view(self) -> bool:
-        """/kb 挂的是不是同步出来的副本：有不给看的文件（kb_deny）、开放了速通资料（kb_allow）、有本机追加资料（kb_extra）
-        或配置里有知识库修改（kb_overlay）时是。"""
-        return bool(self.kb_deny or self.kb_extra or self.kb_allow or self.kb_overlay)
+        """新布局总是合成视图；兼容旧布局时仅过滤、覆盖或追加需要副本。"""
+        from .kb_layout import enabled
+        return bool(getattr(self, '_kb_bound_view', None)) or enabled(REPO_ROOT/'kb') or bool(self.kb_deny or self.kb_extra or self.kb_allow or self.kb_overlay)
 
     @property
     def kb_dir(self) -> Path:
-        """挂进容器 /kb 的目录：默认就是知识库本身；有不给看的文件（kb_deny）或本机追加资料（kb_extra）时是同步出来的副本
-        （orchestrator/kb_access.prepare_view 同步）。"""
+        """本次只读挂载目录；首次 prepare_view 固定后不随源码更新而切换。"""
+        if getattr(self, '_kb_bound_view', None) is not None:
+            from .kb_layout import binding_key
+            if self._kb_bound_settings != binding_key(self):
+                raise ValueError('本次知识库快照已固定；知识范围或工具环境变更需新建会话')
+            return self._kb_bound_view
         if self.kb_view:
+            from .kb_layout import enabled, view_key
+            if enabled(REPO_ROOT/'kb'):
+                return REPO_ROOT/'local/kb_views'/self.workspace_dir.name/view_key(self, REPO_ROOT/'kb')
             return REPO_ROOT / "local" / "kb_views" / self.workspace_dir.name
         return self.kb_source
 

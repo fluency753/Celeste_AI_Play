@@ -57,7 +57,7 @@ class ProfileFixture(unittest.TestCase):
     def legacy_override(self, name="runtime_zh.md", line="本机原有设置的修改行。"):
         path = prompting.OVERRIDES / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text((prompting.PROMPTS / name).read_text(encoding="utf-8") + "\n" + line + "\n", encoding="utf-8")
+        path.write_text(prompting.repo_part_path(name).read_text(encoding="utf-8") + "\n" + line + "\n", encoding="utf-8")
         return line
 
 

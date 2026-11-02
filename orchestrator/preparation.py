@@ -13,6 +13,7 @@ from .runtimes import RUNTIMES, runtime
 from .config import REPO_ROOT, RunConfig
 from .container import ensure_container
 from .kb_study import KbStudy
+from .kb_layout import study_identity
 from .workspace_setup import install_game_helpers
 from .live import LiveStatus
 from .metrics import Metrics
@@ -22,7 +23,8 @@ from overlay.server import start_in_thread
 async def prepare(args):
     adapter = runtime(args.engine)
     cfg = RunConfig(agent=args.agent or args.engine+'-agent', save="", model=args.model, effort=args.effort,
-                    knowledge_profile=args.knowledge, sim=args.knowledge == "full", sim_assist=False,
+                    knowledge_profile=args.knowledge, mode='explore' if args.knowledge == 'explore' else 'speedrun',
+                    sim=args.knowledge == "full", sim_assist=False,
                     live=True, max_minutes=args.max_minutes)
     adapter.configure(cfg, args.provider)
     cfg.model, cfg.effort = await asyncio.to_thread(adapter.resolve, cfg.model, cfg.effort, cfg.provider)
@@ -64,8 +66,9 @@ async def prepare(args):
                           for rel in study.files}
                 result = {"reason": reason, "quick_check": args.quick_check, "game_tools_registered": True, "success":runner.completed_preparation,
                           "engine":cfg.engine, "provider":cfg.provider, "runtime":cfg.runtime, "requested_model":cfg.model,
-                          "knowledge_profile": cfg.knowledge_profile,
+                          "knowledge_profile": cfg.knowledge_profile, "mode": cfg.mode,
                           "kb_study": study.summary(), "kb_hashes": hashes,
+                          "kb_identity": study_identity(study.kb_dir),
                           "session_id": runner.session_id, "turns": runner.turns, "metrics": metrics.snapshot()}
                 (directory / "prepare_summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
                 print(f"[{cfg.engine}] {reason}；实际阅读 {study.progress():.1%}", flush=True)
@@ -78,7 +81,7 @@ async def prepare(args):
             **({'session_storage':'container', 'session_container':container} if cfg.engine == 'codex' else {}),
             'engine':cfg.engine, 'provider':cfg.provider, 'runtime':cfg.runtime, 'mcp_port':cfg.mcp_port,
             'agent':cfg.agent, 'save':'', 'save_slot':None, 'model':metrics.state.model,
-            'requested_model':cfg.model, 'effort':metrics.state.effort, 'knowledge_profile':cfg.knowledge_profile,
+            'requested_model':cfg.model, 'effort':metrics.state.effort, 'knowledge_profile':cfg.knowledge_profile, 'mode':cfg.mode,
             'session_id':runner.session_id, 'session_kind':'ready', 'prepared_dir':str(directory),
             'sim':cfg.sim, 'sim_assist':False, 'cutscene_mode':cfg.cutscene_mode, 'max_minutes':240})
         if adapter.fast and args.fast is not None:

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.config import REPO_ROOT, RunConfig
-from orchestrator.kb_access import documents
+from orchestrator.kb_access import documents, prepare_view
 from orchestrator.kb_study import KbStudy, required_files
 from orchestrator.prompt_environment import render_tool_references
 from orchestrator.prompting import fill, play_prompt
@@ -33,8 +33,8 @@ class ProgressivePromptTests(unittest.TestCase):
                              knowledge_profile='explore', sim=False)
 
     def test_real_preparation_gate_requires_only_core_and_retains_optional_navigation(self):
-        study = KbStudy(self.cfg.kb_source, 10)
-        self.assertEqual(set(study.files), {'README.md', 'basics.md', 'data.md', 'tools.md'})
+        study = KbStudy(prepare_view(self.cfg), 10)
+        self.assertEqual(set(study.files), {'README.md', 'basics.md', 'shared/data.md', 'shared/tools.md'})
         self.assertFalse(study.ready())
         total = 0
         for name in study.files:
@@ -44,12 +44,12 @@ class ProgressivePromptTests(unittest.TestCase):
         self.assertTrue(study.complete())
         self.assertLess(total, 4000)
         rows = {row['path']: row for row in documents('explore')}
-        for name in ('observation.md', 'actions.md', 'story.md', 'workspace.md', 'programs.md'):
-            self.assertIn('help/'+name, rows)
-            self.assertFalse(rows['help/'+name]['required'])
-            self.assertGreater(rows['help/'+name]['size'], 0)
-        data = (study.kb_dir/'data.md').read_text(encoding='utf-8')
-        for name in ('help/observation.md', 'help/actions.md', 'help/story.md', 'help/workspace.md'):
+        for name in ('observe.md', 'act.md', 'cutscene.md', 'files.md', 'programs.md'):
+            self.assertIn('shared/tools/'+name, rows)
+            self.assertFalse(rows['shared/tools/'+name]['required'])
+            self.assertGreater(rows['shared/tools/'+name]['size'], 0)
+        data = (study.kb_dir/'shared/data.md').read_text(encoding='utf-8')
+        for name in ('shared/tools/observe.md', 'shared/tools/act.md', 'shared/tools/cutscene.md', 'shared/tools/files.md'):
             self.assertIn(name, data)
 
     def test_environment_renders_names_once_and_preserves_paths_and_personal_text(self):
@@ -81,20 +81,20 @@ class ProgressivePromptTests(unittest.TestCase):
         def descriptions(cfg):
             server = build_server(SimpleNamespace(cfg=cfg, metrics=None, workspace=None))
             return {tool.name: tool.description for tool in asyncio.run(server.list_tools())}
-        for mode, profile, prefix in [('explore', 'explore', '/kb/help/'),
-                                      ('speedrun', 'full', '/kb/explore/help/')]:
+        for mode, profile, prefix in [('explore', 'explore', '/kb/shared/tools/'),
+                                      ('speedrun', 'full', '/kb/shared/tools/')]:
             cfg = replace(self.cfg, mode=mode, knowledge_profile=profile)
             current = descriptions(cfg)
-            self.assertIn(prefix+'actions.md', current['act'])
-            self.assertIn(prefix+'observation.md', current['observe'])
+            self.assertIn(prefix+'act.md', current['act'])
+            self.assertIn(prefix+'observe.md', current['observe'])
             self.assertIn('剩余输入不执行', current['act'])
             self.assertIn('结束本轮', current['stop_run'])
             self.assertIn('结束本轮', current['set_effort'])
             rel = ('help/' if mode == 'explore' else 'explore/help/')
             denied = descriptions(replace(cfg, kb_deny=[rel+'actions.md', rel+'observation.md']))
-            self.assertNotIn(prefix+'actions.md', denied['act'])
+            self.assertNotIn(prefix+'act.md', denied['act'])
             self.assertIn('expect', denied['act'])
-            self.assertNotIn(prefix+'observation.md', denied['observe'])
+            self.assertNotIn(prefix+'observe.md', denied['observe'])
         host = descriptions(replace(self.cfg, engine='claude', runtime='host'))
         self.assertNotIn('/workspace', host['act'])
         self.assertNotIn('/kb/', host['act'])
@@ -102,7 +102,7 @@ class ProgressivePromptTests(unittest.TestCase):
 
     def test_forbidden_optional_program_reference_is_not_advertised(self):
         cfg = replace(self.cfg, kb_deny=['help/programs.md', 'help/workspace.md'])
-        self.assertNotIn('/kb/help/programs.md', play_prompt(cfg))
+        self.assertNotIn('/kb/shared/tools/programs.md', play_prompt(cfg))
         self.assertIn('当前未提供程序参考资料', play_prompt(cfg))
 
     def test_merged_feedback_matches_executor_and_formal_display_mode(self):
@@ -126,7 +126,7 @@ class ProgressivePromptTests(unittest.TestCase):
         path = self.root/'prompts/button_prepare_zh.md'
         path.parent.mkdir()
         path.write_text('使用 celeste_read 工具和 Read 工具读取必读清单。', encoding='utf-8')
-        study = KbStudy(self.cfg.kb_source, 10)
+        study = KbStudy(prepare_view(self.cfg), 10)
         runner = CodexRunner(self.cfg, self.root/'run', None,
                              Metrics(self.root/'metrics.json', 'test', 'test', 'high', 60),
                              'unused', study, prepare_only=True)

@@ -563,7 +563,7 @@ class CodexRunner(ModelRecovery, SessionControls):
             message = notification('prepare', facts=facts, cfg=self.cfg)
             message = re.sub(r'(?<![A-Za-z0-9_])read(?=\s+工具)', lambda _: self._reader_name(), message)
             if self.prepare_only and self.cfg.sim:
-                message += '\n' + notification('prepare_sim')
+                message += '\n' + notification('prepare_sim', cfg=self.cfg)
             return message
         from .prompting import first_play_prompt
         return self.resume_note or first_play_prompt(self.cfg)
@@ -647,7 +647,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                         "现在仅回答用户的消息、复盘试玩，可以用 read/glob/grep 查阅工作区，"
                         "并按要求用 apply_patch 读取、整理工作区笔记；不运行程序（原生 Shell 不开放）。") +
                        "不连接游戏，不调用游戏观察、动作或在线模拟工具，不自行开始下一章。用户没有发消息时安静等待。")
-            prompt += '\n' + notification('wake_chat')
+            prompt += '\n' + notification('wake_chat', cfg=self.cfg)
         (self.run_dir / ("chat_system_prompt.md" if self.chat_only else "system_prompt.md")).write_text(prompt, encoding="utf-8")
         started = time.monotonic()
         try:
@@ -799,7 +799,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                     self.completed_preparation = True
                     return "知识库准备完成"
                 from .prompting import continue_play_prompt, controller_turn_prompt
-                message = (controller_turn_prompt(f"继续准备，用 {self._reader_name()} 分页读取尚未读完的资料。")
+                message = (controller_turn_prompt(f"继续准备，用 {self._reader_name()} 分页读取尚未读完的资料。", cfg=self.cfg)
                            if self.study and not self.study.complete() else continue_play_prompt(self.cfg))
             return "现实时间预算用完"
         except (ConnectionError, TimeoutError):

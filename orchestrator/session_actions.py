@@ -239,6 +239,8 @@ def play_session(anchor, current, options):
     runtime(cfg.engine).token(cfg)
     from .prepared import load_preparation
     from .kb_study import KbStudy
+    from .kb_access import prepare_view
+    prepare_view(cfg)
     load_preparation(str(directory), cfg, KbStudy(cfg.kb_dir, 60))
     # Chat may have been forked when a desktop client owned the preparation thread.
     preparation = read_json(directory / 'prepare_summary.json')

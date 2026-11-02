@@ -45,7 +45,9 @@ class TunableTests(unittest.TestCase):
     def test_prompt_numbers_follow_tunables(self):
         speed = cfg(mode="speedrun", knowledge_profile="full", sim=True, playback=True, live=True, live_remind_s=10.0)
         base = play_prompt(speed)
-        self.assertIn("一次至少 1 帧、最多 600 帧", base)
+        from orchestrator.prompting import fill
+        from orchestrator.server import ACT_DESCRIPTION
+        self.assertIn('一次至少 1 帧、最多 600 帧', fill(ACT_DESCRIPTION, speed))
         self.assertIn("默认最多 5 分钟（用 Bash 的 timeout 参数最多加到 10 分钟）", base)
         self.assertIn("大约每 100 条画 1 条，至少 40 条", base)
         self.assertIn("解说计时缩短为 10 秒", base)
@@ -53,7 +55,8 @@ class TunableTests(unittest.TestCase):
                              "playback_ratio": 50, "playback_min_tracks": 20})
         speed.live_remind_s = 15.0
         changed = play_prompt(speed)
-        for text in ("最多 900 帧", "默认最多 90 秒（用 Bash 的 timeout 参数最多加到 20 分钟）",
+        self.assertIn('最多 900 帧', fill(ACT_DESCRIPTION, speed))
+        for text in ("默认最多 90 秒（用 Bash 的 timeout 参数最多加到 20 分钟）",
                      "大约每 50 条画 1 条，至少 20 条", "解说计时缩短为 15 秒"):
             self.assertIn(text, changed)
         explore = cfg(mode="explore", knowledge_profile="explore", chapter=1)
@@ -90,7 +93,7 @@ class TunableTests(unittest.TestCase):
         explore.agent_cpus_effective = 1
         self.assertNotIn("{cpu_rule}", play_prompt(explore))
         self.assertIn("实在拿不到才放弃", play_prompt(explore))          # 鼓励拿草莓
-        self.assertIn('/kb/help/programs.md', play_prompt(explore))
+        self.assertIn('/kb/shared/tools/programs.md', play_prompt(explore))
         self.assertNotIn('模拟器对象尽量只构造一次再复用', play_prompt(explore))
         self.assertNotIn("不要求全收集", play_prompt(explore))
         for placeholder in ("{act_max_frames}", "{bash_default}", "{explore_program}", "{explore_program_rule}", "{remind}",

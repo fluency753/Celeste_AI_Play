@@ -49,7 +49,7 @@ class PromptPartsTests(unittest.TestCase):
             for p in parts:
                 self.assertNotIn("{interface}", p.text)
                 if p.source:
-                    self.assertTrue((prompting.PROMPTS / p.source).is_file(), p.source)
+                    self.assertTrue(prompting.repo_part_path(p.source).is_file(), p.source)
 
     def test_tool_list_matches_registered_tools(self):
         from orchestrator.modes import game_tools
@@ -57,13 +57,11 @@ class PromptPartsTests(unittest.TestCase):
                    dict(sim=False, runtime="host")):
             c = cfg(mode="speedrun", runtime=kw.pop("runtime", "container"), **kw)
             text = play_prompt(c)
-            line = next(l for l in text.splitlines() if l.startswith("游戏工具有"))
             names = game_tools(c)
-            self.assertEqual(line.count("`") // 2, len(names), line)
             for name in names:
-                self.assertIn(f"`{name}`", line)
+                self.assertIn(f'## {name}：', text)
             if c.cutscene_mode == 'agent':
-                self.assertIn('当前剧情由你决定', text)
+                self.assertIn('当前为 agent 剧情模式', text)
             else:
                 self.assertIn('当前 auto 模式由主控推进和跳过剧情', text)
 
@@ -71,8 +69,9 @@ class PromptPartsTests(unittest.TestCase):
         parts = prompt_parts(cfg(mode="speedrun", sim=True, runtime="container"))
         sources = [p.source for p in parts]
         k = sources.index("interface_zh.md")
-        self.assertEqual(sources[k - 1], sources[k + 1])          # 系统提示词在接口前后各一段
-        self.assertTrue(parts[k + 1].label.endswith("（接上）"))
+        self.assertEqual(sources[k - 1], 'system_sim_zh.md')
+        self.assertEqual(sources[k + 1], 'tool_observe_zh.md')
+        self.assertIn('tool_act_zh.md', sources)
 
 
 class PromptOverrideTests(unittest.TestCase):
@@ -122,7 +121,7 @@ class PromptOverrideTests(unittest.TestCase):
         before = play_prompt(c)
         self.assertEqual(prompting.overridden_parts(), [])
         self.overrides.mkdir()
-        repo = (prompting.PROMPTS / "explore_zh.md").read_text(encoding="utf-8")
+        repo = prompting.repo_part_path("explore_zh.md").read_text(encoding="utf-8")
         (self.overrides / "explore_zh.md").write_text(repo + "\n本机加的一行。", encoding="utf-8")
         (self.overrides / "unknown.md").write_text("不是提示词文件", encoding="utf-8")
         self.assertIn("本机加的一行。", play_prompt(c))

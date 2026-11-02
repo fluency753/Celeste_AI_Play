@@ -68,7 +68,7 @@ class PromptFocusTests(unittest.TestCase):
         auto = play_prompt(replace(self.cfg, cutscene_mode='auto'))
         self.assertNotIn('当前为 agent 剧情模式', auto)
         self.assertIn('当前 auto 模式', auto)
-        reference = (REPO_ROOT/'kb/explore/help/actions.md').read_text(encoding='utf-8')
+        reference = (REPO_ROOT/'kb/shared/tools/act.md').read_text(encoding='utf-8')
         for fact in ('input_cursor.next', 'remaining_inputs', '原格式', '松键', 'LRUDJKXCZVG'):
             self.assertIn(fact, reference)
 

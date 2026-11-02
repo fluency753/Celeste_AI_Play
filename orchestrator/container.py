@@ -49,6 +49,7 @@ def _labels(cfg: RunConfig) -> dict[str, str]:
             # /kb 挂的是知识库本身（0）还是同步出来的副本（1：有不给看的文件或本机追加资料，见 kb_access.py）；
             # 之前建的容器没有这个标签，按 0 算
             f"{LABEL}.kb_view": "1" if cfg.kb_view else "0",
+            **({f'{LABEL}.kb_layout': str(cfg.kb_dir)} if cfg.kb_view else {}),
             **({f"{LABEL}.codex_home": '1'} if cfg.engine == 'codex' else {})}
 
 
@@ -147,7 +148,9 @@ def apply_cpu_limit(cfg: RunConfig, name: str, log=print) -> None:
 
 
 def ensure_container(cfg: RunConfig, log=print) -> str:
-    """返回已就绪（防火墙生效）的容器名。配置变了（镜像、端口）就重建容器；工作区与会话数据卷保留。"""
+    """返回已就绪（防火墙生效）的容器名；知识库先按当前环境生成。"""
+    from .kb_access import prepare_view
+    prepare_view(cfg, log)
     image = docker("image", "inspect", "-f", "{{.Id}}", cfg.image, check=False)
     if image.returncode != 0:
         raise RuntimeError(f"找不到镜像 {cfg.image}，请先在仓库根目录执行：docker build -t {cfg.image} agent-container")

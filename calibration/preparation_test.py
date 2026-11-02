@@ -47,6 +47,7 @@ class PreparationModelTests(unittest.IsolatedAsyncioTestCase):
             await prepare(self.args)
         cfg = self.container.call_args.args[0]
         self.assertEqual((cfg.model, cfg.effort), ('gpt-6.1-terra', 'high'))
+        self.assertEqual(cfg.mode, 'explore')
         self.assertEqual(self.rpc.request.call_args.args[0], 'model/list')
         self.assertEqual(len(self.catalog_threads), 1)
         self.assertNotEqual(self.catalog_threads[0], preparation_thread)

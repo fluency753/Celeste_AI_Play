@@ -23,13 +23,13 @@ class ButtonPromptTests(unittest.TestCase):
         for item in catalog:
             self.assertEqual(set(item), {'key', 'name', 'label'})
             self.assertEqual(item['name'], f"button_{item['key']}_zh.md")
-            self.assertTrue((prompting.PROMPTS / item['name']).is_file())
+            self.assertTrue(prompting.repo_part_path(item['name']).is_file())
             self.assertTrue(button_prompts.notification(item['key']).startswith(f"【主控系统消息｜{item['label']}】"))
         catalog[0]['key'] = 'changed by caller'
         self.assertEqual(button_prompts.catalog()[0]['key'], 'start_play')
 
     def test_local_override_is_read_on_each_event_without_mutating_repository_template(self):
-        template = prompting.PROMPTS / 'button_goal_zh.md'
+        template = prompting.repo_part_path('button_goal_zh.md')
         original = template.read_bytes()
         self.overrides.mkdir()
         local = self.overrides / template.name
@@ -76,7 +76,7 @@ class ButtonPromptTests(unittest.TestCase):
         (self.overrides / 'button_goal_zh.md').write_bytes(b'\xff')
         text = button_prompts.notification('goal', '实际目标已更新：d0。')
         self.assertTrue(text.startswith('【主控系统消息｜更新目标】\n实际目标已更新：d0。'))
-        self.assertIn((prompting.PROMPTS / 'button_goal_zh.md').read_text(encoding='utf-8').strip(), text)
+        self.assertIn(prompting.repo_part_path('button_goal_zh.md').read_text(encoding='utf-8').strip(), text)
         self.assertIn('本机消息模板读取失败，已用默认说明。', text)
 
     def test_io_failure_does_not_replace_or_drop_already_committed_facts(self):

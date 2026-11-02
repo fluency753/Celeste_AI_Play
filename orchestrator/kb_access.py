@@ -1,11 +1,11 @@
 """知识库的阅读权限与编辑（控制台的"知识库"页）。
 
-每种游玩模式给智能体挂进容器 /kb 的目录不同：速通模式是整个 kb/（含本机的 kb/reference/ 社区原文），
-探索模式只有 kb/explore/。用户可以取消勾选某些文件（RunConfig.kb_deny，命令行 --kb-deny）；探索模式还可以
+两种模式共用 kb/shared，各自加入 kb/speedrun 或 kb/explore，生成独立只读视图。
+速通还包含本机 kb/reference/ 社区原文。用户可以取消勾选某些文件（RunConfig.kb_deny，命令行 --kb-deny）；探索模式还可以
 勾选开放速通知识库里的文件（RunConfig.kb_allow，命令行 --kb-allow，默认一个都不开放），挂在 /kb/speedrun/ 下；
 也可以给某个系列赛追加本机资料（RunConfig.kb_extra，命令行 --kb-extra，目录放在 local/ 下、不入库；
 同名文件覆盖默认版本）。这两种情况下主控把最终的文件同步到 local/kb_views/<工作区标签>/，挂进容器的是这个副本，
-准备阶段也只要求读这些文件。全部可读且没有追加（默认）时直接挂知识库本身，与之前完全相同。
+准备阶段使用清单指定的必读文件，完整工具参考仍为选读。旧布局无修改时仍兼容直接挂载。
 
 控制台编辑知识库文件时不改仓库里的文件：修改存在当前配置的目录（orchestrator/profiles.kb_edits_dir，结构与 kb/ 相同；
 本机原有设置是 local/kb_edits/）。有修改时挂进容器的同样是合并后的副本（RunConfig.kb_overlay）；改回与仓库相同就删掉修改。
@@ -29,7 +29,8 @@ MAX_EDIT_BYTES = 2 * 1024 * 1024
 def root_of(mode: str) -> Path:
     if mode not in (SPEEDRUN, EXPLORE):
         raise ValueError("游玩模式须为速通或探索")
-    return KB_ROOT / "explore" if mode == EXPLORE else KB_ROOT
+    from .kb_layout import enabled
+    return KB_ROOT/mode if enabled(KB_ROOT) else (KB_ROOT / 'explore' if mode == EXPLORE else KB_ROOT)
 
 
 def _files(root: Path) -> list[Path]:
@@ -64,6 +65,9 @@ def _group(rel: str, mode: str = SPEEDRUN) -> str:
 
 def speedrun_files() -> list[str]:
     """速通知识库里不属于探索资料的文件（kb/ 内的相对路径）：探索模式可以逐个勾选开放。"""
+    from .kb_layout import enabled, catalog
+    if enabled(KB_ROOT):
+        return [doc.path for doc in catalog(KB_ROOT, SPEEDRUN) if not doc.path.startswith('shared/')]
     return [rel for rel in (path.relative_to(KB_ROOT).as_posix() for path in _files(KB_ROOT))
             if not rel.startswith("explore/")]
 
@@ -75,7 +79,9 @@ def _edits_root() -> Path:
 
 def _edit_of(path: Path) -> Path:
     """仓库知识库文件在当前配置里的修改版本的位置（不一定存在）。"""
-    return _edits_root() / path.resolve().relative_to(KB_ROOT.resolve())
+    from .kb_layout import enabled, edit_path
+    return (edit_path(KB_ROOT, path, _edits_root()) if enabled(KB_ROOT) else
+            _edits_root() / path.resolve().relative_to(KB_ROOT.resolve()))
 
 
 def _effective(path: Path) -> Path:
@@ -86,7 +92,18 @@ def _effective(path: Path) -> Path:
 def documents(mode: str) -> list[dict]:
     """这个模式下智能体能读到的全部文件（知识库内的相对路径）、是否要求在准备阶段读完、能否在控制台编辑。
     探索模式另列速通知识库的文件（opt_in，路径带 speedrun/ 前缀）：默认不开放，勾选了才挂进 /kb/speedrun/。"""
+    from .kb_layout import enabled, catalog
     root = root_of(mode)
+    if enabled(KB_ROOT):
+        docs = [(doc, False) for doc in catalog(KB_ROOT, mode)]
+        if mode == EXPLORE:
+            docs += [(doc, True) for doc in catalog(KB_ROOT, SPEEDRUN) if not doc.path.startswith('shared/')]
+        return [{'path': ('speedrun/' if opt else '') + doc.path, 'size': _effective(doc.source).stat().st_size,
+                 'group': '共享操作' if doc.path.startswith('shared/') else ('速通知识库（默认不开放）' if opt else mode),
+                 'required': doc.required and not opt, 'editable': doc.source.suffix.lower() in TEXT_SUFFIXES
+                 and _effective(doc.source).stat().st_size <= MAX_EDIT_BYTES,
+                 'local_only': doc.path.startswith('reference/'), 'edited': _effective(doc.source) != doc.source,
+                 **({'opt_in': True} if opt else {})} for doc, opt in docs]
     required = set(required_files(root)) if root.is_dir() else set()
     rows = []
     for path in _files(root):
@@ -112,6 +129,10 @@ def normalize_deny(mode: str, deny) -> list[str]:
         return []
     if not isinstance(deny, list) or not all(isinstance(x, str) for x in deny):
         raise ValueError("知识库权限须为文件路径列表")
+    from .kb_layout import enabled, lookup
+    if enabled(KB_ROOT):
+        deny = [name.strip().replace('\\', '/') for name in deny]
+        deny = [(lookup(KB_ROOT, mode, name).path if lookup(KB_ROOT, mode, name) else name) for name in deny]
     known = {row["path"] for row in documents(mode) if not row.get("opt_in")}
     out = sorted({x.strip().replace("\\", "/") for x in deny if x.strip()})
     unknown = [x for x in out if x not in known]
@@ -130,6 +151,10 @@ def normalize_allow(mode: str, allow) -> list[str]:
     if out and mode != EXPLORE:
         raise ValueError("只有探索模式需要单独开放速通知识库的文件")
     known = {SPEEDRUN_PREFIX + rel for rel in speedrun_files()}
+    from .kb_layout import enabled, lookup
+    if enabled(KB_ROOT):
+        known.update(name for name in out if name.startswith(SPEEDRUN_PREFIX)
+                     and lookup(KB_ROOT, SPEEDRUN, name[len(SPEEDRUN_PREFIX):]))
     unknown = [x for x in out if x not in known]
     if unknown:
         raise ValueError("速通知识库里没有这些文件：" + "、".join(unknown[:5]))
@@ -140,6 +165,13 @@ def _resolve(mode: str, rel: str) -> Path:
     root = root_of(mode).resolve()
     if not isinstance(rel, str) or not rel or rel.startswith(("/", "\\")) or ".." in Path(rel).parts:
         raise ValueError("文件路径无效")
+    from .kb_layout import enabled, lookup
+    if enabled(KB_ROOT):
+        rel = rel.replace('\\', '/')
+        doc = lookup(KB_ROOT, SPEEDRUN, rel[len(SPEEDRUN_PREFIX):]) if mode == EXPLORE and rel.startswith(SPEEDRUN_PREFIX) else lookup(KB_ROOT, mode, rel)
+        if doc is None:
+            raise ValueError(f'找不到 {rel}')
+        return doc.source
     if mode == EXPLORE and rel.startswith(SPEEDRUN_PREFIX):   # 探索页里列出的速通知识库文件
         root, rel = KB_ROOT.resolve(), rel[len(SPEEDRUN_PREFIX):]
         if rel.startswith("explore/"):
@@ -215,6 +247,17 @@ def _prune(directory: Path) -> None:
 def prepare_view(cfg, log=print) -> Path:
     """有不给看的文件或本机追加资料时，把最终的文件同步到 cfg.kb_dir（local/kb_views/<标签>/）并返回它；
     否则返回知识库本身。追加目录里与知识库同名的文件覆盖默认版本；不给看的文件对追加的文件同样生效。"""
+    from .kb_layout import enabled, build, study_identity
+    if getattr(cfg, '_kb_bound_view', None) is not None:
+        view = cfg.kb_dir
+        study_identity(view)
+        return view
+    if enabled(KB_ROOT):
+        from .kb_layout import binding_key
+        view = build(cfg, KB_ROOT, cfg.kb_dir)
+        cfg._kb_bound_settings = binding_key(cfg)
+        cfg._kb_bound_view = view
+        return view
     source = cfg.kb_source
     if not cfg.kb_view:
         return source

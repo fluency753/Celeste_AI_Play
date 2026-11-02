@@ -55,9 +55,9 @@ Codex 恢复线程时检查该线程实际持久化的动态工具。旧线程�
 
 ### 默认采用探索模式
 
-`start_gpt.ps1` 和新建的 `--engine codex` 运行默认使用探索模式。必读是 `kb/explore/` 的 README.md、basics.md（基本规则）、data.md（坐标与观测数据）与 tools.md（按键与工具）；`help/` 包含选读的操作、观测格式、复杂输入、剧情、工作区与程序优化参考，需要时再查，不要求准备阶段通读。目标是通过实际尝试探索并完成指定章节。知识库与提示词不提供技巧说明、实体说明、地图路线或隐藏内容位置，但不限制智能体用自己已有的知识，也不禁止高级技巧与自己写辅助程序（单次运行时长受 `explore_program_s` 限制）。
+`start_gpt.ps1` 和新建的 `--engine codex` 运行默认使用探索模式。必读是探索索引和 basics.md，加共享的 shared/data.md（观测要点）、shared/tools.md（操作）；`shared/tools/` 包含按工具组织的选读格式与文件参考，需要时再查，不要求准备阶段通读。目标是通过实际尝试探索并完成指定章节。知识库与提示词不提供技巧说明、实体说明、地图路线或隐藏内容位置，但不限制智能体用自己已有的知识，也不禁止高级技巧与自己写辅助程序（单次运行时长受 `explore_program_s` 限制）。
 
-容器的 `/kb` 只挂载 `kb/explore/`，不提供 `/sim`。探索模式的工作区是 `workspaces/<标签>-explore`，容器与会话数据卷也与速通模式分开，防止读到旧的攻略笔记。切换知识范围必须新建准备会话，速通模式的 `--prepared` 或 `--resume` 不能混入探索模式。精确模拟器不开放；规划回放新运行默认关闭（`start_gpt.ps1 -Play` 自带 `--playback`），开着时也只有提交了实际预测轨迹才会出现回放。
+容器的 `/kb` 是 `kb/shared/` 与 `kb/explore/` 的合成视图，不提供 `/sim`。探索模式的工作区是 `workspaces/<标签>-explore`，容器与会话数据卷也与速通模式分开，防止读到旧的攻略笔记。切换知识范围必须新建准备会话，速通模式的 `--prepared` 或 `--resume` 不能混入探索模式。精确模拟器不开放；规划回放新运行默认关闭（`start_gpt.ps1 -Play` 自带 `--playback`），开着时也只有提交了实际预测轨迹才会出现回放。
 
 实测（2026-10-24，Codex）：
 
@@ -302,7 +302,7 @@ HUD 把模拟体力显示为"推演额度"（余额 / 上限），网页 HUD 悬
 
 `orchestrator/prompt_environment.py` 集中处理真实能力、工具名和参数差异。Codex 直接显示 read/glob/grep、apply_patch、原生 Shell（timeout_ms），Claude 显示 Read/Write/Edit/Bash（timeout）；不再在 Codex 正文尾部加一整段映射。兼容输入 `runtime=host` 的 Codex 仍使用容器工具，host Claude 则不要求读文件。旧会话实际文件工具登记仍由恢复通知校正。共享模板与本机覆盖中的独立能力名会按环境展开，已带前缀的名称和路径不重复改写；个人追加正文保持原文。现有本机覆盖不自动改写或覆盖，旧的长正文仍会保留；要获得精简版本，可对照控制台“仓库版本”迁移个人修改。自定义启动模板必须保留新增 `{agent_environment}` 槽位，缺失时保存与模型启动明确报迁移错误，不覆盖旧文件。
 
-有工作区读取能力的执行器共用启动模板 `orchestrator/prompts/runtime_zh.md`，默认通过 `{task_brief}`、`{guide_index_path}`、`{agent_environment}` 填入简短任务摘要、指南索引和必要环境事实；不再内联完整配置 JSON 或重复工具接口。`current_settings()` 及旧模板的 `{current_settings}`、`{game_tools}` 仍保留，个人追加要求不变。摘要保留 B／C 面、分段起止、许可范围、绕行边界及通关后继续等任务事实。探索与速通均使用它；控制台“提示词”页可编辑，保存到当前配置的提示词目录（本机原有设置是 `local/prompts/runtime_zh.md`，见 USAGE 4.14），删除本机覆盖恢复默认。须等主控结束后修改，下次启动或重接生成正文时生效；不属于工作区指南。无文件能力的 host Claude 仍内联完整共享规则。
+有工作区读取能力的执行器共用启动模板 `orchestrator/prompts/shared/runtime_zh.md`，默认通过 `{task_brief}`、`{guide_index_path}`、`{agent_environment}` 填入简短任务摘要、指南索引和必要环境事实；不再内联完整配置 JSON 或重复工具接口。`current_settings()` 及旧模板的 `{current_settings}`、`{game_tools}` 仍保留，个人追加要求不变。摘要保留 B／C 面、分段起止、许可范围、绕行边界及通关后继续等任务事实。探索与速通均使用它；控制台“提示词”页可编辑，保存到当前配置的提示词目录（本机原有设置是 `local/prompts/runtime_zh.md`，见 USAGE 4.14），删除本机覆盖恢复默认。须等主控结束后修改，下次启动或重接生成正文时生效；不属于工作区指南。无文件能力的 host Claude 仍内联完整共享规则。
 
 探索默认指南不重复工具清单、动作帧数、stop_on 和冻结帧解释；参数由工具声明及最新观测提供，计时概念保留在基本知识库。记忆维护不规定分类或文件组织方式，情绪约定不列具体场景例子，也不提前告知笔记／解说提醒阈值，实际提醒仍照常运行。剧情责任与整章／中途检查点完成边界集中在 `agent_controls_zh.md`，auto 模式只说明当前处理方式；TAS 细节移至按需 `help/actions.md`，默认不因 agent 剧情模式而通读。
 

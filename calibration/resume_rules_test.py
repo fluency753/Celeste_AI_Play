@@ -204,7 +204,7 @@ class ResumeRulesTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(self.delivered(unknown), record)
                 # 设置变了：附上新规则并更新记录
                 changed_cfg = self.config(runtime)
-                changed_cfg.min_frames_per_act = 55
+                changed_cfg.cutscene_mode = 'agent'  # 修改发布的职责规则；帧数限制现在由工具声明及实时观测提供
                 changed = self.run_dir('session-d', {'rules_delivered': record})
                 sent, _, runner = await self.drive(changed_cfg, changed, session_id='session-d', resume=True,
                                                    note='续跑消息', healthy=True)

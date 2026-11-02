@@ -209,12 +209,12 @@ class SessionControls:
                             else:
                                 if row["kind"] == "goal_clear":
                                     self.session.goals.clear()
-                                    note = notification('goal_clear', facts="用户已清除自定义目标及停止条件，撤回先前自定义要求；保留主控最初指定的章节范围。")
+                                    note = notification('goal_clear', facts="用户已清除自定义目标及停止条件，撤回先前自定义要求；保留主控最初指定的章节范围。", cfg=self.cfg)
                                 else:
                                     goal = json.loads(row["text"])
                                     await asyncio.to_thread(self.session.set_goal, goal)
                                     from .goals import describe_goal
-                                    note = notification('goal', facts="用户更新了目标：" + describe_goal(goal) + "。停止条件由主控核验。")
+                                    note = notification('goal', facts="用户更新了目标：" + describe_goal(goal) + "。停止条件由主控核验。", cfg=self.cfg)
                                 await self._check_goal()
                                 if not self.session.done:
                                     self.pending_messages.append({**row, "text": note})
@@ -229,7 +229,7 @@ class SessionControls:
                                 note = await asyncio.to_thread(self.session.set_plan, data["segments"])
                             else:
                                 note = await asyncio.to_thread(self.session.set_chapter_queue, data.get("queue", []))
-                            self.pending_messages.append({**row, "text": notification('chapters', facts=note)})
+                            self.pending_messages.append({**row, "text": notification('chapters', facts=note, cfg=self.cfg)})
                             self.control.mark(row["id"], "waiting", "要通关的范围已更新，正在通知 agent")
                         elif row['kind'] == 'bridge_reload':
                             await self._reload_bridge(row)
@@ -248,7 +248,7 @@ class SessionControls:
                                 self.control.set_action_permissions(permissions.snapshot())
                                 configure(self.cfg, permissions)
                                 configure(self.session.cfg, permissions)
-                            note = notification('action_permissions', facts='用户更新了' + permissions.instructions(experiments=getattr(self.session.cfg, 'play_scope', 'chapter') == 'visited'))
+                            note = notification('action_permissions', facts='用户更新了' + permissions.instructions(experiments=getattr(self.session.cfg, 'play_scope', 'chapter') == 'visited'), cfg=self.cfg)
                             self.pending_messages.append({**row, 'text': note})
                             self.control.mark(row['id'], 'waiting', '章节重置策略已生效，正在通知 agent')
                         elif row['kind'] == 'detour':
@@ -271,7 +271,7 @@ class SessionControls:
                                     permissions_note = '同时开启了返回地图权限。' + permissions.instructions()
                                 self.control.set_detour(allowed)
                                 self.cfg.allow_detour = self.session.cfg.allow_detour = allowed
-                            self.pending_messages.append({**row, 'text': notification('action_permissions', facts=notice(self.session.cfg, allowed, permissions_note, travel=bool(getattr(self.session, 'travel_tool', False))))})
+                            self.pending_messages.append({**row, 'text': notification('action_permissions', facts=notice(self.session.cfg, allowed, permissions_note, travel=bool(getattr(self.session, 'travel_tool', False))), cfg=self.cfg)})
                             self.control.mark(row['id'], 'waiting', '计划外地图许可已生效，正在通知 agent')
                         elif row['kind'] == 'act_limit':
                             if not self._act_limit_status()['act_limit_control']:
@@ -284,7 +284,7 @@ class SessionControls:
                             if snapshot['changed']:
                                 self.pending_messages.append({**row, 'next_turn': True,
                                     'text': notification('act_limit', facts=f"单次 act 帧数范围：{snapshot['min_frames']}～{snapshot['frames']} 帧，配置项 {snapshot['key']}。"
-                                                         '新范围优先于旧工具说明中的数字；自写推演和模拟额度未改变。')})
+                                                         '新范围优先于旧工具说明中的数字；自写推演和模拟额度未改变。', cfg=self.cfg)})
                         elif row['kind'] == 'sim_update':
                             if not self._sim_status()['sim_control']:
                                 raise ValueError('当前主控未开启有限模拟辅助，不能在线修改推演设置')
@@ -293,7 +293,7 @@ class SessionControls:
                             self.control.mark(row['id'], 'submitted', '推演设置已生效，无需重启主控或录制')
                             # 只是通知：不能向进行中的一轮追加输入的执行器（Claude）不为它打断，下一轮带上
                             self.pending_messages.append({**row, 'next_turn': True, 'text': notification('sim_update', facts='用户已实时更新推演设置：' + snapshot['rules'] +
-                                f"当前余额{snapshot['balance']}。新规则从下一次推演生效。")})
+                                f"当前余额{snapshot['balance']}。新规则从下一次推演生效。", cfg=self.cfg)})
                         elif row["kind"] == "message":
                             self.pending_messages.append(row)
                             self.control.mark(row["id"], "waiting", "等待提交给当前会话")
@@ -337,7 +337,7 @@ class SessionControls:
                             self.control.mark(row['id'],'submitted','剧情模式已更新，当前菜单操作完成后生效')
                             if self.session is not None:
                                 self.session.cfg.cutscene_mode=row['text']
-                                self.pending_messages.append({**row,'text':notification('cutscene_mode', facts='用户将剧情处理切换为 '+row['text']+'。agent模式下自行决定观看、推进、选择选项或跳过；不得用advance代选对话选项。')})
+                                self.pending_messages.append({**row,'text':notification('cutscene_mode', facts='用户将剧情处理切换为 '+row['text']+'。agent模式下自行决定观看、推进、选择选项或跳过；不得用advance代选对话选项。', cfg=self.cfg)})
                         elif row['kind'] == 'effort':
                             value=None if row['text']=='auto' else row['text']
                             if value is not None:
@@ -350,7 +350,7 @@ class SessionControls:
                             if self.turn_active and self.turn_id and not self.turn_done.is_set():
                                 note=(f'用户已手动固定推理强度为 {value}。当前工具或动作完成后，请简短结束本轮，系统将按新档位自动继续。不要因此暂停或结束试玩。'
                                       if value else '用户已恢复自动推理强度，你可以按需调整；之前的手动固定要求已撤回。')
-                                self.pending_messages.append({**row,'text':notification('effort', facts=note)})
+                                self.pending_messages.append({**row,'text':notification('effort', facts=note, cfg=self.cfg)})
                         elif row["kind"] == "pause":
                             self.paused = True
                             self.pausing = True
@@ -374,7 +374,7 @@ class SessionControls:
                                 self.metrics.resume(quota=False)
                             self.paused = False
                             if was_paused:
-                                self.resume_notice = notification('resume', facts='用户已恢复试玩；任务范围、权限和停止条件未改变。')
+                                self.resume_notice = notification('resume', facts='用户已恢复试玩；任务范围、权限和停止条件未改变。', cfg=self.cfg)
                             self.control.mark(row["id"], "submitted", "已继续试玩")
                     except Exception as exc:
                         self.control.mark(row["id"], "error", str(exc))
@@ -478,7 +478,7 @@ class SessionControls:
                               '当前房间经 Everest 正常重载，主控仍核验原存档与房间。')
                 self.pending_messages.append({**row, 'id': 'bridge_reload:' + str(row['id']), 'next_turn': True,
                     'text': notification('bridge_reload', facts='桥接代码已重载并接回，' + recording_note + '。' + scene_note +
-                            '请先重新 observe 核对状态，不沿用旧实体编号，不重复已经执行的动作。')})
+                            '请先重新 observe 核对状态，不沿用旧实体编号，不重复已经执行的动作。', cfg=self.cfg)})
         except Exception as exc:
             self._bridge_reload_failed = getattr(exc, 'reload_held', False)
             self.paused = True
@@ -545,7 +545,7 @@ class SessionControls:
         if key == self._fast_yield_requested:
             return
         try:
-            await self._steer_user(notification('fast', facts=f'用户更新了 Fast 设置：{"开启" if self.fast_mode else "关闭"}，下一轮生效。当前试玩设置：{"暂停" if self.paused else "运行"}。'))
+            await self._steer_user(notification('fast', facts=f'用户更新了 Fast 设置：{"开启" if self.fast_mode else "关闭"}，下一轮生效。当前试玩设置：{"暂停" if self.paused else "运行"}。', cfg=self.cfg))
         except Exception:
             return  # a turn/start or turn/completed race; recheck state on the next control tick
         self._fast_yield_requested=key

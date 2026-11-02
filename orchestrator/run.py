@@ -1457,6 +1457,8 @@ def main() -> int:
     if args.prepared:
         # 在选档、录制或连接游戏前验证，错误的准备目录不能导致游戏动作。
         from .prepared import load_preparation
+        from .kb_access import prepare_view
+        prepare_view(cfg)
         preparation_study = KbStudy(cfg.kb_dir, cfg.study_minutes,
                                     {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None)
         load_preparation(args.prepared, cfg, preparation_study)

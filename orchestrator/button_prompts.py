@@ -44,7 +44,7 @@ def notification(key, facts='', *, cfg=None):
         raise ValueError('未知按钮提示词')
     if not isinstance(facts, str):
         raise ValueError('主控通知事实须为文字')
-    from .prompting import PROMPTS, read_part
+    from .prompting import read_part, repo_part_path
     name = f'button_{key}_zh.md'
     failed = False
     try:
@@ -52,7 +52,7 @@ def notification(key, facts='', *, cfg=None):
     except (OSError, UnicodeError):
         failed = True
         try:
-            body = (PROMPTS / name).read_text(encoding='utf-8').strip()
+            body = repo_part_path(name).read_text(encoding='utf-8').strip()
         except (OSError, UnicodeError):
             body = '请依据当前状态与配置继续当前任务。'
     parts = [f'【主控系统消息｜{_LABELS[key]}】']
@@ -63,7 +63,6 @@ def notification(key, facts='', *, cfg=None):
     if key in _CONTINUATIONS:
         parts.append(_CONTINUATION_NOTE)
     text = '\n'.join(parts)
-    if cfg is not None:
-        from .prompt_environment import render_tool_references
-        text = render_tool_references(text, cfg)
+    from .prompt_environment import render_tool_references
+    text = render_tool_references(text, cfg)
     return text

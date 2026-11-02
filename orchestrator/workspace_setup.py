@@ -14,7 +14,7 @@ def install_game_helpers(workspace: Path) -> None:
     destination = Path(workspace) / 'game'
     destination.mkdir(parents=True, exist_ok=True)
     sources = [(root / 'workspace_files' / name, name) for name in _HELPERS]
-    sources.append((root.parent / 'kb' / 'collision_matrix.md', 'collision_matrix.md'))
+    sources.append((root.parent / 'kb/shared/tools/observe/collision_matrix.md', 'collision_matrix.md'))
     for source, name in sources:
         fd, temporary = tempfile.mkstemp(prefix=f'.{name}.', suffix='.tmp', dir=destination)
         os.close(fd)

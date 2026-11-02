@@ -2473,7 +2473,7 @@ async function openPromptFile(name) {
   catch (e) { toast(e.message, true); return; }
   ui.promptFile = { ...doc, dirty: false };
   $("promptPreviewBox").hidden = true; $("promptEditor").hidden = false;
-  $("promptPath").textContent = "orchestrator/prompts/" + name + (doc.overridden ? "（本机修改）" : "");
+  $("promptPath").textContent = (doc.source_path || "orchestrator/prompts/" + name) + (doc.overridden ? "（本机修改）" : "");
   $("promptText").value = doc.text;
   $("promptStatus").textContent = profileReadonly() ? "默认配置是仓库原样、只读：要修改先在顶部“配置”里新建一份。"
     : doc.overridden ? "这个文件有本机修改，正在编辑的是本机修改。" : "正在编辑仓库里的版本；保存后存为这份配置里的本机修改。";
@@ -2885,7 +2885,7 @@ async function savePromptFile() {
   try {
     const result = await postJSON("/api/console/prompt/file", { name: f.name, text: $("promptText").value, version: f.version });
     ui.promptFile = { ...result, dirty: false };
-    $("promptPath").textContent = "orchestrator/prompts/" + f.name + (result.overridden ? "（本机修改）" : "");
+    $("promptPath").textContent = (result.source_path || "orchestrator/prompts/" + f.name) + (result.overridden ? "（本机修改）" : "");
     $("promptReset").disabled = !result.overridden;
     const missing = result.missing_placeholders || [];
     $("promptStatus").textContent = (result.overridden ? (result.live_editable ? "已保存为本机修改，下一次对应消息生成时生效。" : "已保存为本机修改，下一次运行生效。") : "和仓库里的版本相同，已删掉本机修改。")
@@ -2902,7 +2902,7 @@ async function resetPromptFile(name) {
     if (ui.promptFile && ui.promptFile.name === name) {
       ui.promptFile = { ...doc, dirty: false };
       $("promptText").value = doc.text;
-      $("promptPath").textContent = "orchestrator/prompts/" + name;
+      $("promptPath").textContent = doc.source_path || "orchestrator/prompts/" + name;
       $("promptReset").disabled = true;
       $("promptStatus").textContent = "已恢复成仓库里的版本。";
       updatePromptButtons();

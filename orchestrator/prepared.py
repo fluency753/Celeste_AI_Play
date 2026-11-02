@@ -31,6 +31,14 @@ def load_preparation(path: str, cfg, study):
         raise ValueError("准备阶段的工作区标签与本次 --agent 不一致")
     if not data.get("session_id"):
         raise ValueError("准备阶段缺少会话 ID")
+    from .kb_layout import enabled, study_identity
+    from . import config
+    identity = study_identity(study.kb_dir)
+    if enabled(config.REPO_ROOT/'kb') or getattr(cfg, '_kb_bound_view', None) is not None:
+        if identity is None or study.kb_dir.resolve() != cfg.kb_dir.resolve():
+            raise ValueError('准备核验缺少本次知识库快照清单，请重新准备')
+    if (identity is not None or data.get('kb_identity') is not None) and data.get('kb_identity') != identity:
+        raise ValueError('准备会话的知识库布局、工具环境或授权已变化，请重新准备')
     for rel in study.files:
         source = study.extra.get(rel) or (study.kb_dir / rel)
         actual = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -59,9 +67,11 @@ if __name__ == "__main__":
     parser.add_argument("--knowledge", choices=["explore", "full"], default="explore")
     args = parser.parse_args()
     cfg = RunConfig(agent=args.agent, save="test", model="", knowledge_profile=args.knowledge,
-                    sim=args.knowledge == "full")
+                    mode='explore' if args.knowledge == 'explore' else 'speedrun', sim=args.knowledge == "full")
     from .runtimes import runtime
     runtime(args.engine).configure(cfg, args.provider)
+    from .kb_access import prepare_view
+    prepare_view(cfg)
     study = KbStudy(cfg.kb_dir, 60, {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None)
     data = load_preparation(args.directory, cfg, study)
     print("准备会话校验通过：", data["session_id"])

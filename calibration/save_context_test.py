@@ -59,7 +59,7 @@ class SwitchTests(unittest.TestCase):
                                 knowledge_profile="explore", chapter=4, save_context=False)
                 text_on = fill(observation_tool_description(on, "act"), on)
                 text_off = fill(observation_tool_description(off, "act"), off)
-                self.assertIn("/kb/help/actions.md", text_on)          # 确实走的是精简版
+                self.assertIn('/kb/shared/tools/act.md', text_on)     # 确实走的是精简版
                 self.assertIn("本次开启了节省上下文：同一房间里的", text_on)    # Codex 会把工具名换成 celeste_act
                 self.assertNotIn("节省上下文", text_off)
                 for text in (text_on, text_off):
