@@ -18,6 +18,9 @@ from orchestrator.startup_prompt import runtime_prompt
 
 class ProgressivePromptTests(unittest.TestCase):
     def setUp(self):
+        from orchestrator import profiles
+        self.enterContext(profiles.using(profiles.LEGACY))
+        self.enterContext(patch.object(profiles, 'selected', return_value=profiles.LEGACY))
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
@@ -67,12 +70,11 @@ class ProgressivePromptTests(unittest.TestCase):
             self.assertNotIn('原生 Codex 工具映射', startup)
             guide = play_prompt(cfg)
             if engine == 'codex':
-                self.assertIn('celeste_observe', guide)
-                self.assertIn('celeste_act', guide)
-                self.assertIn('文件用 read/glob/grep', startup)
+                self.assertIn('celeste_narrate', guide)
+                self.assertIn('必读计量只认专用 read', startup)
                 self.assertIn('timeout_ms（毫秒）', fill('{program_timeout_rule}', cfg))
             else:
-                self.assertIn('Read/Glob/Grep', startup)
+                self.assertIn('必读计量只认专用 Read', startup)
                 self.assertIn('Bash 的 timeout 参数', fill('{program_timeout_rule}', cfg))
 
     def test_tool_descriptions_keep_semantics_and_fall_back_when_reference_unavailable(self):
@@ -162,7 +164,7 @@ class ProgressivePromptTests(unittest.TestCase):
             console_api.prompt_write(path.name, old+'\n{agent_environment}', current['version'])
         text = runtime_prompt(self.cfg)
         self.assertIn('保留本机修改', text)
-        self.assertIn('文件用 read/glob/grep', text)
+        self.assertIn('必读计量只认专用 read', text)
 
 
 if __name__ == '__main__':

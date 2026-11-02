@@ -18,6 +18,9 @@ from orchestrator.startup_prompt import current_settings, runtime_prompt
 
 class StartupPromptTests(unittest.TestCase):
     def setUp(self):
+        from orchestrator import profiles
+        self.enterContext(profiles.using(profiles.LEGACY))
+        self.enterContext(patch.object(profiles, 'selected', return_value=profiles.LEGACY))
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
@@ -35,14 +38,14 @@ class StartupPromptTests(unittest.TestCase):
         name = 'runtime_zh.md'
         doc = console_api.prompt_read(name)
         self.assertEqual({p['name'] for p in doc['placeholders']},
-                         {'{current_settings}', '{guide_index_path}', '{game_tools}', '{agent_environment}'})
+                         {'{task_brief}', '{guide_index_path}', '{agent_environment}'})
         self.assertFalse(doc['live_editable'])
         options = {'engine': 'codex', 'mode': 'explore', 'agent': 'test',
                    'save': {'name': '{game_tools}', 'slot': 14},
                    'sim': False, 'sim_assist': False}
         guide = guide_document(config_for(options))
         personal_prompts.save('all', 'PERSONAL {current_settings}', personal_prompts.read('all')['version'])
-        template = '自定义启动\n{current_settings}\n{guide_index_path}\n{game_tools}\n{agent_environment}\n'
+        template = '自定义启动\n{current_settings}\n{guide_index_path}\n{game_tools}\n{agent_environment}\n{task_brief}\n'
         with patch.object(console_api, 'orchestrator_status', return_value={'running': False}):
             saved = console_api.prompt_write(name, template, doc['version'])
             self.assertTrue(saved['overridden'])
@@ -117,8 +120,8 @@ class StartupPromptTests(unittest.TestCase):
         unchanged = [s for s in new['sections'] if old_sections.get(s['id']) == s['sha256']]
         self.assertTrue(unchanged)
         self.assertLess(len(unchanged), len(new['sections']))
-        self.assertIn('实时权限与目标以主控反馈为准', runtime_prompt(updated))
-        self.assertIn('工作区的已读记录不能代替新会话自己阅读', runtime_prompt(updated))
+        self.assertIn('权限与目标以实时反馈为准', runtime_prompt(updated))
+        self.assertIn('新会话自行阅读', runtime_prompt(updated))
 
     def test_failed_guide_publication_stops_runner_before_model_start(self):
         with tempfile.TemporaryDirectory() as folder:

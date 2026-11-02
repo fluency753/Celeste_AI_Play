@@ -36,18 +36,13 @@ def environment_instructions(cfg):
     if not workspace.workspace_read:
         return '当前只有游戏工具，没有文件或程序工具；按观测与工具说明操作。'
     if getattr(cfg, 'engine', 'claude') == 'codex':
-        tools = ('文件用 read/glob/grep，编辑用 apply_patch，程序用原生 Shell；游戏工具为 celeste_ 前缀。'
-                 'Shell 中包括 cat/ls 在内的命令均按程序门禁和次数计量；'
-                 'read/glob/grep 不计程序次数，暂停或只读聊天也可用。'
-                 '旧会话文件工具名以恢复通知中的实际登记为准。'
-                 '公开 commentary 可直接作为解说入口；图像通过当前轮附件送达，按帧号和 screenshot/collision 标签核对。')
+        tools = ('必读计量只认专用 read，Shell 读文件仍按程序计量；暂停或只读聊天仍可查阅文件。'
+                 '旧会话工具名以恢复通知为准。图像通过当前轮附件送达，核对帧号与标签。')
     else:
-        tools = ('文件用 Read/Glob/Grep，编辑用 Write/Edit，程序用 Bash；游戏工具由 celeste MCP 提供。'
-                 '文件读取不计程序次数，暂停或只读聊天仍可查阅；图像通过工具的图像内容送达。')
+        tools = ('必读计量只认专用 Read，Bash 读文件不计准备进度；暂停或只读聊天仍可查阅文件。'
+                 '图像通过工具的图像内容送达。')
     return ('工作目录 /workspace，文件与程序均在断网容器内。' + tools
-            + '必读资料须用专用文件读取工具逐页读取，Shell 读取不计准备进度。'
-              '程序及游戏操作仍受当前阶段与权限限制；不另连桥接或其他服务，不启动子智能体。'
-              '只公开简短结论，不输出内部推理或图像编码。')
+            + '程序及游戏操作遵守当前阶段和权限，不另连桥接或服务，不启动子智能体；不输出内部推理或图像编码。')
 
 
 def reference_path(cfg, name):

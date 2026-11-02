@@ -44,15 +44,11 @@ def game_tool_list(cfg) -> str:
 
 
 def auto_handling(cfg) -> str:
-    """interface_zh.md 里"系统自动处理的部分"：没有剧情工具时剧情一律自动跳过；有剧情工具时按当前剧情模式处理。"""
-    if has_cutscene_tool(cfg):
-        return ("屏幕转场、死亡动画与重生由系统自动推进。拿到磁带、吃心后画面冻结等确认的界面，auto 时系统替你按确认，agent 时交回由你用 act 发 C。"
-                "剧情按当前的剧情模式处理：auto 时系统自动推进并跳过；"
-                "agent 时剧情可尝试跳过便先交回，用 `cutscene` 的 skip 尝试跳过或 watch 观看到下一真实输入节点；对白用 advance，分支明确 choose，教学用 `act`，无需 wait。剧情标记不等于失控，角色可操作时仍可用 `act`；桥接明确识别自动播放时，也可显式 `watch` 观看。"
-                "agent 模式下，吃心提示、结算确认及返回选章地图都由你观察界面后用 act 操作：C 确认、B 返回，纯帧数推进动画。"
-                "complete 事件或 completed=true 只是游戏登记了成绩，不是任务结束；回到选章地图后主控才确认章节完成，不会代按结算。")
-    return ("剧情对话、屏幕转场、死亡动画与重生都由系统自动推进并跳过，拿到磁带、吃心后画面冻结等确认的界面也由系统按确认，"
-            "`act` 返回时 Madeline 已经可以操作；仍卡在确认界面时可以用 act 发 C 确认。")
+    """Current playback facts; agent responsibilities live in one section."""
+    text = '默认 celeste_ai 输入的转场、死亡与重生由主控推进；celeste_tas 不自动补帧。'
+    if getattr(cfg, 'cutscene_mode', 'auto') == 'agent':
+        return text + '当前剧情由你决定，主控不代按确认、菜单或剧情选项；结算边界见“剧情与任务边界”。'
+    return text + '当前 auto 模式由主控推进和跳过剧情，并处理已识别的确认界面；仍卡在确认处时可用 act 发 C。'
 
 
 def explore_program_rule(cfg) -> str:
@@ -72,8 +68,7 @@ def cpu_rule(cfg) -> str:
 
 
 # 思考语句的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
-THOUGHT_MOOD = ("思考语句的语气不必一直冷静理智，可以自然流露真实的情绪，比如找到好路线时的高兴、反复失败后的懊恼、"
-               "面对难关时的紧张；但不要夸张，像正常人说话一样就好。")
+THOUGHT_MOOD = '语气自然，可以表达情绪，不必刻意表演。'
 THOUGHT_MOOD_SHORT = "语气不必一直冷静理智，可以自然带点情绪，但不要夸张。"
 
 
@@ -234,6 +229,12 @@ def room_reference_rule(cfg):
     return '使用首次布局和后续变化，缺少基线时默认 observe 重建；依据身体尺寸与矩形边界，用短动作验证有歧义的连接。'
 
 
+def story_reference_rule(cfg):
+    from .prompt_environment import reference_path
+    path = reference_path(cfg, 'story.md')
+    return f'界面或剧情状态不明时按需查阅 {path}。' if path else '界面不明时先观察，不猜测选项或重复空等。'
+
+
 def program_reference_rule(cfg):
     from .prompt_environment import reference_path
     paths = [reference_path(cfg, name) for name in ('programs.md', 'workspace.md')]
@@ -277,7 +278,7 @@ def fill(text: str, cfg) -> str:
                                      if workspace.workspace_read else "按键和工具约定以本次提供的游戏工具说明为准。"),
         "{explore_environment_rule}": ("Read/Write/Bash 对应容器的文件读取、写入和断网命令；"
                                        if workspace.programs else "当前只有游戏工具，不能读取文件或运行程序；"),
-        "{explore_memory_rule}": ("/workspace/notes.md 按房间或机制整理，保存当前目标、验证过的事实、失败原因、待验证问题以及收集品与支线待办。开局、续跑或压缩后，在首次真实动作前查阅并核对最新观测；不存在时建立简短索引。换房、换目标或连续几次尝试后查相关条目；新发现、反例或目标变化时主动更新，不等用户提醒，区分事实与猜测，合并重复、标明失效结论；长记录拆文件并留链接，不逐帧抄数据。"
+        "{explore_memory_rule}": ("用 /workspace/notes.md 保留后续有用的工作记忆，组织方式由你决定。开局、续跑或压缩后，在首次真实动作前查阅已有记录并核对最新观测；主动记录有用变化，区分事实与猜测，修正失效结论。"
                                    if workspace.workspace_read and workspace.workspace_write else
                                    "依据当前观测与已有对话记录目标、已验证事实和待验证问题，不把旧状态当作当前事实。"),
         "{public_feedback_rule}": ('有新判断时用 '
@@ -293,6 +294,7 @@ def fill(text: str, cfg) -> str:
         "{geometry_record_rule}": ("在笔记或程序里保留已验证的通道、连接依据、失败假设及适用条件。"
                                    if workspace.workspace_write else "在公开解说中简短总结已验证的通道、连接依据与失败假设。"),
         "{room_reference_rule}": room_reference_rule(cfg),
+        "{story_reference_rule}": story_reference_rule(cfg),
         "{program_reference_rule}": program_reference_rule(cfg),
         "{program_timeout_rule}": program_timeout_rule(cfg),
         "{program_progress_rule}": ('每轮运行搜索前用公开 commentary 简述验证目标，程序中用 show.status 报告真实进展。'
@@ -451,7 +453,7 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
         pass  # shared free-exploration instructions below replace the traversal plan
     elif plan_is_partial(getattr(cfg, "plan", None)):
         parts.append(PromptPart("本次的范围（按段通关时自动加）",
-                                "# 本次的范围\n\n" + describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, agent_navigation=cfg.cutscene_mode == 'agent')
+                                "# 本次的范围\n\n" + describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, agent_navigation=cfg.cutscene_mode == 'agent', completion_policy=cfg.completion_policy)
                                 + reuse, None, "\n\n"))
     elif plan_has_sides(getattr(cfg, "plan", None)) or (cfg.chapters and len(cfg.chapters) > 1):
         # 计划里有 B／C 面时一章也写出来：智能体要知道玩的是哪一面（只有 A 面时与原来相同）
@@ -494,7 +496,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
             pass
         elif plan_is_partial(getattr(cfg, "plan", None)):
             parts.append(PromptPart("本次指定范围（按段通关时自动加）",
-                                    describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, speedrun=False, agent_navigation=cfg.cutscene_mode == 'agent')
+                                    describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, speedrun=False, agent_navigation=cfg.cutscene_mode == 'agent', completion_policy=cfg.completion_policy)
                                     + ("计划不得自行扩展，计划外地图只作绕行（见“计划外地图”一节）。" if detour_enabled(cfg)
                                        else "不得自行扩展。"), None, "\n"))
         elif chapters:
@@ -512,13 +514,10 @@ def prompt_parts(cfg) -> list[PromptPart]:
     if getattr(cfg, 'completion_policy', 'stop') == 'continue':
         parts.append(PromptPart("通关后继续", "本条优先于通用提示词中的通关收尾约定：通关不是本次任务的停止条件。结算和选章由你显式操作；计划结束后仍在许可地图内继续探索、建模或收集，直到用户目标触发、用户停止或出现真正阻塞。可用 observe(detail='time') 查询时间和目标剩余量。", None, "\n\n"))
     parts += _file_parts("room_analysis_zh.md")
-    if workspace_capabilities(cfg).workspace_read:
-        threshold = getattr(cfg, 'notes_warn_percent', 60)
-        before = (f"已知上下文窗口占用超过 {threshold:g}% 且本监测周期未检测到笔记内容更新时提醒一次。" if threshold else "前置整理提醒已关闭。")
-        parts.append(PromptPart("笔记维护提醒", "主控在压缩完成后通过后续工具交互提醒读取 /workspace/notes.md；" + before
-                                + "提醒不代替主动维护，不代表笔记已经读过或整理过，也不要求机械重写。遵守当前暂停和仅聊天状态。", None, "\n\n"))
     if cfg.cutscene_mode == 'agent':
         parts += _file_parts("agent_controls_zh.md")
+    elif has_cutscene_tool(cfg):
+        parts.append(PromptPart('当前剧情处理', '当前 auto 模式由主控推进和跳过剧情；仍需确认或操作时依据最新观测处理。', None, '\n\n'))
     from .action_policy import permissions_for
     from .detour import enabled as detour_enabled, instructions as detour_instructions, map_rule
     parts.append(PromptPart("游戏操作权限", permissions_for(cfg).instructions(experiments=getattr(cfg, 'play_scope', 'chapter') == 'visited'), None, "\n\n"))
@@ -531,12 +530,6 @@ def prompt_parts(cfg) -> list[PromptPart]:
                                 "只有用户明确结束整次试玩才设 finish_run=true。按当前操作权限执行，不用保存退出绕过返回地图禁令；返回地图不算通关。", None, "\n\n"))
     if workspace_capabilities(cfg).programs and getattr(cfg, "live", False):
         parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）
-    if has_cutscene_tool(cfg):
-        parts.append(PromptPart("剧情模式说明（有剧情工具时自动加）",
-                                f"当前剧情模式：{cfg.cutscene_mode}。auto由主控自动跳过；agent由你显式操作，无需wait："
-                                "skip尝试跳过，watch只播放已识别动画到下一输入节点或恢复控制，每次最多600帧，未知状态立即交回，不重复空等；"
-                                "advance确认对白、明信片、旧纸一页或confirm画面；分支先读选项再choose，不用advance代选。"
-                                "教学和breathing用act，角色可操作时不因inCutscene标记停下；旧纸U/D翻页、B关闭。", None, "\n"))
     if is_explore(cfg) and workspace_capabilities(cfg).programs and getattr(cfg, "explore_program_runs", None):
         parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",
                                 f"两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。",

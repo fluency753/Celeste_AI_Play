@@ -56,7 +56,7 @@ class FormalRunTest(unittest.TestCase):
         self.assertNotIn("找到一条安全", speedrun_live)
         explore = play_prompt(_cfg(mode="explore", sim=False, sim_assist=True))
         self.assertIn("# 新手探索 Celeste", explore)
-        self.assertIn("observe/act/narrate/set_effort/stop_run/cutscene/simulate", explore)
+        self.assertNotIn('游戏工具为', explore)
         self.assertNotIn("exit_level", explore)
         self.assertNotIn("# 直播", explore)
         self.assertNotIn("10–20 秒", explore)
@@ -64,7 +64,7 @@ class FormalRunTest(unittest.TestCase):
         explore_live = play_prompt(_cfg(mode="explore", sim=False, sim_assist=True, live=True))
         self.assertIn("# 直播（探索）", explore_live)
         self.assertIn("10–20 秒", explore_live)
-        self.assertIn("observe/act/narrate/set_effort/stop_run/exit_level/cutscene/simulate", explore_live)
+        self.assertNotIn('游戏工具为', explore_live)
         for text in (speedrun, nosim, speedrun_live, explore, explore_live):
             self.assertNotIn("{remind}", text)
             self.assertNotIn("{game_tools}", text)

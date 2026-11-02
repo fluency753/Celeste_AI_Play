@@ -121,7 +121,7 @@ class TunableTests(unittest.TestCase):
             self.assertNotIn("汉字不超过", play_prompt(codex), kw)
             for c in (claude, codex):
                 self.assertNotIn("{thought_brief", play_prompt(c))
-                self.assertEqual(play_prompt(c).count("思考语句的语气不必一直冷静理智，可以自然流露真实的情绪"), 1, kw)
+                self.assertEqual(play_prompt(c).count('语气自然，可以表达情绪，不必刻意表演。'), 1, kw)
                 self.assertNotIn("{thought_mood", play_prompt(c))
         tools = descriptions(cfg(mode="explore", knowledge_profile="explore", chapter=1))
         self.assertIn('汉字不超过 30 个，英文术语不计', tools['act'])

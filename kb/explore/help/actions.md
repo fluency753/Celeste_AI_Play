@@ -16,3 +16,12 @@
 ## 计划内自动重试（有程序通道时）
 
 plan_file 对象可带 `retry={"command":"python3 planner.py","max":3,"timeout_s":20,"on":["death","deviate"]}`。死亡、偏离或指定 done（输入用完但仍在本房间）后，主控在 /workspace 的断网程序通道运行 command；程序须读取最新观测并改写同一个计划文件，主控再执行，最多 max 次。重试不能更换输入格式；规划轮次受限时 retry 被忽略，无容器时拒绝。`command` 最多 500 字符（长的写成脚本）；`max` 默认 3、`timeout_s` 默认 20 秒，上限按本次设置（默认 5 次、60 秒）；程序从环境变量 `CELESTE_PLAN_FILE` 得到计划文件路径，重试原因、偏差与已执行帧数见 `/workspace/game/retry.json`。本次程序门禁与限额仍生效。
+
+## TAS 格式切换与继续输入
+
+这些是本项目的按键映射，与 CelesteTAS 的字母并不完全一致，不能直接照搬 TAS 的 S、O、C 等键义。
+读取 TAS 时可显式选择 `input_format="celeste_tas"`（也可写在 JSON 计划里，适用于保留旧工具签名的会话），不要手工逐字替换。支持方向LRUD、J/K双跳、X/C双冲刺、Z/V双蹲冲、G/H双抓、S暂停、Q重试、N日志、O确认及共享菜单绑定。尤其TAS的C是第二冲刺，本项目格式的C才是确认。模拟只支持LRUDJKXCZVG；`F` 摇杆、独立方向通道和自定义键暂不支持，不是完整TAS脚本语言。
+`/workspace/game/tas.py` 提供 load(path,start_line=...)、window(document,offset,count)、to_sim(inputs)。前两者只生成计划，不操作游戏；不执行 console/Set/Read 等命令，需显式选取纯输入区。模拟转换拒绝不能表达的菜单键。
+TAS动作及observe不自动播放转场、重生或剧情；自己用TAS输入或空帧推进。input_cursor.next 是选定输入文档从 0 开始的帧偏移，不是源文件行号；用同一 load 文档和 window(offset=next) 生成下一窗，或把 remaining_inputs 写入仍声明 celeste_tas 的 JSON。旧工具不能把剩余数组直接交给默认 inputs。观察与规划回放不推进游标。切换格式前，先用原格式显式执行一帧空输入松键；这是真实的一帧，须放在准备边界或计入比较，不靠切换格式制造按下边沿。
+`cutscene` 是你显式调用的便利动作；也可用 `act` 直接操作对白或选项，选择前先读可见选项。
+以下自动播放说明仅适用于celeste_ai：主控可继续播放无需选择的逐字对白、转场与重生，但不会替你发送菜单或确认输入。celeste_tas始终由显式输入推进。

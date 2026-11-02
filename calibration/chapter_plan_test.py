@@ -250,7 +250,9 @@ class ResumeExtensionTests(unittest.TestCase):
             self.assertNotIn("程序与笔记", note)
             cfg.runtime = 'container'
             program_note = opening_note(cfg, args.previous, "sess")
-            self.assertIn('"self_written_max_frames":null', program_note)     # 默认不限
+            from orchestrator.startup_prompt import current_settings
+            self.assertIsNone(current_settings(cfg)['prediction']['self_written_max_frames'])  # 默认不限
+            self.assertNotIn('"self_written_max_frames"', program_note)  # 启动信封不再重复完整配置
             self.assertIn('/workspace/game/instructions/', program_note)
             self.assertNotIn('当前生效的完整规则', program_note)
             self.assertIn("程序与笔记", program_note)

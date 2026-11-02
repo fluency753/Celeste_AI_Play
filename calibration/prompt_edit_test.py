@@ -62,8 +62,10 @@ class PromptPartsTests(unittest.TestCase):
             self.assertEqual(line.count("`") // 2, len(names), line)
             for name in names:
                 self.assertIn(f"`{name}`", line)
-            auto = "act` 返回时 Madeline 已经可以操作" in text
-            self.assertEqual(auto, "cutscene" not in names)      # 有剧情工具时不再说"剧情一律自动跳过"
+            if c.cutscene_mode == 'agent':
+                self.assertIn('当前剧情由你决定', text)
+            else:
+                self.assertIn('当前 auto 模式由主控推进和跳过剧情', text)
 
     def test_interface_is_spliced_in(self):
         parts = prompt_parts(cfg(mode="speedrun", sim=True, runtime="container"))
@@ -215,7 +217,7 @@ class PromptPreviewTests(unittest.TestCase):
             options = {"mode": "explore", "engine": "codex", "agent": "a", "save": {"name": "s"}}
             codex = console_api.prompt_preview(options)
             self.assertEqual(codex["parts"][0]["source"], "runtime_zh.md")
-            self.assertIn('文件用 read/glob/grep', codex['parts'][0]['text'])
+            self.assertIn('必读计量只认专用 read', codex['parts'][0]['text'])
             self.assertNotIn('原生 Codex 工具映射', codex['text'])
             self.assertEqual(codex["text"], codex_prompt(config_for(options)))
 

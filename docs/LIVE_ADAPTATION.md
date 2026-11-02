@@ -302,7 +302,9 @@ HUD 把模拟体力显示为"推演额度"（余额 / 上限），网页 HUD 悬
 
 `orchestrator/prompt_environment.py` 集中处理真实能力、工具名和参数差异。Codex 直接显示 read/glob/grep、apply_patch、原生 Shell（timeout_ms），Claude 显示 Read/Write/Edit/Bash（timeout）；不再在 Codex 正文尾部加一整段映射。兼容输入 `runtime=host` 的 Codex 仍使用容器工具，host Claude 则不要求读文件。旧会话实际文件工具登记仍由恢复通知校正。共享模板与本机覆盖中的独立能力名会按环境展开，已带前缀的名称和路径不重复改写；个人追加正文保持原文。现有本机覆盖不自动改写或覆盖，旧的长正文仍会保留；要获得精简版本，可对照控制台“仓库版本”迁移个人修改。自定义启动模板必须保留新增 `{agent_environment}` 槽位，缺失时保存与模型启动明确报迁移错误，不覆盖旧文件。
 
-有工作区读取能力的执行器共用启动模板 `orchestrator/prompts/runtime_zh.md`，通过 `{current_settings}`、`{guide_index_path}`、`{game_tools}`、`{agent_environment}` 填入本次配置、指南索引、工具清单与实际执行环境。探索与速通模式均使用它；控制台“提示词”页可从“当前任务与配置”编辑，保存到当前配置的提示词目录（本机原有设置是 `local/prompts/runtime_zh.md`，见 USAGE 4.14），删除本机覆盖即可恢复默认。它与稳定指南模板一样须等主控结束后修改，下次启动或重接生成正文时生效；不属于工作区指南，不改变指南版本。无工作区读取能力的 host Claude 仍内联完整共享规则。
+有工作区读取能力的执行器共用启动模板 `orchestrator/prompts/runtime_zh.md`，默认通过 `{task_brief}`、`{guide_index_path}`、`{agent_environment}` 填入简短任务摘要、指南索引和必要环境事实；不再内联完整配置 JSON 或重复工具接口。`current_settings()` 及旧模板的 `{current_settings}`、`{game_tools}` 仍保留，个人追加要求不变。摘要保留 B／C 面、分段起止、许可范围、绕行边界及通关后继续等任务事实。探索与速通均使用它；控制台“提示词”页可编辑，保存到当前配置的提示词目录（本机原有设置是 `local/prompts/runtime_zh.md`，见 USAGE 4.14），删除本机覆盖恢复默认。须等主控结束后修改，下次启动或重接生成正文时生效；不属于工作区指南。无文件能力的 host Claude 仍内联完整共享规则。
+
+探索默认指南不重复工具清单、动作帧数、stop_on 和冻结帧解释；参数由工具声明及最新观测提供，计时概念保留在基本知识库。记忆维护不规定分类或文件组织方式，情绪约定不列具体场景例子，也不提前告知笔记／解说提醒阈值，实际提醒仍照常运行。剧情责任与整章／中途检查点完成边界集中在 `agent_controls_zh.md`，auto 模式只说明当前处理方式；TAS 细节移至按需 `help/actions.md`，默认不因 agent 剧情模式而通读。
 
 个人追加要求使用独立的 `local/personal_prompts.json`，按通用和执行器／模式组合应用，默认空。当前启动正文直接附加一次，不复制到共享指南；修改个人要求不会改变共享指南版本。Claude 恢复时用于覆盖旧快照的消息与系统正文使用同一份启动快照，包括无文件能力的 host 模式。保存配置不改变运行中模型输入，损坏配置或版本冲突明确报错，不覆盖他人的修改；启动前读取失败不启动模型，运行中断网或额度等待后重接时则沿用本次已送达的个人要求并记日志，不因此结束运行。
 

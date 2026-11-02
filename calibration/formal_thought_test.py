@@ -99,14 +99,15 @@ class PromptTests(unittest.TestCase):
         self.assertIn("隐藏房间", play_prompt(explore()))
 
     def test_frame_range_in_prompt_and_resume_note(self):
+        from orchestrator.startup_prompt import current_settings
         c = explore()
-        self.assertIn("至少 1 帧、最多 600 帧", play_prompt(c))       # 默认
-        self.assertIn('"act_frames":[1,600]', current_rules_note(c))
+        self.assertNotIn('每次 act 至少', play_prompt(c))
+        self.assertEqual(current_settings(c)['act_frames'], [1, 600])
+        self.assertNotIn('"act_frames"', current_rules_note(c))
         c.min_frames_per_act, c.explore_act_frames = 40, 150
-        self.assertIn("至少 40 帧、最多 150 帧", play_prompt(c))
-        self.assertIn('"act_frames":[40,150]', current_rules_note(c))
+        self.assertEqual(current_settings(c)['act_frames'], [40, 150])
         c.explore_act_frames = 30                     # 下限不超过上限
-        self.assertIn("至少 30 帧、最多 30 帧", play_prompt(c))
+        self.assertEqual(current_settings(c)['act_frames'], [30, 30])
 
 
 class SwitchTests(unittest.TestCase):

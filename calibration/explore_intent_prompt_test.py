@@ -38,7 +38,8 @@ class ExploreIntentPromptTests(unittest.TestCase):
         cfg = self.config(explore_act_frames=300, explore_search_frames=240,
                           explore_program_s=20, agent_cpus_effective=2)
         text = play_prompt(cfg)
-        for expected in ('最多 300 帧', '每次推演最多 240 帧', '往后总共最多推演 240 帧', '不能把模拟出来的中间状态',
+        self.assertNotIn('每次 celeste_act 至少', text)
+        for expected in ('每次推演最多 240 帧', '往后总共最多推演 240 帧', '不能把模拟出来的中间状态',
                          '240 帧内走不完的，先执行推演好的这一段', '最多 20 秒',
                          '本次最多可以用 2 个核', '建议用编译型语言（如 C++）'):
             self.assertIn(expected, text)

@@ -433,6 +433,7 @@ def kb_reset(mode: str, path: str) -> dict:
 # ---------------------------------------------------------------- 提示词页
 
 PLACEHOLDERS = {
+    "{task_brief}": "本次任务的简短摘要：模式、存档、计划起止与停止边界，不展开完整配置 JSON",
     "{current_settings}": "本次任务与配置的 JSON 快照（存档、范围、权限、程序额度等）",
     "{guide_index_path}": "本次已发布的工作区操作指南索引路径",
     "{kb_reference_rule}": "本机生成了 kb/reference/ 社区资料时的一句（没有时为空）",
@@ -440,6 +441,7 @@ PLACEHOLDERS = {
     "{explore_memory_rule}": "有工作区时维护 notes.md，否则依据当前观测与对话记录进展",
     "{public_feedback_rule}": "当前执行器的公开解说入口：Codex commentary／narrate，Claude narrate",
     "{room_reference_rule}": "可读观测参考入口；无文件能力时按当前观测核验",
+    "{story_reference_rule}": "可读的剧情参考入口；未开放时依据当前观测处理",
     "{program_reference_rule}": "本次可读的选读程序优化及工作区接口资料入口",
     "{program_timeout_rule}": "当前执行器的程序时限参数（Claude timeout／Codex timeout_ms）与前台约定",
     "{program_progress_rule}": "当前执行器的搜索进度说明入口（Claude description／Codex commentary）",
@@ -465,7 +467,7 @@ PLACEHOLDERS = {
     "{formal_thought_act}": "开了“仅正式思考”时 act 工具说明里 thought 的补充；没开时为空",
     "{save_context_rule}": "开了“节省上下文”时 act 工具说明里的一句（同一房间里的结果省略哪些样板、进新房间和 observe 照常给全）；没开时为空",
     "{save_context_print}": "开了“节省上下文”时探索提示词辅助程序一节的一句（大块输出只打印关心的区域）；没开时为空",
-    "{act_min_frames}": "单次 act 最少推进的帧数（可调参数 min_frames_per_act，默认 40；不超过本模式的上限）",
+    "{act_min_frames}": "单次 act 最少推进的帧数（可调参数 min_frames_per_act，默认 1；不超过本模式的上限）",
     "{act_max_frames}": "单次 act 最多推进的帧数（可调参数：速通 max_frames_per_act，探索 explore_act_frames）",
     "{explore_search_rule}": "探索模式自写模拟器与搜索程序推演帧数的一句（可调参数 explore_search_frames；不限时为空）",
     "{cpu_rule}": "探索模式最多可以用几个 CPU 核的一句（可调参数 agent_cpus，默认本机的核数；容器运行时不超过 Docker 实际能用的核数）",
@@ -478,7 +480,7 @@ PLACEHOLDERS = {
     "{playback_ratio}": "规划回放每多少条推演画一条（可调参数 playback_ratio）",
     "{playback_min_tracks}": "规划回放每轮至少画几条（可调参数 playback_min_tracks）",
     "{thought_max}": "思考语句最长字数（可调参数 thought_max_chars）",
-    "{thought_mood}": "思考语句语气的一句（不必一直冷静理智，可以带上真实的情绪……）：两种执行器都有",
+    "{thought_mood}": "简短的自然表达约定，不提供情绪示例",
     "{thought_brief_rule}": "\"思考语句尽量简短，汉字不超过 30 个（英文术语不计）。\"一句（可调参数 thought_max_hanzi）：只给 Claude Code 执行器，Codex 执行器为空",
     "{remind}": "解说提醒间隔（可调参数 remind_s / remind_live_s）",
     "{rounds}": "一屏大的房间存入的规划轮次（--rounds-per-room）",
@@ -590,7 +592,7 @@ def _prompt_read(name: str, pid: str) -> dict:
     repo = (PROMPTS / name).read_text(encoding="utf-8")
     return {"name": name, "text": text, "version": _version(text), "overridden": (overrides_dir() / name).is_file(),
             "live_editable": _button_template(name), "readonly": profiles.readonly(pid),
-            "repo_text": repo, "placeholders": [{"name": k, "meaning": v} for k, v in PLACEHOLDERS.items() if k in repo]}
+            "repo_text": repo, "placeholders": [{"name": k, "meaning": v} for k, v in PLACEHOLDERS.items() if k in repo or k in text]}
 
 
 def prompt_write(name: str, text, version) -> dict:

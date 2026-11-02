@@ -49,6 +49,35 @@ def current_settings(cfg):
     return settings
 
 
+def task_brief(cfg):
+    """Only task identity and boundaries; interface budgets live in tool feedback."""
+    from .modes import MODE_NAMES, mode_of
+    from .segments import Piece, describe_piece
+    scope = getattr(cfg, 'play_scope', 'chapter')
+    scope_name = {'chapter': '指定章节或分段', 'campaign': '按计划连续游玩',
+                  'visited': '已到访地图内自由探索'}.get(scope, scope)
+    slot = f'，槽位 {cfg.save_slot}' if cfg.save_slot is not None else ''
+    lines = [f'模式：{MODE_NAMES[mode_of(cfg)]}；存档：{cfg.save}{slot}；范围：{scope_name}。']
+    if scope == 'visited':
+        lines.append('允许地图以主控保存的许可集合及最新观测为准，区分 A/B/C 面；通关不扩大范围。')
+    else:
+        plan = getattr(cfg, 'plan', None) or [Piece(chapter) for chapter in (cfg.chapters or [cfg.chapter])
+                                             if chapter is not None]
+        table = getattr(cfg, 'checkpoints', None) or {}
+        if plan:
+            lines.append('计划目标（依次）：' + '；'.join(describe_piece(piece, table, explicit_side=True) for piece in plan) + '。')
+        from .detour import enabled
+        if enabled(cfg):
+            lines.append('计划外地图仅作获准的绕行，不改变计划目标。')
+    if getattr(cfg, 'completion_policy', 'stop') == 'continue':
+        lines.append('计划完成后继续在许可范围内活动，直到用户停止、指定停止条件触发或真正阻塞。')
+    else:
+        lines.append('以主控核验本次目标完成或用户指定停止条件为结束依据。')
+    if getattr(cfg, 'max_minutes', None) is not None:
+        lines.append(f'本次现实时间上限：{cfg.max_minutes:g} 分钟。')
+    return '\n'.join(lines)
+
+
 def validate_runtime_template(text):
     if '{agent_environment}' not in text:
         raise ValueError('runtime_zh.md 缺少 {agent_environment}：请在控制台“提示词”中保留个人修改并补入该槽位，'
@@ -67,6 +96,7 @@ def runtime_prompt_parts(cfg, *, guide=None):
         from .prompt_environment import environment_instructions, render_tool_references, tool_name
         guide = guide if guide is not None else guide_document(cfg)
         values = {
+            '{task_brief}': task_brief(cfg),
             '{current_settings}': json.dumps(current_settings(cfg), ensure_ascii=False, separators=(',', ':')),
             '{guide_index_path}': guide['index_path'],
             '{game_tools}': '/'.join(tool_name(cfg, name) for name in game_tools(cfg)),

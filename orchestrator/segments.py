@@ -265,10 +265,12 @@ def fetch_table(port: int, timeout: float = 10) -> dict[int, list[dict]]:
         client.close()
 
 
-def describe_piece(piece, table: dict) -> str:
+def describe_piece(piece, table: dict, *, explicit_side: bool = False) -> str:
     """提示词里的一截：起点与终点（带房间名，智能体据此知道到哪里为止）。"""
     piece = Piece.of(piece)
     name = chapter_name_by_id(piece.chapter, piece.side)
+    if explicit_side and piece.side == 'A':
+        name += ' A 面'
     if piece.whole():
         return f"{name}（整章，到通关为止）"
     start = ("章节开头" if piece.start == 0 else
@@ -282,13 +284,15 @@ def plan_is_partial(pieces) -> bool:
     return any(not Piece.of(p).whole() for p in pieces or [])
 
 
-def describe_plan(pieces, table: dict, speedrun: bool = True, agent_navigation: bool = False) -> str:
+def describe_plan(pieces, table: dict, speedrun: bool = True, agent_navigation: bool = False,
+                  completion_policy: str = 'stop') -> str:
     """按段通关时提示词里的"本次范围"一节。"""
     items = "；".join(describe_piece(p, table) for p in pieces)
-    handover = ("每一截完成后由系统接管：下一截不紧接着时，系统直接把你送到下一截的起点（新的计时从 0 开始）；"
-                "最后一截完成后本次运行结束。")
+    handover = "每一截完成后由系统接管：下一截不紧接着时，系统直接把你送到下一截的起点（新的计时从 0 开始）；"
     if agent_navigation:
-        handover = "每一截完成后，你按已配置的下一目标自行导航，主控只核对章节和起点，不代按或传送；最后一截完成后本次运行结束。"
+        handover = "每一截完成后，你按已配置的下一目标自行导航，主控只核对章节和起点，不代按或传送；"
+    handover += ("计划完成后仍在许可范围内继续活动，直到本次停止条件触发。" if completion_policy == 'continue'
+                 else "最后一截完成后本次运行结束。")
     if speedrun:
         return f"本次要依次完成：{items}。{handover}评价指标是各截计时之和。"
     return f"本次指定范围（依次完成）：{items}。{handover}"
