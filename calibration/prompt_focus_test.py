@@ -72,11 +72,33 @@ class PromptFocusTests(unittest.TestCase):
         for fact in ('input_cursor.next', 'remaining_inputs', '原格式', '松键', 'LRUDJKXCZVG'):
             self.assertIn(fact, reference)
 
-        # 整房推演属于启用模拟器的速通要求，不由共享房间分析施加。
+        # 主控模拟规则只在显式启用模拟与硬预算时出现。
         for sim in (False, True):
-            speedrun = play_prompt(replace(self.cfg, mode='speedrun', knowledge_profile='full', sim=sim))
-            self.assertEqual('整个房间在模拟器里推演到出口，再动手' in speedrun, sim)
-            self.assertNotIn('速通仍须先推演整房路线', speedrun)
+            for limited in (False, True):
+                cfg = replace(self.cfg, mode='speedrun', knowledge_profile='full',
+                              sim=sim, pause_limit=limited)
+                speedrun = play_prompt(cfg)
+                self.assertEqual('主控模拟能力' in speedrun, sim and limited)
+                self.assertEqual(current_settings(cfg)['prediction']['preset_simulator'], sim and limited)
+                self.assertNotIn('整个房间在模拟器里推演到出口，再动手', speedrun)
+                self.assertNotIn('/sim/', speedrun)
+                self.assertNotIn('SimPool', speedrun)
+                if sim and limited:
+                    for fact in ('request_file', 'request_id', '准备、暂停、聊天和结束后均不能预测',
+                                 '额度耗尽', '每次有效的'):
+                        self.assertIn(fact, speedrun)
+
+    def test_host_claude_can_request_main_controller_simulation_without_program_tutorial(self):
+        cfg = replace(self.cfg, engine='claude', runtime='host', mode='speedrun',
+                      knowledge_profile='full', sim=True, pause_limit=True)
+        parts = prompt_parts(cfg)
+        sources = [part.source for part in parts]
+        self.assertIn('sim_zh.md', sources)
+        self.assertIn('host_zh.md', sources)
+        self.assertNotIn('container_sim_zh.md', sources)
+        text = play_prompt(cfg)
+        self.assertIn('没有文件工具通道时直接传 `candidates`', text)
+        self.assertNotIn('预装 Python', text)
 
     def test_actual_tool_and_observation_use_configured_frames_without_guide_copy(self):
         from calibration.workspace_observation_test import game_session

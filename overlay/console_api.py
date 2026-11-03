@@ -396,12 +396,11 @@ def kb_list(mode: str) -> dict:
     prefs = load_prefs()
     deny = [x for x in prefs["kb_deny"].get(mode, []) if x in known]
     allow = [x for x in prefs["kb_allow"].get(mode, []) if x in known]
-    sim_readme = REPO_ROOT / "sim" / "dist" / "README.md"
     from orchestrator.kb_layout import enabled
     from orchestrator.kb_access import KB_ROOT
     source_label = 'kb/shared + kb/'+mode if enabled(KB_ROOT) else root.relative_to(REPO_ROOT).as_posix()
     return {"mode": mode, "root": source_label, "documents": docs, "deny": deny, "allow": allow,
-            "sim_readme": mode == "speedrun" and sim_readme.is_file(), "profile": pid, "readonly": profiles.readonly(pid),
+            "sim_readme": False, "profile": pid, "readonly": profiles.readonly(pid),
             "edits_dir": _rel(profiles.kb_edits_dir(pid))}
 
 
@@ -596,9 +595,6 @@ def _prompt_preview(cfg) -> dict:
         files = (kb_layout.selected(cfg, KB_ROOT)[1] if kb_layout.enabled(KB_ROOT) else
                  [rel for rel in required_files(root_of(cfg.mode)) if rel not in set(cfg.kb_deny)])
         paths = [f"{CONTAINER_KB}/{rel}" for rel in files]
-        if cfg.sim:
-            k = next((i for i, rel in enumerate(files) if rel.startswith("reference/")), len(files))
-            paths.insert(k, "/sim/README.md")
         first = study_prompt(SimpleNamespace(container_paths=lambda: paths, minutes=cfg.study_minutes), cfg.sim, cfg=cfg)
     executor = ("原生 GPT（Codex 的开发者指令）" if cfg.engine == "codex"
                 else "Claude Code（接在 Claude Code 自带的系统提示词之后）")

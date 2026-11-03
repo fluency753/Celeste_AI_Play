@@ -27,7 +27,7 @@ MAPS = {"celeste": "蔚蓝官方章节"}      # 以后可能加 MOD 地图
 
 DEFAULTS = {
     "engine": "claude", "provider": "anthropic", "model": "opus", "effort": "high", "agent": "",
-    "mode": SPEEDRUN, "live": False, "sim": True, "sim_assist": False, "stiffness": False, "formal_thought": False, "save_context": True, "collision_image": None, "playback": False, "record": True,
+    "mode": SPEEDRUN, "live": False, "sim": False, "sim_assist": False, "stiffness": False, "formal_thought": False, "save_context": True, "collision_image": None, "playback": False, "record": True,
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
     "start_paused": False, "quota_wait": True, "allow_chapter_reset": False, "cutscene_mode": "auto", "chapters": [0], "segments": None,
     "sides": [],      # 另外要玩的 B／C 面（整章）：[[章节编号, "B"], ...]；空 = 只玩 A 面（命令与原来相同）
@@ -179,8 +179,8 @@ def normalize(options: dict) -> dict:
         o['runtime'] = 'container'
     from types import SimpleNamespace
     capabilities = workspace_capabilities(SimpleNamespace(engine=o['engine'], runtime=o['runtime']))
-    if not capabilities.programs and ((o["mode"] == SPEEDRUN and o["sim"]) or (o["mode"] == EXPLORE and o["sim_assist"])):
-        raise ValueError("当前本机执行器没有沙箱，不能开预置模拟器或限额预测")
+    if o['mode'] == SPEEDRUN and o['sim'] and not o['limit_planning']:
+        raise ValueError('主控预置模拟必须同时开启限额使用')
     o["study_minutes"] = _number(o, "study_minutes", 1, 600, "准备阶段上限")
     o["max_usage"] = _number(o, "max_usage", 0.01, 1, "提前暂停的用量比例", optional=True)
     o["quota_wait_max_hours"] = _number(o, "quota_wait_max_hours", 0.1, 240, "额度等待上限")
@@ -363,8 +363,8 @@ def config_for(options: dict, profile: str | None = None):
     cfg.engine, cfg.runtime, cfg.mode = o["engine"], o["runtime"], o["mode"]
     cfg.knowledge_profile = KNOWLEDGE_OF_MODE[o["mode"]]
     capabilities = workspace_capabilities(cfg)
-    cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and capabilities.programs
-    cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"] and capabilities.programs
+    cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and o["limit_planning"]
+    cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"]
     cfg.stiffness = o["mode"] == EXPLORE and o["stiffness"]
     cfg.formal_thought = bool(o["formal_thought"])
     cfg.save_context = bool(o["save_context"])

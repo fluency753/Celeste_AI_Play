@@ -321,7 +321,7 @@ class ClaudeRunner(SessionControls):
                 "-e", f"BASH_MAX_TIMEOUT_MS={bash_limits_ms(self.cfg)[1]}",
                 self.container, "claude", *self._common_args(),
                 # 受限模式：不读取用户、项目与本地设置文件（智能体改不了自己的配置），文件工具只能访问工作区与知识库
-                "--restricted", "--add-dir", "/kb", *(["--add-dir", "/sim"] if self.cfg.sim else []),
+                "--restricted", "--add-dir", "/kb",
                 "--tools", ",".join(CONTAINER_BUILTIN_TOOLS),
                 "--mcp-config", mcp,
                 "--allowedTools", *CONTAINER_BUILTIN_TOOLS, *self._game_tools(),

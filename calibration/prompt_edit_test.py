@@ -66,7 +66,7 @@ class PromptPartsTests(unittest.TestCase):
                 self.assertIn('当前 auto 模式由主控推进和跳过剧情', text)
 
     def test_interface_is_spliced_in(self):
-        parts = prompt_parts(cfg(mode="speedrun", sim=True, runtime="container"))
+        parts = prompt_parts(cfg(mode="speedrun", sim=True, pause_limit=True, runtime="container"))
         sources = [p.source for p in parts]
         k = sources.index("interface_zh.md")
         self.assertEqual(sources[k - 1], 'system_sim_zh.md')

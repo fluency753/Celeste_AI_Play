@@ -497,7 +497,6 @@ class GameSession:
                 (self.workspace / stale).unlink(missing_ok=True)
             reply = self.client.call("observe", image=False, scope="room", fields=True)
             self._write_workspace(self._track_motion(enrich_obs(reply["obs"])))
-            self._write_sim_state()
         if self._pending_complete:
             self._persist_completion_pending()
         return obs
@@ -532,7 +531,6 @@ class GameSession:
                 # a fresh baseline while leaving stale files behind on failure.
                 self._write_json('game/latest_obs.json', {'decision': self.decision_index, 'obs': self.last_obs})
                 self._write_collision_view(self.last_obs)
-                self._write_sim_state()
 
     def acknowledge_reload_observation(self, epoch: int) -> None:
         with self.lock:
@@ -876,7 +874,6 @@ class GameSession:
                 notes = [*notes, *more]
             self._note_map(obs)
             notes = [*notes, *self._take_detour_notes()]
-            self._write_sim_state()
         if self.cfg.play_scope == 'visited':
             from .free_roam import instructions
             notes.append(instructions(self.cfg))
@@ -999,19 +996,6 @@ class GameSession:
                 if path.name not in keep:
                     path.unlink(missing_ok=True)
 
-    def _write_sim_state(self) -> None:
-        """预置模拟器的起始状态：当前这一帧的完整场景（调用方持有连接锁）。取不到时删掉旧文件，免得智能体用错帧。"""
-        if not (self.cfg.sim and self.workspace):
-            return
-        path = self.workspace / "game" / "sim_state.json"
-        try:
-            reply = self.client.call("sim_state", margin=4)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(reply["state"], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-            tmp.replace(path)
-        except Exception:
-            path.unlink(missing_ok=True)
-
     # ---- 动作 ----
 
     def act_limit_settings(self) -> dict:
@@ -1093,64 +1077,8 @@ class GameSession:
 
     def simulate(self, request: dict) -> dict:
         self._require_reload_observation()
-        from .sim_assist import validate_request, run_predictions
-        if not isinstance(request, dict):raise ActError('模拟请求必须是对象')
-        if not self.sim_energy:
-            raise ActError("本局未开启限额模拟辅助")
-        if self.done or self.goals.stop_motion.is_set():
-            raise ActError("试玩已结束，不能继续预测")
-        # Capture and predict under the same lock: predictions always refer to the actual current frame.
-        with self.lock:
-            if self.done or self.goals.stop_motion.is_set():
-                raise ActError("试玩已结束，不能继续预测")
-            original_format = request.get('input_format', 'celeste_ai')
-            try:tas.check_format(original_format)
-            except ValueError as exc:raise ActError(str(exc)) from exc
-            if original_format == 'celeste_tas':
-                if set(request) != {'candidates','input_format'}:raise ActError('未知的模拟参数')
-                raw_candidates=request['candidates']
-                if not isinstance(raw_candidates,list) or not 1 <= len(raw_candidates) <= self.assist_rules.max_candidates:
-                    raise ActError('TAS模拟候选数量超出限制')
-                try:request = {'candidates':[tas.to_sim(plan,self.assist_rules.max_frames) for plan in raw_candidates]}
-                except (TypeError, ValueError) as exc:raise ActError(str(exc)) from exc
-            elif 'input_format' in request:
-                request = {key:value for key,value in request.items() if key != 'input_format'}
-            candidates, cost = validate_request(request, self.assist_rules)
-            directory = self.run_dir / "sim_private"
-            directory.mkdir(exist_ok=True)
-            ident = self.sim_energy.reserve(cost)
-            self.metrics.update(sim_energy=self.sim_energy.snapshot())
-            try:
-                state = self.client.call("sim_state", margin=4)["state"]
-                (directory / "state.json").write_text(json.dumps(state), encoding="utf-8")
-                result = run_predictions(self.cfg, directory, candidates)
-            except Exception:
-                self.sim_energy.finish(ident, refund=True)
-                self.metrics.update(sim_energy=self.sim_energy.snapshot())
-                raise
-            self.sim_energy.finish(ident)
-        result.update(receipt=ident, cost=cost, energy=self.sim_energy.snapshot(), candidates=candidates,
-                      input_format='celeste_ai', requested_input_format=original_format)
-        # Successful predictions count immediately, independently of visualization and runtime.
-        self.metrics.add(sim_calls=1, sim_rollouts=len(candidates))
-        if self.workspace:
-            try:
-                (self.workspace / "game" / "sim_assist").mkdir(parents=True, exist_ok=True)
-                self._write_json("game/sim_assist/latest.json", result)
-                if self.playback:
-                    self.playback.collect_prediction(result["results"], result["info"].get("frame", 0))
-            except Exception:  # optional visualization must not turn a successful prediction into failure
-                result["replay_warning"] = "本次预测已完成，但轨迹回放记录失败"
-        # Keep ordinary replies short; frame-by-frame details remain available on demand.
-        summary = {k: v for k, v in result.items() if k != "results"}
-        summary["results"] = [{"stop": r.get("stop"), "detail": r.get("detail"),
-                               "frames": len(r.get("frames", [])),
-                               "last_frame": (r.get("frames") or [None])[-1],
-                               "events": r.get("events", []), "warnings": r.get("warnings", [])}
-                              for r in result["results"]]
-        if self.workspace:
-            summary["trajectory_file"] = "/workspace/game/sim_assist/latest.json"
-        return summary
+        from .simulation import predict
+        return predict(self, request)
 
     def program_run_denied(self) -> str | None:
         """Legacy hook retained for compatibility; gameplay does not limit workspace programs."""
@@ -1438,7 +1366,6 @@ class GameSession:
                 obs, image, more = self._enter_next_chapter(obs)
                 notes.extend(more)
             self.goals.check(self.goal_values(obs))
-            self._write_sim_state()
             self._note_map(obs)
             notes.extend(self._take_detour_notes())
 
@@ -2179,7 +2106,6 @@ class GameSession:
                     notes.append(f'已确认你进入{self._piece_place(piece)}。{self._piece_goal(piece)}')
             notes += self._take_detour_notes()
             self.goals.check(self.goal_values(obs))
-            self._write_sim_state()
         record = {'travel': self.travels, 'wall': time.time(), 'chapter': dest.chapter, 'checkpoint': dest.checkpoint,
                   'room': dest.room, 'arrived': arrived and failure is None,
                   'at': {'scene': obs.get('scene'), 'sid': (obs.get('level') or {}).get('sid'),

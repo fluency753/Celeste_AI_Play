@@ -51,13 +51,14 @@ class PreparePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(SIM_PLAN, speedrun)
         self.assertIn('把要点整理进 /workspace/notes.md', speedrun)
         self.assertIn('然后调用 observe 开始游玩', speedrun)
-        self.assertIn('/sim', speedrun)
+        self.assertNotIn('/sim', speedrun)
+        self.assertIn('准备阶段不能预测', speedrun)
         for sim in (False, True):
             prepare = study_prompt(study, sim=sim, prepare_only=True)
             self.assertNotIn('observe 开始游玩', prepare)
             self.assertNotIn('游戏工具自动开放', prepare)
             self.assertNotIn(SIM_PLAN, prepare)          # 仅准备没有"本章"
-            self.assertEqual('/sim' in prepare, sim)
+            self.assertNotIn('/sim', prepare)
         for text in (play, speedrun, study_prompt(study, prepare_only=True)):
             self.assertNotIn('仅准备阶段不开始试玩', text)
             self.assertIn('/kb/README.md', text)

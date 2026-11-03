@@ -55,6 +55,24 @@ class ContainerCodexTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 codex.exec_command('-bad', 'codex')
 
+    def test_agent_creation_never_exposes_host_simulator_even_when_enabled(self):
+        for engine in ('codex', 'claude'):
+            for enabled in (False, True):
+                with self.subTest(engine=engine, sim=enabled):
+                    cfg = RunConfig(agent='fixture', save='fixture', model='fixture', engine=engine,
+                                    sim=enabled, pause_limit=enabled)
+                    with patch('orchestrator.config.REPO_ROOT', self.root), \
+                         patch.object(container, 'REPO_ROOT', self.root), patch.object(container, 'docker') as docker:
+                        container._create(cfg, 'fixture')
+                        labels = container._labels(cfg)
+                    args = docker.call_args.args
+                    mounts = [args[index + 1] for index, arg in enumerate(args[:-1]) if arg == '-v']
+                    self.assertTrue(any(mount.endswith(':/workspace') for mount in mounts))
+                    self.assertTrue(any(mount.endswith(':/kb:ro') for mount in mounts))
+                    self.assertFalse(any(':/sim' in mount for mount in mounts), mounts)
+                    self.assertEqual(labels['celeste-ai-play.sim'], 'host-only-v1')
+                    self.assertIn('celeste-ai-play.sim=host-only-v1', args)
+
     def test_auth_is_explicit_stdin_atomic_and_failure_does_not_expose_secrets(self):
         source = self.root/'selected-auth.json'
         secret = {'tokens': {'access_token':'sensitive-fixture'}}

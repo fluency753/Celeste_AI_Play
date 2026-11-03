@@ -25,7 +25,7 @@ MAX_FILE_BYTES = 32 * 1024 * 1024
 MAX_IMAGE_BYTES = 1024 * 1024
 MAX_IMAGES_BYTES = 4 * MAX_IMAGE_BYTES
 MAX_IMAGES = 20
-ROOTS = ('/workspace', '/kb', '/sim')
+ROOTS = ('/workspace', '/kb')
 # Search bounds: one worker call must finish well inside its 90-second sandbox limit.
 SEARCH_FILE_BYTES = 8 * 1024 * 1024
 SEARCH_TOTAL_BYTES = 256 * 1024 * 1024
@@ -53,7 +53,7 @@ def _normalize(path, name='file_path'):
     parts = path.split('/')[1:]
     path = '/' + '/'.join(part for part in parts if part and part != '.')
     if '..' in parts or not any(path == root or path.startswith(root + '/') for root in ROOTS):
-        raise ValueError('只允许 /workspace、/kb、/sim 内的路径；不允许 .. 路径')
+        raise ValueError('只允许 /workspace、/kb 内的路径；不允许 .. 路径')
     return path
 
 

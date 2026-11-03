@@ -30,7 +30,7 @@
 | 智能体容器 | Docker Desktop | 仓库 `agent-container/` 构建镜像 | 断网沙箱里的 Claude Code（智能体），只能连模型平台与主控端口；原生 GPT 也在这里的零网络沙箱运行它生成的程序 |
 | Codex CLI（可选） | 智能体镜像 | Dockerfile 固定版本安装 | 原生 GPT 的 App Server 与原生编程工具都在容器内；宿主无需安装 Codex |
 | 知识库 | 只读挂进容器 `/kb` | 仓库 `kb/`；参考资料原文本机生成 | 物理常量、机制、技巧；探索模式共用 `kb/shared` 并加入 `kb/explore` |
-| 预置模拟器 | 只读挂进容器 `/sim` | **不在仓库里**，由游戏代码生成，只在开发者本机 | 逐帧精确的推演工具（速通模式开模拟器的版本用；探索模式的限额预测也用它） |
+| 预置模拟器 | 仅主控私有 worker 持有，不挂 agent 容器 | **不在仓库里**，由游戏代码生成，只在开发者本机 | 逐帧精确的推演工具（速通模式开模拟器的版本用；探索模式的限额预测也用它） |
 | HUD | 游戏画面内（MOD 形式）或本机网页 + 独立窗口 + OBS 浏览器源（网页形式） | 仓库 `overlay/`（MOD 形式由桥接绘制） | 右上角信息卡片；网页形式另有聊天与会话管理 |
 | OBS + 锁步插件 | 本机 | OBS 官方安装；插件由仓库 `obs-plugin/` 编译 | 只录游玩帧（以及规划回放帧）的录制 |
 | ffmpeg | 本机 | winget 安装 | 编码录像、合成成片、生成纯享版 |
@@ -274,7 +274,7 @@ winget install Gyan.FFmpeg
 
 1. 构建或更新共享智能体镜像：`docker build -t celeste-agent:0.1 agent-container`。镜像同时安装 Claude Code 与固定版本 Codex；不会把宿主文件系统或 Docker socket 挂进容器。
 2. 初始化本仓库的 Codex 账号环境：`python -m orchestrator.codex_container --account login`，按 `codex login --device-auth` 提示在浏览器完成授权。也可显式执行 `--account import-auth --file <auth.json>` 导入已有文件缓存；普通启动不会读取宿主登录文件。`--account status` 只显示登录状态。
-3. 用 `start_gpt.ps1` 或 HUD 新建并准备。App Server、原生 Shell 与补丁工具都在对应工作区容器内；主控通过 `docker exec -i` 的 stdio 收发协议。工作区、知识库、模拟器挂载与 Claude 复用同一容器生命周期。
+3. 用 `start_gpt.ps1` 或 HUD 新建并准备。App Server、原生 Shell 与补丁工具都在对应工作区容器内；主控通过 `docker exec -i` 的 stdio 收发协议。工作区和知识库与 Claude 复用同一容器生命周期；模拟器不挂给 agent，由主控独立持有。
 
 旧宿主会话不会自动变为容器会话。停止原主控后，用 `python -m orchestrator.codex_container --container <对应容器> import-session --file <原 rollout.jsonl>` 显式导入原记录，再恢复原运行；导入保留原文件、拒绝覆盖已有目标，不导入宿主配置。工作区原有文件继续复用，容器缺少原会话时明确报错，不另建或回退宿主。旧 `--runtime host` 对 Codex 作为容器模式的兼容别名；host Claude 语义保持不变。
 
@@ -364,18 +364,18 @@ winget install Gyan.FFmpeg
 | `--chapter N` | 选章页当前章节 | 只玩一章（或作为 `--scope campaign` 的起始章节） |
 | `--scope chapter` / `campaign` | `chapter`（沿用） | 没给 `--chapters` 时：只玩一章，或从起始章节起按官方章节顺序一直玩下去 |
 | `--max-minutes` | 1000（沿用） | 现实时间安全上限（不含准备阶段与等待额度）；**不显示给智能体** |
-| `--sim` / `--no-sim` | 速通模式、容器运行方式且本机有 `sim\dist` 时开（沿用） | 预置模拟器开关，把速通模式分成两个版本：开时智能体可以随意调用模拟器寻找并优化路线（提示词写明做法）；关时不能调用模拟器，提示词只写目标、规则与工具接口，不教打法 |
+| `--sim` / `--no-sim` | 关（沿用） | 速通主控模拟能力，需同时显式开启 `--limit-planning` 并配置可用模拟器；仅试玩运行且额度足够时可通过工具请求，不提供模拟器文件 |
 | `--sim-assist` / `--no-sim-assist` | 关（沿用） | 只用于探索模式：有额度的短路线预测，不开放模拟器文件；需自配标准模拟器（本机 `sim\dist\celeste-sim`） |
 | `--live` / `--no-live` | 关（沿用） | 直播模式：提示词加直播一节，解说计时 10 秒，可按用户要求退出关卡，HUD 默认用网页形式。`narrate` 与思考提醒在所有模式下都有（不开直播时解说计时半分钟，`RunConfig.live_remind_s`） |
 | `--hud-mod` / `--no-hud-mod` | 不开直播时开，直播模式关（沿用） | HUD 以 MOD 形式画在游戏画面右上角（需要桥接 0.13.0，旧桥接自动改用网页 HUD）；关时用网页 HUD |
 | `--cutscene-mode auto` / `agent` | `auto`（沿用） | 剧情由主控跳过，或交给智能体用 cutscene 工具处理 |
 | `--allow-restart-chapter`、`--allow-return-to-map`、`--allow-save-quit` | 均禁止（续跑沿用） | 各有 `--no-allow-...` 形式，三权限独立配置；需桥接 1.1.1 的 `action_policy=1`，详见[策略契约](CHAPTER_RESET_GUARD.md) |
 | `--allow-chapter-reset` / `--no-allow-chapter-reset` | 兼容别名 | 设置全部三项权限，独立选项覆盖它，旧运行自动迁移 |
-| `--playback` / `--no-playback` | 关（沿用） | 规划回放：把推演过的路线按轮画进游戏（开模拟器时画 `/sim` 的推演，关模拟器时画智能体用 `show.trajectory()` 交来的轨迹）。需要通过提示词让智能体主动写推演程序并按 `show.trajectory()` 交轨迹，否则没有内容可画 |
+| `--playback` / `--no-playback` | 关（沿用） | 绘制主控成功预测或 `show.trajectory()` 提交的轨迹；回放不触发模拟或决定扣费 |
 | `--record` / `--no-record` | 开（沿用） | OBS 录屏开关：开时 OBS 没在运行就由主控自己启动（专用配置、最小化到托盘），锁步录制完整版与纯享版，结束时关掉它启动的 OBS；OBS 已经开着就直接用、结束时不关；`--no-record` 不启动也不调用 OBS |
 | `--keep-obs-open` | 关 | 结束时保留主控启动的 OBS（直播用）；手动关闭 OBS 后可用 `tools\obs_setup.py restore` 还原配置选择 |
 | `--continuous-music` / `--freeze-music` | `configs\local.recording.json` 的 `continuous_music`，没写时冻结 | 冻结游戏逻辑时游戏本身的 BGM 继续播放（直播用）还是一起暂停；默认的 `game_nrt` 录像声音不受影响 |
-| `--limit-planning` | 关 | 限制规划轮次（按章节记账，只用于开模拟器的版本）；`--rounds-per-room`（默认 3）、`--room-scale`（默认 2）调整轮次 |
+| `--limit-planning` | 关 | 速通模拟硬预算，每个有效批量请求扣一轮；需配合 `--sim`，不会封锁工作区工具 |
 | `--no-study` | 关 | 跳过准备阶段（不读知识库，调试用） |
 | `--study-minutes` | 60 | 准备阶段上限，到时自动开放游戏工具 |
 | `--prepared <准备目录>` | 无 | 用已准备好的会话新开一局（校验知识库没有变化）；不能与 `--resume`、`--no-study` 合用 |
@@ -421,7 +421,7 @@ winget install Gyan.FFmpeg
 | `python -m orchestrator.replay <运行目录>` | 不调用模型，按记录重放一次运行的决策 | `--save`、`--chapter` |
 | `python -m orchestrator.preparation` | 只准备会话（读知识库、建会话，不连游戏） | `--engine`、`--provider`、`--agent`、`--knowledge`、`--model`、`--effort` |
 | `python -m orchestrator.chat --run <运行目录>` | 运行结束后接着和同一个会话聊天（不连游戏） | — |
-| `python -m orchestrator.chat --run <运行目录> --allow-programs` | 兼容旧命令，工作区能力无需此开关：Codex（含 host 方式）及 container 方式的 Claude 可在零网络容器沙箱里修改、运行工作区程序，游戏工具仍关闭；host Claude 没有工作区通道，仅聊天。章节中途中断、游戏保持冻结的运行也能这样唤起（不碰游戏和录像），聊完再 `--resume` 接着玩。加 `--fresh-session` 开接班会话：同一工作区与容器里的全新会话，新建一个运行目录记下它（复制原运行的设置、统计与总结），之后 `--resume <新目录>` 续跑就接着这个新会话 | `--sim`：挂载只读模拟器，用保存快照离线验证；无需 `--allow-programs` |
+| `python -m orchestrator.chat --run <运行目录> --allow-programs` | 兼容旧命令，工作区能力无需此开关：Codex（含 host 方式）及 container 方式的 Claude 可在零网络容器沙箱里修改、运行工作区程序，游戏工具仍关闭；host Claude 没有工作区通道，仅聊天。章节中途中断、游戏保持冻结的运行也能这样唤起（不碰游戏和录像），聊完再 `--resume` 接着玩。加 `--fresh-session` 开接班会话：同一工作区与容器里的全新会话，新建一个运行目录记下它（复制原运行的设置、统计与总结），之后 `--resume <新目录>` 续跑就接着这个新会话 | 聊天不开放模拟能力；`--sim` 旧聊天参数不能再挂载或调用模拟器 |
 | `python -m orchestrator.background -- <主控参数>` | 用独立后台宿主启动主控 | — |
 | `python -m overlay.server` / `python -m overlay.window` | 单独启动 HUD 服务（默认跟随 `runs\latest.txt` 指向的运行）/ HUD 窗口 | `--port`、`--run`；`--url` |
 | `python -m overlay.console` | 控制台（5.3 节） | `--port`、`--browser`、`--restart-service` |

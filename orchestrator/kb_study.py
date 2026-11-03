@@ -63,7 +63,7 @@ def _ranges(lines: list[int]) -> str:
 
 class KbStudy:
     def __init__(self, kb_dir: Path, minutes: float, extra: dict[str, Path] | None = None):
-        """extra：知识库以外也要读完的文件，容器里的绝对路径 → 本机路径（例如预置模拟器的说明 /sim/README.md），
+        """extra：知识库以外也要读完的文件，容器里的绝对路径 → 本机路径（例如主控提供的额外参考资料），
         排在知识库正文之后、社区原文之前。"""
         self.kb_dir = kb_dir
         self.minutes = minutes

@@ -19,6 +19,7 @@ from orchestrator.sim_assist import AssistRules, SimEnergy
 
 class LiveSettingsTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch('orchestrator.simulation.available', return_value=True))
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.cfg = RunConfig(agent='test', save='test', model='test', runtime='host', sim_assist=True, mode='explore')
@@ -133,7 +134,7 @@ class LiveSettingsTests(unittest.TestCase):
                 raise RuntimeError('test worker timed out')
             return {'info': {'frame': 1}, 'results': [{'frames': [], 'stop': 'done'}]}
         with patch('orchestrator.sim_assist.run_predictions', side_effect=predict), ThreadPoolExecutor(2) as pool:
-            first = pool.submit(self.session.simulate, {'candidates': [['60,R']]})
+            first = pool.submit(self.session.simulate, {'candidates': [['60,R']], 'request_id':'before-update'})
             self.assertTrue(started.wait(1))
             update = pool.submit(self.session.update_simulation, {'rules': {'assist_cost_base': 10, 'assist_cost_frames': 30}})
             try:
@@ -142,7 +143,7 @@ class LiveSettingsTests(unittest.TestCase):
                 release.set()
             self.assertEqual(first.result()['cost'], 3)
             update.result()
-            self.assertEqual(self.session.simulate({'candidates': [['60,R']]})['cost'], 12)
+            self.assertEqual(self.session.simulate({'candidates': [['60,R']], 'request_id':'after-update'})['cost'], 12)
 
     def test_common_control_channel_updates_codex_and_claude_without_pause_or_stop(self):
         from orchestrator.codex_agent import CodexRunner

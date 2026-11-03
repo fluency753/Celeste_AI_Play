@@ -276,7 +276,7 @@ class CutsceneTests(unittest.TestCase):
             count=sum(int(item.split(',')[0]) for item in args['inputs'])
             return {'obs':states.pop(0),'result':{'consumed':count,'planned':count,'stop':'done','events':[]}}
         self.s.client=Mock(call=call)
-        with patch.object(self.s,'_write_sim_state'),patch.object(self.s,'_update_metrics_from_obs'):
+        with patch.object(self.s,'_update_metrics_from_obs'):
             for inputs in (['1,C','29'], ['60'], ['1,C','29'], ['1,B','29']):
                 outcome=self.s.act(inputs,'根据当前界面操作并查看后续结算',None)
                 self.assertEqual(outcome.auto_frames,0)
@@ -467,7 +467,7 @@ class StoryFlowTests(unittest.TestCase):
             def close(self):pass
         client=Timeline();self.s.client=client;self.s.last_obs=client.obs()
         self.s.cfg.thought_lead_s=0
-        with patch.object(self.s,'_write_sim_state'):
+        with self.subTest('story input flow'):
             outcome=self.s.act(['40,R'],'触发旅馆对话',None)
             self.assertEqual(outcome.obs['frame'],4)
             self.assertIsNone(outcome.obs['storyInput'])

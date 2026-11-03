@@ -3,7 +3,7 @@
 容器里：/workspace 挂载宿主机的 workspaces/<标签>/（可写），/kb 挂载仓库的 kb/（只读），
 /home/agent/.claude 是独立的数据卷（会话记录，便于中断后续跑）。游戏目录、存档、OBS 都不挂载。
 Codex 使用独立的 /home/agent/.codex 持久卷，普通启动不导入宿主登录或会话。
-开放预置模拟器（--sim）时，本机的 sim/dist 只读挂到 /sim。
+预置模拟器仅由主控的私有 worker 使用，不挂入 agent 容器。
 配置变了要重建容器时，旧容器 /tmp 里的东西（智能体常把程序和中间结果放在 Claude Code 的 /tmp/claude-<uid>）
 先打包到本机 local/container_tmp/，新容器建好后原样放回（保留属主与权限）。
 """
@@ -41,7 +41,7 @@ def docker(*args: str, check: bool = True, timeout: float = 120) -> subprocess.C
 def _labels(cfg: RunConfig) -> dict[str, str]:
     return {f"{LABEL}.image": cfg.image, f"{LABEL}.mcp_port": str(cfg.mcp_port),
             f"{LABEL}.seccomp": "unconfined" if cfg.seccomp_unconfined else "default", f"{LABEL}.init": "1",
-            f"{LABEL}.sim": "1" if cfg.sim else "0", f"{LABEL}.provider": cfg.provider,
+            f"{LABEL}.sim": "host-only-v1", f"{LABEL}.provider": cfg.provider,
             f"{LABEL}.knowledge": cfg.knowledge_profile,
             f"{LABEL}.workspace_tag": cfg.workspace_dir.name,
             f"{LABEL}.domains": ",".join(cfg.provider_domains),
@@ -77,8 +77,6 @@ def _create(cfg: RunConfig, name: str) -> None:
     if cfg.engine == 'codex':
         args += ['-v', f'celeste-codex-{slug(cfg.workspace_dir.name)}:/home/agent/.codex',
                  '-e', 'CODEX_HOME=/home/agent/.codex']
-    if cfg.sim:
-        args += ["-v", f"{cfg.sim_dir}:/sim:ro"]
     if cfg.seccomp_unconfined:
         args += ["--security-opt", "seccomp=unconfined"]
     for key, value in _labels(cfg).items():
@@ -156,11 +154,13 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
         raise RuntimeError(f"找不到镜像 {cfg.image}，请先在仓库根目录执行：docker build -t {cfg.image} agent-container")
     image_id = image.stdout.strip()
     name = container_name(cfg.agent + ("-explore" if cfg.knowledge_profile == "explore" else ""))
-    inspect = docker("inspect", "-f", "{{.State.Running}}|{{.Image}}|{{json .Config.Labels}}", name, check=False)
+    inspect = docker("inspect", "-f", "{{.State.Running}}|{{.Image}}|{{json .Config.Labels}}|{{json .Mounts}}", name, check=False)
     if inspect.returncode == 0:
-        running, container_image, labels = inspect.stdout.strip().split("|", 2)
+        running, container_image, labels, mounts = inspect.stdout.strip().split("|", 3)
         current = json.loads(labels or "{}") or {}
-        stale = container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
+        exposed = any(row.get('Destination') == '/sim' or row.get('Destination', '').startswith('/sim/')
+                      for row in json.loads(mounts or '[]'))
+        stale = exposed or container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
                                                    for k, v in _labels(cfg).items())
         if stale:
             log(f"[container] {name} 的镜像或配置已变化，重建（工作区、会话与 /tmp 保留）")

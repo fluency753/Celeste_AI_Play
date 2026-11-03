@@ -39,7 +39,8 @@ class LaunchOptionsTests(unittest.TestCase):
         from orchestrator.launch_options import DEFAULTS
         from orchestrator.run import parse_args
         from orchestrator.tuning import BY_KEY
-        self.assertEqual((DEFAULTS["max_minutes"], DEFAULTS["sim_assist"], DEFAULTS["playback"]), (1000, False, False))
+        self.assertEqual((DEFAULTS["max_minutes"], DEFAULTS["sim"], DEFAULTS["sim_assist"], DEFAULTS["playback"]),
+                         (1000, False, False, False))
         self.assertEqual(BY_KEY["explore_program_s"].default, 120)
         self.assertEqual(BY_KEY["thought_max_hanzi"].default, 30)
         argv = build(options(mode="explore"))
@@ -52,12 +53,29 @@ class LaunchOptionsTests(unittest.TestCase):
 
     def test_default_speedrun(self):
         argv = build(options())
-        for flag in ("--mode", "speedrun", "--no-live", "--sim", "--no-playback", "--record", "--hud-mod",
+        for flag in ("--mode", "speedrun", "--no-live", "--no-sim", "--no-playback", "--record", "--hud-mod",
                      "--chapter", "--save-slot"):
             self.assertIn(flag, argv)
         self.assertEqual(argv[argv.index("--agent") + 1], "dev-opus")
         self.assertNotIn("--no-study", argv)
         self.assertTrue(command_line(argv).startswith("python -m orchestrator.run --engine claude"))
+
+    def test_preset_simulation_requires_explicit_limit_and_keeps_host_claude_support(self):
+        for engine in ('claude', 'codex'):
+            for runtime in ('host', 'container'):
+                with self.subTest(engine=engine, runtime=runtime):
+                    config = options(engine=engine, runtime=runtime, sim=True)
+                    with self.assertRaisesRegex(ValueError, '限额使用'):
+                        normalize(config)
+                    config['limit_planning'] = True
+                    normalized = normalize(config)
+                    self.assertTrue(normalized['sim'])
+                    self.assertTrue(normalized['limit_planning'])
+                    argv = build(config)
+                    self.assertIn('--sim', argv)
+                    self.assertIn('--limit-planning', argv)
+                    if engine == 'claude' and runtime == 'host':
+                        self.assertEqual(argv[argv.index('--runtime') + 1], 'host')
 
     def test_explore_live_and_chapter_list(self):
         argv = build(options(mode="explore", live=True, sim_assist=False, chapters=[2, 0, 1], study=False,

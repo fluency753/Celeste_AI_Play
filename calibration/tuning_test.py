@@ -43,7 +43,7 @@ class TunableTests(unittest.TestCase):
         self.assertEqual(tuning.argv({"playback_speed": 5.0, "remind_s": 30}), ["--tune", "playback_speed=5"])
 
     def test_prompt_numbers_follow_tunables(self):
-        speed = cfg(mode="speedrun", knowledge_profile="full", sim=True, playback=True, live=True, live_remind_s=10.0)
+        speed = cfg(mode="speedrun", knowledge_profile="full", sim=True, pause_limit=True, playback=True, live=True, live_remind_s=10.0)
         base = play_prompt(speed)
         from orchestrator.prompting import fill
         from orchestrator.server import ACT_DESCRIPTION
@@ -215,7 +215,7 @@ class TunableTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--kb-deny") + 1], "techniques.md")
         self.assertEqual(argv[argv.index("--study-minutes") + 1], "30")
         for bad in ({"tune": {"nope": 1}}, {"kb_deny": ["missing.md"]}, {"map": "mod"}, {"bridge_port": 80},
-                    {"runtime": "host"}, {"ffmpeg": "a\nb"}):
+                    {"sim": True, "limit_planning": False}, {"ffmpeg": "a\nb"}):
             with self.assertRaises(ValueError, msg=bad):
                 build({"agent": "dev", "save": save, **bad})
 

@@ -486,24 +486,18 @@ def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None, cfg=No
 
 
 def _speedrun_parts(cfg) -> list[PromptPart]:
-    """速通模式的系统提示词。按预置模拟器的开关分成两个版本（目标都是以最短的章节计时通关）：
-    - 开模拟器（有容器程序通道）：智能体可以随意调用 /sim 寻找并优化路线；提示词里写明做法、建议的工作方式、
-      物理参数简表、规划与优化的要求、自动重试与规划回放（system_sim、container_sim、sim、free/pause、retry、playback）；
-    - 关模拟器（--no-sim，或没有程序通道）：不教怎么玩，只写目标、规则（不得调用或破解模拟器、不读游戏程序）与工具接口，
-      其余由智能体自己决定（system_nosim、container_nosim）；容器里另有展示接口（show.trajectory），算出的逐帧轨迹
-      可以交给系统画给观众看，只用于展示。
-    容器运行方式下都有 hud_zh.md：思考期间用 narrate 随时更新 HUD 的思考语句、运行程序期间报告进度；直播模式（live）
-    另加 live_zh.md：观众实时观看、解说计时 10 秒、可按用户要求退出关卡，但不改变速通目标。"""
+    """速通规则：预置模拟是显式开启的主控限额能力，不向工作区发布实现。"""
     workspace = workspace_capabilities(cfg)
     reuse = "之前写的程序与笔记都在工作区里，可以继续用。" if workspace.workspace_read else "以当前观测和已有对话核对进度后继续。"
     parts: list[PromptPart] = []
-    if not (cfg.sim and workspace.programs):
+    if not (cfg.sim and cfg.pause_limit):
         parts += _file_parts("system_nosim_zh.md", sep="", cfg=cfg)
         parts += _file_parts("container_nosim_zh.md" if workspace.programs else "host_zh.md")
     else:
         parts += _file_parts("system_sim_zh.md", sep="", cfg=cfg)
-        parts += _file_parts("container_sim_zh.md") + _file_parts("sim_zh.md")
-        # 默认不限制思考与调用（free_zh.md，可以把规划程序写成自动重试命令）；--limit-planning 时按章节记账（pause_zh.md）
+        parts += _file_parts("container_sim_zh.md" if workspace.programs else "host_zh.md")
+        parts += _file_parts("sim_zh.md")
+        # 只有启用硬预算的主控模拟能力才提供模拟规则。
         if cfg.pause_limit:
             import math
             n, d = cfg.rounds_per_room, cfg.death_bonus
@@ -511,8 +505,6 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
             scale_text = f"{scale:g}"
             parts += _file_parts("pause_zh.md", lambda t: t.replace("{rounds4}", str(math.ceil(n * scale * scale))).replace(
                 "{rounds}", str(n)).replace("{death}", str(d)).replace("{scale}", scale_text))
-        else:
-            parts += _file_parts("free_zh.md") + _file_parts("retry_zh.md")
         if cfg.playback:
             parts += _file_parts("playback_zh.md")
     if workspace.programs:
@@ -639,13 +631,13 @@ def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = Fals
     准备后接着试玩时写明读完后的下一步，开了预置模拟器的速通另外要求先想清技巧与要写的程序并记进笔记。"""
     from .button_prompts import notification
     files = "\n".join(f"- {path}" for path in study.container_paths())
-    sim_note = "本次预置模拟器已开放，资料位于 /sim。\n" if sim else ""
+    sim_note = "本次可选模拟能力由主控提供；准备阶段不能预测，不需要导入或读取模拟器文件。\n" if sim else ""
     if prepare_only:
         return notification('prepare', facts=(
             f"本次必读清单：\n{files}\n\n主控核对实际阅读进度。\n" + sim_note
             + f"准备阶段最多 {study.minutes:g} 分钟，到时仍未读完则本次准备未完成。"), cfg=cfg)
     after = ("读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些搜索与规划程序"
-             "（模拟器直接用 /sim 预置的）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
+             "（普通程序可生成候选、分析结果；需要预测时由主控工具执行，准备阶段不可调用）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
              if sim else "读完后调用 observe 开始游玩。\n")
     if cfg is not None and workspace_capabilities(cfg).workspace_read:   # 规则在工作区操作指南里：开始游玩前先读它
         after = after.replace("然后调用 observe 开始游玩", "再读工作区操作指南（索引及各节），然后调用 observe 开始游玩").replace(

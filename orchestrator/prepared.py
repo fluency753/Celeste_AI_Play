@@ -67,11 +67,11 @@ if __name__ == "__main__":
     parser.add_argument("--knowledge", choices=["explore", "full"], default="explore")
     args = parser.parse_args()
     cfg = RunConfig(agent=args.agent, save="test", model="", knowledge_profile=args.knowledge,
-                    mode='explore' if args.knowledge == 'explore' else 'speedrun', sim=args.knowledge == "full")
+                    mode='explore' if args.knowledge == 'explore' else 'speedrun', sim=False)
     from .runtimes import runtime
     runtime(args.engine).configure(cfg, args.provider)
     from .kb_access import prepare_view
     prepare_view(cfg)
-    study = KbStudy(cfg.kb_dir, 60, {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None)
+    study = KbStudy(cfg.kb_dir, 60)
     data = load_preparation(args.directory, cfg, study)
     print("准备会话校验通过：", data["session_id"])

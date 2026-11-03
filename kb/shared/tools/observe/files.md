@@ -15,7 +15,10 @@
 | `last_tool.json` | 每次游戏工具调用开始与返回时 | 最近一次游戏工具调用（`last_call`）与最近一次推进动作（`last_action`：`{tool:act}`、`{tool:cutscene}` 等）的执行记录，含 `run_id`、`save`、`save_slot`、前后快照与状态。`running`/`raised`/`unconfirmed` 时先观察核实，不盲目重放；`returned` 只表示工具已返回，不证明动作成功或模型已收到；观察与解说不覆盖 `last_action` |
 | `retry.json` | 自动重试每次运行重算命令之前 | 本次重试的原因、第几次、上限、计划文件路径、偏差、事件与已执行帧数（§3.3） |
 | `rooms/<章节>__<房间>.json` | 第一次在某个房间得到观测时 | 历史首次观测，`snapshot.historical=true`；可回看初始几何，不能作为当前实体位置 |
-| `sim_state.json` | 只在开放预置模拟器的运行里：每次游戏停下（`{tool:observe}`、`{tool:act}` 结束、自动重试之前） | 当前帧的完整场景，是 `/sim` 里预置模拟器的起始状态；格式不需要读懂，直接交给模拟器（见 `/sim/README.md`） |
+| `simulation/<receipt>.json` | 主控成功预测后 | 该请求的候选输入、逐帧预测与回执；按 `{tool:simulate}` 返回的 `trajectory_file` 读取，只是结果数据，不含模拟器实现或可恢复的完整场景 |
+| `rounds.json` | 主控规划额度变化时 | 速通预测余额的展示副本；权威账本在主控私有运行目录，修改此文件不能增加额度 |
+
+预置模拟器是可选主控能力，工作区和 agent 容器没有其二进制、SDK 或完整场景快照；不需要导入或阅读模拟器文件。只有限额能力开启、模拟器可用、试玩运行且有额度时，agent 才能显式请求 `{tool:simulate}`；准备、暂停、聊天和结束后均不可预测。
 
 `<章节>` 是章节编号里的 `/` 换成 `_`，例如 `Celeste_1-ForsakenCity__3.json`。
 
@@ -243,7 +246,7 @@ JSON计划或{tool:act}可显式声明 `input_format="celeste_tas"`（agent剧�
 
 ### 3.3 自动重试 `retry`
 
-在计划里声明一个重算命令，主控遇到指定情况时自己运行它、执行它改写后的计划，**不需要你再调用工具**：
+在允许自动重试的运行中，可声明普通重算命令；主控遇到指定情况时运行它、执行它改写后的计划，**不需要你再调用工具**。主控限额预测必须由 agent 显式请求，重算命令不能调用预置模拟器；启用速通模拟硬预算的运行会忽略 `retry`：
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
@@ -253,7 +256,7 @@ JSON计划或{tool:act}可显式声明 `input_format="celeste_tas"`（agent剧�
 | `on` | `["death", "deviate"]` | 哪些情况触发：`death` 死亡（主控先推进到重生、可操作之后再运行）、`deviate` 偏离预期、`done` 按键用完但仍在本房间（用来"先走一段、再算下一段"） |
 
 - 触发条件还要满足：Madeline 可操作，并且仍在本次 `{tool:act}` 开始时的房间里。换了房间、章节完成、或停在其他原因（例如 `land`）都直接返回给你。
-- 运行前主控已经写好最新数据：`game/latest_obs.json`（当前完整观测）、`game/last_act.json`（刚才那次执行的逐帧轨迹与偏差）、开放预置模拟器时还有 `game/sim_state.json`（当前帧的模拟器起始状态），以及 `game/retry.json`：
+- 运行前主控已经写好最新数据：`game/latest_obs.json`（当前完整观测）、`game/last_act.json`（刚才那次执行的逐帧轨迹与偏差），以及 `game/retry.json`：
 
 ```json
 {"decision": 12, "attempt": 1, "max": 3, "reason": "deviate", "plan_file": "/workspace/plans/room.json",

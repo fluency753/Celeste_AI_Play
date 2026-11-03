@@ -13,6 +13,17 @@ from orchestrator.codex_native import native_tool_hook
 
 
 class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.isolated = tempfile.TemporaryDirectory()
+        self.addCleanup(self.isolated.cleanup)
+        root = Path(self.isolated.name)
+        (root / 'kb').mkdir()
+        for target, value in (('orchestrator.config.REPO_ROOT', root),
+                              ('orchestrator.kb_access.KB_ROOT', root / 'kb')):
+            context = patch(target, value)
+            context.start()
+            self.addCleanup(context.stop)
+
     async def test_host_claude_idle_chat_does_not_create_an_unused_container(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -73,37 +84,15 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(received['container'], 'offline-container')
             self.assertEqual(received['stdout'], 'OK\n')
 
-    async def test_explicit_offline_sim_is_available_for_both_runtimes(self):
-        for engine, execution in (('codex','container'), ('codex','host'), ('claude','container')):
-            with self.subTest(engine=engine, runtime=execution), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                state = {'agent': 'test', 'save': 'test', 'model': 'model', 'effort': 'medium',
-                         'engine': engine, 'provider': 'codex' if engine == 'codex' else 'anthropic',
-                         'session_id': 'original', 'mode': 'speedrun', 'knowledge_profile': 'full',
-                         'runtime':execution}
-                (root / 'run_state.json').write_text(json.dumps(state))
-                (root / 'summary.json').write_text('{"completed":true}')
-                Metrics(root / 'metrics.json', 'test', 'model', 'medium', 600)
-                runner = SimpleNamespace(run=AsyncMock())
-                received = {}
-
-                @asynccontextmanager
-                async def host(cfg, directory, metrics, container, **options):
-                    received.update(sim=cfg.sim, chapters=cfg.chapters, **options)
-                    yield runner
-
-                with patch('orchestrator.chat.ensure_container', return_value='offline') as container, \
-                     patch('orchestrator.chat.host_runner', host), \
-                     patch('orchestrator.runtimes.Runtime.token', return_value='test'):
-                    await chat(root, sim=True)
-                self.assertTrue(received['sim'])
-                self.assertTrue(received['chat_only'])
-                self.assertTrue(received['resume'])
-                self.assertEqual(received['session_id'], 'original')
-                self.assertEqual(received['chapters'], [])
-                self.assertTrue(runner.allow_programs)
-                container.assert_called_once()
-                runner.run.assert_awaited_once()
+    async def test_chat_cannot_enable_simulator_for_any_executor(self):
+        for engine, runtime in (('codex', 'container'), ('codex', 'host'), ('claude', 'container'), ('claude', 'host')):
+            with self.subTest(engine=engine, runtime=runtime), \
+                 patch('orchestrator.chat.ensure_container') as container, \
+                 patch('orchestrator.chat.host_runner') as host:
+                with self.assertRaisesRegex(ValueError, '试玩中'):
+                    await chat(Path('unused'), sim=True)
+                container.assert_not_called()
+                host.assert_not_called()
 
     async def test_sim_resource_mount_cannot_leak_into_naming(self):
         with patch('orchestrator.chat.ensure_container') as container:
@@ -124,7 +113,7 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                     with patch('orchestrator.chat.ensure_container') as container, \
                          patch('orchestrator.chat.host_runner') as host, \
                          patch('orchestrator.runtimes.Runtime.token') as token:
-                        with self.assertRaisesRegex(ValueError, '工作区程序执行通道'):
+                        with self.assertRaisesRegex(ValueError, '试玩中'):
                             await chat(root, allow_programs=True, sim=sim)
                     container.assert_not_called()
                     host.assert_not_called()

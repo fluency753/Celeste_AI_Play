@@ -4,7 +4,7 @@
     python -m orchestrator.run --agent dev-opus --save test --model opus --no-record
     python -m orchestrator.run --agent dev-opus --save test --model opus --max-minutes 20 --effort medium --no-record
     python -m orchestrator.run --agent dev --save test --no-agent --no-record   # 只启动工具服务，用于手动调试
-    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2   # 正式挑战（速通模式，默认开预置模拟器、规划回放、游戏内 HUD 与 OBS 录屏）
+    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2   # 正式挑战（速通模式，模拟能力默认关闭；默认游戏内 HUD 与 OBS 录屏）
     python -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs/opus5.5/<时间戳>     # 中断后续跑（沿用原来的开关）
 
 也可以在控制台（python -m overlay.console）里设置并启动。
@@ -103,15 +103,15 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--limit-planning", action="store_true",
-                    help="规划轮次记账：按章节记录，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮，"
-                         "只有调用离线模拟器的消息占一轮，不限制工作区程序；自动重试关闭")
+                    help="模拟规划硬限额：按章节记录，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮，"
+                         "每次有效主控批量预测消耗一轮，不限制工作区程序；自动重试关闭")
     ap.add_argument("--free-planning", action="store_true", help=argparse.SUPPRESS)  # 旧开关：现在不限制就是默认
     ap.add_argument("--rounds-per-room", type=int, default=3,
                     help="（--limit-planning 时）一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 3，至少 3）；大房间按 --room-scale 放大")
     ap.add_argument("--room-scale", type=float, default=2.0,
                     help="房间的长、高每变成这么多倍，存入的轮次乘这么多（默认 2，即与面积成正比），向上取整")
     ap.add_argument("--playback", dest="playback", action="store_true", default=None,
-                    help="规划回放（新运行默认关闭；续跑沿用原运行）：把推演过的路线按轮画进游戏给观众看（开模拟器时画 /sim 的推演，"
+                    help="规划回放（新运行默认关闭；续跑沿用原运行）：把主控预测的路线按轮画进游戏给观众看（"
                          "关模拟器时画智能体用 show.trajectory() 交来的轨迹，需要在提示词里让智能体主动写推演程序并按这个接口交轨迹）；"
                          "回放不推进游戏、不计章节计时")
     ap.add_argument("--no-playback", dest="playback", action="store_false",
@@ -142,8 +142,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--record-video-args", help="ffmpeg 视频编码参数（默认见 configs/recording.json）")
     ap.add_argument("--audio-offset-ms", type=float, help="声音相对画面的偏移毫秒数（默认用校准结果，见 configs/local.recording.json）")
     ap.add_argument("--sim", dest="sim", action="store_true", default=None,
-                    help="开放预置模拟器（速通模式、容器运行方式下，本机构建了 sim/dist 时默认开启）：本机 sim/dist 只读挂到容器的 /sim，"
-                         "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json")
+                    help="显式开启速通的主控模拟能力，须同时开启 --limit-planning 并自配 sim/dist；不向agent开放模拟器文件")
     ap.add_argument("--sim-assist", action=argparse.BooleanOptionalAction, default=None,
                     help="只用于探索模式：有额度的短路线预测（默认关闭；需自配标准模拟器 sim/dist；续跑沿用原运行）；不向智能体开放模拟器文件")
     ap.add_argument("--stiffness", action=argparse.BooleanOptionalAction, default=None,
@@ -232,6 +231,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             args.effort = previous["metrics"].get("effort") or args.effort
         if args.sim is None:
             args.sim = bool(state["sim"])
+        if not args.limit_planning and not args.free_planning:
+            args.limit_planning = bool(state.get('pause_limit', False))
+        for key in ('rounds_per_room', 'room_scale'):
+            flag = '--' + key.replace('_', '-')
+            if not any(a == flag or a.startswith(flag + '=') for a in sys.argv):
+                setattr(args, key, state.get('planning_rules', {}).get(key, getattr(args, key)))
         if args.live is None:
             # 直播模式记在 live_mode 里；之前的运行（live 表示实时展示）不算直播
             args.live = bool(state.get("live_mode", False))
@@ -387,8 +392,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.net_wait_max_h = args.net_wait_max_hours
     cfg.net_wait_cap_s = args.net_wait_cap_seconds
     capabilities = workspace_capabilities(cfg)
-    if args.sim is None:     # 新运行：本机构建了预置模拟器（sim/dist，不入库）才默认开放
-        args.sim = capabilities.programs and cfg.mode == SPEEDRUN and (cfg.sim_dir / 'celeste-sim').is_file()
+    if args.sim is None:
+        args.sim = False     # 主控能力必须显式开启，不按本机文件存在自动开放。
     if cfg.mode == EXPLORE and args.sim:
         raise SystemExit("探索模式不开放模拟器文件（只能用 --sim-assist 的限额短路线预测）；要开模拟器请用速通模式 --mode speedrun")
     if cfg.mode == SPEEDRUN and args.sim_assist:
@@ -397,7 +402,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     # 新运行默认关闭（要自配标准模拟器 sim/dist）；续跑沿用原运行
     cfg.sim_assist = (bool(previous["state"].get("sim_assist", False)) if previous else False) \
         if args.sim_assist is None else args.sim_assist
-    if cfg.sim_assist and (cfg.sim or not capabilities.programs):
+    if cfg.sim_assist and cfg.sim:
         raise SystemExit("限额模拟辅助仅支持容器模式，不能同时开放无限制 --sim")
     if cfg.sim_assist and not (cfg.sim_dir / "celeste-sim").is_file():
         raise SystemExit("限额模拟辅助需要 sim/dist/celeste-sim；可用 --no-sim-assist 关闭")
@@ -534,9 +539,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             raise SystemExit('通关后继续目前适用于整章范围；按段计划请使用 stop 完成策略')
     if cfg.pause_limit and not cfg.sim:
         raise SystemExit("--limit-planning 只用于开模拟器的版本（关模拟器的版本不限制思考与调用）")
+    if cfg.sim and not cfg.pause_limit:
+        raise SystemExit('--sim 必须同时开启 --limit-planning；不再提供无限额或工作区模拟器')
     if cfg.sim:
-        if not capabilities.programs:
-            raise SystemExit("预置模拟器只能用于容器运行方式（本机运行方式请加 --no-sim）")
         if not (cfg.sim_dir / "celeste-sim").is_file():
             raise SystemExit(f"找不到预置模拟器：{cfg.sim_dir / 'celeste-sim'}（模拟器只在本机，见使用说明的预置模拟器一节；"
                              "没有模拟器时用 --no-sim 运行关模拟器的版本）")
@@ -582,7 +587,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         all_chapters = plan_pieces = None
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "allow_detour":bool(getattr(cfg,"allow_detour",False)), "play_scope":cfg.play_scope, "completion_policy":cfg.completion_policy, "visited_maps":cfg.visited_maps, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
-             "runtime": cfg.runtime, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
+             "runtime": cfg.runtime, "pause_limit": cfg.pause_limit, "planning_rules": {"rounds_per_room": cfg.rounds_per_room, "room_scale": cfg.room_scale}, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": cfg.cutscene_mode == 'agent' and cfg.resume_pending, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "kb_allow": list(cfg.kb_allow), "kb_extra": cfg.kb_extra, "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None,
@@ -995,8 +1000,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
         from .kb_access import prepare_view
         prepare_view(cfg)        # 有不给看的文件或本机追加资料时，同步合并后的副本（挂进容器 /kb）
     if cfg.study and workspace_capabilities(cfg).workspace_read and not args.no_agent:
-        extra = {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None
-        study = KbStudy(cfg.kb_dir, cfg.study_minutes, extra)
+        study = KbStudy(cfg.kb_dir, cfg.study_minutes)
         if not study.has_reference and cfg.knowledge_profile == "full":
             print("[run] 提示：kb/reference/ 不存在，准备阶段只读知识库本身（见使用说明 2.5 节生成参考资料原文）", flush=True)
     prepared = None
@@ -1161,11 +1165,19 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         session.before_advance = recording_guard(recorder, run_dir)
 
     capabilities = workspace_capabilities(cfg)
-    gate = PauseGate(metrics, enabled=cfg.pause_limit and capabilities.programs,
+    gate = PauseGate(metrics, enabled=False,
                      log=lambda m: print(m, flush=True), rounds_per_room=cfg.rounds_per_room,
                      death_bonus=cfg.death_bonus, started=previous is not None, sim_only=cfg.sim,
                      state_path=cfg.workspace_dir / "game" / "rounds.json" if capabilities.workspace_write else None,
                      room_scale=cfg.room_scale)
+    if cfg.sim and cfg.pause_limit:
+        from .planning_budget import PlanningBudget
+        session.planning_budget = PlanningBudget(
+            metrics, run_dir / 'planning_budget.json',
+            state_path=cfg.workspace_dir / 'game/rounds.json',
+            rounds_per_room=cfg.rounds_per_room, death_bonus=cfg.death_bonus, room_scale=cfg.room_scale,
+            previous_path=previous['dir'] / 'planning_budget.json' if previous else None,
+            legacy=previous is not None)
     playback = Playback(cfg, session, metrics, gate, log=lambda m: print(m, flush=True))
     if playback.collect:
         session.playback = playback
@@ -1466,7 +1478,7 @@ def main() -> int:
         from .kb_access import prepare_view
         prepare_view(cfg)
         preparation_study = KbStudy(cfg.kb_dir, cfg.study_minutes,
-                                    {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None)
+                                    None)
         load_preparation(args.prepared, cfg, preparation_study)
     previous = args.previous
     if not port_free(cfg.mcp_port):

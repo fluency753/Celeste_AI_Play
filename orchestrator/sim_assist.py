@@ -9,7 +9,9 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, fields
+from copy import deepcopy
 from pathlib import Path
+import tempfile
 
 from .config import find_docker_exe
 
@@ -44,7 +46,7 @@ class AssistRules:
         """tool：本次执行器登记的模拟工具名（Codex 为 celeste_simulate），在生成处写对，不靠事后替换。"""
         return ("\n\n# 有限模拟辅助\nsimulate 从当前游戏帧预测候选输入，不推进真实游戏。它可为路线决策或自建模型提供对照；围绕待验证的问题使用结果，结合真实反馈验证并修正认识，不自动耗尽体力。"
                 + self.text() +
-                f'\n调用 {tool} 工具，参数为 {{"candidates":[["30,R","1,R,J","29,R,J"]]}}。'
+                f'\n调用 {tool} 工具，参数为 {{"request_id":"predict-1","candidates":[["30,R","1,R,J","29,R,J"]]}}。'
                 '省略 candidates 查询体力不扣费。只能从游戏当前帧预测；不会推进真实游戏。'
                 '结果包含逐帧位置、事件和近似/未模拟实体信息；不保证未知机制完全准确。'
                 '额度不足时依据已有资料、程序实验或合适的真实尝试继续当前任务，不寻找模拟器文件绕过额度。')
@@ -130,6 +132,7 @@ class SimEnergy:
 
     def reward(self, moving_frames=0, room=None):
         with self.lock:
+            before = deepcopy(self.data)
             r = self.rules
             now = self.clock()
             if room and room not in self.data["rooms"]:
@@ -142,27 +145,50 @@ class SimEnergy:
             self.data["moving"] = total % r.regen_frames if self.data["balance"] + points < r.capacity else 0
             self.data["balance"] += points
             self.data["regen_times"] = recent + [now] * points
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.data = before
+                raise
 
     def reserve(self, cost):
+        receipt, _ = self.reserve_request(uuid.uuid4().hex, '', cost)
+        return receipt['id']
+
+    def reserve_request(self, ident, digest, cost):
         with self.lock:
+            previous = next((r for r in self.data['receipts'] if r['id'] == ident), None)
+            if previous is not None:
+                if previous.get('digest', '') != digest:
+                    raise ValueError('模拟请求编号已用于不同内容，本次未执行')
+                return dict(previous), False
             if self.data["balance"] < cost:
                 raise ValueError(f"模拟体力不足：需要{cost}，剩余{self.data['balance']}。请继续真实尝试。{self.rules.text()}")
-            ident = uuid.uuid4().hex
+            before = deepcopy(self.data)
             self.data["balance"] -= cost
-            self.data["receipts"].append({"id": ident, "cost": cost, "status": "reserved"})
-            self._save()
-            return ident
+            receipt = {'id': ident, 'digest': digest, 'cost': cost, 'status': 'reserved'}
+            self.data['receipts'].append(receipt)
+            try:
+                self._save()
+            except Exception:
+                self.data = before
+                raise
+            return dict(receipt), True
 
     def finish(self, ident, *, refund=False):
         with self.lock:
             receipt = next(r for r in self.data["receipts"] if r["id"] == ident)
             if receipt["status"] != "reserved":
                 return
+            before = deepcopy(self.data)
             if refund:
                 self.data["balance"] = min(self.rules.capacity, self.data["balance"] + receipt["cost"])
             receipt["status"] = "refunded" if refund else "used"
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.data = before
+                raise
 
 
 def run_predictions(cfg, directory: Path, candidates):
@@ -177,11 +203,19 @@ def run_predictions(cfg, directory: Path, candidates):
     requests = [{"state": "/state/state.json"}, {"batch": [
         {"inputs": p, "stop_on_death": True, "stop_on_room": True} for p in candidates]}]
     try:
-        result = subprocess.run(command, input="".join(json.dumps(r) + "\n" for r in requests),
-                                capture_output=True, text=True, encoding="utf-8", timeout=15)
-        replies = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        # Bound retained output before decoding; do not buffer an entire worker in host RAM.
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            result = subprocess.run(command, input="".join(json.dumps(r) + "\n" for r in requests),
+                                    stdout=output, stderr=errors, text=True, encoding="utf-8", timeout=15)
+            if output.tell() > 32 * 1024 * 1024:
+                raise RuntimeError('模拟输出超过32 MiB，结果未确认；请缩小后续批量请求')
+            output.seek(0)
+            text = output.read().decode('utf-8')
+            errors.seek(0)
+            error = errors.read(1000).decode('utf-8', errors='replace')
+        replies = [json.loads(line) for line in text.splitlines() if line.strip()]
         if result.returncode or len(replies) != 2 or not all(r.get("ok") for r in replies):
-            raise RuntimeError("模拟辅助服务失败：" + (result.stderr or str(replies))[-1000:])
+            raise RuntimeError("模拟辅助服务失败：" + (error or str(replies))[-1000:])
         results = replies[1]["results"]
         if len(results) != len(candidates) or any(not r.get("ok") for r in results):
             raise RuntimeError("模拟辅助返回了不完整的结果")

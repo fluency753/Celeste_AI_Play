@@ -23,7 +23,7 @@ def current_settings(cfg):
         'program': {'seconds': cfg.explore_program_s if is_explore(cfg) else cfg.bash_max_s,
                     'calls_between_act': None,
                     'cpus': getattr(cfg, 'agent_cpus_effective', None) or cfg.agent_cpus or HOST_CPUS},
-        'prediction': {'preset_simulator': cfg.sim, 'limited_assist': cfg.sim_assist,
+        'prediction': {'preset_simulator': cfg.sim and cfg.pause_limit, 'limited_assist': cfg.sim_assist,
                        'self_written_max_frames': cfg.explore_search_frames if is_explore(cfg) else None},
         'presentation': {'live': cfg.live, 'formal_thought': cfg.formal_thought,
                          'reminder_seconds': cfg.live_remind_s, 'collision_image': collision_image_mode(cfg)},

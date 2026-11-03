@@ -216,7 +216,7 @@ class RunConfig:
     net_retry_attempts: int = 4      # Claude Code 因连接类错误重试到第几次时认定断网（之前的几次交给它自己重试）
     net_probe_s: float = 15.0        # 等待期间多久探测一次能否连上模型接口
     net_wait_cap_s: float | None = None  # 只用于测试：每次网络等待的最长秒数
-    pause_limit: bool = False        # 规划轮次记账（--limit-planning；见 pausegate.py，自动重试关闭），不限制工作区程序
+    pause_limit: bool = False        # 主控模拟硬预算（--limit-planning），不限制工作区程序
     rounds_per_room: int = 3         # 一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次；大房间按 room_scale 放大
     room_scale: float = 2.0          # 房间的长、高每变成这么多倍，存入的轮次乘这么多（2 = 与面积成正比），向上取整
     death_bonus: int = 1             # 在游戏里死亡一次补的规划轮次
@@ -231,7 +231,7 @@ class RunConfig:
     playback_round_s: float = 1.5    # 一轮回放的最长时长（以 1A 第一间、一屏 320×180 的房间为准；房间面积是它的几倍就乘几倍）；
                                      # 按 playback_speed 画会超过时，这一轮整体按比例加速，在这个时长内画完
     thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
-    sim: bool = False                # 预置模拟器：把本机的 sim/dist 只读挂到容器的 /sim，每次停下都把当前帧的完整场景写进工作区
+    sim: bool = False                # 可选的主控预置模拟能力，须同时开启 pause_limit；不向 agent 暴露模拟器文件
     sim_assist: bool = False         # 新手模式的限额模拟：后台持有模拟器，真实试玩赚取体力
     knowledge_profile: str = "full"  # explore：精简入门资料和独立工作区；full：原有速通资料（由 mode 决定，见 modes.py）
     mode: str = "speedrun"           # 速通模式 speedrun / 探索模式 explore（互斥）；直播模式是 live，可以和任一个叠加
@@ -364,7 +364,7 @@ class RunConfig:
 
     @property
     def sim_dir(self) -> Path:
-        """预置模拟器的发布目录（只在本机，不入库；内容见 /sim/README.md）。"""
+        """预置模拟器的发布目录（只在本机，不入库；仅主控私有 worker 使用）。"""
         return REPO_ROOT / "sim" / "dist"
 
     @property

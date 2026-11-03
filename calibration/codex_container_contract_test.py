@@ -70,6 +70,19 @@ class ContainerContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(['--enable', 'hooks'], [flags[i:i+2] for i in range(len(flags)-1)])
         self.assertIn('projects={"/workspace"={trust_level="untrusted"}}', flags)
 
+    def test_host_simulation_capability_does_not_depend_on_agent_program_tools(self):
+        from orchestrator.modes import game_tools
+        cfg = RunConfig(agent='test', save='test', model='test', engine='claude', runtime='host',
+                        mode='speedrun', sim=True, pause_limit=True)
+        self.assertFalse(workspace_capabilities(cfg).programs)
+        self.assertIn('simulate', game_tools(cfg))
+        cfg.pause_limit = False
+        self.assertNotIn('simulate', game_tools(cfg))
+        cfg.sim, cfg.mode, cfg.sim_assist = False, 'explore', True
+        self.assertIn('simulate', game_tools(cfg))
+        cfg.sim_assist = False
+        self.assertNotIn('simulate', game_tools(cfg))
+
     async def test_transport_starts_only_container_appserver_and_closes_owned_process(self):
         with tempfile.TemporaryDirectory() as folder:
             rpc = CodexRPC(Path(folder), container='test-container', environment={'MCP_PORT':'12345'})

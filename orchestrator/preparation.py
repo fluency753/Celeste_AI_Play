@@ -24,7 +24,7 @@ async def prepare(args):
     adapter = runtime(args.engine)
     cfg = RunConfig(agent=args.agent or args.engine+'-agent', save="", model=args.model, effort=args.effort,
                     knowledge_profile=args.knowledge, mode='explore' if args.knowledge == 'explore' else 'speedrun',
-                    sim=args.knowledge == "full", sim_assist=False,
+                    sim=False, sim_assist=False,
                     live=True, max_minutes=args.max_minutes)
     adapter.configure(cfg, args.provider)
     cfg.model, cfg.effort = await asyncio.to_thread(adapter.resolve, cfg.model, cfg.effort, cfg.provider)
@@ -39,8 +39,7 @@ async def prepare(args):
     game = cfg.workspace_dir / "game"
     game.mkdir(parents=True, exist_ok=True)
     install_game_helpers(cfg.workspace_dir)
-    study = KbStudy(cfg.kb_dir, cfg.max_minutes,
-                    {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None)
+    study = KbStudy(cfg.kb_dir, cfg.max_minutes)
     if args.quick_check:
         # 联调仅检查索引文件；不能把联调结果记成全库已读。
         study.files = ["README.md"]

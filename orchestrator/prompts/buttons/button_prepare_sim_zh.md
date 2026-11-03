@@ -1,1 +1,1 @@
-用 {tool:Bash} 执行 python3 -c "import sys;sys.path.insert(0,'/sim');from sim import Sim;print('sim_import_ok')" 验证模拟器模块可以导入；只导入，不读取游戏状态或运行推演。
+本次模拟器由主控按限额提供；准备阶段不预测、不导入模拟器模块、不读取模拟器文件。按当前必读清单完成准备即可。

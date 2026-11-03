@@ -29,6 +29,12 @@ class ProgressivePromptTests(unittest.TestCase):
             context = patch(target, value)
             context.start()
             self.addCleanup(context.stop)
+        original_directory = RunConfig.kb_dir.fget
+        def isolated_directory(cfg):
+            path = original_directory(cfg)
+            generated = REPO_ROOT / 'local/kb_views'
+            return self.root / 'views' / path.relative_to(generated) if path.is_relative_to(generated) else path
+        self.enterContext(patch.object(RunConfig, 'kb_dir', property(isolated_directory)))
         self.cfg = RunConfig(agent='test', save='test', model='test', engine='codex', mode='explore',
                              knowledge_profile='explore', sim=False)
 

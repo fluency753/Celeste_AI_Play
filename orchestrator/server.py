@@ -46,7 +46,7 @@ stop_on：提前停下的条件，可选 death room uncontrollable controllable 
 celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控在可尝试跳过时先交回，可选skip或watch继续观看到实际输入节点或恢复控制。celeste_tas格式下不自动补这些帧，由明确输入推进。读取storyDecision、storyInput与story；inCutscene标记本身不表示角色失控。"""
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json；最近游戏工具调用：/workspace/game/last_tool.json）"
-SIM_NOTE = WORKSPACE_NOTE[:-1] + "；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
+SIM_NOTE = WORKSPACE_NOTE[:-1] + "；模拟仅通过主控 simulate 工具请求，工作区不提供模拟器）"
 
 OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}。{observation_delivery_rule}detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态；detail="time"按秒查询桥接/章节计时、现实用时及各时长目标已用/剩余时间，游戏帧取缓存，桥接时钟不是本轮任务时长。三种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
 
@@ -111,13 +111,13 @@ TRANSPORT_SECURITY = TransportSecuritySettings(
 )
 
 
-NO_RETRY_NOTE = ("\n本次运行记录规划轮次：本章每进入一个没来过的房间按房间大小存入轮次（一屏大小的房间 {n} 轮，房间的长、高每变成 {s} 倍"
+NO_RETRY_NOTE = ("\n本次运行限制模拟规划轮次：本章每进入一个没来过的房间按房间大小存入轮次（一屏大小的房间 {n} 轮，房间的长、高每变成 {s} 倍"
                  "轮次就乘 {s}，向上取整，至少 {n} 轮），在游戏里死亡补 {d} 轮，没用完的留给本章后面的房间；剩余轮数写在观测头部。{rule}"
                  "自动重试关闭：计划文件里的 retry 会被忽略。")
-RULE_SIM = ("只有调用了离线模拟器的消息占一轮，其他工具不占；剩余轮数用于记账提示，不限制工作区程序。"
-            "随时可读 /workspace/game/rounds.json；真实游戏操作和在线预测仅在试玩运行时可用。")
+RULE_SIM = ("一次有效主控批量预测消耗一轮，执行前检查并扣费；余额不足拒绝模拟，文件与普通程序仍可用。"
+            "/workspace/game/rounds.json仅供查看，权威账本由主控持有；模拟只能在试玩运行时请求。")
 RULE_ALL = "工作区操作不占规划轮次，不受游玩额度限制；游戏工具仍按当前试玩状态和额度执行。"
-PLAYBACK_NOTE = "用模拟器推演过的路线，系统会按已刷新的记录画进游戏给观众看（搜索进行中也会画；不推进游戏、不计入章节计时），详见\"规划回放\"。"
+PLAYBACK_NOTE = "主控预测完成的路线可以画进游戏给观众看；回放不推进游戏，不计入章节计时，也不额外扣费。"
 
 
 def build_server(session: GameSession, study: KbStudy | None = None, gate=None) -> MCPServer:
@@ -125,6 +125,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                        log_level="WARNING")
     metrics = session.metrics
     journal = server.journal
+    accounting = getattr(session, 'planning_budget', None) or gate
     ws_note = SIM_NOTE if session.cfg.sim else WORKSPACE_NOTE
     explore = is_explore(session.cfg)
     # 工具按模式注册（modes.game_tools）：narrate 所有模式都有；exit_level 只在直播模式（用户要求时退出关卡）；
@@ -163,8 +164,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     session.tool_lock = call_lock
 
     def begin() -> None:
-        if gate is not None:
-            gate.start()  # 第一次真正执行游戏工具：每次暂停一轮工具的限制从这里开始
+        if accounting is not None:
+            accounting.start()
         if not metrics.playing:
             # 第一次真正执行游戏工具：准备阶段结束，现实用时从这里开始
             metrics.start_play()
@@ -206,8 +207,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
         energy = getattr(metrics.state, "sim_energy", None)
         if energy:
             line += f"\n模拟体力：{energy['balance']}/{energy['capacity']}（预测花费体力，真实操作和首次到新房间补充）"
-        if gate is not None and gate.enabled:
-            line += "\n" + gate.status_line()
+        if accounting is not None and accounting.enabled:
+            line += "\n" + accounting.status_line()
         # 探索模式开了思考僵直：这次冻结已累计的时间与预计僵直（act 的结果里另有这次冻结的说明，不再重复）
         text = getattr(session, "freeze_line", lambda: "")() if freeze else ""
         if text:
@@ -216,9 +217,12 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
 
     def credit(obs: dict) -> None:
         """规划轮次：进入本章没来过的房间就存入轮次。"""
-        if gate is not None:
+        if accounting is not None:
             level = obs.get("level") or {}
-            gate.on_room(level.get("sid"), level.get("room"), level.get("bounds"))
+            chapter = level.get('sid')
+            if getattr(session, 'planning_budget', None) is not None:
+                chapter = f"{chapter}:{level.get('mode', level.get('side', 0))}"
+            accounting.on_room(chapter, level.get("room"), level.get("bounds"))
 
     def images(obs, screenshot=None, *, show_screenshot=True, room_view=True):
         """room_view：这次是进新房间或 observe（--collision-image room 时只在这时附碰撞图）。"""
@@ -328,8 +332,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
                 finally:
                     metrics.decision_end(result)
                 parts = [describe_step(outcome.result, max_rows=8)]
-                if gate is not None:
-                    gate.on_death(metrics.state.deaths - deaths_before)  # 在游戏里死了：补规划轮次
+                if accounting is not None:
+                    accounting.on_death(metrics.state.deaths - deaths_before)
                     credit(outcome.obs)
                 if len(outcome.attempts) > 1:
                     parts.insert(0, describe_attempts(outcome.attempts))
@@ -461,21 +465,34 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
             state['described_room'] = room_key(obs)
             return result
 
-    @optional_tool(tool_simulate, name='simulate', description='消耗模拟体力，从当前真实帧预测短路线，不推进游戏。candidates 为按键段数组的数组；省略时查询体力。只有本次启用限额模拟辅助才可预测。', structured_output=False)
-    async def simulate(candidates: list[list[str]] | None = None, input_format: str = 'celeste_ai') -> list:
+    @optional_tool(tool_simulate, name='simulate', description='请求主控从当前真实帧批量预测，不推进游戏。仅开启限额能力、配置可用模拟器、试玩运行中且有额度时执行。candidates为按键段数组的数组，或request_file指向工作区JSON候选文件。实际预测必须显式提供request_id用于幂等重取结果，同编号不同内容拒绝；超时不要换编号重放。全部省略只查询额度。速通每次有效批量请求消耗一轮，最多256条/每条6000帧/合计60000帧；探索遵守当前模拟体力规则。', structured_output=False)
+    async def simulate(candidates: list[list[str]] | None = None, input_format: str = 'celeste_ai',
+                       request_file: str | None = None, request_id: str | None = None) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
             if (note := gated(ticket)) is not None:
                 return [note]
-            if not getattr(session, 'sim_energy', None):
+            budget = getattr(session, 'planning_budget', None) or getattr(session, 'sim_energy', None)
+            if budget is None:
                 return ['本次未启用限额模拟辅助。']
-            if candidates is None:
-                result = session.sim_energy.snapshot()
+            if candidates is None and request_file is None:
+                result = budget.snapshot()
             else:
                 begin()
-                request = {'candidates':candidates}
+                request = {'request_file': request_file} if request_file is not None else {'candidates':candidates}
+                if candidates is not None and request_file is not None:
+                    return ['candidates 与 request_file 只能提供一个，本次未执行。']
                 if input_format != 'celeste_ai':request['input_format'] = input_format
-                result = await asyncio.to_thread(session.simulate, request)
+                if request_id is not None:request['request_id'] = request_id
+                try:
+                    result = await asyncio.to_thread(session.simulate, request)
+                except (ValueError, RuntimeError) as exc:
+                    # Business denial and submitted/unknown outcomes must reach the model.
+                    # MCP masks uncaught exception details, hiding both scope and next steps.
+                    journal.detail({'simulation_notice': str(exc)})
+                    return [str(exc)]
+                except OSError:
+                    return ['模拟处理或持久化失败，执行结果尚未确认；请保留同一 request_id 核验，不更换编号重放请求。']
             journal.detail(result)
             return [json.dumps(result, ensure_ascii=False)]
 

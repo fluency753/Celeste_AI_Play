@@ -67,11 +67,37 @@ class WorkspaceCapabilityTests(unittest.TestCase):
                     launched, _ = parse_args()
                     preview = config_for({'engine': 'codex', 'agent': 'test', 'runtime': 'host',
                         'save': {'name': 'test', 'slot': 10, 'create': False}, 'mode': mode})
-                self.assertEqual(launched.sim, mode == 'speedrun')
+                self.assertFalse(launched.sim)       # 本机存在模拟器不自动开放主控预测。
                 self.assertFalse(launched.sim_assist)   # 限额短路线预测默认关闭（需自配标准模拟器）
                 self.assertEqual((preview.sim, preview.sim_assist), (launched.sim, launched.sim_assist))
                 self.assertTrue(workspace_capabilities(launched).needs_container)
                 self.assertNotIn('你没有其他工具，也不能执行代码', play_prompt(launched))
+                self.assertNotIn('sim_zh.md', [p.source for p in prompt_parts(launched)])
+
+    def test_host_claude_can_request_private_simulation_without_workspace_tools(self):
+        from orchestrator.launch_options import config_for
+        from orchestrator.modes import game_tools
+        from orchestrator.run import parse_args
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            binary = root / 'sim' / 'dist' / 'celeste-sim'
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            for mode in ('speedrun', 'explore'):
+                flags = ['--sim', '--limit-planning'] if mode == 'speedrun' else ['--sim-assist']
+                settings = {'sim': True, 'limit_planning': True} if mode == 'speedrun' else {'sim_assist': True}
+                with self.subTest(mode=mode), patch('orchestrator.config.REPO_ROOT', root), \
+                     patch.object(sys, 'argv', ['run', '--engine', 'claude', '--agent', 'test',
+                         '--save', 'test', '--runtime', 'host', '--mode', mode, *flags]), \
+                     patch('orchestrator.run.check_provider'):
+                    launched, _ = parse_args()
+                    preview = config_for({'engine': 'claude', 'agent': 'test', 'runtime': 'host',
+                        'save': {'name': 'test', 'slot': 10}, 'mode': mode, **settings})
+                self.assertFalse(workspace_capabilities(launched).programs)
+                self.assertFalse(workspace_capabilities(preview).programs)
+                self.assertEqual((preview.sim, preview.sim_assist), (launched.sim, launched.sim_assist))
+                self.assertIn('simulate', game_tools(launched))
+                self.assertIn('simulate', game_tools(preview))
                 if mode == 'speedrun':
                     self.assertIn('sim_zh.md', [p.source for p in prompt_parts(launched)])
 

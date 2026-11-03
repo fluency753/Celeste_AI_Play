@@ -130,7 +130,7 @@ class CodexRunner(ModelRecovery, SessionControls):
     async def tool_specs(self):
         page = {'offset': {'type': 'integer', 'minimum': 1}, 'limit': {'type': 'integer', 'minimum': 1}}
         tools = [spec('read',
-            '读取文件／目录，限/workspace、/kb、/sim，不跟随符号链接、不计程序次数。准备必读须用本工具。'
+            '读取文件／目录，限/workspace、/kb，不跟随符号链接、不计程序次数。准备必读须用本工具。'
             'offset从1起、limit按行／目录项分页；文本或图像直接送达本轮。支持文本、图像、PDF、notebook；PDF pages从1起最多20页。',
             {'file_path': TEXT, 'path': {**TEXT, 'description': '旧版file_path别名，二者不能冲突'},
              **page, 'pages': TEXT}),
@@ -633,14 +633,10 @@ class CodexRunner(ModelRecovery, SessionControls):
             from .button_prompts import notification
             paths = "\n".join(f"- {p}" for p in self.study.container_paths())
             facts = "本次必读清单：\n" + paths + f"\n必读资料必须用 {self._reader_name()} 的 file_path 与 offset/limit 分页读取，按实际送达的完整行计量。"
-            if self.cfg.sim:
-                facts += '\n本次预置模拟器已开放，资料位于 /sim。'
             facts += ('\n本次只准备，不启动游戏；完成后调用 celeste_finish_preparation 提交完成信号。'
                       if self.prepare_only else '\n本次准备完成后开放试玩工具。')
             message = notification('prepare', facts=facts, cfg=self.cfg)
             message = re.sub(r'(?<![A-Za-z0-9_])read(?=\s+工具)', lambda _: self._reader_name(), message)
-            if self.prepare_only and self.cfg.sim:
-                message += '\n' + notification('prepare_sim', cfg=self.cfg)
             return message
         from .prompting import first_play_prompt
         return self.resume_note or first_play_prompt(self.cfg)
@@ -718,7 +714,7 @@ class CodexRunner(ModelRecovery, SessionControls):
             from .button_prompts import notification
             prompt += (("\n\n# 试玩前聊天\n这是新会话，已完成入门资料准备，还没有开始试玩。" if getattr(self, "ready_to_play", False)
                         else "\n\n# 试玩结束后的聊天\n本次试玩已经结束。") +
-                       self._workspace_notice() + '若已挂载 /sim，可从显式保存的快照做离线模拟。' +
+                       self._workspace_notice() +
                        "不连接游戏，不调用游戏观察、动作或在线模拟工具，不自行开始下一章。用户没有发消息时安静等待。")
             prompt += '\n' + notification('wake_chat', cfg=self.cfg)
         (self.run_dir / ("chat_system_prompt.md" if self.chat_only else "system_prompt.md")).write_text(prompt, encoding="utf-8")

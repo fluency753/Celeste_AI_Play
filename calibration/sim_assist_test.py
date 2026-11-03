@@ -98,6 +98,15 @@ class SimEnergyTests(unittest.TestCase):
             self.wallet.reward(room=f"map:A:{i}")
         self.assertEqual(self.wallet.snapshot()["balance"], 100)
 
+    def test_failed_wallet_writes_do_not_publish_uncommitted_credit_or_spend(self):
+        before = json.loads(json.dumps(self.wallet.data))
+        with patch.object(self.wallet, '_save', side_effect=OSError('disk')):
+            for operation in (lambda: self.wallet.reserve(3),
+                              lambda: self.wallet.reward(moving_frames=60, room='new')):
+                with self.assertRaises(OSError):
+                    operation()
+                self.assertEqual(self.wallet.data, before)
+
     def test_only_real_movement_counts_not_idle_death_or_cutscene_motion(self):
         rows = [[i, x, 0, 0, 0, state, 1, 0] for i, (x, state) in enumerate([
             (1, "Normal"), (1, "Normal"), (2, "Normal"), (3, "Dead"), (4, "Dummy"), (5, "IntroRespawn")])]
@@ -107,10 +116,13 @@ class SimEnergyTests(unittest.TestCase):
     def test_worker_only_gets_private_state_and_has_no_network(self):
         replies = '\n'.join(json.dumps(r) for r in [
             {"ok": True, "info": {"frame": 1}}, {"ok": True, "results": [{"ok": True, "frames": []}]}])
-        response = SimpleNamespace(returncode=0, stdout=replies, stderr="")
+        def response(*args, **kwargs):
+            if 'input' in kwargs:
+                kwargs['stdout'].write(replies.encode('utf-8'))
+            return SimpleNamespace(returncode=0)
         cfg = RunConfig(agent="test", save="test", model="test")
         with patch("orchestrator.sim_assist.find_docker_exe", return_value="docker"), \
-             patch("orchestrator.sim_assist.subprocess.run", return_value=response) as run:
+             patch("orchestrator.sim_assist.subprocess.run", side_effect=response) as run:
             run_predictions(cfg, self.root, [["60,R"]])
         args = run.call_args_list[0].args[0]
         self.assertEqual(args[args.index("--network") + 1], "none")
@@ -146,8 +158,15 @@ class BrokerTests(unittest.TestCase):
         cfg = RunConfig(agent="test", save="test", model="test", runtime="host", sim_assist=True)
         metrics = Metrics(root / "metrics.json", "test", "test", "high", 100)
         self.session = GameSession(cfg, root, metrics)
+        self.sim_available = patch('orchestrator.simulation.available', return_value=True)
+        self.sim_available.start()
+        self.addCleanup(self.sim_available.stop)
         self.calls = []
         self.session.client = SimpleNamespace(call=lambda *a, **kw: self.calls.append(a) or {"state": {"frame": 1}})
+
+    def predict(self, request):
+        self.request_seq = getattr(self, 'request_seq', 0) + 1
+        return self.session.simulate({**request, 'request_id': f'test-{self.request_seq}'})
 
     def tearDown(self):
         self.session._frames_log.close()
@@ -156,18 +175,18 @@ class BrokerTests(unittest.TestCase):
 
     def test_bad_request_does_not_even_capture_state(self):
         with self.assertRaises(ValueError):
-            self.session.simulate({"candidates": [["6000,R"]]})
+            self.predict({"candidates": [["6000,R"]]})
         self.assertEqual(self.calls, [])
 
     def test_tas_conversion_precedes_billing_and_cannot_silently_drop_menu_actions(self):
         before=self.session.sim_energy.snapshot()
         for inputs in (['1,S'],['1,Q'],['1,H'],['9999,J']):
-            with self.assertRaises(ValueError):self.session.simulate({'input_format':'celeste_tas','candidates':[inputs]})
+            with self.assertRaises(ValueError):self.predict({'input_format':'celeste_tas','candidates':[inputs]})
         self.assertEqual(self.calls,[])
         self.assertEqual(self.session.sim_energy.snapshot(),before)
         prediction={'info':{'frame':1},'results':[{'stop':'done','frames':[]} ]}
         with patch('orchestrator.sim_assist.run_predictions',return_value=prediction) as run:
-            result=self.session.simulate({'input_format':'celeste_tas','candidates':[['1,J','1,K','1,C']]})
+            result=self.predict({'input_format':'celeste_tas','candidates':[['1,J','1,K','1,C']]})
         self.assertEqual(run.call_args.args[2],[['1,J','1,K','1,Y']])
         self.assertEqual(result['requested_input_format'],'celeste_tas')
         self.assertEqual(result['input_format'],'celeste_ai')
@@ -192,7 +211,7 @@ class BrokerTests(unittest.TestCase):
                 try:
                     with patch("orchestrator.sim_assist.run_predictions", return_value=prediction), \
                          patch.object(playback, "_call", return_value={}) as replay:
-                        asyncio.run(server.call_tool("simulate", {"candidates": [["20,R"], ["20,L"]]}))
+                        asyncio.run(server.call_tool("simulate", {"candidates": [["20,R"], ["20,L"]], "request_id": "mcp"}))
                         # drain waits for the collector; no act or Bash result needed to submit it.
                         playback.drain()
                         self.assertEqual(session.metrics.state.sim_calls, 1)
@@ -212,7 +231,7 @@ class BrokerTests(unittest.TestCase):
         self.session.playback = SimpleNamespace(collect_prediction=lambda *a: (_ for _ in ()).throw(OSError("disk")))
         prediction = {"info": {"frame": 1}, "results": [{"stop": "done", "frames": []}]}
         with patch("orchestrator.sim_assist.run_predictions", return_value=prediction):
-            result = self.session.simulate({"candidates": [["60,R"]]})
+            result = self.predict({"candidates": [["60,R"]]})
         self.assertIn("replay_warning", result)
         self.assertEqual(self.session.metrics.state.sim_calls, 1)
         self.assertEqual(self.session.metrics.state.sim_rollouts, 1)
@@ -234,29 +253,29 @@ class BrokerTests(unittest.TestCase):
         finally:
             playback.close()
 
-    def test_infrastructure_failure_refunds_but_prediction_death_costs(self):
+    def test_submitted_failure_keeps_charge_and_prediction_death_costs(self):
         with patch("orchestrator.sim_assist.run_predictions", side_effect=RuntimeError("worker down")):
             with self.assertRaises(RuntimeError):
-                self.session.simulate({"candidates": [["60,R"]]})
-        self.assertEqual(self.session.sim_energy.snapshot()["balance"], 60)
+                self.predict({"candidates": [["60,R"]]})
+        self.assertEqual(self.session.sim_energy.snapshot()["balance"], 57)
         prediction = {"info": {"frame": 1}, "results": [{"ok": True, "stop": "death", "frames": []}]}
         with patch("orchestrator.sim_assist.run_predictions", return_value=prediction):
-            result = self.session.simulate({"candidates": [["60,R"]]})
+            result = self.predict({"candidates": [["60,R"]]})
         self.assertEqual(result["cost"], 3)
-        self.assertEqual(result["energy"]["balance"], 57)
+        self.assertEqual(result["energy"]["balance"], 54)
 
     def test_insufficient_energy_never_runs_worker(self):
         self.session.sim_energy.reserve(60)
         with patch("orchestrator.sim_assist.run_predictions") as worker:
             with self.assertRaises(ValueError):
-                self.session.simulate({"candidates": [["60,R"]]})
+                self.predict({"candidates": [["60,R"]]})
         worker.assert_not_called()
         self.assertEqual(self.calls, [])
 
     def test_capture_failure_refunds(self):
         self.session.client.call = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("bridge down"))
-        with self.assertRaises(RuntimeError):
-            self.session.simulate({"candidates": [["60,R"]]})
+        with self.assertRaisesRegex(ValueError, '未执行'):
+            self.predict({"candidates": [["60,R"]]})
         self.assertEqual(self.session.sim_energy.snapshot()["balance"], 60)
 
 

@@ -15,7 +15,7 @@ python /workspace/game/tas.py /workspace/reference/1A.tas --start-line 2 --offse
 由 agent 调用 `act(plan_file="/workspace/plan.json", thought="...")` 执行。返回 `input_cursor.next`、`next_location` 和 `remaining_inputs`；下一窗口使用实际消耗后的游标，不按请求帧数盲目前移。记录保存在 `game/last_act.json` 与决策日志中。
 游标是选定文档内从0开始的输入帧偏移，重建时使用相同来源范围。剩余数组也须放在声明celeste_tas的JSON中，不能交给默认格式的旧工具。跳过装载命令不会替你建立相同初态；源输入帧总数与文件声明的章节计时帧数也不必相同。
 
-程序中可 `load(path,start_line=...)`、`window(document,offset,count)`。`to_sim(inputs)` 将支持的 TAS 游戏按键转换给现有 `Sim.run`／`SimPool.run_many`；限额 `simulate` 也接受显式格式。模拟仅支持 `L R U D J K X C Z V G`，菜单、重试、第二抓键及其尚未释放的快照明确拒绝，不扣除失败转换的额度。模拟结果输出计划仍为本项目格式，不冒充原 TAS 来源。
+程序中可 `load(path,start_line=...)`、`window(document,offset,count)`。`to_sim(inputs)` 只做支持的 TAS 游戏按键转换，不触发预测。预置模拟是可选主控能力，agent 通过 `simulate(candidates=..., input_format="celeste_tas", request_id="tas-batch-1")` 显式请求；普通程序不能直接调用 SDK，也不能上传历史状态或检查点。仅在限额能力开启、配置了可用模拟器、试玩正在运行且额度足够时可用。模拟仅支持 `L R U D J K X C Z V G`，菜单、重试、第二抓键及其尚未释放的快照明确拒绝，不扣除失败转换的额度。模拟结果输出计划仍为本项目格式，不冒充原 TAS 来源。
 
 TAS执行及observe不自动播放剧情或转场，需要 agent 明确输入。切换格式前先用原格式推进一帧空输入松键；不隐式插帧。菜单仍按项目约定自由运行，因此不以菜单空闲的现实时间证明TAS逐帧等价。
 

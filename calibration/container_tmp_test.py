@@ -1,6 +1,7 @@
 """配置变了要重建智能体容器时，旧容器的 /tmp（智能体常把程序放在 /tmp/claude-<uid>）先打包到本机，
 新容器建好后原样放回；保存失败就不重建，放回失败就报错并保留打包。"""
 import io
+import json
 import tarfile
 import tempfile
 import unittest
@@ -24,10 +25,11 @@ def tar_bytes(files):
 
 
 class FakeDocker:
-    def __init__(self, tmp_files, found=None, save_fails=False):
+    def __init__(self, tmp_files, found=None, save_fails=False, labels=None, mounts=None, image='sha:old'):
         self.archive = tar_bytes(tmp_files)
         self.found = len(tmp_files) if found is None else found
         self.save_fails = save_fails
+        self.labels, self.mounts, self.image = labels or {}, mounts or [], image
         self.calls, self.restored = [], None
 
     def docker(self, *args, check=True, timeout=120):
@@ -36,7 +38,7 @@ class FakeDocker:
         if args[:2] == ("image", "inspect"):
             out = "sha:new"
         elif args[0] == "inspect":
-            out = 'true|sha:old|{}'
+            out = f'true|{self.image}|{json.dumps(self.labels)}|{json.dumps(self.mounts)}'
         elif args[0] == "info":
             out = "24"
         elif args[0] == "exec" and "find /tmp -type f | wc -l" in args:
@@ -66,6 +68,7 @@ class CarryTmpTests(unittest.TestCase):
         with patch.object(container, "docker", fake.docker), patch.object(container.subprocess, "run", fake.run), \
              patch.object(container, "find_docker_exe", lambda: "docker"), \
              patch("orchestrator.config.REPO_ROOT", self.root), \
+             patch("orchestrator.kb_access.KB_ROOT", self.root / 'kb'), \
              patch.object(container, "_create", lambda cfg, name: created.append(name) or fake.calls.append(("create",))):
             name = container.ensure_container(self.cfg, log=lambda *_: None)
         return name, created
@@ -96,6 +99,44 @@ class CarryTmpTests(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         with tarfile.open(kept[0]) as tar:
             self.assertEqual(sorted(m.name for m in tar), ["tmp/a.py", "tmp/b.py"])
+
+    def matching_labels(self):
+        with patch('orchestrator.config.REPO_ROOT', self.root):
+            return container._labels(self.cfg)
+
+    def test_matching_labels_do_not_hide_exposed_simulator_mount(self):
+        for destination in ('/sim', '/sim/private'):
+            with self.subTest(destination=destination):
+                fake = FakeDocker({'tmp/search.py': b'print(1)\n'}, image='sha:new',
+                                  labels=self.matching_labels(),
+                                  mounts=[{'Destination': destination, 'Source': '/private/simulator'}])
+                self.assertEqual(fake.labels['celeste-ai-play.sim'], 'host-only-v1')
+                name, created = self.ensure(fake)
+                self.assertEqual(created, [name])
+                self.assertEqual(self.order(fake), ['save', 'rm', 'create', 'restore'])
+                self.assertEqual(fake.restored, fake.archive)
+
+    def test_exposed_simulator_is_not_removed_when_tmp_backup_fails(self):
+        fake = FakeDocker({'tmp/search.py': b'print(1)\n'}, save_fails=True, image='sha:new',
+                          labels=self.matching_labels(), mounts=[{'Destination': '/sim'}])
+        with self.assertRaises(RuntimeError):
+            self.ensure(fake)
+        self.assertEqual(self.order(fake), ['save'])
+
+    def test_matching_container_without_simulator_mount_is_reused(self):
+        fake = FakeDocker({}, image='sha:new', labels=self.matching_labels(),
+                          mounts=[{'Destination': '/workspace'}, {'Destination': '/kb'}])
+        _, created = self.ensure(fake)
+        self.assertEqual(created, [])
+        self.assertEqual(self.order(fake), [])
+
+    def test_old_simulator_capability_label_requires_safe_rebuild(self):
+        labels = self.matching_labels()
+        labels['celeste-ai-play.sim'] = '1'
+        fake = FakeDocker({'tmp/search.py': b'print(1)\n'}, image='sha:new', labels=labels)
+        name, created = self.ensure(fake)
+        self.assertEqual(created, [name])
+        self.assertEqual(self.order(fake), ['save', 'rm', 'create', 'restore'])
 
 
 if __name__ == "__main__":
