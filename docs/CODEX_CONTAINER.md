@@ -29,6 +29,10 @@ docker build -t celeste-agent:0.1 agent-container
 - 所有阶段均保留工作区读写和程序能力，`apply_patch` 可修改 `/workspace`，原生 Shell 可运行程序；仅游戏通道按试玩状态开关。
 - 普通程序的网络、可写范围和凭据隔离边界保持一致。Codex Shell 包装与主控自动重试程序使用同一份 `agent-container/program_sandbox.py`；Claude 内置 Bash 仍由 Claude 的 sandbox-runtime 实现隔离。
 
+工作区根目录支持普通 `git init`、`git add` 和 `git commit`。`celeste-write` 显式开放 `/workspace/.git`，该路径同时绑定到宿主工作区里的真实 `.git` 目录；Git 数据仍随工作区保存。子挂载点不能被 agent 改名或替换为外指链接，`.git` 内部的链接也不获得工作区外写权限。容器镜像的 root 所有系统配置仅信任 `/workspace`，处理 Windows 挂载所有权显示不一致的问题，不使用 `safe.directory=*`。网络、凭据、其他受保护目录及 `celeste-read` 权限保持原规则；`approval_policy=never` 不代替文件权限。
+
+启动时若根 `.git` 已是符号链接、Windows 目录联接或文件式 gitdir，会在替换旧容器前明确拒绝，不删除或转换已有仓库。旧容器按现有流程备份并恢复 `/tmp`，保留工作区和会话数据卷后重建。用户此前自行建立的 `.celeste-git` 等仓库不会自动迁移；没有根 `.git` 时只创建挂载用的空目录，是否初始化仓库由 agent 的任务决定。
+
 Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计量、可靠超时和进程收尾。托管权限及钩子文件归 root，原生程序不能修改。工作区固定标为 untrusted，不加载 agent 可写的项目配置、MCP 或项目钩子，与 Claude 的 restricted 入口对齐。Shell 采用非登录执行；固定版本 CLI 实测将自定义 shell 路径规整为可信解释器，钩子的归一化参数不含原始 shell 字段，不能将此说成钩子拒绝了该字段。升级 CLI 必须复验该边界。内层程序得到稳定 PATH 与临时 HOME；外层 HOME 不设为程序可写目录。App Server 使用独立 owner 标识，关闭时按 PID、启动时间和 UID 核验自身进程树，不用 `killall`，不影响同容器其他进程。
 
 ## 保留的差异
@@ -98,3 +102,5 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 回归使用隔离的模型／Docker边界；真实验收使用独立工作区与专用登录卷，不连接用户游戏、OBS 或在用主控。应分别检查原生创建与增量编辑、程序反馈、同会话恢复、门禁拒绝、超时、中断及容器进程清理、图像接收。不能以工具最终成功代替正常路径成功：模型重试绕过缺 PATH、登录 Shell 差异等失败，也必须修复并重验。
 
 进程归属的独立验收：`python -m calibration.codex_container_ownership_check`，仅操作临时专用容器，结束后清理。长期 OAuth 刷新、完整真实关卡试玩和真实上下文压缩不属于本轮短验收覆盖范围。
+
+Git 文件权限可用显式隔离回归检查：先构建待测镜像，再设置 `CELESTE_CODEX_GIT_IMAGE=<镜像标签>` 并运行 `python -m unittest calibration.codex_git_permissions_test -v`。它只创建临时工作区和专用容器，不挂账号卷、不连接模型或游戏；通过镜像内固定版本 Codex 原生沙箱及生产 Shell 包装验证初始化、跨进程提交、只读档位和越界拒绝。未设置变量时跳过，不在普通回归中自动访问 Docker。真实模型接收、原生工具钩子与同会话跨轮次验证另行执行。

@@ -56,6 +56,10 @@ RUN useradd -m -s /bin/bash -u 1500 agent \
     && mkdir -p /workspace /kb /home/agent/.claude /home/agent/.codex \
     && chown agent:agent /workspace /home/agent/.claude /home/agent/.codex
 
+# Windows bind mounts can report nobody/root ownership. Trust only the explicit
+# workspace, in root-owned system config; never disable ownership checks globally.
+RUN git config --system --add safe.directory /workspace
+
 ENV CLAUDE_CONFIG_DIR=/home/agent/.claude \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
     DISABLE_AUTOUPDATER=1 \

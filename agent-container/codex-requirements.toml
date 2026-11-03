@@ -26,6 +26,10 @@ deny_read = ["/home/agent/.codex/auth.json", "/home/agent/.claude"]
 [permissions.celeste-write.filesystem]
 ":root" = "read"
 "/workspace" = "write"
+# Allow ordinary git init/add/commit at the workspace root. Codex otherwise
+# protects this special path even when its parent is writable. container.py pins
+# it as a real, non-replaceable nested bind so links cannot expand this grant.
+"/workspace/.git" = "write"
 "/tmp" = "write"
 
 [permissions.celeste-write.network]

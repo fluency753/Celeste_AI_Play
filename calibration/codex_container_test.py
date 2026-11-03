@@ -65,6 +65,9 @@ class ContainerCodexTests(unittest.TestCase):
                          patch.object(container, 'REPO_ROOT', self.root), patch.object(container, 'docker') as docker:
                         container._create(cfg, 'fixture')
                         labels = container._labels(cfg)
+                        git_mount = f'{cfg.workspace_dir / ".git"}:/workspace/.git'
+                        if engine == 'codex':
+                            self.assertTrue((cfg.workspace_dir / '.git').is_dir())
                     args = docker.call_args.args
                     mounts = [args[index + 1] for index, arg in enumerate(args[:-1]) if arg == '-v']
                     self.assertTrue(any(mount.endswith(':/workspace') for mount in mounts))
@@ -72,6 +75,12 @@ class ContainerCodexTests(unittest.TestCase):
                     self.assertFalse(any(':/sim' in mount for mount in mounts), mounts)
                     self.assertEqual(labels['celeste-ai-play.sim'], 'host-only-v1')
                     self.assertIn('celeste-ai-play.sim=host-only-v1', args)
+                    if engine == 'codex':
+                        self.assertIn(git_mount, mounts)
+                        self.assertEqual(labels['celeste-ai-play.git_mount'], 'workspace-dir-v1')
+                    else:
+                        self.assertFalse(any(mount.endswith(':/workspace/.git') for mount in mounts))
+                        self.assertNotIn('celeste-ai-play.git_mount', labels)
 
     def test_auth_is_explicit_stdin_atomic_and_failure_does_not_expose_secrets(self):
         source = self.root/'selected-auth.json'

@@ -2,6 +2,8 @@
 新容器建好后原样放回；保存失败就不重建，放回失败就报错并保留打包。"""
 import io
 import json
+import os
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -137,6 +139,132 @@ class CarryTmpTests(unittest.TestCase):
         name, created = self.ensure(fake)
         self.assertEqual(created, [name])
         self.assertEqual(self.order(fake), ['save', 'rm', 'create', 'restore'])
+
+    def git_mounts(self):
+        with patch('orchestrator.config.REPO_ROOT', self.root):
+            workspace = self.cfg.workspace_dir.resolve()
+        return [{'Destination': destination, 'Source': str(source), 'Type': 'bind', 'RW': True}
+                for destination, source in [('/workspace', workspace), ('/workspace/.git', workspace / '.git')]]
+
+    def test_codex_git_mount_is_checked_even_when_labels_match(self):
+        self.cfg.engine = 'codex'
+        for damage in ('missing', 'source', 'readonly', 'volume', 'nested', 'duplicate'):
+            with self.subTest(damage=damage):
+                mounts = self.git_mounts()
+                if damage == 'missing':
+                    mounts.pop()
+                elif damage == 'source':
+                    mounts[-1]['Source'] = str(self.root / 'elsewhere')
+                elif damage == 'readonly':
+                    mounts[-1]['RW'] = False
+                elif damage == 'volume':
+                    mounts[-1]['Type'] = 'volume'
+                elif damage == 'nested':
+                    mounts.append({'Destination': '/workspace/.git/hooks'})
+                else:
+                    mounts.append(dict(mounts[-1]))
+                fake = FakeDocker({'tmp/keep.py': b'keep'}, image='sha:new',
+                                  labels=self.matching_labels(), mounts=mounts)
+                name, created = self.ensure(fake)
+                self.assertEqual(created, [name])
+                self.assertEqual(self.order(fake), ['save', 'rm', 'create', 'restore'])
+                self.assertEqual(fake.restored, fake.archive)
+
+    def test_codex_matching_git_mount_is_reused(self):
+        self.cfg.engine = 'codex'
+        fake = FakeDocker({}, image='sha:new', labels=self.matching_labels(), mounts=self.git_mounts())
+        self.assertEqual(self.ensure(fake)[1], [])
+        self.assertEqual(self.order(fake), [])
+
+    @unittest.skipUnless(os.name == 'nt', 'Docker Desktop drive mapping is Windows-only')
+    def test_desktop_git_mount_spelling_reuses_only_the_same_directory(self):
+        self.cfg.engine = 'codex'
+        mounts = self.git_mounts()
+        for row in mounts:
+            path = Path(row['Source'])
+            row['Source'] = '/run/desktop/mnt/host/' + path.drive[0].lower() + '/' + path.as_posix()[3:]
+        fake = FakeDocker({}, image='sha:new', labels=self.matching_labels(), mounts=mounts)
+        self.assertEqual(self.ensure(fake)[1], [])
+        mounts[-1]['Source'] += '-different'
+        fake = FakeDocker({'tmp/keep': b'yes'}, image='sha:new', labels=self.matching_labels(), mounts=mounts)
+        self.assertTrue(self.ensure(fake)[1])
+        self.assertEqual(self.order(fake), ['save', 'rm', 'create', 'restore'])
+
+    def test_codex_gitdir_file_is_rejected_before_backup_or_removal(self):
+        self.cfg.engine = 'codex'
+        git = Path(self.git_mounts()[-1]['Source'])
+        git.parent.mkdir(parents=True)
+        git.write_text('gitdir: /outside\n', encoding='utf-8')
+        fake = FakeDocker({'tmp/keep': b'yes'})
+        with self.assertRaisesRegex(RuntimeError, '真实目录'):
+            self.ensure(fake)
+        self.assertEqual(self.order(fake), [])
+        self.assertEqual(git.read_text(), 'gitdir: /outside\n')
+
+    def test_codex_git_replacement_during_backup_preserves_container_and_archive(self):
+        self.cfg.engine = 'codex'
+        git = Path(self.git_mounts()[-1]['Source'])
+        fake = FakeDocker({'tmp/keep': b'yes'})
+        original_run = fake.run
+
+        def backup_then_replace(*args, **kwargs):
+            result = original_run(*args, **kwargs)
+            git.rmdir()
+            git.write_text('gitdir: /outside\n', encoding='utf-8')
+            return result
+
+        fake.run = backup_then_replace
+        with self.assertRaisesRegex(RuntimeError, '真实目录'):
+            self.ensure(fake)
+        self.assertEqual(self.order(fake), ['save'])
+        kept = list((self.root / 'local/container_tmp').iterdir())
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].read_bytes(), fake.archive)
+
+    def test_codex_git_symlink_is_rejected_without_touching_its_target(self):
+        self.cfg.engine = 'codex'
+        git = Path(self.git_mounts()[-1]['Source'])
+        git.parent.mkdir(parents=True)
+        target = self.root / 'outside'
+        target.mkdir()
+        (target / 'keep').write_text('untouched', encoding='utf-8')
+        try:
+            git.symlink_to(target, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f'Host cannot create symlink: {error}')
+        fake = FakeDocker({'tmp/keep': b'yes'})
+        with self.assertRaisesRegex(RuntimeError, '真实目录'):
+            self.ensure(fake)
+        self.assertEqual(self.order(fake), [])
+        self.assertEqual((target / 'keep').read_text(), 'untouched')
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows directory junction regression')
+    def test_codex_git_junction_during_backup_keeps_archive_and_target(self):
+        self.cfg.engine = 'codex'
+        git = Path(self.git_mounts()[-1]['Source'])
+        target = self.root / 'junction-outside'
+        target.mkdir()
+        (target / 'keep').write_text('untouched', encoding='utf-8')
+        fake = FakeDocker({'tmp/keep': b'yes'})
+        original_run = fake.run
+        run_host = subprocess.run
+
+        def backup_then_link(*args, **kwargs):
+            result = original_run(*args, **kwargs)
+            git.rmdir()
+            linked = run_host(['cmd', '/c', 'mklink', '/J', str(git), str(target)],
+                              capture_output=True, text=True, timeout=10)
+            self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
+            return result
+
+        fake.run = backup_then_link
+        with self.assertRaisesRegex(RuntimeError, '真实目录'):
+            self.ensure(fake)
+        self.assertEqual(self.order(fake), ['save'])
+        kept = list((self.root / 'local/container_tmp').iterdir())
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].read_bytes(), fake.archive)
+        self.assertEqual((target / 'keep').read_text(), 'untouched')
 
 
 if __name__ == "__main__":

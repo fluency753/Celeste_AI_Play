@@ -10,7 +10,9 @@ Codex 使用独立的 /home/agent/.codex 持久卷，普通启动不导入宿主
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 import subprocess
 import tarfile
 import time
@@ -50,10 +52,52 @@ def _labels(cfg: RunConfig) -> dict[str, str]:
             # 之前建的容器没有这个标签，按 0 算
             f"{LABEL}.kb_view": "1" if cfg.kb_view else "0",
             **({f'{LABEL}.kb_layout': str(cfg.kb_dir)} if cfg.kb_view else {}),
-            **({f"{LABEL}.codex_home": '1'} if cfg.engine == 'codex' else {})}
+            **({f"{LABEL}.codex_home": '1', f"{LABEL}.git_mount": 'workspace-dir-v1'}
+               if cfg.engine == 'codex' else {})}
 
 
 LABEL_DEFAULTS = {f"{LABEL}.kb_view": "0"}
+
+
+def _workspace_git(cfg: RunConfig) -> Path:
+    """Pin Git metadata to a real directory before granting its native write rule.
+
+    Codex canonicalizes explicit writable paths. A .git link could otherwise
+    turn a workspace permission into permission to write its outside target.
+    The nested bind keeps this directory from being replaced by agent tools.
+    """
+    path = cfg.workspace_dir / '.git'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir()
+    except FileExistsError:
+        pass
+    info = path.lstat()
+    reparse = getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)
+    if not stat.S_ISDIR(info.st_mode) or reparse or path.is_symlink():
+        raise RuntimeError(f'工作区 .git 必须是真实目录，不能是链接、目录联接或 gitdir 文件：{path}；'
+                           '未替换现有内容，请先在停用该工作区后处理仓库布局')
+    return path
+
+
+def _git_mount_matches(cfg: RunConfig, mounts: list) -> bool:
+    def source(value):
+        # Docker Desktop may expose the daemon's VM spelling instead of D:\...
+        # for a Windows bind. Compare those two spellings of the same source.
+        if os.name == 'nt':
+            match = re.fullmatch(r'/run/desktop/mnt/host/([A-Za-z])/(.*)', value.replace('\\', '/'))
+            if match:
+                value = match[1] + ':/' + match[2]
+        return os.path.normcase(os.path.normpath(value))
+
+    expected = {'/workspace': cfg.workspace_dir.resolve(),
+                '/workspace/.git': (cfg.workspace_dir / '.git').resolve()}
+    for destination, path in expected.items():
+        found = [row for row in mounts if row.get('Destination') == destination]
+        if (len(found) != 1 or found[0].get('Type') != 'bind' or found[0].get('RW') is not True
+                or source(found[0].get('Source', '')) != source(str(path))):
+            return False
+    return not any(row.get('Destination', '').startswith('/workspace/.git/') for row in mounts)
 
 
 def _create(cfg: RunConfig, name: str) -> None:
@@ -75,7 +119,9 @@ def _create(cfg: RunConfig, name: str) -> None:
             "-v", f"celeste-claude-{slug(cfg.workspace_dir.name)}:/home/agent/.claude",
             "--label", f"{LABEL}=agent"]
     if cfg.engine == 'codex':
-        args += ['-v', f'celeste-codex-{slug(cfg.workspace_dir.name)}:/home/agent/.codex',
+        git = _workspace_git(cfg)
+        args += ['-v', f'{git}:/workspace/.git',
+                 '-v', f'celeste-codex-{slug(cfg.workspace_dir.name)}:/home/agent/.codex',
                  '-e', 'CODEX_HOME=/home/agent/.codex']
     if cfg.seccomp_unconfined:
         args += ["--security-opt", "seccomp=unconfined"]
@@ -153,18 +199,25 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
     if image.returncode != 0:
         raise RuntimeError(f"找不到镜像 {cfg.image}，请先在仓库根目录执行：docker build -t {cfg.image} agent-container")
     image_id = image.stdout.strip()
+    if cfg.engine == 'codex':
+        # Reject an unsafe pre-existing layout before backing up/removing a container.
+        _workspace_git(cfg)
     name = container_name(cfg.agent + ("-explore" if cfg.knowledge_profile == "explore" else ""))
     inspect = docker("inspect", "-f", "{{.State.Running}}|{{.Image}}|{{json .Config.Labels}}|{{json .Mounts}}", name, check=False)
     if inspect.returncode == 0:
         running, container_image, labels, mounts = inspect.stdout.strip().split("|", 3)
         current = json.loads(labels or "{}") or {}
+        mounted = json.loads(mounts or '[]')
         exposed = any(row.get('Destination') == '/sim' or row.get('Destination', '').startswith('/sim/')
-                      for row in json.loads(mounts or '[]'))
-        stale = exposed or container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
+                      for row in mounted)
+        git_stale = cfg.engine == 'codex' and not _git_mount_matches(cfg, mounted)
+        stale = exposed or git_stale or container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
                                                    for k, v in _labels(cfg).items())
         if stale:
             log(f"[container] {name} 的镜像或配置已变化，重建（工作区、会话与 /tmp 保留）")
             archive = _save_tmp(name)
+            if cfg.engine == 'codex':
+                _workspace_git(cfg)  # A long /tmp backup must not hide a changed layout.
             docker("rm", "-f", name)
             try:
                 _create(cfg, name)
