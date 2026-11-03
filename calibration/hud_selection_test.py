@@ -12,7 +12,7 @@ class HudSelectionTests(unittest.TestCase):
         except ImportError:
             self.skipTest('Playwright is needed to run the real HUD page')
         html = (Path(__file__).resolve().parents[1] / 'overlay/hud.html').read_text(encoding='utf-8')
-        text = '这是一段可以复制的会话文本。'
+        text = '第一行会话文本。\n第二行文本。\n\n代码：\n    print("保留缩进")\n最后一行。'
         items = [{'id': 'first', 'text': text, 'kind': '解说'}]
 
         def handle(route):
@@ -28,6 +28,10 @@ class HudSelectionTests(unittest.TestCase):
                 return route.fulfill(json={'run': 'fixture', 'items': items})
             if url.path == '/api/control':
                 return route.fulfill(json={'run': 'fixture', 'control': {'connected': False}})
+            if url.path == '/hud/tools':
+                return route.fulfill(json={'run': 'fixture', 'items': [
+                    {'id': 'tool', 'tool': 'fixture', 'text': '工具复制测试', 'status': 'returned',
+                     'parameters': {'a': 1}, 'result': {'b': 2}}]})
             return route.fulfill(status=404, json={})
 
         with sync_playwright() as playwright:
@@ -36,7 +40,8 @@ class HudSelectionTests(unittest.TestCase):
             except Exception as error:
                 self.skipTest(f'Chromium unavailable: {error}')
             try:
-                context = browser.new_context(permissions=['clipboard-read', 'clipboard-write'])
+                context = browser.new_context(permissions=['clipboard-read', 'clipboard-write'],
+                                              viewport={'width': 600, 'height': 1100})
                 page = context.new_page()
                 page.route('**/*', handle)
                 page.goto('https://hud.test/hud')
@@ -47,22 +52,51 @@ class HudSelectionTests(unittest.TestCase):
                 self.assertEqual(page.locator('.head').evaluate('e => getComputedStyle(e).userSelect'), 'none')
                 # Use mouse selection, so CSS and pointer handlers participate.
                 bounds = entry.evaluate('''e => {
-                    const range = document.createRange(); range.selectNodeContents(e.lastChild);
-                    const r = range.getBoundingClientRect();
-                    return {x: r.x, y: r.y, width: r.width, height: r.height};
+                    const node = e.lastChild, range = document.createRange();
+                    range.setStart(node, 0); range.setEnd(node, 1);
+                    const first = range.getBoundingClientRect();
+                    range.setStart(node, node.length - 1); range.setEnd(node, node.length);
+                    const last = range.getBoundingClientRect();
+                    return {x: first.x, y: first.y + first.height / 2,
+                            endX: last.right, endY: last.y + last.height / 2};
                 }''')
-                y = bounds['y'] + bounds['height'] / 2
-                page.mouse.move(bounds['x'], y)
+                page.mouse.move(bounds['x'], bounds['y'])
                 page.mouse.down()
-                page.mouse.move(bounds['x'] + bounds['width'], y, steps=10)
+                page.mouse.move(bounds['endX'], bounds['endY'], steps=10)
                 page.mouse.up()
                 selected = page.evaluate('getSelection().toString()')
-                self.assertIn(text, selected, str(bounds))
+                self.assertEqual(text, selected, str(bounds))
                 items.append({'id': 'second', 'text': '新消息不会清除已有选区。', 'kind': '解说'})
                 page.wait_for_function("document.querySelectorAll('#thought .thought-entry').length === 2")
                 self.assertEqual(page.evaluate('getSelection().toString()'), selected)
                 page.keyboard.press('Control+c')
-                self.assertEqual(page.evaluate('navigator.clipboard.readText()'), selected)
+                self.assertEqual(page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n'), selected)
+                formats = page.evaluate('''async () =>
+                    (await navigator.clipboard.read()).flatMap(item => item.types)''')
+                self.assertEqual(formats, ['text/plain'])
+                page.evaluate('''() => {
+                    const target = document.createElement('textarea');
+                    target.id = 'pasteTarget';
+                    target.style.cssText = 'position:fixed;inset:0;background:white;color:black;z-index:1000';
+                    document.body.append(target); target.focus();
+                }''')
+                page.keyboard.press('Control+v')
+                self.assertEqual(page.locator('#pasteTarget').input_value(), text)
+                page.locator('#pasteTarget').evaluate('e => e.remove()')
+                page.fill('#agentInput', '输入框第一行\n第二行')
+                page.press('#agentInput', 'Control+a')
+                page.press('#agentInput', 'Control+c')
+                self.assertEqual(page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n'),
+                                 '输入框第一行\n第二行')
+                page.click('#showTools')
+                page.click('#toolRows summary')
+                tool_text = page.locator('#toolRows pre').text_content()
+                self.assertIn('\n', tool_text)
+                page.locator('#toolRows pre').select_text()
+                page.keyboard.press('Control+c')
+                self.assertEqual(page.evaluate('navigator.clipboard.readText()').replace('\r\n', '\n'), tool_text)
+                self.assertEqual(page.evaluate('''async () =>
+                    (await navigator.clipboard.read()).flatMap(item => item.types)'''), ['text/plain'])
             finally:
                 browser.close()
 
