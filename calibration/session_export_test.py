@@ -103,6 +103,46 @@ class SessionExportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             collect_session(self.one)
 
+    def test_time_format_affects_markdown_csv_only_and_preserves_subsecond_order(self):
+        for ident, wall in [('earlier', 1000.125), ('later', 1000.875)]:
+            self.append(self.one / 'public_events.jsonl', {'id': ident, 'text': ident, 'wall': wall})
+        self.put(self.one / 'sim_energy.json', {'receipts': [{'id': 'r', 'cost': 3, 'status': 'used'}]})
+        report = collect_session(self.one, native_reader=lambda state: {'calls': [
+            {'call_id': 'sim', 'receipt': 'r', 'cost': 3, 'success': True, 'wall': 1001.25}]})
+        original = json.dumps(report, ensure_ascii=False)
+        for name, kwargs, expected in [
+            ('default', {}, '01-01 08:16:40'),
+            ('custom', {'time_format': '%Y/%m/%d %H:%M:%S.%f %z'}, '1970/01/01 08:16:40.125000 +0800'),
+        ]:
+            output = self.root / name
+            archive = write_export(report, output, **kwargs)
+            markdown = (output / 'README.md').read_text(encoding='utf-8')
+            self.assertIn('### ' + expected + ' ·', markdown)
+            with (output / 'public_text.csv').open(encoding='utf-8-sig', newline='') as stream:
+                public = list(csv.DictReader(stream))
+            self.assertEqual(public[0]['time'], expected)
+            self.assertEqual([row['id'] for row in public], ['earlier', 'later'])
+            with (output / 'simulations.csv').open(encoding='utf-8-sig', newline='') as stream:
+                simulation = next(csv.DictReader(stream))
+            self.assertEqual(simulation['time'], '01-01 08:16:41' if name == 'default' else '1970/01/01 08:16:41.250000 +0800')
+            self.assertIn('统计起点：01-01 08:16:40' if name == 'default' else '统计起点：1970/01/01 08:16:40.000000 +0800', markdown)
+            with zipfile.ZipFile(archive) as bundle:
+                self.assertEqual(json.loads(bundle.read('session.json')), report)
+            self.assertEqual(json.dumps(report, ensure_ascii=False), original)
+        with self.assertRaises(ValueError):
+            write_export(report, self.root / 'invalid', time_format='')
+        self.assertFalse((self.root / 'invalid').exists())
+
+    def test_cli_passes_python_strftime_option_to_renderer(self):
+        self.append(self.one / 'public_events.jsonl', {'id': 'p', 'text': '公开', 'wall': 1000.25})
+        output = self.root / 'cli-format'
+        cli = Path(__file__).resolve().parents[1] / 'tools/export_session.py'
+        result = subprocess.run([sys.executable, '-X', 'utf8', str(cli), '--run', str(self.one), '--local-only',
+                                 '--output', str(output), '--time-format', '%Y/%m/%d %H:%M:%S'],
+                                capture_output=True, text=True, encoding='utf-8', timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('### 1970/01/01 08:16:40 ·', (output / 'README.md').read_text(encoding='utf-8'))
+
     def test_chat_entry_finds_parent_runs_and_prefers_live_metrics_over_old_summary(self):
         chat = self.one / 'chats' / 'aaa'
         chat.mkdir(parents=True)

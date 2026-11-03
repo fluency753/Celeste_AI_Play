@@ -7,7 +7,7 @@ import sys
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from orchestrator.session_export import TZ, collect_session, write_export
+from orchestrator.session_export import TZ, DEFAULT_TIME_FORMAT, collect_session, write_export
 
 
 def main():
@@ -16,6 +16,7 @@ def main():
     parser.add_argument('--output', type=Path, help='新的输出目录，默认 local/exports/<会话ID>-<时间>')
     parser.add_argument('--local-only', action='store_true', help='只读本机日志，不访问已有 Codex 容器')
     parser.add_argument('--codex-container', help='已有 Codex 容器名称；默认按工作区标签推导，只读并核验归属')
+    parser.add_argument('--time-format', default=DEFAULT_TIME_FORMAT, help='Markdown/CSV 时间显示格式，使用 Python strftime 语法（默认：%(default)s）')
     args = parser.parse_args()
     if args.local_only and args.codex_container:
         parser.error('--local-only 与 --codex-container 不能同时使用')
@@ -27,7 +28,7 @@ def main():
         report = collect_session(args.run, native_reader=reader)
         output = args.output or Path(__file__).resolve().parents[1] / 'local' / 'exports' / (
             report['session']['session_id'] + '-' + datetime.now(TZ).strftime('%Y%m%d-%H%M%S-%f'))
-        archive = write_export(report, output)
+        archive = write_export(report, output, time_format=args.time_format)
         summary = report['simulation_summary']
         print(f'已导出：{archive.parent}')
         print(f"公开文本 {len(report['public_text'])} 条；{len(report['runs'])} 段运行；"

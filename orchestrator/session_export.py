@@ -14,6 +14,7 @@ import subprocess
 import zipfile
 
 TZ = timezone(timedelta(hours=8), 'Asia/Shanghai')
+DEFAULT_TIME_FORMAT = '%m-%d %H:%M:%S'
 TIME_FIELDS = ('elapsed_s', 'thinking_s', 'tool_s', 'play_game_s', 'auto_game_s',
                'study_s', 'compact_s', 'replay_s', 'waited_s', 'net_wait_s')
 TIME_LABELS = ('累计有效现实时间', '思考', '工具', '游戏操作墙钟耗时', '自动推进墙钟耗时',
@@ -293,8 +294,16 @@ def simulation_fact(ident, args, content, success, **metadata):
                         for result in data.get('results', []) if isinstance(result, dict)]}
 
 
-def write_export(report, output):
+def write_export(report, output, *, time_format=DEFAULT_TIME_FORMAT):
     """Write only new artifacts; refuse source-tree/previous-export overwrites."""
+    if not isinstance(time_format, str) or not time_format:
+        raise ValueError('时间格式不能为空')
+    # Validate before creating artifacts; Python strftime owns the format syntax.
+    datetime.now(TZ).strftime(time_format)
+
+    def display_time(value):
+        return datetime.fromisoformat(value).astimezone(TZ).strftime(time_format) if value else None
+
     output = Path(output).resolve()
     for run in report['runs']:
         if output == Path(run) or output in Path(run).parents or output.is_relative_to(Path(run)):
@@ -307,17 +316,18 @@ def write_export(report, output):
             writer = csv.DictWriter(stream, fieldnames=fields)
             writer.writeheader()
             for row in data:
-                safe = {k: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v for k, v in row.items()}
+                safe = {k: display_time(v) if k == 'time' else json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v for k, v in row.items()}
                 writer.writerow({k: "'" + v if isinstance(v, str) and v.lstrip().startswith(('=', '+', '-', '@')) else v for k, v in safe.items()})
     summary = report['simulation_summary']
     lines = ['# 会话公开记录', '', f"会话：{report['session']['session_id']}；存档：{report['session']['save']}",
-             f"导出时间：{report['exported_at']}；所有时间为北京时间。", '', report['scope'], '',
+             f"导出时间：{display_time(report['exported_at'])}；所有时间为北京时间。",
+             f'时间显示格式：`{time_format}`（Python strftime）；JSON 保留完整时间。', '', report['scope'], '',
              f"公开文本 {len(report['public_text'])} 条；合并 {len(report['runs'])} 段运行。", '',
              f"已取得详情的模拟调用 {summary['observed_calls']} 次，其中失败 {summary['failed_calls']} 次，余额查询 {summary['balance_queries']} 次。", '',
              f"模拟成功预测 {summary['successful_predictions']} 次，{summary['predicted_routes']} 条路线；"
              f"账本净消耗 {summary['net_spent']}，退款 {summary['refunded']}，预留 {summary['reserved']}，末次余额 {summary['final_balance']}。", '',
              '## 时间统计', '', '取最后一段主控累计值；不将恢复前后的累计值相加。游戏时钟帧数除以 60；章节 ticks 除以 10000000，含义不同。', '']
-    lines += [f"统计起点：{report['time_summary']['started_at'] or '未知'}；末次快照：{report['time_summary']['snapshot_at'] or '未知'}。", '']
+    lines += [f"统计起点：{display_time(report['time_summary']['started_at']) or '未知'}；末次快照：{display_time(report['time_summary']['snapshot_at']) or '未知'}。", '']
     for key, label in zip(TIME_FIELDS, TIME_LABELS):
         value = report['time_summary'][key]
         lines.append(f'- {label}（{key}）：{round(value, 3) if isinstance(value, (int, float)) else "未知"} 秒')
@@ -329,12 +339,12 @@ def write_export(report, output):
     lines += ['', '## 全部公开文本', '']
     for row in report['public_text']:
         fence = '`' * max(3, max((len(m.group()) + 1 for m in re.finditer(r'`+', row['text'])), default=3))
-        lines += [f"### {row['time'] or '时间未知'} · {row['kind']} · {row['role']}", '', fence + 'text', row['text'], fence, '']
+        lines += [f"### {display_time(row['time']) or '时间未知'} · {row['kind']} · {row['role']}", '', fence + 'text', row['text'], fence, '']
     lines += ['## 模拟器调用', '', '完整候选输入和结果停止原因见 simulations.csv / session.json。扣费前余额仅在同次返回包含成本和余额时由两者相加还原；不推算跨调用奖励。', '',
               '| 时间 | 调用/回执 | 状态 | 扣费 | 返回余额 | 房间 | 耗时秒 |', '|---|---|---|---:|---:|---|---:|']
     for row in report['simulations']:
         state = row.get('ledger_status') or ('失败' if row.get('success') is False else '查询' if row.get('query_only') else '详情缺失')
-        values = [row.get('time') or '未知', row.get('call_id') or row.get('receipt') or '未知', state,
+        values = [display_time(row.get('time')) or '未知', row.get('call_id') or row.get('receipt') or '未知', state,
                   row.get('ledger_cost', row.get('cost')), row.get('balance_after'), row.get('room'), row.get('duration_s')]
         lines.append('| ' + ' | '.join(str(value) if value is not None else '未知' for value in values) + ' |')
     (output / 'README.md').write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='')
