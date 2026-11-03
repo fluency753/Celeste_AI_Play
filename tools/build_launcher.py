@@ -69,7 +69,7 @@ def main() -> int:
             if filename.endswith(('.c', '.rc')):
                 contents = b'#define HUD_LAUNCHER 1\n' + contents
             else:
-                contents = contents.replace(b'CelesteAIPlay.Console', b'CelesteAIPlay.Hud').replace(b'1.4.0.0', b'1.0.0.0')
+                contents = contents.replace(b'CelesteAIPlay.Console', b'CelesteAIPlay.Hud').replace(b'1.4.0.0', b'1.0.1.0')
         (build / filename).write_bytes(contents)
     draw_icon(build / "icon.ico")
     exe = build / (output_name + '.exe')

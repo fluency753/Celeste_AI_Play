@@ -11,7 +11,7 @@ import subprocess
 import unittest
 from unittest.mock import MagicMock, patch
 
-from overlay.hud_startup import HudInstance, current_hud_url
+from overlay.hud_startup import HudInstance, current_hud_url, find_hud_window
 from overlay.window import main, open_window
 
 
@@ -131,14 +131,74 @@ class HudStartupTests(unittest.TestCase):
         with patch('sys.argv', ['overlay.window', '--url', 'http://explicit.test/hud']), \
              patch('overlay.window.sys.platform', 'win32'), \
              patch('overlay.window.HudInstance', return_value=instance), \
-             patch('overlay.window._user32') as user, patch('overlay.window.current_hud_url') as select, \
+             patch('overlay.window.find_hud_window', return_value=None), patch('overlay.window.current_hud_url') as select, \
              patch('overlay.window.open_window', side_effect=RuntimeError('GUI failed')) as start:
-            user.return_value.FindWindowW.return_value = 0
             with self.assertRaisesRegex(RuntimeError, 'GUI failed'):
                 main()
         self.assertEqual(start.call_args.args[0].url, 'http://explicit.test/hud')
         instance.__exit__.assert_called_once()
         select.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Native named handles require Windows')
+    def test_legacy_window_rejection_releases_instance_before_showing_error_and_retry(self):
+        with patch('sys.argv', ['overlay.window']), \
+             patch('overlay.window.HudInstance', side_effect=lambda: HudInstance(root=self.root)), \
+             patch('overlay.window.find_hud_window', return_value=42), \
+             patch('overlay.window.current_hud_url') as select:
+            with self.assertRaisesRegex(RuntimeError, '托盘'):
+                main()
+        # This is the state in which the outer GUI error handler shows its modal.
+        with HudInstance(root=self.root) as retry:
+            self.assertTrue(retry.is_owner)
+        select.assert_not_called()
+        with patch('sys.argv', ['overlay.window', '--url', 'http://fixture.test/hud']), \
+             patch('overlay.window.HudInstance', side_effect=lambda: HudInstance(root=self.root)), \
+             patch('overlay.window.find_hud_window', return_value=None), \
+             patch('overlay.window.open_window', return_value=0) as start:
+            self.assertEqual(main(), 0)
+        start.assert_called_once()
+
+    def test_automatic_start_uses_shared_window_identity_and_only_owns_its_new_process(self):
+        from orchestrator.run import start_hud_window
+        with patch('orchestrator.run.sys.platform', 'win32'), \
+             patch('overlay.hud_startup.find_hud_window', return_value=None) as find, \
+             patch('orchestrator.run.importlib.util.find_spec', return_value=object()), \
+             patch('orchestrator.run.subprocess.Popen') as spawn:
+            process = start_hud_window(12345, self.root)
+        find.assert_called_once()
+        self.assertIs(process, spawn.return_value)
+        self.assertIn('http://127.0.0.1:12345/hud', spawn.call_args.args[0])
+        spawn.call_args.kwargs['stdout'].close()
+        with patch('orchestrator.run.sys.platform', 'win32'), \
+             patch('overlay.hud_startup.find_hud_window', return_value=42), \
+             patch('orchestrator.run.subprocess.Popen') as spawn:
+            self.assertIsNone(start_hud_window(12345, self.root))
+        spawn.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows callback ABI')
+    def test_window_enumeration_skips_the_first_same_title_dialog_then_finds_real_form(self):
+        user = MagicMock()
+        title = 'Isolated fixture HUD'
+
+        def enumerate_windows(callback, data):
+            for handle in (17, 42):
+                if not callback(handle, data):
+                    return False
+            return True
+
+        def caption(handle, buffer, size):
+            buffer.value = title
+            return len(title)
+
+        def class_name(handle, buffer, size):
+            buffer.value = '#32770' if handle == 17 else 'WindowsForms10.Window.8.fixture'
+            return len(buffer.value)
+
+        user.EnumWindows.side_effect = enumerate_windows
+        user.GetWindowTextW.side_effect = caption
+        user.GetClassNameW.side_effect = class_name
+        with patch('overlay.hud_startup.ctypes.WinDLL', return_value=user):
+            self.assertEqual(find_hud_window(title), 42)
 
     def test_explicit_unavailable_service_fails_with_a_bounded_wait(self):
         with patch.dict('sys.modules', {'webview': MagicMock()}), \

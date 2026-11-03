@@ -21,7 +21,7 @@ import threading
 import time
 from .layout import Layout
 from .placement import PlacementAPI, MIN_HEIGHT, DEFAULT_HEIGHT
-from .hud_startup import HudInstance, current_hud_url
+from .hud_startup import HUD_TITLE, HudInstance, current_hud_url, find_hud_window
 
 GWL_EXSTYLE = -20
 WS_EX_TOPMOST = 0x00000008
@@ -38,7 +38,6 @@ SWP_NOOWNERZORDER = 0x0200
 SW_HIDE = 0
 SW_SHOWNOACTIVATE = 4
 
-HUD_TITLE = "Celeste AI HUD"
 HEIGHT_RATIO = 1.45   # 窗口高 / 宽：卡片最高约占 1.43（调用工具折成三行、思考语句六行、回放说明两行时），余下透明
 
 
@@ -49,7 +48,6 @@ def _user32():
     user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
     user32.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
     user32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
-    user32.FindWindowW.restype = wt.HWND
     user32.IsWindow.argtypes = [wt.HWND]
     user32.IsIconic.argtypes = [wt.HWND]
     user32.IsWindowVisible.argtypes = [wt.HWND]
@@ -338,9 +336,8 @@ def main() -> int:
         if not instance.is_owner:
             instance.request_restore()
             return 0
-        if _user32().FindWindowW(None, HUD_TITLE):
-            ctypes.windll.user32.MessageBoxW(None, '已有未接入此启动器的 HUD 窗口，请先从托盘选择“退出 HUD”，再双击启动器。', HUD_TITLE, 0x40)
-            return 0
+        if find_hud_window(HUD_TITLE):
+            raise RuntimeError('已有未接入此启动器的 HUD 窗口，请先从托盘选择“退出 HUD”，再双击启动器。')
         args.instance = instance
         args.url = args.url or current_hud_url()
         return open_window(args)
@@ -386,5 +383,5 @@ if __name__ == "__main__":
         sys.exit(main())
     except Exception as exc:
         if sys.platform == 'win32':
-            ctypes.windll.user32.MessageBoxW(None, str(exc), HUD_TITLE, 0x10)
+            ctypes.windll.user32.MessageBoxW(None, str(exc), HUD_TITLE + ' 启动失败', 0x10)
         raise

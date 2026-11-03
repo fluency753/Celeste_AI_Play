@@ -20,11 +20,10 @@ class WindowTests(unittest.TestCase):
              patch('sys.argv', ['overlay.window', '--url', 'http://hud.test/hud']), \
              patch('overlay.window.sys.platform', 'win32'), \
              patch('overlay.window.HudInstance') as instance, \
-             patch('overlay.window._user32') as user, \
+             patch('overlay.window.find_hud_window', return_value=None), \
              patch('overlay.window.set_dpi_awareness'), \
              patch('overlay.window.Layout', return_value=layout), \
              patch('urllib.request.urlopen') as ready:
-            user.return_value.FindWindowW.return_value = 0
             self.assertEqual(main(), 0)
         ready.assert_called_once_with('http://hud.test/hud', timeout=2)
         options = webview.create_window.call_args.kwargs

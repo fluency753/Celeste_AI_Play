@@ -21,7 +21,11 @@ static const wchar_t TITLE[] = L"Celeste AI 控制台";
 #define PATH_CHARS 32768
 
 static void fail(const wchar_t *text) {
+#ifdef HUD_LAUNCHER
+    MessageBoxW(NULL, text, L"Celeste AI HUD 启动失败", MB_OK | MB_ICONERROR);
+#else
     MessageBoxW(NULL, text, TITLE, MB_OK | MB_ICONERROR);
+#endif
 }
 
 static int exists(const wchar_t *path) {

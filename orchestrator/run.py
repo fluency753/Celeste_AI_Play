@@ -926,9 +926,9 @@ def start_hud_window(port: int, run_dir: Path) -> subprocess.Popen | None:
     录像里的网页 HUD 来自 OBS 的浏览器源，与它无关；OBS 的游戏采集也采不到这个窗口，所以录像里不会出现两份。"""
     if sys.platform != "win32":
         return None
-    import ctypes  # noqa: WPS433
+    from overlay.hud_startup import find_hud_window
 
-    if ctypes.windll.user32.FindWindowW(None, "Celeste AI HUD"):
+    if find_hud_window():
         print("[run] 置顶 HUD 窗口已经开着，沿用", flush=True)
         return None
     if importlib.util.find_spec("webview") is None:

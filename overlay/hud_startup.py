@@ -11,6 +11,35 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PORTS = (47790, 47792)
+HUD_TITLE = 'Celeste AI HUD'
+
+
+def find_hud_window(title=None):
+    """Find a hidden or visible WinForms HUD, excluding same-title message boxes."""
+    title = HUD_TITLE if title is None else title
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wt.LPARAM]
+    user32.EnumWindows.restype = wt.BOOL
+    user32.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    user32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    found = []
+
+    @callback_type
+    def visit(hwnd, _):
+        caption = ctypes.create_unicode_buffer(len(title) + 2)
+        user32.GetWindowTextW(hwnd, caption, len(caption))
+        if caption.value == title:
+            name = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, name, len(name))
+            if name.value.startswith('WindowsForms10.Window.'):
+                found.append(hwnd)
+                return False
+        return True
+
+    if not user32.EnumWindows(visit, 0) and not found:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return found[0] if found else None
 
 
 def _object(path):
