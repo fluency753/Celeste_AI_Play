@@ -132,6 +132,50 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['success'])
         self.runner._events = None
 
+    async def test_paused_native_shell_and_edit_are_allowed_without_game_calls(self):
+        self.runner.paused = True
+        self.metrics.pause()
+        before = self.metrics.state.elapsed_s
+        data = self.native_request('paused-program', command='python3 check_notes.py')
+        result = await native_tool_hook(self.runner, data)
+        self.assertEqual(result['decision'], 'allow')
+        self.assertGreater(result['timeout_s'], 0)
+        await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
+        edit = {**self.native_request('paused-edit'), 'tool_name': 'apply_patch', 'tool_input': {'patch': 'notes update'}}
+        self.assertEqual((await native_tool_hook(self.runner, edit))['decision'], 'allow')
+        await native_tool_hook(self.runner, {**edit, 'hook_event_name': 'PostToolUse'})
+        for tool in ('celeste_act', 'celeste_observe', 'celeste_cutscene', 'celeste_travel', 'celeste_simulate'):
+            refused = await self.runner._request('item/tool/call', {'callId': tool, 'tool': tool, 'arguments': {}})
+            self.assertFalse(refused['success'])
+            self.assertIn('暂停', response_text(refused))
+        self.assertEqual(self.metrics.state.elapsed_s, before)
+        self.assertTrue(self.runner.paused)
+        self.assertFalse(self.metrics.tools_running)
+        self.server.call_tool.assert_not_called()
+
+    async def test_paused_shell_keeps_both_program_and_planning_budgets(self):
+        from orchestrator.game_session import GameSession
+        from orchestrator.pausegate import PauseGate
+        self.runner.paused = True
+        self.cfg.mode = 'explore'
+        self.cfg.explore_program_runs = 1
+        workspace = self.runner.native_session
+        workspace.programs_since_act = 0
+        workspace.program_run_denied = lambda: GameSession.program_run_denied(workspace)
+        first = self.native_request('program-one')
+        self.assertEqual((await native_tool_hook(self.runner, first))['decision'], 'allow')
+        await native_tool_hook(self.runner, {**first, 'hook_event_name': 'PostToolUse'})
+        refused = await native_tool_hook(self.runner, self.native_request('program-two'))
+        self.assertEqual(refused['decision'], 'deny')
+        self.assertIn('不为补充次数调用 act', refused['reason'])
+        self.assertEqual(workspace.programs_since_act, 1)
+        self.runner.gate = PauseGate(self.metrics, enabled=True, started=True, sim_only=True)
+        refused = await native_tool_hook(self.runner, self.native_request('no-rounds'))
+        self.assertEqual(refused['decision'], 'deny')
+        self.assertIn('不要为补充额度调用 act', refused['reason'])
+        self.assertEqual(self.runner.gate.bank, 0)
+        self.assertTrue(self.runner.paused)
+
     async def test_interrupt_cancels_codex_turn_and_waits_for_active_action(self):
         runner = self.runner
         runner.session = SimpleNamespace(done=False)

@@ -88,6 +88,7 @@ class SessionControls:
             self.session.control_guard = self._game_guard
             self.session.request_pause = self._agent_pause
             self.session.program_guard = self._program_guard
+            self.session.workspace_paused = self._workspace_paused
             self.session.effort_policy = self._agent_effort_policy
             self.session.effort_levels = lambda: self._effort_status()['effort_levels'] or []
 
@@ -173,16 +174,39 @@ class SessionControls:
         self.metrics.update(status='paused')
         return True
 
+    def _workspace_paused(self):
+        return self.paused and not self.chat_only
+
+    def _paused_notice(self):
+        from .execution import workspace_capabilities
+        caps = workspace_capabilities(self.cfg)
+        facts = '试玩仍处于用户暂停状态。不观察、推进或操作游戏，不请求模拟预测。'
+        if caps.workspace_read:
+            facts += '可以按用户本轮要求读取工作区文件。'
+        if caps.workspace_write:
+            facts += '可以编辑工作区文件。'
+        if caps.programs:
+            facts += '普通工作区程序可按要求运行，原有次数、规划额度及单次时限仍生效。'
+        return notification('paused', facts=facts, cfg=self.cfg)
+
     def _program_guard(self):
         if getattr(self, 'model_waiting', False):
             return '模型服务恢复等待中，不能运行程序。'
-        # Preparation (and chat with --allow-programs) can organize notes and programs in the sandbox;
-        # the MCP game gate is still closed. Idle chat and user-paused play cannot run planners.
+        if self.stop_requested:
+            return '用户已中断本次运行，不能再运行程序。'
+        goals = getattr(self.session, 'goals', None)
+        if (self.goal_finishing or (self.session is not None and self.session.done)
+                or (goals is not None and goals.stop_motion.is_set())):
+            return '本次任务已结束或正在收尾，不能运行程序。'
+        if self.pausing:
+            return '正在确认暂停，请等待当前轮次和在途操作归还后再处理工作区。'
+        # Workspace execution is independent of user pause; game tools retain _game_guard.
+        # Preparation and explicitly enabled chat keep their own execution permission.
         if getattr(self, 'prepare_only', False) or getattr(self, 'allow_programs', False):
             return None
         if self.chat_only:
             return '当前为只读聊天，未开放程序运行；可以继续读取文件、复盘并回复用户。'
-        return self._game_guard()
+        return None
 
     async def _heartbeat(self):
         while True:
@@ -355,12 +379,20 @@ class SessionControls:
                             self.paused = True
                             self.pausing = True
                             self.control.heartbeat(paused=False, phase="pausing", session_id=self.session_id)
-                            await self._interrupt_user()
+                            interrupt_error = None
+                            try:
+                                await self._interrupt_user()
+                            except Exception as exc:
+                                interrupt_error = exc
+                            # An RPC failure does not mean the current game call
+                            # returned. Keep the transition guard until its boundary.
                             async with self.action_lock:
                                 if self.pause_at is None:
                                     self.pause_at = time.monotonic()
                                     self.metrics.pause()
                                 self.metrics.update(status="net_wait" if getattr(self, 'model_waiting', False) else "paused")
+                            if interrupt_error is not None:
+                                raise RuntimeError('游戏操作已归还并保持暂停，但模型中断未确认：' + str(interrupt_error)) from interrupt_error
                             self.control.mark(row["id"], "submitted", "当前动作已结束，试玩已暂停")
                         elif row["kind"] == "resume":
                             if getattr(self, '_bridge_reload_failed', False):
@@ -392,7 +424,7 @@ class SessionControls:
                         # 提交期间先移出待启动队列，避免轮次结束时被重复带入下一轮。
                         self.pending_messages.remove(row)
                         try:
-                            text = row["text"] + ("\n（试玩仍处于用户暂停状态。只回复，不调用游戏操作，回复后结束本轮。）" if self.paused and not self.chat_only else "")
+                            text = row["text"] + ('\n' + self._paused_notice() if self.paused and not self.chat_only else '')
                             if not self.capabilities.live_steering:
                                 raise RuntimeError('执行器不支持向活动轮追加输入')
                             await self._steer_user(text)

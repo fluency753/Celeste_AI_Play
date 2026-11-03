@@ -391,9 +391,11 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             add_gate_route(app, gate, session=session)
             endpoint = app.router.routes[0].endpoint
             runner.paused = True
+            runner.pausing = True
             denied = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Bash'})))
             self.assertEqual(json.loads(denied.body)['decision'], 'deny')
             self.assertTrue(runner.note_reminders.peek())
+            runner.pausing = False
             allowed = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Read'})))
             body = json.loads(allowed.body)
             self.assertEqual(body['decision'], 'allow')

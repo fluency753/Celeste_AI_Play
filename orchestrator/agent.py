@@ -219,10 +219,8 @@ class ClaudeRunner(SessionControls):
                 text += '\n当前仅聊天，可以按要求读取、整理工作区笔记；不连接或操作游戏。'
             else:
                 text += '\n当前仅聊天，依据已有对话回复用户；没有工作区文件工具，不连接或操作游戏。'
-        elif self.paused and getattr(self, 'allow_programs', False):
-            text += '\n试玩仍处于暂停状态：不调用游戏操作；可以按用户的要求修改、运行工作区里的程序，完成后回复并结束本轮。'
         elif self.paused:
-            text += '\n试玩仍处于暂停状态。只回复用户，不调用游戏操作，回复后结束本轮。'
+            text += '\n' + self._paused_notice()
         await self._send(text)
         for row in rows:
             self.control.mark(row['id'], 'submitted', '已提交给当前 agent 会话')

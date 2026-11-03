@@ -103,6 +103,31 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.charges, [])
         self.assertEqual(self.metrics.state.tool_calls, 2)
 
+    async def test_lifecycle_and_origin_are_rechecked_after_waiting_for_message_ownership(self):
+        for change in ('stopping', 'turn_changed'):
+            with self.subTest(change=change):
+                self.runner.turn_id = 'turn-a'
+                reason = []
+                self.session.program_guard = lambda: reason[0] if reason else None
+                self.gate.enabled, self.gate._started, self.gate.sim_only, self.gate.bank = True, True, False, 1
+                entered, release = asyncio.Event(), asyncio.Event()
+                async def message(ident):
+                    entered.set()
+                    await release.wait()
+                    return 'message-' + change
+                with patch.object(self.gate, '_message_of', side_effect=message):
+                    pending = asyncio.create_task(native_tool_hook(self.runner, self.data(tool_use_id=change)))
+                    await entered.wait()
+                    if change == 'stopping':
+                        reason.append('正在收尾，不能运行程序')
+                    else:
+                        self.runner.turn_id = 'turn-b'
+                    release.set()
+                    result = await pending
+                self.assertEqual(result['decision'], 'deny')
+                self.assertEqual(self.charges, [])
+                self.assertFalse(self.metrics.tools_running)
+
     async def test_retried_running_call_rechecks_current_turn_and_shared_guard(self):
         data = self.data()
         await native_tool_hook(self.runner, data)

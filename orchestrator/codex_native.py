@@ -51,9 +51,14 @@ async def native_tool_hook(runner, data):
                     notes.observe_file()
             return {'decision': 'allow', 'reason': '', 'context': ''}
         turn = data.get('turn_id')
-        if (not runner.turn_active or runner.turn_done.is_set() or not turn
-                or (runner.turn_id is not None and turn != runner.turn_id)):
-            return _denied('发起此请求的轮次已结束，本次未执行；等待当前轮次的新指令。')
+        def turn_guard():
+            if (not runner.turn_active or runner.turn_done.is_set() or not turn
+                    or (runner.turn_id is not None and turn != runner.turn_id)):
+                return '发起此请求的轮次已结束，本次未执行；等待当前轮次的新指令。'
+            return None
+
+        if reason := turn_guard():
+            return _denied(reason)
         session = getattr(runner, 'native_session', runner.session)
         if previous:
             # Revalidate protocol ownership before reusing an in-flight receipt.
@@ -92,7 +97,7 @@ async def native_tool_hook(runner, data):
         # PreToolUse additionalContext 是否进入模型无法确认：提醒不在这里确认送达，
         # 而由执行器经同轮 steer 投递，Codex 记入历史后才算收到（offer_native_reminders）。
         decision = await decide_tool(gate, canonical, ident, metrics=runner.metrics, session=session,
-                                     reminders=False)
+                                     reminders=False, execution_guard=turn_guard)
         if decision.get('decision') == 'allow':
             offer = getattr(runner, 'offer_native_reminders', None)
             if offer is not None:

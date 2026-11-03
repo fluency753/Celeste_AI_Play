@@ -9,6 +9,7 @@ _LABELS = {
     'continue_play': '自动续轮',
     'continue_prepare': '自动续轮',
     'resume': '恢复试玩',
+    'paused': '暂停期间处理消息',
     'reconnect': '主控中断后恢复',
     'resume_prepare': '恢复准备',
     'next_chapter': '开始后续章节',

@@ -87,6 +87,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         self._last_public = 0.0
         self._init_controls(disabled=prepare_only, start_paused=start_paused)
         self.native_session.program_guard = self._program_guard
+        self.native_session.workspace_paused = self._workspace_paused
         self.native_session.note_reminders = self.note_reminders
         self.native_session.native_tool_hook = self._native_hook
         self.native_session.file_tool_name = self._file_tool_name
@@ -439,7 +440,7 @@ class CodexRunner(ModelRecovery, SessionControls):
             if self.model_waiting and game:
                 raise ValueError('模型服务恢复等待中，本次游戏工具未执行。')
             if self.paused and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate"}:
-                raise ValueError("用户已暂停试玩。请只回复用户，不推进游戏或运行规划；结束本轮并等待继续。")
+                raise ValueError('用户已暂停试玩，不能观察、操作游戏或请求模拟预测；可按用户要求处理工作区，完成后保持暂停。')
             if game and not self.prepare_only and not self.chat_only and name.removeprefix('celeste_') not in game_tools(self.cfg):
                 raise ValueError(f"当前试玩配置未启用 {name}，本次请求未执行；请使用当前已启用的工具。")
             if name in FILE_TOOLS:
@@ -807,7 +808,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                                              retain_fallback=retry_input, context=self.tool_notice)
                 self.tool_notice = ''
                 if self.paused and not self.chat_only:
-                    message += "\n（用户已暂停试玩。只能回复用户，不调用 observe、act 或 Bash；回复后结束本轮，等待用户继续。）"
+                    message += '\n' + self._paused_notice()
                 self.turn_done.clear()
                 self.turn_result = None
                 self.turns += 1

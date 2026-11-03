@@ -1158,6 +1158,9 @@ class GameSession:
         if not limit or getattr(self.cfg, "mode", "speedrun") != "explore":
             return None
         if self.programs_since_act >= limit:
+            if getattr(self, 'workspace_paused', lambda: False)():
+                return (f'两次 act 之间最多运行 {limit} 次程序，本次未执行。试玩仍处于用户暂停状态；'
+                        '请用现有文件工具处理，或等待用户继续、调整额度，不为补充次数调用 act。')
             return (f"两次 act 之间最多运行 {limit} 次规划程序，这一次已经用完。"
                     "请先用 act 做一次真实尝试，之后可以再运行。")
         self.programs_since_act += 1

@@ -151,6 +151,9 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call.args[1]["threadId"], "thread")
         self.assertEqual(call.args[1]["expectedTurnId"], "turn")
         self.assertIn("解释一下", call.args[1]["input"][0]["text"])
+        self.assertIn(self.runner._paused_notice(), call.args[1]["input"][0]["text"])
+        self.assertIn('可以编辑工作区文件', call.args[1]["input"][0]["text"])
+        self.assertIn('普通工作区程序', call.args[1]["input"][0]["text"])
         self.server.call_tool.assert_not_called()
 
     async def test_resume_does_not_count_as_quota_wait(self):

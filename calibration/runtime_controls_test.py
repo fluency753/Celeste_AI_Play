@@ -157,7 +157,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: self.metrics.state.status == 'paused')
         ident = self.runner.control.enqueue('message', '先解释一下当前障碍')
         await turn
-        self.assertIn('试玩仍处于暂停状态', self.packets[-1]['message']['content'])
+        self.assertIn(self.runner._paused_notice(), self.packets[-1]['message']['content'])
         self.assertTrue(self.runner.paused)
         self.assertEqual(self.action(ident)['status'], 'submitted')
 
@@ -208,18 +208,78 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: self.action(resume)['status'] == 'submitted')
         self.assertFalse(self.runner.paused)
 
-    async def test_pause_also_denies_container_bash_without_blocking_note_reads(self):
+    async def test_pause_allows_workspace_tools_but_keeps_game_gate_closed(self):
         from orchestrator.run import add_gate_route
         app = SimpleNamespace(router=SimpleNamespace(routes=[]))
         gate = SimpleNamespace(decide=AsyncMock(return_value=(True, '')))
         add_gate_route(app, gate, session=self.session)
         self.runner.paused = True
+        self.cfg.runtime = 'container'
         endpoint = app.router.routes[0].endpoint
         response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Bash'})))
-        self.assertEqual(json.loads(response.body)['decision'], 'deny')
-        gate.decide.assert_not_awaited()
+        self.assertEqual(json.loads(response.body)['decision'], 'allow')
+        gate.decide.assert_awaited_once()
         response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Read'})))
         self.assertEqual(json.loads(response.body)['decision'], 'allow')
+        self.assertTrue(self.runner.paused)
+        self.assertIsNone(self.session.program_guard())
+        self.assertIn('暂停', self.session.control_guard())
+        refused = await self.server.call_tool('simulate', {'candidates': [['60,R']]})
+        self.assertIn('暂停', refused.content[0].text)
+        self.assertIn('普通工作区程序', self.runner._paused_notice())
+
+    async def test_pause_program_permission_preserves_terminal_and_transition_guards(self):
+        self.runner.paused = True
+        for attribute in ('model_waiting', 'stop_requested', 'goal_finishing', 'pausing'):
+            with self.subTest(attribute=attribute):
+                setattr(self.runner, attribute, True)
+                self.runner.allow_programs = True
+                self.assertIsNotNone(self.runner._program_guard())
+                setattr(self.runner, attribute, False)
+        self.session.done = True
+        self.assertIsNotNone(self.runner._program_guard())
+        self.session.done = False
+        self.session.goals.stop_motion.set()
+        self.assertIsNotNone(self.runner._program_guard())
+
+    async def test_failed_model_interrupt_still_waits_for_game_boundary_before_workspace(self):
+        from orchestrator.pausegate import PauseGate
+        from orchestrator.tool_gate import decide_tool
+        self.runner._interrupt_user = AsyncMock(side_effect=RuntimeError('RPC unavailable'))
+        gate = PauseGate(self.metrics, enabled=False)
+        async with self.runner.action_lock:
+            ident = self.runner.control.enqueue('pause')
+            self.controls()
+            await self.until(lambda: self.runner.pausing)
+            await asyncio.sleep(.1)
+            self.assertNotEqual(self.action(ident)['status'], 'error')
+            refused = await decide_tool(gate, 'Bash', 'not-confirmed', session=self.session)
+            self.assertEqual(refused['decision'], 'deny')
+            self.assertIn('正在确认暂停', refused['reason'])
+        await self.until(lambda: self.action(ident)['status'] == 'error')
+        self.assertIn('游戏操作已归还', self.action(ident)['detail'])
+        self.assertTrue(self.runner.paused)
+        self.assertFalse(self.runner.pausing)
+        allowed = await decide_tool(gate, 'Bash', 'confirmed', session=self.session)
+        self.assertEqual(allowed['decision'], 'allow')
+
+    async def test_paused_workspace_turn_does_not_autostart_another_turn(self):
+        self.cfg.runtime = 'container'
+        self.runner.paused = True
+        ident = self.runner.control.enqueue('message', '整理笔记并运行普通检查脚本')
+        self.runner.pending_messages = [{'id': ident, 'text': '整理笔记并运行普通检查脚本'}]
+        await self.runner._next_user_turn('continue')
+        text = self.packets[-1]['message']['content']
+        self.assertIn('可以编辑工作区文件', text)
+        self.assertIn('原有次数、规划额度及单次时限', text)
+        self.assertIn('不自行继续路线研究', text)
+        self.assertTrue(self.runner.paused)
+        count = len(self.packets)
+        next_turn = asyncio.create_task(self.runner._next_user_turn('continue'))
+        self.tasks.append(next_turn)
+        await asyncio.sleep(.15)
+        self.assertFalse(next_turn.done())
+        self.assertEqual(len(self.packets), count)
 
     async def test_preparation_can_organize_notes_but_cannot_use_game_tools(self):
         self.runner.prepare_only = True

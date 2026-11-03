@@ -138,7 +138,10 @@ class PauseGate:
         return (f"规划轮次：剩余 {self.bank} 轮（本章每进入一个没来过的房间 +{self.rounds_per_room}，"
                 f"在游戏里死亡 +{self.death_bonus}；同一条消息里并行的工具调用算一轮，act 与 set_effort 不占轮次）")
 
-    def deny_reason(self) -> str:
+    def deny_reason(self, *, workspace_paused=False) -> str:
+        if workspace_paused:
+            return ('本章的规划额度已用完，本次工具未执行。试玩仍处于用户暂停状态；'
+                    '请在现有权限内处理用户要求，或等待用户继续、调整额度。不要为补充额度调用 act 或自行恢复试玩。')
         if self.sim_only:
             return (f"本章的规划轮次已经用完（每进入一个没来过的房间按房间大小存入轮次，在游戏里死亡补 "
                     f"{self.death_bonus} 轮）。模拟器只能通过 Bash 调用，所以 Bash 暂时不能用；Read、Write、Edit、Glob、Grep "
