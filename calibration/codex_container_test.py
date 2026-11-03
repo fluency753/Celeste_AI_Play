@@ -137,6 +137,75 @@ class ContainerCodexTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '重新构建'):
                 codex.ensure_runtime('fixture', require_login=False)
 
+    def test_metadata_reader_blocks_pending_or_malformed_migration_before_resume(self):
+        path = self.home / 'sessions/2026/11/rollout-fixture.jsonl'
+        path.parent.mkdir(parents=True)
+        payload = {'id': 'fixture', 'cwd': '/workspace', 'dynamic_tools': []}
+        original = json.dumps({'type': 'session_meta', 'payload': payload}) + '\n'
+        path.write_text(original, encoding='utf-8')
+        journal = self.home / 'simulation-schema-migrations/fixture/journal.json'
+        with patch.object(codex, 'exec_command', side_effect=self.worker_command), \
+             patch.dict(os.environ, {'CODEX_HOME': str(self.home)}):
+            self.assertEqual(codex.read_metadata('fixture', str(path)), payload)
+            journal.parent.mkdir(parents=True)
+            for raw in ('{"state":"prepared"}', '{"state":"unknown"}', '{}',
+                        'invalid json', 'null', '[]', '"not an object"'):
+                with self.subTest(journal=raw):
+                    journal.write_text(raw, encoding='utf-8')
+                    with self.assertRaisesRegex(RuntimeError, '迁移尚未完成.*拒绝开始模型轮次') as error:
+                        codex.read_metadata('fixture', str(path))
+                    self.assertIn('migrate_codex_simulate.py', str(error.exception))
+                    self.assertEqual(path.read_text(encoding='utf-8'), original)
+            journal.unlink()
+            journal.mkdir()
+            with self.assertRaisesRegex(RuntimeError, '迁移尚未完成'):
+                codex.read_metadata('fixture', str(path))
+            journal.rmdir()
+            journal.write_text('{"state":"complete"}', encoding='utf-8')
+            self.assertEqual(codex.read_metadata('fixture', str(path)), payload)
+            self.assertEqual(path.read_text(encoding='utf-8'), original)
+
+    def test_metadata_reader_rejects_symlinked_migration_journal_even_if_complete(self):
+        path = self.home / 'sessions/2026/11/rollout-fixture.jsonl'
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'fixture'}}) + '\n', encoding='utf-8')
+        journal = self.home / 'simulation-schema-migrations/fixture/journal.json'
+        journal.parent.mkdir(parents=True)
+        target = self.root / 'other-journal.json'
+        target.write_text('{"state":"complete"}', encoding='utf-8')
+        try:
+            journal.symlink_to(target)
+        except OSError as error:
+            self.skipTest(f'Host cannot create symlink: {error}')
+        with patch.object(codex, 'exec_command', side_effect=self.worker_command), \
+             patch.dict(os.environ, {'CODEX_HOME': str(self.home)}), \
+             self.assertRaisesRegex(RuntimeError, '迁移尚未完成'):
+            codex.read_metadata('fixture', str(path))
+        self.assertEqual(target.read_text(encoding='utf-8'), '{"state":"complete"}')
+
+    def test_metadata_reader_ignores_workspace_json_and_re_shadow_modules(self):
+        workspace = self.root / 'untrusted-workspace'
+        workspace.mkdir()
+        marker = self.root / 'shadow-imported'
+        malicious = f'open({str(marker)!r}, "w").write("shadowed")\nraise RuntimeError("untrusted module imported")\n'
+        for name in ('json.py', 're.py'):
+            (workspace / name).write_text(malicious, encoding='utf-8')
+        path = self.home / 'sessions/rollout-fixture.jsonl'
+        path.parent.mkdir()
+        payload = {'id': 'fixture', 'cwd': '/workspace', 'dynamic_tools': []}
+        path.write_text(json.dumps({'type': 'session_meta', 'payload': payload}) + '\n', encoding='utf-8')
+        spawn = subprocess.run
+
+        def external_spawn(argv, **kwargs):
+            self.assertEqual(argv[1:3], ['-I', '-c'])
+            return spawn(argv, cwd=workspace, **kwargs)
+
+        with patch.object(codex, 'exec_command', side_effect=self.worker_command), \
+             patch.object(codex.subprocess, 'run', side_effect=external_spawn), \
+             patch.dict(os.environ, {'CODEX_HOME': str(self.home), 'PYTHONPATH': str(workspace)}):
+            self.assertEqual(codex.read_metadata('fixture', str(path)), payload)
+        self.assertFalse(marker.exists())
+
     def test_explicit_account_initializes_only_missing_workspace_auth(self):
         account = self.root/'account'
         workspace = self.root/'workspace'

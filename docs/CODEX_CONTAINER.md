@@ -97,6 +97,19 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 
 `tools/sync_codex_session_env.py` 是迁移前的宿主记录维护工具，不得用于容器记录。容器会话在运行状态里记录 `session_storage=container`，不再用宿主归档目录推断其状态。容器会话也不因宿主存在同 ID 的归档副本而从 HUD 隐藏。
 
+旧容器会话已有 `celeste_simulate(candidates, input_format)`、仅缺少预测必需的 `request_id` 时，可以保留原会话进行显式维护：
+
+```powershell
+# 先只检查；不会启动模型、连接游戏或修改原会话。
+.\.venv\Scripts\python.exe -X utf8 tools\migrate_codex_simulate.py --run <原运行目录>
+# 正常停止该会话的聊天／试玩宿主后，备份并迁移；不能只暂停模型而保留 App Server。
+.\.venv\Scripts\python.exe -X utf8 tools\migrate_codex_simulate.py --run <原运行目录> --apply
+```
+
+维护只访问已存在且归属匹配的容器会话卷，不借用宿主登录或新建会话。宿主维护互斥、容器内 App Server 占用检查及原生线程文件锁共同防止并发写入。备份和阶段日志在该卷的 `simulation-schema-migrations/<会话编号>/`，报告写到本机 `local/`。只补 `request_id`，余额查询仍可省略参数；不补 `request_file`，批量候选继续内联提交。
+
+原首行 UTF-8 字节长度通过简短工具说明及 JSON 尾部空格保持不变，其他工具、会话身份、全部历史字节和索引偏移不变；空间不足、归档、独立工具缓存或未知布局明确拒绝，不截断历史、不直接改 SQLite。未完成的维护禁止开始模型轮次，使用同一命令可从阶段日志继续完成，不用备份覆盖后来追加的历史。维护成功后按原运行目录恢复，并核验原会话 ID 和模拟能力；恢复遇其他写入者时明确失败，不再静默复制历史另起线程。
+
 ## 验证边界
 
 回归使用隔离的模型／Docker边界；真实验收使用独立工作区与专用登录卷，不连接用户游戏、OBS 或在用主控。应分别检查原生创建与增量编辑、程序反馈、同会话恢复、门禁拒绝、超时、中断及容器进程清理、图像接收。不能以工具最终成功代替正常路径成功：模型重试绕过缺 PATH、登录 Shell 差异等失败，也必须修复并重验。

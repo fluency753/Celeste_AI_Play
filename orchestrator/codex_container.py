@@ -144,7 +144,7 @@ def _install_auth(container: str, raw: bytes) -> None:
 
 
 META_READ = r'''
-import json,os,sys
+import json,os,re,sys
 from pathlib import Path
 root=Path(os.environ['CODEX_HOME']).resolve()
 p=Path(sys.argv[1]).resolve()
@@ -155,13 +155,25 @@ if len(line)>4194304:raise ValueError('Session metadata too large')
 data=json.loads(line)
 if data.get('type')!='session_meta':raise ValueError('Missing session metadata')
 payload=data.get('payload') or {}
+ident=payload.get('id')
+if not isinstance(ident,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',ident):
+ raise ValueError('Invalid session identity')
+journal=root/'simulation-schema-migrations'/ident/'journal.json'
+try:
+ pending=journal.is_symlink() or (journal.exists() and json.loads(journal.read_text()).get('state')!='complete')
+except (OSError,ValueError,AttributeError):
+ pending=True
+if pending:raise SystemExit('SIMULATION_SCHEMA_MIGRATION_PENDING')
 print(json.dumps({k:payload[k] for k in ('id','cwd','source','cli_version','dynamic_tools') if k in payload}))
 '''
 
 
 def read_metadata(container: str, path: str) -> dict:
-    result = _run(container, 'python3', '-c', META_READ, path)
+    result = _run(container, 'python3', '-I', '-c', META_READ, path)
     if result.returncode:
+        if 'SIMULATION_SCHEMA_MIGRATION_PENDING' in result.stderr:
+            raise RuntimeError('该会话的模拟接口迁移尚未完成，拒绝开始模型轮次；'
+                               '请正常停止宿主后重试 tools/migrate_codex_simulate.py --run <原运行目录> --apply')
         raise RuntimeError('无法核验容器内 Codex 会话登记；确认会话属于当前工作区并已显式导入旧会话')
     try:
         metadata = json.loads(result.stdout)

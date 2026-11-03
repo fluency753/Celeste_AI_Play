@@ -53,7 +53,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.native_session.planning_budget = self.planning
         # Docker is the external filesystem boundary; keep metadata consumers real.
         def metadata_process(container, *command, **kwargs):
-            self.assertEqual(command[:2], ('python3', '-c'))
+            self.assertEqual(command[:3], ('python3', '-I', '-c'))
             payload = json.loads(Path(command[-1]).read_text(encoding='utf-8'))['payload']
             return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
         metadata = patch('orchestrator.codex_container._run', side_effect=metadata_process)
@@ -1007,15 +1007,42 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, '缺少当前必需工具'):
             self.runner._validate_resumed_tools(result['thread'])
 
-    async def test_writer_conflict_forks_history_and_records_recovery(self):
-        expected = {"thread": {"id": "recovered"}}
-        self.runner.rpc.request = AsyncMock(side_effect=[
-            RuntimeError("thread original already has an active writer"), expected])
+    async def test_writer_conflict_preserves_identity_without_fork_or_recovery_file(self):
+        self.runner.rpc.request = AsyncMock(side_effect=
+            RuntimeError("thread original already has an active writer"))
         params = {"threadId": "original", "sandbox": "read-only", "selectedCapabilityRoots": []}
-        self.assertEqual(await self.runner._resume_thread(params), expected)
-        self.runner.rpc.request.assert_awaited_with("thread/fork", {
-            "threadId": "original", "sandbox": "read-only", "excludeTurns": True})
-        self.assertEqual(json.loads((self.root / "session_recovery.json").read_text())["thread"], "recovered")
+        original = self.runner.session_id
+        with self.assertRaisesRegex(RuntimeError, '保留原会话身份'):
+            await self.runner._resume_thread(params)
+        self.runner.rpc.request.assert_awaited_once_with('thread/resume', {**params, 'excludeTurns': True})
+        self.assertEqual(self.runner.session_id, original)
+        self.assertFalse((self.root / 'session_recovery.json').exists())
+
+    async def test_enabled_simulation_requires_migration_before_a_model_turn(self):
+        self.cfg.mode, self.cfg.sim_assist = 'explore', True
+        tools = await self.runner.tool_specs()
+        simulation = next(tool for tool in tools if tool['name'] == 'celeste_simulate')
+        request_id = simulation['inputSchema']['properties'].pop('request_id')
+        path = self.root / 'old-simulation.jsonl'
+        def publish():
+            path.write_text(json.dumps({'payload': {'id': 'session', 'dynamic_tools': tools}}), encoding='utf-8')
+        publish()
+        with self.assertRaisesRegex(RuntimeError, 'migrate_codex_simulate'):
+            self.runner._validate_resumed_tools({'id': 'session', 'path': str(path)})
+        self.runner.rpc.request.assert_not_awaited()
+        self.cfg.sim_assist = False
+        self.runner._validate_resumed_tools({'id': 'session', 'path': str(path)})
+        self.cfg.sim_assist = True
+        simulation['inputSchema']['properties']['request_id'] = request_id
+        publish()
+        self.runner._validate_resumed_tools({'id': 'session', 'path': str(path)})
+        self.runner.rpc.request.assert_not_awaited()
+
+    async def test_resume_rejects_an_unexpected_thread_identity(self):
+        self.runner.rpc.request = AsyncMock(return_value={'thread': {'id': 'different'}})
+        with self.assertRaisesRegex(RuntimeError, '不同会话身份'):
+            await self.runner._resume_thread({'threadId': 'original'})
+        self.runner.rpc.request.assert_awaited_once()
 
     async def test_cutscene_tool_returns_screenshot_alongside_text(self):
         self.runner.study=None
@@ -1143,7 +1170,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             await self.runner._resume_thread({"threadId": "original"})
         self.assertEqual(self.runner.rpc.request.await_count, 1)
 
-    def test_resumed_session_reports_missing_dynamic_tools_without_bash_fallback(self):
+    async def test_resumed_session_reports_missing_dynamic_tools_without_bash_fallback(self):
         path = self.root / 'thread.jsonl'
         tools = ['read', 'celeste_observe', 'celeste_act', 'celeste_cutscene', 'celeste_exit_level',
                  'celeste_narrate', 'celeste_set_effort', 'celeste_stop_run']
@@ -1154,7 +1181,9 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, 'celeste_simulate'):
             self.runner._validate_resumed_tools({'path': str(path)})
         tools.append('celeste_simulate')
-        path.write_text(json.dumps({'payload': {'dynamic_tools': [{'name': name} for name in tools]}}), encoding='utf-8')
+        actual = next(tool for tool in await self.runner.tool_specs() if tool['name'] == 'celeste_simulate')
+        path.write_text(json.dumps({'payload': {'dynamic_tools': [actual if name == 'celeste_simulate' else {'name': name}
+                                                                  for name in tools]}}), encoding='utf-8')
         self.runner._validate_resumed_tools({'path': str(path)})
 
 

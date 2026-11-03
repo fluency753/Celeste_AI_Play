@@ -639,7 +639,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         # one JSON-RPC response. Long play sessions exceed the transport line limit.
         params = {**params, 'excludeTurns': True}
         try:
-            return await self.rpc.request("thread/resume", params)
+            result = await self.rpc.request("thread/resume", params)
         except RuntimeError as exc:
             if 'not found' in str(exc).lower() or 'no rollout' in str(exc).lower():
                 raise RuntimeError('容器中没有该 Codex 会话；请先用 python -m orchestrator.codex_container '
@@ -647,16 +647,11 @@ class CodexRunner(ModelRecovery, SessionControls):
                                    '显式导入原会话后再重试，不会另建会话或退回宿主执行。') from exc
             if "already has an active writer" not in str(exc):
                 raise
-            # 桌面聊天页可能已经加载原会话。保留完整历史，使用独立写入者续跑。
-            fork_params = {key: value for key, value in params.items()
-                           if key != "selectedCapabilityRoots"}
-            fork_params["excludeTurns"] = True
-            result = await self.rpc.request("thread/fork", fork_params)
-            (self.run_dir / "session_recovery.json").write_text(json.dumps({
-                "source_thread": params["threadId"], "thread": result["thread"]["id"],
-                "reason": "original thread already has an active writer"}, ensure_ascii=False), encoding="utf-8")
-            print("[codex] 原会话被其他客户端占用；已复制历史，独立续跑", flush=True)
-            return result
+            raise RuntimeError('原 Codex 会话仍有写入者，未恢复；请先停止占用该会话的客户端后重试。'
+                               '保留原会话身份，不会自动复制历史或另建会话。') from exc
+        if result.get('thread', {}).get('id') != params['threadId']:
+            raise RuntimeError('Codex 恢复返回了不同会话身份，拒绝开始模型轮次')
+        return result
 
     def _validate_resumed_tools(self, thread):
         # The protocol persists dynamic tools at thread/start and cannot replace
@@ -673,6 +668,13 @@ class CodexRunner(ModelRecovery, SessionControls):
         if missing:
             raise RuntimeError('旧会话缺少当前必需工具：' + ', '.join(sorted(missing))
                                + '。该容器记录的接口不完整，请新建准备会话；不会借用宿主工具绕过缺失接口。')
+        if 'celeste_simulate' in required:
+            simulator = next(tool for tool in meta['dynamic_tools'] if tool['name'] == 'celeste_simulate')
+            properties = (simulator.get('inputSchema') or {}).get('properties') or {}
+            if 'request_id' not in properties:
+                raise RuntimeError('原会话的模拟接口缺少 request_id；保持原会话及预测设置，未开始模型轮次。'
+                                   '请停止宿主后运行 tools/migrate_codex_simulate.py --run <原运行目录> --apply，'
+                                   '完成定长迁移后恢复同一会话。')
         self.registered_tools = names
         available = {name: self._file_tool_name(name) for name in FILE_TOOLS}
         absent = [name for name, actual in available.items() if actual is None]
