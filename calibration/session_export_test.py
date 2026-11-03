@@ -1,5 +1,7 @@
 """Export real persisted sources without UI limits or writes to the source run."""
 import csv
+from contextlib import closing
+from datetime import datetime
 import hashlib
 import io
 import json
@@ -12,7 +14,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from orchestrator.session_export import collect_session, write_export, rows
+from orchestrator.session_export import TZ, collect_session, write_export, rows
 from orchestrator.session_export_native import scan_native, read_container_simulations, reader_code
 
 
@@ -142,6 +144,88 @@ class SessionExportTests(unittest.TestCase):
                                 capture_output=True, text=True, encoding='utf-8', timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('### 1970/01/01 08:16:40 ·', (output / 'README.md').read_text(encoding='utf-8'))
+
+    def test_message_time_range_is_half_open_precise_and_keeps_session_statistics(self):
+        for ident, wall in [('before', 1000.0001), ('start', 1000.0002), ('inside', 1000.0003),
+                            ('end', 1000.0004), ('unknown', None)]:
+            self.append(self.one / 'public_events.jsonl', {'id': ident, 'text': ident, 'wall': wall})
+        self.put(self.two / 'sim_energy.json', {'receipts': [{'id': 'r', 'cost': 3, 'status': 'used'}]})
+        reader = lambda state: {'calls': [{'call_id': 'outside', 'receipt': 'r', 'cost': 3, 'wall': 2000}]}
+        full = collect_session(self.two, native_reader=reader)
+        selected = collect_session(self.two, native_reader=reader,
+                                   since='1970-01-01T08:16:40.000200', until='1970-01-01T08:16:40.000400+08:00')
+        self.assertEqual([row['id'] for row in selected['public_text']], ['start', 'inside'])
+        self.assertEqual(len(full['public_text']), 5)
+        self.assertIsNone(full['public_text_filter'])
+        self.assertEqual(selected['public_text_filter']['excluded_unknown_time'], 1)
+        self.assertEqual(selected['public_text_filter']['since'], '1970-01-01T08:16:40.000200+08:00')
+        self.assertEqual(selected['public_text_filter']['statistics_scope'], 'entire_session')
+        self.assertTrue(any('缺少有效时间' in warning for warning in selected['warnings']))
+        for key in ('time_summary', 'simulations', 'simulation_summary', 'runs', 'segments'):
+            self.assertEqual(selected[key], full[key], key)
+
+    def test_message_time_range_one_sided_timezones_and_empty_results(self):
+        for ident, wall in [('a', 1000), ('b', 1001), ('c', 1002)]:
+            self.append(self.one / 'public_events.jsonl', {'id': ident, 'text': ident, 'wall': wall})
+        for bounds, expected in [
+            ({'since': '1970-01-01T00:16:41Z'}, ['b', 'c']),
+            ({'since': '1970-01-01T08:16:41+08:00'}, ['b', 'c']),
+            ({'since': '1970-01-01 08:16:41'}, ['b', 'c']),
+            ({'until': '1970-01-01T01:16:41+01:00'}, ['a']),
+            ({'since': '1970-01-02'}, []),
+        ]:
+            with self.subTest(bounds=bounds):
+                report = collect_session(self.one, **bounds)
+                self.assertEqual([row['id'] for row in report['public_text']], expected)
+
+    def test_message_time_range_uses_canonical_event_before_filtering_reply_and_resume_copies(self):
+        self.append(self.one / 'public_events.jsonl', {'id': 'public:shared', 'text': '范围前的消息', 'wall': 1000.1})
+        self.append(self.two / 'public_events.jsonl', {'id': 'public:shared', 'text': '范围前的消息', 'wall': 1000.3})
+        self.append(self.two / 'public_events.jsonl', {'id': 'public:shared', 'text': '范围内的更新', 'wall': 1000.4})
+        with closing(sqlite3.connect(self.one / 'control.sqlite3')) as connection:
+            connection.executescript('CREATE TABLE actions(id,kind,text,status,wall); CREATE TABLE replies(id,text,wall);')
+            connection.execute('INSERT INTO replies VALUES(?,?,?)', ('shared', '范围前的消息', 1000.2))
+            connection.execute('INSERT INTO actions VALUES(?,?,?,?,?)', (1, 'message', '用户消息', 'submitted', 1000.5))
+            connection.commit()
+        self.append(self.two / 'decisions.jsonl', {'i': 1, 'thought': '公开动作说明', 't': 0.6})
+        report = collect_session(self.two, since='1970-01-01T08:16:40.150000', until='1970-01-01T08:16:41')
+        self.assertEqual([row['text'] for row in report['public_text']], ['范围内的更新', '用户消息', '公开动作说明'])
+
+    def test_message_time_range_cli_artifacts_agree_and_invalid_bounds_create_no_output(self):
+        self.append(self.one / 'public_events.jsonl', {'id': 'before', 'text': 'RANGE_OUTSIDE_CANARY', 'wall': 1000})
+        self.append(self.two / 'public_events.jsonl', {'id': 'inside', 'text': '范围内的可见消息', 'wall': 1001})
+        self.append(self.two / 'public_events.jsonl', {'id': 'end', 'text': 'RANGE_OUTSIDE_CANARY', 'wall': 1002})
+        cli = Path(__file__).resolve().parents[1] / 'tools/export_session.py'
+        output = self.root / 'cli-range'
+        command = [sys.executable, '-X', 'utf8', str(cli), '--run', str(self.two), '--local-only', '--output', str(output)]
+        result = subprocess.run(command + ['--since', '1970-01-01 08:16:41', '--until', '1970-01-01T00:16:42Z'],
+                                capture_output=True, text=True, encoding='utf-8', timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('公开文本 1 条', result.stdout)
+        self.assertIn('仍为整个会话', result.stdout)
+        markdown = (output / 'README.md').read_text(encoding='utf-8')
+        self.assertIn('含起点、不含终点', markdown)
+        self.assertIn('1970-01-01T08:16:41+08:00', markdown)
+        self.assertIn('模拟调用与额度仍为整个会话', markdown)
+        with (output / 'public_text.csv').open(encoding='utf-8-sig', newline='') as stream:
+            self.assertEqual([row['id'] for row in csv.DictReader(stream)], ['inside'])
+        report = json.loads((output / 'session.json').read_text(encoding='utf-8'))
+        self.assertEqual([row['id'] for row in report['public_text']], ['inside'])
+        with zipfile.ZipFile(output / 'export.zip') as bundle:
+            for name in bundle.namelist():
+                self.assertNotIn('RANGE_OUTSIDE_CANARY', bundle.read(name).decode('utf-8-sig'))
+        for args in [['--since', 'not-a-date'], ['--until', ''],
+                     ['--since', '1970-01-02', '--until', '1970-01-01'],
+                     ['--since', '1970-01-01T08:16:41', '--until', '1970-01-01T00:16:41Z']]:
+            with self.subTest(args=args):
+                invalid_output = self.root / 'invalid-range'
+                result = subprocess.run(command[:-1] + [str(invalid_output)] + args,
+                                        capture_output=True, text=True, encoding='utf-8', timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('导出失败', result.stderr)
+                self.assertFalse(invalid_output.exists())
+        empty = collect_session(self.one, until='1970-01-01T00:00:00Z')
+        self.assertTrue(write_export(empty, self.root / 'empty-range').is_file())
 
     def test_chat_entry_finds_parent_runs_and_prefers_live_metrics_over_old_summary(self):
         chat = self.one / 'chats' / 'aaa'

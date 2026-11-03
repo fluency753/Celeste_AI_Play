@@ -78,8 +78,26 @@ def identity(state):
     return engine, state.get('provider') or ('codex' if engine == 'codex' else 'anthropic'), state.get('session_id')
 
 
-def collect_session(run, *, runs_root=None, native_reader=None):
+def message_time_bound(value):
+    """Parse an ISO date/time; a missing UTC offset means Beijing time."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError('公开消息时间范围须使用 ISO 日期时间，例如 2026-11-03T23:02:46+08:00')
+    try:
+        bound = datetime.fromisoformat(value.strip())
+        return bound.replace(tzinfo=TZ) if bound.tzinfo is None else bound.astimezone(TZ)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError(f'无效的公开消息时间范围：{value!r}；请使用 ISO 日期时间') from exc
+
+
+def collect_session(run, *, runs_root=None, native_reader=None, since=None, until=None):
     """No game/model connection, writes or UI history limits; native_reader is an optional read boundary."""
+    since, until = message_time_bound(since), message_time_bound(until)
+    if since is not None and until is not None and since >= until:
+        raise ValueError('公开消息时间范围的起点必须早于终点')
+    since_wall = since.timestamp() if since is not None else None
+    until_wall = until.timestamp() if until is not None else None
     run = Path(run).resolve()
     warnings = []
     selected = read_object(run / 'run_state.json', warnings)
@@ -242,6 +260,19 @@ def collect_session(run, *, runs_root=None, native_reader=None):
         if str(detail.get('tool', '')).split(' · ')[0] in ('celeste_simulate', 'mcp__celeste__simulate') and ident not in represented:
             simulations.append({'call_id': ident, **detail, 'time': timestamp(detail.get('wall')), 'detail_missing': True})
     simulations.sort(key=lambda row: (row.get('wall') is None, row.get('wall') or 0, row.get('receipt', '')))
+    text_filter = None
+    if since is not None or until is not None:
+        # Canonical events must win over later reply copies even at a range boundary.
+        unknown = sum(row['wall'] is None for row in texts)
+        texts = [row for row in texts if row['wall'] is not None
+                 and (since_wall is None or row['wall'] >= since_wall)
+                 and (until_wall is None or row['wall'] < until_wall)]
+        text_filter = {'since': since.isoformat() if since is not None else None,
+                       'until': until.isoformat() if until is not None else None,
+                       'bounds': '[since, until)', 'excluded_unknown_time': unknown,
+                       'statistics_scope': 'entire_session'}
+        if unknown:
+            warnings.append(f'时间筛选排除 {unknown} 条缺少有效时间的公开消息；无法判断是否位于指定范围内')
     texts.sort(key=lambda row: (row['wall'] is None, row['wall'] or 0, row['id']))
     latest = segments[-1]['metrics']
     totals = {status: sum(r.get('cost', 0) for r in receipts.values() if r.get('status') == status) for status in ('used', 'reserved', 'refunded')}
@@ -257,7 +288,7 @@ def collect_session(run, *, runs_root=None, native_reader=None):
                              'chapter_time_ticks': latest.get('chapter_time_ticks'), 'completed_ticks': latest.get('completed_ticks'),
                              'splits': latest.get('splits'), 'source': segments[-1]['snapshot_source']},
             'segments': [{k: v for k, v in segment.items() if k != 'metrics'} | {'cumulative_seconds': {k: segment['metrics'].get(k) for k in TIME_FIELDS}} for segment in segments],
-            'public_text': texts, 'simulations': simulations,
+            'public_text': texts, 'public_text_filter': text_filter, 'simulations': simulations,
             'simulation_summary': {'receipt_count': len(receipts), 'matched_receipts': len(matched), 'net_spent': totals['used'],
                                    'reserved': totals['reserved'], 'refunded': totals['refunded'], 'final_balance': balance,
                                    'observed_calls': len(native_calls), 'failed_calls': sum(call.get('success') is False for call in native_calls.values()),
@@ -321,8 +352,12 @@ def write_export(report, output, *, time_format=DEFAULT_TIME_FORMAT):
     summary = report['simulation_summary']
     lines = ['# 会话公开记录', '', f"会话：{report['session']['session_id']}；存档：{report['session']['save']}",
              f"导出时间：{display_time(report['exported_at'])}；所有时间为北京时间。",
-             f'时间显示格式：`{time_format}`（Python strftime）；JSON 保留完整时间。', '', report['scope'], '',
-             f"公开文本 {len(report['public_text'])} 条；合并 {len(report['runs'])} 段运行。", '',
+             f'时间显示格式：`{time_format}`（Python strftime）；JSON 保留完整时间。', '', report['scope'], '']
+    text_filter = report.get('public_text_filter')
+    if text_filter:
+        lines += [f"公开消息时间范围：{text_filter['since'] or '不限起点'} 至 {text_filter['until'] or '不限终点'}（含起点、不含终点）。",
+                  f"排除时间未知消息 {text_filter['excluded_unknown_time']} 条。筛选仅作用于公开消息；时间统计、模拟调用与额度仍为整个会话。", '']
+    lines += [f"公开文本 {len(report['public_text'])} 条；合并 {len(report['runs'])} 段运行。", '',
              f"已取得详情的模拟调用 {summary['observed_calls']} 次，其中失败 {summary['failed_calls']} 次，余额查询 {summary['balance_queries']} 次。", '',
              f"模拟成功预测 {summary['successful_predictions']} 次，{summary['predicted_routes']} 条路线；"
              f"账本净消耗 {summary['net_spent']}，退款 {summary['refunded']}，预留 {summary['reserved']}，末次余额 {summary['final_balance']}。", '',
