@@ -288,7 +288,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 70;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 71;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -505,7 +505,8 @@ function toolEntry(item, opened) {
   const body=document.createElement('pre');
   body.textContent='请求参数\n'+(item.parameters===null ? '尚无可核实的参数记录' : JSON.stringify(item.parameters,null,2))+
     '\n\n返回摘要（原生工具结果，非总上下文）\n'+(item.result===null ? '尚无可核实的返回结果' : JSON.stringify(item.result,null,2))+
-    '\n应用图像附件：'+(item.attached_images==null ? '未确认数量' : item.attached_images+' 张');
+    '\n同轮图像附件：'+(item.attached_images==null ? '数量未知' : item.attached_images+' 张')+
+    (item.attachment_status ? ' · '+({pending:'待投递',queued:'已排队，未核实接收',recorded:'已确认接收',unconfirmed:'接收未确认'}[item.attachment_status] || item.attachment_status) : '');
   entry.append(summary,body); return entry;
 }
 async function pollTools() {
@@ -654,7 +655,7 @@ function render() {
 
   // 推理强度：当前生效的档位（英文）；申请了切换、还没生效时，后面跟一个呼吸闪烁的"→ 目标档位"
   const box = $("effortBox");
-  const levels = modelKey(controlData?.model) === modelKey(m.model) ? (controlData.control?.effort_levels || []) : [];
+  const levels = controlData && modelKey(controlData.model) === modelKey(m.model) ? (controlData.control?.effort_levels || []) : [];
   const level = levels.indexOf(m.effort);
   const meter = $("effortMeter");
   if (meter.children.length !== levels.length) {
@@ -1237,7 +1238,8 @@ loadSaveChoices();
 setInterval(poll, Number(params.get("poll") || 100));
 pollHistory(); setInterval(pollHistory, 750);
 if (!OBS_SURFACE) setInterval(pollTools, 1000);
-(function loop() { render(); requestAnimationFrame(loop); })();
+// 先安排下一帧；一次渲染异常不能永久停掉整个状态面板。
+(function loop() { requestAnimationFrame(loop); render(); })();
 </script>
 </body>
 </html>

@@ -12,7 +12,9 @@
 
 ## 来源与范围
 
-后台只读已有日志，不修改主控、不连接游戏桥接。Codex 以本次 `decision_timing.jsonl` 的调用 ID 为所有权依据，再从该次登记会话的原生日志补充参数与明确结果；读取前校验会话身份、文件实际路径及初始工作目录。复用会话的其他运行不会混入。Claude 从本运行的 `agent_events.jsonl` 获取相同事实。
+后台只读当前运行目录的日志，不连接游戏桥接。Codex 从 `codex_events.jsonl` 读取动态工具、原生 Shell、文件编辑和看图事件，执行器在真实请求与返回边界追加 `tool/history` 安全摘要；`decision_timing.jsonl` 补充开始时间和耗时，不据此判定成功。保留宿主机旧版原生日志兼容：校验会话身份、文件实际路径及初始工作目录，只为本次计时登记的调用补缺字段。新版事实优先，复用会话的其他运行不会混入。Claude 从本运行的 `agent_events.jsonl` 获取相同事实。
+
+同轮附件读取 `tool_deliveries.jsonl`，区分待投递、已排队、已确认接收和接收未确认；排队不是接收证明。回执重放不重复计数。更新前未保存的动态工具参数和结果摘要无法还原，继续显示未知。
 
 参数不完整或来源无法校验时明确提示，不根据解说猜测。不会显示结果正文、图片编码、写入内容或内部推理。日志缺失、超长行、暂时占用和载入中的详情不伪装成完整记录。
 
@@ -22,4 +24,4 @@
 
 `python -m unittest calibration.tool_history_test calibration.hud_history_test calibration.mod_hud_test` 验证来源隔离、真实 HTTP 消费、状态、遮盖、半行、超长行、重放与迟到事件。
 
-安装 Playwright 及可用浏览器后，在仓库根目录运行 `node calibration/tool_history_ui_check.cjs`。Windows 可设置 `PLAYWRIGHT_CHANNEL=msedge` 使用已安装的 Edge。检查使用隔离页面与假接口，不操作游戏：验证切换、展开保留、命令文本转义、跨运行拒绝，以及 OBS 工具请求为零；截图写入 `local/tool-history-preview.png`。
+安装 Playwright 及可用浏览器后，在仓库根目录运行 `node calibration/tool_history_ui_check.cjs`。Windows 可设置 `PLAYWRIGHT_CHANNEL=msedge` 使用已安装的 Edge。检查使用隔离页面与假接口，不操作游戏：覆盖初始空模型与控制接口慢响应后顶部时间、上下文正常更新，以及验证切换、展开保留、命令文本转义、跨运行拒绝，以及 OBS 工具请求为零；截图写入 `local/tool-history-preview.png`。

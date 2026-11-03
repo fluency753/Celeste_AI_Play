@@ -166,10 +166,11 @@ class CodexRunner(ModelRecovery, SessionControls):
         # 不记录 reasoning 正文或摘要；公开消息和结构化用量可以用于 HUD。
         item = params.get("item") or {}
         if "reasoning" not in method.lower() and item.get("type") != "reasoning" and self._events:
-            safe = {"method": method, "params": params}
+            safe = {"method": method, "wall": time.time(), "params": params}
             if item.get("type") == "dynamicToolCall":
-                safe = {"method": method, "params": {"item": {
-                    k: item.get(k) for k in ("id", "type", "tool", "status", "success", "durationMs")}}}
+                safe = {"method": method, "wall": time.time(), "params": {
+                    **{k: params[k] for k in ("threadId", "turnId", "startedAtMs", "completedAtMs") if k in params},
+                    "item": {k: item.get(k) for k in ("id", "type", "tool", "status", "success", "durationMs")}}}
             self._events.write(json.dumps(public_event(safe), ensure_ascii=False) + "\n")
             self._events.flush()
         if method == "thread/tokenUsage/updated":
@@ -372,7 +373,33 @@ class CodexRunner(ModelRecovery, SessionControls):
         except (RuntimeError, OSError) as exc:
             self._drop_receipt(receipt, reason=str(exc))
 
+    def _tool_fact(self, phase, ident, tool, *, turn=None, arguments=None, response=None):
+        """Run-owned safe projection; disk failure cannot change execution or its result."""
+        from .tool_facts import request_summary, result_summary
+        fact = {'phase': phase, 'id': str(ident), 'tool': tool}
+        if arguments is not None:
+            fact['text'], fact['parameters'] = request_summary(tool, arguments)
+        if response is not None:
+            fact['success'] = response.get('success')
+            fact['result'] = result_summary(response.get('contentItems'), response.get('success'))
+        if self._events:
+            try:
+                self._events.write(json.dumps({'method': 'tool/history', 'wall': time.time(), 'params': {
+                    'threadId': self.session_id, 'turnId': turn, 'fact': fact}}, ensure_ascii=False) + '\n')
+                self._events.flush()
+            except OSError as exc:
+                print(f'[history] 工具摘要写入失败：{exc}', flush=True)
+
     async def _request(self, method, params):
+        if method != 'item/tool/call':
+            return await self._dispatch_request(method, params)
+        tool, ident, turn = params.get('tool', ''), params.get('callId') or params.get('tool', ''), self.turn_id
+        self._tool_fact('requested', ident, tool, turn=turn, arguments=params.get('arguments') or {})
+        response = await self._dispatch_request(method, params)
+        self._tool_fact('returned', ident, tool, turn=turn, response=response)
+        return response
+
+    async def _dispatch_request(self, method, params):
         if method != "item/tool/call":
             # 拒绝任何宿主权限扩张/工具授权请求；不代替用户批准。
             raise RuntimeError(f"只接受客户端动态工具请求，拒绝 {method}")

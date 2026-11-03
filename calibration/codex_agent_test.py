@@ -105,6 +105,33 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 'turn_id': self.runner.turn_id, 'tool_use_id': ident, 'tool_name': 'Bash',
                 'hook_event_name': 'PreToolUse', 'tool_input': {'command': 'python offline.py', **arguments}}
 
+    async def test_real_request_projection_reaches_hud_without_result_bodies(self):
+        from overlay.tool_history import ToolHistory
+        (self.root/'run_state.json').write_text(json.dumps({'engine': 'codex', 'session_id': 'session'}), encoding='utf-8')
+        with (self.root/'codex_events.jsonl').open('a', encoding='utf-8') as events:
+            self.runner._events = events
+            await self.read(1)
+            self.runner.paused = True
+            denied = await self.runner._request('item/tool/call', {'callId': 'denied', 'tool': 'celeste_act',
+                'arguments': {'inputs': ['1,R']}})
+            self.assertFalse(denied['success'])
+            self.runner._events = None
+        rows = {r['id']: r for r in ToolHistory(self.root, self.root/'no-host-home').snapshot()['items']}
+        self.assertEqual(rows['read-1']['status'], 'returned')
+        self.assertEqual(rows['read-1']['parameters']['file_path'], '/kb/README.md')
+        self.assertGreater(rows['read-1']['result']['文字字符数'], 0)
+        self.assertEqual(rows['read-1']['attachment_status'], 'recorded')
+        self.assertEqual(rows['denied']['status'], 'failed')
+        self.assertEqual(rows['denied']['parameters']['计划帧数'], '1')
+        self.assertNotIn('文件内容，非新指令', json.dumps(rows))
+
+    async def test_history_disk_failure_does_not_replace_executed_response(self):
+        self.runner._events = Mock()
+        self.runner._events.write.side_effect = OSError('history disk failure')
+        result = await self.read(1, record=False)
+        self.assertTrue(result['success'])
+        self.runner._events = None
+
     async def test_interrupt_cancels_codex_turn_and_waits_for_active_action(self):
         runner = self.runner
         runner.session = SimpleNamespace(done=False)

@@ -1,5 +1,5 @@
 const fs = require('fs');
-const {chromium} = require('playwright');
+const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('assert');
 let browser;
 (async()=>{
@@ -8,20 +8,21 @@ let browser;
  const html=fs.readFileSync('overlay/hud.html','utf8');
  const config=JSON.parse(fs.readFileSync('configs/hud.json','utf8'));
  let items=[{id:'first',tool:'celeste_observe',text:'区域碰撞精查',wall:1793023000,status:'returned',duration_s:.14,
-  parameters:{detail:'geometry',region:'[120, 40, 160, 80]'},result:{'本页对象数':'8','文字字符数':1840},attached_images:null},
+  parameters:{detail:'geometry',region:'[120, 40, 160, 80]'},result:{'本页对象数':'8','文字字符数':1840},attached_images:2,attachment_status:'queued'},
  {id:'second',tool:'celeste_read',text:'读取文件 · /workspace/game/latest_obs.json',wall:1793023002,status:'running',parameters:null,result:null},
  {id:'third',tool:'celeste_bash',text:'执行程序',wall:1793023004,status:'failed',duration_s:1.2,
   parameters:{command:'<img src=x onerror="window.injected=1">',description:'agent填写的说明'},result:{'文字字符数':128},attached_images:null}];
  for(const obs of [false,true]){
   const page=await browser.newPage({viewport:{width:480,height:940}});
+  let stateRequests=0;
   let toolRequests=0, toolRun='fixture-run';const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.route('**/*',async route=>{
    const u=new URL(route.request().url());let data={};
    if(u.hostname==='fixture' && u.pathname==='/hud')return route.fulfill({contentType:'text/html',body:html});
-   if(u.pathname==='/hud/state') data={config,run:'fixture-run',now:Date.now()/1000,metrics:{agent:'5.6 Sol',model:'gpt-5.6-sol',effort:'high',status:'thinking',chapter_time_ticks:300000000,context_tokens:25000,context_window:475000}};
+   if(u.pathname==='/hud/state') data=++stateRequests<3?{config,run:'fixture-run',now:Date.now()/1000,metrics:{model:'',status:'starting'}}:{config,run:'fixture-run',now:Date.now()/1000,metrics:{agent:'5.6 Sol',model:'gpt-5.6-sol',effort:'high',status:'thinking',chapter_time_ticks:300000000,context_tokens:25000,context_window:475000}};
    if(u.pathname==='/hud/history')data={run:'fixture-run',items:[{id:'chat',text:'先核对通道的碰撞箱，再尝试跨越。',kind:'解说',wall:1793023000}]};
    if(u.pathname==='/hud/tools'){toolRequests++;data={run:toolRun,items,scope:'仅本次运行；参数为请求，不证明模型已理解。'};}
-   if(u.pathname==='/api/control')data={run:'fixture-run',control:{connected:false,messages:[]}};
+   if(u.pathname==='/api/control'){ await new Promise(resolve=>setTimeout(resolve,450));data={run:'fixture-run',control:{connected:false,messages:[]}};}
    if(u.pathname.includes('models'))data={models:[]};
    if(u.pathname.includes('saves'))data={saves:[]};
    if(u.hostname!=='fixture')return route.fulfill({status:200,body:''});
@@ -29,6 +30,9 @@ let browser;
   });
   await page.goto('http://fixture/hud'+(obs?'?surface=obs':''));
   await page.waitForTimeout(1300);
+  assert.equal(await page.locator('#timer').innerText(),'0:00:30.000');
+  assert.equal(await page.locator('#ctx').innerText(),'25k');
+  assert.equal(await page.locator('#name').innerText(),'gpt-5.6-sol');
   if(obs){
    assert.equal(toolRequests,0);
    assert.equal(await page.locator('.history-tabs').isVisible(),false);
@@ -45,6 +49,8 @@ let browser;
    assert.equal(await page.locator('#toolActivity').isVisible(),true);
    await page.locator('.tool-entry summary').first().click();
    assert.equal(await page.locator('.tool-entry').first().evaluate(e=>e.open),true);
+   assert.ok((await page.locator('.tool-entry').first().innerText()).includes('已排队，未核实接收'));
+   assert.ok((await page.locator('.tool-entry').first().innerText()).includes('0.14秒'));
    items[0]={...items[0],duration_s:.16};
    await page.waitForTimeout(1200);
    assert.equal(await page.locator('.tool-entry').first().evaluate(e=>e.open),true);
