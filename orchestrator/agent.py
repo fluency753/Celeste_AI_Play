@@ -30,6 +30,7 @@ import time
 import json
 import os
 import re
+import sys
 import uuid
 from pathlib import Path
 
@@ -114,6 +115,46 @@ def bash_limits_ms(cfg) -> tuple[int, int]:
         cap = int(seconds * 1000)
         return cap, cap
     return int(cfg.bash_default_s * 1000), int(cfg.bash_max_s * 1000)
+
+PROCESS_GRACE_S = 30.0
+PROCESS_TERMINATE_S = 10.0
+PROCESS_KILL_S = 5.0
+DOCKER_CLEANUP_S = 10.0
+READER_CLOSE_S = 5.0
+NETWORK_PROBE_S = 25.0
+
+
+def _cleanup_failure(primary, error, label):
+    if primary is None:
+        return error
+    if isinstance(error, asyncio.CancelledError) and not isinstance(primary, asyncio.CancelledError):
+        error.add_note(f'取消前已有异常：{type(primary).__name__}: {primary}')
+        error.__cause__ = primary
+        return error
+    if error is not primary:
+        primary.add_note(f'{label}失败：{type(error).__name__}: {error}')
+    return primary
+
+
+async def _kill_and_wait(proc, label):
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass  # The child can exit between returncode and the signal.
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=PROCESS_KILL_S)
+    except asyncio.CancelledError as error:
+        # Forward cancellation after giving an already-signalled child a bounded
+        # chance to be reaped; do not leave a background cleanup task behind.
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=PROCESS_KILL_S)
+        except BaseException as cleanup:
+            _cleanup_failure(error, cleanup, f'{label}退出确认')
+        raise
+    except asyncio.TimeoutError as error:
+        raise RuntimeError(f'{label}终止后仍未确认退出') from error
+
 
 class ClaudeRunner(SessionControls):
     capabilities = RuntimeCapabilities()
@@ -385,24 +426,24 @@ class ClaudeRunner(SessionControls):
         return env
 
     async def run(self) -> str:
-        workdir = self.run_dir / "agent_cwd"
-        workdir.mkdir(exist_ok=True)
-        if self.resume_note:
-            first = self.resume_note
-        else:
-            first = (study_prompt(self.study, self.cfg.sim, prepare_only=self.prepare_only, cfg=self.cfg) if self.study
-                     else first_play_prompt(self.cfg))
-        if self.prepare_only:
-            first += self._lifecycle_prompt()
-        self.metrics.update(telemetry_source='claude_stream_json', chat_thread_id=self.session_id)
-        if self.paused:
-            self.pause_at = time.monotonic()
-            self.metrics.pause()
-            self.metrics.update(status='chat_idle' if self.chat_only else 'paused')
-        if self.control:
-            self.control_task = asyncio.create_task(self._controls())
-            self.heartbeat_task = asyncio.create_task(self._heartbeat())
         try:
+            workdir = self.run_dir / "agent_cwd"
+            workdir.mkdir(exist_ok=True)
+            if self.resume_note:
+                first = self.resume_note
+            else:
+                first = (study_prompt(self.study, self.cfg.sim, prepare_only=self.prepare_only, cfg=self.cfg) if self.study
+                         else first_play_prompt(self.cfg))
+            if self.prepare_only:
+                first += self._lifecycle_prompt()
+            self.metrics.update(telemetry_source='claude_stream_json', chat_thread_id=self.session_id)
+            if self.paused:
+                self.pause_at = time.monotonic()
+                self.metrics.pause()
+                self.metrics.update(status='chat_idle' if self.chat_only else 'paused')
+            if self.control:
+                self.control_task = asyncio.create_task(self._controls())
+                self.heartbeat_task = asyncio.create_task(self._heartbeat())
             while True:
                 if (note := self._effort_at_start()):
                     first = note + first
@@ -438,13 +479,26 @@ class ClaudeRunner(SessionControls):
                     study_note = "知识库已经读完；整理好笔记后调用 observe 开始游玩。"
                 first = resume_prompt(self.quota_reason, minutes, study_note)
         finally:
+            primary = sys.exception()
+            failure = primary
             tasks = [task for task in (self.control_task, self.heartbeat_task) if task]
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            if self.control:
-                self.control.heartbeat(stopped=True, phase='stopped', session_id=self.session_id)
-            self._events.close()
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except BaseException as error:
+                failure = _cleanup_failure(failure, error, '控制任务收尾')
+            try:
+                if self.control:
+                    self.control.heartbeat(stopped=True, phase='stopped', session_id=self.session_id)
+            except BaseException as error:
+                failure = _cleanup_failure(failure, error, '停止状态发布')
+            try:
+                self.close_events()
+            except BaseException as error:
+                failure = _cleanup_failure(failure, error, '事件日志关闭')
+            if failure is not None and failure is not primary:
+                raise failure
         return self.stop_reason
 
     async def _run_process(self, workdir: Path, first: str) -> bool:
@@ -456,17 +510,20 @@ class ClaudeRunner(SessionControls):
             from .prompting import current_rules_note
             rules_note = current_rules_note(self.cfg, guide=self._startup_guide)
             first += rules_note
-        stderr_log = open(self.run_dir / "claude_stderr.log", "ab")
-        self.metrics.turn_end()  # 新的 Claude Code 进程：之前没收到结果的工具调用都不算了
-        self._init_checked = False
-        self._turn_done.clear()
-        self.proc = await asyncio.create_subprocess_exec(
-            *command, cwd=str(workdir), env=self._env(),
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=stderr_log,
-            limit=64 * 1024 * 1024)
-        reader = asyncio.create_task(self._read_stdout())
-        started = time.monotonic()
+        stderr_log = None
+        reader = None
+        self.proc = None
         try:
+            stderr_log = open(self.run_dir / "claude_stderr.log", "ab")
+            self.metrics.turn_end()  # 新的 Claude Code 进程：之前没收到结果的工具调用都不算了
+            self._init_checked = False
+            self._turn_done.clear()
+            self.proc = await asyncio.create_subprocess_exec(
+                *command, cwd=str(workdir), env=self._env(),
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=stderr_log,
+                limit=64 * 1024 * 1024)
+            reader = asyncio.create_task(self._read_stdout())
+            started = time.monotonic()
             if not await self._next_user_turn(first, opening=not self.chat_only):
                 self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                 return True
@@ -547,9 +604,23 @@ class ClaudeRunner(SessionControls):
                     self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                     return True
         finally:
-            await self._shutdown(reader)
-            self.metrics.turn_end()
-            stderr_log.close()
+            primary = sys.exception()
+            failure = primary
+            try:
+                await self._shutdown(reader)
+            except BaseException as error:
+                failure = _cleanup_failure(failure, error, 'Claude 进程收尾')
+            try:
+                self.metrics.turn_end()
+            except BaseException as error:
+                failure = _cleanup_failure(failure, error, '轮次计量收尾')
+            try:
+                if stderr_log is not None:
+                    stderr_log.close()
+            except BaseException as error:
+                failure = _cleanup_failure(failure, error, '错误日志关闭')
+            if failure is not None and failure is not primary:
+                raise failure
 
     def _effort_at_start(self) -> str:
         """启动（或额度等待后重启）Claude Code 之前：有待生效的推理强度就直接用它作启动参数。"""
@@ -630,15 +701,26 @@ class ClaudeRunner(SessionControls):
         """现在连得上模型接口吗：容器运行时在容器里探测（与 Claude Code 走同一条出站路径），容器探测不了时退回本机。"""
         url = self._api_url()
         if self.container:
+            proc = None
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    find_docker_exe(), "exec", "-u", "agent", self.container, "python3", "-c", PROBE_SCRIPT, url,
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                code = await asyncio.wait_for(proc.wait(), timeout=25)
-                if code in (0, 3):
-                    return code == 0
-            except (OSError, asyncio.TimeoutError):
-                pass
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        find_docker_exe(), "exec", "-u", "agent", self.container, "python3", "-c", PROBE_SCRIPT, url,
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    code = await asyncio.wait_for(proc.wait(), timeout=NETWORK_PROBE_S)
+                    if code in (0, 3):
+                        return code == 0
+                except (OSError, asyncio.TimeoutError):
+                    pass
+            finally:
+                if proc is not None and proc.returncode is None:
+                    primary = sys.exception()
+                    try:
+                        await _kill_and_wait(proc, 'Docker 网络探测客户端')
+                    except BaseException as error:
+                        failure = _cleanup_failure(primary, error, 'Docker 网络探测客户端回收')
+                        if failure is not primary:
+                            raise failure
 
         def host_probe() -> bool:
             import urllib.error
@@ -771,31 +853,83 @@ class ClaudeRunner(SessionControls):
         self._begin_model_turn(runtime="claude")
         self.metrics.update(status=self._idle_status())
 
-    async def _shutdown(self, reader: asyncio.Task) -> None:
-        if self.proc is None:
-            return
+    async def _shutdown(self, reader: asyncio.Task | None) -> None:
+        failure = None
         try:
-            await self._shutdown_process()
-        finally:
-            if self.container:
-                # docker exec 的客户端退出不一定会结束容器里的进程：把 agent 用户的进程全部结束
-                kill = await asyncio.create_subprocess_exec(
-                    find_docker_exe(), "exec", self.container, "pkill", "-KILL", "-u", "agent",
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                await kill.wait()
-            reader.cancel()
+            if self.proc is not None:
+                await self._shutdown_process()
+        except BaseException as error:
+            failure = _cleanup_failure(failure, error, 'Claude 子进程关闭')
+        try:
+            if self.proc is not None and self.container:
+                # Preserve the existing container/user ownership policy.
+                kill = None
+                try:
+                    kill = await asyncio.create_subprocess_exec(
+                        find_docker_exe(), "exec", self.container, "sh", "-c",
+                        'pkill -KILL -u agent; status=$?; '
+                        'if [ "$status" -eq 1 ]; then exit 0; fi; exit "$status"',
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    code = await asyncio.wait_for(kill.wait(), timeout=DOCKER_CLEANUP_S)
+                    # Only the remote shell normalizes pkill's no-match status.
+                    # An outer Docker=1 can be a daemon/exec failure, not success.
+                    if code != 0:
+                        raise RuntimeError(f'容器进程清理未确认，Docker 返回 {code}')
+                finally:
+                    if kill is not None and kill.returncode is None:
+                        primary = sys.exception()
+                        try:
+                            await _kill_and_wait(kill, 'Docker 清理客户端')
+                        except BaseException as error:
+                            cleanup = _cleanup_failure(primary, error, 'Docker 清理客户端回收')
+                            if cleanup is not primary:
+                                raise cleanup
+        except BaseException as error:
+            failure = _cleanup_failure(failure, error, '容器进程清理')
+        try:
+            if reader is not None:
+                reader.cancel()
+                try:
+                    done, pending = await asyncio.wait({reader}, timeout=READER_CLOSE_S)
+                except asyncio.CancelledError as error:
+                    failure = _cleanup_failure(failure, error, 'Claude 输出读取任务回收')
+                    done, pending = await asyncio.wait({reader}, timeout=READER_CLOSE_S)
+                if pending:
+                    raise RuntimeError('Claude 输出读取任务取消后仍未确认退出')
+                if not reader.cancelled() and reader.exception() is not None:
+                    raise reader.exception()
+        except BaseException as error:
+            failure = _cleanup_failure(failure, error, 'Claude 输出读取任务回收')
+        if failure is not None:
+            raise failure
 
     async def _shutdown_process(self) -> None:
+        proc = self.proc
+        if proc is None:
+            return
         try:
-            if self.proc.stdin and not self.proc.stdin.is_closing():
-                self.proc.stdin.close()
-            await asyncio.wait_for(self.proc.wait(), timeout=30)
-        except (asyncio.TimeoutError, ProcessLookupError):
-            self.proc.terminate()
+            if proc.stdin and not proc.stdin.is_closing():
+                proc.stdin.close()
             try:
-                await asyncio.wait_for(self.proc.wait(), timeout=10)
+                await asyncio.wait_for(proc.wait(), timeout=PROCESS_GRACE_S)
             except asyncio.TimeoutError:
-                self.proc.kill()
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=PROCESS_TERMINATE_S)
+                except asyncio.TimeoutError:
+                    pass  # Force termination and confirm it in the same finally.
+        finally:
+            if proc.returncode is None:
+                primary = sys.exception()
+                try:
+                    await _kill_and_wait(proc, 'Claude 子进程')
+                except BaseException as error:
+                    failure = _cleanup_failure(primary, error, 'Claude 子进程退出确认')
+                    if failure is not primary:
+                        raise failure
 
     async def _read_stdout(self) -> None:
         assert self.proc and self.proc.stdout
