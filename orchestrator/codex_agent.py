@@ -9,6 +9,7 @@ import re
 import time
 import secrets
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -78,7 +79,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         self.tool_notice = ''
         self.native_token = secrets.token_urlsafe(32)
         self.native_session = session or SimpleNamespace(cfg=cfg, metrics=metrics, workspace=cfg.workspace_dir, run_dir=run_dir)
-        self._native_web = None
+        self._native_service = None
+        self._native_service_lock = asyncio.Lock()
         self._native_web_task = None
         self.rpc = CodexRPC(run_dir / "codex-control", self._event, self._request, container=container,
                             before_start=self._start_native_gate,
@@ -106,25 +108,41 @@ class CodexRunner(ModelRecovery, SessionControls):
         return await native_tool_hook(self, data)
 
     async def _start_native_gate(self):
+        async with self._native_service_lock:
+            await self._start_native_gate_locked()
+
+    async def _start_native_gate_locked(self):
         if self.game_server is not None:
-            return  # The game server already owns the shared /gate endpoint.
-        from .run import add_gate_route
+            return  # The playing host already owns the gate.
+        if self._native_service is not None:
+            if self._native_web_task is not None and not self._native_web_task.done():
+                return
+            error = RuntimeError('Codex 工具门禁已经退出，不能继续复用旧服务')
+            if self._native_web_task is not None and not self._native_web_task.cancelled():
+                error.__cause__ = self._native_web_task.exception()
+            await self._close_native_gate_locked(error)
+            raise error
+        from .tool_gate import add_gate_route
+        from .http_service import http_service
         from starlette.applications import Starlette
-        import uvicorn
         app = Starlette()
         add_gate_route(app, session=self.native_session)
-        self._native_web = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=self.cfg.mcp_port,
-                                                       log_level='warning'))
-        self._native_web_task = asyncio.create_task(self._native_web.serve())
-        async with asyncio.timeout(15):
-            while not self._native_web.started:
-                if self._native_web_task.done():
-                    await self._native_web_task
-                    raise RuntimeError('Codex 工具门禁未启动')
-                await asyncio.sleep(.05)
-        if self.cfg.mcp_port == 0:
-            self.cfg.mcp_port = self._native_web.servers[0].sockets[0].getsockname()[1]
-            self.rpc.environment['MCP_PORT'] = str(self.cfg.mcp_port)
+        context = http_service(app, port=self.cfg.mcp_port, label='Codex 工具门禁')
+        service = await context.__aenter__()
+        self._native_service = context
+        self._native_web_task = service.task
+        self.cfg.mcp_port = service.port
+        self.rpc.environment['MCP_PORT'] = str(service.port)
+
+    async def _close_native_gate(self, primary=None):
+        async with self._native_service_lock:
+            await self._close_native_gate_locked(primary)
+
+    async def _close_native_gate_locked(self, primary=None):
+        context, self._native_service = self._native_service, None
+        if context is not None:
+            await context.__aexit__(type(primary) if primary else None, primary,
+                                    primary.__traceback__ if primary else None)
 
     async def tool_specs(self):
         page = {'offset': {'type': 'integer', 'minimum': 1}, 'limit': {'type': 'integer', 'minimum': 1}}
@@ -856,28 +874,40 @@ class CodexRunner(ModelRecovery, SessionControls):
                 self._hold_model_failure()
             raise
         finally:
-            for task in list(self._receipt_tasks):
+            primary = sys.exception()
+            cleanup_errors = []
+            tasks = [*self._receipt_tasks, *[task for task in
+                     (self.heartbeat_task, self.control_task) if task is not None]]
+            for task in tasks:
                 task.cancel()
-            if self.heartbeat_task:
-                self.heartbeat_task.cancel()
-                await asyncio.gather(self.heartbeat_task, return_exceptions=True)
-            if self.control_task:
-                self.control_task.cancel()
-                await asyncio.gather(self.control_task, return_exceptions=True)
-            if self.control:
-                self.control.heartbeat(paused=self.paused, stopped=True, session_id=self.session_id)
-            self._end_model_turn()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                if self.control:
+                    self.control.heartbeat(paused=self.paused, stopped=True, session_id=self.session_id)
+                self._end_model_turn()
+            except BaseException as error:
+                cleanup_errors.append(error)
             try:
                 await self.rpc.close()
-            finally:
+            except BaseException as error:
+                cleanup_errors.append(error)
+            try:
                 from .codex_native import finish_native_tools
                 finish_native_tools(self)
-                if self._native_web_task:
-                    self._native_web.should_exit = True
-                    try:
-                        await asyncio.wait_for(self._native_web_task, 5)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
-                        self._native_web_task.cancel()
-                        await asyncio.gather(self._native_web_task, return_exceptions=True)
+            except BaseException as error:
+                cleanup_errors.append(error)
+            try:
+                await self._close_native_gate(primary or (cleanup_errors[0] if cleanup_errors else None))
+            except BaseException as error:
+                cleanup_errors.append(error)
+            try:
                 if self._events:
                     self._events.close()
+            except BaseException as error:
+                cleanup_errors.append(error)
+            if cleanup_errors:
+                if primary is not None:
+                    for error in cleanup_errors:
+                        primary.add_note(f'Codex 会话清理失败：{error}')
+                else:
+                    raise cleanup_errors[0]

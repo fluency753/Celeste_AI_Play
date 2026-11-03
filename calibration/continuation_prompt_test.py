@@ -130,15 +130,20 @@ class ClaudeContinuationTests(unittest.IsolatedAsyncioTestCase):
                     study = KbStudy(kb, 10)
                 runner = ClaudeRunner(cfg, root, SimpleNamespace(done=False, done_reason=''),
                     Metrics(root/'metrics.json', 'test', 'test', 'high', 60), 'stub-token',
-                    container='unused', study=study, resume_note='fixture first turn')
+                    # The child executes locally; no container process belongs to this fixture.
+                    container=None, study=study, resume_note='fixture first turn')
                 original = runner._command
 
                 def command():
                     original()  # Keep production prompt and guide publication; replace only the child executable.
                     return [sys.executable, '-X', 'utf8', '-u', str(stub), str(captured)]
 
-                with patch('orchestrator.config.REPO_ROOT', root), patch.object(runner, '_command', side_effect=command):
+                with patch('orchestrator.config.REPO_ROOT', root), \
+                     patch('orchestrator.agent.find_docker_exe', return_value='unused-container-command'), \
+                     patch.object(runner, '_command', side_effect=command):
                     await asyncio.wait_for(runner.run(), 10)
+                self.assertEqual(runner.proc.returncode, 0)
+                self.assertTrue(runner._events.closed)
                 sent = [json.loads(line) for line in captured.read_text(encoding='utf-8').splitlines()]
                 self.assertGreaterEqual(len(sent), 2)
                 expected = controller_turn_prompt(study.reminder()) if study else continue_play_prompt(cfg)

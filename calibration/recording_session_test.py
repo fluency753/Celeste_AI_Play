@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from calibration.http_fixture import bound_server
+
 from orchestrator.recording import Recorder, RecordOptions, RecordingError
 
 
@@ -552,7 +554,7 @@ class RunRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                          patch('orchestrator.run.ensure_container',return_value='test-container'), \
                          patch('orchestrator.run.build_server',return_value=server), \
                          patch('orchestrator.run.add_gate_route'), \
-                         patch('orchestrator.run.uvicorn.Server',return_value=web), \
+                         patch('orchestrator.http_service.uvicorn.Server',return_value=bound_server(web, cfg.mcp_port)), \
                          patch('orchestrator.run.Playback',return_value=playback), \
                          patch('orchestrator.runtimes.runtime',return_value=SimpleNamespace(runner=lambda *a,**kw:runner)):
                         recorder_class.adopt.return_value = recorder

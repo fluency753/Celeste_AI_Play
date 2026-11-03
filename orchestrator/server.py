@@ -83,7 +83,7 @@ def observation_tool_description(cfg, name):
     return text
 
 # 实时展示的解说更新计时器：思考状态累计满 RunConfig.live_remind_s 秒没有 narrate，就在智能体下一次调用任何工具时
-# 由容器里的 PreToolUse 钩子把这句提醒放到那次工具结果旁边（见 run.add_gate_route 与 agent-container/celeste-gate.py）
+# 由容器里的 PreToolUse 钩子把这句提醒放到那次工具结果旁边（见 tool_gate.add_gate_route 与 agent-container/celeste-gate.py）
 LIVE_REMINDER = ("（系统·实时展示）你已经思考了约 {s} 秒没有更新 HUD 上的思考内容，观众看不到你此刻的思路。"
                  "请调用 narrate 写一句你现在的分析与判断，之后想法每有进展再写一句。")
 TEMP_REMINDER = ("（系统）你已经思考了约 {s} 秒没有更新临时思考。"

@@ -75,7 +75,8 @@ class PreparePromptTests(unittest.IsolatedAsyncioTestCase):
         cfg = RunConfig(agent='prepare-test', save='test', model='test', sim=sim)
         runner = ClaudeRunner(cfg, run, SimpleNamespace(done=False, done_reason=''),
                               Metrics(run / 'metrics.json', 'prepare-test', 'test', 'high', 60), 'stub',
-                              container='unused', study=KbStudy(self.kb, 10), prepare_only=prepare_only)
+                              # A real local stdio child owns no container cleanup boundary.
+                              container=None, study=KbStudy(self.kb, 10), prepare_only=prepare_only)
         original = runner._command
 
         def command():
@@ -83,8 +84,10 @@ class PreparePromptTests(unittest.IsolatedAsyncioTestCase):
             return [sys.executable, '-X', 'utf8', '-u', str(stub), str(captured)]
 
         with patch.object(runner, '_command', side_effect=command), \
-             patch('orchestrator.agent.find_docker_exe', return_value='docker'):
+             patch('orchestrator.agent.find_docker_exe', return_value='unused-container-command'):
             await asyncio.wait_for(runner.run(), 10)
+        self.assertEqual(runner.proc.returncode, 0)
+        self.assertTrue(runner._events.closed)
         return json.loads(captured.read_text(encoding='utf-8').splitlines()[0])
 
     async def test_claude_prepare_only_and_play_runs_send_matching_first_message(self):

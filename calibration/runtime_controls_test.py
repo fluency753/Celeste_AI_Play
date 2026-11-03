@@ -175,7 +175,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.runner._game_guard())
 
     async def workspace_request(self, tool='Bash'):
-        from orchestrator.run import add_gate_route
+        from orchestrator.tool_gate import add_gate_route
         app = SimpleNamespace(router=SimpleNamespace(routes=[]))
         add_gate_route(app, session=self.session)
         response = await app.router.routes[0].endpoint(SimpleNamespace(json=AsyncMock(return_value={
@@ -216,7 +216,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.runner.paused)
 
     async def test_pause_allows_workspace_tools_but_keeps_game_gate_closed(self):
-        from orchestrator.run import add_gate_route
+        from orchestrator.tool_gate import add_gate_route
         app = SimpleNamespace(router=SimpleNamespace(routes=[]))
         add_gate_route(app, session=self.session)
         self.runner.paused = True
@@ -252,7 +252,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.workspace_request())['decision'], 'deny')
 
     async def test_workspace_hook_checks_owner_without_game_stage_or_budget(self):
-        from orchestrator.run import add_gate_route
+        from orchestrator.tool_gate import add_gate_route
         from starlette.applications import Starlette
         app = Starlette()
         add_gate_route(app, session=self.session)

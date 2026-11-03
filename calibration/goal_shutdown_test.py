@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from calibration.http_fixture import bound_server
+
 from calibration import recording_session_test
 from orchestrator.config import RunConfig
 from orchestrator.game_session import GameSession
@@ -77,7 +79,7 @@ class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
              patch('orchestrator.run.ensure_container',return_value='isolated-fixture-no-container'), \
              patch('orchestrator.run.build_server',return_value=server), \
              patch('orchestrator.run.add_gate_route'), \
-             patch('orchestrator.run.uvicorn.Server',return_value=web), \
+             patch('orchestrator.http_service.uvicorn.Server',return_value=bound_server(web, cfg.mcp_port)), \
              patch('orchestrator.run.Playback',return_value=SimpleNamespace(collect=False,close=Mock(
                  side_effect=RuntimeError('playback cleanup failed') if cleanup_failure else None))), \
              patch('orchestrator.runtimes.runtime',return_value=SimpleNamespace(runner=lambda *a,**kw:runner)), \

@@ -26,3 +26,33 @@ async def decide_tool(tool_name, *, metrics=None, live_remind_s=None, session=No
     if offered:
         notes.acknowledge(offered)
     return {'decision': 'allow', 'reason': '', 'context': context}
+
+
+def add_gate_route(app, metrics=None, live_remind_s: float | None = None, session=None) -> None:
+    """容器里的 PreToolUse 钩子（agent-container/celeste-gate.py）每次调用工具前 POST 到这里。
+    实时展示时（live_remind_s 不为空）兼作解说更新计时器的提醒通道：思考状态累计满 live_remind_s 秒没有 narrate，
+    回复里带上 context，钩子把它作为 additionalContext 交给 Claude Code，出现在这次工具结果旁边。"""
+    from starlette.requests import Request  # noqa: WPS433
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def endpoint(request: Request):
+        try:
+            data = await request.json()
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            return JSONResponse({'decision': 'deny', 'reason': '工具门禁请求必须是对象，本次未执行。', 'context': ''})
+        if data.get('engine') == 'codex':
+            callback = getattr(session, 'native_tool_hook', None)
+            if callback is None:
+                return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Codex 会话', 'context': ''})
+            return JSONResponse(await callback(data))
+        owner_guard = getattr(session, 'workspace_hook_guard', None)
+        if owner_guard is None and session is not None:
+            return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Claude 工具会话，本次未执行。', 'context': ''})
+        return JSONResponse(await decide_tool(str(data.get('tool_name') or ''),
+                                              metrics=metrics, live_remind_s=live_remind_s, session=session,
+                                              execution_guard=(lambda: owner_guard(data)) if owner_guard else None))
+
+    app.router.routes.insert(0, Route("/gate", endpoint, methods=["POST"]))

@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from calibration.http_fixture import bound_server
+
 from calibration.collision_contract_test import FakeBridge
 from orchestrator.codex_agent import CodexRunner
 from orchestrator.config import RunConfig
@@ -374,7 +376,7 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                         patch('orchestrator.personal_prompts.STORE', fixture.root/'personal.json'), \
                         patch('orchestrator.prompting.OVERRIDES', fixture.root/'prompts'), \
                         patch('orchestrator.run.ensure_container', return_value='unused-container'), \
-                        patch('orchestrator.run.uvicorn.Server', return_value=web), \
+                        patch('orchestrator.http_service.uvicorn.Server', return_value=bound_server(web, cfg.mcp_port)), \
                         patch('orchestrator.run.Playback', return_value=SimpleNamespace(collect=False, close=Mock())), \
                         patch('orchestrator.model_catalog.load_models', return_value={'models': []}), \
                         patch('orchestrator.codex_agent.CodexRPC', side_effect=create_rpc):

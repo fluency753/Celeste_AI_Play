@@ -28,8 +28,6 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import uvicorn
-
 from .prompting import current_rules_note, next_chapter_prompt, resume_prompt
 from .runtimes import RUNTIMES, runtime
 from .config import CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id
@@ -39,11 +37,13 @@ from .kb_study import KbStudy
 from .execution import workspace_capabilities
 from .recording_lifecycle import pending_recording
 from .metrics import Metrics
+from .http_service import http_service
+from .tool_gate import add_gate_route
 from .recording import Recorder, RecordingError, RecordingHalt, options_from
 from .live import LiveStatus
 from .modes import EXPLORE, KNOWLEDGE_OF_MODE, MODE_OF_KNOWLEDGE, SPEEDRUN, describe as describe_mode
 from .playback import Playback
-from .server import TRANSPORT_SECURITY, build_server, narrate_reminder
+from .server import TRANSPORT_SECURITY, build_server
 
 
 def parse_args() -> tuple[RunConfig, argparse.Namespace]:
@@ -720,37 +720,6 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
         client.close()
 
 
-def add_gate_route(app, metrics=None, live_remind_s: float | None = None, session=None) -> None:
-    """容器里的 PreToolUse 钩子（agent-container/celeste-gate.py）每次调用工具前 POST 到这里。
-    实时展示时（live_remind_s 不为空）兼作解说更新计时器的提醒通道：思考状态累计满 live_remind_s 秒没有 narrate，
-    回复里带上 context，钩子把它作为 additionalContext 交给 Claude Code，出现在这次工具结果旁边。"""
-    from starlette.requests import Request  # noqa: WPS433
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
-
-    async def endpoint(request: Request):
-        try:
-            data = await request.json()
-        except ValueError:
-            data = {}
-        if not isinstance(data, dict):
-            return JSONResponse({'decision': 'deny', 'reason': '工具门禁请求必须是对象，本次未执行。', 'context': ''})
-        if data.get('engine') == 'codex':
-            callback = getattr(session, 'native_tool_hook', None)
-            if callback is None:
-                return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Codex 会话', 'context': ''})
-            return JSONResponse(await callback(data))
-        from .tool_gate import decide_tool
-        owner_guard = getattr(session, 'workspace_hook_guard', None)
-        if owner_guard is None and session is not None:
-            return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Claude 工具会话，本次未执行。', 'context': ''})
-        return JSONResponse(await decide_tool(str(data.get('tool_name') or ''),
-                                              metrics=metrics, live_remind_s=live_remind_s, session=session,
-                                              execution_guard=(lambda: owner_guard(data)) if owner_guard else None))
-
-    app.router.routes.insert(0, Route("/gate", endpoint, methods=["POST"]))
-
-
 def ensure_obs() -> bool:
     """OBS 录屏开着时调用：OBS 没在运行就用专用的配置文件与场景集合启动它（最小化到托盘，等锁步插件连上桥接），
     返回 True 表示是主控启动的（结束时由主控关掉）；OBS 已经在运行就直接用，返回 False。"""
@@ -1101,118 +1070,122 @@ def _shutdown_mode(cfg, args, session, *, interrupted=False, model_failed=False)
 
 
 async def _run_connected_session(cfg, args, run_dir, token, previous, study, metrics, recorder, prepared, session):
-    if args.prepared or previous:
-        from .control import RunControl
-        source_control = RunControl(Path(args.prepared) if args.prepared else previous['dir'])
-        preference = source_control.fast_preference()
-        if preference is not None:
-            RunControl(run_dir).set_fast(preference)
-        RunControl(run_dir).set_effort(source_control.effort_preference())
-        RunControl(run_dir).set_cutscene_mode(cfg.cutscene_mode)
-        from .action_policy import permissions_for
-        RunControl(run_dir).set_action_permissions(permissions_for(cfg).snapshot())
-        RunControl(run_dir).set_detour(bool(getattr(cfg, 'allow_detour', False)))
-    if cfg.play_scope == 'visited':
-        # The save-bound authorization is committed by connect before any input.
-        # Publish its run-state owner first; session identity is finalized below.
-        write_run_state(run_dir, cfg, None, previous)
-    obs = session.connect()
-    print(f"[run] 已接管游戏：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}，存档 {cfg.save}", flush=True)
-    if previous:
-        session.decision_index = int(previous["metrics"].get("decisions") or 0)
-        print(f"[run] 续跑 {previous['dir']}：已通关 {len(metrics.state.splits or [])} 章，现实用时已用 "
-              f"{metrics.elapsed() / 60:.0f} 分钟" + (f"，剩余章节 {cfg.chapters}" if cfg.chapters else ""), flush=True)
-    backup_save(obs, run_dir)
-    resumed_session, session_id = choose_session(previous, args.fresh_session, prepared)
-    if args.no_agent:
-        metrics.update(telemetry_source="external", chat_thread_id=None)
-    write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous)
-    if args.prepared:
-        try:
-            prepared_state = json.loads((Path(args.prepared) / 'run_state.json').read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            prepared_state = {}
-        if prepared_state.get('session_name'):
-            state = json.loads((run_dir / 'run_state.json').read_text(encoding='utf-8'))
-            state['session_name'] = prepared_state['session_name']
-            temporary = run_dir / 'run_state.tmp'
-            temporary.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
-            temporary.replace(run_dir / 'run_state.json')
-    if recorder is not None:
-        recorder.call = session.bridge_call  # 开局时已经开始录制（见 enter_save），之后改用主控的连接
-        if getattr(cfg, '_recording_resume_manifest', None):
-            cfg._recording_adopted = True
-            cfg._keep_frozen = False
-    elif args.record and not getattr(cfg, '_recording_resume_manifest', None):
-        recorder = Recorder(session.bridge_call,
-                            options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms, args.record_marker,
-                                         continuous_music=cfg.continuous_music),
-                            log=lambda m: print(m, flush=True))
-        recorder.bind_run(run_dir)
+    playback = live = runner = http_context = None
+    primary = None
+    reason = "中断"
+    saved_recording = getattr(cfg, '_recording_resume_manifest', None)
+    try:
+        if args.prepared or previous:
+            from .control import RunControl
+            source_control = RunControl(Path(args.prepared) if args.prepared else previous['dir'])
+            preference = source_control.fast_preference()
+            if preference is not None:
+                RunControl(run_dir).set_fast(preference)
+            RunControl(run_dir).set_effort(source_control.effort_preference())
+            RunControl(run_dir).set_cutscene_mode(cfg.cutscene_mode)
+            from .action_policy import permissions_for
+            RunControl(run_dir).set_action_permissions(permissions_for(cfg).snapshot())
+            RunControl(run_dir).set_detour(bool(getattr(cfg, 'allow_detour', False)))
+        if cfg.play_scope == 'visited':
+            # The save-bound authorization is committed by connect before any input.
+            # Publish its run-state owner first; session identity is finalized below.
+            write_run_state(run_dir, cfg, None, previous)
+        obs = session.connect()
+        print(f"[run] 已接管游戏：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}，存档 {cfg.save}", flush=True)
+        if previous:
+            session.decision_index = int(previous["metrics"].get("decisions") or 0)
+            print(f"[run] 续跑 {previous['dir']}：已通关 {len(metrics.state.splits or [])} 章，现实用时已用 "
+                  f"{metrics.elapsed() / 60:.0f} 分钟" + (f"，剩余章节 {cfg.chapters}" if cfg.chapters else ""), flush=True)
+        backup_save(obs, run_dir)
+        resumed_session, session_id = choose_session(previous, args.fresh_session, prepared)
+        if args.no_agent:
+            metrics.update(telemetry_source="external", chat_thread_id=None)
+        write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous)
+        if args.prepared:
+            try:
+                prepared_state = json.loads((Path(args.prepared) / 'run_state.json').read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                prepared_state = {}
+            if prepared_state.get('session_name'):
+                state = json.loads((run_dir / 'run_state.json').read_text(encoding='utf-8'))
+                state['session_name'] = prepared_state['session_name']
+                temporary = run_dir / 'run_state.tmp'
+                temporary.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
+                temporary.replace(run_dir / 'run_state.json')
+        if recorder is not None:
+            recorder.call = session.bridge_call  # 开局时已经开始录制（见 enter_save），之后改用主控的连接
+            if getattr(cfg, '_recording_resume_manifest', None):
+                cfg._recording_adopted = True
+                cfg._keep_frozen = False
+        elif args.record and not getattr(cfg, '_recording_resume_manifest', None):
+            recorder = Recorder(session.bridge_call,
+                                options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms, args.record_marker,
+                                             continuous_music=cfg.continuous_music),
+                                log=lambda m: print(m, flush=True))
+            recorder.bind_run(run_dir)
+            from .chapter_recording import wrap
+            recorder = wrap(cfg,recorder)
+            recorder.start()
         from .chapter_recording import wrap
         recorder = wrap(cfg,recorder)
-        try:
-            recorder.start()
-        except RecordingError:
-            session.close()
-            raise
-    from .chapter_recording import wrap
-    recorder = wrap(cfg,recorder)
-    if recorder is not None:
-        if getattr(cfg,'recording_mode','continuous') == 'chapter':
-            session.client.before_step = lambda: session.before_advance(boundary_only=True)
-        session.before_advance = recording_guard(recorder, run_dir)
+        if recorder is not None:
+            if getattr(cfg,'recording_mode','continuous') == 'chapter':
+                session.client.before_step = lambda: session.before_advance(boundary_only=True)
+            session.before_advance = recording_guard(recorder, run_dir)
 
-    capabilities = workspace_capabilities(cfg)
-    if cfg.sim and cfg.pause_limit:
-        from .planning_budget import PlanningBudget
-        session.planning_budget = PlanningBudget(
-            metrics, run_dir / 'planning_budget.json',
-            state_path=cfg.workspace_dir / 'game/rounds.json',
-            rounds_per_room=cfg.rounds_per_room, death_bonus=cfg.death_bonus, room_scale=cfg.room_scale,
-            previous_path=previous['dir'] / 'planning_budget.json' if previous else None,
-            legacy=previous is not None)
-    playback = Playback(cfg, session, metrics, log=lambda m: print(m, flush=True))
-    if playback.collect:
-        session.playback = playback
-    live = None
-    # narrate 与工具状态在所有模式都开（HUD 据 live 把思考放在主位）；直播模式另记 live_mode
-    metrics.update(live=True, live_mode=bool(cfg.live), play_mode=describe_mode(cfg), hud_mod=bool(cfg.hud_mod),
-                   formal_only=bool(cfg.formal_thought),
-                   sim_stats=not (cfg.mode == "explore" and not cfg.sim_assist))
-    print(f"[run] 模式：{describe_mode(cfg)}", flush=True)
-    if (overrides := prompt_override_hashes()):
-        where = "local/prompts" if cfg.profile == "local" else f"配置 {cfg.profile}"
-        print(f"[run] 提示词有本机修改（{where}）：{'、'.join(overrides)}", flush=True)
-    if session.workspace is not None:
-        live = LiveStatus(session.workspace / "game" / "hud_status.json", metrics).start()
-    server = build_server(session, study)
-    app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
-                                     transport_security=TRANSPORT_SECURITY)
-    add_gate_route(app, metrics, cfg.live_remind_s if capabilities.workspace_write else None,
-                   session=session)
-    web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
-    web_task = asyncio.create_task(web.serve())
-    while not web.started:
-        if web_task.done():
-            raise RuntimeError(f"游戏工具服务启动失败（端口 {cfg.mcp_port}）")
-        await asyncio.sleep(0.05)
-    print(f"[run] 游戏工具服务：http://127.0.0.1:{cfg.mcp_port}/mcp", flush=True)
+        capabilities = workspace_capabilities(cfg)
+        if cfg.sim and cfg.pause_limit:
+            from .planning_budget import PlanningBudget
+            session.planning_budget = PlanningBudget(
+                metrics, run_dir / 'planning_budget.json',
+                state_path=cfg.workspace_dir / 'game/rounds.json',
+                rounds_per_room=cfg.rounds_per_room, death_bonus=cfg.death_bonus, room_scale=cfg.room_scale,
+                previous_path=previous['dir'] / 'planning_budget.json' if previous else None,
+                legacy=previous is not None)
+        playback = Playback(cfg, session, metrics, log=lambda m: print(m, flush=True))
+        if playback.collect:
+            session.playback = playback
+        live = None
+        # narrate 与工具状态在所有模式都开（HUD 据 live 把思考放在主位）；直播模式另记 live_mode
+        metrics.update(live=True, live_mode=bool(cfg.live), play_mode=describe_mode(cfg), hud_mod=bool(cfg.hud_mod),
+                       formal_only=bool(cfg.formal_thought),
+                       sim_stats=not (cfg.mode == "explore" and not cfg.sim_assist))
+        print(f"[run] 模式：{describe_mode(cfg)}", flush=True)
+        if (overrides := prompt_override_hashes()):
+            where = "local/prompts" if cfg.profile == "local" else f"配置 {cfg.profile}"
+            print(f"[run] 提示词有本机修改（{where}）：{'、'.join(overrides)}", flush=True)
+        if session.workspace is not None:
+            live = LiveStatus(session.workspace / "game" / "hud_status.json", metrics)
+            live.start()
+        server = build_server(session, study)
+        app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
+                                         transport_security=TRANSPORT_SECURITY)
+        add_gate_route(app, metrics, cfg.live_remind_s if capabilities.workspace_write else None,
+                       session=session)
+        context = http_service(app, port=cfg.mcp_port, label='游戏工具服务')
+        service = await context.__aenter__()
+        http_context = context
+        cfg.mcp_port = service.port
+        # Preserve the session identity and delivery metadata already written before startup.
+        state_path = run_dir / 'run_state.json'
+        if state_path.exists():
+            from .session_store import write_json
+            state = json.loads(state_path.read_text(encoding='utf-8'))
+            state['mcp_port'] = service.port
+            write_json(state_path, state)
+        web_task = service.task
+        print(f"[run] 游戏工具服务：http://127.0.0.1:{cfg.mcp_port}/mcp", flush=True)
 
-    reason = "中断"
-    runner = None
-    # 等工具服务就绪才认领原录制；之前任何初始化失败均保留原运行供续跑。
-    saved_recording = getattr(cfg, '_recording_resume_manifest', None)
-    if recorder is None and args.record and saved_recording:
-        recorder = Recorder.adopt(session.bridge_call, saved_recording, run_dir,
-                                  log=lambda m: print(m, flush=True))
-        recorder = wrap(cfg,recorder)
-        if getattr(cfg,'recording_mode','continuous') == 'chapter':
-            session.client.before_step = lambda: session.before_advance(boundary_only=True)
-        cfg._recording_adopted = True
-        cfg._keep_frozen = False
-        session.before_advance = recording_guard(recorder, run_dir)
-    try:
+        # 等工具服务就绪才认领原录制；之前任何初始化失败均保留原运行供续跑。
+        if recorder is None and args.record and saved_recording:
+            recorder = Recorder.adopt(session.bridge_call, saved_recording, run_dir,
+                                      log=lambda m: print(m, flush=True))
+            recorder = wrap(cfg,recorder)
+            if getattr(cfg,'recording_mode','continuous') == 'chapter':
+                session.client.before_step = lambda: session.before_advance(boundary_only=True)
+            cfg._recording_adopted = True
+            cfg._keep_frozen = False
+            session.before_advance = recording_guard(recorder, run_dir)
         if args.no_agent:
             print("[run] --no-agent：工具服务已就绪，按 Ctrl+C 结束", flush=True)
             await web_task
@@ -1235,35 +1208,60 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()
-    except Exception as exc:
-        print(f'[run] 智能体异常，开始收尾：{type(exc).__name__}: {exc}', flush=True)
+    except BaseException as error:
+        primary = error
+        if isinstance(error, Exception):
+            print(f'[run] 主控启动或运行异常，开始收尾：{type(error).__name__}: {error}', flush=True)
         raise
     finally:
         # Commit the ownership decision before cleanup that may itself fail.
         # The outer socket/error cleanup must never undo a reached goal's hold.
-        shutdown = _shutdown_mode(cfg, args, session,
-                                  interrupted=bool(runner and runner.interrupted_for_resume),
-                                  model_failed=bool(runner and getattr(runner, 'retain_on_model_failure', False)
-                                                    and not runner.stop_requested))
+        cleanup_errors = []
+        try:
+            if saved_recording and not getattr(cfg, '_recording_adopted', False):
+                # Startup/adopt failure must not release another run's live capture.
+                shutdown = 'retain'
+            else:
+                shutdown = _shutdown_mode(cfg, args, session,
+                                          interrupted=bool(runner and runner.interrupted_for_resume),
+                                          model_failed=bool(runner and getattr(runner, 'retain_on_model_failure', False)
+                                                            and not runner.stop_requested))
+        except BaseException as error:
+            # An unconfirmed ownership decision cannot authorize release.
+            shutdown = 'retain'
+            cleanup_errors.append(('归还判定', error))
         cfg._keep_frozen = shutdown != 'release'
         finish_error = None
         if session.done and session.done_reason in ("章节完成", "分段完成"):
             try:
                 await asyncio.to_thread(session.finish_at_results if session.done_reason == "章节完成"
                                         else session.finish_at_checkpoint)
-            except Exception as exc:
-                finish_error = str(exc)
-                print(f"[run] 结算收尾未完成：{exc}", flush=True)
-        metrics.update(status="done" if session.done else "stopped")
-        web.should_exit = True
-        if not web_task.done():
+            except BaseException as error:
+                finish_error = str(error)
+                print(f"[run] 结算收尾未完成：{error}", flush=True)
+                if not isinstance(error, Exception):
+                    cleanup_errors.append(('结算收尾', error))
+        try:
+            metrics.update(status="done" if session.done else "stopped")
+        except BaseException as error:
+            cleanup_errors.append(('运行状态', error))
+        # HTTP must stop before capture release or potentially slow movie work.
+        if http_context is not None:
             try:
-                await asyncio.wait_for(web_task, timeout=10)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                web_task.cancel()
-        playback.close()
+                await http_context.__aexit__(type(primary) if primary else None, primary,
+                                             primary.__traceback__ if primary else None)
+            except BaseException as error:
+                cleanup_errors.append(('HTTP 服务', error))
+        if playback is not None:
+            try:
+                playback.close()
+            except BaseException as error:
+                cleanup_errors.append(('规划回放', error))
         if live is not None:
-            live.close()
+            try:
+                live.close()
+            except BaseException as error:
+                cleanup_errors.append(('工作区进度', error))
         recording = None
         if recorder:
             try:
@@ -1282,20 +1280,35 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                     recording = recorder.stop()
                 else:
                     recording = recorder.stop(on_capture_stopped=release_after_capture)
-            except Exception as exc:  # noqa: BLE001（录制收尾失败不影响交还游戏控制与写总结）
-                print(f"[record] 停止录制失败：{exc}", flush=True)
+            except BaseException as error:  # Recording failures still preserve the remaining cleanup.
+                print(f"[record] 停止录制失败：{error}", flush=True)
+                if not isinstance(error, Exception):
+                    cleanup_errors.append(('录制收尾', error))
         # 锁步结束后先释放，外层finally仍负责关闭连接及异常兜底；暂停不走结束流程。
-        summary = metrics.snapshot()
-        summary.update(stop_reason=reason, completed=session.done and session.done_reason in ("章节完成", "分段完成"),
-                       user_stopped=session.user_stopped, agent_stop=getattr(session, "agent_stop", None), goal=session.goals.snapshot(),
-                       chapters=cfg.chapters, splits=metrics.state.splits or [],
-                       plan=[p.row() for p in cfg.plan] if cfg.plan else None,
-                       total_time_ticks=total_time_ticks(metrics.state, session),
-                       start_sid=session.start_sid, end_scene=session.end_scene, finish_error=finish_error, turns=runner.turns if runner else 0,
-                       session_id=runner.session_id if runner else None, run_dir=str(run_dir),
-                       resumed_from=str(previous["dir"]) if previous else None,
-                       kb_study=study.summary() if study else None, recording=recording)
-        (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary = None
+        try:
+            summary = metrics.snapshot()
+            summary.update(stop_reason=reason, completed=session.done and session.done_reason in ("章节完成", "分段完成"),
+                           user_stopped=session.user_stopped, agent_stop=getattr(session, "agent_stop", None), goal=session.goals.snapshot(),
+                           chapters=cfg.chapters, splits=metrics.state.splits or [],
+                           plan=[p.row() for p in cfg.plan] if cfg.plan else None,
+                           total_time_ticks=total_time_ticks(metrics.state, session),
+                           start_sid=session.start_sid, end_scene=session.end_scene, finish_error=finish_error, turns=runner.turns if runner else 0,
+                           session_id=runner.session_id if runner else None, run_dir=str(run_dir),
+                           resumed_from=str(previous["dir"]) if previous else None,
+                           kb_study=study.summary() if study else None, recording=recording)
+            if cleanup_errors:
+                summary['cleanup_errors'] = [f'{label}：{error}' for label, error in cleanup_errors]
+            (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        except BaseException as error:
+            cleanup_errors.append(('总结生成与写入', error))
+        if cleanup_errors:
+            for label, error in cleanup_errors:
+                print(f'[run] {label}清理失败：{error}', flush=True)
+                if primary is not None:
+                    primary.add_note(f'{label}清理失败：{error}')
+            if primary is None:
+                raise cleanup_errors[0][1]
     return summary
 
 
