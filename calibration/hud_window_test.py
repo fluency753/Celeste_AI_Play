@@ -1,10 +1,13 @@
 """Independent HUD window lifecycle; no game-dependent hide or forced pinning."""
 import queue
+from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from overlay.window import main, manage, retain_tray_on_close
 from overlay.placement import PlacementAPI
+from overlay.layout import Layout
 
 
 class WindowTests(unittest.TestCase):
@@ -26,20 +29,46 @@ class WindowTests(unittest.TestCase):
         self.assertIs(options['js_api']._window, webview.create_window.return_value)
         webview.start.assert_called_once()
 
-    def run_window(self, commands=(), minimized=False, visible_again=False):
+    def run_window(self, commands=(), minimized=False, visible_again=False, layout=None, on_sleep=None):
         user=MagicMock();user.IsWindow.side_effect=[True,True,False];user.IsIconic.return_value=minimized
         user.IsWindowVisible.side_effect=[False,visible_again]
         window=MagicMock();placement=PlacementAPI();placement._window=window
         for command in commands:placement._commands.put(command)
         args=SimpleNamespace(placement=placement,interval=.25)
         rect=(500,100,420,760)
-        layout=MagicMock();layout.topmost=True;layout.window_target.return_value=rect
+        if layout is None:
+            layout=MagicMock();layout.topmost=True;layout.window_target.return_value=rect
         with patch('overlay.window._user32',return_value=user),patch('overlay.window.initialize_style',return_value=1), \
              patch('overlay.window.per_pixel_alpha'),patch('overlay.window.Layout',return_value=layout), \
              patch('overlay.window.TrayControl') as tray,patch('overlay.window.client_rect',return_value=rect), \
-             patch('overlay.window.window_work_area',return_value=(0,0,1920,1080)),patch('overlay.window.time.sleep'):
+             patch('overlay.window.window_work_area',return_value=(0,0,1920,1080)), \
+             patch('overlay.window.time.sleep', side_effect=lambda _: on_sleep(placement) if on_sleep else None):
             manage(window,args)
         return user,window,placement,layout,tray
+
+    def test_locked_layout_does_not_stop_commands_or_later_quit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            layout = Layout(Path(folder) / 'layout.json')
+            layout.save_window((500, 100, 420, 760), True)
+            before = layout.path.read_bytes()
+            # Keep the real manager, layout mutations, serializer and command queue.
+            # Only the final filesystem replace fails, as in the live traceback.
+            with patch('pathlib.Path.replace', side_effect=PermissionError('locked layout')), \
+                 self.assertLogs('overlay.layout', level='WARNING') as logs:
+                _, window, placement, _, _ = self.run_window(
+                    ['pin', 'minimize', 'restore', 'reset'], layout=layout,
+                    on_sleep=lambda p: p._commands.put('quit'))
+            self.assertGreaterEqual(len(logs.output), 6)
+            window.hide.assert_called_once()
+            window.show.assert_called_once()
+            window.restore.assert_called_once()
+            window.destroy.assert_called_once()
+            self.assertTrue(placement._quitting)
+            self.assertEqual(layout.path.read_bytes(), before)
+            self.assertEqual(list(Path(folder).iterdir()), [layout.path])
+            # A later write can recover; failed writes never claim the file changed.
+            layout.save_window((600, 200, 420, 760), False)
+            self.assertEqual(Layout(layout.path).window_target((0, 0, 1920, 1080)), (600, 200, 420, 760))
 
     def test_window_never_auto_hides_or_repositions_after_initial_restore(self):
         user,window,_,_,_=self.run_window()

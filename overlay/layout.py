@@ -1,10 +1,13 @@
 """桌面 HUD 独立窗口布局；保留旧比例布局的读取以便一次性迁移。"""
 import json
+import logging
 import math
+import tempfile
 from pathlib import Path
 from .placement import MIN_HEIGHT, DEFAULT_HEIGHT
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "configs/local.hud-window.json"
+logger = logging.getLogger(__name__)
 
 
 class Layout:
@@ -82,7 +85,13 @@ class Layout:
         self._write({"mode": "auto", "topmost":self.topmost})
 
     def _write(self, data):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.path.with_suffix(".tmp")
-        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp.replace(self.path)
+        # Persistence is optional: a locked file must not stop the window command loop.
+        # Each writer owns its temporary path, including when two HUDs overlap briefly.
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix=f'.{self.path.stem}-', dir=self.path.parent) as folder:
+                temp = Path(folder) / self.path.name
+                temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                temp.replace(self.path)
+        except OSError as error:
+            logger.warning('HUD 窗口布局未保存，当前窗口仍可操作：%s', error)
