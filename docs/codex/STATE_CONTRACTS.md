@@ -2,6 +2,12 @@
 
 本文由 [CODEX.md](CODEX.md) 按相关改动引入，供 Codex 复盘自身的实现与审查问题，不约束其他开发或试玩 agent。记录导航、执行能力、回放及录像的状态边界；剩余工作见 [TODO](../../TODO.md) 和 [验收说明](../TODO_DETAILS.md)。
 
+## 桌面 WebView2 资源
+
+HUD 的消息／工具历史有条数上限，DOM 与 JavaScript 堆稳定仍不证明桌面宿主没有内存泄漏。pywebview 6.2.1 无条件订阅 `WebResourceResponseReceived`，持续轮询会保留 WebView2 原生响应资源；空应用监听也存在该问题。修复由 HUD／控制台共用宿主在原生就绪后取消未使用的响应订阅，保留请求事件和 JS bridge；导航重载不重复取消，宿主实例更新重新处理，失败不写成功标记。有应用响应消费者时保留订阅并告警。
+
+先前页面回归只覆盖 Chromium 页面、消息和复制，没有覆盖 pywebview／pythonnet／WebView2 的网络资源链。隔离同版本宿主的 12000 次 4KB 请求对照：默认订阅组在 JS 与 .NET 回收后 renderer private 约 121.6 MiB，生产修复组约 31.3 MiB，两组 JS 堆均约 0.65 MB；本机证据 `local/hud-webview-network-subscribed.json`、`local/hud-webview-network-detached.json`。新原生回归实际执行初次加载与导航重载各 100 次 fetch，确认请求事件、JS API 仍有效，响应事件不再触发。完整页面另做 25000 次渲染和一分钟动画采样，DOM／监听器／JS 堆稳定。上述结果不代表多小时活跃会话或所有 WebView2 版本均已验收；已有窗口须彻底退出重开，网页刷新不能更新宿主 Python 逻辑。
+
 ## 导航
 
 `exit_level` 原来把“离开当前关卡”和“结束整次试玩”绑定：用户授权从 1A 返回地图进入 2A，agent 正常选用了这个工具，结果却清空队列并结束主控，记录 `completed=false` 仍不足以证明任务可继续。现默认 `finish_run=false` 只在返回地图权限下导航，保留目标、队列、计时与录像；仅明确结束整次时传 true。稳定选章／章节面板属于菜单控制状态，不因 auto 模式的 END_SCENES 兜底而结束，也不适用玩家操作最少帧限制。返回本身不能制造通关证据，初始原生观察刚出现的完成证据仍须正常提交。菜单失败可能已推进输入，须用原连接更新实际观测与计量，不重发退出；工具把继续／结束／停止目标及失败范围明确传给模型。

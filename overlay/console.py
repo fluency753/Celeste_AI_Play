@@ -112,7 +112,9 @@ def main() -> int:
         return 0
     stop = threading.Event()
     threading.Thread(target=_watch, args=(args.port, stop), daemon=True).start()
-    webview.create_window(TITLE, url, width=1440, height=920, min_size=(760, 600), background_color="#141729")
+    window = webview.create_window(TITLE, url, width=1440, height=920, min_size=(760, 600), background_color="#141729")
+    from .webview_host import disable_unused_response_observer
+    disable_unused_response_observer(window)
     webview.start()
     stop.set()
     return 0

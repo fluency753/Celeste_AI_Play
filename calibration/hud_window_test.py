@@ -13,6 +13,7 @@ from overlay.layout import Layout
 class WindowTests(unittest.TestCase):
     def test_startup_allows_text_selection_without_enabling_body_drag(self):
         webview = MagicMock()
+        before_load = webview.create_window.return_value.events.before_load
         layout = MagicMock()
         layout.topmost = True
         with patch.dict('sys.modules', {'webview': webview}), \
@@ -27,6 +28,7 @@ class WindowTests(unittest.TestCase):
         self.assertTrue(options['text_select'])
         self.assertFalse(options['easy_drag'])
         self.assertIs(options['js_api']._window, webview.create_window.return_value)
+        before_load.__iadd__.assert_called_once()
         webview.start.assert_called_once()
 
     def run_window(self, commands=(), minimized=False, visible_again=False, layout=None, on_sleep=None):

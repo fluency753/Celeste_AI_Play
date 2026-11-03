@@ -351,6 +351,8 @@ def main() -> int:
                                    on_top=Layout().topmost, focus=True, resizable=True, easy_drag=False, shadow=False,
                                    text_select=True, zoomable=False)
     args.placement._window = window
+    from .webview_host import disable_unused_response_observer
+    disable_unused_response_observer(window)
     retain_tray_on_close(window, args.placement)
     window.events.loaded += args.placement._sync_page
     webview.start(manage, (window, args), gui="edgechromium")
