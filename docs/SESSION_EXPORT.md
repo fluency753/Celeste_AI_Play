@@ -1,5 +1,13 @@
 # 导出会话公开历史
 
+长程行为评估使用增量分析模式（保留旧文件）：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 tools/export_session.py --run runs/<agent>/<运行时间> --analysis --since "2026-11-03 23:02:46"
+```
+
+新增全部可观察工具索引、回合/统一时间线、动作/游戏状态证据、累计快照及房间工作量摘要；详见[分析字段与计量契约](SESSION_ANALYSIS_SCHEMA.md)。可加 `--workspace <本机工作区路径>` 保存有限的当前笔记和程序清单，不执行 Git/程序。分析模式 README 为简明摘要，原完整可读记录在 public_text.md。
+
 在仓库根目录运行：
 
 ```powershell

@@ -16,6 +16,8 @@ def main():
     parser.add_argument('--output', type=Path, help='新的输出目录，默认 local/exports/<会话ID>-<时间>')
     parser.add_argument('--local-only', action='store_true', help='只读本机日志，不访问已有 Codex 容器')
     parser.add_argument('--codex-container', help='已有 Codex 容器名称；默认按工作区标签推导，只读并核验归属')
+    parser.add_argument('--analysis', action='store_true', help='附加全部可观察工具、回合、事件时间线和状态分析；不导出私有推理')
+    parser.add_argument('--workspace', type=Path, help='配合 --analysis，附加指定本机工作区的轻量当前快照（不执行代码或Git）')
     parser.add_argument('--time-format', default=DEFAULT_TIME_FORMAT, help='Markdown/CSV 时间显示格式，使用 Python strftime 语法（默认：%(default)s）')
     parser.add_argument('--since', help='公开消息起点（包含），ISO 日期时间；无时区按北京时间。累计统计与模拟调用仍为整个会话')
     parser.add_argument('--until', help='公开消息终点（不含），ISO 日期时间；可单独使用，时间未知的消息在筛选时排除')
@@ -26,8 +28,9 @@ def main():
         reader = None
         if not args.local_only:
             from orchestrator.session_export_native import read_container_simulations
-            reader = lambda state: read_container_simulations(state, args.codex_container)
-        report = collect_session(args.run, native_reader=reader, since=args.since, until=args.until)
+            reader = lambda state: read_container_simulations(state, args.codex_container, include_analysis=args.analysis)
+        report = collect_session(args.run, native_reader=reader, since=args.since, until=args.until,
+                                 include_analysis=args.analysis, workspace=args.workspace)
         output = args.output or Path(__file__).resolve().parents[1] / 'local' / 'exports' / (
             report['session']['session_id'] + '-' + datetime.now(TZ).strftime('%Y%m%d-%H%M%S-%f'))
         archive = write_export(report, output, time_format=args.time_format)
@@ -35,6 +38,8 @@ def main():
         print(f'已导出：{archive.parent}')
         if report['public_text_filter']:
             print('公开消息已按时间范围筛选；累计时间、模拟调用与额度仍为整个会话。')
+        if args.analysis:
+            print('分析记录：' + str(report['analysis']['counts']) + '；时间未知的记录保留并标记。')
         print(f"公开文本 {len(report['public_text'])} 条；{len(report['runs'])} 段运行；"
               f"扣费回执 {summary['receipt_count']} 条；净消耗 {summary['net_spent']}；余额 {summary['final_balance']}")
         for warning in report['warnings']:

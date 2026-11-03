@@ -39,7 +39,7 @@ def read_object(path, warnings):
         return {}
 
 
-def rows(path, warnings):
+def rows(path, warnings, line_limit=4 * 1024 * 1024):
     """Read only complete lines within the file length captured at open."""
     if not path.exists():
         return
@@ -47,12 +47,12 @@ def rows(path, warnings):
         remaining = stream.seek(0, 2)
         stream.seek(0)
         while remaining:
-            raw = stream.readline(min(remaining, 4 * 1024 * 1024 + 1))
+            raw = stream.readline(min(remaining, line_limit + 1))
             if not raw:
                 warnings.append(f'{path}: 读取期间文件已截短')
                 break
             remaining -= len(raw)
-            if len(raw) > 4 * 1024 * 1024:
+            if len(raw) > line_limit:
                 while remaining and not raw.endswith(b'\n'):
                     raw = stream.readline(min(remaining, 4 * 1024 * 1024))
                     if not raw:
@@ -91,7 +91,7 @@ def message_time_bound(value):
         raise ValueError(f'无效的公开消息时间范围：{value!r}；请使用 ISO 日期时间') from exc
 
 
-def collect_session(run, *, runs_root=None, native_reader=None, since=None, until=None):
+def collect_session(run, *, runs_root=None, native_reader=None, since=None, until=None, include_analysis=False, workspace=None):
     """No game/model connection, writes or UI history limits; native_reader is an optional read boundary."""
     since, until = message_time_bound(since), message_time_bound(until)
     if since is not None and until is not None and since >= until:
@@ -227,6 +227,7 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
                     elif block.get('type') == 'tool_result' and block.get('tool_use_id') in requested:
                         ident = block['tool_use_id']
                         native_calls[ident] = simulation_fact(ident, requested[ident], block.get('content'), not block.get('is_error', False))
+    native = {}
     if native_reader is not None and key[0] == 'codex':
         try:
             native = native_reader(selected)
@@ -279,7 +280,7 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
     balance = (latest.get('sim_energy') or {}).get('balance')
     if receipts and len(matched) < len(receipts):
         warnings.append(f'{len(receipts) - len(matched)} 条扣费回执没有可关联的调用详情；未知时间/输入保持为空，不按顺序猜配')
-    return {'schema_version': 1, 'exported_at': datetime.now(TZ).isoformat(), 'timezone': 'Asia/Shanghai',
+    report = {'schema_version': 1, 'exported_at': datetime.now(TZ).isoformat(), 'timezone': 'Asia/Shanghai',
             'scope': '网页 HUD 对话栏公开文本、主控累计时间及模拟器调用/额度；不含工具结果正文、推理或截图文字识别。',
             'session': {'engine': key[0], 'provider': key[1], 'session_id': key[2], 'agent': selected.get('agent'), 'save': selected.get('save')},
             'runs': [str(directory) for directory, _ in chain], 'sources': source_files,
@@ -295,6 +296,15 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
                                    'balance_queries': sum(call.get('query_only') is True for call in native_calls.values()),
                                    'successful_predictions': latest.get('sim_calls'), 'predicted_routes': latest.get('sim_rollouts')},
             'warnings': list(dict.fromkeys(warnings))}
+    if include_analysis:
+        from .session_analysis import collect_analysis
+        report = collect_analysis(report, chain, snapshots, native, since_wall, until_wall)
+        if workspace is not None:
+            from .session_export_workspace import workspace_snapshot
+            report['workspace'] = workspace_snapshot(workspace)
+    elif workspace is not None:
+        raise ValueError('工作区快照需要启用 --analysis')
+    return report
 
 
 def simulation_fact(ident, args, content, success, **metadata):
@@ -339,6 +349,9 @@ def write_export(report, output, *, time_format=DEFAULT_TIME_FORMAT):
     for run in report['runs']:
         if output == Path(run) or output in Path(run).parents or output.is_relative_to(Path(run)):
             raise ValueError('导出目录不能覆盖或位于源运行目录内')
+    workspace = report.get('workspace', {}).get('root')
+    if workspace and (output == Path(workspace) or output in Path(workspace).parents or output.is_relative_to(Path(workspace))):
+        raise ValueError('导出目录不能覆盖或位于源工作区内')
     output.mkdir(parents=True, exist_ok=False)
     (output / 'session.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8', newline='')
     for name, data in (('public_text.csv', report['public_text']), ('simulations.csv', report['simulations'])):
@@ -382,9 +395,20 @@ def write_export(report, output, *, time_format=DEFAULT_TIME_FORMAT):
         values = [display_time(row.get('time')) or '未知', row.get('call_id') or row.get('receipt') or '未知', state,
                   row.get('ledger_cost', row.get('cost')), row.get('balance_after'), row.get('room'), row.get('duration_s')]
         lines.append('| ' + ' | '.join(str(value) if value is not None else '未知' for value in values) + ' |')
+    if hasattr(report, 'analysis_records'):
+        from .session_export_analysis_write import write_analysis
+        # Keep the full legacy readable transcript outside the compact analysis landing page.
+        (output / 'public_text.md').write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='')
+        lines = write_analysis(report, output)
     (output / 'README.md').write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='')
     files = sorted(output.iterdir())
-    manifest = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
+    manifest = {}
+    for path in files:
+        digest = hashlib.sha256()
+        with path.open('rb') as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(block)
+        manifest[path.name] = digest.hexdigest()
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8', newline='')
     archive = output / 'export.zip'
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
