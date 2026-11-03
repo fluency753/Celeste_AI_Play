@@ -1,28 +1,21 @@
 """One pre-execution policy for Claude hooks and native Codex tools."""
 
+from .execution import WORKSPACE_TOOLS
+
 
 async def decide_tool(gate, tool_name, tool_use_id, *, metrics=None, live_remind_s=None, session=None,
                       reminders=True, execution_guard=None):
     """reminders=False：调用方自己把提醒放进模型确定会收到的结果，这里不取、不确认送达（Codex）。"""
-    guard = getattr(session, 'program_guard', getattr(session, 'control_guard', None))
     if execution_guard and (reason := execution_guard()):
         return {'decision': 'deny', 'reason': reason, 'context': ''}
-    if tool_name == 'Bash' and guard and (reason := guard()):
-        return {'decision': 'deny', 'reason': reason, 'context': ''}
-    allow, reason = await gate.decide(tool_name, tool_use_id)
+    # Gameplay phase and planning budgets do not own workspace capability.
+    allow, reason = (True, '') if tool_name in WORKSPACE_TOOLS else await gate.decide(tool_name, tool_use_id)
     if allow and execution_guard and (denied := execution_guard()):
-        return {'decision': 'deny', 'reason': denied, 'context': ''}
-    # A gate may wait for stream/message ownership. Recheck lifecycle before
-    # authorizing execution or charging the program counter after that await.
-    if allow and tool_name == 'Bash' and guard and (denied := guard()):
         return {'decision': 'deny', 'reason': denied, 'context': ''}
     if not allow and getattr(session, 'workspace_paused', lambda: False)():
         from .pausegate import PauseGate
         if isinstance(gate, PauseGate):
             reason = gate.deny_reason(workspace_paused=True)
-    if allow and tool_name == 'Bash' and session is not None and hasattr(session, 'program_run_denied'):
-        if denied := session.program_run_denied():
-            return {'decision': 'deny', 'reason': denied, 'context': ''}
     context = ''
     if not reminders:
         return {'decision': 'allow' if allow else 'deny', 'reason': reason, 'context': context}

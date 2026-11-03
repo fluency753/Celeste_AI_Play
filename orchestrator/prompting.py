@@ -601,10 +601,6 @@ def prompt_parts(cfg) -> list[PromptPart]:
                                 "只有用户明确结束整次试玩才设 finish_run=true。按当前操作权限执行，不用保存退出绕过返回地图禁令；返回地图不算通关。", None, "\n\n"))
     if workspace_capabilities(cfg).programs and getattr(cfg, "live", False):
         parts += _file_parts("program_batches_zh.md")     # 长程序分批反馈只用于直播模式（用户要求）
-    if is_explore(cfg) and workspace_capabilities(cfg).programs and getattr(cfg, "explore_program_runs", None):
-        parts.append(PromptPart("两次 act 之间的次数（设了才自动加）",
-                                f"两次 act 之间最多运行 {cfg.explore_program_runs} 次规划程序（Bash），用完后先做一次真实尝试。",
-                                None, "\n"))
     if cfg.sim_assist:
         from .sim_assist import AssistRules
         parts.append(PromptPart("有限模拟辅助（开了限额预测时自动加）",

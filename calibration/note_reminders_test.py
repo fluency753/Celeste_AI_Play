@@ -387,16 +387,19 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             runner.metrics.update(context_window=1000)
             claude_usage(runner, 700)
             app = SimpleNamespace(router=SimpleNamespace(routes=[]))
-            gate = PauseGate(runner.metrics, enabled=False)
+            gate = PauseGate(runner.metrics, enabled=True, started=True)
             add_gate_route(app, gate, session=session)
             endpoint = app.router.routes[0].endpoint
             runner.paused = True
             runner.pausing = True
-            denied = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Bash'})))
+            runner.turn_active = True
+            denied = await endpoint(SimpleNamespace(json=AsyncMock(return_value={
+                'tool_name': 'mcp__celeste__observe', 'session_id': runner.session_id})))
             self.assertEqual(json.loads(denied.body)['decision'], 'deny')
             self.assertTrue(runner.note_reminders.peek())
             runner.pausing = False
-            allowed = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Read'})))
+            allowed = await endpoint(SimpleNamespace(json=AsyncMock(return_value={
+                'tool_name': 'Read', 'session_id': runner.session_id})))
             body = json.loads(allowed.body)
             self.assertEqual(body['decision'], 'allow')
             self.assertIn('系统·笔记提醒', body['context'])

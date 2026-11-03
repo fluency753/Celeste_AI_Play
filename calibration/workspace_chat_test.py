@@ -68,7 +68,7 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                     runner.close_events()
             with patch('orchestrator.chat.ensure_container',return_value='offline-container'), \
                  patch('orchestrator.chat.host_runner',host):
-                await chat(root,allow_programs=True,sim=True)
+                await chat(root)
             self.assertEqual(received['reply']['decision'], 'allow')
             self.assertEqual(received['container'], 'offline-container')
             self.assertEqual(received['stdout'], 'OK\n')
@@ -95,7 +95,7 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                 with patch('orchestrator.chat.ensure_container', return_value='offline') as container, \
                      patch('orchestrator.chat.host_runner', host), \
                      patch('orchestrator.runtimes.Runtime.token', return_value='test'):
-                    await chat(root, allow_programs=True, sim=True)
+                    await chat(root, sim=True)
                 self.assertTrue(received['sim'])
                 self.assertTrue(received['chat_only'])
                 self.assertTrue(received['resume'])
@@ -105,17 +105,15 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                 container.assert_called_once()
                 runner.run.assert_awaited_once()
 
-    async def test_sim_requires_explicit_program_access_and_cannot_leak_into_naming(self):
+    async def test_sim_resource_mount_cannot_leak_into_naming(self):
         with patch('orchestrator.chat.ensure_container') as container:
-            with self.assertRaisesRegex(ValueError, 'allow-programs'):
-                await chat(Path('unused'), sim=True)
             with self.assertRaisesRegex(ValueError, '命名'):
                 await chat(Path('unused'), name_request='name', allow_programs=True, sim=True)
             container.assert_not_called()
 
-    async def test_host_claude_program_access_is_rejected_before_any_external_side_effect(self):
+    async def test_host_claude_sim_mount_is_rejected_before_any_external_side_effect(self):
         for engine in ('claude',):
-            for sim in (False, True):
+            for sim in (True,):
                 with self.subTest(engine=engine, sim=sim), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     state = {'agent':'test', 'save':'test', 'model':'model', 'effort':'medium',
@@ -126,7 +124,7 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                     with patch('orchestrator.chat.ensure_container') as container, \
                          patch('orchestrator.chat.host_runner') as host, \
                          patch('orchestrator.runtimes.Runtime.token') as token:
-                        with self.assertRaisesRegex(ValueError, 'container.*host'):
+                        with self.assertRaisesRegex(ValueError, '工作区程序执行通道'):
                             await chat(root, allow_programs=True, sim=sim)
                     container.assert_not_called()
                     host.assert_not_called()

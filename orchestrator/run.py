@@ -103,8 +103,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--limit-planning", action="store_true",
-                    help="限制规划轮次：按章节记账，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮，"
-                         "只有调用模拟器的消息占一轮，用完后不能再跑模拟器；自动重试关闭。默认不限制思考与调用")
+                    help="规划轮次记账：按章节记录，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮，"
+                         "只有调用离线模拟器的消息占一轮，不限制工作区程序；自动重试关闭")
     ap.add_argument("--free-planning", action="store_true", help=argparse.SUPPRESS)  # 旧开关：现在不限制就是默认
     ap.add_argument("--rounds-per-room", type=int, default=3,
                     help="（--limit-planning 时）一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 3，至少 3）；大房间按 --room-scale 放大")
@@ -729,14 +729,20 @@ def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | No
             data = await request.json()
         except ValueError:
             data = {}
+        if not isinstance(data, dict):
+            return JSONResponse({'decision': 'deny', 'reason': '工具门禁请求必须是对象，本次未执行。', 'context': ''})
         if data.get('engine') == 'codex':
             callback = getattr(session, 'native_tool_hook', None)
             if callback is None:
                 return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Codex 会话', 'context': ''})
             return JSONResponse(await callback(data))
         from .tool_gate import decide_tool
+        owner_guard = getattr(session, 'workspace_hook_guard', None)
+        if owner_guard is None and session is not None:
+            return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Claude 工具会话，本次未执行。', 'context': ''})
         return JSONResponse(await decide_tool(gate, str(data.get('tool_name') or ''), data.get('tool_use_id'),
-                                              metrics=metrics, live_remind_s=live_remind_s, session=session))
+                                              metrics=metrics, live_remind_s=live_remind_s, session=session,
+                                              execution_guard=(lambda: owner_guard(data)) if owner_guard else None))
 
     app.router.routes.insert(0, Route("/gate", endpoint, methods=["POST"]))
 

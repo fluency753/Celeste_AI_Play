@@ -107,11 +107,16 @@ class SuccessorSessionTests(unittest.TestCase):
             calls.append((directory, options['session_id'], options['resume']))
             configs.append(cfg)
             yield runner
-        caps = SimpleNamespace(needs_container=False, validate=lambda **k: None)
         with tempfile.TemporaryDirectory() as folder:
             run = self.make(folder)
+            extra = Path(folder) / 'extra'
+            extra.mkdir()
+            state_path = run / 'run_state.json'
+            state = json.loads(state_path.read_text(encoding='utf-8'))
+            state['kb_extra'] = str(extra)
+            state_path.write_text(json.dumps(state), encoding='utf-8')
             with patch('orchestrator.chat.host_runner', fake_host), \
-                 patch('orchestrator.chat.workspace_capabilities', return_value=caps), \
+                 patch('orchestrator.chat.ensure_container', return_value='isolated-container'), \
                  patch('orchestrator.runtimes.Runtime.token', return_value='t'):
                 asyncio.run(chat(run, allow_programs=True, fresh_session=True))
                 new, session, resume = calls[0]

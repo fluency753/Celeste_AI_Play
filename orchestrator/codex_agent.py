@@ -411,7 +411,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         if name in {'celeste_bash', 'celeste_write'}:
             return await self._notes_response({'contentItems': [{'type': 'inputText', 'text':
                 '此会话保留了旧编程工具登记，但该入口已停用，本次未执行。请用容器内原生 Shell 和 apply_patch；'
-                f'只读聊天可用 {self._reader_name()} 读取文件；运行程序须先由用户开放程序能力。'}], 'success': False}, origin_turn)
+                f'可用 {self._reader_name()} 读取文件，或用原生 Shell 处理工作区。'}], 'success': False}, origin_turn)
         reload_ticket = (getattr(self.session, 'reload_epoch', 0),
                          getattr(self.session, 'reload_observation_required', False))
         if not isinstance(args, dict):
@@ -699,9 +699,9 @@ class CodexRunner(ModelRecovery, SessionControls):
             print('[codex] 旧会话未登记 ' + '、'.join(absent) + '；继续恢复原会话，未登记的工具不可用', flush=True)
             notes.append('（系统）本会话未登记 ' + '、'.join(absent) + '，恢复后仍不可调用。')
             if available['read'] is None:
-                notes.append('读取文件只能在开放程序能力时用原生 Shell（按 Bash 管理计次）；只读聊天中无法读取文件。')
+                notes.append('可用原生 Shell 读取、查找和处理工作区文件，遵守单次程序时限。')
             else:
-                notes.append(f"列目录可用 {available['read']} 读取目录路径；未登记的查找或搜索工具需在开放程序时用原生 Shell。")
+                notes.append(f"列目录可用 {available['read']} 读取目录路径；未登记的查找或搜索工具可用原生 Shell。")
         self.tool_notice = ''.join(notes)
 
     async def run(self):
@@ -718,19 +718,15 @@ class CodexRunner(ModelRecovery, SessionControls):
             from .button_prompts import notification
             prompt += (("\n\n# 试玩前聊天\n这是新会话，已完成入门资料准备，还没有开始试玩。" if getattr(self, "ready_to_play", False)
                         else "\n\n# 试玩结束后的聊天\n本次试玩已经结束。") +
-                       ("可以按用户要求用 read/原生 Shell/apply_patch 整理工作区，在零网络沙箱里运行程序；"
-                        "若已挂载 /sim，可从显式保存的快照做离线模拟。"
-                        if getattr(self, 'allow_programs', False) else
-                        "现在仅回答用户的消息、复盘试玩，可以用 read/glob/grep 查阅工作区，"
-                        "并按要求用 apply_patch 读取、整理工作区笔记；不运行程序（原生 Shell 不开放）。") +
+                       self._workspace_notice() + '若已挂载 /sim，可从显式保存的快照做离线模拟。' +
                        "不连接游戏，不调用游戏观察、动作或在线模拟工具，不自行开始下一章。用户没有发消息时安静等待。")
             prompt += '\n' + notification('wake_chat', cfg=self.cfg)
         (self.run_dir / ("chat_system_prompt.md" if self.chat_only else "system_prompt.md")).write_text(prompt, encoding="utf-8")
         started = time.monotonic()
         try:
             await self.rpc.start()
-            # 只读聊天与 Claude 一样保留文件编辑（apply_patch → Write 门禁）；原生 Shell 仍由共享门禁拒绝，
-            # 因此沿用可写工作区的权限配置，celeste-read 只作为旧镜像兼容保留。
+            # All Player phases retain writable workspace and native Shell capability.
+            # celeste-read remains an old-image compatibility profile only.
             params = {"cwd": "/workspace", "permissions": "celeste-write",
                       "approvalPolicy": "never", "baseInstructions": prompt, "dynamicTools": await self.tool_specs(),
                       "config": {"model_reasoning_effort": self.manual_effort or self.cfg.effort}, "selectedCapabilityRoots": []}

@@ -169,6 +169,15 @@ class ClaudeRunner(SessionControls):
         self._interrupt_responses = {}
         self._init_controls(disabled=prepare_only, start_paused=start_paused)
         self.action_lock = getattr(session, 'tool_lock', self.action_lock)
+        if session is not None:
+            session.workspace_hook_guard = self._workspace_hook_guard
+
+    def _workspace_hook_guard(self, request):
+        if request.get('session_id') != self.session_id:
+            return '工具所属会话不匹配，本次未执行。'
+        if self.stop_requested or not self.turn_active or self.turn_done.is_set():
+            return '发起工具请求的执行器正在退出或轮次已结束，本次未执行；等待当前会话的新指令。'
+        return None
 
     async def _validate_effort(self, value):
         if value not in self.capabilities.effort_levels:
@@ -213,12 +222,7 @@ class ClaudeRunner(SessionControls):
             self._net_force_first = False
         text = self._turn_message(fallback, rows, opening=opening, retain_fallback=retain_fallback, context=context)
         if self.chat_only:
-            if getattr(self, 'allow_programs', False):
-                text += '\n当前仅聊天，可以按要求修改、运行工作区程序；不连接或操作游戏。'
-            elif workspace_capabilities(self.cfg).workspace_read:
-                text += '\n当前仅聊天，可以按要求读取、整理工作区笔记；不连接或操作游戏。'
-            else:
-                text += '\n当前仅聊天，依据已有对话回复用户；没有工作区文件工具，不连接或操作游戏。'
+            text += '\n当前为聊天阶段，不连接或操作游戏。' + self._workspace_notice()
         elif self.paused:
             text += '\n' + self._paused_notice()
         await self._send(text)
@@ -345,12 +349,9 @@ class ClaudeRunner(SessionControls):
         from .button_prompts import notification
         if self.prepare_only:
             return '\n本次仅准备：按要求完整读取知识库、整理工作区 notes.md 后结束本轮；不调用游戏工具，不开始试玩。'
-        if self.chat_only and getattr(self, 'allow_programs', False):
-            return '\n' + notification('wake_chat', facts=('本次整理工作区：按用户的要求修改、运行工作区里的程序（可以用 Bash），回复用户；'
-                    '不观察或操作游戏，不自行开始试玩。没有用户消息时等待。'), cfg=self.cfg)
         if self.chat_only:
-            reading = '回复用户、读取笔记' if workspace_capabilities(self.cfg).workspace_read else '依据已有对话回复用户，没有工作区文件工具'
-            return '\n' + notification('wake_chat', facts=f'本次仅聊天：{reading}，不观察或操作游戏，不运行规划程序，不自行开始试玩。没有用户消息时等待。', cfg=self.cfg)
+            return '\n' + notification('wake_chat', facts='本次为聊天阶段：' + self._workspace_notice() +
+                    '不观察或操作游戏，不自行开始试玩。没有用户消息时等待。', cfg=self.cfg)
         return ''
 
     def _allowed_tool(self, name: str) -> bool:

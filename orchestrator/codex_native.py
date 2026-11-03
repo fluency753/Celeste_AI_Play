@@ -52,7 +52,7 @@ async def native_tool_hook(runner, data):
             return {'decision': 'allow', 'reason': '', 'context': ''}
         turn = data.get('turn_id')
         def turn_guard():
-            if (not runner.turn_active or runner.turn_done.is_set() or not turn
+            if (getattr(runner, 'stop_requested', False) or not runner.turn_active or runner.turn_done.is_set() or not turn
                     or (runner.turn_id is not None and turn != runner.turn_id)):
                 return '发起此请求的轮次已结束，本次未执行；等待当前轮次的新指令。'
             return None
@@ -67,9 +67,6 @@ async def native_tool_hook(runner, data):
                 if previous['decision'].get('decision') == 'allow':
                     return _denied('此工具调用已经执行完毕，不重复执行；请读取原结果。')
                 return previous['decision']
-            guard = getattr(session, 'program_guard', getattr(session, 'control_guard', None))
-            if previous.get('canonical', name) == 'Bash' and guard and (reason := guard()):
-                return _denied(reason)
             return previous['decision']
         arguments = data.get('tool_input') or {}
         if not isinstance(arguments, dict):

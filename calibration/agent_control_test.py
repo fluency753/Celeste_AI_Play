@@ -153,7 +153,7 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("解释一下", call.args[1]["input"][0]["text"])
         self.assertIn(self.runner._paused_notice(), call.args[1]["input"][0]["text"])
         self.assertIn('可以编辑工作区文件', call.args[1]["input"][0]["text"])
-        self.assertIn('普通工作区程序', call.args[1]["input"][0]["text"])
+        self.assertIn('工作区程序可按要求运行', call.args[1]["input"][0]["text"])
         self.server.call_tool.assert_not_called()
 
     async def test_resume_does_not_count_as_quota_wait(self):
@@ -180,11 +180,12 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("试玩已经结束", result["contentItems"][0]["text"])
         from orchestrator.codex_native import native_tool_hook
         self.metrics.update(tool_calls=0)
-        denied = await native_tool_hook(self.runner, {'token':self.runner.native_token,
+        allowed = await native_tool_hook(self.runner, {'token':self.runner.native_token,
             'hook_event_name':'PreToolUse', 'tool_name':'Bash', 'tool_use_id':'chat-plan',
             'session_id':'thread', 'turn_id':'turn', 'tool_input':{'command':'python planner.py'}})
-        self.assertEqual(denied['decision'], 'deny')
-        self.assertIn('只读聊天', denied['reason'])
+        self.assertEqual(allowed['decision'], 'allow')
+        from orchestrator.codex_native import finish_native_tools
+        finish_native_tools(self.runner)
         self.assertFalse(self.metrics.tools_running)
         self.server.call_tool.assert_not_called()
 

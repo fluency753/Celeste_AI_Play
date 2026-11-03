@@ -400,7 +400,7 @@ class GameSession:
         from .sim_assist import AssistRules
         self.assist_rules = AssistRules.of(cfg)
         self.sim_energy = SimEnergy(run_dir / "sim_energy.json", rules=self.assist_rules) if cfg.sim_assist else None
-        self.programs_since_act = 0         # 探索模式：两次 act 之间运行过几次规划程序（explore_program_runs）
+        self.programs_since_act = 0         # 旧状态字段，兼容保留；不再限制程序次数
         if self.sim_energy:
             self.metrics.update(sim_energy=self.sim_energy.snapshot())
         if self.workspace:
@@ -1153,17 +1153,7 @@ class GameSession:
         return summary
 
     def program_run_denied(self) -> str | None:
-        """探索模式：两次 act 之间运行规划程序（Bash）的次数到了 explore_program_runs 就拒绝；没到就记一次。"""
-        limit = getattr(self.cfg, "explore_program_runs", None)
-        if not limit or getattr(self.cfg, "mode", "speedrun") != "explore":
-            return None
-        if self.programs_since_act >= limit:
-            if getattr(self, 'workspace_paused', lambda: False)():
-                return (f'两次 act 之间最多运行 {limit} 次程序，本次未执行。试玩仍处于用户暂停状态；'
-                        '请用现有文件工具处理，或等待用户继续、调整额度，不为补充次数调用 act。')
-            return (f"两次 act 之间最多运行 {limit} 次规划程序，这一次已经用完。"
-                    "请先用 act 做一次真实尝试，之后可以再运行。")
-        self.programs_since_act += 1
+        """Legacy hook retained for compatibility; gameplay does not limit workspace programs."""
         return None
 
     def act(self, inputs: list[str] | None, thought: str, stop_on: list[str] | None,

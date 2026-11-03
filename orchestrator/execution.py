@@ -6,6 +6,8 @@ Consumers use this contract instead of inferring permissions from placement.
 """
 from dataclasses import dataclass
 
+WORKSPACE_TOOLS = frozenset({'Bash', 'Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep'})
+
 
 @dataclass(frozen=True)
 class WorkspaceCapabilities:
@@ -24,8 +26,8 @@ class WorkspaceCapabilities:
         return self.agent_location == 'container' or self.program_location == 'container'
 
     def validate(self, *, programs=False, sim=False, preparation=False):
-        if sim and not programs:
-            raise ValueError('离线模拟器需要同时开启 --allow-programs')
+        if sim and not self.programs:
+            raise ValueError('离线模拟器需要工作区程序执行通道')
         if programs and not self.programs:
             raise ValueError('工作区程序和离线模拟器需要 container 工具通道；host Claude 会话仅支持聊天')
         if preparation and not self.workspace_read:

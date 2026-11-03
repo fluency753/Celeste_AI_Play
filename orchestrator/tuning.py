@@ -72,8 +72,8 @@ TUNABLES: tuple[Tunable, ...] = (
             "只在限制规划轮次时用", ("speedrun",)),
     Tunable("explore_program_s", "单次规划程序最长", "探索：规划程序", int, 120, 1, 600, "秒",
             "超时就被结束；提示词里的上限跟着变。空着 = 不限时（仍受整次运行的现实时间上限约束）", ("explore",), optional=True),
-    Tunable("explore_program_runs", "两次 act 之间最多运行几次", "探索：规划程序", int, None, 1, 100, "次",
-            "空着 = 不限", ("explore",), optional=True),
+    Tunable("explore_program_runs", "旧程序次数限制（已停用）", "探索：规划程序", int, None, 1, 100, "次",
+            "仅兼容旧配置；不再限制工作区操作", ("explore",), optional=True),
     Tunable("agent_cpus", "自写程序最多用几个 CPU 核", "探索：规划程序", int, HOST_CPUS, 1, HOST_CPUS, "核",
             f"默认是本机的核数（{HOST_CPUS}）；探索模式的提示词写明最多可以用几个核，容器运行方式同时按它限制智能体容器能用的核",
             ("explore",)),
@@ -181,7 +181,7 @@ def catalog() -> list[dict]:
     """给控制台的参数表。"""
     return [{"key": t.key, "label": t.label, "group": t.group, "kind": t.kind.__name__, "default": t.default,
              "low": t.low, "high": t.high, "unit": t.unit, "note": t.note, "modes": list(t.modes),
-             "optional": t.optional} for t in TUNABLES]
+             "optional": t.optional} for t in TUNABLES if t.key != 'explore_program_runs']
 
 
 def seconds_text(seconds: float) -> str:

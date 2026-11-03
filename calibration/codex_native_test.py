@@ -55,17 +55,17 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
         result = await native_tool_hook(self.runner, data)
         self.assertEqual(result['decision'], 'allow')
         self.assertEqual(result['timeout_s'], 3)
-        self.assertEqual(self.charges, ['program'])
+        self.assertEqual(self.charges, [])
         self.assertTrue(self.metrics.tools_running)
         self.assertEqual(await native_tool_hook(self.runner, data), result)
-        self.assertEqual(self.charges, ['program'])
+        self.assertEqual(self.charges, [])
         self.assertEqual(self.metrics.state.tool_calls, 1)
         post = self.data(hook_event_name='PostToolUse')
         await native_tool_hook(self.runner, post)
         await native_tool_hook(self.runner, post)
         self.assertFalse(self.metrics.tools_running)
         self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'deny')
-        self.assertEqual(self.charges, ['program'])
+        self.assertEqual(self.charges, [])
 
     async def test_omitted_timeout_uses_claude_default_and_explicit_timeout_is_capped(self):
         from orchestrator.agent import bash_limits_ms
@@ -94,48 +94,38 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(notes.peek())
             finish_native_tools(self.runner)
 
-    async def test_claude_and_codex_receive_same_pause_or_program_denial(self):
+    async def test_workspace_ignores_old_phase_guard_for_both_transports(self):
         for reason in ('用户已暂停试玩', '停止目标已触发'):
             self.session.program_guard = lambda: reason
             expected = await decide_tool(self.gate, 'Bash', 'test', session=self.session)
             result = await native_tool_hook(self.runner, self.data(tool_use_id=reason))
-            self.assertEqual(result, expected)
+            self.assertEqual(result['decision'], expected['decision'])
+            self.assertEqual(result['decision'], 'allow')
+        finish_native_tools(self.runner)
         self.assertEqual(self.charges, [])
         self.assertEqual(self.metrics.state.tool_calls, 2)
 
-    async def test_lifecycle_and_origin_are_rechecked_after_waiting_for_message_ownership(self):
+    async def test_workspace_ignores_game_budgets_but_rejects_expired_owner(self):
+        self.gate.enabled, self.gate._started, self.gate.bank = True, True, 0
+        self.session.program_guard = lambda: '旧游戏阶段限制'
+        self.assertEqual((await native_tool_hook(self.runner, self.data()))['decision'], 'allow')
+        await native_tool_hook(self.runner, self.data(hook_event_name='PostToolUse'))
         for change in ('stopping', 'turn_changed'):
-            with self.subTest(change=change):
-                self.runner.turn_id = 'turn-a'
-                reason = []
-                self.session.program_guard = lambda: reason[0] if reason else None
-                self.gate.enabled, self.gate._started, self.gate.sim_only, self.gate.bank = True, True, False, 1
-                entered, release = asyncio.Event(), asyncio.Event()
-                async def message(ident):
-                    entered.set()
-                    await release.wait()
-                    return 'message-' + change
-                with patch.object(self.gate, '_message_of', side_effect=message):
-                    pending = asyncio.create_task(native_tool_hook(self.runner, self.data(tool_use_id=change)))
-                    await entered.wait()
-                    if change == 'stopping':
-                        reason.append('正在收尾，不能运行程序')
-                    else:
-                        self.runner.turn_id = 'turn-b'
-                    release.set()
-                    result = await pending
-                self.assertEqual(result['decision'], 'deny')
-                self.assertEqual(self.charges, [])
-                self.assertFalse(self.metrics.tools_running)
+            self.runner.stop_requested = change == 'stopping'
+            self.runner.turn_id = 'turn-b' if change == 'turn_changed' else 'turn-a'
+            result = await native_tool_hook(self.runner, self.data(tool_use_id=change))
+            self.assertEqual(result['decision'], 'deny')
+            self.assertEqual(self.charges, [])
+            self.assertFalse(self.metrics.tools_running)
 
-    async def test_retried_running_call_rechecks_current_turn_and_shared_guard(self):
+    async def test_retried_running_call_rechecks_current_turn_not_game_phase(self):
         data = self.data()
         await native_tool_hook(self.runner, data)
         self.session.program_guard = lambda: '用户已暂停试玩'
-        self.assertIn('暂停', (await native_tool_hook(self.runner, data))['reason'])
+        self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'allow')
         self.runner.turn_id = 'next-turn'
         self.assertIn('轮次', (await native_tool_hook(self.runner, data))['reason'])
-        self.assertEqual(self.charges, ['program'])
+        self.assertEqual(self.charges, [])
         self.assertEqual(self.metrics.state.tool_calls, 1)
         finish_native_tools(self.runner)
 
@@ -156,7 +146,8 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_protocol_adapter_uses_injected_session_for_shared_guard(self):
         self.runner.native_session = SimpleNamespace(cfg=self.cfg, program_guard=lambda: '本次仅聊天')
-        self.assertIn('仅聊天', (await native_tool_hook(self.runner, self.data()))['reason'])
+        self.assertEqual((await native_tool_hook(self.runner, self.data()))['decision'], 'allow')
+        finish_native_tools(self.runner)
         self.assertEqual(self.charges, [])
 
     async def test_execution_transport_cannot_replace_trusted_shell_or_open_pty(self):
@@ -184,18 +175,19 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
         await native_tool_hook(self.runner, {**data, 'hook_event_name':'PostToolUse'})
         self.assertFalse(self.metrics.tools_running)
 
-    async def test_native_view_image_obeys_same_read_round_budget(self):
+    async def test_native_view_image_is_independent_of_game_round_budget(self):
         self.runner.gate = PauseGate(self.metrics, enabled=True, started=True, sim_only=False)
         self.runner.gate.note_tool_use('read-budget', 'read-budget')
         expected = await decide_tool(self.runner.gate, 'Read', 'read-budget', session=self.session)
         data = self.data(tool_name='view_image', tool_input={'path':'/workspace/preview.png'})
         decision = await native_tool_hook(self.runner, data)
         self.assertEqual(decision['decision'], expected['decision'])
-        self.assertEqual(decision['decision'], 'deny')
+        self.assertEqual(decision['decision'], 'allow')
+        finish_native_tools(self.runner)
         self.assertEqual(self.charges, [])
         self.assertFalse(self.metrics.tools_running)
 
-    async def test_all_native_shell_commands_use_shared_bash_policy_in_readonly_chat(self):
+    async def test_native_shell_commands_are_available_in_chat(self):
         self.runner.native_session = SimpleNamespace(cfg=self.cfg,
             program_guard=lambda: '本次仅聊天，不允许运行程序',
             program_run_denied=self.session.program_run_denied)
@@ -206,22 +198,22 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(command=command):
                 data = self.data(tool_use_id=f'read-{index}', tool_input={'command': command})
                 decision = await native_tool_hook(self.runner, data)
-                self.assertEqual(decision['decision'], 'deny')
-                self.assertIn('仅聊天', decision['reason'])
+                self.assertEqual(decision['decision'], 'allow')
                 self.assertEqual(self.runner._native_tool_calls[f'read-{index}']['canonical'], 'Bash')
+        finish_native_tools(self.runner)
         self.assertEqual(self.charges, [])
         self.assertFalse(self.metrics.tools_running)
 
-    async def test_native_cat_charges_program_budget_like_claude_bash(self):
+    async def test_native_cat_does_not_charge_game_program_counter(self):
         data = self.data(tool_input={'command': 'cat /kb/README.md'})
         result = await native_tool_hook(self.runner, data)
         self.assertEqual(result['decision'], 'allow')
-        self.assertEqual(self.charges, ['program'])
+        self.assertEqual(self.charges, [])
         self.assertEqual(self.runner._native_tool_calls['call-a']['canonical'], 'Bash')
         await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
         self.assertFalse(self.metrics.tools_running)
 
-    async def test_unsafe_read_expressions_keep_bash_policy_and_are_rejected_in_readonly_chat(self):
+    async def test_compound_shell_expressions_keep_sandbox_timeout_in_chat(self):
         self.runner.native_session = SimpleNamespace(cfg=self.cfg,
             program_guard=lambda: '本次仅聊天，不允许运行程序',
             program_run_denied=self.session.program_run_denied)
@@ -233,9 +225,9 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(command=command):
                 decision = await native_tool_hook(self.runner,
                     self.data(tool_use_id=f'unsafe-{index}', tool_input={'command': command}))
-                self.assertEqual(decision['decision'], 'deny')
-                self.assertIn('仅聊天', decision['reason'])
+                self.assertEqual(decision['decision'], 'allow')
                 self.assertEqual(self.runner._native_tool_calls[f'unsafe-{index}']['canonical'], 'Bash')
+        finish_native_tools(self.runner)
         self.assertEqual(self.charges, [])
         self.assertFalse(self.metrics.tools_running)
 

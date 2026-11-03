@@ -385,7 +385,7 @@ winget install Gyan.FFmpeg
 | `--no-quota-wait` / `--quota-wait-max-hours` | 关 / 24 | 额度用完时直接停止 / 最多等多少小时 |
 | `--no-net-wait` / `--net-wait-max-hours` | 关 / 24 | 模型连不上时不暂停等待 / 最多等多少小时（见使用说明 4.8） |
 | `--autocompact` | 平台默认 | 上下文自动压缩窗口：`auto` 或 100000～1000000 token |
-| `--tune 名称=值` | 不改 | 修改可调参数（规划回放倍速与每轮时长、解说提醒间隔、单次 act 帧数、Bash 时长、探索模式规划程序的时长与次数、限额预测规则等），可写多个；全部名称与默认值见 [USAGE.md 4.11 节](USAGE.md#411-可调参数--tune) |
+| `--tune 名称=值` | 不改 | 修改可调参数（规划回放倍速与每轮时长、解说提醒间隔、单次 act 帧数、Bash 时长、探索模式规划程序的时长、限额预测规则等），可写多个；全部名称与默认值见 [USAGE.md 4.11 节](USAGE.md#411-可调参数--tune) |
 | `--kb-deny 文件,...` | 全部可读 | 不给智能体看的知识库文件（知识库内的相对路径），见 [USAGE.md 4.12 节](USAGE.md#412-知识库的阅读权限--kb-deny) |
 | `--kb-extra 目录` | 不追加 | 追加本机资料目录（相对路径按仓库根目录算；同名文件覆盖默认版本；续跑沿用），见 [USAGE.md 4.12 节](USAGE.md#412-知识库的阅读权限--kb-deny) |
 | `--no-hud-window` / `--no-hud` | 关 / 关 | 不开 HUD 窗口 / 连 HUD 服务也不开 |
@@ -421,7 +421,7 @@ winget install Gyan.FFmpeg
 | `python -m orchestrator.replay <运行目录>` | 不调用模型，按记录重放一次运行的决策 | `--save`、`--chapter` |
 | `python -m orchestrator.preparation` | 只准备会话（读知识库、建会话，不连游戏） | `--engine`、`--provider`、`--agent`、`--knowledge`、`--model`、`--effort` |
 | `python -m orchestrator.chat --run <运行目录>` | 运行结束后接着和同一个会话聊天（不连游戏） | — |
-| `python -m orchestrator.chat --run <运行目录> --allow-programs` | 整理工作区：Codex（含 host 方式）及 container 方式的 Claude 可在零网络容器沙箱里修改、运行工作区程序，游戏工具仍关闭；host Claude 不支持，会在启动前报错。章节中途中断、游戏保持冻结的运行也能这样唤起（不碰游戏和录像），聊完再 `--resume` 接着玩。加 `--fresh-session` 开接班会话：同一工作区与容器里的全新会话，新建一个运行目录记下它（复制原运行的设置、统计与总结），之后 `--resume <新目录>` 续跑就接着这个新会话 | `--sim`：挂载只读模拟器，用保存快照离线验证；须同时开启 `--allow-programs` |
+| `python -m orchestrator.chat --run <运行目录> --allow-programs` | 兼容旧命令，工作区能力无需此开关：Codex（含 host 方式）及 container 方式的 Claude 可在零网络容器沙箱里修改、运行工作区程序，游戏工具仍关闭；host Claude 没有工作区通道，仅聊天。章节中途中断、游戏保持冻结的运行也能这样唤起（不碰游戏和录像），聊完再 `--resume` 接着玩。加 `--fresh-session` 开接班会话：同一工作区与容器里的全新会话，新建一个运行目录记下它（复制原运行的设置、统计与总结），之后 `--resume <新目录>` 续跑就接着这个新会话 | `--sim`：挂载只读模拟器，用保存快照离线验证；无需 `--allow-programs` |
 | `python -m orchestrator.background -- <主控参数>` | 用独立后台宿主启动主控 | — |
 | `python -m overlay.server` / `python -m overlay.window` | 单独启动 HUD 服务（默认跟随 `runs\latest.txt` 指向的运行）/ HUD 窗口 | `--port`、`--run`；`--url` |
 | `python -m overlay.console` | 控制台（5.3 节） | `--port`、`--browser`、`--restart-service` |

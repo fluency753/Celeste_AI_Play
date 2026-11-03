@@ -43,13 +43,13 @@ def environment_instructions(cfg):
     if not workspace.workspace_read:
         return '当前只有游戏工具，没有文件或程序工具；按观测与工具说明操作。'
     if getattr(cfg, 'engine', 'claude') == 'codex':
-        tools = ('必读计量只认专用 read，Shell 读文件仍按程序计量；暂停或只读聊天仍可查阅文件。'
+        tools = ('必读计量只认专用 read，Shell 读文件不计准备进度；工作区读写和程序始终可用。'
                  '旧会话工具名以恢复通知为准。图像通过当前轮附件送达，核对帧号与标签。')
     else:
-        tools = ('必读计量只认专用 Read，Bash 读文件不计准备进度；暂停或只读聊天仍可查阅文件。'
+        tools = ('必读计量只认专用 Read，Bash 读文件不计准备进度；工作区读写和程序始终可用。'
                  '图像通过工具的图像内容送达。')
     return ('工作目录 /workspace，文件与程序均在断网容器内。' + tools
-            + '程序及游戏操作遵守当前阶段和权限，不另连桥接或服务，不启动子智能体；不输出内部推理或图像编码。')
+            + '程序遵守沙箱和单次时限，游戏操作遵守当前试玩状态与权限；不另连桥接或服务，不启动子智能体；不输出内部推理或图像编码。')
 
 
 def reference_path(cfg, name):

@@ -23,10 +23,10 @@ docker build -t celeste-agent:0.1 agent-container
 ## 与 Claude 共用的部分
 
 - 容器创建、复用、重建、工作区与知识库挂载、CPU 限额沿用 `container.ensure_container`。
-- 原生 Shell、补丁与图像读取钩子进入同一 `/gate`，共用 `tool_gate.decide_tool`、`SessionControls` 的暂停／目标守卫、`PauseGate` 和程序次数检查；游戏工具沿用主控分发与同一业务实现，不另维护 Codex 业务许可表。两边门禁失联或请求无效时均拒绝本次调用。
+- 原生 Shell、补丁与图像读取钩子进入同一 `/gate`，共用 `tool_gate.decide_tool` 的工作区许可，检查请求归属，不受游戏阶段和规划额度限制；游戏工具沿用 `SessionControls` 的暂停／目标守卫、`PauseGate` 与同一业务实现，不另维护 Codex 业务许可表。两边门禁失联或请求无效时均拒绝本次调用。
 - 时长上限都由 `agent.bash_limits_ms` 决定：未写 `timeout_ms` 时用默认值（速通模式 `bash_default_s`），写了则不超过最大值，与 Claude 的 Bash 相同；恢复、目标、游戏操作、录制和房间业务共用已有主控。
 - 原生 Shell 用 `/bin/bash -c` 执行，`set -euo pipefail`、`source`、`[[ ... ]]` 与 Claude 的 Bash 一致；主控自动重试程序沿用原来的 `/bin/sh`。
-- 只读聊天与 Claude 一样保留文件编辑：`apply_patch` 走 Write 门禁并可修改 `/workspace`（例如整理 `notes.md`），原生 Shell 仍被同一门禁拒绝。
+- 所有阶段均保留工作区读写和程序能力，`apply_patch` 可修改 `/workspace`，原生 Shell 可运行程序；仅游戏通道按试玩状态开关。
 - 普通程序的网络、可写范围和凭据隔离边界保持一致。Codex Shell 包装与主控自动重试程序使用同一份 `agent-container/program_sandbox.py`；Claude 内置 Bash 仍由 Claude 的 sandbox-runtime 实现隔离。
 
 Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计量、可靠超时和进程收尾。托管权限及钩子文件归 root，原生程序不能修改。工作区固定标为 untrusted，不加载 agent 可写的项目配置、MCP 或项目钩子，与 Claude 的 restricted 入口对齐。Shell 采用非登录执行；固定版本 CLI 实测将自定义 shell 路径规整为可信解释器，钩子的归一化参数不含原始 shell 字段，不能将此说成钩子拒绝了该字段。升级 CLI 必须复验该边界。内层程序得到稳定 PATH 与临时 HOME；外层 HOME 不设为程序可写目录。App Server 使用独立 owner 标识，关闭时按 PID、启动时间和 UID 核验自身进程树，不用 `killall`，不影响同容器其他进程。
@@ -41,10 +41,10 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 | 图像交付 | 工具结果图像 | 将游戏图像送入同轮原生 image 通道，工具文字不序列化图像 |
 | 知识库阅读核验 | Claude Read 结果中的完整行 | 必须使用 read；完整行正文经同轮 steer 投递，Codex 把它记入历史后，用相同行元数据计量 |
 | 规划轮次分组 | 同一 assistant 消息内工具归为一组 | 当前协议按工具调用归组；不能用整个 turn 冒充一条消息而少计 |
-| 普通文件查询 | Read／Glob／Grep 不属于 Bash | read／glob／grep 走共享 Read／Glob／Grep 门禁，不算程序；原生 Shell（包括 cat、ls、grep）统一按 Bash 检查、计次 |
+| 普通文件查询 | Read／Glob／Grep 不属于 Bash | read／glob／grep 走共享 Read／Glob／Grep 门禁，不算程序；原生 Shell（包括 cat、ls、grep）遵守沙箱与单次时限，不占游玩规划次数 |
 | 订阅认证 | Claude 登录方式 | Codex 设备登录与独立缓存，刷新机制不同 |
 
-这些是协议或产品设施差异，不据此维护不同的游戏规则。新会话登记 `read`、`glob`、`grep`，原生 Shell 和补丁工具继续负责编程；旧 `celeste_bash/write` 返回停用说明，不执行。两边通过 Bash 读取都不计入 KB 阅读进度。只读聊天和用户暂停时这三个工具照常可用，不消耗探索模式的程序次数，也不会因此开放程序运行。
+这些是协议或产品设施差异，不据此维护不同的游戏规则。新会话登记 `read`、`glob`、`grep`，原生 Shell 和补丁工具继续负责编程；旧 `celeste_bash/write` 返回停用说明，不执行。两边通过 Bash 读取都不计入 KB 阅读进度。聊天、暂停和试玩结束后，这三个工具与原生 Shell 均可用，不受游戏阶段或规划额度限制。
 
 笔记提醒与直播解说提醒只放进模型确定会收到的地方：动态工具（含读取失败、投递失败和异常）的结果、新一轮的输入，或原生工具执行时经同轮 steer 投递并在 Codex 记入历史后才确认。原生工具钩子的 `additionalContext` 不再承载提醒；轮次中断导致投递丢弃时，提醒保持待发，直播计时放回。
 

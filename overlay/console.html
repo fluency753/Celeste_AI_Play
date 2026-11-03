@@ -489,9 +489,8 @@
         <div class="row">
           <label class="field">单次最长（秒）<input type="number" id="exploreSeconds" min="1" max="600" step="1" placeholder="120">
             <span class="inline-check"><input type="checkbox" id="exploreUnlimited"> 不限时</span></label>
-          <label class="field">两次 act 之间最多运行（次）<input type="number" id="exploreRuns" min="1" max="100" step="1" placeholder="不限"></label>
         </div>
-        <p class="hint">智能体写的规划程序（Bash）超过时长就被结束；次数用完后要先做一次真实尝试才能再运行。空着用默认值（120 秒、不限次数），提示词里的数字跟着变。勾选"不限时"时程序可以一直运行，只受整次运行的现实时间上限约束。</p>
+        <p class="hint">工作区程序（Bash）超过单次时长就被结束；不限制调用次数。空着用默认值（120 秒），提示词里的数字跟着变。勾选"不限时"时程序可以一直运行，只受整次运行的现实时间上限约束。</p>
       </fieldset>
 
       <fieldset>
@@ -523,7 +522,7 @@
 
         <div class="group-title">规划轮次（只用于速通开模拟器）</div>
         <div class="switches">
-          <label class="switch wide"><span class="text"><b>限制规划轮次</b><span>按章节记账，用完就不能再推演；自动重试随之关闭</span></span><input type="checkbox" id="limitPlanning"></label>
+          <label class="switch wide"><span class="text"><b>规划轮次记账</b><span>按章节记录离线推演轮次，不限制工作区程序；自动重试随之关闭</span></span><input type="checkbox" id="limitPlanning"></label>
         </div>
         <div class="row" style="margin-top:8px">
           <label class="field">一屏大的房间存入几轮<input type="number" id="roundsPerRoom" min="1" max="100" placeholder="3"></label>
@@ -976,7 +975,7 @@ const STATUS = {
   stopped: ["已结束", "var(--muted)"],
 };
 const SHORT = ["序", "1A", "2A", "3A", "4A", "5A", "6A", "7A", "终", "8A", "9"];
-const EXPLORE_KEYS = ["explore_program_s", "explore_program_runs"];   // 在"探索：规划程序"一栏单独显示
+const EXPLORE_KEYS = ["explore_program_s", "explore_program_runs"];   // 时长单独显示；旧次数键仅为隐藏配置兼容
 
 const ui = { options: null, segOff: {}, status: null, control: null, controlRun: null, hud: null, runs: [], models: [],
              chapters: [0], sides: [], mode: "explore", map: "celeste", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "",
@@ -1470,7 +1469,6 @@ function buildTunables() {
   $("exploreSeconds").value = ui.tune.explore_program_s ?? "";
   $("exploreUnlimited").checked = ui.tune.explore_program_s === null;
   $("exploreSeconds").disabled = $("exploreUnlimited").checked;
-  $("exploreRuns").value = ui.tune.explore_program_runs ?? "";
   tuneCount();
 }
 function tuneCount() {
@@ -1494,10 +1492,9 @@ function formOptions() {
     if (t && t.modes.includes(ui.mode)) tune[k] = v;
   }
   if (ui.mode === "explore") {
-    const s = numberOrNull("exploreSeconds"), r = numberOrNull("exploreRuns");
+    const s = numberOrNull("exploreSeconds");
     if ($("exploreUnlimited").checked) tune.explore_program_s = null;      // 不限时
     else if (s != null) tune.explore_program_s = s;
-    if (r != null) tune.explore_program_runs = r;
   }
   const options = {
     engine, provider, model: $("model").value, effort: $("effort").value, agent: $("agent").value.trim(),

@@ -65,7 +65,7 @@ class TunableTests(unittest.TestCase):
         tuning.apply(explore, {"explore_program_s": 40, "explore_program_runs": 2})
         text = play_prompt(explore)
         self.assertIn("每条程序命令（含编译）最多 40 秒", text)
-        self.assertIn("两次 act 之间最多运行 2 次规划程序", text)
+        self.assertNotIn("两次 act 之间最多运行", text)
         tuning.apply(explore, {"explore_program_s": None})
         self.assertIn("单次规划程序不限时长；", play_prompt(explore))
         # 探索模式：act 单次上限默认 600 帧；自写模拟器、搜索程序的推演帧数默认不限，设了才写进提示词
@@ -176,7 +176,8 @@ class TunableTests(unittest.TestCase):
         session.programs_since_act = 0
         self.assertIsNone(session.program_run_denied())
         self.assertIsNone(session.program_run_denied())
-        self.assertIn("最多运行 2 次", session.program_run_denied())
+        self.assertIsNone(session.program_run_denied())
+        self.assertEqual(session.programs_since_act, 0)
         session.cfg.mode = "speedrun"
         self.assertIsNone(session.program_run_denied())              # 速通模式不限
 

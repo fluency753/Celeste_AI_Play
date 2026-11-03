@@ -90,8 +90,13 @@ class WorkspaceCapabilityTests(unittest.TestCase):
                 self.assertFalse(runner._allowed_tool('Read'))
                 self.assertIn('你没有其他工具，也不能执行代码', play_prompt(cfg))
                 runner.chat_only = True
-                self.assertIn('没有工作区文件工具', runner._lifecycle_prompt())
+                self.assertIn('没有工作区工具通道', runner._lifecycle_prompt())
                 self.assertNotIn('读取笔记', runner._lifecycle_prompt())
+                paused = runner._paused_notice()
+                self.assertIn('没有工作区工具通道', paused)
+                self.assertNotIn('可以读写', paused)
+                self.assertNotIn('可以编辑', paused)
+                self.assertNotIn('程序可按要求运行', paused)
                 with self.assertRaisesRegex(ValueError, 'container.*host'):
                     workspace_capabilities(cfg).validate(programs=True)
             finally:

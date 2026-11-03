@@ -1,24 +1,8 @@
-"""规划轮次：按章节记账，限制智能体在每个房间能用模拟器打磨路线的次数。
+"""Game-side planning accounting. Workspace tools always retain their capability.
 
-为什么：不限制时，智能体会在暂停里反复跑模拟器，直到把一个房间打磨到极致（录像里看不到这些尝试）；
-每次暂停只给一轮又太紧，它只敢走稳妥的慢路线。折中是按章节给一个规划轮次的池子：每进入一个没来过的
-房间存入 rounds_per_room 轮（默认 3），在游戏里真的死了补 death_bonus 轮（默认 1），没用完的留给后面的
-房间，换章节清零。规划过程本身由 playback.py 在执行前画进游戏（规划回放），观众能看到试错。
-
-怎么做：容器的托管配置里登记了 PreToolUse 钩子（agent-container/celeste-gate.py），Claude Code 每次调用
-工具之前都会问主控的 /gate。规则：
-- 每个房间存入的轮次按房间大小算：以一屏大小（320×180，1A 第一个房间那么大）存入 rounds_per_room 轮为基准，房间的长、
-  高每变成 room_scale 倍（默认 2），轮次就乘 room_scale，向上取整——即 ceil(rounds_per_room × (宽/320)^k × (高/180)^k)，
-  k = log2(room_scale)；默认 k = 1，与面积成正比（默认 3 轮时，两倍长、两倍高的房间 12 轮）；每个房间至少 rounds_per_room 轮。
-- 准备阶段（游戏工具还没有真正执行过）不受限制。注意不能看 metrics.playing：有准备阶段时，
-  第一次游戏工具的钩子先于它开始计时。
-- 开放了预置模拟器（sim_only）时，只有调用了模拟器的消息占一轮：一条消息的工具全部返回后，这期间 /sim 写出了
-  推演记录（或命令里直接调用了 celeste-sim），playback.py 就调用 charge 扣一轮；同一条消息里并行的几次调用算一轮。
-  其他工具（Read、Write、不调用模拟器的 Bash、observe……）不占轮次。模拟器只能通过 Bash 调用，所以池子空了
-  就拒绝 Bash（拒绝理由交给模型，提示它直接 act），其他工具照常放行。
-- 没有预置模拟器时，act 与 set_effort 以外的工具每条新消息占一轮（按 Claude Code 输出流里 tool_use 所属的消息分组），
-  池子空了就全部拒绝。
-- 续跑时没有准备阶段，池子从续跑后进入的第一个房间开始重新记。
+Offline simulator messages can still be counted by playback. This counter does
+not revoke file/Shell access. Online metered prediction uses its own wallet and
+running-game guard. Non-workspace game tools retain their planning policy.
 """
 from __future__ import annotations
 
@@ -27,6 +11,7 @@ import json
 import math
 import time
 from pathlib import Path
+from .execution import WORKSPACE_TOOLS
 
 SCREEN_W, SCREEN_H = 320, 180     # 一屏：1A 第一个房间的大小，房间轮次的基准
 
@@ -132,7 +117,7 @@ class PauseGate:
         if not self.enabled:
             return ""
         if self.sim_only:
-            return (f"规划轮次：剩余 {self.bank} 轮（这个房间存入了 {self.last_deposit} 轮：按房间大小，一屏大小的房间 "
+            return (f"规划轮次：记账剩余 {self.bank} 轮（不限制工作区；这个房间存入了 {self.last_deposit} 轮：按房间大小，一屏大小的房间 "
                     f"{self.rounds_per_room} 轮，长、高每加倍轮次翻倍，至少 {self.rounds_per_room} 轮；在游戏里死亡 +{self.death_bonus}；没用完的留给本章后面的房间；"
                     f"只有调用模拟器的消息占一轮，同一条消息里并行的几次调用算一轮，其他工具不占轮次）")
         return (f"规划轮次：剩余 {self.bank} 轮（本章每进入一个没来过的房间 +{self.rounds_per_room}，"
@@ -144,10 +129,10 @@ class PauseGate:
                     '请在现有权限内处理用户要求，或等待用户继续、调整额度。不要为补充额度调用 act 或自行恢复试玩。')
         if self.sim_only:
             return (f"本章的规划轮次已经用完（每进入一个没来过的房间按房间大小存入轮次，在游戏里死亡补 "
-                    f"{self.death_bonus} 轮）。模拟器只能通过 Bash 调用，所以 Bash 暂时不能用；Read、Write、Edit、Glob、Grep "
+                    f"{self.death_bonus} 轮）。工作区工具不受轮次限制；Read、Write、Edit、Glob、Grep、Bash "
                     "与 observe 照常可用。请直接调用 act 执行目前最好的路线。")
         return (f"本章的规划轮次已经用完（每进入一个没来过的房间存入 {self.rounds_per_room} 轮，在游戏里死亡补 "
-                f"{self.death_bonus} 轮）。现在请直接调用 act 执行目前最好的路线；act 的 thought 写这一次尝试的意图。")
+                f"{self.death_bonus} 轮）。工作区工具始终可用；游戏操作仍按当前试玩状态执行。")
 
     # ---- 钩子 ----
 
@@ -168,19 +153,10 @@ class PauseGate:
         return None
 
     async def decide(self, tool_name: str, tool_use_id: str | None) -> tuple[bool, str]:
-        if not self.enabled or not self._started or tool_name in EXEMPT:
+        if not self.enabled or not self._started or tool_name in EXEMPT or tool_name in WORKSPACE_TOOLS:
             return True, ""
         if self.sim_only:
-            if tool_name != "Bash":
-                return True, ""         # 只有模拟器占轮次，而模拟器只能通过 Bash 调用
-            # 等输出流读到这次调用：上一条消息的工具结果在它前面，上一轮该扣的已经扣了
-            if tool_use_id:
-                await self._message_of(tool_use_id)
-            if self.bank <= 0:
-                self.metrics.add(pause_denials=1)
-                self.log("[gate] 拒绝 Bash：本章的规划轮次已用完")
-                return False, self.deny_reason()
-            return True, ""
+            return True, ""             # 离线推演仅记账，不收回工作区能力
         message = await self._message_of(tool_use_id) if tool_use_id else None
         message = message or f"?{tool_use_id}"
         if message == self._round_msg:

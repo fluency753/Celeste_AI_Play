@@ -216,7 +216,7 @@ class RunConfig:
     net_retry_attempts: int = 4      # Claude Code 因连接类错误重试到第几次时认定断网（之前的几次交给它自己重试）
     net_probe_s: float = 15.0        # 等待期间多久探测一次能否连上模型接口
     net_wait_cap_s: float | None = None  # 只用于测试：每次网络等待的最长秒数
-    pause_limit: bool = False        # 限制规划轮次（--limit-planning；按章节记账，见 pausegate.py，自动重试关闭）；默认不限制思考与调用
+    pause_limit: bool = False        # 规划轮次记账（--limit-planning；见 pausegate.py，自动重试关闭），不限制工作区程序
     rounds_per_room: int = 3         # 一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次；大房间按 room_scale 放大
     room_scale: float = 2.0          # 房间的长、高每变成这么多倍，存入的轮次乘这么多（2 = 与面积成正比），向上取整
     death_bonus: int = 1             # 在游戏里死亡一次补的规划轮次
@@ -262,7 +262,7 @@ class RunConfig:
     retry_max: int = 5               # 计划文件 retry.max 的上限
     retry_timeout_max_s: float = 60.0  # 计划文件 retry.timeout_s 的上限
     explore_program_s: int | None = 120  # 探索模式：单次规划程序（Bash）最长秒数；None = 不限时
-    explore_program_runs: int | None = None  # 探索模式：两次 act 之间最多运行几次规划程序；None = 不限
+    explore_program_runs: int | None = None  # 旧配置兼容，不再限制工作区操作
     agent_cpus: int = os.cpu_count() or 1   # 探索模式：自写程序最多用几个 CPU 核（写进提示词；容器按它设置 cpuset），默认本机核数
     agent_cpus_effective: int | None = None  # 容器实际能用的核数（apply_cpu_limit 设置，写进提示词）
     explore_act_frames: int = 600    # 探索模式：单次 act 最多推进的帧数

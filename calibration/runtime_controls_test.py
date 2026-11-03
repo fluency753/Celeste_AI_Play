@@ -175,13 +175,13 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.runner._game_guard())
 
     async def test_workspace_chat_allows_programs_but_not_game_tools(self):
-        # 通关后唤起会话整理工作区（chat --allow-programs）：沙箱里的 Bash 放行，游戏工具仍然不可用
+        # 通关后默认唤起会话整理工作区：沙箱里的 Bash 放行，游戏工具仍然不可用
         self.runner.chat_only, self.runner.paused = True, True
-        self.assertIsNotNone(self.runner._program_guard())
+        self.assertIsNone(self.runner._program_guard())
         self.runner.allow_programs = True
         self.assertIsNone(self.runner._program_guard())
         self.assertIn('暂停', self.runner._game_guard())
-        self.assertIn('整理工作区', self.runner._lifecycle_prompt())
+        self.assertIn('聊天阶段', self.runner._lifecycle_prompt())
 
     async def test_pause_waits_for_mcp_call_then_blocks_next_simulation(self):
         entered, release = threading.Event(), threading.Event()
@@ -216,33 +216,76 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.runner.paused = True
         self.cfg.runtime = 'container'
         endpoint = app.router.routes[0].endpoint
-        response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Bash'})))
+        self.runner.turn_active = True
+        response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Bash', 'session_id': self.runner.session_id})))
         self.assertEqual(json.loads(response.body)['decision'], 'allow')
-        gate.decide.assert_awaited_once()
-        response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Read'})))
+        gate.decide.assert_not_awaited()
+        response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Read', 'session_id': self.runner.session_id})))
         self.assertEqual(json.loads(response.body)['decision'], 'allow')
         self.assertTrue(self.runner.paused)
         self.assertIsNone(self.session.program_guard())
         self.assertIn('暂停', self.session.control_guard())
         refused = await self.server.call_tool('simulate', {'candidates': [['60,R']]})
         self.assertIn('暂停', refused.content[0].text)
-        self.assertIn('普通工作区程序', self.runner._paused_notice())
+        self.assertIn('工作区程序可按要求运行', self.runner._paused_notice())
 
-    async def test_pause_program_permission_preserves_terminal_and_transition_guards(self):
+    async def test_workspace_permission_is_independent_of_game_stage_flags(self):
         self.runner.paused = True
         for attribute in ('model_waiting', 'stop_requested', 'goal_finishing', 'pausing'):
             with self.subTest(attribute=attribute):
                 setattr(self.runner, attribute, True)
                 self.runner.allow_programs = True
-                self.assertIsNotNone(self.runner._program_guard())
+                self.assertIsNone(self.runner._program_guard())
                 setattr(self.runner, attribute, False)
         self.session.done = True
-        self.assertIsNotNone(self.runner._program_guard())
+        self.assertIsNone(self.runner._program_guard())
         self.session.done = False
         self.session.goals.stop_motion.set()
-        self.assertIsNotNone(self.runner._program_guard())
+        self.assertIsNone(self.runner._program_guard())
 
-    async def test_failed_model_interrupt_still_waits_for_game_boundary_before_workspace(self):
+    async def test_workspace_hook_checks_owner_without_game_stage_or_budget(self):
+        from orchestrator.pausegate import PauseGate
+        from orchestrator.run import add_gate_route
+        from starlette.applications import Starlette
+        app = Starlette()
+        gate = PauseGate(self.metrics, enabled=True, started=True)
+        add_gate_route(app, gate, session=self.session)
+        endpoint = app.router.routes[0].endpoint
+        self.runner.turn_active = True
+
+        async def request(session_id=None, tool='Bash'):
+            response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={
+                'tool_name': tool, 'tool_use_id': 'workspace-call',
+                'session_id': self.runner.session_id if session_id is None else session_id})))
+            return json.loads(response.body)
+
+        owner = self.session.workspace_hook_guard
+        del self.session.workspace_hook_guard
+        self.assertEqual((await request())['decision'], 'deny')
+        self.session.workspace_hook_guard = owner
+        malformed = await endpoint(SimpleNamespace(json=AsyncMock(return_value=[])))
+        self.assertEqual(json.loads(malformed.body)['decision'], 'deny')
+        for phase in ('prepare_only', 'paused', 'chat_only', 'goal_finishing'):
+            with self.subTest(phase=phase):
+                setattr(self.runner, phase, True)
+                for tool in ('Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'):
+                    self.assertEqual((await request(tool=tool))['decision'], 'allow')
+                setattr(self.runner, phase, False)
+        self.session.done = True
+        self.assertEqual((await request())['decision'], 'allow')
+        self.assertEqual(gate.bank, 0)
+        self.assertEqual(gate.rounds_used, 0)
+        self.assertIn('会话不匹配', (await request('old-session'))['reason'])
+        self.runner.turn_active = False
+        self.assertEqual((await request())['decision'], 'deny')
+        self.runner.turn_active = True
+        self.runner.turn_done.set()
+        self.assertEqual((await request())['decision'], 'deny')
+        self.runner.turn_done.clear()
+        self.runner.stop_requested = True
+        self.assertEqual((await request())['decision'], 'deny')
+
+    async def test_failed_model_interrupt_still_waits_for_game_boundary(self):
         from orchestrator.pausegate import PauseGate
         from orchestrator.tool_gate import decide_tool
         self.runner._interrupt_user = AsyncMock(side_effect=RuntimeError('RPC unavailable'))
@@ -254,8 +297,8 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(.1)
             self.assertNotEqual(self.action(ident)['status'], 'error')
             refused = await decide_tool(gate, 'Bash', 'not-confirmed', session=self.session)
-            self.assertEqual(refused['decision'], 'deny')
-            self.assertIn('正在确认暂停', refused['reason'])
+            self.assertEqual(refused['decision'], 'allow')
+            self.assertIn('暂停', self.runner._game_guard())
         await self.until(lambda: self.action(ident)['status'] == 'error')
         self.assertIn('游戏操作已归还', self.action(ident)['detail'])
         self.assertTrue(self.runner.paused)
@@ -271,8 +314,8 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         await self.runner._next_user_turn('continue')
         text = self.packets[-1]['message']['content']
         self.assertIn('可以编辑工作区文件', text)
-        self.assertIn('原有次数、规划额度及单次时限', text)
-        self.assertIn('不自行继续路线研究', text)
+        self.assertIn('遵守沙箱和单次时限', text)
+        self.assertIn('不自行继续试玩', text)
         self.assertTrue(self.runner.paused)
         count = len(self.packets)
         next_turn = asyncio.create_task(self.runner._next_user_turn('continue'))
