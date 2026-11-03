@@ -572,12 +572,22 @@ def _prompt_preview(cfg) -> dict:
     from orchestrator.personal_prompts import snapshot
     personal = snapshot(cfg)
     guide = {**(guide_document(cfg) if guided else {}), 'personal': personal}
-    full_parts = ([{"label": p['label'], "text": p['text'], "source": p['source'], "sep": '',
-                    "overridden": p['source'] in overridden} for p in guide['sections']] if guided else
-                  [{"label": p.label, "text": p.text, "source": p.source, "sep": p.sep,
-                    "overridden": p.source in overridden} for p in prompt_parts(cfg)])
-    parts = [{"label": p.label, "text": p.text, "source": p.source, "sep": p.sep,
-              "overridden": p.source in overridden} for p in runtime_prompt_parts(cfg, guide=guide)]
+    from orchestrator.interface_sections import PART_NAMES
+
+    def preview_part(label, text, source, sep):
+        section = PART_NAMES.get(label)
+        if section:
+            label = f'interface_zh.md · {section}'
+            if source not in overridden:
+                source = 'interface_zh.md'
+            if source in PART_NAMES:
+                label += '（旧单节覆盖）'
+        return {"label": label, "text": text, "source": source, "sep": sep,
+                "overridden": source in overridden}
+
+    full_parts = ([preview_part(p['label'], p['text'], p['source'], '') for p in guide['sections']] if guided else
+                  [preview_part(p.label, p.text, p.source, p.sep) for p in prompt_parts(cfg)])
+    parts = [preview_part(p.label, p.text, p.source, p.sep) for p in runtime_prompt_parts(cfg, guide=guide)]
     first = None
     from orchestrator.execution import workspace_capabilities
     if cfg.study and workspace_capabilities(cfg).workspace_read:

@@ -36,6 +36,43 @@ class InterfaceSectionsTests(unittest.TestCase):
                 self.assertEqual(doc['repo_text'].count('## '), 1)
                 self.assertTrue(doc['source_path'].endswith('shared/interface_zh.md'))
 
+    def test_preview_uses_merged_source_and_keeps_only_real_legacy_edits_separate(self):
+        from orchestrator.prompt_guide import guide_document
+        before = guide_document(self.cfg)
+        preview = console_api._prompt_preview(self.cfg)
+        act = next(p for p in preview['guide_parts'] if p['label'] == 'interface_zh.md · act')
+        self.assertEqual(act['source'], 'interface_zh.md')
+        self.assertFalse(act['overridden'])
+        self.assertEqual(console_api.prompt_read(act['source'])['text'], self.template)
+        self.assertFalse(any(p['label'].startswith('tool_') for p in preview['guide_parts']))
+        self.assertEqual(guide_document(self.cfg), before)
+        self.assertIn('tool_act_zh.md', [p['source'] for p in before['sections']])
+
+        (self.overrides / 'tool_act_zh.md').write_text('旧单节修改。', encoding='utf-8')
+        edited = console_api._prompt_preview(self.cfg)
+        act = next(p for p in edited['guide_parts'] if p['label'].startswith('interface_zh.md · act'))
+        self.assertEqual(act['label'], 'interface_zh.md · act（旧单节覆盖）')
+        self.assertEqual(act['source'], 'tool_act_zh.md')
+        self.assertTrue(act['overridden'])
+        self.assertEqual(console_api.prompt_read(act['source'])['text'], '旧单节修改。')
+
+        (self.overrides / 'tool_act_zh.md').unlink()
+        (self.overrides / 'interface_zh.md').write_text(self.template + '\n', encoding='utf-8')
+        merged = console_api._prompt_preview(self.cfg)
+        act = next(p for p in merged['guide_parts'] if p['label'] == 'interface_zh.md · act')
+        self.assertEqual(act['source'], 'interface_zh.md')
+        self.assertTrue(act['overridden'])
+
+    def test_host_preview_uses_merged_labels_and_preserves_runtime_text(self):
+        from dataclasses import replace
+        from orchestrator.startup_prompt import runtime_prompt
+        host = replace(self.cfg, engine='claude', runtime='host')
+        preview = console_api._prompt_preview(host)
+        self.assertEqual(preview['text'], runtime_prompt(host))
+        self.assertEqual(preview['guide_parts'], [])
+        act = next(p for p in preview['parts'] if p['label'] == 'interface_zh.md · act')
+        self.assertEqual(act['source'], 'interface_zh.md')
+
     def test_merged_and_single_section_overrides_have_explicit_precedence(self):
         original = prompting.repo_part_text('tool_observe_zh.md')
         merged = self.template.replace(original, original + '合并文件的观测说明。\n')
