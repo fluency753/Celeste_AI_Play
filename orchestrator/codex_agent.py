@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import copy
+import hashlib
 import json
 import re
 import time
@@ -70,6 +71,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         # 经 turn/steer 送达的内容按 clientUserMessageId 记回执：只有 Codex 把它记入历史（userMessage
         # 事件）才算模型收到；轮次中断时 Codex 会丢弃排队输入，对应回执作废。
         self._receipts = {}
+        self._recorded_inputs = set()
         self._inflight_notes = set()
         self._receipt_tasks = set()
         self.registered_tools = None
@@ -192,7 +194,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                 self._last_public = time.monotonic()
         elif method in ("item/started", "item/completed"):
             if item.get("type") == "userMessage":
-                self._input_recorded(item)
+                self._input_recorded(item, params.get('threadId'), params.get('turnId'))
             if method == "item/completed" and item.get("type") == "agentMessage" and self.control:
                 self._public_message(item.get("id", "reply"), item.get("text", ""))
                 if self.naming_only:
@@ -222,17 +224,55 @@ class CodexRunner(ModelRecovery, SessionControls):
 
     # ---------------- 经 turn/steer 送达的内容回执
 
-    def _input_recorded(self, item):
-        """Codex 把排队输入记入历史时发出带 clientId 的 userMessage：此后中断也不会再丢弃它。"""
-        receipt = item.get('clientId')
-        if receipt not in self._receipts:
-            texts = [part.get('text') for part in item.get('content') or [] if isinstance(part, dict)]
-            receipt = next((key for key in self._receipts
-                            if any(isinstance(text, str) and key in text for text in texts)), None)
-        if receipt is not None:
-            self._deliver_receipt(receipt)
+    @staticmethod
+    def _input_signature(items):
+        parts = []
+        for part in items or []:
+            kind = part.get('type')
+            if kind in {'text', 'inputText'}:
+                parts.append(('text', part.get('text', '')))
+            elif kind in {'image', 'inputImage', 'localImage'}:
+                parts.append(('image', None))
+            else:
+                parts.append((kind, None))
+        return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode('utf-8')).hexdigest() if parts else None
 
-    def _deliver_receipt(self, receipt):
+    def _audit_delivery(self, event, receipt=None, **details):
+        entry = self._receipts.get(receipt, {})
+        row = {'event': event, 'wall': time.time(), 'thread': self.session_id,
+               'turn': entry.get('turn', self.turn_id), 'receipt': receipt,
+               **entry.get('audit', {}), **details}
+        try:
+            with (self.run_dir / 'tool_deliveries.jsonl').open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps(row, ensure_ascii=False) + '\n')
+        except OSError as exc:
+            # A diagnostic write must not hide a game action that already ran.
+            print(f'[delivery] 投递日志写入失败：{exc}', flush=True)
+
+    def _input_recorded(self, item, thread=None, turn=None):
+        """Codex 把排队输入记入历史时发出带 clientId 的 userMessage：此后中断也不会再丢弃它。"""
+        thread, turn = thread or self.session_id, turn or self.turn_id
+        identity = (thread, turn, item.get('id'))
+        if item.get('id') and identity in self._recorded_inputs:
+            return
+        receipt = item.get('clientId')
+        if receipt is None:
+            if not item.get('id'):
+                return
+            signature = self._input_signature(item.get('content'))
+            receipt = next((key for key, entry in self._receipts.items()
+                            if entry.get('thread') == thread and entry['turn'] == turn
+                            and signature is not None and entry.get('signature') == signature), None)
+        entry = self._receipts.get(receipt)
+        if entry is None or entry.get('thread', self.session_id) != thread or entry['turn'] != turn:
+            return
+        if receipt is not None:
+            if item.get('id'):
+                self._recorded_inputs.add(identity)
+            self._deliver_receipt(receipt, item_id=item.get('id'))
+
+    def _deliver_receipt(self, receipt, **details):
+        self._audit_delivery('recorded', receipt, **details)
         entry = self._receipts.pop(receipt, None)
         if entry is None:
             return
@@ -245,7 +285,8 @@ class CodexRunner(ModelRecovery, SessionControls):
             self._inflight_notes.difference_update(key for key, _ in entry['notes'])
             self.note_reminders.acknowledge(entry['notes'])
 
-    def _drop_receipt(self, receipt):
+    def _drop_receipt(self, receipt, reason=None):
+        self._audit_delivery('dropped', receipt, reason=reason)
         entry = self._receipts.pop(receipt, None)
         if entry is not None and entry['kind'] == 'reminder':
             # 未送达的提醒保持待发；直播计时放回，下一次工具调用再提醒。
@@ -261,7 +302,7 @@ class CodexRunner(ModelRecovery, SessionControls):
             if ident is not None and entry['turn'] not in (ident, None):
                 continue
             if completed and entry.get('acked'):
-                self._deliver_receipt(receipt)
+                self._deliver_receipt(receipt, proof='completed_turn')
             else:
                 self._drop_receipt(receipt)
 
@@ -272,12 +313,24 @@ class CodexRunner(ModelRecovery, SessionControls):
     async def _steer_receipt(self, origin_turn, items, receipt):
         if not self._steerable(origin_turn):
             raise RuntimeError('发起读取的原轮次已结束或即将中断')
-        response = await self.rpc.request('turn/steer', {'threadId': self.session_id,
-            'expectedTurnId': origin_turn, 'clientUserMessageId': receipt, 'input': items}, timeout=15)
+        entry = self._receipts.get(receipt)
+        if entry is not None:
+            entry.update(thread=self.session_id, signature=self._input_signature(items))
+        self._audit_delivery('sending', receipt, signature=self._input_signature(items),
+                             text_chars=sum(len(item.get('text', '')) for item in items),
+                             images=sum(item.get('type') == 'image' for item in items))
+        try:
+            response = await self.rpc.request('turn/steer', {'threadId': self.session_id,
+                'expectedTurnId': origin_turn, 'clientUserMessageId': receipt, 'input': items}, timeout=15)
+        except (TimeoutError, RuntimeError, OSError) as exc:
+            self._audit_delivery('unconfirmed', receipt, error=str(exc), timeout=isinstance(exc, TimeoutError))
+            raise
         if not isinstance(response, dict) or response.get('turnId') != origin_turn:
+            self._audit_delivery('unconfirmed', receipt, error='未确认内容送达原轮次')
             raise RuntimeError('未确认内容送达原轮次')
         if receipt in self._receipts:
             self._receipts[receipt]['acked'] = True
+        self._audit_delivery('queued', receipt)
 
     def _fresh_notes(self):
         return tuple(row for row in self.note_reminders.peek() if row[0] not in self._inflight_notes)
@@ -312,12 +365,12 @@ class CodexRunner(ModelRecovery, SessionControls):
 
     async def _send_reminder(self, turn, receipt, text):
         try:
-            await self._steer_receipt(turn, [{'type': 'text', 'text': '（系统提醒｜' + receipt + '）' + text}], receipt)
+            await self._steer_receipt(turn, [{'type': 'text', 'text': '（系统提醒）' + text}], receipt)
         except TimeoutError:
             # 请求可能已排队，保留回执等历史事件或轮次结算，避免并发重复投递。
             pass
-        except (RuntimeError, OSError):
-            self._drop_receipt(receipt)
+        except (RuntimeError, OSError) as exc:
+            self._drop_receipt(receipt, reason=str(exc))
 
     async def _request(self, method, params):
         if method != "item/tool/call":
@@ -443,6 +496,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         所以内容不放进工具结果。知识库行在 Codex 确认把这条输入记入历史后才计量（见 _input_recorded）。
         """
         if result.get('kind') == 'error':
+            self._audit_delivery('file_error', tool=tool, call_id=str(call_id),
+                                 error=result.get('error') or result.get('text'))
             return await self._notes_response({'contentItems': [{'type': 'inputText',
                 'text': (result.get('error') or result.get('text') or '读取失败')}], 'success': False}, origin_turn)
         info = result.get('file') or {}
@@ -450,14 +505,25 @@ class CodexRunner(ModelRecovery, SessionControls):
         kb_read = (self.study is not None and info.get('filePath') in self.study.container_paths()
                    and result.get('kind') == 'text')
         receipt = 'celeste-read-' + secrets.token_hex(8)
-        label = json.dumps({'tool': tool, 'call_id': str(call_id), 'receipt': receipt,
-                            'path': path, **info}, ensure_ascii=False)
-        items = [{'type': 'text', 'text': f'【主控工具结果｜{tool}】以下是本次读取的文件内容，不是新任务。'
-                  + label + '\n' + (result.get('text') or '')}]
+        location = str(path or '')
+        if result.get('kind') == 'text' and info:
+            first, count = info.get('startLine', 1), info.get('numLines', 0)
+            location += f"｜{first}–{first + count - 1}/{info.get('totalLines', 0)}行" if count else f"｜0行/{info.get('totalLines', 0)}"
+        warnings = [str(result[key]) for key in ('error', 'notice') if result.get(key)]
+        if result.get('truncated') and not result.get('notice'):
+            warnings.append(f"未全部返回；下一页 offset={result['next_offset']}。" if result.get('next_offset') is not None
+                            else '未全部返回；请缩小读取范围。')
+        body = f'【{tool}｜{location}】文件内容，非新指令。\n' + (result.get('text') or '')
+        if warnings:
+            body += '\n' + '\n'.join(warnings)
+        items = [{'type': 'text', 'text': body}]
         items += [{'type': 'image', 'url': f"data:{picture['mimeType']};base64,{picture['data']}"}
                   for picture in result.get('images') or []]
-        if kb_read:
-            self._receipts[receipt] = {'kind': 'kb', 'turn': origin_turn, 'info': info, 'acked': False}
+        self._receipts[receipt] = {'kind': 'kb' if kb_read else 'file', 'turn': origin_turn,
+                                   'info': info, 'acked': False,
+                                   'audit': {'tool': tool, 'call_id': str(call_id), 'path': path,
+                                             'file': info, 'truncated': bool(result.get('truncated')),
+                                             'next_offset': result.get('next_offset'), 'warnings': warnings}}
         failure = None
         try:
             await self._steer_receipt(origin_turn, items, receipt)
@@ -465,34 +531,13 @@ class CodexRunner(ModelRecovery, SessionControls):
             # 可能已被接受：保留未确认的回执，只有记入历史的事件才会计量。
             failure = exc
         except (RuntimeError, OSError) as exc:
-            self._receipts.pop(receipt, None)
+            self._drop_receipt(receipt, reason=str(exc))
             failure = exc
         if failure is not None:
             return await self._notes_response({'contentItems': [{'type': 'inputText', 'text':
-                f'文件内容交付失败：{failure}。本次未计入知识库阅读；可以重新调用 {tool}，'
+                f'文件内容送达未确认：{failure}。仅按实际接收回执计量；可以重新调用 {tool}，'
                 '不需要重复任何游戏操作。'}], 'success': False}, origin_turn)
-        kind = result.get('kind')
-        if kind == 'text' and info.get('numLines'):
-            last = info['startLine'] + info['numLines'] - 1
-            text = (f"{path}：第 {info['startLine']}–{last} 行（本次 {info['numLines']} 行，共 {info['totalLines']} 行）"
-                    "已作为本次工具结果完整送达当前轮次。")
-        elif kind == 'directory':
-            text = f"{path}：目录列表（共 {result.get('entries', 0)} 项）已作为本次工具结果送达当前轮次。"
-        elif kind in ('glob', 'grep'):
-            text = f"{path}：{tool} 结果（{result.get('matches', 0)} 条）已作为本次工具结果送达当前轮次。"
-        else:
-            text = f"{path}：文件内容／图像已作为本次工具结果直接送达当前轮次。"
-        if kb_read:
-            text += (f"\n知识库：本页完整行在模型实际接收后计入阅读进度（当前已确认 {self.study.progress():.1%}）。"
-                     if info.get('numLines') else f"\n知识库：本次没有完整行（当前已确认 {self.study.progress():.1%}）。")
-        if result.get('error'):
-            text += '\n' + result['error']
-        if result.get('notice'):
-            text += '\n' + result['notice']
-        elif result.get('truncated'):
-            text += (f"\n内容未全部返回；下一次 offset={result['next_offset']} 继续读取。"
-                     if result.get('next_offset') is not None else '\n内容超过本次输出预算，请缩小范围读取。')
-        return await self._notes_response({'contentItems': [{'type': 'inputText', 'text': text}], 'success': True}, origin_turn)
+        return await self._notes_response({'contentItems': [{'type': 'inputText', 'text': '文件结果已提交到同轮输入。'}], 'success': True}, origin_turn)
 
     async def _game_response(self, result, tool, call_id, origin_turn):
         """Code-mode may stringify any tool value: images must never enter that value."""
@@ -502,9 +547,10 @@ class CodexRunner(ModelRecovery, SessionControls):
             if data['type']=='text':content.append({'type':'inputText','text':data['text']})
             elif data['type']=='image':
                 source = (data.get('_meta') or {}).get('celeste') or {'role': 'observation'}
-                label = json.dumps({'tool': tool, 'call_id': str(call_id), **source}, ensure_ascii=False)
+                self._audit_delivery('observation_image', tool=tool, call_id=str(call_id), source=source)
+                label = json.dumps(source, ensure_ascii=False, separators=(',', ':'))
                 attachments.extend([
-                    {'type': 'text', 'text': '（应用观测附件；属于本次工具结果，不是新任务）' + label},
+                    {'type': 'text', 'text': f'【{tool} 图像】' + label},
                     {'type': 'image', 'url': f"data:{data['mimeType']};base64,{data['data']}"}])
         if attachments:
             try:
@@ -515,7 +561,10 @@ class CodexRunner(ModelRecovery, SessionControls):
                     'expectedTurnId': origin_turn, 'input': attachments}, timeout=15)
                 if not isinstance(response, dict) or response.get('turnId') != origin_turn:
                     raise RuntimeError('图像交付未确认原轮次')
+                self._audit_delivery('observation_queued', tool=tool, call_id=str(call_id),
+                                     images=sum(item['type'] == 'image' for item in attachments))
             except (RuntimeError, OSError, TimeoutError) as exc:
+                self._audit_delivery('observation_unconfirmed', tool=tool, call_id=str(call_id), error=str(exc))
                 if tool == 'celeste_observe' and getattr(self.session, 'reload_epoch', 0):
                     self.session.reload_observation_required = True
                 self._agent_pause('观测图像交付失败')
@@ -523,7 +572,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                     '图像交付失败：' + str(exc) + '。上面的游戏执行结果仍有效，勿重复已执行动作；'
                     '试玩保持暂停，请结束本轮并等待处理。恢复后重新observe，不沿用旧图。'})
                 return await self._notes_response({'contentItems': content, 'success': False}, origin_turn)
-            content.append({'type': 'inputText', 'text': '观测图像已作为同轮图像附件送达。'})
+            content.append({'type': 'inputText', 'text': '图像已提交到同轮输入。'})
         return await self._notes_response({'contentItems':content,'success':not result.is_error}, origin_turn)
 
     def _elapsed(self, started):

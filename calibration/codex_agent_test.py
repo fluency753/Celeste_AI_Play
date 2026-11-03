@@ -21,6 +21,7 @@ from orchestrator.kb_study import KbStudy
 from orchestrator.metrics import Metrics
 from orchestrator.codex_native import native_tool_hook
 from orchestrator.modes import game_tools
+from orchestrator import kb_access  # Import before temporary config roots in legacy preparation fixtures.
 
 
 def response_text(result):
@@ -182,7 +183,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['success'])
         # The steer acknowledgement only queues the input; it can still be dropped.
         self.assertFalse(self.study.read['README.md'])
-        self.assertIn('模型实际接收后计入', response_text(result))
+        self.assertIn('已提交', response_text(result))
         self.record_steer(steered[0])
         self.assertEqual(self.study.read['README.md'], {1})
         self.record_steer(steered[0])
@@ -198,6 +199,116 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner._event('turn/completed', {'turn': {'id': 'turn', 'status': 'interrupted'}})
         self.assertFalse(self.study.read['README.md'])
         self.assertEqual(self.runner._receipts, {})
+
+    async def test_file_wrapper_keeps_source_and_moves_internal_ids_to_delivery_log(self):
+        await self.read(1, record=False)
+        params = self.steer_params()
+        text = params['input'][0]['text']
+        self.assertEqual(text.count('/kb/README.md'), 1)
+        self.assertIn('1–1/2行', text)
+        self.assertIn('\none', text)
+        self.assertNotIn(params['clientUserMessageId'], text)
+        self.assertNotIn('filePath', text)
+        self.assertFalse(self.study.read['README.md'])
+        self.record_steer(params)
+        events = [json.loads(line) for line in (self.root/'tool_deliveries.jsonl').read_text().splitlines()]
+        recorded = next(row for row in events if row['event'] == 'recorded')
+        self.assertEqual(recorded['receipt'], params['clientUserMessageId'])
+        self.assertEqual(recorded['call_id'], 'read-1')
+        self.assertEqual(recorded['file'], self.file_result()['file'])
+        self.assertNotIn('one', recorded)
+
+    async def test_missing_client_id_matches_full_content_once_per_input_event(self):
+        await self.read(1, record=False)
+        first = self.steer_params()
+        await self.read(1, record=False)
+        second = self.steer_params()
+        self.assertEqual(first['input'], second['input'])
+        self.assertEqual(len(self.runner._receipts), 2)
+        def emit(method, ident):
+            self.runner._event(method, {'threadId': 'session', 'turnId': 'turn', 'item': {
+                'type': 'userMessage', 'id': ident, 'clientId': None, 'content': first['input']}})
+        emit('item/started', 'first-input')
+        self.assertEqual(len(self.runner._receipts), 1)
+        emit('item/completed', 'first-input')
+        self.assertEqual(len(self.runner._receipts), 1)
+        emit('item/completed', 'second-input')
+        self.assertEqual(self.runner._receipts, {})
+        self.assertEqual(self.study.read['README.md'], {1})
+
+    async def test_wrong_origin_partial_content_and_assistant_echo_are_not_receipts(self):
+        await self.read(1, record=False)
+        params = self.steer_params()
+        for thread, turn in (('other-thread', 'turn'), ('session', 'old-turn')):
+            self.runner._event('item/completed', {'threadId': thread, 'turnId': turn, 'item': {
+                'type': 'userMessage', 'id': thread+turn, 'clientId': params['clientUserMessageId'],
+                'content': params['input']}})
+        for kind, content, client in (
+                ('userMessage', [{'type': 'text', 'text': params['input'][0]['text'][:-1]}], None),
+                ('agentMessage', params['input'], None),
+                ('userMessage', params['input'], 'unknown-client')):
+            self.runner._event('item/completed', {'threadId': 'session', 'turnId': 'turn', 'item': {
+                'type': kind, 'id': kind+str(client), 'clientId': client, 'content': content}})
+        self.assertFalse(self.study.read['README.md'])
+        self.record_steer(params)
+        self.assertEqual(self.study.read['README.md'], {1})
+
+    async def test_timeout_does_not_count_but_late_recorded_input_still_can(self):
+        self.runner.rpc.request = AsyncMock(side_effect=TimeoutError('late reply'))
+        with patch('orchestrator.codex_agent.read_file', return_value=self.file_result()):
+            result = await self.runner._request('item/tool/call', {'callId': 'timed-read',
+                'tool': 'read', 'arguments': {'file_path': '/kb/README.md'}})
+        self.assertFalse(result['success'])
+        self.assertIn('送达未确认', response_text(result))
+        self.assertFalse(self.study.read['README.md'])
+        self.record_steer()
+        self.assertEqual(self.study.read['README.md'], {1})
+        events = [json.loads(line)['event'] for line in (self.root/'tool_deliveries.jsonl').read_text().splitlines()]
+        self.assertEqual(events, ['sending', 'unconfirmed', 'recorded'])
+
+    async def test_truncation_warning_is_in_actual_input_even_when_tool_ack_is_hidden(self):
+        page = self.file_result(text='partial')
+        page.update(truncated=True, next_offset=2, notice='未返回全部内容，下一页 offset=2。')
+        with patch('orchestrator.codex_agent.read_file', return_value=page):
+            result = await self.runner._request('item/tool/call', {'callId': 'paged-read',
+                'tool': 'read', 'arguments': {'file_path': '/kb/README.md'}})
+        text = self.steer_params()['input'][0]['text']
+        self.assertIn('partial', text)
+        self.assertEqual(text.count('offset=2'), 1)
+        self.assertNotIn('offset=2', response_text(result))
+        self.assertFalse(self.study.read['README.md'])
+
+    async def test_game_image_ids_are_logged_without_base64_and_caption_keeps_frame(self):
+        self.runner.study = None
+        self.server.call_tool.return_value = CallToolResult.model_validate({'content': [
+            {'type': 'text', 'text': 'observed'},
+            {'type': 'image', 'mimeType': 'image/png', 'data': 'AAAA',
+             '_meta': {'celeste': {'role': 'screenshot', 'frame': 42, 'room': '1'}}}]})
+        result = await self.runner._request('item/tool/call', {'callId': 'long-game-call-id',
+            'tool': 'celeste_observe', 'arguments': {}})
+        self.assertTrue(result['success'])
+        attachment = self.runner.rpc.request.call_args.args[1]['input']
+        self.assertIn('"frame":42', attachment[0]['text'])
+        self.assertIn('screenshot', attachment[0]['text'])
+        self.assertNotIn('long-game-call-id', attachment[0]['text'])
+        self.assertEqual(attachment[1]['type'], 'image')
+        log = (self.root/'tool_deliveries.jsonl').read_text()
+        self.assertIn('long-game-call-id', log)
+        self.assertNotIn('AAAA', log)
+
+    async def test_delivery_log_failure_preserves_already_executed_game_result(self):
+        self.runner.study = None
+        original = Path.open
+        def opened(path, *args, **kwargs):
+            if path.name == 'tool_deliveries.jsonl':
+                raise OSError('audit disk failure')
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'open', opened):
+            result = await self.runner._request('item/tool/call', {'callId': 'executed',
+                'tool': 'celeste_observe', 'arguments': {}})
+        self.assertTrue(result['success'])
+        self.assertEqual(result['contentItems'][0]['text'], 'observed')
+        self.server.call_tool.assert_awaited_once()
         self.assertEqual(self.metrics.state.kb_progress, 0.0)
 
     async def test_kb_steer_on_normally_completed_turn_counts_without_item_event(self):
@@ -212,7 +323,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             result = await self.runner._request('item/tool/call', {'callId': 'pausing-kb',
                 'tool': 'read', 'arguments': {'file_path': '/kb/README.md'}})
         self.assertFalse(result['success'])
-        self.assertIn('交付失败', response_text(result))
+        self.assertIn('送达未确认', response_text(result))
         self.runner.rpc.request.assert_not_awaited()
         self.assertEqual(self.runner._receipts, {})
 
@@ -267,11 +378,11 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('row 1 x', text)
         # The hint follows the rows actually delivered within the page budget.
         self.assertLess(page['next_offset'], 2001)
-        self.assertIn(f"offset={page['next_offset']}", text)
-        self.assertEqual(text.count('offset='), 1)
+        self.assertIn(f"offset={page['next_offset']}", self.steer_params()['input'][0]['text'])
+        self.assertEqual(self.steer_params()['input'][0]['text'].count('offset='), 1)
         params = self.steer_params()
         self.assertIn(page['text'], params['input'][0]['text'])
-        self.assertTrue(params['input'][0]['text'].rstrip().endswith('x' * 60))
+        self.assertIn(page['text'], params['input'][0]['text'])
         self.assertFalse(self.study.read['README.md'])
         self.record_steer(params)
         self.assertFalse(self.study.read['README.md'])
@@ -467,7 +578,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             result = await self.runner._request('item/tool/call', {'callId': 'ls', 'tool': 'read',
                 'arguments': {'file_path': '/workspace'}})
         self.assertTrue(result['success'])
-        self.assertIn('目录列表', response_text(result))
+        self.assertIn('目录 /workspace', self.steer_params()['input'][0]['text'])
         self.assertEqual(charges, [])
         self.assertEqual([call.args[0] for call in self.runner.gate.decide.await_args_list], ['Glob', 'Grep', 'Read'])
         # The native shell is still a program in the same chat.
@@ -651,7 +762,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(worker.call_args.args[0], 'container')
             self.assertEqual(worker.call_args.args[1]['file_path'], '/kb/README.md')
             self.assertEqual(worker.call_args.args[1]['_tool_names']['read'], 'celeste_read')
-            self.assertIn('"tool": "' + name + '"', self.steer_params()['input'][0]['text'])
+            self.assertTrue(self.steer_params()['input'][0]['text'].startswith('【' + name + '｜'))
             self.record_steer()
             self.assertEqual(self.study.read['README.md'], {1})
         self.assertEqual(self.metrics.state.tool_calls - before, 2)
@@ -1124,6 +1235,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             load_preparation(str(self.root), self.cfg, self.study)
 
     def test_explore_profile_isolates_kb_workspace_and_rejects_old_session(self):
+        self.cfg.agent = 'native-explore-' + self.root.name
         old_workspace = self.cfg.workspace_dir
         self.cfg.knowledge_profile = "explore"
         self.assertNotEqual(old_workspace, self.cfg.workspace_dir)
