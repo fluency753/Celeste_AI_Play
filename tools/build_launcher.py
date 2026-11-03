@@ -1,10 +1,11 @@
-"""构建控制台的启动器 CelesteAIConsole.exe（Windows 64 位，放在仓库根目录）。
+"""构建控制台或 HUD 的启动器（Windows 64 位，放在仓库根目录）。
 
 不需要 Visual Studio：用 pip 安装的 zig 交叉编译 tools/launcher/launcher.c，图标由 Pillow 画出（夜色底、一条往上爬的
 红色路线，与控制台的章节路线一致）。启动器只负责用 .venv 的 Python 打开 `python -m overlay.console`，不含控制台代码，
 所以只有改了 launcher.c / launcher.rc 或图标时才需要重新构建：
 
     python tools/build_launcher.py            # 输出 CelesteAIConsole.exe
+    python tools/build_launcher.py --target hud # 输出 CelesteAIHud.exe
 """
 from __future__ import annotations
 
@@ -17,7 +18,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "tools" / "launcher"
 BUILD = REPO_ROOT / "build" / "launcher"
-OUTPUT = REPO_ROOT / "CelesteAIConsole.exe"
 
 NIGHT = (20, 23, 41, 255)        # 控制台底色 #141729
 RED = (224, 71, 91, 255)         # #E0475B
@@ -45,28 +45,37 @@ def draw_icon(path: Path) -> None:
     image.save(path, format="ICO", sizes=sizes)
 
 
-def zig(*args: str) -> None:
+def zig(*args: str, cwd=BUILD) -> None:
     try:
         import ziglang  # noqa: F401
     except ImportError:
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ziglang"], check=True)
-    subprocess.run([sys.executable, "-m", "ziglang", *args], check=True, cwd=BUILD)
+    subprocess.run([sys.executable, "-m", "ziglang", *args], check=True, cwd=cwd)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", default=str(OUTPUT), help="输出路径（默认仓库根目录的 CelesteAIConsole.exe）")
+    ap.add_argument('--target', choices=('console', 'hud'), default='console', help='构建控制台或独立 HUD 启动器')
+    ap.add_argument("--out", help="输出路径（默认仓库根目录对应的启动器）")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    BUILD.mkdir(parents=True, exist_ok=True)
-    for name in ("launcher.c", "launcher.rc", "launcher.manifest"):
-        shutil.copy2(SRC / name, BUILD / name)
-    draw_icon(BUILD / "icon.ico")
-    exe = BUILD / "CelesteAIConsole.exe"
+    output_name = 'CelesteAIHud' if args.target == 'hud' else 'CelesteAIConsole'
+    build = BUILD / args.target
+    build.mkdir(parents=True, exist_ok=True)
+    for filename in ("launcher.c", "launcher.rc", "launcher.manifest"):
+        contents = (SRC / filename).read_bytes()
+        if args.target == 'hud':
+            if filename.endswith(('.c', '.rc')):
+                contents = b'#define HUD_LAUNCHER 1\n' + contents
+            else:
+                contents = contents.replace(b'CelesteAIPlay.Console', b'CelesteAIPlay.Hud').replace(b'1.4.0.0', b'1.0.0.0')
+        (build / filename).write_bytes(contents)
+    draw_icon(build / "icon.ico")
+    exe = build / (output_name + '.exe')
     zig("build-exe", "launcher.c", "launcher.rc", "-lc", "-luser32", "-target", "x86_64-windows-gnu",
-        "-O", "ReleaseSmall", "--subsystem", "windows", "-fstrip", "--name", "CelesteAIConsole")
-    out = Path(args.out)
+        "-O", "ReleaseSmall", "--subsystem", "windows", "-fstrip", "--name", output_name, cwd=build)
+    out = Path(args.out) if args.out else REPO_ROOT / (output_name + '.exe')
     shutil.copy2(exe, out)
     print(f"已构建 {out}（{out.stat().st_size // 1024} KB）", flush=True)
     return 0

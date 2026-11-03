@@ -1,8 +1,11 @@
 """独立 HUD 窗口（Windows）：无边框，可拖动、缩放、最小化、关闭和切换置顶。
 位置与大小独立保存；不根据游戏窗口的位置或可见性改变显示。
 
-用法（仓库根目录；先启动主控或 `python -m overlay.server`）：
+用法（仓库根目录；未指定地址时自动选择当前会话的 HUD 服务）：
+    双击 CelesteAIHud.exe
     python -m overlay.window
+
+窗口未开且服务不存在时只启动 HUD 服务；已有窗口则恢复并保留原地址。
 
 主控运行时会自动启动它（--no-hud-window 关闭）。最小化和关闭窗口都隐藏到托盘，任务栏保持隐藏；双击红色 AI 图标恢复窗口。彻底退出请用托盘菜单“退出 HUD”。
 
@@ -18,6 +21,7 @@ import threading
 import time
 from .layout import Layout
 from .placement import PlacementAPI, MIN_HEIGHT, DEFAULT_HEIGHT
+from .hud_startup import HudInstance, current_hud_url
 
 GWL_EXSTYLE = -20
 WS_EX_TOPMOST = 0x00000008
@@ -270,6 +274,8 @@ def manage(window, args) -> None:
     saved_at = 0.0
     print("[hud] 独立窗口已就绪：显示、最小化和置顶均由用户控制", flush=True)
     while user32.IsWindow(hwnd):
+        if getattr(args, 'instance', None) and args.instance.wake_requested():
+            placement._commands.put('restore')
         while not placement._commands.empty():
             command = placement._commands.get_nowait()
             if command == 'quit':
@@ -319,7 +325,7 @@ def manage(window, args) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--url", default="http://127.0.0.1:47790/hud")
+    ap.add_argument("--url", help="显式 HUD 地址；默认自动选择当前会话的服务，已有窗口只恢复且保留原地址")
     ap.add_argument("--game-title", default=None, help=argparse.SUPPRESS)  # 兼容旧命令，不再跟随游戏
     ap.add_argument("--width-ratio", type=float, default=0.182, help=argparse.SUPPRESS)
     ap.add_argument("--margin", type=float, default=0.02, help=argparse.SUPPRESS)
@@ -328,17 +334,33 @@ def main() -> int:
     args = ap.parse_args()
     if sys.platform != "win32":
         raise SystemExit("置顶窗口只支持 Windows；其他系统请在 OBS 或浏览器里打开 HUD 页面")
+    with HudInstance() as instance:
+        if not instance.is_owner:
+            instance.request_restore()
+            return 0
+        if _user32().FindWindowW(None, HUD_TITLE):
+            ctypes.windll.user32.MessageBoxW(None, '已有未接入此启动器的 HUD 窗口，请先从托盘选择“退出 HUD”，再双击启动器。', HUD_TITLE, 0x40)
+            return 0
+        args.instance = instance
+        args.url = args.url or current_hud_url()
+        return open_window(args)
+
+
+def open_window(args):
     set_dpi_awareness()
     import urllib.request
     import webview  # noqa: WPS433（只在 Windows 上需要）
 
     # HUD 服务还没起来时页面会加载失败且不会自动重试：先等服务就绪
     waited = False
+    deadline = time.monotonic() + 15
     while True:
         try:
             urllib.request.urlopen(args.url, timeout=2).close()
             break
-        except OSError:
+        except OSError as exc:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f'HUD 服务未在 15 秒内就绪：{args.url}') from exc
             if not waited:
                 print(f"等待 HUD 服务 {args.url} ……（启动主控或 python -m overlay.server）", flush=True)
                 waited = True
@@ -360,4 +382,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        if sys.platform == 'win32':
+            ctypes.windll.user32.MessageBoxW(None, str(exc), HUD_TITLE, 0x10)
+        raise

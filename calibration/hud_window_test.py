@@ -19,9 +19,12 @@ class WindowTests(unittest.TestCase):
         with patch.dict('sys.modules', {'webview': webview}), \
              patch('sys.argv', ['overlay.window', '--url', 'http://hud.test/hud']), \
              patch('overlay.window.sys.platform', 'win32'), \
+             patch('overlay.window.HudInstance') as instance, \
+             patch('overlay.window._user32') as user, \
              patch('overlay.window.set_dpi_awareness'), \
              patch('overlay.window.Layout', return_value=layout), \
              patch('urllib.request.urlopen') as ready:
+            user.return_value.FindWindowW.return_value = 0
             self.assertEqual(main(), 0)
         ready.assert_called_once_with('http://hud.test/hud', timeout=2)
         options = webview.create_window.call_args.kwargs
@@ -120,6 +123,28 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(window.hide.call_count,2)
         window.show.assert_not_called()
         window.destroy.assert_not_called()
+
+    def test_launcher_wake_restores_through_the_existing_command_queue(self):
+        user = MagicMock()
+        user.IsWindow.side_effect = [True, True, True, False]
+        user.IsIconic.return_value = False
+        user.IsWindowVisible.return_value = False
+        window = MagicMock()
+        placement = PlacementAPI()
+        placement._commands.put('close')
+        instance = MagicMock()
+        instance.wake_requested.side_effect = [False, True, False]
+        args = SimpleNamespace(placement=placement, interval=.25, instance=instance)
+        with patch('overlay.window._user32', return_value=user), \
+             patch('overlay.window.initialize_style', return_value=1), \
+             patch('overlay.window.per_pixel_alpha'), patch('overlay.window.Layout'), \
+             patch('overlay.window.TrayControl'), patch('overlay.window.client_rect', return_value=(0, 0, 420, 760)), \
+             patch('overlay.window.window_work_area', return_value=(0, 0, 1920, 1080)), \
+             patch('overlay.window.time.sleep'):
+            manage(window, args)
+        window.hide.assert_called_once()
+        window.show.assert_called_once()
+        window.restore.assert_called_once()
 
     def test_native_close_is_cancelled_until_explicit_quit(self):
         window=MagicMock();placement=PlacementAPI()

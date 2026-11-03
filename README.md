@@ -29,6 +29,7 @@ cd Celeste_AI_Play
 powershell -ExecutionPolicy Bypass -File .\setup.ps1            # 一键部署向导：逐步检查与安装
 powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各项是否就绪，不改动
 .\CelesteAIConsole.exe                                           # 打开控制台，在图形界面里设置并开始运行
+.\CelesteAIHud.exe                                               # 打开／恢复独立 HUD，自动选择当前会话地址
 ```
 
 环境要求与每一步的细节见 [docs/DEPLOY.md](docs/DEPLOY.md)。
@@ -170,6 +171,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 Celeste_AI_Play/
 ├── setup.ps1             一键部署入口（Python 与虚拟环境，然后启动部署向导）
 ├── CelesteAIConsole.exe  控制台的启动器（Windows；源码在 tools/launcher）
+├── CelesteAIHud.exe      独立 HUD 的启动器（Windows；自动选地址，重复打开恢复窗口）
 ├── start_gpt.ps1         Codex 执行器（GPT）的准备与试玩入口
 ├── game-bridge/          桥接 Mod（C#，Everest）
 ├── game-runtime/         常驻核心（C#，Everest）

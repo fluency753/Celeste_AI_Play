@@ -102,6 +102,7 @@
 1. **开 Docker Desktop**，等左下角显示 Engine running。
 2. **开游戏**（用只启用 CelesteAIBridge 的 Mod 配置），停在标题画面或任意菜单即可。主控会自己用菜单进入存档。
 3. **打开控制台**：双击仓库根目录的 `CelesteAIConsole.exe`。也可以运行 `.\.venv\Scripts\python.exe -m overlay.console`。
+   要单独查看或恢复桌面 HUD，双击同目录的 `CelesteAIHud.exe`；无需手填端口。已有窗口时保留原来的会话来源。
 4. **在"存档与章节"页**：
    - 填一次游戏位置（控制台会记住；空着时自动查找）；
    - 选存档：**选你的测试存档**，或选"新建"让主控新建一个；

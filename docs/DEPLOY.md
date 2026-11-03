@@ -425,7 +425,7 @@ winget install Gyan.FFmpeg
 | `python -m orchestrator.background -- <主控参数>` | 用独立后台宿主启动主控 | — |
 | `python -m overlay.server` / `python -m overlay.window` | 单独启动 HUD 服务（默认跟随 `runs\latest.txt` 指向的运行）/ HUD 窗口 | `--port`、`--run`；`--url` |
 | `python -m overlay.console` | 控制台（5.3 节） | `--port`、`--browser`、`--restart-service` |
-| `tools\build_launcher.py` | 重新构建控制台的启动器 `CelesteAIConsole.exe`（只在改了 `tools\launcher\` 时需要；用 pip 装的 zig 交叉编译） | `--out` |
+| `tools\build_launcher.py` | 重新构建 `CelesteAIConsole.exe`；加 `--target hud` 构建独立 HUD 启动器 `CelesteAIHud.exe`（用 pip 装的 zig 交叉编译） | `--target console/hud`、`--out` |
 | `calibration\m6_recording_test.py` | 录制校准（`obs_mix`） | `--rounds`、`--think`、`--no-marker`、`--audio-offset-ms` |
 | `calibration\chain_check.py` | 多章自动衔接自检 | — |
 | `calibration\reset_test_save.py` | 把 test 存档重置成正式存档的初始进度 / 还原 | `--saves-dir`、`--like`、`--restore` |
