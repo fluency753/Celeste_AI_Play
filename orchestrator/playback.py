@@ -1,13 +1,11 @@
 """规划回放：把智能体每一轮规划在预置模拟器里推演过的路线画进游戏，给观众看试错的过程。
 
-数据从哪来：/sim/sim.py（本机的预置模拟器接口，不入库）在工作区存在 game/simlog/ 目录时，把每一次推演
-记成一条二进制记录（格式见 read_logs）：时刻、开始帧、结果（按键用完 / 死亡 / 换房间 / 剧情 / 不支持）、
-帧数、按键序列的哈希、起点与终点、8 个点的形状摘要，以及每一帧的位置。主控按 Claude Code 输出流里的
-消息分轮：一条带工具调用的消息的全部工具返回之后，把这期间写出的记录文件移出工作区（运行目录的 playback/pending/），
-交给回放线程。准备阶段（第一次执行游戏工具之前）的推演也回放：智能体常在准备阶段就开始规划第一个房间，
-之前不画，录像里每章第一个房间（序章）看不到绘制过程；限制规划轮次时准备阶段照旧不扣轮次。
-
-搜索中增量预览读取已刷新的完整记录，不移动活动日志，默认全量绘制；仅在实测超帧预算时暂时抽样，内存保护会记录略过原因。更新按搜索合并，完成后统一计数扣次，不重复整批回放。日志中的search_preview是视觉更新，统计以完成记录为准，不能累加预览数量。
+数据来自主控私有模拟结果，或 agent 用 /workspace/game/show.py 的 trajectory() 写出的二进制轨迹。
+主控预测在实际执行入口核验并扣除额度；回放不授予模拟权限、不扣规划轮次。自写轨迹只作展示与统计，
+不能证明使用了预置模拟器。工具消息用于归并搜索结果；所有工具返回后，主控把记录移到运行目录的
+playback/pending/，交给回放线程。搜索中增量预览读取已刷新的完整记录，不移动活动日志，默认全量绘制；
+仅在实测超帧预算时暂时抽样，内存保护记录略过原因。更新按搜索合并，完成后统一计数，不重复整批回放。
+日志中的 search_preview 是视觉更新，统计以完成记录为准，不能累加预览数量。
 
 逐轮回放：回放线程只把表头读进内存，挑好要画的路线，马上把这一轮画进游戏（智能体同时在想下一轮；下一轮先结束时排队，
 录像里一轮接一轮），放完删掉这一轮的记录文件。一轮放完保留最后的彩色画面；下一轮开始时旧线转成淡灰，真实执行开始时清理。
@@ -314,8 +312,6 @@ class Round:
 class _Msg:
     pending: set = field(default_factory=set)
     label: str = ""
-    started: bool = False
-    cli: bool = False
     program: bool = False
     previewed: bool = False
     tail: object = field(default_factory=lambda: RecordTail(MAGIC, HEADER))
@@ -331,9 +327,8 @@ class _PreviewCompletion:
 
 
 @dataclass(eq=False)
-class _SearchBill:
+class _SearchOwner:
     label: str
-    started: bool
     counted: bool = False
     account_rollouts: bool = True
 
@@ -353,15 +348,14 @@ class _RoundJob:
 
 
 class Playback:
-    def __init__(self, cfg, session, metrics, gate, log=print):
+    def __init__(self, cfg, session, metrics, log=print):
         self.cfg = cfg
         self.session = session
         self.metrics = metrics
-        self.gate = gate
         self.log = log
-        # collect：收集推演记录（HUD 的模拟器调用与推演统计、限制规划轮次时按"调用了模拟器的消息"记账，都靠它）；
-        # enabled：画进游戏（规划回放）
-        # 开模拟器时记录来自 /sim 的 sim.py；关模拟器时来自智能体用 /workspace/game/show.py 的 trajectory() 记下的轨迹
+        # collect：收集轨迹、更新 HUD 展示统计；enabled：画进游戏。
+        # 主控预测已在实际模拟入口计量；agent 的 show.trajectory() 仅提供自写轨迹。
+        # 两类来源都可以回放，但文件与消息不授权模拟，也不增减主控预算。
         self.collect = session.workspace is not None
         self.enabled = bool(self.collect and cfg.playback)
         self.dir = session.workspace / "game" / "simlog" if session.workspace is not None else None
@@ -380,7 +374,7 @@ class Playback:
         self._live_pending = {}
         self._preview_success = {}
         self._preview_bytes = 0
-        self._retry_bills = {}  # 未接管来源保留原搜索的计费身份；重试不是新搜索。
+        self._retry_owners = {}  # 未接管来源保留原搜索的统计归属；重试不是新搜索。
         self._retain_counts = {}  # 每个留在原处的来源已经接管失败了几次（日志里提示）
         self._retain_offsets = {}  # 留在原处的来源在原搜索的预览里已经画到哪儿：(设备与文件编号, 位置)
         self._closed = False
@@ -411,14 +405,11 @@ class Playback:
         mid = message_id or tool_use_id
         msg = self._msgs.setdefault(mid, _Msg())
         msg.pending.add(tool_use_id)
-        msg.started = msg.started or bool(self.gate is not None and self.gate.started)
         self._tool_msg[tool_use_id] = mid
         if name == "Bash" and isinstance(tool_input, dict):
             msg.program = True
             if not msg.label:
                 msg.label = str(tool_input.get("description") or "").strip()[:80]
-            if "celeste-sim" in str(tool_input.get("command") or ""):
-                msg.cli = True     # 直接用命令行调用模拟器：没有推演记录，但同样占一轮
 
     def note_tool_result(self, tool_use_id: str) -> None:
         with self._submit_lock:
@@ -443,8 +434,7 @@ class Playback:
         self._queue_preview(mid, msg)
         for key, _ in ready:
             del self._msgs[key]
-        self._submit(msg.label, any(other.started for _, other in ready), any(other.cli for _, other in ready),
-                     previews=tuple((key, other.tail) for key, other in ready if other.previewed))
+        self._submit(msg.label, previews=tuple((key, other.tail) for key, other in ready if other.previewed))
 
     def _stream(self):
         while not self._stream_stop.wait(max(.1, getattr(self.cfg, 'playback_stream_interval_s', 1))):
@@ -464,7 +454,7 @@ class Playback:
         if available < len(MAGIC) + HEADER.size:
             return  # 不消费读取游标；容量释放后继续读，完成时统一补画尾部。
         # 之前接管失败、留在原处的来源属于更早的搜索：不当成这次搜索的进度预览（接管成功时随它的原搜索补画）
-        files = [path for path in sorted(self.dir.glob('*.bin')) if path not in self._retry_bills]
+        files = [path for path in sorted(self.dir.glob('*.bin')) if path not in self._retry_owners]
         sources = msg.tail.read(files, budget=available, max_record_bytes=PREVIEW_BYTES, on_skip=self.log)
         if not sources:
             return
@@ -482,36 +472,32 @@ class Playback:
             self._backlog += 1
         self._jobs.put(job)
 
-    def _submit(self, label: str, started: bool, cli: bool = False, previews=()) -> None:
-        """一条消息的工具全部返回：调用了模拟器就扣一轮规划轮次，并把这期间的记录文件移出工作区、交给回放线程。"""
+    def _submit(self, label: str, previews=()) -> None:
+        """一条消息的工具全部返回：接管轨迹并提交回放，独立统计自写搜索，不改模拟预算。"""
         with self._submit_lock:
             if self._closed:
                 return
             files = sorted(self.dir.glob("*.bin"))
-            if not files and not cli:
+            if not files:
                 return
-            bill = _SearchBill(label, started)
-            bills = self._remember_bills(files, bill)
+            owner = _SearchOwner(label)
+            owners = self._remember_owners(files, owner)
             sources, moved, offsets, claimed = (self._take(files, tuple(tail for _, tail in previews))
                                                if files else ([], [], [], []))
-            accepted = {bills[path] for path in claimed}
-            if cli:
-                accepted.add(bill)
+            accepted = {owners[path] for path in claimed}
             for path in claimed:
-                self._retry_bills.pop(path, None)
-            for accepted_bill in accepted:
-                if not accepted_bill.counted:
+                self._retry_owners.pop(path, None)
+            for accepted_owner in accepted:
+                if not accepted_owner.counted:
                     self.metrics.add(sim_calls=1)
-                    if accepted_bill.started and self.gate is not None:
-                        self.gate.charge(accepted_bill.label)
-                    accepted_bill.counted = True
+                    accepted_owner.counted = True
             if not sources:
                 return
             # Different owners can be retried together (native prediction and
             # Bash search). Preserve each owner's rollout accounting contract.
             groups = {}
             for i, path in enumerate(claimed):
-                groups.setdefault(bills[path], []).append(i)
+                groups.setdefault(owners[path], []).append(i)
             shared = {}
             for owner, indexes in groups.items():
                 ends = [offsets[i] for i in indexes]
@@ -533,13 +519,13 @@ class Playback:
             paths = write_replay(self.session.workspace, predictions, start_frame)
             if not paths:
                 return
-            self._remember_bills(paths, _SearchBill("短路线模拟", False, counted=True, account_rollouts=False))
+            self._remember_owners(paths, _SearchOwner("主控模拟", counted=True, account_rollouts=False))
             sources, moved, _, claimed = self._take(paths)
             for path in claimed:
-                self._retry_bills.pop(path, None)
-            self._enqueue(_RoundJob("短路线模拟", sources, moved, account=False))
+                self._retry_owners.pop(path, None)
+            self._enqueue(_RoundJob("主控模拟", sources, moved, account=False))
 
-    def _remember_bills(self, paths, bill):
+    def _remember_owners(self, paths, owner):
         result = {}
         for path in paths:
             try:
@@ -548,10 +534,10 @@ class Playback:
                 identity = (stat.st_dev, stat.st_ino)
             except OSError:
                 identity = None
-            previous = self._retry_bills.get(path)
-            owner = previous[1] if previous and previous[0] == identity else bill
-            self._retry_bills[path] = (identity, owner)
-            result[path] = owner
+            previous = self._retry_owners.get(path)
+            original = previous[1] if previous and previous[0] == identity else owner
+            self._retry_owners[path] = (identity, original)
+            result[path] = original
         return result
 
     def _take(self, files: list[Path], tails=()) -> tuple[list, list[Path], list[int], list[Path]]:
@@ -617,7 +603,7 @@ class Playback:
                 self._closed = True
                 self._msgs.clear()
                 self._tool_msg.clear()
-                self._retry_bills.clear()
+                self._retry_owners.clear()
                 self._retain_counts.clear()
                 self._retain_offsets.clear()
                 self._stream_stop.set()
@@ -917,7 +903,7 @@ class Playback:
                 for tid, mid in list(self._tool_msg.items()):
                     if mid not in self._msgs:
                         self._tool_msg.pop(tid, None)
-                self._submit(label, bool(self.gate is not None and self.gate.started), previews=previews)
+                self._submit(label, previews=previews)
         with self._cv:
             if not self._cv.wait_for(lambda: self._backlog <= 0, timeout=timeout):
                 raise TimeoutError('规划回放尚未排空，不能提前执行游戏')

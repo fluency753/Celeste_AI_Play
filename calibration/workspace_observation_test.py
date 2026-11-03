@@ -209,19 +209,18 @@ class WorkspaceObservationTests(unittest.TestCase):
                                     session.last_obs['frame'])
                 self.assert_file_result(call(server), session)
 
-    def test_planning_gate_keeps_geometry_inline_even_when_files_exist(self):
-        from orchestrator.pausegate import PauseGate
+    def test_exhausted_simulation_budget_keeps_workspace_observation_files_available(self):
+        from orchestrator.planning_budget import PlanningBudget
         with game_session() as (session, server):
             self.assert_file_result(call(server), session)
-            gate = PauseGate(session.metrics, enabled=True, sim_only=True,
-                             state_path=session.workspace / 'game/rounds.json', log=lambda message: None)
-            restricted = build_server(session, gate=gate)
-            self.assert_fallback(call(restricted))
-            gate.bank = 0
-            gate._publish()
-            self.assert_fallback(call(restricted, 'act', arguments('act')))
-            gate.enabled = False
-            self.assert_file_result(call(restricted), session)
+            budget = PlanningBudget(session.metrics, session.run_dir/'planning_budget.json',
+                                    state_path=session.workspace/'game/rounds.json')
+            session.planning_budget = budget
+            server = build_server(session)
+            self.assertEqual(budget.bank, 0)
+            self.assert_file_result(call(server), session)
+            self.assert_file_result(call(server, 'act', arguments('act')), session)
+            self.assertEqual(budget.rounds_used, 0)
 
     def test_file_context_omits_collectible_listing_but_file_keeps_it(self):
         with game_session() as (session, server):

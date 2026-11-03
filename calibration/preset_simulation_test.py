@@ -63,10 +63,20 @@ class PresetSimulationTests(unittest.TestCase):
             self.assertEqual(self.metrics.state.sim_rollouts, 1)
             with self.assertRaisesRegex(ValueError, '额度'):
                 self.session.simulate({'candidates': [['1,L']], 'request_id': 'exhausted'})
-        from orchestrator.pausegate import PauseGate
         from orchestrator.tool_gate import decide_tool
-        decision = asyncio.run(decide_tool(PauseGate(self.metrics, enabled=False), 'Bash', 'shell'))
+        decision = asyncio.run(decide_tool('Bash'))
         self.assertEqual(decision['decision'], 'allow')
+
+    def test_next_run_without_preset_capability_removes_old_balance_projection(self):
+        path = self.session.workspace / 'game/rounds.json'
+        self.assertTrue(path.exists())
+        self.cfg.sim = self.cfg.pause_limit = False
+        following = self.root / 'following'
+        following.mkdir()
+        session = GameSession(self.cfg, following, self.metrics)
+        self.addCleanup(session._frames_log.close)
+        self.addCleanup(session._decisions_log.close)
+        self.assertFalse(path.exists())
 
     def test_each_running_phase_condition_blocks_before_capture_and_reservation(self):
         for name in ('paused', 'chat_only', 'prepare_only', 'goal_finishing', 'stop_requested', 'model_waiting'):

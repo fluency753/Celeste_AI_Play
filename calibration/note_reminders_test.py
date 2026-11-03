@@ -15,7 +15,6 @@ from orchestrator.config import RunConfig
 from orchestrator.game_session import GameSession
 from orchestrator.metrics import Metrics
 from orchestrator.note_reminders import NoteReminders
-from orchestrator.pausegate import PauseGate
 from orchestrator.run import add_gate_route
 from orchestrator.codex_native import native_tool_hook
 from orchestrator.server import build_server
@@ -387,14 +386,13 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             runner.metrics.update(context_window=1000)
             claude_usage(runner, 700)
             app = SimpleNamespace(router=SimpleNamespace(routes=[]))
-            gate = PauseGate(runner.metrics, enabled=True, started=True)
-            add_gate_route(app, gate, session=session)
+            add_gate_route(app, session=session)
             endpoint = app.router.routes[0].endpoint
             runner.paused = True
             runner.pausing = True
             runner.turn_active = True
             denied = await endpoint(SimpleNamespace(json=AsyncMock(return_value={
-                'tool_name': 'mcp__celeste__observe', 'session_id': runner.session_id})))
+                'tool_name': 'Read', 'session_id': 'old-session'})))
             self.assertEqual(json.loads(denied.body)['decision'], 'deny')
             self.assertTrue(runner.note_reminders.peek())
             runner.pausing = False

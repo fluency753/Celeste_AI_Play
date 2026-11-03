@@ -24,7 +24,6 @@ import socket
 import subprocess
 import sys
 import threading
-from types import SimpleNamespace
 
 from .config import RunConfig, find_docker_exe, load_dotenv, REPO_ROOT
 from .container import docker, ensure_container
@@ -76,9 +75,7 @@ def listen(port: int) -> socket.socket:
 class DiagnosticGate:
     """A game-free instance of the shared policy, never an existing controller."""
     def __init__(self, port):
-        from .pausegate import PauseGate
         from .tool_gate import decide_tool
-        gate = PauseGate(SimpleNamespace(update=lambda **values: None), enabled=False)
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass
@@ -91,8 +88,7 @@ class DiagnosticGate:
                     data = json.loads(self.rfile.read(size))
                     if not isinstance(data, dict) or data.get('engine') == 'codex':
                         raise ValueError('Invalid diagnostic context')
-                    response = asyncio.run(decide_tool(gate, str(data.get('tool_name') or ''),
-                                                       data.get('tool_use_id')))
+                    response = asyncio.run(decide_tool(str(data.get('tool_name') or '')))
                     code = 200
                 except (ValueError, TypeError):
                     response, code = {'decision':'deny', 'reason':'诊断门禁请求无效，本次未执行'}, 400

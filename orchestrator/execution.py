@@ -6,9 +6,6 @@ Consumers use this contract instead of inferring permissions from placement.
 """
 from dataclasses import dataclass
 
-WORKSPACE_TOOLS = frozenset({'Bash', 'Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep'})
-
-
 @dataclass(frozen=True)
 class WorkspaceCapabilities:
     agent_location: str
@@ -25,9 +22,9 @@ class WorkspaceCapabilities:
     def needs_container(self) -> bool:
         return self.agent_location == 'container' or self.program_location == 'container'
 
-    def validate(self, *, programs=False, sim=False, preparation=False):
+    def validate(self, *, programs=False, preparation=False):
         if programs and not self.programs:
-            raise ValueError('工作区程序和离线模拟器需要 container 工具通道；host Claude 会话仅支持聊天')
+            raise ValueError('工作区程序需要 container 工具通道；host Claude 会话没有程序工具')
         if preparation and not self.workspace_read:
             raise ValueError('当前执行器没有知识库读取工具，不能进行知识库准备')
 

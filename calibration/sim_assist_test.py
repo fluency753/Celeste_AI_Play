@@ -202,7 +202,7 @@ class BrokerTests(unittest.TestCase):
                 session.workspace = session.run_dir / str(enabled)
                 session.metrics.update(sim_calls=0, sim_rollouts=0)
                 session.sim_energy = SimEnergy(session.run_dir / (str(enabled) + "-energy.json"))
-                playback = Playback(session.cfg, session, session.metrics, None, log=lambda _: None)
+                playback = Playback(session.cfg, session, session.metrics, log=lambda _: None)
                 session.playback = playback
                 prediction = {"info": {"frame": 1}, "results": [
                     {"stop": "done", "frames": [[2, 2, 3], [3, 4, 5]]},
@@ -242,7 +242,7 @@ class BrokerTests(unittest.TestCase):
         session = self.session
         session.cfg.playback = False
         session.workspace = session.run_dir / "workspace"
-        playback = Playback(session.cfg, session, session.metrics, None, log=lambda _: None)
+        playback = Playback(session.cfg, session, session.metrics, log=lambda _: None)
         try:
             write_replay(session.workspace, [{"stop": "done", "frames": [[1, 2, 3], [2, 3, 3]]}], 0)
             playback.drain()

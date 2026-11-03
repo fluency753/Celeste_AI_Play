@@ -24,8 +24,7 @@ class TimeQueryTests(unittest.IsolatedAsyncioTestCase):
         self.session.last_obs=observation(600)
         self.session.last_obs['level']['chapterTimeTicks']=20_000_000
         self.session.game_process_id=1
-        self.gate=Mock(enabled=False)
-        self.server=build_server(self.session,gate=self.gate)
+        self.server=build_server(self.session)
 
     def tearDown(self):
         self.session.close(release=False)
@@ -46,7 +45,7 @@ class TimeQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data['real'],{'elapsed_seconds':0,'playing':False})
         self.assertEqual(data['goal']['time_conditions'],[])
         self.assertFalse(self.metrics.playing)
-        self.gate.start.assert_not_called();self.session.client.call.assert_not_called()
+        self.session.client.call.assert_not_called()
 
     async def test_projection_can_satisfy_one_condition_without_mutating_goal(self):
         self.session.goals.set({'conditions':[{'field':'game_elapsed','op':'delta_gte','value':2},

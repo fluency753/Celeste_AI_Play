@@ -10,12 +10,12 @@ import tempfile
 import tomllib
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from orchestrator.config import RunConfig
 from orchestrator.codex_native import finish_native_tools, native_tool_hook
 from orchestrator.metrics import Metrics
-from orchestrator.pausegate import PauseGate
+from orchestrator.planning_budget import PlanningBudget
 from orchestrator.program_sandbox import bwrap_args
 from orchestrator.tool_gate import decide_tool
 
@@ -37,11 +37,9 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
         self.metrics = Metrics(Path(folder.name)/'metrics.json', 'test', 'test', 'high', 60)
         self.metrics.update(tool_calls=0)  # CodexRunner.run initializes native/dynamic call accounting.
         self.cfg = RunConfig(agent='test', save='test', model='test', mode='explore', engine='codex', live=False)
-        self.charges = []
-        self.session = SimpleNamespace(cfg=self.cfg, program_guard=lambda: None,
-                        program_run_denied=lambda: self.charges.append('program') or None)
-        self.gate = PauseGate(self.metrics, enabled=False)
-        self.runner = SimpleNamespace(cfg=self.cfg, metrics=self.metrics, gate=self.gate,
+        self.budget = PlanningBudget(self.metrics, Path(folder.name)/'planning_budget.json')
+        self.session = SimpleNamespace(cfg=self.cfg, planning_budget=self.budget)
+        self.runner = SimpleNamespace(cfg=self.cfg, metrics=self.metrics,
                     session=self.session, session_id='thread-a', turn_id='turn-a', turn_active=True,
                     turn_done=asyncio.Event(), playback=None, native_token='test-secret')
 
@@ -50,22 +48,25 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
                 'tool_input':{'command':'python3 experiment.py', 'timeout_ms':3000},
                 'session_id':'thread-a', 'turn_id':'turn-a', 'tool_use_id':'call-a', **values}
 
-    async def test_shared_gate_decision_and_program_charge_are_used_once(self):
+    async def test_native_authorization_and_timing_are_idempotent(self):
         data = self.data()
         result = await native_tool_hook(self.runner, data)
         self.assertEqual(result['decision'], 'allow')
         self.assertEqual(result['timeout_s'], 3)
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertTrue(self.metrics.tools_running)
         self.assertEqual(await native_tool_hook(self.runner, data), result)
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertEqual(self.metrics.state.tool_calls, 1)
         post = self.data(hook_event_name='PostToolUse')
         await native_tool_hook(self.runner, post)
         await native_tool_hook(self.runner, post)
         self.assertFalse(self.metrics.tools_running)
         self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'deny')
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
 
     async def test_omitted_timeout_uses_claude_default_and_explicit_timeout_is_capped(self):
         from orchestrator.agent import bash_limits_ms
@@ -94,20 +95,20 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(notes.peek())
             finish_native_tools(self.runner)
 
-    async def test_workspace_ignores_old_phase_guard_for_both_transports(self):
+    async def test_workspace_does_not_borrow_game_guard_for_either_transport(self):
         for reason in ('用户已暂停试玩', '停止目标已触发'):
-            self.session.program_guard = lambda: reason
-            expected = await decide_tool(self.gate, 'Bash', 'test', session=self.session)
+            self.session.control_guard = lambda: reason
+            expected = await decide_tool('Bash', session=self.session)
             result = await native_tool_hook(self.runner, self.data(tool_use_id=reason))
             self.assertEqual(result['decision'], expected['decision'])
             self.assertEqual(result['decision'], 'allow')
         finish_native_tools(self.runner)
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertEqual(self.metrics.state.tool_calls, 2)
 
     async def test_workspace_ignores_game_budgets_but_rejects_expired_owner(self):
-        self.gate.enabled, self.gate._started, self.gate.bank = True, True, 0
-        self.session.program_guard = lambda: '旧游戏阶段限制'
+        self.session.control_guard = lambda: '旧游戏阶段限制'
         self.assertEqual((await native_tool_hook(self.runner, self.data()))['decision'], 'allow')
         await native_tool_hook(self.runner, self.data(hook_event_name='PostToolUse'))
         for change in ('stopping', 'turn_changed'):
@@ -115,26 +116,29 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
             self.runner.turn_id = 'turn-b' if change == 'turn_changed' else 'turn-a'
             result = await native_tool_hook(self.runner, self.data(tool_use_id=change))
             self.assertEqual(result['decision'], 'deny')
-            self.assertEqual(self.charges, [])
+            self.assertEqual(self.budget.bank, 0)
+            self.assertEqual(self.budget.rounds_used, 0)
             self.assertFalse(self.metrics.tools_running)
 
     async def test_retried_running_call_rechecks_current_turn_not_game_phase(self):
         data = self.data()
         await native_tool_hook(self.runner, data)
-        self.session.program_guard = lambda: '用户已暂停试玩'
+        self.session.control_guard = lambda: '用户已暂停试玩'
         self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'allow')
         self.runner.turn_id = 'next-turn'
         self.assertIn('轮次', (await native_tool_hook(self.runner, data))['reason'])
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertEqual(self.metrics.state.tool_calls, 1)
         finish_native_tools(self.runner)
 
     async def test_file_change_maps_to_shared_write_without_extra_codex_rule(self):
-        self.session.program_guard = lambda: '用户已暂停试玩'
-        expected = await decide_tool(self.gate, 'Write', 'call-a', session=self.session)
+        self.session.control_guard = lambda: '用户已暂停试玩'
+        expected = await decide_tool('Write', session=self.session)
         result = await native_tool_hook(self.runner, self.data(tool_name='apply_patch'))
         self.assertEqual(result['decision'], expected['decision'])
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         finish_native_tools(self.runner)
         self.assertFalse(self.metrics.tools_running)
 
@@ -142,20 +146,26 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
         for change in ({'session_id':'other'}, {'turn_id':'old'}, {'tool_input':[]}, {'tool_use_id':''}, {'token':'wrong'}):
             result = await native_tool_hook(self.runner, self.data(**change))
             self.assertEqual(result['decision'], 'deny')
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
 
-    async def test_protocol_adapter_uses_injected_session_for_shared_guard(self):
-        self.runner.native_session = SimpleNamespace(cfg=self.cfg, program_guard=lambda: '本次仅聊天')
+    async def test_post_receipt_observes_the_injected_session_notes(self):
+        observer = Mock()
+        self.runner.native_session = SimpleNamespace(cfg=self.cfg, note_reminders=SimpleNamespace(observe_file=observer))
         self.assertEqual((await native_tool_hook(self.runner, self.data()))['decision'], 'allow')
+        await native_tool_hook(self.runner, self.data(hook_event_name='PostToolUse'))
+        observer.assert_called_once_with()
         finish_native_tools(self.runner)
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
 
     async def test_execution_transport_cannot_replace_trusted_shell_or_open_pty(self):
         for arguments in ({'shell':'/workspace/custom-shell'}, {'shell':'bash'},
                           {'tty':True}, {'pty':True}, {'login':True}):
             data = self.data(tool_input={'command':'python3 experiment.py', **arguments})
             self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'deny')
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertEqual(self.metrics.state.tool_calls, 0)
         allowed = self.data(tool_input={'command':'pwd', 'shell':'/bin/bash', 'login':False})
         self.assertEqual((await native_tool_hook(self.runner, allowed))['decision'], 'allow')
@@ -163,12 +173,11 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
         finish_native_tools(self.runner)
 
     async def test_native_view_image_uses_read_gate_and_timing_without_program_charge(self):
-        self.runner.gate = PauseGate(self.metrics, enabled=True, started=True, sim_only=True)
         data = self.data(tool_name='view_image', tool_input={'path':'/workspace/preview.png'})
         decision = await native_tool_hook(self.runner, data)
         self.assertEqual(decision['decision'], 'allow')
-        self.assertEqual(self.charges, [])
-        self.assertEqual(self.runner.gate.bank, 0)
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertEqual(self.metrics.state.tool_calls, 1)
         self.assertTrue(self.metrics.tools_running)
         self.assertIn('view_image', self.metrics.state.tool_call)
@@ -176,21 +185,19 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.metrics.tools_running)
 
     async def test_native_view_image_is_independent_of_game_round_budget(self):
-        self.runner.gate = PauseGate(self.metrics, enabled=True, started=True, sim_only=False)
-        self.runner.gate.note_tool_use('read-budget', 'read-budget')
-        expected = await decide_tool(self.runner.gate, 'Read', 'read-budget', session=self.session)
+        expected = await decide_tool('Read', session=self.session)
         data = self.data(tool_name='view_image', tool_input={'path':'/workspace/preview.png'})
         decision = await native_tool_hook(self.runner, data)
         self.assertEqual(decision['decision'], expected['decision'])
         self.assertEqual(decision['decision'], 'allow')
         finish_native_tools(self.runner)
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertFalse(self.metrics.tools_running)
 
     async def test_native_shell_commands_are_available_in_chat(self):
-        self.runner.native_session = SimpleNamespace(cfg=self.cfg,
-            program_guard=lambda: '本次仅聊天，不允许运行程序',
-            program_run_denied=self.session.program_run_denied)
+        self.runner.native_session = SimpleNamespace(cfg=self.cfg, planning_budget=self.budget)
+        self.runner.chat_only = True
         for index, command in enumerate(("cat '/kb/file with spaces.md'",
                                          "sed -n '2,4p' /kb/README.md",
                                          'head -n3 /kb/README.md',
@@ -201,22 +208,23 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(decision['decision'], 'allow')
                 self.assertEqual(self.runner._native_tool_calls[f'read-{index}']['canonical'], 'Bash')
         finish_native_tools(self.runner)
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertFalse(self.metrics.tools_running)
 
     async def test_native_cat_does_not_charge_game_program_counter(self):
         data = self.data(tool_input={'command': 'cat /kb/README.md'})
         result = await native_tool_hook(self.runner, data)
         self.assertEqual(result['decision'], 'allow')
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertEqual(self.runner._native_tool_calls['call-a']['canonical'], 'Bash')
         await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
         self.assertFalse(self.metrics.tools_running)
 
     async def test_compound_shell_expressions_keep_sandbox_timeout_in_chat(self):
-        self.runner.native_session = SimpleNamespace(cfg=self.cfg,
-            program_guard=lambda: '本次仅聊天，不允许运行程序',
-            program_run_denied=self.session.program_run_denied)
+        self.runner.native_session = SimpleNamespace(cfg=self.cfg, planning_budget=self.budget)
+        self.runner.chat_only = True
         for index, command in enumerate(('cat /kb/a; python3 exploit.py',
                                          'cat /kb/a | python3 transform.py',
                                          'cat /kb/a > /workspace/copy',
@@ -228,7 +236,8 @@ class NativeHookTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(decision['decision'], 'allow')
                 self.assertEqual(self.runner._native_tool_calls[f'unsafe-{index}']['canonical'], 'Bash')
         finish_native_tools(self.runner)
-        self.assertEqual(self.charges, [])
+        self.assertEqual(self.budget.bank, 0)
+        self.assertEqual(self.budget.rounds_used, 0)
         self.assertFalse(self.metrics.tools_running)
 
 

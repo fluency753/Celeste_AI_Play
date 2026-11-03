@@ -23,7 +23,7 @@ docker build -t celeste-agent:0.1 agent-container
 ## 与 Claude 共用的部分
 
 - 容器创建、复用、重建、工作区与知识库挂载、CPU 限额沿用 `container.ensure_container`。
-- 原生 Shell、补丁与图像读取钩子进入同一 `/gate`，共用 `tool_gate.decide_tool` 的工作区许可，检查请求归属，不受游戏阶段和规划额度限制；游戏工具沿用 `SessionControls` 的暂停／目标守卫、`PauseGate` 与同一业务实现，不另维护 Codex 业务许可表。两边门禁失联或请求无效时均拒绝本次调用。
+- 原生 Shell、补丁与图像读取钩子进入同一 `/gate`，共用 `tool_gate.decide_tool` 的工作区许可，检查请求归属，不受游戏阶段和规划额度限制；游戏工具沿用 `SessionControls` 的暂停／目标守卫与同一业务实现；预置模拟额度仅由主控模拟入口核验，不再装配旧工具规划门禁。两边门禁失联或请求无效时均拒绝本次调用。
 - 时长上限都由 `agent.bash_limits_ms` 决定：未写 `timeout_ms` 时用默认值（速通模式 `bash_default_s`），写了则不超过最大值，与 Claude 的 Bash 相同；恢复、目标、游戏操作、录制和房间业务共用已有主控。
 - 原生 Shell 用 `/bin/bash -c` 执行，`set -euo pipefail`、`source`、`[[ ... ]]` 与 Claude 的 Bash 一致；主控自动重试程序沿用原来的 `/bin/sh`。
 - 所有阶段均保留工作区读写和程序能力，`apply_patch` 可修改 `/workspace`，原生 Shell 可运行程序；仅游戏通道按试玩状态开关。

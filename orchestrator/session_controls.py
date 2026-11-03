@@ -87,8 +87,6 @@ class SessionControls:
             self.session.note_reminders = self.note_reminders
             self.session.control_guard = self._game_guard
             self.session.request_pause = self._agent_pause
-            self.session.program_guard = self._program_guard
-            self.session.workspace_paused = self._workspace_paused
             self.session.effort_policy = self._agent_effort_policy
             self.session.effort_levels = lambda: self._effort_status()['effort_levels'] or []
 
@@ -174,9 +172,6 @@ class SessionControls:
         self.metrics.update(status='paused')
         return True
 
-    def _workspace_paused(self):
-        return self.paused and not self.chat_only
-
     def _workspace_notice(self):
         from .execution import workspace_capabilities
         caps = workspace_capabilities(self.cfg)
@@ -195,14 +190,6 @@ class SessionControls:
         facts = '试玩仍处于用户暂停状态。不观察、推进或操作游戏，不请求在线模拟预测。'
         facts += self._workspace_notice()
         return notification('paused', facts=facts, cfg=self.cfg)
-
-    def _program_guard(self):
-        """Compatibility hook: workspace capability does not depend on gameplay state.
-
-        Actual request ownership and executor shutdown are checked by the transport;
-        the process sandbox and per-command timeout remain in the execution layer.
-        """
-        return None
 
     async def _heartbeat(self):
         while True:

@@ -400,7 +400,6 @@ class GameSession:
         from .sim_assist import AssistRules
         self.assist_rules = AssistRules.of(cfg)
         self.sim_energy = SimEnergy(run_dir / "sim_energy.json", rules=self.assist_rules) if cfg.sim_assist else None
-        self.programs_since_act = 0         # 旧状态字段，兼容保留；不再限制程序次数
         if self.sim_energy:
             self.metrics.update(sim_energy=self.sim_energy.snapshot())
         if self.workspace:
@@ -408,6 +407,8 @@ class GameSession:
             # 给观众看的展示接口（HUD 进度、轨迹记录），每次运行都换成主控这一版；上次运行留下的进度清掉
             install_game_helpers(self.workspace)
             (self.workspace / "game" / "hud_status.json").unlink(missing_ok=True)
+            if not (cfg.sim and cfg.pause_limit):
+                (self.workspace / 'game/rounds.json').unlink(missing_ok=True)
 
     # ---- 连接与观测 ----
 
@@ -1080,14 +1081,9 @@ class GameSession:
         from .simulation import predict
         return predict(self, request)
 
-    def program_run_denied(self) -> str | None:
-        """Legacy hook retained for compatibility; gameplay does not limit workspace programs."""
-        return None
-
     def act(self, inputs: list[str] | None, thought: str, stop_on: list[str] | None,
             plan_file: str | None = None, input_format: str | None = None) -> ActOutcome:
         self._require_reload_observation()
-        self.programs_since_act = 0
         if self.done:
             raise ActError(f"本次试玩已结束（{self.done_reason}），请结束本轮。")
         if plan_file:

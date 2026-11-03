@@ -21,6 +21,7 @@ from orchestrator.kb_study import KbStudy
 from orchestrator.metrics import Metrics
 from orchestrator.codex_native import native_tool_hook
 from orchestrator.modes import game_tools
+from orchestrator.planning_budget import PlanningBudget
 from orchestrator import kb_access  # Import before temporary config roots in legacy preparation fixtures.
 
 
@@ -48,6 +49,8 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner.session = SimpleNamespace(done=False)
         self.runner.rpc.request = AsyncMock(return_value={'turnId': 'turn'})
         self.metrics.update(tool_calls=0)
+        self.planning = PlanningBudget(self.metrics, self.root/'planning_budget.json')
+        self.runner.native_session.planning_budget = self.planning
         # Docker is the external filesystem boundary; keep metadata consumers real.
         def metadata_process(container, *command, **kwargs):
             self.assertEqual(command[:2], ('python3', '-c'))
@@ -153,28 +156,19 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.metrics.tools_running)
         self.server.call_tool.assert_not_called()
 
-    async def test_workspace_shell_ignores_old_program_and_planning_budgets(self):
-        from orchestrator.game_session import GameSession
-        from orchestrator.pausegate import PauseGate
+    async def test_workspace_shell_retains_access_with_legacy_setting_and_empty_simulation_budget(self):
         self.runner.paused = True
         self.cfg.mode = 'explore'
         self.cfg.explore_program_runs = 1
-        workspace = self.runner.native_session
-        workspace.programs_since_act = 0
-        workspace.program_run_denied = lambda: GameSession.program_run_denied(workspace)
-        first = self.native_request('program-one')
-        self.assertEqual((await native_tool_hook(self.runner, first))['decision'], 'allow')
-        await native_tool_hook(self.runner, {**first, 'hook_event_name': 'PostToolUse'})
-        refused = await native_tool_hook(self.runner, self.native_request('program-two'))
-        self.assertEqual(refused['decision'], 'allow')
-        self.assertEqual(workspace.programs_since_act, 0)
-        self.runner.gate = PauseGate(self.metrics, enabled=True, started=True, sim_only=True)
-        refused = await native_tool_hook(self.runner, self.native_request('no-rounds'))
-        self.assertEqual(refused['decision'], 'allow')
-        self.assertEqual(self.runner.gate.bank, 0)
-        from orchestrator.codex_native import finish_native_tools
-        finish_native_tools(self.runner)
+        for ident in ('program-one', 'program-two', 'no-rounds'):
+            data = self.native_request(ident)
+            result = await native_tool_hook(self.runner, data)
+            self.assertEqual(result['decision'], 'allow')
+            await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
+        self.assertEqual(self.planning.bank, 0)
+        self.assertEqual(self.planning.rounds_used, 0)
         self.assertTrue(self.runner.paused)
+        self.assertFalse(self.metrics.tools_running)
 
     async def test_interrupt_cancels_codex_turn_and_waits_for_active_action(self):
         runner = self.runner
@@ -604,7 +598,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 self.record_steer(params)
                 self.assertEqual(self.runner.note_reminders.peek(), ())
 
-    async def test_gate_wait_cannot_rebind_old_dynamic_result_or_reminder_to_new_turn(self):
+    async def test_waiting_work_cannot_rebind_old_dynamic_result_or_reminder_to_new_turn(self):
         self.runner.study = None
         for tool in ('read', 'celeste_observe'):
             with self.subTest(tool=tool):
@@ -612,18 +606,23 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 self.runner.rpc.request.reset_mock()
                 self.server.call_tool.reset_mock()
                 self.runner.note_reminders.pending['after'] = (1, 'OLD-TURN-REMINDER')
-
-                async def decide(*args):
-                    self.runner.turn_id = 'successor'
-                    return True, ''
-
-                self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(), decide=decide)
-                def read_during_turn_change(*args):
-                    self.runner.turn_id = 'successor'
-                    return self.file_result(path='/workspace/x')
-                with patch('orchestrator.codex_agent.read_file', side_effect=read_during_turn_change):
-                    result = await self.runner._request('item/tool/call', {'tool': tool,
-                        'arguments': {'file_path': '/workspace/x'} if tool == 'read' else {}})
+                if tool == 'read':
+                    def read_during_turn_change(*args):
+                        self.runner.turn_id = 'successor'
+                        return self.file_result(path='/workspace/x')
+                    with patch('orchestrator.codex_agent.read_file', side_effect=read_during_turn_change):
+                        result = await self.runner._request('item/tool/call', {'tool': tool,
+                            'arguments': {'file_path': '/workspace/x'}})
+                else:
+                    await self.runner.action_lock.acquire()
+                    try:
+                        pending = asyncio.create_task(self.runner._request('item/tool/call',
+                            {'tool': tool, 'arguments': {}}))
+                        await asyncio.sleep(0)
+                        self.runner.turn_id = 'successor'
+                    finally:
+                        self.runner.action_lock.release()
+                    result = await pending
                 self.assertFalse(result['success'])
                 self.runner.rpc.request.assert_not_awaited()
                 self.server.call_tool.assert_not_awaited()
@@ -632,10 +631,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_glob_grep_and_listing_need_no_program_budget_in_readonly_chat_or_pause(self):
         self.runner.chat_only = self.runner.paused = True
-        charges = []
-        self.runner.native_session = SimpleNamespace(cfg=self.cfg, program_guard=lambda: '当前为只读聊天',
-                                                     program_run_denied=lambda: charges.append('program'))
-        self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(), decide=AsyncMock(return_value=(True, '')))
         for tool, operation in (('glob', 'glob'), ('grep', 'grep')):
             found = {'kind': operation, 'path': '/workspace', 'text': '/workspace/notes.md', 'images': [],
                      'matches': 1, 'truncated': False, 'next_offset': None}
@@ -653,8 +648,8 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 'arguments': {'file_path': '/workspace'}})
         self.assertTrue(result['success'])
         self.assertIn('目录 /workspace', self.steer_params()['input'][0]['text'])
-        self.assertEqual(charges, [])
-        self.runner.gate.decide.assert_not_awaited()
+        self.assertEqual(self.planning.bank, 0)
+        self.assertEqual(self.planning.rounds_used, 0)
         # The native shell is still a program in the same chat.
         denied = await native_tool_hook(self.runner, self.native_request('ls-shell', command='ls /workspace'))
         self.assertEqual(denied['decision'], 'allow')
@@ -826,8 +821,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('可用原生 Shell 读取', self.runner.tool_notice)
 
     async def test_canonical_and_legacy_file_requests_share_backend_gate_and_kb_receipt(self):
-        self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(),
-                                          decide=AsyncMock(return_value=(True, '')))
         self.register_file_tools({'celeste_read', 'celeste_glob', 'celeste_grep'})
         before = self.metrics.state.tool_calls
         for name in ('read', 'celeste_read'):
@@ -843,7 +836,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             self.record_steer()
             self.assertEqual(self.study.read['README.md'], {1})
         self.assertEqual(self.metrics.state.tool_calls - before, 2)
-        self.runner.gate.decide.assert_not_awaited()
+        self.assertEqual(self.planning.rounds_used, 0)
         for canonical in ('glob', 'grep'):
             for name in (canonical, 'celeste_' + canonical):
                 with self.subTest(name=name), patch('orchestrator.codex_agent.search_files', return_value={
@@ -853,16 +846,15 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result['success'], result)
                 self.assertEqual(worker.call_args.args[:2], ('container', canonical))
                 self.assertEqual(worker.call_args.args[2]['_tool_names']['read'], 'celeste_read')
-        self.runner.gate.decide.assert_not_awaited()
+        self.assertEqual(self.planning.rounds_used, 0)
 
     async def test_stop_run_can_report_blockage_while_paused_or_study_incomplete(self):
         self.server.call_tool.return_value = CallToolResult.model_validate({'content': [{'type': 'text', 'text': 'paused'}]})
         self.runner.paused=True
-        self.runner.gate=SimpleNamespace(enabled=True,decide=AsyncMock(return_value=(False,'无额度')))
         result=await self.runner._request('item/tool/call',{'tool':'celeste_stop_run','arguments':{'reason':'工具故障'}})
         self.assertTrue(result['success'])
         self.server.call_tool.assert_awaited_with('stop_run',{'reason':'工具故障'})
-        self.runner.gate.decide.assert_not_awaited()
+        self.assertEqual(self.planning.rounds_used, 0)
         self.runner.chat_only=True
         denied=await self.runner._request('item/tool/call',{'tool':'celeste_stop_run','arguments':{'reason':'工具故障'}})
         self.assertFalse(denied['success'])
@@ -913,8 +905,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_optional_catalog_entries_do_not_enable_execution_or_spend_planning_budget(self):
         self.runner.study = None
         self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = False, False, 'auto'
-        self.runner.gate = SimpleNamespace(enabled=True, note_tool_use=Mock(),
-                                           decide=AsyncMock(return_value=(True, '')))
         arguments = {'celeste_simulate': {}, 'celeste_exit_level': {'reason': 'user requested'},
                      'celeste_cutscene': {'action': 'advance'}}
         for name, args in arguments.items():
@@ -926,9 +916,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(name, text)
                 self.assertIn('未执行', text)
         self.server.call_tool.assert_not_awaited()
-        self.runner.gate.note_tool_use.assert_not_called()
-        self.runner.gate.decide.assert_not_awaited()
-        self.runner.gate = None
+        self.assertEqual(self.planning.rounds_used, 0)
         self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = True, True, 'agent'
         self.server.call_tool.return_value = CallToolResult.model_validate({
             'content': [{'type': 'text', 'text': 'executed once'}]})
@@ -977,7 +965,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_workspace_chat_programs_do_not_need_legacy_flag_and_game_stays_closed(self):
         self.runner.chat_only = self.runner.paused = True
-        self.runner.allow_programs = True
         data = self.native_request('offline-chat')
         result = await native_tool_hook(self.runner, data)
         self.assertEqual(result['decision'], 'allow')
@@ -987,7 +974,6 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             denied = await self.runner._request('item/tool/call', {'tool': name, 'arguments': {}})
             self.assertFalse(denied['success'])
         self.server.call_tool.assert_not_awaited()
-        self.runner.allow_programs = False
         denied = await native_tool_hook(self.runner, self.native_request('closed-chat'))
         self.assertEqual(denied['decision'], 'allow')
         from orchestrator.codex_native import finish_native_tools
@@ -1245,14 +1231,12 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
             await self.runner._request("item/permissions/requestApproval", {})
 
     async def test_exhausted_game_planning_bank_does_not_prevent_workspace_program(self):
-        from orchestrator.pausegate import PauseGate
-        self.runner.gate = PauseGate(self.metrics, enabled=True, started=True, sim_only=True)
         result = await native_tool_hook(self.runner, self.native_request('b1'))
         self.assertEqual(result['decision'], 'allow')
         from orchestrator.codex_native import finish_native_tools
         finish_native_tools(self.runner)
         self.assertFalse(self.metrics.tools_running)
-        self.assertEqual(self.runner.gate.bank, 0)
+        self.assertEqual(self.planning.bank, 0)
 
     def test_usage_and_compaction_are_actual_events(self):
         self.runner._event("thread/tokenUsage/updated", {"tokenUsage": {

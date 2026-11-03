@@ -60,7 +60,7 @@ class MetricsState:
     stiff_frames: int = 0             # 思考僵直推进的帧数（探索模式开了 --stiffness 时）
     stiff_s: float = 0.0              # 思考僵直的游戏内秒数
     retries: int = 0                  # 自动重试次数（重算程序运行次数，不唤醒大模型）
-    pause_denials: int = 0            # 规划轮次用完后被拒绝的工具调用次数（见 pausegate.py）
+    pause_denials: int = 0            # 旧工具规划门禁拒绝数，仅兼容历史统计；主控模拟预算由独立账本记录
     plan_rounds_left: int | None = None  # 本章还剩的规划轮次（--limit-planning 时）；None = 不限（默认）
     plan_rounds_used: int = 0         # 用掉的规划轮次（准备阶段不算）
     replaying: bool = False           # 规划回放正在画面上播放（与智能体的思考同时进行，不改 status）

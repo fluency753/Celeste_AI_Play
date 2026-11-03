@@ -169,17 +169,14 @@ class TunableTests(unittest.TestCase):
             self.assertEqual(SimEnergy(Path(folder) / "e.json", rules=rules).snapshot()["balance"], 10)
         self.assertIn("体力上限100，初始60", AssistRules().text())
 
-    def test_explore_program_runs_between_acts(self):
-        from orchestrator.game_session import GameSession
-        session = GameSession.__new__(GameSession)
-        session.cfg = cfg(mode="explore", explore_program_runs=2)
-        session.programs_since_act = 0
-        self.assertIsNone(session.program_run_denied())
-        self.assertIsNone(session.program_run_denied())
-        self.assertIsNone(session.program_run_denied())
-        self.assertEqual(session.programs_since_act, 0)
-        session.cfg.mode = "speedrun"
-        self.assertIsNone(session.program_run_denied())              # 速通模式不限
+    def test_legacy_program_runs_setting_is_readable_but_not_published_as_a_limit(self):
+        from orchestrator.startup_prompt import current_settings
+        config = cfg(mode='explore')
+        tuning.apply(config, {'explore_program_runs': 2})
+        self.assertEqual(config.explore_program_runs, 2)
+        self.assertEqual(config.tuning['explore_program_runs'], 2)
+        self.assertIsNone(current_settings(config)['program']['calls_between_act'])
+        self.assertNotIn('explore_program_runs', [row['key'] for row in tuning.catalog()])
 
     def test_bash_limits(self):
         from orchestrator.agent import bash_limits_ms

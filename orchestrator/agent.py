@@ -121,14 +121,13 @@ class ClaudeRunner(SessionControls):
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
                  token: str, container: str | None = None, study: KbStudy | None = None,
                  session_id: str | None = None, resume: bool = False, resume_note: str | None = None,
-                 gate=None, playback=None, start_paused=False, prepare_only=False, chat_only=False, naming_only=False):
+                 playback=None, start_paused=False, prepare_only=False, chat_only=False, naming_only=False):
         """resume=True：用 --resume 接着 session_id 这个已有的会话（续跑）；resume_note 不为空时代替开局的第一条消息。"""
         self.cfg = cfg
         from .efforts import normalize_efforts
         selected = next((m for m in (cfg.provider_info or {}).get('models', []) if m.get('id') == cfg.model), None)
         self.capabilities = RuntimeCapabilities(effort_levels=tuple(normalize_efforts((selected or {}).get('efforts'))))
         self.study = study
-        self.gate = gate                         # 规划轮次（pausegate.PauseGate），按输出流里的消息分组
         self.playback = playback                 # 规划回放（playback.Playback）：按输出流里的消息把模拟器推演分轮
         self.container = container
         self.run_dir = run_dir
@@ -932,8 +931,6 @@ class ClaudeRunner(SessionControls):
                     # 工具时间从这里开始，到对应的 tool_result 为止（见 metrics.py）
                     self.metrics.tool_begin(str(block.get("id")), str(block.get("name", "")).startswith("mcp__celeste__"),
                                             tool_label(str(block.get("name", "")), block.get("input")))
-                    if self.gate is not None:
-                        self.gate.note_tool_use(str(block.get("id")), message.get("id"))
                     if self.playback is not None:
                         self.playback.note_tool_use(message.get("id"), str(block.get("id")), str(block.get("name", "")),
                                                     block.get("input"))

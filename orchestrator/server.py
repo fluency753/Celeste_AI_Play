@@ -120,12 +120,12 @@ RULE_ALL = "工作区操作不占规划轮次，不受游玩额度限制；游�
 PLAYBACK_NOTE = "主控预测完成的路线可以画进游戏给观众看；回放不推进游戏，不计入章节计时，也不额外扣费。"
 
 
-def build_server(session: GameSession, study: KbStudy | None = None, gate=None) -> MCPServer:
+def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServer:
     server = RecordedMCPServer(session, name="celeste", instructions="《蔚蓝》游戏工具：observe 查看当前帧，act 推进若干帧。",
                        log_level="WARNING")
     metrics = session.metrics
     journal = server.journal
-    accounting = getattr(session, 'planning_budget', None) or gate
+    accounting = getattr(session, 'planning_budget', None)
     ws_note = SIM_NOTE if session.cfg.sim else WORKSPACE_NOTE
     explore = is_explore(session.cfg)
     # 工具按模式注册（modes.game_tools）：narrate 所有模式都有；exit_level 只在直播模式（用户要求时退出关卡）；
@@ -151,9 +151,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, gate=None) 
     session.reset_observation_delivery = reset_observation_delivery
 
     def observation_context(obs, *, force=False, compact=False):
-        # Limited planning tools can become unavailable immediately after a quota charge.
-        # Keep inline geometry available throughout those runs.
-        files_enabled = workspace_capabilities(session.cfg).programs and not (gate is not None and gate.enabled)
+        files_enabled = workspace_capabilities(session.cfg).programs
         return delivery.prepare(session, obs, files_enabled=files_enabled, force=force, compact=compact)
 
     def room_key(obs: dict):

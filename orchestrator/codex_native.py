@@ -84,16 +84,9 @@ async def native_tool_hook(runner, data):
         runner.metrics.add(tool_calls=1)
         from .tool_gate import decide_tool
         canonical = {'Bash': 'Bash', 'apply_patch': 'Write', 'view_image': 'Read'}[name]
-        gate = runner.gate
-        if gate is None:
-            from .pausegate import PauseGate
-            gate = runner.__dict__.get('_native_gate')
-            if gate is None:
-                gate = runner._native_gate = PauseGate(runner.metrics, enabled=False)
-        gate.note_tool_use(ident, ident)
         # PreToolUse additionalContext 是否进入模型无法确认：提醒不在这里确认送达，
         # 而由执行器经同轮 steer 投递，Codex 记入历史后才算收到（offer_native_reminders）。
-        decision = await decide_tool(gate, canonical, ident, metrics=runner.metrics, session=session,
+        decision = await decide_tool(canonical, metrics=runner.metrics, session=session,
                                      reminders=False, execution_guard=turn_guard)
         if decision.get('decision') == 'allow':
             offer = getattr(runner, 'offer_native_reminders', None)

@@ -60,7 +60,7 @@ def main() -> None:
     try:
         session.container = ensure_container(cfg)
         before = session.connect()
-        playback = Playback(cfg, session, metrics, None)
+        playback = Playback(cfg, session, metrics)
         session.playback = playback
         metrics.update(live=True)
         metrics.set_thought("测试规划回放：对比几种起跳位置，确认轨迹展示不会推进游戏。")

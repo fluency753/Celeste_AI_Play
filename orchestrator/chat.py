@@ -147,7 +147,6 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False, fr
         async with host_runner(cfg, directory, metrics, container, session_id=state['session_id'],
                                resume=not pending, chat_only=True, naming_only=bool(name_request)) as runner:
             runner.ready_to_play = state.get('session_kind') == 'ready'
-            runner.allow_programs = capabilities.programs and not name_request
             if name_request:
                 from .save_naming import name_prompt
                 runner.control.enqueue('message', name_prompt())

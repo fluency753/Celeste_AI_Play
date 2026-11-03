@@ -50,12 +50,12 @@ class CodexRunner(ModelRecovery, SessionControls):
     supports_interrupt = True
 
     def __init__(self, cfg, run_dir, session, metrics, container, study=None, *, game_server=None,
-                 session_id=None, resume=False, resume_note=None, gate=None, playback=None,
+                 session_id=None, resume=False, resume_note=None, playback=None,
                  prepare_only=False, start_paused=False, chat_only=False, naming_only=False):
         self.cfg, self.run_dir, self.session, self.metrics = cfg, run_dir, session, metrics
         self.container, self.study, self.game_server = container, study, game_server
         self.session_id, self.resume, self.resume_note = session_id, resume, resume_note
-        self.gate, self.playback, self.prepare_only = gate, playback, prepare_only
+        self.playback, self.prepare_only = playback, prepare_only
         self.chat_only = chat_only
         self.naming_only, self.name_result, self.naming_reply = naming_only, None, None
         self.turns = 0
@@ -86,8 +86,6 @@ class CodexRunner(ModelRecovery, SessionControls):
         self._events = None
         self._last_public = 0.0
         self._init_controls(disabled=prepare_only, start_paused=start_paused)
-        self.native_session.program_guard = self._program_guard
-        self.native_session.workspace_paused = self._workspace_paused
         self.native_session.note_reminders = self.note_reminders
         self.native_session.native_tool_hook = self._native_hook
         self.native_session.file_tool_name = self._file_tool_name
@@ -109,11 +107,10 @@ class CodexRunner(ModelRecovery, SessionControls):
         if self.game_server is not None:
             return  # The game server already owns the shared /gate endpoint.
         from .run import add_gate_route
-        from .pausegate import PauseGate
         from starlette.applications import Starlette
         import uvicorn
         app = Starlette()
-        add_gate_route(app, self.gate or PauseGate(self.metrics, enabled=False), session=self.native_session)
+        add_gate_route(app, session=self.native_session)
         self._native_web = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=self.cfg.mcp_port,
                                                        log_level='warning'))
         self._native_web_task = asyncio.create_task(self._native_web.serve())
@@ -443,24 +440,6 @@ class CodexRunner(ModelRecovery, SessionControls):
                 raise ValueError('用户已暂停试玩，不能观察、操作游戏或请求模拟预测；可按用户要求处理工作区，完成后保持暂停。')
             if game and not self.prepare_only and not self.chat_only and name.removeprefix('celeste_') not in game_tools(self.cfg):
                 raise ValueError(f"当前试玩配置未启用 {name}，本次请求未执行；请使用当前已启用的工具。")
-            if name in FILE_TOOLS:
-                from .tool_gate import decide_tool
-                gate = self.gate or getattr(self, '_native_gate', None)
-                if gate is None:
-                    from .pausegate import PauseGate
-                    gate = self._native_gate = PauseGate(self.metrics, enabled=False)
-                gate.note_tool_use(ident, ident)
-                # 提醒由 _notes_response 经带回执的同轮输入投递，不在决策时确认。
-                decision = await decide_tool(gate, FILE_TOOLS[name], ident, session=self.native_session,
-                                             reminders=False)
-                if decision['decision'] != 'allow':
-                    raise ValueError(decision['reason'])
-            elif self.gate and self.gate.enabled and name != 'celeste_stop_run':
-                # App Server has no Claude message ID: count each dynamic call.
-                self.gate.note_tool_use(ident, ident)
-                allowed, why = await self.gate.decide('mcp__celeste__' + name.removeprefix('celeste_'), ident)
-                if not allowed:
-                    raise ValueError(why)
             if name in FILE_TOOLS:
                 worker_args = {**args, '_tool_names': {key: self._file_tool_name(key) for key in FILE_TOOLS}}
                 try:

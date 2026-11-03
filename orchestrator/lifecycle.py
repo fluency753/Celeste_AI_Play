@@ -17,14 +17,13 @@ async def host_runner(cfg, directory, metrics, container, study=None, **options)
     session = SimpleNamespace(cfg=cfg, metrics=metrics, workspace=cfg.workspace_dir,
                               done=False, done_reason='')
     from .server import build_server, TRANSPORT_SECURITY
-    from .pausegate import PauseGate
     from .run import add_gate_route
     import uvicorn
     server = build_server(session, study)
     runner = adapter.runner(cfg, directory, session, metrics, container, study, **options)
     app = server.streamable_http_app(streamable_http_path='/mcp', session_idle_timeout=None,
                                     host='127.0.0.1', transport_security=TRANSPORT_SECURITY)
-    add_gate_route(app, PauseGate(metrics, enabled=False), session=session)
+    add_gate_route(app, session=session)
     web = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=cfg.mcp_port, log_level='warning'))
     task = asyncio.create_task(web.serve())
     try:

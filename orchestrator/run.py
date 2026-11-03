@@ -40,7 +40,6 @@ from .execution import workspace_capabilities
 from .recording_lifecycle import pending_recording
 from .metrics import Metrics
 from .recording import Recorder, RecordingError, RecordingHalt, options_from
-from .pausegate import PauseGate
 from .live import LiveStatus
 from .modes import EXPLORE, KNOWLEDGE_OF_MODE, MODE_OF_KNOWLEDGE, SPEEDRUN, describe as describe_mode
 from .playback import Playback
@@ -721,7 +720,7 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
         client.close()
 
 
-def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | None = None, session=None) -> None:
+def add_gate_route(app, metrics=None, live_remind_s: float | None = None, session=None) -> None:
     """容器里的 PreToolUse 钩子（agent-container/celeste-gate.py）每次调用工具前 POST 到这里。
     实时展示时（live_remind_s 不为空）兼作解说更新计时器的提醒通道：思考状态累计满 live_remind_s 秒没有 narrate，
     回复里带上 context，钩子把它作为 additionalContext 交给 Claude Code，出现在这次工具结果旁边。"""
@@ -745,7 +744,7 @@ def add_gate_route(app, gate: PauseGate, metrics=None, live_remind_s: float | No
         owner_guard = getattr(session, 'workspace_hook_guard', None)
         if owner_guard is None and session is not None:
             return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Claude 工具会话，本次未执行。', 'context': ''})
-        return JSONResponse(await decide_tool(gate, str(data.get('tool_name') or ''), data.get('tool_use_id'),
+        return JSONResponse(await decide_tool(str(data.get('tool_name') or ''),
                                               metrics=metrics, live_remind_s=live_remind_s, session=session,
                                               execution_guard=(lambda: owner_guard(data)) if owner_guard else None))
 
@@ -1165,11 +1164,6 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         session.before_advance = recording_guard(recorder, run_dir)
 
     capabilities = workspace_capabilities(cfg)
-    gate = PauseGate(metrics, enabled=False,
-                     log=lambda m: print(m, flush=True), rounds_per_room=cfg.rounds_per_room,
-                     death_bonus=cfg.death_bonus, started=previous is not None, sim_only=cfg.sim,
-                     state_path=cfg.workspace_dir / "game" / "rounds.json" if capabilities.workspace_write else None,
-                     room_scale=cfg.room_scale)
     if cfg.sim and cfg.pause_limit:
         from .planning_budget import PlanningBudget
         session.planning_budget = PlanningBudget(
@@ -1178,7 +1172,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             rounds_per_room=cfg.rounds_per_room, death_bonus=cfg.death_bonus, room_scale=cfg.room_scale,
             previous_path=previous['dir'] / 'planning_budget.json' if previous else None,
             legacy=previous is not None)
-    playback = Playback(cfg, session, metrics, gate, log=lambda m: print(m, flush=True))
+    playback = Playback(cfg, session, metrics, log=lambda m: print(m, flush=True))
     if playback.collect:
         session.playback = playback
     live = None
@@ -1192,10 +1186,10 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         print(f"[run] 提示词有本机修改（{where}）：{'、'.join(overrides)}", flush=True)
     if session.workspace is not None:
         live = LiveStatus(session.workspace / "game" / "hud_status.json", metrics).start()
-    server = build_server(session, study, gate)
+    server = build_server(session, study)
     app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                      transport_security=TRANSPORT_SECURITY)
-    add_gate_route(app, gate, metrics, cfg.live_remind_s if capabilities.workspace_write else None,
+    add_gate_route(app, metrics, cfg.live_remind_s if capabilities.workspace_write else None,
                    session=session)
     web = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=cfg.mcp_port, log_level="warning"))
     web_task = asyncio.create_task(web.serve())
@@ -1237,7 +1231,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
                 game_server=server, token=token, session_id=session_id,
                 resume=resumed_session is not None, resume_note=note,
-                gate=gate, playback=playback if playback.collect else None, start_paused=args.start_paused)
+                playback=playback if playback.collect else None, start_paused=args.start_paused)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
             reason = await runner.run()

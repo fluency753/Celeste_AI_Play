@@ -11,6 +11,7 @@ from orchestrator.config import RunConfig
 from orchestrator.metrics import Metrics
 from orchestrator.playback import Playback, MAGIC, HEADER, read_logs
 from orchestrator.rollout_tail import RecordTail
+from orchestrator.planning_budget import PlanningBudget
 
 
 def record(index):
@@ -39,8 +40,11 @@ class StreamTests(unittest.TestCase):
         self.metrics=Metrics(self.root/'metrics.json','test','test','high',60)
         session=SimpleNamespace(workspace=self.root/'workspace',run_dir=self.root/'run',
                                 last_obs={'level':{'bounds':[0,-100,10000,200]}},decision_index=0,room_entry_frame=0)
-        self.gate=SimpleNamespace(started=True,charge=Mock())
-        self.playback=Playback(cfg,session,self.metrics,self.gate,log=lambda _:None)
+        self.budget=PlanningBudget(self.metrics,self.root/'planning_budget.json')
+        self.budget.start()
+        self.budget.on_room('map:A','start')
+        session.planning_budget=self.budget
+        self.playback=Playback(cfg,session,self.metrics,log=lambda _:None)
         cfg.playback_stream_interval_s=1
         self.playback._call=Mock(return_value={'render_avg_ms':1})
         self.file=self.playback.dir/'writer.bin'
@@ -157,7 +161,18 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(self.metrics.state.sim_calls,1)
         self.assertEqual(self.metrics.state.sim_rollouts,3)
         self.assertEqual(len(self.playback.rounds),1)
-        self.gate.charge.assert_called_once()
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
+
+    def test_shell_command_text_without_trajectory_does_not_count_as_simulation(self):
+        self.playback.note_tool_use('message', 'call', 'Bash',
+            {'command': 'echo celeste-sim', 'description': 'ordinary workspace program'})
+        self.playback.note_tool_result('call')
+        self.wait()
+        self.assertEqual(self.metrics.state.sim_calls,0)
+        self.assertEqual(self.metrics.state.sim_rollouts,0)
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
 
     def test_stream_default_draws_every_complete_route(self):
         self.start();self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(1,101)))
@@ -214,7 +229,8 @@ class StreamTests(unittest.TestCase):
         self.playback.note_tool_result('two');self.wait()
         self.assertEqual(self.metrics.state.sim_rollouts,2)
         self.assertEqual(self.metrics.state.sim_calls,1)
-        self.gate.charge.assert_called_once()
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
 
     def test_failed_preview_does_not_suppress_the_final_replay(self):
         self.start();self.file.write_bytes(MAGIC+record(1))
@@ -239,7 +255,8 @@ class StreamTests(unittest.TestCase):
         self.assertTrue(all(len(call.args[0]['tracks'])<=2 for call in self.playback._call.call_args_list))
         self.assertEqual(self.metrics.state.sim_calls,1)
         self.assertEqual(self.metrics.state.sim_rollouts,6)
-        self.gate.charge.assert_called_once()
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
         self.assertEqual(len(self.playback.rounds),1)
         self.assertFalse(self.file.exists())
         self.assertEqual(list(self.playback.pending.glob('*.bin')),[])
@@ -265,7 +282,8 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(self.drawn_starts(),list(range(1,13)))
         self.assertGreater(self.playback._call.call_count,1)
         self.assertEqual(self.metrics.state.sim_rollouts,12)
-        self.gate.charge.assert_called_once()
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
 
     def test_finish_handles_stream_copy_fallback_and_invalid_sources(self):
         self.start()
@@ -308,7 +326,8 @@ class StreamTests(unittest.TestCase):
             self.playback.note_tool_result('call');self.wait()
         self.assertEqual(self.drawn_starts(),[i for i in range(1,61) if i not in (3,4)])
         self.assertEqual(self.metrics.state.sim_rollouts,58)
-        self.gate.charge.assert_called_once()
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
 
     def test_finish_ignores_incomplete_record_after_all_complete_routes(self):
         self.start()
@@ -431,7 +450,7 @@ class StreamTests(unittest.TestCase):
         self.playback.close()
         self.playback.note_tool_result('call')
         self.playback.note_tool_use('late', 'late-call', 'Bash', {})
-        self.playback._submit('late', True)
+        self.playback._submit('late')
         self.assertTrue(self.file.exists())
         self.assertEqual(self.playback._backlog, 0)
         self.assertEqual(self.metrics.state.sim_calls, 0)
@@ -448,7 +467,8 @@ class StreamTests(unittest.TestCase):
         self.playback.drain(timeout=3)
         self.assertEqual(self.metrics.state.sim_calls, 1)
         self.assertEqual(self.metrics.state.sim_rollouts, 1)
-        self.gate.charge.assert_called_once()
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
 
     def test_worker_owns_cleanup_even_when_digest_raises(self):
         self.start()
@@ -478,7 +498,8 @@ class StreamTests(unittest.TestCase):
         self.playback.drain(timeout=3)
         self.assertEqual(self.metrics.state.sim_calls, 1)
         self.assertEqual(self.metrics.state.sim_rollouts, 2)
-        self.gate.charge.assert_called_once()
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
         # A failed transfer must not lose a route, charge the search again, or
         # redraw what the original search's preview already drew.
         self.assertEqual(sorted(self.drawn_starts()), [1, 2])
@@ -507,7 +528,9 @@ class StreamTests(unittest.TestCase):
         locked['on'] = False
         self.playback.note_tool_result('c2'); self.wait()
         self.assertEqual(self.metrics.state.sim_calls, 2)
-        self.assertEqual(sorted(c.args[0] for c in self.gate.charge.call_args_list), ['first search', 'second search'])
+        self.assertEqual(sorted(rd.label for rd in self.playback.rounds), ['first search', 'second search'])
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
         self.assertEqual(sorted(self.drawn_starts()), [1, 2, 3])   # 接管成功时只补画路线 2，路线 1 不重画
         self.assertEqual(self.playback._retain_counts, {})
         self.assertEqual(self.playback._retain_offsets, {})
@@ -522,7 +545,8 @@ class StreamTests(unittest.TestCase):
             self.wait()
         self.playback.drain(timeout=3)
         self.assertEqual(self.metrics.state.sim_calls, 1)
-        self.gate.charge.assert_not_called()
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
         self.assertEqual(self.metrics.state.sim_rollouts, 1)
 
     def test_mixed_native_and_bash_retry_keep_independent_rollout_ownership(self):
@@ -539,7 +563,8 @@ class StreamTests(unittest.TestCase):
         self.wait()
         self.assertEqual(self.metrics.state.sim_calls, 2)
         self.assertEqual(self.metrics.state.sim_rollouts, 2)
-        self.gate.charge.assert_called_once()
+        self.assertEqual(self.budget.bank,3)
+        self.assertEqual(self.budget.rounds_used,0)
         # 两组来源共用同一份预览结果：预览画过的路线不再整批重画（之前第二组会把路线 1 再画一遍）
         self.assertEqual(sorted(self.drawn_starts()), [1, 2])
 
