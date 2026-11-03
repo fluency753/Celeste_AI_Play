@@ -26,9 +26,12 @@ async def check(args):
     knowledge = manifest.get("knowledge_profile", "full")
     cfg = RunConfig(agent="gpt-native", save="test", model="", provider="codex", engine="codex",
                     provider_info={"images": True, "allowed_domains": ["api.openai.com"]},
-                    knowledge_profile=knowledge, sim=knowledge == "full",
+                    knowledge_profile=knowledge, mode="explore" if knowledge == "explore" else "speedrun",
+                    sim=False, sim_assist=False, pause_limit=False,
                     effort="medium", max_minutes=5, live=True)
-    study = KbStudy(cfg.kb_dir, 60, {"/sim/README.md": cfg.sim_dir / "README.md"} if cfg.sim else None)
+    from orchestrator.kb_access import prepare_view
+    prepare_view(cfg)
+    study = KbStudy(cfg.kb_dir, 60)
     prepared = load_preparation(args.prepared, cfg, study)
     directory = REPO_ROOT / "runs/gpt-native" / (datetime.now().strftime("%Y%m%d-%H%M%S") + "-readonly")
     directory.mkdir(parents=True)

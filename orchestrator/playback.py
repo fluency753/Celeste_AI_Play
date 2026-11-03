@@ -57,7 +57,7 @@ PREVIEW_BYTES = 8 * 1024 * 1024  # 所有待播与正在绘制的增量记录共
 
 
 def canon_hash(inputs) -> int:
-    """按键序列的规范化哈希（与 /sim/sim.py 里的同名函数一致）：展开成逐帧按键、每帧按键排序。"""
+    """按键序列的规范化哈希（用于对齐输入与轨迹记录）：展开成逐帧按键、每帧按键排序。"""
     frames: list[str] = []
     for seg in inputs or []:
         seg = str(seg)

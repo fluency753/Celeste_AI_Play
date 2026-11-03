@@ -74,7 +74,7 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 
 ## glob 与 grep
 
-与 Claude 的 Glob／Grep 对应，同一只读工作器、同样的根目录和逐级不跟随符号链接的遍历；不运行程序，不消耗程序次数，不计入 KB 阅读进度。
+与 Claude 的 Glob／Grep 对应，同一只读工作器、同样的根目录和逐级不跟随符号链接的遍历；不运行程序，不受模拟预算限制，不计入 KB 阅读进度。
 
 - `glob`：`pattern` 支持 `*`、`?`、`**`、`[...]`、`{a,b}`，相对 `path`（默认 `/workspace`）匹配完整相对路径；以 `/` 开头的模式自带起始目录。结果按修改时间从新到旧，`offset/limit` 分页（默认 250 条）。
 - `grep`：`pattern` 为 Python 正则，`path` 为文件或目录，`glob` 过滤文件名（不含 `/` 时只比较文件名），`output_mode` 为 `files_with_matches`（默认）、`content`（带行号，可加 `context` 行上下文）或 `count`，`ignore_case` 忽略大小写。跳过二进制、硬链接和超过 8 MiB 的文件；遍历超过 10 万项或读取超过 256 MiB 时停止并说明结果可能不完整。

@@ -98,7 +98,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
   - 第三方平台（如 DeepSeek）：用户在向导里给出密钥文件或粘贴密钥。密钥存在仓库目录之外（`%USERPROFILE%\.celeste-ai-play\`），`configs\local.providers.json` 只记文件位置。平台预设见 `configs\providers.json`。
   - Codex（GPT）：用户在浏览器完成设备登录：`.\.venv\Scripts\python.exe -m orchestrator.codex_container --account login`。这条命令会输出授权链接与代码，让用户自己打开。
 - 在游戏里建测试存档（或在运行时用 `--create-save` 让主控新建）；建只启用 CelesteAIBridge 的 Mod 配置；在 Steam 里关闭云同步。
-- 预置模拟器 `sim\dist` 不随仓库分发。用户有的话由用户提供；没有就不用（探索模式照常，速通模式运行 `--no-sim`）。
+- 预置模拟器 `sim\dist` 不随仓库分发。用户有的话由用户提供；没有就不用。预测默认关闭，有资源也须显式开启限额能力，资源不向工作区或 agent 容器提供。
 
 ## 4. 启动运行
 
@@ -144,12 +144,13 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 | `--no-record` | 不录像（默认录：主控自己启动并在结束时关闭 OBS） |
 | `--playback` | 打开规划回放（默认关） |
 | `--sim-assist` | 探索模式的限额短路线预测（默认关，需要本机有 `sim\dist`） |
-| `--no-sim` | 速通模式不开放预置模拟器 |
+| `--sim --limit-planning` | 速通主控限额预测（默认关闭，需配置可用模拟器）；只有试玩运行且有额度时可用 |
+| `--no-sim` | 明确关闭速通主控预测（默认已关闭） |
 | `--resume <运行目录>` | 续跑（见 6 节） |
 
 完整参数见 `.\.venv\Scripts\python.exe -m orchestrator.run --help`、`docs/USAGE.md` 4.1 节、`docs/DEPLOY.md` 6.1 节。可调参数用 `--tune 名称=值`，见 `docs/USAGE.md` 4.11 节（例如探索模式规划程序单次最长 `explore_program_s`，默认 120 秒；思考语句汉字上限 `thought_max_hanzi`，默认 30）。
 
-规划回放只有在智能体把逐帧轨迹交给工作区的绘制接口 `show.trajectory()` 时才有内容。用户想要回放时，除了 `--playback`，还要在提示词里要求智能体主动写推演程序并适配这个接口（控制台"提示词"页的个人追加要求，保存在本机 `local\personal_prompts.json`）。
+规划回放可以展示主控 `simulate` 的预测轨迹，或工作区绘制接口 `show.trajectory()` 收到的自算轨迹。用户想展示自算轨迹时，除了 `--playback`，还需在提示词里约定适配该接口（控制台"提示词"页的个人追加要求，保存在本机 `local\personal_prompts.json`）。
 
 ## 5. 运行中怎么监督
 

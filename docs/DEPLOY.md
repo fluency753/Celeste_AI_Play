@@ -253,8 +253,8 @@ winget install Gyan.FFmpeg
 
 预置模拟器由游戏代码生成，**不在仓库里，也不应公开分发**。在新电脑上有两种选择：
 
-- 如果你有一台已经构建好模拟器的开发机，把 `sim\dist` 整个目录（`celeste-sim`、`sim.py`、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`）复制到新电脑仓库的 `sim\dist`；它是 Linux 单文件程序，只在容器里运行，与 Windows 版本无关。自检：游戏在 test 存档的关卡里时运行 `.\.venv\Scripts\python.exe tools\sim_check.py`，应"逐帧一致"。
-- 没有模拟器时用**关模拟器的版本**：速通模式新运行在本机没有 `sim\dist` 时自动按 `--no-sim` 运行（提示词换成不教打法的版本，见 6 节）。探索模式的限额预测（`--sim-assist`）默认关闭，开它需要预置模拟器。
+- 如果你有一台已经构建好模拟器的开发机，把 `sim\dist` 整个目录（`celeste-sim`、`sim.py`、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`）复制到新电脑仓库的 `sim\dist`；它是 Linux 单文件程序，仅主控私有 Docker worker 使用，不向 agent 挂载或复制；能力默认关闭，与 Windows 版本无关。自检：游戏在 test 存档的关卡里时运行 `.\.venv\Scripts\python.exe tools\sim_check.py`，应"逐帧一致"。
+- 不启用时照常运行：速通与探索的预置预测均默认关闭，不因发现 `sim\dist` 自动开启。配置可用资源后，速通需显式用 `--sim --limit-planning`，探索用 `--sim-assist`；仅试玩运行且有额度时接受预测。
 
 ### 4.9 知识库参考资料（可选）
 
@@ -295,7 +295,7 @@ winget install Gyan.FFmpeg
 ### 5.2 直接用命令
 
 ```powershell
-# 速通模式依次通关序章、1A、2A（Anthropic Opus；OBS 录屏与游戏内 HUD 默认开启，OBS 由主控自己启动和关闭；本机有预置模拟器时默认开放）
+# 速通模式依次通关序章、1A、2A（Anthropic Opus；OBS 录屏与游戏内 HUD 默认开启，OBS 由主控自己启动和关闭；预置模拟能力默认关闭，需另加 --sim --limit-planning 显式启用）
 .\.venv\Scripts\python.exe -m orchestrator.run --agent opus --save <存档名> --model opus --mode speedrun --chapters 0,1,2
 # DeepSeek
 .\.venv\Scripts\python.exe -m orchestrator.run --agent deepseek-flash --save <存档名> --provider deepseek --model deepseek-flash --chapters 0,1,2
@@ -391,7 +391,7 @@ winget install Gyan.FFmpeg
 | `--no-hud-window` / `--no-hud` | 关 / 关 | 不开 HUD 窗口 / 连 HUD 服务也不开 |
 | `--hud-port` | 47790 | HUD 端口 |
 | `--bridge-port` / `--mcp-port` | 47774 / 47780 | 桥接与游戏工具服务的端口 |
-| `--runtime` | `container`（沿用） | `host`：在本机运行、只开放游戏工具（早期的过渡方式，没有沙箱、没有模拟器） |
+| `--runtime` | `container`（沿用） | `host`：在本机运行、只开放游戏工具（早期的过渡方式，没有工作区程序沙箱；可通过 MCP 使用显式开启的主控限额模拟，模拟 worker 仍需 Docker） |
 | `--skip-enter` | 关 | 已在关卡内可操作时跳过菜单宏 |
 | `--no-agent` | 关 | 只启动工具服务，不启动智能体（调试；可配合 `tools\game_tool.py` 手动调用游戏工具） |
 | `--ffmpeg` / `--record-video-args` / `--audio-offset-ms` | 见配置 | 临时覆盖录制设置 |
@@ -459,7 +459,7 @@ winget install Gyan.FFmpeg
 
 另外，桥接与主控、OBS 插件之间还用本机共享内存交换 MOD 形式 HUD 的图片（`Local\CelesteAIHud-<桥接端口>`）与录像声音（`Local\CelesteAIRecordAudio-47776`）。原生 GPT 的 Codex app-server 由主控通过容器 stdio 启动；App Server 不开放监听端口，工具钩子复用主控的门禁端口。
 
-容器的出站防火墙（`agent-container\init-firewall.sh`，容器启动时生效）只放行：所用模型平台的域名（Anthropic 平台放行 Anthropic 官方域名；第三方平台只放行它自己的域名，不放行 Anthropic）、宿主机上主控的端口、平台配置里的宿主机端口；其余一律拒绝，DNS 也封掉。智能体用 Bash 运行的程序在零网络的沙箱（bubblewrap）里，连模型平台也连不上，环境里也没有令牌与密钥。Claude Code 以受限模式启动，文件工具只能访问工作区、知识库与模拟器目录；联网工具在托管配置里被拒绝；不允许后台任务。原生 GPT 的 App Server 和原生编程工具也在容器内，使用相同主控门禁和程序额度；Codex 托管权限与共享程序沙箱阻止程序读取登录缓存或联网。改了 `agent-container\` 之后要重新构建镜像，主控发现镜像或平台设置变了会自动重建容器（工作区与会话数据卷保留）。
+容器的出站防火墙（`agent-container\init-firewall.sh`，容器启动时生效）只放行：所用模型平台的域名（Anthropic 平台放行 Anthropic 官方域名；第三方平台只放行它自己的域名，不放行 Anthropic）、宿主机上主控的端口、平台配置里的宿主机端口；其余一律拒绝，DNS 也封掉。智能体用 Bash 运行的程序在零网络的沙箱（bubblewrap）里，连模型平台也连不上，环境里也没有令牌与密钥。Claude Code 以受限模式启动，文件工具只能访问工作区与知识库；联网工具在托管配置里被拒绝；不允许后台任务。原生 GPT 的 App Server 和原生编程工具也在容器内，使用相同主控门禁和单命令时长限制；工作区程序没有调用次数额度，模拟硬预算仅由主控预测入口核验；Codex 托管权限与共享程序沙箱阻止程序读取登录缓存或联网。改了 `agent-container\` 之后要重新构建镜像，主控发现镜像或平台设置变了会自动重建容器（工作区与会话数据卷保留）。
 
 ## 9. 接入其他平台的模型
 
@@ -530,7 +530,7 @@ Remove-Item "<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll"
 | PowerShell 里中文乱码 | 先执行 `chcp 65001`；日志文件本身是 UTF-8 |
 | winget 不存在 | 从 Microsoft Store 安装"应用安装程序"，或按 2.2 节的链接手动安装各软件 |
 | 找不到 docker | Docker Desktop 没启动，或装好后还没新开终端 |
-| 主控提示找不到预置模拟器 | 拷来 `sim\dist`（4.8 节），或加 `--no-sim` 用关模拟器的版本 |
+| 主控提示找不到预置模拟器 | 配置可用 `sim\dist`（4.8 节），或显式关闭 `--sim` / `--sim-assist`；默认不启用预测 |
 | 主控提示需要更新桥接 | 桥接低于 0.12.4；按 4.4 节重新编译安装（先关游戏） |
 | `deploy_bridge.ps1` 提示文件被占用 | 游戏还开着，关掉再试 |
 | 测试客户端连不上桥接 | 游戏没开，或 `log.txt` 里没有 `[CelesteAIBridge] loaded`（Mod 配置里没启用它） |
