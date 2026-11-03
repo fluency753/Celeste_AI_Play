@@ -349,7 +349,7 @@ def main() -> int:
                                    js_api=args.placement,
                                    min_size=(200, MIN_HEIGHT),
                                    on_top=Layout().topmost, focus=True, resizable=True, easy_drag=False, shadow=False,
-                                   text_select=False, zoomable=False)
+                                   text_select=True, zoomable=False)
     args.placement._window = window
     retain_tray_on_close(window, args.placement)
     window.events.loaded += args.placement._sync_page

@@ -3,11 +3,29 @@ import queue
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-from overlay.window import manage, retain_tray_on_close
+from overlay.window import main, manage, retain_tray_on_close
 from overlay.placement import PlacementAPI
 
 
 class WindowTests(unittest.TestCase):
+    def test_startup_allows_text_selection_without_enabling_body_drag(self):
+        webview = MagicMock()
+        layout = MagicMock()
+        layout.topmost = True
+        with patch.dict('sys.modules', {'webview': webview}), \
+             patch('sys.argv', ['overlay.window', '--url', 'http://hud.test/hud']), \
+             patch('overlay.window.sys.platform', 'win32'), \
+             patch('overlay.window.set_dpi_awareness'), \
+             patch('overlay.window.Layout', return_value=layout), \
+             patch('urllib.request.urlopen') as ready:
+            self.assertEqual(main(), 0)
+        ready.assert_called_once_with('http://hud.test/hud', timeout=2)
+        options = webview.create_window.call_args.kwargs
+        self.assertTrue(options['text_select'])
+        self.assertFalse(options['easy_drag'])
+        self.assertIs(options['js_api']._window, webview.create_window.return_value)
+        webview.start.assert_called_once()
+
     def run_window(self, commands=(), minimized=False, visible_again=False):
         user=MagicMock();user.IsWindow.side_effect=[True,True,False];user.IsIconic.return_value=minimized
         user.IsWindowVisible.side_effect=[False,visible_again]
