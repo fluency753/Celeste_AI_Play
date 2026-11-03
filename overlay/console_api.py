@@ -611,12 +611,14 @@ def prompt_read(name: str) -> dict:
 
 def _prompt_read(name: str, pid: str) -> dict:
     from orchestrator import profiles
-    from orchestrator.prompting import overrides_dir, read_part, repo_part_path
+    from orchestrator.prompting import overrides_dir, read_part, repo_part_path, repo_part_text, part_source
     name = _prompt_name(name)
     text = read_part(name)
-    repo = repo_part_path(name).read_text(encoding='utf-8')
+    repo = repo_part_text(name)
+    source = part_source(name)
     return {"name": name, "text": text, "version": _version(text), "overridden": (overrides_dir() / name).is_file(),
             "source_path": _rel(repo_part_path(name)),
+            "inherited_from": source if source != name else None,
             "live_editable": _button_template(name), "readonly": profiles.readonly(pid),
             "repo_text": repo, "placeholders": [{"name": k, "meaning": v} for k, v in PLACEHOLDERS.items() if k in repo or k in text]}
 
@@ -630,7 +632,7 @@ def prompt_write(name: str, text, version) -> dict:
 
 
 def _prompt_write(name: str, text, version, pid: str) -> dict:
-    from orchestrator.prompting import check_program_placeholders, overrides_dir, read_part, repo_part_path
+    from orchestrator.prompting import check_program_placeholders, overrides_dir, read_part, repo_part_text
     name = _prompt_name(name)
     if not _button_template(name) and orchestrator_status()["running"]:
         raise ValueError("有主控在运行：等运行结束再保存提示词")
@@ -643,7 +645,10 @@ def _prompt_write(name: str, text, version, pid: str) -> dict:
     if name == 'runtime_zh.md':
         from orchestrator.startup_prompt import validate_runtime_template
         validate_runtime_template(text)
-    repo = repo_part_path(name).read_text(encoding='utf-8')
+    if name == 'interface_zh.md':
+        from orchestrator.interface_sections import parse_interface
+        parse_interface(text)
+    repo = repo_part_text(name)
     root = overrides_dir()
     override = root / name
     if text == repo:

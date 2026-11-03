@@ -7,6 +7,41 @@ import unittest
 
 
 class ConsolePromptEditorTests(unittest.TestCase):
+    def test_removing_single_section_override_shows_inherited_text_and_source(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node required')
+        source = (Path(__file__).resolve().parents[1]/'overlay/console.html').read_text(encoding='utf-8')
+        functions = source[source.index('async function savePromptFile('):source.index('async function loadAbout(')]
+        harness = r'''
+const fs=require('fs'),assert=require('assert');
+const ids={},messages=[];
+const $=id=>ids[id] ||= {value:'',textContent:'',disabled:false,classList:{toggle(){}}};
+const ui={promptFile:{name:'tool_act_zh.md',version:'old',dirty:true}};
+const postJSON=async()=>({name:'tool_act_zh.md',text:'继承的动作说明',version:'new',overridden:false,
+ inherited_from:'interface_zh.md',source_path:'orchestrator/prompts/shared/interface_zh.md'});
+const toast=message=>messages.push(message),updatePromptButtons=()=>{},loadPromptPreview=()=>{};
+eval(JSON.parse(fs.readFileSync(0,'utf8')).functions+`
+(async()=>{
+ $('promptText').value='仓库默认说明';
+ await savePromptFile();
+ assert.equal($('promptText').value,'继承的动作说明');
+ assert($('promptStatus').textContent.includes('继承 interface_zh.md'));
+ assert.equal(ui.promptFile.dirty,false);assert.equal($('promptReset').disabled,true);
+ $('promptText').value='单节修改';
+ await resetPromptFile('tool_act_zh.md');
+ assert.equal($('promptText').value,'继承的动作说明');
+ assert($('promptStatus').textContent.includes('继承 interface_zh.md'));
+ assert(messages[0].includes('继承 interface_zh.md'));
+ console.log('ok');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+`);
+'''
+        result = subprocess.run([node, '-e', harness], input=json.dumps({'functions': functions}),
+                                text=True, encoding='utf-8', capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('ok', result.stdout)
+
     def test_opening_message_reveals_editor_scrolls_to_it_and_preserves_dirty_changes(self):
         node = shutil.which('node')
         if not node:

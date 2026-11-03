@@ -2476,7 +2476,9 @@ async function openPromptFile(name) {
   $("promptPath").textContent = (doc.source_path || "orchestrator/prompts/" + name) + (doc.overridden ? "（本机修改）" : "");
   $("promptText").value = doc.text;
   $("promptStatus").textContent = profileReadonly() ? "默认配置是仓库原样、只读：要修改先在顶部“配置”里新建一份。"
-    : doc.overridden ? "这个文件有本机修改，正在编辑的是本机修改。" : "正在编辑仓库里的版本；保存后存为这份配置里的本机修改。";
+    : doc.overridden ? "这个文件有本机修改，正在编辑的是本机修改。"
+    : doc.inherited_from ? `当前章节继承 ${doc.inherited_from} 的本机修改；保存后单独覆盖本章节。`
+    : "正在编辑仓库里的版本；保存后存为这份配置里的本机修改。";
   $("promptStatus").classList.remove("warn");
   $("promptPlaceholderBox").hidden = !doc.placeholders.length;
   $("promptPlaceholders").replaceChildren(...doc.placeholders.flatMap(p => [
@@ -2885,10 +2887,13 @@ async function savePromptFile() {
   try {
     const result = await postJSON("/api/console/prompt/file", { name: f.name, text: $("promptText").value, version: f.version });
     ui.promptFile = { ...result, dirty: false };
+    $("promptText").value = result.text;
     $("promptPath").textContent = (result.source_path || "orchestrator/prompts/" + f.name) + (result.overridden ? "（本机修改）" : "");
     $("promptReset").disabled = !result.overridden;
     const missing = result.missing_placeholders || [];
-    $("promptStatus").textContent = (result.overridden ? (result.live_editable ? "已保存为本机修改，下一次对应消息生成时生效。" : "已保存为本机修改，下一次运行生效。") : "和仓库里的版本相同，已删掉本机修改。")
+    $("promptStatus").textContent = (result.overridden ? (result.live_editable ? "已保存为本机修改，下一次对应消息生成时生效。" : "已保存为本机修改，下一次运行生效。")
+      : result.inherited_from ? `已删掉单节修改；当前继承 ${result.inherited_from} 的本机修改。`
+      : "和仓库里的版本相同，已删掉本机修改。")
       + (missing.length ? ` 注意：删掉了占位符 ${missing.join("、")}，运行时这些位置不会再填入对应的内容。` : "");
     $("promptStatus").classList.toggle("warn", missing.length > 0);
     updatePromptButtons();
@@ -2898,13 +2903,14 @@ async function savePromptFile() {
 async function resetPromptFile(name) {
   try {
     const doc = await postJSON("/api/console/prompt/reset", { name });
-    toast(`${name} 已恢复成仓库里的版本。`);
+    const status = doc.inherited_from ? `已删掉单节修改；当前继承 ${doc.inherited_from} 的本机修改。` : `${name} 已恢复成仓库里的版本。`;
+    toast(status);
     if (ui.promptFile && ui.promptFile.name === name) {
       ui.promptFile = { ...doc, dirty: false };
       $("promptText").value = doc.text;
       $("promptPath").textContent = doc.source_path || "orchestrator/prompts/" + name;
       $("promptReset").disabled = true;
-      $("promptStatus").textContent = "已恢复成仓库里的版本。";
+      $("promptStatus").textContent = status;
       updatePromptButtons();
     } else loadPromptPreview();
   } catch (e) { toast(e.message, true); }

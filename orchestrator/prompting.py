@@ -7,6 +7,7 @@ from .config import REPO_ROOT, chapter_name_by_id
 from .kb_study import KbStudy
 from .execution import workspace_capabilities
 from .modes import act_frame_cap, act_frame_min, collision_image_mode, game_tools, has_cutscene_tool, is_explore
+from .interface_sections import PART_NAMES, parse_interface
 
 PROMPTS = REPO_ROOT / "orchestrator" / "prompts"
 
@@ -392,10 +393,12 @@ def overrides_dir() -> Path:
 
 
 def prompt_files() -> list[str]:
-    return sorted(p.name for p in PROMPTS.rglob('*.md'))
+    return sorted({p.name for p in PROMPTS.rglob('*.md')} | PART_NAMES.keys())
 
 
 def repo_part_path(name: str) -> Path:
+    if name in PART_NAMES:
+        name = 'interface_zh.md'
     matches = list(PROMPTS.rglob(name)) if Path(name).name == name else []
     if not matches:
         raise FileNotFoundError(f'提示词文件不存在：{name}')
@@ -404,12 +407,34 @@ def repo_part_path(name: str) -> Path:
     return matches[0]
 
 
+def repo_part_text(name: str) -> str:
+    """Read a physical template or a legacy tool ID's section baseline."""
+    text = repo_part_path(name).read_text(encoding='utf-8')
+    if name in PART_NAMES:
+        return parse_interface(text)[1][PART_NAMES[name]]
+    return text
+
+
 def read_part(name: str) -> str:
     """提示词文件的当前内容：有本机修改时用本机修改。"""
     override = overrides_dir() / name
     if override.is_file():
         return override.read_text(encoding="utf-8")
-    return repo_part_path(name).read_text(encoding='utf-8')
+    if name in PART_NAMES:
+        parsed = parse_interface(read_part('interface_zh.md'))
+        if parsed is not None:
+            return parsed[1][PART_NAMES[name]]
+    return repo_part_text(name)
+
+
+def part_source(name: str) -> str:
+    """An inherited tool section is edited through the merged local template."""
+    root = overrides_dir()
+    if (name in PART_NAMES and not (root / name).is_file()
+            and (root / 'interface_zh.md').is_file()
+            and parse_interface(read_part('interface_zh.md')) is not None):
+        return 'interface_zh.md'
+    return name
 
 
 def overridden_parts() -> list[str]:
@@ -434,6 +459,9 @@ def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None, cfg=No
         text = transform(text)
     blocks = dict(slots or {})
     if '{interface}' in text:
+        interface = read_part('interface_zh.md')
+        parsed = parse_interface(interface)
+        wrapper = parsed[0] if parsed is not None else interface
         sections = []
         if cfg is not None:
             for tool in game_tools(cfg):
@@ -442,9 +470,10 @@ def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None, cfg=No
                 sections += _file_parts('tool_files_zh.md')
             if workspace_capabilities(cfg).programs:
                 sections += _file_parts('tool_programs_zh.md')
-        blocks['{interface}'] = _file_parts('interface_zh.md', slots={'{tool_sections}': sections})
+        blocks['{interface}'] = _file_parts('interface_zh.md', transform=lambda _: wrapper,
+                                            slots={'{tool_sections}': sections})
     if not any(key in text for key in blocks):
-        return [PromptPart(name, text, name, sep)]
+        return [PromptPart(name, text, part_source(name), sep)]
     import re
     parts = []
     for i, piece in enumerate(re.split('(' + '|'.join(re.escape(key) for key in blocks) + ')', text)):

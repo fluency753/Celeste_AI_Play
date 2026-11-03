@@ -15,7 +15,7 @@
 
 ## 工具与相关文件
 
-`interface_zh.md` 是短目录，不再同时堆放坐标、原始字段、输入语法和自动处理策略。它根据实际登记的工具和文件／程序能力，插入对应工具章节：
+`shared/interface_zh.md` 集中保存工具简介，以独占一行的 `<!-- tool:observe -->` 和 `<!-- /tool:observe -->` 等成对标记划分章节。生成时按实际登记的工具和文件／程序能力选取对应章节，标记不进入模型输入；完整数据格式和高级用法仍在知识库按需查阅：
 
 - `observe`：当前状态与坐标；`latest_obs.json`、`collision.json` 和历史 `rooms/`。完整观测、几何和数据文件格式在 `shared/tools/observe*`。
 - `act`：显式输入与返回；计划文件、`last_act.json`、`retry.json`、`tas.py` 以及调用核验。完整输入、计划、TAS 与续输入在 `shared/tools/act.md`。
@@ -27,9 +27,13 @@
 
 ## 提示词源码与动态工具名
 
-`orchestrator/prompts/shared/` 保存通用提示；`modes/explore/`、`modes/speedrun/` 保存模式专属提示；`tools/` 保存工具章节；`buttons/` 保存消息正文。
+`orchestrator/prompts/shared/` 保存通用提示和集中式工具说明 `interface_zh.md`；`modes/explore/`、`modes/speedrun/` 保存模式专属提示；`buttons/` 保存消息正文。
 
 文件名仍是编辑器与本机覆盖的稳定逻辑 ID，例如 `pause_zh.md`。`repo_part_path()` 将 ID 映射到新源码位置；原有 `local/prompts/pause_zh.md` 或 profile 下的同名覆盖继续优先使用，不自动搬动、拆分或重写。
+
+原 `tool_*_zh.md` 保留为工具章节的逻辑 ID，不再对应独立源码文件；控制台单节编辑和旧覆盖继续可用，源码路径统一指向 `shared/interface_zh.md`。读取单节基准用 `repo_part_text()`，不能直接读取该路径的全文。覆盖优先级为旧工具单节覆盖、合并文档中的章节、仓库默认章节；没有标记的旧接口覆盖继续支持 `{tool_sections}`，无槽位的旧全文覆盖保持整体生效。
+
+合并模板的公共导语放在章节前，所有工具章节均须保留（允许空正文）；工具顺序由实际登记顺序决定。保存时拒绝重复、嵌套、缺失或未闭合的章节，也不允许章节标记与旧 `{tool_sections}` 混用；失败不覆盖本机文件。
 
 受控模板和共享知识库用 `{tool:act}`、`{tool:Bash}` 等显式标记插入当前执行器名称；Codex 对应 `celeste_act` 和原生 Shell，Claude 对应 `act` 和 Bash。代码块、路径和 JSON 协议值保持字面值，个人追加正文不进入改名流程。旧模板的普通叙述兼容原有能力名，但不扫描受保护的引号字符串和代码块。程序时限参数仍由环境生成，不能只替换工具名而保留另一执行器的参数约定。
 
