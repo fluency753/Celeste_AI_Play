@@ -27,7 +27,10 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         self.cfg = RunConfig(agent="control-test", save="test", model="model", live=True)
         self.metrics = Metrics(self.root / "metrics.json", "control-test", "model", "medium", 600)
         self.server = SimpleNamespace(call_tool=AsyncMock(return_value=CallToolResult(content=[])))
-        self.runner = CodexRunner(self.cfg, self.root, None, self.metrics, "container", game_server=self.server)
+        from orchestrator.goals import GoalManager
+        session = SimpleNamespace(cfg=self.cfg, metrics=self.metrics, workspace=None, done=False,
+                                  goals=GoalManager(self.root), goal_values=lambda: {})
+        self.runner = CodexRunner(self.cfg, self.root, session, self.metrics, "container", game_server=self.server)
         self.runner.session_id = "thread"
         self.runner.turn_id = "turn"
         self.runner.turn_active = True
@@ -127,7 +130,7 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
             return CallToolResult(content=[])
         self.server.call_tool.side_effect = action
         first = asyncio.create_task(self.runner._request("item/tool/call", {"tool": "celeste_act", "arguments": {}}))
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 3)
         ident = self.runner.control.enqueue("pause")
         self.task = asyncio.create_task(self.runner._controls())
         await self.wait_for(lambda: self.runner.paused)
@@ -177,7 +180,7 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         for name in ("celeste_act", "celeste_observe"):
             result = await self.runner._request("item/tool/call", {"tool": name, "arguments": {}})
             self.assertFalse(result["success"])
-            self.assertIn("试玩已经结束", result["contentItems"][0]["text"])
+            self.assertIn("聊天阶段", result["contentItems"][0]["text"])
         from orchestrator.codex_native import native_tool_hook
         self.metrics.update(tool_calls=0)
         allowed = await native_tool_hook(self.runner, {'token':self.runner.native_token,

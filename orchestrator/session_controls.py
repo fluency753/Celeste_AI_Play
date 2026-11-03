@@ -86,13 +86,15 @@ class SessionControls:
         if self.session is not None:
             self.session.note_reminders = self.note_reminders
             self.session.control_guard = self._game_guard
+            self.session.tool_guard = self._tool_guard
             self.session.request_pause = self._agent_pause
             self.session.effort_policy = self._agent_effort_policy
             self.session.effort_levels = lambda: self._effort_status()['effort_levels'] or []
 
     async def _agent_effort_policy(self, value):
-        if self.manual_effort and value != self.manual_effort:
-            raise ValueError(f'用户已固定推理强度为 {self.manual_effort}；先在 HUD 恢复自动调整。')
+        from .game_policy import effort_denial
+        if note := effort_denial(self, value):
+            raise ValueError(note)
         await self._validate_effort(value)
 
     def _public_message(self, ident, text):
@@ -131,17 +133,11 @@ class SessionControls:
                 role='system', kind='系统')
 
     def _game_guard(self):
-        if getattr(self, 'model_waiting', False):
-            return '模型服务恢复等待中，不能执行游戏操作。'
-        if getattr(self, 'prepare_only', False):
-            return '本次仅准备知识库，不允许操作游戏。'
-        if self.paused or self.chat_only:
-            return '用户已暂停试玩，不能执行游戏操作。'
-        if self.session.done or self.goal_finishing:
-            return '本次试玩已结束，不能执行游戏操作。'
-        if self.stop_requested and not self.chat_only:
-            return '用户已中断本次运行，不能再执行游戏操作。'
-        return None
+        return self._tool_guard('act')
+
+    def _tool_guard(self, name, arguments=None):
+        from .game_policy import denial
+        return denial(self, name, arguments)
 
     def _turn_message(self, fallback, rows, *, opening=False, retain_fallback=False, context=''):
         """Choose one lifecycle instruction, keeping user input and separate control facts."""

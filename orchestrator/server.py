@@ -173,9 +173,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     def reload_ticket():
         return (getattr(session, 'reload_epoch', 0), getattr(session, 'reload_observation_required', False))
 
-    def gated(ticket=None) -> str | None:
+    def gated(name, ticket=None) -> str | None:
         """知识库没读完时不执行游戏工具，返回提示。"""
-        guard = getattr(session, 'control_guard', None)
+        tool_guard = getattr(session, 'tool_guard', None)
+        guard = (lambda: tool_guard(name)) if tool_guard else getattr(session, 'control_guard', None)
         if guard and (note := guard()):
             journal.not_executed()
             return note
@@ -254,7 +255,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     async def observe(detail: str = 'overview', region: list[float] | None = None, offset: int = 0,
                       limit: int = 32, snapshot_id: str | None = None) -> list:
         async with journal.execution(call_lock):
-            if (note := gated()) is not None:
+            if (note := gated('observe')) is not None:
                 return [note]
             if detail == 'time':
                 if region is not None or offset or limit != 32 or snapshot_id is not None:
@@ -314,7 +315,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                   stop_on: list[str] | None = None, input_format: str | None = None) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
-            if (note := gated(ticket)) is not None:
+            if (note := gated('act', ticket)) is not None:
                 return [note]
             begin()
             try:
@@ -379,6 +380,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     @server.tool(name='stop_run', description='任务被工具故障、缺少能力或其他无法继续的条件阻塞时，用 reason 说明原因（200 字以内）报告给用户：主控暂停试玩，章节内保持冻结，菜单正常运行，由用户决定继续还是停止。不是通关，不退出关卡，不用于普通死亡或仍可尝试的难点。调用后结束本轮，等待用户处理；暂停或知识库未读完也能报告。', structured_output=False)
     async def stop_run(reason: str) -> list:
         async with journal.execution(call_lock):
+            tool_guard = getattr(session, 'tool_guard', None)
+            if tool_guard and (note := tool_guard('stop_run')):
+                journal.not_executed()
+                return [note]
             try:
                 result = await asyncio.to_thread(session.stop_run, reason)
                 journal.detail(result)
@@ -396,7 +401,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     async def exit_level(reason: str, finish_run: bool = False) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
-            if (note := gated(ticket)) is not None:
+            if (note := gated('exit_level', ticket)) is not None:
                 return [note]
             begin()
             try:
@@ -416,7 +421,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     async def travel(chapter: int | str, thought: str, checkpoint: int | str = 0) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
-            if (note := gated(ticket)) is not None:
+            if (note := gated('travel', ticket)) is not None:
                 return [note]
             begin()
             try:
@@ -448,7 +453,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     async def cutscene(action: str, choice: int | None = None) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
-            if (note := gated(ticket)) is not None:return [note]
+            if (note := gated('cutscene', ticket)) is not None:return [note]
             begin()
             try:
                 obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
@@ -468,7 +473,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                        request_file: str | None = None, request_id: str | None = None) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
-            if (note := gated(ticket)) is not None:
+            if (note := gated('simulate', ticket)) is not None:
                 return [note]
             budget = getattr(session, 'planning_budget', None) or getattr(session, 'sim_energy', None)
             if budget is None:

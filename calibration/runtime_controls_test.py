@@ -187,7 +187,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.runner.chat_only, self.runner.paused = True, True
         self.runner.turn_active = True
         self.assertEqual((await self.workspace_request())['decision'], 'allow')
-        self.assertIn('暂停', self.runner._game_guard())
+        self.assertIn('聊天', self.runner._game_guard())
         self.assertIn('聊天阶段', self.runner._lifecycle_prompt())
 
     async def test_pause_waits_for_mcp_call_then_blocks_next_simulation(self):
@@ -330,9 +330,9 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.runner.prepare_only = True
         self.runner.turn_active = True
         self.assertEqual((await self.workspace_request())['decision'], 'allow')
-        self.assertIn('仅准备', self.session.control_guard())
+        self.assertIn('知识库准备', self.session.control_guard())
         result = await self.server.call_tool('simulate', {'candidates': [['60,R']]})
-        self.assertIn('仅准备', result.content[0].text)
+        self.assertIn('知识库准备', result.content[0].text)
 
     async def test_stop_and_goals_use_shared_controller(self):
         self.controls()

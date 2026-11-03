@@ -142,7 +142,8 @@ def predict(session, request):
     """Called by both adapters through the real game tool; no agent code is executed."""
     from . import sim_assist
     with session.lock:
-        guard = getattr(session, 'control_guard', None)
+        tool_guard = getattr(session, 'tool_guard', None)
+        guard = (lambda: tool_guard('simulate')) if tool_guard else getattr(session, 'control_guard', None)
         if guard and (reason := guard()):
             raise ValueError(reason)
         if session.done or session.goals.stop_motion.is_set():

@@ -932,7 +932,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.live, self.cfg.sim_assist, self.cfg.cutscene_mode = False, False, 'auto'
         for preparing, chat, paused, explanation in [
                 (True, False, False, '知识库准备'),
-                (False, True, False, '只提供聊天'),
+                (False, True, False, '聊天阶段'),
                 (False, False, True, '用户已暂停')]:
             self.runner.prepare_only, self.runner.chat_only, self.runner.paused = preparing, chat, paused
             for name in ('celeste_simulate', 'celeste_exit_level', 'celeste_cutscene'):

@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .prompting import play_prompt
-from .modes import game_tools
+from .game_policy import GAME_ACTIONS, is_game_tool, tool_name
 from .codex_rpc import CodexRPC
 from .codex_recovery import ModelRecovery, is_model_unavailable
 from .codex_read import read_file, search_files
@@ -77,7 +77,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         self.registered_tools = None
         self.tool_notice = ''
         self.native_token = secrets.token_urlsafe(32)
-        self.native_session = session or SimpleNamespace(cfg=cfg, metrics=metrics, workspace=cfg.workspace_dir)
+        self.native_session = session or SimpleNamespace(cfg=cfg, metrics=metrics, workspace=cfg.workspace_dir, run_dir=run_dir)
         self._native_web = None
         self._native_web_task = None
         self.rpc = CodexRPC(run_dir / "codex-control", self._event, self._request, container=container,
@@ -89,6 +89,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         self.native_session.note_reminders = self.note_reminders
         self.native_session.native_tool_hook = self._native_hook
         self.native_session.file_tool_name = self._file_tool_name
+        self.native_session.tool_guard = self._tool_guard
+        self.native_session.effort_policy = self._agent_effort_policy
 
     def _file_tool_name(self, canonical):
         if self.registered_tools is None or canonical in self.registered_tools:
@@ -420,26 +422,15 @@ class CodexRunner(ModelRecovery, SessionControls):
         ident = params.get("callId") or name
         self.called_tools.append(requested)
         self.metrics.add(tool_calls=1)
-        game = name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_narrate", "celeste_stop_run", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate")
+        game = is_game_tool(name)
         detail = (args.get("description") or args.get("file_path") or
                   (f"{args.get('pattern')} @ {args.get('path') or '/workspace'}" if name in FILE_TOOLS and args.get('pattern')
                    else args.get("path")) or "")
         self.metrics.tool_begin(ident, game_tool=game, label=requested + (" · " + detail if detail else ""))
         dispatched = False
         try:
-            if name == 'celeste_set_effort' and self.manual_effort is not None:
-                raise ValueError(f'用户已手动固定推理强度为 {self.manual_effort}，请保留用户设置；恢复自动后才可自行调整。')
-            if self.session is not None and hasattr(self.session, "goals") and self.session.goals.stop_motion.is_set() and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate"}:
-                reason = self.session.goals.snapshot().get('stop_reason', '停止目标已触发')
-                raise ValueError("停止目标已触发（" + reason + "）。正在保存录像，本次工具未执行，请结束本轮。")
-            if self.chat_only and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_set_effort", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate", "celeste_stop_run"}:
-                raise ValueError("本次试玩已经结束，当前只提供聊天，不连接或操作游戏。")
-            if self.model_waiting and game:
-                raise ValueError('模型服务恢复等待中，本次游戏工具未执行。')
-            if self.paused and name in {"celeste_act", "celeste_observe", "celeste_bash", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate"}:
-                raise ValueError('用户已暂停试玩，不能观察、操作游戏或请求模拟预测；可按用户要求处理工作区，完成后保持暂停。')
-            if game and not self.prepare_only and not self.chat_only and name.removeprefix('celeste_') not in game_tools(self.cfg):
-                raise ValueError(f"当前试玩配置未启用 {name}，本次请求未执行；请使用当前已启用的工具。")
+            if game and (note := self._tool_guard(name, args)):
+                raise ValueError(note)
             if name in FILE_TOOLS:
                 worker_args = {**args, '_tool_names': {key: self._file_tool_name(key) for key in FILE_TOOLS}}
                 try:
@@ -461,15 +452,20 @@ class CodexRunner(ModelRecovery, SessionControls):
                 if self.study is None or not self.study.complete():
                     raise ValueError(self.study.reminder(reader=self._reader_name()) if self.study else "没有准备阶段")
                 text = "全部知识库已读完；结束本次准备，不启动游戏。"
-            elif name in ("celeste_act", "celeste_observe", "celeste_set_effort", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate", "celeste_stop_run") and self.prepare_only:
-                raise ValueError("本次只做知识库准备，不开放游戏操作，不会进入关卡。")
-            elif game and self.game_server is not None and not self.prepare_only:
+            elif name == 'celeste_set_effort' and self.game_server is None:
+                from .server import build_server
+                control_server = getattr(self, '_control_server', None)
+                if control_server is None:
+                    control_server = self._control_server = build_server(self.native_session)
+                result = await control_server.call_tool('set_effort', args)
+                return await self._game_response(result, name, ident, origin_turn)
+            elif game and self.game_server is not None:
                 if name in ("celeste_act", "celeste_observe") and self.study and not self.study.complete():
                     raise ValueError(self.study.reminder(reader=self._reader_name()))
-                if name in {"celeste_act", "celeste_observe", "celeste_exit_level", "celeste_travel", "celeste_cutscene", "celeste_simulate"}:
+                if tool_name(name) in GAME_ACTIONS:
                     async with self.action_lock:
-                        if self.paused:
-                            raise ValueError("用户已暂停试玩，不能执行游戏动作")
+                        if note := self._tool_guard(name, args):
+                            raise ValueError(note)
                         if name != 'celeste_observe' and (reload_ticket[1]
                                 or reload_ticket[0] != getattr(self.session, 'reload_epoch', 0)
                                 or getattr(self.session, 'reload_observation_required', False)):
