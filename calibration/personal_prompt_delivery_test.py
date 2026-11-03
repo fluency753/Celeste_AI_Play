@@ -58,6 +58,8 @@ class PersonalPromptDeliveryTests(unittest.TestCase):
                 for text in (actual, resume):
                     self.assertIn('CAPTURED-MARKER', text)
                     self.assertNotIn('LATER-MARKER', text)
+                    self.assertEqual(text.count('\n> CAPTURED-MARKER'), 1)
+                    self.assertNotIn('\n> > CAPTURED-MARKER', text)
                 self.assertEqual(actual.count('CAPTURED-MARKER'), 1)
                 self.assertIn(actual, resume)
 
@@ -73,11 +75,12 @@ class PersonalPromptDeliveryTests(unittest.TestCase):
                 self.assertFalse(empty['personal_applied'])
                 self.assertNotIn('本机个人追加要求', empty['text'])
                 self.assertFalse(personal.STORE.exists())
-                self.save('all', 'PERSONAL-MARKER')
+                self.save('all', '# PERSONAL-MARKER\n\n## 子标题\n\n- 一条要求')
                 preview = prompt_preview(options)
                 actual = codex_prompt(cfg) if engine == 'codex' else runtime_prompt(cfg)
                 self.assertEqual(preview['text'], actual)
                 self.assertEqual(actual.count('PERSONAL-MARKER'), 1)
+                self.assertIn('> # PERSONAL-MARKER\n>\n> ## 子标题\n>\n> - 一条要求', actual)
                 self.assertEqual([p['scope'] for p in preview['personal_applied']], ['all'])
                 if engine == 'claude' and runtime == 'host':
                     self.assertTrue(actual.startswith(play_prompt(cfg)))

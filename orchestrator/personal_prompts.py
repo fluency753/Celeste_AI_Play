@@ -166,10 +166,14 @@ def snapshot(cfg):
     values = _load(Path(store_path()).absolute())
     entries = [_record(scope, values[scope]) for scope in ('all', specific)
                if values.get(scope, '').strip()]
-    content = [{'scope': item['scope'], 'text': item['text']} for item in entries]
-    version = hashlib.sha256(json.dumps(content, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()[:16]
-    text = ('# 本机个人追加要求\n\n以下要求补充共享说明；仍须遵守当前用户指令、任务范围、操作权限与实际工具限制。\n\n'
-            + '\n\n'.join(f"## {item['label']}\n\n{item['text']}" for item in entries)) if entries else ''
+    def quote(text):
+        lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        return '\n'.join('> ' + line if line else '>' for line in lines)
+
+    text = ('# 本机个人追加要求\n\n以下引用块是本次需要遵循的个人追加要求，用于补充共享说明；'
+            '仍须遵守当前用户指令、任务范围、操作权限与实际工具限制。\n\n'
+            + '\n\n'.join(f"## {item['label']}\n\n{quote(item['text'])}" for item in entries)) if entries else ''
+    version = hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
     return {'entries': entries, 'text': text, 'version': version}
 
 

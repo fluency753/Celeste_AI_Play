@@ -66,6 +66,40 @@ class PersonalPromptTests(unittest.TestCase):
         self.assertEqual(snapshot['text'], personal.instructions(cfg))
         self.assertEqual(snapshot['version'], personal.fingerprint(cfg))
 
+    def test_quoted_rendering_preserves_raw_headings_blank_lines_lists_and_code(self):
+        raw = '# 一级标题\n\n## 二级标题\n\n- 条目\n> 已有引用\n```python\nprint("{tool:act}")\n```\n'
+        saved = self.save('all', raw)
+        before = self.path.read_bytes()
+        cfg = SimpleNamespace(engine='codex', mode='explore')
+        snapshot = personal.snapshot(cfg)
+        quoted = snapshot['text'].split('## 通用（全部执行器与模式）\n\n', 1)[1]
+        self.assertTrue(all(line.startswith('>') for line in quoted.split('\n')))
+        restored = '\n'.join(line[2:] if line.startswith('> ') else '' for line in quoted.split('\n'))
+        self.assertEqual(restored, raw)
+        self.assertIn('> > 已有引用', quoted)
+        self.assertIn('> ```python\n> print("{tool:act}")\n> ```', quoted)
+        self.assertIn('以下引用块是本次需要遵循的个人追加要求', snapshot['text'])
+        self.assertEqual(snapshot['entries'][0], saved)
+        self.assertEqual(personal.read('all'), saved)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_quoted_rendering_covers_bare_carriage_returns_without_rewriting_store(self):
+        raw = '# 标题\r正文\r\r结束'
+        self.save('all', raw)
+        snapshot = personal.snapshot(SimpleNamespace(engine='codex', mode='explore'))
+        self.assertIn('> # 标题\n> 正文\n>\n> 结束', snapshot['text'])
+        self.assertEqual(personal.read('all')['text'], raw)
+
+    def test_delivery_version_covers_envelope_while_edit_version_stays_raw(self):
+        saved = self.save('all', '# 标题')
+        cfg = SimpleNamespace(engine='codex', mode='explore')
+        original = personal.snapshot(cfg)
+        with patch.dict(personal._LABELS, {'all': '新的显示名称'}):
+            changed = personal.snapshot(cfg)
+        self.assertNotEqual(changed['text'], original['text'])
+        self.assertNotEqual(changed['version'], original['version'])
+        self.assertEqual(changed['entries'][0]['version'], saved['version'])
+
     def test_scope_versions_allow_other_scope_changes_but_reject_stale_same_scope(self):
         old_a = personal.read('all')
         old_b = personal.read('codex:explore')
