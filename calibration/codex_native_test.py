@@ -262,7 +262,6 @@ class NativeSandboxTests(unittest.TestCase):
             command = helper.command_args('python3 experiment.py', 15, '/workspace')
         self.assertEqual(command[4:-4], bwrap_args(network_isolated=True))
         self.assertEqual(command[0], '/usr/bin/timeout')
-        self.assertEqual(command[4], '/usr/bin/bwrap')
         # Native Shell runs bash like Claude's Bash tool; the controller retry runner keeps its shell.
         self.assertEqual(command[-3], '/bin/bash')
         self.assertEqual(command[-4], '--')

@@ -203,7 +203,7 @@ class ReadWorkerTests(unittest.TestCase):
         self.assertTrue(result['truncated'])
         self.assertIn('第 2 页及后续页图像未返回', result['notice'])
 
-    def test_host_transport_reuses_sandbox_without_shell_and_passes_json_stdin(self):
+    def test_host_transport_reuses_sandbox_and_passes_json_stdin(self):
         from orchestrator.program_sandbox import bwrap_args
         for call, operation in ((lambda: reader.read_file('isolated', {'file_path': '/kb/a'}), 'read'),
                                 (lambda: reader.search_files('isolated', 'grep', {'pattern': 'x'}), 'grep')):
@@ -212,7 +212,7 @@ class ReadWorkerTests(unittest.TestCase):
                 self.assertEqual(call(), {'kind': 'text'})
             args, kwargs = run.call_args
             self.assertEqual(args[0], 'isolated')
-            prefix = args.index('/usr/bin/bwrap')
+            prefix = args.index('90s') + 1
             self.assertEqual(list(args[prefix:prefix + len(bwrap_args())]), bwrap_args())
             self.assertIn('--unshare-net', args)
             self.assertIn('--clearenv', args)

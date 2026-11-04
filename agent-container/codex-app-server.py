@@ -15,12 +15,15 @@ import time
 from contextlib import contextmanager
 
 
+PLAYER_LOGIN_HOME = Path('/var/lib/celeste-codex-login')
+
+
 @contextmanager
 def player_login():
     if os.environ.get('CELESTE_CODEX_PLAYER_LOGIN') != '1':
         yield ()
         return
-    root = Path('/var/lib/celeste-codex-login')
+    root = PLAYER_LOGIN_HOME
     target = root / 'auth.json'
     path = Path(os.environ['CODEX_HOME']) / 'auth.json'
     fd = os.open(root / 'lease', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -235,7 +238,11 @@ def main():
         if lock_fds and command[:1] == ['codex']:
             command[1:1] = ['-c', 'cli_auth_credentials_store="file"']
         if args.login_command:
-            return subprocess.call(command, pass_fds=lock_fds)
+            # Device login unlinks the old auth.json before saving the new one.
+            # Run credential management at the destination so it cannot unlink
+            # the workspace's alias. App Server still uses its own workspace home.
+            env = {**os.environ, 'CODEX_HOME': str(PLAYER_LOGIN_HOME)} if lock_fds else None
+            return subprocess.call(command, pass_fds=lock_fds, env=env)
         return launch(args.owner, command, lock_fds=lock_fds)
 
 

@@ -9,6 +9,7 @@ from uuid import uuid4
 from orchestrator.codex_container import CodexLoginBusy, exec_command, login_args, login_status
 from orchestrator.codex_rpc import CodexRPC
 from orchestrator.container import PLAYER_LOGIN_MOUNT, docker
+from orchestrator.sandbox import run_program
 
 
 @unittest.skipUnless(os.getenv('CELESTE_CODEX_PLAYER_LOGIN_TEST_IMAGE'), 'requires an explicit disposable test image')
@@ -27,7 +28,7 @@ class PlayerLoginTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             for name in (a_name, b_name):
-                result = docker('exec', name, 'grep', '-F', f'"{PLAYER_LOGIN_MOUNT}"', '/etc/codex/requirements.toml',
+                result = docker('exec', name, 'grep', '-F', f'"{PLAYER_LOGIN_MOUNT}/auth.json"', '/etc/codex/requirements.toml',
                                 check=False)
                 self.assertEqual(result.returncode, 0, result.stderr)
             self.install_fixture(a_name, 'fixture-a')
@@ -51,6 +52,16 @@ class PlayerLoginTests(unittest.IsolatedAsyncioTestCase):
                 await b.start()
             finally:
                 await b.close()
+            # ChatGPT device login clears the old cache before writing a new one.
+            # Exercise that filesystem contract without a real OAuth grant.
+            docker('exec', '-u', 'agent', '-e', 'CODEX_HOME=/home/agent/.codex', b_name,
+                   'python3', '/usr/local/lib/celeste/codex-app-server.py', '--login-command', '--',
+                   'python3', '-c',
+                   "import os; from pathlib import Path; "
+                   "p = Path(os.environ['CODEX_HOME']) / 'auth.json'; p.unlink(); "
+                   "p.write_text('{\"OPENAI_API_KEY\":\"fixture-replaced\"}')")
+            docker('exec', b_name, 'test', '-L', '/home/agent/.codex/auth.json')
+            self.assertTrue(login_status(a_name)['authenticated'])
             self.install_fixture(b_name, 'fixture-b')
             docker('exec', a_name, 'python3', '-c',
                    "import json; from pathlib import Path; "
@@ -68,6 +79,9 @@ class PlayerLoginTests(unittest.IsolatedAsyncioTestCase):
                 result = subprocess.run(exec_command(name, 'codex', 'sandbox', '--', 'bash', '-c', command),
                                         capture_output=True, text=True, encoding='utf-8', timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('sandbox-ok', result.stdout)
+                result = run_program(name, command, timeout_s=10)
+                self.assertTrue(result.ok, result.stderr)
                 self.assertIn('sandbox-ok', result.stdout)
 
     @staticmethod
