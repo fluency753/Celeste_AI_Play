@@ -122,3 +122,19 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 进程归属的独立验收：`python -m calibration.codex_container_ownership_check`，仅操作临时专用容器，结束后清理。长期 OAuth 刷新、完整真实关卡试玩和真实上下文压缩不属于本轮短验收覆盖范围。
 
 Git 文件权限可用显式隔离回归检查：先构建待测镜像，再设置 `CELESTE_CODEX_GIT_IMAGE=<镜像标签>` 并运行 `python -m unittest calibration.codex_git_permissions_test -v`。它只创建临时工作区和专用容器，不挂账号卷、不连接模型或游戏；通过镜像内固定版本 Codex 原生沙箱及生产 Shell 包装验证初始化、跨进程提交、只读档位和越界拒绝。未设置变量时跳过，不在普通回归中自动访问 Docker。真实模型接收、原生工具钩子与同会话跨轮次验证另行执行。
+
+### 共享 player 登录专项回归
+
+在仓库根目录用 PowerShell 构建专用测试镜像。构建成功后，在同一个终端指定该镜像并运行测试。
+
+```powershell
+docker build -t celeste-agent:codex-login-test agent-container
+```
+
+```powershell
+$env:CELESTE_CODEX_PLAYER_LOGIN_TEST_IMAGE = 'celeste-agent:codex-login-test'
+.\.venv\Scripts\python.exe -X utf8 -m unittest calibration.codex_player_login_test -v
+Remove-Item Env:CELESTE_CODEX_PLAYER_LOGIN_TEST_IMAGE
+```
+
+看到 `Ran 1 test` 和 `OK` 即通过。未设置镜像变量时，普通回归会跳过该用例。用例使用随机命名的临时 Docker 容器和登录卷、关闭网络并写入假凭据，结束后清理容器和卷。它验证真实 App Server 的 A → B → A 登录接力、并发启动和登录写入拒绝，以及沙箱无法从工作区链接或共享卷路径读出凭据。可以在正式试玩期间运行，真实账号 OAuth 续期和 Celeste 实机换局另行验收。
