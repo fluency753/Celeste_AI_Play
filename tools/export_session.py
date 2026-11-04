@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--local-only', action='store_true', help='只读本机日志，不访问已有 Codex 容器')
     parser.add_argument('--codex-container', help='已有 Codex 容器名称；默认按工作区标签推导，只读并核验归属')
     parser.add_argument('--analysis', action='store_true', help='附加全部可观察工具、回合、事件时间线和状态分析；不导出私有推理')
-    parser.add_argument('--workspace', type=Path, help='配合 --analysis，附加指定本机工作区的轻量当前快照（不执行代码或Git）')
+    parser.add_argument('--workspace', type=Path, help='配合 --analysis，附加本机工作区笔记、Git 时间窗摘要及当前改动清单')
     parser.add_argument('--time-format', default=DEFAULT_TIME_FORMAT, help='Markdown/CSV 时间显示格式，使用 Python strftime 语法（默认：%(default)s）')
     parser.add_argument('--since', help='公开消息起点（包含），ISO 日期时间；无时区按北京时间。累计统计与模拟调用仍为整个会话')
     parser.add_argument('--until', help='公开消息终点（不含），ISO 日期时间；可单独使用，时间未知的消息在筛选时排除')

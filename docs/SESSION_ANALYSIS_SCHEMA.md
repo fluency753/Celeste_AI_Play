@@ -15,7 +15,9 @@
 | actions.jsonl | action_id；decisions.jsonl 中实际动作和结果 |
 | game_states.jsonl | state_id；已有工具结果中的状态证据 |
 | metric_snapshots.jsonl | snapshot_id；已有 metrics/summary 累计快照 |
-| workspace.json（可选） | 显式指定本机工作区的当前文件清单、笔记和 Git HEAD |
+| workspace.json（可选） | 显式指定本机工作区的当前文件清单、笔记及结构化 Git 摘要 |
+| notes.md（可选） | 工作区根目录笔记的当前脱敏文本，与 workspace.json 中对应的 `text` 相同 |
+| git_changes.md（可选） | 同一份 Git 摘要的可读版本，包含时段、当前状态与缺口 |
 | SCHEMA.md | 本字段契约随包副本 |
 
 公共字段 session_id、run_id、run。run_id 对会话和源运行绝对路径哈希，移动路径后变化；tool_id 对 run_id+call_id 哈希；turn_id 对运行段+本地回合编号哈希。native_turn_id 为原生 UUID，通过主控 ACK 关联；未获 ACK 的记录可仅属于原生会话（run_id=null）。不按时间或顺序猜配，不合并不同运行段的同名调用。歧义在 run_ownership 标记。
@@ -75,4 +77,11 @@ game_states 从已有工具结果提取 frame、sid、room、死亡数/flags、p
 
 --since/--until 对旧 public_text 仍是左闭右开（无时区按北京时间），旧累计/模拟字段仍为整个会话。分析工具/回合保留相交区间及完整边界；window_membership 区分 within_window、overlaps_window、end_observed_in_window、time_unknown、unfiltered。未知记录保留，不视为确定在窗口内。状态和快照保留整个会话用于引用。
 
---workspace 显式选取导出时当前成果：最多2000项清单，20份 notes/memory/journal，每份128KiB总512KiB；跳过链接/reparse、依赖目录和敏感文件。当前笔记不证明历史读取/理解，mtime 不作历史归因。Git 仅读 HEAD/refs，worktree_status=null 并给出原因，不执行过滤器或外部程序，不打包对象库。输出不能位于源运行/源工作区内。
+`--workspace` 显式选取工作区，最多 2000 项清单和 20 份 notes/memory/journal，每份 128 KiB、合计 512 KiB。根 `notes.md` 优先采集。跳过链接、重解析点、依赖目录和敏感文件。当前笔记只代表采样时内容，mtime 不作历史归因。输出不能位于源运行或源工作区内。
+
+`workspace.json.git` 中的 `*_wall` 均为 Unix 秒。Git 记录只有整秒精度，`since_wall` / `until_wall` 保留输入精度，窗口左闭右开。列表中的 `null` 表示证据不可用，`[]` 表示可用且没有匹配项。`*_truncated` 表示条数上限生效。
+
+- `head` / `ref` 是采样到的 HEAD 与引用名。`commits` 最多 200 条，记录当前 HEAD 可达提交的 ID、提交者时间和脱敏标题。被重置掉的提交可能只出现在 reflog。
+- `head_events` 最多 200 条，从本地 HEAD reflog 读取时间和更新前后的哈希。`window_start_head` / `window_end_head` 为相应边界之前可核实的 HEAD，无终点时取采样 HEAD。`window_changes` 最多 500 项，为这两个提交树之间净变化的 Git 状态和路径。记录缺失、引用不一致或端点不可核实时保留未知。reflog 可能被禁用或清理，也可能受本机时钟影响。
+- `worktree_status` 最多 500 项，保存 `worktree_status_wall` 采样时的 Git porcelain XY 状态和路径。`X` 为索引、`Y` 为工作树，`??` 为未跟踪。忽略子模块变化，重命名按删除和新增列出。未提交变化没有历史快照，无法归入窗口；各来源分开读取，活动工作区可能在采样期间变化。
+- Git 使用独立临时元数据读取，仅接收普通的 `.git` 目录。不加载源 Git 配置、hooks、过滤器、外部 diff 或对象库替代路径。当前状态使用本机 Git 默认的文件比较规则及工作区忽略规则，可能与原环境自定义配置不同。Git 缺失、源数据不全或超出大小/时间限制时，相应字段降级并说明。归档不含 Git 对象、diff 正文或任意工作区文件。

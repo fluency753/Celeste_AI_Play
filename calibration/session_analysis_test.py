@@ -1,11 +1,14 @@
 """Behavior export over real file readers; no controller, model or game connection."""
 import csv
 from contextlib import closing
+from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 import sqlite3
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -207,6 +210,10 @@ class AnalysisTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as bundle:
             self.assertIn('tool_calls.jsonl', bundle.namelist())
             self.assertIn('SCHEMA.md', bundle.namelist())
+            self.assertIn('git_changes.md', bundle.namelist())
+            self.assertIn('notes.md', bundle.namelist())
+            self.assertEqual(bundle.read('notes.md').decode(), report['workspace']['memory_documents'][0]['text'])
+            self.assertNotIn(b'SECRET_NOTE', bundle.read('notes.md'))
         for name, digest in json.loads((output / 'manifest.json').read_text(encoding='utf-8')).items():
             self.assertEqual(hashlib.sha256((output / name).read_bytes()).hexdigest(), digest)
         events = report.analysis_records['timeline']
@@ -215,6 +222,68 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(known, sorted(known))
         with (output / 'tool_calls.csv').open(encoding='utf-8-sig') as stream:
             self.assertEqual(len(list(csv.DictReader(stream))), report['analysis']['counts']['tool_calls'])
+
+    @unittest.skipUnless(shutil.which('git'), 'Git is unavailable')
+    def test_workspace_git_window_and_isolated_current_status(self):
+        workspace = self.root / 'workspace'
+        workspace.mkdir()
+        env = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
+
+        def git(*args):
+            return subprocess.check_output(['git', *args], cwd=workspace, env=env, text=True).strip()
+
+        def commit(second, subject):
+            wall = f'2025-01-01T00:00:{second:02d}Z'
+            env.update(GIT_AUTHOR_DATE=wall, GIT_COMMITTER_DATE=wall)
+            git('add', 'plan.py')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', subject)
+            return git('rev-parse', 'HEAD')
+
+        git('init', '--quiet', '--template=')
+        plan = workspace / 'plan.py'
+        plan.write_text('start\n', encoding='utf-8')
+        first = commit(0, 'start')
+        plan.write_text('second\n', encoding='utf-8')
+        second = commit(1, 'password=SECRET_SUBJECT')
+        plan.write_text('third\n', encoding='utf-8')
+        third = commit(2, 'excluded end')
+        (workspace / '.gitattributes').write_text('plan.py filter=probe\n', encoding='utf-8')
+        git('config', 'filter.probe.clean', 'echo FILTER_EXECUTED > FILTER_CANARY')
+        git('config', 'core.fsmonitor', 'echo FSMONITOR_EXECUTED > FSMONITOR_CANARY')
+        plan.write_text('a different size for unstaged status\n', encoding='utf-8')
+        (workspace / 'new.py').touch()
+        index = workspace / '.git' / 'index'
+        index_before = index.read_bytes()
+
+        report = self.collect(workspace=workspace, since='2025-01-01T00:00:01Z', until='2025-01-01T00:00:02Z')
+        result = report['workspace']['git']
+        wall = datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc).timestamp()
+        self.assertEqual(result['commits'], [{'commit': second, 'wall': wall, 'subject': 'password=[隐藏]'}])
+        self.assertEqual(result['head_events'], [{'old_head': first, 'new_head': second, 'wall': wall}])
+        self.assertEqual((result['window_start_head'], result['window_end_head'], result['head']), (first, second, third))
+        self.assertEqual(result['window_changes'], [{'status': 'M', 'path': 'plan.py'}])
+        self.assertEqual(result['worktree_status'], [{'status': ' M', 'path': 'plan.py'},
+                                                     {'status': '??', 'path': '.gitattributes'},
+                                                     {'status': '??', 'path': 'new.py'}])
+        self.assertEqual(index.read_bytes(), index_before)
+        self.assertFalse(list(workspace.glob('*CANARY')))
+        archive = write_export(report, self.root / 'git-export')
+        with zipfile.ZipFile(archive) as bundle:
+            markdown = bundle.read('git_changes.md').decode()
+            self.assertIn(second, markdown)
+            self.assertIn('plan.py', markdown)
+            self.assertNotIn('SECRET_SUBJECT', markdown)
+            self.assertNotIn('notes.md', bundle.namelist())
+
+        result = workspace_snapshot(workspace, wall + 0.5, wall + 1)['git']
+        self.assertEqual(result['commits'], [])
+        self.assertEqual(result['head_events'], [])
+        self.assertEqual(result['window_changes'], [])
+        (workspace / '.git' / 'logs' / 'HEAD').unlink()
+        result = workspace_snapshot(workspace, wall, wall + 1)['git']
+        self.assertIsNone(result['window_changes'])
+        self.assertEqual([commit['commit'] for commit in result['commits']], [second])
 
     def test_native_unavailable_preserves_local_evidence_and_incomplete_line(self):
         self.timing('tool_requested', 1000, tool_id='pending', tool='Read', decision_wait_s=0)

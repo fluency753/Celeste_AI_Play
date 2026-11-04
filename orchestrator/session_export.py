@@ -301,7 +301,7 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
         report = collect_analysis(report, chain, snapshots, native, since_wall, until_wall)
         if workspace is not None:
             from .session_export_workspace import workspace_snapshot
-            report['workspace'] = workspace_snapshot(workspace)
+            report['workspace'] = workspace_snapshot(workspace, since_wall, until_wall)
     elif workspace is not None:
         raise ValueError('工作区快照需要启用 --analysis')
     return report

@@ -1,7 +1,60 @@
 """Structured analysis artifacts and a compact, source-qualified landing page."""
 import csv
+from datetime import datetime, timezone
+from html import escape
 import json
 from pathlib import Path
+
+
+def _write_workspace(workspace, output):
+    (output / 'workspace.json').write_text(json.dumps(workspace, ensure_ascii=False, indent=2), encoding='utf-8')
+    note = next((doc for doc in workspace['memory_documents'] if doc['path'] == 'notes.md'), None)
+    if note is not None:
+        (output / 'notes.md').write_text(note['text'], encoding='utf-8', newline='')
+    git = workspace['git']
+
+    def utc(wall):
+        if wall is None:
+            return '未指定'
+        try:
+            return datetime.fromtimestamp(wall, timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return f'{wall}（Unix 秒）'
+
+    def code(value):
+        return '<code>' + escape(json.dumps(value, ensure_ascii=False)[1:-1]).replace(' ', '&#32;') + '</code>'
+
+    lines = ['# Git 变更摘要', '',
+             f"会话时间窗 {utc(git['since_wall'])} 至 {utc(git['until_wall'])}（UTC，左闭右开）。",
+             f"导出时 HEAD {code(git['head'] or '未知')}，引用 {code(git['ref'] or '未知或分离 HEAD')}。"]
+
+    def section(title, field, description, render):
+        lines.extend(['', '## ' + title, '', description, ''])
+        rows = git[field]
+        if rows is None:
+            lines.append('不可用。')
+        elif not rows:
+            lines.append('无记录。')
+        else:
+            lines.extend('- ' + render(row) for row in rows)
+            if git[field + '_truncated']:
+                lines.append('- 已达到记录条数上限，详见 SCHEMA.md。')
+
+    section('当前 HEAD 可达提交', 'commits', '按提交者时间筛选，包含当前 HEAD 能追溯到的提交。',
+            lambda row: f"{utc(row['wall'])} {code(row['commit'])} {code(row['subject'])}")
+    section('本地 HEAD 变动', 'head_events', '按本地 reflog 的记录时间筛选，可包含检出、重置和提交。',
+            lambda row: f"{utc(row['wall'])} {code(row['old_head'])} → {code(row['new_head'])}")
+    section('窗口端点间净提交路径变化', 'window_changes',
+            f"起点前 HEAD {code(git['window_start_head'] or '未知')}，终点前 HEAD {code(git['window_end_head'] or '未知')}。",
+            lambda row: f"{code(row['status'])} {code(row['path'])}")
+    section('导出时工作树', 'worktree_status',
+            f"采样时间 {utc(git['worktree_status_wall'])}。XY 两列分别为索引和工作树状态，?? 为未跟踪。该清单仅描述采样时状态。",
+            lambda row: f"{code(row['status'])} {code(row['path'])}")
+    warnings = list(dict.fromkeys(git['warnings'] + [git['status_unavailable_reason']]))
+    if any(warnings):
+        lines.extend(['', '## 数据缺口', ''] + ['- ' + code(warning) for warning in warnings if warning])
+    (output / 'git_changes.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    return note
 
 
 def write_analysis(report, output):
@@ -21,8 +74,8 @@ def write_analysis(report, output):
             values = {key: row.get(key) for key in fields}
             writer.writerow({key: "'" + value if isinstance(value, str) and value.lstrip().startswith(('=', '+', '-', '@')) else value
                              for key, value in values.items()})
-    if report.get('workspace') is not None:
-        (output / 'workspace.json').write_text(json.dumps(report['workspace'], ensure_ascii=False, indent=2), encoding='utf-8')
+    workspace = report.get('workspace')
+    note = _write_workspace(workspace, output) if workspace is not None else None
     # Ship the field contract with the archive, rather than requiring repository access.
     contract = Path(__file__).resolve().parents[1] / 'docs' / 'SESSION_ANALYSIS_SCHEMA.md'
     (output / 'SCHEMA.md').write_text(contract.read_text(encoding='utf-8'), encoding='utf-8')
@@ -60,6 +113,12 @@ def write_analysis(report, output):
         lines += ['', '## 最近恢复链的快照比较（非精确窗口统计）', '',
                   f"基准 {delta['base_snapshot_id']} → 末次 {delta['end_snapshot_id']}；游戏时钟变化 {delta['game_clock_seconds_delta']} 秒。",
                   '累计秒数变化：`' + json.dumps(values, ensure_ascii=False) + '`。前段快照可能受后续聊天影响，不能当作已证明的恢复基线。']
+    if workspace is not None:
+        lines += ['', '## 工作区附件', '',
+                  '- workspace.json：当前文件清单、笔记投影及结构化 Git 摘要。',
+                  '- git_changes.md：指定窗口的 Git 记录与导出时工作树状态。']
+        lines.append('- notes.md：根目录笔记的当前脱敏投影' + ('（已截断）。' if note['truncated'] else '。')
+                     if note is not None else '- 根目录 notes.md 缺失或无法读取，未生成笔记附件。')
     lines += ['', '## 数据缺口与提醒', '']
     lines += ['- ' + text for text in coverage['limitations']]
     warnings = list(dict.fromkeys(report['warnings'] + coverage['source_warnings']))

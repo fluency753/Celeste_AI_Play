@@ -1,4 +1,4 @@
-"""Optional bounded current-workspace evidence. No Git/programs are executed."""
+"""Optional bounded workspace evidence."""
 import hashlib
 import os
 from pathlib import Path
@@ -9,9 +9,10 @@ from .session_export_projection import clean_text
 
 
 def read_regular(path, root, limit):
-    if path.is_symlink() or getattr(path.lstat(), 'st_file_attributes', 0) & 0x400:
-        raise ValueError('link/reparse point skipped')
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    initial = path.lstat()
+    if not stat.S_ISREG(initial.st_mode) or getattr(initial, 'st_file_attributes', 0) & 0x400:
+        raise ValueError('non-regular file or reparse point skipped')
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
@@ -40,7 +41,9 @@ def read_regular(path, root, limit):
         os.close(descriptor)
 
 
-def workspace_snapshot(path):
+def workspace_snapshot(path, since_wall=None, until_wall=None):
+    from .session_export_git import git_snapshot
+
     root = Path(path).resolve()
     if not root.is_dir():
         raise ValueError('工作区目录不存在')
@@ -48,12 +51,28 @@ def workspace_snapshot(path):
     total = 0
     extensions = {'.py', '.cpp', '.c', '.h', '.hpp', '.cs', '.sh', '.md', '.txt', '.json', '.toml'}
     excluded = {'.git', '.venv', '__pycache__', 'node_modules', 'build', 'dist', '.ssh', '.codex', 'agent-home', 'Saves'}
+
+    def capture_note(source):
+        nonlocal total
+        relative = source.relative_to(root).as_posix()
+        try:
+            raw, size, truncated = read_regular(source, root, min(128 * 1024, 512 * 1024 - total))
+            total += len(raw)
+            text = clean_text(raw.decode('utf-8-sig', errors='replace'), 128 * 1024)
+            notes.append({'path': relative, 'source_bytes': size, 'captured_bytes': len(raw), 'truncated': truncated,
+                          'captured_sha256': hashlib.sha256(raw).hexdigest(), 'text': text})
+        except (OSError, ValueError) as exc:
+            warnings.append(f'{relative}: {exc}')
+
     def unlinked(source):
         try:
             return not source.is_symlink() and not getattr(source.lstat(), 'st_file_attributes', 0) & 0x400
         except OSError as exc:
             warnings.append(f'{source}: {exc}')
             return False
+    root_note = root / 'notes.md'
+    if os.path.lexists(root_note):
+        capture_note(root_note)
     for directory, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = sorted(name for name in dirs if name not in excluded and not name.startswith('.')
                          and unlinked(Path(directory) / name))
@@ -74,19 +93,11 @@ def workspace_snapshot(path):
                 continue
             relative = source.relative_to(root).as_posix()
             inventory.append({'path': relative, 'size': info.st_size, 'mtime_wall': info.st_mtime})
-            if source.suffix.lower() in ('.md', '.txt') and re.search(r'(?i)note|memory|journal', name) and len(notes) < 20 and total < 512 * 1024:
-                try:
-                    raw, size, truncated = read_regular(source, root, min(128 * 1024, 512 * 1024 - total))
-                    total += len(raw)
-                    text = clean_text(raw.decode('utf-8-sig', errors='replace'), 128 * 1024)
-                    notes.append({'path': relative, 'source_bytes': size, 'captured_bytes': len(raw), 'truncated': truncated,
-                                  'captured_sha256': hashlib.sha256(raw).hexdigest(), 'text': text})
-                except (OSError, ValueError) as exc:
-                    warnings.append(f'{relative}: {exc}')
+            if source != root_note and source.suffix.lower() in ('.md', '.txt') and re.search(r'(?i)note|memory|journal', name) and len(notes) < 20 and total < 512 * 1024:
+                capture_note(source)
         if len(inventory) >= 2000:
             break
-    git = {'head': None, 'ref': None, 'worktree_status': None,
-           'status_unavailable_reason': '未执行工作区 Git、过滤器或外部助手；只读 HEAD/refs，不读取对象数据库'}
+    git = {'head': None, 'ref': None}
     git_dir = root / '.git'
     if git_dir.is_dir() and not git_dir.is_symlink() and not getattr(git_dir.lstat(), 'st_file_attributes', 0) & 0x400:
         try:
@@ -105,9 +116,10 @@ def workspace_snapshot(path):
                         head = next((line.split(' ', 1)[0] for line in raw.decode().splitlines() if line.endswith(' ' + ref)), '')
                         if truncated:
                             warnings.append('packed-refs 已按1MiB截断')
-            if re.fullmatch(r'[0-9a-fA-F]{40,64}', head):
-                git['head'] = head
+            if re.fullmatch(r'(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})', head):
+                git['head'] = head.lower()
         except (OSError, ValueError, UnicodeError) as exc:
             warnings.append(f'Git HEAD: {exc}')
-    return {'root': str(root), 'meaning': '导出时当前工作区；不证明游玩当时内容或Agent读取/理解，mtime不用于历史归因',
+    git.update(git_snapshot(root, git['head'], since_wall, until_wall))
+    return {'root': str(root), 'meaning': '笔记与清单来自导出时工作区；不证明游玩当时内容或Agent读取/理解，mtime不用于历史归因',
             'inventory': inventory, 'memory_documents': notes, 'git': git, 'warnings': warnings}

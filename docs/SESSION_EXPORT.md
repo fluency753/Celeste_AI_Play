@@ -6,7 +6,15 @@
 .\.venv\Scripts\python.exe -X utf8 tools/export_session.py --run runs/<agent>/<运行时间> --analysis --since "2026-11-03 23:02:46"
 ```
 
-新增全部可观察工具索引、回合/统一时间线、动作/游戏状态证据、累计快照及房间工作量摘要；详见[分析字段与计量契约](SESSION_ANALYSIS_SCHEMA.md)。可加 `--workspace <本机工作区路径>` 保存有限的当前笔记和程序清单，不执行 Git/程序。分析模式 README 为简明摘要，原完整可读记录在 public_text.md。
+新增全部可观察工具索引、回合/统一时间线、动作/游戏状态证据、累计快照及房间工作量摘要。分析模式 README 为简明摘要，原完整可读记录在 public_text.md。详见 [分析字段与计量契约](SESSION_ANALYSIS_SCHEMA.md)。
+
+同时导出指定时段与工作区成果：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 tools/export_session.py --run "runs/<agent>/<运行时间>" --analysis --since "2026-11-04T01:40:41.730920+08:00" --until "2026-11-04T14:50:16.663815+08:00" --workspace "workspaces/<本机工作区>"
+```
+
+`--workspace` 自动生成 `workspace.json`、`git_changes.md`，以及可安全读取时的根目录 `notes.md`，随 ZIP 一并交付并纳入校验清单。`notes.md` 是导出时的脱敏投影；Git 历史按同一窗口筛选，当前未提交状态单独注明采样时间。历史工作区已清理时，可省略 `--workspace` 继续导出会话；工作区必须显式指定，以免把其他游玩实例的成果归给目标会话。
 
 在仓库根目录运行：
 
@@ -15,6 +23,8 @@
 ```
 
 可选择同一会话的任一运行或 `chats/<会话目录>`，工具自动在所属 `runs` 根目录中合并执行器、提供方和会话 ID 均相同的记录。同名 agent、不同会话的记录不混入。默认输出到新的 `local/exports/<会话ID>-<时间>/`；`--output <新目录>` 可指定位置，已有目录和源运行目录内的目标会被拒绝。
+
+只有会话 ID 时，可先执行 `rg -l -F "<会话ID>" runs -g run_state.json -g codex_session.json`，用匹配文件所在的运行目录作为 `--run`。要接续上次导出，可从旧 `session.json` 的 `public_text_filter` 取终点作为新起点，避免重复选入边界消息。
 
 使用 `--since` / `--until` 按时间筛选**公开消息**，例如只保留一次 2A 游玩的可见消息：
 
