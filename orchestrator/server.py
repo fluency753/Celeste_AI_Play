@@ -48,7 +48,7 @@ celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进�
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json；最近游戏工具调用：/workspace/game/last_tool.json）"
 SIM_NOTE = WORKSPACE_NOTE[:-1] + "；模拟仅通过主控 simulate 工具请求，工作区不提供模拟器）"
 
-OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}。{observation_delivery_rule}detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态；detail="time"按秒查询桥接/章节计时、现实用时及各时长目标已用/剩余时间，游戏帧取缓存，桥接时钟不是本轮任务时长。三种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
+OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}，可有界等待已核实的过渡和演出。{observation_delivery_rule}detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态；detail="time"按秒查询桥接/章节计时、现实用时及各时长目标已用/剩余时间，游戏帧取缓存，桥接时钟不是本轮任务时长。三种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
 
 # 整房间精确数据前的标题：房间信息以它为准，截图与字符地图只作参考（字段说明在系统提示词"房间数据"一节）
 
@@ -66,7 +66,7 @@ stop_on 可选 death/room/uncontrollable/controllable/land/refill/complete/story
 thought 一两句中文{thought_brief}，显示给观众，简述判断，不写数值、算法或内部推理。{thought_mood_short}{formal_thought_act}
 input_format 默认celeste_ai；TAS须显式celeste_tas且agent剧情，TAS不自动推进转场／重生，不能混用键义。复杂计划和TAS使用前查 {actions_reference}；数据格式查 {observation_reference}。'''
 
-COMPACT_OBSERVE_DESCRIPTION = '''获取新观测{observe_collision_image}，不推进游戏。文件可用时返回状态与latest_obs.json位置，否则baseline/delta。detail="geometry"用region=[x,y,w,h]精查缓存，offset/limit分页最多64，后续页带同一snapshot_id；观测更新后重查第一页。detail="player"查完整玩家；detail="time"按秒查章节／现实计时及目标剩余量，桥接累计时钟不等于任务时长。三种详情不改变布局基线。身份、覆盖和形状完整性须核对，未知或局部空结果不证明安全。格式查 {observation_reference}。'''
+COMPACT_OBSERVE_DESCRIPTION = '''获取新观测{observe_collision_image}，可有界等待已核实的过渡和演出。文件可用时返回状态与latest_obs.json位置，否则baseline/delta。detail="geometry"用region=[x,y,w,h]精查缓存，offset/limit分页最多64，后续页带同一snapshot_id；观测更新后重查第一页。detail="player"查完整玩家；detail="time"按秒查章节／现实计时及目标剩余量，桥接累计时钟不等于任务时长。三种详情不改变布局基线。身份、覆盖和形状完整性须核对，未知或局部空结果不证明安全。格式查 {observation_reference}。'''
 
 
 def observation_tool_description(cfg, name):
@@ -387,7 +387,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     @server.tool(name='stop_run',
                  description='仅在任务必需步骤仍无法执行、适用的获准恢复方式已尝试或确知不可用、且需要用户介入时调用。'
                  'reason 用 200 字以内说明状态、尝试与结果，以及需要用户做什么。普通死亡、自动等待交回控制、单次工具拒绝不足以判定阻塞。'
-                 '主控记录原因并暂停试玩，调用后结束本轮等待用户处理。暂停或知识库未读完时仍可报告真实阻塞。',
+                 '主控有可用的入场或重生恢复路径时会返回下一步。报告被接受并暂停时结束本轮等待用户。'
+                 '暂停或知识库未读完时仍可报告真实阻塞。',
                  structured_output=False)
     async def stop_run(reason: str) -> list:
         async with journal.execution(call_lock):
@@ -400,6 +401,17 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 journal.detail(result)
             except ActError as err:
                 return [str(err)]
+            if result['status'] != 'reported':
+                if result['status'] == 'recovery_available':
+                    progress = result['transition']
+                    tail = (f'当前为已核实的入场或重生过渡，累计推进 {progress["advanced_frames"]} 帧，'
+                            f'剩余等待预算 {progress["remaining_frames"]} 帧。60 帧约为 1 秒。'
+                            '请调用 observe，由主控以正常速度继续有界等待，随后核对返回状态。此次报告没有触发暂停。')
+                else:
+                    tail = '相同状态及证据的报告已记录为诊断。请检查最新观测或提供新故障证据。此次报告没有再次触发暂停。'
+                    if note := result.get('control_note'):
+                        tail += note
+                return [json.dumps(result, ensure_ascii=False) + '\n' + tail]
             publish(session.run_dir, f"system:agent-stop:{len(session.agent_stop['reports'])}",
                     '智能体报告任务阻塞：' + result['reason'] + ('；试玩已暂停，等待用户处理。' if result['paused'] else ''),
                     role='system', kind='系统')
@@ -488,7 +500,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             finally:
                 finish()
 
-    @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段。watch只播放桥接明确识别的动画，未知状态立即返回，每次调用最多自动等待600帧；仍在播放可明确watch继续。advance确认当前完整对白、明信片、旧纸的一页或confirm画面，choose选择可见选项index；教学和breathing呼吸小游戏用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
+    @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段。watch等待已核实的入场、重生或桥接明确识别的演出。未知状态交回；入场和重生共享本次过渡的累计等待预算。advance确认当前完整对白、明信片、旧纸的一页或confirm画面，choose选择可见选项index；教学和breathing呼吸小游戏用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
     async def cutscene(action: str, choice: int | None = None) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):

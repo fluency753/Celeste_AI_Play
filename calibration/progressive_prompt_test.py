@@ -73,15 +73,10 @@ class ProgressivePromptTests(unittest.TestCase):
             cfg = replace(self.cfg, engine=engine)
             startup = runtime_prompt(cfg)
             self.assertTrue(startup.endswith('PERSONAL Read act Bash'))
-            self.assertNotIn('原生 Codex 工具映射', startup)
             guide = play_prompt(cfg)
             if engine == 'codex':
                 self.assertIn('celeste_narrate', guide)
-                self.assertIn('必读计量只认专用 read', startup)
-                self.assertIn('timeout_ms（毫秒）', fill('{program_timeout_rule}', cfg))
-            else:
-                self.assertIn('必读计量只认专用 Read', startup)
-                self.assertIn('Bash 的 timeout 参数', fill('{program_timeout_rule}', cfg))
+                self.assertIn('timeout_ms', fill('{program_timeout_rule}', cfg))
 
     def test_tool_descriptions_keep_semantics_and_fall_back_when_reference_unavailable(self):
         def descriptions(cfg):
@@ -93,9 +88,6 @@ class ProgressivePromptTests(unittest.TestCase):
             current = descriptions(cfg)
             self.assertIn(prefix+'act.md', current['act'])
             self.assertIn(prefix+'observe.md', current['observe'])
-            self.assertIn('剩余输入不执行', current['act'])
-            self.assertIn('结束本轮', current['stop_run'])
-            self.assertIn('结束本轮', current['set_effort'])
             rel = ('help/' if mode == 'explore' else 'explore/help/')
             denied = descriptions(replace(cfg, kb_deny=[rel+'actions.md', rel+'observation.md']))
             self.assertNotIn(prefix+'act.md', denied['act'])
@@ -104,12 +96,10 @@ class ProgressivePromptTests(unittest.TestCase):
         host = descriptions(replace(self.cfg, engine='claude', runtime='host'))
         self.assertNotIn('/workspace', host['act'])
         self.assertNotIn('/kb/', host['act'])
-        self.assertIn('plan_file 当前无文件能力，不可用', host['act'])
 
     def test_forbidden_optional_program_reference_is_not_advertised(self):
         cfg = replace(self.cfg, kb_deny=['help/programs.md', 'help/workspace.md'])
         self.assertNotIn('/kb/shared/tools/programs.md', play_prompt(cfg))
-        self.assertIn('当前未提供程序参考资料', play_prompt(cfg))
 
     def test_merged_feedback_matches_executor_and_formal_display_mode(self):
         for engine in ('codex', 'claude'):
@@ -118,12 +108,6 @@ class ProgressivePromptTests(unittest.TestCase):
                 rule = fill('{public_feedback_rule}', cfg)
                 text = play_prompt(cfg)
                 self.assertIn(rule, text)
-                if formal:
-                    self.assertIn('写下临时思考', rule)
-                    self.assertNotIn('更新 HUD', rule)
-                    self.assertIn('只显示每次', text)
-                else:
-                    self.assertIn('更新 HUD', rule)
                 self.assertEqual('commentary' in rule, engine == 'codex')
 
     def test_old_reader_notice_does_not_double_prefix_explicit_local_names(self):

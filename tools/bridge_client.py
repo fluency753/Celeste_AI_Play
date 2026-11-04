@@ -34,6 +34,7 @@ class BridgeClient:
         self.host, self.port, self.timeout = host, port, timeout
         self._connect()
         self.next_id = 1
+        self.last_call_failure = None
         self.cancel_check = None
         self.step_options = None
         self.after_step = None
@@ -73,6 +74,27 @@ class BridgeClient:
             self.file.flush()
 
     def call(self, cmd: str, on_event=None, *, allow_reconnect: bool = True, **args) -> dict:
+        serial = getattr(self, 'next_id', None)
+        failure = getattr(self, 'last_call_failure', None)
+        # An observe can establish the current frame, but cannot confirm that a
+        # failed input path works again. Keep that evidence until a step succeeds.
+        record_failure = cmd == 'step' or (cmd == 'observe' and (not failure or failure[0] != 'step'))
+        try:
+            reply = self._call(cmd, on_event, allow_reconnect=allow_reconnect, **args)
+        except Exception:
+            if record_failure:
+                self.last_call_failure = (cmd, serial)
+            raise
+        if cmd in {'step', 'observe'}:
+            obs = reply.get('obs')
+            if not isinstance(obs, dict) or type(obs.get('frame')) is not int:
+                if record_failure:
+                    self.last_call_failure = (cmd, serial)
+            elif cmd == 'step' or not failure or failure[0] == 'observe':
+                self.last_call_failure = None
+        return reply
+
+    def _call(self, cmd: str, on_event=None, *, allow_reconnect: bool = True, **args) -> dict:
         """发送一条指令并等待它的回复。执行中桥接推送的事件（{"event": …}，例如 step 的 progress）交给 on_event。"""
         if cmd == "step" and self.cancel_check is not None and self.cancel_check():
             raise InterruptedError("用户停止请求已生效，不再推进游戏")

@@ -44,6 +44,7 @@ END_SCENES = {"LevelExit", "AreaComplete", "Overworld", "OverworldLoader"}
 ENDING_STUCK_STEPS = 40              # 最终章片尾连续 40 次（每次 30 帧，约 20 秒）画面状态不变就不再空等
 FROZEN_GIVE_UP_FRAMES = 600          # 画面冻结等确认时，主控最多推进这么多帧（10 秒，期间每 30 帧按一次确认）就交回
 AGENT_STORY_WAIT_FRAMES = 600        # 每次工具调用中，已确认播放阶段的等待总预算；未知状态不推进。
+TRANSITION_WAIT_FRAMES = 600         # 一次已核实的入场／重生共享预算，按原生帧累计（约 10 秒）。
 PAUSE_WAIT_FRAMES = 180              # auto 模式剧情里游戏暂时不让暂停时，前 3 秒每 10 帧看一次能不能暂停跳过（之后每 30 帧）
 MAP_TRANSITION_WAIT_FRAMES = 1200    # auto 剧情模式：回地图途中（LevelExit、OverworldLoader、菜单切换）最多空帧等 20 秒，仍未就绪就交回
 
@@ -59,7 +60,23 @@ def _manual_transition_note(obs: dict) -> str | None:
         return None
     return ('若刚进入获准章节，或刚死亡、换房且仍处于过渡，试玩运行中且无待处理输入时，'
             '可用 act 按当前帧数限制显式推进一小段空输入，用 stop_on 包含 controllable、story_input 和 room。'
-            '核对新帧与状态，出现输入节点就按节点操作。只在仍有过渡依据和总推进上限时继续分段。')
+            '60 帧约为 1 秒，动画未在一小段内播完很常见。核对新帧与状态，出现输入节点就按节点操作。'
+            '只在仍有过渡依据和总推进上限时继续分段。')
+
+
+@dataclass
+class TransitionWait:
+    kind: str
+    identity: tuple
+    epoch: tuple
+    start_frame: int
+    stalled_at: int | None = None
+
+    def progress(self, frame: int) -> dict:
+        used = frame - self.start_frame
+        return {'kind': self.kind, 'start_frame': self.start_frame, 'frame': frame, 'advanced_frames': used,
+                'remaining_frames': 0 if self.stalled_at == frame else max(0, TRANSITION_WAIT_FRAMES - used),
+                'stalled': self.stalled_at == frame}
 
 
 def map_transition(obs: dict) -> bool:
@@ -361,6 +378,8 @@ class GameSession:
         self.done_reason = ""
         self.user_stopped = False
         self.agent_stop = None
+        self._transition_wait: TransitionWait | None = None
+        self._last_stop_evidence = None
         self.goals = GoalManager(run_dir)
         self._goal_progress = {}
         self._entered_level = False
@@ -826,7 +845,7 @@ class GameSession:
         self._start_freeze()               # 僵直已经执行：即使后面的按键出错，也不会再为同一段冻结僵直一次
         self._log_frames(result, [keys] * used, "思考僵直", auto=True, input_format=fmt)
         self._note_map(obs)
-        self._handle_events(result)
+        self._handle_events(result, obs)
         self._commit_completion(obs)
         self._note_obs_room(obs)
         self.goals.check(self.goal_values(obs))
@@ -876,7 +895,8 @@ class GameSession:
             if not reload_observation and not self.done:
                 self._note_first_goal_entry(obs)
             may_advance = not reload_observation and not self.done and not self.goals.stop_motion.is_set()
-            if may_advance and self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas' and story_pending(obs):
+            if (may_advance and self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas'
+                    and (story_pending(obs) or self._transition_for(obs))):
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
             elif (may_advance and self.cfg.cutscene_mode == 'auto' and obs.get('scene') == 'Level' and (obs.get('level') or {}).get('inCutscene')
@@ -959,6 +979,7 @@ class GameSession:
 
     def _write_workspace(self, obs: dict, act_record: dict | None = None) -> None:
         self.last_obs = obs
+        self._transition_for(obs)
         if not self.workspace:
             return
         try:
@@ -1351,7 +1372,7 @@ class GameSession:
             if not skipped:
                 self._log_frames(result, frames, thought, auto=False, input_format=plan.input_format)
                 self._note_map(obs)            # 先认清这一步停在哪张地图：计划外地图的通关、死亡与房间不算进计划
-                self._handle_events(result)
+                self._handle_events(result, obs)
                 self._commit_completion(obs)
                 self._note_obs_room(obs)
             self._seeker_act = False
@@ -1424,6 +1445,44 @@ class GameSession:
         return result, obs, image, game_s, auto_frames, notes
 
     # ---- 非可控段：按剧情模式交接，自动处理转场、死亡与重生 ----
+
+    def _transition_epoch(self):
+        return getattr(self, 'game_process_id', None), getattr(self, 'reload_epoch', 0)
+
+    @staticmethod
+    def _transition_identity(obs, level):
+        return ((obs.get('save') or {}).get('slot'), level.get('sid'), level.get('side') or 'A', level.get('room'))
+
+    def _transition_for(self, obs, *, remember=True):
+        """Identify an already authorized, input-free transition on a bridge frame."""
+        if self.cfg.cutscene_mode != 'agent' or type(frame := obs.get('frame')) is not int:
+            return None
+        current = getattr(self, '_transition_wait', None)
+        epoch = self._transition_epoch()
+        level, player = obs.get('level') or {}, obs.get('player') or {}
+        scene = obs.get('scene')
+        if scene == 'LevelEnter' or (scene in {'LevelLoader', 'IntroVignette'} and current and current.kind == 'entry'):
+            entered = (obs.get('reload_boundary') or {}).get('session') or {}
+            identity = self._transition_identity(obs, entered)
+            target = self.navigation.target
+            if (target is not None and self.cfg.save_slot is not None and identity[0] == self.cfg.save_slot
+                    and identity[1:3] == (CHAPTER_SIDS.get(target.chapter), target.side)):
+                if (not current or current.kind != 'entry' or current.identity != identity
+                        or current.epoch != epoch or frame < current.start_frame):
+                    current = TransitionWait('entry', identity, epoch, frame) if remember and scene == 'LevelEnter' else None
+            else:
+                current = None
+        elif (scene != 'Level' or not current or current.kind != 'respawn'
+              or current.identity != self._transition_identity(obs, level) or current.epoch != epoch
+              or frame < current.start_frame or obs.get('controllable')
+              or not (player.get('dead') or player.get('state') == 'IntroRespawn' or level.get('screenWipe'))):
+            current = None
+        if remember:
+            self._transition_wait = current
+        if (obs.get('input_format') == 'celeste_tas' or obs.get('controllable') or story_input(obs)
+                or story_decision(obs) or obs.get('pauseMenu') or level.get('paused')):
+            return None
+        return current
 
     @staticmethod
     def _settled(obs: dict) -> bool:
@@ -1516,12 +1575,12 @@ class GameSession:
         self._before_advance()
         t0 = time.monotonic()
 
-        def log_step(inputs: list[str], result: dict) -> None:
+        def log_step(inputs: list[str], result: dict, observation=None) -> None:
             nonlocal total
             total += result["consumed"] + result.get("loadingFrames", 0)
             self.metrics.add(frames_auto=result["consumed"])
             self._log_frames(result, expand_inputs(inputs, 10_000, LETTERS), "(自动推进)", auto=True)
-            self._handle_events(result)
+            self._handle_events(result, observation)
 
         for _ in range(600):
             if self.done or (mode != 'agent' and self.chapter_finished) or self.goals.stop_motion.is_set():
@@ -1607,14 +1666,18 @@ class GameSession:
             if seeker_control(obs):
                 notes.append(SEEKER_NOTE)  # 操控 PlayerSeeker：交给智能体，不等 Madeline 恢复控制
                 break
-            if mode == 'agent' and awaiting_confirm(obs):
+            transition = self._transition_for(obs) if mode == 'agent' else None
+            if mode == 'agent' and not transition and awaiting_confirm(obs):
                 notes.append('画面冻结、角色不可操作，游戏可能在等确认键（例如拿到磁带后的"B 面已解锁"、吃心后的诗句）：'
                              '请观察后用 act 发送 C 确认；主控不代按。')
                 break
             if mode == 'agent':
                 playback = obs.get('storyPlaybackState') or {}
                 known_transition = (automatic_transition or scene == 'LevelLoader' or level.get('transitioning')
-                                    or (obs.get('player') or {}).get('dead'))
+                                    or (obs.get('player') or {}).get('dead') or transition is not None)
+                if transition and not transition.progress(obs['frame'])['remaining_frames']:
+                    notes.append('已停止等待入场或重生：本次过渡的累计帧预算已用完，或上一次等待没有推进。请核对当前状态。')
+                    break
                 if playback.get('state') != 'playing' and not known_transition:
                     if idle_uncontrolled(obs):
                         self._idle_handover = True
@@ -1686,11 +1749,33 @@ class GameSession:
                 stops.append('story_decision')
             if watching_while_controllable or (mode == 'auto' and level.get('inCutscene') and obs.get('controllable')):
                 stops.remove('controllable')
+            if transition:
+                before_frame = obs['frame']
+                inputs = [str(min(int(inputs[0]), transition.progress(before_frame)['remaining_frames']))]
+                stops = ['controllable', 'story_input', 'story_decision', 'death', 'room', 'complete']
             reply = self.client.call("step", inputs=inputs, stop_on=stops,
-                                     speed=self.cfg.auto_speed, image=False, entities=False, tiles=False,
+                                     speed=1 if transition else self.cfg.auto_speed, image=False, entities=False, tiles=False,
                                      progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
-            log_step(inputs, reply["result"])
+            log_step(inputs, reply["result"], reply['obs'])
             obs = reply["obs"]
+            if transition:
+                if reply['result'].get('stop') in BLOCK_STOPS:
+                    transition.stalled_at = obs.get('frame', before_frame)
+                    if reply['result'].get('block'):
+                        from .action_policy import block_note
+                        notes.append(block_note(reply['result']['block'], detour=detour_enabled(self.cfg)))
+                    break
+                if reply['result'].get('stop') in {'room', 'death', 'complete', 'recording_boundary', 'cancelled'}:
+                    break
+                if not story_input(obs) and story_decision(obs) == 'skip':
+                    notes.append(skip_opportunity_hint(obs))
+                    break
+                if obs.get('controllable') and not story_input(obs):
+                    break
+                if type(obs.get('frame')) is not int or obs['frame'] <= before_frame:
+                    transition.stalled_at = before_frame
+                    notes.append('本次有界等待没有取得更新帧，已交回控制。')
+                    break
             if pause_wait:
                 pause_waited += reply["result"]["consumed"]
             if waiting:
@@ -1852,7 +1937,8 @@ class GameSession:
             if self.done or self.goals.stop_motion.is_set():raise ActError('本次试玩已结束')
             self._before_advance()
             obs=self.client.call('observe',image=False,entities=False,tiles=False)['obs']
-            if not story_pending(obs) and not (obs.get('level') or {}).get('skippingCutscene'):
+            if (not story_pending(obs) and not (obs.get('level') or {}).get('skippingCutscene')
+                    and not (action == 'watch' and self._transition_for(obs))):
                 raise ActError('当前没有待处理的剧情')
             original_options = [(item.get('index'),item.get('text')) for item in (obs.get('level') or {}).get('dialogChoices') or []]
             auto_frames, auto_notes = 0, []
@@ -1880,15 +1966,15 @@ class GameSession:
                 refuse_input('主控尚未检测到可操作的对话选项，请检查剧情节点状态')
             used=0
             started=time.monotonic()
-            def log(inputs,result):
+            def log(inputs,result,observation=None):
                 nonlocal used
                 used += result.get('consumed',0)+result.get('loadingFrames',0)
                 self._log_frames(result,expand_inputs(inputs,10000,LETTERS),'(agent处理剧情)',auto=False)
-                self._handle_events(result)
+                self._handle_events(result, observation)
             def step(inputs):
                 reply=self.client.call('step',inputs=inputs,stop_on=[],speed=1,image=False,
                                        entities=False,tiles=False,progress=PROGRESS_EVERY,on_event=self._on_progress)
-                log(inputs,reply['result'])
+                log(inputs,reply['result'],reply['obs'])
                 return reply['obs']
             skipped=False
             if action=='skip':
@@ -1966,13 +2052,44 @@ class GameSession:
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
                 raise ActError('本次试玩已结束或正在按目标收尾')
+            obs = self.last_obs or {}
+            frame = obs.get('frame')
+            failure = getattr(self.client, 'last_call_failure', None)
+            transition = self._transition_for(obs, remember=False)
+            progress = transition.progress(frame) if transition else None
+            guard = getattr(self, 'control_guard', None)
+            control_note = guard() if guard else None
+            if (progress and progress['remaining_frames'] and self.client is not None and not failure
+                    and not getattr(self, 'reload_observation_required', False) and not control_note):
+                return self._stop_diagnostic('recovery_available', reason, frame, progress)
+            level, player = obs.get('level') or {}, obs.get('player') or {}
+            evidence = (self._transition_epoch(), obs.get('scene'), self._transition_identity(obs, level),
+                        frame, story_input(obs), story_decision(obs), obs.get('controllable'),
+                        level.get('screenWipe'), level.get('deaths'), player.get('state'), failure)
+            if (type(frame) is int or failure) and evidence == self._last_stop_evidence:
+                return self._stop_diagnostic('duplicate', reason, frame, progress, control_note=control_note)
             reports = list((self.agent_stop or {}).get('reports') or [])
             reports.append({'reason': reason, 'wall': time.time(), 'decision': self.decision_index})
             self.agent_stop = {'reason': reason, 'source': 'agent', 'reports': reports}
             (self.run_dir/'agent_stop.json').write_text(json.dumps(self.agent_stop,ensure_ascii=False,indent=2),encoding='utf-8')
+            self._last_stop_evidence = evidence
         pause = getattr(self, 'request_pause', None)
         paused = bool(pause and pause(reason))
-        return {'reason': reason, 'source': 'agent', 'paused': paused, 'finished': False, 'completed': False}
+        return {'status': 'reported', 'reason': reason, 'source': 'agent', 'paused': paused,
+                'finished': False, 'completed': False}
+
+    def _stop_diagnostic(self, status, reason, frame, progress, *, control_note=None):
+        result = {'status': status, 'reason': reason, 'source': 'agent', 'frame': frame,
+                  'transition': progress, 'paused': False, 'finished': False, 'completed': False}
+        if isinstance(control_note, str) and control_note:
+            result['control_note'] = control_note
+        try:
+            with (self.run_dir/'stop_run_diagnostics.jsonl').open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps({**result, 'wall': time.time(), 'decision': self.decision_index},
+                                        ensure_ascii=False) + '\n')
+        except OSError as exc:
+            print(f'[run] 阻塞诊断未写入：{exc}', flush=True)
+        return result
 
     def exit_level(self, reason: str, finish_run: bool = False) -> dict:
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 120:
@@ -2185,7 +2302,7 @@ class GameSession:
         self._write_workspace(obs)
         return obs, image, notes
 
-    def _handle_events(self, result: dict) -> None:
+    def _handle_events(self, result: dict, obs=None) -> None:
         for e in result.get("events", []):
             if e["type"] == "death":
                 if self._seeker_act:
@@ -2193,6 +2310,14 @@ class GameSession:
                     self._seeker_death = True
                     continue
                 self.metrics.add(deaths=1)
+                if self.cfg.cutscene_mode == 'agent' and obs and obs.get('scene') == 'Level' and type(e.get('frame')) is int:
+                    identity = self._transition_identity(obs, obs.get('level') or {})
+                    slot = self.cfg.save_slot
+                    if (identity[1] and identity[3] is not None and e.get('detail', identity[3]) == identity[3]
+                            and (slot is None or identity[0] == slot)):
+                        self._transition_wait = TransitionWait('respawn', identity, self._transition_epoch(), e['frame'])
+            elif e['type'] == 'room':
+                self._transition_wait = None
             elif e["type"] == "complete":
                 if self._in_detour():
                     # 计划外地图通关：只记绕行成绩，不登记计划的待确认通关、不结束本次试玩

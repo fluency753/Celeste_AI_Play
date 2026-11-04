@@ -8,11 +8,12 @@ import unittest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from orchestrator.config import RunConfig
-from orchestrator.game_session import AGENT_STORY_WAIT_FRAMES, ActError, GameSession
+from orchestrator.game_session import AGENT_STORY_WAIT_FRAMES, TRANSITION_WAIT_FRAMES, ActError, GameSession
 from orchestrator.metrics import Metrics
 from orchestrator.server import build_server
 from orchestrator.navigation import ChapterNavigation
 from orchestrator.segments import Piece
+from tools.bridge_client import BridgeClient
 
 
 def observation(*, node=None, playing=False, controllable=False, cutscene=True, **level):
@@ -53,7 +54,8 @@ class StoryBridge:
             count = sum(int(part.split(',')[0]) for part in inputs)
             self.frames += count
             self.obs['frame'] += count
-            self.obs['level']['chapterTimeTicks'] += count * 166667
+            if self.obs.get('level') is not None:
+                self.obs['level']['chapterTimeTicks'] += count * 166667
             if self.after_step:
                 self.after_step(self, inputs)
             return {'obs': copy.deepcopy(self.obs),
@@ -65,6 +67,44 @@ class StoryBridge:
 
     def close(self):
         pass
+
+
+class RespawnBridge(StoryBridge):
+    death_frame = 97790
+
+    def __init__(self, *, ready=97921, pause_at=None):
+        super().__init__(observation(controllable=True, cutscene=False))
+        self.obs.update(frame=self.death_frame - 1, save={'slot': 15})
+        self.ready, self.pause_at = ready, pause_at
+        self.paused = False
+        self.stop_lists = []
+
+    def call(self, command, **args):
+        if command != 'step':
+            return super().call(command, **args)
+        inputs, stops = args['inputs'], args['stop_on']
+        self.steps.append(inputs)
+        self.stop_lists.append(stops)
+        planned = sum(int(part.split(',')[0]) for part in inputs)
+        frame = self.obs['frame']
+        events = []
+        if frame < self.death_frame:
+            count, stop = 1, 'death'
+            events = [{'type': 'death', 'frame': self.death_frame, 'detail': self.obs['level']['room']}]
+            self.obs.update(controllable=False, player=None)
+            self.obs['level'].update(screenWipe=True, deaths=1)
+        elif self.ready is not None and frame + planned >= self.ready and 'controllable' in stops:
+            count, stop = self.ready - frame, 'controllable'
+            self.obs.update(controllable=True, player=observation(controllable=True)['player'])
+            self.obs['level']['screenWipe'] = False
+        else:
+            count, stop = planned, 'done'
+        self.frames += count
+        self.obs['frame'] += count
+        if self.pause_at is not None and self.obs['frame'] >= self.pause_at:
+            self.paused = True
+        return {'obs': copy.deepcopy(self.obs), 'result': {'consumed': count, 'planned': planned,
+                'events': events, 'trajectory': [], 'stop': stop}}
 
 
 class StoryWaitTests(unittest.TestCase):
@@ -237,6 +277,131 @@ class StoryWaitTests(unittest.TestCase):
         self.assertFalse(result.is_error)
         self.assertIn('明信片已显示完毕', '\n'.join(item.text for item in result.content if item.type == 'text'))
         self.assertEqual(client.steps, [['30']])
+
+    def test_verified_level_enter_automatically_waits_to_postcard_without_confirmation(self):
+        start = {'scene': 'LevelEnter', 'frame': 51945, 'save': {'slot': 15}, 'controllable': False,
+                 'reload_boundary': {'session': {'sid': 'Celeste/3-CelestialResort', 'side': 'A', 'room': 'start'}}}
+
+        def after(client, inputs):
+            if client.frames == 60:
+                client.obs.update(storyInput='postcard', storyDecision='postcard')
+
+        client = self.bridge(start, after)
+        server = build_server(self.session)
+        self.session.cfg.save_slot = 14
+        result = asyncio.run(server.call_tool('cutscene', {'action': 'watch'}))
+        self.assertFalse(result.is_error)
+        self.assertEqual(client.steps, [])
+        self.session.cfg.save_slot = 15
+        result = asyncio.run(server.call_tool('cutscene', {'action': 'watch'}))
+        self.assertFalse(result.is_error)
+        self.assertEqual(client.steps, [['30'], ['30']])
+        self.assertEqual(self.session.last_obs['storyInput'], 'postcard')
+        self.session.observe()
+        self.assertEqual(client.frames, 60)
+
+    def _death_fixture(self, **kwargs):
+        client = self.session.client = RespawnBridge(**kwargs)
+        self.session.last_obs = copy.deepcopy(client.obs)
+        self.session.control_guard = lambda: client.paused
+        server = build_server(self.session)
+        result = asyncio.run(server.call_tool('act', {'inputs': ['1,R'], 'thought': '进入尖刺'}))
+        self.assertFalse(result.is_error)
+        return client, server
+
+    def _stop_report(self, server, reason='角色没有恢复'):
+        result = asyncio.run(server.call_tool('stop_run', {'reason': reason}))
+        self.assertFalse(result.is_error)
+        return json.loads(result.content[0].text.splitlines()[0])
+
+    def test_respawn_can_resume_bounded_wait_after_stop_report_without_extra_input(self):
+        client, server = self._death_fixture(pause_at=97880)
+        self.assertEqual(self.session.last_obs['frame'], 97880)
+        self.assertEqual(client.steps, [['1,R'], ['30'], ['30'], ['30']])
+        client.paused, client.pause_at = False, None
+        report = self._stop_report(server)
+        self.assertEqual(report['status'], 'recovery_available')
+        self.assertEqual(report['transition']['advanced_frames'], 90)
+        self.assertFalse(report['paused'])
+        self.assertIsNone(self.session.agent_stop)
+        self.assertEqual(client.obs['frame'], 97880)
+        result = asyncio.run(server.call_tool('observe', {}))
+        self.assertFalse(result.is_error)
+        self.assertTrue(self.session.last_obs['controllable'])
+        self.assertEqual(client.obs['frame'], 97921)
+        self.assertEqual(client.steps[1:], [['30']] * 5)
+        self.assertTrue(all({'controllable', 'story_input', 'room'} <= set(stops) for stops in client.stop_lists[1:]))
+
+    def test_respawn_budget_includes_explicit_frames_and_duplicate_reports_do_not_pause(self):
+        client, server = self._death_fixture(ready=None, pause_at=97880)
+        client.paused, client.pause_at = False, None
+        pauses = []
+        self.session.request_pause = lambda reason: pauses.append(reason) or True
+        result = asyncio.run(server.call_tool('act', {'inputs': ['60'], 'thought': '补充中性帧'}))
+        self.assertFalse(result.is_error)
+        self.assertIn(['60'], client.steps)
+        self.assertEqual(client.obs['frame'], client.death_frame + TRANSITION_WAIT_FRAMES)
+        steps = client.steps.copy()
+        self.session.observe()
+        self.assertEqual(client.steps, steps)
+        self.assertEqual(self._stop_report(server)['status'], 'reported')
+        self.assertEqual(self._stop_report(server, '同一帧仍然无角色')['status'], 'duplicate')
+        self.assertEqual(len(pauses), 1)
+        self.assertEqual(len(self.session.agent_stop['reports']), 1)
+        path = self.root / 'stop_run_diagnostics.jsonl'
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['status'], 'duplicate')
+
+    def test_transport_failure_allows_stop_report_despite_cached_respawn_evidence(self):
+        _, server = self._death_fixture(pause_at=97880)
+        self.session.control_guard = None
+        client = BridgeClient.__new__(BridgeClient)
+        client.next_id = 8
+        replies = iter(({}, ConnectionError('桥接已断开'), {'obs': self.session.last_obs}))
+
+        def broken(*args, **kwargs):
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        client._call = broken
+        client.call('step', inputs=['30'])
+        with self.assertRaises(ConnectionError):
+            client.call('observe')
+        client.call('observe')
+        self.session.client = client
+        try:
+            self.assertEqual(self._stop_report(server, '桥接没有返回可核验的推进结果')['status'], 'reported')
+        finally:
+            self.session.client = None
+
+    def test_respawn_wait_stops_on_zero_progress_and_preserves_report_path(self):
+        client, server = self._death_fixture(pause_at=97880)
+        client.paused, client.pause_at = False, None
+        original = client.call
+
+        def stalled(command, **args):
+            if command != 'step':
+                return original(command, **args)
+            client.steps.append(args['inputs'])
+            return {'obs': copy.deepcopy(client.obs), 'result': {'consumed': 0, 'events': [], 'stop': 'done'}}
+
+        client.call = stalled
+        count = len(client.steps)
+        self.session.observe()
+        self.assertEqual(len(client.steps), count + 1)
+        self.session.observe()
+        self.assertEqual(len(client.steps), count + 1)
+        self.assertEqual(self._stop_report(server)['status'], 'reported')
+
+    def test_respawn_observe_does_not_add_frames_to_tas(self):
+        client, _ = self._death_fixture(pause_at=97880)
+        client.paused, client.pause_at = False, None
+        client.obs['input_format'] = 'celeste_tas'
+        steps = client.steps.copy()
+        obs, _ = self.session.observe()
+        self.assertEqual(obs['frame'], 97880)
+        self.assertEqual(client.steps, steps)
 
     def test_death_wipe_handover_exposes_next_explicit_step_without_auto_input(self):
         start = observation(cutscene=False, screenWipe=True)
