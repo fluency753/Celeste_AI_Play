@@ -43,7 +43,7 @@ class DecisionTimingTests(unittest.TestCase):
             metrics.tool_end("act2")
             metrics.turn_end()
             metrics.turn_end()  # cleanup isn't another turn
-            rows = [json.loads(s) for s in (Path(tmp) / "decision_timing.jsonl").read_text().splitlines()]
+            rows = [json.loads(s) for s in (Path(tmp) / "decision_timing.jsonl").read_text(encoding='utf-8').splitlines()]
             requests = [r for r in rows if r["event"] == "turn_requested"]
             self.assertEqual([r["fast_requested"] for r in requests], [True, False, False])
             ack = next(r for r in rows if r["event"] == "turn_acknowledged")
@@ -62,6 +62,6 @@ class DecisionTimingTests(unittest.TestCase):
             metrics.start_play()
             clock.return_value = 165
             metrics.turn_acknowledged("a")
-            row = json.loads((Path(tmp) / "decision_timing.jsonl").read_text().splitlines()[-1])
+            row = json.loads((Path(tmp) / "decision_timing.jsonl").read_text(encoding='utf-8').splitlines()[-1])
             self.assertEqual(row["request_ack_s"], 65)
             self.assertIsNone(row["fast_requested"])

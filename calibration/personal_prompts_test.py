@@ -127,7 +127,7 @@ class PersonalPromptTests(unittest.TestCase):
         self.save('codex:explore', '')
         self.assertEqual(personal.read('all')['text'], 'A')
         self.assertEqual(personal.read('codex:explore')['text'], '')
-        self.assertNotIn('codex:explore', json.loads(self.path.read_text())['scopes'])
+        self.assertNotIn('codex:explore', json.loads(self.path.read_text(encoding='utf-8'))['scopes'])
 
     def test_invalid_scope_text_and_version_do_not_write_configuration(self):
         for scope in ('codex', '../all', [], None):
@@ -178,7 +178,7 @@ class PersonalPromptTests(unittest.TestCase):
             personal.read('all')
         with self.assertRaisesRegex(ValueError, '符号链接|重解析点'):
             personal.save('all', 'new', 'version')
-        self.assertEqual(target.read_text(), '{"version":1,"scopes":{}}')
+        self.assertEqual(target.read_text(encoding='utf-8'), '{"version":1,"scopes":{}}')
 
     def test_linked_parent_is_rejected_including_windows_junctions(self):
         outside = self.root/'outside'
@@ -199,7 +199,7 @@ class PersonalPromptTests(unittest.TestCase):
                 personal.read('all')
             with self.assertRaisesRegex(ValueError, '符号链接|重解析点'):
                 personal.save('all', 'new', 'version')
-        self.assertEqual(target.read_text(), original)
+        self.assertEqual(target.read_text(encoding='utf-8'), original)
 
     def test_separate_processes_merge_different_scopes_without_losing_data(self):
         script = ('import sys; from pathlib import Path; '

@@ -53,7 +53,7 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(resized_rect((100, 100, 300, 500), 50, -20, "move"), (150, 80, 300, 500))
         self.assertEqual(resized_rect((100, 100, 300, 500), 50, 80, "se"), (100, 100, 350, 580))
         self.assertEqual(resized_rect((100, 100, 300, 500), 500, 500, "nw"), (200, 340, 200, 260))
-        self.path.write_text(json.dumps({"mode": "custom", "x": 0, "y": 0, "width": float("nan"), "height": 1}))
+        self.path.write_text(json.dumps({"mode": "custom", "x": 0, "y": 0, "width": float("nan"), "height": 1}), encoding='utf-8')
         self.assertIsNone(Layout(self.path).custom)
 
 

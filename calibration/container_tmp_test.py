@@ -199,7 +199,7 @@ class CarryTmpTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '真实目录'):
             self.ensure(fake)
         self.assertEqual(self.order(fake), [])
-        self.assertEqual(git.read_text(), 'gitdir: /outside\n')
+        self.assertEqual(git.read_text(encoding='utf-8'), 'gitdir: /outside\n')
 
     def test_codex_git_replacement_during_backup_preserves_container_and_archive(self):
         self.cfg.engine = 'codex'
@@ -236,7 +236,7 @@ class CarryTmpTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '真实目录'):
             self.ensure(fake)
         self.assertEqual(self.order(fake), [])
-        self.assertEqual((target / 'keep').read_text(), 'untouched')
+        self.assertEqual((target / 'keep').read_text(encoding='utf-8'), 'untouched')
 
     @unittest.skipUnless(os.name == 'nt', 'Windows directory junction regression')
     def test_codex_git_junction_during_backup_keeps_archive_and_target(self):
@@ -264,7 +264,7 @@ class CarryTmpTests(unittest.TestCase):
         kept = list((self.root / 'local/container_tmp').iterdir())
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0].read_bytes(), fake.archive)
-        self.assertEqual((target / 'keep').read_text(), 'untouched')
+        self.assertEqual((target / 'keep').read_text(encoding='utf-8'), 'untouched')
 
 
 if __name__ == "__main__":

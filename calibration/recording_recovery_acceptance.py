@@ -92,7 +92,7 @@ def check(args):
     assert (ROOT / 'local').resolve() in directory.parents, 'Evidence must stay under ignored local/'
     assert (ROOT / 'local').resolve() in game.parents and (ROOT / 'local').resolve() in obs_root.parents
     directory.mkdir(parents=True, exist_ok=False)
-    manifest = json.loads((game / 'isolation.json').read_text())
+    manifest = json.loads((game / 'isolation.json').read_text(encoding='utf-8'))
     ipc, clock = manifest['ipc_port'], manifest['clock_port']
     assert ipc == 48974 and clock == 48976, 'This check only permits the prepared private ports'
     game_process, obs_process = process(args.game_pid), process(args.obs_pid)

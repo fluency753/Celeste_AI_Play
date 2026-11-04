@@ -58,7 +58,7 @@ class SimulationMigrationTests(unittest.TestCase):
         with patch.object(migration, '_replace_header', side_effect=OSError('replacement boundary failed')):
             with self.assertRaisesRegex(OSError, 'replacement boundary'):
                 self.migrate()
-        self.assertEqual(json.loads(self.journal.read_text())['state'], 'prepared')
+        self.assertEqual(json.loads(self.journal.read_text(encoding='utf-8'))['state'], 'prepared')
         self.assertEqual(self.backup.read_bytes(), self.original)
 
     def test_dry_check_is_read_only(self):
@@ -77,7 +77,7 @@ class SimulationMigrationTests(unittest.TestCase):
         self.assertEqual(self.rollout.read_bytes(), expected + self.history)
         self.assertEqual(self.rollout.stat().st_size, len(self.original))
         self.assertEqual(self.backup.read_bytes(), self.original)
-        self.assertEqual(json.loads(self.journal.read_text())['state'], 'complete')
+        self.assertEqual(json.loads(self.journal.read_text(encoding='utf-8'))['state'], 'complete')
         self.assertEqual(result['status'], 'updated')
         self.assertTrue(result['history_unchanged'])
         self.assertEqual(result['header_bytes'], len(self.header))
@@ -115,12 +115,12 @@ class SimulationMigrationTests(unittest.TestCase):
                 self.migrate()
         expected = patch_metadata(self.header, IDENT, SCHEMA) + self.history
         self.assertEqual(self.rollout.read_bytes(), expected)
-        self.assertEqual(json.loads(self.journal.read_text())['state'], 'prepared')
+        self.assertEqual(json.loads(self.journal.read_text(encoding='utf-8'))['state'], 'prepared')
         with patch.object(migration, '_replace_header') as replace:
             self.assertEqual(self.migrate()['status'], 'updated')
         replace.assert_not_called()
         self.assertEqual(self.rollout.read_bytes(), expected)
-        self.assertEqual(json.loads(self.journal.read_text())['state'], 'complete')
+        self.assertEqual(json.loads(self.journal.read_text(encoding='utf-8'))['state'], 'complete')
 
     def test_partial_backup_write_failure_is_retryable(self):
         def partial_copy(source, output, *args):
@@ -151,7 +151,7 @@ class SimulationMigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '首行'):
             self.migrate()
         self.assertEqual(self.rollout.read_bytes(), changed)
-        self.assertEqual(json.loads(self.journal.read_text())['state'], 'prepared')
+        self.assertEqual(json.loads(self.journal.read_text(encoding='utf-8'))['state'], 'prepared')
 
     def test_pending_changed_or_truncated_original_history_is_rejected(self):
         self.prepare()
@@ -161,7 +161,7 @@ class SimulationMigrationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '历史'):
                     self.migrate()
                 self.assertEqual(self.rollout.read_bytes(), changed)
-                self.assertEqual(json.loads(self.journal.read_text())['state'], 'prepared')
+                self.assertEqual(json.loads(self.journal.read_text(encoding='utf-8'))['state'], 'prepared')
 
     def create_cache(self, ident):
         path = self.home / 'state_5.sqlite'

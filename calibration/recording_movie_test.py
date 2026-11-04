@@ -87,7 +87,7 @@ class RecordingMovieTests(unittest.TestCase):
             with self.subTest(suffix=suffix),tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp);run = root/'runs/test/20261026-000000';recording = run/'recording'
                 recording.mkdir(parents=True)
-                (run/'run_state.json').write_text('{"agent":"test"}')
+                (run/'run_state.json').write_text('{"agent":"test"}', encoding='utf-8')
                 for stem in ('gameplay','gameplay_pure'):
                     (recording/(stem+suffix)).touch()
                 with patch.object(console_api,'REPO_ROOT',root), \

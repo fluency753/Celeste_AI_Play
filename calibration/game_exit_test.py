@@ -237,7 +237,7 @@ class GameExitTests(unittest.TestCase):
         try:
             recorder = fixture.start(); fixture.advance(3); recorder.retain()
             (fixture.directory/'gameplay.mp4').write_bytes(b'encoder movie fixture')
-            (fixture.first/'summary.json').write_text('{"game_released":false}')
+            (fixture.first/'summary.json').write_text('{"game_released":false}', encoding='utf-8')
             game = MenuGame(level=True)
             game.hello.update(copy.deepcopy(fixture.hello))
             original = game.call
@@ -252,7 +252,7 @@ class GameExitTests(unittest.TestCase):
             process = Process(game)
             def pure(*args, **kwargs):
                 self.assertTrue(game.exited, 'Video postprocessing blocked game shutdown')
-                self.assertTrue(json.loads((fixture.first/'summary.json').read_text())['game_released'])
+                self.assertTrue(json.loads((fixture.first/'summary.json').read_text(encoding='utf-8'))['game_released'])
                 return {'state': 'skipped'}
             with patch('orchestrator.maintenance.GameProcess', return_value=process), \
                  patch('orchestrator.recording.make_pure', side_effect=pure):

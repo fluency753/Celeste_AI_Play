@@ -28,8 +28,8 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root/'run_state.json').write_text(json.dumps({'agent':'test','save':'test','model':'opus',
-                'effort':'high','engine':'claude','runtime':'host','session_id':'original'}))
-            (root/'summary.json').write_text('{"completed":true}')
+                'effort':'high','engine':'claude','runtime':'host','session_id':'original'}), encoding='utf-8')
+            (root/'summary.json').write_text('{"completed":true}', encoding='utf-8')
             Metrics(root/'metrics.json','test','opus','high',600)
             runner = SimpleNamespace(run=AsyncMock())
             @asynccontextmanager
@@ -48,8 +48,8 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root/'run_state.json').write_text(json.dumps({'agent':'test','save':'test','model':'model',
-                'effort':'medium','engine':'codex','runtime':'host','session_id':'original'}))
-            (root/'summary.json').write_text('{"completed":true}')
+                'effort':'medium','engine':'codex','runtime':'host','session_id':'original'}), encoding='utf-8')
+            (root/'summary.json').write_text('{"completed":true}', encoding='utf-8')
             Metrics(root/'metrics.json','test','model','medium',600)
             received = {}
             @asynccontextmanager
@@ -107,8 +107,8 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                     root = Path(tmp)
                     state = {'agent':'test', 'save':'test', 'model':'model', 'effort':'medium',
                              'engine':engine, 'runtime':'host', 'session_id':'original'}
-                    (root/'run_state.json').write_text(json.dumps(state))
-                    (root/'summary.json').write_text('{"completed":true}')
+                    (root/'run_state.json').write_text(json.dumps(state), encoding='utf-8')
+                    (root/'summary.json').write_text('{"completed":true}', encoding='utf-8')
                     Metrics(root/'metrics.json', 'test', 'model', 'medium', 600)
                     with patch('orchestrator.chat.ensure_container') as container, \
                          patch('orchestrator.chat.host_runner') as host, \

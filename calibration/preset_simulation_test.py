@@ -101,7 +101,7 @@ class PresetSimulationTests(unittest.TestCase):
 
     def test_request_file_is_data_and_rejects_escape_links_and_excess(self):
         workspace = self.session.workspace
-        (workspace / 'request.json').write_text(json.dumps({'candidates': [['1,R']]}))
+        (workspace / 'request.json').write_text(json.dumps({'candidates': [['1,R']]}), encoding='utf-8')
         with patch('orchestrator.sim_assist.run_predictions', return_value=self.result):
             result = self.session.simulate({'request_file': '/workspace/request.json', 'request_id': 'file'})
         self.assertEqual(result['receipt'], 'file')
@@ -150,7 +150,7 @@ class PresetSimulationTests(unittest.TestCase):
         self.assertEqual(self.budget.bank, 0)
 
     def test_private_directory_failure_before_submission_refunds(self):
-        (self.run / 'sim_private').write_text('directory blocked')
+        (self.run / 'sim_private').write_text('directory blocked', encoding='utf-8')
         with patch('orchestrator.sim_assist.run_predictions') as worker:
             with self.assertRaisesRegex(ValueError, "尚未提交"):
                 self.session.simulate({'candidates': [['1,R']], 'request_id': 'mkdir'})
@@ -193,7 +193,7 @@ class PresetSimulationTests(unittest.TestCase):
             self.session.simulate({'candidates': [['1,R']], 'request_id': 'resume'})
         resumed = self.root / 'resumed'
         resumed.mkdir()
-        (resumed / 'run_state.json').write_text(json.dumps({'resumed_from': str(self.run)}))
+        (resumed / 'run_state.json').write_text(json.dumps({'resumed_from': str(self.run)}), encoding='utf-8')
         metrics = Metrics(resumed / 'metrics.json', 'test', 'stub', 'high', 100)
         session = GameSession(self.cfg, resumed, metrics)
         self.addCleanup(session._frames_log.close)

@@ -91,11 +91,11 @@ class SuccessorSessionTests(unittest.TestCase):
             self.assertEqual(state['resumed_from'], str(run))
             self.assertEqual(state['kb_extra'], 'local/kb_extra/x')
             self.assertNotIn('session_name', state)
-            metrics = json.loads((new / 'metrics.json').read_text())
+            metrics = json.loads((new / 'metrics.json').read_text(encoding='utf-8'))
             self.assertEqual((metrics['decisions'], metrics['elapsed_s']), (7, 5.0))
             self.assertEqual((metrics['compactions'], metrics['compact_s'], metrics['context_tokens']), (0, 0.0, 0))
             self.assertTrue(can_wake(new))
-            self.assertEqual(json.loads((run / 'run_state.json').read_text())['session_id'], 'old-session')
+            self.assertEqual(json.loads((run / 'run_state.json').read_text(encoding='utf-8'))['session_id'], 'old-session')
             self.assertNotEqual(successor_run(run), new)          # 同一秒再开一次也不覆盖
 
     def test_fresh_chat_starts_a_new_session_then_resumes_it(self):

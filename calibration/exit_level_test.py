@@ -100,7 +100,7 @@ class ExitLevelTests(unittest.TestCase):
                 self.assertEqual(session.chapter_queue,[Piece(2)])
                 self.assertEqual(session.metrics.state.splits or [],[])
                 self.assertEqual(session.goals.snapshot()['baseline'],baseline)
-                saved=json.loads((session.workspace/'game/latest_obs.json').read_text())['obs']
+                saved=json.loads((session.workspace/'game/latest_obs.json').read_text(encoding='utf-8'))['obs']
                 self.assertEqual(saved['scene'],'Overworld')
                 exits=len(client.steps)
                 again=session.exit_level('已经在地图，确认继续')

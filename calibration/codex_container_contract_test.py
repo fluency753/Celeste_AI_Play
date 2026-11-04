@@ -127,7 +127,7 @@ class ContainerContractTests(unittest.IsolatedAsyncioTestCase):
     def test_container_session_archive_status_cannot_be_taken_from_host_copy(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            (root/'session-id.jsonl').write_text('archived legacy copy')
+            (root/'session-id.jsonl').write_text('archived legacy copy', encoding='utf-8')
             adapter = runtime('codex')
             self.assertTrue(adapter.archived('session-id', root))
             self.assertFalse(adapter.archived('session-id', root, state={'session_storage':'container'}))

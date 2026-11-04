@@ -735,7 +735,7 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertEqual(self.session.replays, 3)
         self.assertEqual(len(rejected), 1)
         self.assertIn('maintenance hold', rejected[0])
-        state = json.loads((self.root/'bridge_reload.json').read_text())
+        state = json.loads((self.root/'bridge_reload.json').read_text(encoding='utf-8'))
         self.assertTrue(state['before_from_hold'])
 
     def test_retry_uses_held_counters_instead_of_a_stale_snapshot(self):
@@ -744,10 +744,10 @@ class ReloadWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(BridgeReloadError, '版本与要求不符'):
             reload_bridge(self.session, self.root, {'expected_version': '9.9.9'})
         self.assertEqual(self.session.stage, 'ready')
-        state = json.loads((self.root/'bridge_reload.json').read_text())
+        state = json.loads((self.root/'bridge_reload.json').read_text(encoding='utf-8'))
         state['before']['recording']['replays'] = 0
         state.pop('before_from_hold', None)
-        (self.root/'bridge_reload.json').write_text(json.dumps(state))
+        (self.root/'bridge_reload.json').write_text(json.dumps(state), encoding='utf-8')
         result = reload_bridge(self.session, self.root, {'retry': True, 'expected_version': '1.3.1'})
         self.assertEqual(result['phase'], 'finished')
         self.assertEqual(result['before']['recording']['replays'], 3)
@@ -783,7 +783,7 @@ class ReloadWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(BridgeReloadError, '拒绝重载.*cutscene') as raised:
             reload_bridge(self.session, self.root, self.options)
         self.assertFalse(raised.exception.reload_held)
-        state = json.loads((self.root/'bridge_reload.json').read_text())
+        state = json.loads((self.root/'bridge_reload.json').read_text(encoding='utf-8'))
         self.assertFalse(state['prepare_outcome_unknown'])
         self.assertIsNone(state.get('lease'))
         # A refused attempt does not block the next ordinary reload.
@@ -840,7 +840,7 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertEqual(self.session.stage, 'aborted')
         self.assertEqual(self.target.read_bytes(), b'previous payload')
         self.assertFalse(any(c == 'reload_commit' for c, _ in self.session.calls))
-        self.assertEqual(json.loads((self.root/'bridge_reload.json').read_text())['phase'], 'aborted')
+        self.assertEqual(json.loads((self.root/'bridge_reload.json').read_text(encoding='utf-8'))['phase'], 'aborted')
 
     def test_missing_runtime_reference_is_refused(self):
         (self.root / 'build' / 'CelesteAIRuntime.dll').unlink()
@@ -930,7 +930,7 @@ class ReloadWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(BridgeReloadError, '结果尚未确认') as raised:
             reload_bridge(self.session, self.root, self.options)
         self.assertTrue(raised.exception.reload_held)
-        state = json.loads((self.root/'bridge_reload.json').read_text())
+        state = json.loads((self.root/'bridge_reload.json').read_text(encoding='utf-8'))
         self.assertTrue(state['prepare_outcome_unknown'])
         self.assertEqual(state['resume_phase'], 'preparing')
         self.assertIsNone(state.get('lease'))
@@ -977,7 +977,7 @@ class ReloadWorkerTests(unittest.TestCase):
         self.session.fail = True
         with self.assertRaisesRegex(BridgeReloadError, 'bad build'):
             reload_bridge(self.session, self.root, self.options)
-        state = json.loads((self.root/'bridge_reload.json').read_text())
+        state = json.loads((self.root/'bridge_reload.json').read_text(encoding='utf-8'))
         self.assertEqual(state['lease'], 'lease-123')
         self.assertEqual(state['phase'], 'failed')
         self.assertFalse(any(c == 'reload_finish' for c, _ in self.session.calls))
@@ -1009,13 +1009,13 @@ class ReloadWorkerTests(unittest.TestCase):
         self.session.calls.clear()
         with self.assertRaisesRegex(BridgeReloadError, '已经完成'):
             reload_bridge(self.session, self.root, {'retry': True})
-        self.assertEqual(json.loads((self.root/'bridge_reload.json').read_text())['phase'], 'finished')
+        self.assertEqual(json.loads((self.root/'bridge_reload.json').read_text(encoding='utf-8'))['phase'], 'finished')
         self.assertEqual(self.session.calls, [])
 
     def test_retry_keeps_expected_version_until_explicitly_overridden(self):
         with self.assertRaisesRegex(BridgeReloadError, '版本与要求不符'):
             reload_bridge(self.session, self.root, {'expected_version': '9.9.9'})
-        state = json.loads((self.root/'bridge_reload.json').read_text())
+        state = json.loads((self.root/'bridge_reload.json').read_text(encoding='utf-8'))
         self.assertEqual(state['expected_version'], '9.9.9')
         self.session.calls.clear()
         with self.assertRaisesRegex(BridgeReloadError, '版本与要求不符'):
@@ -1037,7 +1037,7 @@ class ReloadWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(BridgeReloadError, '刷新失败'):
             reload_bridge(self.session, self.root, self.options)
         self.assertEqual(self.session.stage, 'finished')
-        record = json.loads((self.root/'bridge_reload.json').read_text())
+        record = json.loads((self.root/'bridge_reload.json').read_text(encoding='utf-8'))
         self.assertTrue(record['resident_finished'])
         self.assertFalse(record['connection_failed'])
         self.session.calls.clear()
@@ -1157,7 +1157,7 @@ class DirectAbortCliTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('已撤销', result.stdout)
                 self.assertEqual(installed.read_bytes(), b'running payload')
-                self.assertEqual(json.loads((root / 'bridge_reload.json').read_text())['phase'], 'aborted')
+                self.assertEqual(json.loads((root / 'bridge_reload.json').read_text(encoding='utf-8'))['phase'], 'aborted')
         finally:
             core.close()
         self.assertEqual(core.stage, 'aborted')
@@ -1323,7 +1323,7 @@ class ReloadControlTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(session.stage, 'finished')
             self.assertTrue(owner.paused)
             self.assertTrue(owner._bridge_reload_failed)
-            self.assertFalse(json.loads((root/'bridge_reload.json').read_text())['owner_was_paused'])
+            self.assertFalse(json.loads((root/'bridge_reload.json').read_text(encoding='utf-8'))['owner_was_paused'])
             session.calls.clear()
             owner.control.enqueue('bridge_reload', '{"retry":true}')
             await owner._reload_bridge(owner.control.pending()[0])
@@ -1422,7 +1422,7 @@ class ReloadCliTests(unittest.TestCase):
             session.bridge_reload_supported = True
             cfg = RunConfig(agent='test', save='test', model='test', runtime='host')
             session.cfg = cfg
-            (root/'run_state.json').write_text(json.dumps({'agent': 'test', 'save': 'test', 'engine': 'claude', 'model': 'test'}))
+            (root/'run_state.json').write_text(json.dumps({'agent': 'test', 'save': 'test', 'engine': 'claude', 'model': 'test'}), encoding='utf-8')
             metrics = Metrics(root/'metrics.json', 'test', 'test', 'high', 60)
             session.metrics = metrics
             ready, stop = threading.Event(), threading.Event()
@@ -1459,7 +1459,7 @@ class ReloadCliTests(unittest.TestCase):
                                          '--hud-port', str(server.server_port), '--timeout', '5'],
                                         cwd=Path(__file__).resolve().parents[1], capture_output=True,
                                         encoding='utf-8', timeout=12)
-                state = json.loads((root/'bridge_reload.json').read_text())
+                state = json.loads((root/'bridge_reload.json').read_text(encoding='utf-8'))
                 if lost_prepare or refresh_fail:
                     from tools.reload_bridge import request
                     base = f'http://127.0.0.1:{server.server_port}'

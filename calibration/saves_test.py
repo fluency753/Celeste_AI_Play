@@ -14,7 +14,7 @@ class SaveCatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             (root/'configs').mkdir();(root/'game/Saves').mkdir(parents=True)
-            (root/'configs/local.deploy.json').write_text(json.dumps({'celeste_dir':str(root/'game')}))
+            (root/'configs/local.deploy.json').write_text(json.dumps({'celeste_dir':str(root/'game')}), encoding='utf-8')
             for name,xml in [('10.celeste','<SaveData><Name>直播 &amp; 探索</Name></SaveData>'),
                              ('10-modsavedata.celeste','<SaveData><Name>ignore</Name></SaveData>'),
                              ('11.celeste','broken')]:

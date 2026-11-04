@@ -171,7 +171,7 @@ def main():
     parser.add_argument('--bad-dll', action='store_true', help='Fail the first actual reload, restore DLL and retry the same lease')
     args = parser.parse_args()
     isolation = args.isolation.resolve()
-    manifest = json.loads((isolation / 'isolation.json').read_text())
+    manifest = json.loads((isolation / 'isolation.json').read_text(encoding='utf-8'))
     ipc_port, clock_port = manifest['ipc_port'], manifest['clock_port']
     assert ipc_port not in {47774, 47776} and clock_port not in {47774, 47776}
     output = isolation / ('reload-acceptance-' + time.strftime('%Y%m%d-%H%M%S'))

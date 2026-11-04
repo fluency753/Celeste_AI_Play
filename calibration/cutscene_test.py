@@ -348,7 +348,7 @@ class CutsceneTests(unittest.TestCase):
             self.s.connect()
         self.assertTrue(self.s._pending_complete);self.assertFalse(self.s.done)
         self.assertEqual(self.s.metrics.state.chapter_side,'C')
-        self.assertTrue(json.loads((self.path/'run_state.json').read_text())['completion_pending'])
+        self.assertTrue(json.loads((self.path/'run_state.json').read_text(encoding='utf-8'))['completion_pending'])
 
 
 class ScriptClient(SceneClient):

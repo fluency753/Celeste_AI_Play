@@ -65,7 +65,7 @@ class SessionActionTests(unittest.TestCase):
         (self.root / 'game/Saves').mkdir(parents=True)
         (self.root / 'game/Saves/0.celeste').write_text('<SaveData><Name>test</Name></SaveData>', encoding='utf-8')
         (self.root / 'game/Mods/CelesteAIBridge').mkdir(parents=True)
-        (self.root / 'game/Mods/CelesteAIBridge/everest.yaml').write_text('- Name: CelesteAIBridge\n  Version: 0.12.1\n')
+        (self.root / 'game/Mods/CelesteAIBridge/everest.yaml').write_text('- Name: CelesteAIBridge\n  Version: 0.12.1\n', encoding='utf-8')
         write_json(self.root / 'configs/local.deploy.json', {'celeste_dir': str(self.root / 'game')})
         self.catalog_patch=patch('orchestrator.model_catalog.load_models',return_value={
             'default_model':'gpt-test','models':[{'id':'gpt-test','efforts':['high']}]})
@@ -166,7 +166,7 @@ class SessionActionTests(unittest.TestCase):
         self.assertTrue(can_wake(target))
         self.assertEqual(read_json(target / 'run_state.json')['session_kind'], 'ready')
         self.assertEqual(read_json(target / 'metrics.json')['room'], 'end')
-        self.assertEqual((target / 'codex_events.jsonl').read_text(), 'new preparation')
+        self.assertEqual((target / 'codex_events.jsonl').read_text(encoding='utf-8'), 'new preparation')
         self.assertFalse(RunControl(target).fast_preference())
         self.assertEqual(read_json(self.anchor / 'session_operation.json')['status'], 'ready')
         start.assert_called_once_with(target)
@@ -340,7 +340,7 @@ class SessionActionTests(unittest.TestCase):
         new=self.root/'runs/old/new'
         def launch_game(current,options):
             RunControl(new).heartbeat(chat_only=False,phase='idle')
-            (self.root/'runs/latest.txt').write_text(str(new))
+            (self.root/'runs/latest.txt').write_text(str(new), encoding='utf-8')
             return self.root/'play-host',{}
         with patch('orchestrator.session_actions._launch_play',side_effect=launch_game) as launch:
             _finish(self.anchor,operation)

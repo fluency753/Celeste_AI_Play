@@ -281,7 +281,7 @@ class NativeSandboxTests(unittest.TestCase):
         self.assertEqual(temp_command[temp_command.index('--chdir') + 1], '/tmp')
 
     def test_managed_requirements_pin_foreground_tools_and_protect_credentials(self):
-        requirements = tomllib.loads((ROOT/'agent-container/codex-requirements.toml').read_text())
+        requirements = tomllib.loads((ROOT/'agent-container/codex-requirements.toml').read_text(encoding='utf-8'))
         self.assertTrue(requirements['allow_managed_hooks_only'])
         self.assertFalse(requirements['allow_login_shell'])
         self.assertFalse(requirements['features']['unified_exec'])

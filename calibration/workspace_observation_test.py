@@ -205,7 +205,7 @@ class WorkspaceObservationTests(unittest.TestCase):
                 prepare_story(session, name)
                 with patch.object(session, '_write_json', fail_observation):
                     self.assert_fallback(call(server, name, arguments(name)))
-                self.assertNotEqual(json.loads((session.workspace / 'game/latest_obs.json').read_text())['obs']['frame'],
+                self.assertNotEqual(json.loads((session.workspace / 'game/latest_obs.json').read_text(encoding='utf-8'))['obs']['frame'],
                                     session.last_obs['frame'])
                 self.assert_file_result(call(server), session)
 

@@ -402,7 +402,7 @@ class DetourSessionTests(unittest.TestCase):
         outcome = self.act(session, ['40,R'], '吃心')
         self.assertEqual(game.steps[acted:], [['40,R']])   # 主控没有补按任何键
         self.assertFalse(session._pending_complete)
-        self.assertFalse(json.loads((session.run_dir / 'run_state.json').read_text()).get('completion_pending'))
+        self.assertFalse(json.loads((session.run_dir / 'run_state.json').read_text(encoding='utf-8')).get('completion_pending'))
         self.assertNotIn('complete', session._stop_list(None))
         self.assertTrue(any('由你用 act 操作' in note for note in outcome.auto_notes))
         self.act(session, ['40'], '等吃心动画')

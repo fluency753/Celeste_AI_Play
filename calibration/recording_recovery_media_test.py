@@ -155,8 +155,8 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
         self.media(self.root,[100,200,300])
         self.recovery.record_closed_capture(self.saved,self.root,{'state':'finished','frames':3})
         path=self.root/self.recovery.CLOSED_RECEIPT
-        receipt=json.loads(path.read_text());receipt['session_id']='other'
-        path.write_text(json.dumps(receipt))
+        receipt=json.loads(path.read_text(encoding='utf-8'));receipt['session_id']='other'
+        path.write_text(json.dumps(receipt), encoding='utf-8')
         with patch.object(self.recovery,'_probe',wraps=self.recovery._probe) as probe:
             prepared=self.recovery.prepare(self.saved)
         self.assertEqual(prepared['prefix_frames'],3)
@@ -165,7 +165,7 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
     def test_changed_media_invalidates_clean_receipt(self):
         self.media(self.root,[100,200])
         self.recovery.record_closed_capture(self.saved,self.root,{'state':'finished','frames':2})
-        with (self.root/'segments.csv').open('a') as stream:stream.write('\n')
+        with (self.root/'segments.csv').open('a', encoding='utf-8') as stream:stream.write('\n')
         with patch.object(self.recovery,'_probe',wraps=self.recovery._probe) as probe:
             self.recovery.prepare(self.saved)
         self.assertTrue(any(call.kwargs.get('decode',True) for call in probe.call_args_list))
@@ -210,7 +210,7 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
         self.assertEqual(read_ticks(self.root/'frames.csv'), base['ticks'] + tail1['ticks'] + tail2['ticks'])
         with (self.root/'frames.csv').open(newline='', encoding='utf-8') as stream:
             self.assertEqual([int(row['index']) for row in csv.DictReader(stream)], list(range(9)))
-        self.assertEqual(json.loads((self.root/'session.json').read_text())['id'], self.saved['id'])
+        self.assertEqual(json.loads((self.root/'session.json').read_text(encoding='utf-8'))['id'], self.saved['id'])
         self.assert_backup_kept(original)
 
     def test_partial_publication_retry_never_appends_a_chunk_twice(self):
@@ -352,7 +352,7 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
         final = self.recovery.finalize(self.saved)
         self.assertEqual((final['frames'], final['replays']), (5, 1))
         self.assertEqual(self.frames(self.root/'video.mkv'), 5)
-        self.assertEqual(json.loads((self.root/'session.json').read_text())['id'], self.saved['id'])
+        self.assertEqual(json.loads((self.root/'session.json').read_text(encoding='utf-8'))['id'], self.saved['id'])
 
     def test_nonempty_unparseable_video_is_not_silently_skipped(self):
         self.media(self.root, [100, 200])

@@ -132,7 +132,7 @@ class AnalysisTests(unittest.TestCase):
 
     def test_window_unknown_boundaries_cross_run_ids_and_snapshot_resets(self):
         other = self.make_run('two')
-        data = json.loads((other / 'run_state.json').read_text())
+        data = json.loads((other / 'run_state.json').read_text(encoding='utf-8'))
         self.put(other / 'run_state.json', {**data, 'resumed_from': str(self.run)})
         self.put(other / 'metrics.json', {'written_wall': 1200, 'thinking_s': 50, 'tool_s': 4, 'game_clock': {'committed': 180}})
         for run in (self.run, other):
@@ -189,8 +189,8 @@ class AnalysisTests(unittest.TestCase):
         workspace = self.root / 'workspace'
         workspace.mkdir()
         (workspace / 'notes.md').write_text('学习记录 password=SECRET_NOTE', encoding='utf-8')
-        (workspace / 'plan.py').write_text('raise RuntimeError("DO_NOT_EXECUTE")')
-        (workspace / '.env').write_text('SECRET_ENV')
+        (workspace / 'plan.py').write_text('raise RuntimeError("DO_NOT_EXECUTE")', encoding='utf-8')
+        (workspace / '.env').write_text('SECRET_ENV', encoding='utf-8')
         legacy = collect_session(self.run)
         self.assertNotIn('analysis', legacy)
         report = self.collect(workspace=workspace)
@@ -207,7 +207,7 @@ class AnalysisTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as bundle:
             self.assertIn('tool_calls.jsonl', bundle.namelist())
             self.assertIn('SCHEMA.md', bundle.namelist())
-        for name, digest in json.loads((output / 'manifest.json').read_text()).items():
+        for name, digest in json.loads((output / 'manifest.json').read_text(encoding='utf-8')).items():
             self.assertEqual(hashlib.sha256((output / name).read_bytes()).hexdigest(), digest)
         events = report.analysis_records['timeline']
         self.assertTrue(any(row['kind'] == 'control.requested' for row in events))

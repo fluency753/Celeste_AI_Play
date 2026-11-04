@@ -285,14 +285,14 @@ class RestartTests(unittest.TestCase):
         original_launch=self.launch
         def starting(args,**kwargs):
             result=original_launch(args,**kwargs)
-            pending.append((self.new/'run_state.json').read_text())
-            (self.new/'run_state.json').write_text('{')
+            pending.append((self.new/'run_state.json').read_text(encoding='utf-8'))
+            (self.new/'run_state.json').write_text('{', encoding='utf-8')
             return result
         def update(port,payload=None):
             result=original(port,payload)
             if pending:
                 text=pending.pop()
-                timer=threading.Timer(.05,lambda:(self.new/'run_state.json').write_text(text))
+                timer=threading.Timer(.05,lambda:(self.new/'run_state.json').write_text(text, encoding='utf-8'))
                 timer.start();self.addCleanup(timer.join)
             return result
         checks=[]

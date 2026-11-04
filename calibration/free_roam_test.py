@@ -37,7 +37,7 @@ class FreeRoamTests(unittest.TestCase):
 
     def test_snapshot_is_fixed_and_persisted_before_inputs(self):
         self.session._bind_visited_maps(self.obs())
-        self.assertEqual(json.loads((self.root/'run_state.json').read_text())['visited_maps'], self.maps)
+        self.assertEqual(json.loads((self.root/'run_state.json').read_text(encoding='utf-8'))['visited_maps'], self.maps)
         other = self.obs(level=False)
         other['save']['visited_maps'] = self.maps + [{'sid': CHAPTER_SIDS[2], 'side': 'A'}]
         self.session._bind_visited_maps(other)

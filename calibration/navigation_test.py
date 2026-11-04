@@ -56,7 +56,7 @@ class NavigationTests(unittest.TestCase):
                 self.assertEqual(self.session.chapter_queue, [Piece(2), Piece(3)])
                 self.assertEqual(self.session.navigation.target, Piece(2))
                 self.assertTrue(self.session.chapter_finished)
-                self.assertTrue(json.loads((self.root/'run_state.json').read_text())['piece_pending'])
+                self.assertTrue(json.loads((self.root/'run_state.json').read_text(encoding='utf-8'))['piece_pending'])
 
     def test_successful_handoff_commits_once_and_keeps_guard_on_current_piece(self):
         self.finish_current()
@@ -67,7 +67,7 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(self.session.chapter_queue, [Piece(3)])
         self.assertEqual(self.session._step_options()['entry_guard']['sid'], CHAPTER_SIDS[2])
         self.assertFalse(self.session._confirm_next_entry(self.session.client.obs))
-        saved = json.loads((self.root/'run_state.json').read_text())
+        saved = json.loads((self.root/'run_state.json').read_text(encoding='utf-8'))
         self.assertEqual(saved['plan_pieces'], [[1, 0, None], [2, 0, None], [3, 0, None]])
         self.assertFalse(saved['piece_pending'])
 

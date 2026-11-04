@@ -110,7 +110,7 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(chat(directory,name_request='name-1'),10)
                 result = json.loads((directory/'save_name_result.json').read_text(encoding='utf-8'))
                 self.assertEqual(result,{'request_id':'name-1','name':'North Star'})
-                self.assertEqual(json.loads((directory/'run_state.json').read_text())['session_id'],proof['session_id'])
+                self.assertEqual(json.loads((directory/'run_state.json').read_text(encoding='utf-8'))['session_id'],proof['session_id'])
                 self.assertIn('--session-id', commands[0])
                 for command_args in commands[1:]:
                     self.assertEqual(command_args[command_args.index('--resume')+1],proof['session_id'])

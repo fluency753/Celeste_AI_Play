@@ -22,9 +22,9 @@ class ConversationTests(unittest.TestCase):
         directory = self.root / "runs" / "gpt-native" / name
         directory.mkdir(parents=True)
         (directory / "run_state.json").write_text(json.dumps({"engine":"codex", "agent":name, "session_id":ident,
-            "model":"model", "effort":"high", "knowledge_profile":"explore"}))
-        (directory / "summary.json").write_text(json.dumps({"completed":True}))
-        (directory / "metrics.json").write_text(json.dumps({"context_tokens":1000, **metrics}))
+            "model":"model", "effort":"high", "knowledge_profile":"explore"}), encoding='utf-8')
+        (directory / "summary.json").write_text(json.dumps({"completed":True}), encoding='utf-8')
+        (directory / "metrics.json").write_text(json.dumps({"context_tokens":1000, **metrics}), encoding='utf-8')
         return directory
 
     def test_catalog_excludes_archived_and_deduplicates(self):
@@ -37,33 +37,33 @@ class ConversationTests(unittest.TestCase):
 
     def test_same_id_across_engines_does_not_collide_or_share_chat_history(self):
         from orchestrator.conversations import session_key
-        state = json.loads((self.source/'run_state.json').read_text())
+        state = json.loads((self.source/'run_state.json').read_text(encoding='utf-8'))
         state.update(engine='claude',provider='anthropic',session_id='active')
-        (self.source/'run_state.json').write_text(json.dumps(state))
+        (self.source/'run_state.json').write_text(json.dumps(state), encoding='utf-8')
         records = catalog(self.anchor,self.root/'runs',self.root/'archive')
         self.assertEqual(len(records),2)
         self.assertEqual(len({r['key'] for r in records}),2)
         target = prepare_target(self.anchor,next(r for r in records if r['engine']=='claude'))
-        selected = json.loads((target/'run_state.json').read_text())
+        selected = json.loads((target/'run_state.json').read_text(encoding='utf-8'))
         self.assertEqual(session_key(selected),'claude:anthropic:active')
         self.assertEqual(selected['provider'],'anthropic')
         self.assertNotEqual(target,self.anchor)
 
     def test_selection_cannot_escape_chat_directory(self):
-        (self.anchor / "hud_session.json").write_text(json.dumps({"relative":"../old"}))
+        (self.anchor / "hud_session.json").write_text(json.dumps({"relative":"../old"}), encoding='utf-8')
         self.assertEqual(selected_run(self.anchor), self.anchor)
 
     def test_switch_preserves_save_name_and_slot_as_one_identity(self):
         for folder,name,slot in [(self.anchor,'live',12),(self.source,'older',3)]:
-            path=folder/'run_state.json';state=json.loads(path.read_text());state.update(save=name,save_slot=slot);path.write_text(json.dumps(state))
+            path=folder/'run_state.json';state=json.loads(path.read_text(encoding='utf-8'));state.update(save=name,save_slot=slot);path.write_text(json.dumps(state), encoding='utf-8')
         target=prepare_target(self.anchor,{'directory':str(self.source),'id':'older'})
-        state=json.loads((target/'run_state.json').read_text())
+        state=json.loads((target/'run_state.json').read_text(encoding='utf-8'))
         self.assertEqual((state['save'],state['save_slot']),('older',3))
 
     def test_missing_source_slot_never_inherits_another_saves_slot(self):
-        path=self.anchor/'run_state.json';state=json.loads(path.read_text());state['save_slot']=12;path.write_text(json.dumps(state))
+        path=self.anchor/'run_state.json';state=json.loads(path.read_text(encoding='utf-8'));state['save_slot']=12;path.write_text(json.dumps(state), encoding='utf-8')
         target=prepare_target(self.anchor,{'directory':str(self.source),'id':'older'})
-        self.assertNotIn('save_slot',json.loads((target/'run_state.json').read_text()))
+        self.assertNotIn('save_slot',json.loads((target/'run_state.json').read_text(encoding='utf-8')))
 
     def test_selected_configuration_is_authoritative_including_missing_fields(self):
         settings = {'sim_assist': True, 'sim': True, 'cutscene_mode': 'agent',
@@ -72,40 +72,40 @@ class ConversationTests(unittest.TestCase):
                     'stiffness': True, 'formal_thought': True, 'save_context': True,
                     'future_session_setting': 'must not leak'}
         anchor_path = self.anchor/'run_state.json'
-        anchor_state = json.loads(anchor_path.read_text())
+        anchor_state = json.loads(anchor_path.read_text(encoding='utf-8'))
         anchor_state.update(settings)
-        anchor_path.write_text(json.dumps(anchor_state))
+        anchor_path.write_text(json.dumps(anchor_state), encoding='utf-8')
         source_path = self.source/'run_state.json'
-        source_state = json.loads(source_path.read_text())
+        source_state = json.loads(source_path.read_text(encoding='utf-8'))
         source_state.update(sim_assist=False, sim=False, cutscene_mode='auto',
                             session_kind='ready', prepared_dir=str(self.source),
                             action_permissions={'restart_chapter': False})
-        source_path.write_text(json.dumps(source_state))
+        source_path.write_text(json.dumps(source_state), encoding='utf-8')
         target = prepare_target(self.anchor, {'directory':str(self.source), 'id':'older'})
-        selected = json.loads((target/'run_state.json').read_text())
+        selected = json.loads((target/'run_state.json').read_text(encoding='utf-8'))
         for key, value in source_state.items():
             self.assertEqual(selected[key], value, key)
         for key in settings.keys() - source_state.keys():
             self.assertNotIn(key, selected, key)
-        self.assertEqual(json.loads(anchor_path.read_text()), anchor_state)
-        self.assertEqual(json.loads(source_path.read_text()), source_state)
+        self.assertEqual(json.loads(anchor_path.read_text(encoding='utf-8')), anchor_state)
+        self.assertEqual(json.loads(source_path.read_text(encoding='utf-8')), source_state)
 
     def test_selected_enabled_settings_are_not_replaced_by_anchor_defaults(self):
         path = self.source/'run_state.json'
-        state = json.loads(path.read_text())
+        state = json.loads(path.read_text(encoding='utf-8'))
         state.update(sim_assist=True, cutscene_mode='agent', kb_deny=['source.md'],
                      tuning={'min_frames_per_act': 80})
-        path.write_text(json.dumps(state))
+        path.write_text(json.dumps(state), encoding='utf-8')
         target = prepare_target(self.anchor, {'directory':str(self.source), 'id':'older'})
-        selected = json.loads((target/'run_state.json').read_text())
+        selected = json.loads((target/'run_state.json').read_text(encoding='utf-8'))
         for key in ('sim_assist', 'cutscene_mode', 'kb_deny', 'tuning'):
             self.assertEqual(selected[key], state[key])
 
     def test_recovered_conversation_replaces_occupied_source_in_picker(self):
         target = prepare_target(self.anchor, {"directory":str(self.source), "id":"older"})
-        state = json.loads((target / "run_state.json").read_text())
+        state = json.loads((target / "run_state.json").read_text(encoding='utf-8'))
         state["session_id"] = "recovered"
-        (target / "run_state.json").write_text(json.dumps(state))
+        (target / "run_state.json").write_text(json.dumps(state), encoding='utf-8')
         records = catalog(self.anchor, self.root / "runs", self.root / "archive")
         self.assertEqual({record["id"] for record in records}, {"active", "recovered"})
 
@@ -114,9 +114,9 @@ class ConversationTests(unittest.TestCase):
         old.enqueue("message", "历史上尚未完成投递的提示")
         old.set_fast(False)
         old.set_effort('low')
-        (self.source / "codex_events.jsonl").write_text("public history\n")
+        (self.source / "codex_events.jsonl").write_text("public history\n", encoding='utf-8')
         target = prepare_target(self.anchor, {"directory":str(self.source), "id":"older"})
-        metrics = json.loads((target / "metrics.json").read_text())
+        metrics = json.loads((target / "metrics.json").read_text(encoding='utf-8'))
         self.assertEqual(metrics["room"], "end")
         self.assertEqual(metrics["decisions"], 289)
         copied = RunControl(target)

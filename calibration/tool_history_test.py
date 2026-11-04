@@ -22,7 +22,7 @@ class ToolHistoryTests(unittest.TestCase):
         self.native = self.home/'sessions'/'2026'/'10'/'26'/('rollout-'+self.sid+'.jsonl')
         self.native.parent.mkdir(parents=True)
         self.append(self.native, {'type': 'session_meta', 'payload': {'id': self.sid, 'cwd': str(self.run/'codex-control')}})
-        (self.run/'run_state.json').write_text(json.dumps({'engine': 'codex', 'session_id': self.sid}))
+        (self.run/'run_state.json').write_text(json.dumps({'engine': 'codex', 'session_id': self.sid}), encoding='utf-8')
         self.reader = ToolHistory(self.run, self.home)
         self.root_patch = patch('overlay.tool_history.ROOT', self.root)
         self.root_patch.start()
@@ -179,7 +179,7 @@ class ToolHistoryTests(unittest.TestCase):
         self.assertEqual(self.reader.snapshot()['items'][0]['status'], 'interrupted')
 
     def test_claude_begin_and_result_use_same_safe_projection(self):
-        (self.run/'run_state.json').write_text('{"engine":"claude"}')
+        (self.run/'run_state.json').write_text('{"engine":"claude"}', encoding='utf-8')
         self.begin('claude', 'Read')
         events = self.run/'agent_events.jsonl'
         self.append(events, {'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'id': 'claude', 'name': 'Read',
@@ -194,7 +194,7 @@ class ToolHistoryTests(unittest.TestCase):
 
     def test_rejects_rollout_with_wrong_session_or_foreign_cwd(self):
         self.begin('one')
-        self.native.write_text(json.dumps({'payload': {'id': self.sid, 'cwd': str(self.root/'foreign')}})+'\n')
+        self.native.write_text(json.dumps({'payload': {'id': self.sid, 'cwd': str(self.root/'foreign')}})+'\n', encoding='utf-8')
         self.complete('one')
         result = self.reader.snapshot()
         self.assertIsNone(result['items'][0]['parameters'])
@@ -213,7 +213,7 @@ class ToolHistoryTests(unittest.TestCase):
         self.assertLessEqual(len(tail.pending), 80)
         with path.open('ab') as stream: stream.write(b'2}\n')
         self.assertEqual(tail.read(), [{'partial': 2}])
-        path.write_text('{"new":3}\n')
+        path.write_text('{"new":3}\n', encoding='utf-8')
         self.assertEqual(tail.read(), [{'new': 3}])
 
     def test_parameters_do_not_expose_write_content_or_unbounded_secrets(self):
@@ -265,7 +265,7 @@ class ToolHistoryTests(unittest.TestCase):
 
     def test_http_tools_endpoint_consumes_claude_events_without_touching_game(self):
         from overlay.server import make_handler
-        (self.run/'run_state.json').write_text('{"engine":"claude"}')
+        (self.run/'run_state.json').write_text('{"engine":"claude"}', encoding='utf-8')
         self.begin('read', 'Read')
         self.append(self.run/'agent_events.jsonl', {'message': {'content': [{'type': 'tool_use', 'id': 'read',
             'name': 'Read', 'input': {'file_path': '/workspace/game/collision.json', 'limit': 8}}]}})
@@ -301,7 +301,7 @@ class ToolHistoryTests(unittest.TestCase):
     def test_tools_endpoint_is_readable_only_from_local_pages(self):
         from urllib.request import Request
         from overlay.server import make_handler
-        (self.run/'run_state.json').write_text('{"engine":"claude"}')
+        (self.run/'run_state.json').write_text('{"engine":"claude"}', encoding='utf-8')
         with patch('overlay.server.current_run', return_value=self.run):
             server = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(None))
             thread = threading.Thread(target=server.serve_forever)

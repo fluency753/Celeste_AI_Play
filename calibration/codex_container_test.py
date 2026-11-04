@@ -89,8 +89,8 @@ class ContainerCodexTests(unittest.TestCase):
         with patch.object(codex, 'exec_command', side_effect=self.worker_command), \
              patch.dict(os.environ, {'CODEX_HOME':str(self.home)}):
             codex.import_auth('fixture', source)
-            self.assertEqual(json.loads((self.home/'auth.json').read_text()), secret)
-            self.assertEqual(json.loads(source.read_text()), secret)
+            self.assertEqual(json.loads((self.home/'auth.json').read_text(encoding='utf-8')), secret)
+            self.assertEqual(json.loads(source.read_text(encoding='utf-8')), secret)
             self.assertEqual(sorted(p.name for p in self.home.iterdir()), ['auth.json'])
         with patch.object(codex, '_run', return_value=subprocess.CompletedProcess([],1,'','sensitive-fixture')):
             with self.assertRaisesRegex(RuntimeError, '导入') as error:
@@ -105,7 +105,7 @@ class ContainerCodexTests(unittest.TestCase):
             with patch.object(codex, '_run') as run, self.assertRaises(ValueError):
                 codex.import_auth('fixture', source)
             run.assert_not_called()
-            self.assertEqual((self.home/'auth.json').read_text(), 'original')
+            self.assertEqual((self.home/'auth.json').read_text(encoding='utf-8'), 'original')
 
     def test_session_import_keeps_original_and_never_overwrites(self):
         source = self.root/'host'/'sessions'/'2026'/'10'/'30'/'rollout.jsonl'
@@ -121,8 +121,8 @@ class ContainerCodexTests(unittest.TestCase):
             self.assertEqual(codex.read_metadata('fixture', str(path)), payload)
             with self.assertRaisesRegex(RuntimeError, '已存在'):
                 codex.import_session('fixture', source)
-            self.assertEqual(path.read_text(), original)
-            self.assertEqual(source.read_text(), original)
+            self.assertEqual(path.read_text(encoding='utf-8'), original)
+            self.assertEqual(source.read_text(encoding='utf-8'), original)
             self.assertEqual([p.name for p in path.parent.iterdir()], ['rollout.jsonl'])
             with self.assertRaises(RuntimeError):
                 codex.read_metadata('fixture', str(source))
@@ -235,13 +235,13 @@ class ContainerCodexTests(unittest.TestCase):
             self.assertEqual(config.engine, 'codex')
             self.assertEqual(config.image, 'image-fixture')
             self.assertIn('chatgpt.com', config.provider_domains)
-            self.assertEqual(json.loads((workspace/'auth.json').read_text()), original)
-            self.assertEqual(json.loads((account/'auth.json').read_text()), original)
+            self.assertEqual(json.loads((workspace/'auth.json').read_text(encoding='utf-8')), original)
+            self.assertEqual(json.loads((account/'auth.json').read_text(encoding='utf-8')), original)
             (workspace/'auth.json').write_text(json.dumps({'tokens': {'access_token':'workspace-refreshed'}}),encoding='utf-8')
             calls.clear()
             codex.ensure_runtime('workspace-fixture')
             self.assertFalse(any(name == 'account-fixture' for name, _ in calls))
-            self.assertEqual(json.loads((workspace/'auth.json').read_text())['tokens']['access_token'],'workspace-refreshed')
+            self.assertEqual(json.loads((workspace/'auth.json').read_text(encoding='utf-8'))['tokens']['access_token'],'workspace-refreshed')
 
 
 if __name__ == '__main__':

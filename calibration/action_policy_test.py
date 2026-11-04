@@ -71,14 +71,14 @@ class PolicyConfigurationTests(unittest.TestCase):
             root = Path(folder) / 'source'; root.mkdir()
             cfg = self.cfg(); configure(cfg, ActionPermissions.read(MIXED))
             write_run_state(root, cfg, 'old', None)
-            state = json.loads((root/'run_state.json').read_text())
+            state = json.loads((root/'run_state.json').read_text(encoding='utf-8'))
             self.assertEqual(state['action_permissions'], MIXED)
             restored = config_from_state(state)
             self.assertEqual(permissions_for(restored).snapshot(), MIXED)
             changed = {**MIXED, 'return_to_map':True}
             RunControl(root).set_action_permissions(changed)
             target = successor_run(root)
-            inherited = json.loads((target/'run_state.json').read_text())
+            inherited = json.loads((target/'run_state.json').read_text(encoding='utf-8'))
             self.assertEqual(inherited['action_permissions'], changed)
             self.assertEqual(permissions_for(config_from_state(inherited)).snapshot(), changed)
 

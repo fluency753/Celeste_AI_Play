@@ -38,7 +38,7 @@ class ReloadObservationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_neutral_key_persistence_failure_is_not_reported_as_success(self):
         held = self.session.run_dir/'held_input.json'
-        held.write_text(json.dumps({'keys': 'R', 'input_format': 'celeste_ai', 'frame': 12}))
+        held.write_text(json.dumps({'keys': 'R', 'input_format': 'celeste_ai', 'frame': 12}), encoding='utf-8')
         with patch.object(Path, 'replace', side_effect=PermissionError('held file locked')):
             with self.assertRaisesRegex(PermissionError, 'held file locked'):
                 self.session.after_bridge_reload(observation())
@@ -49,12 +49,12 @@ class ReloadObservationTests(unittest.IsolatedAsyncioTestCase):
     async def test_successor_ignores_same_frame_key_from_incomplete_reload(self):
         previous = self.session.run_dir/'previous'
         previous.mkdir()
-        (previous/'summary.json').write_text(json.dumps({'game_released': False}))
-        (previous/'held_input.json').write_text(json.dumps({'keys': 'R', 'frame': 12}))
+        (previous/'summary.json').write_text(json.dumps({'game_released': False}), encoding='utf-8')
+        (previous/'held_input.json').write_text(json.dumps({'keys': 'R', 'frame': 12}), encoding='utf-8')
         self.session.metrics.state.resumed_from = str(previous)
         for content in ('{"phase":"refreshing"}', 'invalid'):
             with self.subTest(ledger=content):
-                (previous/'bridge_reload.json').write_text(content)
+                (previous/'bridge_reload.json').write_text(content, encoding='utf-8')
                 self.session._restore_held_input(12)
                 self.assertEqual(self.session._held_input, ('', 'celeste_ai'))
                 self.assertTrue(self.session.reload_observation_required)
@@ -62,10 +62,10 @@ class ReloadObservationTests(unittest.IsolatedAsyncioTestCase):
     async def test_refresh_replaces_workspace_and_requires_default_observe(self):
         game = self.session.workspace/'game'
         for name in ('last_act.json', 'retry.json', 'sim_state.json', 'latest_obs.json', 'collision.json'):
-            (game/name).write_text('stale')
+            (game/name).write_text('stale', encoding='utf-8')
         self.session.after_bridge_reload(observation())
         self.assertTrue(self.session.reload_observation_required)
-        self.assertEqual(json.loads((game/'latest_obs.json').read_text())['obs']['frame'], 12)
+        self.assertEqual(json.loads((game/'latest_obs.json').read_text(encoding='utf-8'))['obs']['frame'], 12)
         self.assertTrue(all(not (game/name).exists() for name in ('last_act.json', 'retry.json', 'sim_state.json')))
         before = list(self.session.client.calls)
         with self.assertRaisesRegex(ActError, 'observe'):

@@ -28,7 +28,7 @@ class BackgroundTest(unittest.TestCase):
                         self.fail(launcher.stderr.read().decode(errors="replace"))
                     time.sleep(.1)
                 self.assertTrue(marker.exists())
-                launched = json.loads(marker.read_text())
+                launched = json.loads(marker.read_text(encoding='utf-8'))
                 launcher.terminate()
                 launcher.wait(timeout=5)
                 kernel = ctypes.WinDLL("kernel32", use_last_error=True)

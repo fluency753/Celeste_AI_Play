@@ -276,7 +276,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('filePath', text)
         self.assertFalse(self.study.read['README.md'])
         self.record_steer(params)
-        events = [json.loads(line) for line in (self.root/'tool_deliveries.jsonl').read_text().splitlines()]
+        events = [json.loads(line) for line in (self.root/'tool_deliveries.jsonl').read_text(encoding='utf-8').splitlines()]
         recorded = next(row for row in events if row['event'] == 'recorded')
         self.assertEqual(recorded['receipt'], params['clientUserMessageId'])
         self.assertEqual(recorded['call_id'], 'read-1')
@@ -328,7 +328,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.study.read['README.md'])
         self.record_steer()
         self.assertEqual(self.study.read['README.md'], {1})
-        events = [json.loads(line)['event'] for line in (self.root/'tool_deliveries.jsonl').read_text().splitlines()]
+        events = [json.loads(line)['event'] for line in (self.root/'tool_deliveries.jsonl').read_text(encoding='utf-8').splitlines()]
         self.assertEqual(events, ['sending', 'unconfirmed', 'recorded'])
 
     async def test_truncation_warning_is_in_actual_input_even_when_tool_ack_is_hidden(self):
@@ -357,7 +357,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('screenshot', attachment[0]['text'])
         self.assertNotIn('long-game-call-id', attachment[0]['text'])
         self.assertEqual(attachment[1]['type'], 'image')
-        log = (self.root/'tool_deliveries.jsonl').read_text()
+        log = (self.root/'tool_deliveries.jsonl').read_text(encoding='utf-8')
         self.assertIn('long-game-call-id', log)
         self.assertNotIn('AAAA', log)
 

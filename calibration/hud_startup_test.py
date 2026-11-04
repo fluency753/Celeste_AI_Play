@@ -102,7 +102,7 @@ class HudStartupTests(unittest.TestCase):
         with patch('overlay.hud_startup.DEFAULT_PORTS', (port,)), patch('overlay.console.ensure_service') as ensure:
             self.assertEqual(current_hud_url(self.root), f'http://127.0.0.1:{port}/hud')
         ensure.assert_not_called()
-        (self.root / 'runs/latest.txt').write_text(str(self.run))
+        (self.root / 'runs/latest.txt').write_text(str(self.run), encoding='utf-8')
         host = self.root / 'host'
         self.write(self.run / 'run_state.json', {'controller_host': str(host)})
         self.write(host / 'launch.json', {'arguments': ['--hud-port=-5', '--hud-port', 'broken']})
@@ -273,7 +273,7 @@ class HudStartupTests(unittest.TestCase):
         while not marker.exists() and time.monotonic() < deadline:
             time.sleep(.05)
         self.assertTrue(marker.exists())
-        received = json.loads(marker.read_text())
+        received = json.loads(marker.read_text(encoding='utf-8'))
         # The thin EXE exits before Python; wait for both Python and its venv
         # redirector to release their executable files before temp cleanup.
         import ctypes

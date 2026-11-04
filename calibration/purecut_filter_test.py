@@ -22,7 +22,7 @@ class PureCutFilterTests(unittest.TestCase):
                               ('Unknown encoder', 1)]:
             with self.subTest(output=output), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                (root/'frames.csv').write_text('index,chapter_ticks\n0,0\n1,-1\n')
+                (root/'frames.csv').write_text('index,chapter_ticks\n0,0\n1,-1\n', encoding='utf-8')
                 old = root/'gameplay_pure.mp4'
                 old.write_bytes(b'previous finished movie')
                 with patch.object(purecut, '_run', side_effect=purecut.FFmpegError(1, root/'log', output)) as run:
@@ -46,7 +46,7 @@ class PureCutFilterTests(unittest.TestCase):
                                 '-video_size', '16x16', '-framerate', '60', '-i', 'pipe:0',
                                 '-c:v', 'rawvideo', '-f', 'nut', str(root/'video.mkv')], input=source, check=True)
                 (root/'frames.csv').write_text('index,chapter_ticks\n'+''.join(
-                    f'{i},{i if i % 2 == 0 else -1}\n' for i in range(frames)))
+                    f'{i},{i if i % 2 == 0 else -1}\n' for i in range(frames)), encoding='utf-8')
                 pcm = bytes(segments * purecut.SAMPLES_PER_FRAME * 8)
                 (root/'audio_play.wav').write_bytes(purecut._wav_header(len(pcm)) + pcm)
                 result = purecut.make_pure(root, FFMPEG, '-c:v libx264rgb -crf 0 -preset ultrafast -threads 1',
@@ -72,7 +72,7 @@ class PureCutFilterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             log = root/'ffmpeg.log'
-            log.write_text("Unrecognized option '/filter:v'.\n")
+            log.write_text("Unrecognized option '/filter:v'.\n", encoding='utf-8')
             with self.assertRaises(purecut.FFmpegError) as caught:
                 purecut._run([FFMPEG, '-v', 'error', '-f', 'lavfi', '-i', 'color=s=16x16',
                               '-frames:v', '1', '-c:v', 'nonexistent_purecut_encoder',

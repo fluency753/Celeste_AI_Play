@@ -258,10 +258,10 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
     def test_wake_requires_completed_native_run(self):
         from orchestrator.chat import can_wake
         self.assertFalse(can_wake(self.root))
-        (self.root / "run_state.json").write_text(json.dumps({"engine":"codex", "session_id":"thread"}))
-        (self.root / "summary.json").write_text(json.dumps({"completed":False}))
+        (self.root / "run_state.json").write_text(json.dumps({"engine":"codex", "session_id":"thread"}), encoding='utf-8')
+        (self.root / "summary.json").write_text(json.dumps({"completed":False}), encoding='utf-8')
         self.assertFalse(can_wake(self.root))
-        (self.root / "summary.json").write_text(json.dumps({"completed":True}))
+        (self.root / "summary.json").write_text(json.dumps({"completed":True}), encoding='utf-8')
         self.assertTrue(can_wake(self.root))
 
     def test_server_rejects_wrong_run_and_cross_site_posts(self):

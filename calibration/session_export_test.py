@@ -230,7 +230,7 @@ class SessionExportTests(unittest.TestCase):
     def test_chat_entry_finds_parent_runs_and_prefers_live_metrics_over_old_summary(self):
         chat = self.one / 'chats' / 'aaa'
         chat.mkdir(parents=True)
-        self.put(chat / 'run_state.json', json.loads((self.one / 'run_state.json').read_text()))
+        self.put(chat / 'run_state.json', json.loads((self.one / 'run_state.json').read_text(encoding='utf-8')))
         self.put(chat / 'metrics.json', {'elapsed_s': 19, 'written_wall': 1100})
         self.put(chat / 'summary.json', {'elapsed_s': 3, 'written_wall': 999})
         (chat / 'public_events.jsonl').touch()
@@ -244,7 +244,7 @@ class SessionExportTests(unittest.TestCase):
         trap.mkdir()
         marker = trap / 'side-effect'
         for module in ('json.py', 'sitecustomize.py'):
-            (trap / module).write_text(f'from pathlib import Path\nPath({str(marker)!r}).write_text("executed")\n')
+            (trap / module).write_text(f'from pathlib import Path\nPath({str(marker)!r}).write_text("executed")\n', encoding='utf-8')
         code = reader_code() + '\nprint(json.dumps(scan_native(sys.argv[1], sys.argv[2])))\n'
         result = subprocess.run([sys.executable, '-I', '-S', '-c', code, str(self.root / 'empty-home'), self.sid],
                                 cwd=trap, capture_output=True, text=True, check=True)

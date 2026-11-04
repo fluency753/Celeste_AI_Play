@@ -57,7 +57,7 @@ class ActLimitTests(unittest.TestCase):
         self.assertEqual(self.cfg.explore_act_frames, 600)
         self.assertEqual(self.session.act_limit_settings()['min'], 60)
         self.session.update_act_limit({'frames': 600})
-        self.assertEqual(json.loads(self.state.read_text())['tuning'], {})
+        self.assertEqual(json.loads(self.state.read_text(encoding='utf-8'))['tuning'], {})
 
     def test_invalid_values_and_persistence_failure_do_not_change_effective_cap(self):
         before = self.state.read_bytes()
@@ -155,7 +155,7 @@ class ActLimitControlTests(unittest.IsolatedAsyncioTestCase):
                         await asyncio.sleep(.01)
                 self.assertEqual(row['status'], 'submitted', row)
                 self.assertEqual(runner._act_limit_status()['act_limit_settings']['frames'], 300)
-                self.assertEqual(json.loads((root/'run_state.json').read_text())['tuning'], {'explore_act_frames': 300})
+                self.assertEqual(json.loads((root/'run_state.json').read_text(encoding='utf-8'))['tuning'], {'explore_act_frames': 300})
                 self.assertEqual(len(runner.pending_messages), 1)
                 self.assertTrue(runner.pending_messages[0]['next_turn'])
                 self.assertIn('300', runner.pending_messages[0]['text'])

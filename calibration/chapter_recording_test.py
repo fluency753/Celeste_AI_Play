@@ -37,8 +37,8 @@ class ChapterRecordingTests(unittest.TestCase):
                 self.hello['clock']['lockstep']=True;self.hello['record_audio_active']=True
                 self.hello.pop('record_chapter_sid',None)
                 (directory/'video.mkv').write_bytes(b'fixture video')
-                (directory/'frames.csv').write_text('index,game_frame,chapter_ticks,obs_ts_ns\n')
-                (directory/'segments.csv').write_text('segment,first_index,start_ts_ns,measured_ms,offset_ms,method\n')
+                (directory/'frames.csv').write_text('index,game_frame,chapter_ticks,obs_ts_ns\n', encoding='utf-8')
+                (directory/'segments.csv').write_text('segment,first_index,start_ts_ns,measured_ms,offset_ms,method\n', encoding='utf-8')
                 for name in ('audio.wav','audio_play.wav'):(directory/name).write_bytes(_wav_header(0))
                 if self.fail_ack:
                     self.fail_ack=False;raise OSError('ACK lost after start reached OBS')
@@ -49,7 +49,7 @@ class ChapterRecordingTests(unittest.TestCase):
 
     def frames(self,n,sid='Celeste/0-Intro'):
         p=self.hello['clock']['plugin'];d=Path(p['dir']);start=p['frames']
-        with (d/'frames.csv').open('a') as stream:
+        with (d/'frames.csv').open('a', encoding='utf-8') as stream:
             for i in range(start,start+n):stream.write(f'{i},{100+i},{i},0\n')
         p['frames']+=n
         for name in ('audio.wav','audio_play.wav'):(d/name).write_bytes(_wav_header(p['frames']*6400)+b'\0'*(p['frames']*6400))
@@ -116,7 +116,7 @@ class ChapterRecordingTests(unittest.TestCase):
         original_call=self.call
         def checked(cmd,**args):
             if cmd=='record' and args['action']=='start':
-                data=json.loads(self.rec.path.read_text())
+                data=json.loads(self.rec.path.read_text(encoding='utf-8'))
                 self.assertEqual(data['pending']['id'],self.rec.session_id)
             return original_call(cmd,**args)
         self.rec.call=checked;self.rec.before_step()
@@ -171,7 +171,7 @@ class ChapterRecordingTests(unittest.TestCase):
         self.assertIsNotNone(self.rec.data['pending'])
         result=self.rec.stop()
         self.assertEqual(self.starts,[])
-        self.assertIsNone(json.loads(self.rec.path.read_text())['pending'])
+        self.assertIsNone(json.loads(self.rec.path.read_text(encoding='utf-8'))['pending'])
         self.assertFalse(result['pending'])
 
     def test_no_record_resolution_does_not_create_a_next_chapter(self):

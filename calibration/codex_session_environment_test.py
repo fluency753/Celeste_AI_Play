@@ -64,7 +64,7 @@ class SessionEnvironmentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             for name in ['20260101-010000','20260102-010000']:
-                d=root/'runs'/'test'/name;d.mkdir(parents=True);(d/'run_state.json').write_text(json.dumps(state()))
+                d=root/'runs'/'test'/name;d.mkdir(parents=True);(d/'run_state.json').write_text(json.dumps(state()), encoding='utf-8')
             found=env.targets(root=root)
             self.assertEqual(len(found),1);self.assertEqual(found[0][0].name,'20260102-010000')
             with self.assertRaises(ValueError):env.targets([root/'outside'],root=root)
@@ -77,7 +77,7 @@ class SessionEnvironmentTests(unittest.TestCase):
     def test_nested_chat_is_discovered_and_blocks_workspace_sync(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);directory=root/'runs'/'test'/'20260101-010000'/'chats'/'old'
-            directory.mkdir(parents=True);(directory/'run_state.json').write_text(json.dumps(state()))
+            directory.mkdir(parents=True);(directory/'run_state.json').write_text(json.dumps(state()), encoding='utf-8')
             RunControl(directory).heartbeat(chat_only=True,phase='idle')
             self.assertEqual(env.targets(root=root)[0][0],directory.resolve())
             self.assertEqual(env.active_agents(root),{'test'})
@@ -94,7 +94,7 @@ class SessionEnvironmentTests(unittest.TestCase):
             old=root/'runs'/'test'/'20260101-010000'/'chats'/'zzzz'
             new=root/'runs'/'test'/'20260102-010000'
             for directory in [old,new]:
-                directory.mkdir(parents=True);(directory/'run_state.json').write_text(json.dumps(state()))
+                directory.mkdir(parents=True);(directory/'run_state.json').write_text(json.dumps(state()), encoding='utf-8')
             self.assertEqual(env.targets(root=root)[0][0],new.resolve())
 
     def test_current_tools_do_not_bypass_late_nested_host_check(self):
@@ -103,7 +103,7 @@ class SessionEnvironmentTests(unittest.TestCase):
             path=sessions/'session.jsonl';original=rollout([]);path.write_bytes(original)
             nested=root/'runs'/'test'/'20260101-010000'/'chats'/'old'
             async def rpc(*args,**kwargs):
-                nested.mkdir(parents=True);(nested/'run_state.json').write_text(json.dumps(state()))
+                nested.mkdir(parents=True);(nested/'run_state.json').write_text(json.dumps(state()), encoding='utf-8')
                 RunControl(nested).heartbeat(chat_only=True,phase='idle')
                 return {'id':'old','path':str(path)}
             with patch.dict('os.environ',{'CODEX_HOME':str(home)}), \
@@ -125,7 +125,7 @@ class SessionEnvironmentTests(unittest.TestCase):
                             raise RuntimeError('writer busy')
                         if scenario == 'host_connected_during_probe':
                             nested=root/'runs'/'test'/'20260101-010000'/'chats'/'old'
-                            nested.mkdir(parents=True);(nested/'run_state.json').write_text(json.dumps(state()))
+                            nested.mkdir(parents=True);(nested/'run_state.json').write_text(json.dumps(state()), encoding='utf-8')
                             RunControl(nested).heartbeat(chat_only=True,phase='idle')
                     return {'id':'old','path':str(path)}
                 with patch.dict('os.environ',{'CODEX_HOME':str(home)}), \
@@ -150,7 +150,7 @@ class SessionEnvironmentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);directory=root/'runs'/'test'/'20260101-010000';directory.mkdir(parents=True)
             other={**state(),'engine':'claude'}
-            (directory/'run_state.json').write_text(json.dumps(other))
+            (directory/'run_state.json').write_text(json.dumps(other), encoding='utf-8')
             self.assertEqual(env.targets(root=root),[])
             with self.assertRaisesRegex(ValueError,'仅同步 Codex'):
                 env.targets([directory],root=root)
