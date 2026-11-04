@@ -2,7 +2,7 @@
 
 逐项校验后生成参数列表（不拼命令行字符串），再交给 orchestrator/background.py 的独立宿主启动。
 主控的全部参数（含 --tune 可调参数与 --kb-deny 知识库权限）都能在控制台里设置；只在命令行有的是
---prepared（用原生 GPT 预先准备好的会话开局，见 start_gpt.ps1）与只用于测试的隐藏参数。
+--prepared（用原生 GPT 预先准备好的会话开局，见 start_gpt.ps1）、--goal / --goal-file（启动目标）等专用参数。
 """
 from __future__ import annotations
 

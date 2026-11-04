@@ -1,23 +1,30 @@
 """Goal checks must keep the game frozen through recording and socket cleanup."""
 import asyncio
 import copy
+import json
 from pathlib import Path
+import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 from calibration.http_fixture import bound_server
+from calibration.formal_run_test import _observation
 
 from calibration import recording_session_test
 from orchestrator.config import RunConfig
 from orchestrator.game_session import GameSession
 from orchestrator.metrics import Metrics
 from orchestrator.recording import Recorder, RecordingError
-from orchestrator.run import _run_session, _shutdown_mode, _previous_kept_frozen
+from orchestrator.run import _run_session, _shutdown_mode, _previous_kept_frozen, parse_args
+from orchestrator.server import build_server
+from mcp.server.mcpserver.exceptions import ToolError
 
 
 class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
-    async def exercise(self, *, manual=False, failure=False, record=True, cleanup_failure=False):
+    async def exercise(self, *, manual=False, failure=False, record=True, cleanup_failure=False,
+                       report=False, goal_args=(), enter_from_menu=False):
         fixture = recording_session_test.RecordingSessionTests()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
@@ -27,12 +34,37 @@ class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
                         runtime='host', sim=False, record=record, cutscene_mode='agent')
         metrics = Metrics(root/'metrics.json', 'test', 'test', 'high', 600)
         session = GameSession(cfg, root, metrics)
-        session.last_obs = {'scene': 'Level', 'frame': 103, 'save': {'name':'test','slot':14},
-                            'level': {'sid':'Celeste/1-ForsakenCity','side':'A','room':'6zb'}}
+        level = _observation()
+        level.update(scene='Level', frame=103, save={'name':'test','slot':14})
+        level['level'].update(sid='Celeste/1-ForsakenCity', side='A', room='6zb')
+        session.last_obs = level
+        if enter_from_menu:
+            session.last_obs = {'scene': 'Overworld', 'frame': 70, 'save': level['save'],
+                                'menu': {'current': 'OuiChapterSelect'}}
+            metrics.update(chapter=level['level']['sid'], chapter_side='A', room='6zb')
+            cfg.thought_lead_s = 0
+        bridge_obs = session.last_obs
+        steps = []
         fixture.hello.update(active=True, frozen=True, frame=103)
         def call(command, **options):
+            nonlocal bridge_obs
             if command == 'observe':
-                return {'obs':copy.deepcopy(session.last_obs)}
+                return {'obs':copy.deepcopy(bridge_obs)}
+            if command == 'step' and enter_from_menu:
+                steps.append(options['inputs'])
+                if len(steps) == 1:
+                    self.assertEqual(options['inputs'], ['1,C'])
+                    bridge_obs = {'scene': 'LevelLoader', 'frame': 71}
+                elif len(steps) == 2:
+                    bridge_obs = level
+                else:
+                    self.fail('主控在入图目标命中后继续推进了游戏')
+                reply = {'obs': copy.deepcopy(bridge_obs), 'result': {'consumed': 1, 'planned': 1, 'stop': 'done',
+                         'events': [], 'trajectory': []}}
+                session._after_step(options, reply)
+                if len(steps) == 2:
+                    self.assertTrue(session.goals.stop_motion.is_set())
+                return reply
             if command == 'deactivate':
                 fixture.hello.update(active=False, frozen=False)
             if command == 'record' and options.get('action') == 'stop' and failure == 'request':
@@ -51,9 +83,38 @@ class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
             if failure == 'timeout':
                 original_stop = recorder.stop
                 recorder.stop = lambda **kwargs: original_stop(timeout=0, **kwargs)
+        server = build_server(session)
+        actor_calls = []
         async def actor():
+            actor_calls.append(True)
+            if enter_from_menu:
+                self.assertTrue(session.goals.snapshot()['awaiting_entry'])
+                self.assertFalse(session.goals.check(session.goal_values()))
+                self.assertFalse(session.done)
+                with self.assertRaisesRegex(ToolError, '尚未进入关卡'):
+                    await server.call_tool('finish_goal', {'goal': '到达房间 6zb', 'evidence': '缓存房间为 6zb'})
+                await server.call_tool('act', {'inputs': ['1,C'], 'thought': '进入章节'})
+                self.assertTrue(session.goals.stop_motion.is_set())
+                self.assertEqual(len(steps), 2)
+                session.finish_user_stop()
+                return session.done_reason
+            if report:
+                if goal_args:
+                    self.assertEqual(session.goals.snapshot()['baseline']['frame'], 103)
+                    with self.assertRaisesRegex(ToolError, '与用户登记的文字目标不同'):
+                        await server.call_tool('finish_goal', {'goal': '旧目标', 'evidence': '已达成'})
+                    self.assertFalse(session.done)
+                reply = await server.call_tool('finish_goal',
+                    {'goal': '到达房间 6zb', 'evidence': '最新观测的房间为 6zb'})
+                self.assertIn('按智能体报告结束试玩', reply.content[0].text)
+                with self.assertRaisesRegex(ToolError, '已结束'):
+                    await server.call_tool('finish_goal', {'goal': '到达房间 6zb', 'evidence': '重复提交'})
+                return session.done_reason
             baseline = session.goal_values()
             session.goals.set({'conditions':[{'field':'elapsed','op':'delta_gte','value':1}]}, baseline)
+            with self.assertRaisesRegex(ToolError, '已有用户设置的自动停止条件'):
+                await server.call_tool('finish_goal', {'goal': '到达房间 6zb', 'evidence': '已到达'})
+            self.assertFalse(session.done)
             if manual:
                 session.goals.stop_now()
             else:
@@ -67,9 +128,12 @@ class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(.001)
         web.serve = serve
         args = SimpleNamespace(prepared=None, fresh_session=False, no_agent=False, record=record, start_paused=False)
-        server = SimpleNamespace(streamable_http_app=lambda **kw:None)
+        if goal_args:
+            with patch.object(sys, 'argv', ['run', '--agent', 'test', '--save', 'test', *goal_args]):
+                _, parsed = parse_args()
+            args.initial_goal = parsed.initial_goal
         def movie(*args, **kwargs):
-            if not manual:
+            if not (manual or report):
                 self.assertTrue(fixture.hello['active'] and fixture.hello['frozen'])
                 self.assertFalse(fixture.hello['record_audio_active'])
             if failure is True:
@@ -92,6 +156,8 @@ class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
             else:
                 summary = await _run_session(cfg,args,root,None,None,None,metrics,recorder)
         client.close.assert_called_once()
+        if goal_args and not report and not enter_from_menu:
+            self.assertFalse(actor_calls)
         return fixture, cfg, session, recorder, summary
 
     async def test_automatic_time_goal_stops_real_recorder_but_not_game(self):
@@ -118,6 +184,51 @@ class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(fixture.hello['active'])
         self.assertTrue(summary['game_released'])
         self.assertIn('deactivate',[cmd for cmd,_ in fixture.commands])
+
+    async def test_reported_oral_goal_stops_capture_and_releases_game_without_inputs(self):
+        fixture, _, session, _, summary = await self.exercise(report=True)
+        self.assertTrue(session.done)
+        self.assertFalse(summary['completed'] or summary['user_stopped'] or summary['goal']['reached'])
+        self.assertIsNone(summary['agent_stop'])
+        report = summary['goal']['completion_report']
+        self.assertEqual(report['goal'], '到达房间 6zb')
+        self.assertEqual(report['observation']['frame'], 103)
+        self.assertEqual(json.loads((fixture.first / 'goal.json').read_text(encoding='utf-8'))['completion_report'], report)
+        self.assertTrue(summary['game_released'])
+        self.assertEqual(Recorder.saved_session(fixture.first)['state'], 'finished')
+        self.assertNotIn('step', [cmd for cmd, _ in fixture.commands])
+        self.assertIn('deactivate', [cmd for cmd, _ in fixture.commands])
+
+    async def test_launch_text_goal_uses_registered_text_and_fresh_baseline(self):
+        _, _, _, _, summary = await self.exercise(report=True, goal_args=('--goal', '到达房间 6zb'))
+        self.assertEqual(summary['goal']['completion_report']['goal'], '到达房间 6zb')
+        self.assertEqual(summary['goal']['text'], '到达房间 6zb')
+
+    async def test_satisfied_launch_condition_finishes_before_model_turn(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'goal.json'
+            path.write_text(json.dumps({'conditions':[{'field':'room','op':'eq','value':'6zb'}]}),
+                            encoding='utf-8-sig')
+            _, _, _, _, summary = await self.exercise(goal_args=('--goal-file', str(path)))
+        self.assertTrue(summary['goal']['reached'])
+        self.assertIsNone(summary['session_id'])
+        self.assertFalse(summary['game_released'])
+
+    async def test_launch_from_chapter_menu_cannot_match_cached_room_before_entry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'goal.json'
+            path.write_text(json.dumps({'conditions':[{'field':'room','op':'eq','value':'6zb'}]}), encoding='utf-8')
+            _, _, _, _, summary = await self.exercise(goal_args=('--goal-file', str(path)), enter_from_menu=True)
+        self.assertTrue(summary['goal']['reached'])
+        self.assertEqual(summary['goal']['baseline']['frame'], 103)
+        self.assertFalse(summary['game_released'])
+
+    def test_invalid_launch_goal_rejected_before_loading_previous_run(self):
+        with patch.object(sys, 'argv', ['run', '--agent', 'test', '--resume', 'unused', '--goal', ' ']), \
+             patch('orchestrator.run.load_previous') as load:
+            with self.assertRaises(SystemExit):
+                parse_args()
+        load.assert_not_called()
 
     async def test_postprocessing_failure_does_not_release_goal_freeze(self):
         fixture,_,_,_,summary = await self.exercise(failure=True)

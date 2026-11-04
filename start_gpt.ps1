@@ -12,7 +12,9 @@ param(
     [string]$Save = '',
     [Nullable[int]]$SaveSlot = $null,
     [switch]$CreateSave,
-    [ValidateSet('chapter','campaign')][string]$Scope = 'chapter'
+    [ValidateSet('chapter','campaign')][string]$Scope = 'chapter',
+    [string]$Goal,
+    [string]$GoalFile
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
@@ -20,6 +22,10 @@ $py = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 $env:PYTHONIOENCODING = 'utf-8'
 $extra = @('--effort', $Effort, '--knowledge', $Knowledge)
 if ($Model) { $extra += @('--model', $Model) }
+$hasGoal = $PSBoundParameters.ContainsKey('Goal')
+$hasGoalFile = $PSBoundParameters.ContainsKey('GoalFile')
+if ($hasGoal -and $hasGoalFile) { throw '-Goal 和 -GoalFile 不能同时使用。' }
+if (($hasGoal -or $hasGoalFile) -and -not $Play) { throw '-Goal 和 -GoalFile 需要 -Play。' }
 if (-not $Play) {
     & $py -X utf8 -m orchestrator.preparation --agent gpt-native @extra
 } else {
@@ -50,6 +56,8 @@ if (-not $Play) {
     } else {
         $runArgs += $chapterArgs + @('--prepared', $Prepared) + $extra
     }
+    if ($hasGoal) { $runArgs += "--goal=$Goal" }
+    if ($hasGoalFile) { $runArgs += "--goal-file=$GoalFile" }
     if ($Foreground) {
         & $py -X utf8 -m orchestrator.run @runArgs
     } else {

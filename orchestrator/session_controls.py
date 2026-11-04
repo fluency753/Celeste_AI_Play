@@ -143,7 +143,18 @@ class SessionControls:
         """Choose one lifecycle instruction, keeping user input and separate control facts."""
         supplied = '\n\n'.join(row['text'] for row in rows)
         notice, self.resume_notice = self.resume_notice, ''
-        if opening or retain_fallback:
+        if opening:
+            goals = getattr(self.session, 'goals', None)
+            goal = goals.snapshot() if goals is not None else None
+            facts = ''
+            if goal and goal['active']:
+                from .goals import describe_goal
+                facts = '（主控）当前已登记的试玩目标：' + describe_goal(goal) + '。'
+                if goal['conditions']:
+                    facts += ('自动停止条件将在首次进入关卡后启用，由主控核验。' if goal.get('awaiting_entry')
+                              else '自动停止条件由主控核验。')
+            parts = [fallback, facts, supplied]
+        elif retain_fallback:
             parts = [fallback, supplied]
         elif notice:
             parts = [supplied, notice]
@@ -155,6 +166,11 @@ class SessionControls:
         if self.interrupted_for_resume:
             await self.interrupt_ready.wait()
         return self.stop_reason or "聊天会话切换"
+
+    def _goal_report_grace(self):
+        accepted = getattr(self.session, 'goal_reported_at', None)
+        # Allow the acceptance to reach the originating turn before closing the executor.
+        return max(0, 15 - (time.monotonic() - accepted)) if accepted is not None else None
 
     def _agent_pause(self, reason):
         """智能体用 stop_run 报告任务阻塞（在工具线程里调用）：与用户在 HUD 暂停相同，试玩暂停、章节内保持冻结，菜单正常运行，
@@ -312,7 +328,10 @@ class SessionControls:
                             try:
                                 await self._interrupt_user()
                                 async with self.action_lock:   # 正在执行的动作先走完，游戏停在动作之间
-                                    pass
+                                    if self.session.done:
+                                        self.interrupted_for_resume = False
+                                        self.stop_reason = self.session.done_reason
+                                        raise ValueError("本次试玩已结束，中断请求未生效")
                                 self.control.mark(row["id"], "submitted", "正在结束本次运行，章节内保持冻结，菜单正常运行")
                             finally:
                                 self.interrupt_ready.set()

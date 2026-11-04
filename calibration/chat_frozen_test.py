@@ -16,6 +16,13 @@ def make_run(folder, **summary):
 
 
 class ChatFrozenTests(unittest.TestCase):
+    def test_reported_goal_can_wake_chat_after_normal_finish(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run = make_run(folder, completed=False, user_stopped=False, game_released=True,
+                           goal={'completion_report': {'goal': '探索支路', 'evidence': '已走到尽头'}})
+            self.assertTrue(can_wake(run))
+            self.assertFalse(can_wake_frozen(run))
+
     def test_interrupted_frozen_run_can_chat(self):
         with tempfile.TemporaryDirectory() as folder:
             run = make_run(folder, completed=False, user_stopped=False, game_released=False)

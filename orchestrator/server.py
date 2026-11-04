@@ -396,6 +396,34 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     else '主控已记下阻塞原因，等待用户处理。请结束本轮，不再调用工具。')
             return [json.dumps(result, ensure_ascii=False) + '\n' + tail]
 
+    @optional_tool(getattr(session, 'allow_goal_report', True), name='finish_goal',
+                 description='本次试玩进入过关卡后，用户交代的整次试玩任务确实达成且未设置自动停止条件时使用。'
+                 'goal 填写用户实际交代的目标，有登记时须使用当前登记的原文；evidence 说明实际达成的结果及具体依据（1～1000 字）。'
+                 '只能报告用户任务，不能自行改小范围、用预测或部分进展充当完成。'
+                 '已有自动停止条件时等主控核验；整章通关仍须按当前剧情与结算规则处理。'
+                 '接受后主控正常收尾并保存录像，不发送游戏输入。', structured_output=False)
+    async def finish_goal(goal: str, evidence: str) -> list:
+        ticket = reload_ticket()
+        async with journal.execution(call_lock):
+            if (note := gated('finish_goal', ticket)) is not None:
+                return [note]
+            try:
+                report = await asyncio.to_thread(session.finish_goal, goal, evidence)
+            except ActError as err:
+                journal.not_executed()
+                raise ToolError(f'未结束试玩：{err}。没有发送游戏输入。') from err
+            except OSError as err:
+                journal.not_executed()
+                raise ToolError(f'无法保存目标达成报告，试玩仍在进行。可重试提交。没有发送游戏输入。{err}') from err
+            journal.detail(report)
+            try:
+                publish(session.run_dir, 'system:goal-completed-by-agent',
+                        f"主控已接受智能体的目标达成报告：{report['goal']}。依据：{report['evidence']}",
+                        role='system', kind='系统')
+            except OSError as err:
+                print(f'[run] 无法写入目标达成的 HUD 消息：{err}', flush=True)
+            return ['主控已记录目标及达成依据，按智能体报告结束试玩并收尾录像。没有发送游戏输入。请结束本轮。']
+
     from .detour import map_rule
     @optional_tool(tool_exit_level, name='exit_level', description='按用户要求离开当前关卡。默认 finish_run=false：需返回地图权限，仅返回地图继续原任务，不算通关，不停止录像、不清除后续章节；返回后先 observe，只进入当前计划或许可允许的地图，' + map_rule(session.cfg) + '。只有用户明确要求结束整次试玩时才设 finish_run=true：按允许的返回地图或保存退出操作收尾整次任务。不得从“返回地图换章”推断为结束任务；权限不足时说明原因，不以保存退出绕过。', structured_output=False)
     async def exit_level(reason: str, finish_run: bool = False) -> list:

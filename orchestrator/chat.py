@@ -34,7 +34,9 @@ def can_wake(directory):
                     and preparation.get("kb_study", {}).get("complete") is True
                     and not preparation.get("quick_check") and preparation.get("success") is not False)
         summary = json.loads((directory / "summary.json").read_text(encoding="utf-8"))
-        return bool(state.get("session_id")) and (summary.get("completed") is True or summary.get("user_stopped") is True)
+        return bool(state.get("session_id")) and (
+            summary.get("completed") is True or summary.get("user_stopped") is True
+            or bool((summary.get("goal") or {}).get("completion_report")))
     except (OSError, ValueError):
         return False
 

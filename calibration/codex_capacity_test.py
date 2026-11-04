@@ -69,7 +69,8 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(.002)
 
     async def run_case(self, *, failure='rpc', failures=1, action=False,
-                       waiting=None, configure=None, initial_user=None, preparing=False, naming=False):
+                       waiting=None, configure=None, initial_user=None, preparing=False, naming=False,
+                       report_goal=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cfg = RunConfig(agent='capacity-test', save='test', model='test', engine='codex',
@@ -86,6 +87,8 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                 session = GameSession(cfg, root, metrics)
             bridge = CountingBridge()
             session.client = bridge
+            if report_goal:
+                session._update_metrics_from_obs(bridge.obs)
             study = None
             if preparing:
                 kb = root/'kb'
@@ -103,6 +106,14 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
             state = {'reason': None, 'error': None}
 
             async def finish(number, failed):
+                if report_goal:
+                    session.agent_stop = {'reason': '已解决的历史阻塞'}
+                    response = await runner._request('item/tool/call', {
+                        'callId': 'finish-goal', 'tool': 'celeste_finish_goal',
+                        'arguments': {'goal': '进入 s3 房间', 'evidence': '关卡观测的房间为 s3'}})
+                    actions.append(response)
+                    await asyncio.sleep(.25)
+                    runner.rpc.close.assert_not_awaited()
                 if failed and action:
                     response = await runner._request('item/tool/call', {
                         'callId': 'action-before-capacity', 'tool': 'celeste_act',
@@ -111,7 +122,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                 runner._event('turn/completed', {'turn': {
                     'id': f'turn-{number}', 'status': 'failed' if failed else 'completed',
                     **({'error': {'message': CAPACITY}} if failed else {})}})
-                if not failed:
+                if not failed and not report_goal:
                     if naming:
                         runner.naming_reply = 'Fixture'
                     session.done = True
@@ -176,6 +187,15 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                     watcher.cancel()
                     await asyncio.gather(watcher, return_exceptions=True)
                 session.close(False)
+
+    async def test_goal_acceptance_reaches_turn_with_historical_blocker(self):
+        state = await self.run_case(failures=0, report_goal=True)
+        self.assertIsNone(state['error'])
+        self.assertEqual(state['reason'], state['session'].done_reason)
+        self.assertEqual(state['shutdown'], 'release')
+        self.assertEqual(state['steps'], [])
+        self.assertTrue(state['actions'][0]['success'])
+        self.assertIn('按智能体报告结束试玩', state['actions'][0]['contentItems'][0]['text'])
 
     async def test_explicit_start_rejection_retries_same_thread_and_keeps_input(self):
         result = await self.run_case(failures=2, initial_user='保留这条尚未送达的用户消息。')

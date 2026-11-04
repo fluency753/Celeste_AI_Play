@@ -125,6 +125,8 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 .\.venv\Scripts\python.exe -m orchestrator.background -- --agent dev-trial --save <测试存档名> --mode explore --chapter 0 --max-minutes 30 --no-record
 ```
 
+用户为本次试玩指定了任务时，在启动命令中用 `--goal '任务原文'` 登记。若有明确可核验的停止条件，用 `--goal-file <UTF-8 JSON 路径>` 一并登记文字和条件，格式见 [目标与停止条件](LIVE_ADAPTATION.md#目标与停止条件)。例如“到达指定房间即结束”可用房间相等条件，房间 ID 须先核实。主控在首轮前写入 `goal.json` 并告诉 player agent。将目标写进启动参数后，无需再通过个人提示词追加同一任务。用 `start_gpt.ps1 -Play` 时对应 `-Goal` 或 `-GoalFile`。
+
 它立即返回一行 JSON，`directory` 是宿主目录 `local\background\<启动时间>\`：`status.json` 记状态、PID 与退出码，`output.log` 是主控输出。同一时间只允许一个主控。
 
 前台运行 `.\.venv\Scripts\python.exe -m orchestrator.run <参数>` 只适合很短的调试。

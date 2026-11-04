@@ -26,6 +26,7 @@ TOOL_NOTES = {
     "narrate": "思考期间更新观众看到的思考，不推进游戏",
     "set_effort": "调整你自己的推理强度",
     "stop_run": "任务阻塞时说明原因报告给用户，主控暂停试玩等用户处理",
+    "finish_goal": "用户交代的整次任务已达成且无自动停止条件时，提交目标与依据，正常结束试玩",
     "exit_level": "用户要求返回地图时离开当前关卡并继续任务；仅明确结束整次试玩才设finish_run=true",
     "cutscene": "在剧情决策点尝试跳过或继续观看，在真实输入节点推进或选择",
     "simulate": "花模拟体力预测短路线",
@@ -422,7 +423,7 @@ def read_part(name: str) -> str:
         return override.read_text(encoding="utf-8")
     if name in PART_NAMES:
         parsed = parse_interface(read_part('interface_zh.md'))
-        if parsed is not None:
+        if parsed is not None and PART_NAMES[name] in parsed[1]:
             return parsed[1][PART_NAMES[name]]
     return repo_part_text(name)
 

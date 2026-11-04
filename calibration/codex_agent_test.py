@@ -864,7 +864,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         # when preparation starts with each capability disabled.
         self.server.list_tools = AsyncMock(return_value=[])
         expected_game = {'celeste_observe', 'celeste_act', 'celeste_narrate', 'celeste_set_effort',
-                         'celeste_stop_run', 'celeste_exit_level', 'celeste_cutscene', 'celeste_simulate'}
+                         'celeste_stop_run', 'celeste_finish_goal', 'celeste_exit_level', 'celeste_cutscene', 'celeste_simulate'}
         catalogs = []
         for preparing, chat, live, simulate, cutscene in [
                 (True, False, False, False, 'auto'),
@@ -1178,6 +1178,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.runner._validate_resumed_tools({'path': str(path)})
 
         self.cfg.sim_assist = True
+        self.assertIn('此旧会话未登记 celeste_finish_goal', self.runner.tool_notice)
         with self.assertRaisesRegex(RuntimeError, 'celeste_simulate'):
             self.runner._validate_resumed_tools({'path': str(path)})
         tools.append('celeste_simulate')

@@ -664,7 +664,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         names = {tool['name'] for tool in meta.get('dynamic_tools', [])}
         from .modes import game_tools
         required = {'celeste_' + name for name in game_tools(self.cfg)}
-        missing = required - names
+        # Existing prepared/player threads predate this optional completion path.
+        missing = required - names - {'celeste_finish_goal'}
         if missing:
             raise RuntimeError('旧会话缺少当前必需工具：' + ', '.join(sorted(missing))
                                + '。该容器记录的接口不完整，请新建准备会话；不会借用宿主工具绕过缺失接口。')
@@ -682,6 +683,8 @@ class CodexRunner(ModelRecovery, SessionControls):
             raise RuntimeError('旧会话没有登记 read（旧名 celeste_read），无法按实际送达的内容计量必读知识库；'
                                '本版本协议不能在恢复时补登记工具，请新建准备会话。')
         notes = []
+        if 'celeste_finish_goal' not in names:
+            notes.append('（系统）此旧会话未登记 celeste_finish_goal。文字任务达成后请向用户说明结果，请用户在 HUD 停止并保存；自动条件仍由主控核验。')
         if any(actual is not None and actual != name for name, actual in available.items()):
             mapping = '、'.join(f'{name} → {actual}' for name, actual in available.items() if actual is not None)
             notes.append('（系统）本会话沿用持久化的文件工具登记，请按实际名称调用：' + mapping + '。'
@@ -831,8 +834,14 @@ class CodexRunner(ModelRecovery, SessionControls):
                 while not self.turn_done.is_set():
                     if self.stop_requested:
                         return await self._stopped_reason()
-                    if self.session is not None and self.session.done and getattr(self.session, "agent_stop", None):
-                        return self.session.done_reason
+                    if self.session is not None and self.session.done:
+                        if (grace := self._goal_report_grace()) is not None:
+                            if grace <= 0 or self.rpc.reader.done():
+                                return self.session.done_reason
+                            await asyncio.sleep(min(grace, .1))
+                            continue
+                        if getattr(self.session, "agent_stop", None):
+                            return self.session.done_reason
                     if self.rpc.reader.done():
                         raise ConnectionError("Codex app-server 已断开；检查 codex_stderr.log")
                     if self._elapsed(started) >= self.cfg.budget_seconds:
@@ -841,6 +850,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                     await asyncio.sleep(0.1)
                 self._end_model_turn()
                 self.turn_active, self.turn_id = False, None
+                if self.session is not None and self.session.done and self._goal_report_grace() is not None:
+                    return self.session.done_reason
                 if self.fatal:
                     raise RuntimeError(self.fatal)
                 interrupted = self.turn_result.get("status") == "interrupted" and self.user_interrupted

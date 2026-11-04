@@ -2,7 +2,8 @@
 import re
 
 
-SECTION_NAMES = ('observe', 'act', 'narrate', 'set_effort', 'stop_run', 'exit_level',
+OPTIONAL_SECTIONS = {'finish_goal'}
+SECTION_NAMES = ('observe', 'act', 'narrate', 'set_effort', 'stop_run', 'finish_goal', 'exit_level',
                  'cutscene', 'simulate', 'travel', 'files', 'programs')
 PART_NAMES = {f'tool_{name}_zh.md': name for name in SECTION_NAMES}
 _MARKER = re.compile(r'^<!-- (/?)tool:([a-z_]+) -->[ \t]*(?:\r?\n|$)', re.MULTILINE)
@@ -45,7 +46,7 @@ def parse_interface(text):
         raise ValueError(f'interface_zh.md 工具章节未闭合：{opened[0]}')
     if text[end:].strip():
         raise ValueError('interface_zh.md 公共说明须放在工具章节之前')
-    missing = set(SECTION_NAMES) - sections.keys()
+    missing = set(SECTION_NAMES) - sections.keys() - OPTIONAL_SECTIONS
     if missing:
         raise ValueError('interface_zh.md 缺少工具章节：' + '、'.join(sorted(missing)))
     return prefix + '{tool_sections}\n', sections

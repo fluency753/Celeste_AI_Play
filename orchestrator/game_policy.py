@@ -1,7 +1,7 @@
 """One gameplay permission policy; transports separately own request identity."""
 from __future__ import annotations
 
-GAME_ACTIONS = frozenset({'observe', 'act', 'cutscene', 'exit_level', 'travel', 'simulate'})
+GAME_ACTIONS = frozenset({'observe', 'act', 'cutscene', 'exit_level', 'travel', 'simulate', 'finish_goal'})
 CONTROL_TOOLS = frozenset({'narrate', 'set_effort'})
 REPORT_TOOLS = frozenset({'stop_run'})
 

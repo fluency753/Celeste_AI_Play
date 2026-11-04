@@ -44,7 +44,7 @@ from .prompting import play_prompt, study_prompt, resume_prompt, net_resume_prom
 from .telemetry import publish
 
 GAME_TOOLS = ['mcp__celeste__' + name for name in
-              ('observe', 'act', 'set_effort', 'cutscene', 'exit_level', 'simulate', 'stop_run', 'travel')]
+              ('observe', 'act', 'set_effort', 'cutscene', 'exit_level', 'simulate', 'stop_run', 'finish_goal', 'travel')]
 NARRATE_TOOL = "mcp__celeste__narrate"   # 所有模式都有：更新 HUD 上的思考语句（算思考时间，不算工具）
 # /effort 命令成功时 Claude Code 的回复，例如 "Set effort level to low (this session only): ..."
 EFFORT_OK = re.compile(r"^Set effort level to ([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\s|$)")
@@ -532,6 +532,12 @@ class ClaudeRunner(SessionControls):
                 self._remember_rules(digest)
                 self._force_rules = False
             while True:
+                if self.session.done and (grace := self._goal_report_grace()) is not None:
+                    if grace > 0 and not reader.done() and not self._turn_done.is_set():
+                        await self._wait_turn(min(grace, 1.0))
+                        continue
+                    self.stop_reason = self.session.done_reason
+                    return True
                 if self.session.done and getattr(self.session, "agent_stop", None):
                     self.stop_reason = self.session.done_reason
                     return True
@@ -564,7 +570,7 @@ class ClaudeRunner(SessionControls):
                     if not await self._wait_turn(min(remaining, 1.0)):
                         if self.control_task and self.control_task.done():
                             await self.control_task
-                        if self.session.done:
+                        if self.session.done and self._goal_report_grace() is None:
                             self.stop_reason = self.session.done_reason
                             return True
                         if self.stop_requested and self.stop_reason and not self.turn_active:

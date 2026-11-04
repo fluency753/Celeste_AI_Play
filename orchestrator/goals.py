@@ -82,9 +82,9 @@ class GoalManager:
         self.immediate = False
         self.cancel_sent = False
 
-    def _save(self):
+    def _save(self, data=None):
         temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.data, ensure_ascii=False), encoding="utf-8")
+        temporary.write_text(json.dumps(self.data if data is None else data, ensure_ascii=False), encoding="utf-8")
         temporary.replace(self.path)
 
     def snapshot(self):
@@ -105,7 +105,7 @@ class GoalManager:
             used = None
             if field == 'game_elapsed' and clock is not None:
                 used = clock['advanced_frames']/60
-            elif data['active']:
+            elif data['active'] and not data.get('awaiting_entry'):
                 actual = values.get(field)
                 initial = data.get('baseline', {}).get(field)
                 if actual is not None and (op != 'delta_gte' or initial is not None):
@@ -121,22 +121,32 @@ class GoalManager:
             conditions.append({'field':field, 'op':op, 'target_seconds':target, 'used_seconds':used,
                 'remaining_seconds':max(0,target-used) if used is not None and op in {'gte','delta_gte'} else None,
                 'satisfied_now':satisfied})
-        return {key:data[key] for key in ('revision','active','reached','match')} | {'time_conditions':conditions}
+        return {key:data[key] for key in ('revision','active','reached','match')} | {
+            'awaiting_entry': bool(data.get('awaiting_entry')), 'time_conditions':conditions}
 
-    def set(self, data, values):
+    @staticmethod
+    def _anchor(data, values):
+        data['baseline'] = dict(values)
+        if any(c['field'] == 'game_elapsed' for c in data['conditions']):
+            data['game_clock'] = {'frame':values.get('frame'), 'epoch':values.get('game_epoch'), 'advanced_frames':0}
+
+    def set(self, data, values, *, wait_for_entry=False):
         spec = validate_goal(data)
         with self.lock:
-            if self.stop_motion.is_set():
+            if self.stop_motion.is_set() or self.data.get('completion_report'):
                 raise ValueError("已经开始停止并保存，不能撤回")
-            self.data = {**spec, "revision": self.data["revision"]+1, "active": True, "reached": False,
-                         "baseline": dict(values), "updated_wall": time.time()}
-            if any(c['field']=='game_elapsed' for c in spec['conditions']):
-                self.data['game_clock'] = {'frame':values.get('frame'), 'epoch':values.get('game_epoch'), 'advanced_frames':0}
-            self._save()
+            updated = {**spec, "revision": self.data["revision"]+1, "active": True, "reached": False,
+                       "updated_wall": time.time()}
+            if wait_for_entry and spec['conditions'] and not values.get('in_level'):
+                updated['awaiting_entry'] = True
+            else:
+                self._anchor(updated, values)
+            self._save(updated)
+            self.data = updated
 
     def clear(self):
         with self.lock:
-            if self.stop_motion.is_set():
+            if self.stop_motion.is_set() or self.data.get('completion_report'):
                 raise ValueError("已经开始停止并保存，不能撤回")
             self.data = {"revision": self.data["revision"]+1, "active": False, "reached": False,
                          "text": "", "conditions": [], "match": "all", "updated_wall": time.time()}
@@ -144,15 +154,45 @@ class GoalManager:
 
     def stop_now(self):
         with self.lock:
+            if self.data.get('completion_report'):
+                raise ValueError("已接受目标达成报告，正在收尾")
             self.immediate = True
             self.stop_motion.set()
             self.data.update(active=False, reached=True, stop_reason="用户立即停止", updated_wall=time.time())
             self._save()
 
+    def report_completion(self, goal, evidence, values):
+        """Accept an agent attestation for a user task without automatic conditions."""
+        with self.lock:
+            if self.stop_motion.is_set() or self.data.get('completion_report'):
+                raise ValueError("本次试玩已结束或正在收尾")
+            if self.data['active'] and self.data['conditions']:
+                raise ValueError("已有用户设置的自动停止条件，请继续按该条件行动并等待主控核验")
+            if not self.data['active'] and self.data['revision'] > 0:
+                raise ValueError("用户已清除自定义目标；如有新任务，请让用户登记后再报告完成")
+            configured = self.data['text'] if self.data['active'] else ''
+            if configured and goal != configured:
+                raise ValueError(f"报告目标与用户登记的文字目标不同。当前目标为「{configured}」，请核对并在完成后再提交")
+            report = {'goal': goal, 'evidence': evidence, 'source': 'agent',
+                      'observation': dict(values)}
+            data = {**self.data, 'active': False, 'completion_report': report,
+                    'stop_reason': '已接受智能体的目标达成报告', 'updated_wall': time.time()}
+            self._save(data)
+            self.data = data
+            return report
+
     def check(self, values):
         with self.lock:
             if self.stop_motion.is_set() or not self.data["active"] or not self.data["conditions"]:
                 return self.stop_motion.is_set()
+            if self.data.get('awaiting_entry'):
+                if not values.get('in_level'):
+                    return False
+                updated = dict(self.data)
+                del updated['awaiting_entry']
+                self._anchor(updated, values)
+                self._save(updated)
+                self.data = updated
             baseline = self.data["baseline"]
             clock = self.data.get('game_clock')
             clock_changed = False

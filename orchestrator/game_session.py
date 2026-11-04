@@ -352,6 +352,7 @@ class GameSession:
         self.agent_stop = None
         self.goals = GoalManager(run_dir)
         self._goal_progress = {}
+        self._entered_level = False
         self.start_sid: str | None = None
         self.end_scene: str | None = None
         self.decision_index = 0
@@ -674,6 +675,7 @@ class GameSession:
         """BridgeClient.after_step：核实关卡内帧数，再记下最后按住的键。"""
         self._count_level_frames(reply)
         self._remember_held_input(args, reply)
+        self._note_first_goal_entry(reply.get('obs') or {})
 
     def _remember_held_input(self, args: dict, reply: dict) -> None:
         """桥接每次推进之后：记下最后真正喂给游戏的那一帧按键（主控的自动推进也算），并存进运行目录供续跑接上。
@@ -859,11 +861,14 @@ class GameSession:
             obs, image = enrich_obs(reply["obs"]), reply.get("image")
             self._commit_completion(obs)
             reload_observation = getattr(self, 'reload_observation_required', False)
-            if not reload_observation and self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas' and story_pending(obs) and not self.done:
+            if not reload_observation and not self.done:
+                self._note_first_goal_entry(obs)
+            may_advance = not reload_observation and not self.done and not self.goals.stop_motion.is_set()
+            if may_advance and self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas' and story_pending(obs):
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
-            elif (not reload_observation and self.cfg.cutscene_mode == 'auto' and obs.get('scene') == 'Level' and (obs.get('level') or {}).get('inCutscene')
-                  and not self._ending_agent and not self._ending_pending and not self.done):
+            elif (may_advance and self.cfg.cutscene_mode == 'auto' and obs.get('scene') == 'Level' and (obs.get('level') or {}).get('inCutscene')
+                  and not self._ending_agent and not self._ending_pending):
                 # 自动跳过剧情：剧情（含跳过的淡出）还没结束就先推进完，不让智能体看着黑屏或剧情画面判断
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
@@ -1457,6 +1462,7 @@ class GameSession:
         auto模式跳过剧情；agent模式在决策机会、实际输入节点或恢复控制时交回。
         显式 watch/advance/choose 后忽略本段的跳过机会，播至下一实际输入节点。"""
         mode = story_mode or self.cfg.cutscene_mode
+        self._note_first_goal_entry(obs)
         total, notes = 0, []
         history = []
 
@@ -1731,6 +1737,13 @@ class GameSession:
         epoch = getattr(self, 'game_process_id', None)
         return self._goal_progress if self._goal_progress.get('game_epoch', epoch) == epoch else {}
 
+    def _note_first_goal_entry(self, obs):
+        if not getattr(self, '_entered_level', False) and obs.get('scene') == 'Level' and (obs.get('level') or {}).get('sid'):
+            values = self.goal_values(obs)
+            self.goals.check(values)
+            self._goal_progress = values
+            self._entered_level = True
+
     def goal_values(self, obs=None):
         observation = obs if obs is not None else self.last_obs or {}
         level = observation.get("level") or {}
@@ -1742,6 +1755,7 @@ class GameSession:
         # 没有观测（例如续跑刚连上、还没 observe）时帧号未知：给 None，不用 0 冒充真实帧号，
         # 否则游戏时长目标会锚在 0、把新进程启动以来的菜单与加载帧都算进去
         values = {"room": level.get("room", self.metrics.state.room), "map": f"{sid}:{side}", "side": side,
+                "in_level": observation.get('scene') == 'Level' and bool(level.get('sid')),
                 "map_complete": complete, "deaths": level.get("deaths", 0),
                 "frame": observation.get("frame"), "elapsed": self.metrics.elapsed(),
                 "chapter_time_ticks":level.get('chapterTimeTicks'),
@@ -1755,9 +1769,10 @@ class GameSession:
         values['game_elapsed'] = values['frame']/60 if values['frame'] is not None else None
         return values
 
-    def set_goal(self, spec):
+    def set_goal(self, spec, *, wait_for_entry=False):
         from .goals import validate_goal
         spec = validate_goal(spec)
+        wait_for_entry = wait_for_entry or not getattr(self, '_entered_level', True)
         # An in-flight action owns the connection: use its latest progress and
         # do not wait for the whole action. Otherwise refresh a running menu's
         # frame before anchoring relative durations.
@@ -1766,11 +1781,11 @@ class GameSession:
                 obs = self.client.call('observe', image=False, entities=False, tiles=False)['obs']
                 values = self.goal_values(obs)
                 self._goal_progress = dict(values)
-                self.goals.set(spec, values)
+                self.goals.set(spec, values, wait_for_entry=wait_for_entry)
             finally:
                 self.lock.release()
         else:
-            self.goals.set(spec, self.goal_values())
+            self.goals.set(spec, self.goal_values(), wait_for_entry=wait_for_entry)
 
     def time_snapshot(self):
         with self.lock:
@@ -1886,6 +1901,25 @@ class GameSession:
                   'skipped':skipped,'scene':obs.get('scene'),'finished':self.done}
             if action=='skip' and not skipped:info['note']=why
             return obs,reply.get('image'),info
+
+    def finish_goal(self, goal: str, evidence: str) -> dict:
+        if not isinstance(evidence, str) or not 1 <= len(evidence.strip()) <= 1000:
+            raise ActError('请用 1～1000 字说明目标达成的具体依据')
+        if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 4000:
+            raise ActError('请填写用户交代的试玩目标（1～4000 字）')
+        with self.lock:
+            if self.done:
+                raise ActError('本次试玩已结束')
+            values = self.goal_values()
+            if not self._entered_level and not values['in_level']:
+                raise ActError('本次试玩尚未进入关卡，请先进入关卡再提交达成报告')
+            try:
+                report = self.goals.report_completion(goal.strip(), evidence.strip(), values)
+            except ValueError as exc:
+                raise ActError(str(exc)) from exc
+            self.goal_reported_at = time.monotonic()
+            self._mark_done("已接受智能体的目标达成报告")
+            return report
 
     def stop_run(self, reason: str) -> dict:
         """智能体报告任务阻塞：不算通关、不操作游戏，主控把试玩暂停（章节内保持冻结，菜单正常运行），等用户处理后继续或停止。
@@ -2824,6 +2858,7 @@ class GameSession:
         self._frames_log.flush()
 
     def _update_metrics_from_obs(self, obs: dict) -> None:
+        self._note_first_goal_entry(obs)
         self._goal_progress = {}
         level = obs.get("level") or {}
         player = obs.get("player") or {}

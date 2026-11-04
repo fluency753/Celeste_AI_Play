@@ -71,10 +71,10 @@ class FormalRunTest(unittest.TestCase):
             self.assertNotIn("# 新手探索", text) if text in (speedrun, nosim, speedrun_live) else None
 
     def test_tools_by_mode(self):
-        self.assertEqual(game_tools(_cfg()), ["observe", "act", "narrate", "set_effort", "stop_run"])
-        self.assertEqual(game_tools(_cfg(live=True)), ["observe", "act", "narrate", "set_effort", "stop_run", "exit_level", "cutscene"])
+        self.assertEqual(game_tools(_cfg()), ["observe", "act", "narrate", "set_effort", "stop_run", "finish_goal"])
+        self.assertEqual(game_tools(_cfg(live=True)), ["observe", "act", "narrate", "set_effort", "stop_run", "finish_goal", "exit_level", "cutscene"])
         self.assertEqual(game_tools(_cfg(mode="explore", sim=False, sim_assist=True)),
-                         ["observe", "act", "narrate", "set_effort", "stop_run", "cutscene", "simulate"])
+                         ["observe", "act", "narrate", "set_effort", "stop_run", "finish_goal", "cutscene", "simulate"])
         self.assertIn("cutscene", game_tools(_cfg(cutscene_mode="agent")))
 
     def test_host_does_not_classify_routes_in_either_mode(self):

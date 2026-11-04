@@ -892,8 +892,8 @@ function renderGoal(c) {
   $('goalStop').disabled=!c.connected || !c.goals_enabled || savingGoal || switchingSession;
   const draft=savingGoal?'正在提交…':goalError || (goalPending?'已提交，等待主控确认生效…':goalDirty?'有未应用的更改，点击“更新”后生效。':'');
   $('goalDraftStatus').textContent=draft;$('goalDraftStatus').hidden=!draft;
-  $('goalStatus').textContent=goal.reached ? '停止条件已触发，正在保存录像。' : !c.goals_enabled ? '当前未在试玩；开始试玩后可实时修改目标。' :
-    goal.active ? '已生效：' + (goal.text||'自定义停止目标') + ((goal.conditions||[]).length ? ` · ${goal.match==='any'?'任一':'全部'}条件满足后停止` : ' · 无自动停止条件') : '当前未设置自定义目标；按本次试玩范围继续。';
+  $('goalStatus').textContent=goal.completion_report ? '已接受智能体的目标达成报告。' : goal.reached ? '停止条件已触发，正在保存录像。' : !c.goals_enabled ? '当前未在试玩；开始试玩后可实时修改目标。' :
+    goal.active ? (goal.awaiting_entry ? '已登记，入图后生效：' : '已生效：') + (goal.text||'自定义停止目标') + ((goal.conditions||[]).length ? ` · ${goal.match==='any'?'任一':'全部'}条件满足后停止` : ' · 无自动停止条件') : '当前未设置自定义目标；按本次试玩范围继续。';
 }
 function primaryControlView(data, local = {}) {
   const c=data?.control || {}, operation=data?.operation || {};

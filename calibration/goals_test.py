@@ -71,6 +71,57 @@ class GoalTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_goal({"conditions":[condition]})
 
+    def test_failed_completion_write_can_be_retried_without_a_partial_commit(self):
+        self.set_goal()
+        before = self.goal.snapshot()
+        with patch.object(Path, 'replace', side_effect=PermissionError('fixture')):
+            with self.assertRaises(PermissionError):
+                self.goal.report_completion('探索支路', '走到了尽头', BASE)
+        self.assertEqual(self.goal.snapshot(), before)
+        self.assertEqual(GoalManager(self.directory).snapshot(), before)
+        report = self.goal.report_completion('探索支路', '走到了尽头', BASE)
+        self.assertEqual(GoalManager(self.directory).snapshot()['completion_report'], report)
+        self.assertFalse(self.goal.check(BASE))
+
+    def test_clearing_registered_goal_withdraws_permission_to_report_it(self):
+        self.set_goal()
+        self.goal.clear()
+        restored = GoalManager(self.directory)
+        with self.assertRaisesRegex(ValueError, '用户已清除自定义目标'):
+            restored.report_completion('探索支路', '走到了尽头', BASE)
+
+    def test_registered_goal_is_added_to_opening_without_replacing_preparation(self):
+        from orchestrator.session_controls import SessionControls
+        self.set_goal({'field': 'room', 'op': 'changed'})
+        controller = SimpleNamespace(session=self.session(), resume_notice='')
+        message = SessionControls._turn_message(controller, '先读必读清单。', [], opening=True)
+        self.assertIn('先读必读清单。', message)
+        self.assertIn('探索支路', message)
+        self.assertIn('房间发生变化', message)
+
+    def test_pending_start_goal_survives_reload_and_excludes_menu_time_and_rooms(self):
+        conditions = [{'field': 'game_elapsed', 'op': 'delta_gte', 'value': 1},
+                      {'field': 'room', 'op': 'changed'}]
+        self.goal.set({'conditions': conditions}, BASE, wait_for_entry=True)
+        restored = GoalManager(self.directory)
+        self.assertFalse(restored.check({**BASE, 'frame': 5000, 'room': 'stale'}))
+        self.assertTrue(restored.time_status(BASE)['awaiting_entry'])
+        entered = {**BASE, 'frame': 6000, 'room': 'first', 'in_level': True}
+        self.assertFalse(restored.check(entered))
+        self.assertFalse(restored.check({**entered, 'frame': 6059, 'room': 'second'}))
+        self.assertTrue(restored.check({**entered, 'frame': 6060, 'room': 'second'}))
+
+    def test_first_entry_seeds_confirmed_side_for_progress_in_same_action(self):
+        session = self.session()
+        level = {**session.last_obs, 'scene': 'Level'}
+        session.last_obs = {'scene': 'Overworld', 'frame': 90}
+        session.goals.set({'conditions': [{'field': 'side', 'op': 'eq', 'value': 'A'}]},
+                          session.goal_values(), wait_for_entry=True)
+        session._note_first_goal_entry(level)
+        session._on_progress({'event': 'progress', 'sid': BASE['map'].rsplit(':', 1)[0], 'frame': 106})
+        self.assertEqual(session.goal_values()['side'], 'B')
+        self.assertFalse(session.goals.stop_motion.is_set())
+
     def session(self):
         session=GameSession.__new__(GameSession)
         session.goals=self.goal; session._goal_progress={}; session.done=False; session.done_reason=""; session.user_stopped=False

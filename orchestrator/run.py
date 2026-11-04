@@ -53,6 +53,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="独立执行器：claude（原有）、codex（原生 GPT，复用 Codex 登录）")
     ap.add_argument("--prepared", help="复用 preparation 完成的知识库准备与独立会话（校验知识库未变化）")
     ap.add_argument("--start-paused", action="store_true", help="原生 GPT 启动后保持暂停，可先聊天再点继续")
+    goal_args = ap.add_mutually_exclusive_group()
+    goal_args.add_argument("--goal", metavar="TEXT", help="启动时登记本次试玩的文字目标")
+    goal_args.add_argument("--goal-file", type=Path, metavar="JSON", help="从 UTF-8 JSON 登记试玩目标和自动停止条件")
     ap.add_argument("--mode", choices=["speedrun", "explore"], default=None,
                     help="游玩模式（二选一）：speedrun 速通模式（Claude 执行器默认）：完整知识库，可选是否开放预置模拟器；"
                          "explore 探索模式（原生 GPT 默认）：只有基本操作与工具说明，不开放模拟器文件，可选限额短路线预测。"
@@ -208,6 +211,17 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="与 --resume 一起用：把这个文件（UTF-8 文本）的内容作为用户留言，附在续跑发给智能体的第一条消息里"
                          "（在主控的续跑说明之后；Claude另附当前配置及指南，无文件工具时附完整规则），例如章节之间的说明与新增资料的阅读要求")
     args = ap.parse_args()
+    args.initial_goal = None
+    if args.goal is not None or args.goal_file is not None:
+        if args.no_agent:
+            ap.error("--goal 和 --goal-file 需要启动试玩 agent")
+        from .goals import validate_goal
+        try:
+            goal = (json.loads(args.goal_file.read_text(encoding="utf-8-sig"))
+                    if args.goal_file is not None else {"text": args.goal})
+            args.initial_goal = validate_goal(goal)
+        except (OSError, ValueError) as exc:
+            ap.error(f"启动目标无效：{exc}")
     previous = args.previous = load_previous(args.resume) if args.resume else None
     args.note_text = None
     if args.note_file:
@@ -1000,9 +1014,9 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
 async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, token: str | None,
                        previous: dict | None, study: KbStudy | None, metrics: Metrics,
                        recorder: Recorder | None = None, prepared: dict | None = None) -> dict:
-    if previous and (previous["dir"] / "goal.json").exists():
+    if previous and getattr(args, 'initial_goal', None) is None and (previous["dir"] / "goal.json").exists():
         previous_goal = json.loads((previous["dir"] / "goal.json").read_text(encoding="utf-8"))
-        if previous_goal.get("active") and not previous_goal.get("reached"):
+        if not previous_goal.get("reached") and not previous_goal.get("completion_report"):
             shutil.copy2(previous["dir"] / "goal.json", run_dir / "goal.json")
     if previous and (previous["dir"] / "sim_energy.json").exists():
         shutil.copy2(previous["dir"] / "sim_energy.json", run_dir / "sim_energy.json")
@@ -1091,6 +1105,9 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             # Publish its run-state owner first; session identity is finalized below.
             write_run_state(run_dir, cfg, None, previous)
         obs = session.connect()
+        initial_goal = getattr(args, 'initial_goal', None)
+        if initial_goal is not None:
+            session.set_goal(initial_goal, wait_for_entry=True)
         print(f"[run] 已接管游戏：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}，存档 {cfg.save}", flush=True)
         if previous:
             session.decision_index = int(previous["metrics"].get("decisions") or 0)
@@ -1157,6 +1174,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         if session.workspace is not None:
             live = LiveStatus(session.workspace / "game" / "hud_status.json", metrics)
             live.start()
+        session.allow_goal_report = not args.no_agent
         server = build_server(session, study)
         app = server.streamable_http_app(streamable_http_path="/mcp", session_idle_timeout=None, host="127.0.0.1",
                                          transport_security=TRANSPORT_SECURITY)
@@ -1190,6 +1208,9 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             print("[run] --no-agent：工具服务已就绪，按 Ctrl+C 结束", flush=True)
             await web_task
             reason = "手动结束"
+        elif session.goals.stop_motion.is_set() or (initial_goal is not None and session.goals.check(session.goal_values())):
+            session.finish_user_stop()
+            reason = session.done_reason
         else:
             container = None
             if capabilities.needs_container:
@@ -1288,8 +1309,10 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         summary = None
         try:
             summary = metrics.snapshot()
-            summary.update(stop_reason=reason, completed=session.done and session.done_reason in ("章节完成", "分段完成"),
-                           user_stopped=session.user_stopped, agent_stop=getattr(session, "agent_stop", None), goal=session.goals.snapshot(),
+            goal = session.goals.snapshot()
+            summary.update(stop_reason=goal["stop_reason"] if goal.get("completion_report") else reason,
+                           completed=session.done and session.done_reason in ("章节完成", "分段完成"),
+                           user_stopped=session.user_stopped, agent_stop=getattr(session, "agent_stop", None), goal=goal,
                            chapters=cfg.chapters, splits=metrics.state.splits or [],
                            plan=[p.row() for p in cfg.plan] if cfg.plan else None,
                            total_time_ticks=total_time_ticks(metrics.state, session),
@@ -1644,7 +1667,7 @@ def main() -> int:
           f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）"
           + (f"；准备阶段 {summary['study_s']:.0f} 秒，知识库已读 {summary['kb_study']['progress']:.0%}"
              if summary.get("kb_study") else ""), flush=True)
-    return 0 if summary["completed"] or summary.get("user_stopped") else 1
+    return 0 if summary["completed"] or summary.get("user_stopped") or (summary.get("goal") or {}).get("completion_report") else 1
 
 
 def claim_controller_lease():
