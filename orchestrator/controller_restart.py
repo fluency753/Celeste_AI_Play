@@ -15,7 +15,7 @@ from .config import REPO_ROOT
 from .game_process import GameProcess, controller_lease
 from .launch_options import resume_args
 from .recording import RecordingError
-from .session_store import write_json
+from .session_store import load_json, write_json
 
 
 class HandoffRejected(ValueError):
@@ -27,8 +27,7 @@ LAUNCH_GRACE_S = 60   # 宿主目录创建后，这么久仍无状态文件且�
 
 
 def read(path):
-    with Path(path).open(encoding='utf-8-sig') as stream:
-        return json.load(stream)
+    return load_json(path, encoding='utf-8-sig')
 
 
 def control(port, payload=None):

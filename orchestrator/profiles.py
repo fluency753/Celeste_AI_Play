@@ -29,6 +29,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import config
+from .session_store import load_json
 
 DEFAULT = "default"
 LEGACY = "local"
@@ -420,7 +421,7 @@ def runs_using(pid: str, runs_dir: Path | None = None) -> int:
         return 0
     for state in base.glob("*/*/run_state.json"):
         try:
-            if json.loads(state.read_text(encoding="utf-8-sig")).get("profile") == pid:
+            if load_json(state, encoding="utf-8-sig").get("profile") == pid:
                 n += 1
         except (OSError, ValueError, AttributeError):
             continue

@@ -18,13 +18,15 @@ from .runtimes import runtime, config_from_state
 from .container import ensure_container
 from .metrics import Metrics
 from .execution import workspace_capabilities
+from .session_store import load_json, write_json
 
 
-def can_wake(directory):
+def can_wake(directory, *, state=None):
     if directory is None:
         return False
     try:
-        state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
+        if state is None:
+            state = load_json(directory / "run_state.json")
         runtime(state.get("engine"))
         if state.get("session_kind") == "ready":
             preparation = json.loads((directory / "prepare_summary.json").read_text(encoding="utf-8"))
@@ -50,7 +52,7 @@ def can_wake_frozen(directory):
     if directory is None:
         return False
     try:
-        state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
+        state = load_json(directory / "run_state.json")
         runtime(state.get("engine"))
         summary = json.loads((directory / "summary.json").read_text(encoding="utf-8"))
         return (bool(state.get("session_id")) and summary.get("game_released") is False
@@ -63,7 +65,7 @@ def successor_run(directory):
     """接班会话的运行目录：复制原运行的设置（run_state）、统计（metrics）与总结（summary 等），换上新的会话编号，
     并标记 session_pending（会话还没真正开始：第一次聊天用新会话开头，之后才按编号接续）。返回新目录。"""
     directory = Path(directory)
-    state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
+    state = load_json(directory / "run_state.json")
     if state.get("session_kind") == "ready":
         raise ValueError("已准备、尚未开始的会话不需要接班")
     from .action_policy import permissions_from_state
@@ -90,17 +92,15 @@ def successor_run(directory):
     state.update(session_id=str(uuid.uuid4()), session_pending=True, resumed_from=str(directory),
                  fresh_session_from=state.get("session_id"))
     state.pop("session_name", None)
-    (target / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(target / "run_state.json", state, indent=2)
     return target
 
 
 def _clear_pending(directory):
     path = Path(directory) / "run_state.json"
-    state = json.loads(path.read_text(encoding="utf-8"))
+    state = load_json(path)
     if state.pop("session_pending", None) is not None:
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(path)
+        write_json(path, state, indent=2)
 
 
 async def chat(directory, name_request=None, allow_programs=False, sim=False, fresh_session=False):
@@ -113,7 +113,7 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False, fr
     if fresh_session:
         directory = successor_run(directory)
         print(f"[chat] 接班会话：新运行目录 {directory}（之后用 --resume 这个目录续跑）", flush=True)
-    state = json.loads((directory / "run_state.json").read_text(encoding="utf-8"))
+    state = load_json(directory / "run_state.json")
     pending = bool(state.get("session_pending"))
     if name_request and state.get('session_kind') != 'ready':
         raise ValueError('自动取名仅用于准备完成、尚未开始的新试玩')

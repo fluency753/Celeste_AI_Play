@@ -13,6 +13,7 @@ from xml.etree.ElementTree import ParseError as ET_ERRORS
 from .telemetry import publish
 from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, CHAPTER_SIDS
 from .metrics import Metrics
+from .session_store import load_json, write_json
 from .navigation import ChapterNavigation
 from .action_policy import BLOCK_STOPS
 from .detour import OFFICIAL_MAPS, enabled as detour_enabled, map_label
@@ -621,11 +622,9 @@ class GameSession:
         # Persist before exposing any action. A failed write must not publish an
         # in-memory authorization that recovery cannot reproduce.
         path = self.run_dir / 'run_state.json'
-        state = json.loads(path.read_text(encoding='utf-8'))
+        state = load_json(path)
         state['visited_maps'] = maps
-        temporary = path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
-        temporary.replace(path)
+        write_json(path, state, indent=2)
         self.cfg.visited_maps = maps
 
     # ---- 思考僵直（探索模式 --stiffness） ----
@@ -1066,15 +1065,10 @@ class GameSession:
             if frames == settings['frames']:
                 return {**settings, 'changed': False}
             state_path = self.run_dir / 'run_state.json'
-            state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {}
+            state = load_json(state_path) if state_path.exists() else {}
             tuning = {**overrides(self.cfg), key: frames}
             state['tuning'] = {name: value for name, value in tuning.items() if value != DEFAULTS[name]}
-            temporary = state_path.with_suffix('.act-limit.tmp')
-            try:
-                temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
-                temporary.replace(state_path)
-            finally:
-                temporary.unlink(missing_ok=True)
+            write_json(state_path, state, indent=2)
             setattr(self.cfg, key, frames)
             self.cfg.tuning = state['tuning']
             return {**self.act_limit_settings(), 'changed': True}
@@ -1105,13 +1099,11 @@ class GameSession:
             snapshot = self.sim_energy.reconfigure(rules, balance)
             state_path = self.run_dir / 'run_state.json'
             try:
-                state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {}
+                state = load_json(state_path) if state_path.exists() else {}
                 tuning = {**overrides(self.cfg), **values}
                 from .tuning import DEFAULTS
                 state['tuning'] = {key: value for key, value in tuning.items() if value != DEFAULTS[key]}
-                tmp = state_path.with_suffix('.tmp')
-                tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
-                tmp.replace(state_path)
+                write_json(state_path, state, indent=2)
             except Exception:
                 self.sim_energy.reconfigure(previous_rules, previous_balance)
                 raise
@@ -2349,11 +2341,9 @@ class GameSession:
         path = self.run_dir / 'run_state.json'
         if not path.exists():return
         try:
-            state = json.loads(path.read_text(encoding='utf-8'))
+            state = load_json(path)
             state['completion_pending'] = self._pending_complete
-            temporary = path.with_suffix('.tmp')
-            temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
-            temporary.replace(path)
+            write_json(path, state, indent=2)
         except (OSError, ValueError) as exc:
             print(f'[run] 未能保存待确认结算状态：{exc}', flush=True)
 
@@ -3005,7 +2995,7 @@ class GameSession:
         all_chapters（涉及的章节）与 piece_pending（这一截已完成、还没换到下一截）。"""
         path = self.run_dir / "run_state.json"
         try:
-            state = json.loads(path.read_text(encoding="utf-8"))
+            state = load_json(path)
         except (OSError, ValueError):
             return
         done = []
@@ -3022,9 +3012,7 @@ class GameSession:
         state["all_chapters"] = chapters_of(pieces)
         state["piece_pending"] = bool(self.chapter_finished)
         state["segment_index"] = None if self.chapter_finished else self.segment_index
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        write_json(path, state, indent=2)
 
     def _mark_done(self, reason: str) -> None:
         if not self.done:

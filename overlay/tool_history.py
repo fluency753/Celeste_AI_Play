@@ -9,6 +9,7 @@ from collections import deque
 import math
 
 from orchestrator.tool_facts import safe_text, request_summary, result_summary
+from orchestrator.session_store import load_json
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -242,7 +243,7 @@ class ToolHistory:
                         if isinstance(ident, str) and ident in self.rows and self.rows[ident]['status'] == 'running':
                             self.rows[ident]['status'] = 'interrupted'
             try:
-                state = mapping(json.loads((self.directory/'run_state.json').read_text(encoding='utf-8-sig')))
+                state = mapping(load_json(self.directory/'run_state.json', encoding='utf-8-sig'))
             except (OSError, ValueError):
                 state = {}
             if state.get('engine') == 'codex':

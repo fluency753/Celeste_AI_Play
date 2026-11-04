@@ -16,6 +16,7 @@ from pathlib import Path
 
 from orchestrator.config import CHAPTER_SIDS, REPO_ROOT
 from orchestrator.recording_lifecycle import pending_recording as is_recording_pending
+from orchestrator.session_store import load_json
 
 CHAPTER_LABELS = {0: "序章", 1: "1A 被遗弃之城", 2: "2A 旧址", 3: "3A 天空度假村", 4: "4A 黄金山脊", 5: "5A 镜之神殿",
                   6: "6A 映像", 7: "7A 顶峰", 8: "终章", 9: "8A 核心", 10: "第九章 告别"}
@@ -25,7 +26,7 @@ CONTROLLER_MUTEX = "Local\\CelesteAIPlayController"
 
 def _read_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
+        return load_json(path, encoding="utf-8-sig")
     except (OSError, ValueError):
         return {}
 

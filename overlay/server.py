@@ -186,25 +186,25 @@ def make_handler(pinned: Path | None):
                 payload = {"run": str(directory), "model": metrics.get("model"), "room": metrics.get("room"),
                            "control": RunControl(directory).snapshot() if directory else {"connected": False}}
                 from orchestrator.chat import can_wake
-                payload["can_wake"] = can_wake(directory)
-                payload["waking"] = waking(directory) if directory and not payload["control"]["connected"] else False
                 from orchestrator.conversations import catalog, read_json, session_key
+                selected = read_json(directory / "run_state.json") if directory else {}
+                payload["can_wake"] = can_wake(directory, state=selected)
+                payload["waking"] = waking(directory) if directory and not payload["control"]["connected"] else False
                 payload["sessions"] = [{"id":record["key"], "label":record["label"], "model":record["model"]}
                                        for record in catalog(anchor_run(pinned))]
-                selected = read_json(directory / "run_state.json") if directory else {}
                 from orchestrator.launch_options import recording_options
                 payload['recording_options'] = recording_options(selected, legacy=bool(selected) and selected.get('session_kind') != 'ready')
                 payload["selected_session"] = session_key(selected) if selected.get("session_id") else None
                 from orchestrator.runtimes import configured_runtimes
                 payload["runtimes"] = configured_runtimes()
                 payload["runtime"] = selected.get("engine", "codex") + ":" + selected.get("provider", "codex" if selected.get("engine", "codex") == "codex" else "anthropic")
-                payload['save'] = read_json(directory / 'run_state.json').get('save') if directory else None
-                payload['save_slot'] = read_json(directory / 'run_state.json').get('save_slot') if directory else None
+                payload['save'] = selected.get('save')
+                payload['save_slot'] = selected.get('save_slot')
                 from orchestrator.session_actions import operation_status
                 payload["operation"] = operation_status(anchor_run(pinned))
-                payload["ready_to_play"] = bool(directory and read_json(directory / 'run_state.json').get('session_kind') == 'ready')
+                payload["ready_to_play"] = selected.get('session_kind') == 'ready'
                 payload['session_management'] = pinned is None
-                idle=bool(directory and read_json(directory/'run_state.json').get('session_kind') in {'idle','standby'})
+                idle = selected.get('session_kind') in {'idle', 'standby'}
                 payload['can_create_session']=payload['can_wake'] or idle
                 from orchestrator.play_scope import sim_available
                 payload['sim_available']=sim_available(REPO_ROOT)
@@ -370,8 +370,9 @@ def make_handler(pinned: Path | None):
                     if not control.snapshot().get('effort_control'):
                         raise ValueError('当前主控还不支持手动推理强度，请更新主控后重试')
                     # 原生 GPT 的档位按 Codex 模型目录预先核对；其他执行器由主控按所选模型声明的档位核对
-                    engine = (json.loads((directory / 'run_state.json').read_text(encoding='utf-8'))
-                              if (directory / 'run_state.json').exists() else {}).get('engine', 'codex')
+                    from orchestrator.session_store import load_json
+                    state_path = directory / 'run_state.json'
+                    engine = (load_json(state_path) if state_path.exists() else {}).get('engine', 'codex')
                     if data.get('text') != 'auto' and engine == 'codex':
                         from orchestrator.model_catalog import resolve_selection
                         resolve_selection((read_metrics(directory) or {}).get('model'),data.get('text'))

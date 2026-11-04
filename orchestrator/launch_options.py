@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from .efforts import valid_effort
 from .modes import EXPLORE, SPEEDRUN
 from .runtimes import RUNTIMES
 from .execution import workspace_capabilities
+from .session_store import load_json
 
 AGENT_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}"
 MODEL_PATTERN = r"[A-Za-z0-9._:/\[\]-]{1,100}"
@@ -405,7 +405,7 @@ def resume_args(run_dir: Path, fresh_session: bool = False, new_recording: bool 
     if (REPO_ROOT / "runs").resolve() not in run_dir.parents:
         raise ValueError("只能续跑本项目 runs 目录下的运行")
     try:
-        state = json.loads((run_dir / "run_state.json").read_text(encoding="utf-8-sig"))
+        state = load_json(run_dir / "run_state.json", encoding="utf-8-sig")
     except (OSError, ValueError) as exc:
         raise ValueError("这次运行没有 run_state.json，不能续跑") from exc
     if not state.get("save"):

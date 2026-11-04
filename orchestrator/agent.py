@@ -40,6 +40,7 @@ from .kb_study import KbStudy
 from .metrics import Metrics
 from .execution import workspace_capabilities
 from .session_controls import RuntimeCapabilities, SessionControls
+from .session_store import load_json, write_json
 from .prompting import play_prompt, study_prompt, resume_prompt, net_resume_prompt, first_play_prompt, continue_play_prompt
 from .telemetry import publish
 
@@ -306,7 +307,7 @@ class ClaudeRunner(SessionControls):
     def _delivered_rules_digest(self):
         """run_state.json 里记下的、这个会话最近一次送达的规则摘要；会话编号不同或没有记录时返回 None。"""
         try:
-            state = json.loads((self.run_dir / "run_state.json").read_text(encoding="utf-8"))
+            state = load_json(self.run_dir / "run_state.json")
         except (OSError, ValueError):
             return None
         record = state.get("rules_delivered") if isinstance(state, dict) else None
@@ -319,21 +320,17 @@ class ClaudeRunner(SessionControls):
         self._rules_digest = digest
         path = self.run_dir / "run_state.json"
         try:
-            state = json.loads(path.read_text(encoding="utf-8"))
+            state = load_json(path)
         except FileNotFoundError:
             return                               # 准备阶段等还没有 run_state.json：只记在内存
         except (OSError, ValueError) as exc:
             print(f"[agent] 未能读取 run_state.json，规则送达记录只保留在内存：{exc}", flush=True)
             return
         state["rules_delivered"] = {"session_id": self.session_id, "sha256": digest}
-        temporary = path.with_suffix(".rules.tmp")
         try:
-            temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-            temporary.replace(path)
+            write_json(path, state, indent=2)
         except OSError as exc:
             print(f"[agent] 未能保存规则送达记录，只保留在内存：{exc}", flush=True)
-        finally:
-            temporary.unlink(missing_ok=True)
 
     def _confirm_current_rules(self):
         if self._rules_inflight:

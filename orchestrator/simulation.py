@@ -10,6 +10,7 @@ import stat
 import tempfile
 
 from .sim_assist import AssistRules, validate_request
+from .session_store import load_json
 
 PRESET_RULES = AssistRules(max_candidates=256, max_frames=6000, max_total=60000)
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -107,7 +108,7 @@ def _cached(session, ident, digest):
                 raise ValueError('模拟请求编号已用于不同内容，本次未执行')
             return result
         try:
-            previous = json.loads((directory / 'run_state.json').read_text(encoding='utf-8')).get('resumed_from')
+            previous = load_json(directory / 'run_state.json').get('resumed_from')
         except FileNotFoundError:
             previous = None
         if not previous:

@@ -88,7 +88,7 @@ class LiveSettingsTests(unittest.TestCase):
         before = self.session.sim_energy.snapshot()
         replace = Path.replace
         def fail_state(path, target):
-            if path.name == 'run_state.tmp':
+            if target == self.root / 'run_state.json':
                 raise OSError('cannot persist run settings')
             return replace(path, target)
         with patch.object(Path, 'replace', fail_state), self.assertRaises(OSError):

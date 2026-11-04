@@ -11,6 +11,7 @@ import time
 from .chat import can_wake
 from .control import RunControl
 from .runtimes import RUNTIMES, runtime
+from .session_store import load_json, write_json
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -22,7 +23,7 @@ def session_key(state):
 
 def read_json(path):
     try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
+        return load_json(path, encoding="utf-8-sig")
     except (OSError, ValueError):
         return {}
 
@@ -139,7 +140,7 @@ def prepare_target(anchor, record):
             metrics[key] = previous[key]
     metrics["model"] = state["model"]
     metrics["agent"] = state["agent"]
-    (target / "run_state.json").write_text(json.dumps(current_state, ensure_ascii=False), encoding="utf-8")
+    write_json(target / "run_state.json", current_state)
     (target / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False), encoding="utf-8")
     if (source / 'summary.json').exists():
         shutil.copy2(source / 'summary.json', target / 'summary.json')

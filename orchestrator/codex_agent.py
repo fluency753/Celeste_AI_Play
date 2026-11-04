@@ -20,6 +20,7 @@ from .codex_container import CodexLoginRequired
 from .codex_recovery import ModelRecovery, is_model_unavailable, requires_login
 from .codex_read import read_file, search_files
 from .session_controls import RuntimeCapabilities, SessionControls
+from .session_store import load_json, write_json
 from .telemetry import public_event, publish
 
 
@@ -767,10 +768,10 @@ class CodexRunner(ModelRecovery, SessionControls):
                 ensure_ascii=False, indent=2), encoding="utf-8")
             state_path = self.run_dir / "run_state.json"
             if state_path.exists():
-                state = json.loads(state_path.read_text(encoding="utf-8"))
+                state = load_json(state_path)
                 state.update(session_id=self.session_id, engine="codex", model=result["model"],
                              session_storage='container', session_container=self.container)
-                state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+                write_json(state_path, state, indent=2)
             parked_source = getattr(self.cfg, '_parked_source', None)
             if parked_source:
                 from .parked_run import mark_resumed

@@ -9,6 +9,8 @@ from pathlib import Path
 import urllib.error
 import urllib.request
 
+from orchestrator.session_store import load_json
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PORTS = (47790, 47792)
 HUD_TITLE = 'Celeste AI HUD'
@@ -44,7 +46,7 @@ def find_hud_window(title=None):
 
 def _object(path):
     try:
-        value = json.loads(path.read_text(encoding='utf-8-sig'))
+        value = load_json(path, encoding='utf-8-sig')
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}

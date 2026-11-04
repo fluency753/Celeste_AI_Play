@@ -44,6 +44,7 @@ from .live import LiveStatus
 from .modes import EXPLORE, KNOWLEDGE_OF_MODE, MODE_OF_KNOWLEDGE, SPEEDRUN, describe as describe_mode
 from .playback import Playback
 from .server import TRANSPORT_SECURITY, build_server
+from .session_store import load_json, write_json
 
 
 def parse_args() -> tuple[RunConfig, argparse.Namespace]:
@@ -587,7 +588,7 @@ def load_previous(path: str) -> dict:
     if not run_dir.is_absolute():
         run_dir = (Path.cwd() / run_dir) if (Path.cwd() / run_dir).exists() else REPO_ROOT / run_dir
     try:
-        state = json.loads((run_dir / "run_state.json").read_text(encoding="utf-8"))
+        state = load_json(run_dir / "run_state.json")
         metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise SystemExit(f"--resume：{run_dir} 里找不到 {Path(exc.filename).name}（只能续跑带 run_state.json 的运行）")
@@ -639,7 +640,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     delivered = ((previous or {}).get("state") or {}).get("rules_delivered")
     if session_id and isinstance(delivered, dict) and delivered.get("session_id") == session_id:
         state["rules_delivered"] = delivered
-    (run_dir / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(run_dir / "run_state.json", state, indent=2)
 
 
 def check_provider(info: dict) -> None:
@@ -1085,7 +1086,6 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
             final['game_released'] = not keep
             if final.get('parked') and (keep or not had_connection):
                 final.pop('parked', None)
-            from .session_store import write_json
             write_json(run_dir / 'summary.json', final)
         if keep:
             print('[run] 游戏保持冻结在当前帧（章节计时不走）：可以用 --resume 续跑；'
@@ -1167,15 +1167,13 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous)
         if args.prepared:
             try:
-                prepared_state = json.loads((Path(args.prepared) / 'run_state.json').read_text(encoding='utf-8'))
+                prepared_state = load_json(Path(args.prepared) / 'run_state.json')
             except (OSError, ValueError):
                 prepared_state = {}
             if prepared_state.get('session_name'):
-                state = json.loads((run_dir / 'run_state.json').read_text(encoding='utf-8'))
+                state = load_json(run_dir / 'run_state.json')
                 state['session_name'] = prepared_state['session_name']
-                temporary = run_dir / 'run_state.tmp'
-                temporary.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
-                temporary.replace(run_dir / 'run_state.json')
+                write_json(run_dir / 'run_state.json', state)
         if recorder is not None:
             recorder.call = session.bridge_call  # 开局时已经开始录制（见 enter_save），之后改用主控的连接
             if getattr(cfg, '_recording_resume_manifest', None):
@@ -1234,8 +1232,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         # Preserve the session identity and delivery metadata already written before startup.
         state_path = run_dir / 'run_state.json'
         if state_path.exists():
-            from .session_store import write_json
-            state = json.loads(state_path.read_text(encoding='utf-8'))
+            state = load_json(state_path)
             state['mcp_port'] = service.port
             write_json(state_path, state)
         web_task = service.task

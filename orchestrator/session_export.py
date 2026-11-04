@@ -13,6 +13,8 @@ import sqlite3
 import subprocess
 import zipfile
 
+from .session_store import load_json
+
 TZ = timezone(timedelta(hours=8), 'Asia/Shanghai')
 DEFAULT_TIME_FORMAT = '%m-%d %H:%M:%S'
 TIME_FIELDS = ('elapsed_s', 'thinking_s', 'tool_s', 'play_game_s', 'auto_game_s',
@@ -32,7 +34,7 @@ def timestamp(wall):
 
 def read_object(path, warnings):
     try:
-        data = json.loads(path.read_text(encoding='utf-8-sig'))
+        data = load_json(path, encoding='utf-8-sig')
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError) as exc:
         warnings.append(f'{path}: {exc}')
