@@ -641,8 +641,8 @@ def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = Fals
              "（普通程序可生成候选、分析结果；需要预测时由主控工具执行，准备阶段不可调用）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
              if sim else "读完后调用 observe 开始游玩。\n")
     if cfg is not None and workspace_capabilities(cfg).workspace_read:   # 规则在工作区操作指南里：开始游玩前先读它
-        after = after.replace("然后调用 observe 开始游玩", "再读工作区操作指南（索引及各节），然后调用 observe 开始游玩").replace(
-            "读完后调用 observe 开始游玩", "读完后先读工作区操作指南（索引及各节），再调用 observe 开始游玩")
+        after = after.replace("然后调用 observe 开始游玩", "再按主控给出的阅读安排查阅工作区操作指南，然后调用 observe 开始游玩").replace(
+            "读完后调用 observe 开始游玩", "读完后按主控给出的阅读安排查阅工作区操作指南，再调用 observe 开始游玩")
     return notification('prepare', facts=(
         f"本次必读清单：\n{files}\n\n"
         "主控核对实际阅读进度，完成前 observe 与 act 不会执行。\n" + sim_note + after +

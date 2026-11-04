@@ -38,7 +38,7 @@ class StartupPromptTests(unittest.TestCase):
         name = 'runtime_zh.md'
         doc = console_api.prompt_read(name)
         self.assertEqual({p['name'] for p in doc['placeholders']},
-                         {'{task_brief}', '{guide_index_path}', '{agent_environment}'})
+                         {'{task_brief}', '{guide_read_plan}', '{agent_environment}'})
         self.assertFalse(doc['live_editable'])
         options = {'engine': 'codex', 'mode': 'explore', 'agent': 'test',
                    'save': {'name': '{game_tools}', 'slot': 14},
@@ -121,7 +121,7 @@ class StartupPromptTests(unittest.TestCase):
         self.assertTrue(unchanged)
         self.assertLess(len(unchanged), len(new['sections']))
         self.assertIn('权限与目标以实时反馈为准', runtime_prompt(updated))
-        self.assertIn('新会话自行阅读', runtime_prompt(updated))
+        self.assertIn('一次读取正文', runtime_prompt(updated))
 
     def test_failed_guide_publication_stops_runner_before_model_start(self):
         with tempfile.TemporaryDirectory() as folder:

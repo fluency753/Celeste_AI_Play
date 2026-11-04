@@ -92,13 +92,15 @@ def runtime_prompt_parts(cfg, *, guide=None):
     if not workspace_capabilities(cfg).workspace_read:
         parts = prompt_parts(cfg)
     else:
-        from .prompt_guide import guide_document
+        from .prompt_guide import GuideReading, guide_document
         from .prompt_environment import environment_instructions, render_tool_references, tool_name
         guide = guide if guide is not None else guide_document(cfg)
+        read_plan = guide.get('read_plan') or GuideReading(cfg, guide).read_plan()
         values = {
             '{task_brief}': task_brief(cfg),
             '{current_settings}': json.dumps(current_settings(cfg), ensure_ascii=False, separators=(',', ':')),
             '{guide_index_path}': guide['index_path'],
+            '{guide_read_plan}': read_plan,
             '{game_tools}': '/'.join(tool_name(cfg, name) for name in game_tools(cfg)),
             '{agent_environment}': environment_instructions(cfg),
         }
@@ -107,6 +109,8 @@ def runtime_prompt_parts(cfg, *, guide=None):
         # Replace only template tokens, never tokens inside inserted configuration/user text.
         text = re.sub('|'.join(re.escape(key) for key in values), lambda match: values[match.group()],
                       render_tool_references(template, cfg))
+        if '{guide_read_plan}' not in template:
+            text += '\n\n本次阅读范围以主控以下安排为准。\n' + read_plan
         parts = [PromptPart('当前任务与配置', text, 'runtime_zh.md')]
     if personal['text']:
         parts.append(PromptPart('本机个人追加要求', personal['text'], None, '\n\n'))

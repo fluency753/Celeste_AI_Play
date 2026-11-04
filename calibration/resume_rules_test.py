@@ -112,7 +112,7 @@ class ResumeRulesTests(unittest.IsolatedAsyncioTestCase):
     def delivered(self, directory):
         return json.loads((directory / 'run_state.json').read_text(encoding='utf-8')).get('rules_delivered')
 
-    async def test_reconnect_republishes_tampered_guide_without_repeating_unchanged_rules(self):
+    async def test_reconnect_republishes_tampered_guide_and_sends_unconfirmed_rules(self):
         cfg = self.config()
         directory = self.run_dir('session-a')
         touched = []
@@ -135,8 +135,8 @@ class ResumeRulesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(commands[1][commands[1].index('--resume') + 1], 'session-a')
         self.assertEqual(sent[0], '第一条消息')
         self.assertIn('模型连不上', sent[1])
-        for text in sent:
-            self.assertNotIn(RULES_NOTE, text)       # 系统提示词里已有，规则没变就不再附
+        self.assertNotIn(RULES_NOTE, sent[0])       # 新会话先通过系统提示词给规则
+        self.assertIn(RULES_NOTE, sent[1])          # 首轮断线，重接时仍未确认旧快照包含当前规则
         guide = self.guide_dir(cfg)
         name, original = touched[0]
         self.assertEqual((guide / name).read_bytes(), original)
@@ -179,9 +179,24 @@ class ResumeRulesTests(unittest.IsolatedAsyncioTestCase):
                                                       during_wait=user_breaks_file)
         self.assertEqual(len(commands), 2, '重接不应因个人提示词文件损坏而结束运行')
         self.assertIn('模型连不上', sent[1])
-        self.assertNotIn(RULES_NOTE, sent[1])
+        self.assertIn(RULES_NOTE, sent[1])
         self.assertIn('KEPT-MARKER', runner._startup_guide['personal']['text'])
         self.assertTrue(any('个人追加要求读取失败' in str(call.args[0]) for call in log.call_args_list if call.args))
+
+    async def test_resumed_guide_plan_is_retried_until_first_successful_result(self):
+        cfg = self.config()
+        directory = self.run_dir('session-retry', {
+            'rules_delivered': {'session_id': 'session-retry', 'sha256': 'older'}})
+        records_during_retry = []
+        sent, _, runner = await self.drive(cfg, directory, session_id='session-retry', resume=True,
+                                            during_wait=lambda: records_during_retry.append(self.delivered(directory)))
+        self.assertEqual(len(sent), 2)
+        for text in sent:
+            self.assertIn(RULES_NOTE, text)
+            self.assertIn('用 Read 一次读取正文', text)
+        self.assertTrue(records_during_retry)
+        self.assertTrue(all(record['sha256'] == 'older' for record in records_during_retry))
+        self.assertEqual(self.delivered(directory)['sha256'], runner._startup_rules_digest)
 
     async def test_resumed_session_sends_rules_only_when_changed_or_unknown(self):
         for runtime, note in (('container', RULES_NOTE), ('host', HOST_NOTE)):

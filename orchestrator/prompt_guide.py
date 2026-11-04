@@ -1,4 +1,5 @@
 """Versioned workspace instructions; building a preview never publishes files."""
+from bisect import bisect_right
 import hashlib
 import json
 import os
@@ -10,6 +11,10 @@ import uuid
 
 from .prompting import prompt_parts
 from .execution import workspace_capabilities
+from .config import REPO_ROOT
+
+
+GUIDE_READ_ROOT = REPO_ROOT / 'local' / 'guide-reading'
 
 
 def _digest(text):
@@ -20,33 +25,40 @@ def guide_document(cfg):
     """Return the complete rendered guide and its immutable publication identity."""
     sections = []
     occurrences = {}
-    documents = {}
     for part in prompt_parts(cfg):
         source = part.source or part.label
         occurrences[source] = occurrences.get(source, 0) + 1
         content = part.sep + part.text
         digest = _digest(content)
         sections.append({'id': f'{source}:{occurrences[source]}', 'label': part.label,
-                         'source': part.source, 'sha256': digest, 'file': digest + '.md',
-                         'text': content})
-        documents[digest + '.md'] = content
-    manifest = {'format': 'celeste-prompt-guide-v1', 'sections': [
+                         'source': part.source, 'sha256': digest, 'text': content})
+    body = ''.join(section['text'] for section in sections)
+    starts, position = [], 0
+    for line in body.splitlines(keepends=True):
+        starts.append(position)
+        position += len(line)
+    position = 0
+    for section in sections:
+        content = section['text']
+        first = bisect_right(starts, position + len(content) - len(content.lstrip()))
+        last = bisect_right(starts, position + len(content.rstrip()) - 1)
+        section.update(offset=first, limit=last - first + 1 if content.strip() else 0)
+        position += len(content)
+    manifest = {'format': 'celeste-prompt-guide-v2', 'sections': [
         {key: value for key, value in section.items() if key != 'text'} for section in sections]}
     manifest_text = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + '\n'
     version = _digest(manifest_text)
     prefix = f'/workspace/game/instructions/{version}'
-    index = ['# 试玩操作指南', '', f'版本：{version}', '',
+    path = prefix + '/guide.md'
+    index = ['# 试玩操作指南索引', '', f'版本：{version}', '', f'正文：{path}',
              '当前任务、配置、实时工具结果与用户最新指令优先于本指南中的启动快照。',
-             '首次接手按顺序阅读各节；同一会话已读且哈希未变的章节无需重读。',
-             '版本变化时比较各节的标识与哈希，只补读新增或变化的章节；压缩后按遗忘的内容查阅。',
-             '下列文件名相对于本索引所在目录；文件名去掉 .md 即该节的内容哈希。', '']
+             '首次读正文，续跑按主控给出的范围补读。遗忘时可用本索引定位。', '',
+             '各节依次列出标识、名称、offset、limit 和内容哈希。']
     for section in sections:
-        section['path'] = prefix + '/' + section['file']
-        index.append(f"- {section['id']} | {section['label']} | {section['file']}")
-    documents['manifest.json'] = manifest_text
-    documents['index.md'] = '\n'.join(index) + '\n'
-    return {'version': version, 'index_path': prefix + '/index.md',
-            'sections': sections, 'documents': documents}
+        index.append(f"- {section['id']} | {section['label']} | {section['offset']} | {section['limit']} | {section['sha256']}")
+    documents = {'guide.md': body, 'manifest.json': manifest_text, 'index.md': '\n'.join(index) + '\n'}
+    return {'version': version, 'path': path, 'index_path': prefix + '/index.md',
+            'sections': sections, 'documents': documents, 'total_lines': len(starts)}
 
 
 def _is_link(path):
@@ -155,6 +167,101 @@ def publish_guide(cfg):
         if _intact(destination, documents):
             return guide
     raise ValueError(f'操作指南发布后仍与内容不一致：{destination}')
+
+
+class GuideReading:
+    """Controller-owned evidence of guide sections delivered to one native session."""
+
+    def __init__(self, cfg, guide, session_id=None):
+        self.cfg = cfg
+        self.guide = guide
+        self.sections = [s for s in guide.get('sections', ()) if s['limit']]
+        self.session_id = session_id
+        self.lines = set()
+        self.delivered = {}
+        if session_id and guide.get('path'):
+            try:
+                saved = json.loads(self.state_path.read_text(encoding='utf-8'))
+                if isinstance(saved, dict):
+                    self.delivered = saved
+            except (OSError, ValueError):
+                pass  # No reliable baseline: ask for the full guide once.
+
+    @property
+    def state_path(self):
+        key = json.dumps([self.cfg.engine, self.cfg.provider, str(self.cfg.workspace_dir), self.session_id])
+        return GUIDE_READ_ROOT / (_digest(key) + '.json')
+
+    def read_plan(self):
+        from .prompt_environment import tool_name
+
+        guide = self.guide
+        path = guide['path']
+        reader = tool_name(self.cfg, 'Read')
+        prefix = f'工作区操作指南：{path}\n'
+        suffix = (f'压缩或遗忘后可查 {guide["index_path"]} 定位相关内容。'
+                  '仅聊天、准备资料或取名时按需查阅。指南不替代准备阶段的必读清单。')
+        if not self.delivered:
+            return prefix + f'开始正式试玩前，先用 {reader} 一次读取正文；如结果截断，从返回的下一行继续。\n' + suffix
+        pending = [s for s in self.sections if self.delivered.get(s['id']) != s['sha256']]
+        if pending:
+            ranges = '\n'.join(f"- offset={s['offset']}，limit={s['limit']}（{s['label']}）" for s in pending)
+            prefix += (f'开始正式试玩前，用 {reader} 补读以下范围。每次调用的 file_path 都是上面的 guide.md，括号内是小节名称。'
+                       '范围内的行已读齐时，忽略指向范围外的翻页提示。\n'
+                       + ranges + '\n')
+        else:
+            prefix += '主控已确认当前各节均已送达，无需重读。\n'
+        removed = sorted(self.removed_sections())
+        if removed:
+            prefix += '当前指南已移除以下章节，旧内容不再适用：' + '、'.join(removed) + '。\n'
+        return prefix + suffix
+
+    def removed_sections(self):
+        return self.delivered.keys() - {s['id'] for s in self.sections}
+
+    def confirm_scope(self):
+        """Retire removed sections only after a turn has seen the current plan."""
+        if removed := self.removed_sections():
+            for key in removed:
+                self.delivered.pop(key)
+            self._save()
+
+    def note_result(self, info):
+        guide = self.guide
+        if not self.session_id or not guide.get('path') or not isinstance(info, dict) or info.get('filePath') != guide['path']:
+            return
+        first, count, total = (info.get(key) for key in ('startLine', 'numLines', 'totalLines'))
+        if (any(type(value) is not int for value in (first, count, total)) or total != guide['total_lines']
+                or first < 1 or count < 1 or first + count - 1 > total):
+            return
+        published = self.cfg.workspace_dir / 'game' / 'instructions' / guide['version'] / 'guide.md'
+        try:
+            _check_chain(published.parent)
+            if not _same_bytes(published, guide['documents']['guide.md'].encode('utf-8')):
+                return
+        except (OSError, ValueError):
+            return
+        self.lines.update(range(first, first + count))
+        complete = {s['id']: s['sha256'] for s in self.sections if self.delivered.get(s['id']) != s['sha256']
+                    and self.lines.issuperset(range(s['offset'], s['offset'] + s['limit']))}
+        if not complete:
+            return
+        self.delivered.update(complete)
+        self._save()
+
+    def _save(self):
+        path = self.state_path
+        temporary = path.with_suffix(f'.{uuid.uuid4().hex}.tmp')
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(json.dumps(self.delivered, ensure_ascii=False), encoding='utf-8')
+            temporary.replace(path)
+        except OSError as exc:
+            print(f'[guide] 无法保存指南阅读进度，下次可能需要重读：{exc}', flush=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def startup_context(cfg, *, previous=None):

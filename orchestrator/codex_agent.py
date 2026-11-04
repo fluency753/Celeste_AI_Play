@@ -73,6 +73,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         # 经 turn/steer 送达的内容按 clientUserMessageId 记回执：只有 Codex 把它记入历史（userMessage
         # 事件）才算模型收到；轮次中断时 Codex 会丢弃排队输入，对应回执作废。
         self._receipts = {}
+        self._guide_reading = None
         self._recorded_inputs = set()
         self._inflight_notes = set()
         self._receipt_tasks = set()
@@ -240,6 +241,8 @@ class CodexRunner(ModelRecovery, SessionControls):
             finish_native_tools(self)
             self.turn_result = params.get("turn") or {}
             self._settle_receipts(self.turn_result)
+            if self._guide_reading is not None and self.turn_result.get('status') == 'completed':
+                self._guide_reading.confirm_scope()
             self.turn_done.set()
 
     # ---------------- 经 turn/steer 送达的内容回执
@@ -301,6 +304,8 @@ class CodexRunner(ModelRecovery, SessionControls):
             self.metrics.update(kb_progress=round(self.study.progress(), 4))
             if completed:
                 self.metrics.kb_finished()
+        elif entry['kind'] == 'file' and self._guide_reading is not None:
+            self._guide_reading.note_result(entry['info'])
         elif entry['kind'] == 'reminder':
             self._inflight_notes.difference_update(key for key, _ in entry['notes'])
             self.note_reminders.acknowledge(entry['notes'])
@@ -702,8 +707,11 @@ class CodexRunner(ModelRecovery, SessionControls):
     async def run(self):
         if not self.container:
             raise RuntimeError('Codex 会话必须在智能体容器内运行；请先创建并登录该工作区的容器。')
-        from .prompt_guide import startup_context
+        from .prompt_guide import GuideReading, startup_context
         guide = startup_context(self.cfg)
+        if guide.get('path'):
+            self._guide_reading = GuideReading(self.cfg, guide, self.session_id if self.resume else None)
+            guide['read_plan'] = self._guide_reading.read_plan()
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self._events = (self.run_dir / "codex_events.jsonl").open("a", encoding="utf-8")
         self.metrics.update(telemetry_source="codex_app_server", chat_thread_id=None,
@@ -738,6 +746,8 @@ class CodexRunner(ModelRecovery, SessionControls):
             if (result.get('activePermissionProfile') or {}).get('id') != params['permissions']:
                 raise RuntimeError('Codex 未采用主控指定的容器权限配置，拒绝运行')
             self.session_id = result["thread"]["id"]
+            if self._guide_reading is not None:
+                self._guide_reading.session_id = self.session_id
             if self.fast_mode is None:
                 self.fast_mode = result.get("serviceTier") in {"priority", "fast"}
             self.metrics.update(model=result["model"], effort=result.get("reasoningEffort") or self.cfg.effort)

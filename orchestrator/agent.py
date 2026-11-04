@@ -176,11 +176,13 @@ class ClaudeRunner(SessionControls):
         self.metrics = metrics
         self.token = token
         self.session_id = session_id or str(uuid.uuid4())
+        self._guide_reading = None
         self.resume = resume                     # True：用 --resume 接着已有的会话
         self.resume_note = resume_note
         # 这个会话最近一次送达的规则（runtime_prompt）摘要，记在 run_state.json 的 rules_delivered；
         # 续跑、重接时规则没变就不再附一遍（None：不知道会话里是哪一版，照常附上）
         self._rules_digest = self._delivered_rules_digest() if resume else None
+        self._startup_rules_digest = self._rules_inflight = None
         # 续跑追加章节的开场消息（next_chapter_prompt）写明"以这条消息后面的规则为准"，第一条消息必须附上规则
         self._force_rules = bool(resume and resume_note and getattr(cfg, '_extended_plan', None))
         self.quota_until: float | None = None    # 额度到上限：预计重置的时刻（墙钟，秒）
@@ -201,7 +203,6 @@ class ClaudeRunner(SessionControls):
         self.stop_reason = ""
         self._command_active = False             # 正在执行主控自己发出的斜杠命令（/effort）
         self._command_reply = ""
-        self._sent_text = ""
         self.prepare_only, self.chat_only, self.naming_only = prepare_only, chat_only, naming_only
         self.name_result, self.naming_reply = None, None
         self.turn_done = self._turn_done
@@ -334,11 +335,21 @@ class ClaudeRunner(SessionControls):
         finally:
             temporary.unlink(missing_ok=True)
 
+    def _confirm_current_rules(self):
+        if self._rules_inflight:
+            self._remember_rules(self._rules_inflight)
+            self._rules_inflight = None
+            self._force_rules = False
+
     def _command(self) -> list[str]:
-        from .prompt_guide import startup_context
+        from .prompt_guide import GuideReading, startup_context
         from .startup_prompt import runtime_prompt
         # 重接时传入上次的快照：个人追加要求读取失败就沿用已送达的版本，不因此结束运行
         self._startup_guide = startup_context(self.cfg, previous=getattr(self, "_startup_guide", None))
+        if self._startup_guide.get('path'):
+            self._guide_reading = GuideReading(self.cfg, self._startup_guide, self.session_id if self.resume else None)
+            self._guide_reading.session_id = self.session_id
+            self._startup_guide['read_plan'] = self._guide_reading.read_plan()
         rules = runtime_prompt(self.cfg, guide=self._startup_guide)
         self._startup_rules_digest = hashlib.sha256(rules.encode("utf-8")).hexdigest()
         if workspace_capabilities(self.cfg).agent_location == "container":
@@ -504,12 +515,6 @@ class ClaudeRunner(SessionControls):
     async def _run_process(self, workdir: Path, first: str) -> bool:
         """启动一个 Claude Code 进程并驱动到结束。返回 True 表示本次运行结束；False 表示因额度暂停，稍后续上。"""
         command = self._command()
-        digest, rules_note = self._startup_rules_digest, ""
-        if self.resume and (self._force_rules or digest != self._rules_digest):
-            # 续跑同一个会话：规则与上次送达的不同（或不知道上次是哪一版）时才在第一条消息后附上当前规则
-            from .prompting import current_rules_note
-            rules_note = current_rules_note(self.cfg, guide=self._startup_guide)
-            first += rules_note
         stderr_log = None
         reader = None
         self.proc = None
@@ -527,10 +532,6 @@ class ClaudeRunner(SessionControls):
             if not await self._next_user_turn(first, opening=not self.chat_only):
                 self.stop_reason = self.session.done_reason if self.session.done else (self.stop_reason or '用户停止')
                 return True
-            # 新会话的系统提示词带着规则；续跑时只有附上的规则确实随第一条消息发出（没被用户消息替换）才算送达
-            if not self.resume or (rules_note and rules_note in self._sent_text):
-                self._remember_rules(digest)
-                self._force_rules = False
             while True:
                 if self.session.done and (grace := self._goal_report_grace()) is not None:
                     if grace > 0 and not reader.done() and not self._turn_done.is_set():
@@ -851,10 +852,19 @@ class ClaudeRunner(SessionControls):
         self.turn_active = True
         self.turn_done.clear()
         self._tool_calls_this_turn = 0
+        self._rules_inflight = None
+        digest = self._startup_rules_digest
+        if digest and (self._force_rules or digest != self._rules_digest):
+            # Append to the selected message so user input cannot displace updated rules on resume.
+            if self.resume:
+                from .prompting import current_rules_note
+                text += current_rules_note(self.cfg, guide=self._startup_guide)
+            self._rules_inflight = digest
         offered_notes = self.note_reminders.peek()
         text += ('\n\n' + '\n'.join(value for _, value in offered_notes) if offered_notes else '')
         await self._write(text)
-        self._sent_text = text                   # 最近一次实际发出的消息（核对续跑附上的规则有没有送达）
+        if self._guide_reading is None:
+            self._confirm_current_rules()  # Inline-only host sessions retain the existing delivery convention.
         self.note_reminders.acknowledge(offered_notes)
         self._begin_model_turn(runtime="claude")
         self.metrics.update(status=self._idle_status())
@@ -1082,6 +1092,9 @@ class ClaudeRunner(SessionControls):
                     self.metrics.tool_end(str(block.get("tool_use_id")))
                     if self.playback is not None:
                         self.playback.note_tool_result(str(block.get("tool_use_id")))
+                    result = event.get('tool_use_result')
+                    if self._guide_reading is not None and isinstance(result, dict) and not block.get('is_error'):
+                        self._guide_reading.note_result(result.get('file'))
             if self.study is None or self.study.finished is not None:
                 return
             if self.study.note_result(event):
@@ -1124,6 +1137,9 @@ class ClaudeRunner(SessionControls):
             if self._command_active:
                 self._turn_done.set()
         elif etype == "result":
+            if self._guide_reading is not None and subtype == 'success' and not event.get('is_error'):
+                self._confirm_current_rules()
+                self._guide_reading.confirm_scope()
             model_usage = event.get('modelUsage') or {}
             selected = model_usage.get(self.metrics.state.model)
             if selected is None and len(model_usage) == 1:

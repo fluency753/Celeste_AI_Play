@@ -453,6 +453,7 @@ PLACEHOLDERS = {
     "{task_brief}": "本次任务的简短摘要：模式、存档、计划起止与停止边界，不展开完整配置 JSON",
     "{current_settings}": "本次任务与配置的 JSON 快照（存档、范围、权限、程序额度等）",
     "{guide_index_path}": "本次已发布的工作区操作指南索引路径",
+    "{guide_read_plan}": "主控给出的操作指南路径与本次需要阅读的范围",
     "{kb_reference_rule}": "本机生成了 kb/reference/ 社区资料时的一句（没有时为空）",
     "{agent_environment}": "按实际执行器与文件／程序能力生成工具名称、容器、阅读计量和图像送达约定",
     "{explore_memory_rule}": "有工作区时维护 notes.md，否则依据当前观测与对话记录进展",
@@ -664,7 +665,8 @@ def _prompt_write(name: str, text, version, pid: str) -> dict:
         tmp = override.with_name(override.name + ".tmp")
         tmp.write_text(text, encoding="utf-8", newline="\n")
         tmp.replace(override)
-    missing = [k for k in PLACEHOLDERS if k in repo and k not in text]
+    # The startup renderer appends the controller's plan when an older template lacks this slot.
+    missing = [k for k in PLACEHOLDERS if k in repo and k not in text and k != '{guide_read_plan}']
     return {**_prompt_read(name, pid), "missing_placeholders": missing}
 
 
