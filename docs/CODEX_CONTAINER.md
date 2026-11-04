@@ -138,3 +138,13 @@ Remove-Item Env:CELESTE_CODEX_PLAYER_LOGIN_TEST_IMAGE
 ```
 
 看到 `Ran 1 test` 和 `OK` 即通过。未设置镜像变量时，普通回归会跳过该用例。用例使用随机命名的临时 Docker 容器和登录卷、关闭网络并写入假凭据，结束后清理容器和卷。它验证真实 App Server 的 A → B → A 登录接力、并发启动和登录写入拒绝，以及沙箱无法从工作区链接或共享卷路径读出凭据。可以在正式试玩期间运行，真实账号 OAuth 续期和 Celeste 实机换局另行验收。
+
+### 真实模型冒烟
+
+选一个固定的测试工作区标签和空闲的 MCP 端口。通过命令行准备测试工作区，沿用其独立登录卷，并串行运行需要真实模型的测试。首次提示缺少登录时，按输出对测试容器做一次设备授权，再重试原命令。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m orchestrator.preparation --engine codex --agent dev-codex-example --knowledge explore --mcp-port 47831 --hud-managed --quick-check
+```
+
+将示例标签和端口换成测试环境实际使用的值，启动时省略 `--codex-player-login`。冒烟验证模型访问和知识库索引读取，不连接游戏或 OBS，结果写在运行目录的 `prepare_summary.json`。要验证实际游戏动作，再单独安排实机测试并指定测试存档槽。
