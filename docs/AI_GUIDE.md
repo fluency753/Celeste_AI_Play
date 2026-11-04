@@ -96,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 - **登录与密钥**：
   - Anthropic：用户在浏览器里授权 `claude setup-token`，把令牌粘贴进向导（输入不显示）。令牌写进仓库根目录的 `.env`。不要让用户把令牌发给你，不要自己读出或打印它。
   - 第三方平台（如 DeepSeek）：用户在向导里给出密钥文件或粘贴密钥。密钥存在仓库目录之外（`%USERPROFILE%\.celeste-ai-play\`），`configs\local.providers.json` 只记文件位置。平台预设见 `configs\providers.json`。
-  - Codex（GPT）：用户在浏览器完成设备登录：`.\.venv\Scripts\python.exe -m orchestrator.codex_container --account login`。这条命令会输出授权链接与代码，让用户自己打开。
+  - Codex（GPT）：按准备或启动提示指定工作区容器，用 `.\.venv\Scripts\python.exe -m orchestrator.codex_container --container NAME login` 获取授权链接与代码，由用户在浏览器完成设备登录。
 - 在游戏里建测试存档（或在运行时用 `--create-save` 让主控新建）；建只启用 CelesteAIBridge 的 Mod 配置；在 Steam 里关闭云同步。
 - 预置模拟器 `sim\dist` 不随仓库分发。用户有的话由用户提供；没有就不用。预测默认关闭，有资源也须显式开启限额能力，资源不向工作区或 agent 容器提供。
 

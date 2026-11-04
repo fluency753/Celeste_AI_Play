@@ -65,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | --- | --- | --- |
 | Claude Code（`--engine claude`，默认） | Anthropic：Claude 订阅（Pro/Max）里的模型，别名 `opus`、`fable`、`haiku` | 用 `claude setup-token` 生成长期令牌，写进仓库根目录的 `.env`；不需要 API 密钥 |
 | Claude Code + 第三方平台（`--provider`） | 提供 Anthropic 兼容接口的平台。DeepSeek 已有预设（`--provider deepseek --model deepseek-flash`） | 平台列表在 [configs/providers.json](configs/providers.json)；密钥文件位置与自定义平台写在本机的 `configs/local.providers.json`，部署向导可以代写 |
-| Codex（`--engine codex`） | GPT | 能使用 Codex 的 ChatGPT 账号，在容器里设备登录：`python -m orchestrator.codex_container --account login` |
+| Codex（`--engine codex`） | GPT | 能使用 Codex 的 ChatGPT 账号，按首次准备或启动的提示对工作区容器做设备登录 |
 
 推理强度默认 `high`（Codex 默认 `medium`），可选档位由所选模型声明。智能体可以用 `set_effort` 自己调整。接入方法见 [docs/DEPLOY.md 第 9 节](docs/DEPLOY.md#9-接入其他平台的模型)。
 

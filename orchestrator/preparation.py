@@ -12,6 +12,7 @@ from .lifecycle import host_runner
 from .runtimes import RUNTIMES, runtime
 from .config import REPO_ROOT, RunConfig
 from .container import ensure_container
+from .codex_container import CodexLoginRequired
 from .kb_study import KbStudy
 from .kb_layout import study_identity
 from .workspace_setup import install_game_helpers
@@ -53,12 +54,16 @@ async def prepare(args):
     print(f"[{cfg.engine}] 独立 HUD：http://127.0.0.1:{args.hud_port}/hud（游戏保持原样）", flush=True)
     live = LiveStatus(game / "hud_status.json", metrics).start()
     reason = "中断"
+    login_required = None
     try:
         async with host_runner(cfg, directory, metrics, container, study, prepare_only=True) as runner:
             if args.fast is not None and adapter.fast:
                 runner.fast_mode = args.fast == 'on'
             try:
                 reason = await runner.run()
+            except CodexLoginRequired as exc:
+                reason = str(exc)
+                login_required = exc.container
             finally:
                 metrics.update(status="done" if runner.completed_preparation else "stopped")
                 hashes = {rel: hashlib.sha256((study.extra.get(rel) or (study.kb_dir / rel)).read_bytes()).hexdigest()
@@ -69,6 +74,8 @@ async def prepare(args):
                           "kb_study": study.summary(), "kb_hashes": hashes,
                           "kb_identity": study_identity(study.kb_dir),
                           "session_id": runner.session_id, "turns": runner.turns, "metrics": metrics.snapshot()}
+                if login_required:
+                    result['login_required'] = login_required
                 (directory / "prepare_summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
                 print(f"[{cfg.engine}] {reason}；实际阅读 {study.progress():.1%}", flush=True)
     finally:

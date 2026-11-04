@@ -57,6 +57,10 @@ class SessionActionTests(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.root_patch = patch('orchestrator.session_actions.REPO_ROOT', self.root)
         self.root_patch.start()
+        self.enterContext(patch('orchestrator.config.REPO_ROOT', self.root))
+        self.enterContext(patch('orchestrator.kb_access.KB_ROOT', self.root/'kb'))
+        (self.root/'kb/explore').mkdir(parents=True)
+        (self.root/'kb/explore/README.md').write_text('fixture\n', encoding='utf-8')
         self.save_root_patch = patch('orchestrator.gamepaths.DEPLOY_ANSWERS', self.root / 'configs/local.deploy.json')
         self.save_root_patch.start()
         self.prefs_patch = patch('orchestrator.gamepaths.CONSOLE_PREFS', self.root / 'configs/local.console.json')
@@ -100,6 +104,27 @@ class SessionActionTests(unittest.TestCase):
         self.assertTrue(arguments[arguments.index('--agent')+1].startswith('codex-hud-'))
         self.assertEqual(arguments[arguments.index('--fast')+1], 'off')
         self.assertIn('--hud-managed', arguments)
+
+    def test_preparation_can_retry_after_login_in_the_same_workspace(self):
+        operation = self.operation(complete=False)
+        operation.update(engine='codex', provider='codex', model='gpt-test', effort='high')
+        directory = Path(operation['directory'])
+        host = Path(operation['host'])
+        write_json(host/'status.json', {'state':'exited', 'exit_code':1})
+        write_json(directory/'prepare_summary.json', {'login_required':'celeste-agent-new-explore'})
+        with patch('orchestrator.session_actions.start_chat') as restore:
+            _finish(self.anchor, operation)
+        restore.assert_called_once_with(self.anchor)
+        status = operation_status(self.anchor)
+        self.assertEqual(status['status'], 'login_required')
+        self.assertIn('--container celeste-agent-new-explore login', status['error'])
+        with patch('orchestrator.session_actions.release_chat'), \
+                patch('orchestrator.session_actions.launch', return_value=(host, {})) as launch, \
+                patch('orchestrator.session_actions._monitor'):
+            self.assertEqual(create_session(self.anchor, self.anchor, {'retry_login':True})['status'], 'preparing')
+        argv = launch.call_args.args[0]
+        self.assertEqual(argv[argv.index('--agent')+1], 'new')
+        self.assertNotEqual(Path(argv[argv.index('--output')+1]), directory)
 
     def test_starting_status_follows_new_run_before_its_controller_connects(self):
         operation={'id':'test-start','agent':'new-agent','kind':'play','status':'starting','host':'fake'}

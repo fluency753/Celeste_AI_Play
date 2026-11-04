@@ -55,6 +55,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
              patch('orchestrator.model_catalog.CodexRPC',return_value=rpc) as factory:
             result=await fetch_models()
         self.assertEqual(factory.call_args.kwargs['container'], 'account-fixture')
+        self.assertFalse(factory.call_args.kwargs['require_login'])
         self.assertEqual([m['id'] for m in result['models']],['one','two'])
         self.assertEqual([call.args[0] for call in rpc.request.call_args_list],['model/list','model/list'])
         self.assertEqual(rpc.request.call_args_list[1].args[1]['cursor'],'page2')

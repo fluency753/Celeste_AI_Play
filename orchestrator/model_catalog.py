@@ -45,7 +45,7 @@ def normalize_models(rows):
 
 async def fetch_models():
     container = await asyncio.to_thread(ensure_account_container)
-    rpc = CodexRPC(REPO_ROOT / 'local/model-catalog', container=container)
+    rpc = CodexRPC(REPO_ROOT / 'local/model-catalog', container=container, require_login=False)
     rows, cursor, cursors = [], None, set()
     try:
         await rpc.start()

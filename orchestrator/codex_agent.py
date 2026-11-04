@@ -15,11 +15,12 @@ from types import SimpleNamespace
 
 from .prompting import play_prompt
 from .game_policy import GAME_ACTIONS, is_game_tool, tool_name
-from .codex_rpc import CodexRPC
-from .codex_recovery import ModelRecovery, is_model_unavailable
+from .codex_rpc import CodexRPC, CodexRPCError
+from .codex_container import CodexLoginRequired
+from .codex_recovery import ModelRecovery, is_model_unavailable, requires_login
 from .codex_read import read_file, search_files
 from .session_controls import RuntimeCapabilities, SessionControls
-from .telemetry import public_event
+from .telemetry import public_event, publish
 
 
 def spec(name, description, properties, required=()):
@@ -857,11 +858,14 @@ class CodexRunner(ModelRecovery, SessionControls):
                 interrupted = self.turn_result.get("status") == "interrupted" and self.user_interrupted
                 self.user_interrupted = False
                 if self.turn_result.get("status") != "completed" and not interrupted:
-                    if is_model_unavailable(self.turn_result.get('error')):
-                        await self._wait_for_model(self.turn_result['error'])
+                    error = self.turn_result.get('error')
+                    if requires_login(error):
+                        raise CodexLoginRequired(self.container)
+                    if is_model_unavailable(error):
+                        await self._wait_for_model(error)
                         message, retry_input = self._model_recovery_prompt(), True
                         continue
-                    raise RuntimeError(f"Codex 轮次未完成：{self.turn_result.get('error') or self.turn_result}")
+                    raise CodexRPCError(error or self.turn_result, context='Codex 轮次未完成')
                 if not interrupted:
                     self._model_recovered()
                 if self.naming_only:
@@ -883,6 +887,25 @@ class CodexRunner(ModelRecovery, SessionControls):
             self._hold_model_failure()
             raise
         except RuntimeError as exc:
+            if requires_login(exc):
+                login = exc if isinstance(exc, CodexLoginRequired) else CodexLoginRequired(self.container)
+                if self.session is None or self.chat_only or self.prepare_only:
+                    raise login from (exc if login is not exc else None)
+                self._hold_model_failure()
+                self.model_waiting = True  # Reject new game operations before draining an accepted call.
+                async with self.action_lock:
+                    pass
+                if self.stop_requested:
+                    return await self._stopped_reason()
+                if self.session.done:
+                    return self.session.done_reason
+                reason = f'{login}。游戏接管和录像保留。授权后用原运行目录续跑，先核对最近动作。'
+                print(f'[codex] {reason}', flush=True)
+                try:
+                    publish(self.run_dir, 'system:codex-login-required', reason, role='system', kind='系统')
+                except OSError as error:
+                    print(f'[codex] 授权通知写入失败：{error}', flush=True)
+                return reason
             if is_model_unavailable(exc):
                 self._hold_model_failure()
             raise

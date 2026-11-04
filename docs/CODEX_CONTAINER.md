@@ -6,17 +6,20 @@ Codex App Server 与原生 Shell、补丁编辑工具均运行在智能体容器
 
 ```powershell
 docker build -t celeste-agent:0.1 agent-container
-.\.venv\Scripts\python.exe -m orchestrator.codex_container --account login
 ```
 
-镜像固定 Codex CLI 版本，账号环境使用同一个 `ensure_container`，不另建容器管理器。设备登录在浏览器完成授权，容器内无需图形界面。已有文件形式的登录缓存也可显式导入：
+镜像固定 Codex CLI 版本。首次准备或试玩创建工作区后，使用提示里的容器名称登录，按输出在浏览器完成授权。
 
 ```powershell
-.\.venv\Scripts\python.exe -m orchestrator.codex_container --account import-auth --file <auth.json>
-.\.venv\Scripts\python.exe -m orchestrator.codex_container --account status
+.\.venv\Scripts\python.exe -m orchestrator.codex_container --container '<容器名>' login
+.\.venv\Scripts\python.exe -m orchestrator.codex_container --container '<容器名>' status
 ```
 
-普通启动不读取宿主登录文件。工作区尚未登录时，从已显式初始化的账号环境引入缓存，已有工作区缓存不覆盖。账号卷和工作区 Codex 卷均不入库，程序不能读取凭据；模型进程保留访问模型平台所需的网络，自写程序无网络。缓存副本分别刷新，本轮短验收不保证长期并发刷新无冲突；遇到刷新失败，对具体容器执行 `--container NAME login` 重新授权，不自动退回宿主或覆盖其他登录。
+每个工作区容器单独登录，并在自己的持久卷中维护刷新后的凭据。首次准备或试玩会创建容器，缺少登录时输出 `--container NAME login` 命令。完成浏览器授权后，命令行重试原命令，HUD 新建会话点击「登录后重试准备」继续使用同一工作区。已有工作区的凭据会继续使用。模型列表使用独立账号容器的目录接口，可在无登录状态下读取目录，目录结果只用于选型。
+
+正式试玩在接管游戏和启动 OBS 前，用目标工作区和所选模型完成一轮临时、只读的预检。预检使用标准服务档位，原试玩线程和游戏工具不参与。试玩期间，若 Codex 自身刷新后仍报告明确的鉴权错误，主控等已受理的游戏调用完成，保留游戏接管和录像，并在 HUD 和运行摘要提示要授权的容器。重新授权后，使用原目录 `--resume`，核对上次动作和当前观测再继续。普通网络故障沿用原有退避，App Server 断开仍由手动续跑接回。
+
+账号卷和工作区 Codex 卷均不入库，工作区程序无法读取凭据或访问网络。原来的共享账号自动复制登录缓存已取消。若此前从同一个缓存初始化过多个工作区，分别在需要使用的容器内完成设备登录，便可各自刷新。
 
 官方支持 [设备登录及向 Docker 复制登录缓存](https://learn.chatgpt.com/docs/auth#login-on-headless-devices)。这里使用 ChatGPT 订阅认证，不要求改用 API 计费。
 

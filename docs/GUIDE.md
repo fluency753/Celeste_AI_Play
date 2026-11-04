@@ -95,7 +95,7 @@
 
    它只检查、不改动。每一项显示"就绪"或"缺少"。
 
-向导的 platform 步骤只配 Claude Code 执行器用的平台。要用 Codex 执行器（GPT）时，另外执行一次 `.\.venv\Scripts\python.exe -m orchestrator.codex_container --account login`，按提示在浏览器里完成授权。
+向导的 platform 步骤只配 Claude Code 执行器用的平台。使用 Codex 执行器（GPT）时，按首次准备或启动提示运行 `.\.venv\Scripts\python.exe -m orchestrator.codex_container --container NAME login`，在浏览器里授权后重试同一工作区。
 
 ## 3. 用控制台开第一次运行
 

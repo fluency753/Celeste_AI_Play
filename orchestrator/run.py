@@ -1115,6 +1115,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                   f"{metrics.elapsed() / 60:.0f} 分钟" + (f"，剩余章节 {cfg.chapters}" if cfg.chapters else ""), flush=True)
         backup_save(obs, run_dir)
         resumed_session, session_id = choose_session(previous, args.fresh_session, prepared)
+        if cfg.engine == 'codex' and resumed_session is None:
+            session_id = None  # App Server assigns the ID; a failed startup must not publish a placeholder.
         if args.no_agent:
             metrics.update(telemetry_source="external", chat_thread_id=None)
         write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous)
@@ -1212,9 +1214,11 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             session.finish_user_stop()
             reason = session.done_reason
         else:
-            container = None
+            preflight = getattr(args, 'codex_preflight', None)
+            container = preflight[0] if preflight and preflight[1] == cfg.mcp_port else None
             if capabilities.needs_container:
-                container = await asyncio.to_thread(ensure_container, cfg, lambda m: print(m, flush=True))
+                if container is None:
+                    container = await asyncio.to_thread(ensure_container, cfg, lambda m: print(m, flush=True))
                 print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
                 session.container = container
             note = opening_note(cfg, previous, resumed_session, getattr(args, "note_text", None),
@@ -1513,6 +1517,17 @@ def main() -> int:
     previous = args.previous
     if not port_free(cfg.mcp_port):
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
+    if not args.no_agent and cfg.engine == 'codex':
+        from .codex_preflight import verify_model
+        log_dir = REPO_ROOT / 'local' / 'codex-preflight' / uuid.uuid4().hex
+        try:
+            container = ensure_container(cfg, lambda message: print(message, flush=True))
+            print(f'[run] 正在验证 Codex 容器 {container} 的模型访问', flush=True)
+            asyncio.run(verify_model(cfg, container, log_dir))
+        except (RuntimeError, OSError) as exc:
+            print(f'[run] Codex 开局预检失败，未接管游戏或启动录像。{exc}。预检日志 {log_dir}', flush=True)
+            return 2
+        args.codex_preflight = (container, cfg.mcp_port)
     from .bridge_requirements import preflight_bridge
     hello = preflight_bridge(cfg.bridge_port)
     if getattr(cfg, 'play_scope', 'chapter') == 'visited' and hello.get('map_entry_set') is not True:

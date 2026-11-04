@@ -238,6 +238,7 @@
       <div class="control-buttons"><label>起始A面 <input id="sessionChapter" type="number" min="0" max="10" value="0" style="width:3.5em"></label><select id="sessionScope" aria-label="试玩范围"><option value="campaign">顺序游玩</option><option value="chapter">仅这一章</option><option value="visited">已到访地图自由探索</option></select><select id="sessionCompletion" aria-label="通关后行为"><option value="stop">计划通关后停止</option><option value="continue">计划通关后继续</option></select><button id="sessionPlay" type="button" title="进入所选存档和章节后保持暂停，点击继续才开始操作">开始试玩</button></div>
       <label><input id="sessionSimAssist" type="checkbox" disabled>有限模拟辅助<span id="simAvailability">（检查安装状态…）</span></label>
       <div id="sessionOperation" role="status" hidden></div>
+      <button id="sessionRetryLogin" type="button" hidden>登录后重试准备</button>
     </details>
     <details id="recordingPanel">
       <summary>录像与冻结</summary>
@@ -1089,7 +1090,9 @@ async function pollControl() {
     $('sessionModel').disabled=busy || modelsLoading || !modelCatalog.models.length;
     $('sessionEffort').disabled=busy || modelsLoading || !selectedModel;
     $('sessionModelRefresh').disabled=busy || modelsLoading;
-    $('sessionOperation').textContent = lifecycleError || (operation.status==='error' ? operation.error :
+    $('sessionRetryLogin').hidden = operation.status !== 'login_required';
+    $('sessionRetryLogin').disabled = !manageable;
+    $('sessionOperation').textContent = lifecycleError || (['error','login_required'].includes(operation.status) ? operation.error :
       busy ? ({preparing:'正在准备入门资料…',connecting:'正在接入会话…',starting:'正在进入章节…',naming:'会话正在取名…'}[operation.status] || '正在交接会话…') : '');
     $('sessionOperation').hidden=!$('sessionOperation').textContent;
     if (busy) {
@@ -1104,7 +1107,7 @@ async function pollControl() {
     $('toggleFast').disabled = true;
     $('liveEffort').disabled = true;
     $('sessionSelect').disabled = true;
-    for (const id of ['sessionNew','sessionDisconnect','sessionPlay','recordingMode','freezeChapterSelect','freezeFileSelect','freezeMainMenu']) $(id).disabled=true;
+    for (const id of ['sessionNew','sessionRetryLogin','sessionDisconnect','sessionPlay','recordingMode','freezeChapterSelect','freezeFileSelect','freezeMainMenu']) $(id).disabled=true;
   }
 }
 let recordingSelectionRun=null;
@@ -1135,6 +1138,7 @@ async function sessionAction(kind, options) {
   await pollControl();
 }
 $('sessionNew').onclick=()=>sessionAction('new_session',{...chosenRuntime(),name:$('sessionName').value,model:$('sessionModel').value,effort:$('sessionEffort').value});
+$('sessionRetryLogin').onclick=()=>sessionAction('new_session',{retry_login:true});
 $('sessionDisconnect').onclick=()=>sessionAction('disconnect');
 $('sessionScope').onchange=()=>{ $('sessionCompletion').value=$('sessionScope').value==='visited'?'continue':'stop'; $('sessionChapter').disabled=$('sessionScope').value==='visited'; };
 $('sessionPlay').onclick=()=>{

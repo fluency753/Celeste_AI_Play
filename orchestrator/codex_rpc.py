@@ -55,14 +55,14 @@ def process_options(*, container=False) -> list[str]:
 
 class CodexRPCError(RuntimeError):
     """A definite JSON-RPC refusal, retaining the server's error fields."""
-    def __init__(self, error):
+    def __init__(self, error, *, context=None):
         self.error = error
-        super().__init__(str(error))
+        super().__init__(f'{context}：{error}' if context else str(error))
 
 
 class CodexRPC:
     def __init__(self, directory: Path, on_event=None, on_request=None, *, container=None,
-                 before_start=None, environment=None):
+                 before_start=None, environment=None, require_login=True):
         self.directory = directory
         self.on_event, self.on_request = on_event, on_request
         self.proc = None
@@ -73,6 +73,7 @@ class CodexRPC:
         self.write_lock = asyncio.Lock()
         self.stderr = None
         self.container = container
+        self.require_login = require_login
         self.before_start = before_start
         self.environment = environment or {}
         self.owner = uuid.uuid4().hex
@@ -86,7 +87,7 @@ class CodexRPC:
             env.pop(key, None)
         if self.container:
             from .codex_container import ensure_runtime, launch_command
-            await asyncio.to_thread(ensure_runtime, self.container)
+            await asyncio.to_thread(ensure_runtime, self.container, require_login=self.require_login)
             if self.before_start:
                 await self.before_start()
             command = launch_command(self.container, self.owner, 'env',

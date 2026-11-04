@@ -72,7 +72,7 @@
 | --- | --- | --- |
 | Anthropic（默认） | Claude Max（或 Pro）订阅；用 `claude setup-token` 生成的长期令牌（有效期一年） | 仓库根目录 `.env` 的 `CLAUDE_CODE_OAUTH_TOKEN` |
 | DeepSeek | API 密钥 | 本机的密钥文件，由 `configs\local.providers.json` 的 `key_file` 指向；或环境变量 `DEEPSEEK_API_KEY` |
-| 原生 GPT（Codex） | 能使用 Codex 的 ChatGPT 账号，账号容器执行设备登录 | 专用账号卷及各工作区 Codex 卷，程序不可读；仅在工作区未登录时从已初始化账号缓存引入，不覆盖已有登录 |
+| 原生 GPT（Codex） | 能使用 Codex 的 ChatGPT 账号，在目标工作区容器做设备登录 | 每个工作区的 Codex 持久卷，工作区程序不可读 |
 | 其他兼容 Anthropic 接口的平台 | API 密钥 | 同 DeepSeek，用 `key_file` 或 `key_env` 指定的环境变量 |
 
 令牌与密钥只在主控进程的内存里传给容器（`docker exec -e 变量名`，值不进命令行），智能体自写的程序在零网络的沙箱里运行并且看不到它们（见 8 节）。
@@ -273,12 +273,12 @@ winget install Gyan.FFmpeg
 ### 4.11 原生 GPT（可选）
 
 1. 构建或更新共享智能体镜像：`docker build -t celeste-agent:0.1 agent-container`。镜像同时安装 Claude Code 与固定版本 Codex；不会把宿主文件系统或 Docker socket 挂进容器。
-2. 初始化本仓库的 Codex 账号环境：`python -m orchestrator.codex_container --account login`，按 `codex login --device-auth` 提示在浏览器完成授权。也可显式执行 `--account import-auth --file <auth.json>` 导入已有文件缓存；普通启动不会读取宿主登录文件。`--account status` 只显示登录状态。
+2. 按准备或启动提示运行 `python -m orchestrator.codex_container --container NAME login`，在浏览器里授权目标工作区，完成后重试原准备或启动命令。`--container NAME status` 仅显示本地登录状态，正式试玩另做实际模型预检。
 3. 用 `start_gpt.ps1` 或 HUD 新建并准备。App Server、原生 Shell 与补丁工具都在对应工作区容器内；主控通过 `docker exec -i` 的 stdio 收发协议。工作区和知识库与 Claude 复用同一容器生命周期；模拟器不挂给 agent，由主控独立持有。
 
 旧宿主会话不会自动变为容器会话。停止原主控后，用 `python -m orchestrator.codex_container --container <对应容器> import-session --file <原 rollout.jsonl>` 显式导入原记录，再恢复原运行；导入保留原文件、拒绝覆盖已有目标，不导入宿主配置。工作区原有文件继续复用，容器缺少原会话时明确报错，不另建或回退宿主。旧 `--runtime host` 对 Codex 作为容器模式的兼容别名；host Claude 语义保持不变。
 
-账号缓存初始化到工作区后各自持久化并刷新。官方支持缓存复制，但本轮不保证长期并发刷新互不影响；刷新失败时可对具体容器显式 `login` 重新授权，不自动覆盖缓存或回落宿主。协议及必要差异见 [Codex 容器执行](CODEX_CONTAINER.md)。
+工作区各自登录，在自己的持久卷中刷新凭据。刷新失败时，对提示里的容器重新授权并从原运行目录续跑。协议及必要差异见 [Codex 容器执行](CODEX_CONTAINER.md)。
 
 ## 5. 运行
 
@@ -539,7 +539,7 @@ Remove-Item "<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll"
 | OBS 弹出"安全模式" | 用 `tools\obs_setup.py launch` 启动（会清掉崩溃标记）；已弹出时选正常模式 |
 | 录像里没有游戏画面 | 录制时游戏窗口被最小化；主控会自动还原，失败时手动还原后重录 |
 | 第三方平台提示找不到密钥 | 按 9 节写 `configs\local.providers.json` 的 `key_file`，或设环境变量 |
-| 原生 GPT 提示容器缺少 Codex 或未登录 | 按 4.11 节更新镜像并执行 `python -m orchestrator.codex_container --account login` |
+| 原生 GPT 提示容器缺少 Codex 或未登录 | 按 4.11 节检查镜像，按提示用 `python -m orchestrator.codex_container --container NAME login` 授权目标工作区 |
 | 后台试玩提示主控已经运行 / 端口被占用 | 已有一个后台主控在运行（同一时间只允许一个）；看 `local\background\` 下最新目录的 `status.json` 与 `output.log` |
 | 智能体想从零开始 | 删除 `workspaces\<标签>\`，再 `docker rm -f celeste-agent-<标签>`、`docker volume rm celeste-claude-<标签>` |
 | 存档进度不对 | 从运行目录的 `save_backup\` 恢复（先关游戏），并确认已关闭云同步 |

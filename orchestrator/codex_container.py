@@ -19,8 +19,15 @@ CODEX_VERSION = '0.165.0-alpha.1.2'
 ACCOUNT_AGENT = 'codex-account'
 
 
+class CodexLoginRequired(RuntimeError):
+    def __init__(self, container):
+        self.container = container
+        super().__init__(f'Codex 容器 {container} 需要登录或重新授权。请运行 '
+                         f'.\\.venv\\Scripts\\python.exe -m orchestrator.codex_container --container {container} login')
+
+
 def ensure_account_container(*, image=None, log=print) -> str:
-    """Use the ordinary container lifecycle for the repository's opted-in account."""
+    """Use the ordinary container lifecycle for the model catalog's account."""
     from .container import ensure_container
     from .config import RunConfig
     from .runtimes import runtime
@@ -71,29 +78,8 @@ def ensure_runtime(container: str, *, require_login=True) -> None:
     result = _run(container, 'codex', '--version')
     if result.returncode or result.stdout.strip() != f'codex-cli {CODEX_VERSION}':
         raise RuntimeError(f'容器缺少匹配的 Codex {CODEX_VERSION}，请重新构建 agent-container 镜像')
-    if (require_login and not login_status(container)['authenticated']
-            and not _copy_account_auth(container)):
-        raise RuntimeError('Codex 容器尚未登录；运行 python -m orchestrator.codex_container '
-                           '--account login，或 --account import-auth --file <auth.json>；'
-                           f'仅给当前环境登录可用 --container {container} login')
-
-
-def _copy_account_auth(container: str) -> bool:
-    from .container import container_name, docker
-    if container == container_name(ACCOUNT_AGENT):
-        return False
-    image = docker('inspect', '-f', '{{.Config.Image}}', container).stdout.strip()
-    account = ensure_account_container(image=image)
-    if not login_status(account)['authenticated']:
-        return False
-    # The user explicitly initialized this repository's shared account; copy
-    # credentials only, never the host's config or another workspace's history.
-    result = _run(account, 'python3', '-c',
-                  "import os,sys;from pathlib import Path;sys.stdout.write((Path(os.environ['CODEX_HOME'])/'auth.json').read_text())")
-    if result.returncode:
-        raise RuntimeError('无法读取已初始化的 Codex 账号缓存；请重新运行 --account login')
-    _install_auth(container, result.stdout.encode('utf-8'))
-    return login_status(container)['authenticated']
+    if require_login and not login_status(container)['authenticated']:
+        raise CodexLoginRequired(container)
 
 
 AUTH_IMPORT = r'''
@@ -237,7 +223,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument('--container')
-    target.add_argument('--account', action='store_true', help='本仓库共享订阅账号环境（显式登录后供新工作区初始化）')
+    target.add_argument('--account', action='store_true', help='本仓库的模型目录账号环境')
     parser.add_argument('--image', help='创建共享账号环境时使用的容器镜像')
     commands = parser.add_subparsers(dest='operation', required=True)
     commands.add_parser('status')

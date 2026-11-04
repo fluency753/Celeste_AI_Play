@@ -85,7 +85,7 @@ def _finish(anchor, operation):
             operation.update(host=str(host), status='starting', save_name=options['save'])
             store_operation(anchor, operation)
         host = Path(operation['host'])
-        deadline = time.monotonic() + (65 * 60 if operation['kind'] == 'new' else 60)
+        deadline = time.monotonic() + (65 * 60 if operation['kind'] == 'new' else 180)
         while time.monotonic() < deadline:
             status = read_json(host / 'status.json')
             if operation['kind'] == 'play':
@@ -98,6 +98,13 @@ def _finish(anchor, operation):
                         return
             if status.get('state') in {'exited', 'failed'}:
                 if status.get('exit_code', 1) != 0 or status.get('state') == 'failed' or operation['kind'] == 'play':
+                    if operation['kind'] == 'new' and operation.get('engine') == 'codex':
+                        from .codex_container import CodexLoginRequired
+                        from .container import container_name
+                        expected = container_name(operation['agent'] + '-explore')
+                        prepared = read_json(Path(operation['directory']) / 'prepare_summary.json')
+                        if prepared.get('login_required') == expected:
+                            raise CodexLoginRequired(expected)
                     raise RuntimeError('后台启动失败：' + (host / 'output.log').read_text(encoding='utf-8', errors='replace')[-1200:])
                 break
             time.sleep(.25)
@@ -129,7 +136,8 @@ def _finish(anchor, operation):
         write_json(anchor / 'hud_session.json', {'relative': str(target.relative_to(anchor))})
         operation['status'] = 'ready'
     except Exception as exc:
-        operation.update(status='error', error=str(exc))
+        from .codex_container import CodexLoginRequired
+        operation.update(status='login_required' if isinstance(exc, CodexLoginRequired) else 'error', error=str(exc))
         if operation['kind'] == 'play':
             latest = REPO_ROOT / 'runs/latest.txt'
             path = latest.read_text(encoding='utf-8').strip() if latest.exists() else ''
@@ -150,6 +158,16 @@ def create_session(anchor, current, options):
     require_idle(current)
     if operation_status(anchor).get('status') in BUSY:
         raise ValueError('已有会话操作正在进行')
+    if options == {'retry_login': True}:
+        previous = read_json(anchor / 'session_operation.json')
+        if (previous.get('status') != 'login_required' or previous.get('kind') != 'new'
+                or previous.get('engine') != 'codex' or previous.get('previous') != str(current)):
+            raise ValueError('当前没有等待授权的新会话，请刷新 HUD')
+        ident = uuid.uuid4().hex[:10]
+        directory = REPO_ROOT / 'runs' / previous['agent'] / (time.strftime('%Y%m%d-%H%M%S') + '-' + ident)
+        operation = {**previous, 'id': ident, 'directory': str(directory), 'status': 'preparing'}
+        operation.pop('error', None)
+        return _launch_preparation(anchor, current, operation)
     if not isinstance(options, dict) or set(options) - {'name', 'model', 'effort', 'engine', 'provider'}:
         raise ValueError('新会话参数无效')
     name, model, effort = options.get('name', ''), options.get('model', ''), options.get('effort', 'high')
@@ -174,12 +192,19 @@ def create_session(anchor, current, options):
     fast = RunControl(current).fast_preference()
     operation = {'id': ident, 'kind': 'new', 'status': 'preparing', 'previous': str(current),
                  'directory': str(directory), 'agent': agent, 'name': name or '新会话 ' + time.strftime('%H:%M'),
-                 'fast': bool(fast) if adapter.fast else False, 'engine':engine, 'provider':cfg.provider}
+                 'fast': bool(fast) if adapter.fast else False, 'engine':engine, 'provider':cfg.provider,
+                 'model':model, 'effort':effort}
     operation['cutscene_mode']=RunControl(current).cutscene_preference() or read_json(current/'run_state.json').get('cutscene_mode','auto')
+    return _launch_preparation(anchor, current, operation)
+
+
+def _launch_preparation(anchor, current, operation):
     release_chat(current)
     try:
-        host, _ = launch(['--engine',engine,'--provider',cfg.provider,'--agent', agent, '--knowledge', 'explore', '--model', model, '--effort', effort,
-                          '--output', str(directory), '--hud-managed', '--fast', 'on' if fast else 'off'], service='prepare')
+        host, _ = launch(['--engine',operation['engine'],'--provider',operation['provider'],'--agent',operation['agent'],
+                          '--knowledge','explore','--model',operation['model'],'--effort',operation['effort'],
+                          '--output',operation['directory'],'--hud-managed','--fast','on' if operation['fast'] else 'off'],
+                         service='prepare')
     except Exception:
         if can_wake(current):
             start_chat(current)

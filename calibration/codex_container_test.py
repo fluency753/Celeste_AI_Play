@@ -130,8 +130,8 @@ class ContainerCodexTests(unittest.TestCase):
     def test_runtime_missing_login_has_actionable_message(self):
         outputs = [subprocess.CompletedProcess([],0,f'codex-cli {codex.CODEX_VERSION}\n',''),
                    subprocess.CompletedProcess([],1,'','Not logged in')]
-        with patch.object(codex, '_run', side_effect=outputs), patch.object(codex, '_copy_account_auth', return_value=False):
-            with self.assertRaisesRegex(RuntimeError, 'login.*import-auth'):
+        with patch.object(codex, '_run', side_effect=outputs):
+            with self.assertRaisesRegex(codex.CodexLoginRequired, '--container fixture login'):
                 codex.ensure_runtime('fixture')
         with patch.object(codex, '_run', return_value=subprocess.CompletedProcess([],0,'codex-cli wrong','')):
             with self.assertRaisesRegex(RuntimeError, '重新构建'):
@@ -206,7 +206,7 @@ class ContainerCodexTests(unittest.TestCase):
             self.assertEqual(codex.read_metadata('fixture', str(path)), payload)
         self.assertFalse(marker.exists())
 
-    def test_explicit_account_initializes_only_missing_workspace_auth(self):
+    def test_workspace_login_never_seeds_from_the_catalog_account(self):
         account = self.root/'account'
         workspace = self.root/'workspace'
         account.mkdir()
@@ -228,14 +228,11 @@ class ContainerCodexTests(unittest.TestCase):
                                   text=True, encoding='utf-8', env={**os.environ,'CODEX_HOME':str(home)}, timeout=timeout)
 
         with patch.object(codex, '_run', side_effect=external_cli), \
-             patch.object(container, 'docker', return_value=subprocess.CompletedProcess([],0,'image-fixture\n','')), \
-             patch.object(container, 'ensure_container', return_value='account-fixture') as factory:
-            codex.ensure_runtime('workspace-fixture')
-            config = factory.call_args.args[0]
-            self.assertEqual(config.engine, 'codex')
-            self.assertEqual(config.image, 'image-fixture')
-            self.assertIn('chatgpt.com', config.provider_domains)
-            self.assertEqual(json.loads((workspace/'auth.json').read_text(encoding='utf-8')), original)
+             patch.object(codex, 'ensure_account_container') as factory:
+            with self.assertRaisesRegex(codex.CodexLoginRequired, '--container workspace-fixture login'):
+                codex.ensure_runtime('workspace-fixture')
+            self.assertFalse((workspace/'auth.json').exists())
+            factory.assert_not_called()
             self.assertEqual(json.loads((account/'auth.json').read_text(encoding='utf-8')), original)
             (workspace/'auth.json').write_text(json.dumps({'tokens': {'access_token':'workspace-refreshed'}}),encoding='utf-8')
             calls.clear()

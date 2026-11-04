@@ -38,6 +38,15 @@ class CountingBridge(FakeBridge):
 
 
 class ModelAvailabilityClassificationTests(unittest.TestCase):
+    def test_auth_refusal_requires_explicit_credentials_evidence(self):
+        from orchestrator.codex_recovery import requires_login
+        for error in ({'status': 401}, {'statusCode': 401}, {'httpStatusCode': 401},
+                      'workspace routing discovery unauthorized (401)', 'token_expired'):
+            self.assertTrue(requires_login(error), error)
+        for error in ({'code': -32602, 'message': 'HTTP 401 is not a valid model name'},
+                      'HTTP 403 permission denied', 'responseStreamDisconnected'):
+            self.assertFalse(requires_login(error), error)
+
     def test_explicit_service_failures_and_structured_status_are_recoverable(self):
         from orchestrator.codex_recovery import is_model_unavailable
         for error in (CAPACITY, RuntimeError(CAPACITY), {'message': CAPACITY},
@@ -52,6 +61,7 @@ class ModelAvailabilityClassificationTests(unittest.TestCase):
     def test_authentication_quota_and_tool_policy_are_not_capacity_retries(self):
         from orchestrator.codex_recovery import is_model_unavailable
         for error in ('HTTP 401 authentication failed', 'HTTP 403 permission denied',
+                      {'message': 'token_expired', 'codexErrorInfo': 'responseStreamDisconnected'},
                       'usage limit reached', 'quota exceeded', 'Invalid params: model not found',
                       'tool permission denied', 'HTTP 400 invalid argument',
                       {'codexErrorInfo': {'httpConnectionFailed': {'httpStatusCode': 429}}},
@@ -119,9 +129,13 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                         'callId': 'action-before-capacity', 'tool': 'celeste_act',
                         'arguments': {'inputs': ['1,R'], 'thought': '核验容量失败前的动作'}})
                     actions.append(response)
+                terminal_errors = {
+                    'auth_after_action': {'message': 'workspace routing discovery unauthorized (401)'},
+                    'parameter_after_turn': {'code': -32602, 'message': 'HTTP 401 is not a valid model name'},
+                }
                 runner._event('turn/completed', {'turn': {
                     'id': f'turn-{number}', 'status': 'failed' if failed else 'completed',
-                    **({'error': {'message': CAPACITY}} if failed else {})}})
+                    **({'error': terminal_errors.get(failure, {'message': CAPACITY})} if failed else {})}})
                 if not failed and not report_goal:
                     if naming:
                         runner.naming_reply = 'Fixture'
@@ -176,6 +190,8 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                 from orchestrator.run import _shutdown_mode
                 state.update(runner=runner, session=session, metrics=metrics, sent=sent, actions=actions,
                              steps=deepcopy(bridge.steps),
+                             public=(root/'public_events.jsonl').read_text(encoding='utf-8')
+                             if (root/'public_events.jsonl').exists() else '',
                              study_shift=study.started-study_started if study else None,
                              shutdown=_shutdown_mode(cfg, SimpleNamespace(no_agent=False), session,
                                                      interrupted=runner.interrupted_for_resume,
@@ -241,12 +257,25 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['metrics'].state.net_waits, 0)
 
     async def test_non_transient_errors_do_not_enter_capacity_wait(self):
-        for failure in ('auth', 'parameter'):
+        for failure in ('parameter', 'parameter_after_turn'):
             with self.subTest(failure=failure):
                 result = await self.run_case(failure=failure)
                 self.assertIsNotNone(result['error'])
                 self.assertEqual(len(result['sent']), 1)
                 self.assertEqual(result['metrics'].state.net_waits, 0)
+                self.assertEqual(result['shutdown'], 'release')
+
+    async def test_final_auth_refusal_preserves_game_and_recording_without_replaying_action(self):
+        for failure, action in [('auth', False), ('auth_after_action', True)]:
+            with self.subTest(failure=failure):
+                result = await self.run_case(failure=failure, action=action)
+                self.assertIsNone(result['error'])
+                self.assertIn('--container unused login', result['reason'])
+                self.assertIn('原运行目录续跑', result['public'])
+                self.assertEqual(result['shutdown'], 'retain')
+                self.assertEqual(result['metrics'].state.net_waits, 0)
+                self.assertEqual(len(result['sent']), 1)
+                self.assertEqual(result['steps'], [['1,R']] if action else [])
 
     async def test_unknown_start_ack_does_not_replay_and_retains_control(self):
         for failure in ('timeout', 'connection'):
@@ -352,6 +381,12 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
 
 class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_capacity_error_retains_real_recorder_in_connected_session_finally(self):
+        await self.exercise(CAPACITY)
+
+    async def test_auth_error_retains_real_recorder_and_writes_resume_reason(self):
+        await self.exercise('workspace routing discovery unauthorized (401)', auth=True)
+
+    async def exercise(self, failure, *, auth=False):
         from calibration.recording_session_test import RecordingSessionTests
         from orchestrator.recording import Recorder
         from orchestrator.run import _run_connected_session
@@ -373,6 +408,8 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
             session.connect = Mock(return_value={'scene': 'Level'})
             args = SimpleNamespace(prepared=None, fresh_session=False, no_agent=False, record=True,
                                    start_paused=False)
+            if auth:
+                args.codex_preflight = ('unused-container', cfg.mcp_port)
             web = SimpleNamespace(started=True, should_exit=False)
             async def serve():
                 while not web.should_exit:
@@ -386,7 +423,7 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                         return {'thread': {'id': 'retained-thread'}, 'model': 'test',
                                 'activePermissionProfile': {'id': params['permissions']}}
                     if method == 'turn/start':
-                        raise RuntimeError(CAPACITY)
+                        raise RuntimeError(failure)
                     return {}
                 return SimpleNamespace(start=AsyncMock(), close=AsyncMock(),
                                        request=AsyncMock(side_effect=request),
@@ -395,14 +432,18 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 with patch('orchestrator.config.REPO_ROOT', fixture.root), \
                         patch('orchestrator.personal_prompts.STORE', fixture.root/'personal.json'), \
                         patch('orchestrator.prompting.OVERRIDES', fixture.root/'prompts'), \
-                        patch('orchestrator.run.ensure_container', return_value='unused-container'), \
+                        patch('orchestrator.run.ensure_container', return_value='unused-container') as ensure, \
                         patch('orchestrator.http_service.uvicorn.Server', return_value=bound_server(web, cfg.mcp_port)), \
                         patch('orchestrator.run.Playback', return_value=SimpleNamespace(collect=False, close=Mock())), \
                         patch('orchestrator.model_catalog.load_models', return_value={'models': []}), \
                         patch('orchestrator.codex_agent.CodexRPC', side_effect=create_rpc):
-                    with self.assertRaisesRegex(RuntimeError, '自动等待已关闭'):
+                    if auth:
                         await _run_connected_session(cfg, args, root, None, None, None,
                                                      metrics, recorder, None, session)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, '自动等待已关闭'):
+                            await _run_connected_session(cfg, args, root, None, None, None,
+                                                         metrics, recorder, None, session)
                 self.assertTrue(cfg._keep_frozen)
                 self.assertTrue(cfg._recording_retained)
                 self.assertTrue(runners[0].retain_on_model_failure)
@@ -416,6 +457,10 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn('deactivate', [c for c, _ in fixture.commands])
                 summary = json.loads((root/'summary.json').read_text(encoding='utf-8'))
                 self.assertEqual(summary['recording']['state'], 'retained')
+                if auth:
+                    ensure.assert_not_called()
+                    self.assertIn('--container unused-container login', summary['stop_reason'])
+                    self.assertEqual(summary['session_id'], 'retained-thread')
             finally:
                 session.close(False)
         finally:

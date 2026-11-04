@@ -110,7 +110,7 @@ class ContainerContractTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('/usr/local/lib/celeste/codex-app-server.py', argv)
                 self.assertIn('codex', argv)
                 self.assertIn('MCP_PORT=12345', argv)
-                ready.assert_called_once_with('test-container')
+                ready.assert_called_once_with('test-container', require_login=True)
                 await rpc.close()
                 stop.assert_called_with('test-container', rpc.owner)
 

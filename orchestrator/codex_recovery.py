@@ -7,8 +7,26 @@ import re
 import time
 
 
+def requires_login(error) -> bool:
+    """Identify a final credential refusal without treating policy errors as login failures."""
+    from .codex_container import CodexLoginRequired
+    if isinstance(error, CodexLoginRequired):
+        return True
+    value = getattr(error, 'error', error)
+    if isinstance(value, dict) and value.get('code') in {-32600, -32601, -32602}:
+        return False
+    text = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+    return bool(re.search(
+        r'token_expired|refresh[_ ]token[_ ](?:reused|expired|revoked)|refresh token.{0,80}already used|'
+        r'unauthori[sz]ed\s*\(401\)|\b401\s+unauthori[sz]ed|'
+        r'\b(?:HTTP(?:\s+status)?|httpStatusCode|status(?:_?code)?)["\x27\s:=]+401\b',
+        text, re.I))
+
+
 def is_model_unavailable(error) -> bool:
     """Only model availability failures, never authentication or tool-policy errors."""
+    if requires_login(error):
+        return False
     value = getattr(error, 'error', error)
     if isinstance(value, dict) and value.get('code') in {-32600, -32601, -32602}:
         return False
