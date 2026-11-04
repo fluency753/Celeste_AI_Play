@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <style>
   /* 控制台：与 HUD 同一套颜色（夜晚的山、Madeline 的发色）。
      红 = 能冲刺 / 运行中，蓝 = 冲刺用完 / 暂停与冻结，金 = 规划回放与录制、改过的参数，绿 = 正在推进游戏。 */
@@ -602,7 +602,7 @@
         <span class="where" id="runWhere"></span>
       </div>
       <div class="clock" id="runClock">0:00:00<small>.000</small></div>
-      <div class="modeline" id="runMode"></div>
+      <div class="modeline" id="runModeSummary"></div>
       <div class="metrics">
         <div class="metric"><span>死亡</span><b id="mDeaths">0</b></div>
         <div class="metric"><span>决策</span><b id="mDecisions">0</b></div>
@@ -980,7 +980,8 @@ const EXPLORE_KEYS = ["explore_program_s", "explore_program_runs"];   // 时长�
 const ui = { options: null, segOff: {}, status: null, control: null, controlRun: null, hud: null, runs: [], models: [],
              chapters: [0], sides: [], mode: "explore", map: "celeste", hudTouched: false, previewTimer: 0, previewOk: false, lastFeed: "",
              tune: {}, kb: {}, kbFile: null, kbView: "edit", page: "run", aboutLoaded: false,
-             profiles: null, profileBaseline: null, profileDirty: false, leaving: false };
+             profiles: null, profileBaseline: null, profileDirty: false, settingsLoading: true, settingsError: null,
+             modelsLoading: false, leaving: false };
 
 async function getJSON(path) {
   const res = await fetch(path, { cache: "no-store" });
@@ -1021,8 +1022,11 @@ function showPage(page) {
   store("page", page);
   if (location.hash !== "#" + page) history.replaceState(null, "", "#" + page);
   if (page === "saves") buildRoute();
-  if (page === "kb") loadKb(ui.mode);
-  if (page === "prompts") { loadPromptPreview(); loadPersonalPrompt(); }
+  if (page === "kb" && !ui.settingsLoading) loadKb(ui.mode);
+  if (page === "prompts") {
+    loadPromptPreview();
+    if (ui.options) loadPersonalPrompt();
+  }
   if (page === "about" && !ui.aboutLoaded) loadAbout();
 }
 
@@ -1108,7 +1112,11 @@ function markdown(src, base = "") {
 
 async function loadOptions() {
   const o = ui.options = await getJSON("/api/console/options");
-  fillRuntimes(o.runtimes, "claude:anthropic");
+  ui.profiles = o.profiles || null;
+  const form = ui.profiles?.current?.form;
+  const preferredRuntime = form?.engine === "codex" ? "codex:codex"
+    : form?.engine === "claude" ? `claude:${form.provider || "anthropic"}` : "claude:anthropic";
+  fillRuntimes(o.runtimes, preferredRuntime);
   ui.prov.lastRuntime = $("runtime").value;
   const d = o.defaults;
   $("maxMinutes").value = d.max_minutes;
@@ -1126,18 +1134,30 @@ async function loadOptions() {
   $("simAssistNote").textContent = o.sim_available ? "按体力额度预测短路线" : "没有安装预置模拟器（sim/dist）";
   $("simAssist").disabled = !o.sim_available; $("simAssist").checked = !!d.sim_assist && o.sim_available;
   $("playback").checked = !!d.playback;
-  buildTunables();
-  await Promise.all(["speedrun", "explore"].map(m => loadKbList(m).catch(() => null)));
-  updateSummary();
-  await loadModels();
-  ui.profiles = o.profiles || null;
   // 第一次打开（还没选过配置）：把按情况挑出的那份记下来，免得之后本机原有设置清空时自动换成默认
   if (ui.profiles && !ui.profiles.stored) postJSON("/api/console/profiles/select", { id: ui.profiles.selected }).catch(() => null);
-  if (ui.profiles && ui.profiles.current.form) {
-    try { await applyProfileForm(ui.profiles.current.form); }
+  if (form) {
+    try { applyProfileForm(form); }
     catch (e) { toast("这份配置的表单设置有一部分用不了：" + e.message, true); }
   }
+  setMode(ui.mode);
+  const initial = profileForm();
+  ui.profileBaseline = JSON.stringify(initial);
   renderProfiles();
+  if (ui.page === "prompts") loadPersonalPrompt();
+
+  loadModels(form).then(selection => {
+    if (!selection) return;
+    initial.model = selection.model;
+    initial.effort = selection.effort;
+    initial.agent ||= selection.suggestedAgent;
+    ui.profileBaseline = JSON.stringify(initial);
+    updateProfileDirty();
+  });
+  await Promise.all(["speedrun", "explore"].map(m => loadKbList(m).catch(() => null)));
+  ui.settingsLoading = false;
+  if (ui.page === "kb") renderKb();
+  updateSummary();
   schedulePreview();
 }
 
@@ -1195,30 +1215,42 @@ async function saveGameDir() {
   } catch (e) { toast(e.message, true); }
 }
 
-async function loadModels() {
+let modelRequest = 0;
+async function loadModels(preferred) {
+  const request = ++modelRequest;
   const [engine, provider] = ($("runtime").value || "claude:anthropic").split(":");
   const sel = $("model");
+  ui.modelsLoading = true;
   sel.disabled = true; sel.replaceChildren(new Option("读取中…", ""));
+  $("effort").disabled = true;
+  schedulePreview();
   try {
     const data = await getJSON(`/api/models?engine=${encodeURIComponent(engine)}&provider=${encodeURIComponent(provider)}`);
+    if (request !== modelRequest) return null;
     ui.models = data.models || [];
     sel.replaceChildren(...ui.models.map(m => new Option(m.label || m.id, m.id)));
     sel.value = data.default_model || (ui.models[0] || {}).id || "";
     if (engine === "claude" && provider === "anthropic" && ui.models.some(m => m.id === "opus")) sel.value = "opus";
+    if (ui.models.some(m => m.id === preferred?.model)) sel.value = preferred.model;
     sel.disabled = !ui.models.length;
   } catch (e) {
+    if (request !== modelRequest) return null;
     ui.models = [];
     sel.replaceChildren(new Option("读不到模型列表", ""));
     toast(e.message, true);
   }
-  fillEfforts();
-  if (!$("agent").value) $("agent").value = suggestAgent();
+  fillEfforts(preferred?.effort);
+  const suggestedAgent = preferred?.agent === undefined ? suggestAgent() : "";
+  if (!$("agent").value) $("agent").value = suggestedAgent;
+  ui.modelsLoading = false;
+  schedulePreview();
+  return {model: sel.value, effort: $("effort").value, suggestedAgent};
 }
 
-function fillEfforts() {
+function fillEfforts(preferred) {
   const model = ui.models.find(m => m.id === $("model").value);
   const efforts = (model && model.efforts) || [];
-  const sel = $("effort"), previous = sel.value;
+  const sel = $("effort"), previous = preferred || sel.value;
   sel.replaceChildren(...efforts.map(e => new Option(e, e)));
   sel.value = efforts.includes(previous) ? previous : (model && model.default_effort) || efforts[0] || "";
   sel.disabled = !efforts.length;
@@ -1244,7 +1276,7 @@ function setMode(mode) {
   if (mode === "explore" && !$("study").dataset.touched) $("study").checked = true;
   buildTunables();
   updateSummary();
-  if (ui.page === "kb") loadKb(mode);
+  if (ui.page === "kb" && !ui.settingsLoading) loadKb(mode);
   schedulePreview();
 }
 
@@ -1524,18 +1556,26 @@ function formOptions() {
   return options;
 }
 
+let commandPreviewRequest = 0;
 function schedulePreview() {
+  const request = ++commandPreviewRequest;
+  ++promptPreviewRequest;
   updateProfileDirty();
   clearTimeout(ui.previewTimer);
-  ui.previewTimer = setTimeout(() => { preview(); if (ui.page === "prompts") loadPromptPreview(); }, 200);
+  ui.previewOk = false;
+  updateStartButton();
+  if (ui.settingsLoading || ui.settingsError || ui.modelsLoading) return;
+  ui.previewTimer = setTimeout(() => { preview(request); if (ui.page === "prompts") loadPromptPreview(); }, 200);
 }
-async function preview() {
+async function preview(request) {
   if (!ui.options) return;
   const el = $("command");
   try {
     const result = await postJSON("/api/console/preview", { options: formOptions() });
+    if (request !== commandPreviewRequest) return;
     el.textContent = result.command; el.classList.remove("invalid"); ui.previewOk = true;
   } catch (e) {
+    if (request !== commandPreviewRequest) return;
     el.textContent = e.message; el.classList.add("invalid"); ui.previewOk = false;
   }
   updateStartButton();
@@ -1552,6 +1592,7 @@ function updateStartButton() {
 
 async function startRun(event) {
   event.preventDefault();
+  if (!ui.previewOk || running()) return;
   $("start").disabled = true;
   try {
     await postJSON("/api/console/start", { options: formOptions() });
@@ -1577,8 +1618,6 @@ function profileForm() {
   return o;
 }
 function profileSnapshot() { try { return JSON.stringify(profileForm()); } catch (e) { return null; } }
-function profileBaseline() { ui.profileBaseline = profileSnapshot(); updateProfileDirty(); }
-
 function updateProfileDirty() {
   if (!ui.profiles || ui.profileBaseline == null || !ui.options) return;
   const now = profileSnapshot();
@@ -1588,7 +1627,8 @@ function updateProfileDirty() {
   st.classList.toggle("dirty", ui.profileDirty);
   st.textContent = !ui.profileDirty ? (locked || !ui.profiles.current.saved_form ? "" : "表单设置已保存")
     : locked ? "运行页有改动：默认配置不能保存，要留下就新建一份" : "运行页有未保存的改动";
-  $("profileSave").disabled = locked || !ui.profileDirty;
+  $("profileSave").disabled = locked || ui.settingsLoading || ui.modelsLoading || !ui.profileDirty;
+  $("profileNew").disabled = ui.settingsLoading || ui.modelsLoading;
 }
 
 function renderProfiles() {
@@ -1620,17 +1660,11 @@ function renderProfiles() {
 }
 
 // 把配置里存的表单设置填回运行页（缺的项保持默认；存档、模型等不存在了就跳过）
-async function applyProfileForm(form) {
+function applyProfileForm(form) {
   if (!form || typeof form !== "object") return;
   const d = ui.options.defaults, has = (k) => Object.prototype.hasOwnProperty.call(form, k);
   const pick = (id, value) => { if ([...$(id).options].some(o => o.value === value)) { $(id).value = value; return true; } return false; };
   const check = (id, value) => { if (typeof value === "boolean" && !$(id).disabled) $(id).checked = value; };
-  if (has("engine")) {
-    const runtime = `${form.engine}:${form.engine === "codex" ? "codex" : (form.provider || "anthropic")}`;
-    if (runtime !== $("runtime").value && pick("runtime", runtime)) { ui.prov.lastRuntime = runtime; updateRuntimeNote(); await loadModels(); }
-  }
-  if (has("model") && pick("model", form.model)) fillEfforts();
-  if (has("effort")) pick("effort", form.effort);
   if (has("agent")) $("agent").value = form.agent || "";
   if (form.mode === "speedrun" || form.mode === "explore") ui.mode = form.mode;    // boot 里按 ui.mode 切换显示
   for (const [key, id] of [["live", "live"], ["sim", "sim"], ["sim_assist", "simAssist"], ["stiffness", "stiffness"],
@@ -1910,7 +1944,7 @@ function renderRun(m) {
     : m.chapter_base ? (m.chapter_time_ticks || 0) : (m.completed_ticks || 0) + (done ? 0 : (m.chapter_time_ticks || 0));
   const t = ticksText(ticks);
   $("runClock").replaceChildren(document.createTextNode(t.slice(0, -4)), Object.assign(document.createElement("small"), { textContent: t.slice(-4) }));
-  $("runMode").textContent = [m.play_mode, m.hud_mod ? "游戏内 HUD" : "网页 HUD"].filter(Boolean).join(" · ");
+  $("runModeSummary").textContent = [m.play_mode, m.hud_mod ? "游戏内 HUD" : "网页 HUD"].filter(Boolean).join(" · ");
   renderRunTimers(m);
   $("mDeaths").textContent = since("deaths");
   $("mDecisions").textContent = since("decisions");
@@ -2358,6 +2392,11 @@ function promptOptions() { return formOptions(); }
 let promptPreviewRequest = 0;
 async function loadPromptPreview() {
   const request = ++promptPreviewRequest;
+  if (ui.settingsLoading || ui.settingsError || ui.modelsLoading) {
+    $("promptWhat").textContent = ui.settingsError || "正在读取运行设置…";
+    $("promptWhat").classList.toggle("warn", !!ui.settingsError);
+    return;
+  }
   let data;
   try { data = await postJSON("/api/console/prompt/preview", { options: promptOptions() }); }
   catch (e) {
@@ -3004,7 +3043,7 @@ document.querySelectorAll("[data-pmode]").forEach(b => b.addEventListener("click
   setMode(b.dataset.pmode);
 }));
 document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => setKbView(b.dataset.view)));
-$("runtime").addEventListener("change", async () => { $("agent").value = ""; ui.prov.lastRuntime = $("runtime").value; updateRuntimeNote(); await loadModels(); schedulePreview(); });
+$("runtime").addEventListener("change", () => { $("agent").value = ""; ui.prov.lastRuntime = $("runtime").value; updateRuntimeNote(); loadModels(); });
 $("manageProviders").addEventListener("click", openProviders);
 $("providerClose").addEventListener("click", closeProviders);
 $("providerDialog").addEventListener("cancel", (e) => { e.preventDefault(); closeProviders(); });   // Esc 也先问有没有没保存的修改
@@ -3152,17 +3191,26 @@ function confirmTwice(id, text) {
   return false;
 }
 
-(async function boot() {
-  try { await loadOptions(); } catch (e) { toast("读取设置失败：" + e.message, true); }
-  try { setMode(ui.mode); } catch (e) { /* 设置没读到时保持页面原样 */ }     // 默认探索：按默认模式显示/隐藏模式相关的选项
-  profileBaseline();
+function poll(task, interval) {
+  async function tick() {
+    try { await task(); }
+    finally { setTimeout(tick, interval); }
+  }
+  tick();
+}
+
+(function boot() {
   showPage((location.hash || "").slice(1) || recall("page") || "run");
-  await refreshRuns(); await refreshStatus(); await refreshRun(); await refreshFeed();
-  setInterval(refreshStatus, 1500);
-  setInterval(refreshRun, 700);
+  loadOptions().catch(e => {
+    ui.settingsError = "读取设置失败：" + e.message;
+    toast(ui.settingsError, true);
+    if (ui.page === "prompts") loadPromptPreview();
+  });
+  poll(refreshStatus, 1500);
+  poll(refreshRun, 700);
   setInterval(() => { const m = ui.hud && ui.hud.metrics; if (running() && m) renderRunTimers(m); }, 100);
-  setInterval(refreshFeed, 1200);
-  setInterval(refreshRuns, 8000);
+  poll(refreshFeed, 1200);
+  poll(refreshRuns, 8000);
   window.addEventListener("resize", () => { if (ui.page === "saves") buildRoute(); });
 })();
 </script>
