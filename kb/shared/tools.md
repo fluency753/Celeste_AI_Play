@@ -9,6 +9,6 @@
 - thought 写本次判断。{tool:narrate} 更新公开反馈；笔记和解说规则见本次操作指南。
 - 计时用 {tool:observe}(detail="time") 查询任务及章节时间，桥接累计时钟不是本轮任务时长。{tool:set_effort} 申请调整推理强度后结束本轮生效。
 - 剧情先读 story 的对白、教学和选项。choose 明确选分支，advance 不代选；教学用 {tool:act}。agent 模式的菜单、结算与换章须显式操作，complete 只表示登记成绩，以主控报告任务完成为准。
-- 用户交代的整次任务已达成且没有自动停止条件时，可用已登记的 {tool:finish_goal} 提交依据并正常结束。工具故障或缺少能力导致无法继续时，用 {tool:stop_run} 报告原因并等用户处理。返回地图遵循用户要求和当前权限。
+- 用户交代的整次任务已达成且没有自动停止条件时，可用已登记的 {tool:finish_goal} 提交依据并正常结束。必需步骤仍无法执行、适用的获准恢复方式已尝试或确知不可用且需要用户介入时，用 {tool:stop_run} 报告状态、尝试、结果和所需协助。返回地图遵循用户要求和当前权限。
 
 复杂情况再查 /kb/shared/tools/act.md、/kb/shared/tools/cutscene.md；程序与数据位置查 /kb/shared/tools/files.md。必读资料须用专用文件读取工具读完，不能用搜索或程序读取代替准备进度。

@@ -212,7 +212,141 @@ class StoryWaitTests(unittest.TestCase):
         client = self.bridge(observation())
         result = asyncio.run(build_server(self.session).call_tool('cutscene', {'action': 'watch'}))
         self.assertFalse(result.is_error)
-        self.assertIn('未知界面', '\n'.join(item.text for item in result.content if item.type == 'text'))
+        text = '\n'.join(item.text for item in result.content if item.type == 'text')
+        self.assertIn('未知界面', text)
+        self.assertNotIn('显式推进一小段空输入', text)
+        self.assertEqual(client.steps, [])
+
+    def test_entry_handover_guides_explicit_steps_and_recognized_postcard(self):
+        start = observation()
+        start.update(scene='LevelEnter', storyPlaybackState={'state': 'unknown', 'source': 'unrecognized_story_scene'})
+
+        def after(client, inputs):
+            client.obs.update(storyInput='postcard', storyDecision='postcard')
+
+        client = self.bridge(start, after)
+        server = build_server(self.session)
+        result = asyncio.run(server.call_tool('cutscene', {'action': 'watch'}))
+        self.assertFalse(result.is_error)
+        text = '\n'.join(item.text for item in result.content if item.type == 'text')
+        self.assertIn('刚进入获准章节', text)
+        self.assertIn('显式推进一小段空输入', text)
+        self.assertEqual(client.steps, [])
+        result = asyncio.run(server.call_tool('act', {'inputs': ['30'], 'thought': '推进已知入场过程',
+            'stop_on': ['controllable', 'story_input', 'room']}))
+        self.assertFalse(result.is_error)
+        self.assertIn('明信片已显示完毕', '\n'.join(item.text for item in result.content if item.type == 'text'))
+        self.assertEqual(client.steps, [['30']])
+
+    def test_death_wipe_handover_exposes_next_explicit_step_without_auto_input(self):
+        start = observation(cutscene=False, screenWipe=True)
+        start['player'] = None
+        client = self.bridge(start)
+        result = asyncio.run(build_server(self.session).call_tool('act', {
+            'inputs': ['60'], 'thought': '等待重生', 'stop_on': ['controllable', 'story_input', 'room']}))
+        self.assertFalse(result.is_error)
+        text = '\n'.join(item.text for item in result.content if item.type == 'text')
+        self.assertIn('刚死亡、换房且仍处于过渡', text)
+        self.assertIn('核对新帧与状态', text)
+        self.assertEqual(client.steps, [['60']])
+        obs, _ = self.session.observe()
+        self.assertEqual(obs['frame'], 160)
+        self.assertIn('显式推进一小段空输入', '\n'.join(self.session.observe_notes))
+        self.assertEqual(client.steps, [['60']])
+
+    def test_final_chapter_recording_boundary_settles_at_verified_panel_without_extra_step(self):
+        self.session.cfg.save_slot = 15
+        sid = 'Celeste/3-CelestialResort'
+        start = observation(controllable=True, cutscene=False)
+        start['save'] = {'slot': 15}
+        panel = {'scene': 'Overworld', 'frame': 134, 'saving': False, 'save': {'slot': 15},
+                 'menu': {'current': 'OuiChapterPanel', 'next': None, 'panelSelectingMode': True,
+                          'panelArea': 3, 'panelSide': 'Normal'}}
+
+        class EndingBridge(StoryBridge):
+            def call(bridge, command, **args):
+                if command != 'step':
+                    return super().call(command, **args)
+                bridge.steps.append(args['inputs'])
+                if len(bridge.steps) == 1:
+                    bridge.obs = {'scene': 'AreaComplete', 'frame': 101, 'save': {'slot': 15},
+                                  'completion': {'sid': sid, 'side': 'A'}}
+                    used, reason, event = 1, 'complete', 'complete'
+                else:
+                    if len(bridge.steps) != 2:
+                        raise AssertionError('Unexpected input after recording boundary')
+                    bridge.obs = panel
+                    used, reason, event = 33, 'recording_boundary', 'recording_boundary'
+                planned = sum(int(part.split(',')[0]) for part in args['inputs'])
+                return {'obs': copy.deepcopy(bridge.obs), 'result': {'consumed': used, 'planned': planned, 'stop': reason,
+                    'trajectory': [], 'events': [{'frame': bridge.obs['frame'], 'type': event}]}}
+
+        client = self.session.client = EndingBridge(start)
+        self.session.last_obs = start
+        server = build_server(self.session)
+        self.session.observe()
+        result = asyncio.run(server.call_tool('act', {'inputs': ['1,R'], 'thought': '走到章末'}))
+        self.assertFalse(result.is_error)
+        self.assertTrue(self.session._pending_complete)
+        self.assertFalse(self.session.done)
+        result = asyncio.run(server.call_tool('act', {'inputs': ['1,C', '180'], 'thought': '确认结算'}))
+        self.assertFalse(result.is_error)
+        text = '\n'.join(item.text for item in result.content if item.type == 'text')
+        self.assertIn('执行了 33/181 帧', text)
+        self.assertIn('本次试玩已结束', text)
+        self.assertEqual(client.steps, [['1,R'], ['1,C', '180']])
+        self.assertFalse(self.session._pending_complete)
+        self.assertEqual(self.session.done_reason, '章节完成')
+        self.assertEqual([split['chapter'] for split in self.session.metrics.state.splits], [sid])
+        self.session.finish_at_results()
+        self.assertEqual(len(client.steps), 2)
+
+    def test_pending_panel_preserves_navigation_when_identity_or_finality_is_unconfirmed(self):
+        self.session.cfg.save_slot = 15
+        self.session._handle_events({'events': [{'type': 'complete'}]})
+        panel = {'scene': 'Overworld', 'frame': 134, 'saving': False, 'save': {'slot': 15},
+                 'menu': {'current': 'OuiChapterPanel', 'next': None, 'panelSelectingMode': True,
+                          'panelArea': 3, 'panelSide': 'Normal'}}
+        variants = (
+            ('保存未完成', {'saving': True}, [], '仍在保存'),
+            ('不同存档', {'save': {'slot': 14}}, [], '短按 B'),
+            ('不同面', {'menu': {**panel['menu'], 'panelSide': 'BSide'}}, [], '短按 B'),
+            ('菜单还在切换', {'menu': {**panel['menu'], 'next': 'OuiChapterSelect'}}, [], None),
+            ('后续章节', {}, [Piece(4)], '短按 B'),
+        )
+        for name, change, queue, hint in variants:
+            with self.subTest(name=name):
+                self.session.chapter_queue = queue
+                client = self.bridge({**panel, **change})
+                self.session.observe()
+                self.assertFalse(self.session.done)
+                self.assertTrue(self.session._pending_complete)
+                self.assertFalse(self.session.metrics.state.splits)
+                self.assertEqual(client.steps, [])
+                if hint:
+                    self.assertIn(hint, '\n'.join(self.session.observe_notes))
+
+        self.session.chapter_queue = []
+        client = self.bridge(panel)
+        result = asyncio.run(build_server(self.session).call_tool('observe', {}))
+        self.assertFalse(result.is_error)
+        self.assertIn('本次试玩已结束', '\n'.join(item.text for item in result.content if item.type == 'text'))
+        self.assertEqual(client.steps, [])
+        self.assertEqual(self.session.done_reason, '章节完成')
+
+    def test_goal_stop_can_settle_pending_final_panel_from_latest_observation(self):
+        self.session.cfg.save_slot = 15
+        state_path = self.root/'run_state.json'
+        state_path.write_text('{}', encoding='utf-8')
+        self.session._handle_events({'events': [{'type': 'complete'}]})
+        client = self.bridge({'scene': 'Overworld', 'saving': False, 'save': {'slot': 15},
+            'menu': {'current': 'OuiChapterPanel', 'next': None, 'panelSelectingMode': True,
+                     'panelArea': 3, 'panelSide': 'Normal'}})
+        self.session.finish_user_stop()
+        self.session.finish_at_results()
+        self.assertEqual(self.session.done_reason, '章节完成')
+        self.assertEqual(self.session.end_scene, 'Overworld')
+        self.assertFalse(json.loads(state_path.read_text(encoding='utf-8'))['completion_pending'])
         self.assertEqual(client.steps, [])
 
     def test_advance_unknown_preserves_current_frame_and_reports_no_confirmation(self):

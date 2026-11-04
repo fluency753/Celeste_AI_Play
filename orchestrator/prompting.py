@@ -25,7 +25,7 @@ TOOL_NOTES = {
     "act": "推进若干帧",
     "narrate": "思考期间更新观众看到的思考，不推进游戏",
     "set_effort": "调整你自己的推理强度",
-    "stop_run": "任务阻塞时说明原因报告给用户，主控暂停试玩等用户处理",
+    "stop_run": "任务必需步骤没有获准的恢复路径且需要用户介入时，报告阻塞并暂停试玩",
     "finish_goal": "用户交代的整次任务已达成且无自动停止条件时，提交目标与依据，正常结束试玩",
     "exit_level": "用户要求返回地图时离开当前关卡并继续任务；仅明确结束整次试玩才设finish_run=true",
     "cutscene": "在剧情决策点尝试跳过或继续观看，在真实输入节点推进或选择",
@@ -600,7 +600,7 @@ def prompt_parts(cfg) -> list[PromptPart]:
                                 AssistRules.of(cfg).instructions(
                                     'celeste_simulate' if getattr(cfg, 'engine', None) == 'codex' else 'simulate'
                                 ).lstrip("\n"), None, "\n\n"))
-    parts.append(PromptPart("工具异常与任务阻塞", "首次遇到大量编码串（如Base64）、乱码、无信息重复或关键内容截断时，公开报告工具名、现象及影响；不编造token数，不粘贴大块原文，不把编码当作已看到图像，不反复调用堆积。能从可靠局部查询或原始文件恢复时继续；信息不可靠或缺少必要能力导致任务无法继续时，调用stop_run说明原因，主控冻结暂停，结束本轮等待用户。正常长数据、普通死亡和仍可尝试的难点不算阻塞，也不能把阻塞当作通关。", None, "\n\n"))
+    parts.append(PromptPart("工具输出异常", "首次遇到大量编码串（如Base64）、乱码、无信息重复或关键内容截断时，公开报告工具名、现象及影响；不编造token数，不粘贴大块原文，不把编码当作已看到图像，不反复调用堆积。优先从可靠局部查询或原始文件恢复信息，按最新结果判断下一步。", None, "\n\n"))
     for part in parts:
         part.text = fill(part.text, cfg)
     return parts

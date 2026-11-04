@@ -251,6 +251,11 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             content.append(tagged(collision, 'collision'))
         return content
 
+    def completion_notice():
+        if getattr(session, 'done', False):
+            return f"【{session.done_reason}】本次试玩已结束，请直接结束本轮。"
+        return None
+
     @server.tool(name="observe", description=fill(observation_tool_description(session.cfg, 'observe'), session.cfg), structured_output=False)
     async def observe(detail: str = 'overview', region: list[float] | None = None, offset: int = 0,
                       limit: int = 32, snapshot_id: str | None = None) -> list:
@@ -290,6 +295,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                                + describe_obs(obs, full_room=True, effort=header_line(), explore=explore, compact_context=True, file_context=file_context)
                                + "\n\n" + context
                                + ("\n" + ws_note if session.workspace and not file_context else ""))
+                if notice := completion_notice():
+                    content.append(notice)
                 delivery.commit(candidate)
                 state["described_room"] = room_key(obs)
                 acknowledge = getattr(session, 'acknowledge_reload_observation', None)
@@ -338,8 +345,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     parts.insert(0, describe_attempts(outcome.attempts))
                 if outcome.auto_notes:
                     parts.append("；".join(outcome.auto_notes))
-                if session.done:
-                    parts.append(f"【{session.done_reason}】本次试玩已结束，不需要再调用工具，请直接结束本轮。")
+                if notice := completion_notice():
+                    parts.append(notice)
                 new_room = room_key(outcome.obs) != state["described_room"]
                 # 节省上下文：同一房间里省略每次都一样的样板（进新房间时照常给全）
                 brief = bool(getattr(session.cfg, "save_context", False)) and not new_room
@@ -377,7 +384,11 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         # 不需要的工具不注册：装饰器原样返回函数，不进 MCP 工具列表
         return server.tool(**kw) if enabled else (lambda fn: fn)
 
-    @server.tool(name='stop_run', description='任务被工具故障、缺少能力或其他无法继续的条件阻塞时，用 reason 说明原因（200 字以内）报告给用户：主控暂停试玩，章节内保持冻结，菜单正常运行，由用户决定继续还是停止。不是通关，不退出关卡，不用于普通死亡或仍可尝试的难点。调用后结束本轮，等待用户处理；暂停或知识库未读完也能报告。', structured_output=False)
+    @server.tool(name='stop_run',
+                 description='仅在任务必需步骤仍无法执行、适用的获准恢复方式已尝试或确知不可用、且需要用户介入时调用。'
+                 'reason 用 200 字以内说明状态、尝试与结果，以及需要用户做什么。普通死亡、自动等待交回控制、单次工具拒绝不足以判定阻塞。'
+                 '主控记录原因并暂停试玩，调用后结束本轮等待用户处理。暂停或知识库未读完时仍可报告真实阻塞。',
+                 structured_output=False)
     async def stop_run(reason: str) -> list:
         async with journal.execution(call_lock):
             tool_guard = getattr(session, 'tool_guard', None)
@@ -492,6 +503,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             context, file_context, candidate = observation_context(obs, force=new_room)
             result=images(obs, image, room_view=new_room)
             result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore,compact_context=True,file_context=file_context)+'\n'+context)
+            if notice := completion_notice():
+                result.append(notice)
             delivery.commit(candidate)
             state['described_room'] = room_key(obs)
             return result

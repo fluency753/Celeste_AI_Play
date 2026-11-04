@@ -33,6 +33,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 from bridge_client import BridgeClient  # noqa: E402
 from cutscene import (skip_by_pause_menu, leave_level_by_pause_menu, story_pending, story_input, story_decision,  # noqa: E402
                       cutscene_skippable)
+from tools.enter_save import PANEL_SIDES  # noqa: E402
 
 LETTERS = set("LRUDJXZGTKYVCBPN")    # 桥接认识的全部按键
 PLAY_LETTERS = set("LRUDJXZGTKYV")   # 游玩按键（思考僵直时只保持这些）
@@ -49,6 +50,16 @@ MAP_TRANSITION_WAIT_FRAMES = 1200    # auto 剧情模式：回地图途中（Lev
 
 def _automatic_loader_transition(obs: dict) -> bool:
     return obs.get('scene') == 'OverworldLoader' and (obs.get('reload_boundary') or {}).get('mode') == 'wait'
+
+
+def _manual_transition_note(obs: dict) -> str | None:
+    scene, level = obs.get('scene'), obs.get('level') or {}
+    if (obs.get('controllable') or story_input(obs) or obs.get('pauseMenu') or level.get('paused')
+            or not (scene in {'LevelEnter', 'IntroVignette'} or (scene == 'Level' and level.get('screenWipe')))):
+        return None
+    return ('若刚进入获准章节，或刚死亡、换房且仍处于过渡，试玩运行中且无待处理输入时，'
+            '可用 act 按当前帧数限制显式推进一小段空输入，用 stop_on 包含 controllable、story_input 和 room。'
+            '核对新帧与状态，出现输入节点就按节点操作。只在仍有过渡依据和总推进上限时继续分段。')
 
 
 def map_transition(obs: dict) -> bool:
@@ -879,8 +890,16 @@ class GameSession:
             if not reload_observation and self.chapter_finished and not self.done and not self.goals.stop_motion.is_set():
                 obs, image, more = self._enter_next_chapter(obs)
                 notes = [*notes, *more]
-            self._note_map(obs)
+            if reload_observation:
+                self._note_map(obs)
+            else:
+                self._commit_completion(obs)
             notes = [*notes, *self._take_detour_notes()]
+            if may_advance and not notes and self.cfg.cutscene_mode == 'agent':
+                if note := _manual_transition_note(obs):
+                    notes.append(note)
+            if note := self._completion_panel_note(obs):
+                notes.append(note)
         if self.cfg.play_scope == 'visited':
             from .free_roam import instructions
             notes.append(instructions(self.cfg))
@@ -1352,6 +1371,8 @@ class GameSession:
                     or story_pending(obs)):
                 obs, image, auto_frames, more = self._auto_advance(obs, image)
                 notes.extend(more)        # 接在执行前的说明（续推剧情、思考僵直）后面，不覆盖它们
+                if self.cfg.cutscene_mode == 'agent':
+                    self._commit_completion(obs)
             if self._ending_pending and not self.done and not self.goals.stop_motion.is_set():
                 obs, image, more = self._finish_ending()
                 notes.extend(more)
@@ -1374,6 +1395,8 @@ class GameSession:
             if result.get('block'):
                 from .action_policy import block_note
                 notes.append(block_note(result['block'], detour=detour_enabled(self.cfg)))
+            if note := self._completion_panel_note(obs):
+                notes.append(note)
 
         self.metrics.update(last_stop=result["stop"])
         obs = self._track_motion(obs)
@@ -1538,7 +1561,7 @@ class GameSession:
             self._commit_completion(obs)
             if self.done or (mode != 'agent' and self.chapter_finished):break
             if mode == 'agent' and (self._pending_complete or scene in END_SCENES) and not story_pending(obs) and not automatic_transition:
-                notes.append('结尾或结算由你操作：观察当前界面，用 act 发送确认 C、返回 B 或所需的空帧；回到选章地图才算完成。'
+                notes.append('结尾或结算由你操作：观察当前界面，用 act 发送确认 C、返回 B 或所需的空帧。以主控结算反馈为准。'
                              if self._pending_complete else '当前菜单或转场由你输入操作，按本次目标自行导航；主控不代选。')
                 break
             if scene in END_SCENES and not story_pending(obs) and not automatic_transition:
@@ -1595,9 +1618,10 @@ class GameSession:
                 if playback.get('state') != 'playing' and not known_transition:
                     if idle_uncontrolled(obs):
                         self._idle_handover = True
-                    notes.append('当前不是已确认的剧情播放、死亡或转场阶段，主控停止自动等待；'
-                                 '未知界面可能在等按键，请查看当前观测后明确操作，不能靠空帧猜测。'
+                    notes.append('主控未识别到可自动等待的阶段，已交回当前观测。未知界面请先核对画面、剧情输入和角色状态。'
                                  f'播放识别：{playback.get("state", "missing")} / {playback.get("source", "missing")}。')
+                    if note := _manual_transition_note(obs):
+                        notes.append(note)
                     break
                 if total >= wait_budget:
                     notes.append(f'本次已等待 {total} 帧，达到剧情播放等待预算；主控交回当前观测。'
@@ -1610,7 +1634,7 @@ class GameSession:
                 self._idle_handover = True
                 notes.append(f'角色不可操作（状态 {(obs.get("player") or {}).get("state")}）又不在剧情、对白、暂停或转场里，'
                              f'主控已等约 {round(idle_frames / 60)} 秒仍未恢复，为免空耗章节计时停止自动推进：请 observe 查看；'
-                             '之后的 act 按键照常执行（主控不再先自动推进），解决不了就调用 stop_run 报告。')
+                             '之后的 act 按键照常执行（主控不再先自动推进）。先检查是否存在已知输入节点或其他可操作对象。')
                 break
             pause_wait = False
             if not level.get("inCutscene"):
@@ -1644,7 +1668,7 @@ class GameSession:
             elif frozen_frames >= FROZEN_GIVE_UP_FRAMES:
                 notes.append(f'画面冻结约 {round(frozen_frames / 60)} 秒，主控按了 {confirms} 次确认 C 仍未恢复，'
                              '为免空耗章节计时停止自动推进：请 observe 查看，可以用 act 发送按键（含 C 确认）尝试，'
-                             '解决不了就调用 stop_run 报告。')
+                             '根据新观测判断下一步，确需用户介入时再报告阻塞。')
                 break
             if mode == 'auto' and node in {'postcard', 'confirm'}:
                 inputs = ["1,C", "29"]
@@ -1752,7 +1776,7 @@ class GameSession:
         side = level.get("side", getattr(self.metrics.state, "chapter_side", "A"))
         complete = bool(level.get("completed")) and not story_pending(observation)
         if self.cfg.cutscene_mode == 'agent':
-            complete = self._pending_complete and self._at_chapter_select(observation)
+            complete = self._pending_complete and self._agent_completion_ready(observation)
         # 没有观测（例如续跑刚连上、还没 observe）时帧号未知：给 None，不用 0 冒充真实帧号，
         # 否则游戏时长目标会锚在 0、把新进程启动以来的菜单与加载帧都算进去
         values = {"room": level.get("room", self.metrics.state.room), "map": f"{sid}:{side}", "side": side,
@@ -1803,12 +1827,18 @@ class GameSession:
 
     def finish_user_stop(self):
         self.user_stopped = True
+        obs = self.last_obs or {}
+        agent = self.cfg.cutscene_mode == 'agent'
         # 停在计划外地图（哪怕已通关）不是计划通关：不清后续章节、不记分段成绩
-        if not self.goals.immediate and not self._in_detour() and (self.cfg.cutscene_mode != 'agent' or self._at_chapter_select(self.last_obs or {})) and (self._pending_complete or
-                bool(((self.last_obs or {}).get('level') or {}).get('completed'))):
+        if (not self.goals.immediate and not self._in_detour() and (not agent or self._agent_completion_ready(obs))
+                and (self._pending_complete or (obs.get('level') or {}).get('completed'))):
             self.chapter_queue.clear()
+            if agent:
+                self.end_scene = obs.get('scene')
             self._pending_complete=False
             if not self.done:self._chapter_complete()
+            if agent:
+                self._persist_completion_pending()
         if not self.done and (self._ending_pending or self._ending_agent):
             self._ending_pending = self._ending_agent = False
             self._mark_done("章节完成")         # 已通关、片尾没走完：收尾时照常跳过片尾、确认结算
@@ -1895,7 +1925,10 @@ class GameSession:
             reply=self.client.call('observe',image=True,scope='room',fields=True)
             obs=self._track_motion(enrich_obs(reply['obs']))
             if playback:obs['storyPlayback']=playback
-            self._note_map(obs);auto_notes.extend(self._take_detour_notes())
+            self._commit_completion(obs)
+            auto_notes.extend(self._take_detour_notes())
+            if note := self._completion_panel_note(obs):
+                auto_notes.append(note)
             self._update_metrics_from_obs(obs);self._write_workspace(obs)
             info={'action':action,'frames':used,'auto_frames':auto_frames,'auto_notes':auto_notes,
                   'story_input':story_input(obs),'story_decision':story_decision(obs),
@@ -2173,11 +2206,13 @@ class GameSession:
 
     def _commit_completion(self, obs):
         self._note_map(obs)
+        if self.done:
+            return
         if (self.cfg.cutscene_mode == 'agent' and not self._pending_complete and (obs.get('level') or {}).get('completed')
                 and not self._in_detour()):
             self._pending_complete = True
             self._persist_completion_pending()
-        ready = (self._at_chapter_select(obs) if self.cfg.cutscene_mode == 'agent' else
+        ready = (self._agent_completion_ready(obs) if self.cfg.cutscene_mode == 'agent' else
                  not story_pending(obs) and not _automatic_loader_transition(obs))
         if self._pending_complete and ready:
             self.end_scene = obs.get('scene')
@@ -2207,6 +2242,30 @@ class GameSession:
     def _at_chapter_select(obs):
         menu = obs.get('menu') or {}
         return GameSession._at_chapter_menu(obs) and menu.get('current') == 'OuiChapterSelect'
+
+    def _agent_completion_ready(self, obs):
+        if self._at_chapter_select(obs):
+            return True
+        # A saved, matching panel is sufficient for terminal settlement. A chapter
+        # handoff still uses the existing chapter-select navigation boundary.
+        if not (self._pending_complete and self._at_chapter_menu(obs) and obs.get('saving') is False
+                and self.cfg.play_scope == 'chapter' and self.cfg.completion_policy == 'stop'
+                and self.piece is not None and self.piece.whole() and not self.chapter_queue
+                and not self.chapter_finished and not self._in_detour()):
+            return False
+        menu = obs['menu']
+        return (self.cfg.save_slot is not None and (obs.get('save') or {}).get('slot') == self.cfg.save_slot
+                and menu.get('panelSelectingMode') is True and menu.get('panelArea') == self.piece.chapter
+                and menu.get('panelSide') == PANEL_SIDES[self.piece.side])
+
+    def _completion_panel_note(self, obs):
+        if (self.cfg.cutscene_mode == 'agent' and self._pending_complete and not self.done
+                and self._at_chapter_menu(obs) and not self._at_chapter_select(obs)):
+            if obs.get('saving'):
+                return '章节成绩已登记，当前在章节面板，游戏仍在保存。保存结束后用 observe 核对结算状态。'
+            return ('章节成绩已登记，当前仍在章节面板，主控正在等待结算核验。'
+                    '请用 act 短按 B 返回上一层并核对菜单。回到选章地图后由主控核验，再按本次任务范围收尾或换章。')
+        return None
 
     def _chapter_complete(self) -> None:
         """当前章节通关：记下分段成绩；还有下一章就等进入下一章，否则本次运行完成。
