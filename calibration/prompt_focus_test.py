@@ -59,7 +59,8 @@ class PromptFocusTests(unittest.TestCase):
         labels = [p.label for p in prompt_parts(self.cfg)]
         self.assertNotIn('剧情模式说明（有剧情工具时自动加）', labels)
         self.assertEqual(text.count('当前为 agent 剧情模式'), 1)
-        self.assertIn('返回选章地图，等待主控确认整章完成', text)
+        self.assertIn('按主控反馈核验整章完成', text)
+        self.assertIn('主控提示仍需返回选章地图时，显式操作菜单', text)
         self.assertNotIn('menu.current=OuiChapterSelect', text)
         self.assertNotIn('有额度的预测', text)
         self.assertNotIn('速通仍须先推演整房路线', text)
