@@ -202,10 +202,18 @@ class PromptOverrideTests(unittest.TestCase):
 
 class PromptPreviewTests(unittest.TestCase):
     def test_preview_matches_what_executors_send(self):
+        from orchestrator import personal_prompts, profiles
         from orchestrator.codex_agent import codex_prompt
         from orchestrator.launch_options import config_for
         from overlay import console_api
-        with patch.object(prompting, "OVERRIDES", Path(tempfile.gettempdir()) / "no-such-prompts-dir"):
+        with tempfile.TemporaryDirectory() as folder, patch.object(profiles, "root", return_value=Path(folder)):
+            profile = profiles.create("预览测试")
+            profiles.select(profile)
+            instruction = "先核对房间入口的位置。"
+            with profiles.using(profile):
+                record = personal_prompts.read("codex:explore")
+                personal_prompts.save("codex:explore", instruction, record["version"])
+
             claude = console_api.prompt_preview({"mode": "explore"})       # 名字与存档没填也能预览
             self.assertTrue(claude["executor"].startswith("Claude Code"))
             self.assertEqual(claude["text"], "".join(p["sep"] + p["text"] for p in claude["parts"]))
@@ -218,7 +226,10 @@ class PromptPreviewTests(unittest.TestCase):
             self.assertEqual(codex["parts"][0]["source"], "runtime_zh.md")
             self.assertIn('必读计量只认专用 read', codex['parts'][0]['text'])
             self.assertNotIn('原生 Codex 工具映射', codex['text'])
-            self.assertEqual(codex["text"], codex_prompt(config_for(options)))
+            self.assertEqual(codex["profile"], profile)
+            self.assertIn(instruction, codex["text"])
+            with profiles.using(profile):
+                self.assertEqual(codex["text"], codex_prompt(config_for(options, profile)))
 
             speed = console_api.prompt_preview({"mode": "speedrun", "agent": "a", "save": {"name": "s"}})
             self.assertTrue(any(p["source"] == "hud_zh.md" for p in speed["guide_parts"]))

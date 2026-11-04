@@ -10,12 +10,15 @@ from unittest.mock import patch
 from overlay import console_api
 
 GIT = shutil.which("git")
-ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
-       "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com", "GIT_CONFIG_GLOBAL": os.devnull}
+FIXTURE_GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+    "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+}
 
 
 def git(cwd, *args):
-    subprocess.run(["git", *args], cwd=cwd, env=ENV, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
 
 def write_versions(root: Path, console: str, bridge: str):
@@ -29,6 +32,9 @@ def write_versions(root: Path, console: str, bridge: str):
 @unittest.skipIf(GIT is None, "没有 git")
 class ConsoleUpdateTests(unittest.TestCase):
     def setUp(self):
+        # Fixture setup and the real console subprocesses must use the same
+        # Git configuration when interpreting the checkout's line endings.
+        self.enterContext(patch.dict(os.environ, FIXTURE_GIT_ENV))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         base = Path(self.temp.name)
