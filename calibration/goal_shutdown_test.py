@@ -24,7 +24,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
     async def exercise(self, *, manual=False, failure=False, record=True, cleanup_failure=False,
-                       report=False, goal_args=(), enter_from_menu=False):
+                       report=False, goal_args=(), enter_from_menu=False, park=False):
         fixture = recording_session_test.RecordingSessionTests()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
@@ -87,6 +87,10 @@ class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
         actor_calls = []
         async def actor():
             actor_calls.append(True)
+            if park:
+                runner.parked_frame = 103
+                runner.parked_for_switch = True
+                return '挂起以切换工作区'
             if enter_from_menu:
                 self.assertTrue(session.goals.snapshot()['awaiting_entry'])
                 self.assertFalse(session.goals.check(session.goal_values()))
@@ -133,7 +137,7 @@ class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
                 _, parsed = parse_args()
             args.initial_goal = parsed.initial_goal
         def movie(*args, **kwargs):
-            if not (manual or report):
+            if not (manual or report or park):
                 self.assertTrue(fixture.hello['active'] and fixture.hello['frozen'])
                 self.assertFalse(fixture.hello['record_audio_active'])
             if failure is True:
@@ -184,6 +188,24 @@ class GoalShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(fixture.hello['active'])
         self.assertTrue(summary['game_released'])
         self.assertIn('deactivate',[cmd for cmd,_ in fixture.commands])
+
+    async def test_parked_run_releases_recording_and_game_before_it_is_resumable(self):
+        from orchestrator.parked_run import mark_resumed, parked_summary
+        fixture, _, _, _, summary = await self.exercise(park=True)
+        self.assertTrue(summary['game_released'])
+        self.assertFalse(fixture.hello['active'] or fixture.hello['clock']['lockstep'])
+        self.assertEqual(Recorder.saved_session(fixture.first)['state'], 'finished')
+        self.assertEqual(parked_summary(fixture.first)['parked_slot'], 14)
+        self.assertNotIn('step', [command for command, _ in fixture.commands])
+        mark_resumed(fixture.first, fixture.root / 'successor')
+        self.assertEqual(parked_summary(fixture.first)['resumed_by'], str(fixture.root / 'successor'))
+
+    async def test_parked_run_is_not_resumable_before_capture_stop_is_confirmed(self):
+        from orchestrator.parked_run import parked_summary
+        fixture, _, _, _, summary = await self.exercise(park=True, failure='request')
+        self.assertFalse(parked_summary(fixture.first))
+        self.assertFalse(summary['game_released'])
+        self.assertTrue(fixture.hello['active'])
 
     async def test_reported_oral_goal_stops_capture_and_releases_game_without_inputs(self):
         fixture, _, session, _, summary = await self.exercise(report=True)

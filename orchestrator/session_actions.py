@@ -122,6 +122,7 @@ def _finish(anchor, operation):
         state = {'engine': engine, 'provider': provider, 'agent': operation['agent'], 'save': '',
                  'model': metrics['model'], 'requested_model':prepared.get('requested_model', metrics['model']), 'effort': metrics['effort'], 'session_id': prepared['session_id'],
                  'knowledge_profile': 'explore', 'session_kind': 'ready', 'session_name': operation['name'],
+                 'codex_player_login': prepared.get('codex_player_login') is True,
                  'prepared_dir': str(directory), 'runtime': 'container', 'sim': False, 'sim_assist': False,
                  'max_minutes': 1000}
         write_json(directory / 'run_state.json', state)
@@ -143,7 +144,9 @@ def _finish(anchor, operation):
             path = latest.read_text(encoding='utf-8').strip() if latest.exists() else ''
             if path and path != operation['latest_before'] and read_json(Path(path) / 'run_state.json').get('agent') == operation['agent']:
                 latest.write_text(operation['latest_before'], encoding='utf-8')
-        if read_json(previous/'run_state.json').get('session_id'):
+        previous_state = read_json(previous/'run_state.json')
+        shared_login_needed = isinstance(exc, CodexLoginRequired) and previous_state.get('codex_player_login') is True
+        if previous_state.get('session_id') and not shared_login_needed:
             try:
                 start_chat(previous)
             except Exception as restore:
@@ -203,7 +206,8 @@ def _launch_preparation(anchor, current, operation):
     try:
         host, _ = launch(['--engine',operation['engine'],'--provider',operation['provider'],'--agent',operation['agent'],
                           '--knowledge','explore','--model',operation['model'],'--effort',operation['effort'],
-                          '--output',operation['directory'],'--hud-managed','--fast','on' if operation['fast'] else 'off'],
+                          '--output',operation['directory'],'--hud-managed','--fast','on' if operation['fast'] else 'off']
+                         + (['--codex-player-login'] if operation['engine'] == 'codex' else []),
                          service='prepare')
     except Exception:
         if can_wake(current):

@@ -1773,7 +1773,7 @@ async function refreshStatus() {
   light("lightRun", orch.running ? "active" : "off", "runDetail", orch.running ? `运行中 · ${runName || "启动中"}` : "空闲");
   const frozen = g.running && g.active && !orch.running;
   $("frozenBanner").hidden = !frozen;
-  const resumable = ui.runs.find(r => r.resumable);
+  const resumable = ui.runs.find(r => r.resumable && !r.parked);
   $("resumeLatest").hidden = !resumable;
   if (frozen) $("frozenText").textContent = resumable
     ? `游戏冻结在 ${resumable.agent} 停下的地方（章节计时不走）。可以续跑这次运行，或交还控制让游戏恢复正常。`
@@ -1805,6 +1805,7 @@ async function refreshRuns() {
     const side = document.createElement("span"); side.className = "side";
     const tag = document.createElement("span"); tag.className = "tag";
     if (r.completed) { tag.classList.add("ok"); tag.textContent = "通关"; }
+    else if (r.parked) { tag.textContent = r.resumable ? "已挂起 · 可续跑" : "挂起 · 待交还游戏"; }
     else if (r.resumable) { tag.classList.add("frozen"); tag.textContent = "游戏冻结中"; }
     else if (r.game_released === false) { tag.textContent = "停下时保持冻结"; }
     else tag.textContent = r.recording ? (r.pure ? "录像 + 纯享版" : "有录像") : "无录像";
@@ -1812,7 +1813,7 @@ async function refreshRuns() {
     if(r.chapter_videos?.length)tag.textContent += ` · ${r.chapter_videos.length} 章视频`;
     side.appendChild(tag);
     if (r.resumable) {
-      const b = document.createElement("button"); b.className = "btn small blue"; b.type = "button"; b.textContent = "续跑";
+      const b = document.createElement("button"); b.className = "btn small blue"; b.type = "button"; b.textContent = r.parked ? "恢复挂起试玩" : "续跑";
       b.disabled = running();
       b.addEventListener("click", () => resumeRun(r.dir));
       side.appendChild(b);
@@ -1833,7 +1834,7 @@ async function refreshRuns() {
 
 async function resumeRun(dir, newRecording = false) {
   try {
-    await postJSON("/api/console/resume", { run: dir || (ui.runs.find(r => r.resumable) || {}).dir, new_recording: newRecording });
+    await postJSON("/api/console/resume", { run: dir || (ui.runs.find(r => r.resumable && !r.parked) || {}).dir, new_recording: newRecording });
     toast(newRecording ? "已启动续跑：放弃原录像，另起一段录像。" : "已启动续跑：接着原来的章节、统计与会话。");
     await refreshStatus();
   } catch (e) { toast(e.message, true); }

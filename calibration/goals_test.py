@@ -122,6 +122,22 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(session.goal_values()['side'], 'B')
         self.assertFalse(session.goals.stop_motion.is_set())
 
+    def test_park_preserves_goal_progress_and_excludes_other_runs_and_menu_frames(self):
+        self.set_goal({'field':'game_elapsed', 'op':'delta_gte', 'value':1},
+                      {'field':'frame', 'op':'delta_gte', 'value':60})
+        before = {**BASE, 'frame':145, 'in_level':True}
+        self.assertFalse(self.goal.check(before))
+        original = self.goal.snapshot()
+        self.goal.resume_from_park(145)
+        restored = GoalManager(self.directory)
+        self.assertFalse(restored.check({**BASE, 'frame':5000, 'in_level':False}))
+        self.assertEqual(restored.time_status({'frame':5000})['time_conditions'][0]['used_seconds'], .75)
+        entered = {**BASE, 'frame':6000, 'in_level':True}
+        self.assertFalse(restored.check(entered))
+        self.assertEqual(restored.snapshot()['revision'], original['revision'])
+        self.assertFalse(restored.check({**entered, 'frame':6014}))
+        self.assertTrue(restored.check({**entered, 'frame':6015}))
+
     def session(self):
         session=GameSession.__new__(GameSession)
         session.goals=self.goal; session._goal_progress={}; session.done=False; session.done_reason=""; session.user_stopped=False
@@ -256,6 +272,37 @@ class GoalTests(unittest.TestCase):
 
 
 class StopControlTest(unittest.IsolatedAsyncioTestCase):
+    async def test_park_refuses_live_level_then_accepts_saved_menu_without_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = RunConfig(agent='test', save='test', save_slot=8, model='test', engine='codex')
+            metrics = Metrics(root / 'metrics.json', 'test', 'test', 'medium', 600)
+            session = SimpleNamespace(done=False, goals=GoalManager(root), goal_values=lambda: BASE)
+            session.bridge_call = Mock(side_effect=[
+                {'obs':{'scene':'Level', 'frame':100}},
+                {'obs':{'scene':'Overworld', 'menu':{'current':'OuiFileSelect'}, 'saving':False, 'frame':105}},
+            ])
+            runner = CodexRunner(cfg, root, session, metrics, 'container', start_paused=True)
+            first = runner.control.enqueue('park')
+            task = asyncio.create_task(runner._controls())
+            try:
+                async with asyncio.timeout(3):
+                    while runner.control.snapshot()['actions'][0]['status'] == 'queued':
+                        await asyncio.sleep(.01)
+                failed = runner.control.snapshot()['actions'][0]
+                self.assertEqual((failed['id'], failed['status']), (first, 'error'))
+                self.assertFalse(runner.stop_requested)
+                accepted = runner.control.enqueue('park')
+                await asyncio.wait_for(task, 3)
+                self.assertEqual((runner.parked_for_switch, runner.parked_frame), (True, 105))
+                self.assertEqual(runner.control.snapshot()['actions'][0]['id'], accepted)
+                self.assertEqual([call.args for call in session.bridge_call.call_args_list],
+                                 [('observe',), ('observe',)])
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                runner.close_events()
+
     async def test_wall_duration_expires_without_any_game_tool(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)

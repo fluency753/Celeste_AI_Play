@@ -903,7 +903,14 @@ def runs(limit: int = 40) -> list[dict]:
     # 主控停下后仍保持接管就能续跑：游戏停在关卡里时冻结，停在地图或菜单上时照常运行，续跑用菜单宏进入（见 run.py）
     held_now = bool(game.get("running") and game.get("active"))
     rows = []
-    for directory in found[:limit]:
+    from orchestrator.parked_run import parked_summary
+    for index, directory in enumerate(found):
+        parked = parked_summary(directory)
+        available = bool(parked) and not parked.get("resumed_by")
+        if index >= limit and not available:
+            continue
+        parked_ready = available and (parked.get("game_released") is True
+                                     or bool(game.get("running") and game.get("active") is False))
         state = _read_json(directory / "run_state.json")
         summary = _read_json(directory / "summary.json")
         metrics = _read_json(directory / "metrics.json")
@@ -942,8 +949,10 @@ def runs(limit: int = 40) -> list[dict]:
             "pure": bool(chapter_videos) and all(v['pure'] for v in chapter_videos) or finished_movie(recording, pure=True) is not None,
             "chapter_videos":chapter_videos,
             "recording_pending": pending_recording, "recording_dir": str(recording),
-            "resumable": bool(summary) and summary.get("game_released") is False and latest is not None
-                         and latest.resolve() == directory.resolve() and held_now,
+            "parked": available,
+            "resumable": (not available and bool(summary) and summary.get("game_released") is False and latest is not None
+                          and latest.resolve() == directory.resolve() and held_now)
+                         or parked_ready,
         })
     return rows
 
@@ -996,7 +1005,16 @@ def resume(run_dir: str, fresh_session: bool = False, new_recording: bool = Fals
     directory = Path(run_dir)
     row = next((r for r in runs() if Path(r["dir"]).resolve() == directory.resolve()), None)
     if not row or not row["resumable"]:
-        raise ValueError("只能续跑最近一次停下时保持冻结的运行")
+        raise ValueError("只能续跑已挂起的试玩或最近一次仍保持冻结的运行")
+    if row.get("parked"):
+        if fresh_session:
+            raise ValueError("挂起续跑须接回原 Codex 会话")
+        if orchestrator_status()["running"]:
+            raise ValueError("请先挂起或结束当前试玩")
+        from orchestrator.conversations import release_chat, selected_run
+        current = selected_run(latest_run())
+        if current is not None:
+            release_chat(current)
     argv = resume_args(directory, bool(fresh_session), bool(new_recording))
     return {**_launch(argv), "command": command_line(argv)}
 

@@ -143,6 +143,7 @@ def config_from_state(state, metrics=None):
                     effort=(metrics or {}).get('effort') or state['effort'],
                     knowledge_profile=state.get('knowledge_profile','explore'), runtime=state.get('runtime','container'))
     cfg.mcp_port = state.get('mcp_port', cfg.mcp_port)
+    cfg.codex_player_login = state.get('codex_player_login') is True
     cfg.play_scope = state.get('play_scope', 'chapter')
     from .play_scope import completion_policy
     cfg.completion_policy = completion_policy(cfg.play_scope, state.get('completion_policy'))

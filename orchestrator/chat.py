@@ -36,6 +36,7 @@ def can_wake(directory):
         summary = json.loads((directory / "summary.json").read_text(encoding="utf-8"))
         return bool(state.get("session_id")) and (
             summary.get("completed") is True or summary.get("user_stopped") is True
+            or (summary.get("parked") is True and summary.get("game_released") is True)
             or bool((summary.get("goal") or {}).get("completion_report")))
     except (OSError, ValueError):
         return False

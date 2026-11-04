@@ -235,7 +235,7 @@
       <select id="sessionSave" aria-label="选择游戏存档"><option value="">选择存档…</option><option value="new">新建独立存档</option></select>
       <input id="sessionSaveName" aria-label="新存档名" placeholder="ASCII 玩家名（留空由 agent 取名）" maxlength="20" hidden>
       <div id="sessionSaveStatus" role="status" hidden></div>
-      <div class="control-buttons"><label>起始A面 <input id="sessionChapter" type="number" min="0" max="10" value="0" style="width:3.5em"></label><select id="sessionScope" aria-label="试玩范围"><option value="campaign">顺序游玩</option><option value="chapter">仅这一章</option><option value="visited">已到访地图自由探索</option></select><select id="sessionCompletion" aria-label="通关后行为"><option value="stop">计划通关后停止</option><option value="continue">计划通关后继续</option></select><button id="sessionPlay" type="button" title="进入所选存档和章节后保持暂停，点击继续才开始操作">开始试玩</button></div>
+      <div class="control-buttons"><label>起始A面 <input id="sessionChapter" type="number" min="0" max="10" value="0" style="width:3.5em"></label><select id="sessionScope" aria-label="试玩范围"><option value="campaign">顺序游玩</option><option value="chapter">仅这一章</option><option value="visited">已到访地图自由探索</option></select><select id="sessionCompletion" aria-label="通关后行为"><option value="stop">计划通关后停止</option><option value="continue">计划通关后继续</option></select><button id="sessionPlay" type="button" title="进入所选存档和章节后保持暂停，点击继续才开始操作">开始试玩</button><button id="parkPlay" type="button" hidden title="先原生保存退出到菜单并暂停。挂起后可从控制台续跑原会话">挂起以切换</button></div>
       <label><input id="sessionSimAssist" type="checkbox" disabled>有限模拟辅助<span id="simAvailability">（检查安装状态…）</span></label>
       <div id="sessionOperation" role="status" hidden></div>
       <button id="sessionRetryLogin" type="button" hidden>登录后重试准备</button>
@@ -1043,6 +1043,11 @@ async function pollControl() {
     const primary=primaryControlView(controlData,{wakingAgent,lifecycleBusy,switchingSession});
     $('togglePlay').textContent=primary.label;
     $('togglePlay').disabled=primary.disabled;
+    $('parkPlay').hidden = !c.park_control;
+    const lastPark = (c.actions || []).find(action => action.kind === 'park');
+    if (c.connected && lastPark?.status === 'error' && c.paused) {
+      $('controlStatus').textContent = lastPark.detail;
+    }
     $('agentSend').disabled = !c.connected || sendingMessage;
     $('toggleFast').title = c.connected && c.fast_pending ? '等待当前模型轮次结束后切换，当前动作不会被中断' : '设置下次模型请求是否使用 Fast';
     $('toggleFast').textContent = `Fast：${c.fast == null ? '—' : c.fast ? '开' : '关'}${c.connected && c.fast_pending ? '（待换轮）' : ''}`;
@@ -1104,6 +1109,7 @@ async function pollControl() {
     $('controlStatus').textContent = error.message;
     $('togglePlay').textContent = '未连接';
     $('togglePlay').disabled = $('agentSend').disabled = true;
+    $('parkPlay').hidden = true;
     $('toggleFast').disabled = true;
     $('liveEffort').disabled = true;
     $('sessionSelect').disabled = true;
@@ -1173,6 +1179,11 @@ $('togglePlay').onclick = async () => {
     wakingAgent = false;
     await pollControl();
   } else await sendControl(primary.action);
+};
+$('parkPlay').onclick = async () => {
+  $('parkPlay').disabled = true;
+  try { await sendControl('park'); }
+  finally { $('parkPlay').disabled = false; }
 };
 $('toggleFast').onclick = async () => {
   $('toggleFast').disabled = true;

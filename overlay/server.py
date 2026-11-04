@@ -389,6 +389,8 @@ def make_handler(pinned: Path | None):
                     raise ValueError('当前主控尚未提供在线动作帧数设置，请先使用支持此功能的主控')
                 if data.get('kind') == 'bridge_reload' and not control.snapshot().get('bridge_reload_control'):
                     raise ValueError('当前主控或桥接尚未支持不停录重载；需要先安装常驻核心并重新接入')
+                if data.get('kind') == 'park' and not control.snapshot().get('park_control'):
+                    raise ValueError('请先暂停使用独立存档槽的 Codex 试玩，等当前轮次结束再挂起')
                 if data.get("kind") in {"goal", "goal_clear", "stop"} and not control.snapshot().get("goals_enabled"):
                     raise ValueError("当前未在试玩，不能修改或触发停止目标")
                 if data.get("kind") == "chapters" and not control.snapshot().get("chapters_control"):

@@ -175,6 +175,7 @@ class RunConfig:
     provider: str = "anthropic"     # 模型提供方（configs/providers.json）：anthropic 用 Claude 订阅令牌，其他用本机保存的 API 密钥
     provider_info: dict | None = None  # load_provider(provider) 的结果
     engine: str = "claude"          # claude：原有执行器；codex：原生 app-server + 客户端沙箱工具
+    codex_player_login: bool = False  # 使用本项目的持久 player 登录，工作区数据仍单独保存
     effort: str = "high"
     bridge_port: int = 47774
     mcp_port: int = 47780

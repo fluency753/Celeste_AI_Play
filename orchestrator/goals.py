@@ -95,7 +95,7 @@ class GoalManager:
         """Read-only projections; a satisfied condition does not commit a stop."""
         data = self.snapshot()
         clock = data.get('game_clock')
-        if clock is not None and data['active']:
+        if clock is not None and data['active'] and data.get('resume_after_frame') is None:
             clock = project_game_clock(clock, values)
         conditions = []
         for condition in data['conditions']:
@@ -105,7 +105,7 @@ class GoalManager:
             used = None
             if field == 'game_elapsed' and clock is not None:
                 used = clock['advanced_frames']/60
-            elif data['active'] and not data.get('awaiting_entry'):
+            elif data['active'] and not data.get('awaiting_entry') and data.get('resume_after_frame') is None:
                 actual = values.get(field)
                 initial = data.get('baseline', {}).get(field)
                 if actual is not None and (op != 'delta_gte' or initial is not None):
@@ -122,7 +122,16 @@ class GoalManager:
                 'remaining_seconds':max(0,target-used) if used is not None and op in {'gte','delta_gte'} else None,
                 'satisfied_now':satisfied})
         return {key:data[key] for key in ('revision','active','reached','match')} | {
-            'awaiting_entry': bool(data.get('awaiting_entry')), 'time_conditions':conditions}
+            'awaiting_entry': bool(data.get('awaiting_entry') or data.get('resume_after_frame') is not None),
+            'time_conditions':conditions}
+
+    def resume_from_park(self, parked_frame):
+        with self.lock:
+            if self.data['active'] and self.data['conditions'] and not self.data.get('awaiting_entry'):
+                updated = dict(self.data)
+                updated.setdefault('resume_after_frame', parked_frame)
+                self._save(updated)
+                self.data = updated
 
     @staticmethod
     def _anchor(data, values):
@@ -193,6 +202,18 @@ class GoalManager:
                 self._anchor(updated, values)
                 self._save(updated)
                 self.data = updated
+            parked_frame = self.data.get('resume_after_frame')
+            if parked_frame is not None:
+                if not values.get('in_level') or values.get('frame') is None:
+                    return False
+                updated = dict(self.data)
+                del updated['resume_after_frame']
+                updated['frame_offset'] = updated.get('frame_offset', 0) + parked_frame - values['frame']
+                if updated.get('game_clock') is not None:
+                    updated['game_clock'] = {**updated['game_clock'], 'frame': values['frame'],
+                                             'epoch': values.get('game_epoch')}
+                self._save(updated)
+                self.data = updated
             baseline = self.data["baseline"]
             clock = self.data.get('game_clock')
             clock_changed = False
@@ -205,6 +226,8 @@ class GoalManager:
             for condition in self.data["conditions"]:
                 field, op = condition["field"], condition["op"]
                 actual, initial = values.get(field), baseline.get(field)
+                if field == 'frame' and actual is not None:
+                    actual += self.data.get('frame_offset', 0)
                 if field in {"room", "map_complete", "deaths"} and values.get("map") != baseline.get("map"):
                     actual = None
                 if field == "room" and values.get("dead"):

@@ -761,6 +761,10 @@ class CodexRunner(ModelRecovery, SessionControls):
                 state.update(session_id=self.session_id, engine="codex", model=result["model"],
                              session_storage='container', session_container=self.container)
                 state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+            parked_source = getattr(self.cfg, '_parked_source', None)
+            if parked_source:
+                from .parked_run import mark_resumed
+                mark_resumed(parked_source, self.run_dir)
             print(f"[codex] 独立会话 {self.session_id} · {result['model']} · {self.metrics.state.effort}", flush=True)
             if self.control:
                 if self.paused:
@@ -789,6 +793,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                         raise RuntimeError("用户控制通道已停止")
                     self.metrics.update(status="chat_idle" if self.chat_only else "paused")
                     await asyncio.sleep(.2)
+                if self.stop_requested:
+                    return await self._stopped_reason()
                 if self.session is not None and self.session.done:
                     return self.session.done_reason
                 fresh = list(self.pending_messages)

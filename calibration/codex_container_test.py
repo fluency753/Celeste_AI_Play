@@ -220,7 +220,7 @@ class ContainerCodexTests(unittest.TestCase):
             home = account if name == 'account-fixture' else workspace
             if command == ('codex', '--version'):
                 return subprocess.CompletedProcess(command,0,f'codex-cli {codex.CODEX_VERSION}\n','')
-            if command == ('codex', 'login', 'status'):
+            if command == tuple(codex.login_args('status')):
                 present = (home/'auth.json').is_file()
                 return subprocess.CompletedProcess(command,0 if present else 1,'Logged in using ChatGPT' if present else '','')
             self.assertEqual(command[0], 'python3')

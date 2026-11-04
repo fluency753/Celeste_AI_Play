@@ -90,9 +90,9 @@ class CodexRPC:
             await asyncio.to_thread(ensure_runtime, self.container, require_login=self.require_login)
             if self.before_start:
                 await self.before_start()
-            command = launch_command(self.container, self.owner, 'env',
-                *[f'{key}={value}' for key, value in self.environment.items()],
-                'codex', 'app-server', '--listen', 'stdio://', *process_options(container=True))
+            command = launch_command(self.container, self.owner, 'codex', 'app-server',
+                                     '--listen', 'stdio://', *process_options(container=True),
+                                     environment=self.environment)
         else:
             command = [codex_executable(), 'app-server', '--listen', 'stdio://', *process_options()]
         self.proc = await asyncio.create_subprocess_exec(
@@ -101,9 +101,20 @@ class CodexRPC:
             stdout=asyncio.subprocess.PIPE, stderr=self.stderr, limit=32 * 1024 * 1024,
             creationflags=0x08000000 if os.name == "nt" else 0)
         self.reader = asyncio.create_task(self._read())
-        result = await self.request("initialize", {"clientInfo": {
-            "name": "celeste_ai_play", "title": "Celeste AI Play", "version": "0.1.0"},
-            "capabilities": {"experimentalApi": True}}, timeout=60)
+        try:
+            result = await self.request("initialize", {"clientInfo": {
+                "name": "celeste_ai_play", "title": "Celeste AI Play", "version": "0.1.0"},
+                "capabilities": {"experimentalApi": True}}, timeout=60)
+        except ConnectionError:
+            if self.container:
+                from .codex_container import LOGIN_BUSY, CodexLoginBusy
+                try:
+                    code = await asyncio.wait_for(self.proc.wait(), 1)
+                except asyncio.TimeoutError:
+                    code = None
+                if code == LOGIN_BUSY:
+                    raise CodexLoginBusy() from None
+            raise
         await self.send({"method": "initialized"})
         return result
 

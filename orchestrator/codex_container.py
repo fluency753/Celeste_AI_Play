@@ -17,6 +17,12 @@ from .config import find_docker_exe
 CODEX_HOME = '/home/agent/.codex'
 CODEX_VERSION = '0.165.0-alpha.1.2'
 ACCOUNT_AGENT = 'codex-account'
+LOGIN_BUSY = 73
+
+
+class CodexLoginBusy(RuntimeError):
+    def __init__(self):
+        super().__init__('项目的 Codex player 登录正在使用，请先挂起试玩或断开当前聊天')
 
 
 class CodexLoginRequired(RuntimeError):
@@ -39,18 +45,26 @@ def ensure_account_container(*, image=None, log=print) -> str:
     return ensure_container(cfg, log=log)
 
 
-def exec_command(container: str, *command: str, workdir='/workspace') -> list[str]:
+def exec_command(container: str, *command: str, workdir='/workspace', environment=None) -> list[str]:
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', container):
         raise ValueError('无效的 Codex 容器名称')
-    return [find_docker_exe(), 'exec', '-i', '-u', 'agent', '-w', workdir,
-            '-e', f'CODEX_HOME={CODEX_HOME}', container, *command]
+    args = [find_docker_exe(), 'exec', '-i', '-u', 'agent', '-w', workdir, '-e', f'CODEX_HOME={CODEX_HOME}']
+    for key, value in (environment or {}).items():
+        args += ['-e', f'{key}={value}']
+    return [*args, container, *command]
 
 
-def launch_command(container: str, owner: str, *command: str) -> list[str]:
+def launch_command(container: str, owner: str, *command: str, environment=None) -> list[str]:
     if not re.fullmatch(r'[a-f0-9]{32}', owner):
         raise ValueError('无效的 App Server 所有者标识')
     return exec_command(container, 'python3', '/usr/local/lib/celeste/codex-app-server.py',
-                        '--owner', owner, '--', *command)
+                        '--owner', owner, '--', *command, environment=environment)
+
+
+def login_args(*args: str) -> list[str]:
+    wrapper = ('if [ "$CELESTE_CODEX_PLAYER_LOGIN" = 1 ]; then '
+               'exec python3 /usr/local/lib/celeste/codex-app-server.py --login-command -- "$@"; fi; exec "$@"')
+    return ['sh', '-c', wrapper, 'codex-login', 'codex', 'login', *args]
 
 
 def terminate_owned_server(container: str, owner: str) -> None:
@@ -68,7 +82,11 @@ def _run(container, *command, input=None, timeout=30):
 
 
 def login_status(container: str) -> dict:
-    result = _run(container, 'codex', 'login', 'status')
+    result = _run(container, *login_args('status'))
+    if result.returncode == LOGIN_BUSY:
+        raise CodexLoginBusy()
+    if result.returncode not in (0, 1):
+        raise RuntimeError('Codex 登录检查失败，请检查容器镜像是否需要重建')
     text = result.stdout + result.stderr
     method = ('chatgpt' if 'ChatGPT' in text else 'api' if 'API key' in text else None)
     return {'authenticated': result.returncode == 0, 'method': method}
@@ -85,6 +103,8 @@ def ensure_runtime(container: str, *, require_login=True) -> None:
 AUTH_IMPORT = r'''
 import json,os,sys,tempfile
 from pathlib import Path
+if os.environ.get('CELESTE_CODEX_PLAYER_LOGIN') == '1':
+ raise ValueError('共享 player 登录须使用设备授权')
 root=Path(os.environ['CODEX_HOME'])
 if root.is_symlink() or not root.is_dir():raise ValueError('Codex home unavailable')
 data=sys.stdin.buffer.read(1048577)
@@ -237,7 +257,10 @@ def main():
     if args.operation == 'status':
         print(json.dumps(login_status(name), ensure_ascii=False))
     elif args.operation == 'login':
-        raise SystemExit(subprocess.call(exec_command(name, 'codex', 'login', '--device-auth')))
+        result = subprocess.call(exec_command(name, *login_args('--device-auth')))
+        if result == LOGIN_BUSY:
+            raise SystemExit(str(CodexLoginBusy()))
+        raise SystemExit(result)
     elif args.operation == 'import-auth':
         import_auth(name, args.file)
         print('已导入；请用 status 核对容器登录状态。')

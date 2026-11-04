@@ -480,7 +480,8 @@ class GameSession:
             chapter = next((i for i, s in CHAPTER_SIDS.items() if s == (obs.get('level') or {}).get('sid')), None)
             if chapter is not None:
                 self.piece = Piece(chapter)
-        if obs.get("scene") != "Level" and not (self.cfg.cutscene_mode == 'agent' and (
+        parked_menu = getattr(self.cfg, '_parked_source', None) and self._at_chapter_menu(obs)
+        if obs.get("scene") != "Level" and not parked_menu and not (self.cfg.cutscene_mode == 'agent' and (
                 story_pending(obs) or ((self._pending_complete or self.chapter_finished or self._in_detour()) and obs.get('scene') in END_SCENES)
                 or (obs.get('scene') == 'Overworld' and (obs.get('menu') or {}).get('current') in {'OuiChapterSelect','OuiChapterPanel'}))):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")

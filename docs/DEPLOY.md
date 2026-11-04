@@ -273,12 +273,14 @@ winget install Gyan.FFmpeg
 ### 4.11 原生 GPT（可选）
 
 1. 构建或更新共享智能体镜像：`docker build -t celeste-agent:0.1 agent-container`。镜像同时安装 Claude Code 与固定版本 Codex；不会把宿主文件系统或 Docker socket 挂进容器。
-2. 按准备或启动提示运行 `python -m orchestrator.codex_container --container NAME login`，在浏览器里授权目标工作区，完成后重试原准备或启动命令。`--container NAME status` 仅显示本地登录状态，正式试玩另做实际模型预检。
+2. 按准备或启动提示运行 `python -m orchestrator.codex_container --container NAME login`，在浏览器里完成设备授权，随后重试。`--container NAME status` 显示本地登录状态，正式试玩另做实际模型预检。
 3. 用 `start_gpt.ps1` 或 HUD 新建并准备。App Server、原生 Shell 与补丁工具都在对应工作区容器内；主控通过 `docker exec -i` 的 stdio 收发协议。工作区和知识库与 Claude 复用同一容器生命周期；模拟器不挂给 agent，由主控独立持有。
 
 旧宿主会话不会自动变为容器会话。停止原主控后，用 `python -m orchestrator.codex_container --container <对应容器> import-session --file <原 rollout.jsonl>` 显式导入原记录，再恢复原运行；导入保留原文件、拒绝覆盖已有目标，不导入宿主配置。工作区原有文件继续复用，容器缺少原会话时明确报错，不另建或回退宿主。旧 `--runtime host` 对 Codex 作为容器模式的兼容别名；host Claude 语义保持不变。
 
-工作区各自登录，在自己的持久卷中刷新凭据。刷新失败时，对提示里的容器重新授权并从原运行目录续跑。协议及必要差异见 [Codex 容器执行](CODEX_CONTAINER.md)。
+HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登录只需授权一次。前一个 App Server 退出后，下一个工作区沿用同一份登录，由 Codex 原生续期。既有独立工作区沿用自己的登录；命令行新工作区可选 `--codex-player-login`。刷新失败时，对提示里的容器重新授权，再从原运行目录续跑。协议及必要差异见 [Codex 容器执行](CODEX_CONTAINER.md)。
+
+跨工作区换局请使用各自的存档槽。在关卡内先切到 agent 剧情模式并开放「保存退出」权限，让 player 用原生暂停菜单保存退出。等存档写完并到达菜单后，在 HUD 暂停并点「挂起以切换」。主控收尾录像、关闭 App Server 并交还游戏。控制台的历史运行里可以恢复已挂起的试玩，接回原线程并按原生存档继续，恢复录制时另起一段。房间会按游戏原生机制重建，若载入后停在选章页，由 player 自选章节。自动停止目标等重新进入地图再核验，并跳过切换期间的游戏帧。
 
 ## 5. 运行
 

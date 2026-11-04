@@ -110,6 +110,48 @@ class ResumePositionTests(unittest.TestCase):
                 raise RuntimeError('failed')
         self.assertIs(client.step_options, strict)
 
+    def test_parked_resume_loads_save_but_leaves_chapter_selection_to_player(self):
+        from pathlib import Path
+        from calibration.menu_navigation_test import GameIpc, file_select, reply
+        initial = file_select()
+        initial['saving'] = False
+        initial['menu']['slots'][0].update(name='opus5.5', fileSlot=8)
+        selected = {'scene':'Overworld', 'saving':False, 'save':{'name':'opus5.5', 'slot':8},
+                    'menu':{'current':'OuiChapterSelect'}}
+        client = GameIpc(initial, [reply(selected)])
+        client.step_options = None
+        client.close = lambda: None
+        cfg = RunConfig(agent='opus5.5', save='opus5.5', model='opus', save_slot=8)
+        cfg.chapter = 2
+        cfg._parked_source = Path('old')
+        with patch('tools.bridge_client.BridgeClient', return_value=client):
+            self.assertTrue(check_resume_position(cfg))
+        self.assertEqual(len(client.steps), 1)
+        self.assertIn('chapter_loaded', client.steps[0]['stop_on'])
+        self.assertIsNone(client.step_options)
+
+    def test_parked_resume_retry_allows_the_already_loaded_slot_only(self):
+        self.assertTrue(self.check(level(), _parked_source='old')[0])
+        with self.assertRaisesRegex(SystemExit, '稳定的游戏菜单'):
+            self.check(level(save='other', slot=7), _parked_source='old')
+
+    def test_parked_slot_is_reserved_until_its_thread_is_reconnected(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from orchestrator.parked_run import check_reserved_slot, mark_resumed, note_release
+        from orchestrator.session_store import write_json
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            previous = root / 'player' / 'old'
+            cfg = RunConfig(agent='player-new', save='save', save_slot=8, model='test')
+            write_json(previous / 'summary.json', {'parked':True, 'parked_slot':8, 'parked_save':'save'})
+            self.assertTrue(note_release(previous, released=True))
+            with self.assertRaisesRegex(ValueError, '存档由挂起的试玩保留'):
+                check_reserved_slot(root, cfg, None)
+            check_reserved_slot(root, cfg, {'dir':previous})
+            mark_resumed(previous, root / 'player' / 'continued')
+            check_reserved_slot(root, cfg, None)
+
     def test_failed_native_restore_never_releases_the_loaded_state(self):
         from calibration.menu_navigation_test import GameIpc, file_select, reply, blocked
         for response, capable in ((reply(level(save='other', slot=9)), True),

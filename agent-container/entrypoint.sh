@@ -2,6 +2,12 @@
 # 容器入口（root）：先设置防火墙，成功后写就绪标记，然后常驻。
 # Claude Code 由主控用 docker exec -u agent 启动，智能体没有 root 权限，改不了防火墙。
 set -e
+# bubblewrap cannot mask auth.json when it is a symlink. Mask its entire
+# destination volume in the player-login layout; the workspace alias then
+# resolves only inside that masked directory.
+if [ "${CELESTE_CODEX_PLAYER_LOGIN:-}" = 1 ]; then
+    sed -i 's|"/home/agent/\.codex/auth\.json"|"/var/lib/celeste-codex-login"|' /etc/codex/requirements.toml
+fi
 rm -f /run/firewall-ready /run/firewall-failed
 if /usr/local/sbin/init-firewall.sh; then
     touch /run/firewall-ready

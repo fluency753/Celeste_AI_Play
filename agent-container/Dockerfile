@@ -53,8 +53,9 @@ RUN chmod 644 /etc/claude-code/managed-settings.json /usr/local/lib/celeste/gate
 
 # 普通用户：工作区 /workspace（可写，挂载宿主目录），知识库 /kb（只读挂载）
 RUN useradd -m -s /bin/bash -u 1500 agent \
-    && mkdir -p /workspace /kb /home/agent/.claude /home/agent/.codex \
-    && chown agent:agent /workspace /home/agent/.claude /home/agent/.codex
+    && mkdir -p /workspace /kb /home/agent/.claude /home/agent/.codex /var/lib/celeste-codex-login \
+    && chmod 700 /var/lib/celeste-codex-login \
+    && chown agent:agent /workspace /home/agent/.claude /home/agent/.codex /var/lib/celeste-codex-login
 
 # Windows bind mounts can report nobody/root ownership. Trust only the explicit
 # workspace, in root-owned system config; never disable ownership checks globally.

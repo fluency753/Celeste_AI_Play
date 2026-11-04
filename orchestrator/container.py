@@ -22,6 +22,8 @@ from . import config as _config
 from .config import REPO_ROOT, RunConfig, find_docker_exe
 
 LABEL = "celeste-ai-play"
+PLAYER_LOGIN_MOUNT = '/var/lib/celeste-codex-login'
+PLAYER_LOGIN_VOLUME = 'celeste-player-codex-auth-v1'
 
 
 def slug(agent: str) -> str:
@@ -53,7 +55,8 @@ def _labels(cfg: RunConfig) -> dict[str, str]:
             f"{LABEL}.kb_view": "1" if cfg.kb_view else "0",
             **({f'{LABEL}.kb_layout': str(cfg.kb_dir)} if cfg.kb_view else {}),
             **({f"{LABEL}.codex_home": '1', f"{LABEL}.git_mount": 'workspace-dir-v1'}
-               if cfg.engine == 'codex' else {})}
+               if cfg.engine == 'codex' else {}),
+            **({f"{LABEL}.codex_player_login": '1'} if cfg.engine == 'codex' and cfg.codex_player_login else {})}
 
 
 LABEL_DEFAULTS = {f"{LABEL}.kb_view": "0"}
@@ -123,6 +126,9 @@ def _create(cfg: RunConfig, name: str) -> None:
         args += ['-v', f'{git}:/workspace/.git',
                  '-v', f'celeste-codex-{slug(cfg.workspace_dir.name)}:/home/agent/.codex',
                  '-e', 'CODEX_HOME=/home/agent/.codex']
+        if cfg.codex_player_login:
+            args += ['-v', f'{PLAYER_LOGIN_VOLUME}:{PLAYER_LOGIN_MOUNT}',
+                     '-e', 'CELESTE_CODEX_PLAYER_LOGIN=1']
     if cfg.seccomp_unconfined:
         args += ["--security-opt", "seccomp=unconfined"]
     for key, value in _labels(cfg).items():
@@ -211,6 +217,13 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
         exposed = any(row.get('Destination') == '/sim' or row.get('Destination', '').startswith('/sim/')
                       for row in mounted)
         git_stale = cfg.engine == 'codex' and not _git_mount_matches(cfg, mounted)
+        player_mounts = [row for row in mounted if row.get('Destination') == PLAYER_LOGIN_MOUNT]
+        expected_login = cfg.engine == 'codex' and cfg.codex_player_login
+        login_stale = (len(player_mounts) != 1 or player_mounts[0].get('Type') != 'volume'
+                       or player_mounts[0].get('Name') != PLAYER_LOGIN_VOLUME
+                       or player_mounts[0].get('RW') is not True) if expected_login else bool(player_mounts)
+        if login_stale:
+            raise RuntimeError(f'容器 {name} 已使用另一种 Codex 登录方式，请使用新工作区标签')
         stale = exposed or git_stale or container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
                                                    for k, v in _labels(cfg).items())
         if stale:

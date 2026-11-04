@@ -74,6 +74,7 @@ class SessionControls:
         self.stop_requested = False
         self.stop_reason = ""
         self.interrupted_for_resume = False
+        self.parked_for_switch = False
         self.interrupt_ready = asyncio.Event()
         self.goal_finishing = False
         self.paused, self.turn_active, self.user_interrupted = start_paused or self.chat_only, False, False
@@ -316,6 +317,21 @@ class SessionControls:
                         elif row["kind"] == "message":
                             self.pending_messages.append(row)
                             self.control.mark(row["id"], "waiting", "等待提交给当前会话")
+                        elif row["kind"] == "park":
+                            if not self._can_park():
+                                raise ValueError("请先暂停 Codex 试玩，并确认使用了独立存档槽")
+                            async with self.action_lock:
+                                obs = (await asyncio.to_thread(self.session.bridge_call, "observe",
+                                                               image=False, entities=False, tiles=False))["obs"]
+                                from .parked_run import stable_menu
+                                if not stable_menu(obs):
+                                    raise ValueError("请切到 agent 剧情模式并允许保存退出，让 player 原生保存退出到菜单后再暂停并挂起")
+                                self.stop_reason = "挂起以切换工作区"
+                                self.parked_frame = obs['frame']
+                                self.parked_for_switch = True
+                                self.stop_requested = True
+                                self.control.mark(row["id"], "submitted", "正在结束 App Server、保存录像并交还游戏")
+                            return
                         elif row["kind"] == "interrupt":
                             # 显式中断独立于普通停止；收尾时保留接管，可 --resume 接着玩。
                             if not getattr(self, "supports_interrupt", False):
@@ -582,8 +598,15 @@ class SessionControls:
 
     def _effort_status(self):
         return {'effort_control':True, 'interrupt_control': bool(getattr(self, 'supports_interrupt', False)),'effort':self.metrics.state.effort,
+                'park_control': self._can_park(),
                 'effort_pending':self.metrics.state.effort_pending,'effort_manual':self.manual_effort,
                 'effort_levels':getattr(self, 'runtime_efforts', self.capabilities.effort_levels)}
+
+    def _can_park(self):
+        return (getattr(self.cfg, 'engine', None) == 'codex' and not self.chat_only and self.session is not None
+                and not self.session.done and self.paused and not self.pausing and not self.turn_active
+                and not self.stop_requested and not getattr(self, '_bridge_reload_failed', False)
+                and type(getattr(self.cfg, 'save_slot', None)) is int)
 
     def _cutscene_status(self):
         return {'cutscene_control':getattr(self.session, 'cutscene_tool', True),

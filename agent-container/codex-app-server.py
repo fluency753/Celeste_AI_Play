@@ -2,6 +2,7 @@
 """Own one App Server and its descendants across Docker stdio disconnections."""
 import argparse
 import ctypes
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,35 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
+
+
+@contextmanager
+def player_login():
+    if os.environ.get('CELESTE_CODEX_PLAYER_LOGIN') != '1':
+        yield ()
+        return
+    root = Path('/var/lib/celeste-codex-login')
+    target = root / 'auth.json'
+    path = Path(os.environ['CODEX_HOME']) / 'auth.json'
+    fd = os.open(root / 'lease', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit(73) from None
+        if target.is_symlink():
+            raise RuntimeError('Invalid player credential path')
+        if path.is_symlink():
+            if Path(os.readlink(path)) != target:
+                raise RuntimeError('Invalid workspace credential link')
+        elif path.exists():
+            raise RuntimeError('Workspace already has its own Codex login')
+        else:
+            path.symlink_to(target)
+        yield (fd,)
+    finally:
+        os.close(fd)
 
 
 def process(pid):
@@ -128,7 +158,7 @@ def child_setup():
         raise OSError('Could not set parent-death signal')
 
 
-def launch(owner, command):
+def launch(owner, command, *, lock_fds=()):
     if not command:
         raise ValueError('Missing App Server command')
     libc = ctypes.CDLL(None)
@@ -140,7 +170,7 @@ def launch(owner, command):
     for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):
         signal.signal(sig, lambda *_:stopped.set())
     launcher = process(os.getpid())
-    child = subprocess.Popen(command, stdin=subprocess.PIPE, preexec_fn=child_setup)
+    child = subprocess.Popen(command, stdin=subprocess.PIPE, preexec_fn=child_setup, pass_fds=lock_fds)
     known = {os.getpid():launcher, child.pid:process(child.pid)}
     published = False
 
@@ -194,13 +224,19 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--owner')
     mode.add_argument('--terminate')
+    mode.add_argument('--login-command', action='store_true')
     parser.add_argument('command',nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.terminate:
         print(json.dumps(terminate(args.terminate)))
         return 0
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
-    return launch(args.owner,command)
+    with player_login() as lock_fds:
+        if lock_fds and command[:1] == ['codex']:
+            command[1:1] = ['-c', 'cli_auth_credentials_store="file"']
+        if args.login_command:
+            return subprocess.call(command, pass_fds=lock_fds)
+        return launch(args.owner, command, lock_fds=lock_fds)
 
 
 if __name__ == '__main__':

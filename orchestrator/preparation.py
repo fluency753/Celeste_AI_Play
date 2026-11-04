@@ -28,6 +28,7 @@ async def prepare(args):
                     sim=False, sim_assist=False,
                     live=True, max_minutes=args.max_minutes)
     adapter.configure(cfg, args.provider)
+    cfg.codex_player_login = getattr(args, 'codex_player_login', False) and cfg.engine == 'codex'
     cfg.model, cfg.effort = await asyncio.to_thread(adapter.resolve, cfg.model, cfg.effort, cfg.provider)
     adapter.token(cfg)  # Fail before creating containers or changing the selected session.
     cfg.mcp_port = getattr(args, 'mcp_port', cfg.mcp_port)
@@ -73,7 +74,8 @@ async def prepare(args):
                           "knowledge_profile": cfg.knowledge_profile, "mode": cfg.mode,
                           "kb_study": study.summary(), "kb_hashes": hashes,
                           "kb_identity": study_identity(study.kb_dir),
-                          "session_id": runner.session_id, "turns": runner.turns, "metrics": metrics.snapshot()}
+                          "session_id": runner.session_id, "turns": runner.turns, "metrics": metrics.snapshot(),
+                          "codex_player_login": cfg.codex_player_login}
                 if login_required:
                     result['login_required'] = login_required
                 (directory / "prepare_summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -89,6 +91,7 @@ async def prepare(args):
             'agent':cfg.agent, 'save':'', 'save_slot':None, 'model':metrics.state.model,
             'requested_model':cfg.model, 'effort':metrics.state.effort, 'knowledge_profile':cfg.knowledge_profile, 'mode':cfg.mode,
             'session_id':runner.session_id, 'session_kind':'ready', 'prepared_dir':str(directory),
+            'codex_player_login':cfg.codex_player_login,
             'sim':cfg.sim, 'sim_assist':False, 'cutscene_mode':cfg.cutscene_mode, 'max_minutes':240})
         if adapter.fast and args.fast is not None:
             RunControl(directory).set_fast(args.fast == 'on')
@@ -100,6 +103,7 @@ def main():
     ap.add_argument("--engine", choices=list(RUNTIMES), default="codex")
     ap.add_argument("--provider", default=None)
     ap.add_argument("--agent", default=None)
+    ap.add_argument("--codex-player-login", action="store_true", help="使用项目持久的 Codex player 登录")
     ap.add_argument("--knowledge", choices=["explore", "full"], default="explore")
     ap.add_argument("--model", default="", help="留空沿用 Codex 已登录配置，由服务回报实际模型")
     ap.add_argument("--effort", default="medium")

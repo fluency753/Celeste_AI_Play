@@ -52,6 +52,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--engine", choices=list(RUNTIMES), default=None,
                     help="独立执行器：claude（原有）、codex（原生 GPT，复用 Codex 登录）")
     ap.add_argument("--prepared", help="复用 preparation 完成的知识库准备与独立会话（校验知识库未变化）")
+    ap.add_argument("--codex-player-login", action="store_true", help="新工作区使用项目持久的 Codex player 登录")
     ap.add_argument("--start-paused", action="store_true", help="原生 GPT 启动后保持暂停，可先聊天再点继续")
     goal_args = ap.add_mutually_exclusive_group()
     goal_args.add_argument("--goal", metavar="TEXT", help="启动时登记本次试玩的文字目标")
@@ -386,10 +387,13 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv) and not previous:
         cfg.effort = adapter.default_effort
     adapter.configure(cfg, cfg.provider)
+    cfg.codex_player_login = cfg.engine == 'codex' and (
+        previous['state'].get('codex_player_login') is True if previous else args.codex_player_login)
     if args.prepared and (args.no_study or previous):
         raise SystemExit("--prepared 只用于已准备会话新开一局，不能与 --no-study 或 --resume 合用")
     if args.prepared:
         prepared_metadata = json.loads((Path(args.prepared)/'prepare_summary.json').read_text(encoding='utf-8'))
+        cfg.codex_player_login = cfg.engine == 'codex' and prepared_metadata.get('codex_player_login') is True
         if not any(a == '--model' or a.startswith('--model=') for a in sys.argv):
             cfg.model = prepared_metadata.get('requested_model') or prepared_metadata['metrics']['model']
         if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv):
@@ -471,6 +475,17 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         state = previous["state"]
         if (args.agent, args.save) != (state["agent"], state["save"]):
             raise SystemExit(f"--resume 的运行是 --agent {state['agent']} --save {state['save']}，与这次给的不一致")
+        from .parked_run import parked_summary
+        parked = parked_summary(previous['dir'])
+        if parked:
+            if parked.get('resumed_by'):
+                raise SystemExit(f"该挂起已续跑，请从新的运行继续：{parked['resumed_by']}")
+            if args.fresh_session or args.no_agent or cfg.engine != 'codex' or not state.get('session_id'):
+                raise SystemExit('挂起续跑须接回原 Codex 会话')
+            if cfg.save_slot != parked['parked_slot'] or cfg.save != parked['parked_save']:
+                raise SystemExit('挂起续跑须使用原存档及槽位')
+            cfg._parked_source = previous['dir']
+            cfg._parked_needs_release_check = parked.get('game_released') is not True
         cfg.resume_completion_pending = bool(state.get('completion_pending'))
         # 分类事实与当前许可独立。旧记录仍可由原开关或已记录的绕行身份/成绩恢复。
         cfg.resume_detour_classifying = cfg.play_scope != 'visited' and bool(
@@ -611,6 +626,8 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     current_plan = cfg.plan or [Piece(c) for c in (cfg.chapters or ([] if cfg.chapter is None else [cfg.chapter]))]
     state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [p.row() for p in map(Piece.of,current_plan)]
     state.update({key:getattr(cfg,key) for key in ('recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu')})
+    if cfg.codex_player_login:
+        state['codex_player_login'] = True
     if getattr(cfg, "profile", "local") != "local":
         state["profile"] = cfg.profile     # 用了配置（--profile）；没记的是本机原有设置，与旧运行相同
     # 接着同一个会话续跑：带上这个会话最近一次送达的规则摘要（见 agent.ClaudeRunner），规则没变时首条不再重复附上
@@ -824,26 +841,37 @@ def check_resume_position(cfg: RunConfig) -> bool:
     （中断发生在两章或两截之间、游戏重启过、还没载入存档或在别的存档的菜单里），由调用方像新开一局那样进入，
     开了录屏时这段也从选档页开始录进录像。关卡里是别的存档或别的章节时报错，不替你离开那个关卡。"""
     from tools.bridge_client import BridgeClient
+    from tools.enter_save import load_save_and_freeze
+    from .action_policy import controller_navigation
 
     client = BridgeClient(port=cfg.bridge_port, timeout=120)
+    def load_selected_save():
+        if cfg.play_scope == 'visited':
+            client.step_options = lambda: startup_step_options(client, cfg)
+            return load_save_and_freeze(client, cfg.save, save_slot=cfg.save_slot)
+        with controller_navigation(client, cfg, slot=cfg.save_slot):
+            return load_save_and_freeze(client, cfg.save, save_slot=cfg.save_slot)
+
     try:
         if cfg.play_scope == 'visited' and client.call('hello').get('map_entry_set') is not True:
             raise SystemExit('已到访地图自由探索需要支持地图集合门禁的新版桥接；未发送游戏输入')
         obs = client.call("observe", image=False, entities=False, tiles=False)["obs"]
+        if getattr(cfg, '_parked_source', None):
+            from .parked_run import stable_menu
+            save = obs.get('save') or {}
+            if obs.get('scene') == 'Level' and (save.get('name'), save.get('slot')) == (cfg.save, cfg.save_slot):
+                return True  # A previous attempt may have loaded this slot before the model failed.
+            if not stable_menu(obs):
+                raise SystemExit('挂起续跑须从稳定的游戏菜单恢复，请先明确保存退出当前试玩')
+            load_selected_save()
+            return True
         # A saved native Session may resume directly into its Level. Do not turn
         # "load this save" into "leave that Level to reach chapter select".
         if cfg.chapter is None and obs.get('scene') == 'Overworld' and (
                 (obs.get('save') or {}).get('name') != cfg.save or
                 (cfg.save_slot is not None and (obs.get('save') or {}).get('slot') != cfg.save_slot) or
                 (obs.get('menu') or {}).get('current') not in {'OuiChapterSelect', 'OuiChapterPanel'}):
-            from tools.enter_save import load_save_and_freeze
-            from .action_policy import controller_navigation
-            if cfg.play_scope == 'visited':
-                client.step_options = lambda: startup_step_options(client, cfg)
-                obs = load_save_and_freeze(client, cfg.save, save_slot=cfg.save_slot)
-            else:
-                with controller_navigation(client, cfg, slot=cfg.save_slot):
-                    obs = load_save_and_freeze(client, cfg.save, save_slot=cfg.save_slot)
+            obs = load_selected_save()
         save = (obs.get("save") or {}).get("name")
         right_save = save == cfg.save and (cfg.save_slot is None or (obs.get('save') or {}).get('slot') == cfg.save_slot)
         sid = (obs.get("level") or {}).get("sid")
@@ -1031,7 +1059,13 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
         # 由桥接按场景决定是否冻结（见 _keeps_game_frozen）。
         had_connection = getattr(session,'client',None) is not None
         keep = bool(getattr(cfg, '_keep_frozen', False)) and had_connection
-        session.close(release=not keep)
+        try:
+            session.close(release=not keep)
+        except BaseException:
+            if had_connection and not keep:
+                from .parked_run import note_release
+                cfg._parked_release_pending = note_release(run_dir, released=False)
+            raise
         if cfg is not None:
             cfg._game_released = had_connection and not keep
         # Ctrl+C 时 _run_connected_session 在自己的 finally 里写了 summary.json 但没有返回值：从文件补上，
@@ -1044,7 +1078,10 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
                 final = None
         if final is not None:
             final['game_released'] = not keep
-            (run_dir / 'summary.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8')
+            if final.get('parked') and (keep or not had_connection):
+                final.pop('parked', None)
+            from .session_store import write_json
+            write_json(run_dir / 'summary.json', final)
         if keep:
             print('[run] 游戏保持冻结在当前帧（章节计时不走）：可以用 --resume 续跑；'
                   '不续跑时在控制台交还游戏控制'
@@ -1108,6 +1145,9 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         initial_goal = getattr(args, 'initial_goal', None)
         if initial_goal is not None:
             session.set_goal(initial_goal, wait_for_entry=True)
+        elif getattr(cfg, '_parked_source', None):
+            from .parked_run import parked_summary
+            session.goals.resume_from_park(parked_summary(cfg._parked_source)['parked_frame'])
         print(f"[run] 已接管游戏：{(obs.get('level') or {}).get('sid',obs.get('scene'))} 房间 {(obs.get('level') or {}).get('room','—')}，存档 {cfg.save}", flush=True)
         if previous:
             session.decision_index = int(previous["metrics"].get("decisions") or 0)
@@ -1242,10 +1282,13 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         # Commit the ownership decision before cleanup that may itself fail.
         # The outer socket/error cleanup must never undo a reached goal's hold.
         cleanup_errors = []
+        parked = bool(runner and getattr(runner, 'parked_for_switch', False))
         try:
             if saved_recording and not getattr(cfg, '_recording_adopted', False):
                 # Startup/adopt failure must not release another run's live capture.
                 shutdown = 'retain'
+            elif parked:
+                shutdown = 'release' if primary is None else 'retain'
             else:
                 shutdown = _shutdown_mode(cfg, args, session,
                                           interrupted=bool(runner and runner.interrupted_for_resume),
@@ -1288,6 +1331,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             except BaseException as error:
                 cleanup_errors.append(('工作区进度', error))
         recording = None
+        recording_stopped = not recorder
         if recorder:
             try:
                 def release_after_capture():
@@ -1304,11 +1348,16 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 elif shutdown == 'freeze':
                     recording = recorder.stop()
                 else:
-                    recording = recorder.stop(on_capture_stopped=release_after_capture)
+                    recording = recorder.stop() if parked else recorder.stop(on_capture_stopped=release_after_capture)
+                    recording_stopped = not recorder.started
             except BaseException as error:  # Recording failures still preserve the remaining cleanup.
                 print(f"[record] 停止录制失败：{error}", flush=True)
                 if not isinstance(error, Exception):
                     cleanup_errors.append(('录制收尾', error))
+        if parked and (primary is not None or cleanup_errors or not recording_stopped):
+            cfg._keep_frozen = True
+            if recorder:
+                cfg._recording_retained = True
         # 锁步结束后先释放，外层finally仍负责关闭连接及异常兜底；暂停不走结束流程。
         summary = None
         try:
@@ -1326,6 +1375,9 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                            kb_study=study.summary() if study else None, recording=recording)
             if cleanup_errors:
                 summary['cleanup_errors'] = [f'{label}：{error}' for label, error in cleanup_errors]
+            if parked and primary is None and not cleanup_errors and recording_stopped:
+                summary.update(parked=True, parked_slot=cfg.save_slot, parked_save=cfg.save,
+                               parked_frame=runner.parked_frame)
             (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         except BaseException as error:
             cleanup_errors.append(('总结生成与写入', error))
@@ -1428,6 +1480,10 @@ def opening_note(cfg, previous, resumed_session, user_note: str | None = None, *
     if not previous:
         return None
     extra = f"\n\n（用户留言）\n{user_note}" if user_note else ""
+    if getattr(cfg, '_parked_source', None):
+        note = ('（系统）已切回这个工作区和原会话，游戏按原生存档载入。请先 observe 核对位置，'
+                '房间内部状态可能已重建。若在选章菜单，由你选择本次任务允许的地图。') + extra
+        return note + current_rules_note(cfg) if include_rules else note
     if getattr(cfg, "_extended_plan", None):
         note = next_chapter_prompt(cfg, fresh_session=not resumed_session) + extra
         return note + current_rules_note(cfg) if resumed_session and include_rules else note
@@ -1515,6 +1571,8 @@ def main() -> int:
                                     None)
         load_preparation(args.prepared, cfg, preparation_study)
     previous = args.previous
+    from .parked_run import check_reserved_slot
+    check_reserved_slot(REPO_ROOT / 'runs', cfg, previous)
     if not port_free(cfg.mcp_port):
         raise SystemExit(f"端口 {cfg.mcp_port} 已被占用：可能有另一个主控在运行，或用 --mcp-port 换一个端口")
     if not args.no_agent and cfg.engine == 'codex':
@@ -1530,6 +1588,8 @@ def main() -> int:
         args.codex_preflight = (container, cfg.mcp_port)
     from .bridge_requirements import preflight_bridge
     hello = preflight_bridge(cfg.bridge_port)
+    if getattr(cfg, '_parked_needs_release_check', False) and hello.get('active') is not False:
+        raise SystemExit('上次挂起未确认交还游戏，请先在控制台交还游戏控制，再恢复挂起试玩')
     if getattr(cfg, 'play_scope', 'chapter') == 'visited' and hello.get('map_entry_set') is not True:
         raise RuntimeError('自由探索需要桥接 1.10.0 的地图集合门禁；未开始录制或进档')
     if getattr(cfg, 'allow_detour', False) and getattr(cfg, 'play_scope', 'chapter') != 'visited' and hello.get('map_entry_set') is not True:
@@ -1539,7 +1599,10 @@ def main() -> int:
         raise SystemExit('按章录制与菜单冻结设置需要桥接 1.9.0；请先更新 Bridge，未启动录制或游戏输入')
     saved_recording = None
     try:
-        saved_recording = Recorder.saved_session(args.previous['dir']) if args.previous else None
+        parked_source = getattr(cfg, '_parked_source', None)
+        saved_recording = Recorder.saved_session(args.previous['dir']) if args.previous and not parked_source else None
+        if parked_source:
+            Recorder.validate_resume(None, hello)
         if (args.previous and getattr(cfg,'recording_mode','continuous') != (args.previous.get('state') or {}).get('recording_mode','continuous') and saved_recording):
             clock=hello.get('clock') or {};plugin=clock.get('plugin') or {}
             if saved_recording.get('state') not in {'finished','failed','abandoned'} or clock.get('lockstep') or plugin.get('state') in {'recording','finishing'}:
@@ -1646,7 +1709,9 @@ def main() -> int:
     finally:
         try:
             keep_frozen = bool(getattr(cfg, '_keep_frozen', False))
-            if (recorder is not None and recorder.started) or (handoff_needed and not getattr(cfg,'_game_released',False) and not keep_frozen):
+            parked_release_pending = getattr(cfg, '_parked_release_pending', False)
+            if ((recorder is not None and recorder.started) or parked_release_pending
+                    or (handoff_needed and not getattr(cfg, '_game_released', False) and not keep_frozen)):
                 # 进入存档后、正式会话创建前也可能失败；此时原宏连接已经关闭，在这里收尾并恢复游戏。
                 from tools.bridge_client import BridgeClient  # noqa: WPS433
                 client = BridgeClient(port=cfg.bridge_port, timeout=120)
@@ -1662,6 +1727,9 @@ def main() -> int:
                     try:
                         if not keep_frozen:
                             client.call('deactivate')
+                            if parked_release_pending:
+                                from .parked_run import note_release
+                                note_release(run_dir, released=True)
                     finally:
                         client.close()
         finally:
@@ -1682,7 +1750,7 @@ def main() -> int:
           f"游戏推进 {summary['play_game_s'] + summary['auto_game_s']:.0f}）"
           + (f"；准备阶段 {summary['study_s']:.0f} 秒，知识库已读 {summary['kb_study']['progress']:.0%}"
              if summary.get("kb_study") else ""), flush=True)
-    return 0 if summary["completed"] or summary.get("user_stopped") or (summary.get("goal") or {}).get("completion_report") else 1
+    return 0 if summary["completed"] or summary.get("user_stopped") or summary.get("parked") or (summary.get("goal") or {}).get("completion_report") else 1
 
 
 def claim_controller_lease():
