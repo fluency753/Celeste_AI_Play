@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from orchestrator import profiles
 from orchestrator.chat import can_wake
 from orchestrator.control import RunControl
 from orchestrator.conversations import read_json, selected_run
@@ -35,23 +36,30 @@ class SessionActionTests(unittest.TestCase):
 
     def test_prepared_claude_connects_and_play_command_keeps_engine_provider_and_model(self):
         from orchestrator.session_actions import _launch_play
+        profile = profiles.create('绑定的预设')
         operation = self.operation()
-        operation.update(engine='claude',provider='anthropic')
+        operation.update(engine='claude',provider='anthropic',profile=profile)
         directory = Path(operation['directory'])
         proof = read_json(directory/'prepare_summary.json')
-        proof.update(engine='claude',provider='anthropic',game_tools_registered=True,requested_model='opus')
+        proof.update(engine='claude',provider='anthropic',game_tools_registered=True,requested_model='opus',
+                     profile=profile,kb_deny=['help/actions.md'],kb_allow=['speedrun/README.md'])
         write_json(directory/'prepare_summary.json',proof)
+        profiles.select(profiles.DEFAULT)
         with patch('orchestrator.session_actions.start_chat'),patch('orchestrator.session_actions.launch') as launch:
             _finish(self.anchor,operation)
             target = selected_run(self.anchor)
             self.assertTrue(can_wake(target))
             state = read_json(target/'run_state.json')
             self.assertEqual(state['engine'],'claude')
+            self.assertEqual(state['profile'],profile)
+            self.assertEqual(state['kb_deny'],proof['kb_deny'])
+            self.assertEqual(state['kb_allow'],proof['kb_allow'])
             _launch_play(target,{'save':'new','create_save':True,'chapter':0})
         args = launch.call_args.args[0]
         self.assertEqual(args[args.index('--engine')+1],'claude')
         self.assertEqual(args[args.index('--provider')+1],'anthropic')
         self.assertEqual(args[args.index('--model')+1],'opus')
+        self.assertEqual(args[args.index('--profile')+1],profile)
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
@@ -91,6 +99,8 @@ class SessionActionTests(unittest.TestCase):
 
     def test_new_preparation_uses_unique_workspace_and_preserves_fast_off(self):
         host = self.root / 'host'
+        profile = profiles.create('控制台选中的预设')
+        profiles.select(profile)
         with patch('orchestrator.session_actions.REPO_ROOT', self.root), \
              patch('orchestrator.session_actions.release_chat') as release, \
              patch('orchestrator.session_actions.launch', return_value=(host, {})) as launch, \
@@ -104,10 +114,21 @@ class SessionActionTests(unittest.TestCase):
         self.assertTrue(arguments[arguments.index('--agent')+1].startswith('codex-hud-'))
         self.assertEqual(arguments[arguments.index('--fast')+1], 'off')
         self.assertIn('--hud-managed', arguments)
+        self.assertEqual(arguments[arguments.index('--profile')+1], profile)
+
+    def test_explicit_test_profile_overrides_console_selection(self):
+        profiles.select(profiles.create('控制台选中的预设'))
+        with patch('orchestrator.session_actions.release_chat'), \
+             patch('orchestrator.session_actions.launch', return_value=(self.root/'host', {})) as launch, \
+             patch('orchestrator.session_actions._monitor'):
+            create_session(self.anchor, self.anchor, {'model':'gpt-test', 'profile':profiles.DEFAULT})
+        argv = launch.call_args.args[0]
+        self.assertEqual(argv[argv.index('--profile')+1], profiles.DEFAULT)
 
     def test_preparation_can_retry_after_login_in_the_same_workspace(self):
         operation = self.operation(complete=False)
-        operation.update(engine='codex', provider='codex', model='gpt-test', effort='high')
+        profile = profiles.create('等待登录的预设')
+        operation.update(engine='codex', provider='codex', model='gpt-test', effort='high', profile=profile)
         directory = Path(operation['directory'])
         host = Path(operation['host'])
         write_json(host/'status.json', {'state':'exited', 'exit_code':1})
@@ -118,6 +139,7 @@ class SessionActionTests(unittest.TestCase):
         status = operation_status(self.anchor)
         self.assertEqual(status['status'], 'login_required')
         self.assertIn('--container celeste-agent-new-explore login', status['error'])
+        profiles.select(profiles.DEFAULT)
         with patch('orchestrator.session_actions.release_chat'), \
                 patch('orchestrator.session_actions.launch', return_value=(host, {})) as launch, \
                 patch('orchestrator.session_actions._monitor'):
@@ -125,6 +147,7 @@ class SessionActionTests(unittest.TestCase):
         argv = launch.call_args.args[0]
         self.assertEqual(argv[argv.index('--agent')+1], 'new')
         self.assertNotEqual(Path(argv[argv.index('--output')+1]), directory)
+        self.assertEqual(argv[argv.index('--profile')+1], profile)
 
     def test_starting_status_follows_new_run_before_its_controller_connects(self):
         operation={'id':'test-start','agent':'new-agent','kind':'play','status':'starting','host':'fake'}
@@ -148,7 +171,7 @@ class SessionActionTests(unittest.TestCase):
 
     def test_invalid_options_never_release_current_session(self):
         with patch('orchestrator.session_actions.release_chat') as release:
-            for options in ({'name':None}, {'model':'bad; command'}, {'effort':'unknown'}, {'extra':True}):
+            for options in ({'name':None}, {'model':'bad; command'}, {'effort':'unknown'}, {'extra':True}, {'profile':'missing'}):
                 with self.subTest(options=options), self.assertRaises(ValueError):
                     create_session(self.anchor, self.anchor, options)
         release.assert_not_called()
@@ -204,6 +227,15 @@ class SessionActionTests(unittest.TestCase):
         self.assertEqual(selected_run(self.anchor), self.anchor)
         start.assert_called_once_with(self.anchor)
         self.assertEqual(read_json(self.anchor / 'session_operation.json')['status'], 'error')
+
+    def test_preparation_for_the_wrong_profile_does_not_switch_hud(self):
+        operation = self.operation()
+        operation['profile'] = profiles.DEFAULT
+        with patch('orchestrator.session_actions.start_chat') as start:
+            _finish(self.anchor, operation)
+        self.assertEqual(selected_run(self.anchor), self.anchor)
+        start.assert_called_once_with(self.anchor)
+        self.assertIn('配置与本次请求不一致', operation_status(self.anchor)['error'])
 
     def test_unprepared_old_session_cannot_silently_start_new_game(self):
         with patch('orchestrator.session_actions.release_chat') as release, self.assertRaisesRegex(ValueError, '新建并准备'):

@@ -8,6 +8,7 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 
+from . import profiles
 from .lifecycle import host_runner
 from .runtimes import RUNTIMES, runtime
 from .config import REPO_ROOT, RunConfig
@@ -22,6 +23,14 @@ from overlay.server import start_in_thread
 
 
 async def prepare(args):
+    profile = getattr(args, 'profile', None)
+    if profile is None:
+        return await _prepare(args, None)
+    with profiles.using(profile):
+        return await _prepare(args, profile)
+
+
+async def _prepare(args, profile):
     adapter = runtime(args.engine)
     cfg = RunConfig(agent=args.agent or args.engine+'-agent', save="", model=args.model, effort=args.effort,
                     knowledge_profile=args.knowledge, mode='explore' if args.knowledge == 'explore' else 'speedrun',
@@ -29,6 +38,14 @@ async def prepare(args):
                     live=True, max_minutes=args.max_minutes)
     adapter.configure(cfg, args.provider)
     cfg.codex_player_login = getattr(args, 'codex_player_login', False) and cfg.engine == 'codex'
+    profile_state = {}
+    if profile is not None:
+        cfg.profile = profile
+        cfg.kb_overlay = profiles.kb_overlay_for(profile)
+        permissions = profiles.kb_permissions(profile)
+        cfg.kb_deny = permissions['kb_deny'][cfg.mode]
+        cfg.kb_allow = permissions['kb_allow'].get(cfg.mode, [])
+        profile_state = {'profile': profile, 'kb_deny': cfg.kb_deny, 'kb_allow': cfg.kb_allow}
     cfg.model, cfg.effort = await asyncio.to_thread(adapter.resolve, cfg.model, cfg.effort, cfg.provider)
     adapter.token(cfg)  # Fail before creating containers or changing the selected session.
     cfg.mcp_port = getattr(args, 'mcp_port', cfg.mcp_port)
@@ -75,7 +92,7 @@ async def prepare(args):
                           "kb_study": study.summary(), "kb_hashes": hashes,
                           "kb_identity": study_identity(study.kb_dir),
                           "session_id": runner.session_id, "turns": runner.turns, "metrics": metrics.snapshot(),
-                          "codex_player_login": cfg.codex_player_login}
+                          "codex_player_login": cfg.codex_player_login, **profile_state}
                 if login_required:
                     result['login_required'] = login_required
                 (directory / "prepare_summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -92,7 +109,8 @@ async def prepare(args):
             'requested_model':cfg.model, 'effort':metrics.state.effort, 'knowledge_profile':cfg.knowledge_profile, 'mode':cfg.mode,
             'session_id':runner.session_id, 'session_kind':'ready', 'prepared_dir':str(directory),
             'codex_player_login':cfg.codex_player_login,
-            'sim':cfg.sim, 'sim_assist':False, 'cutscene_mode':cfg.cutscene_mode, 'max_minutes':240})
+            'sim':cfg.sim, 'sim_assist':False, 'cutscene_mode':cfg.cutscene_mode, 'max_minutes':240,
+            **profile_state})
         if adapter.fast and args.fast is not None:
             RunControl(directory).set_fast(args.fast == 'on')
     return 0 if runner.completed_preparation else 1
@@ -103,6 +121,7 @@ def main():
     ap.add_argument("--engine", choices=list(RUNTIMES), default="codex")
     ap.add_argument("--provider", default=None)
     ap.add_argument("--agent", default=None)
+    ap.add_argument("--profile", help="使用指定控制台预设的提示词和知识库")
     ap.add_argument("--codex-player-login", action="store_true", help="使用项目持久的 Codex player 登录")
     ap.add_argument("--knowledge", choices=["explore", "full"], default="explore")
     ap.add_argument("--model", default="", help="留空沿用 Codex 已登录配置，由服务回报实际模型")

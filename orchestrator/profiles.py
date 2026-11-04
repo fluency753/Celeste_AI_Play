@@ -146,6 +146,32 @@ def _empty_kb() -> dict:
     return {"kb_deny": {m: [] for m in MODES}, "kb_allow": {"explore": []}}
 
 
+def kb_permissions(pid: str, legacy_data: dict | None = None) -> dict:
+    """Read the profile's knowledge permissions with the current catalog paths."""
+    if pid == LEGACY:
+        if legacy_data is None:
+            path = config.REPO_ROOT / 'configs/local.console.json'
+            try:
+                legacy_data = json.loads(path.read_text(encoding='utf-8-sig'))
+            except (OSError, ValueError):
+                legacy_data = {}
+        data = legacy_data if isinstance(legacy_data, dict) else {}
+        deny = data.get('kb_deny') if isinstance(data.get('kb_deny'), dict) else {}
+        allow = data.get('kb_allow') if isinstance(data.get('kb_allow'), dict) else {}
+        permissions = {'kb_deny': {mode: list(deny.get(mode) or []) for mode in MODES},
+                       'kb_allow': {'explore': list(allow.get('explore') or [])}}
+    else:
+        data = meta(pid)
+        permissions = {key: data[key] for key in ('kb_deny', 'kb_allow')}
+    from . import kb_layout
+    from .kb_access import KB_ROOT
+    if kb_layout.enabled(KB_ROOT):
+        for mode, names in permissions['kb_deny'].items():
+            permissions['kb_deny'][mode] = sorted({doc.path if (doc := kb_layout.lookup(KB_ROOT, mode, name)) else name
+                                                   for name in names})
+    return permissions
+
+
 def meta(pid: str) -> dict:
     """名字、表单设置与（新建配置的）知识库权限。default 没有文件；local 只存名字与表单设置。"""
     pid = check(pid)

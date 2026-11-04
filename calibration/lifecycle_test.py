@@ -15,8 +15,8 @@ from orchestrator.control import RunControl
 from orchestrator.kb_study import KbStudy
 from orchestrator.preparation import prepare
 from orchestrator.prepared import load_preparation
-from orchestrator.runtimes import runtime
-from orchestrator import kb_access
+from orchestrator.runtimes import config_from_state, runtime
+from orchestrator import kb_access, personal_prompts, profiles
 
 
 STUB = '''import sys,json,uuid
@@ -48,6 +48,8 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
             kb.mkdir(parents=True)
             for name in ('README.md','tools.md'):
                 (kb/name).write_text('one\n', encoding='utf-8')
+            (kb/'help').mkdir()
+            (kb/'help/extra.md').write_text('optional\n', encoding='utf-8')
             helper = root/'orchestrator/workspace_files/show.py'
             helper.parent.mkdir(parents=True)
             helper.write_text('# test helper\n', encoding='utf-8')
@@ -63,12 +65,20 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 original_command(runner)  # Keep guide publication and prompt preparation; replace only the child executable.
                 commands.append(runner._common_args())
                 return [sys.executable,'-X','utf8','-u',str(stub)]
+            def prepare_fixture(cfg):
+                kb_access.prepare_view(cfg)
             with patch('orchestrator.config.REPO_ROOT',root), patch('orchestrator.preparation.REPO_ROOT',root), \
                  patch.object(kb_access, 'KB_ROOT', root/'kb'), \
+                 patch.object(profiles, '_active', profiles.LEGACY), \
                  patch('orchestrator.runtimes.Runtime.token',return_value='stub'), \
-                 patch('orchestrator.preparation.ensure_container',return_value=None), \
+                 patch('orchestrator.preparation.ensure_container',side_effect=prepare_fixture), \
                  patch('orchestrator.chat.ensure_container',return_value=None), \
                  patch.object(ClaudeRunner,'_command',command):
+                args.profile = profiles.create('指定的预设')
+                profiles.set_kb_permissions(args.profile, kb_deny={'explore':['help/extra.md']})
+                with profiles.using(args.profile):
+                    entry = personal_prompts.read('claude:explore')
+                    personal_prompts.save('claude:explore', 'CLAUDE-PROFILE-MARKER', entry['version'])
                 self.assertEqual(await asyncio.wait_for(prepare(args),10),0)
                 for name in ("show.py", "tas.py", "collision_matrix.py", "collision_matrix.md"):
                     self.assertTrue((root / "workspaces/claude-test-explore/game" / name).is_file(), name)
@@ -77,8 +87,14 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 proof = json.loads((directory/'prepare_summary.json').read_text(encoding='utf-8'))
                 self.assertEqual(proof['engine'],'claude')
                 self.assertTrue(proof['kb_study']['complete'])
-                cfg = runtime('claude').configure(RunConfig(agent='claude-test',save='',model='opus',knowledge_profile='explore'), 'anthropic')
-                load_preparation(str(directory),cfg,KbStudy(kb,1))
+                self.assertEqual(proof['profile'], args.profile)
+                self.assertIn('CLAUDE-PROFILE-MARKER', (directory/'system_prompt.md').read_text(encoding='utf-8'))
+                state = json.loads((directory/'run_state.json').read_text(encoding='utf-8'))
+                self.assertEqual(state['profile'], args.profile)
+                self.assertEqual(state['kb_deny'], ['help/extra.md'])
+                cfg = config_from_state(state)
+                self.assertFalse((kb_access.prepare_view(cfg)/'help/extra.md').exists())
+                load_preparation(str(directory),cfg,KbStudy(cfg.kb_dir,1))
                 other = runtime('codex').configure(RunConfig(agent='claude-test',save='',model='test',knowledge_profile='explore'))
                 with self.assertRaisesRegex(ValueError,'执行器'):
                     load_preparation(str(directory),other,KbStudy(kb,1))
@@ -86,10 +102,6 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(ValueError,'提供方'):
                     load_preparation(str(directory),other,KbStudy(kb,1))
 
-                state = {'engine':'claude','provider':'anthropic','agent':'claude-test','model':proof['metrics']['model'],
-                         'requested_model':'opus','effort':'high','save':'','runtime':'container','mcp_port':0,
-                         'knowledge_profile':'explore','session_kind':'ready','session_id':proof['session_id']}
-                (directory/'run_state.json').write_text(json.dumps(state),encoding='utf-8')
                 self.assertTrue(can_wake(directory))
                 control = RunControl(directory)
                 async with asyncio.timeout(10):
@@ -111,6 +123,7 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 result = json.loads((directory/'save_name_result.json').read_text(encoding='utf-8'))
                 self.assertEqual(result,{'request_id':'name-1','name':'North Star'})
                 self.assertEqual(json.loads((directory/'run_state.json').read_text(encoding='utf-8'))['session_id'],proof['session_id'])
+                self.assertIn('CLAUDE-PROFILE-MARKER', (directory/'system_prompt.md').read_text(encoding='utf-8'))
                 self.assertIn('--session-id', commands[0])
                 for command_args in commands[1:]:
                     self.assertEqual(command_args[command_args.index('--resume')+1],proof['session_id'])

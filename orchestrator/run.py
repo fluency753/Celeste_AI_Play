@@ -391,6 +391,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         previous['state'].get('codex_player_login') is True if previous else args.codex_player_login)
     if args.prepared and (args.no_study or previous):
         raise SystemExit("--prepared 只用于已准备会话新开一局，不能与 --no-study 或 --resume 合用")
+    prepared_metadata = {}
     if args.prepared:
         prepared_metadata = json.loads((Path(args.prepared)/'prepare_summary.json').read_text(encoding='utf-8'))
         cfg.codex_player_login = cfg.engine == 'codex' and prepared_metadata.get('codex_player_login') is True
@@ -446,22 +447,26 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     except ValueError as exc:
         raise SystemExit(f"--tune：{exc}") from None
     cfg.live_remind_s = cfg.remind_live_s if cfg.live else cfg.remind_s   # 解说计时：默认直播 10 秒，其余半分钟
+    kb_state = previous['state'] if previous else prepared_metadata
     if args.kb_deny is not None:
         cfg.kb_deny = sorted({x.strip().replace("\\", "/") for x in args.kb_deny.split(",") if x.strip()})
-    elif previous:
-        cfg.kb_deny = list(previous["state"].get("kb_deny") or [])
+    else:
+        cfg.kb_deny = list(kb_state.get('kb_deny') or [])
     if args.kb_allow is not None:
         from .kb_access import normalize_allow
         try:
             cfg.kb_allow = normalize_allow(cfg.mode, [x for x in args.kb_allow.split(",")])
         except ValueError as exc:
             raise SystemExit(f"--kb-allow：{exc}") from None
-    elif previous:
-        cfg.kb_allow = list(previous["state"].get("kb_allow") or [])
+    else:
+        cfg.kb_allow = list(kb_state.get('kb_allow') or [])
     cfg.kb_extra = kb_extra_choice(previous, args.kb_extra)
     if cfg.kb_extra and not cfg.kb_extra_dir.is_dir():
         raise SystemExit(f"--kb-extra：找不到目录 {cfg.kb_extra_dir}")
-    use_profile(cfg, previous, args.profile)
+    prepared_profile = prepared_metadata.get('profile')
+    use_profile(cfg, previous, args.profile if args.profile is not None else prepared_profile)
+    if prepared_profile is not None and cfg.profile != prepared_profile:
+        raise SystemExit('--profile 与准备会话绑定的配置不一致，请沿用原配置或重新准备')
     args.record = args.record is not False  # 默认开启
     cfg.record = args.record
     from .recording import load_config

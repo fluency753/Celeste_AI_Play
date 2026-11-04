@@ -149,29 +149,11 @@ def options() -> dict:
 PREFS = REPO_ROOT / "configs" / "local.console.json"
 
 
-def _legacy_kb(data: dict) -> dict:
-    deny = data.get("kb_deny") if isinstance(data.get("kb_deny"), dict) else {}
-    allow = data.get("kb_allow") if isinstance(data.get("kb_allow"), dict) else {}
-    return {"kb_deny": {mode: list(deny.get(mode) or []) for mode in ("speedrun", "explore")},
-            # 探索模式额外开放的速通知识库文件（默认一个都不开放）
-            "kb_allow": {"explore": list(allow.get("explore") or [])}}
-
-
 def _kb_permissions(pid: str, data: dict | None = None) -> dict:
-    """一份配置的知识库阅读权限：本机原有设置的在 configs/local.console.json，默认配置全部可读，新建配置的在它的 profile.json。"""
     from orchestrator import profiles
-    if pid == profiles.LEGACY:
-        permissions = _legacy_kb(_read_json(PREFS) if data is None else data)
-    else:
-        m = profiles.meta(pid)
-        permissions = {'kb_deny': m['kb_deny'], 'kb_allow': m['kb_allow']}
-    from orchestrator import kb_layout
-    from orchestrator.kb_access import KB_ROOT
-    if kb_layout.enabled(KB_ROOT):
-        for mode, names in permissions['kb_deny'].items():
-            permissions['kb_deny'][mode] = sorted({doc.path if (doc := kb_layout.lookup(KB_ROOT, mode, name)) else name
-                                                   for name in names})
-    return permissions
+    if pid == profiles.LEGACY and data is None:
+        data = _read_json(PREFS)
+    return profiles.kb_permissions(pid, data)
 
 
 def load_prefs() -> dict:

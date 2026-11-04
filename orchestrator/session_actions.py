@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 
+from . import profiles
 from .background import launch
 from .chat import can_wake
 from .config import REPO_ROOT, RunConfig
@@ -119,12 +120,15 @@ def _finish(anchor, operation):
         provider = operation.get('provider', 'codex')
         if prepared.get('engine', 'codex') != engine or prepared.get('provider', 'codex') != provider:
             raise ValueError('准备结果的执行器身份与本次请求不一致')
+        if prepared.get('profile') != operation.get('profile'):
+            raise ValueError('准备结果的配置与本次请求不一致')
         state = {'engine': engine, 'provider': provider, 'agent': operation['agent'], 'save': '',
                  'model': metrics['model'], 'requested_model':prepared.get('requested_model', metrics['model']), 'effort': metrics['effort'], 'session_id': prepared['session_id'],
                  'knowledge_profile': 'explore', 'session_kind': 'ready', 'session_name': operation['name'],
                  'codex_player_login': prepared.get('codex_player_login') is True,
                  'prepared_dir': str(directory), 'runtime': 'container', 'sim': False, 'sim_assist': False,
-                 'max_minutes': 1000}
+                 'max_minutes': 1000,
+                 **{key: prepared[key] for key in ('profile', 'kb_deny', 'kb_allow') if key in prepared}}
         write_json(directory / 'run_state.json', state)
         if runtime(engine).fast:
             RunControl(directory).set_fast(operation['fast'])
@@ -171,8 +175,9 @@ def create_session(anchor, current, options):
         operation = {**previous, 'id': ident, 'directory': str(directory), 'status': 'preparing'}
         operation.pop('error', None)
         return _launch_preparation(anchor, current, operation)
-    if not isinstance(options, dict) or set(options) - {'name', 'model', 'effort', 'engine', 'provider'}:
+    if not isinstance(options, dict) or set(options) - {'name', 'model', 'effort', 'engine', 'provider', 'profile'}:
         raise ValueError('新会话参数无效')
+    profile = profiles.check(options['profile']) if 'profile' in options else profiles.selected()
     name, model, effort = options.get('name', ''), options.get('model', ''), options.get('effort', 'high')
     if not all(isinstance(value, str) for value in (name, model, effort)):
         raise ValueError('名称、模型和推理强度须为文字')
@@ -196,7 +201,7 @@ def create_session(anchor, current, options):
     operation = {'id': ident, 'kind': 'new', 'status': 'preparing', 'previous': str(current),
                  'directory': str(directory), 'agent': agent, 'name': name or '新会话 ' + time.strftime('%H:%M'),
                  'fast': bool(fast) if adapter.fast else False, 'engine':engine, 'provider':cfg.provider,
-                 'model':model, 'effort':effort}
+                 'model':model, 'effort':effort, 'profile':profile}
     operation['cutscene_mode']=RunControl(current).cutscene_preference() or read_json(current/'run_state.json').get('cutscene_mode','auto')
     return _launch_preparation(anchor, current, operation)
 
@@ -207,6 +212,7 @@ def _launch_preparation(anchor, current, operation):
         host, _ = launch(['--engine',operation['engine'],'--provider',operation['provider'],'--agent',operation['agent'],
                           '--knowledge','explore','--model',operation['model'],'--effort',operation['effort'],
                           '--output',operation['directory'],'--hud-managed','--fast','on' if operation['fast'] else 'off']
+                         + (['--profile', operation['profile']] if operation.get('profile') else [])
                          + (['--codex-player-login'] if operation['engine'] == 'codex' else []),
                          service='prepare')
     except Exception:

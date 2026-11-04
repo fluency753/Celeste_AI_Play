@@ -101,6 +101,27 @@ class LegacyTests(ProfileFixture):
         with self.assertRaises(SystemExit):
             use_profile(c, None, "missing")
 
+    def test_prepared_play_uses_bound_profile_and_permissions_after_selection_changes(self):
+        from orchestrator.run import parse_args
+        pid = profiles.create('准备绑定的预设')
+        profiles.select(profiles.DEFAULT)
+        directory = self.root / 'prepared'
+        directory.mkdir()
+        (directory / 'prepare_summary.json').write_text(json.dumps({
+            'profile': pid, 'kb_deny': ['help/actions.md'], 'kb_allow': ['speedrun/techniques.md'],
+            'requested_model': 'gpt-test', 'metrics': {'effort': 'medium'},
+        }), encoding='utf-8')
+        argv = ['run', '--agent', 'fixture', '--save', 'test', '--engine', 'codex',
+                '--mode', 'explore', '--prepared', str(directory), '--no-record']
+        with patch.object(sys, 'argv', argv):
+            selected, _ = parse_args()
+        self.assertEqual(selected.profile, pid)
+        self.assertEqual(selected.kb_deny, ['help/actions.md'])
+        self.assertEqual(selected.kb_allow, ['speedrun/techniques.md'])
+        with patch.object(sys, 'argv', argv + ['--profile', profiles.DEFAULT]):
+            with self.assertRaisesRegex(SystemExit, '准备会话绑定的配置不一致'):
+                parse_args()
+
     def test_legacy_prompt_text_matches_old_lookup(self):
         """本机原有设置下生成的启动提示词，与直接按 local/prompts/、local/personal_prompts.json 生成的完全相同。"""
         line = self.legacy_override()

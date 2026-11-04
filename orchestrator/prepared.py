@@ -68,6 +68,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
     cfg = RunConfig(agent=args.agent, save="test", model="", knowledge_profile=args.knowledge,
                     mode='explore' if args.knowledge == 'explore' else 'speedrun', sim=False)
+    metadata = json.loads((Path(args.directory) / 'prepare_summary.json').read_text(encoding='utf-8'))
+    if 'profile' in metadata:
+        from . import profiles
+        cfg.profile = profiles.check(metadata['profile'])
+        cfg.kb_overlay = profiles.kb_overlay_for(cfg.profile)
+        cfg.kb_deny = list(metadata.get('kb_deny') or [])
+        cfg.kb_allow = list(metadata.get('kb_allow') or [])
     from .runtimes import runtime
     runtime(args.engine).configure(cfg, args.provider)
     from .kb_access import prepare_view
