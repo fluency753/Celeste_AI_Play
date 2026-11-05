@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from orchestrator.session_export import TZ, collect_session, write_export, rows
+from orchestrator.session_export import TZ, collect_session, write_export, rows, simulation_fact
 from orchestrator.session_export_native import scan_native, read_container_simulations, reader_code
 
 
@@ -410,6 +410,79 @@ class SessionExportTests(unittest.TestCase):
             write_export(report, archive.parent)
         with self.assertRaises(ValueError):
             write_export(report, self.one / 'export')
+
+    def test_text_simulation_failure_links_saved_request_without_inventing_a_result(self):
+        home = self.root / 'home'
+        path = home / 'sessions/2026/11/03' / (self.sid + '.jsonl')
+        path.parent.mkdir(parents=True)
+        self.append(path, {'type': 'session_meta', 'payload': {'id': self.sid}})
+        args = {'request_id': 'six-entry', 'candidates': [['24,R', '12']]}
+        for ident in ('first', 'retry'):
+            self.append(path, {'payload': {'type': 'item_completed', 'started_at_ms': 1100000,
+                'item': {'type': 'DynamicToolCall', 'id': ident, 'tool': 'celeste_simulate',
+                         'arguments': args, 'success': True,
+                         'content_items': [{'type': 'inputText', 'text': '模拟执行结果未确认；不要重放'}]}}})
+        # Exercise the exact generated, isolated reader used inside existing containers.
+        code = reader_code() + '\nprint(json.dumps(scan_native(sys.argv[1], sys.argv[2])))\n'
+        read = subprocess.run([sys.executable, '-I', '-S', '-c', code, str(home), self.sid],
+                              capture_output=True, text=True, encoding='utf-8', check=True)
+        native = json.loads(read.stdout)
+        self.put(self.two / 'sim_energy.json', {'receipts': [{
+            'id': 'six-entry', 'digest': '59063a8fb23099ee6f618338d0debb93159f89728c37d2eff483ae80b88a58f6',
+            'cost': 3, 'status': 'used'}]})
+        report = collect_session(self.two, native_reader=lambda state: native)
+        self.assertEqual(report['simulation_summary']['matched_receipts'], 1)
+        self.assertEqual(report['simulation_summary']['net_spent'], 3)
+        self.assertEqual(report['simulation_summary']['unavailable_prediction_results'], 2)
+        self.assertEqual(len(report['simulations']), 2)
+        for row in report['simulations']:
+            self.assertEqual(row['receipt'], 'six-entry')
+            self.assertEqual(row['association_source'], 'request_id+digest')
+            self.assertEqual(row['ledger_cost'], 3)
+            self.assertEqual(row['ledger_status'], 'used')
+            self.assertEqual(row['candidates'], args['candidates'])
+            self.assertEqual(row['wall'], 1100)
+            self.assertTrue(row['success'])
+            self.assertFalse(row['result_available'])
+            self.assertEqual(row['result_format'], 'text')
+            self.assertIsNone(row['cost'])
+            self.assertIsNone(row['balance_after'])
+        self.assertFalse(any('成本与账本不一致' in value for value in report['warnings']))
+        archive = write_export(report, self.root / 'recovered-failure')
+        with zipfile.ZipFile(archive) as bundle:
+            self.assertEqual(len(json.loads(bundle.read('session.json'))['simulations']), 2)
+        with (archive.parent / 'simulations.csv').open(encoding='utf-8-sig', newline='') as stream:
+            self.assertTrue(all(row['cost'] == '' and row['ledger_cost'] == '3' for row in csv.DictReader(stream)))
+
+    def test_request_receipt_fallback_requires_complete_matching_inline_input(self):
+        ledger = {'id': 'r', 'digest': hashlib.sha256(json.dumps({
+            'candidates': [['60,R']], 'format': 'celeste_ai'}, sort_keys=True).encode()).hexdigest(),
+            'cost': 3, 'status': 'used'}
+        self.put(self.two / 'sim_energy.json', {'receipts': [ledger]})
+        for args, extra in [
+            ({'request_id': 'r', 'candidates': [['60,L']]}, {}),
+            ({'candidates': [['60,R']]}, {}),
+            ({'request_id': {'invalid': True}, 'candidates': [['60,R']]}, {}),
+            ({'request_id': 'r', 'request_file': '/workspace/request.json'}, {}),
+            ({'request_id': 'r', 'candidates': [['60,R']]}, {'analysis_candidates_truncated': True}),
+            ({'request_id': 'r', 'candidates': [None]}, {}),
+        ]:
+            with self.subTest(args=args, extra=extra):
+                fact = simulation_fact('call', args, 'result unavailable', True, **extra)
+                if 'request_file' in args:
+                    self.assertFalse(fact['query_only'])
+                report = collect_session(self.two, native_reader=lambda state: {'calls': [fact]})
+                self.assertEqual(report['simulation_summary']['matched_receipts'], 0)
+                self.assertEqual(report['simulation_summary']['net_spent'], 3)
+                self.assertTrue(any(row.get('detail_missing') for row in report['simulations']))
+        fact = simulation_fact('normalized', {'request_id': 'r', 'candidates': [[' 60 , r ']]}, [], False)
+        report = collect_session(self.two, native_reader=lambda state: {'calls': [fact]})
+        self.assertEqual(report['simulation_summary']['matched_receipts'], 1)
+        self.assertFalse(report['simulations'][0]['success'])
+        self.assertEqual(report['simulations'][0]['result_format'], 'missing')
+        empty_json = simulation_fact('empty-json', {}, '{}', True)
+        self.assertEqual(empty_json['result_format'], 'json')
+        self.assertIsNone(empty_json['result_available'])
 
     def test_native_failure_and_incomplete_lines_are_reported_without_invented_times(self):
         self.put(self.one / 'sim_energy.json', {'receipts': [{'id': 'r', 'cost': 3, 'status': 'used'}]})

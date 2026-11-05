@@ -355,8 +355,14 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
                'duration_s': detail.get('duration_s', call.get('duration_s'))}
         receipt = receipts.get(call.get('receipt'))
         if receipt:
+            row['association_source'] = 'response_receipt'
+        elif not call.get('receipt'):
+            receipt = requested_simulation_receipt(call, receipts)
+            if receipt:
+                row.update(receipt=receipt['id'], association_source='request_id+digest')
+        if receipt:
             matched.add(receipt['id'])
-            if call.get('cost') != receipt.get('cost'):
+            if call.get('cost') is not None and call.get('cost') != receipt.get('cost'):
                 warnings.append(f"回执 {receipt['id']} 的工具返回成本与账本不一致")
             row.update(ledger_status=receipt.get('status'), ledger_cost=receipt.get('cost'), ledger_source=receipt['ledger_source'])
         elif call.get('receipt'):
@@ -370,7 +376,7 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
     for ident, detail in timing.items():
         if str(detail.get('tool', '')).split(' · ')[0] in ('celeste_simulate', 'mcp__celeste__simulate') and ident not in represented:
             simulations.append({'call_id': ident, **detail, 'time': timestamp(detail.get('wall')), 'detail_missing': True})
-    simulations.sort(key=lambda row: (row.get('wall') is None, row.get('wall') or 0, row.get('receipt', '')))
+    simulations.sort(key=lambda row: (row.get('wall') is None, row.get('wall') or 0, row.get('receipt') or ''))
     text_filter = None
     if since is not None or until is not None:
         # Canonical events must win over later reply copies even at a range boundary.
@@ -397,6 +403,9 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
     balance = (latest.get('sim_energy') or {}).get('balance')
     if receipts and len(matched) < len(receipts):
         warnings.append(f'{len(receipts) - len(matched)} 条扣费回执没有可关联的调用详情；未知时间/输入保持为空，不按顺序猜配')
+    unavailable = sum(call.get('result_available') is False for call in native_calls.values())
+    if unavailable:
+        warnings.append(f'{unavailable} 次模拟预测调用没有结构化预测结果（可能被拒绝或执行失败）；工具 success 标记不代表预测成功，详见分析版 tool_calls.jsonl 的原始公开响应投影')
     report = {'schema_version': 1, 'exported_at': datetime.now(TZ).isoformat(), 'timezone': 'Asia/Shanghai',
             'scope': '网页 HUD 对话栏公开文本、主控累计时间及模拟器调用/额度；不含工具结果正文、推理或截图文字识别。',
             'session': {'engine': key[0], 'provider': key[1], 'session_id': key[2], 'agent': selected.get('agent'), 'save': selected.get('save')},
@@ -412,6 +421,7 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
             'simulation_summary': {'receipt_count': len(receipts), 'matched_receipts': len(matched), 'net_spent': totals['used'],
                                    'reserved': totals['reserved'], 'refunded': totals['refunded'], 'final_balance': balance,
                                    'observed_calls': len(native_calls), 'failed_calls': sum(call.get('success') is False for call in native_calls.values()),
+                                   'unavailable_prediction_results': unavailable,
                                    'balance_queries': sum(call.get('query_only') is True for call in native_calls.values()),
                                    'successful_predictions': latest.get('sim_calls'), 'predicted_routes': latest.get('sim_rollouts')},
             'warnings': list(dict.fromkeys(warnings))}
@@ -426,25 +436,52 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
     return report
 
 
+def requested_simulation_receipt(call, receipts):
+    """Link a saved inline request, without reading today's mutable request files."""
+    request_id = call.get('request_id')
+    if not isinstance(request_id, str):
+        return None
+    receipt = receipts.get(request_id)
+    if not receipt or call.get('request_file') is not None or call.get('analysis_candidates_truncated'):
+        return None
+    from types import SimpleNamespace
+    from .simulation import _normalize
+    # Reuse the runtime's pure inline normalization with its largest supported limits.
+    # No client, workspace, worker or ledger is passed to it.
+    session = SimpleNamespace(cfg=SimpleNamespace(sim=True), workspace=None)
+    try:
+        _, digest, _, _, _ = _normalize(session, {
+            'request_id': call.get('request_id'), 'candidates': call.get('candidates'),
+            'input_format': call.get('input_format', 'celeste_ai')})
+    except (TypeError, ValueError):
+        return None
+    return receipt if digest == receipt.get('digest') else None
+
+
 def simulation_fact(ident, args, content, success, **metadata):
     args = args if isinstance(args, dict) else {}
     texts = [content] if isinstance(content, str) else [b['text'] for b in (content or []) if isinstance(b, dict) and isinstance(b.get('text'), str)]
     data = {}
+    parsed_json = False
     for text in texts:
         try:
             obj = json.loads(text)
             if isinstance(obj, dict):
                 data = obj
+                parsed_json = True
                 break
         except ValueError:
             pass
     energy, info = data.get('energy') or {}, data.get('info') or {}
-    query = args.get('candidates') is None
+    query = args.get('candidates') is None and args.get('request_file') is None
     cost = data.get('cost', 0 if query and success is True else None)
     balance = energy.get('balance', data.get('balance'))
     before = balance + cost if type(balance) is int and type(cost) is int else None
     # Explicit projection: never include tool bodies, private state/trajectories or reasoning.
     return {'call_id': ident, **metadata, 'success': success, 'query_only': query,
+            'request_id': args.get('request_id'), 'request_file': args.get('request_file'),
+            'result_format': 'json' if parsed_json else 'text' if texts else 'missing',
+            'result_available': None if query else isinstance(data.get('results'), list),
             'candidates': args.get('candidates'), 'input_format': args.get('input_format', 'celeste_ai'),
             'receipt': data.get('receipt'), 'cost': cost, 'balance_after': balance, 'balance_before_derived': before,
             'capacity': energy.get('capacity', data.get('capacity')), 'rules': energy.get('rules', data.get('rules')),
