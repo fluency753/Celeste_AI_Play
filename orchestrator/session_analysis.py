@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 import sqlite3
 
-from .session_export import rows, timestamp, TIME_FIELDS
+from .session_export import SessionSourceRows, timestamp, TIME_FIELDS
 from .session_export_projection import bounded_tree, canonical_tool, clean_text, finite, iso_epoch, project_tool
 
 
@@ -77,12 +77,13 @@ class Analysis:
         self.parameter_priority = {}
         self.result_priority = {}
         self.detail_bytes = 0
+        self.source_rows = SessionSourceRows(chain)
 
     def read(self, directory, name):
         path = directory / name
         if path.exists():
             self.sources.append({'path': str(path), 'size_at_capture': path.stat().st_size})
-        return enumerate(rows(path, self.warnings, line_limit=32 * 1024 * 1024), 1)
+        return self.source_rows.read(path, self.warnings, line_limit=32 * 1024 * 1024)
 
     def context(self, directory):
         return {'session_id': self.session_id, 'run_id': self.run_ids[str(directory)], 'run': str(directory)}
@@ -381,8 +382,11 @@ class Analysis:
                 connection.row_factory = sqlite3.Row
                 connection.execute('PRAGMA query_only=ON')
                 connection.execute('BEGIN')
+                copied_actions = self.source_rows.copied_actions(directory, self.warnings)
                 for entry in connection.execute('SELECT * FROM actions ORDER BY id'):
                     entry = dict(entry)
+                    if self.source_rows.action_key(entry) in copied_actions:
+                        continue
                     if entry.get('kind') == 'message':
                         continue
                     self.event(self.context(directory), 'control.requested', entry.get('wall'), str(db) + '#actions', entry.get('id'),
@@ -441,6 +445,8 @@ class Analysis:
                       'tool_calls', 'compactions', 'retries', 'output_tokens', 'thinking_tokens')
             row = {**context, 'snapshot_id': stable_id(context['run_id'], path.name, data.get('written_wall')),
                    'wall': wall(data.get('written_wall')), 'source': str(path), 'canonical': path == canonical,
+                   'metrics_authoritative': state.get('_export_source_kind', 'run') == 'run',
+                   'source_kind': state.get('_export_source_kind', 'run'),
                    'counters': {key: data.get(key) for key in fields},
                    'game_clock': bounded_tree(data.get('game_clock')),
                    'chapter_base': ({key: value for key, value in data['chapter_base'].items() if key in fields and finite(value)}
@@ -632,7 +638,7 @@ class Analysis:
 
 def summarize(records, chain, run_ids, since, until):
     tools, actions, snapshots = records['tool_calls'], records['actions'], records['metric_snapshots']
-    by_path = {row['run']: row for row in snapshots if row['canonical']}
+    by_path = {row['run']: row for row in snapshots if row['canonical'] and row.get('metrics_authoritative', True)}
     comparisons = []
     for directory, state in chain:
         before = by_path.get(str(Path(state['resumed_from']).resolve())) if isinstance(state.get('resumed_from'), str) else None

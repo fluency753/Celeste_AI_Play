@@ -5,6 +5,7 @@ from datetime import datetime
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -44,6 +45,134 @@ class SessionExportTests(unittest.TestCase):
                                         'sim_calls': 1, 'sim_rollouts': 2, 'sim_energy': {'balance': 17}})
         (run / 'public_events.jsonl').touch()
         return run
+
+    def make_idle_chat(self, name):
+        chat = (self.root / 'local' / 'hud-idle' / 'chats' / name).resolve()
+        chat.mkdir(parents=True)
+        self.put(chat / 'run_state.json', {'engine': 'codex', 'provider': 'codex', 'session_id': self.sid,
+                                           'agent': 'tag', 'session_kind': 'ready', 'resumed_from': str(self.one)})
+        self.put(chat / 'metrics.json', {'elapsed_s': 9999, 'written_wall': 5000, 'sim_energy': {'balance': 999}})
+        return chat
+
+    def test_idle_preparation_chat_and_save_name_join_the_export_without_overriding_play_metrics(self):
+        chat = self.make_idle_chat('prepared')
+        self.append(chat / 'public_events.jsonl', {'id': 'public:prepared', 'text': '准备完成', 'wall': 1005})
+        self.append(chat / 'public_events.jsonl', {'id': 'public:name', 'text': 'Echo', 'wall': 1006})
+        self.put(chat / 'save_name_result.json', {'request_id': 'request-1', 'name': 'Echo'})
+        db = chat / 'control.sqlite3'
+        with closing(sqlite3.connect(db)) as connection:
+            connection.executescript('CREATE TABLE actions(id,kind,text,status,wall); CREATE TABLE replies(id,text,wall);')
+            connection.execute('INSERT INTO actions VALUES(1,?,?,?,?)', ('message', '请自行命名', 'submitted', 1004))
+            connection.execute('INSERT INTO replies VALUES(?,?,?)', ('name', 'Echo', 4000))
+            connection.commit()
+        duplicate = self.make_idle_chat('duplicate')
+        self.put(duplicate / 'save_name_result.json', {'request_id': 'request-1', 'name': 'Echo'})
+        preparation = self.make_run('20261103-090000', 8000)
+        state = json.loads((preparation / 'run_state.json').read_text(encoding='utf-8'))
+        self.put(preparation / 'run_state.json', {**state, 'session_kind': 'ready'})
+        self.put(preparation / 'metrics.json', {'elapsed_s': 8000, 'written_wall': 6000, 'sim_energy': {'balance': 888}})
+        foreign = self.make_idle_chat('foreign')
+        self.put(foreign / 'run_state.json', {'engine': 'claude', 'provider': 'anthropic', 'session_id': self.sid})
+        self.append(foreign / 'public_events.jsonl', {'id': 'foreign', 'text': 'FOREIGN_CANARY', 'wall': 1005})
+        self.append(chat / 'decision_timing.jsonl', {'event': 'tool_requested', 'wall': 1005, 'turn': 1,
+                                                   'tool_id': 'prep-tool', 'tool': 'Read'})
+        before = hashlib.sha256(db.read_bytes()).hexdigest()
+        report = collect_session(self.two, include_analysis=True)
+        self.assertEqual([row['text'] for row in report['public_text']], ['请自行命名', '准备完成', 'Echo'])
+        self.assertNotIn('FOREIGN_CANARY', json.dumps(report))
+        self.assertEqual(report['time_summary']['elapsed_s'], 15)
+        self.assertEqual(report['simulation_summary']['final_balance'], 17)
+        self.assertEqual(report['time_summary']['source'], str((self.two / 'summary.json').resolve()))
+        self.assertEqual(len(report['save_naming']), 1)
+        naming = report['save_naming'][0]
+        self.assertEqual((naming['request_id'], naming['name']), ('request-1', 'Echo'))
+        self.assertEqual(set(naming['runs']), {str(chat), str(duplicate)})
+        self.assertIsNone(naming['wall'])
+        self.assertIsNone(naming['time'])
+        idle_snapshots = [row for row in report.analysis_records['metric_snapshots'] if row['run'] == str(chat)]
+        self.assertTrue(idle_snapshots)
+        self.assertTrue(all(not row['metrics_authoritative'] for row in idle_snapshots))
+        prep_segment = next(row for row in report['segments'] if Path(row['run']) == preparation.resolve())
+        self.assertEqual(prep_segment['source_kind'], 'preparation')
+        self.assertFalse(prep_segment['metrics_authoritative'])
+        self.assertEqual(report['analysis']['snapshot_deltas'], [])
+        self.assertTrue(any(row['call_id'] == 'prep-tool' for row in report.analysis_records['tool_calls']))
+        self.assertEqual(hashlib.sha256(db.read_bytes()).hexdigest(), before)
+        archive = write_export(report, self.root / 'lifecycle-export')
+        with zipfile.ZipFile(archive) as bundle:
+            self.assertIn('Echo', bundle.read('public_text.csv').decode('utf-8-sig'))
+            self.assertEqual(json.loads(bundle.read('session.json'))['save_naming'], report['save_naming'])
+        for name, digest in json.loads((archive.parent / 'manifest.json').read_text(encoding='utf-8')).items():
+            self.assertEqual(hashlib.sha256((archive.parent / name).read_bytes()).hexdigest(), digest)
+        from_chat = collect_session(chat, since='1970-01-01T00:16:45Z', until='1970-01-01T00:16:47Z')
+        self.assertEqual([row['text'] for row in from_chat['public_text']], ['准备完成', 'Echo'])
+        self.assertEqual(from_chat['save_naming'][0]['window_membership'], 'unknown')
+        self.assertEqual(from_chat['time_summary']['elapsed_s'], 15)
+        self.put(duplicate / 'save_name_result.json', {'request_id': 'request-1', 'name': 'Different'})
+        conflict = collect_session(self.two)
+        self.assertEqual({row['name'] for row in conflict['save_naming']}, {'Echo', 'Different'})
+        self.assertTrue(any('不同名字' in warning for warning in conflict['warnings']))
+
+    def test_preparation_only_has_no_play_totals(self):
+        chat = self.make_idle_chat('standalone')
+        self.put(chat / 'run_state.json', {'engine': 'codex', 'provider': 'codex', 'session_id': 'standalone-session',
+                                          'session_kind': 'ready'})
+        report = collect_session(chat)
+        self.assertEqual(report['runs'], [str(chat)])
+        self.assertIsNone(report['time_summary']['elapsed_s'])
+        self.assertIsNone(report['simulation_summary']['final_balance'])
+        self.assertFalse(report['time_summary']['metrics_authoritative'])
+
+    def test_cloned_chat_history_is_not_counted_as_new_actions_or_tool_calls(self):
+        chat = self.make_idle_chat('clone')
+        state = json.loads((chat / 'run_state.json').read_text(encoding='utf-8'))
+        state.update(conversation_source=self.sid, conversation_origin=self.one.name)
+        self.put(chat / 'run_state.json', state)
+        action = {'id': 'act:1:0', 'text': '真实动作', 'wall': 1001, 'kind': '尝试'}
+        for directory in (self.one, self.two, chat):
+            self.append(directory / 'public_events.jsonl', action)
+        tool = {'method': 'item/started', 'wall': 1002, 'params': {'threadId': self.sid,
+                'turnId': 'original-turn', 'item': {'id': 'original-call', 'type': 'commandExecution', 'command': 'true'}}}
+        decision = {'i': 1, 'attempt': 0, 't': 1, 'thought': '真实动作', 'inputs': ['1,R'], 'frames': 1}
+        for directory in (self.one, chat):
+            self.append(directory / 'codex_events.jsonl', tool)
+            self.append(directory / 'decisions.jsonl', decision)
+            with closing(sqlite3.connect(directory / 'control.sqlite3')) as db:
+                db.executescript('CREATE TABLE actions(id,kind,text,status,wall); CREATE TABLE replies(id,text,wall);')
+                db.execute('INSERT INTO actions VALUES(1,?,?,?,?)', ('message', '历史请求', 'submitted', 1003))
+                db.commit()
+        self.append(chat / 'public_events.jsonl', {'id': 'public:new-chat', 'text': '新增聊天', 'wall': 1004})
+        self.append(chat / 'codex_events.jsonl', {**tool, 'wall': 1005, 'params': {**tool['params'], 'turnId': 'new-turn',
+                    'item': {**tool['params']['item'], 'id': 'new-call'}}})
+        with closing(sqlite3.connect(chat / 'control.sqlite3')) as db:
+            db.execute('INSERT INTO actions VALUES(2,?,?,?,?)', ('message', '新增请求', 'submitted', 1006))
+            db.commit()
+        report = collect_session(self.one, include_analysis=True)
+        self.assertEqual([r['text'] for r in report['public_text']].count('真实动作'), 2)
+        self.assertEqual([r['text'] for r in report['public_text']].count('历史请求'), 1)
+        self.assertEqual([r['text'] for r in report['public_text']].count('新增请求'), 1)
+        self.assertEqual([r['text'] for r in report['public_text']].count('新增聊天'), 1)
+        self.assertEqual(len(report.analysis_records['actions']), 1)
+        calls = [row['call_id'] for row in report.analysis_records['tool_calls']]
+        self.assertEqual(calls.count('original-call'), 1)
+        self.assertEqual(calls.count('new-call'), 1)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows junction discovery boundary')
+    def test_idle_chat_discovery_rejects_junctions(self):
+        target = self.root / 'other-source'
+        target.mkdir()
+        self.put(target / 'run_state.json', {'engine': 'codex', 'provider': 'codex', 'session_id': self.sid})
+        self.append(target / 'public_events.jsonl', {'id': 'trap', 'text': 'JUNCTION_CANARY', 'wall': 1005})
+        link = self.root / 'local' / 'hud-idle' / 'chats' / 'linked'
+        link.parent.mkdir(parents=True)
+        env = {**os.environ, 'EXPORT_TEST_LINK': str(link), 'EXPORT_TEST_TARGET': str(target)}
+        subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                        '$ErrorActionPreference="Stop"; New-Item -ItemType Junction -Path $env:EXPORT_TEST_LINK -Target $env:EXPORT_TEST_TARGET | Out-Null'],
+                       env=env, check=True, capture_output=True)
+        self.addCleanup(link.rmdir)
+        report = collect_session(self.one)
+        self.assertNotIn('JUNCTION_CANARY', json.dumps(report))
+        self.assertTrue(any('跳过链接或越界' in warning for warning in report['warnings']))
 
     def test_full_history_readonly_wal_cross_run_scope_and_no_cumulative_double_count(self):
         for run in (self.one, self.two):

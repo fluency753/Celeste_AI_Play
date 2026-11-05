@@ -93,6 +93,73 @@ def message_time_bound(value):
         raise ValueError(f'无效的公开消息时间范围：{value!r}；请使用 ISO 日期时间') from exc
 
 
+def _source_directory(path, root):
+    """Discovered sources must stay under the selected project without links."""
+    if not path.resolve().is_relative_to(root):
+        return False
+    current = path
+    while current != root:
+        info = current.lstat()
+        if current.is_symlink() or getattr(info, 'st_file_attributes', 0) & 0x400:
+            return False
+        current = current.parent
+    return True
+
+
+class SessionSourceRows:
+    """A cloned chat contributes appended events, while its copied prefix stays with the origin."""
+    COPIED_LOGS = {'public_events.jsonl', 'codex_events.jsonl', 'decisions.jsonl'}
+
+    def __init__(self, chain):
+        self.origins = {}
+        self.action_keys = {}
+        for directory, state in chain:
+            origin = state.get('conversation_origin')
+            if not isinstance(origin, str) or state.get('conversation_source') != state.get('session_id'):
+                continue
+            matches = [path for path, source in chain if path != directory and path.name == origin
+                       and not source.get('conversation_source')]
+            if len(matches) == 1:
+                self.origins[directory] = matches[0]
+
+    def read(self, path, warnings, *, line_limit=4 * 1024 * 1024):
+        origin = self.origins.get(path.parent)
+        original = rows(origin / path.name, warnings, line_limit=line_limit) if origin and path.name in self.COPIED_LOGS else None
+        try:
+            for index, record in enumerate(rows(path, warnings, line_limit=line_limit), 1):
+                if original is not None:
+                    if record == next(original, None):
+                        continue
+                    original.close()
+                    original = None
+                yield index, record
+        finally:
+            if original is not None:
+                original.close()
+
+    @staticmethod
+    def action_key(record):
+        return tuple(record.get(key) for key in ('id', 'kind', 'text', 'wall'))
+
+    def copied_actions(self, directory, warnings):
+        origin = self.origins.get(directory)
+        if origin is None:
+            return set()
+        if origin not in self.action_keys:
+            keys = set()
+            db = origin / 'control.sqlite3'
+            if db.exists():
+                try:
+                    with closing(sqlite3.connect(db.as_uri() + '?mode=ro', uri=True)) as connection:
+                        connection.row_factory = sqlite3.Row
+                        connection.execute('PRAGMA query_only=ON')
+                        keys = {self.action_key(dict(row)) for row in connection.execute('SELECT id,kind,text,wall FROM actions')}
+                except sqlite3.Error as exc:
+                    warnings.append(f'{db}: 无法核对复制的控制请求：{exc}')
+            self.action_keys[origin] = keys
+        return self.action_keys[origin]
+
+
 def collect_session(run, *, runs_root=None, native_reader=None, since=None, until=None, include_analysis=False, workspace=None):
     """No game/model connection, writes or UI history limits; native_reader is an optional read boundary."""
     since, until = message_time_bound(since), message_time_bound(until)
@@ -106,13 +173,30 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
     key = identity(selected)
     if key[0] not in ('codex', 'claude') or not isinstance(key[2], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key[2]):
         raise ValueError('运行目录没有可识别的执行器与会话 ID')
-    root = Path(runs_root).resolve() if runs_root else next((p for p in run.parents if p.name == 'runs'), run.parent.parent)
-    candidates = {run / 'run_state.json', *root.glob('*/*/run_state.json'), *root.glob('*/*/chats/*/run_state.json')}
+    idle_chat_entry = run.parent.name == 'chats' and run.parent.parent.name == 'hud-idle' and run.parent.parent.parent.name == 'local'
+    default_root = run.parents[3] / 'runs' if idle_chat_entry else run.parent.parent
+    root = Path(runs_root).resolve() if runs_root else next((p for p in run.parents if p.name == 'runs'), default_root)
+    idle_chats = root.parent / 'local' / 'hud-idle' / 'chats'
+    candidates = {path: (root, 'run') for path in (*root.glob('*/*/run_state.json'), *root.glob('*/*/chats/*/run_state.json'))}
+    if root.name == 'runs':
+        candidates.update({path: (root.parent, 'hud_idle_chat') for path in idle_chats.glob('*/run_state.json')})
+    candidates.setdefault(run / 'run_state.json', (run, 'hud_idle_chat' if idle_chat_entry else 'run'))
     chain = []
-    for path in sorted(candidates):
+    for path, (boundary, source_kind) in sorted(candidates.items()):
+        try:
+            if not _source_directory(path, boundary):
+                warnings.append(f'{path}: 跳过链接或越界的会话来源')
+                continue
+        except OSError as exc:
+            warnings.append(f'{path}: {exc}')
+            continue
         state = read_object(path, warnings)
         if identity(state) == key:
-            chain.append((path.parent, state))
+            if source_kind == 'run' and state.get('session_kind') == 'ready':
+                source_kind = 'preparation'
+            chain.append((path.parent, {**state, '_export_source_kind': source_kind}))
+    if not chain:
+        raise ValueError('未找到可安全读取的同会话来源')
     snapshots = {}
     for directory, _ in chain:
         # The HUD consumes metrics, including post-play chat; summary is only a fallback.
@@ -128,7 +212,9 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
         return wall if timestamp(wall) else path.stat().st_mtime if path.exists() else 0
 
     chain.sort(key=lambda pair: (snapshot_wall(pair), str(pair[0])))
+    source_rows = SessionSourceRows(chain)
     texts, seen, segments, receipts, native_calls, timing, source_files = [], set(), [], {}, {}, {}, []
+    save_names = {}
 
     def text_event(directory, event, source):
         text = event.get('text')
@@ -149,17 +235,36 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
     for directory, state in chain:
         metrics_file, metrics = snapshots[directory]
         segments.append({'run': str(directory), 'save': state.get('save'), 'model': state.get('model'),
+                         'source_kind': state['_export_source_kind'],
+                         'copied_from': str(source_rows.origins[directory]) if directory in source_rows.origins else None,
+                         'metrics_authoritative': state['_export_source_kind'] == 'run',
                          'snapshot_source': str(metrics_file), 'metrics': metrics})
         for name in ('run_state.json', 'public_events.jsonl', 'decisions.jsonl', 'control.sqlite3',
-                     'sim_energy.json', 'decision_timing.jsonl', metrics_file.name):
+                     'sim_energy.json', 'decision_timing.jsonl', 'save_name_result.json', metrics_file.name):
             path = directory / name
             if path.exists():
                 source_files.append({'path': str(path), 'size_at_capture': path.stat().st_size})
-        events = list(rows(directory / 'public_events.jsonl', warnings))
+        naming_file = directory / 'save_name_result.json'
+        if naming_file.exists():
+            record = read_object(naming_file, warnings)
+            from .saves import validate_new_name
+            try:
+                name = validate_new_name(record.get('name'))
+                request = record.get('request_id')
+                if not isinstance(request, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', request):
+                    raise ValueError('请求 ID 无效')
+            except ValueError:
+                warnings.append(f'{naming_file}: 命名结果无效，未加入命名索引')
+            else:
+                entry = save_names.setdefault((request, name), {'request_id': request, 'name': name, 'runs': [], 'sources': [],
+                    'wall': None, 'time': None, 'window_membership': 'unknown' if since is not None or until is not None else 'unfiltered'})
+                entry['runs'].append(str(directory))
+                entry['sources'].append(str(naming_file))
+        events = [event for _, event in source_rows.read(directory / 'public_events.jsonl', warnings)]
         for event in events:
             text_event(directory, event, str(directory / 'public_events.jsonl'))
         public_ids = {event.get('id') for event in events}
-        for decision in rows(directory / 'decisions.jsonl', warnings):
+        for _, decision in source_rows.read(directory / 'decisions.jsonl', warnings):
             ident = f"act:{decision.get('i')}:{decision.get('attempt', 0)}"
             if ident not in public_ids:
                 began = metrics.get('started_wall')
@@ -168,7 +273,7 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
                                       'kind': '正式思考' if metrics.get('formal_only') else '尝试'}, str(directory / 'decisions.jsonl'))
         # Older runs may predate public_events; never export user inputs/tool bodies from protocol traces.
         if not (directory / 'public_events.jsonl').exists():
-            for event in rows(directory / 'codex_events.jsonl', warnings):
+            for _, event in source_rows.read(directory / 'codex_events.jsonl', warnings):
                 params = event.get('params') or {}
                 item = params.get('item') or {}
                 if event.get('method') == 'item/completed' and item.get('type') == 'agentMessage':
@@ -189,7 +294,10 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
                     connection.row_factory = sqlite3.Row
                     connection.execute('PRAGMA query_only=ON')
                     connection.execute('BEGIN')
+                    copied_actions = source_rows.copied_actions(directory, warnings)
                     for row in connection.execute("SELECT * FROM actions WHERE kind='message' ORDER BY id"):
+                        if source_rows.action_key(dict(row)) in copied_actions:
+                            continue
                         delivery = {'queued': '等待发送', 'waiting': '等待提交', 'submitted': '已提交', 'error': '发送失败'}.get(row['status'], '')
                         text_event(directory, {**dict(row), 'id': 'user:' + str(row['id']), 'role': 'user',
                                               'kind': '你 · ' + delivery}, str(db) + '#actions')
@@ -277,7 +385,14 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
         if unknown:
             warnings.append(f'时间筛选排除 {unknown} 条缺少有效时间的公开消息；无法判断是否位于指定范围内')
     texts.sort(key=lambda row: (row['wall'] is None, row['wall'] or 0, row['id']))
-    latest = segments[-1]['metrics']
+    authoritative = [segment for segment in segments if segment['metrics_authoritative']]
+    latest_segment = (authoritative or segments)[-1]
+    latest = latest_segment['metrics'] if authoritative else {}
+    if not authoritative:
+        warnings.append('只有准备或 HUD 聊天快照，不能作为试玩累计统计')
+    for request in {request for request, _ in save_names}:
+        if sum(key[0] == request for key in save_names) > 1:
+            warnings.append(f'命名请求 {request} 存在不同名字的结果，均保留供核对')
     totals = {status: sum(r.get('cost', 0) for r in receipts.values() if r.get('status') == status) for status in ('used', 'reserved', 'refunded')}
     balance = (latest.get('sim_energy') or {}).get('balance')
     if receipts and len(matched) < len(receipts):
@@ -289,9 +404,11 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
             'time_summary': {**{k: latest.get(k) for k in TIME_FIELDS}, 'started_at': timestamp(latest.get('started_wall')),
                              'snapshot_at': timestamp(latest.get('written_wall')), 'game_clock': latest.get('game_clock'),
                              'chapter_time_ticks': latest.get('chapter_time_ticks'), 'completed_ticks': latest.get('completed_ticks'),
-                             'splits': latest.get('splits'), 'source': segments[-1]['snapshot_source']},
+                             'splits': latest.get('splits'), 'source': latest_segment['snapshot_source'],
+                             'metrics_authoritative': latest_segment['metrics_authoritative']},
             'segments': [{k: v for k, v in segment.items() if k != 'metrics'} | {'cumulative_seconds': {k: segment['metrics'].get(k) for k in TIME_FIELDS}} for segment in segments],
             'public_text': texts, 'public_text_filter': text_filter, 'simulations': simulations,
+            'save_naming': list(save_names.values()),
             'simulation_summary': {'receipt_count': len(receipts), 'matched_receipts': len(matched), 'net_spent': totals['used'],
                                    'reserved': totals['reserved'], 'refunded': totals['refunded'], 'final_balance': balance,
                                    'observed_calls': len(native_calls), 'failed_calls': sum(call.get('success') is False for call in native_calls.values()),
@@ -376,11 +493,13 @@ def write_export(report, output, *, time_format=DEFAULT_TIME_FORMAT):
              f"已取得详情的模拟调用 {summary['observed_calls']} 次，其中失败 {summary['failed_calls']} 次，余额查询 {summary['balance_queries']} 次。", '',
              f"模拟成功预测 {summary['successful_predictions']} 次，{summary['predicted_routes']} 条路线；"
              f"账本净消耗 {summary['net_spent']}，退款 {summary['refunded']}，预留 {summary['reserved']}，末次余额 {summary['final_balance']}。", '',
-             '## 时间统计', '', '取最后一段主控累计值；不将恢复前后的累计值相加。游戏时钟帧数除以 60；章节 ticks 除以 10000000，含义不同。', '']
+             '## 时间统计', '', '取 runs 内排除准备段后的末次主控累计值；HUD 聊天快照另有标记，可能复制自其他会话。不将恢复前后的累计值相加。游戏时钟帧数除以 60；章节 ticks 除以 10000000，含义不同。', '']
     lines += [f"统计起点：{display_time(report['time_summary']['started_at']) or '未知'}；末次快照：{display_time(report['time_summary']['snapshot_at']) or '未知'}。", '']
     for key, label in zip(TIME_FIELDS, TIME_LABELS):
         value = report['time_summary'][key]
         lines.append(f'- {label}（{key}）：{round(value, 3) if isinstance(value, (int, float)) else "未知"} 秒')
+    if report.get('save_naming'):
+        lines += ['', '## 存档取名', '', '各目录最后保存的取名结果见 session.json.save_naming，包含请求 ID 和来源。结果文件没有可靠时间，保留为空；命名对话仍按公开消息时间筛选。']
     clock = report['time_summary']['game_clock'] or {}
     if isinstance(clock.get('frames'), (int, float)):
         lines.append(f"- HUD 主游戏时钟：{clock['frames']} 帧 / 60 = {clock['frames'] / 60:.3f} 秒")

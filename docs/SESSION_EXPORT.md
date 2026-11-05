@@ -22,7 +22,9 @@
 .\.venv\Scripts\python.exe -X utf8 tools/export_session.py --run runs/<agent>/<运行时间>
 ```
 
-可选择同一会话的任一运行或 `chats/<会话目录>`，工具自动在所属 `runs` 根目录中合并执行器、提供方和会话 ID 均相同的记录。同名 agent、不同会话的记录不混入。默认输出到新的 `local/exports/<会话ID>-<时间>/`；`--output <新目录>` 可指定位置，已有目录和源运行目录内的目标会被拒绝。
+可选择同一会话的任一运行或 `chats/<会话目录>`，工具自动合并所属 `runs` 及对应项目 `local/hud-idle/chats` 中执行器、提供方和会话 ID 均相同的记录。准备聊天、存档取名的公开请求和回复也会一并导出。同名 agent、不同会话的记录不混入；自动发现的来源拒绝链接、重解析点和项目外路径。默认输出到新的 `local/exports/<会话ID>-<时间>/`；`--output <新目录>` 可指定位置，已有目录和源运行目录内的目标会被拒绝。
+
+能通过已记录的来源关系唯一核对原运行时，聊天目录复制的历史日志前缀和控制请求只在原来源计算一次，聊天中新增的记录继续保留。`segments.copied_from` 给出核对到的原目录，避免将复制的旧动作当成新尝试。
 
 只有会话 ID 时，可先执行 `rg -l -F "<会话ID>" runs -g run_state.json -g codex_session.json`，用匹配文件所在的运行目录作为 `--run`。要接续上次导出，可从旧 `session.json` 的 `public_text_filter` 取终点作为新起点，避免重复选入边界消息。
 
@@ -41,7 +43,7 @@
 - `README.md`：公开文本的完整时间线、时间统计、模拟调用表及来源缺口。
 - `public_text.csv`：全量公开解说、动作说明、系统公开提示和用户消息，不受 HUD 最近条数限制。
 - `simulations.csv`：模拟器的调用时间、耗时、候选输入、扣费回执、成本、余额与停止原因/帧数。
-- `session.json`：上述内容、跨运行来源和分段累计统计的结构化版本。
+- `session.json`：上述内容、跨运行来源、分段累计统计与 `save_naming` 取名索引。索引保留各目录最后保存的请求 ID、名字和来源，原结果没有可靠时间时留空；同请求同名字合并来源，冲突名字保留并告警。
 - `manifest.json`：生成文件的 SHA256；`export.zip` 仅打包生成产物。
 
 Markdown/CSV 的时间默认显示为 `月-日 时:分:秒`，例如 `11-03 12:51:05`。`--time-format` 使用 Python `datetime.strftime` 的格式字符串，默认 `%m-%d %H:%M:%S`，例如 `--time-format "%Y-%m-%d %H:%M:%S.%f %z"` 可显示年份、微秒及 UTC 偏移。所有展示时间均为北京时间；JSON 继续保留完整 ISO 时间和可用的 epoch 精度。此参数不改变排序、耗时统计或唯一输出目录命名。
@@ -50,7 +52,9 @@ Markdown/CSV 的时间默认显示为 `月-日 时:分:秒`，例如 `11-03 12:5
 
 公开文本来自 `public_events.jsonl`、缺失时的公开消息回退、`decisions.jsonl` 的公开 thought，以及以 SQLite 只读事务查询的控制消息。不会导出工具结果正文、模型内部推理、压缩摘要、图像编码或模拟器逐帧轨迹。仅能复原已保存的公开历史，不能恢复未写入日志的瞬时 HUD 状态或截图中的文字。
 
-时间总计使用最后有效 HUD `metrics.json` 快照；没有时才使用 `summary.json`，各次恢复的累计值不相加。各时间类别可能重叠，不把类别求和当作总时长。HUD 主游戏时钟为 `game_clock.frames / 60`，章节计时为 ticks / 10000000；两者不同，保留原字段供核对。
+时间总计使用 `runs` 内排除准备段后的末次主控 `metrics.json` 快照，没有时才使用 `summary.json`，各次恢复的累计值不相加。`local/hud-idle/chats` 的快照可能复制自其他 HUD 锚点，因此通过 `source_kind=hud_idle_chat` 和 `metrics_authoritative=false` 标记；`runs` 内 `session_kind=ready` 的准备段标记为 `source_kind=preparation`。两者都不覆盖试玩累计统计或模拟器末次余额，也不用于恢复链快照差。只有准备聊天来源时累计字段留空。各时间类别可能重叠，不把类别求和当作总时长。HUD 主游戏时钟为 `game_clock.frames / 60`，章节计时为 ticks / 10000000；两者不同，保留原字段供核对。
+
+`--since` / `--until` 同样筛选准备聊天与取名的公开消息。`save_naming` 属于会话元数据，时间未知的结果仍保留并标记 `window_membership=unknown`，不能据此判断命名发生在筛选时段内。
 
 探索模式的模拟额度以 `sim_energy.json` 的唯一回执为权威，跨恢复合并；`used` 计净消费，退款和仍预留的费用分列。详情按回执 ID 关联，不以调用顺序猜配。扣费前余额只在同次返回同时含成本与余额时相加还原，字段为 `balance_before_derived`；跨调用余额还受到真实操作恢复、新房奖励、上限和人工调整影响，不能用余额差代替消费。
 

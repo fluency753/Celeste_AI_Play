@@ -75,6 +75,12 @@ game_states 从已有工具结果提取 frame、sid、room、死亡数/flags、p
 
 ## 筛选与工作区
 
+会话来源除 `runs` 外还包含对应项目固定 `local/hud-idle/chats` 下同执行器、提供方和会话 ID 的准备聊天。公开消息与工具记录按原时间规则合并。`segments.source_kind` 标识 `run`、`preparation`（runs 内 session_kind=ready）或 `hud_idle_chat`。后两者的 `metrics_authoritative=false`，因为准备阶段不代表试玩累计量，HUD 聊天还可能沿用另一会话的统计。`metric_snapshots.jsonl` 保留同名标记，这些快照仅作来源证据，不用于恢复链计量差或覆盖 `time_summary`。只有这类快照时累计值为空。
+
+`session.json.save_naming` 是各来源最后保存的取名结果索引。字段包含 `request_id`、`name`、`runs`、`sources`、`wall`、`time`、`window_membership`。同请求同名字合并来源，冲突名字分别保留并告警。现有结果文件未记录可靠发生时间，`wall/time` 为 null；无时间筛选时 membership 为 `unfiltered`，有筛选时为 `unknown`。此索引属于会话元数据，公开取名对话本身仍按消息时间筛选。
+
+聊天来源记录了 `conversation_source` / `conversation_origin` 且能唯一对应本会话原运行时，`segments.copied_from` 指向该来源。复制的 public/codex/decisions 日志相同前缀保留在原来源，聊天只贡献新增记录；SQLite 中同 ID、类型、正文与时间的历史控制请求也只计一次。普通运行之间真实重复发生的动作仍分别保留。
+
 --since/--until 对旧 public_text 仍是左闭右开（无时区按北京时间），旧累计/模拟字段仍为整个会话。分析工具/回合保留相交区间及完整边界；window_membership 区分 within_window、overlaps_window、end_observed_in_window、time_unknown、unfiltered。未知记录保留，不视为确定在窗口内。状态和快照保留整个会话用于引用。
 
 `--workspace` 显式选取工作区，最多 2000 项清单和 20 份 notes/memory/journal，每份 128 KiB、合计 512 KiB。根 `notes.md` 优先采集。跳过链接、重解析点、依赖目录和敏感文件。当前笔记只代表采样时内容，mtime 不作历史归因。输出不能位于源运行或源工作区内。

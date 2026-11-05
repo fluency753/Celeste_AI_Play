@@ -113,6 +113,10 @@ def write_analysis(report, output):
         lines += ['', '## 最近恢复链的快照比较（非精确窗口统计）', '',
                   f"基准 {delta['base_snapshot_id']} → 末次 {delta['end_snapshot_id']}；游戏时钟变化 {delta['game_clock_seconds_delta']} 秒。",
                   '累计秒数变化：`' + json.dumps(values, ensure_ascii=False) + '`。前段快照可能受后续聊天影响，不能当作已证明的恢复基线。']
+    if report.get('save_naming'):
+        lines += ['', '## 存档取名', '',
+                  '本会话有保存的取名结果，见 session.json.save_naming。包含请求 ID、名字与来源；原结果没有可靠时间，时间留空。',
+                  '取名请求与公开回复一并收进 public_text.csv / public_text.md，按消息本身时间筛选。']
     if workspace is not None:
         lines += ['', '## 工作区附件', '',
                   '- workspace.json：当前文件清单、笔记投影及结构化 Git 摘要。',
