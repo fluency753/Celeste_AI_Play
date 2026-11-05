@@ -43,6 +43,8 @@ class ReloadObservationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(PermissionError, 'held file locked'):
                 self.session.after_bridge_reload(observation())
         self.assertTrue(self.session.reload_observation_required)
+        self.assertEqual(self.session.last_obs['frame'], observation()['frame'])
+        self.assertEqual(self.session._transition_observed[0], self.session._transition_epoch())
         self.assertEqual(self.session._held_input, ('', 'celeste_ai'))
         self.assertFalse(held.with_suffix('.reload-tmp').exists())
 

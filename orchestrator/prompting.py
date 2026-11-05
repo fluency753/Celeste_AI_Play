@@ -49,7 +49,8 @@ def auto_handling(cfg) -> str:
     """Current playback facts; agent responsibilities live in one section."""
     text = '默认输入的转场、死亡与重生由主控推进。'
     if getattr(cfg, 'cutscene_mode', 'auto') == 'agent':
-        return text + '当前剧情的操作责任与结算边界见“剧情与任务边界”。'
+        return ('默认输入的转场可由主控推进。死亡或房间重试后的重生先交回控制：普通死亡可显式用 act 的 C 确认缩短部分动画，'
+                '也可选择 observe / cutscene(watch) 有界等待，主控不代按确认。当前剧情的操作责任与结算边界见“剧情与任务边界”。')
     return text + '当前 auto 模式由主控推进和跳过剧情，并处理已识别的确认界面；仍卡在确认处时可用 act 发 C。'
 
 

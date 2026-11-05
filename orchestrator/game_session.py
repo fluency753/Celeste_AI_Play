@@ -72,6 +72,7 @@ class TransitionWait:
     epoch: tuple
     start_frame: int
     stalled_at: int | None = None
+    evidence: str | None = None
 
     def progress(self, frame: int) -> dict:
         used = frame - self.start_frame
@@ -380,6 +381,8 @@ class GameSession:
         self.user_stopped = False
         self.agent_stop = None
         self._transition_wait: TransitionWait | None = None
+        self._transition_observed = None
+        self._transition_saved = None
         self._last_stop_evidence = None
         self.goals = GoalManager(run_dir)
         self._goal_progress = {}
@@ -487,6 +490,7 @@ class GameSession:
         slot = (obs.get('save') or {}).get('slot')
         if self.cfg.save_slot is not None and slot != self.cfg.save_slot:
             raise RuntimeError(f'当前存档槽位 {slot} 与指定槽位 {self.cfg.save_slot} 不一致')
+        self._restore_transition_wait(obs)
         if self.cfg.play_scope == 'visited':
             self._bind_visited_maps(obs)
         if obs.get('scene') == 'Level' and not self.chapter_finished and self.piece is not None:
@@ -540,6 +544,13 @@ class GameSession:
         with self.lock:
             self.reload_epoch = getattr(self, 'reload_epoch', 0) + 1
             self.reload_observation_required = True
+            self._transition_wait = None
+            self.last_obs = enrich_obs(obs)
+            level = self.last_obs.get('level') or {}
+            self._transition_observed = (self._transition_epoch(), self.last_obs.get('scene'),
+                                         self._transition_identity(self.last_obs, level),
+                                         self.last_obs.get('frame'), level.get('deaths'))
+            self._persist_transition_wait({'wait': None}, required=True)
             self._input_formats = None
             self._last_positions, self._last_room = {}, None
             self._collision_png = None
@@ -551,7 +562,6 @@ class GameSession:
                 pending.replace(held)
             finally:
                 pending.unlink(missing_ok=True)
-            self.last_obs = enrich_obs(obs)
             reset = getattr(self, 'reset_observation_delivery', None)
             if reset:
                 reset()
@@ -703,9 +713,11 @@ class GameSession:
 
     def _after_step(self, args: dict, reply: dict) -> None:
         """BridgeClient.after_step：核实关卡内帧数，再记下最后按住的键。"""
+        self._ingest_transition(reply.get('obs') or {}, reply.get('result'))
         self._count_level_frames(reply)
         self._remember_held_input(args, reply)
         self._note_first_goal_entry(reply.get('obs') or {})
+        self._save_transition_wait(reply.get('obs') or {})
 
     def _remember_held_input(self, args: dict, reply: dict) -> None:
         """桥接每次推进之后：记下最后真正喂给游戏的那一帧按键（主控的自动推进也算），并存进运行目录供续跑接上。
@@ -889,6 +901,7 @@ class GameSession:
         with self.lock:
             reply = self.client.call("observe", image=True, scope="room", fields=True)
             obs, image = enrich_obs(reply["obs"]), reply.get("image")
+            self._ingest_transition(obs)
             self._commit_completion(obs)
             reload_observation = getattr(self, 'reload_observation_required', False)
             if not reload_observation and not self.done:
@@ -977,6 +990,7 @@ class GameSession:
         tmp.replace(path)
 
     def _write_workspace(self, obs: dict, act_record: dict | None = None) -> None:
+        self._save_transition_wait(obs)
         self.last_obs = obs
         self._transition_for(obs)
         if not self.workspace:
@@ -1375,12 +1389,22 @@ class GameSession:
                              decisions=1 if attempt == 0 else 0)
 
             auto_frames, notes = 0, list(resumed)
+            transition = self._transition_for(obs)
+            respawn_handover = (self.cfg.cutscene_mode == 'agent' and
+                               (transition is not None and transition.kind == 'respawn'
+                                or (obs.get('player') or {}).get('dead')))
+            if respawn_handover:
+                notes.append('已出现死亡或房间重试后的重生状态，本次动作后未自动等待。'
+                             + ('TAS 格式继续用显式 TAS 输入或空帧推进，observe 不自动等待。'
+                                if plan.input_format == 'celeste_tas' else
+                             '普通死亡可用 act 显式发送 C 确认以缩短部分动画；也可选择 observe 或 cutscene(watch) 有界等待。'
+                             '确认键由你按画面决定，主控不代按；单次未恢复不足以判定阻塞。'))
             if self._seeker_death:
                 notes.append(SEEKER_DEATH_NOTE)
             ending_agent = self._ending_agent       # 片尾已交给智能体：主控不再自动推进
             # 计划外地图的片尾交给了智能体，或智能体自己打开了暂停菜单（auto 模式开了计划外地图）：同样不自动推进
             handed = ending_agent or self._detour_agent or self._agent_menu(obs)
-            if not handed and result['stop'] not in BLOCK_STOPS and plan.input_format != 'celeste_tas' and not self.done and (self.cfg.cutscene_mode == 'agent' or not self.chapter_finished) and not self.goals.stop_motion.is_set() and (not self._agent_controls(obs)
+            if not handed and not respawn_handover and result['stop'] not in BLOCK_STOPS and plan.input_format != 'celeste_tas' and not self.done and (self.cfg.cutscene_mode == 'agent' or not self.chapter_finished) and not self.goals.stop_motion.is_set() and (not self._agent_controls(obs)
                     or story_pending(obs)):
                 obs, image, auto_frames, more = self._auto_advance(obs, image)
                 notes.extend(more)        # 接在执行前的说明（续推剧情、思考僵直）后面，不覆盖它们
@@ -1445,8 +1469,97 @@ class GameSession:
     def _transition_identity(obs, level):
         return ((obs.get('save') or {}).get('slot'), level.get('sid'), level.get('side') or 'A', level.get('room'))
 
+    def _ingest_transition(self, obs, result=None):
+        """Accept observed death evidence once, including eventless pause-menu retries."""
+        frame = obs.get('frame')
+        if type(frame) is not int:
+            return
+        level = obs.get('level') or {}
+        identity, epoch = self._transition_identity(obs, level), self._transition_epoch()
+        previous = getattr(self, '_transition_observed', None)
+        if previous is None and self.last_obs:
+            before = self.last_obs
+            previous = (epoch, before.get('scene'), self._transition_identity(before, before.get('level') or {}),
+                        before.get('frame'), (before.get('level') or {}).get('deaths'))
+        deaths = level.get('deaths')
+        self._transition_observed = (epoch, obs.get('scene'), identity, frame, deaths)
+        if (self.cfg.cutscene_mode != 'agent' or obs.get('scene') != 'Level' or not identity[1]
+                or identity[3] is None or (self.cfg.save_slot is not None and identity[0] != self.cfg.save_slot)
+                or seeker_control(obs) or getattr(self, '_seeker_act', False)):
+            return
+        events = [e for e in (result or {}).get('events', []) if e.get('type') == 'death'
+                  and type(e.get('frame')) is int and e['frame'] <= frame
+                  and e.get('detail', identity[3]) == identity[3]]
+        increased = (previous is not None and previous[:3] == (epoch, 'Level', identity)
+                     and type(previous[3]) is int and frame > previous[3]
+                     and type(previous[4]) is int and previous[4] >= 0
+                     and type(deaths) is int and deaths > previous[4])
+        start = max(e['frame'] for e in events) if events else frame if increased else None
+        if start is None:
+            return
+        current = getattr(self, '_transition_wait', None)
+        if (not current or current.kind != 'respawn' or current.identity != identity or current.epoch != epoch
+                or start > current.start_frame and (increased or not previous
+                                                    or type(previous[3]) is int and start > previous[3])):
+            self._transition_wait = TransitionWait('respawn', identity, epoch, start,
+                                                   evidence='death_event' if events else 'death_counter')
+
+    def _save_transition_wait(self, obs):
+        self._transition_for(obs)
+        current = getattr(self, '_transition_wait', None)
+        value = {'wait': None}
+        if current:
+            value = {'wait': {'kind': current.kind, 'identity': list(current.identity), 'epoch': list(current.epoch),
+                             'start_frame': current.start_frame, 'stalled_at': current.stalled_at,
+                             'evidence': current.evidence},
+                     'frame': obs.get('frame'), 'deaths': (obs.get('level') or {}).get('deaths')}
+        self._persist_transition_wait(value)
+
+    def _persist_transition_wait(self, value, *, required=False):
+        if value != getattr(self, '_transition_saved', None):
+            try:
+                write_json(self.run_dir / 'transition_wait.json', value)
+                self._transition_saved = value
+            except OSError as exc:
+                if required:
+                    raise
+                print(f'[run] 过渡恢复状态未写入：{exc}', flush=True)
+
+    def _restore_transition_wait(self, obs):
+        previous = self.metrics.state.resumed_from
+        if (not previous or type(getattr(self, 'game_process_id', None)) is not int
+                or self.cfg.cutscene_mode != 'agent' or getattr(self, 'reload_observation_required', False)):
+            return
+        try:
+            saved = load_json(Path(previous) / 'transition_wait.json')
+            wait = saved.get('wait') or {}
+            frame, start, stalled = obs.get('frame'), wait.get('start_frame'), wait.get('stalled_at')
+            epoch = wait.get('epoch')
+            level = ((obs.get('reload_boundary') or {}).get('session') or {}
+                     if wait.get('kind') == 'entry' and obs.get('scene') in {'LevelEnter', 'LevelLoader', 'IntroVignette'}
+                     else obs.get('level') or {})
+            if (wait.get('kind') not in {'entry', 'respawn'} or type(start) is not int or type(frame) is not int
+                    or not 0 <= start <= frame or saved.get('frame') != frame
+                    or not isinstance(epoch, list) or len(epoch) != 2 or epoch[0] != self.game_process_id
+                    or type(epoch[1]) is not int or epoch[1] < 0
+                    or getattr(self, 'reload_epoch', 0) not in (0, epoch[1])
+                    or wait.get('identity') != list(self._transition_identity(obs, level))
+                    or saved.get('deaths') != (obs.get('level') or {}).get('deaths')
+                    or stalled is not None and (type(stalled) is not int or not start <= stalled <= frame)):
+                return
+            # Carry the previous controller's local reload generation forward;
+            # never rewrite old evidence to fit a new game process or rebuilt room.
+            self.reload_epoch = epoch[1]
+            self._transition_wait = TransitionWait(wait['kind'], tuple(wait['identity']), self._transition_epoch(),
+                                                   start, stalled, wait.get('evidence'))
+            self._transition_for(obs)
+        except (OSError, ValueError, TypeError, AttributeError):
+            return  # Old runs have no transition record; missing players alone are not death evidence.
+
     def _transition_for(self, obs, *, remember=True):
         """Identify an already authorized, input-free transition on a bridge frame."""
+        if remember:
+            self._ingest_transition(obs)
         if self.cfg.cutscene_mode != 'agent' or type(frame := obs.get('frame')) is not int:
             return None
         current = getattr(self, '_transition_wait', None)
@@ -1467,7 +1580,7 @@ class GameSession:
         elif (scene != 'Level' or not current or current.kind != 'respawn'
               or current.identity != self._transition_identity(obs, level) or current.epoch != epoch
               or frame < current.start_frame or obs.get('controllable')
-              or not (player.get('dead') or player.get('state') == 'IntroRespawn' or level.get('screenWipe'))):
+              or not (obs.get('player') is None or player.get('dead') or player.get('state') == 'IntroRespawn' or level.get('screenWipe'))):
             current = None
         if remember:
             self._transition_wait = current
@@ -1750,6 +1863,11 @@ class GameSession:
                                      progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
             log_step(inputs, reply["result"], reply['obs'])
             obs = reply["obs"]
+            following = self._transition_for(obs) if mode == 'agent' else None
+            if mode == 'agent' and ((following and following.kind == 'respawn' and following is not transition)
+                                    or (not transition and (obs.get('player') or {}).get('dead'))):
+                notes.append('自动播放期间发生了新的死亡，本次交回控制；可自行选择确认键或 observe/watch 等待重生。')
+                break
             if transition:
                 if reply['result'].get('stop') in BLOCK_STOPS:
                     transition.stalled_at = obs.get('frame', before_frame)
@@ -1931,7 +2049,9 @@ class GameSession:
             obs=self.client.call('observe',image=False,entities=False,tiles=False)['obs']
             if (not story_pending(obs) and not (obs.get('level') or {}).get('skippingCutscene')
                     and not (action == 'watch' and self._transition_for(obs))):
-                raise ActError('当前没有待处理的剧情')
+                raise ActError('当前没有待处理的剧情，本次未推进游戏。watch 不是通用等待工具；'
+                               '若刚死亡或重试房间且无待处理输入，可按画面选择用 act 确认或短段空输入核对恢复。'
+                               '没有剧情不代表无法继续，也不足以判定任务阻塞。')
             original_options = [(item.get('index'),item.get('text')) for item in (obs.get('level') or {}).get('dialogChoices') or []]
             auto_frames, auto_notes = 0, []
             if action in {'advance','choose'} and not story_input(obs):
@@ -2295,6 +2415,8 @@ class GameSession:
         return obs, image, notes
 
     def _handle_events(self, result: dict, obs=None) -> None:
+        if obs:
+            self._ingest_transition(obs, result)
         for e in result.get("events", []):
             if e["type"] == "death":
                 if self._seeker_act:
@@ -2302,12 +2424,6 @@ class GameSession:
                     self._seeker_death = True
                     continue
                 self.metrics.add(deaths=1)
-                if self.cfg.cutscene_mode == 'agent' and obs and obs.get('scene') == 'Level' and type(e.get('frame')) is int:
-                    identity = self._transition_identity(obs, obs.get('level') or {})
-                    slot = self.cfg.save_slot
-                    if (identity[1] and identity[3] is not None and e.get('detail', identity[3]) == identity[3]
-                            and (slot is None or identity[0] == slot)):
-                        self._transition_wait = TransitionWait('respawn', identity, self._transition_epoch(), e['frame'])
             elif e['type'] == 'room':
                 self._transition_wait = None
             elif e["type"] == "complete":

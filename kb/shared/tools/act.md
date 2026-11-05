@@ -24,4 +24,4 @@ plan_file 对象可带 `retry={"command":"python3 planner.py","max":3,"timeout_s
 `/workspace/game/tas.py` 提供 load(path,start_line=...)、window(document,offset,count)、to_sim(inputs)。前两者只生成计划，不操作游戏；不执行 console/Set/Read 等命令，需显式选取纯输入区。模拟转换拒绝不能表达的菜单键。
 TAS动作及{tool:observe}不自动播放转场、重生或剧情；自己用TAS输入或空帧推进。input_cursor.next 是选定输入文档从 0 开始的帧偏移，不是源文件行号；用同一 load 文档和 window(offset=next) 生成下一窗，或把 remaining_inputs 写入仍声明 celeste_tas 的 JSON。旧工具不能把剩余数组直接交给默认 inputs。观察与规划回放不推进游标。切换格式前，先用原格式显式执行一帧空输入松键；这是真实的一帧，须放在准备边界或计入比较，不靠切换格式制造按下边沿。
 `{tool:cutscene}` 是你显式调用的便利动作；也可用 `{tool:act}` 直接操作对白或选项，选择前先读可见选项。
-以下自动播放说明仅适用于celeste_ai：主控可继续播放无需选择的逐字对白、转场与重生，但不会替你发送菜单或确认输入。celeste_tas始终由显式输入推进。
+以下自动播放说明仅适用于celeste_ai：主控可继续播放无需选择的逐字对白与转场。agent 模式在死亡或房间重试后的重生阶段先交回；普通死亡可由你显式发送 C 确认缩短部分动画，也可调用 observe / cutscene(watch) 选择有界等待，不强制先等完动画。主控不会替你发送菜单或确认输入。watch 返回“没有待处理剧情”不能作为阻塞依据；已知刚死亡/重试时，核对画面并选择确认或有总帧数上限的短段空输入继续恢复。celeste_tas始终由显式输入推进。

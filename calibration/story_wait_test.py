@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from mcp.server.mcpserver.exceptions import ToolError
 
 from orchestrator.config import RunConfig
@@ -72,12 +73,13 @@ class StoryBridge:
 class RespawnBridge(StoryBridge):
     death_frame = 97790
 
-    def __init__(self, *, ready=97921, pause_at=None):
+    def __init__(self, *, ready=97921, pause_at=None, death_event=True, screen_wipe=True, confirm=False):
         super().__init__(observation(controllable=True, cutscene=False))
         self.obs.update(frame=self.death_frame - 1, save={'slot': 15})
         self.ready, self.pause_at = ready, pause_at
         self.paused = False
         self.stop_lists = []
+        self.death_event, self.screen_wipe, self.confirm = death_event, screen_wipe, confirm
 
     def call(self, command, **args):
         if command != 'step':
@@ -89,10 +91,16 @@ class RespawnBridge(StoryBridge):
         frame = self.obs['frame']
         events = []
         if frame < self.death_frame:
-            count, stop = 1, 'death'
-            events = [{'type': 'death', 'frame': self.death_frame, 'detail': self.obs['level']['room']}]
+            count, stop = (1, 'death') if self.death_event else (planned, 'done')
+            events = ([{'type': 'death', 'frame': self.death_frame, 'detail': self.obs['level']['room']}]
+                      if self.death_event else [])
             self.obs.update(controllable=False, player=None)
-            self.obs['level'].update(screenWipe=True, deaths=1)
+            self.obs.pop('pauseMenu', None)
+            self.obs['level'].update(screenWipe=self.screen_wipe, deaths=1, paused=False)
+        elif self.confirm and any(',C' in part for part in inputs):
+            count, stop = 1, 'controllable'
+            self.obs.update(controllable=True, player=observation(controllable=True)['player'])
+            self.obs['level']['screenWipe'] = False
         elif self.ready is not None and frame + planned >= self.ready and 'controllable' in stops:
             count, stop = self.ready - frame, 'controllable'
             self.obs.update(controllable=True, player=observation(controllable=True)['player'])
@@ -105,6 +113,32 @@ class RespawnBridge(StoryBridge):
             self.paused = True
         return {'obs': copy.deepcopy(self.obs), 'result': {'consumed': count, 'planned': planned,
                 'events': events, 'trajectory': [], 'stop': stop}}
+
+
+class BridgeWire:
+    """Only replace the socket transport; retain BridgeClient hooks and failure tracking."""
+    def __init__(self, bridge):
+        self.bridge = bridge
+
+    def write(self, data):
+        self.request = json.loads(data)
+
+    def readline(self):
+        request = self.request.copy()
+        ident, command = request.pop('id'), request.pop('cmd')
+        return (json.dumps({'id': ident, 'ok': True, **self.bridge.call(command, **request)}) + '\n').encode()
+
+    def makefile(self, mode):
+        return self
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
+    def setsockopt(self, *args):
+        pass
 
 
 class StoryWaitTests(unittest.TestCase):
@@ -300,19 +334,196 @@ class StoryWaitTests(unittest.TestCase):
         self.session.observe()
         self.assertEqual(client.frames, 60)
 
-    def _death_fixture(self, **kwargs):
+    def _death_fixture(self, *, wait=True, **kwargs):
         client = self.session.client = RespawnBridge(**kwargs)
         self.session.last_obs = copy.deepcopy(client.obs)
         self.session.control_guard = lambda: client.paused
         server = build_server(self.session)
         result = asyncio.run(server.call_tool('act', {'inputs': ['1,R'], 'thought': '进入尖刺'}))
         self.assertFalse(result.is_error)
+        self.assertEqual(client.steps, [['1,R']])  # No forced animation wait after the death.
+        if wait:
+            asyncio.run(server.call_tool('observe', {}))
         return client, server
 
     def _stop_report(self, server, reason='角色没有恢复'):
         result = asyncio.run(server.call_tool('stop_run', {'reason': reason}))
         self.assertFalse(result.is_error)
         return json.loads(result.content[0].text.splitlines()[0])
+
+    def _wire_bridge(self, bridge):
+        with patch('tools.bridge_client.socket.create_connection', return_value=BridgeWire(bridge)):
+            client = BridgeClient(port=1)
+        client.after_step = self.session._after_step
+        self.session.client = client
+        self.session.last_obs = copy.deepcopy(bridge.obs)
+        self.session.game_process_id = 778
+        return build_server(self.session)
+
+    def test_menu_retry_without_death_event_or_wipe_can_choose_waiting(self):
+        bridge = RespawnBridge(ready=3067, death_event=False, screen_wipe=False)
+        bridge.death_frame = 2937
+        bridge.obs.update(frame=2934, controllable=False,
+                          pauseMenu={'focused': True, 'selection': 1, 'items': []})
+        bridge.obs['level']['paused'] = True
+        server = self._wire_bridge(bridge)
+        result = asyncio.run(server.call_tool('act', {'inputs': ['1,D', '1', '1,C'], 'thought': '选择重试'}))
+        self.assertFalse(result.is_error)
+        self.assertEqual(bridge.steps, [['1,D', '1', '1,C']])
+        self.assertEqual(self.session.last_obs['frame'], 2937)
+        self.assertIsNone(self.session.last_obs['player'])
+        self.assertFalse(self.session.last_obs['level']['screenWipe'])
+        self.assertEqual(self.session._transition_wait.evidence, 'death_counter')
+        self.assertEqual(self.session._transition_wait.start_frame, 2937)
+        report = self._stop_report(server)
+        self.assertEqual(report['status'], 'recovery_available')
+        self.assertFalse(report['paused'])
+        self.assertEqual(len(bridge.steps), 1)
+        result = asyncio.run(server.call_tool('cutscene', {'action': 'watch'}))
+        self.assertFalse(result.is_error)
+        self.assertTrue(self.session.last_obs['controllable'])
+        self.assertEqual(bridge.obs['frame'], 3067)
+        self.assertTrue(all(part.split(',')[0] == part for step in bridge.steps[1:] for part in step))
+        self.assertIsNone(json.loads((self.root/'transition_wait.json').read_text())['wait'])
+
+    def test_natural_death_confirmation_executes_before_any_wait_or_retry_program(self):
+        bridge = RespawnBridge(confirm=True, screen_wipe=False)
+        server = self._wire_bridge(bridge)
+        self.session.container = 'fixture-only'
+        plan = self.session.workspace/'plan.json'
+        plan.write_text(json.dumps({'inputs': ['60,R'], 'retry': {'command': 'python planner.py', 'max': 2}}))
+        with patch('orchestrator.game_session.run_program') as program:
+            result = asyncio.run(server.call_tool('act', {'plan_file': 'plan.json', 'thought': '执行路线'}))
+            self.assertFalse(result.is_error)
+            program.assert_not_called()
+        self.assertEqual(bridge.steps, [['60,R']])
+        self.assertEqual(bridge.obs['frame'], bridge.death_frame)
+        self.assertEqual(self.session.last_obs['level']['deaths'], 1)
+        result = asyncio.run(server.call_tool('act', {
+            'inputs': ['1,C'], 'thought': '确认缩短死亡动画', 'stop_on': ['controllable']}))
+        self.assertFalse(result.is_error)
+        self.assertEqual(bridge.steps, [['60,R'], ['1,C']])
+        self.assertTrue(self.session.last_obs['controllable'])
+        self.assertEqual(bridge.obs['frame'], bridge.death_frame + 1)
+
+    def test_missing_player_alone_and_counter_from_another_identity_do_not_authorize_wait(self):
+        for changed in ('none', 'room', 'sid', 'slot', 'epoch', 'counter_reset'):
+            with self.subTest(changed=changed):
+                before = observation(controllable=True, cutscene=False, deaths=2)
+                before['save'] = {'slot': 15}
+                self.session._transition_wait = self.session._transition_observed = None
+                self.session.last_obs = copy.deepcopy(before)
+                self.session._ingest_transition(before)
+                after = copy.deepcopy(before)
+                after.update(frame=101, player=None, controllable=False)
+                after['level']['deaths'] = 2 if changed == 'none' else 3
+                if changed in ('room', 'sid'):
+                    after['level'][changed] = 'other'
+                elif changed == 'slot':
+                    after['save']['slot'] = 16
+                elif changed == 'epoch':
+                    self.session.reload_epoch = getattr(self.session, 'reload_epoch', 0) + 1
+                elif changed == 'counter_reset':
+                    after['level']['deaths'] = 0
+                client = StoryBridge(after)
+                self.session.client = client
+                self.session.observe()
+                self.assertEqual(client.steps, [])
+                self.assertIsNone(self.session._transition_wait)
+
+    def test_respawn_restart_preserves_budget_and_stall_only_at_identical_frozen_state(self):
+        bridge, server = self._death_fixture(wait=False, screen_wipe=False)
+        self.session.game_process_id = 778
+        # Record the new process baseline before establishing evidence again.
+        self.session._transition_wait = self.session._transition_observed = None
+        self.session._handle_events({'events': [{'type': 'death', 'frame': bridge.death_frame}]}, bridge.obs)
+        bridge.obs['frame'] += 90
+        self.session._write_workspace(copy.deepcopy(bridge.obs))
+        saved = json.loads((self.root/'transition_wait.json').read_text())
+        self.assertEqual(saved['wait']['start_frame'], bridge.death_frame)
+        for variant in ('same', 'stalled', 'exhausted', 'generation', 'reload_pending', 'process', 'frame', 'identity', 'deaths'):
+            with self.subTest(variant=variant):
+                directory = self.root/variant
+                directory.mkdir()
+                metrics = Metrics(directory/'metrics.json', 'test', 'test', 'high', 600)
+                metrics.state.resumed_from = str(self.root)
+                restored = GameSession(copy.copy(self.session.cfg), directory, metrics)
+                restored.game_process_id = 779 if variant == 'process' else 778
+                obs = copy.deepcopy(bridge.obs)
+                data = copy.deepcopy(saved)
+                if variant == 'stalled':
+                    data['wait']['stalled_at'] = obs['frame']
+                elif variant == 'generation':
+                    data['wait']['epoch'][1] = 2
+                elif variant == 'reload_pending':
+                    restored.reload_observation_required = True
+                elif variant == 'exhausted':
+                    data['wait']['start_frame'] = obs['frame'] - TRANSITION_WAIT_FRAMES
+                elif variant == 'frame':
+                    obs['frame'] += 1
+                elif variant == 'identity':
+                    obs['level']['room'] = 'other'
+                elif variant == 'deaths':
+                    obs['level']['deaths'] += 1
+                (self.root/'transition_wait.json').write_text(json.dumps(data))
+                try:
+                    restored._restore_transition_wait(obs)
+                    restored.last_obs = obs
+                    if variant in ('same', 'stalled', 'exhausted', 'generation'):
+                        wait = restored._transition_for(obs)
+                        self.assertIsNotNone(wait)
+                        self.assertEqual(wait.start_frame, data['wait']['start_frame'])
+                        remaining = TRANSITION_WAIT_FRAMES - 90 if variant in ('same', 'generation') else 0
+                        self.assertEqual(wait.progress(obs['frame'])['remaining_frames'], remaining)
+                        if variant == 'generation':
+                            self.assertEqual(restored.reload_epoch, 2)
+                    else:
+                        self.assertIsNone(restored._transition_for(obs))
+                finally:
+                    restored.close(release=False)
+
+    def test_entry_restart_keeps_the_original_budget_and_reload_persists_invalidation(self):
+        self.session.cfg.save_slot = 15
+        self.session.game_process_id = 778
+        start = {'scene': 'LevelEnter', 'frame': 500, 'save': {'slot': 15}, 'controllable': False,
+                 'reload_boundary': {'session': {'sid': 'Celeste/3-CelestialResort', 'side': 'A', 'room': 'start'}}}
+        self.session._write_workspace(start)
+        later = copy.deepcopy(start)
+        later['frame'] = 560
+        self.session._write_workspace(later)
+        directory = self.root/'entry-restart'
+        directory.mkdir()
+        metrics = Metrics(directory/'metrics.json', 'test', 'test', 'high', 600)
+        metrics.state.resumed_from = str(self.root)
+        restored = GameSession(copy.copy(self.session.cfg), directory, metrics)
+        restored.game_process_id = 778
+        try:
+            restored._restore_transition_wait(later)
+            self.assertEqual(restored._transition_wait.start_frame, 500)
+            self.assertEqual(restored._transition_wait.progress(560)['advanced_frames'], 60)
+            restored.after_bridge_reload(observation(controllable=True, cutscene=False))
+            self.assertTrue(restored.reload_observation_required)
+            self.assertIsNone(json.loads((directory/'transition_wait.json').read_text())['wait'])
+        finally:
+            restored.close(release=False)
+
+    def test_new_death_during_story_auto_play_hands_back_before_respawn(self):
+        def after(client, inputs):
+            if client.frames == 1:
+                client.obs['controllable'] = False
+                client.obs['storyPlaybackState'] = {'state': 'playing', 'source': 'fixture'}
+            else:
+                client.obs['player'] = None
+                client.obs['level'].update(deaths=1, inCutscene=False)
+                client.obs['storyPlaybackState'] = {'state': 'unknown', 'source': 'level_blocked'}
+        start = observation(controllable=True, cutscene=False)
+        bridge = StoryBridge(start, after)
+        self._wire_bridge(bridge)
+        outcome = self.session.act(['1,R'], '经过剧情入口', None)
+        self.assertEqual(bridge.steps, [['1,R'], ['30']])
+        self.assertEqual(outcome.auto_frames, 30)
+        self.assertIsNone(outcome.obs['player'])
+        self.assertEqual(self.session._transition_wait.evidence, 'death_counter')
 
     def test_respawn_can_resume_bounded_wait_after_stop_report_without_extra_input(self):
         client, server = self._death_fixture(pause_at=97880)
@@ -340,6 +551,8 @@ class StoryWaitTests(unittest.TestCase):
         result = asyncio.run(server.call_tool('act', {'inputs': ['60'], 'thought': '补充中性帧'}))
         self.assertFalse(result.is_error)
         self.assertIn(['60'], client.steps)
+        self.assertEqual(client.obs['frame'], 97940)
+        self.session.observe()  # Explicitly choose waiting; act did not add an automatic suffix.
         self.assertEqual(client.obs['frame'], client.death_frame + TRANSITION_WAIT_FRAMES)
         steps = client.steps.copy()
         self.session.observe()

@@ -406,7 +406,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     progress = result['transition']
                     tail = (f'当前为已核实的入场或重生过渡，累计推进 {progress["advanced_frames"]} 帧，'
                             f'剩余等待预算 {progress["remaining_frames"]} 帧。60 帧约为 1 秒。'
-                            '请调用 observe，由主控以正常速度继续有界等待，随后核对返回状态。此次报告没有触发暂停。')
+                            '重生时可按画面用 act 显式确认以缩短部分死亡动画，或选择 observe / cutscene(watch) 正常速度有界等待。'
+                            '此次报告没有推进游戏或触发暂停。')
                 else:
                     tail = '相同状态及证据的报告已记录为诊断。请检查最新观测或提供新故障证据。此次报告没有再次触发暂停。'
                     if note := result.get('control_note'):
