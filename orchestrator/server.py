@@ -43,7 +43,7 @@ thought：一两句中文{thought_brief}，会显示给观众。只写你对当�
   不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。{thought_mood_short}{formal_thought_act}
 stop_on：提前停下的条件，可选 death room uncontrollable controllable land refill complete story_input story_decision；
   默认 ["death", "room", "complete"]，death 总会生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。
-celeste_ai格式下，死亡、换房后的转场与重生由系统自动推进；agent剧情模式下主控在可尝试跳过时先交回，可选skip或watch继续观看到实际输入节点或恢复控制。celeste_tas格式下不自动补这些帧，由明确输入推进。读取storyDecision、storyInput与story；inCutscene标记本身不表示角色失控。"""
+celeste_ai格式下，{auto_handling}agent剧情模式下主控在剧情可尝试跳过时先交回，可选skip或watch继续观看到实际输入节点或恢复控制。celeste_tas格式下不自动补这些帧，由明确输入推进。读取storyDecision、storyInput与story；inCutscene标记本身不表示角色失控。"""
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json；最近游戏工具调用：/workspace/game/last_tool.json）"
 SIM_NOTE = WORKSPACE_NOTE[:-1] + "；模拟仅通过主控 simulate 工具请求，工作区不提供模拟器）"
