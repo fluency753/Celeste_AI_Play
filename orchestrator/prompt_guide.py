@@ -12,6 +12,7 @@ import uuid
 from .prompting import prompt_parts
 from .execution import workspace_capabilities
 from .config import REPO_ROOT
+from .session_store import rename_directory
 
 
 GUIDE_READ_ROOT = REPO_ROOT / 'local' / 'guide-reading'
@@ -118,7 +119,7 @@ def _set_aside(base, destination):
     """Rename a tampered version entry within the guide base; links are renamed, never followed or deleted."""
     _check_chain(base)
     stale = base / f'.stale-{destination.name[:16]}-{uuid.uuid4().hex[:12]}'
-    os.rename(destination, stale)
+    rename_directory(destination, stale)
     return stale
 
 
@@ -153,7 +154,7 @@ def publish_guide(cfg):
                     output.write(content)
             _check_chain(base)
             try:
-                os.rename(temporary, destination)
+                rename_directory(temporary, destination)
             except OSError:
                 if not os.path.lexists(destination):
                     raise

@@ -2,9 +2,12 @@
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
+
+from .session_store import rename_directory
 
 VERSION = 1
 MANIFEST = '.knowledge.json'
@@ -148,9 +151,12 @@ def build(cfg, root, view):
     try:
         _write_view(cfg, root, staging)
         try:
-            staging.rename(view)
-        except FileExistsError:
-            study_identity(view)
+            rename_directory(staging, view)
+        except OSError:
+            if not os.path.lexists(view):
+                raise
+            if study_identity(view) is None:
+                raise ValueError('并发发布的知识库快照不完整，请重新生成到新目录')
         return view
     finally:
         if staging.exists():

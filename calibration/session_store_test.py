@@ -4,12 +4,13 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import shutil
 from threading import Event
 import unittest
 from unittest.mock import patch
 from urllib.request import urlopen
 
-from orchestrator.session_store import load_json, write_json
+from orchestrator.session_store import load_json, rename_directory, write_json
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows file sharing semantics')
@@ -100,3 +101,82 @@ class SessionSnapshotTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError) as missing:
             load_json(self.path)
         self.assertEqual(Path(missing.exception.filename), self.path)
+
+    def test_directory_publication_waits_for_a_real_windows_reader(self):
+        from orchestrator.windows_state_file import _open, _close, _GENERIC_READ, wintypes
+
+        source = self.path.parent / 'staging'
+        target = self.path.parent / 'published'
+        source.mkdir()
+        (source / 'guide.md').write_text('complete guide', encoding='utf-8')
+        blocked = Event()
+        rename = os.rename
+
+        def signal_conflict(old, new):
+            try:
+                return rename(old, new)
+            except OSError:
+                blocked.set()
+                raise
+
+        handle = _open(str(source), _GENERIC_READ, 3, None, 3, 0x02000000, None)
+        self.assertNotEqual(handle, wintypes.HANDLE(-1).value)
+        with ThreadPoolExecutor() as pool, patch('orchestrator.session_store.os.rename', signal_conflict):
+            try:
+                task = pool.submit(rename_directory, source, target)
+                self.assertTrue(blocked.wait(5))
+                self.assertFalse(target.exists())
+            finally:
+                _close(handle)
+            task.result(timeout=5)
+        self.assertFalse(source.exists())
+        self.assertEqual((target / 'guide.md').read_text(encoding='utf-8'), 'complete guide')
+
+    def test_directory_publication_failure_preserves_source_and_competing_target(self):
+        source, target = self.path.parent / 'staging', self.path.parent / 'published'
+        source.mkdir()
+        (source / 'guide.md').write_text('original', encoding='utf-8')
+        denied = OSError(13, 'sharing violation', source, 5)
+        with patch('orchestrator.session_store.os.rename', side_effect=denied) as rename, \
+             patch('orchestrator.session_store.time.sleep'):
+            with self.assertRaises(OSError):
+                rename_directory(source, target)
+        self.assertEqual(rename.call_count, 7)
+        self.assertEqual((source / 'guide.md').read_text(encoding='utf-8'), 'original')
+        self.assertFalse(target.exists())
+        target.mkdir()
+        (target / 'guide.md').write_text('winner', encoding='utf-8')
+        with patch('orchestrator.session_store.os.rename', side_effect=denied) as rename:
+            with self.assertRaises(OSError):
+                rename_directory(source, target)
+        self.assertEqual(rename.call_count, 1)
+        self.assertEqual((target / 'guide.md').read_text(encoding='utf-8'), 'winner')
+
+    def test_knowledge_publisher_validates_concurrent_directory(self):
+        from orchestrator import kb_layout
+        from orchestrator.config import RunConfig
+
+        kb = self.path.parent / 'kb'
+        for name in ('shared/data.md', 'shared/tools.md', 'explore/README.md', 'speedrun/README.md'):
+            path = kb / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture knowledge', encoding='utf-8')
+        cfg = RunConfig(agent='fixture', save='', model='', engine='codex', knowledge_profile='explore')
+        for complete in (True, False):
+            with self.subTest(complete=complete):
+                view = self.path.parent / ('complete' if complete else 'incomplete')
+
+                def concurrent_winner(source, target):
+                    if complete:
+                        shutil.copytree(source, target)
+                    else:
+                        target.mkdir()
+                    raise OSError(13, 'concurrent destination', source, 5)
+
+                with patch('orchestrator.session_store.os.rename', side_effect=concurrent_winner):
+                    if complete:
+                        self.assertEqual(kb_layout.build(cfg, kb, view), view)
+                        self.assertIsNotNone(kb_layout.study_identity(view))
+                    else:
+                        with self.assertRaisesRegex(ValueError, '不完整'):
+                            kb_layout.build(cfg, kb, view)

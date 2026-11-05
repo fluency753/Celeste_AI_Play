@@ -17,6 +17,24 @@ def load_json(path, *, encoding='utf-8'):
         return json.load(stream)
 
 
+def rename_directory(source, target):
+    """Publish a completed directory, tolerating short Windows handle conflicts."""
+    for delay in (0, .01, .02, .04, .08, .16, .32):
+        if delay:
+            time.sleep(delay)
+        try:
+            os.rename(source, target)
+            if delay:
+                print(f'[publish] 目录发布重试成功：{source} -> {target}', flush=True)
+            return
+        except OSError as exc:
+            if (os.name != 'nt' or getattr(exc, 'winerror', None) not in (5, 32)
+                    or os.path.lexists(target) or delay == .32):
+                raise
+            if not delay:
+                print(f'[publish] Windows 目录发布异常，将有限重试：{exc}', flush=True)
+
+
 def _replace_snapshot(source, target):
     windows = os.name == 'nt'
     native = windows
