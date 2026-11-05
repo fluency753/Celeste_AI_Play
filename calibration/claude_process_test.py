@@ -2,6 +2,7 @@
 import asyncio
 import builtins
 import json
+import os
 from contextlib import ExitStack
 from pathlib import Path
 import shutil
@@ -15,9 +16,12 @@ from orchestrator import agent, config, kb_access, personal_prompts, prompting
 from orchestrator.agent import ClaudeRunner
 from orchestrator.config import RunConfig
 from orchestrator.metrics import Metrics
+from orchestrator.session_store import rename_directory
 
 
-CHILD = '''import json,sys,time
+CHILD = '''import json,os,sys,time
+from pathlib import Path
+Path(sys.argv[2]).write_text(str(os.getpid()),encoding='ascii')
 def emit(value): print(json.dumps(value),flush=True)
 for line in sys.stdin:
  value=json.loads(line)
@@ -65,6 +69,11 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         self.work.mkdir()
         self.script = self.root/'child.py'
         self.script.write_text(CHILD, encoding='utf-8')
+        # Windows venv python.exe is a launcher that owns another Python process.
+        # These fixtures model a directly owned executable, as the real Claude client is.
+        self.python = sys._base_executable if os.name == 'nt' else sys.executable
+        self.main_pid = self.root/'main-child.pid'
+        self.pid_files = []
         self.mode = 'normal'
         self.children, self.readers, self.logs = [], [], []
         self.spawn_error = self.docker_error = self.body_error = self.close_error = None
@@ -80,7 +89,8 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
 
         def command():
             original_command()  # Keep guide and prompt publication; replace only the executable.
-            return [sys.executable, '-X', 'utf8', '-u', str(self.script), self.mode]
+            self.main_pid = self.root/f'main-child-{len(self.children)}.pid'
+            return [self.python, '-X', 'utf8', '-u', str(self.script), self.mode, str(self.main_pid)]
 
         async def reader():
             self.readers.append(asyncio.current_task())
@@ -105,13 +115,18 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
                     script = f'pkill() {{ return {self.docker_exit}; }}; ' + argv[-1]
                     proc = await self.real_spawn(shell, '-c', script, **options)
                 else:
-                    program = ('import time;time.sleep(60)' if self.docker_mode == 'hang'
-                               else f'raise SystemExit({self.docker_exit})')
-                    proc = await self.real_spawn(sys.executable, '-c', program, **options)
+                    marker = self.root/f'cleanup-child-{len(self.children)}.pid'
+                    program = ('import os,sys;from pathlib import Path;'
+                               'Path(sys.argv[1]).write_text(str(os.getpid()),encoding="ascii");'
+                               + ('import time;time.sleep(60)' if self.docker_mode == 'hang'
+                                  else f'raise SystemExit({self.docker_exit})'))
+                    proc = await self.real_spawn(self.python, '-c', program, str(marker), **options)
+                    self.pid_files.append((proc, marker))
             else:
                 if self.spawn_error is not None:
                     raise self.spawn_error
                 proc = await self.real_spawn(*argv, **options)
+                self.pid_files.append((proc, self.main_pid))
                 close = proc.stdin.close
 
                 def close_input():
@@ -160,6 +175,14 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(task.done() for task in self.readers))
         self.assertTrue(all(handle.closed for handle in self.logs))
         self.assertFalse(self.metrics.tools_running)
+        for proc, marker in self.pid_files:
+            if marker.exists():  # A child killed before its first instruction has no marker.
+                self.assertEqual(int(marker.read_text(encoding='ascii')), proc.pid)
+        released = self.work.with_name('work-released')
+        # Process identity/exit checks above are mandatory; this additionally
+        # checks CWD release without turning a transient Windows file lock into a test failure.
+        rename_directory(self.work, released)
+        rename_directory(released, self.work)
 
     async def run_process(self):
         return await asyncio.wait_for(self.runner._run_process(self.work, 'Fixture'), 5)
@@ -210,6 +233,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await task
         self.assertTrue(task.cancelled())
+        self.assertTrue(self.main_pid.is_file())
         self.assert_reaped()
 
     async def test_cancel_during_shutdown_overrides_body_error_and_keeps_its_cause(self):

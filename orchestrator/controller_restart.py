@@ -139,8 +139,6 @@ def interrupt_action(operation):
 def operation_lock(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a+b') as stream:
-        if stream.tell() == 0:
-            stream.write(b'\0'); stream.flush()
         stream.seek(0)
         if os.name == 'nt':
             import msvcrt

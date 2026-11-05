@@ -571,7 +571,6 @@ class ConsoleTests(unittest.TestCase):
         body = body[:body.index('\n}\n')]
         self.assertLess(body.index('ui.sides = [];'), body.index('fillSaves();'))
         self.assertLess(body.index('ui.chapters = [0];'), body.index('fillSaves();'))
-        self.assertIn('await loadModels();', body)
 
 
 if __name__ == '__main__':

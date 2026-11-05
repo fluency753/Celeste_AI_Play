@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -215,6 +216,56 @@ class PersonalPromptTests(unittest.TestCase):
             self.assertEqual(child.returncode, 0, (out, error))
         self.assertEqual(personal.read('all')['text'], 'parallel A')
         self.assertEqual(personal.read('codex:explore')['text'], 'parallel B')
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows byte-range locks beyond EOF')
+    def test_writer_waits_on_an_empty_lock_instead_of_writing_before_acquisition(self):
+        import msvcrt
+
+        self.path.parent.mkdir()
+        lock = self.path.with_suffix(self.path.suffix + '.lock')
+        ready = self.root/'locking.ready'
+        script = '''import msvcrt,sys
+from pathlib import Path
+from orchestrator import personal_prompts as p
+p.STORE=Path(sys.argv[1])
+locking=msvcrt.locking
+def observed_lock(fd,mode,count):
+    if mode==msvcrt.LK_LOCK: Path(sys.argv[2]).touch()
+    return locking(fd,mode,count)
+msvcrt.locking=observed_lock
+p.save('all','saved after release',p.read('all')['version'])
+print('saved',flush=True)
+'''
+        with lock.open('a+b') as stream:
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            try:
+                child = subprocess.Popen([sys._base_executable, '-X', 'utf8', '-c', script,
+                                          str(self.path), str(ready)],
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         text=True, encoding='utf-8')
+
+                def reap():
+                    if child.poll() is None:
+                        child.kill()
+                    child.communicate(timeout=10)
+
+                self.addCleanup(reap)
+                deadline = time.monotonic() + 10
+                while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(ready.is_file(), 'Writer did not reach the real blocking lock')
+                self.assertIsNone(child.poll())
+                self.assertFalse(self.path.exists())
+                self.assertEqual(lock.stat().st_size, 0)
+            finally:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            output, error = child.communicate(timeout=15)
+        self.assertEqual(child.returncode, 0, error)
+        self.assertEqual(output, 'saved\n')
+        self.assertEqual(personal.read('all')['text'], 'saved after release')
+        self.assertEqual(lock.stat().st_size, 0)
 
     def test_separate_processes_cannot_overwrite_stale_same_scope(self):
         script = ('import sys; from pathlib import Path; '

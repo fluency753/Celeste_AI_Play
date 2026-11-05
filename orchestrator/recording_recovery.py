@@ -19,6 +19,7 @@ import subprocess
 import uuid
 
 from .purecut import _wav_header
+from .session_store import rename_directory
 
 
 class RecoveryError(RuntimeError):
@@ -231,9 +232,6 @@ def _lock(root):
         raise RecoveryError('Recovery directory cannot be a link')
     directory.mkdir(parents=True, exist_ok=True)
     with _inside(root, 'recovery.lock').open('a+b') as stream:
-        stream.seek(0, 2)
-        if stream.tell() == 0:
-            stream.write(b'0'); stream.flush()
         stream.seek(0)
         try:
             if os.name == 'nt':
@@ -552,7 +550,7 @@ def _normalize(saved, relative):
                   'normalized_hashes': {name: _hash(stage / name) for name in MEDIA if (stage / name).exists()}}
         _write(stage / 'report.json', report)
         output.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(stage, output)
+        rename_directory(stage, output)
         return output, report
 
 
@@ -702,7 +700,7 @@ def prepare(saved):
                     if (root / CLOSED_RECEIPT).is_file():
                         shutil.copy2(root / CLOSED_RECEIPT, stage / CLOSED_RECEIPT)
                 _write(stage / 'identity.json', {'session_id': saved['id']})
-                os.replace(stage, base)
+                rename_directory(stage, base)
             elif json.loads((base / 'identity.json').read_text(encoding='utf-8'))['session_id'] != saved['id']:
                 raise RecoveryError('Existing recovery backup belongs to another recording')
             else:

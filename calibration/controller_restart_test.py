@@ -16,6 +16,23 @@ from orchestrator.session_store import write_json
 HTTP_CONTROL = restart.control
 
 class RestartTests(unittest.TestCase):
+    def test_operation_lock_preserves_empty_and_existing_files_and_releases_on_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'operation.lock'
+            for content in (b'', b'old lock contents'):
+                with self.subTest(content=content):
+                    path.write_bytes(content)
+                    with self.assertRaisesRegex(ValueError, 'owner failed'):
+                        with restart.operation_lock(path):
+                            self.assertEqual(path.stat().st_size, len(content))
+                            with self.assertRaises(OSError):
+                                with restart.operation_lock(path):
+                                    self.fail('Another operation acquired the held lock')
+                            raise ValueError('owner failed')
+                    with restart.operation_lock(path):
+                        self.assertEqual(path.stat().st_size, len(content))
+                    self.assertEqual(path.read_bytes(), content)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

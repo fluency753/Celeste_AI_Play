@@ -102,10 +102,6 @@ def _write_lock(path):
         lock_path = path.with_suffix(path.suffix + '.lock')
         _check_path(lock_path)
         with lock_path.open('a+b') as stream:
-            stream.seek(0, os.SEEK_END)
-            if not stream.tell():
-                stream.write(b'\0')
-                stream.flush()
             stream.seek(0)
             if os.name == 'nt':
                 import msvcrt

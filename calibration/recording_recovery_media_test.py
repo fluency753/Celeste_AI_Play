@@ -220,15 +220,17 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
         self.media(prepared['active_capture'], [300, 400], start_frame=12, color='blue')
         replace = self.recovery.os.replace
         failed = False
+        expected = PermissionError('Injected audio publication failure')
         def locked_audio(source, destination):
             nonlocal failed
             if Path(destination) == self.root/'audio.wav' and not failed:
                 failed = True
-                raise PermissionError('Injected audio publication failure')
+                raise expected
             return replace(source, destination)
         with patch.object(self.recovery.os, 'replace', side_effect=locked_audio):
-            with self.assertRaises((PermissionError, RuntimeError)):
+            with self.assertRaises(PermissionError) as caught:
                 self.recovery.finalize(self.saved)
+        self.assertIs(caught.exception, expected)
         self.assertTrue(failed)
         result = self.recovery.finalize(self.saved)
         self.assertEqual(result['frames'], 4)
@@ -237,6 +239,128 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
         self.assertEqual(len(read_ticks(self.root/'frames.csv')), 4)
         self.assertEqual(len(self.wav('audio.wav')), 4*6400)
         self.assert_backup_kept(original)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows directory publication conflicts')
+    def test_transient_directory_conflicts_keep_media_exact_on_retry(self):
+        base = self.media(self.root, [100, 200])
+        original = self.fingerprints()
+        rename = os.rename
+        attempts = {}
+        targets = {self.root/'.recovery/base', self.root/'.recovery/normalized/base'}
+
+        def briefly_locked(source, destination):
+            destination = Path(destination)
+            if destination in targets:
+                attempts[destination] = attempts.get(destination, 0) + 1
+                if attempts[destination] < 3:
+                    raise OSError(13, 'Injected short directory conflict', source, 5)
+            return rename(source, destination)
+
+        with patch('orchestrator.session_store.os.rename', side_effect=briefly_locked):
+            prepared = self.recovery.prepare(self.saved)
+        self.assertEqual(attempts, {target: 3 for target in targets})
+        self.assertEqual(self.fingerprints(), original)
+        tail = self.media(prepared['active_capture'], [300, 400], start_frame=12, color='blue')
+        result = self.recovery.finalize(self.saved)
+        self.assertEqual(result['frames'], 4)
+        self.assertEqual(self.recovery.finalize(self.saved)['generation'], result['generation'])
+        self.assertEqual(self.decode(self.root/'video.mkv'), base['raw'] + tail['raw'])
+        self.assertEqual(self.wav('audio.wav'), base['full'] + tail['full'])
+        self.assertEqual(read_ticks(self.root/'frames.csv'), [100, 200, 300, 400])
+        self.assert_backup_kept(original)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows directory publication conflicts')
+    def test_persistent_base_directory_conflict_preserves_capture_for_later_recovery(self):
+        self.media(self.root, [100, 200])
+        original = self.fingerprints()
+        target = self.root/'.recovery/base'
+        rename = os.rename
+        expected = OSError(13, 'Injected persistent base conflict', target, 5)
+        attempts = []
+
+        def locked_base(source, destination):
+            if Path(destination) == target:
+                attempts.append(Path(source))
+                raise expected
+            return rename(source, destination)
+
+        with patch('orchestrator.session_store.os.rename', side_effect=locked_base), \
+             patch('orchestrator.session_store.time.sleep'):
+            with self.assertRaises(PermissionError) as caught:
+                self.recovery.prepare(self.saved)
+        self.assertIs(caught.exception, expected)
+        self.assertEqual(len(attempts), 7)
+        self.assertEqual(len(set(attempts)), 1)
+        self.assertTrue(attempts[0].is_dir())
+        self.assertFalse(target.exists())
+        self.assertFalse((self.root/'.recovery/ledger.json').exists())
+        self.assertEqual(self.fingerprints(), original)
+        prepared = self.recovery.prepare(self.saved)
+        self.media(prepared['active_capture'], [300, 400], start_frame=12, color='blue')
+        self.assertEqual(self.recovery.finalize(self.saved)['frames'], 4)
+        self.assertEqual(self.recovery.finalize(self.saved)['frames'], 4)
+        self.assertEqual(read_ticks(self.root/'frames.csv'), [100, 200, 300, 400])
+        self.assert_backup_kept(original)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows directory publication conflicts')
+    def test_persistent_normalized_directory_conflict_never_reappends_a_capture(self):
+        self.media(self.root, [100, 200])
+        original = self.fingerprints()
+        prepared = self.recovery.prepare(self.saved)
+        capture = Path(prepared['active_capture'])
+        tail = self.media(capture, [300, 400], start_frame=12, color='blue')
+        target = self.root/'.recovery/normalized'/capture.name
+        rename = os.rename
+        expected = OSError(13, 'Injected persistent normalization conflict', target, 5)
+        attempts = []
+
+        def locked_prefix(source, destination):
+            if Path(destination) == target:
+                attempts.append(Path(source))
+                raise expected
+            return rename(source, destination)
+
+        with patch('orchestrator.session_store.os.rename', side_effect=locked_prefix), \
+             patch('orchestrator.session_store.time.sleep'):
+            with self.assertRaises(PermissionError) as caught:
+                self.recovery.finalize(self.saved)
+        self.assertIs(caught.exception, expected)
+        self.assertEqual(len(attempts), 7)
+        self.assertEqual(len(set(attempts)), 1)
+        self.assertTrue(attempts[0].is_dir())
+        self.assertFalse(target.exists())
+        self.assertEqual(self.fingerprints(), original)
+        self.assertEqual(self.decode(capture/'video.mkv'), tail['raw'])
+        self.assertEqual(read_ticks(capture/'frames.csv'), [300, 400])
+        result = self.recovery.finalize(self.saved)
+        self.assertEqual(result['frames'], 4)
+        self.assertEqual(self.recovery.finalize(self.saved)['generation'], result['generation'])
+        self.assertEqual(read_ticks(self.root/'frames.csv'), [100, 200, 300, 400])
+        self.assertEqual(self.frames(self.root/'video.mkv'), 4)
+        self.assert_backup_kept(original)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows directory publication conflicts')
+    def test_competing_base_directory_is_not_replaced(self):
+        self.media(self.root, [100, 200])
+        original = self.fingerprints()
+        target = self.root/'.recovery/base'
+        rename = os.rename
+        attempts = []
+
+        def competing_publication(source, destination):
+            if Path(destination) == target:
+                attempts.append(Path(source))
+                target.mkdir()
+                (target/'owner.txt').write_text('another publisher', encoding='utf-8')
+            return rename(source, destination)
+
+        with patch('orchestrator.session_store.os.rename', side_effect=competing_publication):
+            with self.assertRaises(FileExistsError):
+                self.recovery.prepare(self.saved)
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual((target/'owner.txt').read_text(encoding='utf-8'), 'another publisher')
+        self.assertEqual(self.fingerprints(), original)
+        self.assertFalse((self.root/'.recovery/ledger.json').exists())
 
     def test_codec_mismatch_rejects_candidate_and_preserves_published_prefix(self):
         self.media(self.root, [100, 200])
@@ -433,25 +557,18 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
         directory = self.root/'.recovery'
         directory.mkdir()
         lock = directory/'recovery.lock'
-        with lock.open('x', encoding='utf-8') as stream:
-            stream.write('0')
-            stream.flush()
-            stream.seek(0)
-            if os.name == 'nt':
-                import msvcrt
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            try:
-                with self.assertRaises(RuntimeError):
-                    self.recovery.prepare(self.saved)
-            finally:
-                stream.seek(0)
-                if os.name == 'nt':
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(stream, fcntl.LOCK_UN)
+        for content in (b'', b'old lock contents'):
+            with self.subTest(content=content):
+                lock.write_bytes(content)
+                with self.assertRaisesRegex(ValueError, 'owner failed'):
+                    with self.recovery._lock(self.root):
+                        self.assertEqual(lock.stat().st_size, len(content))
+                        with self.assertRaisesRegex(self.recovery.RecoveryError, 'Another recovery operation'):
+                            self.recovery.prepare(self.saved)
+                        raise ValueError('owner failed')
+                with self.recovery._lock(self.root):
+                    self.assertEqual(lock.stat().st_size, len(content))
+                self.assertEqual(lock.read_bytes(), content)
         self.assertEqual(self.fingerprints(), original)
 
     @unittest.skipUnless(os.name == 'nt', 'Uses actual Windows sharing protection')
