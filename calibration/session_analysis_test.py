@@ -285,6 +285,118 @@ class AnalysisTests(unittest.TestCase):
         self.assertIsNone(result['window_changes'])
         self.assertEqual([commit['commit'] for commit in result['commits']], [second])
 
+    @unittest.skipUnless(shutil.which('git'), 'Git is unavailable')
+    def test_nested_git_repositories_keep_root_notes_and_export_separate_readonly_evidence(self):
+        workspace = self.root / 'workspace'
+        workspace.mkdir()
+        note = b'Current player notes\n'
+        (workspace / 'notes.md').write_bytes(note)
+        env = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1',
+                   GIT_AUTHOR_DATE='2025-01-01T00:00:01Z', GIT_COMMITTER_DATE='2025-01-01T00:00:01Z')
+
+        def git(root, *args):
+            return subprocess.check_output(['git', *args], cwd=root, env=env, text=True).strip()
+
+        git(workspace, 'init', '--quiet', '--template=')
+        expected = {}
+        for name in ('celeste-lab', 'other-program'):
+            root = workspace / name
+            root.mkdir()
+            git(root, 'init', '--quiet', '--template=')
+            (root / 'plan.py').write_text('start\n', encoding='utf-8')
+            git(root, 'add', 'plan.py')
+            git(root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', name)
+            expected[name] = (git(root, 'rev-parse', 'HEAD'), (root/'.git/index').read_bytes())
+            git(root, 'config', 'core.fsmonitor', 'echo EXECUTED > FSMONITOR_CANARY')
+        (workspace/'celeste-lab/plan.py').write_text('modified plan with different length\n', encoding='utf-8')
+        (workspace/'pointer').mkdir()
+        (workspace/'pointer/.git').write_text('gitdir: ../../outside/.git\n', encoding='utf-8')
+        (workspace/'broken/.git').mkdir(parents=True)
+        (workspace/'broken/.git/HEAD').write_text('invalid\n', encoding='utf-8')
+        (workspace/'node_modules/ignored/.git').mkdir(parents=True)
+
+        report = self.collect(workspace=workspace, since='2025-01-01T00:00:01Z', until='2025-01-01T00:00:02Z')
+        evidence = report['workspace']
+        self.assertIsNone(evidence['git']['head'])
+        repos = {row['path']: row for row in evidence['git_repositories']}
+        self.assertEqual(set(repos), {'.', 'broken', 'celeste-lab', 'other-program'})
+        self.assertIsNone(repos['broken']['head'])
+        for name, (head, index) in expected.items():
+            self.assertEqual(repos[name]['head'], head)
+            self.assertEqual([row['commit'] for row in repos[name]['commits']], [head])
+            self.assertEqual((workspace/name/'.git/index').read_bytes(), index)
+            self.assertFalse((workspace/name/'FSMONITOR_CANARY').exists())
+        self.assertEqual(repos['celeste-lab']['worktree_status'], [{'status': ' M', 'path': 'plan.py'}])
+        self.assertEqual(repos['other-program']['worktree_status'], [])
+        self.assertTrue(any('pointer/.git' in warning for warning in evidence['warnings']))
+        archive = write_export(report, self.root/'nested-export')
+        with zipfile.ZipFile(archive) as bundle:
+            self.assertEqual(bundle.read('notes.md'), note)
+            markdown = bundle.read('git_changes.md').decode('utf-8')
+            self.assertIn('celeste-lab', markdown)
+            self.assertIn('other-program', markdown)
+            for head, _ in expected.values():
+                self.assertIn(head, markdown)
+            self.assertIn('pointer/.git', bundle.read('README.md').decode('utf-8'))
+        git(workspace, 'add', 'notes.md')
+        git(workspace, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'root notes')
+        root_head = git(workspace, 'rev-parse', 'HEAD')
+        evidence = workspace_snapshot(workspace)
+        self.assertEqual(evidence['git']['head'], root_head)
+        self.assertEqual({row['path']: row['head'] for row in evidence['git_repositories'] if row['head']},
+                         {'.': root_head, **{name: head for name, (head, _) in expected.items()}})
+
+    def test_workspace_repository_and_empty_directory_scan_limits_are_reported(self):
+        workspace = self.root/'workspace'
+        workspace.mkdir()
+        for name in ('a', 'b', 'c', 'd'):
+            (workspace/name/'.git').mkdir(parents=True)
+        with patch('orchestrator.session_export_workspace.REPOSITORY_LIMIT', 2):
+            evidence = workspace_snapshot(workspace)
+        self.assertEqual([repo['path'] for repo in evidence['git_repositories']], ['.', 'a'])
+        self.assertTrue(any('Git 仓库达到' in warning for warning in evidence['warnings']))
+        with patch('orchestrator.session_export_workspace.DIRECTORY_LIMIT', 2):
+            evidence = workspace_snapshot(workspace)
+        self.assertEqual([repo['path'] for repo in evidence['git_repositories']], ['.', 'a'])
+        self.assertTrue(any('目录访问达到' in warning for warning in evidence['warnings']))
+
+    def test_nested_git_links_do_not_follow_metadata_outside_the_workspace(self):
+        workspace = self.root/'workspace'
+        (workspace/'program').mkdir(parents=True)
+        outside = self.root/'outside-git'
+        outside.mkdir()
+        (outside/'HEAD').write_text('f'*40+'\n', encoding='utf-8')
+        try:
+            os.symlink(outside, workspace/'program/.git', target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f'Directory symlink unavailable: {exc}')
+        evidence = workspace_snapshot(workspace)
+        self.assertEqual([repo['path'] for repo in evidence['git_repositories']], ['.'])
+        self.assertTrue(any('program/.git' in warning for warning in evidence['warnings']))
+        self.assertNotIn('f'*40, json.dumps(evidence))
+
+    def test_nested_git_executable_and_temporary_directory_must_be_outside_entire_workspace(self):
+        from orchestrator.session_export_git import git_snapshot
+        workspace = self.root/'workspace'
+        repository = workspace/'program'
+        (repository/'.git').mkdir(parents=True)
+        for shim in (workspace/'git.exe', workspace/'sibling/git.exe'):
+            shim.parent.mkdir(exist_ok=True)
+            shim.write_text('DO_NOT_EXECUTE', encoding='utf-8')
+            with patch('orchestrator.session_export_git.shutil.which', return_value=str(shim)), \
+                    patch('orchestrator.session_export_git.subprocess.run') as execute:
+                evidence = git_snapshot(repository, 'a'*40, None, None, workspace_root=workspace)
+            self.assertIsNone(evidence['commits'])
+            self.assertIn('Git 可执行文件', evidence['status_unavailable_reason'])
+            execute.assert_not_called()
+        with patch('orchestrator.session_export_git.shutil.which', return_value=str(self.root/'trusted-git.exe')), \
+                patch('orchestrator.session_export_git.tempfile.gettempdir', return_value=str(workspace)), \
+                patch('orchestrator.session_export_git.tempfile.TemporaryDirectory') as temporary:
+            evidence = git_snapshot(repository, 'a'*40, None, None, workspace_root=workspace)
+        self.assertIn('临时目录', evidence['status_unavailable_reason'])
+        temporary.assert_not_called()
+
     def test_native_unavailable_preserves_local_evidence_and_incomplete_line(self):
         self.timing('tool_requested', 1000, tool_id='pending', tool='Read', decision_wait_s=0)
         with (self.run / 'codex_events.jsonl').open('ab') as stream:

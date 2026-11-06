@@ -7,6 +7,9 @@ import stat
 
 from .session_export_projection import clean_text
 
+DIRECTORY_LIMIT = 2048
+REPOSITORY_LIMIT = 8
+
 
 def read_regular(path, root, limit):
     initial = path.lstat()
@@ -42,8 +45,6 @@ def read_regular(path, root, limit):
 
 
 def workspace_snapshot(path, since_wall=None, until_wall=None):
-    from .session_export_git import git_snapshot
-
     root = Path(path).resolve()
     if not root.is_dir():
         raise ValueError('工作区目录不存在')
@@ -73,7 +74,22 @@ def workspace_snapshot(path, since_wall=None, until_wall=None):
     root_note = root / 'notes.md'
     if os.path.lexists(root_note):
         capture_note(root_note)
-    for directory, dirs, files in os.walk(root, followlinks=False):
+    repositories = [root]
+    repository_limit_warned = False
+    for visited, (directory, dirs, files) in enumerate(os.walk(root, followlinks=False)):
+        if visited >= DIRECTORY_LIMIT:
+            warnings.append(f'目录访问达到{DIRECTORY_LIMIT}项上限，文件和 Git 仓库清单可能不完整')
+            break
+        current = Path(directory)
+        candidate = current / '.git'
+        if current != root and os.path.lexists(candidate):
+            if not unlinked(candidate) or not candidate.is_dir():
+                warnings.append(f'{candidate.relative_to(root).as_posix()}: 跳过 Git 文件指针、链接或重解析点')
+            elif len(repositories) < REPOSITORY_LIMIT:
+                repositories.append(current)
+            elif not repository_limit_warned:
+                warnings.append(f'Git 仓库达到{REPOSITORY_LIMIT}项上限，仓库摘要可能不完整')
+                repository_limit_warned = True
         dirs[:] = sorted(name for name in dirs if name not in excluded and not name.startswith('.')
                          and unlinked(Path(directory) / name))
         for name in sorted(files):
@@ -97,9 +113,28 @@ def workspace_snapshot(path, since_wall=None, until_wall=None):
                 capture_note(source)
         if len(inventory) >= 2000:
             break
+    snapshots = [{'path': directory.relative_to(root).as_posix(),
+                  **_git_evidence(directory, since_wall, until_wall, workspace_root=root)} for directory in repositories]
+    return {'root': str(root), 'meaning': '笔记与清单来自导出时工作区；不证明游玩当时内容或Agent读取/理解，mtime不用于历史归因',
+            'inventory': inventory, 'memory_documents': notes, 'git': {k: v for k, v in snapshots[0].items() if k != 'path'},
+            'git_repositories': snapshots, 'warnings': warnings}
+
+
+def _git_evidence(root, since_wall, until_wall, *, workspace_root):
+    from .session_export_git import git_snapshot
+
+    warnings = []
     git = {'head': None, 'ref': None}
     git_dir = root / '.git'
-    if git_dir.is_dir() and not git_dir.is_symlink() and not getattr(git_dir.lstat(), 'st_file_attributes', 0) & 0x400:
+    try:
+        info = git_dir.lstat()
+        plain_directory = stat.S_ISDIR(info.st_mode) and not getattr(info, 'st_file_attributes', 0) & 0x400
+    except FileNotFoundError:
+        plain_directory = False
+    except OSError as exc:
+        warnings.append(f'Git 目录: {exc}')
+        plain_directory = False
+    if plain_directory:
         try:
             raw, _, _ = read_regular(git_dir / 'HEAD', root, 4096)
             head = raw.decode('utf-8').strip()
@@ -120,6 +155,6 @@ def workspace_snapshot(path, since_wall=None, until_wall=None):
                 git['head'] = head.lower()
         except (OSError, ValueError, UnicodeError) as exc:
             warnings.append(f'Git HEAD: {exc}')
-    git.update(git_snapshot(root, git['head'], since_wall, until_wall))
-    return {'root': str(root), 'meaning': '笔记与清单来自导出时工作区；不证明游玩当时内容或Agent读取/理解，mtime不用于历史归因',
-            'inventory': inventory, 'memory_documents': notes, 'git': git, 'warnings': warnings}
+    git.update(git_snapshot(root, git['head'], since_wall, until_wall, workspace_root=workspace_root))
+    git['warnings'] = warnings + git['warnings']
+    return git

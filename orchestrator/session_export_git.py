@@ -91,7 +91,8 @@ def _paths(output, *, status=False):
     return rows, len(pairs) > PATH_LIMIT
 
 
-def git_snapshot(root, head, since, until):
+def git_snapshot(root, head, since, until, *, workspace_root=None):
+    boundary = Path(workspace_root if workspace_root is not None else root).resolve()
     snapshot = {'since_wall': since, 'until_wall': until, 'commits': None, 'commits_truncated': False,
                 'head_events': None, 'head_events_truncated': False, 'window_start_head': None, 'window_end_head': None,
                 'window_changes': None, 'window_changes_truncated': False, 'worktree_status': None,
@@ -119,14 +120,17 @@ def git_snapshot(root, head, since, until):
 
     try:
         executable = shutil.which('git.exe' if os.name == 'nt' else 'git')
-        if not executable or Path(executable).resolve().is_relative_to(root):
+        if not executable or Path(executable).resolve().is_relative_to(boundary):
             raise ValueError('未找到工作区之外的 Git 可执行文件')
         env = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
         env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_ATTR_NOSYSTEM='1', GIT_OPTIONAL_LOCKS='0',
                    GIT_NO_LAZY_FETCH='1', GIT_NO_REPLACE_OBJECTS='1', GIT_ALLOW_PROTOCOL='', GIT_TERMINAL_PROMPT='0')
-        with tempfile.TemporaryDirectory(prefix='session-export-git-') as scratch:
+        temporary_root = Path(tempfile.gettempdir()).resolve()
+        if temporary_root.is_relative_to(boundary):
+            raise ValueError('Git 临时目录必须位于源工作区之外')
+        with tempfile.TemporaryDirectory(prefix='session-export-git-', dir=temporary_root) as scratch:
             private = Path(scratch).resolve()
-            if private.is_relative_to(root):
+            if private.is_relative_to(boundary):
                 raise ValueError('Git 临时目录必须位于源工作区之外')
             git_dir = private / 'git'
             (git_dir / 'objects').mkdir(parents=True)

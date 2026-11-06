@@ -11,7 +11,16 @@ def _write_workspace(workspace, output):
     note = next((doc for doc in workspace['memory_documents'] if doc['path'] == 'notes.md'), None)
     if note is not None:
         (output / 'notes.md').write_text(note['text'], encoding='utf-8', newline='')
-    git = workspace['git']
+    lines = ['# Git 变更摘要', '', '## 工作区根目录', '', *_git_lines(workspace['git'], level=3)]
+    for repository in workspace.get('git_repositories', []):
+        if repository['path'] != '.':
+            label = escape(repository['path'])
+            lines.extend(['', f'## 子目录仓库 <code>{label}</code>', '', *_git_lines(repository, level=3)])
+    (output / 'git_changes.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    return note
+
+
+def _git_lines(git, *, level):
 
     def utc(wall):
         if wall is None:
@@ -24,12 +33,11 @@ def _write_workspace(workspace, output):
     def code(value):
         return '<code>' + escape(json.dumps(value, ensure_ascii=False)[1:-1]).replace(' ', '&#32;') + '</code>'
 
-    lines = ['# Git 变更摘要', '',
-             f"会话时间窗 {utc(git['since_wall'])} 至 {utc(git['until_wall'])}（UTC，左闭右开）。",
+    lines = [f"会话时间窗 {utc(git['since_wall'])} 至 {utc(git['until_wall'])}（UTC，左闭右开）。",
              f"导出时 HEAD {code(git['head'] or '未知')}，引用 {code(git['ref'] or '未知或分离 HEAD')}。"]
 
     def section(title, field, description, render):
-        lines.extend(['', '## ' + title, '', description, ''])
+        lines.extend(['', '#' * level + ' ' + title, '', description, ''])
         rows = git[field]
         if rows is None:
             lines.append('不可用。')
@@ -52,9 +60,8 @@ def _write_workspace(workspace, output):
             lambda row: f"{code(row['status'])} {code(row['path'])}")
     warnings = list(dict.fromkeys(git['warnings'] + [git['status_unavailable_reason']]))
     if any(warnings):
-        lines.extend(['', '## 数据缺口', ''] + ['- ' + code(warning) for warning in warnings if warning])
-    (output / 'git_changes.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    return note
+        lines.extend(['', '#' * level + ' 数据缺口', ''] + ['- ' + code(warning) for warning in warnings if warning])
+    return lines
 
 
 def write_analysis(report, output):
@@ -120,12 +127,13 @@ def write_analysis(report, output):
     if workspace is not None:
         lines += ['', '## 工作区附件', '',
                   '- workspace.json：当前文件清单、笔记投影及结构化 Git 摘要。',
-                  '- git_changes.md：指定窗口的 Git 记录与导出时工作树状态。']
+                  '- git_changes.md：根目录及子目录独立仓库的 Git 记录与导出时工作树状态。']
         lines.append('- notes.md：根目录笔记的当前脱敏投影' + ('（已截断）。' if note['truncated'] else '。')
                      if note is not None else '- 根目录 notes.md 缺失或无法读取，未生成笔记附件。')
     lines += ['', '## 数据缺口与提醒', '']
     lines += ['- ' + text for text in coverage['limitations']]
-    warnings = list(dict.fromkeys(report['warnings'] + coverage['source_warnings']))
+    warnings = list(dict.fromkeys(report['warnings'] + coverage['source_warnings'] +
+                                 (workspace.get('warnings', []) if workspace is not None else [])))
     lines += ['- ' + text for text in warnings[:30]]
     if len(warnings) > 30:
         lines.append('- 更多来源警告见 session.json。')

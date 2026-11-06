@@ -83,7 +83,9 @@ game_states 从已有工具结果提取 frame、sid、room、死亡数/flags、p
 
 --since/--until 对旧 public_text 仍是左闭右开（无时区按北京时间），旧累计/模拟字段仍为整个会话。分析工具/回合保留相交区间及完整边界；window_membership 区分 within_window、overlaps_window、end_observed_in_window、time_unknown、unfiltered。未知记录保留，不视为确定在窗口内。状态和快照保留整个会话用于引用。
 
-`--workspace` 显式选取工作区，最多 2000 项清单和 20 份 notes/memory/journal，每份 128 KiB、合计 512 KiB。根 `notes.md` 优先采集。跳过链接、重解析点、依赖目录和敏感文件。当前笔记只代表采样时内容，mtime 不作历史归因。输出不能位于源运行或源工作区内。
+`--workspace` 显式选取工作区，最多访问 2048 个目录、采集 2000 项清单和 20 份 notes/memory/journal，每份 128 KiB、合计 512 KiB。根 `notes.md` 优先采集。跳过链接、重解析点、依赖目录和敏感文件。当前笔记只代表采样时内容，mtime 不作历史归因。输出不能位于源运行或源工作区内。
+
+`workspace.json.git` 继续表示工作区根目录的 Git 快照。新增 `git_repositories` 数组，每项包含工作区相对路径 `path`（根目录为 `.`）及相同 Git 字段，按遍历顺序最多 8 项（含根目录快照）。工作区子目录中的独立 `.git` 目录会单独采样，`git_changes.md` 按仓库显示，路径以各仓库根目录为准；根目录没有提交不影响子目录仓库。Git 文件指针、链接、重解析点不追踪；扫描达到上限或跳过不支持的 Git 目录时在 `workspace.warnings` 明确标记。各仓库依次使用隔离 Git 快照，不运行源配置、过滤器、钩子或联网。
 
 `workspace.json.git` 中的 `*_wall` 均为 Unix 秒。Git 记录只有整秒精度，`since_wall` / `until_wall` 保留输入精度，窗口左闭右开。列表中的 `null` 表示证据不可用，`[]` 表示可用且没有匹配项。`*_truncated` 表示条数上限生效。
 
