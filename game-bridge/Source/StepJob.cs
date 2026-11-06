@@ -50,6 +50,9 @@ internal sealed class StepJob {
     private bool recordingSawChapter = Bridge.RecordingChapterActive;
     private string? lastRoom;
     private bool lastAlive;
+    private Session? deathSession;
+    private int lastSessionDeaths;
+    private int registeredDeaths;
     private bool lastControllable;
     private string? lastStoryInput;
     private string? lastStoryDecision;
@@ -93,6 +96,8 @@ internal sealed class StepJob {
         Player? p = level == null ? null : StateExtractor.GetPlayer(level);
         lastRoom = level?.Session.Level;
         lastAlive = p is { Dead: false };
+        deathSession = level?.Session;
+        lastSessionDeaths = deathSession?.Deaths ?? 0;
         lastControllable = StateExtractor.IsControllable(level, p);
         lastStoryInput = StoryText.InputNode(Engine.Scene);
         lastStoryDecision = StoryText.DecisionNode(Engine.Scene);
@@ -124,7 +129,22 @@ internal sealed class StepJob {
         }
     }
 
-    public InputFrame NextInput() => plan[index++];
+    public InputFrame NextInput() {
+        // Loading frames can enter a Level without AfterFrame. Establish its
+        // baseline before the first consumed input, which may itself kill.
+        CountRegisteredDeaths(Engine.Scene as Level);
+        return plan[index++];
+    }
+
+    private void CountRegisteredDeaths(Level? level) {
+        // Retry removes the player immediately, and save-and-quit increments
+        // Session.Deaths without calling Player.Die. Read the previous Session
+        // before adopting a new one: the old one may have left the scene here.
+        if (deathSession != null)
+            registeredDeaths += Math.Max(0, deathSession.Deaths - lastSessionDeaths);
+        deathSession = level?.Session;
+        lastSessionDeaths = deathSession?.Deaths ?? 0;
+    }
 
     public bool AllowNextInput() => !Finished;
     public void NoteScene(Scene? scene) {
@@ -233,6 +253,7 @@ internal sealed class StepJob {
         bool onGround = alive && p!.onGround;
         int dashes = p?.Dashes ?? 0;
 
+        CountRegisteredDeaths(level);
         if (PlayerControl.IsDeathTransition(lastAlive, p)) Emit(frame, "death", room);
         if (room != null && lastRoom != null && room != lastRoom) {
             Emit(frame, "room", room);
@@ -341,6 +362,7 @@ internal sealed class StepJob {
         w.WriteNumber("consumed", index);
         w.WriteNumber("planned", plan.Count);
         w.WriteNumber("loadingFrames", LoadingFrames);
+        w.WriteNumber("registeredDeaths", registeredDeaths);
         w.WriteNumber("startFrame", startFrame);
         w.WriteNumber("endFrame", Bridge.Frame);
         w.WriteStartArray("events");

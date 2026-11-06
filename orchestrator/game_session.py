@@ -712,7 +712,10 @@ class GameSession:
                                'session_ticks': int(event.get('chapterTimeTicks') or 0), 'level': True, 'wall': time.time()}}
 
     def _after_step(self, args: dict, reply: dict) -> None:
-        """BridgeClient.after_step：核实关卡内帧数，再记下最后按住的键。"""
+        """所有推进入口共用：登记原生死亡增量、关卡帧数及最后按住的键。"""
+        deaths = (reply.get('result') or {}).get('registeredDeaths')
+        if type(deaths) is int and deaths > 0:
+            self.metrics.add(deaths=deaths)
         self._ingest_transition(reply.get('obs') or {}, reply.get('result'))
         self._count_level_frames(reply)
         self._remember_held_input(args, reply)
@@ -2423,7 +2426,10 @@ class GameSession:
                     # PlayerSeeker 碰到 Madeline：游戏用 Die(registerDeathInStats: false) 结束这一段，不计死亡
                     self._seeker_death = True
                     continue
-                self.metrics.add(deaths=1)
+                if 'registeredDeaths' not in result:
+                    # Compatibility with bridges before 1.10.1. New replies
+                    # are counted once in after_step, including menu helpers.
+                    self.metrics.add(deaths=1)
             elif e['type'] == 'room':
                 self._transition_wait = None
             elif e["type"] == "complete":

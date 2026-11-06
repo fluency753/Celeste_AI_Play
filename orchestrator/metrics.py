@@ -51,7 +51,7 @@ class MetricsState:
     turn_service_tier_requested: str | None = None  # 请求值，不代表服务端确认的实际档位
     frames_played: int = 0
     frames_auto: int = 0
-    deaths: int = 0
+    deaths: int = 0                   # 本局原生统计死亡增量（含菜单重试、保存退出；不含非计数剧情死亡）
     context_tokens: int = 0
     context_window: int | None = None
     tool_calls: int | None = None

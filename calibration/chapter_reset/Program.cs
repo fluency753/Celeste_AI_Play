@@ -894,6 +894,72 @@ try {
 } finally { fullMixer.SetValue(null,oldMixer);onlyChapters.SetValue(null,oldOnly); }
 Console.WriteLine("PASS: recording boundary preserves outgoing loaders, truncates compound input, and releases no-record play");
 
+// Native Session counters are the accounting source, while death events still
+// describe physical transitions. Do not turn save-and-quit into a death stop.
+System.Text.Json.JsonElement DeathResult(StepJob step) {
+    using var buffer = new MemoryStream();
+    using (var writer = new System.Text.Json.Utf8JsonWriter(buffer)) {
+        writer.WriteStartObject(); step.WriteResult(writer); writer.WriteEndObject();
+    }
+    using var doc = System.Text.Json.JsonDocument.Parse(buffer.ToArray());
+    return doc.RootElement.Clone();
+}
+StepJob DeathJob() => new(300, new() { InputFrame.Neutral, InputFrame.Neutral, InputFrame.Neutral },
+    new[] { "death" }, 1, false, "level", new SnapshotOptions(), false);
+Player DeathPlayer(Level level) {
+    var player = (Player)RuntimeHelpers.GetUninitializedObject(typeof(Player));
+    level.Tracker.Entities[typeof(Player)].Add(player);
+    return player;
+}
+var deathLevel = Level(); Scene(deathLevel);
+deathLevel.Session.Deaths = 7;
+var retryPlayer = DeathPlayer(deathLevel);
+var retryJob = DeathJob(); retryJob.NextInput();
+deathLevel.Session.Deaths++;
+deathLevel.Tracker.Entities[typeof(Player)].Clear(); // Native Die removes the player before AfterFrame.
+retryJob.AfterFrame(100);
+var retryResult = DeathResult(retryJob);
+Check(retryResult.GetProperty("registeredDeaths").GetInt32() == 1, "Menu retry death was lost after player removal");
+Check(retryJob.StopReason == null, "Stat accounting changed missing-player transition behavior");
+Scene(deathLevel);
+var naturalPlayer = DeathPlayer(deathLevel);
+var naturalJob = DeathJob(); naturalJob.NextInput();
+deathLevel.Session.Deaths++; naturalPlayer.Dead = true;
+naturalJob.AfterFrame(101);
+var naturalResult = DeathResult(naturalJob);
+Check(naturalResult.GetProperty("registeredDeaths").GetInt32() == 1 &&
+    naturalResult.GetProperty("events").EnumerateArray().Count(e => e.GetProperty("type").GetString() == "death") == 1 &&
+    naturalJob.StopReason == "death", "Natural death lost its count or physical stop");
+var resumeJob = DeathJob(); resumeJob.NextInput(); resumeJob.AfterFrame(102);
+Check(DeathResult(resumeJob).GetProperty("registeredDeaths").GetInt32() == 0, "New action recounted existing deaths");
+naturalPlayer.Dead = false;
+var nonstatJob = DeathJob(); nonstatJob.NextInput(); naturalPlayer.Dead = true; nonstatJob.AfterFrame(103);
+Check(DeathResult(nonstatJob).GetProperty("registeredDeaths").GetInt32() == 0 && nonstatJob.StopReason == "death",
+    "Non-statistical death must preserve the stop without adding to HUD deaths");
+var quitJob = DeathJob(); quitJob.NextInput(); deathLevel.Session.Deaths++;
+Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene))); quitJob.AfterFrame(104);
+var quitResult = DeathResult(quitJob);
+Check(quitResult.GetProperty("registeredDeaths").GetInt32() == 1 && quitJob.StopReason == null &&
+    !quitResult.GetProperty("events").EnumerateArray().Any(e => e.GetProperty("type").GetString() == "death"),
+    "Save-and-quit lost the departing Session count or introduced a death stop");
+Scene(deathLevel);
+var changedJob = DeathJob(); changedJob.NextInput(); deathLevel.Session.Deaths++;
+var newDeathLevel = Level(); newDeathLevel.Session.Deaths = 50; Scene(newDeathLevel); changedJob.AfterFrame(105);
+changedJob.NextInput(); newDeathLevel.Session.Deaths++; changedJob.AfterFrame(106);
+Check(DeathResult(changedJob).GetProperty("registeredDeaths").GetInt32() == 2,
+    "Session replacement lost the departing increment or counted incoming history");
+var resetJob = DeathJob(); resetJob.NextInput(); newDeathLevel.Session.Deaths = 0; resetJob.AfterFrame(107);
+resetJob.NextInput(); newDeathLevel.Session.Deaths = 2; resetJob.AfterFrame(108);
+Check(DeathResult(resetJob).GetProperty("registeredDeaths").GetInt32() == 2, "Counter reset lost subsequent deaths");
+Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)));
+var loadingDeathJob = DeathJob();
+var loadedDeathLevel = Level(); loadedDeathLevel.Session.Deaths = 9; Scene(loadedDeathLevel);
+loadingDeathJob.NextInput(); loadedDeathLevel.Session.Deaths++; loadingDeathJob.AfterFrame(109);
+Check(DeathResult(loadingDeathJob).GetProperty("registeredDeaths").GetInt32() == 1,
+    "First input after loading lost a death or counted historical deaths");
+Console.WriteLine("PASS: real StepJob counts retry, natural death, save-and-quit, non-statistical death, Session replacement/reset and action baselines without changing stops");
+GC.KeepAlive(callbackEffects); // Keep external-effect detours installed through every native menu check.
+
 sealed class ProbeButton(string label, Action onConfirm) : TextMenu.Button(label) {
     public override void ConfirmPressed() => onConfirm();
 }
