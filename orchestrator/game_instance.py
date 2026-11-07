@@ -3,6 +3,7 @@
 副本是从个人安装复制出来的一份完整游戏目录（默认 local/instances/<名字>，不入库），不带个人的 Mods 与 Saves：
 - Mods 里只有 CelesteAIRuntime 与 CelesteAIBridge（从源安装复制，之后用 tools/deploy_bridge.ps1 -CelesteDir 副本目录 更新）；
 - Saves 从空开始，只把源安装的 settings.celeste 与 modsettings-Everest.celeste 作为初始设置复制一份；
+  需要已有进度时用 copy_saves 复制指定的存档槽（之后只写副本，不回写个人存档）；
 - steam_appid.txt 默认写 480（Valve 公开的 Spacewar 测试程序）：Steam 版《蔚蓝》启动时必须连上正在运行的 Steam，
   写 480 时 Steam 把副本当成 Spacewar，你自己的《蔚蓝》仍能从 Steam 正常启动，AI 也不会给账号解锁《蔚蓝》成就；
 - 目录里的 celeste-ai-instance.json 标记它是副本（名字、窗口标题、来源）。
@@ -169,6 +170,57 @@ def update(game_dir=None, source=None, log=print) -> dict:
     marker.update(source=str(source.resolve()), updated=time.strftime('%Y-%m-%d %H:%M:%S'))
     _write_marker(target, marker)
     return {**marker, 'dir': str(target)}
+
+
+def _slot_files(saves: Path, slot: int) -> list[Path]:
+    """一个存档槽的全部文件：<槽>.celeste 与 Everest 的 <槽>-modsave-*、<槽>-modsession-*、<槽>-modsavedata。"""
+    if not saves.is_dir():
+        return []
+    return sorted(p for p in saves.iterdir() if p.is_file() and p.suffix == '.celeste'
+                  and (p.name == f'{slot}.celeste' or p.name.startswith(f'{slot}-')))
+
+
+def _save_name(path: Path) -> str:
+    import re
+    try:
+        found = re.search(r'<Name>([^<]*)</Name>', path.read_text(encoding='utf-8-sig', errors='replace'))
+    except OSError:
+        return ''
+    return found.group(1) if found else ''
+
+
+def copy_saves(slots, game_dir=None, source=None, log=print) -> list[dict]:
+    """把源安装（默认标记里记下的来源）的这些存档槽原样复制进副本；只读源安装。
+    之后副本的进度只写副本，不回写个人存档。副本里已有同号存档槽时拒绝（不覆盖副本的进度）。"""
+    marker = info(game_dir) if game_dir else current()
+    if marker is None:
+        raise ValueError('不是 AI 副本目录（缺少 celeste-ai-instance.json）')
+    target = Path(marker['dir'])
+    source = Path(source or marker.get('source') or '')
+    if not _is_game_dir(source) or info(source):
+        raise ValueError(f'来源 {source} 不是个人的《蔚蓝》安装目录')
+    slots = list(dict.fromkeys(slots))
+    if not slots or not all(type(s) is int and s >= 0 for s in slots):
+        raise ValueError('存档槽号必须是不小于 0 的整数')
+    if game_processes(target) or game_processes(source):
+        raise RuntimeError('个人的《蔚蓝》或 AI 副本正在运行：请先关闭游戏再复制存档（运行中的游戏随时可能写存档）')
+    plan = []
+    for slot in slots:
+        files = _slot_files(source / 'Saves', slot)
+        if not any(p.name == f'{slot}.celeste' for p in files):
+            raise ValueError(f'源安装没有存档槽 {slot}（{source / "Saves" / f"{slot}.celeste"}）')
+        if existing := _slot_files(target / 'Saves', slot):
+            raise ValueError(f'副本里已经有存档槽 {slot}（{existing[0].name} 等），不覆盖副本的进度')
+        plan.append((slot, files))
+    (target / 'Saves').mkdir(exist_ok=True)
+    copied = []
+    for slot, files in plan:
+        for path in files:
+            shutil.copy2(path, target / 'Saves' / path.name)
+        name = _save_name(target / 'Saves' / f'{slot}.celeste')
+        log(f'[instance] 已复制存档槽 {slot}（{name or "未命名"}，{len(files)} 个文件）')
+        copied.append({'slot': slot, 'name': name, 'files': len(files)})
+    return copied
 
 
 def select(game_dir) -> None:

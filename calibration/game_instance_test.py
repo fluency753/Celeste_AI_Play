@@ -95,6 +95,37 @@ class CreateTests(unittest.TestCase):
         self.assertIn('updated', updated)
         self.assertEqual(game_instance.info(target)['name'], 'main')
 
+    def test_copy_saves_copies_whole_slots_and_never_overwrites(self):
+        saves = self.source / 'Saves'
+        (saves / '8.celeste').write_text('<SaveData><Name>opus5.5</Name></SaveData>', encoding='utf-8')
+        for name in ('8-modsave-Everest.celeste', '8-modsession-Everest.celeste', '8-modsavedata.celeste',
+                     '80.celeste', '80-modsave-Everest.celeste', '1-modsave-Everest.celeste', '10.celeste'):
+            (saves / name).write_text(name, encoding='utf-8')
+        marker = game_instance.create('main', self.source, self.root / 'i', log=lambda _: None)
+        target = Path(marker['dir'])
+        before = {p.name: p.read_bytes() for p in saves.iterdir()}
+        copied = game_instance.copy_saves([8, 0], target, log=lambda _: None)
+        self.assertEqual(copied, [{'slot': 8, 'name': 'opus5.5', 'files': 4}, {'slot': 0, 'name': '', 'files': 1}])
+        self.assertEqual(sorted(p.name for p in (target / 'Saves').iterdir()),
+                         ['0.celeste', '8-modsave-Everest.celeste', '8-modsavedata.celeste',
+                          '8-modsession-Everest.celeste', '8.celeste', 'modsettings-Everest.celeste',
+                          'settings.celeste'])           # 80、10、1- 开头的都不是槽 8 / 0
+        self.assertEqual({p.name: p.read_bytes() for p in saves.iterdir()}, before)   # 源安装原样
+        (target / 'Saves/8.celeste').write_text('ai progress', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, '已经有存档槽 8'):
+            game_instance.copy_saves([10, 8], target, log=lambda _: None)
+        self.assertEqual((target / 'Saves/8.celeste').read_text(encoding='utf-8'), 'ai progress')
+        self.assertFalse((target / 'Saves/10.celeste').exists())      # 先全部核对，有一个不行就都不复制
+        with self.assertRaisesRegex(ValueError, '没有存档槽 3'):
+            game_instance.copy_saves([3], target, log=lambda _: None)
+        with self.assertRaisesRegex(ValueError, '整数'):
+            game_instance.copy_saves([-1], target, log=lambda _: None)
+        with self.assertRaisesRegex(ValueError, '不是 AI 副本'):
+            game_instance.copy_saves([8], self.source, log=lambda _: None)
+        with patch.object(game_instance, 'game_processes', side_effect=lambda d: [1] if Path(d) == self.source.resolve() else []):
+            with self.assertRaisesRegex(RuntimeError, '正在运行'):
+                game_instance.copy_saves([10], target, log=lambda _: None)
+
     def test_invalid_markers_are_not_instances(self):
         folder = self.root / 'x'
         folder.mkdir()

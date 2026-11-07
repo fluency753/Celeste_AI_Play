@@ -86,7 +86,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 6. **启动脚本**（可选）：`.\.venv\Scripts\python.exe tools\setup_wizard.py --only saves,switches`，生成本机的 `start_local.ps1`。
 7. **容器隔离验收**（可选，Anthropic 平台、令牌配好后，约 2 分钟）：`.\.venv\Scripts\python.exe -m orchestrator.verify --agent <标签>`，应全部"通过"。
 8. **控制台启动器**：仓库根目录的 `CelesteAIConsole.exe` 已在仓库里，不需要构建。它需要 `.venv` 存在。
-9. **AI 专用游戏副本**（可选，用户想边让智能体试玩边自己玩、或不想让 AI 碰到自己的存档与 Mod 时）：`.\.venv\Scripts\python.exe tools\game_instance.py create` 复制出副本并把游戏位置改成它，`launch` 启动。副本需要 Steam 在运行；个人游戏里要停用两个 AI 模组，否则先启动的一方占用端口。细节见 `docs/USAGE.md` 3.5 节。
+9. **AI 专用游戏副本**（可选，用户想边让智能体试玩边自己玩、或不想让 AI 碰到自己的存档与 Mod 时）：`.\.venv\Scripts\python.exe tools\game_instance.py create` 复制出副本并把游戏位置改成它，`launch` 启动。副本的存档从空开始；用户要接着用已有的 AI 存档时，关掉游戏后用 `copy-saves <槽号…>` 复制（只复制用户指定的槽，不复制用户自己的存档）。副本需要 Steam 在运行；个人游戏里要停用两个 AI 模组，否则先启动的一方占用端口。细节见 `docs/USAGE.md` 3.5 节。
 
 ### 3.3 必须由用户亲手做的部分
 

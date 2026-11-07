@@ -4,6 +4,12 @@
 
 ## 2026-11-07
 
+- **控制台 1.9.0：把已有的存档复制进 AI 专用副本；待办整理**：
+  - **复制存档**：新 `tools/game_instance.py copy-saves <槽号…>`（`game_instance.copy_saves`），把个人安装里指定存档槽的 `<槽>.celeste` 连同 Everest 的 `<槽>-modsave-*`、`<槽>-modsession-*`、`<槽>-modsavedata` 原样复制进副本，之后进度只写副本、不回写个人存档。只读个人安装；个人游戏或副本在运行时拒绝（运行中的游戏随时可能写存档）；先核对全部槽，副本里已有同号存档槽或个人安装缺槽时整批不复制，不覆盖副本的进度。
+  - 使用说明 3.5 节补上复制存档，并说明 CeleMod、Olympus 管理的是个人安装（切换配置改的是个人安装 `Mods` 里的 `blacklist.txt`），不影响副本；部署说明与 AI 指南同步。
+  - **待办**：删去“正式挑战（M7）”；AI 专用副本与模拟辅助 Docker 清理两项只留未完成的部分（`status.json` 一项仍未修：11-05 的原子发布只覆盖 `run_state.json`，后台宿主的 `status.json` 仍是普通读写）；待办设计说明里私有 OBS 一节补上现状：主控沿用正在运行的 OBS 时锁步插件录的是 OBS 节目画面，主控启动的 OBS 收尾时按映像名关闭会连带个人 OBS，两个 OBS 都加载锁步插件时会互相顶掉桥接的时钟连接。
+  验证：`calibration/game_instance_test.py` 新增复制存档的回归（整槽复制、不误取 `80`／`10`／`1-` 开头的文件、个人安装不变、已有同号槽时整批拒绝、缺槽、不是副本、游戏运行中拒绝）；全量回归通过。
+
 - **控制台 1.8.0：AI 专用游戏副本**：给智能体复制一份专用的游戏，有自己的存档、设置、Mod 环境与桥接连接，个人的《蔚蓝》可以同时游玩。
   - **副本**：新 `tools/game_instance.py`（`create` / `launch` / `status` / `update` / `select`，逻辑在 `orchestrator/game_instance.py`），控制台“游戏位置”加「创建 AI 专用副本」「启动 AI 副本」。从个人安装复制游戏本体到 `local/instances/<名字>`，Mods 只放两个 AI 模组，Saves 从空开始（只复制 `settings.celeste`、`modsettings-Everest.celeste` 作初始设置），不复制存档、个人 Mod、日志与备份，源安装一律不改；目录里的 `celeste-ai-instance.json` 标记它是副本。游戏位置指向副本时进入副本模式。
   - **Steam**：Steam 版《蔚蓝》启动时必须连上正在运行的 Steam（`SteamAPI.Init` 失败就退出），启动副本时 Steam 没开就静默启动。副本的 `steam_appid.txt` 默认 480（Spacewar），个人的《蔚蓝》仍能从 Steam 启动，AI 也不会解锁账号的《蔚蓝》成就。

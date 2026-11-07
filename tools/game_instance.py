@@ -4,6 +4,7 @@
     python tools/game_instance.py launch            # 启动现在选中的副本（Steam 没开时先静默启动 Steam）
     python tools/game_instance.py status
     python tools/game_instance.py update            # 用个人安装刷新副本的游戏本体（副本的 Mods、Saves 不动）
+    python tools/game_instance.py copy-saves 7 8    # 把个人安装的这些存档槽复制进副本（之后只写副本）
     python tools/game_instance.py select <副本目录>  # 把控制台的游戏位置设为这个副本
     python tools/game_instance.py select --personal <个人安装目录>   # 换回个人安装
 
@@ -36,6 +37,10 @@ def main() -> int:
     sub.add_parser('status', help='显示副本与运行状态')
     update = sub.add_parser('update', help='用个人安装刷新副本的游戏本体')
     update.add_argument('--source', help='个人安装目录（默认副本标记里记下的来源）')
+    saves = sub.add_parser('copy-saves', help='把个人安装的存档槽复制进副本')
+    saves.add_argument('slots', nargs='+', type=int, help='存档槽号（游戏里第一个存档是 0）')
+    saves.add_argument('--dir', help='副本目录（默认现在的游戏位置）')
+    saves.add_argument('--source', help='个人安装目录（默认副本标记里记下的来源）')
     select = sub.add_parser('select', help='把控制台的游戏位置设为某个目录')
     select.add_argument('directory')
     select.add_argument('--personal', action='store_true', help='允许选不是副本的目录（换回个人安装）')
@@ -59,6 +64,8 @@ def main() -> int:
                                  ensure_ascii=False, indent=2))
         elif args.command == 'update':
             print(json.dumps(game_instance.update(source=args.source), ensure_ascii=False, indent=2))
+        elif args.command == 'copy-saves':
+            print(json.dumps(game_instance.copy_saves(args.slots, args.dir, args.source), ensure_ascii=False, indent=2))
         elif args.command == 'select':
             directory = Path(args.directory).resolve()
             if not (directory / 'Celeste.exe').is_file():
