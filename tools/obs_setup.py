@@ -574,12 +574,19 @@ def stop(wait: float = 20.0, force: bool = False) -> None:
         else:
             subprocess.run(["taskkill", *flags, "/IM", "obs64.exe"], capture_output=True, creationflags=NO_WINDOW)
 
+    def close_main_windows() -> None:     # 托盘里的 OBS 也能正常退出
+        _post_close(obs_processes(private=True) if root else _obs_pids())
+
     if obs_running():
-        _post_close(obs_processes(private=True) if root else _obs_pids())   # 托盘里的 OBS 也正常退出
+        close_main_windows()
         taskkill()   # 正常关闭（不加 /F）
         deadline = time.monotonic() + wait
+        posted = time.monotonic()
         while obs_running() and time.monotonic() < deadline:
             time.sleep(0.5)
+            if time.monotonic() - posted >= 2:   # 刚启动、还在加载的 OBS 会忽略关闭通知：隔一会儿再发
+                close_main_windows()
+                posted = time.monotonic()
         if obs_running() and force:
             print(f"{label()} 在 {wait:g} 秒内没有正常退出，强制结束")
             taskkill("/F")
