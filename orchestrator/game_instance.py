@@ -283,15 +283,31 @@ def _steam_registry():
     return exe, user
 
 
-def steam_ready() -> bool:
+def _steam_user() -> int:
     try:
-        return bool(_steam_registry()[1])
-    except OSError:
+        return int(_steam_registry()[1] or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def steam_running() -> bool:
+    """steam.exe 在运行（tasklist 也看得到以管理员身份运行的）。"""
+    if sys.platform != 'win32':
         return False
+    import csv
+    out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq steam.exe', '/FO', 'CSV', '/NH'], capture_output=True,
+                         text=True, errors='replace', creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).stdout
+    return any(len(row) > 1 and row[0].lower() == 'steam.exe' for row in csv.reader(out.splitlines()))
+
+
+def steam_ready() -> bool:
+    """Steam 在运行。登录后 Steam 通常在注册表 ActiveProcess 记下登录的用户；但实测 Steam 重新打开后它可能一直是 0，
+    《蔚蓝》照样能连上 Steam，所以 steam.exe 进程在就算（没登录时游戏启动后会退出，launch 会报告）。"""
+    return _steam_user() != 0 or steam_running()
 
 
 def ensure_steam(wait_s: float = 180, log=print) -> None:
-    """Steam 版《蔚蓝》启动时必须连上正在运行的 Steam：没开就静默启动并等它登录。"""
+    """Steam 版《蔚蓝》启动时必须连上正在运行的 Steam：没开就静默启动并等它登录（新启动的 Steam 会记下登录的用户）。"""
     if steam_ready():
         return
     try:
@@ -302,7 +318,7 @@ def ensure_steam(wait_s: float = 180, log=print) -> None:
     _detached([exe, '-silent'])
     deadline = time.monotonic() + wait_s
     while time.monotonic() < deadline:
-        if steam_ready():
+        if _steam_user():
             return
         time.sleep(2)
     raise RuntimeError(f'Steam 在 {wait_s:g} 秒内没有登录完成；登录后再启动 AI 副本')
@@ -339,12 +355,26 @@ def launch(game_dir=None, *, background: bool = False, log=print) -> dict:
     def work():
         ensure_steam(log=log)
         process = _detached([str(target / 'Celeste.exe')], cwd=str(target))
-        titled = apply_title(process.pid, marker['window_title'], wait_s=180)
+        deadline = time.monotonic() + 180
+        while True:     # 桥接 1.11.0 起模组加载时就改好标题；这里核对，旧桥接时补改
+            if process.poll() is not None:
+                raise RuntimeError(f'AI 副本的游戏启动后退出了（返回码 {process.returncode}）：可能 Steam 还没登录完成，'
+                                   f'登录后再启动；详见 {target / "log.txt"}')
+            titled = apply_title(process.pid, marker['window_title'])
+            if titled or time.monotonic() >= deadline:
+                break
+            time.sleep(0.5)
         log(f'[instance] AI 副本已启动（进程 {process.pid}）' + ('' if titled else '；窗口标题没能改好，主控接管时会再改'))
         return process.pid
 
+    def background_work():
+        try:
+            work()
+        except (RuntimeError, OSError) as exc:
+            log(f'[instance] 启动 AI 副本失败：{exc}')
+
     if background:
-        threading.Thread(target=work, name='celeste-instance-launch', daemon=True).start()
+        threading.Thread(target=background_work, name='celeste-instance-launch', daemon=True).start()
         return {'started': True, 'dir': str(target)}
     return {'started': True, 'pid': work(), 'dir': str(target)}
 

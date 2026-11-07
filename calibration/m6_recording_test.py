@@ -220,13 +220,19 @@ def main() -> int:
           f"{stream.get('nb_read_frames')} / {len(rows)}")
 
     if not args.no_marker:
-        marks = decode_markers(options.ffmpeg, rec_dir / "video.mkv", width, height,
-                               capture_size[0] if capture_size else 1920)
-        diffs = [((m - (f & 0xFFFF)) + 0x8000) % 0x10000 - 0x8000 for m, f in zip(marks, frames)]
-        exact = sum(1 for d in diffs if d == 0)
+        # 游戏采集拿的是游戏的画面缓冲：Windows 显示缩放（例如 150%）时窗口比画面缓冲大，条码按画布 1:1 画出。
+        # 两种宽度都试，取一致最多的那种。
+        best = None
+        for capture_width in dict.fromkeys([capture_size[0] if capture_size else width, width]):
+            marks = decode_markers(options.ffmpeg, rec_dir / "video.mkv", width, height, capture_width)
+            diffs = [((m - (f & 0xFFFF)) + 0x8000) % 0x10000 - 0x8000 for m, f in zip(marks, frames)]
+            exact = sum(1 for d in diffs if d == 0)
+            if best is None or exact > best[0]:
+                best = (exact, capture_width, marks, diffs)
+        exact, capture_width, marks, diffs = best
         histogram = {d: diffs.count(d) for d in sorted(set(diffs))}
         check(len(marks) == len(frames) and exact == len(frames), "每一帧画面里的帧号与记录一致",
-              f"一致 {exact}/{len(frames)}，差值分布 {histogram}")
+              f"一致 {exact}/{len(frames)}（按采集宽 {capture_width} 解码），差值分布 {histogram}")
 
     spf = 48000 // 60
     wav_path = rec_dir / "audio.wav"

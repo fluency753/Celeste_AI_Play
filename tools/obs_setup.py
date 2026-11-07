@@ -408,6 +408,37 @@ def obs_processes(private: bool) -> list[int]:
     return found
 
 
+def _post_close(pids: list[int]) -> int:
+    """给这些 OBS 进程的主窗口（标题以“OBS ”开头）发 WM_CLOSE，让它正常退出。最小化到托盘时主窗口是隐藏的，
+    taskkill 不加 /F 时它收不到关闭通知。返回发了几个窗口。"""
+    if sys.platform != "win32" or not pids:
+        return 0
+    import ctypes
+    from ctypes import wintypes as wt
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wt.LPARAM]
+    user32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    user32.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    user32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+    targets, sent = set(pids), 0
+
+    def visit(hwnd, _lparam):
+        nonlocal sent
+        owner = wt.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value in targets:
+            title = ctypes.create_unicode_buffer(300)
+            user32.GetWindowTextW(hwnd, title, 300)
+            if title.value.startswith("OBS "):
+                user32.PostMessageW(hwnd, 0x0010, 0, 0)    # WM_CLOSE
+                sent += 1
+        return True
+
+    user32.EnumWindows(callback_type(visit), 0)
+    return sent
+
+
 def obs_running() -> bool:
     """主控用的 OBS 是否在运行：有私有 OBS 时只看它（你自己的 OBS 开着不算），否则看任何 OBS。"""
     if private_root():
@@ -544,6 +575,7 @@ def stop(wait: float = 20.0, force: bool = False) -> None:
             subprocess.run(["taskkill", *flags, "/IM", "obs64.exe"], capture_output=True, creationflags=NO_WINDOW)
 
     if obs_running():
+        _post_close(obs_processes(private=True) if root else _obs_pids())   # 托盘里的 OBS 也正常退出
         taskkill()   # 正常关闭（不加 /F）
         deadline = time.monotonic() + wait
         while obs_running() and time.monotonic() < deadline:

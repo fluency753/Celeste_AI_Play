@@ -150,8 +150,10 @@ class PrivateObsTests(unittest.TestCase):
             if args[0] == 'taskkill':
                 self.pids.pop(1, None)
 
-        with patch.object(obs_setup.subprocess, 'run', side_effect=run), patch.object(obs_setup.time, 'sleep'):
+        with patch.object(obs_setup.subprocess, 'run', side_effect=run), patch.object(obs_setup.time, 'sleep'), \
+                patch.object(obs_setup, '_post_close', return_value=1) as close:
             obs_setup.stop(wait=1)
+        close.assert_called_once_with([1])                    # 托盘里的私有 OBS 也收到关闭通知
         self.assertEqual(calls, [['taskkill', '/PID', '1']])
         self.assertEqual(self.pids, {2: mine})               # 你自己的 OBS 还开着
 

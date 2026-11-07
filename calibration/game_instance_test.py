@@ -134,6 +134,53 @@ class CreateTests(unittest.TestCase):
             self.assertIsNone(game_instance.info(folder), content)
 
 
+class LaunchTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.marker = game_instance.create('main', fake_game(Path(self.temp.name) / 'Steam/Celeste'),
+                                           Path(self.temp.name) / 'i', log=lambda _: None)
+
+    def test_running_steam_counts_even_when_the_registry_shows_no_user(self):
+        # 实测：Steam 重新打开、登录后注册表 ActiveProcess 仍是 0，游戏照样连得上
+        with patch.object(game_instance, '_steam_user', return_value=0), \
+                patch.object(game_instance, 'steam_running', return_value=True):
+            self.assertTrue(game_instance.steam_ready())
+        with patch.object(game_instance, '_steam_user', return_value=0), \
+                patch.object(game_instance, 'steam_running', return_value=False):
+            self.assertFalse(game_instance.steam_ready())
+
+    def test_a_freshly_started_steam_is_awaited_until_it_logs_in(self):
+        users = iter([0, 0, 1234])
+        with patch.object(game_instance, 'steam_ready', return_value=False), \
+                patch.object(game_instance, '_steam_registry', return_value=('steam.exe', 0)), \
+                patch.object(game_instance, '_steam_user', side_effect=lambda: next(users)), \
+                patch.object(game_instance, '_detached') as start, patch.object(game_instance.time, 'sleep'):
+            game_instance.ensure_steam(log=lambda _: None)
+        start.assert_called_once_with(['steam.exe', '-silent'])
+
+    def launch(self, poll):
+        class Process:
+            pid = 99
+            returncode = 1
+
+            def poll(self):
+                return poll
+
+        with patch.object(game_instance.sys, 'platform', 'win32'), \
+                patch.object(game_instance, 'game_processes', return_value=[]), \
+                patch.object(game_instance, 'ensure_steam'), \
+                patch.object(game_instance, '_detached', return_value=Process()), \
+                patch.object(game_instance, 'apply_title', return_value=True), \
+                patch.object(game_instance.time, 'sleep'):
+            return game_instance.launch(self.marker['dir'], log=lambda _: None)
+
+    def test_launch_reports_a_game_that_exits_right_away(self):
+        self.assertEqual(self.launch(None)['pid'], 99)
+        with self.assertRaisesRegex(RuntimeError, '启动后退出了.*Steam'):
+            self.launch(1)
+
+
 class SelectionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
