@@ -1271,6 +1271,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
                 game_server=server, token=token, session_id=session_id,
                 resume=resumed_session is not None, resume_note=note,
+                include_task=previous is None,
+                announce_goal=previous is None or getattr(args, 'initial_goal', None) is not None,
                 playback=playback if playback.collect else None, start_paused=args.start_paused)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)

@@ -148,7 +148,7 @@ class SessionControls:
             goals = getattr(self.session, 'goals', None)
             goal = goals.snapshot() if goals is not None else None
             facts = ''
-            if goal and goal['active']:
+            if goal and goal['active'] and getattr(self, 'announce_goal', True):
                 from .goals import describe_goal
                 facts = '（主控）当前已登记的试玩目标：' + describe_goal(goal) + '。'
                 if goal['conditions']:

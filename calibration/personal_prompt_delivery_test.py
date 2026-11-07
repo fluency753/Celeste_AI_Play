@@ -51,17 +51,18 @@ class PersonalPromptDeliveryTests(unittest.TestCase):
                 cfg = replace(self.cfg, engine='claude', runtime=runtime)
                 self.save('all', 'CAPTURED-MARKER')
                 context = startup_context(cfg)
+                restore_context = {**guide_document(cfg, include_task=False), 'personal': context['personal']}
                 self.save('all', 'LATER-MARKER')
                 with patch.object(personal, 'snapshot', side_effect=AssertionError('must use captured snapshot')):
                     actual = runtime_prompt(cfg, guide=context)
-                    resume = current_rules_note(cfg, guide=context)
+                    resume = current_rules_note(cfg, guide=restore_context)
                 for text in (actual, resume):
+                    self.assertIn(context['personal']['text'], text)
                     self.assertIn('CAPTURED-MARKER', text)
                     self.assertNotIn('LATER-MARKER', text)
                     self.assertEqual(text.count('\n> CAPTURED-MARKER'), 1)
                     self.assertNotIn('\n> > CAPTURED-MARKER', text)
                 self.assertEqual(actual.count('CAPTURED-MARKER'), 1)
-                self.assertIn(actual, resume)
 
     def test_empty_defaults_and_preview_match_actual_all_executors(self):
         from orchestrator.launch_options import config_for

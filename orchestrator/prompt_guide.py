@@ -9,7 +9,7 @@ import stat
 import tempfile
 import uuid
 
-from .prompting import prompt_parts
+from .prompting import TASK_SECTION_LABELS, prompt_parts
 from .execution import workspace_capabilities
 from .config import REPO_ROOT
 from .session_store import rename_directory
@@ -22,16 +22,23 @@ def _digest(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def guide_document(cfg):
+def guide_document(cfg, *, include_task=True):
     """Return the complete rendered guide and its immutable publication identity."""
     sections = []
     occurrences = {}
+    # Reading ledgers predate task classification. Include all generated task
+    # identities so changing whole-chapter/segment form does not revoke history.
+    omitted = {label + ':1' for label in TASK_SECTION_LABELS.values()} if not include_task else set()
     for part in prompt_parts(cfg):
         source = part.source or part.label
         occurrences[source] = occurrences.get(source, 0) + 1
+        section_id = f'{source}:{occurrences[source]}'
+        if part.is_task and not include_task:
+            omitted.add(section_id)
+            continue
         content = part.sep + part.text
         digest = _digest(content)
-        sections.append({'id': f'{source}:{occurrences[source]}', 'label': part.label,
+        sections.append({'id': section_id, 'label': part.label,
                          'source': part.source, 'sha256': digest, 'text': content})
     body = ''.join(section['text'] for section in sections)
     starts, position = [], 0
@@ -58,7 +65,8 @@ def guide_document(cfg):
     for section in sections:
         index.append(f"- {section['id']} | {section['label']} | {section['offset']} | {section['limit']} | {section['sha256']}")
     documents = {'guide.md': body, 'manifest.json': manifest_text, 'index.md': '\n'.join(index) + '\n'}
-    return {'version': version, 'path': path, 'index_path': prefix + '/index.md',
+    return {'version': version, 'path': path, 'index_path': prefix + '/index.md', 'include_task': include_task,
+            'omitted_task_sections': sorted(omitted),
             'sections': sections, 'documents': documents, 'total_lines': len(starts)}
 
 
@@ -123,7 +131,7 @@ def _set_aside(base, destination):
     return stale
 
 
-def publish_guide(cfg):
+def publish_guide(cfg, *, include_task=True):
     """Publish before starting a model; failures propagate instead of exposing a false path.
 
     A version directory whose published files were changed is moved aside and
@@ -131,7 +139,7 @@ def publish_guide(cfg):
     """
     if not workspace_capabilities(cfg).workspace_read:
         return None
-    guide = guide_document(cfg)
+    guide = guide_document(cfg, include_task=include_task)
     documents = guide['documents']
     workspace = Path(cfg.workspace_dir).absolute()
     base = workspace / 'game' / 'instructions'
@@ -218,7 +226,7 @@ class GuideReading:
         return prefix + suffix
 
     def removed_sections(self):
-        return self.delivered.keys() - {s['id'] for s in self.sections}
+        return self.delivered.keys() - {s['id'] for s in self.sections} - set(self.guide.get('omitted_task_sections', ()))
 
     def confirm_scope(self):
         """Retire removed sections only after a turn has seen the current plan."""
@@ -265,7 +273,7 @@ class GuideReading:
                 pass
 
 
-def startup_context(cfg, *, previous=None):
+def startup_context(cfg, *, previous=None, include_task=True):
     """Capture local additions once, alongside the exact published shared guide.
 
     previous is this runner's last startup context. On a reconnect an unreadable
@@ -280,5 +288,5 @@ def startup_context(cfg, *, previous=None):
             raise
         personal = previous['personal']
         print(f'[guide] 本机个人追加要求读取失败，沿用本次运行上次送达的版本：{exc}', flush=True)
-    guide = publish_guide(cfg)
-    return {**(guide or {}), 'personal': personal}
+    guide = publish_guide(cfg, include_task=include_task)
+    return {**(guide or {}), 'personal': personal, 'include_task': include_task}

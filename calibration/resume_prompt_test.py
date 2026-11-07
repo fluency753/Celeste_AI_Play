@@ -8,6 +8,7 @@ from orchestrator.config import RunConfig
 from orchestrator.prompting import play_prompt
 from orchestrator.run import opening_note
 from orchestrator.segments import Piece
+from orchestrator.startup_prompt import runtime_prompt
 
 
 class ResumePromptTests(unittest.TestCase):
@@ -23,9 +24,9 @@ class ResumePromptTests(unittest.TestCase):
                 cfg.chapter, cfg.chapters, cfg.plan = 2, [2], [Piece(2, 0, None)]
                 cfg._extended_plan = [Piece(2, 0, None)] if extended else None
                 note = opening_note(cfg, previous, None if fresh else 'existing-session', '保留用户留言。')
-                rules = play_prompt(cfg)
+                rules = runtime_prompt(cfg, include_task=False)
                 needs_snapshot = engine == 'claude' and runtime == 'host' and not fresh
-                self.assertEqual(rules in note, needs_snapshot)
+                self.assertEqual(rules in note, engine == 'claude' and not fresh)
                 self.assertEqual('提示词快照' in note, needs_snapshot)
                 self.assertEqual('后面附上的当前规则' in note, needs_snapshot and extended)
                 self.assertEqual(note.count('保留用户留言。'), 1)

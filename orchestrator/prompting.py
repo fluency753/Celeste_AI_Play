@@ -452,6 +452,19 @@ class PromptPart:
     text: str
     source: str | None = None
     sep: str = ""
+    is_task: bool = False
+
+
+TASK_SECTION_LABELS = {
+    'speedrun_segments': '本次的范围（按段通关时自动加）',
+    'speedrun_chapters': '本次的章节（多章时自动加）',
+    'explore_segments': '本次指定范围（按段通关时自动加）',
+    'explore_chapters': '本次指定章节（自动加）',
+}
+
+
+def _task_part(kind, text, sep):
+    return PromptPart(TASK_SECTION_LABELS[kind], text, None, sep, is_task=True)
 
 
 def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None, cfg=None) -> list[PromptPart]:
@@ -517,16 +530,16 @@ def _speedrun_parts(cfg) -> list[PromptPart]:
     if getattr(cfg, 'play_scope', 'chapter') == 'visited':
         pass  # shared free-exploration instructions below replace the traversal plan
     elif plan_is_partial(getattr(cfg, "plan", None)):
-        parts.append(PromptPart("本次的范围（按段通关时自动加）",
+        parts.append(_task_part('speedrun_segments',
                                 "# 本次的范围\n\n" + describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, agent_navigation=cfg.cutscene_mode == 'agent', completion_policy=cfg.completion_policy)
-                                + reuse, None, "\n\n"))
+                                + reuse, "\n\n"))
     elif plan_has_sides(getattr(cfg, "plan", None)) or (cfg.chapters and len(cfg.chapters) > 1):
         # 计划里有 B／C 面时一章也写出来：智能体要知道玩的是哪一面（只有 A 面时与原来相同）
         names = " → ".join(plan_names(cfg))
-        parts.append(PromptPart("本次的章节（多章时自动加）",
+        parts.append(_task_part('speedrun_chapters',
                                 "# 本次的章节\n\n本次要依次通关：" + names + "。评价指标是各章章节计时之和。"
                                 + ("一章结算并返回选章地图后，按主控报告的下一目标自行导航；主控只核对章节和起点。" if cfg.cutscene_mode == 'agent' else "一章通关后系统自动进入下一章，你接着玩。")
-                                + reuse, None, "\n\n"))
+                                + reuse, "\n\n"))
     return parts
 
 
@@ -560,15 +573,15 @@ def prompt_parts(cfg) -> list[PromptPart]:
         if getattr(cfg, 'play_scope', 'chapter') == 'visited':
             pass
         elif plan_is_partial(getattr(cfg, "plan", None)):
-            parts.append(PromptPart("本次指定范围（按段通关时自动加）",
+            parts.append(_task_part('explore_segments',
                                     describe_plan(cfg.plan, getattr(cfg, "checkpoints", {}) or {}, speedrun=False, agent_navigation=cfg.cutscene_mode == 'agent', completion_policy=cfg.completion_policy)
                                     + ("计划不得自行扩展，计划外地图只作绕行（见“计划外地图”一节）。" if detour_enabled(cfg)
-                                       else "不得自行扩展。"), None, "\n"))
+                                       else "不得自行扩展。"), "\n"))
         elif chapters:
-            parts.append(PromptPart("本次指定章节（自动加）", "本次指定章节：" + "、".join(plan_names(cfg) if plan_has_sides(getattr(cfg, "plan", None))
+            parts.append(_task_part('explore_chapters', "本次指定章节：" + "、".join(plan_names(cfg) if plan_has_sides(getattr(cfg, "plan", None))
                                                                              else [chapter_name_by_id(c) for c in chapters])
                                     + ("；计划不得自行扩展，计划外地图只作绕行（见“计划外地图”一节）。" if detour_enabled(cfg)
-                                       else "；不得自行扩展。"), None, "\n"))
+                                       else "；不得自行扩展。"), "\n"))
     else:
         parts = _speedrun_parts(cfg)
     if not workspace_capabilities(cfg).workspace_read:
@@ -678,7 +691,7 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
             "请先调用 observe 看清当前画面，再开始游玩。"), cfg=cfg)
 
 
-def current_rules_note(cfg, *, guide=None) -> str:
+def current_rules_note(cfg, *, guide=None, include_task=False) -> str:
     """续跑同一个 Claude Code 会话时附在第一条消息后面的当前规则。Claude Code 压缩上下文时会把当时的系统提示词与工具说明
     存成快照（prompt_snapshot），之后续跑沿用快照，要到下一次压缩才换成新的；所以续跑时改过的规则要在对话里再给一遍。"""
     # Codex thread/resume replaces baseInstructions. Only Claude needs a copy in history.
@@ -686,10 +699,10 @@ def current_rules_note(cfg, *, guide=None) -> str:
         return ""
     from .startup_prompt import runtime_prompt
     if workspace_capabilities(cfg).workspace_read:
-        return '\n\n（系统）续跑配置与指南如下，当前配置及指南内容替代旧快照中的任务与操作约定：\n' + runtime_prompt(cfg, guide=guide)
+        return '\n\n（系统）续跑配置与指南如下，当前操作配置及规则替代旧快照中的对应约定；任务目标从已有记录恢复：\n' + runtime_prompt(cfg, guide=guide, include_task=include_task)
     return ("\n\n（系统）续跑的会话沿用之前保存的提示词快照：你看到的系统提示词与工具说明可能还是旧版本，要到下次压缩上下文后才会更新。"
             f"当前生效的完整规则如下，与旧版本不一致时以这里为准；act 一次至少推进 {act_frame_min(cfg)} 帧、最多 {act_frame_cap(cfg)} 帧，不在范围内会被主控退回。\n\n"
-            + runtime_prompt(cfg, guide=guide))
+            + runtime_prompt(cfg, guide=guide, include_task=include_task))
 
 
 def net_resume_prompt(minutes: float, chat: bool = False, study_note: str | None = None) -> str:

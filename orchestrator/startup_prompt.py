@@ -7,7 +7,7 @@ from .execution import workspace_capabilities
 from .modes import act_frame_cap, act_frame_min, collision_image_mode, game_tools, is_explore
 
 
-def current_settings(cfg):
+def current_settings(cfg, *, include_task=True):
     from .action_policy import permissions_for
     from .tuning import HOST_CPUS
     plan = getattr(cfg, 'plan', None)
@@ -46,10 +46,12 @@ def current_settings(cfg):
             settings['stiffness']['stiff_max_s'] = cfg.stiff_max_s
     if getattr(cfg, 'tuning', None):
         settings['tuning'] = cfg.tuning
+    if not include_task:
+        settings['task'].pop('targets', None)
     return settings
 
 
-def task_brief(cfg):
+def task_brief(cfg, *, include_task=True):
     """Only task identity and boundaries; interface budgets live in tool feedback."""
     from .modes import MODE_NAMES, mode_of
     from .segments import Piece, describe_piece
@@ -58,7 +60,9 @@ def task_brief(cfg):
                   'visited': '已到访地图内自由探索'}.get(scope, scope)
     slot = f'，槽位 {cfg.save_slot}' if cfg.save_slot is not None else ''
     lines = [f'模式：{MODE_NAMES[mode_of(cfg)]}；存档：{cfg.save}{slot}；范围：{scope_name}。']
-    if scope == 'visited':
+    if not include_task:
+        lines.append('从已有会话和可用的工作区记录自行恢复任务目标。')
+    elif scope == 'visited':
         lines.append('允许地图以主控保存的许可集合及最新观测为准，区分 A/B/C 面；通关不扩大范围。')
     else:
         plan = getattr(cfg, 'plan', None) or [Piece(chapter) for chapter in (cfg.chapters or [cfg.chapter])
@@ -84,21 +88,25 @@ def validate_runtime_template(text):
                          '以接收当前执行器的工具与环境约定；原模板未覆盖。迁移说明见 docs/USAGE.md 4.13。')
 
 
-def runtime_prompt_parts(cfg, *, guide=None):
+def runtime_prompt_parts(cfg, *, guide=None, include_task=True):
     """Render the editable startup template and keep local additions separate."""
     from .prompting import PromptPart, prompt_parts, read_part
     from .personal_prompts import snapshot
+    if guide is not None:
+        if not include_task and guide.get('include_task', True):
+            raise ValueError('恢复说明须使用 include_task=False 生成的指南，不能重新引用含任务目标的开局指南')
+        include_task = include_task and guide.get('include_task', True)
     personal = guide['personal'] if guide is not None and 'personal' in guide else snapshot(cfg)
     if not workspace_capabilities(cfg).workspace_read:
-        parts = prompt_parts(cfg)
+        parts = [part for part in prompt_parts(cfg) if include_task or not part.is_task]
     else:
         from .prompt_guide import GuideReading, guide_document
         from .prompt_environment import environment_instructions, render_tool_references, tool_name
-        guide = guide if guide is not None else guide_document(cfg)
+        guide = guide if guide is not None else guide_document(cfg, include_task=include_task)
         read_plan = guide.get('read_plan') or GuideReading(cfg, guide).read_plan()
         values = {
-            '{task_brief}': task_brief(cfg),
-            '{current_settings}': json.dumps(current_settings(cfg), ensure_ascii=False, separators=(',', ':')),
+            '{task_brief}': task_brief(cfg, include_task=include_task),
+            '{current_settings}': json.dumps(current_settings(cfg, include_task=include_task), ensure_ascii=False, separators=(',', ':')),
             '{guide_index_path}': guide['index_path'],
             '{guide_read_plan}': read_plan,
             '{game_tools}': '/'.join(tool_name(cfg, name) for name in game_tools(cfg)),
@@ -117,5 +125,5 @@ def runtime_prompt_parts(cfg, *, guide=None):
     return parts
 
 
-def runtime_prompt(cfg, *, guide=None):
-    return ''.join(part.sep + part.text for part in runtime_prompt_parts(cfg, guide=guide))
+def runtime_prompt(cfg, *, guide=None, include_task=True):
+    return ''.join(part.sep + part.text for part in runtime_prompt_parts(cfg, guide=guide, include_task=include_task))

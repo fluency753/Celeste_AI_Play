@@ -163,9 +163,11 @@ class ClaudeRunner(SessionControls):
     def __init__(self, cfg: RunConfig, run_dir: Path, session: GameSession, metrics: Metrics,
                  token: str, container: str | None = None, study: KbStudy | None = None,
                  session_id: str | None = None, resume: bool = False, resume_note: str | None = None,
-                 playback=None, start_paused=False, prepare_only=False, chat_only=False, naming_only=False):
+                 playback=None, start_paused=False, prepare_only=False, chat_only=False, naming_only=False,
+                 include_task=True, announce_goal=True):
         """resume=True：用 --resume 接着 session_id 这个已有的会话（续跑）；resume_note 不为空时代替开局的第一条消息。"""
         self.cfg = cfg
+        self.include_task, self.announce_goal = include_task and not chat_only, announce_goal
         from .efforts import normalize_efforts
         selected = next((m for m in (cfg.provider_info or {}).get('models', []) if m.get('id') == cfg.model), None)
         self.capabilities = RuntimeCapabilities(effort_levels=tuple(normalize_efforts((selected or {}).get('efforts'))))
@@ -342,12 +344,13 @@ class ClaudeRunner(SessionControls):
         from .prompt_guide import GuideReading, startup_context
         from .startup_prompt import runtime_prompt
         # 重接时传入上次的快照：个人追加要求读取失败就沿用已送达的版本，不因此结束运行
-        self._startup_guide = startup_context(self.cfg, previous=getattr(self, "_startup_guide", None))
+        self._startup_guide = startup_context(self.cfg, previous=getattr(self, "_startup_guide", None),
+                                              include_task=self.include_task)
         if self._startup_guide.get('path'):
             self._guide_reading = GuideReading(self.cfg, self._startup_guide, self.session_id if self.resume else None)
             self._guide_reading.session_id = self.session_id
             self._startup_guide['read_plan'] = self._guide_reading.read_plan()
-        rules = runtime_prompt(self.cfg, guide=self._startup_guide)
+        rules = runtime_prompt(self.cfg, guide=self._startup_guide, include_task=self.include_task)
         self._startup_rules_digest = hashlib.sha256(rules.encode("utf-8")).hexdigest()
         if workspace_capabilities(self.cfg).agent_location == "container":
             mcp = json.dumps({"mcpServers": {"celeste": {
@@ -464,6 +467,7 @@ class ClaudeRunner(SessionControls):
                             self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
                         break
                     self.resume = True
+                    self.include_task = self.announce_goal = False
                     self.idle_turns = 0
                     study_note = None
                     if not self.metrics.playing and self.study is not None and not self.study.ready():
@@ -479,6 +483,7 @@ class ClaudeRunner(SessionControls):
                     self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
                     break
                 self.resume = True
+                self.include_task = self.announce_goal = False
                 self.idle_turns = 0
                 study_note = None
                 if not self.metrics.playing and self.study is not None and not self.study.ready():
@@ -855,7 +860,7 @@ class ClaudeRunner(SessionControls):
             # Append to the selected message so user input cannot displace updated rules on resume.
             if self.resume:
                 from .prompting import current_rules_note
-                text += current_rules_note(self.cfg, guide=self._startup_guide)
+                text += current_rules_note(self.cfg, guide=self._startup_guide, include_task=self.include_task)
             self._rules_inflight = digest
         offered_notes = self.note_reminders.peek()
         text += ('\n\n' + '\n'.join(value for _, value in offered_notes) if offered_notes else '')

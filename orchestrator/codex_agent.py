@@ -37,9 +37,9 @@ FILE_TOOLS = {'read': 'Read', 'glob': 'Glob', 'grep': 'Grep'}
 LEGACY_FILE_TOOLS = {'celeste_' + name: name for name in FILE_TOOLS}
 
 
-def codex_prompt(cfg, *, guide=None) -> str:
+def codex_prompt(cfg, *, guide=None, include_task=True) -> str:
     from .startup_prompt import runtime_prompt
-    return runtime_prompt(cfg, guide=guide)
+    return runtime_prompt(cfg, guide=guide, include_task=include_task)
 
 
 def program_cap(cfg) -> float:
@@ -54,12 +54,14 @@ class CodexRunner(ModelRecovery, SessionControls):
 
     def __init__(self, cfg, run_dir, session, metrics, container, study=None, *, game_server=None,
                  session_id=None, resume=False, resume_note=None, playback=None,
-                 prepare_only=False, start_paused=False, chat_only=False, naming_only=False):
+                 prepare_only=False, start_paused=False, chat_only=False, naming_only=False,
+                 include_task=True, announce_goal=True):
         self.cfg, self.run_dir, self.session, self.metrics = cfg, run_dir, session, metrics
         self.container, self.study, self.game_server = container, study, game_server
         self.session_id, self.resume, self.resume_note = session_id, resume, resume_note
         self.playback, self.prepare_only = playback, prepare_only
         self.chat_only = chat_only
+        self.include_task, self.announce_goal = include_task and not chat_only, announce_goal
         self.naming_only, self.name_result, self.naming_reply = naming_only, None, None
         self.turns = 0
         self.turn_id = None
@@ -709,7 +711,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         if not self.container:
             raise RuntimeError('Codex 会话必须在智能体容器内运行；请先创建并登录该工作区的容器。')
         from .prompt_guide import GuideReading, startup_context
-        guide = startup_context(self.cfg)
+        guide = startup_context(self.cfg, include_task=self.include_task)
         if guide.get('path'):
             self._guide_reading = GuideReading(self.cfg, guide, self.session_id if self.resume else None)
             guide['read_plan'] = self._guide_reading.read_plan()
@@ -717,7 +719,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         self._events = (self.run_dir / "codex_events.jsonl").open("a", encoding="utf-8")
         self.metrics.update(telemetry_source="codex_app_server", chat_thread_id=None,
                             tool_calls=self.metrics.state.tool_calls or 0)
-        prompt = codex_prompt(self.cfg, guide=guide)
+        prompt = codex_prompt(self.cfg, guide=guide, include_task=self.include_task)
         if self.chat_only:
             from .button_prompts import notification
             prompt += (("\n\n# 试玩前聊天\n这是新会话，已完成入门资料准备，还没有开始试玩。" if getattr(self, "ready_to_play", False)
