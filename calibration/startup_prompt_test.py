@@ -103,7 +103,10 @@ class StartupPromptTests(unittest.TestCase):
                     self.assertEqual(actual, play_prompt(cfg))
                     self.assertFalse(preview['guide_parts'])
                 else:
-                    self.assertIn(guide_document(cfg)['index_path'], actual)
+                    guide = guide_document(cfg)
+                    self.assertIn(guide['path'], actual)
+                    self.assertIn('同目录的 index.md', actual)
+                    self.assertEqual(actual.count(guide['version']), 1)
                     self.assertNotIn('# 从房间数据建立路线', actual)
                     self.assertLess(len(actual), 2500)
                     self.assertEqual(''.join(p['sep'] + p['text'] for p in preview['guide_parts']), play_prompt(cfg))
@@ -145,15 +148,15 @@ class StartupPromptTests(unittest.TestCase):
             with patch('orchestrator.config.REPO_ROOT', root):
                 guide = publish_guide(cfg)
             with patch('orchestrator.prompt_guide.guide_document', side_effect=AssertionError('must not rerender')):
-                self.assertIn(guide['index_path'], codex_prompt(cfg, guide=guide))
-                self.assertIn(guide['index_path'], runtime_prompt(cfg, guide=guide))
+                self.assertIn(guide['path'], codex_prompt(cfg, guide=guide))
+                self.assertIn(guide['path'], runtime_prompt(cfg, guide=guide))
             cfg.engine = 'claude'
             runner = ClaudeRunner(cfg, root, None, Metrics(root/'metrics.json', 'test', 'test', 'high', 60), 'unused')
             try:
                 with patch('orchestrator.prompt_guide.publish_guide', return_value=guide), \
                      patch('orchestrator.prompt_guide.guide_document', side_effect=AssertionError('must not rerender')):
                     command = runner._command()
-                    self.assertIn(guide['index_path'], command[command.index('--append-system-prompt') + 1])
+                    self.assertIn(guide['path'], command[command.index('--append-system-prompt') + 1])
             finally:
                 runner.close_events()
 

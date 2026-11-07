@@ -150,7 +150,7 @@ def make_handler(pinned: Path | None):
                                "/api/console/prefs": console_api.load_prefs,
                                "/api/console/providers": console_api.providers_list,
                                "/api/console/profiles": console_api.profiles_payload,
-                               "/api/console/update": console_api.update_check,
+                               "/api/console/update": lambda: console_api.update_check(channel=query.get("channel", "dev")),
                                "/api/console/versions": console_api.versions,
                                "/api/console/kb": lambda: console_api.kb_list(query.get("mode", "speedrun")),
                                "/api/console/kb/file": lambda: console_api.kb_read(query.get("mode", "speedrun"),
@@ -286,7 +286,7 @@ def make_handler(pinned: Path | None):
                         elif self.path == "/api/console/prefs":
                             result = console_api.save_prefs(data)
                         elif self.path == "/api/console/prompt/preview":
-                            result = console_api.prompt_preview(data.get("options"))
+                            result = console_api.prompt_preview(data.get("options"), data.get("engine"))
                         elif self.path == "/api/console/personal-prompt":
                             result = console_api.personal_prompt_write(data.get("scope"), data.get("text"), data.get("version"))
                         elif self.path == "/api/console/prompt/file":
@@ -309,7 +309,7 @@ def make_handler(pinned: Path | None):
                         elif self.path == "/api/console/profiles/delete":
                             result = console_api.profile_delete(data)
                         elif self.path == "/api/console/update":
-                            result = console_api.update_apply()
+                            result = console_api.update_apply(data.get("channel", "dev"))
                         elif self.path == "/api/console/rollback":
                             result = console_api.rollback(data)
                         elif self.path == "/api/console/providers":

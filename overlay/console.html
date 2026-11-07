@@ -319,6 +319,7 @@
   .prow .size { color: var(--muted); font-size: 12px; white-space: nowrap; display: flex; gap: 6px; align-items: center; }
   .tag.auto { color: #A797F5; border-color: rgba(167, 151, 245, 0.5); }
   .pblock { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; overflow: hidden; scroll-margin-top: 80px; }
+  .ptext mark.pdiff { background: rgba(242, 193, 78, 0.18); color: inherit; border-radius: 3px; box-shadow: -3px 0 0 var(--gold); }
   .pblock > header { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--raised); font: 12.5px Consolas, "Cascadia Mono", monospace; color: var(--muted); }
   .pblock > header i { width: 10px; height: 10px; border-radius: 2px; }
   .pblock > header .grow { flex: 1; }
@@ -449,7 +450,7 @@
         </div>
         <div class="row" style="margin-top:10px">
           <label class="field">智能体标签<input type="text" id="agent" maxlength="40" placeholder="例如 opus-explore 或 dev-opus"></label>
-          <label class="field">现实时间上限（分钟）<input type="number" id="maxMinutes" min="1" max="1440" step="1" value="1000"></label>
+          <label class="field">现实时间上限（分钟）<input type="number" id="maxMinutes" min="1" max="9999999" step="1" value="1000" title="1～9999999；很大的值相当于不限时"></label>
         </div>
         <p class="hint">标签决定日志目录 runs/&lt;标签&gt;/ 与智能体的工作区；同一个系列一直用同一个标签（续跑、笔记都按标签找），临时试验可以用 dev- 开头。</p>
       </fieldset>
@@ -791,7 +792,14 @@
         <button type="button" role="radio" data-pmode="explore" aria-checked="true">探索</button>
         <button type="button" role="radio" data-pmode="speedrun" aria-checked="false">速通（实验性）</button>
       </div>
+      <div class="segmented" role="radiogroup" aria-label="按哪个执行器生成（不改运行页）">
+        <button type="button" role="radio" data-pengine="follow" aria-checked="true">跟随运行页</button>
+        <button type="button" role="radio" data-pengine="claude" aria-checked="false">Claude Code</button>
+        <button type="button" role="radio" data-pengine="codex" aria-checked="false">Codex（GPT）</button>
+      </div>
     </div>
+    <label class="inline-check" style="margin:2px 0 8px"><input type="checkbox" id="promptDiff"> 标出与另一执行器不同的行</label>
+    <p class="hint" style="margin-top:0">两种执行器共用同一套模板，不同的只有：游戏工具名（Claude 写 act，Codex 写 celeste_act）、文件与程序工具（Read、Bash 与 read、原生 Shell）、临时思考的写法（Codex 还可以用公开 commentary）、思考字数上限（只对 Claude）、图像送达方式、个人追加要求的适用范围，以及外层（Claude Code 自带的系统提示词，或 Codex 的开发者指令）。</p>
     <p class="hint" id="promptWhat" style="margin-top:0">—</p>
     <div class="pbar" id="promptBar" role="img" aria-label="这一版由哪些部分组成，按长度"></div>
     <div class="plist" id="promptParts"></div>
@@ -839,9 +847,14 @@
       <p class="version" id="aboutVersion">读取中…</p>
       <div class="update" id="aboutUpdate">
         <span class="latest" id="latestVersion" role="status">最新版本：还没检查</span>
+        <select id="updateChannel" aria-label="更新通道" title="检查与一键更新按哪类版本">
+          <option value="release">正式版</option>
+          <option value="prerelease">公测版</option>
+          <option value="dev">开发版</option>
+        </select>
         <button class="btn small" type="button" id="checkUpdate">检查更新</button>
         <button class="btn small primary" type="button" id="applyUpdate" disabled>一键更新</button>
-        <small>从 GitHub 拉取最新的开发版</small>
+        <small id="updateChannelNote"></small>
       </div>
       <div class="update rollback" id="aboutRollback">
         <span class="latest">换版本：回退到 GitHub 上发布过的正式版、公测版或最近的开发版</span>
@@ -2424,22 +2437,42 @@ async function savePersonalPrompt(clear = false) {
   finally { draft.saving = false; if (scope === $('personalPromptScope').value) renderPersonalPrompt(); }
 }
 
-function promptText(text) {
+// other：另一执行器那一版的全部行（标出差异时）；这一版里有、那一版里没有的行用 mark 标出
+function promptText(text, other) {
   const box = document.createElement("div"); box.className = "ptext";
   for (const line of text.split("\n")) {
     const m = line.match(/^(#{1,4} )(.*)$/);
+    let node = line;
     if (m) {
-      const h = document.createElement("span"); h.className = "h";
-      h.append(Object.assign(document.createElement("span"), { className: "hash", textContent: m[1] }), m[2]);
-      box.append(h, "\n");
-    } else box.append(line + "\n");
+      node = document.createElement("span"); node.className = "h";
+      node.append(Object.assign(document.createElement("span"), { className: "hash", textContent: m[1] }), m[2]);
+    }
+    if (other && line.trim() && !other.has(line.trim())) {
+      const mark = document.createElement("mark"); mark.className = "pdiff"; mark.append(node);
+      node = mark;
+    }
+    box.append(node, "\n");
   }
   return box;
 }
 
 function promptOptions() { return formOptions(); }
-
 let promptPreviewRequest = 0;
+// 提示词页按哪个执行器生成：跟随运行页，或临时看另一个执行器（不改运行页）
+function runEngine() { return ($("runtime").value || "claude:anthropic").split(":")[0] === "codex" ? "codex" : "claude"; }
+function promptEngine() { return ui.promptEngine === "claude" || ui.promptEngine === "codex" ? ui.promptEngine : runEngine(); }
+function setPromptEngine(value) {
+  ui.promptEngine = value;
+  store("promptEngine", value);
+  document.querySelectorAll("[data-pengine]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.pengine === value)));
+}
+function promptLines(data) {
+  const lines = new Set();
+  for (const p of [...data.parts, ...(data.guide_parts || [])]) for (const line of p.text.split("\n")) if (line.trim()) lines.add(line.trim());
+  for (const line of (data.first_message || "").split("\n")) if (line.trim()) lines.add(line.trim());
+  return lines;
+}
+
 async function loadPromptPreview() {
   const request = ++promptPreviewRequest;
   if (ui.settingsLoading || ui.settingsError || ui.modelsLoading) {
@@ -2447,8 +2480,15 @@ async function loadPromptPreview() {
     $("promptWhat").classList.toggle("warn", !!ui.settingsError);
     return;
   }
-  let data;
-  try { data = await postJSON("/api/console/prompt/preview", { options: promptOptions() }); }
+  let data, other = null;
+  const engine = promptEngine(), otherEngine = engine === "codex" ? "claude" : "codex";
+  try {
+    data = await postJSON("/api/console/prompt/preview", { options: promptOptions(), engine });
+    if ($("promptDiff").checked) {
+      try { other = promptLines(await postJSON("/api/console/prompt/preview", { options: promptOptions(), engine: otherEngine })); }
+      catch (e) { other = null; }     // 另一执行器生成不了时只显示这一版
+    }
+  }
   catch (e) {
     if (request !== promptPreviewRequest) return;
     ui.prompt = null;
@@ -2481,8 +2521,8 @@ async function loadPromptPreview() {
     actions.append(edit);row.append(open,actions);
     return row;
   }));
-  const o = promptOptions();
-  const bits = [o.mode === "explore" ? "探索" : "速通"];
+  const o = { ...promptOptions(), engine };
+  const bits = [engine === "codex" ? "Codex（GPT）" : "Claude Code", o.mode === "explore" ? "探索" : "速通"];
   if (o.mode === "speedrun") bits.push(o.sim && o.limit_planning ? "主控限额模拟"
                                         : o.engine !== "codex" && o.sim && o.runtime === "container" ? "开模拟器（/sim）" : "无模拟能力");
   else if (o.sim_assist) bits.push("限额预测");
@@ -2494,7 +2534,11 @@ async function loadPromptPreview() {
   if (o.runtime === "host" && o.engine !== 'codex') bits.push("本机运行方式");
   if (data.personal_applied?.length) bits.push('个人要求：' + data.personal_applied.map(item => item.label).join('、'));
   const guideSize = (data.guide_parts || []).reduce((n, p) => n + p.text.length + p.sep.length, 0);
-  $("promptWhat").textContent = `${bits.join(" · ")}；启动 ${data.text.length.toLocaleString("zh-CN")} 字符` + (guideSize ? `；工作区指南 ${guideSize.toLocaleString("zh-CN")} 字符（按需读取）` : "");
+  let diffCount = 0;
+  if (other) for (const p of [...previewParts, { text: data.first_message || "" }])
+    for (const line of p.text.split("\n")) if (line.trim() && !other.has(line.trim())) diffCount += 1;
+  $("promptWhat").textContent = `${bits.join(" · ")}；启动 ${data.text.length.toLocaleString("zh-CN")} 字符` + (guideSize ? `；工作区指南 ${guideSize.toLocaleString("zh-CN")} 字符（按需读取）` : "")
+    + (other ? `；与 ${otherEngine === "codex" ? "Codex" : "Claude Code"} 版不同的 ${diffCount} 行已标出` : $("promptDiff").checked ? "；另一执行器的版本生成不了，没有标出差异" : "");
   $("promptExecutor").textContent = data.executor;
   const colors = new Map();
   const colorOf = (p) => {
@@ -2528,7 +2572,7 @@ async function loadPromptPreview() {
       edit.addEventListener("click", () => openPromptFile(p.source));
       head.append(edit);
     } else head.append(Object.assign(document.createElement("span"), { className: "tag auto", textContent: "主控自动加，不能编辑" }));
-    block.append(head, promptText(p.text.replace(/^\n+|\n+$/g, "")));
+    block.append(head, promptText(p.text.replace(/^\n+|\n+$/g, ""), other));
     preview.append(block);
   });
   if (data.first_message) {
@@ -2537,7 +2581,7 @@ async function loadPromptPreview() {
     head.append(Object.assign(document.createElement("i"), { style: "background:var(--muted)" }),
                 Object.assign(document.createElement("span"), { className: "grow", textContent: "准备阶段的第一条消息（会话里的第一条用户消息）" }),
                 Object.assign(document.createElement("span"), { className: "tag auto", textContent: "主控自动生成" }));
-    block.append(head, promptText(data.first_message));
+    block.append(head, promptText(data.first_message, other));
     preview.append(block);
   }
   const over = $("promptOverrides");
@@ -3052,27 +3096,34 @@ async function loadAbout() {
 function versionText(v) {
   if (!v || !v.commit) return "—";
   const bits = [];
+  if (v.tag) bits.push(`<b>${escapeHtml(v.tag)}</b>`);
   if (v.console) bits.push(`控制台 <b>${escapeHtml(v.console)}</b>`);
   if (v.bridge) bits.push(`桥接 Mod <b>${escapeHtml(v.bridge)}</b>`);
   bits.push(`提交 <b>${escapeHtml(v.commit)}</b>（${escapeHtml(v.date || "")}）`);
   return bits.join("，");
 }
 
+// 更新通道：正式版（GitHub 正式发布的标签）、公测版（预发布标签，或更新的正式版）、开发版（主线最新提交）
+const CHANNEL_NOTES = { release: "从 GitHub 更新到最新的正式版", prerelease: "从 GitHub 更新到最新的公测版（或更新的正式版）",
+                        dev: "从 GitHub 拉取主线上最新的开发版" };
+function updateChannel() { return $("updateChannel").value || "dev"; }
 async function checkUpdate() {
   ui.updateChecked = true;
-  const line = $("latestVersion");
-  line.className = "latest"; line.textContent = "最新版本：检查中…";
+  const line = $("latestVersion"), channel = updateChannel(), label = $("updateChannel").selectedOptions[0].textContent;
+  $("updateChannelNote").textContent = CHANNEL_NOTES[channel];
+  line.className = "latest"; line.textContent = `最新${label}：检查中…`;
   $("checkUpdate").disabled = true; $("applyUpdate").disabled = true;
   let u;
-  try { u = await getJSON("/api/console/update"); }
-  catch (e) { line.textContent = "最新版本：检查失败（" + e.message + "）"; $("checkUpdate").disabled = false; ui.updateChecked = false; return; }
+  try { u = await getJSON("/api/console/update?channel=" + encodeURIComponent(channel)); }
+  catch (e) { line.textContent = `最新${label}：检查失败（${e.message}）`; $("checkUpdate").disabled = false; ui.updateChecked = false; return; }
+  if (channel !== updateChannel()) return;          // 检查期间换了通道：以新的一次为准
   $("checkUpdate").disabled = false;
-  if (!u.latest) { line.textContent = "最新版本：" + (u.reason || "读不到"); return; }
-  line.innerHTML = "最新版本：" + versionText(u.latest)
-    + (u.behind ? `；比本机新 ${u.behind} 个提交` : "；本机已是最新");
+  if (!u.latest) { line.textContent = `最新${label}：` + (u.reason || "读不到"); return; }
+  line.innerHTML = `最新${label}：` + versionText(u.latest)
+    + (u.behind && !u.ahead ? `；比本机新 ${u.behind} 个提交` : u.behind || u.ahead ? "" : "；本机已是这个版本");
   if (u.behind) line.classList.add("new");
   if (u.latest.subject) line.title = "最新一次提交：" + u.latest.subject;
-  if (u.behind && !u.can_update) line.innerHTML += `<br><small>${escapeHtml(u.reason)}</small>`;
+  if (!u.can_update && u.reason && (u.behind || u.ahead)) line.innerHTML += `<br><small>${escapeHtml(u.reason)}</small>`;
   $("applyUpdate").disabled = !u.can_update;
 }
 
@@ -3089,7 +3140,7 @@ async function reloadWhenServing(commit, line) {
 }
 
 // 换版本：正式版、公测版是 GitHub 上的标签，开发版是最近的提交；只列出自带一键更新的版本（换过去之后还能一键回到最新）
-const ROLLBACK_NOTE = "只换程序文件，运行记录、配置、存档等本机数据不动；较旧的版本可能读不懂新版本留下的数据。要回到最新版本，点上面的“一键更新”。";
+const ROLLBACK_NOTE = "只换程序文件，运行记录、配置、存档等本机数据不动；较旧的版本可能读不懂新版本留下的数据。要回到最新版本，在上面选好通道后点“一键更新”。";
 const VERSION_KINDS = { release: "正式版", prerelease: "公测版", commit: "开发版（最近的提交）" };
 async function loadVersions() {
   const sel = $("rollbackTarget");
@@ -3143,12 +3194,13 @@ async function applyRollback() {
 }
 
 async function applyUpdate() {
-  if (!confirmTwice("applyUpdate", "再点一次：从 GitHub 更新")) return;
+  const label = $("updateChannel").selectedOptions[0].textContent;
+  if (!confirmTwice("applyUpdate", `再点一次：更新到最新${label}`)) return;
   $("applyUpdate").disabled = true; $("checkUpdate").disabled = true;
   const line = $("latestVersion");
   line.textContent = "正在从 GitHub 拉取…";
   let r;
-  try { r = await postJSON("/api/console/update", {}); }
+  try { r = await postJSON("/api/console/update", { channel: updateChannel() }); }
   catch (e) { toast("更新失败：" + e.message, true); line.textContent = "更新失败：" + e.message; $("checkUpdate").disabled = false; return; }
   line.innerHTML = `已更新到 ${versionText(r.after)}（${r.files} 个文件有变化）；正在重启 HUD 服务，控制台稍后自动刷新…`
     + (r.notes.length ? "<br><small>" + r.notes.map(escapeHtml).join("<br>") + "</small>" : "");
@@ -3238,8 +3290,14 @@ $("profileCancel").addEventListener("click", closeProfileDialog);
 $("profileForm").addEventListener("submit", submitProfileDialog);
 $("aboutRefresh").addEventListener("click", loadAbout);
 $("checkUpdate").addEventListener("click", checkUpdate);
+$("updateChannel").value = ["release", "prerelease", "dev"].includes(recall("updateChannel")) ? recall("updateChannel") : "dev";
+$("updateChannel").addEventListener("change", () => { store("updateChannel", updateChannel()); checkUpdate(); });
 $("applyUpdate").addEventListener("click", applyUpdate);
 $("loadVersions").addEventListener("click", loadVersions);
+document.querySelectorAll("[data-pengine]").forEach(b => b.addEventListener("click", () => { setPromptEngine(b.dataset.pengine); loadPromptPreview(); }));
+$("promptDiff").addEventListener("change", () => { store("promptDiff", $("promptDiff").checked ? "1" : ""); loadPromptPreview(); });
+setPromptEngine(["claude", "codex"].includes(recall("promptEngine")) ? recall("promptEngine") : "follow");
+$("promptDiff").checked = recall("promptDiff") === "1";
 $("applyRollback").addEventListener("click", applyRollback);
 $("rollbackTarget").addEventListener("change", updateRollbackButton);
 $('personalPromptScope').addEventListener('change', () => { ++personalRequest; loadPersonalPrompt(); });

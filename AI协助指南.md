@@ -49,7 +49,7 @@ docker image inspect celeste-agent:0.1                                 # 智能�
 
 ## 3. 部署
 
-**版本**：`git clone` 下来的是最新的开发版（主线上的最新提交）。GitHub Releases 里的正式版（标签 `vX.Y.Z`）与公测版（预发布，标签带后缀）更稳定；用户想用某个正式版或公测版时，部署好后在控制台"关于"页的"换版本"里选，或在没有运行时用 `git fetch --tags` 加 `git reset --keep <标签>`（保持在 main 分支上，之后一键更新照常可用）。不要用 `git checkout <标签>` 切到分离头指针，那样控制台的一键更新与换版本都会拒绝。
+**版本**：`git clone` 下来的是最新的开发版（主线上的最新提交）。GitHub Releases 里的正式版（标签 `vX.Y.Z`）与公测版（预发布，标签带后缀）更稳定；用户想用某个正式版或公测版时，部署好后在控制台"关于"页的"换版本"里选，或在没有运行时用 `git fetch --tags` 加 `git reset --keep <标签>`（保持在 main 分支上，之后一键更新照常可用）。控制台"关于"页的检查更新与一键更新可以选通道（正式版、公测版、开发版）。不要用 `git checkout <标签>` 切到分离头指针，那样控制台的换版本会拒绝。
 
 ### 3.1 推荐：交互式部署向导
 
@@ -89,6 +89,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 7. **容器隔离验收**（可选，Anthropic 平台、令牌配好后，约 2 分钟）：`.\.venv\Scripts\python.exe -m orchestrator.verify --agent <标签>`，应全部"通过"。
 8. **控制台启动器**：程序根目录的 `CelesteAIConsole.exe` 随程序发布，不需要构建。它需要 `.venv` 存在。
 9. **AI 专用游戏副本**（可选，用户想边让智能体试玩边自己玩、或不想让 AI 碰到自己的存档与 Mod 时）：`.\.venv\Scripts\python.exe tools\game_instance.py create` 复制出副本并把游戏位置改成它，`launch` 启动。副本的存档从空开始；用户要接着用已有的 AI 存档时，关掉游戏后用 `copy-saves <槽号…>` 复制（只复制用户指定的槽，不复制用户自己的存档）。副本需要 Steam 在运行；个人游戏里要停用两个 AI 模组，否则先启动的一方占用端口。细节见 `docs/USAGE.md` 3.5 节。用户还想同时用自己的 OBS 直播或录像时，先请用户关闭自己的 OBS，再 `tools\obs_setup.py private --move-personal-plugin` 建私有 OBS、`personal-capture --apply` 让用户自己的场景只采标题为 Celeste 的窗口（见 `docs/USAGE.md` 4.4 节）；之后 `obs_setup.py stop` 只关私有 OBS。
+10. **知识库参考资料**（可选；速通模式会读，"预置配置 1 · 探索模式"也给探索模式开放，没有时这部分自动跳过）：社区原文（Celeste Wiki 技巧页面、草莓酱训练场与机制库）不随程序发布，在本机生成一次：`.\.venv\Scripts\python.exe tools\fetch_reference.py`。需要能访问 celeste.ink；草莓酱部分读取游戏目录里的 `Mods\StrawberryJam2021.zip`（草莓酱 Mod 装着即可，不必启用；没装时先问用户是否要装，装 Mod 由用户在自己的 Mod 管理器里做）。用了 AI 专用副本时副本里没有这个 Mod，加 `--celeste-dir "<装着草莓酱的游戏目录>"`；只要其中一份时加 `--skip-wiki` 或 `--skip-sj`。输出在 `kb\reference\`（只在本机，不上传），细节见 `docs/USAGE.md` 2.5 节。有主控在运行时不要生成（会改动挂给智能体的知识库）。
 
 ### 3.3 必须由用户亲手做的部分
 

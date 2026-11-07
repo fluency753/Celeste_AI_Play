@@ -141,8 +141,21 @@ def speedrun_allow_rule(cfg) -> str:
     allow = [rel for rel in getattr(cfg, "kb_allow", None) or [] if rel.startswith("speedrun/")]
     if not allow or getattr(cfg, "mode", "speedrun") != "explore":
         return ""
-    names = "、".join(rel[len("speedrun/"):] for rel in allow[:12]) + ("等" if len(allow) > 12 else "")
-    return f"本次另外开放了速通知识库的 {len(allow)} 个文件（/kb/speedrun/ 下：{names}），按需查阅，不要求准备阶段读完。"
+    # 按目录归并：同一目录下超过 3 个文件时只写目录与个数，免得长路径重复、重要的文件被截掉
+    groups: dict[str, list[str]] = {}
+    for rel in sorted(allow):
+        folder, _, name = rel[len("speedrun/"):].rpartition("/")
+        groups.setdefault(folder, []).append(name)
+    items = []
+    for folder in sorted(groups, key=lambda d: (d != "", d)):
+        names = groups[folder]
+        if not folder:
+            items += names
+        elif len(names) <= 3:
+            items += [f"{folder}/{name}" for name in names]
+        else:
+            items.append(f"{folder}/ 下的 {len(names)} 个文件")
+    return f"本次另外开放了速通知识库的 {len(allow)} 个文件（/kb/speedrun/ 下：{'、'.join(items)}），按需查阅，不要求准备阶段读完。"
 
 
 def save_context_act(cfg) -> str:

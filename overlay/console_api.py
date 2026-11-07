@@ -528,11 +528,20 @@ def _version(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def prompt_preview(options: dict) -> dict:
-    """按运行页的当前设置与选中的配置，生成智能体会收到的提示词（分块，标出来源文件与本机修改）和准备阶段的第一条消息。"""
+def prompt_preview(options: dict, engine: str | None = None) -> dict:
+    """按运行页的当前设置与选中的配置，生成智能体会收到的提示词（分块，标出来源文件与本机修改）和准备阶段的第一条消息。
+    engine 给出时按那个执行器生成（提示词页的“Claude Code／Codex”切换，不改运行页）：两种执行器共用同一套模板，
+    不同的是工具名、文件与程序工具、临时思考的写法与字数上限、图像送达方式和个人追加要求的适用范围。"""
     from orchestrator.launch_options import config_for
     # 预览不需要真的起名字或选存档：没填的用占位值，免得运行页还没填完就看不了提示词
     options = dict(options or {})
+    if engine is not None:
+        if engine not in ("claude", "codex"):
+            raise ValueError("未知执行器：" + str(engine))
+        if engine != options.get("engine", "claude"):
+            # 模型与推理强度不进提示词：换执行器时用各自的默认值，免得运行页选的模型不在另一边的列表里
+            options.update({"engine": engine, "provider": "codex", "model": "gpt", "effort": "medium"} if engine == "codex"
+                           else {"engine": engine, "provider": "anthropic", "model": "opus", "effort": "high"})
     if not options.get("agent"):
         options["agent"] = "preview"
     if not (options.get("save") or {}).get("name"):
@@ -679,7 +688,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.12.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.13.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -751,30 +760,79 @@ def _dirty_files() -> list[str]:
     return [line[3:].split(" -> ")[-1].strip('"') for line in dirty.splitlines() if line.strip()]
 
 
-def update_check(fetch: bool = True) -> dict:
-    """从 GitHub 取最新版本（git fetch），与本机比较。不改动本机文件。"""
+UPDATE_CHANNELS = {"release": "正式版", "prerelease": "公测版", "dev": "开发版"}
+
+
+def _channel(channel) -> str:
+    if channel not in UPDATE_CHANNELS:
+        raise ValueError("更新通道须为正式版、公测版或开发版")
+    return channel
+
+
+def _tags() -> list[tuple[str, str, str]]:
+    """本机已知的版本标签：(标签名, 指向的提交, release/prerelease)，按创建时间从新到旧。"""
+    _, tags, _ = _git(["for-each-ref", "refs/tags", "--sort=-creatordate",
+                       "--format=%(refname:short)%09%(objectname)%09%(*objectname)"], timeout=20)
+    out = []
+    for line in tags.splitlines():
+        name, obj, peeled = (line.split("\t") + ["", "", ""])[:3]
+        kind = "release" if RELEASE_TAG.match(name) else "prerelease" if PRERELEASE_TAG.match(name) else None
+        if kind:
+            out.append((name, peeled or obj, kind))
+    return out
+
+
+def _channel_target(upstream: str, channel: str) -> tuple[str | None, str | None]:
+    """通道的最新版本：(提交, 标签)。开发版是 GitHub 主线的最新提交；正式版是主线上最新的正式版标签；
+    公测版是主线上最新的公测版或正式版标签（谁新用谁）。还没有发布时为 (None, None)。"""
+    if channel == "dev":
+        return upstream, None
+    _, mainline, _ = _git(["rev-list", upstream], timeout=30)
+    order = {commit: i for i, commit in enumerate(mainline.split())}      # 0 = 最新
+    best = None
+    for name, commit, kind in _tags():
+        if commit in order and (channel == "prerelease" or kind == "release"):
+            if best is None or order[commit] < order[best[1]]:
+                best = (name, commit)
+    return (best[1], best[0]) if best else (None, None)
+
+
+def update_check(fetch: bool = True, channel: str = "dev") -> dict:
+    """从 GitHub 取所选通道（正式版、公测版、开发版）的最新版本，与本机比较。不改动本机文件。"""
+    channel = _channel(channel)
+    label = UPDATE_CHANNELS[channel]
     upstream = _upstream()
     remote, _, branch = upstream.partition("/")
-    out = {"upstream": upstream, "current": _version_at("HEAD"), "latest": None, "behind": 0, "ahead": 0,
-           "dirty": [], "can_update": False, "reason": ""}
+    out = {"upstream": upstream, "channel": channel, "target": None, "current": _version_at("HEAD"), "latest": None,
+           "behind": 0, "ahead": 0, "dirty": [], "can_update": False, "reason": ""}
     if not out["current"]["commit"]:
         out["reason"] = "这个目录不是 git 克隆（或没装 git），不能检查更新；请从 GitHub 重新下载"
         return out
     if fetch:
-        code, _, err = _git(["fetch", "--quiet", remote, branch], timeout=60)
+        code, _, err = _git(["fetch", "--quiet", "--tags", remote, branch], timeout=60)
         if code != 0:
             out["reason"] = f"连不上 GitHub：{err or '未知错误'}"
             return out
-    out["latest"] = _version_at(upstream)
-    code, counts, _ = _git(["rev-list", "--left-right", "--count", f"HEAD...{upstream}"], timeout=10)
+    target, tag = _channel_target(upstream, channel)
+    if target is None:
+        out["reason"] = f"GitHub 上还没有发布{label}；可以改选开发版"
+        return out
+    out["target"] = target
+    out["latest"] = {**_version_at(target), "tag": tag}
+    code, counts, _ = _git(["rev-list", "--left-right", "--count", f"HEAD...{target}"], timeout=10)
     if code == 0 and counts:
         ahead, behind = (int(x) for x in counts.split()[:2])
         out.update(ahead=ahead, behind=behind)
+    _, local, _ = _git(["rev-list", "--count", f"{upstream}..HEAD"], timeout=10)
+    local = int(local) if local.strip().isdigit() else 0
     out["dirty"] = _dirty_files()[:20]
-    if out["behind"] == 0:
-        out["reason"] = "已经是最新版本"
-    elif out["ahead"]:
-        out["reason"] = f"本机有 {out['ahead']} 个 GitHub 上没有的提交，不能直接快进；请手动合并"
+    if out["behind"] == 0 and out["ahead"] == 0:
+        out["reason"] = f"已经是最新版本（{label}）"
+    elif local:
+        out["reason"] = f"本机有 {local} 个 GitHub 上没有的提交，不能直接快进；请手动合并"
+    elif out["behind"] == 0 or out["ahead"]:
+        out["reason"] = (f"本机比最新的{label}（{tag or out['latest']['commit']}）还新，已经是最新版本；"
+                         f"要换回{label}，用下面的“换版本”")
     elif out["dirty"]:
         out["reason"] = "本机改过程序文件（" + "、".join(out["dirty"][:5]) + "）；先撤销这些改动再更新"
     else:
@@ -796,18 +854,19 @@ def _change_notes(before: dict, after: dict, changed: list[str]) -> list[str]:
     return notes
 
 
-def update_apply() -> dict:
-    """一键更新：没有主控在运行、本机没有未提交的改动、只能快进时，从 GitHub 拉取（git merge --ff-only），
-    然后重启 HUD 服务（控制台接口在里面）让新代码生效。"""
+def update_apply(channel: str = "dev") -> dict:
+    """一键更新到所选通道的最新版本：没有主控在运行、本机没有未提交的改动、只能快进时，从 GitHub 拉取
+    （git merge --ff-only 到那个版本），然后重启 HUD 服务（控制台接口在里面）让新代码生效。"""
+    channel = _channel(channel)
     if orchestrator_status()["running"]:
         raise ValueError("有主控在运行：等运行结束再更新（运行中换代码可能出错）")
-    check = update_check(fetch=True)
+    check = update_check(fetch=True, channel=channel)
     if not check["can_update"]:
         raise ValueError(check["reason"] or "现在不能更新")
     before = check["current"]
-    code, changed, _ = _git(["diff", "--name-only", "HEAD", check["upstream"]], timeout=20)
+    code, changed, _ = _git(["diff", "--name-only", "HEAD", check["target"]], timeout=20)
     changed = changed.splitlines() if code == 0 else []
-    code, _, err = _git(["merge", "--ff-only", check["upstream"]], timeout=120)
+    code, _, err = _git(["merge", "--ff-only", check["target"]], timeout=120)
     if code != 0:
         raise ValueError(f"更新失败：{err or '未知错误'}")
     after = _version_at("HEAD")
@@ -892,13 +951,8 @@ def versions(fetch: bool = True) -> dict:
     mainline = set(mainline.split())
     _, head, _ = _git(["rev-parse", "HEAD"], timeout=10)
     rows, seen = [], set()
-    _, tags, _ = _git(["for-each-ref", "refs/tags", "--sort=-creatordate",
-                       "--format=%(refname:short)%09%(objectname)%09%(*objectname)"], timeout=20)
-    for line in tags.splitlines():
-        name, obj, peeled = (line.split("\t") + ["", "", ""])[:3]
-        kind = "release" if RELEASE_TAG.match(name) else "prerelease" if PRERELEASE_TAG.match(name) else None
-        target = peeled or obj
-        if kind and target in mainline and target not in seen:
+    for name, target, kind in _tags():
+        if target in mainline and target not in seen:
             rows.append({"ref": target, "kind": kind, "tag": name})
             seen.add(target)
     _, recent, _ = _git(["log", "--first-parent", f"-n{ROLLBACK_COMMITS}", "--format=%H", upstream], timeout=20)

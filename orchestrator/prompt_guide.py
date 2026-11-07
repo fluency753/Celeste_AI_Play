@@ -18,6 +18,9 @@ from .session_store import rename_directory
 GUIDE_READ_ROOT = REPO_ROOT / 'local' / 'guide-reading'
 
 
+VERSION_CHARS = 12
+
+
 def _digest(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
@@ -55,15 +58,16 @@ def guide_document(cfg, *, include_task=True):
     manifest = {'format': 'celeste-prompt-guide-v2', 'sections': [
         {key: value for key, value in section.items() if key != 'text'} for section in sections]}
     manifest_text = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + '\n'
-    version = _digest(manifest_text)
+    # 目录名取清单哈希的前 VERSION_CHARS 位：足以区分版本，提示词里不出现 64 位长串；完整哈希留在 manifest.json
+    version = _digest(manifest_text)[:VERSION_CHARS]
     prefix = f'/workspace/game/instructions/{version}'
     path = prefix + '/guide.md'
-    index = ['# 试玩操作指南索引', '', f'版本：{version}', '', f'正文：{path}',
+    index = ['# 试玩操作指南索引', '', '正文：同目录的 guide.md',
              '当前任务、配置、实时工具结果与用户最新指令优先于本指南中的启动快照。',
              '首次读正文，续跑按主控给出的范围补读。遗忘时可用本索引定位。', '',
-             '各节依次列出标识、名称、offset、limit 和内容哈希。']
+             '各节依次列出标识、名称、offset 和 limit（读 guide.md 时用）。']
     for section in sections:
-        index.append(f"- {section['id']} | {section['label']} | {section['offset']} | {section['limit']} | {section['sha256']}")
+        index.append(f"- {section['id']} | {section['label']} | {section['offset']} | {section['limit']}")
     documents = {'guide.md': body, 'manifest.json': manifest_text, 'index.md': '\n'.join(index) + '\n'}
     return {'version': version, 'path': path, 'index_path': prefix + '/index.md', 'include_task': include_task,
             'omitted_task_sections': sorted(omitted),
@@ -208,7 +212,7 @@ class GuideReading:
         path = guide['path']
         reader = tool_name(self.cfg, 'Read')
         prefix = f'工作区操作指南：{path}\n'
-        suffix = (f'压缩或遗忘后可查 {guide["index_path"]} 定位相关内容。'
+        suffix = ('压缩或遗忘后可查同目录的 index.md 定位相关内容。'
                   '仅聊天、准备资料或取名时按需查阅。指南不替代准备阶段的必读清单。')
         if not self.delivered:
             return prefix + f'开始正式试玩前，先用 {reader} 一次读取正文；如结果截断，从返回的下一行继续。\n' + suffix

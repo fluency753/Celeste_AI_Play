@@ -139,7 +139,7 @@ eval(JSON.parse(fs.readFileSync(0,'utf8')).function+`
         if not node:
             self.skipTest('Node required')
         html = (Path(__file__).resolve().parents[1] / 'overlay/console.html').read_text(encoding='utf-8')
-        functions = html[html.index('const personalDrafts ='):html.index('function promptText(text)')]
+        functions = html[html.index('const personalDrafts ='):html.index('function promptText(')]
         harness = r'''
 const assert=require('assert'), fs=require('fs');
 const elements={};const $=id=>elements[id] ||= {value:'',disabled:false,textContent:'',replaceChildren(...options){this.options=options;}};

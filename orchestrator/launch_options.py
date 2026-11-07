@@ -24,6 +24,12 @@ SWITCHES = ("live", "sim", "sim_assist", "stiffness", "formal_thought", "save_co
             "keep_obs_open", "start_paused", "quota_wait", "record_marker", "skip_enter", "no_agent", "hud_window", "hud", "allow_chapter_reset",
             "freeze_chapter_select", "freeze_file_select", "freeze_main_menu", "allow_detour")
 MAPS = {"celeste": "蔚蓝官方章节"}      # 以后可能加 MOD 地图
+MAX_MINUTES = 9999999                    # 现实时间上限的最大值（约 19 年，相当于不限时）
+
+
+def minutes_text(value) -> str:
+    """分钟数写进命令行与提示词：整数原样（9999999 不写成 1e+07），小数用 :g。"""
+    return str(int(value)) if float(value).is_integer() else f"{value:g}"
 
 DEFAULTS = {
     "engine": "claude", "provider": "anthropic", "model": "opus", "effort": "high", "agent": "",
@@ -175,8 +181,8 @@ def normalize(options: dict) -> dict:
     save["name"] = save["name"].strip()
     o["save"] = save
     minutes = o["max_minutes"]
-    if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or not 1 <= minutes <= 24 * 60:
-        raise ValueError("现实时间上限须为 1～1440 分钟")
+    if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or not 1 <= minutes <= MAX_MINUTES:
+        raise ValueError(f"现实时间上限须为 1～{MAX_MINUTES} 分钟（很大的值相当于不限时）")
     compact = str(o["autocompact"] or "").strip()
     if compact and compact != "auto" and not (compact.isdigit() and 100000 <= int(compact) <= 1000000):
         raise ValueError("自动压缩窗口须为 auto 或 100000～1000000")
@@ -235,11 +241,13 @@ def build(options: dict, profile: str | None = None) -> list[str]:
     本机原有设置（"local"）或不给时不写 --profile，命令与没有配置功能时相同。"""
     o = normalize(options)
     argv = ["--engine", o["engine"], "--provider", o["provider"], "--model", o["model"], "--effort", o["effort"],
-            "--agent", o["agent"], "--mode", o["mode"], "--max-minutes", f"{o['max_minutes']:g}",
+            "--agent", o["agent"], "--mode", o["mode"], "--max-minutes", minutes_text(o['max_minutes']),
             "--save", o["save"]["name"], "--cutscene-mode", o["cutscene_mode"]]
     argv.append("--live" if o["live"] else "--no-live")
     argv += recording_args(o)
-    argv.append("--allow-chapter-reset" if o["allow_chapter_reset"] else "--no-allow-chapter-reset")
+    if not o['allow_detour']:
+        # 旧的总开关；开着计划外地图时不写（主控拒绝它与 --allow-detour 合用），三项权限下面逐项写明
+        argv.append("--allow-chapter-reset" if o["allow_chapter_reset"] else "--no-allow-chapter-reset")
     for action, enabled in o['action_permissions'].items():
         argv.append(('--allow-' if enabled else '--no-allow-') + action.replace('_', '-'))
     if o['allow_detour']:
@@ -375,6 +383,16 @@ def config_for(options: dict, profile: str | None = None):
     cfg = RunConfig(agent=o["agent"], save=o["save"]["name"], model=o["model"], effort=o["effort"], provider=o["provider"])
     cfg.engine, cfg.runtime, cfg.mode = o["engine"], o["runtime"], o["mode"]
     cfg.knowledge_profile = KNOWLEDGE_OF_MODE[o["mode"]]
+    # 与 run.parse_args 相同的几项：提示词里会写到时间上限、存档槽位与提供方（calibration/prompt_parity_test.py 对照）
+    cfg.max_minutes = float(o["max_minutes"])
+    cfg.save_slot = o["save"]["slot"]
+    from .runtimes import runtime
+    try:
+        runtime(cfg.engine).configure(cfg, cfg.provider)
+    except ValueError:
+        pass                                  # 提供方读不出时预览照常，开跑时再报错
+    from .segments import load_table
+    cfg.checkpoints = load_table()
     capabilities = workspace_capabilities(cfg)
     # 限额：主控预测（两个执行器）；不限额：/sim 直接调用（只有 Claude，需要容器程序通道），见 sim_mode.py
     cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and (o["limit_planning"] or (o["engine"] != "codex" and capabilities.programs))

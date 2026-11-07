@@ -38,11 +38,11 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 
 | 版本 | 是什么 | 怎么用 |
 | --- | --- | --- |
-| 正式版 | GitHub 上的 [Releases](https://github.com/fluency753/Celeste_AI_Play/releases)（标签 `vX.Y.Z`），作者确认可以稳定使用的版本 | 控制台“关于”页的“换版本”里选 |
-| 公测版 | Releases 里标为预发布的版本（标签带后缀，例如 `v1.12.0-beta.1`），新功能已可用、仍在验证 | 同上 |
-| 开发版 | 主线上的每一次提交，功能最新、可能还有没发现的问题 | `git clone` 下来的就是最新开发版；“关于”页的“一键更新”拉到最新开发版 |
+| 正式版 | GitHub 上的 [Releases](https://github.com/fluency753/Celeste_AI_Play/releases)（标签 `vX.Y.Z`），作者确认可以稳定使用的版本 | 控制台“关于”页把更新通道选为“正式版”后检查更新、一键更新；也可以在“换版本”里选 |
+| 公测版 | Releases 里标为预发布的版本（标签带后缀，例如 `v1.12.0-beta.1`），新功能已可用、仍在验证 | 更新通道选“公测版”（有更新的正式版时也会更新到正式版） |
+| 开发版 | 主线上的每一次提交，功能最新、可能还有没发现的问题 | `git clone` 下来的就是最新开发版；更新通道选“开发版” |
 
-换版本只换程序文件，运行记录、配置与存档不动；之后点“一键更新”就能回到最新。还没有发布正式版或公测版时，“换版本”里只列开发版。
+换版本只换程序文件，运行记录、配置与存档不动；之后选好通道点“一键更新”就能回到最新。还没有发布正式版或公测版时，“换版本”里只列开发版。
 
 ### 预置配置
 
@@ -94,7 +94,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | 主控 | `orchestrator/`，本机 Python | 唯一同时连接游戏、智能体、HUD 与 OBS 的组件：游戏工具服务、决策循环、执行与自动重试、规划回放、录制、换章、额度与断网等待、中断续跑 |
 | 智能体容器 | `agent-container/`，Docker 镜像 `celeste-agent:0.1` | 容器里的执行器只能连所用模型平台与主控端口；智能体自写的程序在零网络沙箱里运行，看不到令牌与密钥 |
 | 知识库 | `kb/`，只读挂进容器 | 物理常量、机制规则、技巧与数据格式；只讲游戏规则，不讲关卡怎么过 |
-| HUD 与控制台 | `overlay/` | 游戏内 HUD 的绘制、网页 HUD、桌面控制台（`CelesteAIConsole.exe`，1.12.0） |
+| HUD 与控制台 | `overlay/` | 游戏内 HUD 的绘制、网页 HUD、桌面控制台（`CelesteAIConsole.exe`，1.13.0） |
 | OBS 锁步插件 | `obs-plugin/` | 只把游玩帧（和规划回放帧）交给 ffmpeg 编码 |
 | 部署与诊断 | `setup.ps1`、`tools/` | 部署向导、桥接与插件构建、OBS 配置、状态查看、测试客户端 |
 
@@ -119,7 +119,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 
 - `--save` 是游戏里的存档名，与当前存档不一致时主控拒绝开始；同名存档用 `--save-slot` 区分，`--create-save` 让主控新建存档。
 - 章节可以选官方章节的 A/B/C 面；`--chapters` 依次通关多章，一章通关后自动进入下一章。纯数字是章节编号（A 面，例如 `0,1,2`），B/C 面写章节序号加面（例如 `4B,8C`，不分大小写，8 是核心），只有第 1～7 章与核心有 B/C 面，开跑前按存档核对已解锁，整章游玩、不按检查点分段。
-- `--max-minutes` 是现实时间安全上限，默认 1000 分钟，不含准备阶段与等待额度的时间，也不显示给智能体。
+- `--max-minutes` 是现实时间安全上限，默认 1000 分钟，最大 9999999（相当于不限时），不含准备阶段与等待额度的时间。不超过 1440 分钟（一天）时启动提示词里会告诉智能体，更大的值不告诉。
 - 长时间运行建议用控制台，或用独立后台宿主启动：`python -m orchestrator.background -- <主控参数>`。从聊天助手的命令工具里直接启动，聊天关闭或回退时主控可能被一起结束（见 [docs/INCIDENT_20261024.md](docs/INCIDENT_20261024.md)）。
 
 **全部参数**：主控参数的完整一览表见 [docs/USAGE.md 4.1 节](docs/USAGE.md#41-让智能体游玩一个章节) 与 [docs/DEPLOY.md 6.1 节](docs/DEPLOY.md#61-主控-python--m-orchestratorrun)；可调参数（`--tune`）见 [USAGE.md 4.11 节](docs/USAGE.md#411-可调参数--tune)；其他工具的参数见 [DEPLOY.md 6.2 节](docs/DEPLOY.md#62-其他工具)。`python -m orchestrator.run --help` 列出同样的内容。

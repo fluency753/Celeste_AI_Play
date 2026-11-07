@@ -58,9 +58,12 @@ class ExploreIntentPromptTests(unittest.TestCase):
                     continue
                 sections.append(program)
                 self.assertIn('你可以自行编写模拟器、搜索或其他辅助程序，自由发挥', text)
-                for expected in ('本次最多可以用 1 个核', '多线程完成',
-                                 '/kb/shared/tools/programs.md', '/kb/shared/tools/files.md'):
+                for expected in ('本次最多可以用 1 个核', '多线程完成'):
                     self.assertIn(expected, program)
+                # 程序参考资料只在工具说明的“程序与辅助文件”一节写一次
+                for expected in ('/kb/shared/tools/programs.md', '/kb/shared/tools/files.md'):
+                    self.assertNotIn(expected, program)
+                    self.assertIn(expected, text)
                 reference = (PROMPTS.parent.parent / 'kb/shared/tools/programs.md').read_text(encoding='utf-8')
                 for detail in ('去重、择优和汇总', '避免逐个启动进程', '循环中不反复读写工作区'):
                     self.assertNotIn(detail, program)
@@ -76,8 +79,11 @@ class ExploreIntentPromptTests(unittest.TestCase):
         for marker in ('{program_freedom}', '{program_lead}', '{parallel_rule}'):
             self.assertNotIn(marker, intro + programs)
             self.assertNotIn(marker, PLACEHOLDERS)
-        for expected in ('你可以自行编写', '建议用编译型语言（如 C++）', '{program_reference_rule}'):
+        for expected in ('你可以自行编写', '建议用编译型语言（如 C++）'):
             self.assertIn(expected, programs)
+        # 程序参考资料的一句只在工具说明的“程序与辅助文件”一节出现，探索的辅助程序一节不再重复
+        self.assertNotIn('{program_reference_rule}', programs)
+        self.assertIn('{program_reference_rule}', repo_part_path('interface_zh.md').read_text(encoding='utf-8'))
         self.assertIn('{cpu_rule}', programs)
         self.assertIn('{explore_program_rule}', programs)
 

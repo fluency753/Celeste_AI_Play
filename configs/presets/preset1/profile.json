@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "预置配置 1 · 探索模式",
-  "description": "作者的 Opus 5.5 探索系列（序章到第九章）最终采用的设置：Claude Code 执行器的 opus、推理强度 high，探索模式，仅正式思考、关闭思考僵直，单次 act 40～300 帧、自写模拟器与搜索每次最多推演 300 帧、规划程序不限时，全部章节、连续录制；探索模式额外开放速通知识库的技巧、机制库与搜索方法，以及本机生成的草莓酱训练场、机制库与 Celeste Wiki 技巧原文（没有生成的跳过）；个人追加要求写了收集品、隐藏房间、C++ 工具与中文总结等规矩。",
+  "description": "作者的 Opus 5.5 探索系列（序章到第九章）最终采用的设置：Claude Code 执行器的 opus、推理强度 high，探索模式，仅正式思考、关闭思考僵直，单次 act 40～300 帧、自写模拟器与搜索每次最多推演 300 帧、规划程序不限时，全部章节、连续录制、现实时间不限（9999999 分钟）、不开规划回放；探索模式额外开放速通知识库的技巧、机制库与搜索方法，以及本机生成的草莓酱训练场、机制库与 Celeste Wiki 技巧原文（没有生成的跳过）；个人追加要求写了收集品、隐藏房间、C++ 工具与中文总结等规矩。",
   "form": {
     "engine": "claude",
     "provider": "anthropic",
@@ -14,7 +14,7 @@
     "stiffness": false,
     "formal_thought": true,
     "save_context": true,
-    "playback": true,
+    "playback": false,
     "record": true,
     "hud_mod": true,
     "study": true,
@@ -43,7 +43,7 @@
     ],
     "sides": [],
     "segments": null,
-    "max_minutes": 1440,
+    "max_minutes": 9999999,
     "autocompact": "",
     "map": "celeste",
     "runtime": "container",

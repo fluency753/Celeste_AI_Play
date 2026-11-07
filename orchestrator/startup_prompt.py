@@ -52,6 +52,10 @@ def current_settings(cfg, *, include_task=True):
     return settings
 
 
+# 现实时间上限不超过一天时写进启动提示词；更大的值只是防止无限运行的安全阀（例如 9999999 表示不限时），不告诉智能体
+TIME_LIMIT_SHOWN_MAX = 24 * 60
+
+
 def task_brief(cfg, *, include_task=True):
     """Only task identity and boundaries; interface budgets live in tool feedback."""
     from .modes import MODE_NAMES, mode_of
@@ -78,8 +82,10 @@ def task_brief(cfg, *, include_task=True):
         lines.append('计划完成后继续在许可范围内活动，直到用户停止、指定停止条件触发或真正阻塞。')
     else:
         lines.append('以主控核验本次目标完成或用户指定停止条件为结束依据。')
-    if getattr(cfg, 'max_minutes', None) is not None:
-        lines.append(f'本次现实时间上限：{cfg.max_minutes:g} 分钟。')
+    limit = getattr(cfg, 'max_minutes', None)
+    if limit is not None and limit <= TIME_LIMIT_SHOWN_MAX:
+        from .launch_options import minutes_text
+        lines.append(f'本次现实时间上限：{minutes_text(limit)} 分钟。')
     return '\n'.join(lines)
 
 

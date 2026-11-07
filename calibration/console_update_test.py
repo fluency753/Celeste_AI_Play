@@ -189,5 +189,43 @@ class ConsoleRollbackTests(GitFixture):
         self.assertIn("1.2.0", (self.local / "overlay" / "console_api.py").read_text(encoding="utf-8"))
 
 
+@unittest.skipIf(GIT is None, "没有 git")
+class ConsoleUpdateChannelTests(GitFixture):
+    """检查更新与一键更新按通道：正式版、公测版（含正式版，谁新用谁）、开发版。"""
+
+    history = ConsoleRollbackTests.history
+
+    def test_channels_pick_their_latest_version_and_fast_forward(self):
+        _, stable, beta, latest = self.history()
+        console_api.rollback({"ref": stable})
+        release = console_api.update_check(channel="release")
+        self.assertEqual((release["latest"]["tag"], release["behind"], release["can_update"]), ("v1.1.0", 0, False))
+        self.assertIn("已经是最新版本（正式版）", release["reason"])
+        pre = console_api.update_check(channel="prerelease")
+        self.assertEqual((pre["latest"]["tag"], pre["target"], pre["can_update"]), ("v1.2.0-beta.1", beta, True))
+        done = console_api.update_apply("prerelease")
+        self.assertEqual((done["after"]["console"], done["after"]["bridge"]), ("1.2.0", "2.1.0"))
+        self.assertEqual(subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.local, capture_output=True, text=True).stdout.strip(), beta)
+        newer = console_api.update_check(channel="release")
+        self.assertFalse(newer["can_update"])
+        self.assertIn("还新", newer["reason"])
+        with self.assertRaisesRegex(ValueError, "还新"):
+            console_api.update_apply("release")
+        dev = console_api.update_check(channel="dev")
+        self.assertEqual((dev["target"], dev["behind"], dev["can_update"]), (dev["upstream"], 1, True))
+        self.assertEqual(console_api.update_apply("dev")["after"]["commit"], latest[:7])
+
+    def test_no_release_yet_and_bad_channel(self):
+        self.publish()
+        result = console_api.update_check(channel="release")
+        self.assertIsNone(result["latest"])
+        self.assertIn("还没有发布正式版", result["reason"])
+        with self.assertRaisesRegex(ValueError, "还没有发布公测版"):
+            console_api.update_apply("prerelease")
+        for bad in ("stable", None, ""):
+            with self.assertRaises(ValueError):
+                console_api.update_check(channel=bad)
+
+
 if __name__ == "__main__":
     unittest.main()
