@@ -2148,6 +2148,16 @@ class GameSession:
             values = self.goal_values()
             if not self._entered_level and not values['in_level']:
                 raise ActError('本次试玩尚未进入关卡，请先进入关卡再提交达成报告')
+            registered = self.goals.snapshot()
+            if (not registered.get('active') and self.cfg.play_scope != 'visited'
+                    and getattr(self.cfg, 'completion_policy', 'stop') == 'stop'):
+                remaining = ([] if self.chapter_finished or self.piece is None else [self.piece]) + \
+                    [Piece.of(piece) for piece in self.chapter_queue]
+                if remaining:
+                    targets = '；'.join(piece_label(piece, self._table) for piece in remaining)
+                    raise ActError(f'当前仍需由主控核验章节或分段完成，剩余计划：{targets}。'
+                                   '已完成旧目标或提交文字依据不能替代当前计划通关；'
+                                   '如用户另有可提前结束的独立文字目标，须先明确登记')
             try:
                 report = self.goals.report_completion(goal.strip(), evidence.strip(), values)
             except ValueError as exc:
