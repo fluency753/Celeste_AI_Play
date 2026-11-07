@@ -522,7 +522,7 @@
 
         <div class="group-title">规划轮次（只用于速通开模拟器）</div>
         <div class="switches">
-          <label class="switch wide"><span class="text"><b id="limitTitle">规划轮次记账</b><span id="limitNote">按章节记录离线推演轮次，不限制工作区程序；自动重试随之关闭</span></span><input type="checkbox" id="limitPlanning"></label>
+          <label class="switch wide"><span class="text"><b>模拟规划硬限额</b><span>开了它预置模拟器改由主控按额度预测（两个执行器相同）：每批预测扣一轮，额度耗尽仅停止预测，工作区程序照常可用；自动重试随之关闭</span></span><input type="checkbox" id="limitPlanning"></label>
         </div>
         <div class="row" style="margin-top:8px">
           <label class="field">一屏大的房间存入几轮<input type="number" id="roundsPerRoom" min="1" max="100" placeholder="3"></label>
@@ -2434,8 +2434,8 @@ async function loadPromptPreview() {
   }));
   const o = promptOptions();
   const bits = [o.mode === "explore" ? "探索" : "速通"];
-  if (o.mode === "speedrun") bits.push(o.engine === "codex" ? (o.sim && o.limit_planning ? "主控限额模拟" : "无模拟能力")
-                                        : (o.sim && o.runtime === "container" ? "开模拟器" : "关模拟器"));
+  if (o.mode === "speedrun") bits.push(o.sim && o.limit_planning ? "主控限额模拟"
+                                        : o.engine !== "codex" && o.sim && o.runtime === "container" ? "开模拟器（/sim）" : "无模拟能力");
   else if (o.sim_assist) bits.push("限额预测");
   if (o.mode === "explore" && o.stiffness) bits.push("思考僵直");
   if (o.formal_thought) bits.push("仅正式思考");
@@ -2553,17 +2553,15 @@ function fillRuntimes(list, keep) {
   updateRuntimeNote();
 }
 
-// 预置模拟器在两个执行器上的提供方式不同（orchestrator/sim_mode.py）：Claude 直接调用 /sim（有模拟器时默认开，
-// 规划轮次只记账）；Codex 是主控私有的限额预测（默认关，须同时开规划硬限额）
+// 预置模拟器（orchestrator/sim_mode.py）：不限额时 Claude 直接调用 /sim（有模拟器时默认开）；开规划硬限额时两个执行器
+// 都改由主控按额度预测；Codex 只有后一种（默认关，须同时开规划硬限额）
 function simEngine() { return ($("runtime").value || "").split(":")[0] || "claude"; }
 function updateSimRow(resetDefault) {
   const o = ui.options || {}, codex = simEngine() === "codex";
   $("simTitle").textContent = codex ? "主控模拟能力（需配置模拟器）" : "预置模拟器";
   $("simNote").textContent = !o.sim_available ? "没有安装预置模拟器（sim/dist）"
-    : codex ? "需同时开启规划硬限额，仅试玩运行中可请求预测" : "逐帧精确地推演路线";
-  $("limitTitle").textContent = codex ? "模拟规划硬限额" : "规划轮次记账";
-  $("limitNote").textContent = codex ? "每批预测扣一轮；额度耗尽仅停止预测，工作区程序照常可用"
-    : "按章节记录离线推演轮次，不限制工作区程序；自动重试随之关闭";
+    : codex ? "需同时开启规划硬限额，仅试玩运行中可请求预测"
+    : "逐帧精确地推演路线：不限额时直接调用 /sim，开规划硬限额后改由主控按额度预测";
   $("sim").disabled = !o.sim_available;
   if (!o.sim_available) $("sim").checked = false;
   else if (resetDefault && !$("sim").dataset.touched) $("sim").checked = !codex;

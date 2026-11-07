@@ -113,14 +113,11 @@ TRANSPORT_SECURITY = TransportSecuritySettings(
 )
 
 
-NO_RETRY_NOTE = ("\n本次运行{verb}模拟规划轮次：本章每进入一个没来过的房间按房间大小存入轮次（一屏大小的房间 {n} 轮，房间的长、高每变成 {s} 倍"
+NO_RETRY_NOTE = ("\n本次运行限制模拟规划轮次：本章每进入一个没来过的房间按房间大小存入轮次（一屏大小的房间 {n} 轮，房间的长、高每变成 {s} 倍"
                  "轮次就乘 {s}，向上取整，至少 {n} 轮），在游戏里死亡补 {d} 轮，没用完的留给本章后面的房间；剩余轮数写在观测头部。{rule}"
                  "自动重试关闭：计划文件里的 retry 会被忽略。")
 RULE_SIM = ("一次有效主控批量预测消耗一轮，执行前检查并扣费；余额不足拒绝模拟，文件与普通程序仍可用。"
             "/workspace/game/rounds.json仅供查看，权威账本由主控持有；模拟只能在试玩运行时请求。")
-# Claude 执行器（/sim 直接调用）：只记账，不封锁
-AGENT_RULE_SIM = ("只有调用了离线模拟器的消息占一轮，其他工具不占；剩余轮数用于记账提示，不限制工作区程序。"
-                  "随时可读 /workspace/game/rounds.json；真实游戏操作仅在试玩运行时可用。")
 RULE_ALL = "工作区操作不占规划轮次，不受游玩额度限制；游戏工具仍按当前试玩状态和额度执行。"
 PLAYBACK_NOTE = "主控预测完成的路线可以画进游戏给观众看；回放不推进游戏，不计入章节计时，也不额外扣费。"
 AGENT_PLAYBACK_NOTE = "用模拟器推演过的路线，系统会按已刷新的记录画进游戏给观众看（搜索进行中也会画；不推进游戏、不计入章节计时），详见\"规划回放\"。"
@@ -131,8 +128,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                        log_level="WARNING")
     metrics = session.metrics
     journal = server.journal
-    # 规划额度：Codex 主控限额预测用 planning_budget（硬预算）；Claude 开 /sim 时用 planning_gate（只记账）
-    accounting = getattr(session, 'planning_budget', None) or getattr(session, 'planning_gate', None)
+    accounting = getattr(session, 'planning_budget', None)
     from .sim_mode import agent_sim
     legacy_sim = agent_sim(session.cfg)
     ws_note = (AGENT_SIM_NOTE if legacy_sim else SIM_NOTE) if session.cfg.sim else WORKSPACE_NOTE
@@ -317,9 +313,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             finally:
                 finish()
 
-    rule = (AGENT_RULE_SIM if legacy_sim else RULE_SIM) if session.cfg.sim else RULE_ALL
+    rule = RULE_SIM if session.cfg.sim else RULE_ALL
     act_description = observation_tool_description(session.cfg, 'act') + (NO_RETRY_NOTE.format(n=session.cfg.rounds_per_room, d=session.cfg.death_bonus, rule=rule,
-                                                                                                verb='记录' if legacy_sim else '限制',
                                                                                                 s=f"{float(session.cfg.room_scale or 2.0):g}")
                                          if session.cfg.pause_limit else "")
     if session.cfg.playback and session.cfg.sim:

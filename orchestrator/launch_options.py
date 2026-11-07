@@ -189,12 +189,11 @@ def normalize(options: dict) -> dict:
         o['runtime'] = 'container'
     from types import SimpleNamespace
     capabilities = workspace_capabilities(SimpleNamespace(engine=o['engine'], runtime=o['runtime']))
-    if o['mode'] == SPEEDRUN and o['sim']:
+    if o['mode'] == SPEEDRUN and o['sim'] and not o['limit_planning']:
         if o['engine'] == 'codex':
-            if not o['limit_planning']:
-                raise ValueError('主控预置模拟必须同时开启限额使用')
-        elif not capabilities.programs:
-            raise ValueError("当前本机执行器没有沙箱，不能开预置模拟器")
+            raise ValueError('主控预置模拟必须同时开启限额使用')
+        if not capabilities.programs:
+            raise ValueError("当前本机执行器没有沙箱，不能直接调用预置模拟器（可开规划硬限额改用主控预测）")
     o["study_minutes"] = _number(o, "study_minutes", 1, 600, "准备阶段上限")
     o["max_usage"] = _number(o, "max_usage", 0.01, 1, "提前暂停的用量比例", optional=True)
     o["quota_wait_max_hours"] = _number(o, "quota_wait_max_hours", 0.1, 240, "额度等待上限")
@@ -377,8 +376,8 @@ def config_for(options: dict, profile: str | None = None):
     cfg.engine, cfg.runtime, cfg.mode = o["engine"], o["runtime"], o["mode"]
     cfg.knowledge_profile = KNOWLEDGE_OF_MODE[o["mode"]]
     capabilities = workspace_capabilities(cfg)
-    # Claude：/sim 直接调用，需要容器程序通道；Codex：主控限额预测，须同时开限额
-    cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and (o["limit_planning"] if o["engine"] == "codex" else capabilities.programs)
+    # 限额：主控预测（两个执行器）；不限额：/sim 直接调用（只有 Claude，需要容器程序通道），见 sim_mode.py
+    cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and (o["limit_planning"] or (o["engine"] != "codex" and capabilities.programs))
     cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"]
     cfg.stiffness = o["mode"] == EXPLORE and o["stiffness"]
     cfg.formal_thought = bool(o["formal_thought"])

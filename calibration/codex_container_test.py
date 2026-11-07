@@ -59,15 +59,15 @@ class ContainerCodexTests(unittest.TestCase):
         for engine in ('codex', 'claude'):
             for enabled in (False, True):
                 with self.subTest(engine=engine, sim=enabled):
+                    # Codex 只有限额（主控预测）；Claude 不限额时直接调用 /sim
                     cfg = RunConfig(agent='fixture', save='fixture', model='fixture', engine=engine,
-                                    sim=enabled, pause_limit=enabled)
+                                    sim=enabled, pause_limit=enabled and engine == 'codex')
                     with patch('orchestrator.config.REPO_ROOT', self.root), \
                          patch.object(container, 'REPO_ROOT', self.root), patch.object(container, 'docker') as docker:
                         container._create(cfg, 'fixture')
                         labels = container._labels(cfg)
                         git_mount = f'{cfg.workspace_dir / ".git"}:/workspace/.git'
-                        if engine == 'codex':
-                            self.assertTrue((cfg.workspace_dir / '.git').is_dir())
+                        self.assertTrue((cfg.workspace_dir / '.git').is_dir())
                     args = docker.call_args.args
                     mounts = [args[index + 1] for index, arg in enumerate(args[:-1]) if arg == '-v']
                     self.assertTrue(any(mount.endswith(':/workspace') for mount in mounts))
@@ -78,16 +78,13 @@ class ContainerCodexTests(unittest.TestCase):
                         self.assertEqual(labels['celeste-ai-play.sim'], 'host-only-v1')
                         self.assertIn('celeste-ai-play.sim=host-only-v1', args)
                     else:
-                        # Claude 执行器沿用原方式：开模拟器时 sim/dist 只读挂到 /sim，智能体直接调用
+                        # Claude 不限额：sim/dist 只读挂到 /sim，智能体直接调用（限额时同 Codex，见 container_tmp_test）
                         self.assertEqual(any(m == f'{self.root / "sim" / "dist"}:/sim:ro' for m in mounts), enabled, mounts)
                         self.assertEqual(sum(':/sim' in mount for mount in mounts), int(enabled), mounts)
                         self.assertEqual(labels['celeste-ai-play.sim'], '1' if enabled else '0')
-                    if engine == 'codex':
-                        self.assertIn(git_mount, mounts)
-                        self.assertEqual(labels['celeste-ai-play.git_mount'], 'workspace-dir-v1')
-                    else:
-                        self.assertFalse(any(mount.endswith(':/workspace/.git') for mount in mounts))
-                        self.assertNotIn('celeste-ai-play.git_mount', labels)
+                    # 两个执行器都把 /workspace/.git 固定为真实目录并单独挂载
+                    self.assertIn(git_mount, mounts)
+                    self.assertEqual(labels['celeste-ai-play.git_mount'], 'workspace-dir-v1')
 
     def test_auth_is_explicit_stdin_atomic_and_failure_does_not_expose_secrets(self):
         source = self.root/'selected-auth.json'

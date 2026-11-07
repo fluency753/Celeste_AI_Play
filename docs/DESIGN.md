@@ -202,7 +202,7 @@ Mod 内置一个只监听 127.0.0.1 的 TCP 服务（默认端口 47774，每行
 | observe（游戏工具） | 取当前帧的截图、状态与整个房间的精确数据 | 主控 | 工具时间 |
 | narrate（游戏工具） | 思考期间把一句给观众看的话写到 HUD 上；不推进游戏 | 主控 | 计入思考时间（不算工具调用） |
 | set\_effort（游戏工具） | 申请调整推理强度（档位由模型决定，如 low、medium、high、xhigh、max），本轮结束后主控在同一会话里切换（12.4）；不推进游戏 | 主控 | 耗时可忽略，计入思考时间 |
-| exit\_level、cutscene、simulate（游戏工具，按模式注册） | 直播模式下按用户要求退出关卡；剧情交给智能体时推进对白、选择分支或跳过剧情（可尝试跳过时先交回，watch 继续播放到真实输入节点）；开启主控限额模拟时花额度预测候选路线（Codex 的速通与两个执行器的探索；Claude 速通直接调用 /sim，5.7） | 主控 | 按 4.5 节的口径 |
+| exit\_level、cutscene、simulate（游戏工具，按模式注册） | 直播模式下按用户要求退出关卡；剧情交给智能体时推进对白、选择分支或跳过剧情（可尝试跳过时先交回，watch 继续播放到真实输入节点）；开启主控限额模拟时花额度预测候选路线（速通限额与探索限额预测，两个执行器相同；不限额的 Claude 速通直接调用 /sim，5.7） | 主控 | 按 4.5 节的口径 |
 | stop\_run（游戏工具，所有模式） | 遇到工具故障、缺少能力等无法继续的情况时报告给用户：主控暂停试玩（游戏保持冻结），由用户继续或停止；不推进游戏、不算通关 | 主控 | 耗时可忽略 |
 | Bash | 运行自写程序生成候选、分析主控预测结果或自行建模，产出计划文件与预期轨迹；在无网络沙箱中执行，不直接调用预置模拟器 | 容器 | 工具时间 |
 | Read / Write / Edit / Glob / Grep | 编写和修改程序、查阅只读知识库、维护长期笔记 | 容器 | 工具时间 |
@@ -257,7 +257,7 @@ Mod 内置一个只监听 127.0.0.1 的 TCP 服务（默认端口 47774，每行
 
 | 模式 | 目标 | 知识库与模拟器 | 提示词 | 游戏工具 |
 | --- | --- | --- | --- | --- |
-| 速通 `--mode speedrun`（Claude 执行器默认） | 以最短的游戏内章节计时通关 | 完整 `kb/`；Claude：本机有模拟器时默认开放 `/sim`；Codex：`--sim --limit-planning` 显式开启主控限额模拟，默认关 | Claude 开模拟器：system_sim_claude、container_sim_claude、sim_claude，free 与 retry（`--limit-planning` 时换成 pause_claude）及可选 playback_claude；Codex 开模拟器：system_sim、container_sim、sim、pause 及可选 playback；关模拟器：system_nosim、container_nosim；均加 interface（Claude 另有完整接口说明 interface_claude）与 HUD | observe、act、narrate、set_effort，Codex 开启模拟时另有 simulate |
+| 速通 `--mode speedrun`（Claude 执行器默认） | 以最短的游戏内章节计时通关 | 完整 `kb/`；Claude 不限额时本机有模拟器默认开放 `/sim`；`--sim --limit-planning` 为主控限额模拟（Codex 只有这种，默认关） | 不限额直接调用 /sim（Claude）：system_sim_direct、container_sim_direct、sim_direct、free、retry 及可选 playback_direct；限额（两个执行器）：system_sim、container_sim、sim、pause 及可选 playback；关模拟器：system_nosim、container_nosim；均加 interface（Claude 另有完整接口说明 interface_claude）与 HUD | observe、act、narrate、set_effort，限额模拟时另有 simulate |
 | 探索 `--mode explore`（原生 GPT 执行器默认） | 新手探索、学习并完成指定章节，不以速通为目标 | `kb/shared` 与 `kb/explore`；不开放模拟器文件，`--sim-assist`（默认关，需自配标准模拟器）提供有额度的短路线预测 | explore\_zh | 另有 cutscene，开了限额预测时有 simulate |
 | 直播 `--live`（叠加，默认关） | 不改变所叠加模式的目标 | — | 速通 + 直播加 live\_zh（观众实时观看、解说计时 10 秒、用户可要求退出关卡）；探索 + 直播加 explore\_live\_zh | 另有 exit\_level、cutscene |
 
@@ -469,7 +469,7 @@ HUD 负责显示，控制台负责操作。开局前的全部设置、开始运�
 | 模型推理强度 | 默认 high，允许动态调整 | 所有智能体使用同一套调整规则，每次决策的强度写入日志 |
 | 游戏画面选项（屏幕震动等） | 全部统一 | 影响截图观感 |
 | 主控预置模拟能力 | 默认关闭；需配置可用模拟器并显式开启限额 | 实现只由主控私有 worker 持有（13.1），不放入工作区或 agent 容器；速通用 `--sim --limit-planning`、探索用 `--sim-assist` 开启，仅试玩运行且有额度时接受结构化候选。未启用时不提供预置预测，智能体可自行建模 |
-| 模拟规划轮次 | 普通工作区程序不限调用次数；Claude 的 `/sim` 默认不限，`--limit-planning` 只记账；Codex 的主控模拟显式启用后按硬预算发放轮次 | Codex 速通需 `--sim --limit-planning`，每批有效预测扣一轮，见 14.2 |
+| 模拟规划轮次 | 普通工作区程序不限调用次数；Claude 不限额时直接调用 `/sim`，不限推演；`--limit-planning` 时两个执行器都改由主控按硬预算发放轮次 | 限额需 `--sim --limit-planning`，每批有效预测扣一轮，见 14.2 |
 
 ### 8.2 版本固定
 
@@ -681,17 +681,19 @@ HUD 负责显示，控制台负责操作。开局前的全部设置、开始运�
 
 ## 13. 预置模拟器与正式挑战的串联
 
-### 13.1 两个执行器的预置模拟器
+### 13.1 预置模拟器：不限额直接调用，限额经主控
 
-速通 `--sim` 按执行器分开（`orchestrator/sim_mode.py`）。**Claude 执行器**沿用原方式：容器方式下本机有 `sim/dist` 时默认开放，`sim/dist` 只读挂到容器的 `/sim`，每次游戏停下把当前帧的完整场景写到 `game/sim_state.json`，准备阶段另读 `/sim/README.md`；智能体用 `Sim`/`SimPool`/检查点直接推演，默认不限规划，`--limit-planning` 只记账（`pausegate.PauseGate`：调用了模拟器的消息由规划回放记一轮，不封锁工具，自动重试关闭）；提示词用 `*_claude_zh.md` 一套，知识库里用 `<!-- executor:claude -->` 标出的段落。以下是 **Codex 执行器**的主控限额模拟。
+速通 `--sim` 按是否限额分两种方式（`orchestrator/sim_mode.py`）。**不限额**（目前只有 Claude 执行器）：容器方式下本机有 `sim/dist` 时默认开放，`sim/dist` 只读挂到容器的 `/sim`，每次游戏停下把当前帧的完整场景写到 `game/sim_state.json`，准备阶段另读 `/sim/README.md`；智能体用 `Sim`/`SimPool`/检查点直接推演，推演多少由它决定，适合大规模搜索最优路线；提示词用 `*_direct_zh.md` 一套，知识库里用 `<!-- sim:direct -->` 标出的段落。**限额**（`--sim --limit-planning`，两个执行器相同，Codex 只有这一种）走下面的主控限额模拟。限额不能沿用 `/sim`：挂着 `/sim` 时任何 Shell 都能调用它，要计量只能封锁 Shell（早先的做法），暂停与聊天期间也就不能操作工作区；只记账又约束不了；所以由主控入口计量，工作区始终可用。
 
-Codex 的模拟器只由主控私有的隔离 worker 持有。此能力不依赖 agent 的工作区或程序工具，主控 worker 需 Docker。agent 工作区与容器均无模拟器二进制或 SDK；普通程序负责生成候选、分析结果，不能直接调用预置实现。模拟默认关闭，用户需自行配置可用资源并显式启用限额能力。
+以下是主控限额模拟。
+
+限额时模拟器只由主控私有的隔离 worker 持有。此能力不依赖 agent 的工作区或程序工具，主控 worker 需 Docker。agent 工作区与容器均无模拟器二进制或 SDK；普通程序负责生成候选、分析结果，不能直接调用预置实现。模拟默认关闭，用户需自行配置可用资源并显式启用限额能力。
 
 速通使用 `--sim --limit-planning` 和按房间发放的轮次；探索使用 `--sim-assist` 和原体力钱包。只有能力开启、模拟器可用、试玩正在运行且额度足够时，`simulate` 才从当前帧执行有界批量预测；准备、暂停、聊天、结束和收尾阶段不预测。主控不执行 agent 提交的搜索脚本，只读取结构化候选或受限请求文件。
 
 速通预算与请求回执保存在主控私有运行目录；执行前原子预留一轮，持久化失败零执行。重复请求按 ID 与内容核验，结果不明不自动退款或重跑。结果先私有保存再发布工作区数据副本；回放仅消费成功结果，发布或绘制失败不改变计费事实。
 
-对 Codex 执行器，旧 `/sim` 直调、`SimPool`、历史快照与检查点接口不再作为 agent 能力提供，迁移和当前候选上限见 [USAGE.md 4.5.2](USAGE.md#452-codex-执行器主控限额模拟能力默认关闭)；Claude 执行器仍按 4.5.1 提供。以下历史设计调整不表示旧接口继续可用。
+限额时 `/sim` 直调、`SimPool`、历史快照与检查点接口不作为 agent 能力提供，迁移和当前候选上限见 [USAGE.md 4.5.2](USAGE.md#452-限额主控限额模拟能力--sim---limit-planning两个执行器相同codex-默认关闭)；不限额的 Claude 仍按 4.5.1 提供。以下历史设计调整不表示旧接口继续可用。
 
 ### 13.2 依次通关多章
 
@@ -730,15 +732,13 @@ Codex 的模拟器只由主控私有的隔离 worker 持有。此能力不依赖
 
 ### 14.2 规划硬预算（--limit-planning）
 
-Claude 执行器：`--limit-planning` 仍是规划轮次记账（按房间存入、死亡补轮次，一条调用了 `/sim` 模拟器的消息记一轮，不封锁工具，自动重试关闭），见 13.1。以下是 Codex 执行器的硬预算。
-
-Codex 的速通模拟需要显式开启 `--sim --limit-planning`，不提供无限制模拟。每个有效批量预测请求执行前占一轮；同一条模型消息内多个不同请求分别扣费。普通 Shell 与文件工具不受这项预算约束。
+限额的速通模拟需要显式开启 `--sim --limit-planning`（两个执行器相同）；不限额只有 Claude 的 `/sim` 直接调用（13.1）。每个有效批量预测请求执行前占一轮；同一条模型消息内多个不同请求分别扣费。普通 Shell 与文件工具不受这项预算约束。
 
 按房间大小发放轮次，真实死亡补额；跨章清余额，同章未用完可结转。章节身份区分 A/B/C 面。主控私有账本保存余额、已见房间和回执，续跑不重复赠送；工作区 `game/rounds.json` 仅是展示投影，不能作为恢复或授权来源。
 
 计费不读取 Shell 命令、工具消息分组或回放日志。只有主控结构化模拟入口可以触发私有 worker，并在其锁内核验运行状态、配置、预算和请求归属。暂停、准备、聊天与结束均拒绝预测。自动计划重试不能调用预置模拟，限额运行继续关闭 `retry`。
 
-对 Codex，旧消息级扣费和纯记账实现已由上述规则取代（Claude 仍用纯记账）。此变化不限制 agent 自写计算程序；受限的是主控提供的预置模拟能力。
+旧消息级扣费和纯记账实现已由上述规则取代。此变化不限制 agent 自写计算程序；受限的是主控提供的预置模拟能力。
 
 ### 14.3 规划回放
 

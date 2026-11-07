@@ -80,7 +80,7 @@ class PromptPartsTests(unittest.TestCase):
             parts = prompt_parts(cfg(mode="speedrun", engine="claude", sim=sim, runtime="container"))
             sources = [p.source for p in parts]
             k = sources.index("interface_claude_zh.md")
-            self.assertEqual(sources[k - 1], 'system_sim_claude_zh.md' if sim else 'system_nosim_zh.md')
+            self.assertEqual(sources[k - 1], 'system_sim_direct_zh.md' if sim else 'system_nosim_zh.md')
             self.assertEqual(sources[k + 1], 'interface_zh.md')
             self.assertEqual(sources[k + 2], 'tool_observe_zh.md')
             text = parts[k].text

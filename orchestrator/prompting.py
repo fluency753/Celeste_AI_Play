@@ -505,38 +505,29 @@ def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None, cfg=No
     return parts
 
 
-def _claude_sim_parts(cfg, workspace) -> list[PromptPart]:
-    """Claude 执行器开预置模拟器（/sim 挂进容器、智能体直接调用）的速通提示词，与 Codex 改为主控限额预测之前相同：
-    system_sim、container_sim、sim，再按 --limit-planning 加规划轮次记账（pause），否则加不限思考与调用（free）
-    和自动重试（retry）；开规划回放时加 playback。"""
-    parts = _file_parts("system_sim_claude_zh.md", sep="", cfg=cfg)
-    parts += _file_parts("container_sim_claude_zh.md") + _file_parts("sim_claude_zh.md")
-    if cfg.pause_limit:
-        import math
-        n, d = cfg.rounds_per_room, cfg.death_bonus
-        scale = float(getattr(cfg, "room_scale", 2.0) or 2.0)
-        scale_text = f"{scale:g}"
-        parts += _file_parts("pause_claude_zh.md", lambda t: t.replace("{rounds4}", str(math.ceil(n * scale * scale))).replace(
-            "{rounds}", str(n)).replace("{death}", str(d)).replace("{scale}", scale_text))
-    else:
-        parts += _file_parts("free_zh.md") + _file_parts("retry_zh.md")
+def _direct_sim_parts(cfg) -> list[PromptPart]:
+    """不限额、直接调用 /sim 的速通提示词（sim_mode.agent_sim）：system_sim_direct、container_sim_direct、sim_direct，
+    不限思考与调用（free）、自动重试（retry），开规划回放时加 playback_direct。"""
+    parts = _file_parts("system_sim_direct_zh.md", sep="", cfg=cfg)
+    parts += _file_parts("container_sim_direct_zh.md") + _file_parts("sim_direct_zh.md")
+    parts += _file_parts("free_zh.md") + _file_parts("retry_zh.md")
     if cfg.playback:
-        parts += _file_parts("playback_claude_zh.md")
+        parts += _file_parts("playback_direct_zh.md")
     return parts
 
 
 def _speedrun_parts(cfg) -> list[PromptPart]:
-    """速通模式的系统提示词。按预置模拟器的开关和执行器分成三个版本（目标都是以最短的章节计时通关）：
-    - Claude 开模拟器（有容器程序通道）：智能体直接调用 /sim 寻找并优化路线（_claude_sim_parts）；
-    - Codex 开模拟器（须同时开 --limit-planning）：预置模拟是主控限额能力，经 simulate 请求，不向工作区发布实现；
+    """速通模式的系统提示词，按预置模拟器分成三个版本（目标都是以最短的章节计时通关，见 sim_mode.py）：
+    - 不限额直接调用 /sim（目前只有 Claude，需容器程序通道）：智能体随意推演、寻找并优化路线（_direct_sim_parts）；
+    - 限额（--sim --limit-planning，两个执行器相同）：预置模拟是主控限额能力，经 simulate 请求，不向工作区发布实现；
     - 关模拟器：只写目标、规则与工具接口，其余由智能体自己决定（system_nosim、container_nosim）。"""
-    from .sim_mode import agent_sim, controller_owned
+    from .sim_mode import agent_sim, controller_sim
     workspace = workspace_capabilities(cfg)
     reuse = "之前写的程序与笔记都在工作区里，可以继续用。" if workspace.workspace_read else "以当前观测和已有对话核对进度后继续。"
     parts: list[PromptPart] = []
     if agent_sim(cfg) and workspace.programs:
-        parts += _claude_sim_parts(cfg, workspace)
-    elif not (cfg.sim and cfg.pause_limit and controller_owned(cfg)):
+        parts += _direct_sim_parts(cfg)
+    elif not controller_sim(cfg):
         parts += _file_parts("system_nosim_zh.md", sep="", cfg=cfg)
         parts += _file_parts("container_nosim_zh.md" if workspace.programs else "host_zh.md")
     else:
@@ -678,7 +669,8 @@ def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = Fals
     from .button_prompts import notification
     files = "\n".join(f"- {path}" for path in study.container_paths())
     from .sim_mode import controller_owned
-    legacy_sim = sim and not (cfg is not None and controller_owned(cfg))   # Claude：/sim 直接调用
+    # 不限额直接调用 /sim（Claude）；限额时与 Codex 相同，经主控预测
+    legacy_sim = sim and not (cfg is not None and (controller_owned(cfg) or getattr(cfg, 'pause_limit', False)))
     sim_note = ("本次预置模拟器已开放，资料位于 /sim。\n" if legacy_sim else
                 "本次可选模拟能力由主控提供；准备阶段不能预测，不需要导入或读取模拟器文件。\n" if sim else "")
     if prepare_only:

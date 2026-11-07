@@ -74,9 +74,9 @@ class WorkspaceCapabilityTests(unittest.TestCase):
                 self.assertNotIn('你没有其他工具，也不能执行代码', play_prompt(launched))
                 self.assertNotIn('sim_zh.md', [p.source for p in prompt_parts(launched)])
 
-    def test_claude_speedrun_simulator_is_workspace_only_and_on_by_default_in_container(self):
-        """Claude 执行器的速通预置模拟器沿用 /sim 直接调用：容器运行方式下本机有模拟器时默认开、不要求限额；
-        本机运行方式（没有程序通道）不能开。"""
+    def test_claude_speedrun_simulator_is_direct_by_default_and_controller_when_limited(self):
+        """Claude 的速通预置模拟器不限额时直接调用 /sim：容器运行方式下本机有模拟器时默认开；本机运行方式（没有程序
+        通道）不能直接调用；加规划硬限额改用主控限额预测（与 Codex 相同）。"""
         from orchestrator.launch_options import config_for
         from orchestrator.modes import game_tools
         from orchestrator.run import parse_args
@@ -94,7 +94,7 @@ class WorkspaceCapabilityTests(unittest.TestCase):
             self.assertFalse(launched.pause_limit)
             self.assertNotIn('simulate', game_tools(launched))
             sources = [p.source for p in prompt_parts(launched)]
-            self.assertIn('sim_claude_zh.md', sources)
+            self.assertIn('sim_direct_zh.md', sources)
             self.assertIn('free_zh.md', sources)
             self.assertNotIn('sim_zh.md', sources)
             with patch('orchestrator.config.REPO_ROOT', root), \
@@ -103,6 +103,15 @@ class WorkspaceCapabilityTests(unittest.TestCase):
                  patch('orchestrator.run.check_provider'):
                 with self.assertRaisesRegex(SystemExit, '容器运行方式'):
                     parse_args()
+            # 加规划硬限额就改用主控预测：不需要工作区程序，本机运行方式也可以
+            with patch('orchestrator.config.REPO_ROOT', root), \
+                 patch.object(sys, 'argv', ['run', '--engine', 'claude', '--agent', 'test', '--save', 'test',
+                                            '--runtime', 'host', '--mode', 'speedrun', '--sim', '--limit-planning']), \
+                 patch('orchestrator.run.check_provider'):
+                limited, _ = parse_args()
+            self.assertTrue(limited.sim and limited.pause_limit)
+            self.assertIn('simulate', game_tools(limited))
+            self.assertIn('sim_zh.md', [p.source for p in prompt_parts(limited)])
 
     def test_host_claude_can_request_private_simulation_without_workspace_tools(self):
         from orchestrator.launch_options import config_for

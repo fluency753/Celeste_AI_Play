@@ -107,9 +107,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--limit-planning", action="store_true",
-                    help="规划轮次：按章节记录，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮；自动重试关闭。"
-                         "Claude 执行器只记账（调用了 /sim 模拟器的消息记一轮，不封锁工作区）；"
-                         "Codex 执行器是主控模拟的硬限额（每次有效主控批量预测消耗一轮），不限制工作区程序")
+                    help="模拟规划硬限额：按章节记录，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮，"
+                         "每次有效主控批量预测消耗一轮，不限制工作区程序；自动重试关闭。开了它预置模拟器改由主控提供"
+                         "（两个执行器相同，不挂 /sim）")
     ap.add_argument("--free-planning", action="store_true", help=argparse.SUPPRESS)  # 旧开关：现在不限制就是默认
     ap.add_argument("--rounds-per-room", type=int, default=3,
                     help="（--limit-planning 时）一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 3，至少 3）；大房间按 --room-scale 放大")
@@ -147,9 +147,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--record-video-args", help="ffmpeg 视频编码参数（默认见 configs/recording.json）")
     ap.add_argument("--audio-offset-ms", type=float, help="声音相对画面的偏移毫秒数（默认用校准结果，见 configs/local.recording.json）")
     ap.add_argument("--sim", dest="sim", action="store_true", default=None,
-                    help="开放速通的预置模拟器（需自配 sim/dist）。Claude 执行器：本机 sim/dist 只读挂到容器的 /sim，"
-                         "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json（容器运行方式下本机构建了模拟器时默认开启）；"
-                         "Codex 执行器：主控私有的限额预测，须同时开启 --limit-planning，不向 agent 开放模拟器文件（默认关闭）")
+                    help="开放速通的预置模拟器（需自配 sim/dist）。不限额时（只有 Claude 执行器）本机 sim/dist 只读挂到容器的 /sim、"
+                         "智能体直接调用，每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json（容器运行方式下本机构建了模拟器时默认开启）；"
+                         "同时开 --limit-planning 时改为主控私有的限额预测，不向 agent 开放模拟器文件（Codex 只有这一种，默认关闭）")
     ap.add_argument("--sim-assist", action=argparse.BooleanOptionalAction, default=None,
                     help="只用于探索模式：有额度的短路线预测（默认关闭；需自配标准模拟器 sim/dist；续跑沿用原运行）；不向智能体开放模拟器文件")
     ap.add_argument("--stiffness", action=argparse.BooleanOptionalAction, default=None,
@@ -583,8 +583,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     from .sim_mode import controller_owned
     if cfg.sim and not cfg.pause_limit and controller_owned(cfg):
         raise SystemExit('Codex 执行器的 --sim 必须同时开启 --limit-planning（主控限额预测，不提供工作区模拟器）')
-    if cfg.sim and not controller_owned(cfg) and not capabilities.programs:
-        raise SystemExit("预置模拟器只能用于容器运行方式（本机运行方式请加 --no-sim）")
+    if cfg.sim and not cfg.pause_limit and not capabilities.programs:
+        raise SystemExit("直接调用的预置模拟器只能用于容器运行方式（本机运行方式请加 --no-sim，或加 --limit-planning 改用主控限额预测）")
     if cfg.sim:
         if not (cfg.sim_dir / "celeste-sim").is_file():
             raise SystemExit(f"找不到预置模拟器：{cfg.sim_dir / 'celeste-sim'}（模拟器只在本机，见使用说明的预置模拟器一节；"
@@ -1207,18 +1207,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             session.before_advance = recording_guard(recorder, run_dir)
 
         capabilities = workspace_capabilities(cfg)
-        from .sim_mode import controller_owned
-        gate = None
-        if not controller_owned(cfg):
-            # Claude 执行器：开 /sim 时的规划轮次只记账（--limit-planning；调用了模拟器的消息由回放扣一轮），不封锁工具
-            from .pausegate import PauseGate
-            gate = PauseGate(metrics, enabled=bool(cfg.pause_limit and cfg.sim and capabilities.programs),
-                             log=lambda m: print(m, flush=True), rounds_per_room=cfg.rounds_per_room,
-                             death_bonus=cfg.death_bonus, started=previous is not None,
-                             state_path=cfg.workspace_dir / "game" / "rounds.json" if capabilities.workspace_write else None,
-                             room_scale=cfg.room_scale)
-            session.planning_gate = gate
-        elif cfg.sim and cfg.pause_limit:
+        from .sim_mode import controller_sim
+        if controller_sim(cfg):        # 限额：主控私有预测的硬预算（两个执行器相同）
             from .planning_budget import PlanningBudget
             session.planning_budget = PlanningBudget(
                 metrics, run_dir / 'planning_budget.json',
@@ -1226,7 +1216,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 rounds_per_room=cfg.rounds_per_room, death_bonus=cfg.death_bonus, room_scale=cfg.room_scale,
                 previous_path=previous['dir'] / 'planning_budget.json' if previous else None,
                 legacy=previous is not None)
-        playback = Playback(cfg, session, metrics, log=lambda m: print(m, flush=True), gate=gate)
+        playback = Playback(cfg, session, metrics, log=lambda m: print(m, flush=True))
         if playback.collect:
             session.playback = playback
         live = None

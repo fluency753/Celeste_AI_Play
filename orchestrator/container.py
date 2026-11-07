@@ -3,8 +3,9 @@
 容器里：/workspace 挂载宿主机的 workspaces/<标签>/（可写），/kb 挂载仓库的 kb/（只读），
 /home/agent/.claude 是独立的数据卷（会话记录，便于中断后续跑）。游戏目录、存档、OBS 都不挂载。
 Codex 使用独立的 /home/agent/.codex 持久卷，普通启动不导入宿主登录或会话。
-Claude 执行器开放预置模拟器（--sim）时，本机的 sim/dist 只读挂到 /sim；Codex 的预置模拟器仅由主控的私有 worker 使用，
-不挂入 agent 容器（见 sim_mode.py）。
+不限额直接调用预置模拟器时（只有 Claude 执行器，见 sim_mode.py），本机的 sim/dist 只读挂到 /sim；限额时模拟器仅由
+主控的私有 worker 使用，不挂入 agent 容器。工作区的 /workspace/.git 固定为真实目录并单独嵌套挂载（两个执行器相同），
+智能体可以直接在工作区根目录用 git 管理自己的程序与笔记。
 配置变了要重建容器时，旧容器 /tmp 里的东西（智能体常把程序和中间结果放在 Claude Code 的 /tmp/claude-<uid>）
 先打包到本机 local/container_tmp/，新容器建好后原样放回（保留属主与权限）。
 """
@@ -60,8 +61,8 @@ def _labels(cfg: RunConfig) -> dict[str, str]:
             # 之前建的容器没有这个标签，按 0 算
             f"{LABEL}.kb_view": "1" if cfg.kb_view else "0",
             **({f'{LABEL}.kb_layout': str(cfg.kb_dir)} if cfg.kb_view else {}),
-            **({f"{LABEL}.codex_home": '1', f"{LABEL}.git_mount": 'workspace-dir-v1'}
-               if cfg.engine == 'codex' else {}),
+            f"{LABEL}.git_mount": 'workspace-dir-v1',
+            **({f"{LABEL}.codex_home": '1'} if cfg.engine == 'codex' else {}),
             **({f"{LABEL}.codex_player_login": '1'} if cfg.engine == 'codex' and cfg.codex_player_login else {})}
 
 
@@ -74,6 +75,8 @@ def _workspace_git(cfg: RunConfig) -> Path:
     Codex canonicalizes explicit writable paths. A .git link could otherwise
     turn a workspace permission into permission to write its outside target.
     The nested bind keeps this directory from being replaced by agent tools.
+    Claude uses the same layout; its sandbox keeps .git/hooks and .git/config
+    read-only, so the controller creates the repository (init_workspace_git).
     """
     path = cfg.workspace_dir / '.git'
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,6 +90,24 @@ def _workspace_git(cfg: RunConfig) -> Path:
         raise RuntimeError(f'工作区 .git 必须是真实目录，不能是链接、目录联接或 gitdir 文件：{path}；'
                            '未替换现有内容，请先在停用该工作区后处理仓库布局')
     return path
+
+
+def init_workspace_git(cfg: RunConfig, name: str, log=print) -> None:
+    """Claude 的沙箱让 .git/config 与 .git/hooks 保持只读，智能体自己 git init 写不了配置：工作区根目录还没有仓库
+    （.git 是空目录）时，由主控以 agent 身份在沙箱外建好仓库并写入默认作者，之后智能体在沙箱里照常 add/commit。
+    .git 里已有内容（已有仓库，或旧版沙箱留下的占位文件）时不动。Codex 的沙箱允许写 .git，由它自己建。"""
+    try:
+        if any((cfg.workspace_dir / '.git').iterdir()):
+            return
+    except OSError:
+        return
+    script = 'git init -q && git config user.name "$1" && git config user.email "$1@workspace.local"'
+    result = docker("exec", "-u", "agent", "-w", "/workspace", name, "sh", "-c", script, "sh",
+                    cfg.workspace_dir.name, check=False)
+    if result.returncode:
+        log(f"[container] 工作区 Git 仓库初始化失败（不影响试玩）：{(result.stderr or result.stdout).strip()[:200]}")
+    else:
+        log("[container] 已在工作区根目录建好 Git 仓库（/workspace/.git）")
 
 
 def _git_mount_matches(cfg: RunConfig, mounts: list) -> bool:
@@ -127,10 +148,10 @@ def _create(cfg: RunConfig, name: str) -> None:
             "-v", f"{cfg.kb_dir}:/kb:ro",
             "-v", f"celeste-claude-{slug(cfg.workspace_dir.name)}:/home/agent/.claude",
             "--label", f"{LABEL}=agent"]
+    git = _workspace_git(cfg)
+    args += ['-v', f'{git}:/workspace/.git']
     if cfg.engine == 'codex':
-        git = _workspace_git(cfg)
-        args += ['-v', f'{git}:/workspace/.git',
-                 '-v', f'celeste-codex-{slug(cfg.workspace_dir.name)}:/home/agent/.codex',
+        args += ['-v', f'celeste-codex-{slug(cfg.workspace_dir.name)}:/home/agent/.codex',
                  '-e', 'CODEX_HOME=/home/agent/.codex']
         if cfg.codex_player_login:
             args += ['-v', f'{PLAYER_LOGIN_VOLUME}:{PLAYER_LOGIN_MOUNT}',
@@ -214,9 +235,8 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
     if image.returncode != 0:
         raise RuntimeError(f"找不到镜像 {cfg.image}，请先在仓库根目录执行：docker build -t {cfg.image} agent-container")
     image_id = image.stdout.strip()
-    if cfg.engine == 'codex':
-        # Reject an unsafe pre-existing layout before backing up/removing a container.
-        _workspace_git(cfg)
+    # Reject an unsafe pre-existing layout before backing up/removing a container.
+    _workspace_git(cfg)
     name = container_name(cfg.agent + ("-explore" if cfg.knowledge_profile == "explore" else ""))
     inspect = docker("inspect", "-f", "{{.State.Running}}|{{.Image}}|{{json .Config.Labels}}|{{json .Mounts}}", name, check=False)
     if inspect.returncode == 0:
@@ -225,7 +245,7 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
         mounted = json.loads(mounts or '[]')
         exposed = any(row.get('Destination') == '/sim' or row.get('Destination', '').startswith('/sim/')
                       for row in mounted)
-        git_stale = cfg.engine == 'codex' and not _git_mount_matches(cfg, mounted)
+        git_stale = not _git_mount_matches(cfg, mounted)
         player_mounts = [row for row in mounted if row.get('Destination') == PLAYER_LOGIN_MOUNT]
         expected_login = cfg.engine == 'codex' and cfg.codex_player_login
         login_stale = (len(player_mounts) != 1 or player_mounts[0].get('Type') != 'volume'
@@ -239,8 +259,7 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
         if stale:
             log(f"[container] {name} 的镜像或配置已变化，重建（工作区、会话与 /tmp 保留）")
             archive = _save_tmp(name)
-            if cfg.engine == 'codex':
-                _workspace_git(cfg)  # A long /tmp backup must not hide a changed layout.
+            _workspace_git(cfg)  # A long /tmp backup must not hide a changed layout.
             docker("rm", "-f", name)
             try:
                 _create(cfg, name)
@@ -259,6 +278,8 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if docker("exec", name, "test", "-f", "/run/firewall-ready", check=False).returncode == 0:
+            if cfg.engine != 'codex':
+                init_workspace_git(cfg, name, log)
             return name
         if docker("exec", name, "test", "-f", "/run/firewall-failed", check=False).returncode == 0:
             logs = docker("logs", "--tail", "30", name, check=False)

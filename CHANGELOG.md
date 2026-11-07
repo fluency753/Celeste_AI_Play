@@ -4,6 +4,11 @@
 
 ## 2026-11-07
 
+- **控制台 1.6.0：预置模拟器按是否限额区分，Claude 的工作区也能用 `/workspace/.git`**：
+  - **模拟器**：不限额时 Claude 照旧直接调用 `/sim`（容器方式下本机有模拟器时默认开，推演不限，适合大规模搜索最优路线）；开 `--limit-planning` 时两个执行器都改为主控限额预测（`simulate`，不挂 `/sim`，每批有效预测扣一轮），Codex 仍只有这一种。挂着 `/sim` 无法计量（任何 Shell 都能调用它），只能封锁 Shell，暂停和聊天期间也就不能操作工作区；只记账又约束不了。所以 1.5.0 里 Claude 的“只记账”`--limit-planning` 撤掉，删去 `orchestrator/pausegate.py` 和回放里的扣轮次逻辑。Claude 本机运行方式加 `--limit-planning` 也能用主控预测。提示词 `*_claude_zh.md` 改名为 `*_direct_zh.md`（删去 `pause_claude_zh.md`）；知识库的分段标记改为 `<!-- sim:direct -->` / `<!-- sim:controller -->`，按 `sim_mode.kb_variant` 选择（两种渲染仍分别与改动前、改动后的原文逐字相同）。
+  - **`/workspace/.git`**：两个执行器都把工作区的 `.git` 固定为真实目录并单独嵌套挂载（与 Codex 相同）。Claude 的沙箱让 `.git/config` 和 `.git/hooks` 保持只读，智能体自己 `git init` 写不了配置，所以 `.git` 是空目录时由主控以 agent 身份在沙箱外建好仓库并写入默认作者（工作区标签），之后智能体照常 add/commit；`.git` 里已有内容时不动。镜像里 `git init` 改用空模板（不再复制示例钩子）。
+  验证：更新 `calibration/claude_sim_test.py` 及受影响的容器、启动、提示词回归；全量回归通过。
+
 - **控制台 1.5.0：速通模拟器、续跑任务目标与完整接口说明三处改动只用于 Codex 执行器，Claude 执行器恢复原行为**：
   - **速通 `--sim`**：Claude 执行器沿用 `/sim` 直接调用——容器方式下本机构建了 `sim/dist` 时默认开启（控制台对 Claude 默认勾选），只读挂到容器的 `/sim`，每次游戏停下写 `game/sim_state.json`，准备阶段另读 `/sim/README.md`，默认不限思考与调用、可用自动重试；`--limit-planning` 恢复为只记账（新 `orchestrator/pausegate.py`，调用了模拟器的消息由规划回放扣一轮，剩余轮次写在观测头部与 `rounds.json`，不封锁工具，自动重试关闭）；Claude 唤起聊天的 `--sim` 也恢复。Codex 执行器保持主控私有的限额预测（须 `--sim --limit-planning`，默认关闭，经 `simulate`）。分流集中在新 `orchestrator/sim_mode.py`；提示词另存一套 `*_claude_zh.md`（`free_zh.md`、`retry_zh.md` 恢复原文，只有 Claude 使用）；知识库 `search_methods.md` 与 `shared/tools/observe/files.md` 用 `<!-- executor:claude -->`／`<!-- executor:codex -->` 标出与模拟器用法有关的段落，生成知识库视图时只留当前执行器的那段（两种渲染分别与改动前、改动后逐字相同）。
   - **续跑不重发任务目标**（11-07 那条）只用于 Codex：Claude 续跑、网络或额度恢复、唤起聊天时，规则里照旧带上任务目标与已登记目标（`run.restore_task_flags`）。

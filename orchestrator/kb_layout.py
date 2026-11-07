@@ -133,12 +133,20 @@ def view_key(cfg, root):
     files, required, aliases = selected(cfg, root)
     identity = [VERSION, cfg.engine, cfg.knowledge_profile, cfg.profile, required, aliases,
                 [(name, str(path), path.stat().st_size, path.stat().st_mtime_ns) for name, path in sorted(files.items())]]
+    identity += _variant_identity(cfg)
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
+
+
+def _variant_identity(cfg):
+    """模拟器段落的选择（sim_mode.kb_variant）随执行器默认时不进标识，免得已有视图无故换目录。"""
+    from .sim_mode import controller_owned, kb_variant
+    variant = kb_variant(cfg)
+    return [] if variant == ('controller' if controller_owned(cfg) else 'direct') else ['sim:' + variant]
 
 
 def binding_key(cfg):
     return (cfg.engine, cfg.knowledge_profile, cfg.profile, tuple(sorted(cfg.kb_deny)),
-            tuple(sorted(cfg.kb_allow)), cfg.kb_extra, cfg.kb_overlay, str(cfg.workspace_dir))
+            tuple(sorted(cfg.kb_allow)), cfg.kb_extra, cfg.kb_overlay, str(cfg.workspace_dir), *_variant_identity(cfg))
 
 
 def build(cfg, root, view):
@@ -165,13 +173,14 @@ def build(cfg, root, view):
 
 
 def _write_view(cfg, root, view):
-    from .prompt_environment import render_tool_references, select_executor_blocks
+    from .prompt_environment import render_tool_references, select_sim_blocks
+    from .sim_mode import kb_variant
     files, required, aliases = selected(cfg, root)
     content = {}
     for name, source in files.items():
         data = source.read_bytes()
         if source.suffix == '.md':
-            text = select_executor_blocks(data.decode('utf-8'), getattr(cfg, 'engine', 'claude'))
+            text = select_sim_blocks(data.decode('utf-8'), kb_variant(cfg))
             data = render_tool_references(text, cfg, legacy=False).encode('utf-8')
         content[name] = data
     for alias, name in aliases.items():

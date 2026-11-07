@@ -127,13 +127,32 @@ class CarryTmpTests(unittest.TestCase):
 
     def test_matching_container_without_simulator_mount_is_reused(self):
         fake = FakeDocker({}, image='sha:new', labels=self.matching_labels(),
-                          mounts=[{'Destination': '/workspace'}, {'Destination': '/kb'}])
+                          mounts=[*self.git_mounts(), {'Destination': '/kb'}])
         _, created = self.ensure(fake)
         self.assertEqual(created, [])
         self.assertEqual(self.order(fake), [])
 
+    def test_claude_workspace_git_mount_and_controller_init(self):
+        # 两个执行器都把 /workspace/.git 单独挂载；Claude 的沙箱写不了 .git/config，空 .git 由主控建仓库
+        self.assertEqual(self.cfg.engine, 'claude')
+        self.assertEqual(self.matching_labels()['celeste-ai-play.git_mount'], 'workspace-dir-v1')
+        missing = FakeDocker({'tmp/keep': b'yes'}, image='sha:new', labels=self.matching_labels(),
+                             mounts=[self.git_mounts()[0]])
+        name, created = self.ensure(missing)
+        self.assertEqual(created, [name])
+        inits = [call for call in missing.calls if call[:1] == ('exec',) and 'git init -q' in ' '.join(call)]
+        self.assertEqual(len(inits), 1)
+        self.assertIn('-u', inits[0])
+        self.assertEqual(inits[0][-1], self.cfg.workspace_dir.name)
+        with patch('orchestrator.config.REPO_ROOT', self.root):
+            (self.cfg.workspace_dir / '.git' / 'HEAD').write_text('ref: refs/heads/master\n', encoding='utf-8')
+        again = FakeDocker({}, image='sha:new', labels=self.matching_labels(), mounts=self.git_mounts())
+        self.ensure(again)
+        self.assertFalse([call for call in again.calls if 'git init -q' in ' '.join(call)])   # 已有内容就不动
+
     def test_claude_simulator_mount_follows_the_run_switch(self):
-        # Claude 执行器开模拟器：/sim 已挂且标签相同就复用；标签相同却没挂（不该发生）也要重建补上
+        # 不限额直接调用 /sim（Claude）：/sim 已挂且标签相同就复用；标签相同却没挂（不该发生）也要重建补上；
+        # 开了限额改由主控预测，不挂 /sim
         from dataclasses import replace
         cfg = self.cfg
         try:
@@ -141,12 +160,18 @@ class CarryTmpTests(unittest.TestCase):
             labels = self.matching_labels()
             self.assertEqual(labels['celeste-ai-play.sim'], '1')
             mounted = FakeDocker({}, image='sha:new', labels=labels,
-                                 mounts=[{'Destination': '/workspace'}, {'Destination': '/sim'}])
+                                 mounts=[*self.git_mounts(), {'Destination': '/sim'}])
             _, created = self.ensure(mounted)
             self.assertEqual(created, [])
             missing = FakeDocker({'tmp/search.py': b'print(1)\n'}, image='sha:new', labels=labels,
-                                 mounts=[{'Destination': '/workspace'}])
+                                 mounts=self.git_mounts())
             name, created = self.ensure(missing)
+            self.assertEqual(created, [name])
+            self.cfg = replace(cfg, sim=True, pause_limit=True)
+            self.assertEqual(self.matching_labels()['celeste-ai-play.sim'], '0')
+            exposed = FakeDocker({'tmp/keep': b'yes'}, image='sha:new', labels=self.matching_labels(),
+                                 mounts=[*self.git_mounts(), {'Destination': '/sim'}])
+            name, created = self.ensure(exposed)
             self.assertEqual(created, [name])
         finally:
             self.cfg = cfg

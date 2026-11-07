@@ -59,7 +59,10 @@ RUN useradd -m -s /bin/bash -u 1500 agent \
 
 # Windows bind mounts can report nobody/root ownership. Trust only the explicit
 # workspace, in root-owned system config; never disable ownership checks globally.
-RUN git config --system --add safe.directory /workspace
+RUN git config --system --add safe.directory /workspace \
+    && mkdir -p /usr/local/share/celeste-git-template \
+    && git config --system init.templateDir /usr/local/share/celeste-git-template
+# git init uses an empty template (no sample hooks); workspace repositories never need hooks.
 
 ENV CLAUDE_CONFIG_DIR=/home/agent/.claude \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \

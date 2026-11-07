@@ -17,14 +17,14 @@ def tool_name(cfg, name):
             'Write': 'apply_patch', 'Edit': 'apply_patch', 'Bash': '原生 Shell'}.get(name, name)
 
 
-EXECUTOR_BLOCK = re.compile(r'^<!-- executor:(claude|codex) -->[ \t]*\r?\n(.*?)^<!-- /executor -->[ \t]*(?:\r?\n|\Z)',
-                            re.M | re.S)
+SIM_BLOCK = re.compile(r'^<!-- sim:(direct|controller) -->[ \t]*\r?\n(.*?)^<!-- /sim -->[ \t]*(?:\r?\n|\Z)',
+                       re.M | re.S)
 
 
-def select_executor_blocks(text, engine):
-    """知识库里只适用于一个执行器的段落（例如预置模拟器的用法：Claude 直接调用 /sim，Codex 经主控 simulate）：
-    `<!-- executor:claude -->` … `<!-- /executor -->`，标记各占一行；生成视图时只留当前执行器的段落。"""
-    return EXECUTOR_BLOCK.sub(lambda m: m[2] if m[1] == engine else '', text)
+def select_sim_blocks(text, variant):
+    """知识库里只适用于一种预置模拟器提供方式的段落（sim_mode.kb_variant）：`<!-- sim:direct -->`（直接调用 /sim）
+    或 `<!-- sim:controller -->`（经主控 simulate 限额预测）… `<!-- /sim -->`，标记各占一行；生成视图时只留当前这一种。"""
+    return SIM_BLOCK.sub(lambda m: m[2] if m[1] == variant else '', text)
 
 
 def render_tool_references(text, cfg, *, legacy=True):

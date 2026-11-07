@@ -146,7 +146,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 | `--no-record` | 不录像（默认录：主控自己启动并在结束时关闭 OBS） |
 | `--playback` | 打开规划回放（默认关） |
 | `--sim-assist` | 探索模式的限额短路线预测（默认关，需要本机有 `sim\dist`） |
-| `--sim` / `--limit-planning` | Claude 执行器：`--sim` 开放 `/sim`（本机有模拟器时默认开），`--limit-planning` 只记账；Codex 执行器：须两者同时开启主控限额预测（默认关闭），只有试玩运行且有额度时可用 |
+| `--sim` / `--limit-planning` | `--sim` 开放速通预置模拟器：不限额时（只有 Claude，本机有模拟器时默认开）直接调用 `/sim`；加 `--limit-planning` 改为主控限额预测（两个执行器相同，Codex 必须这样开，默认关闭），只有试玩运行且有额度时可用 |
 | `--no-sim` | 速通模式不开放预置模拟器 |
 | `--resume <运行目录>` | 续跑（见 6 节） |
 
