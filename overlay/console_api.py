@@ -379,11 +379,12 @@ def kb_list(mode: str) -> dict:
     prefs = load_prefs()
     deny = [x for x in prefs["kb_deny"].get(mode, []) if x in known]
     allow = [x for x in prefs["kb_allow"].get(mode, []) if x in known]
+    sim_readme = REPO_ROOT / "sim" / "dist" / "README.md"     # Claude 执行器开模拟器时另要读完
     from orchestrator.kb_layout import enabled
     from orchestrator.kb_access import KB_ROOT
     source_label = 'kb/shared + kb/'+mode if enabled(KB_ROOT) else root.relative_to(REPO_ROOT).as_posix()
     return {"mode": mode, "root": source_label, "documents": docs, "deny": deny, "allow": allow,
-            "sim_readme": False, "profile": pid, "readonly": profiles.readonly(pid),
+            "sim_readme": mode == "speedrun" and sim_readme.is_file(), "profile": pid, "readonly": profiles.readonly(pid),
             "edits_dir": _rel(profiles.kb_edits_dir(pid))}
 
 
@@ -579,6 +580,10 @@ def _prompt_preview(cfg) -> dict:
         files = (kb_layout.selected(cfg, KB_ROOT)[1] if kb_layout.enabled(KB_ROOT) else
                  [rel for rel in required_files(root_of(cfg.mode)) if rel not in set(cfg.kb_deny)])
         paths = [f"{CONTAINER_KB}/{rel}" for rel in files]
+        from orchestrator.sim_mode import agent_sim
+        if agent_sim(cfg):          # Claude 开模拟器：/sim/README.md 排在知识库正文之后、社区原文之前（与 KbStudy 相同）
+            k = next((i for i, rel in enumerate(files) if rel.startswith("reference/")), len(files))
+            paths.insert(k, "/sim/README.md")
         first = study_prompt(SimpleNamespace(container_paths=lambda: paths, minutes=cfg.study_minutes), cfg.sim, cfg=cfg)
     executor = ("原生 GPT（Codex 的开发者指令）" if cfg.engine == "codex"
                 else "Claude Code（接在 Claude Code 自带的系统提示词之后）")
@@ -672,7 +677,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.4.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.5.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

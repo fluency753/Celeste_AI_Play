@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -69,7 +70,9 @@ def main() -> int:
             if filename.endswith(('.c', '.rc')):
                 contents = b'#define HUD_LAUNCHER 1\n' + contents
             else:
-                contents = contents.replace(b'CelesteAIPlay.Console', b'CelesteAIPlay.Hud').replace(b'1.4.0.0', b'1.0.1.0')
+                # 只换启动器自己的身份与版本（控制台版本号变了也照样换成 HUD 的），不动依赖项的版本
+                contents = re.sub(rb'name="CelesteAIPlay\.Console" version="[0-9.]+"',
+                                  b'name="CelesteAIPlay.Hud" version="1.0.1.0"', contents)
         (build / filename).write_bytes(contents)
     draw_icon(build / "icon.ico")
     exe = build / (output_name + '.exe')

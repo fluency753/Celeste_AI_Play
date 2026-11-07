@@ -112,7 +112,7 @@ class CarryTmpTests(unittest.TestCase):
                 fake = FakeDocker({'tmp/search.py': b'print(1)\n'}, image='sha:new',
                                   labels=self.matching_labels(),
                                   mounts=[{'Destination': destination, 'Source': '/private/simulator'}])
-                self.assertEqual(fake.labels['celeste-ai-play.sim'], 'host-only-v1')
+                self.assertEqual(fake.labels['celeste-ai-play.sim'], '0')   # Claude 没开模拟器
                 name, created = self.ensure(fake)
                 self.assertEqual(created, [name])
                 self.assertEqual(self.order(fake), ['save', 'rm', 'create', 'restore'])
@@ -131,6 +131,25 @@ class CarryTmpTests(unittest.TestCase):
         _, created = self.ensure(fake)
         self.assertEqual(created, [])
         self.assertEqual(self.order(fake), [])
+
+    def test_claude_simulator_mount_follows_the_run_switch(self):
+        # Claude 执行器开模拟器：/sim 已挂且标签相同就复用；标签相同却没挂（不该发生）也要重建补上
+        from dataclasses import replace
+        cfg = self.cfg
+        try:
+            self.cfg = replace(cfg, sim=True)
+            labels = self.matching_labels()
+            self.assertEqual(labels['celeste-ai-play.sim'], '1')
+            mounted = FakeDocker({}, image='sha:new', labels=labels,
+                                 mounts=[{'Destination': '/workspace'}, {'Destination': '/sim'}])
+            _, created = self.ensure(mounted)
+            self.assertEqual(created, [])
+            missing = FakeDocker({'tmp/search.py': b'print(1)\n'}, image='sha:new', labels=labels,
+                                 mounts=[{'Destination': '/workspace'}])
+            name, created = self.ensure(missing)
+            self.assertEqual(created, [name])
+        finally:
+            self.cfg = cfg
 
     def test_old_simulator_capability_label_requires_safe_rebuild(self):
         labels = self.matching_labels()

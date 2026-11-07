@@ -24,7 +24,7 @@ class ResumePromptTests(unittest.TestCase):
                 cfg.chapter, cfg.chapters, cfg.plan = 2, [2], [Piece(2, 0, None)]
                 cfg._extended_plan = [Piece(2, 0, None)] if extended else None
                 note = opening_note(cfg, previous, None if fresh else 'existing-session', '保留用户留言。')
-                rules = runtime_prompt(cfg, include_task=False)
+                rules = runtime_prompt(cfg, include_task=engine != 'codex')   # 续跑省略任务目标只用于 Codex
                 needs_snapshot = engine == 'claude' and runtime == 'host' and not fresh
                 self.assertEqual(rules in note, engine == 'claude' and not fresh)
                 self.assertEqual('提示词快照' in note, needs_snapshot)

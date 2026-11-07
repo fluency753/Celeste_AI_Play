@@ -41,6 +41,7 @@ from .metrics import Metrics
 from .execution import workspace_capabilities
 from .session_controls import RuntimeCapabilities, SessionControls
 from .session_store import load_json, write_json
+from .sim_mode import agent_sim
 from .prompting import play_prompt, study_prompt, resume_prompt, net_resume_prompt, first_play_prompt, continue_play_prompt
 from .telemetry import publish
 
@@ -167,7 +168,9 @@ class ClaudeRunner(SessionControls):
                  include_task=True, announce_goal=True):
         """resume=True：用 --resume 接着 session_id 这个已有的会话（续跑）；resume_note 不为空时代替开局的第一条消息。"""
         self.cfg = cfg
-        self.include_task, self.announce_goal = include_task and not chat_only, announce_goal
+        # 续跑时省略任务目标（include_task/announce_goal=False）只用于 Codex；主控对 Claude 照旧传 True：
+        # 续跑、网络或额度恢复、唤起聊天时规则里都带上任务目标与已登记目标（与原来相同）
+        self.include_task, self.announce_goal = include_task, announce_goal
         from .efforts import normalize_efforts
         selected = next((m for m in (cfg.provider_info or {}).get('models', []) if m.get('id') == cfg.model), None)
         self.capabilities = RuntimeCapabilities(effort_levels=tuple(normalize_efforts((selected or {}).get('efforts'))))
@@ -372,7 +375,7 @@ class ClaudeRunner(SessionControls):
                 "-e", f"BASH_MAX_TIMEOUT_MS={bash_limits_ms(self.cfg)[1]}",
                 self.container, "claude", *self._common_args(),
                 # 受限模式：不读取用户、项目与本地设置文件（智能体改不了自己的配置），文件工具只能访问工作区与知识库
-                "--restricted", "--add-dir", "/kb",
+                "--restricted", "--add-dir", "/kb", *(["--add-dir", "/sim"] if agent_sim(self.cfg) else []),
                 "--tools", ",".join(CONTAINER_BUILTIN_TOOLS),
                 "--mcp-config", mcp,
                 "--allowedTools", *CONTAINER_BUILTIN_TOOLS, *self._game_tools(),
@@ -467,7 +470,6 @@ class ClaudeRunner(SessionControls):
                             self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
                         break
                     self.resume = True
-                    self.include_task = self.announce_goal = False
                     self.idle_turns = 0
                     study_note = None
                     if not self.metrics.playing and self.study is not None and not self.study.ready():
@@ -483,7 +485,6 @@ class ClaudeRunner(SessionControls):
                     self.stop_reason = self.session.done_reason if self.session.done else '用户停止'
                     break
                 self.resume = True
-                self.include_task = self.announce_goal = False
                 self.idle_turns = 0
                 study_note = None
                 if not self.metrics.playing and self.study is not None and not self.study.ready():

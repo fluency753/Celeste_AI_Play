@@ -21,7 +21,8 @@ def available(cfg):
 
 
 def enabled(cfg):
-    return bool(cfg.sim_assist or (cfg.sim and cfg.pause_limit))
+    from .sim_mode import controller_sim
+    return bool(cfg.sim_assist or controller_sim(cfg))
 
 
 def _request_file(workspace, value):

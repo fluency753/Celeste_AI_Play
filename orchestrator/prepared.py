@@ -77,8 +77,10 @@ if __name__ == "__main__":
         cfg.kb_allow = list(metadata.get('kb_allow') or [])
     from .runtimes import runtime
     runtime(args.engine).configure(cfg, args.provider)
+    from .sim_mode import controller_owned, sim_readme
+    cfg.sim = args.knowledge == "full" and not controller_owned(cfg) and (cfg.sim_dir / "celeste-sim").is_file()
     from .kb_access import prepare_view
     prepare_view(cfg)
-    study = KbStudy(cfg.kb_dir, 60)
+    study = KbStudy(cfg.kb_dir, 60, sim_readme(cfg))
     data = load_preparation(args.directory, cfg, study)
     print("准备会话校验通过：", data["session_id"])

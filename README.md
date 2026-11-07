@@ -49,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | 模式 | 目标 | 智能体能读的资料 | 模拟器 |
 | --- | --- | --- | --- |
 | 探索 `--mode explore` | 像新手一样探索、学习并完成指定章节 | 只有 `kb/explore` 的入门资料（基本规则、坐标与观测数据、按键与工具） | 不开放模拟器文件；可选"限额短路线预测"（`--sim-assist`，默认关闭，需自配标准模拟器） |
-| 速通 `--mode speedrun` | 以最短的游戏内章节计时通关 | 完整知识库 `kb/`（物理参数、机制、技巧、数据格式） | 默认关闭；配置可用资源并显式用 `--sim --limit-planning` 开启主控限额预测 |
+| 速通 `--mode speedrun` | 以最短的游戏内章节计时通关 | 完整知识库 `kb/`（物理参数、机制、技巧、数据格式） | Claude 执行器：本机有预置模拟器时默认开放 `/sim`（`--sim`），没有时运行关模拟器的版本（`--no-sim`）；Codex 执行器：默认关闭，配置可用资源并显式用 `--sim --limit-planning` 开启主控限额预测 |
 | 直播 `--live`（叠加） | 观众实时观看：解说更勤，HUD 默认用可交互的网页形式 | — | — |
 
 - 控制台默认选探索模式。命令行不写 `--mode` 时，Claude Code 执行器默认速通，Codex 执行器默认探索。
@@ -80,7 +80,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | 主控 | `orchestrator/`，本机 Python | 唯一同时连接游戏、智能体、HUD 与 OBS 的组件：游戏工具服务、决策循环、执行与自动重试、规划回放、录制、换章、额度与断网等待、中断续跑 |
 | 智能体容器 | `agent-container/`，Docker 镜像 `celeste-agent:0.1` | 容器里的执行器只能连所用模型平台与主控端口；智能体自写的程序在零网络沙箱里运行，看不到令牌与密钥 |
 | 知识库 | `kb/`，只读挂进容器 | 物理常量、机制规则、技巧与数据格式；只讲游戏规则，不讲关卡怎么过 |
-| HUD 与控制台 | `overlay/` | 游戏内 HUD 的绘制、网页 HUD、桌面控制台（`CelesteAIConsole.exe`，1.4.0） |
+| HUD 与控制台 | `overlay/` | 游戏内 HUD 的绘制、网页 HUD、桌面控制台（`CelesteAIConsole.exe`，1.5.0） |
 | OBS 锁步插件 | `obs-plugin/` | 只把游玩帧（和规划回放帧）交给 ffmpeg 编码 |
 | 部署与诊断 | `setup.ps1`、`tools/` | 部署向导、桥接与插件构建、OBS 配置、状态查看、测试客户端 |
 
@@ -139,7 +139,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 
 | 本机位置 | 是什么 | 新电脑上怎么办 |
 | --- | --- | --- |
-| `sim\dist\` | 预置模拟器：`celeste-sim`（Linux 单文件程序，仅主控私有 worker 使用）、`sim.py`、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`。由游戏代码生成，不公开分发 | 有构建好的模拟器时把整个文件夹复制到同一位置；资源不向 agent 挂载；有资源也需显式开启限额能力，没有时不启用预测 |
+| `sim\dist\` | 预置模拟器：`celeste-sim`（Linux 单文件程序；Claude 执行器只读挂到智能体容器的 `/sim`，Codex 执行器只由主控私有 worker 使用）、`sim.py`、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`。由游戏代码生成，不公开分发 | 有构建好的模拟器时把整个文件夹复制到同一位置；Claude 的速通有它时默认开放；Codex 需显式开启限额能力，不向 agent 挂载；没有时不启用预测 |
 | `kb\reference\` | 知识库参考资料原文：Celeste Wiki 技巧页面、草莓酱训练场与机制库、导入的社区资料 | 用 `tools\fetch_reference.py`、`tools\import_reference_pdf.py` 生成；没有时只读知识库正文 |
 | `.env` | Claude Code 订阅令牌 | 用 `claude setup-token` 重新生成（部署向导会引导） |
 | `configs\local.*.json` | 本机路径、密钥文件位置、录制参数、HUD 窗口与字号、控制台记住的设置 | 由部署向导与控制台重新生成 |

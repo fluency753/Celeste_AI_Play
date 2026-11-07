@@ -41,20 +41,46 @@ class PromptFocusTests(unittest.TestCase):
         self.assertEqual(current_settings(cfg)['task']['targets'][1]['side'], 'B')
 
     def test_runtime_settings_report_preset_simulator_only_when_enabled_and_bounded(self):
-        for sim in (False, True):
-            for limited in (False, True):
-                cfg = replace(self.cfg, mode='speedrun', knowledge_profile='full',
-                              sim=sim, pause_limit=limited)
-                self.assertEqual(current_settings(cfg)['prediction']['preset_simulator'], sim and limited)
+        for engine in ('codex', 'claude'):
+            for sim in (False, True):
+                for limited in (False, True):
+                    cfg = replace(self.cfg, engine=engine, mode='speedrun', knowledge_profile='full',
+                                  sim=sim, pause_limit=limited)
+                    # Codex：主控预测须限额；Claude：/sim 直接调用，记账与否都算开放
+                    expected = sim and (limited or engine == 'claude')
+                    self.assertEqual(current_settings(cfg)['prediction']['preset_simulator'], expected)
 
-    def test_host_claude_can_request_main_controller_simulation_without_program_tutorial(self):
-        cfg = replace(self.cfg, engine='claude', runtime='host', mode='speedrun',
+    def test_main_controller_simulation_prompt_is_codex_only(self):
+        cfg = replace(self.cfg, engine='codex', mode='speedrun',
                       knowledge_profile='full', sim=True, pause_limit=True)
-        parts = prompt_parts(cfg)
-        sources = [part.source for part in parts]
+        sources = [part.source for part in prompt_parts(cfg)]
         self.assertIn('sim_zh.md', sources)
+        self.assertIn('pause_zh.md', sources)
+        self.assertNotIn('sim_claude_zh.md', sources)
+        # Claude 本机运行方式没有程序通道：不开放预置模拟器，也不改用主控预测
+        cfg = replace(cfg, engine='claude', runtime='host')
+        sources = [part.source for part in prompt_parts(cfg)]
+        self.assertNotIn('sim_zh.md', sources)
+        self.assertNotIn('sim_claude_zh.md', sources)
+        self.assertIn('system_nosim_zh.md', sources)
         self.assertIn('host_zh.md', sources)
-        self.assertNotIn('container_sim_zh.md', sources)
+
+    def test_claude_container_prompt_keeps_workspace_simulator(self):
+        for limited in (False, True):
+            cfg = replace(self.cfg, engine='claude', runtime='container', mode='speedrun',
+                          knowledge_profile='full', sim=True, pause_limit=limited, playback=True)
+            parts = prompt_parts(cfg)
+            sources = [part.source for part in parts]
+            text = ''.join(part.sep + part.text for part in parts)
+            for name in ('system_sim_claude_zh.md', 'container_sim_claude_zh.md', 'sim_claude_zh.md',
+                         'playback_claude_zh.md', 'interface_claude_zh.md'):
+                self.assertIn(name, sources)
+            self.assertEqual('pause_claude_zh.md' in sources, limited)
+            self.assertEqual('free_zh.md' in sources and 'retry_zh.md' in sources, not limited)
+            self.assertIn('/sim/README.md', text)
+            self.assertIn('sim_state.json', text)
+            self.assertIn('房间具体信息以精确碰撞箱数据和实体数据等为准，截图的视觉识别仅作为参考', text)
+            self.assertNotIn('simulate', text)
 
     def test_actual_tool_and_observation_use_configured_frames_without_guide_copy(self):
         from calibration.workspace_observation_test import game_session

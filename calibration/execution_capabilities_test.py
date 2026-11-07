@@ -74,6 +74,36 @@ class WorkspaceCapabilityTests(unittest.TestCase):
                 self.assertNotIn('你没有其他工具，也不能执行代码', play_prompt(launched))
                 self.assertNotIn('sim_zh.md', [p.source for p in prompt_parts(launched)])
 
+    def test_claude_speedrun_simulator_is_workspace_only_and_on_by_default_in_container(self):
+        """Claude 执行器的速通预置模拟器沿用 /sim 直接调用：容器运行方式下本机有模拟器时默认开、不要求限额；
+        本机运行方式（没有程序通道）不能开。"""
+        from orchestrator.launch_options import config_for
+        from orchestrator.modes import game_tools
+        from orchestrator.run import parse_args
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            binary = root / 'sim' / 'dist' / 'celeste-sim'
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            with patch('orchestrator.config.REPO_ROOT', root), \
+                 patch.object(sys, 'argv', ['run', '--engine', 'claude', '--agent', 'test', '--save', 'test',
+                                            '--mode', 'speedrun']), \
+                 patch('orchestrator.run.check_provider'):
+                launched, _ = parse_args()
+            self.assertTrue(launched.sim)
+            self.assertFalse(launched.pause_limit)
+            self.assertNotIn('simulate', game_tools(launched))
+            sources = [p.source for p in prompt_parts(launched)]
+            self.assertIn('sim_claude_zh.md', sources)
+            self.assertIn('free_zh.md', sources)
+            self.assertNotIn('sim_zh.md', sources)
+            with patch('orchestrator.config.REPO_ROOT', root), \
+                 patch.object(sys, 'argv', ['run', '--engine', 'claude', '--agent', 'test', '--save', 'test',
+                                            '--runtime', 'host', '--mode', 'speedrun', '--sim']), \
+                 patch('orchestrator.run.check_provider'):
+                with self.assertRaisesRegex(SystemExit, '容器运行方式'):
+                    parse_args()
+
     def test_host_claude_can_request_private_simulation_without_workspace_tools(self):
         from orchestrator.launch_options import config_for
         from orchestrator.modes import game_tools
@@ -83,7 +113,7 @@ class WorkspaceCapabilityTests(unittest.TestCase):
             binary = root / 'sim' / 'dist' / 'celeste-sim'
             binary.parent.mkdir(parents=True)
             binary.touch()
-            for mode in ('speedrun', 'explore'):
+            for mode in ('explore',):          # 速通的主控限额预测只用于 Codex；Claude 速通用 /sim（见上）
                 flags = ['--sim', '--limit-planning'] if mode == 'speedrun' else ['--sim-assist']
                 settings = {'sim': True, 'limit_planning': True} if mode == 'speedrun' else {'sim_assist': True}
                 with self.subTest(mode=mode), patch('orchestrator.config.REPO_ROOT', root), \

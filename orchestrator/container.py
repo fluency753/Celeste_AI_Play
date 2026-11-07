@@ -3,7 +3,8 @@
 容器里：/workspace 挂载宿主机的 workspaces/<标签>/（可写），/kb 挂载仓库的 kb/（只读），
 /home/agent/.claude 是独立的数据卷（会话记录，便于中断后续跑）。游戏目录、存档、OBS 都不挂载。
 Codex 使用独立的 /home/agent/.codex 持久卷，普通启动不导入宿主登录或会话。
-预置模拟器仅由主控的私有 worker 使用，不挂入 agent 容器。
+Claude 执行器开放预置模拟器（--sim）时，本机的 sim/dist 只读挂到 /sim；Codex 的预置模拟器仅由主控的私有 worker 使用，
+不挂入 agent 容器（见 sim_mode.py）。
 配置变了要重建容器时，旧容器 /tmp 里的东西（智能体常把程序和中间结果放在 Claude Code 的 /tmp/claude-<uid>）
 先打包到本机 local/container_tmp/，新容器建好后原样放回（保留属主与权限）。
 """
@@ -42,10 +43,15 @@ def docker(*args: str, check: bool = True, timeout: float = 120) -> subprocess.C
     return result
 
 
+def _sim_label(cfg: RunConfig) -> str:
+    from .sim_mode import agent_sim, controller_owned
+    return "host-only-v1" if controller_owned(cfg) else ("1" if agent_sim(cfg) else "0")
+
+
 def _labels(cfg: RunConfig) -> dict[str, str]:
     return {f"{LABEL}.image": cfg.image, f"{LABEL}.mcp_port": str(cfg.mcp_port),
             f"{LABEL}.seccomp": "unconfined" if cfg.seccomp_unconfined else "default", f"{LABEL}.init": "1",
-            f"{LABEL}.sim": "host-only-v1", f"{LABEL}.provider": cfg.provider,
+            f"{LABEL}.sim": _sim_label(cfg), f"{LABEL}.provider": cfg.provider,
             f"{LABEL}.knowledge": cfg.knowledge_profile,
             f"{LABEL}.workspace_tag": cfg.workspace_dir.name,
             f"{LABEL}.domains": ",".join(cfg.provider_domains),
@@ -129,6 +135,9 @@ def _create(cfg: RunConfig, name: str) -> None:
         if cfg.codex_player_login:
             args += ['-v', f'{PLAYER_LOGIN_VOLUME}:{PLAYER_LOGIN_MOUNT}',
                      '-e', 'CELESTE_CODEX_PLAYER_LOGIN=1']
+    from .sim_mode import agent_sim
+    if agent_sim(cfg):
+        args += ["-v", f"{cfg.sim_dir}:/sim:ro"]
     if cfg.seccomp_unconfined:
         args += ["--security-opt", "seccomp=unconfined"]
     for key, value in _labels(cfg).items():
@@ -224,7 +233,8 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
                        or player_mounts[0].get('RW') is not True) if expected_login else bool(player_mounts)
         if login_stale:
             raise RuntimeError(f'容器 {name} 已使用另一种 Codex 登录方式，请使用新工作区标签')
-        stale = exposed or git_stale or container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
+        from .sim_mode import agent_sim
+        stale = exposed != agent_sim(cfg) or git_stale or container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
                                                    for k, v in _labels(cfg).items())
         if stale:
             log(f"[container] {name} 的镜像或配置已变化，重建（工作区、会话与 /tmp 保留）")

@@ -69,7 +69,8 @@ def game_tools(cfg) -> list[str]:
         tools.append("exit_level")          # 直播时观众/用户可以要求退出关卡
     if has_cutscene_tool(cfg):
         tools.append("cutscene")
-    if getattr(cfg, "sim_assist", False) or (getattr(cfg, 'sim', False) and getattr(cfg, 'pause_limit', False)):
+    from .sim_mode import controller_sim
+    if getattr(cfg, "sim_assist", False) or controller_sim(cfg):   # Claude 开模拟器时直接用 /sim，不经 simulate
         tools.append("simulate")            # 探索模式的限额短路线预测
     from .detour import enabled as detour_enabled
     if detour_enabled(cfg):

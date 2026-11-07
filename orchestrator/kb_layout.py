@@ -165,13 +165,14 @@ def build(cfg, root, view):
 
 
 def _write_view(cfg, root, view):
-    from .prompt_environment import render_tool_references
+    from .prompt_environment import render_tool_references, select_executor_blocks
     files, required, aliases = selected(cfg, root)
     content = {}
     for name, source in files.items():
         data = source.read_bytes()
         if source.suffix == '.md':
-            data = render_tool_references(data.decode('utf-8'), cfg, legacy=False).encode('utf-8')
+            text = select_executor_blocks(data.decode('utf-8'), getattr(cfg, 'engine', 'claude'))
+            data = render_tool_references(text, cfg, legacy=False).encode('utf-8')
         content[name] = data
     for alias, name in aliases.items():
         content[alias] = content[name]

@@ -4,7 +4,7 @@
     python -m orchestrator.run --agent dev-opus --save test --model opus --no-record
     python -m orchestrator.run --agent dev-opus --save test --model opus --max-minutes 20 --effort medium --no-record
     python -m orchestrator.run --agent dev --save test --no-agent --no-record   # 只启动工具服务，用于手动调试
-    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2   # 正式挑战（速通模式，模拟能力默认关闭；默认游戏内 HUD 与 OBS 录屏）
+    python -m orchestrator.run --agent opus5.5 --save opus5.5 --model opus --chapters 0,1,2   # 正式挑战（速通模式；Claude 执行器本机构建了模拟器时默认开放 /sim，Codex 的模拟能力默认关闭；默认游戏内 HUD 与 OBS 录屏）
     python -m orchestrator.run --agent opus5.5 --save opus5.5 --resume runs/opus5.5/<时间戳>     # 中断后续跑（沿用原来的开关）
 
 也可以在控制台（python -m overlay.console）里设置并启动。
@@ -107,8 +107,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--limit-planning", action="store_true",
-                    help="模拟规划硬限额：按章节记录，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮，"
-                         "每次有效主控批量预测消耗一轮，不限制工作区程序；自动重试关闭")
+                    help="规划轮次：按章节记录，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮；自动重试关闭。"
+                         "Claude 执行器只记账（调用了 /sim 模拟器的消息记一轮，不封锁工作区）；"
+                         "Codex 执行器是主控模拟的硬限额（每次有效主控批量预测消耗一轮），不限制工作区程序")
     ap.add_argument("--free-planning", action="store_true", help=argparse.SUPPRESS)  # 旧开关：现在不限制就是默认
     ap.add_argument("--rounds-per-room", type=int, default=3,
                     help="（--limit-planning 时）一屏大小（320×180，1A 第一个房间）的新房间存入的规划轮次（默认 3，至少 3）；大房间按 --room-scale 放大")
@@ -146,7 +147,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--record-video-args", help="ffmpeg 视频编码参数（默认见 configs/recording.json）")
     ap.add_argument("--audio-offset-ms", type=float, help="声音相对画面的偏移毫秒数（默认用校准结果，见 configs/local.recording.json）")
     ap.add_argument("--sim", dest="sim", action="store_true", default=None,
-                    help="显式开启速通的主控模拟能力，须同时开启 --limit-planning 并自配 sim/dist；不向agent开放模拟器文件")
+                    help="开放速通的预置模拟器（需自配 sim/dist）。Claude 执行器：本机 sim/dist 只读挂到容器的 /sim，"
+                         "每次停下把当前帧的完整场景写到 /workspace/game/sim_state.json（容器运行方式下本机构建了模拟器时默认开启）；"
+                         "Codex 执行器：主控私有的限额预测，须同时开启 --limit-planning，不向 agent 开放模拟器文件（默认关闭）")
     ap.add_argument("--sim-assist", action=argparse.BooleanOptionalAction, default=None,
                     help="只用于探索模式：有额度的短路线预测（默认关闭；需自配标准模拟器 sim/dist；续跑沿用原运行）；不向智能体开放模拟器文件")
     ap.add_argument("--stiffness", action=argparse.BooleanOptionalAction, default=None,
@@ -412,7 +415,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.net_wait_cap_s = args.net_wait_cap_seconds
     capabilities = workspace_capabilities(cfg)
     if args.sim is None:
-        args.sim = False     # 主控能力必须显式开启，不按本机文件存在自动开放。
+        # 新运行：Claude 执行器在容器运行方式、本机构建了预置模拟器（sim/dist，不入库）时默认开放 /sim（与原来相同）；
+        # Codex 的主控限额预测必须显式开启，不按本机文件存在自动开放。
+        from .sim_mode import controller_owned
+        args.sim = (not controller_owned(cfg) and capabilities.programs and cfg.mode == SPEEDRUN
+                    and (cfg.sim_dir / 'celeste-sim').is_file())
     if cfg.mode == EXPLORE and args.sim:
         raise SystemExit("探索模式不开放模拟器文件（只能用 --sim-assist 的限额短路线预测）；要开模拟器请用速通模式 --mode speedrun")
     if cfg.mode == SPEEDRUN and args.sim_assist:
@@ -573,8 +580,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             raise SystemExit('通关后继续目前适用于整章范围；按段计划请使用 stop 完成策略')
     if cfg.pause_limit and not cfg.sim:
         raise SystemExit("--limit-planning 只用于开模拟器的版本（关模拟器的版本不限制思考与调用）")
-    if cfg.sim and not cfg.pause_limit:
-        raise SystemExit('--sim 必须同时开启 --limit-planning；不再提供无限额或工作区模拟器')
+    from .sim_mode import controller_owned
+    if cfg.sim and not cfg.pause_limit and controller_owned(cfg):
+        raise SystemExit('Codex 执行器的 --sim 必须同时开启 --limit-planning（主控限额预测，不提供工作区模拟器）')
+    if cfg.sim and not controller_owned(cfg) and not capabilities.programs:
+        raise SystemExit("预置模拟器只能用于容器运行方式（本机运行方式请加 --no-sim）")
     if cfg.sim:
         if not (cfg.sim_dir / "celeste-sim").is_file():
             raise SystemExit(f"找不到预置模拟器：{cfg.sim_dir / 'celeste-sim'}（模拟器只在本机，见使用说明的预置模拟器一节；"
@@ -1016,7 +1026,8 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
         from .kb_access import prepare_view
         prepare_view(cfg)        # 有不给看的文件或本机追加资料时，同步合并后的副本（挂进容器 /kb）
     if cfg.study and workspace_capabilities(cfg).workspace_read and not args.no_agent:
-        study = KbStudy(cfg.kb_dir, cfg.study_minutes)
+        from .sim_mode import sim_readme
+        study = KbStudy(cfg.kb_dir, cfg.study_minutes, sim_readme(cfg))   # Claude 开 /sim 时另读 /sim/README.md
         if not study.has_reference and cfg.knowledge_profile == "full":
             print("[run] 提示：kb/reference/ 不存在，准备阶段只读知识库本身（见使用说明 2.5 节生成参考资料原文）", flush=True)
     prepared = None
@@ -1196,7 +1207,18 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             session.before_advance = recording_guard(recorder, run_dir)
 
         capabilities = workspace_capabilities(cfg)
-        if cfg.sim and cfg.pause_limit:
+        from .sim_mode import controller_owned
+        gate = None
+        if not controller_owned(cfg):
+            # Claude 执行器：开 /sim 时的规划轮次只记账（--limit-planning；调用了模拟器的消息由回放扣一轮），不封锁工具
+            from .pausegate import PauseGate
+            gate = PauseGate(metrics, enabled=bool(cfg.pause_limit and cfg.sim and capabilities.programs),
+                             log=lambda m: print(m, flush=True), rounds_per_room=cfg.rounds_per_room,
+                             death_bonus=cfg.death_bonus, started=previous is not None,
+                             state_path=cfg.workspace_dir / "game" / "rounds.json" if capabilities.workspace_write else None,
+                             room_scale=cfg.room_scale)
+            session.planning_gate = gate
+        elif cfg.sim and cfg.pause_limit:
             from .planning_budget import PlanningBudget
             session.planning_budget = PlanningBudget(
                 metrics, run_dir / 'planning_budget.json',
@@ -1204,7 +1226,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                 rounds_per_room=cfg.rounds_per_room, death_bonus=cfg.death_bonus, room_scale=cfg.room_scale,
                 previous_path=previous['dir'] / 'planning_budget.json' if previous else None,
                 legacy=previous is not None)
-        playback = Playback(cfg, session, metrics, log=lambda m: print(m, flush=True))
+        playback = Playback(cfg, session, metrics, log=lambda m: print(m, flush=True), gate=gate)
         if playback.collect:
             session.playback = playback
         live = None
@@ -1271,8 +1293,7 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             runner = runtime(cfg.engine).runner(cfg, run_dir, session, metrics, container, study,
                 game_server=server, token=token, session_id=session_id,
                 resume=resumed_session is not None, resume_note=note,
-                include_task=previous is None,
-                announce_goal=previous is None or getattr(args, 'initial_goal', None) is not None,
+                **restore_task_flags(cfg, previous, getattr(args, 'initial_goal', None)),
                 playback=playback if playback.collect else None, start_paused=args.start_paused)
             print(f"[run] 启动智能体：model={cfg.model} effort={cfg.effort} 运行方式 {cfg.runtime} "
                   f"预算 {cfg.max_minutes:g} 分钟", flush=True)
@@ -1478,6 +1499,14 @@ def publish_user_note(run_dir: Path, text: str | None) -> None:
         publish(run_dir, "user:note-file", text, role="user", kind="你 · 局间留言（附在开场消息里）")
 
 
+def restore_task_flags(cfg, previous, initial_goal=None) -> dict:
+    """恢复试玩时规则里是否带任务目标、开场是否重述已登记目标。省略只用于 Codex（运行说明、配置 targets、
+    指南补读与已登记目标都从会话和工作区记录恢复）；Claude 续跑照旧带上，与原来相同。首次开局和用户新登记的目标两者都带。"""
+    codex = getattr(cfg, 'engine', 'claude') == 'codex'
+    return {'include_task': previous is None or not codex,
+            'announce_goal': previous is None or initial_goal is not None or not codex}
+
+
 def opening_note(cfg, previous, resumed_session, user_note: str | None = None, *, include_rules=True) -> str | None:
     """续跑时代替开局的第一条消息：追加了新章节（原计划已全部通关）时说开始新的一章，否则说中途被打断后接着玩。
     user_note（--note-file）放在主控说明之后；仅 Claude 续跑另附快照兼容规则。"""
@@ -1571,8 +1600,8 @@ def main() -> int:
         from .prepared import load_preparation
         from .kb_access import prepare_view
         prepare_view(cfg)
-        preparation_study = KbStudy(cfg.kb_dir, cfg.study_minutes,
-                                    None)
+        from .sim_mode import sim_readme
+        preparation_study = KbStudy(cfg.kb_dir, cfg.study_minutes, sim_readme(cfg))
         load_preparation(args.prepared, cfg, preparation_study)
     previous = args.previous
     from .parked_run import check_reserved_slot

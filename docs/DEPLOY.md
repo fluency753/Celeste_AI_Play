@@ -254,7 +254,7 @@ winget install Gyan.FFmpeg
 预置模拟器由游戏代码生成，**不在仓库里，也不应公开分发**。在新电脑上有两种选择：
 
 - 如果你有一台已经构建好模拟器的开发机，把 `sim\dist` 整个目录（`celeste-sim`、`sim.py`、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`）复制到新电脑仓库的 `sim\dist`；它是 Linux 单文件程序，仅主控私有 Docker worker 使用，不向 agent 挂载或复制；能力默认关闭，与 Windows 版本无关。自检：游戏在 test 存档的关卡里时运行 `.\.venv\Scripts\python.exe tools\sim_check.py`，应"逐帧一致"。
-- 不启用时照常运行：速通与探索的预置预测均默认关闭，不因发现 `sim\dist` 自动开启。配置可用资源后，速通需显式用 `--sim --limit-planning`，探索用 `--sim-assist`；仅试玩运行且有额度时接受预测。
+- 没有模拟器时照常运行：速通模式新运行自动按 `--no-sim` 运行（关模拟器的版本）。有模拟器时，Claude 执行器的速通在容器方式下默认开放 `/sim`；Codex 执行器的速通需显式用 `--sim --limit-planning`（主控限额预测，仅试玩运行且有额度时接受）；探索模式两个执行器都用 `--sim-assist`（默认关闭）。
 
 ### 4.9 知识库参考资料（可选）
 
@@ -297,7 +297,7 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 ### 5.2 直接用命令
 
 ```powershell
-# 速通模式依次通关序章、1A、2A（Anthropic Opus；OBS 录屏与游戏内 HUD 默认开启，OBS 由主控自己启动和关闭；预置模拟能力默认关闭，需另加 --sim --limit-planning 显式启用）
+# 速通模式依次通关序章、1A、2A（Anthropic Opus；OBS 录屏与游戏内 HUD 默认开启，OBS 由主控自己启动和关闭；本机有预置模拟器时默认开放 /sim）
 .\.venv\Scripts\python.exe -m orchestrator.run --agent opus --save <存档名> --model opus --mode speedrun --chapters 0,1,2
 # DeepSeek
 .\.venv\Scripts\python.exe -m orchestrator.run --agent deepseek-flash --save <存档名> --provider deepseek --model deepseek-flash --chapters 0,1,2
@@ -393,7 +393,7 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 | `--no-hud-window` / `--no-hud` | 关 / 关 | 不开 HUD 窗口 / 连 HUD 服务也不开 |
 | `--hud-port` | 47790 | HUD 端口 |
 | `--bridge-port` / `--mcp-port` | 47774 / 47780 | 桥接与游戏工具服务的端口 |
-| `--runtime` | `container`（沿用） | `host`：在本机运行、只开放游戏工具（早期的过渡方式，没有工作区程序沙箱；可通过 MCP 使用显式开启的主控限额模拟，模拟 worker 仍需 Docker） |
+| `--runtime` | `container`（沿用） | `host`：在本机运行、只开放游戏工具（早期的过渡方式，没有沙箱、没有模拟器） |
 | `--skip-enter` | 关 | 已在关卡内可操作时跳过菜单宏 |
 | `--no-agent` | 关 | 只启动工具服务，不启动智能体（调试；可配合 `tools\game_tool.py` 手动调用游戏工具） |
 | `--ffmpeg` / `--record-video-args` / `--audio-offset-ms` | 见配置 | 临时覆盖录制设置 |
@@ -532,7 +532,7 @@ Remove-Item "<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll"
 | PowerShell 里中文乱码 | 先执行 `chcp 65001`；日志文件本身是 UTF-8 |
 | winget 不存在 | 从 Microsoft Store 安装"应用安装程序"，或按 2.2 节的链接手动安装各软件 |
 | 找不到 docker | Docker Desktop 没启动，或装好后还没新开终端 |
-| 主控提示找不到预置模拟器 | 配置可用 `sim\dist`（4.8 节），或显式关闭 `--sim` / `--sim-assist`；默认不启用预测 |
+| 主控提示找不到预置模拟器 | 拷来 `sim\dist`（4.8 节），或加 `--no-sim` 用关模拟器的版本（探索模式关 `--sim-assist`） |
 | 主控提示需要更新桥接 | 桥接低于 0.12.4；按 4.4 节重新编译安装（先关游戏） |
 | `deploy_bridge.ps1` 提示文件被占用 | 游戏还开着，关掉再试 |
 | 测试客户端连不上桥接 | 游戏没开，或 `log.txt` 里没有 `[CelesteAIBridge] loaded`（Mod 配置里没启用它） |

@@ -17,6 +17,16 @@ def tool_name(cfg, name):
             'Write': 'apply_patch', 'Edit': 'apply_patch', 'Bash': '原生 Shell'}.get(name, name)
 
 
+EXECUTOR_BLOCK = re.compile(r'^<!-- executor:(claude|codex) -->[ \t]*\r?\n(.*?)^<!-- /executor -->[ \t]*(?:\r?\n|\Z)',
+                            re.M | re.S)
+
+
+def select_executor_blocks(text, engine):
+    """知识库里只适用于一个执行器的段落（例如预置模拟器的用法：Claude 直接调用 /sim，Codex 经主控 simulate）：
+    `<!-- executor:claude -->` … `<!-- /executor -->`，标记各占一行；生成视图时只留当前执行器的段落。"""
+    return EXECUTOR_BLOCK.sub(lambda m: m[2] if m[1] == engine else '', text)
+
+
 def render_tool_references(text, cfg, *, legacy=True):
     """Resolve standalone capability names, preserving paths and explicit prefixes.
 

@@ -72,9 +72,8 @@ class ContainerContractTests(unittest.IsolatedAsyncioTestCase):
 
     def test_host_simulation_capability_does_not_depend_on_agent_program_tools(self):
         from orchestrator.modes import game_tools
-        cfg = RunConfig(agent='test', save='test', model='test', engine='claude', runtime='host',
+        cfg = RunConfig(agent='test', save='test', model='test', engine='codex',
                         mode='speedrun', sim=True, pause_limit=True)
-        self.assertFalse(workspace_capabilities(cfg).programs)
         self.assertIn('simulate', game_tools(cfg))
         cfg.pause_limit = False
         self.assertNotIn('simulate', game_tools(cfg))
@@ -82,6 +81,17 @@ class ContainerContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('simulate', game_tools(cfg))
         cfg.sim_assist = False
         self.assertNotIn('simulate', game_tools(cfg))
+
+    def test_claude_preset_simulator_stays_in_workspace_without_simulate_tool(self):
+        """Claude 执行器的速通预置模拟器仍是 /sim 直接调用：不注册主控 simulate，限额只记账。"""
+        from orchestrator.modes import game_tools
+        for runtime in ('container', 'host'):
+            for limit in (False, True):
+                cfg = RunConfig(agent='test', save='test', model='test', engine='claude', runtime=runtime,
+                                mode='speedrun', sim=True, pause_limit=limit)
+                self.assertNotIn('simulate', game_tools(cfg))
+        cfg = RunConfig(agent='test', save='test', model='test', engine='claude', mode='explore', sim_assist=True)
+        self.assertIn('simulate', game_tools(cfg))      # 探索模式的限额短路线预测两个执行器相同
 
     async def test_transport_starts_only_container_appserver_and_closes_owned_process(self):
         with tempfile.TemporaryDirectory() as folder:

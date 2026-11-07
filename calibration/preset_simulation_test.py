@@ -23,7 +23,7 @@ class PresetSimulationTests(unittest.TestCase):
         self.config_root = patch('orchestrator.config.REPO_ROOT', self.root)
         self.config_root.start()
         self.addCleanup(self.config_root.stop)
-        self.cfg = RunConfig(agent='test', save='test', model='stub', sim=True, pause_limit=True)
+        self.cfg = RunConfig(agent='test', save='test', model='stub', engine='codex', sim=True, pause_limit=True)
         self.cfg.sim_dir.mkdir(parents=True)
         (self.cfg.sim_dir / 'celeste-sim').write_bytes(b'fixture; never executed')
         self.run = self.root / 'run'

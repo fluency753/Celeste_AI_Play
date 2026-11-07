@@ -1,7 +1,9 @@
 """规划回放：把智能体每一轮规划在预置模拟器里推演过的路线画进游戏，给观众看试错的过程。
 
-数据来自主控私有模拟结果，或 agent 用 /workspace/game/show.py 的 trajectory() 写出的二进制轨迹。
-主控预测在实际执行入口核验并扣除额度；回放不授予模拟权限、不扣规划轮次。自写轨迹只作展示与统计，
+数据来自主控私有模拟结果（Codex），Claude 执行器开模拟器时 /sim/sim.py 写进 game/simlog/ 的推演记录，
+或 agent 用 /workspace/game/show.py 的 trajectory() 写出的二进制轨迹。
+Codex 的主控预测在实际执行入口核验并扣除额度，回放不授予模拟权限、不扣规划轮次；Claude 开 --limit-planning 时，
+一条调用了 /sim 模拟器的消息（有推演记录，或命令行调用了 celeste-sim）结束后在这里扣一轮（只记账）。自写轨迹只作展示与统计，
 不能证明使用了预置模拟器。工具消息用于归并搜索结果；所有工具返回后，主控把记录移到运行目录的
 playback/pending/，交给回放线程。搜索中增量预览读取已刷新的完整记录，不移动活动日志，默认全量绘制；
 仅在实测超帧预算时暂时抽样，内存保护记录略过原因。更新按搜索合并，完成后统一计数，不重复整批回放。
@@ -314,6 +316,8 @@ class _Msg:
     label: str = ""
     program: bool = False
     previewed: bool = False
+    started: bool = False   # Claude 开 /sim 记账时：这条消息开始时游戏工具已真正执行过（准备阶段的推演不扣轮次）
+    cli: bool = False       # 直接用命令行调用 /sim 的模拟器：没有推演记录，但同样记一轮
     tail: object = field(default_factory=lambda: RecordTail(MAGIC, HEADER))
 
 
@@ -331,6 +335,7 @@ class _SearchOwner:
     label: str
     counted: bool = False
     account_rollouts: bool = True
+    started: bool = False   # 扣 Claude 规划轮次（PauseGate.charge）的前提：试玩已开始
 
 
 @dataclass
@@ -348,11 +353,14 @@ class _RoundJob:
 
 
 class Playback:
-    def __init__(self, cfg, session, metrics, log=print):
+    def __init__(self, cfg, session, metrics, log=print, gate=None):
         self.cfg = cfg
         self.session = session
         self.metrics = metrics
         self.log = log
+        # Claude 执行器开 /sim 时的规划轮次记账（pausegate.PauseGate）：一条调用了模拟器的消息结束后扣一轮。
+        # Codex 的主控预测在实际模拟入口计量，这里为 None。
+        self.gate = gate
         # collect：收集轨迹、更新 HUD 展示统计；enabled：画进游戏。
         # 主控预测已在实际模拟入口计量；agent 的 show.trajectory() 仅提供自写轨迹。
         # 两类来源都可以回放，但文件与消息不授权模拟，也不增减主控预算。
@@ -406,10 +414,13 @@ class Playback:
         msg = self._msgs.setdefault(mid, _Msg())
         msg.pending.add(tool_use_id)
         self._tool_msg[tool_use_id] = mid
+        msg.started = msg.started or bool(self.gate is not None and self.gate.started)
         if name == "Bash" and isinstance(tool_input, dict):
             msg.program = True
             if not msg.label:
                 msg.label = str(tool_input.get("description") or "").strip()[:80]
+            if self.gate is not None and "celeste-sim" in str(tool_input.get("command") or ""):
+                msg.cli = True     # 直接用命令行调用模拟器：没有推演记录，但同样占一轮
 
     def note_tool_result(self, tool_use_id: str) -> None:
         with self._submit_lock:
@@ -434,7 +445,8 @@ class Playback:
         self._queue_preview(mid, msg)
         for key, _ in ready:
             del self._msgs[key]
-        self._submit(msg.label, previews=tuple((key, other.tail) for key, other in ready if other.previewed))
+        self._submit(msg.label, previews=tuple((key, other.tail) for key, other in ready if other.previewed),
+                     started=any(other.started for _, other in ready), cli=any(other.cli for _, other in ready))
 
     def _stream(self):
         while not self._stream_stop.wait(max(.1, getattr(self.cfg, 'playback_stream_interval_s', 1))):
@@ -472,24 +484,29 @@ class Playback:
             self._backlog += 1
         self._jobs.put(job)
 
-    def _submit(self, label: str, previews=()) -> None:
-        """一条消息的工具全部返回：接管轨迹并提交回放，独立统计自写搜索，不改模拟预算。"""
+    def _submit(self, label: str, previews=(), started: bool = False, cli: bool = False) -> None:
+        """一条消息的工具全部返回：接管轨迹并提交回放，独立统计自写搜索。Codex 不改模拟预算；
+        Claude 开 /sim 记账时，调用了模拟器的消息（有推演记录或用了命令行）扣一轮。"""
         with self._submit_lock:
             if self._closed:
                 return
             files = sorted(self.dir.glob("*.bin"))
-            if not files:
+            if not files and not cli:
                 return
-            owner = _SearchOwner(label)
+            owner = _SearchOwner(label, started=started)
             owners = self._remember_owners(files, owner)
             sources, moved, offsets, claimed = (self._take(files, tuple(tail for _, tail in previews))
                                                if files else ([], [], [], []))
             accepted = {owners[path] for path in claimed}
+            if cli:
+                accepted.add(owner)
             for path in claimed:
                 self._retry_owners.pop(path, None)
             for accepted_owner in accepted:
                 if not accepted_owner.counted:
                     self.metrics.add(sim_calls=1)
+                    if accepted_owner.started and self.gate is not None:
+                        self.gate.charge(accepted_owner.label)
                     accepted_owner.counted = True
             if not sources:
                 return
@@ -903,7 +920,7 @@ class Playback:
                 for tid, mid in list(self._tool_msg.items()):
                     if mid not in self._msgs:
                         self._tool_msg.pop(tid, None)
-                self._submit(label, previews=previews)
+                self._submit(label, previews=previews, started=bool(self.gate is not None and self.gate.started))
         with self._cv:
             if not self._cv.wait_for(lambda: self._backlog <= 0, timeout=timeout):
                 raise TimeoutError('规划回放尚未排空，不能提前执行游戏')

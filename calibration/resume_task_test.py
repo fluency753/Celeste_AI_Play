@@ -106,6 +106,37 @@ class RestoreTaskTests(RestoreTaskFixture, unittest.TestCase):
         self.assertEqual(cfg.plan, [Piece(3)])
 
 
+class ExecutorRestorePolicyTests(RestoreTaskFixture, unittest.TestCase):
+    def test_only_codex_omits_targets_when_restoring(self):
+        from orchestrator.run import restore_task_flags
+        previous = {'dir': self.root}
+        for engine in ('codex', 'claude'):
+            cfg = replace(self.cfg, engine=engine)
+            self.assertEqual(restore_task_flags(cfg, None), {'include_task': True, 'announce_goal': True})
+            restored = restore_task_flags(cfg, previous)
+            self.assertEqual(restored, {'include_task': engine == 'claude', 'announce_goal': engine == 'claude'})
+            self.assertTrue(restore_task_flags(cfg, previous, 'new goal')['announce_goal'])
+
+    def test_claude_restore_keeps_task_in_inline_rules_and_chat(self):
+        cfg = replace(self.cfg, engine='claude', runtime='host')
+        for chat_only in (False, True):
+            directory = self.root/('claude-chat' if chat_only else 'claude-play')
+            directory.mkdir()
+            runner = ClaudeRunner(cfg, directory, SimpleNamespace(done=False),
+                                  Metrics(directory/'metrics.json', 'test', 'test', 'medium', 60),
+                                  'unused', session_id='old-session', resume=True, chat_only=chat_only)
+            self.addCleanup(runner.close_events)
+            self.assertTrue(runner.include_task)
+            self.assertTrue(runner.announce_goal)
+            with patch('orchestrator.agent.find_claude_exe', return_value='fixture-claude'):
+                runner._command()
+            self.assertIn('天空度假村', (directory/'system_prompt.md').read_text(encoding='utf-8'))
+            from orchestrator.prompting import current_rules_note
+            note = current_rules_note(cfg, guide=runner._startup_guide)
+            self.assertIn('天空度假村', note)
+            self.assertNotIn('任务目标从已有记录恢复', note)
+
+
 class CodexRestoreInputTests(RestoreTaskFixture, unittest.IsolatedAsyncioTestCase):
     async def test_native_resume_receives_filtered_base_instructions_and_guide(self):
         directory = self.root/'codex'

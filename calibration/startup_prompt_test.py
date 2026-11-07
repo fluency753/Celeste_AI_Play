@@ -60,7 +60,7 @@ class StartupPromptTests(unittest.TestCase):
                     self.assertEqual(preview['text'], actual)
                     self.assertEqual(actual.count('PERSONAL {current_settings}'), 1)
                     if engine == 'claude':
-                        self.assertIn(runtime_prompt(cfg, include_task=False), current_rules_note(cfg))
+                        self.assertIn(runtime_prompt(cfg), current_rules_note(cfg))   # Claude 续跑照旧附带任务目标
                     self.assertFalse(any(p['source'] == name for p in preview['guide_parts']))
                     if engine == 'claude' and runtime == 'host':
                         self.assertNotIn('自定义启动', actual)

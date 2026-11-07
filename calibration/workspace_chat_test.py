@@ -84,15 +84,45 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(received['container'], 'offline-container')
             self.assertEqual(received['stdout'], 'OK\n')
 
-    async def test_chat_cannot_enable_simulator_for_any_executor(self):
-        for engine, runtime in (('codex', 'container'), ('codex', 'host'), ('claude', 'container'), ('claude', 'host')):
-            with self.subTest(engine=engine, runtime=runtime), \
+    async def test_codex_chat_cannot_enable_simulator(self):
+        for runtime in ('container', 'host'):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as tmp, \
                  patch('orchestrator.chat.ensure_container') as container, \
                  patch('orchestrator.chat.host_runner') as host:
+                root = Path(tmp)
+                (root/'run_state.json').write_text(json.dumps({'engine': 'codex', 'runtime': runtime}), encoding='utf-8')
                 with self.assertRaisesRegex(ValueError, '试玩中'):
-                    await chat(Path('unused'), sim=True)
+                    await chat(root, sim=True)
                 container.assert_not_called()
                 host.assert_not_called()
+
+    async def test_claude_container_chat_can_mount_offline_simulator(self):
+        # Claude 执行器沿用原来的聊天 --sim：挂只读 /sim，以保存快照做离线验证，不连接游戏
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = {'agent': 'test', 'save': 'test', 'model': 'model', 'effort': 'medium', 'engine': 'claude',
+                     'provider': 'anthropic', 'session_id': 'original', 'mode': 'speedrun',
+                     'knowledge_profile': 'full', 'runtime': 'container'}
+            (root/'run_state.json').write_text(json.dumps(state), encoding='utf-8')
+            (root/'summary.json').write_text('{"completed":true}', encoding='utf-8')
+            Metrics(root/'metrics.json', 'test', 'model', 'medium', 600)
+            runner = SimpleNamespace(run=AsyncMock())
+            received = {}
+
+            @asynccontextmanager
+            async def host(cfg, directory, metrics, container, **options):
+                received.update(sim=cfg.sim, chapters=cfg.chapters, **options)
+                yield runner
+
+            with patch('orchestrator.chat.ensure_container', return_value='offline') as container, \
+                 patch('orchestrator.chat.host_runner', host), \
+                 patch('orchestrator.runtimes.Runtime.token', return_value='test'):
+                await chat(root, sim=True)
+            self.assertTrue(received['sim'])
+            self.assertTrue(received['chat_only'])
+            self.assertEqual(received['chapters'], [])
+            container.assert_called_once()
+            runner.run.assert_awaited_once()
 
     async def test_sim_resource_mount_cannot_leak_into_naming(self):
         with patch('orchestrator.chat.ensure_container') as container:
@@ -113,7 +143,7 @@ class WorkspaceChatTests(unittest.IsolatedAsyncioTestCase):
                     with patch('orchestrator.chat.ensure_container') as container, \
                          patch('orchestrator.chat.host_runner') as host, \
                          patch('orchestrator.runtimes.Runtime.token') as token:
-                        with self.assertRaisesRegex(ValueError, '试玩中'):
+                        with self.assertRaisesRegex(ValueError, '工作区程序执行通道'):
                             await chat(root, allow_programs=True, sim=sim)
                     container.assert_not_called()
                     host.assert_not_called()

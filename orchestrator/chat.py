@@ -1,7 +1,8 @@
 """通关后按需唤起原 agent 会话，仅聊天，不建立游戏桥接或录制连接。
 
 具备工作区工具通道时，始终可以读写文件和运行程序，不需要 --allow-programs。
---allow-programs 保留为兼容参数。模拟能力仅用于试玩，--sim 在聊天入口明确拒绝。
+--allow-programs 保留为兼容参数。--sim：Claude 执行器挂载只读模拟器（/sim），以保存快照做离线验证，仍不连接游戏；
+Codex 的模拟能力仅用于试玩（主控私有），--sim 在聊天入口明确拒绝。
 章节中途显式中断、游戏保持冻结的运行也能这样唤起（例如暂停去改搜索程序），聊完再 --resume 接着玩。
 --fresh-session：接班会话——同一个智能体、同一个工作区与容器里开一个全新的会话（不带原会话的上下文），
 新建一个运行目录记下它；之后 --resume <新目录> 续跑就接着这个新会话。原运行目录不动。"""
@@ -104,8 +105,15 @@ def _clear_pending(directory):
 
 
 async def chat(directory, name_request=None, allow_programs=False, sim=False, fresh_session=False):
+    if name_request and sim:
+        raise ValueError('存档命名不挂载离线模拟器')
     if sim:
-        raise ValueError('模拟器是试玩中的可选主控能力，聊天或存档命名阶段不能调用')
+        try:
+            engine = load_json(Path(directory) / "run_state.json").get("engine", "claude")
+        except (OSError, ValueError, AttributeError):
+            engine = None                # 读不出来：后面的检查会报告
+        if engine == 'codex':
+            raise ValueError('Codex 的模拟器是试玩中的可选主控能力，聊天阶段不能调用')
     if name_request and fresh_session:
         raise ValueError('存档命名不开接班会话')
     if not (can_wake(directory) or (not name_request and can_wake_frozen(directory))):
@@ -123,6 +131,8 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False, fr
     activate(cfg.profile)          # 与原运行相同的配置（提示词修改、个人追加要求）
     capabilities = workspace_capabilities(cfg)
     capabilities.validate(programs=capabilities.programs)
+    if sim and not capabilities.programs:
+        raise ValueError('离线模拟器需要工作区程序执行通道')
     # 与原运行相同的游玩模式与可调参数（提示词按模式生成；探索模式的程序时长等跟原运行一致）
     from .modes import MODE_OF_KNOWLEDGE
     from .tuning import apply
@@ -137,7 +147,7 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False, fr
     runtime(cfg.engine).token(cfg)
     from .control import RunControl
     cfg.cutscene_mode=RunControl(directory).cutscene_preference() or state.get('cutscene_mode','auto')
-    cfg.sim, cfg.live, cfg.chapters = False, True, []
+    cfg.sim, cfg.live, cfg.chapters = bool(sim), True, []   # 只有 Claude 能走到这里带 sim：挂 /sim
     if name_request:
         cfg.max_minutes = 3
     if capabilities.needs_container:
@@ -176,7 +186,7 @@ def main():
     parser.add_argument("--allow-programs", action="store_true",
                         help="兼容旧命令；工作区工具通道始终允许程序运行，无需此开关")
     parser.add_argument('--sim', action='store_true',
-                        help='旧参数：聊天阶段不开放模拟能力，使用时明确报错')
+                        help='Claude 执行器：挂载只读模拟器，以保存快照做离线验证，不连接游戏；Codex 聊天阶段不开放模拟能力，使用时明确报错')
     parser.add_argument('--fresh-session', action='store_true',
                         help='接班会话：同一工作区与容器里开一个全新的会话，新建运行目录记下它，之后 --resume 新目录续跑')
     args = parser.parse_args()

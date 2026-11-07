@@ -37,6 +37,9 @@ async def _prepare(args, profile):
                     sim=False, sim_assist=False,
                     live=True, max_minutes=args.max_minutes)
     adapter.configure(cfg, args.provider)
+    from .sim_mode import controller_owned
+    # Claude 执行器的速通准备与原来相同：挂 /sim，并把 /sim/README.md 列入必读（Codex 的模拟只在试玩中由主控提供）
+    cfg.sim = args.knowledge == "full" and not controller_owned(cfg) and (cfg.sim_dir / "celeste-sim").is_file()
     cfg.codex_player_login = getattr(args, 'codex_player_login', False) and cfg.engine == 'codex'
     profile_state = {}
     if profile is not None:
@@ -58,7 +61,8 @@ async def _prepare(args, profile):
     game = cfg.workspace_dir / "game"
     game.mkdir(parents=True, exist_ok=True)
     install_game_helpers(cfg.workspace_dir)
-    study = KbStudy(cfg.kb_dir, cfg.max_minutes)
+    from .sim_mode import sim_readme
+    study = KbStudy(cfg.kb_dir, cfg.max_minutes, sim_readme(cfg))
     if args.quick_check:
         # 联调仅检查索引文件；不能把联调结果记成全库已读。
         study.files = ["README.md"]

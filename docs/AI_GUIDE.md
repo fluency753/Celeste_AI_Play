@@ -98,7 +98,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
   - 第三方平台（如 DeepSeek）：用户在向导里给出密钥文件或粘贴密钥。密钥存在仓库目录之外（`%USERPROFILE%\.celeste-ai-play\`），`configs\local.providers.json` 只记文件位置。平台预设见 `configs\providers.json`。
   - Codex（GPT）：按准备或启动提示指定工作区容器，用 `.\.venv\Scripts\python.exe -m orchestrator.codex_container --container NAME login` 获取授权链接与代码，由用户在浏览器完成设备登录。
 - 在游戏里建测试存档（或在运行时用 `--create-save` 让主控新建）；建只启用 CelesteAIBridge 的 Mod 配置；在 Steam 里关闭云同步。
-- 预置模拟器 `sim\dist` 不随仓库分发。用户有的话由用户提供；没有就不用。预测默认关闭，有资源也须显式开启限额能力，资源不向工作区或 agent 容器提供。
+- 预置模拟器 `sim\dist` 不随仓库分发。用户有的话由用户提供；没有就不用（探索模式照常，速通模式运行 `--no-sim`）。Claude 执行器的速通有它时默认开放 `/sim`；Codex 执行器的预测默认关闭，有资源也须显式开启限额能力，资源不向工作区或 agent 容器提供。
 
 ## 4. 启动运行
 
@@ -146,8 +146,8 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 | `--no-record` | 不录像（默认录：主控自己启动并在结束时关闭 OBS） |
 | `--playback` | 打开规划回放（默认关） |
 | `--sim-assist` | 探索模式的限额短路线预测（默认关，需要本机有 `sim\dist`） |
-| `--sim --limit-planning` | 速通主控限额预测（默认关闭，需配置可用模拟器）；只有试玩运行且有额度时可用 |
-| `--no-sim` | 明确关闭速通主控预测（默认已关闭） |
+| `--sim` / `--limit-planning` | Claude 执行器：`--sim` 开放 `/sim`（本机有模拟器时默认开），`--limit-planning` 只记账；Codex 执行器：须两者同时开启主控限额预测（默认关闭），只有试玩运行且有额度时可用 |
+| `--no-sim` | 速通模式不开放预置模拟器 |
 | `--resume <运行目录>` | 续跑（见 6 节） |
 
 完整参数见 `.\.venv\Scripts\python.exe -m orchestrator.run --help`、`docs/USAGE.md` 4.1 节、`docs/DEPLOY.md` 6.1 节。可调参数用 `--tune 名称=值`，见 `docs/USAGE.md` 4.11 节（例如探索模式规划程序单次最长 `explore_program_s`，默认 120 秒；思考语句汉字上限 `thought_max_hanzi`，默认 30）。

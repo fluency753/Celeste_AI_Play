@@ -47,6 +47,8 @@ celeste_ai格式下，{auto_handling}agent剧情模式下主控在剧情可尝�
 
 WORKSPACE_NOTE = "（完整观测：/workspace/game/latest_obs.json；统一碰撞：/workspace/game/collision.json，image指向同一快照的碰撞图；本次逐帧轨迹：/workspace/game/last_act.json；最近游戏工具调用：/workspace/game/last_tool.json）"
 SIM_NOTE = WORKSPACE_NOTE[:-1] + "；模拟仅通过主控 simulate 工具请求，工作区不提供模拟器）"
+# Claude 执行器开预置模拟器（/sim 挂进容器）时的版本
+AGENT_SIM_NOTE = WORKSPACE_NOTE[:-1] + "；当前帧的模拟器起始状态：/workspace/game/sim_state.json）"
 
 OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}，可有界等待已核实的过渡和演出。{observation_delivery_rule}detail="geometry"按region=[x,y,w,h]查询最近观测缓存，offset/limit分页最多64；后续页必须带snapshot_id，观测更新后失效。详情保留完整反射状态与整形状，不裁掉孔洞；detail="player"只查询完整玩家状态；detail="time"按秒查询桥接/章节计时、现实用时及各时长目标已用/剩余时间，游戏帧取缓存，桥接时钟不是本轮任务时长。三种详情均不推进游戏、不改变变化基线，无工作区也可用。来源scope/coverage仍限制覆盖。'
 
@@ -111,13 +113,17 @@ TRANSPORT_SECURITY = TransportSecuritySettings(
 )
 
 
-NO_RETRY_NOTE = ("\n本次运行限制模拟规划轮次：本章每进入一个没来过的房间按房间大小存入轮次（一屏大小的房间 {n} 轮，房间的长、高每变成 {s} 倍"
+NO_RETRY_NOTE = ("\n本次运行{verb}模拟规划轮次：本章每进入一个没来过的房间按房间大小存入轮次（一屏大小的房间 {n} 轮，房间的长、高每变成 {s} 倍"
                  "轮次就乘 {s}，向上取整，至少 {n} 轮），在游戏里死亡补 {d} 轮，没用完的留给本章后面的房间；剩余轮数写在观测头部。{rule}"
                  "自动重试关闭：计划文件里的 retry 会被忽略。")
 RULE_SIM = ("一次有效主控批量预测消耗一轮，执行前检查并扣费；余额不足拒绝模拟，文件与普通程序仍可用。"
             "/workspace/game/rounds.json仅供查看，权威账本由主控持有；模拟只能在试玩运行时请求。")
+# Claude 执行器（/sim 直接调用）：只记账，不封锁
+AGENT_RULE_SIM = ("只有调用了离线模拟器的消息占一轮，其他工具不占；剩余轮数用于记账提示，不限制工作区程序。"
+                  "随时可读 /workspace/game/rounds.json；真实游戏操作仅在试玩运行时可用。")
 RULE_ALL = "工作区操作不占规划轮次，不受游玩额度限制；游戏工具仍按当前试玩状态和额度执行。"
 PLAYBACK_NOTE = "主控预测完成的路线可以画进游戏给观众看；回放不推进游戏，不计入章节计时，也不额外扣费。"
+AGENT_PLAYBACK_NOTE = "用模拟器推演过的路线，系统会按已刷新的记录画进游戏给观众看（搜索进行中也会画；不推进游戏、不计入章节计时），详见\"规划回放\"。"
 
 
 def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServer:
@@ -125,8 +131,11 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                        log_level="WARNING")
     metrics = session.metrics
     journal = server.journal
-    accounting = getattr(session, 'planning_budget', None)
-    ws_note = SIM_NOTE if session.cfg.sim else WORKSPACE_NOTE
+    # 规划额度：Codex 主控限额预测用 planning_budget（硬预算）；Claude 开 /sim 时用 planning_gate（只记账）
+    accounting = getattr(session, 'planning_budget', None) or getattr(session, 'planning_gate', None)
+    from .sim_mode import agent_sim
+    legacy_sim = agent_sim(session.cfg)
+    ws_note = (AGENT_SIM_NOTE if legacy_sim else SIM_NOTE) if session.cfg.sim else WORKSPACE_NOTE
     explore = is_explore(session.cfg)
     # 工具按模式注册（modes.game_tools）：narrate 所有模式都有；exit_level 只在直播模式（用户要求时退出关卡）；
     # cutscene 在探索、直播或 --cutscene-mode agent 时；simulate 只在探索模式开了限额短路线预测时。
@@ -308,12 +317,13 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             finally:
                 finish()
 
-    rule = RULE_SIM if session.cfg.sim else RULE_ALL
+    rule = (AGENT_RULE_SIM if legacy_sim else RULE_SIM) if session.cfg.sim else RULE_ALL
     act_description = observation_tool_description(session.cfg, 'act') + (NO_RETRY_NOTE.format(n=session.cfg.rounds_per_room, d=session.cfg.death_bonus, rule=rule,
+                                                                                                verb='记录' if legacy_sim else '限制',
                                                                                                 s=f"{float(session.cfg.room_scale or 2.0):g}")
                                          if session.cfg.pause_limit else "")
     if session.cfg.playback and session.cfg.sim:
-        act_description += PLAYBACK_NOTE
+        act_description += AGENT_PLAYBACK_NOTE if legacy_sim else PLAYBACK_NOTE
     from .detour import act_note
     act_description += act_note(session.cfg)      # 开了计划外地图才有；关时与原来相同
 

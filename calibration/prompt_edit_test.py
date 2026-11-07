@@ -66,12 +66,29 @@ class PromptPartsTests(unittest.TestCase):
                 self.assertIn('当前 auto 模式由主控推进和跳过剧情', text)
 
     def test_interface_is_spliced_in(self):
-        parts = prompt_parts(cfg(mode="speedrun", sim=True, pause_limit=True, runtime="container"))
+        parts = prompt_parts(cfg(mode="speedrun", engine="codex", sim=True, pause_limit=True, runtime="container"))
         sources = [p.source for p in parts]
         k = sources.index("interface_zh.md")
         self.assertEqual(sources[k - 1], 'system_sim_zh.md')
         self.assertEqual(sources[k + 1], 'tool_observe_zh.md')
         self.assertIn('tool_act_zh.md', sources)
+        self.assertNotIn('interface_claude_zh.md', sources)
+
+    def test_claude_speedrun_keeps_full_interface_before_tool_sections(self):
+        # Claude 执行器的速通沿用完整接口说明（房间数据以精确数据为准、act 输入格式等），再接各工具入口；探索模式不加
+        for sim in (False, True):
+            parts = prompt_parts(cfg(mode="speedrun", engine="claude", sim=sim, runtime="container"))
+            sources = [p.source for p in parts]
+            k = sources.index("interface_claude_zh.md")
+            self.assertEqual(sources[k - 1], 'system_sim_claude_zh.md' if sim else 'system_nosim_zh.md')
+            self.assertEqual(sources[k + 1], 'interface_zh.md')
+            self.assertEqual(sources[k + 2], 'tool_observe_zh.md')
+            text = parts[k].text
+            self.assertIn('# 房间数据：以精确数据为准', text)
+            self.assertIn('# act 的输入格式', text)
+        explore = [p.source for p in prompt_parts(cfg(mode="explore", knowledge_profile="explore", engine="claude"))]
+        self.assertNotIn('interface_claude_zh.md', explore)
+        self.assertIn('interface_zh.md', explore)
 
 
 class PromptOverrideTests(unittest.TestCase):

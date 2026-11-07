@@ -212,7 +212,8 @@ class TunableTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--kb-deny") + 1], "techniques.md")
         self.assertEqual(argv[argv.index("--study-minutes") + 1], "30")
         for bad in ({"tune": {"nope": 1}}, {"kb_deny": ["missing.md"]}, {"map": "mod"}, {"bridge_port": 80},
-                    {"sim": True, "limit_planning": False}, {"ffmpeg": "a\nb"}):
+                    {"engine": "codex", "sim": True, "limit_planning": False},
+                    {"sim": True, "runtime": "host"}, {"ffmpeg": "a\nb"}):
             with self.assertRaises(ValueError, msg=bad):
                 build({"agent": "dev", "save": save, **bad})
 

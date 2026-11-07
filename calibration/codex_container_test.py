@@ -55,7 +55,7 @@ class ContainerCodexTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 codex.exec_command('-bad', 'codex')
 
-    def test_agent_creation_never_exposes_host_simulator_even_when_enabled(self):
+    def test_only_claude_agent_creation_mounts_the_preset_simulator(self):
         for engine in ('codex', 'claude'):
             for enabled in (False, True):
                 with self.subTest(engine=engine, sim=enabled):
@@ -72,9 +72,16 @@ class ContainerCodexTests(unittest.TestCase):
                     mounts = [args[index + 1] for index, arg in enumerate(args[:-1]) if arg == '-v']
                     self.assertTrue(any(mount.endswith(':/workspace') for mount in mounts))
                     self.assertTrue(any(mount.endswith(':/kb:ro') for mount in mounts))
-                    self.assertFalse(any(':/sim' in mount for mount in mounts), mounts)
-                    self.assertEqual(labels['celeste-ai-play.sim'], 'host-only-v1')
-                    self.assertIn('celeste-ai-play.sim=host-only-v1', args)
+                    if engine == 'codex':
+                        # Codex 的预置模拟器只由主控私有 worker 使用
+                        self.assertFalse(any(':/sim' in mount for mount in mounts), mounts)
+                        self.assertEqual(labels['celeste-ai-play.sim'], 'host-only-v1')
+                        self.assertIn('celeste-ai-play.sim=host-only-v1', args)
+                    else:
+                        # Claude 执行器沿用原方式：开模拟器时 sim/dist 只读挂到 /sim，智能体直接调用
+                        self.assertEqual(any(m == f'{self.root / "sim" / "dist"}:/sim:ro' for m in mounts), enabled, mounts)
+                        self.assertEqual(sum(':/sim' in mount for mount in mounts), int(enabled), mounts)
+                        self.assertEqual(labels['celeste-ai-play.sim'], '1' if enabled else '0')
                     if engine == 'codex':
                         self.assertIn(git_mount, mounts)
                         self.assertEqual(labels['celeste-ai-play.git_mount'], 'workspace-dir-v1')

@@ -39,8 +39,9 @@ class LaunchOptionsTests(unittest.TestCase):
         from orchestrator.launch_options import DEFAULTS
         from orchestrator.run import parse_args
         from orchestrator.tuning import BY_KEY
+        # 预置模拟器按执行器默认（None）：Claude 在容器运行方式、本机构建了模拟器时开放 /sim，Codex 默认关
         self.assertEqual((DEFAULTS["max_minutes"], DEFAULTS["sim"], DEFAULTS["sim_assist"], DEFAULTS["playback"]),
-                         (1000, False, False, False))
+                         (1000, None, False, False))
         self.assertEqual(BY_KEY["explore_program_s"].default, 120)
         self.assertEqual(BY_KEY["thought_max_hanzi"].default, 30)
         argv = build(options(mode="explore"))
@@ -53,29 +54,49 @@ class LaunchOptionsTests(unittest.TestCase):
 
     def test_default_speedrun(self):
         argv = build(options())
-        for flag in ("--mode", "speedrun", "--no-live", "--no-sim", "--no-playback", "--record", "--hud-mod",
+        from orchestrator.launch_options import simulator_installed
+        simulator = simulator_installed()
+        for flag in ("--mode", "speedrun", "--no-live", "--sim" if simulator else "--no-sim", "--no-playback", "--record", "--hud-mod",
                      "--chapter", "--save-slot"):
             self.assertIn(flag, argv)
         self.assertEqual(argv[argv.index("--agent") + 1], "dev-opus")
         self.assertNotIn("--no-study", argv)
         self.assertTrue(command_line(argv).startswith("python -m orchestrator.run --engine claude"))
 
-    def test_preset_simulation_requires_explicit_limit_and_keeps_host_claude_support(self):
-        for engine in ('claude', 'codex'):
-            for runtime in ('host', 'container'):
-                with self.subTest(engine=engine, runtime=runtime):
-                    config = options(engine=engine, runtime=runtime, sim=True)
-                    with self.assertRaisesRegex(ValueError, '限额使用'):
-                        normalize(config)
-                    config['limit_planning'] = True
-                    normalized = normalize(config)
-                    self.assertTrue(normalized['sim'])
-                    self.assertTrue(normalized['limit_planning'])
-                    argv = build(config)
-                    self.assertIn('--sim', argv)
-                    self.assertIn('--limit-planning', argv)
-                    if engine == 'claude' and runtime == 'host':
-                        self.assertEqual(argv[argv.index('--runtime') + 1], 'host')
+    def test_codex_preset_simulation_requires_explicit_limit(self):
+        for runtime in ('host', 'container'):
+            with self.subTest(runtime=runtime):
+                config = options(engine='codex', runtime=runtime, sim=True)
+                with self.assertRaisesRegex(ValueError, '限额使用'):
+                    normalize(config)
+                config['limit_planning'] = True
+                normalized = normalize(config)
+                self.assertTrue(normalized['sim'])
+                self.assertTrue(normalized['limit_planning'])
+                argv = build(config)
+                self.assertIn('--sim', argv)
+                self.assertIn('--limit-planning', argv)
+        self.assertFalse(normalize(options(engine='codex'))['sim'])          # Codex 默认关
+
+    def test_claude_preset_simulator_keeps_unlimited_default_and_needs_container(self):
+        from orchestrator.launch_options import config_for
+        for limit in (False, True):
+            with self.subTest(limit=limit):
+                config = options(engine='claude', runtime='container', sim=True, limit_planning=limit)
+                normalized = normalize(config)
+                self.assertTrue(normalized['sim'])
+                argv = build(config)
+                self.assertIn('--sim', argv)
+                self.assertEqual('--limit-planning' in argv, limit)
+                cfg = config_for(config)
+                self.assertTrue(cfg.sim)
+                self.assertEqual(cfg.pause_limit, limit)
+        with self.assertRaisesRegex(ValueError, '没有沙箱'):
+            normalize(options(engine='claude', runtime='host', sim=True))
+        self.assertFalse(normalize(options(engine='claude', runtime='host'))['sim'])
+        with patch('orchestrator.launch_options.simulator_installed', return_value=True):
+            self.assertTrue(normalize(options(engine='claude', runtime='container'))['sim'])
+            self.assertFalse(normalize(options(engine='codex'))['sim'])
 
     def test_explore_live_and_chapter_list(self):
         argv = build(options(mode="explore", live=True, sim_assist=False, chapters=[2, 0, 1], study=False,

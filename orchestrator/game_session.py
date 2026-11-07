@@ -535,6 +535,7 @@ class GameSession:
                 (self.workspace / stale).unlink(missing_ok=True)
             reply = self.client.call("observe", image=False, scope="room", fields=True)
             self._write_workspace(self._track_motion(enrich_obs(reply["obs"])))
+            self._write_sim_state()
         if self._pending_complete:
             self._persist_completion_pending()
         return obs
@@ -575,6 +576,7 @@ class GameSession:
                 # a fresh baseline while leaving stale files behind on failure.
                 self._write_json('game/latest_obs.json', {'decision': self.decision_index, 'obs': self.last_obs})
                 self._write_collision_view(self.last_obs)
+                self._write_sim_state()
 
     def acknowledge_reload_observation(self, epoch: int) -> None:
         with self.lock:
@@ -930,6 +932,7 @@ class GameSession:
             else:
                 self._commit_completion(obs)
             notes = [*notes, *self._take_detour_notes()]
+            self._write_sim_state()
             if may_advance and not notes and self.cfg.cutscene_mode == 'agent':
                 if note := _manual_transition_note(obs):
                     notes.append(note)
@@ -1058,6 +1061,21 @@ class GameSession:
             for path in directory.glob('*.png'):
                 if path.name not in keep:
                     path.unlink(missing_ok=True)
+
+    def _write_sim_state(self) -> None:
+        """Claude 执行器开预置模拟器（/sim）时的起始状态：当前这一帧的完整场景（调用方持有连接锁）。
+        取不到时删掉旧文件，免得智能体用错帧。Codex 的主控预测自己取私有快照，不写进工作区。"""
+        from .sim_mode import agent_sim
+        if not (agent_sim(self.cfg) and self.workspace):
+            return
+        path = self.workspace / "game" / "sim_state.json"
+        try:
+            reply = self.client.call("sim_state", margin=4)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(reply["state"], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            tmp.replace(path)
+        except Exception:
+            path.unlink(missing_ok=True)
 
     # ---- 动作 ----
 
@@ -1429,6 +1447,7 @@ class GameSession:
                 obs, image, more = self._enter_next_chapter(obs)
                 notes.extend(more)
             self.goals.check(self.goal_values(obs))
+            self._write_sim_state()
             self._note_map(obs)
             notes.extend(self._take_detour_notes())
 
@@ -2412,6 +2431,7 @@ class GameSession:
                     notes.append(f'已确认你进入{self._piece_place(piece)}。{self._piece_goal(piece)}')
             notes += self._take_detour_notes()
             self.goals.check(self.goal_values(obs))
+            self._write_sim_state()
         record = {'travel': self.travels, 'wall': time.time(), 'chapter': dest.chapter, 'checkpoint': dest.checkpoint,
                   'room': dest.room, 'arrived': arrived and failure is None,
                   'at': {'scene': obs.get('scene'), 'sid': (obs.get('level') or {}).get('sid'),

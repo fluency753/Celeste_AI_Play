@@ -475,6 +475,10 @@ def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None, cfg=No
     blocks = dict(slots or {})
     if '{interface}' in text:
         interface = read_part('interface_zh.md')
+        from .sim_mode import controller_owned
+        # Claude 执行器的速通沿用原来的完整接口说明（坐标、房间数据以精确数据为准、act 输入格式、系统自动处理），
+        # 后面再接各工具的入口说明；Codex 与探索模式只用后者（细节按需查知识库）
+        legacy = (cfg is not None and not controller_owned(cfg) and not is_explore(cfg))
         parsed = parse_interface(interface)
         wrapper = parsed[0] if parsed is not None else interface
         sections = []
@@ -485,8 +489,9 @@ def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None, cfg=No
                 sections += _file_parts('tool_files_zh.md')
             if workspace_capabilities(cfg).programs:
                 sections += _file_parts('tool_programs_zh.md')
-        blocks['{interface}'] = _file_parts('interface_zh.md', transform=lambda _: wrapper,
-                                            slots={'{tool_sections}': sections})
+        blocks['{interface}'] = ((_file_parts('interface_claude_zh.md', sep='') if legacy else [])
+                                 + _file_parts('interface_zh.md', transform=lambda _: wrapper,
+                                               slots={'{tool_sections}': sections}))
     if not any(key in text for key in blocks):
         return [PromptPart(name, text, part_source(name), sep)]
     import re
@@ -500,12 +505,38 @@ def _file_parts(name: str, transform=None, sep: str = "\n\n", slots=None, cfg=No
     return parts
 
 
+def _claude_sim_parts(cfg, workspace) -> list[PromptPart]:
+    """Claude 执行器开预置模拟器（/sim 挂进容器、智能体直接调用）的速通提示词，与 Codex 改为主控限额预测之前相同：
+    system_sim、container_sim、sim，再按 --limit-planning 加规划轮次记账（pause），否则加不限思考与调用（free）
+    和自动重试（retry）；开规划回放时加 playback。"""
+    parts = _file_parts("system_sim_claude_zh.md", sep="", cfg=cfg)
+    parts += _file_parts("container_sim_claude_zh.md") + _file_parts("sim_claude_zh.md")
+    if cfg.pause_limit:
+        import math
+        n, d = cfg.rounds_per_room, cfg.death_bonus
+        scale = float(getattr(cfg, "room_scale", 2.0) or 2.0)
+        scale_text = f"{scale:g}"
+        parts += _file_parts("pause_claude_zh.md", lambda t: t.replace("{rounds4}", str(math.ceil(n * scale * scale))).replace(
+            "{rounds}", str(n)).replace("{death}", str(d)).replace("{scale}", scale_text))
+    else:
+        parts += _file_parts("free_zh.md") + _file_parts("retry_zh.md")
+    if cfg.playback:
+        parts += _file_parts("playback_claude_zh.md")
+    return parts
+
+
 def _speedrun_parts(cfg) -> list[PromptPart]:
-    """速通规则：预置模拟是显式开启的主控限额能力，不向工作区发布实现。"""
+    """速通模式的系统提示词。按预置模拟器的开关和执行器分成三个版本（目标都是以最短的章节计时通关）：
+    - Claude 开模拟器（有容器程序通道）：智能体直接调用 /sim 寻找并优化路线（_claude_sim_parts）；
+    - Codex 开模拟器（须同时开 --limit-planning）：预置模拟是主控限额能力，经 simulate 请求，不向工作区发布实现；
+    - 关模拟器：只写目标、规则与工具接口，其余由智能体自己决定（system_nosim、container_nosim）。"""
+    from .sim_mode import agent_sim, controller_owned
     workspace = workspace_capabilities(cfg)
     reuse = "之前写的程序与笔记都在工作区里，可以继续用。" if workspace.workspace_read else "以当前观测和已有对话核对进度后继续。"
     parts: list[PromptPart] = []
-    if not (cfg.sim and cfg.pause_limit):
+    if agent_sim(cfg) and workspace.programs:
+        parts += _claude_sim_parts(cfg, workspace)
+    elif not (cfg.sim and cfg.pause_limit and controller_owned(cfg)):
         parts += _file_parts("system_nosim_zh.md", sep="", cfg=cfg)
         parts += _file_parts("container_nosim_zh.md" if workspace.programs else "host_zh.md")
     else:
@@ -646,13 +677,18 @@ def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = Fals
     准备后接着试玩时写明读完后的下一步，开了预置模拟器的速通另外要求先想清技巧与要写的程序并记进笔记。"""
     from .button_prompts import notification
     files = "\n".join(f"- {path}" for path in study.container_paths())
-    sim_note = "本次可选模拟能力由主控提供；准备阶段不能预测，不需要导入或读取模拟器文件。\n" if sim else ""
+    from .sim_mode import controller_owned
+    legacy_sim = sim and not (cfg is not None and controller_owned(cfg))   # Claude：/sim 直接调用
+    sim_note = ("本次预置模拟器已开放，资料位于 /sim。\n" if legacy_sim else
+                "本次可选模拟能力由主控提供；准备阶段不能预测，不需要导入或读取模拟器文件。\n" if sim else "")
     if prepare_only:
         return notification('prepare', facts=(
             f"本次必读清单：\n{files}\n\n主控核对实际阅读进度。\n" + sim_note
             + f"准备阶段最多 {study.minutes:g} 分钟，到时仍未读完则本次准备未完成。"), cfg=cfg)
     after = ("读完后，结合知识库想清楚：哪些技巧能在本章用来缩短游戏内计时、它们的输入写法与帧窗口，以及你要写哪些搜索与规划程序"
-             "（普通程序可生成候选、分析结果；需要预测时由主控工具执行，准备阶段不可调用）。把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
+             + ("（模拟器直接用 /sim 预置的）。" if legacy_sim else
+                "（普通程序可生成候选、分析结果；需要预测时由主控工具执行，准备阶段不可调用）。") +
+             "把要点整理进 /workspace/notes.md（工作区里已有的笔记和程序先看一遍），然后调用 observe 开始游玩。\n"
              if sim else "读完后调用 observe 开始游玩。\n")
     if cfg is not None and workspace_capabilities(cfg).workspace_read:   # 规则在工作区操作指南里：开始游玩前先读它
         after = after.replace("然后调用 observe 开始游玩", "再按主控给出的阅读安排查阅工作区操作指南，然后调用 observe 开始游玩").replace(
@@ -691,7 +727,7 @@ def next_chapter_prompt(cfg, fresh_session: bool = False) -> str:
             "请先调用 observe 看清当前画面，再开始游玩。"), cfg=cfg)
 
 
-def current_rules_note(cfg, *, guide=None, include_task=False) -> str:
+def current_rules_note(cfg, *, guide=None, include_task=True) -> str:
     """续跑同一个 Claude Code 会话时附在第一条消息后面的当前规则。Claude Code 压缩上下文时会把当时的系统提示词与工具说明
     存成快照（prompt_snapshot），之后续跑沿用快照，要到下一次压缩才换成新的；所以续跑时改过的规则要在对话里再给一遍。"""
     # Codex thread/resume replaces baseInstructions. Only Claude needs a copy in history.
@@ -699,7 +735,9 @@ def current_rules_note(cfg, *, guide=None, include_task=False) -> str:
         return ""
     from .startup_prompt import runtime_prompt
     if workspace_capabilities(cfg).workspace_read:
-        return '\n\n（系统）续跑配置与指南如下，当前操作配置及规则替代旧快照中的对应约定；任务目标从已有记录恢复：\n' + runtime_prompt(cfg, guide=guide, include_task=include_task)
+        head = ('\n\n（系统）续跑配置与指南如下，当前配置及指南内容替代旧快照中的任务与操作约定：\n' if include_task else
+                '\n\n（系统）续跑配置与指南如下，当前操作配置及规则替代旧快照中的对应约定；任务目标从已有记录恢复：\n')
+        return head + runtime_prompt(cfg, guide=guide, include_task=include_task)
     return ("\n\n（系统）续跑的会话沿用之前保存的提示词快照：你看到的系统提示词与工具说明可能还是旧版本，要到下次压缩上下文后才会更新。"
             f"当前生效的完整规则如下，与旧版本不一致时以这里为准；act 一次至少推进 {act_frame_min(cfg)} 帧、最多 {act_frame_cap(cfg)} 帧，不在范围内会被主控退回。\n\n"
             + runtime_prompt(cfg, guide=guide, include_task=include_task))

@@ -47,19 +47,27 @@ class PreparePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(PLAY, play)
         self.assertIn('到时游戏工具自动开放', play)
         self.assertNotIn(SIM_PLAN, play)
-        speedrun = study_prompt(study, sim=True)
+        codex = RunConfig(agent='a', save='s', model='m', engine='codex', runtime='container')
+        speedrun = study_prompt(study, sim=True, cfg=codex)
         self.assertIn(SIM_PLAN, speedrun)
         self.assertIn('把要点整理进 /workspace/notes.md', speedrun)
-        self.assertIn('然后调用 observe 开始游玩', speedrun)
+        self.assertIn('开始游玩', speedrun)
         self.assertNotIn('/sim', speedrun)
         self.assertIn('准备阶段不能预测', speedrun)
+        # Claude 执行器的预置模拟器仍在 /sim，准备时一并说明（与原来相同）
+        claude_speedrun = study_prompt(study, sim=True)
+        self.assertIn(SIM_PLAN, claude_speedrun)
+        self.assertIn('然后调用 observe 开始游玩', claude_speedrun)
+        self.assertIn('本次预置模拟器已开放，资料位于 /sim。', claude_speedrun)
+        self.assertIn('模拟器直接用 /sim 预置的', claude_speedrun)
         for sim in (False, True):
-            prepare = study_prompt(study, sim=sim, prepare_only=True)
+            prepare = study_prompt(study, sim=sim, prepare_only=True, cfg=codex)
             self.assertNotIn('observe 开始游玩', prepare)
             self.assertNotIn('游戏工具自动开放', prepare)
             self.assertNotIn(SIM_PLAN, prepare)          # 仅准备没有"本章"
             self.assertNotIn('/sim', prepare)
-        for text in (play, speedrun, study_prompt(study, prepare_only=True)):
+        self.assertIn('资料位于 /sim', study_prompt(study, sim=True, prepare_only=True))
+        for text in (play, claude_speedrun, study_prompt(study, prepare_only=True)):
             self.assertNotIn('仅准备阶段不开始试玩', text)
             self.assertIn('/kb/README.md', text)
             self.assertIn('不用 Bash 扫描或搜索代替阅读', text)
