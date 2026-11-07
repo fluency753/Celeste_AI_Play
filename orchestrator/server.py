@@ -540,10 +540,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             if candidates is None and request_file is None:
                 result = budget.snapshot()
             else:
-                begin()
-                request = {'request_file': request_file} if request_file is not None else {'candidates':candidates}
                 if candidates is not None and request_file is not None:
                     return ['candidates 与 request_file 只能提供一个，本次未执行。']
+                begin()
+                request = {'request_file': request_file} if request_file is not None else {'candidates':candidates}
                 if input_format != 'celeste_ai':request['input_format'] = input_format
                 if request_id is not None:request['request_id'] = request_id
                 try:

@@ -222,7 +222,11 @@ def run_predictions(cfg, directory: Path, candidates):
         return {"info": replies[0]["info"], "results": results}
     finally:
         # Killing a timed-out Docker client does not reliably stop its container.
-        subprocess.run([docker, "rm", "-f", name], capture_output=True, timeout=10)
+        # 收尾失败不能把已经拿到的结果变成异常（主控限额预测会按“已提交未获结果”扣费）
+        try:
+            subprocess.run([docker, "rm", "-f", name], capture_output=True, timeout=10)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
 
 
 def write_replay(workspace, predictions, start_frame):

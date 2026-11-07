@@ -45,6 +45,31 @@ class PresetSimulationTests(unittest.TestCase):
         self.session.client = SimpleNamespace(call=lambda *a, **kw: self.state_calls.append(a) or {'state': {'frame': 10}})
         self.result = {'info': {'frame': 10}, 'results': [{'stop': 'done', 'frames': [[11, 1, 2]]}]}
 
+    def test_conflicting_request_sources_do_not_start_play_or_the_budget(self):
+        server = build_server(self.session)
+        with patch('orchestrator.sim_assist.run_predictions') as worker:
+            reply = asyncio.run(server.call_tool('simulate', {'candidates': [['1,R']], 'request_file': 'r.json',
+                                                              'request_id': 'both'}))
+        self.assertIn('只能提供一个', reply.content[0].text)
+        worker.assert_not_called()
+        self.assertFalse(self.budget.started)          # 被拒绝的请求不算第一次真正执行游戏工具
+
+    def test_worker_result_survives_a_slow_container_cleanup(self):
+        import subprocess
+        from orchestrator import sim_assist
+        replies = [{'ok': True, 'info': {'frame': 10}}, {'ok': True, 'results': [{'ok': True, 'stop': 'done'}]}]
+
+        def fake_run(command, **options):
+            if command[1] == 'rm':
+                raise subprocess.TimeoutExpired(command, 10)
+            options['stdout'].write(''.join(json.dumps(r) + '\n' for r in replies).encode('utf-8'))
+            return SimpleNamespace(returncode=0)
+        with patch('orchestrator.sim_assist.find_docker_exe', return_value='docker'), \
+             patch('orchestrator.sim_assist.subprocess.run', side_effect=fake_run):
+            result = sim_assist.run_predictions(self.cfg, self.run, [['1,R']])
+        self.assertEqual(result['info'], {'frame': 10})
+        self.assertEqual(len(result['results']), 1)
+
     def test_mcp_batch_spends_only_simulation_and_replays_same_request(self):
         server = build_server(self.session)
         with patch('orchestrator.sim_assist.run_predictions', return_value=self.result) as worker:

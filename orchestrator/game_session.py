@@ -2461,7 +2461,10 @@ class GameSession:
                     # are counted once in after_step, including menu helpers.
                     self.metrics.add(deaths=1)
             elif e['type'] == 'room':
-                self._transition_wait = None
+                # 同一次推进里先换房再在新房间死亡：死亡建立的重生等待不能被更早的换房事件清掉
+                wait = getattr(self, '_transition_wait', None)
+                if wait is None or type(e.get('frame')) is not int or e['frame'] >= wait.start_frame:
+                    self._transition_wait = None
             elif e["type"] == "complete":
                 if self._in_detour():
                     # 计划外地图通关：只记绕行成绩，不登记计划的待确认通关、不结束本次试玩

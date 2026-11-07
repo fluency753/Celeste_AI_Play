@@ -232,7 +232,7 @@ class RunConfig:
     playback_round_s: float = 1.5    # 一轮回放的最长时长（以 1A 第一间、一屏 320×180 的房间为准；房间面积是它的几倍就乘几倍）；
                                      # 按 playback_speed 画会超过时，这一轮整体按比例加速，在这个时长内画完
     thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
-    sim: bool = False                # 可选的主控预置模拟能力，须同时开启 pause_limit；不向 agent 暴露模拟器文件
+    sim: bool = False                # 速通预置模拟器：不限额时 Claude 直接调用 /sim；开 pause_limit 时改为主控限额预测（sim_mode.py）
     sim_assist: bool = False         # 新手模式的限额模拟：后台持有模拟器，真实试玩赚取体力
     knowledge_profile: str = "full"  # explore：精简入门资料和独立工作区；full：原有速通资料（由 mode 决定，见 modes.py）
     mode: str = "speedrun"           # 速通模式 speedrun / 探索模式 explore（互斥）；直播模式是 live，可以和任一个叠加
@@ -365,7 +365,7 @@ class RunConfig:
 
     @property
     def sim_dir(self) -> Path:
-        """预置模拟器的发布目录（只在本机，不入库；仅主控私有 worker 使用）。"""
+        """预置模拟器的发布目录（只在本机，不入库）：不限额时只读挂到 Claude 容器的 /sim，限额时只给主控私有 worker 用。"""
         return REPO_ROOT / "sim" / "dist"
 
     @property

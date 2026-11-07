@@ -406,6 +406,24 @@ class StoryWaitTests(unittest.TestCase):
         self.assertTrue(self.session.last_obs['controllable'])
         self.assertEqual(bridge.obs['frame'], bridge.death_frame + 1)
 
+    def test_room_change_before_a_death_in_the_same_step_keeps_the_respawn_wait(self):
+        before = observation(controllable=True, cutscene=False, deaths=2, room='10-z')
+        self.session._transition_wait = self.session._transition_observed = None
+        self.session.last_obs = copy.deepcopy(before)
+        self.session._ingest_transition(before)
+        after = copy.deepcopy(before)
+        after.update(frame=130, controllable=False)
+        after['player'].update(dead=True)
+        after['level'].update(room='11-a', deaths=3)
+        result = {'events': [{'type': 'room', 'frame': 110, 'detail': '11-a'},
+                             {'type': 'death', 'frame': 125, 'detail': '11-a'}]}
+        self.session._handle_events(result, after)
+        wait = self.session._transition_wait
+        self.assertIsNotNone(wait)                      # 更早的换房事件不清掉新房间里的死亡等待
+        self.assertEqual((wait.kind, wait.start_frame), ('respawn', 125))
+        self.session._handle_events({'events': [{'type': 'room', 'frame': 140, 'detail': '12'}]})
+        self.assertIsNone(self.session._transition_wait)   # 死亡之后再换房照常清掉
+
     def test_missing_player_alone_and_counter_from_another_identity_do_not_authorize_wait(self):
         for changed in ('none', 'room', 'sid', 'slot', 'epoch', 'counter_reset'):
             with self.subTest(changed=changed):
