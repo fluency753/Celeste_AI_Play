@@ -407,7 +407,8 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 | `setup.ps1` | 一键部署 | `-Check` 只检查；`-Only 步骤,...` |
 | `tools\setup_wizard.py` | 部署向导 | `--check`；`--only` |
 | `start_gpt.ps1` | 原生 GPT 的准备与试玩 | 见 5.5 节 |
-| `tools\deploy_bridge.ps1` | 编译安装桥接 Mod | `-CelesteDir`（必填）、`-Configuration` |
+| `tools\deploy_bridge.ps1` | 编译安装桥接 Mod（只检查目标目录里的游戏有没有在运行） | `-CelesteDir`（必填）、`-Configuration` |
+| `tools\game_instance.py` | AI 专用游戏副本（独立存档、设置、Mod 与连接，见使用说明 3.5 节） | `create`/`launch`/`status`/`update`/`select` |
 | `tools\build_obs_plugin.py` | 编译安装锁步插件 | `--obs-dir`、`--obs-version`、`--no-install` |
 | `tools\obs_setup.py` | OBS 配置与启动 | `setup`/`launch`/`stop`/`status`/`restore`；`--obs-dir`、`--show`、`--reset`、`--force` |
 | `tools\enter_save.py <存档>` | 菜单宏进入存档的关卡 | `--chapter N`、`--leave-active` |

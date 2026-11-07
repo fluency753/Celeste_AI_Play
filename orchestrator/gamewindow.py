@@ -30,6 +30,9 @@ def _api():
     user32.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
     user32.GetWindow.argtypes = [wt.HWND, ctypes.c_uint]
     user32.GetWindow.restype = wt.HWND
+    user32.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    user32.SetWindowTextW.argtypes = [wt.HWND, wt.LPCWSTR]
+    user32.SetWindowTextW.restype = wt.BOOL
     kernel32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
     kernel32.OpenProcess.restype = wt.HANDLE
     kernel32.QueryFullProcessImageNameW.argtypes = [wt.HANDLE, wt.DWORD, wt.LPWSTR, ctypes.POINTER(wt.DWORD)]
@@ -37,7 +40,7 @@ def _api():
     return ctypes, wt, user32, kernel32, enum_proc
 
 
-def _image_name(ctypes, wt, kernel32, pid: int) -> str:
+def _image_path(ctypes, wt, kernel32, pid: int) -> str:
     handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
     if not handle:
         return ""
@@ -45,34 +48,77 @@ def _image_name(ctypes, wt, kernel32, pid: int) -> str:
         size = wt.DWORD(1024)
         buf = ctypes.create_unicode_buffer(size.value)
         if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-            return os.path.basename(buf.value).lower()
+            return buf.value
         return ""
     finally:
         kernel32.CloseHandle(handle)
 
 
-def find_game_window() -> int | None:
-    """Celeste.exe 的主窗口（顶层、没有所有者、可见或最小化）；找不到或不是 Windows 时返回 None。"""
+def _image_name(ctypes, wt, kernel32, pid: int) -> str:
+    return os.path.basename(_image_path(ctypes, wt, kernel32, pid)).lower()
+
+
+def process_path(pid: int) -> str:
+    """进程的完整可执行文件路径；取不到或不是 Windows 时返回空串。"""
+    if not _IS_WINDOWS:
+        return ""
+    ctypes, wt, _user32, kernel32, _enum = _api()
+    return _image_path(ctypes, wt, kernel32, int(pid))
+
+
+def find_game_window(*, pid: int | None = None, game_dir=None) -> int | None:
+    """Celeste.exe 的主窗口（顶层、没有所有者、可见或最小化）；找不到或不是 Windows 时返回 None。
+    pid：只认这个进程的窗口。game_dir：只认这个目录里的 Celeste.exe。都不给时，AI 副本模式下只认副本目录
+    （个人的《蔚蓝》同时开着也不会被还原或采集），否则认任何 Celeste.exe。"""
     if not _IS_WINDOWS:
         return None
+    if pid is None and game_dir is None:
+        from .game_instance import current
+        marker = current()
+        game_dir = marker['dir'] if marker else None
     ctypes, wt, user32, kernel32, enum_proc = _api()
     found: list[int] = []
-    names: dict[int, str] = {}
+    paths: dict[int, str] = {}
 
     def callback(hwnd, _lparam):
         if not user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, 4):  # GW_OWNER：跳过附属窗口
             return True
-        pid = wt.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if pid.value not in names:
-            names[pid.value] = _image_name(ctypes, wt, kernel32, pid.value)
-        if names[pid.value] == "celeste.exe":
-            found.append(hwnd)
-            return False
-        return True
+        owner = wt.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if pid is not None and owner.value != pid:
+            return True
+        if owner.value not in paths:
+            paths[owner.value] = _image_path(ctypes, wt, kernel32, owner.value)
+        path = paths[owner.value]
+        if os.path.basename(path).lower() != "celeste.exe":
+            return True
+        if game_dir is not None:
+            from .game_instance import inside
+            if not inside(path, game_dir):
+                return True
+        found.append(hwnd)
+        return False
 
     user32.EnumWindows(enum_proc(callback), 0)
     return found[0] if found else None
+
+
+def window_title(hwnd: int) -> str:
+    if not _IS_WINDOWS:
+        return ""
+    ctypes, wt, user32, _kernel32, _enum = _api()
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetWindowTextW(hwnd, buf, len(buf))
+    return buf.value
+
+
+def set_window_title(hwnd: int, title: str) -> None:
+    """改另一个进程的窗口标题（发 WM_SETTEXT；SDL 按系统默认处理，游戏之后不会再改回去）。"""
+    if not _IS_WINDOWS:
+        return
+    ctypes, wt, user32, _kernel32, _enum = _api()
+    if not user32.SetWindowTextW(hwnd, title):
+        raise ctypes.WinError(ctypes.get_last_error())
 
 
 def game_executable() -> str | None:

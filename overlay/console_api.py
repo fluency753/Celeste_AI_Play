@@ -677,7 +677,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.7.1"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.8.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -1007,6 +1007,23 @@ def resume(run_dir: str, fresh_session: bool = False, new_recording: bool = Fals
             release_chat(current)
     argv = resume_args(directory, bool(fresh_session), bool(new_recording))
     return {**_launch(argv), "command": command_line(argv)}
+
+
+def instance_create(data: dict | None = None) -> dict:
+    """从现在用的游戏位置（个人安装）复制出 AI 专用副本，并把游戏位置改成它。"""
+    from orchestrator import game_instance
+    if orchestrator_status()["running"]:
+        raise ValueError("主控还在运行，结束后再创建 AI 副本")
+    name = (data or {}).get("name") or "main"
+    marker = game_instance.create(name)
+    game_instance.select(marker["dir"])
+    return {**marker, "prefs": load_prefs()}
+
+
+def instance_launch() -> dict:
+    """启动现在选中的 AI 副本（Steam 没开时先静默启动），窗口出现后在后台改好标题。"""
+    from orchestrator import game_instance
+    return game_instance.launch(background=True)
 
 
 def release(bridge_port: int = 47774) -> dict:

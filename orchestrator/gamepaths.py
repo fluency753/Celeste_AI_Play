@@ -98,13 +98,24 @@ SOURCE_NAMES = {"explicit": "命令行参数", "env": "环境变量 CELESTE_DIR"
                 "deploy": "部署向导", "running": "正在运行的游戏", "steam": "Steam 库"}
 
 
-def _celeste_sources(explicit=None) -> list[tuple[Path, str]]:
+def _configured_sources(explicit=None) -> list[tuple[Path, str]]:
     configured = [(explicit, "explicit"), (os.environ.get("CELESTE_DIR"), "env"),
                   (_console_prefs().get("celeste_dir"), "console"), (_deploy_answers().get("celeste_dir"), "deploy")]
     found: list[tuple[Path, str]] = []
     for item, source in configured:
         if item and Path(item).is_dir() and Path(item) not in [p for p, _ in found]:
             found.append((Path(item), source))
+    return found
+
+
+def configured_dir() -> Path | None:
+    """明确配置的游戏目录（环境变量、控制台、部署向导），不做自动查找；没有时返回 None。"""
+    found = _configured_sources()
+    return found[0][0] if found else None
+
+
+def _celeste_sources(explicit=None) -> list[tuple[Path, str]]:
+    found = _configured_sources(explicit)
     if found:
         return found
     for path, source in [(running_game_dir(), "running"), *[(p, "steam") for p in steam_app_dirs("Celeste")]]:
@@ -119,8 +130,12 @@ def celeste_dir_info() -> dict:
     if not found:
         return {"path": None, "source": None, "source_name": None}
     path, source = found[0]
+    from .game_instance import info
+    instance = info(path)
     return {"path": str(path), "source": source, "source_name": SOURCE_NAMES[source],
-            "everest": (path / "Celeste.dll").is_file(), "saves": (path / "Saves").is_dir()}
+            "everest": (path / "Celeste.dll").is_file(), "saves": (path / "Saves").is_dir(),
+            "instance": {k: instance[k] for k in ("name", "window_title", "source", "steam_appid") if k in instance}
+            if instance else None}
 
 
 def is_game_dir(path) -> bool:

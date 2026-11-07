@@ -685,6 +685,11 @@
         <button class="btn" type="button" id="saveGameDir">保存</button>
         <span class="note" id="gameDirNote">空着时自动查找：正在运行的游戏、Steam 库、部署向导记下的位置。</span>
       </div>
+      <div class="launch" style="margin-top:8px">
+        <button class="btn" type="button" id="createInstance" hidden title="从现在的游戏位置复制一份只给 AI 用的游戏：独立的存档、设置、Mod 环境与桥接连接，你自己的《蔚蓝》可以同时玩">创建 AI 专用副本</button>
+        <button class="btn" type="button" id="launchInstance" hidden title="启动 AI 专用副本（Steam 没开时先静默启动 Steam）">启动 AI 副本</button>
+        <span class="note" id="instanceNote" hidden></span>
+      </div>
     </section>
 
     <section class="pane" aria-labelledby="saveTitle">
@@ -1204,6 +1209,37 @@ function fillGameDir() {
   $("gameDirNote").textContent = game.path
     ? `现在用的：${game.path}（${game.source_name}）${game.everest ? "" : "；这个目录里没有 Everest"}`
     : "还没找到游戏：填写安装目录，或先启动游戏再点「刷新存档列表」。";
+  const instance = game.instance;
+  $("createInstance").hidden = !game.path || !!instance;
+  $("launchInstance").hidden = !instance;
+  $("instanceNote").hidden = !instance;
+  if (instance) $("instanceNote").textContent =
+    `AI 专用副本「${instance.name}」：独立存档与 Mod，窗口标题「${instance.window_title}」，OBS 只录这个窗口；你自己的《蔚蓝》可以同时玩（个人游戏里请停用 AI 模组）。`;
+}
+
+async function createInstance() {
+  if (!confirm("从现在的游戏位置复制一份只给 AI 用的游戏（约 2～3 GB，不复制你的 Mods 和存档），并把游戏位置改成它？")) return;
+  $("createInstance").disabled = true;
+  toast("正在复制游戏本体，可能要几十秒…");
+  try {
+    const result = await postJSON("/api/console/instance/create", {});
+    ui.options.prefs = result.prefs;
+    ui.options.game = await getJSON("/api/console/options").then(o => o.game);
+    fillGameDir();
+    toast(result.missing_mods && result.missing_mods.length
+      ? `副本已创建：${result.dir}。源安装里没有 AI 模组，请运行 deploy_bridge.ps1 -CelesteDir 副本目录`
+      : `副本已创建：${result.dir}`);
+  } catch (e) { toast(e.message, true); }
+  finally { $("createInstance").disabled = false; }
+}
+
+async function launchInstance() {
+  $("launchInstance").disabled = true;
+  try {
+    const result = await postJSON("/api/console/instance/launch", {});
+    toast(result.started ? "正在启动 AI 副本（需要时先启动 Steam）…" : "AI 副本已经在运行。");
+  } catch (e) { toast(e.message, true); }
+  finally { setTimeout(() => { $("launchInstance").disabled = false; }, 5000); }
 }
 
 async function saveGameDir() {
@@ -3097,6 +3133,8 @@ $("save").addEventListener("change", onSaveChange);
 $("newSave").addEventListener("input", () => { updateSummary(); schedulePreview(); });
 $("refreshSaves").addEventListener("click", refreshSaves);
 $("saveGameDir").addEventListener("click", saveGameDir);
+$("createInstance").addEventListener("click", createInstance);
+$("launchInstance").addEventListener("click", launchInstance);
 $("celesteDir").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveGameDir(); } });
 $("setup").addEventListener("input", schedulePreview);
 $("exploreUnlimited").addEventListener("change", () => { $("exploreSeconds").disabled = $("exploreUnlimited").checked; });

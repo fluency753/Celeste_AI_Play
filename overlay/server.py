@@ -278,6 +278,10 @@ def make_handler(pinned: Path | None):
                                                        bool(data.get("new_recording")))
                         elif self.path == "/api/console/release":
                             result = console_api.release()
+                        elif self.path == "/api/console/instance/create":
+                            result = console_api.instance_create(data)
+                        elif self.path == "/api/console/instance/launch":
+                            result = console_api.instance_launch()
                         elif self.path == "/api/console/prefs":
                             result = console_api.save_prefs(data)
                         elif self.path == "/api/console/prompt/preview":

@@ -26,12 +26,15 @@ if ($HotReload -and $Rollback) {
 }
 
 if (-not $HotReload) {
-    # Everest can also run through its private dotnet host rather than Celeste.exe.
+    # 只看部署目标目录里的游戏：AI 专用副本可以在个人的《蔚蓝》开着时部署（反过来也一样）。
+    # 取不到路径的 Celeste.exe 按在运行处理；Everest 也可能经它私有的 dotnet 宿主运行，那种情况一律按在运行处理。
+    $gameRoot = (Resolve-Path -LiteralPath $CelesteDir).Path.TrimEnd('\') + '\'
     $runningGame = Get-CimInstance Win32_Process -Filter "Name='Celeste.exe' OR Name='dotnet.exe'" | Where-Object {
-        $_.Name -eq 'Celeste.exe' -or $_.CommandLine -match '(?i)(?:^|[\\/"\s])Celeste\.dll(?:["\s]|$)'
+        ($_.Name -eq 'Celeste.exe' -and (-not $_.ExecutablePath -or $_.ExecutablePath.StartsWith($gameRoot, [StringComparison]::OrdinalIgnoreCase))) -or
+        ($_.Name -eq 'dotnet.exe' -and $_.CommandLine -match '(?i)(?:^|[\\/"\s])Celeste\.dll(?:["\s]|$)')
     }
     if ($runningGame) {
-        throw "维护部署需要先安全关闭游戏；已安装常驻核心的兼容逻辑更新请用 -HotReload"
+        throw "维护部署需要先安全关闭 $CelesteDir 里的游戏；已安装常驻核心的兼容逻辑更新请用 -HotReload"
     }
 }
 

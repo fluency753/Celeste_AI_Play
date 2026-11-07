@@ -16,6 +16,9 @@ def validate_bridge(hello):
         require_pico8_guard(hello)
     except ValueError as exc:
         raise RuntimeError(str(exc) + '未开始录制或进档。') from exc
+    # AI 专用副本模式：只接管副本里的游戏（个人的《蔚蓝》同时开着、也装了 AI 模组时可能先占了端口），并改好窗口标题
+    from .game_instance import check_identity
+    check_identity(hello)
 
 
 def preflight_bridge(port):

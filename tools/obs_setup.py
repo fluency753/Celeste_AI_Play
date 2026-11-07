@@ -131,16 +131,77 @@ def _item(source: dict, item_id: int, x: float, y: float, bounds: tuple[float, f
     }
 
 
+def capture_target(cfg: dict) -> tuple[str, int]:
+    """游戏画面与声音采集匹配哪个窗口：(OBS 的窗口串 "标题:类名:程序", 匹配方式)。
+    AI 专用副本模式下按窗口标题匹配（1）：标题不符的窗口直接排除，个人的《蔚蓝》同时开着也不会被录进去；
+    否则按可执行文件匹配（2，原来的做法）。"""
+    try:
+        from orchestrator.game_instance import current
+        marker = current()
+    except Exception:  # noqa: BLE001（读不到副本标记时按原来的方式）
+        marker = None
+    if marker:
+        title = marker["window_title"].replace(":", "#3A")
+        return f"{title}:SDL_app:Celeste.exe", 1
+    return cfg["game_window"], 2
+
+
+GAME_SOURCES = ("game_capture", "wasapi_process_output_capture")
+
+
+def sync_game_capture(collection: Path, cfg: dict) -> bool:
+    """已有场景集合里由本工具建的游戏画面／声音来源（窗口串以 :SDL_app:Celeste.exe 结尾）改成当前的采集目标；
+    OBS 运行时不改（它退出时会写回自己的设置）。返回是否改了。"""
+    if obs_running():
+        return False
+    try:
+        data = json.loads(collection.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    window, priority = capture_target(cfg)
+    changed = False
+    for source in data.get("sources", []):
+        settings = source.get("settings") or {}
+        if source.get("id") in GAME_SOURCES and str(settings.get("window", "")).endswith(":SDL_app:Celeste.exe"):
+            if settings.get("window") != window or settings.get("priority") != priority:
+                settings.update(window=window, priority=priority)
+                source["settings"] = settings
+                changed = True
+    if changed:
+        collection.write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
+    return changed
+
+
+def capture_mismatch(cfg: dict) -> str | None:
+    """AI 副本模式下 OBS 正在运行、而它的场景集合仍不按副本窗口标题采集时，返回说明；其他情况返回 None。"""
+    window, priority = capture_target(cfg)
+    if priority != 1:
+        return None
+    collection = obs_config_dir() / "basic" / "scenes" / f"{cfg.get('collection_file', cfg['collection'])}.json"
+    try:
+        data = json.loads(collection.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for source in data.get("sources", []):
+        settings = source.get("settings") or {}
+        if source.get("id") == "game_capture" and str(settings.get("window", "")).endswith(":SDL_app:Celeste.exe"):
+            if settings.get("window") != window or settings.get("priority") != priority:
+                return ("OBS 正在运行，它的游戏画面来源仍按可执行文件匹配窗口，个人的《蔚蓝》开着时可能录错游戏。"
+                        "请关闭 OBS，主控会改成按 AI 副本的窗口标题采集后重新启动它")
+    return None
+
+
 def scene_collection(cfg: dict) -> dict:
     width, height = cfg["canvas"]
     hud = cfg["hud"]
+    window, priority = capture_target(cfg)   # 2：按可执行文件匹配窗口；1：按窗口标题（AI 副本）
     game = _source("Celeste 游戏画面", "game_capture", {
-        "capture_mode": "window", "window": cfg["game_window"], "priority": 2,  # 2：按可执行文件匹配窗口
+        "capture_mode": "window", "window": window, "priority": priority,
         "capture_cursor": False, "allow_transparency": False, "limit_framerate": False,
         "capture_overlays": False, "anti_cheat_hook": True, "hook_rate": 1, "capture_audio": False,
     })
     sound = _source("Celeste 游戏声音", "wasapi_process_output_capture",
-                    {"window": cfg["game_window"], "priority": 2}, mixers=0xFF)
+                    {"window": window, "priority": priority}, mixers=0xFF)
     # OBS 33 的本地文件源不能跨源访问回环服务；默认用同源 HTTP，启动 OBS 前先启动 HUD 服务。
     page = REPO_ROOT / "overlay" / "hud.html"
     overlay = _source("HUD", "browser_source", {
@@ -213,7 +274,9 @@ def setup(cfg: dict, reset: bool = False) -> None:
     print(f"配置文件：{profile}{'（已更新）' if changed else ''}")
     if collection.exists() and not reset:
         resized = sync_hud_size(collection, cfg)
-        print(f"场景集合：{collection}（已存在，" + ("已更新 HUD 来源；保留 OBS 自定义布局" if resized else "未改动")
+        captured = sync_game_capture(collection, cfg)
+        notes = [text for flag, text in ((resized, "已更新 HUD 来源"), (captured, "游戏采集已改为当前目标")) if flag]
+        print(f"场景集合：{collection}（已存在，" + ("、".join(notes) + "；保留 OBS 自定义布局" if notes else "未改动")
               + "；要重建用 setup --reset）")
         return
     if collection.exists():

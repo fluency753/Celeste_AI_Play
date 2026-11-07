@@ -773,6 +773,8 @@ def ensure_obs() -> bool:
     返回 True 表示是主控启动的（结束时由主控关掉）；OBS 已经在运行就直接用，返回 False。"""
     from tools import obs_setup  # noqa: WPS433（延迟导入：不录屏时不碰 OBS）
     if obs_setup.obs_running():
+        if problem := obs_setup.capture_mismatch(obs_setup.load_config()):
+            raise SystemExit(problem + "。未开始录制或进档")
         print("[record] OBS 已经在运行，沿用当前场景；结束时不关闭", flush=True)
         return False
     try:

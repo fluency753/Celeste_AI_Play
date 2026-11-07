@@ -4,6 +4,16 @@
 
 ## 2026-11-07
 
+- **控制台 1.8.0：AI 专用游戏副本**：给智能体复制一份专用的游戏，有自己的存档、设置、Mod 环境与桥接连接，个人的《蔚蓝》可以同时游玩。
+  - **副本**：新 `tools/game_instance.py`（`create` / `launch` / `status` / `update` / `select`，逻辑在 `orchestrator/game_instance.py`），控制台“游戏位置”加「创建 AI 专用副本」「启动 AI 副本」。从个人安装复制游戏本体到 `local/instances/<名字>`，Mods 只放两个 AI 模组，Saves 从空开始（只复制 `settings.celeste`、`modsettings-Everest.celeste` 作初始设置），不复制存档、个人 Mod、日志与备份，源安装一律不改；目录里的 `celeste-ai-instance.json` 标记它是副本。游戏位置指向副本时进入副本模式。
+  - **Steam**：Steam 版《蔚蓝》启动时必须连上正在运行的 Steam（`SteamAPI.Init` 失败就退出），启动副本时 Steam 没开就静默启动。副本的 `steam_appid.txt` 默认 480（Spacewar），个人的《蔚蓝》仍能从 Steam 启动，AI 也不会解锁账号的《蔚蓝》成就。
+  - **连接与身份**：副本沿用默认端口；主控接管前核对桥接报告的模组路径在副本目录里（`bridge_requirements.validate_bridge` → `game_instance.check_identity`），个人游戏也加载了 AI 模组、先占了端口时拒绝开始。
+  - **窗口与录像**：接管时把副本窗口标题改成 `Celeste AI Play`；`gamewindow.find_game_window` 在副本模式下只认副本目录里的 Celeste.exe（还原最小化、采集尺寸不会碰到个人游戏），另可按进程号查找。OBS 的游戏画面与声音来源改为按窗口标题匹配（标题不符的窗口直接排除）；OBS 关着时 `obs_setup` 自动改好已有场景集合，开着且仍是旧设置时拒绝开始录制。
+  - **输入**：不需要另外隔离——窗口没有焦点时 Monocle 的 `MInput.Update` 把键盘与手柄都清空。
+  - `tools/deploy_bridge.ps1` 只检查部署目标目录里的游戏有没有在运行。
+  - 实测（本机）：副本直接运行、桥接的模组路径指向副本；副本开着时个人的《蔚蓝》照常从 Steam 启动，端口归先启动的副本，个人游戏只在日志里记端口被占用；外部改的窗口标题保持不变。
+  验证：新增 `calibration/game_instance_test.py`（复制范围、拒绝不安全的目标与来源、更新不动副本状态、身份核验、OBS 按标题采集与场景集合改写）；全量回归通过。
+
 - **控制台 1.7.1：逐行审查协作者 11-02 至 11-07 的提交后修的三处小问题**：
   - **换房后在新房间死亡，重生等待被清掉**：同一次推进里先换房、再在新房间死亡时，主控先按死亡建了重生等待，随后处理更早的换房事件又把它清掉，agent 剧情模式下这次重生不再自动有界等待。现在只有晚于等待起点的换房才清。
   - **`simulate` 同时给 `candidates` 与 `request_file` 时**先开始计时（结束准备阶段）再拒绝；改为先校验。
