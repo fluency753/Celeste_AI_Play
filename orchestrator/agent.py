@@ -206,6 +206,7 @@ class ClaudeRunner(SessionControls):
         self._events = open(run_dir / "agent_events.jsonl", "a", encoding="utf-8")
         self._turn_done = asyncio.Event()
         self._init_checked = False
+        self._parked_marked = False
         self.stop_reason = ""
         self._command_active = False             # 正在执行主控自己发出的斜杠命令（/effort）
         self._command_reply = ""
@@ -1020,6 +1021,12 @@ class ClaudeRunner(SessionControls):
             if not self._init_checked:
                 print(f"[agent] model={event.get('model')} tools={tools} mcp={servers}", flush=True)
             self._init_checked = True
+            # 挂起续跑：原会话已经接上（--resume 找不到会话时不会输出 init），原运行不再保留存档槽
+            parked_source = getattr(self.cfg, '_parked_source', None)
+            if parked_source and self.resume and not self._parked_marked:
+                from .parked_run import mark_resumed
+                mark_resumed(parked_source, self.run_dir)
+                self._parked_marked = True
             if unexpected:
                 print(f"[agent] 发现不应开放的工具 {unexpected}，立即停止", flush=True)
                 self.stop_reason = f"隔离检查失败：{unexpected}"

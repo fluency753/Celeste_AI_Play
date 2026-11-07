@@ -4,6 +4,9 @@
 
 ## 2026-11-07
 
+- **控制台 1.7.0：Claude 执行器也能“挂起以切换”**：原来只有 Codex 能在独立存档槽原生保存退出到菜单后挂起、交还游戏，之后接回原会话续跑；现在两个执行器相同。HUD 暂停且当前轮次结束、使用独立存档槽时显示「挂起以切换」，Claude 挂起时结束的是 Claude Code 进程；控制台「恢复挂起试玩」须用原执行器接回原会话（`--resume` 时执行器与原运行不同、会话尚未开始或加 `--fresh-session` 都拒绝）。Claude 在 Claude Code 输出第一条 init（原会话已接上）时把原运行标为已续跑，之后原运行不再保留存档槽（Codex 仍在线程恢复成功时标记）。开局预检仍只用于 Codex。
+  验证：挂起控制回归改为两个执行器都跑（无独立存档槽不能挂起、提示文字按执行器），新增 Claude 接上会话后标记原挂起运行的回归；全量回归通过。
+
 - **控制台 1.6.0：预置模拟器按是否限额区分，Claude 的工作区也能用 `/workspace/.git`**：
   - **模拟器**：不限额时 Claude 照旧直接调用 `/sim`（容器方式下本机有模拟器时默认开，推演不限，适合大规模搜索最优路线）；开 `--limit-planning` 时两个执行器都改为主控限额预测（`simulate`，不挂 `/sim`，每批有效预测扣一轮），Codex 仍只有这一种。挂着 `/sim` 无法计量（任何 Shell 都能调用它），只能封锁 Shell，暂停和聊天期间也就不能操作工作区；只记账又约束不了。所以 1.5.0 里 Claude 的“只记账”`--limit-planning` 撤掉，删去 `orchestrator/pausegate.py` 和回放里的扣轮次逻辑。Claude 本机运行方式加 `--limit-planning` 也能用主控预测。提示词 `*_claude_zh.md` 改名为 `*_direct_zh.md`（删去 `pause_claude_zh.md`）；知识库的分段标记改为 `<!-- sim:direct -->` / `<!-- sim:controller -->`，按 `sim_mode.kb_variant` 选择（两种渲染仍分别与改动前、改动后的原文逐字相同）。
   - **`/workspace/.git`**：两个执行器都把工作区的 `.git` 固定为真实目录并单独嵌套挂载（与 Codex 相同）。Claude 的沙箱让 `.git/config` 和 `.git/hooks` 保持只读，智能体自己 `git init` 写不了配置，所以 `.git` 是空目录时由主控以 agent 身份在沙箱外建好仓库并写入默认作者（工作区标签），之后智能体照常 add/commit；`.git` 里已有内容时不动。镜像里 `git init` 改用空模板（不再复制示例钩子）。

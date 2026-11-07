@@ -319,7 +319,7 @@ class SessionControls:
                             self.control.mark(row["id"], "waiting", "等待提交给当前会话")
                         elif row["kind"] == "park":
                             if not self._can_park():
-                                raise ValueError("请先暂停 Codex 试玩，并确认使用了独立存档槽")
+                                raise ValueError("请先暂停试玩、等当前轮次结束，并确认使用了独立存档槽")
                             async with self.action_lock:
                                 obs = (await asyncio.to_thread(self.session.bridge_call, "observe",
                                                                image=False, entities=False, tiles=False))["obs"]
@@ -330,7 +330,8 @@ class SessionControls:
                                 self.parked_frame = obs['frame']
                                 self.parked_for_switch = True
                                 self.stop_requested = True
-                                self.control.mark(row["id"], "submitted", "正在结束 App Server、保存录像并交还游戏")
+                                ending = "App Server" if getattr(self.cfg, 'engine', None) == 'codex' else "Claude Code 会话"
+                                self.control.mark(row["id"], "submitted", f"正在结束 {ending}、保存录像并交还游戏")
                             return
                         elif row["kind"] == "interrupt":
                             # 显式中断独立于普通停止；收尾时保留接管，可 --resume 接着玩。
@@ -603,7 +604,8 @@ class SessionControls:
                 'effort_levels':getattr(self, 'runtime_efforts', self.capabilities.effort_levels)}
 
     def _can_park(self):
-        return (getattr(self.cfg, 'engine', None) == 'codex' and not self.chat_only and self.session is not None
+        # 挂起以切换：两个执行器相同（原生保存退出到菜单、交还游戏，之后接回原会话续跑）
+        return (not self.chat_only and self.session is not None
                 and not self.session.done and self.paused and not self.pausing and not self.turn_active
                 and not self.stop_requested and not getattr(self, '_bridge_reload_failed', False)
                 and type(getattr(self.cfg, 'save_slot', None)) is int)

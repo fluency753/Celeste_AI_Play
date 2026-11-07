@@ -493,8 +493,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if parked:
             if parked.get('resumed_by'):
                 raise SystemExit(f"该挂起已续跑，请从新的运行继续：{parked['resumed_by']}")
-            if args.fresh_session or args.no_agent or cfg.engine != 'codex' or not state.get('session_id'):
-                raise SystemExit('挂起续跑须接回原 Codex 会话')
+            if (args.fresh_session or args.no_agent or cfg.engine != state.get('engine', 'claude')
+                    or not state.get('session_id') or state.get('session_pending')):
+                raise SystemExit('挂起续跑须用原执行器接回原会话')
             if cfg.save_slot != parked['parked_slot'] or cfg.save != parked['parked_save']:
                 raise SystemExit('挂起续跑须使用原存档及槽位')
             cfg._parked_source = previous['dir']

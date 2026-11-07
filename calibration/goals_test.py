@@ -273,16 +273,27 @@ class GoalTests(unittest.TestCase):
 
 class StopControlTest(unittest.IsolatedAsyncioTestCase):
     async def test_park_refuses_live_level_then_accepts_saved_menu_without_inputs(self):
+        for engine in ('codex', 'claude'):        # 挂起以切换：两个执行器相同
+            with self.subTest(engine=engine):
+                await self._park_after_native_save(engine)
+
+    async def _park_after_native_save(self, engine):
+        from orchestrator.agent import ClaudeRunner
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            cfg = RunConfig(agent='test', save='test', save_slot=8, model='test', engine='codex')
+            cfg = RunConfig(agent='test', save='test', save_slot=8, model='test', engine=engine)
             metrics = Metrics(root / 'metrics.json', 'test', 'test', 'medium', 600)
             session = SimpleNamespace(done=False, goals=GoalManager(root), goal_values=lambda: BASE)
             session.bridge_call = Mock(side_effect=[
                 {'obs':{'scene':'Level', 'frame':100}},
                 {'obs':{'scene':'Overworld', 'menu':{'current':'OuiFileSelect'}, 'saving':False, 'frame':105}},
             ])
-            runner = CodexRunner(cfg, root, session, metrics, 'container', start_paused=True)
+            runner = (CodexRunner(cfg, root, session, metrics, 'container', start_paused=True) if engine == 'codex'
+                      else ClaudeRunner(cfg, root, session, metrics, '', start_paused=True))
+            self.assertTrue(runner._can_park())
+            cfg.save_slot = None                  # 没有独立存档槽不能挂起
+            self.assertFalse(runner._can_park())
+            cfg.save_slot = 8
             first = runner.control.enqueue('park')
             task = asyncio.create_task(runner._controls())
             try:
@@ -296,6 +307,8 @@ class StopControlTest(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(task, 3)
                 self.assertEqual((runner.parked_for_switch, runner.parked_frame), (True, 105))
                 self.assertEqual(runner.control.snapshot()['actions'][0]['id'], accepted)
+                self.assertIn('App Server' if engine == 'codex' else 'Claude Code 会话',
+                              runner.control.snapshot()['actions'][0]['detail'])
                 self.assertEqual([call.args for call in session.bridge_call.call_args_list],
                                  [('observe',), ('observe',)])
             finally:

@@ -152,6 +152,34 @@ class ResumePositionTests(unittest.TestCase):
             mark_resumed(previous, root / 'player' / 'continued')
             check_reserved_slot(root, cfg, None)
 
+    def test_claude_marks_parked_run_once_its_session_is_reconnected(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from types import SimpleNamespace
+        from orchestrator.agent import ClaudeRunner
+        from orchestrator.metrics import Metrics
+        from orchestrator.parked_run import parked_summary
+        from orchestrator.session_store import write_json
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            previous, run_dir = root / 'old', root / 'new'
+            run_dir.mkdir()
+            write_json(previous / 'summary.json', {'parked':True, 'parked_slot':8, 'parked_save':'save'})
+            cfg = RunConfig(agent='a', save='save', save_slot=8, model='m')
+            cfg._parked_source = previous
+            metrics = Metrics(run_dir / 'metrics.json', 'a', 'm', 'high', 60)
+            runner = ClaudeRunner(cfg, run_dir, SimpleNamespace(done=False), metrics, '', session_id='s', resume=True)
+            try:
+                self.assertNotIn('resumed_by', parked_summary(previous))   # 进程还没接上原会话
+                init = {'type':'system', 'subtype':'init', 'model':'m', 'tools':[], 'mcp_servers':[]}
+                runner._handle(init)
+                self.assertEqual(parked_summary(previous)['resumed_by'], str(run_dir))
+                write_json(previous / 'summary.json', {**parked_summary(previous), 'resumed_by':'other'})
+                runner._handle(init)                                      # 之后每轮的 init 不再改写
+                self.assertEqual(parked_summary(previous)['resumed_by'], 'other')
+            finally:
+                runner.close_events()
+
     def test_failed_native_restore_never_releases_the_loaded_state(self):
         from calibration.menu_navigation_test import GameIpc, file_select, reply, blocked
         for response, capable in ((reply(level(save='other', slot=9)), True),

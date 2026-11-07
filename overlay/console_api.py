@@ -677,7 +677,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.6.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.7.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -998,7 +998,7 @@ def resume(run_dir: str, fresh_session: bool = False, new_recording: bool = Fals
         raise ValueError("只能续跑已挂起的试玩或最近一次仍保持冻结的运行")
     if row.get("parked"):
         if fresh_session:
-            raise ValueError("挂起续跑须接回原 Codex 会话")
+            raise ValueError("挂起续跑须接回原会话，不能另起新会话")
         if orchestrator_status()["running"]:
             raise ValueError("请先挂起或结束当前试玩")
         from orchestrator.conversations import release_chat, selected_run

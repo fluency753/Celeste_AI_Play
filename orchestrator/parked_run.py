@@ -1,4 +1,4 @@
-"""Durable game handoff for a Codex thread with an independently saved slot."""
+"""挂起以切换：试玩在独立存档槽原生保存退出后交还游戏，之后接回原会话续跑（Claude 与 Codex 执行器相同）。"""
 import json
 
 
