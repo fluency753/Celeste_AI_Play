@@ -25,6 +25,11 @@ def denial(controller, name, arguments=None):
     """Read current facts rather than maintaining another lifecycle state machine."""
     requested = str(name)
     name = tool_name(name)
+    mismatch = getattr(controller, 'model_mismatch', None)
+    if mismatch:
+        # 服务模型被换掉（agent.ClaudeRunner._model_switched）：换回指定模型之前什么都不执行，包括 HUD 思考语句
+        return (f"服务模型被自动换成了 {mismatch['actual']}（指定 {mismatch['expected']}），主控已拦下，"
+                f"本次 {requested} 未执行。")
     if name in CONTROL_TOOLS:
         return effort_denial(controller, arguments.get('level')) if name == 'set_effort' and arguments else None
     if name not in GAME_ACTIONS | REPORT_TOOLS:

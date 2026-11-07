@@ -748,6 +748,19 @@ def net_resume_prompt(minutes: float, chat: bool = False, study_note: str | None
     return notification('reconnect', facts=text)
 
 
+def model_resume_prompt(expected: str, actual: str, chat: bool = False, study_note: str | None = None) -> str:
+    """服务模型被换掉、主控拦下并重启换回之后，接着同一个会话发出的第一条消息。"""
+    text = (f"（系统）模型服务刚才把这次会话自动换成了 {actual}（本次指定 {expected}），主控当场拦下：从那时起的游戏工具与"
+            f"工作区工具都没有执行。主控已结束原进程，用 {expected} 接着同一个会话继续。")
+    from .button_prompts import notification
+    if chat:
+        return notification('wake_chat', facts=text + "请接着处理用户刚才的消息。")
+    text += "这段时间游戏一直冻结，章节计时没有走。正式思考里不要提这件事。"
+    if study_note:
+        return notification('resume_prepare', facts=text + "准备阶段还没有结束：\n" + study_note)
+    return notification('reconnect', facts=text)
+
+
 def resume_prompt(reason: str, minutes: float, study_note: str | None = None) -> str:
     """Claude Code 进程被结束后，用 --resume 接着同一个会话时发出的第一条消息。"""
     text = (f"（系统）{reason}，你的上一轮在中途被结束，暂停了约 {minutes:.0f} 分钟，现在接着同一个会话继续。"

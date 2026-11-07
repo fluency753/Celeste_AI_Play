@@ -289,7 +289,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 72;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 73;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -310,6 +310,7 @@ const STATUS = {
   replaying: ["规划回放", "replay", true],
   quota_wait:["等待额度重置", "idle", false],
   net_wait:  ["模型服务不可用，等待恢复", "retrying", false],
+  model_wait:["模型被换，正在换回", "retrying", false],
   done:      ["已完成", "idle", false],
   stopped:   ["已结束", "idle", false],
 };

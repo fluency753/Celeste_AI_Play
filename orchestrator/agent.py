@@ -21,6 +21,13 @@ Max 额度：默认一直用到额度真正用完（Claude Code 报告限额拒�
 这一轮以连接错误结束）时，主控认定断网，结束 Claude Code 进程，游戏保持冻结，现实用时与思考僵直从第一次连不上起停表；
 之后每隔一段时间从智能体所在的位置（容器里）探测模型接口，连续两次连得上就用 --resume 接着同一个会话继续。
 连续断网时等待逐次加长（服务过载时探测总能连上，避免反复重启）；超过 --net-wait-max-hours 结束本次运行。
+
+服务模型被换掉（例如 Opus 5.5 的安全分类器拦下回复后，Claude Code 自动回退到 Opus 4.8，并在这个进程里一直用它）：
+回复里出现 fallback 内容块，或（Anthropic 订阅）回复、init 报告的模型与指定模型不同，就当场拦下——之后的游戏工具与
+工作区工具一律拒绝，游戏保持冻结，现实用时停表——结束 Claude Code 进程，用 --resume 与指定的具体模型名接着同一个会话；
+重启后第一条回复是指定模型才放行。连续 MODEL_RESTARTS 次换不回就保持暂停，等用户在 HUD 继续（再试一次）或中断。
+指定模型：命令行写具体模型名（claude-…）时以它为准；写别名（opus）时取本次运行第一次 init 报告的模型，记在
+run_state.json 的 model_expected，续跑沿用；换回时用这个具体名字启动，避免别名被解析成别的模型。
 """
 from __future__ import annotations
 
@@ -42,7 +49,8 @@ from .execution import workspace_capabilities
 from .session_controls import RuntimeCapabilities, SessionControls
 from .session_store import load_json, write_json
 from .sim_mode import agent_sim
-from .prompting import play_prompt, study_prompt, resume_prompt, net_resume_prompt, first_play_prompt, continue_play_prompt
+from .prompting import (play_prompt, study_prompt, resume_prompt, net_resume_prompt, model_resume_prompt,
+                        first_play_prompt, continue_play_prompt)
 from .telemetry import publish
 
 GAME_TOOLS = ['mcp__celeste__' + name for name in
@@ -54,6 +62,13 @@ EFFORT_OK = re.compile(r"^Set effort level to ([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\s|
 # "Claude AI usage limit reached|1792766400"、"You've hit your limit · resets 3pm"
 LIMIT_TEXT = re.compile(r"usage limit|hit your (?:usage )?limit|rate[ _]limit", re.I)
 CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
+MODEL_RESTARTS = 2      # 服务模型被换掉后自动重启换回的次数；连续这么多次都换不回就保持暂停
+
+
+def model_key(name) -> str:
+    """比较模型名用：去掉 [1m] 之类的后缀与结尾的日期（claude-sonnet-4-5-20250929 与 claude-sonnet-4-5 相同）。"""
+    text = re.sub(r"\[[^\]]*\]$", "", str(name or "").strip().lower())
+    return re.sub(r"-\d{8}$", "", text)
 # 模型连不上：没有 HTTP 响应（连接被拒、DNS 失败、超时、断开），或网关/服务不可用、过载
 NET_STATUS = frozenset({408, 500, 502, 503, 504, 529})
 NET_TEXT = re.compile(r"connect|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EPIPE|socket hang up|"
@@ -207,6 +222,13 @@ class ClaudeRunner(SessionControls):
         self._turn_done = asyncio.Event()
         self._init_checked = False
         self._parked_marked = False
+        # 服务模型被换掉：{"expected", "actual", "how", "reason"}；不为空时拦下所有工具（见模块说明）
+        self.model_mismatch: dict | None = None
+        self._model_failures = 0                 # 连续几次重启都没换回指定模型
+        self._model_metrics_paused = False       # 是主控为换模型暂停了计时（用户本来就暂停着时不动）
+        self._model_blocked_proc = None          # 已为换模型拦下、正在结束的那个 Claude Code 进程
+        self._model_notice = ""                  # 最近一条 informational 事件（例如安全分类器拦下了回复）
+        self._expected_model = self._saved_expected_model()
         self.stop_reason = ""
         self._command_active = False             # 正在执行主控自己发出的斜杠命令（/effort）
         self._command_reply = ""
@@ -223,6 +245,9 @@ class ClaudeRunner(SessionControls):
     def _workspace_hook_guard(self, request):
         if request.get('session_id') != self.session_id:
             return '工具所属会话不匹配，本次未执行。'
+        if self.model_mismatch is not None:
+            return (f"服务模型被自动换成了 {self.model_mismatch['actual']}（指定 {self.model_mismatch['expected']}），"
+                    "主控已拦下，本次工具未执行。")
         if self.stop_requested or not self.turn_active or self.turn_done.is_set():
             return '发起工具请求的执行器正在退出或轮次已结束，本次未执行；等待当前会话的新指令。'
         return None
@@ -284,9 +309,134 @@ class ClaudeRunner(SessionControls):
         return self.metrics.state.effort or self.cfg.effort
 
     def _model_name(self) -> str:
-        """传给 Claude Code 的模型名；第三方提供方可以加后缀（例如 [1m]：按 100 万 token 上下文压缩）。"""
+        """传给 Claude Code 的模型名；第三方提供方可以加后缀（例如 [1m]：按 100 万 token 上下文压缩）。
+        服务模型被换掉后重启换回时（Anthropic 订阅），用本次运行的具体模型名启动，不让别名被解析成别的模型。"""
+        if not self.cfg.third_party and self._expected_model and self.model_mismatch is not None:
+            return self._expected_model
         suffix = (self.cfg.provider_info or {}).get("model_suffix") or "" if self.cfg.third_party else ""
         return self.cfg.model + suffix
+
+    # ------------------------------------------------------------ 服务模型核对
+
+    def _explicit_model(self) -> str | None:
+        """命令行写的是具体模型名（claude-…）时返回它；写的是别名（opus、sonnet）时返回 None。"""
+        name = str(self.cfg.model or "")
+        return name if not self.cfg.third_party and re.fullmatch(r"claude-[a-z0-9][a-z0-9.\-]*", name) else None
+
+    def _saved_expected_model(self) -> str | None:
+        """run_state.json 里记下的本次运行的具体模型（只在指定的模型名没变时沿用）。"""
+        try:
+            state = load_json(self.run_dir / "run_state.json")
+        except (OSError, ValueError):
+            state = None
+        record = state.get("model_expected") if isinstance(state, dict) else None
+        if isinstance(record, dict) and record.get("requested") == self.cfg.model and isinstance(record.get("resolved"), str):
+            return record["resolved"]
+        return self._explicit_model()
+
+    def _remember_expected_model(self) -> None:
+        path = self.run_dir / "run_state.json"
+        try:
+            state = load_json(path)
+        except (OSError, ValueError):
+            return                               # 准备阶段等还没有 run_state.json：只记在内存
+        if not isinstance(state, dict):
+            return
+        state["model_expected"] = {"requested": self.cfg.model, "resolved": self._expected_model}
+        try:
+            write_json(path, state, indent=2)
+        except OSError as exc:
+            print(f"[agent] 未能保存指定模型，只保留在内存：{exc}", flush=True)
+
+    def _expect_model(self, model: str) -> None:
+        """system/init 报告的模型：第一次见到时定为本次运行的指定模型；之后（Anthropic 订阅）不同就拦下。"""
+        if self._expected_model is None:
+            self._expected_model = self._explicit_model() or model
+            self._remember_expected_model()
+        if not self.cfg.third_party and model_key(model) != model_key(self._expected_model):
+            self._model_switched(model, "Claude Code 报告的当前模型")
+
+    def _check_reply_model(self, event: dict, message: dict) -> None:
+        """每条回复都核对所用的模型：fallback 内容块（任何提供方）或与指定模型不同（Anthropic 订阅）就拦下；
+        拦下之后重启的会话第一条用指定模型的回复到达时放行。"""
+        model = message.get("model")
+        if event.get("parent_tool_use_id") or not model or model == "<synthetic>":
+            return
+        fallback = next((block for block in message.get("content") or []
+                         if isinstance(block, dict) and block.get("type") == "fallback"), None)
+        if fallback is not None:
+            self._model_switched((fallback.get("to") or {}).get("model") or model, "回复时自动回退")
+        elif (not self.cfg.third_party and self._expected_model
+              and model_key(model) != model_key(self._expected_model)):
+            self._model_switched(model, "回复所用的模型")
+        elif self.model_mismatch is not None:
+            self._model_restored(model)
+
+    def _model_switched(self, actual: str, how: str) -> None:
+        """当场拦下：之后的工具一律拒绝（game_policy.denial 与工作区钩子都看 model_mismatch），计时停表，结束进程。"""
+        if self.stop_reason or (self.model_mismatch is not None and self._model_blocked_proc is self.proc):
+            return                               # 这个进程已经拦下、正在结束
+        again = self.model_mismatch is not None  # 重启换回后又被换掉
+        expected = self._expected_model or self.cfg.model
+        self.model_mismatch = {"expected": expected, "actual": actual, "how": how, "reason": self._model_notice}
+        self._model_blocked_proc = self.proc
+        if self.pause_at is None and not self._model_metrics_paused:
+            self.metrics.pause(status="model_wait")
+            self._model_metrics_paused = True
+        self.metrics.update(thought="")
+        reason = f"；之前的提示：{self._model_notice}" if self._model_notice else ""
+        text = (f"服务模型{'重启后又' if again else ''}被换成了 {actual}（本次指定 {expected}；{how}{reason}）。"
+                "主控已拦下：之后的游戏工具与工作区工具一律不执行，游戏保持冻结，现实用时停表；"
+                "正在结束 Claude Code 进程，用指定模型接着同一个会话。")
+        print(f"[agent] {text}", flush=True)
+        publish(self.run_dir, f"system:model-switch:{int(time.time() * 1000)}", text, role="system", kind="系统")
+        if self.proc and self.proc.returncode is None:
+            self.proc.terminate()
+
+    def _model_restored(self, model: str) -> None:
+        info, self.model_mismatch = self.model_mismatch, None
+        self._model_failures = 0
+        self._model_notice = ""
+        text = f"已换回指定模型 {model}（刚才被换成 {info['actual']}），继续试玩。"
+        print(f"[agent] {text}", flush=True)
+        publish(self.run_dir, f"system:model-back:{int(time.time() * 1000)}", text, role="system", kind="系统")
+
+    async def _recover_model(self) -> str | None:
+        """服务模型被换掉、进程已结束：还没连续换回失败 MODEL_RESTARTS 次就立刻重启（--resume、指定的具体模型名）；
+        否则保持暂停，等用户在 HUD 继续（再试）或停止。返回重启后的第一条消息；用户停止时返回 None。"""
+        info = self.model_mismatch
+        self._model_failures += 1
+        if self._model_failures > MODEL_RESTARTS:
+            self.paused = True
+            if self.pause_at is None:
+                self.pause_at = time.monotonic()
+            if self._model_metrics_paused:
+                self._model_metrics_paused = False   # 计时继续停着，用户点继续时由 HUD 控制恢复
+            self.metrics.update(status="paused")
+            text = (f"连续 {MODEL_RESTARTS} 次用 {info['expected']} 重启后，回复仍被换成 {info['actual']}：主控换不回指定模型，"
+                    "试玩保持暂停，游戏冻结。在 HUD 点“继续”会再试一次；也可以中断，之后续跑。")
+            print(f"[agent] {text}", flush=True)
+            publish(self.run_dir, f"system:model-paused:{int(time.time() * 1000)}", text, role="system", kind="系统")
+            while self.paused and not (self.session.done or self.stop_requested):
+                if self.control_task and self.control_task.done():
+                    await self.control_task
+                await asyncio.sleep(.2)
+            if self.session.done or self.stop_requested:
+                if not self.stop_reason:
+                    self.stop_reason = (self.session.done_reason if self.session.done
+                                        else f"服务模型被换成 {info['actual']}，换不回 {info['expected']}")
+                return None
+            self._model_failures = 0
+        elif self._model_metrics_paused:
+            self.metrics.resume(quota=False)
+            self._model_metrics_paused = False
+        print(f"[agent] 用 {info['expected']} 重启 Claude Code，接着同一个会话", flush=True)
+        self.resume = True
+        self.idle_turns = 0
+        study_note = None
+        if not self.metrics.playing and self.study is not None and not self.study.ready():
+            study_note = self.study.reminder()
+        return model_resume_prompt(info["expected"], info["actual"], chat=self.chat_only, study_note=study_note)
 
     def _provider_env(self) -> dict[str, str]:
         """第三方提供方：接口地址、API 密钥与模型槽位。都经 docker exec -e 名字 从环境传进容器，值不进命令行；
@@ -463,6 +613,12 @@ class ClaudeRunner(SessionControls):
                 if (note := self._effort_at_start()):
                     first = note + first
                 stopped = await self._run_process(workdir, first)
+                if not stopped and self.model_mismatch is not None:
+                    # 服务模型被换掉：游戏保持冻结，重启换回（换不回就保持暂停）
+                    first = await self._recover_model()
+                    if first is None:
+                        break
+                    continue
                 if not stopped and self.net_outage:
                     # 模型连不上：游戏保持冻结，等网络恢复后接着同一个会话
                     minutes = await self._wait_for_network()
@@ -548,8 +704,9 @@ class ClaudeRunner(SessionControls):
                     return True
                 if reader.done():
                     await reader
-                    if (self.net_outage or self.quota_until is not None) and not self.stop_reason:
-                        return False      # 主控为等待网络 / 额度结束了进程
+                    if ((self.net_outage or self.quota_until is not None or self.model_mismatch is not None)
+                            and not self.stop_reason):
+                        return False      # 主控为等待网络 / 额度、换回模型结束了进程
                     self.stop_reason = self.stop_reason or 'Claude Code 输出流已结束'
                     return True
                 if not self.metrics.playing and self.study is not None:
@@ -581,7 +738,7 @@ class ClaudeRunner(SessionControls):
                         if self.stop_requested and self.stop_reason and not self.turn_active:
                             return True       # 控制台中断：这一轮已经停下
                         continue
-                if (self.quota_until is not None or self.net_outage) and not self.stop_reason:
+                if (self.quota_until is not None or self.net_outage or self.model_mismatch is not None) and not self.stop_reason:
                     return False
                 if reader.done():
                     self.stop_reason = self.stop_reason or "Claude Code 进程已退出"
@@ -1014,6 +1171,7 @@ class ClaudeRunner(SessionControls):
             if event.get("model"):
                 changed = event["model"] != self.metrics.state.model
                 self.metrics.update(model=event["model"], **({"context_window": None} if changed else {}))
+                self._expect_model(event["model"])
             # 每轮开始都会输出一次 init：每次都核对工具列表，只在第一次打印
             tools = event.get("tools") or []
             unexpected = [t for t in tools if not self._allowed_tool(t)]
@@ -1031,6 +1189,11 @@ class ClaudeRunner(SessionControls):
                 print(f"[agent] 发现不应开放的工具 {unexpected}，立即停止", flush=True)
                 self.stop_reason = f"隔离检查失败：{unexpected}"
                 self.proc.terminate()
+        elif etype == "system" and subtype == "informational":
+            # 例如 "Opus 5.5's safeguards stopped the response above · continuing once with that noted"：
+            # 紧接着的回复常常换了模型，记下来写进拦下时的说明
+            self._model_notice = str(event.get("content") or "")[:200]
+            print(f"[agent] Claude Code 提示：{self._model_notice}", flush=True)
         elif etype == "system" and subtype == "status":
             if event.get("status") == "compacting":
                 self._public_compaction(self.metrics.state.compactions)
@@ -1064,6 +1227,7 @@ class ClaudeRunner(SessionControls):
             message = event.get("message") or {}
             if self._command_active:
                 return  # /effort 等主控命令的回复，不是模型输出
+            self._check_reply_model(event, message)
             if message.get("model") != "<synthetic>" and not event.get("error"):
                 self._net_ok()
             if event.get("error") == "rate_limit" or message.get("model") == "<synthetic>":

@@ -37,7 +37,7 @@ class MetricsState:
     effort_pending: str | None = None  # 智能体用 set_effort 申请、本轮结束后才生效的强度
     effort_changes: int = 0           # 推理强度实际切换的次数
     effort_log: list | None = None    # 每次切换：[{"t": 现实用时, "from", "to", "chapter", "room", "reason"}, ...]
-    status: str = "starting"         # starting / studying / thinking / tool / executing / auto / retrying / compacting / quota_wait / net_wait / done / stopped
+    status: str = "starting"         # starting / studying / thinking / tool / executing / auto / retrying / compacting / quota_wait / net_wait / model_wait / done / stopped
     started_wall: float = 0.0
     elapsed_s: float = 0.0
     budget_s: float = 0.0
