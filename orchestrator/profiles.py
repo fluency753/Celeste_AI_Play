@@ -4,8 +4,12 @@
 两种模式的知识库阅读权限、对知识库文件的修改、对提示词文件的修改（含启动提示词与按钮消息的模板）、个人追加要求。
 游戏目录、端口以外的本机环境（提供方与密钥、录制配置）不属于配置。
 
-三类配置：
+四类配置：
 - 默认（default）：就是仓库现在的样子：默认设置、仓库知识库、仓库提示词、没有个人追加要求。只读。
+- 预置配置（configs/presets/<编号>/，随仓库发布）：作者整理好的一整套设置，结构与新建的配置相同（profile.json、
+  personal_prompts.json，可选 prompts/、kb/），另有 description 说明。只读；要改动先基于它新建一份。
+  知识库开放权限里以 / 结尾的条目表示整个目录（例如本机生成的社区原文 speedrun/reference/strawberry_jam/），
+  读取时展开成本机实际有的文件，没生成的跳过。
 - 本机原有设置（local）：沿用旧版本的本机文件：local/prompts/（提示词修改）、local/personal_prompts.json
   （个人追加要求）、configs/local.console.json 里的知识库权限；知识库修改放在 local/kb_edits/。
   命令行不写 --profile、以及没记配置的旧运行续跑都用它，所以这些情况与之前完全相同。
@@ -33,7 +37,7 @@ from .session_store import load_json
 
 DEFAULT = "default"
 LEGACY = "local"
-BUILTIN = {DEFAULT: "默认（仓库）", LEGACY: "本机原有设置"}
+BUILTIN = {DEFAULT: "默认", LEGACY: "本机原有设置"}
 ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
 MAX_NAME = 40
 MAX_FORM_BYTES = 200_000
@@ -47,6 +51,30 @@ _override: contextvars.ContextVar[str | None] = contextvars.ContextVar("celeste_
 
 def root() -> Path:
     return config.REPO_ROOT / "local" / "profiles"
+
+
+def presets_root() -> Path:
+    return config.REPO_ROOT / "configs" / "presets"
+
+
+def presets() -> list[str]:
+    """随仓库发布的预置配置（按编号排序）。"""
+    base = presets_root()
+    if not base.is_dir():
+        return []
+    return [path.name for path in sorted(base.iterdir())
+            if path.is_dir() and path.name not in BUILTIN and ID_PATTERN.fullmatch(path.name)
+            and (path / "profile.json").is_file()]
+
+
+def is_preset(pid) -> bool:
+    return isinstance(pid, str) and pid not in BUILTIN and bool(ID_PATTERN.fullmatch(pid)) \
+        and (presets_root() / pid / "profile.json").is_file()
+
+
+def builtin(pid) -> bool:
+    """内置的配置（默认、预置、本机原有设置）：不能改名、删除。"""
+    return pid in BUILTIN or is_preset(pid)
 
 
 def selected_file() -> Path:
@@ -83,7 +111,7 @@ def using(pid: str):
 # ---------------------------------------------------------------- 编号与路径
 
 def check(pid) -> str:
-    if pid in BUILTIN:
+    if pid in BUILTIN or is_preset(pid):
         return pid
     if not isinstance(pid, str) or not ID_PATTERN.fullmatch(pid):
         raise ValueError("配置编号无效")
@@ -93,11 +121,11 @@ def check(pid) -> str:
 
 
 def readonly(pid: str) -> bool:
-    return pid == DEFAULT
+    return pid == DEFAULT or is_preset(pid)
 
 
 def _dir(pid: str) -> Path:
-    return root() / pid
+    return presets_root() / pid if is_preset(pid) else root() / pid
 
 
 def prompts_dir(pid: str | None = None) -> Path:
@@ -164,6 +192,8 @@ def kb_permissions(pid: str, legacy_data: dict | None = None) -> dict:
     else:
         data = meta(pid)
         permissions = {key: data[key] for key in ('kb_deny', 'kb_allow')}
+        if is_preset(pid):
+            permissions['kb_allow'] = {'explore': _expand_allow(permissions['kb_allow']['explore'])}
     from . import kb_layout
     from .kb_access import KB_ROOT
     if kb_layout.enabled(KB_ROOT):
@@ -171,6 +201,23 @@ def kb_permissions(pid: str, legacy_data: dict | None = None) -> dict:
             permissions['kb_deny'][mode] = sorted({doc.path if (doc := kb_layout.lookup(KB_ROOT, mode, name)) else name
                                                    for name in names})
     return permissions
+
+
+def _expand_allow(entries: list[str]) -> list[str]:
+    """预置配置开放的速通资料：以 / 结尾的条目展开成本机实际有的文件；单个文件本机没有时也跳过
+    （社区原文由各自的电脑本机生成，不入库）。"""
+    from .kb_access import SPEEDRUN_PREFIX, speedrun_files
+    try:
+        known = [SPEEDRUN_PREFIX + rel for rel in speedrun_files()]
+    except (OSError, ValueError):
+        return []
+    out = []
+    for entry in entries:
+        if entry.endswith("/"):
+            out.extend(name for name in known if name.startswith(entry))
+        elif entry in known:
+            out.append(entry)
+    return sorted(set(out))
 
 
 def meta(pid: str) -> dict:
@@ -186,7 +233,8 @@ def meta(pid: str) -> dict:
         data = {}
     out = {"id": pid, "name": BUILTIN.get(pid) or str(data.get("name") or pid),
            "form": data.get("form") if isinstance(data.get("form"), dict) else None,
-           "created": data.get("created"), "updated": data.get("updated")}
+           "created": data.get("created"), "updated": data.get("updated"),
+           "description": str(data.get("description") or "") if is_preset(pid) else ""}
     kb = _empty_kb()
     deny = data.get("kb_deny") if isinstance(data.get("kb_deny"), dict) else {}
     allow = data.get("kb_allow") if isinstance(data.get("kb_allow"), dict) else {}
@@ -216,7 +264,7 @@ def _raw(pid: str) -> dict:
 def _writable(pid: str) -> str:
     pid = check(pid)
     if readonly(pid):
-        raise ValueError("默认配置就是仓库原样，不能修改：先在顶部的“配置”里新建一份再改")
+        raise ValueError(f"“{meta(pid)['name']}”是内置配置，不能修改：先在顶部的“配置”里基于它新建一份再改")
     return pid
 
 
@@ -268,12 +316,14 @@ def set_kb_permissions(pid: str, kb_deny: dict | None = None, kb_allow: dict | N
 # ---------------------------------------------------------------- 列表、新建、改名、删除、选中
 
 def ids() -> list[str]:
+    shipped = presets()
     found = []
     if root().is_dir():
         for path in sorted(root().iterdir()):
-            if path.is_dir() and path.name not in BUILTIN and ID_PATTERN.fullmatch(path.name) and (path / "profile.json").is_file():
+            if (path.is_dir() and path.name not in BUILTIN and path.name not in shipped and ID_PATTERN.fullmatch(path.name)
+                    and (path / "profile.json").is_file()):
                 found.append(path.name)
-    return [DEFAULT, LEGACY] + found
+    return [DEFAULT, *shipped, LEGACY] + found
 
 
 def summary(pid: str) -> dict:
@@ -295,8 +345,8 @@ def listing() -> dict:
     rows = []
     for pid in ids():
         m = meta(pid)
-        rows.append({"id": pid, "name": m["name"], "readonly": readonly(pid), "builtin": pid in BUILTIN,
-                     "updated": m["updated"], **summary(pid)})
+        rows.append({"id": pid, "name": m["name"], "readonly": readonly(pid), "builtin": builtin(pid),
+                     "preset": is_preset(pid), "description": m["description"], "updated": m["updated"], **summary(pid)})
     stored = _stored_selection()
     current = selected()
     return {"profiles": rows, "selected": current, "stored": stored == current}
@@ -305,7 +355,7 @@ def listing() -> dict:
 def _new_id() -> str:
     base = "p" + time.strftime("%Y%m%d-%H%M%S")
     pid, n = base, 1
-    while (root() / pid).exists():
+    while (root() / pid).exists() or is_preset(pid):
         n += 1
         pid = f"{base}-{n}"
     return pid
@@ -346,7 +396,7 @@ def create(name, base: str = DEFAULT, form=None, kb: dict | None = None) -> str:
 
 def rename(pid: str, name) -> dict:
     pid = check(pid)
-    if pid in BUILTIN:
+    if builtin(pid):
         raise ValueError("内置的配置不能改名")
     data = _raw(pid)
     data["name"] = _clean_name(name)
@@ -357,7 +407,7 @@ def rename(pid: str, name) -> dict:
 
 def delete(pid: str) -> None:
     pid = check(pid)
-    if pid in BUILTIN:
+    if builtin(pid):
         raise ValueError("内置的配置不能删除")
     shutil.rmtree(_dir(pid))
     if _stored_selection() == pid:

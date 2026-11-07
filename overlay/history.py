@@ -83,7 +83,7 @@ class PublicHistory:
                     if message["role"] == "user":
                         delivery = {"queued": "等待发送", "waiting": "等待提交", "submitted": "已提交", "error": "发送失败"}.get(message["status"], "")
                         self.items[message["id"]] = {"id": message["id"], "text": message["text"], "role": "user",
-                            "kind": "你 · " + delivery, "wall": message["wall"]}
+                            "kind": "用户 · " + delivery, "wall": message["wall"]}
             # 保留最近 80 条（控制台的对话栏要看得更多）；HUD 只取最后 12 条
             ordered = sorted(self.items.values(), key=lambda item: (item["wall"], item["id"]))[-80:]
             self.items = {item["id"]: item for item in ordered}

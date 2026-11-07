@@ -183,7 +183,7 @@ class ProfileStoreTests(ProfileFixture):
 
     def test_builtin_rules(self):
         self.assertEqual(profiles.selected(), profiles.DEFAULT)    # 本机原有设置是空的：默认配置
-        with self.assertRaisesRegex(ValueError, "默认配置"):
+        with self.assertRaisesRegex(ValueError, "内置配置"):
             profiles.save_form(profiles.DEFAULT, {})
         for pid in (profiles.DEFAULT, profiles.LEGACY):
             with self.assertRaises(ValueError):
@@ -275,7 +275,7 @@ class ConsoleTests(ProfileFixture):
                      lambda: api.prompt_reset("runtime_zh.md"),
                      lambda: api.personal_prompt_write("all", "x", "v"),
                      lambda: api.profile_save({"form": {}})):
-            with self.assertRaisesRegex(ValueError, "默认配置"):
+            with self.assertRaisesRegex(ValueError, "内置配置“默认”"):
                 call()
         self.assertTrue(api.personal_prompt_read("all")["readonly"])
         self.assertTrue(api.prompt_read("runtime_zh.md")["readonly"])
@@ -288,7 +288,7 @@ class ConsoleTests(ProfileFixture):
         api.personal_prompt_write("all", "原有的要求", doc["version"])
         payload = api.profile_create({"name": "系列", "base": "current", "form": {"agent": "series", "mode": "explore"}})
         pid = payload["selected"]
-        self.assertEqual(payload["current"], {"id": pid, "name": "系列", "readonly": False, "builtin": False,
+        self.assertEqual(payload["current"], {"id": pid, "name": "系列", "readonly": False, "builtin": False, "preset": False, "description": "",
                                               "form": {"agent": "series", "mode": "explore"}})
         # 新配置复制了提示词修改与个人追加要求；改它不影响本机原有设置
         self.assertIn(line, api.prompt_read("runtime_zh.md")["text"])
@@ -346,6 +346,101 @@ class ConsoleTests(ProfileFixture):
         for bad in ({"id": "local"}, {"id": "default"}, {"id": pid}, {"other": 1}):
             with self.assertRaises(ValueError):
                 api.profile_delete(bad)
+
+
+class PresetTests(ProfileFixture):
+    """随仓库发布的预置配置（configs/presets/<编号>/）：只读、排在默认之后，开放目录按本机实际有的文件展开。"""
+
+    def make_preset(self):
+        base = self.root / "configs" / "presets" / "pre1"
+        base.mkdir(parents=True)
+        (base / "profile.json").write_text(json.dumps({
+            "version": 1, "name": "预置 1", "description": "说明。", "form": {"mode": "explore", "effort": "high"},
+            "kb_deny": {"speedrun": [], "explore": []},
+            "kb_allow": {"explore": ["speedrun/techniques.md", "speedrun/reference/sj/", "speedrun/reference/wiki/",
+                                     "speedrun/missing.md"]}}, ensure_ascii=False), encoding="utf-8")
+        (base / "personal_prompts.json").write_text(json.dumps({"version": 1, "scopes": {"claude:explore": "预置的规矩"}},
+                                                               ensure_ascii=False), encoding="utf-8")
+        (self.kb / "reference" / "sj").mkdir(parents=True)
+        (self.kb / "reference" / "sj" / "gyms.md").write_text("g\n", encoding="utf-8")
+        return "pre1"
+
+    def test_preset_is_listed_read_only_and_builtin(self):
+        pid = self.make_preset()
+        self.assertEqual(profiles.ids(), ["default", pid, "local"])
+        row = next(r for r in profiles.listing()["profiles"] if r["id"] == pid)
+        self.assertEqual((row["name"], row["readonly"], row["builtin"], row["preset"], row["description"], row["personal"]),
+                         ("预置 1", True, True, True, "说明。", 1))
+        self.assertEqual(profiles.meta(pid)["form"], {"mode": "explore", "effort": "high"})
+        self.assertEqual(profiles.personal_store(pid), self.root / "configs" / "presets" / pid / "personal_prompts.json")
+        with self.assertRaisesRegex(ValueError, "内置配置"):
+            profiles.save_form(pid, {})
+        for action in (lambda: profiles.rename(pid, "x"), lambda: profiles.delete(pid),
+                       lambda: profiles.set_kb_permissions(pid, {"explore": []})):
+            with self.assertRaises(ValueError):
+                action()
+        api = self.console
+        api.profile_select(pid)
+        with self.assertRaisesRegex(ValueError, "预置 1"):
+            api.personal_prompt_write("claude:explore", "改", None)
+        with self.assertRaises(ValueError):
+            api.profile_delete({"id": pid})
+        self.assertTrue((self.root / "configs" / "presets" / pid / "profile.json").is_file())
+        payload = api.profiles_payload()["current"]
+        self.assertEqual((payload["preset"], payload["builtin"], payload["readonly"]), (True, True, True))
+
+    def test_preset_folders_expand_to_local_files(self):
+        pid = self.make_preset()
+        with patch.object(kb_access, "KB_ROOT", self.kb):
+            allow = profiles.kb_permissions(pid)["kb_allow"]["explore"]
+            self.assertEqual(allow, ["speedrun/reference/sj/gyms.md", "speedrun/techniques.md"])
+            self.assertEqual(kb_access.normalize_allow("explore", allow), allow)
+            api = self.console
+            api.profile_select(pid)
+            self.assertEqual(api.kb_list("explore")["allow"], allow)
+            new = api.profile_create({"name": "改一改", "base": "current", "form": {"mode": "explore"}})["selected"]
+            self.assertEqual(profiles.meta(new)["kb_allow"]["explore"], allow)
+            stored = json.loads(profiles.personal_store(new).read_text(encoding="utf-8"))
+            self.assertEqual(stored["scopes"]["claude:explore"], "预置的规矩")
+            self.assertFalse(profiles.readonly(new))
+        with profiles.using(pid):
+            self.assertIn("预置的规矩", runtime_prompt(cfg(mode="explore", knowledge_profile="explore", profile=pid)))
+
+    def test_local_profile_cannot_shadow_a_preset(self):
+        pid = self.make_preset()
+        (profiles.root() / pid).mkdir(parents=True)
+        (profiles.root() / pid / "profile.json").write_text('{"name": "冒名"}', encoding="utf-8")
+        self.assertEqual(profiles.ids().count(pid), 1)
+        self.assertEqual(profiles.meta(pid)["name"], "预置 1")
+
+
+class ShippedPresetTests(unittest.TestCase):
+    """仓库里的预置配置本身：表单能通过开跑校验，知识库开放的文件与个人追加要求都有效。"""
+
+    def test_shipped_presets_are_valid(self):
+        from orchestrator import launch_options, tuning
+        shipped = profiles.presets()
+        self.assertIn("preset1", shipped)
+        for pid in shipped:
+            m = profiles.meta(pid)
+            self.assertTrue(m["name"] and m["description"])
+            form = {k: v for k, v in m["form"].items() if k != "seg_off"}
+            self.assertTrue(set(form) <= set(launch_options.DEFAULTS), set(form) - set(launch_options.DEFAULTS))
+            keys = {t["key"] for t in tuning.catalog()}
+            self.assertTrue(set(form.get("tune") or {}) <= keys)
+            perms = profiles.kb_permissions(pid)
+            options = {**form, "agent": "preset-check", "save": {"name": "x", "slot": None, "create": True},
+                       "kb_deny": perms["kb_deny"][form["mode"]], "kb_allow": perms["kb_allow"].get(form["mode"], [])}
+            normalized = launch_options.normalize(options)
+            self.assertEqual(normalized["mode"], form["mode"])
+            for entry in m["kb_allow"]["explore"]:
+                self.assertTrue(entry.startswith("speedrun/"), entry)
+                if not entry.endswith("/") and "/reference/" not in entry:
+                    self.assertIn(entry, perms["kb_allow"]["explore"])      # 仓库自带的文件一定开放
+            data = json.loads(profiles.personal_store(pid).read_text(encoding="utf-8"))
+            for scope, text in data["scopes"].items():
+                self.assertIn(scope, {row["scope"] for row in personal_prompts.catalog()})
+                self.assertTrue(text.strip())
 
 
 if __name__ == "__main__":

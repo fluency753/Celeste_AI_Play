@@ -10,16 +10,16 @@
 
 ## 快速开始
 
-**推荐让一个 AI 编程助手帮你部署和操作**（例如 Claude Code、Codex 等能在你电脑上读文件、执行命令的 AI）。对它说：
+**推荐让一个 AI 编程助手帮忙部署和操作**（例如 Claude Code、Codex 等能在电脑上读文件、执行命令的 AI）。对它说：
 
-> 请阅读本仓库的 docs/AI_GUIDE.md，按它帮我部署并启动一次试玩。
+> 请阅读 Celeste_AI_Play 的 AI协助指南.md，按它帮我部署并启动一次试玩。
 
-两份使用说明：
+两份上手文档都在根目录：
 
 | 文档 | 给谁看 | 内容 |
 | --- | --- | --- |
-| [docs/GUIDE.md](docs/GUIDE.md) | 你自己 | 需要准备什么、一步步部署、用控制台开第一次运行、怎么看、暂停与续跑、录像在哪、常见问题 |
-| [docs/AI_GUIDE.md](docs/AI_GUIDE.md) | 帮你操作的 AI 助手 | 先读什么、环境检查、部署、启动、监督、介入、收集产出、安全与礼节规则 |
+| [上手指南.md](上手指南.md) | 使用者 | 需要准备什么、一步步部署、用控制台开第一次运行、怎么看、暂停与续跑、录像在哪、版本与更新、常见问题 |
+| [AI协助指南.md](AI协助指南.md) | 帮忙操作的 AI 助手 | 先读什么、环境检查、部署、启动、监督、介入、收集产出、安全与礼节规则 |
 
 自己动手时，在一台装好正版《蔚蓝》的 Windows 电脑上：
 
@@ -34,36 +34,50 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 
 环境要求与每一步的细节见 [docs/DEPLOY.md](docs/DEPLOY.md)。
 
+### 版本
+
+| 版本 | 是什么 | 怎么用 |
+| --- | --- | --- |
+| 正式版 | GitHub 上的 [Releases](https://github.com/fluency753/Celeste_AI_Play/releases)（标签 `vX.Y.Z`），作者确认可以稳定使用的版本 | 控制台“关于”页的“换版本”里选 |
+| 公测版 | Releases 里标为预发布的版本（标签带后缀，例如 `v1.12.0-beta.1`），新功能已可用、仍在验证 | 同上 |
+| 开发版 | 主线上的每一次提交，功能最新、可能还有没发现的问题 | `git clone` 下来的就是最新开发版；“关于”页的“一键更新”拉到最新开发版 |
+
+换版本只换程序文件，运行记录、配置与存档不动；之后点“一键更新”就能回到最新。还没有发布正式版或公测版时，“换版本”里只列开发版。
+
+### 预置配置
+
+控制台顶部的“配置”里，除了程序自带的“默认”，还有随程序发布的**预置配置 1 · 探索模式**：作者的 Opus 5.5 探索系列（序章到第九章）最终采用的整套设置，包括运行设置、可调参数、探索模式额外开放的知识库资料和个人追加要求。选中它就能直接开跑；要改动时点“新建…”基于它复制一份。内容见 [USAGE.md 4.14 节](docs/USAGE.md#414-配置保存切换与新建--profile)。
+
 ## 效果是什么样
 
 - **逐帧冻结思考**：智能体思考、写程序、运行程序时，游戏冻结在当前帧，章节计时也停住。它想好之后，用按键序列推进一段（默认一次最多 600 帧），再停下来观察。
 - **锁步录像，只录游玩帧**：OBS 每要一帧，游戏才推进一帧。成片的帧数等于游玩帧数，声音由游戏按帧单独混出。每次录制出两个版本：完整版 `gameplay.mp4` 和只有真实游玩帧的纯享版 `gameplay_pure.mp4`。
 - **HUD**：游戏画面右上角显示章节计时（逐帧准确）、推理强度、思考与工具用时、上下文、死亡次数、正在调用的工具，以及智能体写给观众的思考语句。也可以改用网页 HUD（独立窗口与 OBS 浏览器源）。
 - **规划回放**（默认关闭，`--playback` 打开）：把智能体算过的候选路线按轮画进游戏：绿线延伸，死亡的变红，最快的变金。回放不推进游戏、不计章节计时，照常录进完整版录像。回放内容来自主控 `simulate` 的预测轨迹，或智能体把自算轨迹交给工作区的 `show.trajectory()`；使用自算轨迹时需在提示词里约定适配该接口。
-- **控制台**：图形界面里设置全部参数、开始运行；运行中暂停、继续、给智能体发消息、中断后续跑。
+- **控制台**：图形界面里设置全部参数、开始运行；运行中暂停、继续、给智能体发消息、中断后续跑；保存多套配置，检查更新与换版本。
 
 ## 两种游玩模式
 
-速通模式与探索模式二选一（`--mode`）。直播模式（`--live`）可以叠加在任一个上。
+探索模式与速通模式二选一（`--mode`）。直播模式（`--live`）可以叠加在任一个上。
 
 | 模式 | 目标 | 智能体能读的资料 | 模拟器 |
 | --- | --- | --- | --- |
-| 探索 `--mode explore` | 像新手一样探索、学习并完成指定章节 | 只有 `kb/explore` 的入门资料（基本规则、坐标与观测数据、按键与工具） | 不开放模拟器文件；可选"限额短路线预测"（`--sim-assist`，默认关闭，需自配标准模拟器） |
-| 速通 `--mode speedrun` | 以最短的游戏内章节计时通关 | 完整知识库 `kb/`（物理参数、机制、技巧、数据格式） | Claude 执行器：本机有预置模拟器时默认开放 `/sim`（`--sim`，不限额直接调用），没有时运行关模拟器的版本（`--no-sim`）；加 `--limit-planning` 改为主控限额预测（两个执行器相同；Codex 只有这种，默认关闭） |
+| 探索（默认）`--mode explore` | 像新手一样探索、学习并完成指定章节 | 只有 `kb/explore` 的入门资料（基本规则、坐标与观测数据、按键与工具）；可以在控制台逐个开放速通知识库的文件 | 不开放模拟器文件；可选"限额短路线预测"（`--sim-assist`，默认关闭，需自配标准模拟器） |
+| 速通（实验性功能）`--mode speedrun` | 以最短的游戏内章节计时通关 | 完整知识库 `kb/`（物理参数、机制、技巧、数据格式） | Claude 执行器：本机有预置模拟器时默认开放 `/sim`（`--sim`，不限额直接调用），没有时运行关模拟器的版本（`--no-sim`）；加 `--limit-planning` 改为主控限额预测（两个执行器相同；Codex 只有这种，默认关闭） |
 | 直播 `--live`（叠加） | 观众实时观看：解说更勤，HUD 默认用可交互的网页形式 | — | — |
 
-- 控制台默认选探索模式。命令行不写 `--mode` 时，Claude Code 执行器默认速通，Codex 执行器默认探索。
+- 控制台默认选探索模式。速通模式还在实验阶段：它最适合配合预置模拟器，而模拟器需要自行准备。命令行不写 `--mode` 时，Claude Code 执行器默认速通，Codex 执行器默认探索。
 - 探索模式里智能体可以自己写辅助程序，单次运行默认最长 120 秒（可调参数 `explore_program_s`）。
 - 速通模式下，大模型负责规划路线，具体按键由程序搜索生成，执行时 60 fps 全速推进。
-- "预置模拟器"由游戏代码逐帧推演，含反编译代码，**不随仓库分发**，需要自己准备（见下文"不在仓库里的本机文件"）。
+- "预置模拟器"由游戏代码逐帧推演，含反编译代码，**不随程序发布**，需要自己准备（见下文"不随程序发布的本机文件"）。
 
 ## 执行器与模型接入
 
 智能体运行在 Docker 容器里。有两种执行器，共用同一套游戏工具、提示词、知识库、HUD 与录制。
 
-| 执行器 | 接入的模型 | 登录与密钥（都只存本机，不入库） |
+| 执行器 | 接入的模型 | 登录与密钥（都只存本机，不会上传） |
 | --- | --- | --- |
-| Claude Code（`--engine claude`，默认） | Anthropic：Claude 订阅（Pro/Max）里的模型，别名 `opus`、`fable`、`haiku` | 用 `claude setup-token` 生成长期令牌，写进仓库根目录的 `.env`；不需要 API 密钥 |
+| Claude Code（`--engine claude`，默认） | Anthropic：Claude 订阅（Pro/Max）里的模型，别名 `opus`、`fable`、`haiku` | 用 `claude setup-token` 生成长期令牌，写进程序根目录的 `.env`；不需要 API 密钥 |
 | Claude Code + 第三方平台（`--provider`） | 提供 Anthropic 兼容接口的平台。DeepSeek 已有预设（`--provider deepseek --model deepseek-flash`） | 平台列表在 [configs/providers.json](configs/providers.json)；密钥文件位置与自定义平台写在本机的 `configs/local.providers.json`，部署向导可以代写 |
 | Codex（`--engine codex`） | GPT | 能使用 Codex 的 ChatGPT 账号，按首次准备或启动的提示对工作区容器做设备登录 |
 
@@ -80,7 +94,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | 主控 | `orchestrator/`，本机 Python | 唯一同时连接游戏、智能体、HUD 与 OBS 的组件：游戏工具服务、决策循环、执行与自动重试、规划回放、录制、换章、额度与断网等待、中断续跑 |
 | 智能体容器 | `agent-container/`，Docker 镜像 `celeste-agent:0.1` | 容器里的执行器只能连所用模型平台与主控端口；智能体自写的程序在零网络沙箱里运行，看不到令牌与密钥 |
 | 知识库 | `kb/`，只读挂进容器 | 物理常量、机制规则、技巧与数据格式；只讲游戏规则，不讲关卡怎么过 |
-| HUD 与控制台 | `overlay/` | 游戏内 HUD 的绘制、网页 HUD、桌面控制台（`CelesteAIConsole.exe`，1.6.0） |
+| HUD 与控制台 | `overlay/` | 游戏内 HUD 的绘制、网页 HUD、桌面控制台（`CelesteAIConsole.exe`，1.12.0） |
 | OBS 锁步插件 | `obs-plugin/` | 只把游玩帧（和规划回放帧）交给 ffmpeg 编码 |
 | 部署与诊断 | `setup.ps1`、`tools/` | 部署向导、桥接与插件构建、OBS 配置、状态查看、测试客户端 |
 
@@ -118,7 +132,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | `setup.ps1 -Check` | 只检查各项是否就绪，不改动 |
 | `setup.ps1 -Only 步骤,...` | 只重做其中几步（system、game、dotnet、bridge、docker、platform、recording、sim、kb、saves、switches、checks） |
 | `start_local.ps1` | 部署向导生成的本机启动脚本：用向导里选好的存档、章节与开关运行 |
-| `start_local.ps1 -Trial` | 在调试存档上试跑 30 分钟（标签 `dev-<标签>`，第一个章节） |
+| `start_local.ps1 -Trial` | 在测试存档上试跑 30 分钟（标签 `dev-<标签>`，第一个章节） |
 | `start_local.ps1 -Resume <运行目录>` | 续跑一次中断的运行 |
 | `start_gpt.ps1` | Codex 执行器（GPT）的准备与试玩，见 [docs/LIVE_ADAPTATION.md](docs/LIVE_ADAPTATION.md) |
 
@@ -129,13 +143,15 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 ## 项目状态
 
 - **只支持《蔚蓝》官方章节**（A/B/C 面）。MOD 地图在未来版本中支持（控制台"存档与章节"页已经预留了选项）。
-- 已经可用：桥接 Mod 与常驻核心、主控、断网的智能体容器、知识库、两种执行器、速通与探索两种模式、直播模式、游戏内 HUD 与网页 HUD、控制台、OBS 锁步录制（完整版与纯享版、每章一个视频）、额度与断网等待、中断续跑、一键部署。
-- 尚未完成：MOD 地图、探索模式限额短路线预测的实际试玩验收、隔离的独立游戏实例等，见 [TODO.md](TODO.md)。
-- 部署流程与默认值会随开发调整，以仓库里的代码和最新文档为准。
+- 已经可用：桥接 Mod 与常驻核心、主控、断网的智能体容器、知识库、两种执行器、探索模式与速通模式（实验性）、直播模式、游戏内 HUD 与网页 HUD、控制台（多套配置、预置配置、一键更新与换版本）、OBS 锁步录制（完整版与纯享版、每章一个视频）、AI 专用游戏副本与私有 OBS（可以和个人游戏、个人 OBS 同时使用）、额度与断网等待、服务模型被换掉时自动换回、中断续跑、一键部署。
+- 尚未完成：MOD 地图、探索模式限额短路线预测的实际试玩验收、AI 专用副本的删除与端口按实例分配等，见 [TODO.md](TODO.md)。
+- 部署流程与默认值会随开发调整，以最新版本的代码和文档为准。
 
-## 不在仓库里的本机文件
+<a id="不在仓库里的本机文件"></a>
 
-运行需要、但不入库的东西（部署到新电脑时要另外复制或生成）：
+## 不随程序发布的本机文件
+
+运行需要、但不随程序发布（也不会上传到 GitHub）的东西，部署到新电脑时要另外复制或生成：
 
 | 本机位置 | 是什么 | 新电脑上怎么办 |
 | --- | --- | --- |
@@ -143,19 +159,19 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | `kb\reference\` | 知识库参考资料原文：Celeste Wiki 技巧页面、草莓酱训练场与机制库、导入的社区资料 | 用 `tools\fetch_reference.py`、`tools\import_reference_pdf.py` 生成；没有时只读知识库正文 |
 | `.env` | Claude Code 订阅令牌 | 用 `claude setup-token` 重新生成（部署向导会引导） |
 | `configs\local.*.json` | 本机路径、密钥文件位置、录制参数、HUD 窗口与字号、控制台记住的设置 | 由部署向导与控制台重新生成 |
-| `local\` | 后台宿主的启动记录与输出日志、控制台里改过的提示词与个人追加要求、按阅读权限生成的知识库副本等 | 不需要复制；想沿用改过的提示词时复制 `local\prompts\` 与 `local\personal_prompts.json` |
+| `local\` | 后台宿主的启动记录与输出日志、控制台里新建的配置（`local\profiles\`）、改过的提示词与个人追加要求、按阅读权限生成的知识库副本、AI 专用游戏副本与私有 OBS 等 | 想沿用自己的配置时复制 `local\profiles\`（以及旧版本留下的 `local\prompts\` 与 `local\personal_prompts.json`） |
 | `workspaces\`、`runs\` | 智能体写的程序与笔记；运行记录、录像、存档备份 | 想延续进度时复制 |
 
-知识库正文（`kb\*.md`）在仓库里。反编译的游戏源码、存档、录像、令牌与 API 密钥一律不入库。
+知识库正文（`kb\*.md`）与预置配置（`configs\presets\`）随程序发布。反编译的游戏源码、存档、录像、令牌与 API 密钥一律不上传。
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [docs/GUIDE.md](docs/GUIDE.md) | 使用指南（给人看）：准备、部署、第一次运行、暂停与续跑、录像、常见问题 |
-| [docs/AI_GUIDE.md](docs/AI_GUIDE.md) | 操作手册（给帮你操作的 AI 助手看） |
+| [上手指南.md](上手指南.md) | 给使用者：准备、部署、第一次运行、暂停与续跑、录像、版本与更新、常见问题 |
+| [AI协助指南.md](AI协助指南.md) | 给帮忙操作的 AI 助手：部署、启动、监督、介入与安全规则 |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | 部署说明：环境要求、一键部署、手动部署、全部命令与开关、配置文件、端口与隔离、接入其他平台、更新与卸载 |
-| [docs/USAGE.md](docs/USAGE.md) | 使用说明（详细）：每个功能的原理与参数、HUD、录制、模拟器、续跑、控制台、可调参数、提示词 |
+| [docs/USAGE.md](docs/USAGE.md) | 使用说明（详细）：每个功能的原理与参数、HUD、录制、模拟器、续跑、控制台、可调参数、提示词、配置与预置配置 |
 | [docs/DESIGN.md](docs/DESIGN.md) | 设计文档：整体框架、实现原理、提速方案 |
 | [docs/LIVE_ADAPTATION.md](docs/LIVE_ADAPTATION.md) | Codex 执行器（GPT）、直播、可交互网页 HUD、独立游戏声音、存档选择与剧情控制 |
 | [docs/CODEX_CONTAINER.md](docs/CODEX_CONTAINER.md) | Codex 执行器在容器里的运行方式与账号登录 |
@@ -163,12 +179,14 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | [docs/CHAPTER_RECORDING.md](docs/CHAPTER_RECORDING.md)、[docs/RECORDING_RECOVERY.md](docs/RECORDING_RECOVERY.md) | 分章录制与菜单冻结；录像中途失败后的恢复 |
 | [docs/INCIDENT_20261024.md](docs/INCIDENT_20261024.md) | 故障说明：后台进程依附在聊天会话上，随会话关闭而退出 |
 | [CHANGELOG.md](CHANGELOG.md) | 更新记录 |
-| [TODO.md](TODO.md) | 待办 |
+| [TODO.md](TODO.md) | 开发计划 |
 
 ## 目录结构
 
 ```text
 Celeste_AI_Play/
+├── 上手指南.md           给使用者的上手文档
+├── AI协助指南.md         给帮忙操作的 AI 助手的文档
 ├── setup.ps1             一键部署入口（Python 与虚拟环境，然后启动部署向导）
 ├── CelesteAIConsole.exe  控制台的启动器（Windows；源码在 tools/launcher）
 ├── CelesteAIHud.exe      独立 HUD 的启动器（Windows；自动选地址，重复打开恢复窗口）
@@ -180,7 +198,7 @@ Celeste_AI_Play/
 ├── agent-container/      智能体镜像（Claude Code 与 Codex、出站防火墙、托管配置、工具门控钩子、程序沙箱）
 ├── kb/                   知识库（探索模式的入门资料在 kb/explore；只读挂进容器）
 ├── overlay/              HUD 与控制台：网页、服务、独立窗口，以及游戏内 HUD 的绘制
-├── configs/              HUD、录制、模型平台与检查点的共享配置
+├── configs/              HUD、录制、模型平台与检查点的共享配置；presets/ 是预置配置
 ├── calibration/          回归测试、校准与验收
 ├── docs/                 文档
 ├── tools/                部署向导、构建、OBS 配置、菜单宏、测试客户端、状态查看、资料抓取
@@ -196,7 +214,7 @@ Celeste_AI_Play/
 
 ## 游戏文件与版权
 
-本仓库不包含《蔚蓝》的游戏文件、资源或反编译代码，运行需要自行购买正版游戏。知识库只收录事实性的物理参数与机制描述。录像专用的独立游戏声音读取的是你本机安装的官方音频文件，不会复制进仓库。
+本项目不包含《蔚蓝》的游戏文件、资源或反编译代码，运行需要自行购买正版游戏。知识库只收录事实性的物理参数与机制描述；Celeste Wiki 与草莓酱的原文由使用者在本机生成，不随程序发布。录像专用的独立游戏声音读取的是本机安装的官方音频文件，不会被复制或上传。
 
 ## 更新记录
 

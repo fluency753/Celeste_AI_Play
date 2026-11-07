@@ -1490,7 +1490,7 @@ def publish_user_note(run_dir: Path, text: str | None) -> None:
     """--note-file 的留言附在开场消息里发给智能体；同时记进公开事件，控制台的对话栏里能看到发了什么。"""
     if text:
         from .telemetry import publish
-        publish(run_dir, "user:note-file", text, role="user", kind="你 · 局间留言（附在开场消息里）")
+        publish(run_dir, "user:note-file", text, role="user", kind="用户 · 局间留言（附在开场消息里）")
 
 
 def restore_task_flags(cfg, previous, initial_goal=None) -> dict:

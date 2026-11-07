@@ -151,6 +151,7 @@ def make_handler(pinned: Path | None):
                                "/api/console/providers": console_api.providers_list,
                                "/api/console/profiles": console_api.profiles_payload,
                                "/api/console/update": console_api.update_check,
+                               "/api/console/versions": console_api.versions,
                                "/api/console/kb": lambda: console_api.kb_list(query.get("mode", "speedrun")),
                                "/api/console/kb/file": lambda: console_api.kb_read(query.get("mode", "speedrun"),
                                                                                    query.get("path", "")),
@@ -309,6 +310,8 @@ def make_handler(pinned: Path | None):
                             result = console_api.profile_delete(data)
                         elif self.path == "/api/console/update":
                             result = console_api.update_apply()
+                        elif self.path == "/api/console/rollback":
+                            result = console_api.rollback(data)
                         elif self.path == "/api/console/providers":
                             result = console_api.providers_save(data)
                         elif self.path == "/api/console/providers/remove":
@@ -316,7 +319,7 @@ def make_handler(pinned: Path | None):
                         else:
                             raise ValueError("未知控制台接口")
                     self._json(200, result, cors=False)
-                    if self.path == "/api/console/update" and result.get("restart"):
+                    if self.path in ("/api/console/update", "/api/console/rollback") and result.get("restart"):
                         restart_service(self.server.server_address[1])
                 except (ValueError, TypeError, RuntimeError, OSError, KeyError) as exc:
                     self._json(400, {"error": str(exc)}, cors=False)

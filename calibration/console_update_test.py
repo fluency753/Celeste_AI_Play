@@ -1,4 +1,4 @@
-"""关于页的检查更新与一键更新：用临时的本地 git 仓库模拟 GitHub，不联网、不动本仓库。"""
+"""关于页的检查更新、一键更新与换版本：用临时的本地 git 仓库模拟 GitHub，不联网、不动本仓库。"""
 import os
 import shutil
 import subprocess
@@ -21,16 +21,18 @@ def git(cwd, *args):
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
 
-def write_versions(root: Path, console: str, bridge: str):
+def write_versions(root: Path, console: str, bridge: str, updatable: bool = True):
     (root / "overlay").mkdir(exist_ok=True)
     (root / "game-bridge" / "Source").mkdir(parents=True, exist_ok=True)
-    (root / "overlay" / "console_api.py").write_text(f'CONSOLE_VERSION = "{console}"\n', encoding="utf-8")
+    feature = "\n\ndef update_apply():\n    pass\n" if updatable else "\n"
+    (root / "overlay" / "console_api.py").write_text(f'CONSOLE_VERSION = "{console}"{feature}', encoding="utf-8")
     (root / "game-bridge" / "Source" / "Bridge.cs").write_text(f'public const string Version = "{bridge}";\n',
                                                                 encoding="utf-8")
 
 
-@unittest.skipIf(GIT is None, "没有 git")
-class ConsoleUpdateTests(unittest.TestCase):
+class GitFixture(unittest.TestCase):
+    """模拟的 GitHub（裸仓库）、作者那边的克隆与用户本机的克隆。"""
+
     def setUp(self):
         # Fixture setup and the real console subprocesses must use the same
         # Git configuration when interpreting the checkout's line endings.
@@ -51,14 +53,22 @@ class ConsoleUpdateTests(unittest.TestCase):
             item.start()
             self.addCleanup(item.stop)
 
-    def publish(self, console="1.1.0", bridge="2.0.0", extra=None):
-        write_versions(self.upstream, console, bridge)
+    def publish(self, console="1.1.0", bridge="2.0.0", extra=None, tag=None, updatable=True, message="second"):
+        write_versions(self.upstream, console, bridge, updatable)
         for name, text in (extra or {}).items():
             (self.upstream / name).write_text(text, encoding="utf-8")
         git(self.upstream, "add", "-A")
-        git(self.upstream, "commit", "-m", "second")
+        git(self.upstream, "commit", "-m", message)
         git(self.upstream, "push", "origin", "HEAD:main")
+        if tag:
+            git(self.upstream, "tag", "-a", tag, "-m", tag)
+            git(self.upstream, "push", "origin", tag)
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.upstream, capture_output=True, text=True,
+                              check=True).stdout.strip()
 
+
+@unittest.skipIf(GIT is None, "没有 git")
+class ConsoleUpdateTests(GitFixture):
     def test_up_to_date(self):
         result = console_api.update_check()
         self.assertEqual(result["behind"], 0)
@@ -87,7 +97,7 @@ class ConsoleUpdateTests(unittest.TestCase):
         result = console_api.update_check()
         self.assertFalse(result["can_update"])
         self.assertIn("overlay/console_api.py", result["reason"])
-        with self.assertRaisesRegex(ValueError, "先提交或撤销"):
+        with self.assertRaisesRegex(ValueError, "先撤销"):
             console_api.update_apply()
         git(self.local, "checkout", "--", ".")
         with patch.object(console_api, "orchestrator_status", return_value={"running": True}):
@@ -104,6 +114,79 @@ class ConsoleUpdateTests(unittest.TestCase):
         self.assertEqual(result["ahead"], 1)
         self.assertFalse(result["can_update"])
         self.assertIn("不能直接快进", result["reason"])
+
+
+
+@unittest.skipIf(GIT is None, "没有 git")
+class ConsoleRollbackTests(GitFixture):
+    """换版本：列出正式版、公测版（标签）与最近的开发版；换过去之后一键更新能回到最新，本机数据不动。"""
+
+    def history(self):
+        old = self.publish(console="1.0.5", updatable=False, message="太旧")
+        stable = self.publish(console="1.1.0", tag="v1.1.0", message="正式")
+        beta = self.publish(console="1.2.0", bridge="2.1.0", tag="v1.2.0-beta.1", message="公测")
+        git(self.upstream, "tag", "not-a-version")
+        git(self.upstream, "push", "origin", "not-a-version")
+        latest = self.publish(console="1.2.0", bridge="2.1.0", extra={"requirements.txt": "y\n"}, message="最新")
+        self.assertTrue(console_api.update_apply()["updated"])
+        return old, stable, beta, latest
+
+    def test_versions_are_grouped_and_filtered(self):
+        old, stable, beta, latest = self.history()
+        result = console_api.versions()
+        self.assertTrue(result["can_rollback"], result["reason"])
+        rows = {row["ref"]: row for row in result["versions"]}
+        self.assertNotIn(old, rows)                          # 没有一键更新的旧版本：换过去就回不来，不列
+        self.assertEqual((rows[stable]["kind"], rows[stable]["tag"], rows[stable]["console"]), ("release", "v1.1.0", "1.1.0"))
+        self.assertEqual((rows[beta]["kind"], rows[beta]["tag"], rows[beta]["bridge"]), ("prerelease", "v1.2.0-beta.1", "2.1.0"))
+        self.assertEqual((rows[latest]["kind"], rows[latest]["current"], rows[latest]["subject"]), ("commit", True, "最新"))
+        self.assertEqual(sum(1 for row in result["versions"] if row["ref"] in (stable, beta)), 2)   # 打了标签的不重复列
+        self.assertFalse(any(row["tag"] == "not-a-version" for row in result["versions"]))
+
+    def test_rollback_keeps_local_data_and_update_comes_back(self):
+        _, stable, _, latest = self.history()
+        (self.local / "local").mkdir()
+        (self.local / "local" / "mine.json").write_text("{}\n", encoding="utf-8")
+        done = console_api.rollback({"ref": stable})
+        self.assertTrue(done["restart"])
+        self.assertEqual(done["after"]["console"], "1.1.0")
+        self.assertTrue(any("桥接 Mod" in note for note in done["notes"]))
+        self.assertTrue(any("requirements.txt" in note for note in done["notes"]))
+        self.assertTrue((self.local / "local" / "mine.json").is_file())
+        branch = subprocess.run(["git", "symbolic-ref", "--short", "HEAD"], cwd=self.local, capture_output=True,
+                                text=True).stdout.strip()
+        self.assertEqual(branch, "main")                     # 仍在分支上：一键更新与 git pull --ff-only 照常可用
+        check = console_api.update_check()
+        self.assertEqual((check["behind"], check["ahead"], check["can_update"]), (2, 0, True))
+        self.assertEqual(console_api.update_apply()["after"]["console"], "1.2.0")
+        self.assertTrue(next(r for r in console_api.versions()["versions"] if r["ref"] == latest)["current"])
+
+    def test_blockers(self):
+        _, stable, _, latest = self.history()
+        for bad in (None, {}, {"ref": "v1.1.0"}, {"ref": stable, "x": 1}, {"ref": "0" * 40}):
+            with self.assertRaises(ValueError):
+                console_api.rollback(bad)
+        with self.assertRaisesRegex(ValueError, "已经是这个版本"):
+            console_api.rollback({"ref": latest})
+        with patch.object(console_api, "orchestrator_status", return_value={"running": True}):
+            self.assertIn("有主控在运行", console_api.versions(fetch=False)["reason"])
+            with self.assertRaisesRegex(ValueError, "有主控在运行"):
+                console_api.rollback({"ref": stable})
+        (self.local / "overlay" / "console_api.py").write_text("changed\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "先撤销"):
+            console_api.rollback({"ref": stable})
+        git(self.local, "checkout", "--", ".")
+        git(self.local, "checkout", "--detach", "HEAD")
+        with self.assertRaisesRegex(ValueError, "不在分支上"):
+            console_api.rollback({"ref": stable})
+        git(self.local, "checkout", "main")
+        (self.local / "mine.txt").write_text("x\n", encoding="utf-8")
+        git(self.local, "add", "mine.txt")
+        git(self.local, "commit", "-m", "mine")
+        self.assertFalse(console_api.versions(fetch=False)["can_rollback"])
+        with self.assertRaisesRegex(ValueError, "GitHub 上没有的提交"):
+            console_api.rollback({"ref": stable})
+        self.assertIn("1.2.0", (self.local / "overlay" / "console_api.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

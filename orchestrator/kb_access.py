@@ -216,7 +216,7 @@ def write_document(mode: str, rel: str, text: str, expected_mtime: float | None 
     edit = _edit_of(path)
     effective = edit if edit.is_file() else path
     if expected_mtime is not None and abs(effective.stat().st_mtime - float(expected_mtime)) > 1e-3:
-        raise ValueError("这个文件在你打开之后被改过，请重新打开再编辑")
+        raise ValueError("这个文件在打开之后被改过，请重新打开再编辑")
     if data == path.read_bytes().replace(b"\r\n", b"\n"):
         edit.unlink(missing_ok=True)          # 改回与仓库相同：删掉修改
         _prune(edit.parent)

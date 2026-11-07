@@ -300,7 +300,7 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
                             continue
                         delivery = {'queued': '等待发送', 'waiting': '等待提交', 'submitted': '已提交', 'error': '发送失败'}.get(row['status'], '')
                         text_event(directory, {**dict(row), 'id': 'user:' + str(row['id']), 'role': 'user',
-                                              'kind': '你 · ' + delivery}, str(db) + '#actions')
+                                              'kind': '用户 · ' + delivery}, str(db) + '#actions')
                     for row in connection.execute('SELECT * FROM replies ORDER BY wall'):
                         text_event(directory, {**dict(row), 'id': 'public:' + str(row['id'])}, str(db) + '#replies')
             except sqlite3.Error as exc:

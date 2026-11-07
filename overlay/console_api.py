@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 import sys
 import time
@@ -222,7 +223,7 @@ def _editable_profile(what: str) -> str:
     from orchestrator import profiles
     pid = profiles.selected()
     if profiles.readonly(pid):
-        raise ValueError(f"现在选的是默认配置（仓库原样），不能修改{what}：先在顶部“配置”里点“新建”，再改")
+        raise ValueError(f"现在选的是内置配置“{profiles.meta(pid)['name']}”，不能修改{what}：先在顶部“配置”里点“新建…”，再改")
     return pid
 
 
@@ -246,7 +247,8 @@ def profiles_payload() -> dict:
     pid = listing["selected"]
     m = profiles.meta(pid)
     return {**listing, "current": {"id": pid, "name": m["name"], "readonly": profiles.readonly(pid),
-                                   "builtin": pid in profiles.BUILTIN, "form": m["form"]}}
+                                   "builtin": profiles.builtin(pid), "preset": profiles.is_preset(pid),
+                                   "description": m["description"], "form": m["form"]}}
 
 
 def profile_select(pid) -> dict:
@@ -634,7 +636,7 @@ def _prompt_write(name: str, text, version, pid: str) -> dict:
     if not isinstance(text, str) or len(text.encode("utf-8")) > 300_000:
         raise ValueError("内容须为文本，最多 300 KB")
     if version != _version(read_part(name)):
-        raise ValueError("这个文件在你打开之后被改过，请重新打开再编辑")
+        raise ValueError("这个文件在打开之后被改过，请重新打开再编辑")
     text = text.replace("\r\n", "\n")
     check_program_placeholders(text)
     if name == 'runtime_zh.md':
@@ -677,7 +679,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.11.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.12.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -738,11 +740,20 @@ def _version_at(ref: str) -> dict:
             "bridge": _bridge_source_version(bridge_text) if bridge_text else None}
 
 
+def _upstream() -> str:
+    code, upstream, _ = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=10)
+    return upstream if code == 0 and upstream else "origin/main"
+
+
+def _dirty_files() -> list[str]:
+    """本机改过、还没提交的程序文件（git status 的简短格式；改名的写新名字）。"""
+    _, dirty, _ = _git(["-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=no"], timeout=10)
+    return [line[3:].split(" -> ")[-1].strip('"') for line in dirty.splitlines() if line.strip()]
+
+
 def update_check(fetch: bool = True) -> dict:
     """从 GitHub 取最新版本（git fetch），与本机比较。不改动本机文件。"""
-    code, upstream, _ = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=10)
-    if code != 0 or not upstream:
-        upstream = "origin/main"
+    upstream = _upstream()
     remote, _, branch = upstream.partition("/")
     out = {"upstream": upstream, "current": _version_at("HEAD"), "latest": None, "behind": 0, "ahead": 0,
            "dirty": [], "can_update": False, "reason": ""}
@@ -759,17 +770,30 @@ def update_check(fetch: bool = True) -> dict:
     if code == 0 and counts:
         ahead, behind = (int(x) for x in counts.split()[:2])
         out.update(ahead=ahead, behind=behind)
-    _, dirty, _ = _git(["status", "--porcelain", "--untracked-files=no"], timeout=10)
-    out["dirty"] = [line[3:] for line in dirty.splitlines() if line.strip()][:20]
+    out["dirty"] = _dirty_files()[:20]
     if out["behind"] == 0:
         out["reason"] = "已经是最新版本"
     elif out["ahead"]:
         out["reason"] = f"本机有 {out['ahead']} 个 GitHub 上没有的提交，不能直接快进；请手动合并"
     elif out["dirty"]:
-        out["reason"] = "本机改过仓库里的文件（" + "、".join(out["dirty"][:5]) + "）；先提交或撤销这些改动再更新"
+        out["reason"] = "本机改过程序文件（" + "、".join(out["dirty"][:5]) + "）；先撤销这些改动再更新"
     else:
         out["can_update"] = True
     return out
+
+
+def _change_notes(before: dict, after: dict, changed: list[str]) -> list[str]:
+    """换版本（更新或回退）之后还要手动做的事。"""
+    notes = []
+    if before.get("bridge") != after.get("bridge"):
+        notes.append(f"桥接 Mod 换成了 {after.get('bridge')}：按部署说明重新编译并部署到游戏")
+    if "requirements.txt" in changed:
+        notes.append("Python 依赖有变化：运行 pip install -r requirements.txt")
+    if any(path.startswith("agent-container/") for path in changed):
+        notes.append("智能体容器有改动：按部署说明重建镜像")
+    if any(path.startswith(("tools/launcher/", "CelesteAIConsole.exe", "overlay/console.py")) for path in changed):
+        notes.append("控制台窗口本身有改动：关掉控制台窗口再打开")
+    return notes
 
 
 def update_apply() -> dict:
@@ -787,16 +811,142 @@ def update_apply() -> dict:
     if code != 0:
         raise ValueError(f"更新失败：{err or '未知错误'}")
     after = _version_at("HEAD")
-    notes = []
-    if before.get("bridge") != after.get("bridge"):
-        notes.append(f"桥接 Mod 有新版本 {after.get('bridge')}：按 docs/DEPLOY.md 重新编译部署到游戏")
-    if "requirements.txt" in changed:
-        notes.append("Python 依赖有变化：运行 pip install -r requirements.txt")
-    if any(path.startswith("agent-container/") for path in changed):
-        notes.append("智能体容器有改动：按 docs/DEPLOY.md 重建镜像")
-    if any(path.startswith(("tools/launcher/", "CelesteAIConsole.exe", "overlay/console.py")) for path in changed):
-        notes.append("控制台窗口本身有改动：关掉控制台窗口再打开")
-    return {"updated": True, "before": before, "after": after, "files": len(changed), "notes": notes, "restart": True}
+    return {"updated": True, "before": before, "after": after, "files": len(changed),
+            "notes": _change_notes(before, after, changed), "restart": True}
+
+
+# ---------------------------------------------------------------- 回退版本（关于页）
+# 可选的版本：GitHub 上发布的正式版（标签 vX.Y.Z）与公测版（vX.Y.Z-beta.N 等带后缀的标签），以及最近的开发版（每次提交）。
+# 回退用 git reset --keep 把本机分支移到那个版本：本机数据（运行记录、配置、存档、local/）不动；之后关于页的
+# “一键更新”照常快进回最新版本。所以只列出 GitHub 主线上、自带一键更新的版本，回退之后一定回得来。
+
+RELEASE_TAG = re.compile(r"^v\d+\.\d+\.\d+$")
+PRERELEASE_TAG = re.compile(r"^v\d+\.\d+\.\d+-[0-9A-Za-z][0-9A-Za-z.-]*$")
+ROLLBACK_COMMITS = 30
+HASH = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _blobs(specs: list[str]) -> dict[str, str | None]:
+    """一次读出多个 “提交:路径” 的文件内容（git cat-file --batch）；不存在的为 None。"""
+    import subprocess
+    if not specs:
+        return {}
+    try:
+        result = subprocess.run(["git", "cat-file", "--batch"], input="\n".join(specs).encode("utf-8") + b"\n",
+                                capture_output=True, timeout=60, cwd=REPO_ROOT,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return {spec: None for spec in specs}
+    data, pos, out = result.stdout, 0, {}
+    for spec in specs:
+        end = data.find(b"\n", pos)
+        if end < 0:
+            out[spec] = None
+            continue
+        header = data[pos:end].split()
+        pos = end + 1
+        if len(header) == 3 and header[1] == b"blob":
+            size = int(header[2])
+            out[spec] = data[pos:pos + size].decode("utf-8", errors="replace")
+            pos += size + 1
+        else:
+            out[spec] = None
+    return out
+
+
+def _rollback_blockers(upstream: str) -> str:
+    """现在为什么不能回退（空字符串 = 可以）。"""
+    if orchestrator_status()["running"]:
+        return "有主控在运行：等运行结束再换版本"
+    code, _, _ = _git(["symbolic-ref", "-q", "--short", "HEAD"], timeout=10)
+    if code != 0:
+        return "本机不在分支上（例如手动检出过某个提交）：先用 git switch main 回到分支"
+    changed = _dirty_files()
+    if changed:
+        return "本机改过程序文件（" + "、".join(changed[:5]) + "）；先撤销这些改动再换版本"
+    code, counts, _ = _git(["rev-list", "--count", f"{upstream}..HEAD"], timeout=10)
+    if code != 0:
+        return f"读不到 GitHub 上的版本（{upstream}）：先在上面点“检查更新”"
+    if counts.strip() not in ("", "0"):
+        return f"本机有 {counts.strip()} 个 GitHub 上没有的提交：回退会丢掉它们，请手动处理"
+    return ""
+
+
+def versions(fetch: bool = True) -> dict:
+    """回退版本的选项：正式版、公测版（GitHub 上的标签）与最近的开发版（提交），新的在前。不改动本机文件。"""
+    upstream = _upstream()
+    out = {"upstream": upstream, "current": _version_at("HEAD"), "versions": [], "can_rollback": False, "reason": ""}
+    if not out["current"]["commit"]:
+        out["reason"] = "这个目录不是 git 克隆（或没装 git），不能换版本；请从 GitHub 重新下载"
+        return out
+    if fetch:
+        remote, _, branch = upstream.partition("/")
+        code, _, err = _git(["fetch", "--quiet", "--tags", remote, branch], timeout=60)
+        if code != 0:
+            out["reason"] = f"连不上 GitHub：{err or '未知错误'}"
+            return out
+    code, mainline, _ = _git(["rev-list", upstream], timeout=30)
+    if code != 0:
+        out["reason"] = f"读不到 GitHub 上的版本（{upstream}）"
+        return out
+    mainline = set(mainline.split())
+    _, head, _ = _git(["rev-parse", "HEAD"], timeout=10)
+    rows, seen = [], set()
+    _, tags, _ = _git(["for-each-ref", "refs/tags", "--sort=-creatordate",
+                       "--format=%(refname:short)%09%(objectname)%09%(*objectname)"], timeout=20)
+    for line in tags.splitlines():
+        name, obj, peeled = (line.split("\t") + ["", "", ""])[:3]
+        kind = "release" if RELEASE_TAG.match(name) else "prerelease" if PRERELEASE_TAG.match(name) else None
+        target = peeled or obj
+        if kind and target in mainline and target not in seen:
+            rows.append({"ref": target, "kind": kind, "tag": name})
+            seen.add(target)
+    _, recent, _ = _git(["log", "--first-parent", f"-n{ROLLBACK_COMMITS}", "--format=%H", upstream], timeout=20)
+    for target in recent.split():
+        if target not in seen:
+            rows.append({"ref": target, "kind": "commit", "tag": None})
+            seen.add(target)
+    _, info, _ = _git(["show", "-s", "--format=%H%x09%h%x09%cs%x09%s", *[r["ref"] for r in rows]], timeout=30) if rows else (0, "", "")
+    details = {parts[0]: parts[1:] for parts in (line.split("\t", 3) for line in info.splitlines()) if len(parts) == 4}
+    blobs = _blobs([f"{r['ref']}:{path}" for r in rows for path in ("overlay/console_api.py", "game-bridge/Source/Bridge.cs")])
+    for row in rows:
+        console_text = blobs.get(f"{row['ref']}:overlay/console_api.py") or ""
+        if "def update_apply" not in console_text:
+            continue                              # 太旧：没有一键更新，回退之后在控制台里回不来
+        commit, date, subject = details.get(row["ref"], ["", "", ""])
+        bridge_text = blobs.get(f"{row['ref']}:game-bridge/Source/Bridge.cs")
+        out["versions"].append({**row, "commit": commit, "date": date, "subject": subject,
+                                "console": _console_version_of(console_text),
+                                "bridge": _bridge_source_version(bridge_text) if bridge_text else None,
+                                "current": row["ref"] == head})
+    out["reason"] = _rollback_blockers(upstream)
+    out["can_rollback"] = not out["reason"]
+    return out
+
+
+def rollback(data) -> dict:
+    """回退到选中的版本（也可以选比本机新的版本）：git reset --keep，然后重启 HUD 服务让那个版本的代码生效。"""
+    if not isinstance(data, dict) or set(data) != {"ref"} or not isinstance(data["ref"], str) or not HASH.match(data["ref"]):
+        raise ValueError("要换到的版本无效")
+    target = data["ref"]
+    upstream = _upstream()
+    reason = _rollback_blockers(upstream)
+    if reason:
+        raise ValueError(reason)
+    listed = {row["ref"]: row for row in versions(fetch=False)["versions"]}
+    if target not in listed:
+        raise ValueError("这个版本不在可选列表里：刷新版本列表后再选")
+    if listed[target]["current"]:
+        raise ValueError("本机已经是这个版本")
+    before = _version_at("HEAD")
+    code, changed, _ = _git(["diff", "--name-only", "HEAD", target], timeout=20)
+    changed = changed.splitlines() if code == 0 else []
+    code, _, err = _git(["reset", "--keep", target], timeout=120)
+    if code != 0:
+        raise ValueError(f"换版本失败：{err or '未知错误'}；可以刷新版本列表看看本机现在是哪个版本")
+    after = _version_at("HEAD")
+    return {"switched": True, "before": before, "after": after, "files": len(changed),
+            "notes": _change_notes(before, after, changed), "restart": True}
 
 
 def about() -> dict:
@@ -865,13 +1015,13 @@ def about() -> dict:
              "note": ("游戏运行中，已加载 " + status_["version"]) if status_.get("running") and status_.get("version") else
                      "游戏没在运行", "ok": bool(installed) and installed == _bridge_source_version()},
             {"name": "预置模拟器", "value": sim_version or ("已安装" if (REPO_ROOT / "sim" / "dist" / "celeste-sim").is_file() else "没有"),
-             "note": "只在本机，不入库", "ok": (REPO_ROOT / "sim" / "dist" / "celeste-sim").is_file()},
+             "note": "需另行配置，只在本机", "ok": (REPO_ROOT / "sim" / "dist" / "celeste-sim").is_file()},
             {"name": "知识库参考资料", "value": (f"{sum(1 for p in reference.rglob('*') if p.is_file())} 个文件"
                                           if reference.is_dir() else "没有"), "note": "kb/reference，只在本机",
              "ok": reference.is_dir()},
             {"name": "Docker", "value": docker or "没找到", "ok": bool(docker)},
             {"name": "OBS", "value": str(obs_dir) if obs_dir else "没找到",
-             "note": ("私有便携版，与你自己的 OBS 分开；" if private_obs else "")
+             "note": ("私有便携版，与个人使用的 OBS 分开；" if private_obs else "")
              + ("锁步插件已安装" if plugin else ("锁步插件没装" if obs_dir else "")), "ok": bool(obs_dir and plugin)},
             {"name": "Codex", "value": ('镜像内 ' + codex) if codex_ready else '镜像需要更新',
              "note": '容器执行；账号需单独初始化，不检查宿主 CLI', "ok": codex_ready},

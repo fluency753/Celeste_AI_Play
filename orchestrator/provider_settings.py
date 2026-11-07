@@ -506,7 +506,7 @@ def _key_file_choice(text, ident: str, key_env: str) -> str:
     if path.stat().st_size > 64 * 1024:
         raise ValueError("密钥文件太大：应只有密钥一行，或 KEY=VALUE 形式")
     if _tracked_risk(path):
-        raise ValueError("这个密钥文件在仓库目录里、又没有被 .gitignore 排除，可能被提交：移到仓库外，或改名为 .key 结尾")
+        raise ValueError("这个密钥文件在程序目录里、又没有被 .gitignore 排除，可能被上传到 GitHub：移到程序目录外，或改名为 .key 结尾")
     try:
         key = _config.load_api_key({"name": ident, "key_env": "", "key_file": path_text})
     except SystemExit as exc:
@@ -588,7 +588,7 @@ def save(request, in_use=frozenset()) -> str:
         repo = _read_repo()
         raw, local = _read_local()
         if request.get("version") != _version(raw):
-            raise ValueError(f"{_display(local_path())} 在你打开之后被改过，请重新读取再修改")
+            raise ValueError(f"{_display(local_path())} 在打开之后被改过，请重新读取再修改")
         create = request.get("create") is True
         if create:
             ident = _check_new_id(request.get("id"), repo, local)
@@ -675,7 +675,7 @@ def remove(request, in_use=frozenset()) -> str:
         repo = _read_repo()
         raw, local = _read_local()
         if request.get("version") != _version(raw):
-            raise ValueError(f"{_display(local_path())} 在你打开之后被改过，请重新读取再操作")
+            raise ValueError(f"{_display(local_path())} 在打开之后被改过，请重新读取再操作")
         ident = request.get("id")
         if not isinstance(ident, str) or ident not in _provider_ids(repo, local):
             raise ValueError("没有这个提供方，请重新读取")

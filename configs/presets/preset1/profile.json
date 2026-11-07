@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "name": "预置配置 1 · 探索模式",
+  "description": "作者的 Opus 5.5 探索系列（序章到第九章）最终采用的设置：Claude Code 执行器的 opus、推理强度 high，探索模式，仅正式思考、关闭思考僵直，单次 act 40～300 帧、自写模拟器与搜索每次最多推演 300 帧、规划程序不限时，全部章节、连续录制；探索模式额外开放速通知识库的技巧、机制库与搜索方法，以及本机生成的草莓酱训练场、机制库与 Celeste Wiki 技巧原文（没有生成的跳过）；个人追加要求写了收集品、隐藏房间、C++ 工具与中文总结等规矩。",
+  "form": {
+    "engine": "claude",
+    "provider": "anthropic",
+    "model": "opus",
+    "effort": "high",
+    "mode": "explore",
+    "live": false,
+    "sim": false,
+    "sim_assist": false,
+    "stiffness": false,
+    "formal_thought": true,
+    "save_context": true,
+    "playback": true,
+    "record": true,
+    "hud_mod": true,
+    "study": true,
+    "limit_planning": false,
+    "quota_wait": true,
+    "keep_obs_open": false,
+    "start_paused": false,
+    "action_permissions": {
+      "restart_chapter": false,
+      "return_to_map": true,
+      "save_quit": false
+    },
+    "allow_detour": true,
+    "cutscene_mode": "auto",
+    "chapters": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      9,
+      10
+    ],
+    "sides": [],
+    "segments": null,
+    "max_minutes": 1440,
+    "autocompact": "",
+    "map": "celeste",
+    "runtime": "container",
+    "recording_mode": "continuous",
+    "freeze_chapter_select": false,
+    "freeze_file_select": false,
+    "freeze_main_menu": false,
+    "tune": {
+      "explore_program_s": null,
+      "explore_act_frames": 300,
+      "explore_search_frames": 300,
+      "min_frames_per_act": 40
+    },
+    "seg_off": {}
+  },
+  "kb_deny": {
+    "speedrun": [],
+    "explore": []
+  },
+  "kb_allow": {
+    "explore": [
+      "speedrun/techniques.md",
+      "speedrun/mechanics.md",
+      "speedrun/search_methods.md",
+      "speedrun/reference/strawberry_jam/",
+      "speedrun/reference/celeste_wiki/"
+    ]
+  }
+}

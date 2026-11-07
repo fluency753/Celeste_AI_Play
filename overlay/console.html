@@ -122,6 +122,8 @@
   .mode[aria-checked="true"] { border-color: rgba(224, 71, 91, 0.6); background: rgba(224, 71, 91, 0.08); }
   .mode[aria-checked="true"]::before { content: ""; position: absolute; left: 6px; top: 11px; bottom: 11px; width: 3px; border-radius: 2px; background: var(--red); }
   .mode:disabled { cursor: not-allowed; opacity: 0.5; }
+  .tag-exp { display: inline-block; font-style: normal; font-weight: 600; font-size: 11px; line-height: 1; vertical-align: 2px;
+             padding: 3px 6px; margin-left: 4px; border-radius: 4px; color: var(--warn); border: 1px solid currentColor; }
   .segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
   .segmented button { background: transparent; border: 0; padding: 4px 14px; cursor: pointer; color: var(--muted); }
   .segmented button[aria-checked="true"] { background: rgba(224, 71, 91, 0.16); color: var(--text); }
@@ -230,7 +232,7 @@
   .tag.frozen { color: var(--blue); border-color: rgba(91, 192, 235, 0.5); }
   .tag.gold { color: var(--gold); border-color: rgba(242, 193, 78, 0.5); }
 
-  /* 对话：解说、尝试、你的消息与智能体的回复，按时间排在一条线上 */
+  /* 对话：解说、尝试、用户的消息与智能体的回复，按时间排在一条线上 */
   #chatPane { display: flex; flex-direction: column; max-height: calc(100vh - 100px); position: sticky; top: 72px; }
   @media (max-width: 860px) { #chatPane { position: static; max-height: none; } }
   .feed { flex: 1; overflow-y: auto; min-height: 220px; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
@@ -286,6 +288,8 @@
   .update .latest b { color: var(--text); font-weight: 500; }
   .update .latest.new b { color: var(--gold); }
   .update small { color: var(--muted); font-size: 12px; }
+  .update.rollback select { min-width: 0; flex: 1 1 320px; max-width: 100%; }
+  .update.rollback small { flex-basis: 100%; }
   .authors { font-size: 15px; margin: 0 0 14px; }
   .authors a { color: var(--blue); text-decoration: none; font-weight: 500; }
   .authors a:hover { text-decoration: underline; }
@@ -444,19 +448,19 @@
           <label class="field">推理强度<select id="effort"></select></label>
         </div>
         <div class="row" style="margin-top:10px">
-          <label class="field">智能体标签<input type="text" id="agent" maxlength="40" placeholder="例如 dev-opus 或 opus5.5"></label>
+          <label class="field">智能体标签<input type="text" id="agent" maxlength="40" placeholder="例如 opus-explore 或 dev-opus"></label>
           <label class="field">现实时间上限（分钟）<input type="number" id="maxMinutes" min="1" max="1440" step="1" value="1000"></label>
         </div>
-        <p class="hint">标签决定日志目录 runs/&lt;标签&gt;/ 与智能体的工作区；正式挑战建议用固定标签，调试用 dev- 开头。</p>
+        <p class="hint">标签决定日志目录 runs/&lt;标签&gt;/ 与智能体的工作区；同一个系列一直用同一个标签（续跑、笔记都按标签找），临时试验可以用 dev- 开头。</p>
       </fieldset>
 
       <fieldset>
         <legend>游玩模式</legend>
         <div class="modes" role="radiogroup" aria-label="游玩模式">
-          <button type="button" class="mode" role="radio" data-mode="speedrun" aria-checked="false">
-            <b>速通（需自配标准模拟器）</b><span>以最短的章节计时通关。完整知识库，可开放预置模拟器。</span></button>
           <button type="button" class="mode" role="radio" data-mode="explore" aria-checked="true">
             <b>探索（默认）</b><span>新手式探索与学习。只有基本操作与工具说明。</span></button>
+          <button type="button" class="mode" role="radio" data-mode="speedrun" aria-checked="false">
+            <b>速通 <em class="tag-exp">实验性功能</em></b><span>以最短的章节计时通关。完整知识库；预置模拟器需另行配置标准模拟器。</span></button>
         </div>
         <div class="switches" style="margin-top:8px">
           <label class="switch wide"><span class="text"><b>直播</b><span id="liveNote">观众实时观看：解说更勤，可按要求退出关卡，HUD 默认用可交互的网页形式；不改变速通目标</span></span><input type="checkbox" id="live"></label>
@@ -471,16 +475,16 @@
           <label class="switch" id="rowStiffness" hidden><span class="text"><b>思考僵直</b><span>冻结期间的思考与工具时间按比例变成下一次动作前的僵直（参数在“可调参数”里）</span></span><input type="checkbox" id="stiffness"></label>
           <label class="switch"><span class="text"><b>仅正式思考</b><span>冻结期间的临时思考只显示在控制台，游戏内 HUD 只显示每次动作的正式思考</span></span><input type="checkbox" id="formalThought"></label>
           <label class="switch"><span class="text"><b>节省上下文</b><span>同一房间里的动作结果省略每次都一样的部分，提示词轻提只打印关心的区域</span></span><input type="checkbox" id="saveContext" checked></label>
-          <label class="switch"><span class="text"><b>规划回放</b><span>把推演过的路线画进游戏；需通过提示词让 agent 主动写推演程序，并适配系统的绘制接口</span></span><input type="checkbox" id="playback"></label>
+          <label class="switch"><span class="text"><b>规划回放</b><span>把推演过的路线画进游戏；需要在提示词里让智能体主动写推演程序，并适配系统的绘制接口</span></span><input type="checkbox" id="playback"></label>
           <label class="switch"><span class="text"><b>OBS 录屏</b><span>锁步录制完整版与纯享版</span></span><input type="checkbox" id="record" checked></label>
           <label class="switch"><span class="text"><b>游戏内 HUD</b><span id="hudModNote">画在游戏画面右上角</span></span><input type="checkbox" id="hudMod" checked></label>
           <label class="switch"><span class="text"><b>先读知识库</b><span>开局前的准备阶段，不计现实用时</span></span><input type="checkbox" id="study" checked></label>
-          <label class="switch"><span class="text"><b>开始时先暂停</b><span>进入章节后等你点继续</span></span><input type="checkbox" id="startPaused"></label>
+          <label class="switch"><span class="text"><b>开始时先暂停</b><span>进入章节后先暂停，点“继续”后才开始</span></span><input type="checkbox" id="startPaused"></label>
           <label class="switch"><span class="text"><b>剧情交给智能体</b><span>关时由主控自动跳过剧情</span></span><input type="checkbox" id="cutsceneAgent"></label>
           <label class="switch"><span class="text"><b>允许重启章节</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowRestartChapter"></label>
           <label class="switch"><span class="text"><b>允许返回地图</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowReturnToMap"></label>
           <label class="switch"><span class="text"><b>允许保存退出</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowSaveQuit"></label>
-          <label class="switch"><span class="text"><b>允许去计划外的已解锁地图</b><span>agent 可自行返回地图，去其他已解锁的官方章节、面与检查点（例如收集水晶之心）再回来；计划不变，开启时一并允许返回地图</span></span><input type="checkbox" id="allowDetour"></label>
+          <label class="switch"><span class="text"><b>允许去计划外的已解锁地图</b><span>智能体可以自行返回地图，去其他已解锁的官方章节、面与检查点（例如收集水晶之心）再回来；计划不变，开启时一并允许返回地图</span></span><input type="checkbox" id="allowDetour"></label>
         </div>
       </fieldset>
 
@@ -553,7 +557,7 @@
           <label class="switch"><span class="text"><b>HUD 服务</b><span>关掉后主控不启动 HUD 服务</span></span><input type="checkbox" id="hudService" checked></label>
         </div>
 
-        <div class="group-title">调试与端口</div>
+        <div class="group-title">测试与端口</div>
         <div class="row">
           <label class="field">运行方式<select id="runMode"><option value="container">Docker 容器（默认）</option><option value="host">本机（只有游戏工具，没有沙箱）</option></select></label>
           <label class="field">上下文自动压缩窗口<input type="text" id="autocompact" placeholder="默认，或 auto / 100000～1000000"></label>
@@ -567,14 +571,14 @@
         </div>
         <div class="switches" style="margin-top:6px">
           <label class="switch"><span class="text"><b>已在关卡里时跳过进档</b><span>不走菜单宏</span></span><input type="checkbox" id="skipEnter"></label>
-          <label class="switch"><span class="text"><b>不启动智能体</b><span>只开游戏工具服务，手动调试</span></span><input type="checkbox" id="noAgent"></label>
+          <label class="switch"><span class="text"><b>不启动智能体</b><span>只开游戏工具服务，手动测试</span></span><input type="checkbox" id="noAgent"></label>
         </div>
         <div class="row thirds" style="margin-top:8px">
           <label class="field">桥接端口<input type="number" id="bridgePort" min="1024" max="65535" placeholder="47774"></label>
           <label class="field">游戏工具端口<input type="number" id="mcpPort" min="1024" max="65535" placeholder="47780"></label>
           <label class="field">HUD 端口<input type="number" id="hudPort" min="1024" max="65535" placeholder="47790"></label>
         </div>
-        <p class="hint">推进速度大于 1 是快进，只用于调试，录像会失真。</p>
+        <p class="hint">推进速度大于 1 是快进，只用于测试，录像会失真。</p>
       </details>
 
       <details class="more" id="tuneBox">
@@ -619,7 +623,7 @@
         <select id="liveRestartChapter" aria-label="重启章节权限"><option value="deny">重启章节：禁止</option><option value="allow">重启章节：允许</option></select>
         <select id="liveReturnToMap" aria-label="返回地图权限"><option value="deny">返回地图：禁止</option><option value="allow">返回地图：允许</option></select>
         <select id="liveSaveQuit" aria-label="保存退出权限"><option value="deny">保存退出：禁止</option><option value="allow">保存退出：允许</option></select>
-        <select id="liveDetour" aria-label="计划外地图许可" title="允许 agent 自行返回地图去其他已解锁的官方章节、面与检查点，计划不变；开启时一并允许返回地图"><option value="deny">计划外地图：禁止</option><option value="allow">计划外地图：允许</option></select>
+        <select id="liveDetour" aria-label="计划外地图许可" title="允许智能体自行返回地图去其他已解锁的官方章节、面与检查点，计划不变；开启时一并允许返回地图"><option value="deny">计划外地图：禁止</option><option value="allow">计划外地图：允许</option></select>
         <button class="btn" type="button" id="fastToggle" hidden>Fast：关</button>
       </div>
       <div class="controls" style="margin-top:10px">
@@ -656,7 +660,7 @@
   </section>
 
   <section class="pane" id="chatPane" aria-labelledby="chatTitle">
-    <h2 id="chatTitle">对话 <span class="aside" id="chatAside">解说、尝试、你的消息与智能体的回复</span></h2>
+    <h2 id="chatTitle">对话 <span class="aside" id="chatAside">解说、尝试、用户的消息与智能体的回复</span></h2>
     <div class="feed" id="feed" aria-live="polite"></div>
     <form class="compose" id="compose">
       <textarea id="message" maxlength="4000" placeholder="给沙箱里的智能体发消息：提示、纠正或提问。Enter 发送，Shift+Enter 换行"></textarea>
@@ -686,7 +690,7 @@
         <span class="note" id="gameDirNote">空着时自动查找：正在运行的游戏、Steam 库、部署向导记下的位置。</span>
       </div>
       <div class="launch" style="margin-top:8px">
-        <button class="btn" type="button" id="createInstance" hidden title="从现在的游戏位置复制一份只给 AI 用的游戏：独立的存档、设置、Mod 环境与桥接连接，你自己的《蔚蓝》可以同时玩">创建 AI 专用副本</button>
+        <button class="btn" type="button" id="createInstance" hidden title="从现在的游戏位置复制一份只给 AI 用的游戏：独立的存档、设置、Mod 环境与桥接连接，个人的《蔚蓝》可以同时玩">创建 AI 专用副本</button>
         <button class="btn" type="button" id="launchInstance" hidden title="启动 AI 专用副本（Steam 没开时先静默启动 Steam）">启动 AI 副本</button>
         <span class="note" id="instanceNote" hidden></span>
       </div>
@@ -733,8 +737,8 @@
     <h2 id="kbTitle">知识库 <span class="aside" id="kbRoot"></span></h2>
     <div class="kb-head">
       <div class="segmented" role="radiogroup" aria-label="按哪种游玩模式显示">
-        <button type="button" role="radio" data-kbmode="speedrun" aria-checked="false">速通</button>
         <button type="button" role="radio" data-kbmode="explore" aria-checked="true">探索</button>
+        <button type="button" role="radio" data-kbmode="speedrun" aria-checked="false">速通（实验性）</button>
       </div>
       <span class="kb-count" id="kbCount"></span>
     </div>
@@ -745,7 +749,7 @@
 
   <section class="pane" aria-labelledby="kbEditorTitle">
     <h2 id="kbEditorTitle">查看与编辑</h2>
-    <div id="kbEmpty" class="empty"><b>从左边选一个文件</b>文本文件可以直接编辑：修改存进当前配置，仓库里的文件不变；保存后下一次运行生效。</div>
+    <div id="kbEmpty" class="empty"><b>从左边选一个文件</b>文本文件可以直接编辑：修改存进当前配置，程序自带的文件不变；保存后下一次运行生效。</div>
     <div id="kbEditor" hidden>
       <div class="editor-head">
         <span class="path" id="kbPath"></span>
@@ -754,7 +758,7 @@
           <button type="button" role="radio" data-view="preview" aria-checked="false">预览</button>
         </div>
         <button class="btn small" type="button" id="kbRevert" disabled>放弃修改</button>
-        <button class="btn small" type="button" id="kbReset" hidden>恢复仓库版本</button>
+        <button class="btn small" type="button" id="kbReset" hidden>恢复默认版本</button>
         <button class="btn small primary" type="button" id="kbSave" disabled>保存</button>
       </div>
       <textarea class="code" id="kbText" spellcheck="false"></textarea>
@@ -772,7 +776,7 @@
     <label for="personalPromptScope">适用范围</label>
     <select id="personalPromptScope" aria-label="个人要求适用范围"><option value="all">通用（全部执行器与模式）</option></select>
     <label for="personalPromptText" style="display:block;margin-top:12px">追加内容</label>
-    <textarea id="personalPromptText" style="width:100%;min-height:180px" spellcheck="false" maxlength="12000" placeholder="默认留空，在这里填写你自己的要求" disabled></textarea>
+    <textarea id="personalPromptText" style="width:100%;min-height:180px" spellcheck="false" maxlength="12000" placeholder="默认留空，在这里填写额外的要求" disabled></textarea>
     <div class="presets" style="margin-top:10px">
       <button class="btn small primary" id="personalPromptSave" type="button" disabled>保存</button>
       <button class="btn small" id="personalPromptClear" type="button" disabled>清空并保存</button>
@@ -784,8 +788,8 @@
     <h2 id="promptTitle">提示词 <span class="aside">按运行页的当前设置生成</span></h2>
     <div class="kb-head">
       <div class="segmented" role="radiogroup" aria-label="游玩模式（与运行页同步）">
-        <button type="button" role="radio" data-pmode="speedrun" aria-checked="false">速通</button>
         <button type="button" role="radio" data-pmode="explore" aria-checked="true">探索</button>
+        <button type="button" role="radio" data-pmode="speedrun" aria-checked="false">速通（实验性）</button>
       </div>
     </div>
     <p class="hint" id="promptWhat" style="margin-top:0">—</p>
@@ -801,7 +805,7 @@
     </div>
     <div class="subhead">本机修改过的文件</div>
     <div id="promptOverrides" class="plist"></div>
-    <p class="hint" id="promptOverridesNote">编辑保存的内容放在当前配置的目录（本机文件，不入库），仓库里的提示词文件不变，更新仓库也不会冲突；恢复仓库版本就是删掉本机修改。每次运行会在日志与 run_state.json 里记下用了哪些本机修改。</p>
+    <p class="hint" id="promptOverridesNote">编辑保存的内容放在当前配置的目录（只在本机），程序自带的提示词文件不变，更新程序也不会冲突；恢复默认版本就是删掉本机修改。每次运行会在日志与 run_state.json 里记下用了哪些本机修改。</p>
   </section>
 
   <section class="pane" aria-labelledby="promptViewTitle">
@@ -814,7 +818,7 @@
         <span class="path" id="promptPath"></span>
         <button class="btn small" type="button" id="promptBack">返回预览</button>
         <button class="btn small" type="button" id="promptRevert" disabled>放弃修改</button>
-        <button class="btn small" type="button" id="promptReset">恢复仓库版本</button>
+        <button class="btn small" type="button" id="promptReset">恢复默认版本</button>
         <button class="btn small primary" type="button" id="promptSave" disabled>保存</button>
       </div>
       <textarea class="code" id="promptText" spellcheck="false"></textarea>
@@ -837,7 +841,14 @@
         <span class="latest" id="latestVersion" role="status">最新版本：还没检查</span>
         <button class="btn small" type="button" id="checkUpdate">检查更新</button>
         <button class="btn small primary" type="button" id="applyUpdate" disabled>一键更新</button>
-        <small>从github拉取</small>
+        <small>从 GitHub 拉取最新的开发版</small>
+      </div>
+      <div class="update rollback" id="aboutRollback">
+        <span class="latest">换版本：回退到 GitHub 上发布过的正式版、公测版或最近的开发版</span>
+        <select id="rollbackTarget" aria-label="要换到的版本" disabled><option value="">点“读取版本列表”</option></select>
+        <button class="btn small" type="button" id="loadVersions">读取版本列表</button>
+        <button class="btn small" type="button" id="applyRollback" disabled>换到这个版本</button>
+        <small id="rollbackNote" role="status"></small>
       </div>
       <p class="authors">作者：<a id="authorFluency" href="https://space.bilibili.com/490510003" target="_blank" rel="noopener">Fluency</a>、<a id="authorPig" href="https://space.bilibili.com/384651096" target="_blank" rel="noopener">Mechanic Pig</a></p>
       <p style="margin:0">项目地址：<a id="githubLink" href="https://github.com/fluency753/Celeste_AI_Play" target="_blank" rel="noopener">github.com/fluency753/Celeste_AI_Play</a></p>
@@ -847,7 +858,7 @@
       <div class="env" id="envList"></div>
     </section>
     <section class="pane" aria-labelledby="todoTitle">
-      <h2 id="todoTitle">待办</h2>
+      <h2 id="todoTitle">开发计划</h2>
       <div class="md" id="todo"></div>
     </section>
   </div>
@@ -863,7 +874,7 @@
     <h2 id="providerTitle">模型提供方 <span class="aside">Claude Code 执行器经 Anthropic 兼容接口接入的第三方模型</span></h2>
     <button class="btn small" type="button" id="providerClose">关闭</button>
   </div>
-  <p class="hint" id="providerIntro">修改写进本机的 <code>configs/local.providers.json</code>（不入库）；入库的 <code>configs/providers.json</code> 不变，内置提供方可以随时"恢复默认"。Anthropic 订阅与 Codex 不在这里设置。保存后下一次运行生效。</p>
+  <p class="hint" id="providerIntro">修改写进本机的 <code>configs/local.providers.json</code>（只在本机）；程序自带的 <code>configs/providers.json</code> 不变，内置提供方可以随时"恢复默认"。Anthropic 订阅与 Codex 不在这里设置。保存后下一次运行生效。</p>
   <div class="sheet-body">
     <nav class="prov-list" aria-label="提供方列表">
       <div id="providerList" class="prov-list"></div>
@@ -889,7 +900,7 @@
           <button type="button" role="radio" data-keymode="file" aria-checked="false">密钥文件路径</button>
           <button type="button" role="radio" data-keymode="paste" aria-checked="false">粘贴密钥</button>
         </div>
-        <label class="field" id="provKeyFileField" hidden>密钥文件路径<input type="text" id="provKeyFile" maxlength="400" spellcheck="false" placeholder="例如 C:\Users\你\secrets\deepseek.key"></label>
+        <label class="field" id="provKeyFileField" hidden>密钥文件路径<input type="text" id="provKeyFile" maxlength="400" spellcheck="false" placeholder="例如 D:\secrets\deepseek.key"></label>
         <label class="field" id="provKeyValueField" hidden>粘贴密钥<input type="password" id="provKeyValue" maxlength="4096" autocomplete="new-password" spellcheck="false" placeholder="保存后不再显示"></label>
         <p class="hint" id="provKeyHint"></p>
         <label class="field">环境变量名（设了这个环境变量时优先用它）<input type="text" id="provKeyEnv" maxlength="64" spellcheck="false"></label>
@@ -958,7 +969,7 @@
       <label class="inline-check"><input type="radio" name="profileBase" value="current" checked>
         <span>基于当前配置（<b id="profileBaseName"></b>）<small>复制它的知识库修改与阅读权限、提示词修改、个人追加要求；表单设置用运行页现在的</small></span></label>
       <label class="inline-check"><input type="radio" name="profileBase" value="default">
-        <span>基于默认配置<small>从仓库原样开始：默认设置、仓库知识库与提示词、没有个人追加要求</small></span></label>
+        <span>基于默认配置<small>从程序自带的默认设置、知识库与提示词开始，没有个人追加要求</small></span></label>
     </div>
     <div class="launch" style="margin-top:16px">
       <button class="btn primary" type="submit" id="profileOk">创建</button>
@@ -1214,11 +1225,11 @@ function fillGameDir() {
   $("launchInstance").hidden = !instance;
   $("instanceNote").hidden = !instance;
   if (instance) $("instanceNote").textContent =
-    `AI 专用副本「${instance.name}」：独立存档与 Mod，窗口标题「${instance.window_title}」，OBS 只录这个窗口；你自己的《蔚蓝》可以同时玩（个人游戏里请停用 AI 模组）。`;
+    `AI 专用副本「${instance.name}」：独立存档与 Mod，窗口标题「${instance.window_title}」，OBS 只录这个窗口；个人的《蔚蓝》可以同时玩（个人游戏里请停用 AI 模组）。`;
 }
 
 async function createInstance() {
-  if (!confirm("从现在的游戏位置复制一份只给 AI 用的游戏（约 2～3 GB，不复制你的 Mods 和存档），并把游戏位置改成它？")) return;
+  if (!confirm("从现在的游戏位置复制一份只给 AI 用的游戏（约 2～3 GB，不复制原游戏的 Mods 和存档），并把游戏位置改成它？")) return;
   $("createInstance").disabled = true;
   toast("正在复制游戏本体，可能要几十秒…");
   try {
@@ -1641,7 +1652,7 @@ async function startRun(event) {
 
 // ---------------------------------------------------------------- 配置（顶部的配置栏；后端 orchestrator/profiles.py）
 // 选中的配置决定：运行页的表单设置（点"保存"时存进去）、知识库的阅读权限与修改、提示词修改、个人追加要求
-// （这三样在各自页面保存时直接存进当前配置）。默认配置是仓库原样、只读。切换、新建、删除配置后重新载入页面。
+// （这三样在各自页面保存时直接存进当前配置）。默认配置与预置配置只读。切换、新建、删除配置后重新载入页面。
 
 function profileReadonly() { return !!(ui.profiles && ui.profiles.current && ui.profiles.current.readonly); }
 
@@ -1661,7 +1672,7 @@ function updateProfileDirty() {
   const st = $("profileState"), locked = profileReadonly();
   st.classList.toggle("dirty", ui.profileDirty);
   st.textContent = !ui.profileDirty ? (locked || !ui.profiles.current.saved_form ? "" : "表单设置已保存")
-    : locked ? "运行页有改动：默认配置不能保存，要留下就新建一份" : "运行页有未保存的改动";
+    : locked ? "运行页有改动：内置配置不能保存，要留下就新建一份" : "运行页有未保存的改动";
   $("profileSave").disabled = locked || ui.settingsLoading || ui.modelsLoading || !ui.profileDirty;
   $("profileNew").disabled = ui.settingsLoading || ui.modelsLoading;
 }
@@ -1672,7 +1683,7 @@ function renderProfiles() {
   const sel = $("profile");
   sel.replaceChildren(...p.profiles.map(r => {
     const opt = new Option(r.name + (r.readonly ? "（只读）" : ""), r.id);
-    opt.title = r.builtin ? r.name : `local/profiles/${r.id}/`;
+    opt.title = r.preset ? (r.description || r.name) : r.builtin ? r.name : `local/profiles/${r.id}/`;
     return opt;
   }));
   sel.value = p.selected;
@@ -1686,8 +1697,10 @@ function renderProfiles() {
   if (row.kb) bits.push(`知识库修改 ${row.kb} 个`);
   if (!cur.readonly && !cur.form) bits.push("表单设置还没保存过（用默认设置）");
   const has = bits.length ? "这份配置里：" + bits.join("、") + "。" : "";
-  $("profileHint").textContent = cur.readonly
-    ? "仓库原样：默认设置、仓库知识库与提示词、没有个人追加要求；只读。要改动先点“新建…”。"
+  $("profileHint").textContent = cur.preset
+    ? `${cur.description || "随程序发布的预置配置。"}只读，要改动先点“新建…”（基于当前配置）。`
+    : cur.readonly
+    ? "程序自带的默认设置、知识库与提示词，没有个人追加要求；只读。要改动先点“新建…”。"
     : cur.id === "local"
       ? `沿用旧版本的本机文件（local/prompts/、local/personal_prompts.json、local/kb_edits/ 与知识库权限）；命令行不写 --profile 时用它。${has}`
       : `保存在 local/profiles/${cur.id}/；命令行开跑用 --profile ${cur.id}，续跑沿用。${has}`;
@@ -2028,7 +2041,7 @@ function renderControls() {
   const engine = ui.status && ui.status.run && ui.status.run.state && ui.status.run.state.engine;
   $("delivery").textContent = !running() ? "运行开始后可以发消息。" : !c.connected ? "等待主控连上…"
     : c.paused ? "试玩已暂停：智能体只回复，不操作游戏。"
-    : engine === "codex" ? "消息会插入智能体当前这一轮。" : "智能体会先停下当前这一轮，再读你的消息。";
+    : engine === "codex" ? "消息会插入智能体当前这一轮。" : "智能体会先停下当前这一轮，再读这条消息。";
   const last = (c.actions || [])[0];
   $("controlStatus").textContent = last ? `最近的操作：${last.detail || last.status}` : "";
 }
@@ -2171,7 +2184,7 @@ async function refreshFeed() {
     div.append(who, document.createTextNode(item.text || ""));
     return div;
   }));
-  if (!items.length) feed.replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "运行开始后，智能体的解说、每段动作的说明和你们的对话会显示在这里。" }));
+  if (!items.length) feed.replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "运行开始后，智能体的解说、每段动作的说明和对话会显示在这里。" }));
   if (atBottom) feed.scrollTop = feed.scrollHeight;
 }
 
@@ -2256,7 +2269,7 @@ function renderKb() {
       const size = document.createElement("span"); size.className = "size";
       if (d.required) size.appendChild(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "必读" }));
       if (d.local_only) size.appendChild(Object.assign(document.createElement("span"), { className: "tag", textContent: "本机" }));
-      if (d.edited) size.appendChild(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "已改", title: "这份配置改过这个文件（仓库里的文件不变）" }));
+      if (d.edited) size.appendChild(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "已改", title: "这份配置改过这个文件（程序自带的文件不变）" }));
       size.appendChild(document.createTextNode(bytes(d.size)));
       row.append(box, name, size);
       wrap.appendChild(row);
@@ -2303,7 +2316,7 @@ async function openKbFile(mode, path) {
     text.readOnly = !doc.editable;
     $("kbStatus").textContent = doc.text == null ? "这不是文本文件，不能在这里查看或编辑。"
       : !doc.editable ? (doc.truncated ? "文件太大，只显示开头，不能在这里编辑。" : "只读。")
-      : profileReadonly() ? "默认配置是仓库原样、只读：要修改先在顶部“配置”里新建一份。"
+      : profileReadonly() ? "内置配置只读：要修改先在顶部“配置”里新建一份。"
       : doc.edited ? "这份配置改过这个文件，正在编辑的是修改后的版本。" : "";
     setKbView(doc.text == null ? "edit" : ui.kbView);
     renderKb(); updateKbSave();
@@ -2332,8 +2345,8 @@ async function saveKbFile() {
   try {
     const result = await postJSON("/api/console/kb/file", { mode: f.mode, path: f.path, text: $("kbText").value, mtime: f.mtime });
     f.mtime = result.mtime; f.text = $("kbText").value; f.dirty = false; f.edited = !!result.edited;
-    $("kbStatus").textContent = result.edited ? `已保存到这份配置（${bytes(result.size)}），仓库里的文件不变。下一次运行生效。`
-      : "和仓库里的版本相同，已删掉这份配置的修改。";
+    $("kbStatus").textContent = result.edited ? `已保存到这份配置（${bytes(result.size)}），程序自带的文件不变。下一次运行生效。`
+      : "和默认版本相同，已删掉这份配置的修改。";
     updateKbSave();
     loadKbList(f.mode).then(renderKb).catch(() => null);
   } catch (e) { toast(e.message, true); }
@@ -2346,7 +2359,7 @@ async function resetKbFile() {
     const doc = await postJSON("/api/console/kb/reset", { mode: f.mode, path: f.path });
     Object.assign(f, { text: doc.text, mtime: doc.mtime, edited: !!doc.edited, dirty: false });
     $("kbText").value = doc.text ?? "";
-    $("kbStatus").textContent = "已恢复成仓库里的版本。";
+    $("kbStatus").textContent = "已恢复成默认版本。";
     setKbView(ui.kbView); updateKbSave();
     loadKbList(f.mode).then(renderKb).catch(() => null);
   } catch (e) { toast(e.message, true); }
@@ -2389,7 +2402,7 @@ async function loadPersonalPrompt(force = false) {
     $('personalPromptText').maxLength = doc.max_chars;
     $('personalPromptAside').textContent = doc.readonly ? '默认配置没有个人追加要求（只读）' : `仅本机，存在 ${doc.store}`;
     personalDrafts.set(scope, {text:doc.text, saved:doc.text, version:doc.version, saving:false,
-      status: doc.readonly ? '默认配置是仓库原样、只读：要写个人追加要求先在顶部“配置”里新建一份。' : '仅保存在本机；下次启动或重接模型时加载；普通暂停／继续不重新加载。'});
+      status: doc.readonly ? '内置配置只读：要写个人追加要求先在顶部“配置”里新建一份。' : '仅保存在本机；下次启动或重接模型时加载；普通暂停／继续不重新加载。'});
     renderPersonalPrompt();
   } catch (e) {
     if (request === personalRequest && scope === $('personalPromptScope').value) $('personalPromptStatus').textContent = '读取失败：' + e.message;
@@ -2448,8 +2461,8 @@ async function loadPromptPreview() {
   if (request !== promptPreviewRequest) return;
   $("promptWhat").classList.remove("warn");
   $("promptOverridesNote").textContent = data.readonly
-    ? "默认配置用仓库里的提示词、不能修改；要修改先在顶部“配置”里新建一份。"
-    : `编辑保存的内容放在 ${data.overrides_dir}/（当前配置的本机文件，不入库），仓库里的提示词文件不变，更新仓库也不会冲突；恢复仓库版本就是删掉本机修改。每次运行会在日志与 run_state.json 里记下用了哪些本机修改。`;
+    ? "内置配置用自带的提示词、不能修改；要修改先在顶部“配置”里新建一份。"
+    : `编辑保存的内容放在 ${data.overrides_dir}/（当前配置的本机文件），程序自带的提示词文件不变，更新程序也不会冲突；恢复默认版本就是删掉本机修改。每次运行会在日志与 run_state.json 里记下用了哪些本机修改。`;
   const previewParts = [...data.parts, ...(data.guide_parts || []).map(p => ({...p, label: "工作区指南 · " + p.label}))];
   if (ui.promptFile && !previewParts.some(part => part.source === ui.promptFile.name) && !(data.button_prompts || []).some(item => item.name === ui.promptFile.name)) {
     $("promptStatus").textContent = `这个文件不在当前设置（${promptOptions().mode === "explore" ? "探索" : "速通"}模式）的提示词里；点"返回预览"看当前这一版。`;
@@ -2532,11 +2545,11 @@ async function loadPromptPreview() {
     const row = document.createElement("div"); row.className = "prow";
     const open = Object.assign(document.createElement("button"), { type: "button", textContent: name });
     open.addEventListener("click", () => openPromptFile(name));
-    const reset = Object.assign(document.createElement("button"), { type: "button", className: "chip", textContent: "恢复仓库版本" });
+    const reset = Object.assign(document.createElement("button"), { type: "button", className: "chip", textContent: "恢复默认版本" });
     reset.addEventListener("click", () => resetPromptFile(name));
     row.append(Object.assign(document.createElement("i"), { style: "background:var(--gold)" }), open, reset);
     return row;
-  }) : [Object.assign(document.createElement("p"), { className: "hint", textContent: "没有：全部用仓库里的版本。" })]));
+  }) : [Object.assign(document.createElement("p"), { className: "hint", textContent: "没有：全部用默认版本。" })]));
 }
 
 async function openPromptFile(name) {
@@ -2549,10 +2562,10 @@ async function openPromptFile(name) {
   $("promptPreviewBox").hidden = true; $("promptEditor").hidden = false;
   $("promptPath").textContent = (doc.source_path || "orchestrator/prompts/" + name) + (doc.overridden ? "（本机修改）" : "");
   $("promptText").value = doc.text;
-  $("promptStatus").textContent = profileReadonly() ? "默认配置是仓库原样、只读：要修改先在顶部“配置”里新建一份。"
+  $("promptStatus").textContent = profileReadonly() ? "内置配置只读：要修改先在顶部“配置”里新建一份。"
     : doc.overridden ? "这个文件有本机修改，正在编辑的是本机修改。"
     : doc.inherited_from ? `当前章节继承 ${doc.inherited_from} 的本机修改；保存后单独覆盖本章节。`
-    : "正在编辑仓库里的版本；保存后存为这份配置里的本机修改。";
+    : "正在编辑默认版本；保存后存为这份配置里的本机修改。";
   $("promptStatus").classList.remove("warn");
   $("promptPlaceholderBox").hidden = !doc.placeholders.length;
   $("promptPlaceholders").replaceChildren(...doc.placeholders.flatMap(p => [
@@ -2686,7 +2699,7 @@ function fillProviderForm(p) {
   $("provKeyEnv").dataset.touched = "";
   $("provIdHint").textContent = ui.prov.isNew
     ? "标识用于命令行 --provider 与密钥文件名：只能用字母、数字、点、下划线与连字符，不能用 anthropic、codex；保存后不能改。"
-    : p.builtin ? "内置提供方：标识不能改；这里改的设置写进本机覆盖，入库的 configs/providers.json 不变。"
+    : p.builtin ? "内置提供方：标识不能改；这里改的设置写进本机覆盖，程序自带的 configs/providers.json 不变。"
                 : "自建提供方：标识保存后不能改（要换标识就新建一个，再删掉这个）。";
   $("provLabel").value = p.label;
   $("provUrl").value = p.base_url;
@@ -2755,7 +2768,7 @@ function setKeyMode(mode) {
   $("provKeyHint").textContent = mode === "file"
     ? "适合已有的密钥文件（只有密钥一行，或 KEY=VALUE 形式）：文件留在原处，只记下路径。留空 = 不用文件，只用环境变量。"
     : mode === "paste"
-      ? `保存到本机的 ${dir}/<标识>.key（不入库，尽量只让当前用户可读），key_file 指向它。保存后输入框清空，界面只显示末尾 4 位。`
+      ? `保存到本机的 ${dir}/<标识>.key（只在本机，尽量只让当前用户可读），key_file 指向它。保存后输入框清空，界面只显示末尾 4 位。`
       : ui.prov.isNew ? "之后再设置：可以设环境变量，或回来粘贴密钥、填密钥文件路径。" : "密钥设置不变。";
 }
 
@@ -2891,7 +2904,7 @@ function removeProvider() {
   const other = (p.local_fields || []).filter(f => f !== "key_file" && f !== "key_env");
   if (p.builtin) {
     body.replaceChildren(
-      para(`会删掉本机 ${file} 里 ${p.id} 这一项${other.length ? "的这些字段：" + other.join("、") : ""}，恢复成入库的 configs/providers.json 里的设置。`),
+      para(`会删掉本机 ${file} 里 ${p.id} 这一项${other.length ? "的这些字段：" + other.join("、") : ""}，恢复成程序自带的 configs/providers.json 里的设置。`),
       para(keyFields.length ? `本机覆盖里的密钥设置（${keyFields.join("、")}）是否保留，用下面的勾选决定。`
                             : "本机覆盖里没有密钥设置（密钥来自环境变量，或没有配置），不受影响。"));
   } else {
@@ -2907,7 +2920,7 @@ function removeProvider() {
     $("provConfirmDeleteText").textContent = `同时删除控制台保存的密钥文件（${(ui.prov.data && ui.prov.data.keys_dir) || "configs/local.keys"}/${p.id}.key）；不勾选时文件留在本机`;
     $("provConfirmNote") && $("provConfirmNote").remove();
     if (!keep && p.key_file && !p.key_saved_by_console && p.local_fields.includes("key_file")) {
-      const note = para(`你自己的密钥文件（${p.key_file}）不会被删除，只是不再记它的路径。`);
+      const note = para(`原来的密钥文件（${p.key_file}）不会被删除，只是不再记它的路径。`);
       note.id = "provConfirmNote"; note.className = "hint"; body.append(note);
     }
   };
@@ -2981,7 +2994,7 @@ async function savePromptFile() {
     const missing = result.missing_placeholders || [];
     $("promptStatus").textContent = (result.overridden ? (result.live_editable ? "已保存为本机修改，下一次对应消息生成时生效。" : "已保存为本机修改，下一次运行生效。")
       : result.inherited_from ? `已删掉单节修改；当前继承 ${result.inherited_from} 的本机修改。`
-      : "和仓库里的版本相同，已删掉本机修改。")
+      : "和默认版本相同，已删掉本机修改。")
       + (missing.length ? ` 注意：删掉了占位符 ${missing.join("、")}，运行时这些位置不会再填入对应的内容。` : "");
     $("promptStatus").classList.toggle("warn", missing.length > 0);
     updatePromptButtons();
@@ -2991,7 +3004,7 @@ async function savePromptFile() {
 async function resetPromptFile(name) {
   try {
     const doc = await postJSON("/api/console/prompt/reset", { name });
-    const status = doc.inherited_from ? `已删掉单节修改；当前继承 ${doc.inherited_from} 的本机修改。` : `${name} 已恢复成仓库里的版本。`;
+    const status = doc.inherited_from ? `已删掉单节修改；当前继承 ${doc.inherited_from} 的本机修改。` : `${name} 已恢复成默认版本。`;
     toast(status);
     if (ui.promptFile && ui.promptFile.name === name) {
       ui.promptFile = { ...doc, dirty: false };
@@ -3063,6 +3076,72 @@ async function checkUpdate() {
   $("applyUpdate").disabled = !u.can_update;
 }
 
+// 等 HUD 服务换成新代码后刷新页面（更新与换版本共用）
+async function reloadWhenServing(commit, line) {
+  const started = Date.now();
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  while (Date.now() - started < 60000) {
+    try { const a = await getJSON("/api/console/about"); if (a.version && a.version.commit === commit) { location.reload(); return; } }
+    catch (e) { /* 服务正在重启 */ }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  line.innerHTML += "<br><small>HUD 服务没有自动起来：关掉控制台窗口再打开。</small>";
+}
+
+// 换版本：正式版、公测版是 GitHub 上的标签，开发版是最近的提交；只列出自带一键更新的版本（换过去之后还能一键回到最新）
+const ROLLBACK_NOTE = "只换程序文件，运行记录、配置、存档等本机数据不动；较旧的版本可能读不懂新版本留下的数据。要回到最新版本，点上面的“一键更新”。";
+const VERSION_KINDS = { release: "正式版", prerelease: "公测版", commit: "开发版（最近的提交）" };
+async function loadVersions() {
+  const sel = $("rollbackTarget");
+  $("loadVersions").disabled = true; $("applyRollback").disabled = true;
+  sel.disabled = true; sel.replaceChildren(new Option("读取中…", ""));
+  let v;
+  try { v = await getJSON("/api/console/versions"); }
+  catch (e) { sel.replaceChildren(new Option("读取失败", "")); $("rollbackNote").textContent = e.message; $("loadVersions").disabled = false; return; }
+  $("loadVersions").disabled = false;
+  ui.versions = v;
+  const groups = [];
+  for (const kind of Object.keys(VERSION_KINDS)) {
+    const rows = v.versions.filter(r => r.kind === kind);
+    if (!rows.length) continue;
+    const g = document.createElement("optgroup");
+    g.label = VERSION_KINDS[kind];
+    for (const r of rows) {
+      const subject = r.subject.length > 36 ? r.subject.slice(0, 35) + "…" : r.subject;
+      const label = [r.tag, r.console && `控制台 ${r.console}`, r.commit, r.date].filter(Boolean).join(" · ")
+        + (r.current ? "（本机当前）" : "") + (subject ? "　" + subject : "");
+      const opt = new Option(label, r.ref);
+      opt.disabled = r.current; opt.title = r.subject;
+      g.appendChild(opt);
+    }
+    groups.push(g);
+  }
+  if (!groups.length) groups.push(new Option(v.reason || "没有可选的版本", ""));
+  sel.replaceChildren(...groups);
+  const first = v.versions.find(r => !r.current);
+  if (first) sel.value = first.ref;
+  sel.disabled = !first;
+  $("rollbackNote").textContent = v.can_rollback ? ROLLBACK_NOTE : (v.reason || ROLLBACK_NOTE);
+  updateRollbackButton();
+}
+function updateRollbackButton() {
+  $("applyRollback").disabled = !(ui.versions && ui.versions.can_rollback && $("rollbackTarget").value);
+}
+async function applyRollback() {
+  const row = ui.versions && ui.versions.versions.find(r => r.ref === $("rollbackTarget").value);
+  if (!row || !confirmTwice("applyRollback", `再点一次：换到 ${row.tag || "开发版 " + row.commit}`)) return;
+  $("applyRollback").disabled = true; $("loadVersions").disabled = true; $("applyUpdate").disabled = true;
+  const line = $("rollbackNote");
+  line.textContent = "正在换版本…";
+  let r;
+  try { r = await postJSON("/api/console/rollback", { ref: row.ref }); }
+  catch (e) { toast("换版本失败：" + e.message, true); line.textContent = "换版本失败：" + e.message; $("loadVersions").disabled = false; updateRollbackButton(); return; }
+  line.innerHTML = `已换到 ${versionText(r.after)}（${r.files} 个文件有变化）；正在重启 HUD 服务，控制台稍后自动刷新…`
+    + (r.notes.length ? "<br>" + r.notes.map(escapeHtml).join("<br>") : "");
+  if (r.notes.length) toast(r.notes.join("；"));
+  await reloadWhenServing(r.after.commit, line);
+}
+
 async function applyUpdate() {
   if (!confirmTwice("applyUpdate", "再点一次：从 GitHub 更新")) return;
   $("applyUpdate").disabled = true; $("checkUpdate").disabled = true;
@@ -3074,14 +3153,7 @@ async function applyUpdate() {
   line.innerHTML = `已更新到 ${versionText(r.after)}（${r.files} 个文件有变化）；正在重启 HUD 服务，控制台稍后自动刷新…`
     + (r.notes.length ? "<br><small>" + r.notes.map(escapeHtml).join("<br>") + "</small>" : "");
   if (r.notes.length) toast(r.notes.join("；"));
-  const started = Date.now();
-  await new Promise(resolve => setTimeout(resolve, 2500));
-  while (Date.now() - started < 60000) {
-    try { const a = await getJSON("/api/console/about"); if (a.version && a.version.commit === r.after.commit) { location.reload(); return; } }
-    catch (e) { /* 服务正在重启 */ }
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  }
-  line.innerHTML += "<br><small>HUD 服务没有自动起来：关掉控制台窗口再打开。</small>";
+  await reloadWhenServing(r.after.commit, line);
 }
 
 // ---------------------------------------------------------------- 事件
@@ -3167,6 +3239,9 @@ $("profileForm").addEventListener("submit", submitProfileDialog);
 $("aboutRefresh").addEventListener("click", loadAbout);
 $("checkUpdate").addEventListener("click", checkUpdate);
 $("applyUpdate").addEventListener("click", applyUpdate);
+$("loadVersions").addEventListener("click", loadVersions);
+$("applyRollback").addEventListener("click", applyRollback);
+$("rollbackTarget").addEventListener("change", updateRollbackButton);
 $('personalPromptScope').addEventListener('change', () => { ++personalRequest; loadPersonalPrompt(); });
 $('personalPromptText').addEventListener('input', () => {
   const draft = personalDrafts.get($('personalPromptScope').value);

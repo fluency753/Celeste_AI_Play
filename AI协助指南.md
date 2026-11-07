@@ -1,11 +1,11 @@
-# 操作手册（给 AI 助手）
+# AI 协助指南
 
 这份手册写给在用户电脑上替用户操作本系统的 AI 助手（例如 Claude Code、Codex）。你的角色是**操作者**：阅读文档、检查环境、部署、启动运行、在运行中监督与介入、结束后收集产出。你不是游戏里的智能体；游戏里的智能体在 Docker 容器里，由主控启动。
 
 规则：
 
 - 按章节顺序做。每一步先检查，再动手。
-- 命令都在仓库根目录的 PowerShell 里执行。Python 一律用虚拟环境里的 `.\.venv\Scripts\python.exe`。
+- 命令都在程序根目录（Celeste_AI_Play，git 仓库的根目录）的 PowerShell 里执行。Python 一律用虚拟环境里的 `.\.venv\Scripts\python.exe`。
 - 状态查询、构建、部署、启动分开执行，一条命令只做一件事，前一步失败就停下，不要接着做依赖它的步骤。
 - 先读第 8 节"安全与礼节规则"，整个过程都要遵守。
 
@@ -13,11 +13,11 @@
 
 按顺序读：
 
-1. `README.md`：项目是什么、组成、模式。
-2. `docs/GUIDE.md`：用户视角的流程；第 0 节列出了必须由用户亲手做的事。
+1. `README.md`：项目是什么、组成、模式、版本。
+2. `上手指南.md`：用户视角的流程；第 0 节列出了必须由用户亲手做的事。
 3. 本手册。
 4. `docs/DEPLOY.md`：第 2 节（环境要求）、第 3 节（一键部署）、第 4 节（手动部署）、第 5 节（运行）、第 11 节（常见问题）。
-5. 按需查阅：`docs/USAGE.md` 第 4.1 节（主控参数）、4.8 节（额度等待与中断续跑）、4.10 节（控制台）、4.11 节（可调参数）；`docs/BRIDGE_RELOAD.md`（不重启游戏更新桥接）；`docs/INCIDENT_20261024.md`（后台进程为什么要独立启动）。
+5. 按需查阅：`docs/USAGE.md` 第 4.1 节（主控参数）、4.8 节（额度等待与中断续跑）、4.10 节（控制台）、4.11 节（可调参数）、4.12 节末尾（更新与换版本）、4.14 节（配置与预置配置）；`docs/BRIDGE_RELOAD.md`（不重启游戏更新桥接）；`docs/INCIDENT_20261024.md`（后台进程为什么要独立启动）。
 
 读完后，用几句话向用户复述你接下来要做什么，等用户确认再开始。
 
@@ -45,9 +45,11 @@ docker image inspect celeste-agent:0.1                                 # 智能�
 
 `restart_controller.py check` 默认查 47792 端口的 HUD 服务；控制台和主控用的是 47790，查它时加 `--hud-port 47790`。它报"Connection refused"（退出码 2）表示那个端口上没有 HUD 服务，通常就是没有在用的运行，不是故障。最直接的判断是控制台顶栏的"主控"灯。
 
-游戏的版本要求：桥接 Mod CelesteAIBridge 1.10.0（`game-bridge/everest.yaml`），依赖常驻核心 CelesteAIRuntime 1.0.5 与 EverestCore 1.5935.0；主控要求桥接 1.4.0 或更新。游戏启动后，游戏目录的 `log.txt` 里应有 `[CelesteAIBridge] loaded v1.10.0`，以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。
+游戏的版本要求：桥接 Mod 版本见 `game-bridge/everest.yaml`（写作时为 CelesteAIBridge 1.11.0），依赖常驻核心 CelesteAIRuntime 1.0.5 与 EverestCore 1.5935.0；主控要求桥接 1.4.0 或更新。游戏启动后，游戏目录的 `log.txt` 里应有 `[CelesteAIBridge] loaded v<同一版本>`，以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。
 
 ## 3. 部署
+
+**版本**：`git clone` 下来的是最新的开发版（主线上的最新提交）。GitHub Releases 里的正式版（标签 `vX.Y.Z`）与公测版（预发布，标签带后缀）更稳定；用户想用某个正式版或公测版时，部署好后在控制台"关于"页的"换版本"里选，或在没有运行时用 `git fetch --tags` 加 `git reset --keep <标签>`（保持在 main 分支上，之后一键更新照常可用）。不要用 `git checkout <标签>` 切到分离头指针，那样控制台的一键更新与换版本都会拒绝。
 
 ### 3.1 推荐：交互式部署向导
 
@@ -85,7 +87,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
    找不到 OBS 时加 `--obs-dir "<OBS 安装目录>"`。录制参数写在 `configs\local.recording.json`（`setup.ps1 -Only recording` 会代写）。
 6. **启动脚本**（可选）：`.\.venv\Scripts\python.exe tools\setup_wizard.py --only saves,switches`，生成本机的 `start_local.ps1`。
 7. **容器隔离验收**（可选，Anthropic 平台、令牌配好后，约 2 分钟）：`.\.venv\Scripts\python.exe -m orchestrator.verify --agent <标签>`，应全部"通过"。
-8. **控制台启动器**：仓库根目录的 `CelesteAIConsole.exe` 已在仓库里，不需要构建。它需要 `.venv` 存在。
+8. **控制台启动器**：程序根目录的 `CelesteAIConsole.exe` 随程序发布，不需要构建。它需要 `.venv` 存在。
 9. **AI 专用游戏副本**（可选，用户想边让智能体试玩边自己玩、或不想让 AI 碰到自己的存档与 Mod 时）：`.\.venv\Scripts\python.exe tools\game_instance.py create` 复制出副本并把游戏位置改成它，`launch` 启动。副本的存档从空开始；用户要接着用已有的 AI 存档时，关掉游戏后用 `copy-saves <槽号…>` 复制（只复制用户指定的槽，不复制用户自己的存档）。副本需要 Steam 在运行；个人游戏里要停用两个 AI 模组，否则先启动的一方占用端口。细节见 `docs/USAGE.md` 3.5 节。用户还想同时用自己的 OBS 直播或录像时，先请用户关闭自己的 OBS，再 `tools\obs_setup.py private --move-personal-plugin` 建私有 OBS、`personal-capture --apply` 让用户自己的场景只采标题为 Celeste 的窗口（见 `docs/USAGE.md` 4.4 节）；之后 `obs_setup.py stop` 只关私有 OBS。
 
 ### 3.3 必须由用户亲手做的部分
@@ -95,11 +97,11 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 - 购买、安装《蔚蓝》；用 Olympus 安装 Everest 并启动一次游戏。
 - 以管理员身份运行 `wsl --install --no-distribution` 并重启电脑；首次打开 Docker Desktop 接受协议。
 - **登录与密钥**：
-  - Anthropic：用户在浏览器里授权 `claude setup-token`，把令牌粘贴进向导（输入不显示）。令牌写进仓库根目录的 `.env`。不要让用户把令牌发给你，不要自己读出或打印它。
-  - 第三方平台（如 DeepSeek）：用户在向导里给出密钥文件或粘贴密钥。密钥存在仓库目录之外（`%USERPROFILE%\.celeste-ai-play\`），`configs\local.providers.json` 只记文件位置。平台预设见 `configs\providers.json`。
+  - Anthropic：用户在浏览器里授权 `claude setup-token`，把令牌粘贴进向导（输入不显示）。令牌写进程序根目录的 `.env`。不要让用户把令牌发给你，不要自己读出或打印它。
+  - 第三方平台（如 DeepSeek）：用户在向导里给出密钥文件或粘贴密钥。密钥存在程序目录之外（`%USERPROFILE%\.celeste-ai-play\`），`configs\local.providers.json` 只记文件位置。平台预设见 `configs\providers.json`。
   - Codex（GPT）：按准备或启动提示指定工作区容器，用 `.\.venv\Scripts\python.exe -m orchestrator.codex_container --container NAME login` 获取授权链接与代码，由用户在浏览器完成设备登录。
 - 在游戏里建测试存档（或在运行时用 `--create-save` 让主控新建）；建只启用 CelesteAIBridge 的 Mod 配置；在 Steam 里关闭云同步。
-- 预置模拟器 `sim\dist` 不随仓库分发。用户有的话由用户提供；没有就不用（探索模式照常，速通模式运行 `--no-sim`）。Claude 执行器的速通有它时默认开放 `/sim`；Codex 执行器的预测默认关闭，有资源也须显式开启限额能力，资源不向工作区或 agent 容器提供。
+- 预置模拟器 `sim\dist` 不随程序发布。用户有的话由用户提供；没有就不用（探索模式照常，速通模式运行 `--no-sim`）。Claude 执行器的速通有它时默认开放 `/sim`；Codex 执行器的预测默认关闭，有资源也须显式开启限额能力，资源不向工作区或 agent 容器提供。
 
 ## 4. 启动运行
 
@@ -116,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 .\CelesteAIConsole.exe
 ```
 
-或 `.\.venv\Scripts\python.exe -m overlay.console --browser`（用浏览器打开 `http://127.0.0.1:47790/console`）。用户在"存档与章节"页选存档与章节，在"运行"页选执行器、模型、模式与开关，点"开始运行"。控制台启动的主控在独立后台宿主里运行，关掉控制台窗口不影响它。页面底部显示等价的命令行。
+或 `.\.venv\Scripts\python.exe -m overlay.console --browser`（用浏览器打开 `http://127.0.0.1:47790/console`）。用户在"存档与章节"页选存档与章节，在"运行"页选执行器、模型、模式与开关，点"开始运行"。用户想直接用作者的探索设置时，在顶部"配置"里选"预置配置 1 · 探索模式"（内容见 `docs/USAGE.md` 4.14 节）；它只读，要改动先"新建…"。控制台启动的主控在独立后台宿主里运行，关掉控制台窗口不影响它。页面底部显示等价的命令行。
 
 ### 4.3 方式二：命令行
 
@@ -126,7 +128,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 .\.venv\Scripts\python.exe -m orchestrator.background -- --agent dev-trial --save <测试存档名> --mode explore --chapter 0 --max-minutes 30 --no-record
 ```
 
-用户为本次试玩指定了任务时，在启动命令中用 `--goal '任务原文'` 登记。若有明确可核验的停止条件，用 `--goal-file <UTF-8 JSON 路径>` 一并登记文字和条件，格式见 [目标与停止条件](LIVE_ADAPTATION.md#目标与停止条件)。例如“到达指定房间即结束”可用房间相等条件，房间 ID 须先核实。主控在首轮前写入 `goal.json` 并告诉 player agent。将目标写进启动参数后，无需再通过个人提示词追加同一任务。用 `start_gpt.ps1 -Play` 时对应 `-Goal` 或 `-GoalFile`。
+用户为本次试玩指定了任务时，在启动命令中用 `--goal '任务原文'` 登记。若有明确可核验的停止条件，用 `--goal-file <UTF-8 JSON 路径>` 一并登记文字和条件，格式见 [目标与停止条件](docs/LIVE_ADAPTATION.md#目标与停止条件)。例如“到达指定房间即结束”可用房间相等条件，房间 ID 须先核实。主控在首轮前写入 `goal.json` 并告诉 player agent。将目标写进启动参数后，无需再通过个人提示词追加同一任务。用 `start_gpt.ps1 -Play` 时对应 `-Goal` 或 `-GoalFile`。
 
 它立即返回一行 JSON，`directory` 是宿主目录 `local\background\<启动时间>\`：`status.json` 记状态、PID 与退出码，`output.log` 是主控输出。同一时间只允许一个主控。
 
@@ -140,7 +142,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 | `--save <存档名>`、`--save-slot <槽位>` | 必填存档名；同名存档用槽位区分。存档名与游戏里的不一致时主控拒绝开始 |
 | `--create-save` | 让主控新建存档（放在最新存档的下一个槽位，不覆盖已有存档）；只能从序章 `--chapter 0` 开始 |
 | `--chapter N` / `--chapters 0,1,2` | 只玩一章 / 依次通关多章。可以选官方章节的 A/B/C 面 |
-| `--mode explore` / `--mode speedrun` | 游玩模式。不写时 Claude Code 执行器默认速通，Codex 执行器默认探索 |
+| `--mode explore` / `--mode speedrun` | 游玩模式（速通是实验性功能）。不写时 Claude Code 执行器默认速通，Codex 执行器默认探索；控制台默认探索 |
 | `--engine claude` / `--engine codex` | 执行器，默认 claude |
 | `--provider`、`--model`、`--effort` | 模型平台（默认 `anthropic`）、模型（默认 `opus`）、推理强度（默认 `high`） |
 | `--max-minutes` | 现实时间安全上限，默认 1000 分钟（不含准备阶段与等待额度） |
@@ -244,7 +246,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 **运行期间不改环境**
 
-- 运行期间不要 `git pull`、不要部署（桥接、OBS 插件、镜像）、不要跑 `orchestrator.verify`（它会创建或复用智能体容器）、不要改 `orchestrator\`、`kb\`、`configs\` 等仓库文件。等运行结束或中断后再做。控制台的一键更新在有主控运行时也会拒绝。唯一的例外是用户明确要求、按 `docs/BRIDGE_RELOAD.md` 经在用主控做的桥接受控重载。
+- 运行期间不要 `git pull`、不要换版本、不要部署（桥接、OBS 插件、镜像）、不要跑 `orchestrator.verify`（它会创建或复用智能体容器）、不要改 `orchestrator\`、`kb\`、`configs\` 等程序文件。等运行结束或中断后再做。控制台的一键更新与换版本在有主控运行时也会拒绝。唯一的例外是用户明确要求、按 `docs/BRIDGE_RELOAD.md` 经在用主控做的桥接受控重载。
 - 运行期间不要关闭游戏、OBS 或 Docker Desktop；不要最小化游戏窗口（录像会出问题）。
 - 不要在你自己的命令会话里前台跑长时间的主控，用后台宿主（4.3 节）。
 
@@ -278,4 +280,4 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 - 报告看到的现象与相关文件（`output.log`、`metrics.json` 的 `status`），说明你打算怎么做，等用户确认。
 - 不要用强制结束进程、删除状态文件的办法"修复"。游戏冻结时先看能否续跑或交还控制。
-- 常见问题对照 `docs/GUIDE.md` 第 7 节、`docs/DEPLOY.md` 第 11 节、`docs/USAGE.md` 第 7 节。
+- 常见问题对照 `上手指南.md` 第 7 节、`docs/DEPLOY.md` 第 11 节、`docs/USAGE.md` 第 7 节。
