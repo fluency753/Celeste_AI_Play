@@ -4,6 +4,15 @@
 
 ## 2026-11-07
 
+- **控制台 1.10.0／桥接 1.11.0：私有便携版 OBS，智能体录像与你自己的 OBS 可以同时用**：原来主控用的是你自己的 OBS（只切到专用的配置文件与场景集合）：OBS 开着时直接沿用，锁步插件录的是 OBS 正在播的画面；主控启动的 OBS 收尾时按程序名 `taskkill /IM obs64.exe` 关闭，会连带你的 OBS；两个 OBS 都加载锁步插件时会互相顶掉桥接的时钟连接（时钟服务只留最新的连接）。
+  - **私有 OBS**：新 `tools/obs_setup.py private` 从你的 OBS 安装复制一份到 `local/obs`：只复制 OBS Project 签名的组件与插件（第三方插件、旧的锁步插件和它们的 data 目录不复制），不带 `.pdb` 与来源的便携配置；写 `portable_mode.txt` 与标记 `celeste-ai-obs.json`，配置在 `local/obs/config/obs-studio`（首次运行向导与更新检查关掉，默认选中专用配置文件与场景集合），用 `--portable --multi` 启动。已有时再运行一次只刷新程序文件（OBS 升级后），配置与插件保留。
+  - **只管私有 OBS**：建了私有 OBS 后，主控、`launch`、`stop`、`status`、`setup` 与 `build_obs_plugin.py` 都只用它：按进程的可执行文件路径区分（读不到路径的，例如以管理员身份运行的，算你自己的），关闭时 `taskkill /PID` 只关私有 OBS 的进程，不再记下、还原你的 OBS 的配置选择；你自己的 OBS 开着不算“OBS 在运行”。没建私有 OBS 时行为不变。
+  - **锁步插件**：`private --move-personal-plugin` 把你的 OBS 里的插件移到 `local/obs-personal-backup`（你的 OBS 开着时拒绝，插件文件被占用）；私有 OBS 里的插件优先用移过来的或 `build/obs-plugin` 里构建好的。
+  - **个人场景只认个人游戏**：新 `obs_setup.py personal-capture [--apply]`，把你自己的场景集合里采集 `Celeste.exe` 窗口的游戏画面／声音来源改成只认标题 `Celeste`（匹配方式“标题必须匹配”），AI 副本的窗口（`Celeste AI Play`）不会被个人直播采到；不加 `--apply` 只列出，改前把原文件备份到 `local/obs-personal-backup`，你的 OBS 开着时不改，本工具的专用场景集合不动。
+  - **桥接 1.11.0**：游戏目录里有 `celeste-ai-instance.json`（AI 专用副本）时，模组加载时（第一帧之前）就把窗口标题改成标记里的标题，按标题采集的 OBS 不会在改名之前误挂上副本；主控接管时仍会核对、补改。个人安装不用更新桥接。
+  - 控制台“关于”页的 OBS 一行标明私有便携版；使用说明 4.4 节、部署说明与 AI 指南补充用法。
+  验证：新增 `calibration/obs_private_test.py`（复制范围、私有配置与选择、个人 OBS 的配置与安装不变、移走插件留备份、更新保留插件与配置、按路径区分进程、启动参数与只关私有 OBS、个人场景改采集与备份）；全量回归通过。
+
 - **控制台 1.9.0：把已有的存档复制进 AI 专用副本；待办整理**：
   - **复制存档**：新 `tools/game_instance.py copy-saves <槽号…>`（`game_instance.copy_saves`），把个人安装里指定存档槽的 `<槽>.celeste` 连同 Everest 的 `<槽>-modsave-*`、`<槽>-modsession-*`、`<槽>-modsavedata` 原样复制进副本，之后进度只写副本、不回写个人存档。只读个人安装；个人游戏或副本在运行时拒绝（运行中的游戏随时可能写存档）；先核对全部槽，副本里已有同号存档槽或个人安装缺槽时整批不复制，不覆盖副本的进度。
   - 使用说明 3.5 节补上复制存档，并说明 CeleMod、Olympus 管理的是个人安装（切换配置改的是个人安装 `Mods` 里的 `blacklist.txt`），不影响副本；部署说明与 AI 指南同步。

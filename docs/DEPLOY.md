@@ -177,7 +177,7 @@ winget install Microsoft.DotNet.SDK.8
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本构建桥接及其常驻核心依赖，备份并安装 `Mods\CelesteAIBridge\` 与 `Mods\CelesteAIRuntime\` 两个 Mod；首次安装与核心更新必须关闭游戏。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.10.0，要求常驻核心 1.0.5，以 `game-bridge/everest.yaml` 为准），以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。1.3.0 是不兼容的部署结构变化，旧版需维护重启迁移；1.3.1／核心 1.0.2 同样需要维护重启安装。已经安装相同常驻核心的兼容逻辑更新，可用 `-HotReload -HudPort 47792` 经在用主控保持原录像重载；正常 Everest 重载仍会重建当前房间。回滚在关闭游戏后用 `-Rollback "<部署时打印的备份目录>"`：当前两个 Mod 先移到 `<Celeste 安装目录>\CelesteAI-backups\`（不删除），备份里没有常驻核心时核心不再加载，避免旧桥接与核心争用端口。完整流程、撤销、失败重试与验收边界见 [桥接重载](BRIDGE_RELOAD.md)。
+Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本构建桥接及其常驻核心依赖，备份并安装 `Mods\CelesteAIBridge\` 与 `Mods\CelesteAIRuntime\` 两个 Mod；首次安装与核心更新必须关闭游戏。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.11.0，要求常驻核心 1.0.5，以 `game-bridge/everest.yaml` 为准），以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。1.3.0 是不兼容的部署结构变化，旧版需维护重启迁移；1.3.1／核心 1.0.2 同样需要维护重启安装。已经安装相同常驻核心的兼容逻辑更新，可用 `-HotReload -HudPort 47792` 经在用主控保持原录像重载；正常 Everest 重载仍会重建当前房间。回滚在关闭游戏后用 `-Rollback "<部署时打印的备份目录>"`：当前两个 Mod 先移到 `<Celeste 安装目录>\CelesteAI-backups\`（不删除），备份里没有常驻核心时核心不再加载，避免旧桥接与核心争用端口。完整流程、撤销、失败重试与验收边界见 [桥接重载](BRIDGE_RELOAD.md)。
 
 冒烟测试（游戏停在标题画面即可）：
 
@@ -410,7 +410,7 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 | `tools\deploy_bridge.ps1` | 编译安装桥接 Mod（只检查目标目录里的游戏有没有在运行） | `-CelesteDir`（必填）、`-Configuration` |
 | `tools\game_instance.py` | AI 专用游戏副本（独立存档、设置、Mod 与连接，见使用说明 3.5 节） | `create`/`launch`/`status`/`update`/`copy-saves`/`select` |
 | `tools\build_obs_plugin.py` | 编译安装锁步插件 | `--obs-dir`、`--obs-version`、`--no-install` |
-| `tools\obs_setup.py` | OBS 配置与启动 | `setup`/`launch`/`stop`/`status`/`restore`；`--obs-dir`、`--show`、`--reset`、`--force` |
+| `tools\obs_setup.py` | OBS 配置与启动；私有便携版 OBS（与自己的 OBS 并行，见使用说明 4.4 节） | `setup`/`launch`/`stop`/`status`/`restore`/`private`/`personal-capture`；`--obs-dir`、`--show`、`--reset`、`--force`、`--move-personal-plugin`、`--apply` |
 | `tools\enter_save.py <存档>` | 菜单宏进入存档的关卡 | `--chapter N`、`--leave-active` |
 | `tools\bridge_client.py` | 桥接测试客户端 | `hello`、`activate`、`observe`、`step`、`advance`、`skip`、`cancel`、`smoke`、`deactivate` |
 | `tools\game_tool.py` | 主控以 `--no-agent` 运行时，从命令行调用游戏工具 | `observe`/`act`/`narrate`/`exit_level`/`cutscene`；`--args`、`--args-file`、`--out` |

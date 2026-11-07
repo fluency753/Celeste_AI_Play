@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.10.1";
+    public const string Version = "1.11.0";
     internal static bool RecordOnlyChapters { get; private set; }
     internal static bool ChapterRecordingEnabled => RecordOnlyChapters && RecordingAudio.Enabled;
     internal static bool RecordingChapterActive { get; private set; }

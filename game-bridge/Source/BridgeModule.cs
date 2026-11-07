@@ -1,5 +1,8 @@
 using System;
+using System.IO;
+using System.Text.Json;
 using Celeste.Mod;
+using Monocle;
 
 namespace CelesteAI.Bridge;
 
@@ -33,6 +36,37 @@ public class BridgeModule : EverestModule {
             throw;
         }
         Log.Info($"loaded v{Bridge.Version}, resident IPC 127.0.0.1:{RuntimeModule.Settings.Port}");
+        ApplyInstanceTitle();
+    }
+
+    /// <summary>
+    /// AI 专用游戏副本（游戏目录里有 celeste-ai-instance.json）：模组加载时就把窗口标题改成标记里的标题。
+    /// 这时还没画第一帧，OBS 按标题采集时不会在改名之前误挂上副本（个人 OBS 只认标题 Celeste）。
+    /// 主控接管时仍会再核对、补改一次。
+    /// </summary>
+    private static void ApplyInstanceTitle() {
+        try {
+            string path = Path.Combine(Everest.PathGame, "celeste-ai-instance.json");
+            if (!File.Exists(path)) return;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            JsonElement root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("format", out JsonElement format) || format.ValueKind != JsonValueKind.Number
+                || format.GetInt32() != 1
+                || !root.TryGetProperty("window_title", out JsonElement value) || value.ValueKind != JsonValueKind.String)
+                return;
+            string title = value.GetString()!;
+            if (title.Trim().Length == 0 || title.Length > 80) return;
+            void Set() {
+                if (Engine.Instance?.Window != null && Engine.Instance.Window.Title != title)
+                    Engine.Instance.Window.Title = title;
+            }
+            if (MainThreadHelper.IsMainThread) Set();
+            else MainThreadHelper.Schedule(Set);
+            Log.Info($"AI instance window title: {title}");
+        } catch (Exception e) {
+            Log.Warn($"AI instance window title not applied: {e.Message}");
+        }
     }
 
     public override void Unload() {

@@ -75,7 +75,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 
 | 组成 | 位置 | 作用 |
 | --- | --- | --- |
-| 桥接 Mod CelesteAIBridge（1.10.0） | `game-bridge/`，运行在游戏进程内（Everest Mod） | 逐帧暂停与放行、注入按键、提取状态与碰撞箱、截图、画游戏内 HUD 与规划回放、录像专用的游戏声音、新建存档 |
+| 桥接 Mod CelesteAIBridge（1.11.0） | `game-bridge/`，运行在游戏进程内（Everest Mod） | 逐帧暂停与放行、注入按键、提取状态与碰撞箱、截图、画游戏内 HUD 与规划回放、录像专用的游戏声音、新建存档 |
 | 常驻核心 CelesteAIRuntime（1.0.5） | `game-runtime/`，Everest Mod | 持有冻结、连接、录制时钟与录音资源；桥接逻辑可以在不重启游戏的情况下受控重载（见 [docs/BRIDGE_RELOAD.md](docs/BRIDGE_RELOAD.md)） |
 | 主控 | `orchestrator/`，本机 Python | 唯一同时连接游戏、智能体、HUD 与 OBS 的组件：游戏工具服务、决策循环、执行与自动重试、规划回放、录制、换章、额度与断网等待、中断续跑 |
 | 智能体容器 | `agent-container/`，Docker 镜像 `celeste-agent:0.1` | 容器里的执行器只能连所用模型平台与主控端口；智能体自写的程序在零网络沙箱里运行，看不到令牌与密钥 |

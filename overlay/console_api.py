@@ -677,7 +677,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.9.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.10.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -816,10 +816,11 @@ def about() -> dict:
         except OSError:
             pass
     status_ = game_status()
-    obs_dir, plugin = None, False
+    obs_dir, plugin, private_obs = None, False, False
     try:
-        from tools.obs_setup import find_obs_dir
+        from tools.obs_setup import find_obs_dir, private_root
         obs_dir = find_obs_dir(None)
+        private_obs = private_root() is not None
         plugin = (obs_dir / "obs-plugins" / "64bit" / "celeste-lockstep.dll").is_file()
     except (SystemExit, Exception):  # noqa: BLE001
         obs_dir = None
@@ -870,7 +871,8 @@ def about() -> dict:
              "ok": reference.is_dir()},
             {"name": "Docker", "value": docker or "没找到", "ok": bool(docker)},
             {"name": "OBS", "value": str(obs_dir) if obs_dir else "没找到",
-             "note": "锁步插件已安装" if plugin else ("锁步插件没装" if obs_dir else ""), "ok": bool(obs_dir and plugin)},
+             "note": ("私有便携版，与你自己的 OBS 分开；" if private_obs else "")
+             + ("锁步插件已安装" if plugin else ("锁步插件没装" if obs_dir else "")), "ok": bool(obs_dir and plugin)},
             {"name": "Codex", "value": ('镜像内 ' + codex) if codex_ready else '镜像需要更新',
              "note": '容器执行；账号需单独初始化，不检查宿主 CLI', "ok": codex_ready},
         ],

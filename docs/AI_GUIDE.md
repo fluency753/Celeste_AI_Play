@@ -76,7 +76,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
    ```
 
 4. **模型平台**（需要用户参与，见 3.3 节）：`powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only platform`
-5. **OBS 锁步插件**（**先确认 OBS 已关闭**。`.\.venv\Scripts\python.exe tools\obs_setup.py stop` 会正常关闭正在运行的 OBS，并把 OBS 的配置选择还原成用户原来的；用户可能正在用 OBS 直播或录像，关之前先问用户）：
+5. **OBS 锁步插件**（**先确认 OBS 已关闭**。`.\.venv\Scripts\python.exe tools\obs_setup.py stop` 会正常关闭正在运行的 OBS，并把 OBS 的配置选择还原成用户原来的（建了私有 OBS 时只关私有 OBS）；用户可能正在用 OBS 直播或录像，关之前先问用户）：
 
    ```powershell
    .\.venv\Scripts\python.exe tools\build_obs_plugin.py
@@ -86,7 +86,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 6. **启动脚本**（可选）：`.\.venv\Scripts\python.exe tools\setup_wizard.py --only saves,switches`，生成本机的 `start_local.ps1`。
 7. **容器隔离验收**（可选，Anthropic 平台、令牌配好后，约 2 分钟）：`.\.venv\Scripts\python.exe -m orchestrator.verify --agent <标签>`，应全部"通过"。
 8. **控制台启动器**：仓库根目录的 `CelesteAIConsole.exe` 已在仓库里，不需要构建。它需要 `.venv` 存在。
-9. **AI 专用游戏副本**（可选，用户想边让智能体试玩边自己玩、或不想让 AI 碰到自己的存档与 Mod 时）：`.\.venv\Scripts\python.exe tools\game_instance.py create` 复制出副本并把游戏位置改成它，`launch` 启动。副本的存档从空开始；用户要接着用已有的 AI 存档时，关掉游戏后用 `copy-saves <槽号…>` 复制（只复制用户指定的槽，不复制用户自己的存档）。副本需要 Steam 在运行；个人游戏里要停用两个 AI 模组，否则先启动的一方占用端口。细节见 `docs/USAGE.md` 3.5 节。
+9. **AI 专用游戏副本**（可选，用户想边让智能体试玩边自己玩、或不想让 AI 碰到自己的存档与 Mod 时）：`.\.venv\Scripts\python.exe tools\game_instance.py create` 复制出副本并把游戏位置改成它，`launch` 启动。副本的存档从空开始；用户要接着用已有的 AI 存档时，关掉游戏后用 `copy-saves <槽号…>` 复制（只复制用户指定的槽，不复制用户自己的存档）。副本需要 Steam 在运行；个人游戏里要停用两个 AI 模组，否则先启动的一方占用端口。细节见 `docs/USAGE.md` 3.5 节。用户还想同时用自己的 OBS 直播或录像时，先请用户关闭自己的 OBS，再 `tools\obs_setup.py private --move-personal-plugin` 建私有 OBS、`personal-capture --apply` 让用户自己的场景只采标题为 Celeste 的窗口（见 `docs/USAGE.md` 4.4 节）；之后 `obs_setup.py stop` 只关私有 OBS。
 
 ### 3.3 必须由用户亲手做的部分
 

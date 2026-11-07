@@ -470,6 +470,22 @@ M5 验收（2026-10-23，桥接 0.7.0，当时的网页 HUD）：`python calibra
 
    `video_args` 是 ffmpeg 的视频编码参数：有 NVIDIA 显卡用上面的 NVENC，否则保留默认的 libx264。`audio_source` 是录像声音的来源：默认 `game_nrt`（独立游戏音频：桥接另开 FMOD 系统按帧混出声音，不经过声卡与 OBS 混音），`obs_mix` 是旧路线（OBS 的应用音频捕获，按段校准延迟）。`audio_offset_ms` 只用于 `obs_mix`：某段量不到声音延迟时作为后备（见下），`--continuous-music` 时作为固定偏移。
 
+**私有 OBS（可选，想边让智能体录像边用自己的 OBS 直播或录像时）**
+
+不建私有 OBS 时，主控用的是你自己的 OBS（同一安装与配置目录，只切到专用的配置文件与场景集合）：OBS 已经开着时直接沿用，锁步插件录的是 OBS 正在播的画面；主控启动的 OBS 收尾时按程序名关闭。所以那样不能同时用它直播。建一份私有便携版之后两边互不干扰：
+
+```powershell
+# 先关闭你自己的 OBS
+.\.venv\Scripts\python.exe tools\obs_setup.py private --move-personal-plugin
+.\.venv\Scripts\python.exe tools\obs_setup.py personal-capture            # 先看要改哪些来源
+.\.venv\Scripts\python.exe tools\obs_setup.py personal-capture --apply    # 再改（先备份）
+```
+
+- `private` 从你的 OBS 安装复制一份到 `local\obs`（约 400 MB）：只复制 OBS 官方签名的组件与插件，不带调试符号、第三方插件（例如直播平台的插件）和你的配置；配置在 `local\obs\config`（便携模式），用 `--portable --multi` 启动，与你自己的 OBS 同时运行。之后主控、`launch`、`stop`、`status` 都只管这一份（按进程路径区分），你自己的 OBS 开着也不受影响；`build_obs_plugin.py` 也装到私有 OBS。你的 OBS 升级后再运行一次 `private` 刷新程序文件（配置与插件保留），然后重新构建插件。
+- `--move-personal-plugin` 把你自己的 OBS 里的锁步插件移到 `local\obs-personal-backup`：两个 OBS 都加载它时会抢着连桥接的时钟端口，互相顶掉。
+- `personal-capture --apply` 配合 [AI 专用游戏副本](#35-ai-专用游戏副本可选)：把你自己的场景集合里采集 `Celeste.exe` 窗口的游戏画面／声音来源改成只认标题 `Celeste` 的窗口（匹配方式“标题必须匹配”），个人直播不会采到标题为 `Celeste AI Play` 的副本；原文件先备份到 `local\obs-personal-backup`。副本的窗口在桥接 1.11.0 加载时（第一帧之前）就改好标题。你自己的 OBS 开着时不改。
+- 你的直播如果用桌面音频，副本的游戏声音也会进去（录像的声音默认是桥接另外混出来的，不受影响）；个人直播改用只采你自己游戏的应用音频捕获可以避开。
+
 **每次录制**
 
 ```powershell
@@ -479,7 +495,7 @@ M5 验收（2026-10-23，桥接 0.7.0，当时的网页 HUD）：`python calibra
 .\.venv\Scripts\python.exe -m orchestrator.run --agent dev-opus --save test --model opus --no-record
 ```
 
-- **录屏开关**：`--record`（默认）时主控在开局前检查 OBS：没在运行就调用 `tools\obs_setup.py` 的启动流程（自动建好专用的配置文件与场景集合 CelesteAI、记下你原来选中的配置、确认 HUD 服务在运行、最小化到托盘、等锁步插件连上桥接），最终收尾时（成片与纯享版写好之后）关掉 OBS；中断且保留接管时不收尾、不关闭 OBS。正常关闭时（最小化到托盘的 OBS 有时不响应正常关闭，30 秒内没退出就强制结束；`obs_setup.py stop --force` 同样），并把 OBS 下次打开时选中的配置还原成你原来的；OBS 已经开着时直接用（要是 CelesteAI 配置），结束时不关。`--no-record` 时不启动、不调用 OBS。手动管理 OBS 的命令照旧可用：`tools\obs_setup.py launch` / `stop` / `status` / `restore`。改了网页 HUD 后，先关掉开着的 OBS，让主控下次重新启动它（OBS 的浏览器源不会自动刷新）。
+- **录屏开关**（下面说的 OBS 在建了私有 OBS 后都是指它）：`--record`（默认）时主控在开局前检查 OBS：没在运行就调用 `tools\obs_setup.py` 的启动流程（自动建好专用的配置文件与场景集合 CelesteAI、记下你原来选中的配置、确认 HUD 服务在运行、最小化到托盘、等锁步插件连上桥接），最终收尾时（成片与纯享版写好之后）关掉 OBS；中断且保留接管时不收尾、不关闭 OBS。正常关闭时（最小化到托盘的 OBS 有时不响应正常关闭，30 秒内没退出就强制结束；`obs_setup.py stop --force` 同样），并把 OBS 下次打开时选中的配置还原成你原来的；OBS 已经开着时直接用（要是 CelesteAI 配置），结束时不关。`--no-record` 时不启动、不调用 OBS。手动管理 OBS 的命令照旧可用：`tools\obs_setup.py launch` / `stop` / `status` / `restore`。改了网页 HUD 后，先关掉开着的 OBS，让主控下次重新启动它（OBS 的浏览器源不会自动刷新）。
 - `obs_setup.py` 不动你自己的配置文件与场景：CelesteAI 配置文件是 1920×1080、60 fps、NV12、48 kHz；场景里只有游戏采集、应用音频捕获（只录 Celeste.exe）与 HUD 浏览器源，没有桌面音频和麦克风。场景集合已存在时保留你在 OBS 里的调整，只把 HUD 浏览器源的网址与打开方式同步成 `configs\recording.json` 里的值（旧版本建的整画布 HUD 源会迁移成默认的大小与位置；OBS 运行时不改，`stop` 之后再 `launch` 即可）；`setup --reset` 重建（原来的先备份）。`status` 查看插件是否加载、是否连上桥接；`restore` 在手动关闭 OBS 之后还原原来选中的配置。
 - **开局也录进去**：主控先把游戏退回选档页（这一步不录、快速完成），从选档页开始录制，再按正常速度选存档、进地图、选章节、进关卡、用暂停菜单跳过开场剧情，所以录像从选档页开始。HUD 在这段时间显示智能体名称、推理强度与"等待"，计时都是 0。`--resume` 有保留录制时直接接续，菜单宏进入过程按正常速度录入同一份录像；原编码器已退出时按[录制恢复](RECORDING_RECOVERY.md)接到原录制会话，同样不另开录像。`--resume` 加 `--chapters`（或 `--segments`）追加章节、且上一章的录像已经正常收尾（`finished`）时另起新录像：停在目标关卡里则接管后开始，否则从选档页开始，上一章的录像目录与成片保持不变。从未录制过的运行续跑时同样新开录像。`--skip-enter` 时接管后开始录制。
 - 正常结束或点击停止时收尾录像，再交还游戏控制；中断且保留接管时保留 OBS 编码器与独立音频，续跑继续写同一份录像，不重置帧号。编码器已退出时，普通续跑会核验旧文件并恢复到同一录制会话，新增片段在收尾时合并回原目录（追加章节且上一章录像已正常收尾时例外，见上一条）；其余情况只有明确 `--new-recording` 才另开录像，失败重试及边界见 [录制恢复](RECORDING_RECOVERY.md)。中断摘要中的 `recording.state` 为 `retained`；具体冻结规则见 4.8 节。
