@@ -1,6 +1,9 @@
 """Retain the production recorder/recovery ledger; replace only bridge and media codecs."""
 import copy
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 import tempfile
 import unittest
 from pathlib import Path
@@ -737,6 +740,71 @@ class RollTests(unittest.TestCase):
         self.assertEqual((generation/'previous-gameplay.mp4').read_bytes(), current)
         stale = list(generation.glob('previous-gameplay.mp4.stale-*'))
         self.assertEqual([p.read_bytes() for p in stale], [b'partial'])
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows sharing semantics')
+    def test_media_publication_retries_after_a_real_reader_releases_the_target(self):
+        from orchestrator import recording_recovery
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        recorder.stop()
+        recovered = Recorder.recover(self.bridge.call, Recorder.saved_session(self.run), self.run, log=lambda _: None)
+        self.bridge.advance(2)
+        result = recovered.stop()
+        saved = Recorder.saved_session(self.run)
+        root = recorder.opts.dir.resolve()
+        target = root / 'audio.wav'
+        generation = root / '.recovery' / result['recovery']['generation']
+        expected = (generation / 'audio.wav').read_bytes()
+        target.write_bytes(b'damaged')
+        blocked = Event()
+        replace = Path.replace
+
+        def signal_conflict(source, destination):
+            try:
+                return replace(source, destination)
+            except OSError:
+                if Path(destination) == target:
+                    blocked.set()
+                raise
+
+        with ThreadPoolExecutor() as pool, patch.object(Path, 'replace', signal_conflict):
+            with target.open('rb'):
+                publication = pool.submit(recording_recovery.finalize, saved)
+                self.assertTrue(blocked.wait(5), 'did not reach a real sharing conflict')
+            summary = publication.result(timeout=5)
+        self.assertEqual(summary['generation'], result['recovery']['generation'])
+        self.assertEqual(summary['frames'], 5)
+        self.assertEqual(target.read_bytes(), expected)
+        self.assertEqual((generation / 'audio.wav').read_bytes(), expected)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows sharing semantics')
+    def test_persistent_media_reader_preserves_journal_and_resumes_same_generation(self):
+        from orchestrator import recording_recovery
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        recorder.stop()
+        recovered = Recorder.recover(self.bridge.call, Recorder.saved_session(self.run), self.run, log=lambda _: None)
+        self.bridge.advance(2)
+        result = recovered.stop()
+        saved = Recorder.saved_session(self.run)
+        root = recorder.opts.dir.resolve()
+        generation = root / '.recovery' / result['recovery']['generation']
+        source = generation / 'audio.wav'
+        expected = source.read_bytes()
+        target = root / 'audio.wav'
+        target.write_bytes(b'damaged')
+        with target.open('rb'):
+            with self.assertRaises(OSError):
+                recording_recovery.finalize(saved)
+        self.assertEqual(target.read_bytes(), b'damaged')
+        self.assertEqual(source.read_bytes(), expected)
+        ledger = json.loads((root / '.recovery/ledger.json').read_text(encoding='utf-8'))
+        self.assertEqual(ledger['phase'], 'publishing')
+        self.assertEqual(ledger['transaction']['generation'], result['recovery']['generation'])
+        summary = recording_recovery.finalize(saved)
+        self.assertEqual(summary['generation'], result['recovery']['generation'])
+        self.assertEqual(summary['frames'], 5)
+        self.assertEqual(target.read_bytes(), expected)
 
     def test_entry_macro_does_not_restart_an_already_recovered_capture(self):
         from orchestrator import run

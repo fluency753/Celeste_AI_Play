@@ -8,6 +8,12 @@ on:
       - 'tools/component_package.py'
       - 'tools/package_release.py'
       - 'tools/publish_release.py'
+      - 'overlay/console_api.py'
+      - 'game-bridge/**'
+      - 'game-runtime/**'
+      - 'obs-plugin/**'
+      - 'tools/build_*.py'
+      - 'tools/launcher/**'
   release:
     types: [published]
   workflow_dispatch:

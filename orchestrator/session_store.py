@@ -35,7 +35,8 @@ def rename_directory(source, target):
                 print(f'[publish] Windows 目录发布异常，将有限重试：{exc}', flush=True)
 
 
-def _replace_snapshot(source, target):
+def replace_file(source, target):
+    """Publish a complete file snapshot with bounded Windows sharing recovery."""
     windows = os.name == 'nt'
     native = windows
     for delay in (0, .01, .02, .04, .08, .16):
@@ -69,7 +70,7 @@ def write_json(path, data, *, indent=None):
                                          prefix=path.name + '.', suffix='.tmp', delete=False) as stream:
             temporary = Path(stream.name)
             json.dump(data, stream, ensure_ascii=False, indent=indent)
-        _replace_snapshot(temporary, path)
+        replace_file(temporary, path)
     finally:
         if temporary is not None:
             try:

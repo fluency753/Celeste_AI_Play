@@ -19,7 +19,7 @@ import subprocess
 import uuid
 
 from .purecut import _wav_header
-from .session_store import rename_directory
+from .session_store import rename_directory, replace_file
 
 
 class RecoveryError(RuntimeError):
@@ -51,7 +51,7 @@ def _write(path, value):
         json.dump(value, stream, ensure_ascii=False, indent=2)
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    replace_file(temporary, path)
 
 
 def _hash(path):
@@ -571,7 +571,7 @@ def _publish(root, ledger, transaction, saved):
             shutil.copyfileobj(src, dst, 1024 * 1024)
             dst.flush()
             os.fsync(dst.fileno())
-        os.replace(temporary, target)
+        replace_file(temporary, target)
     # Completed movies from an older generation must not win finished_movie().
     # Move them into this generation with a same-volume rename: the original is
     # never deleted, and a crash leaves it either in place or fully archived.
