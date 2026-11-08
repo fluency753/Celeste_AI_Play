@@ -383,8 +383,8 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 | `--prepared <准备目录>` | 无 | 用已准备好的会话新开一局（校验知识库没有变化）；不能与 `--resume`、`--no-study` 合用 |
 | `--start-paused` | 关 | 原生 GPT 启动后保持暂停，可先聊天再点继续 |
 | `--resume <运行目录>` | 无 | 续跑一次中断的运行（游戏须仍冻结在原处）；`--fresh-session` 开新会话 |
-| `--max-usage 0~1` | 不设 | Max 订阅：用量到这个比例就提前暂停、等重置；默认用到真正用完再等 |
-| `--no-quota-wait` / `--quota-wait-max-hours` | 关 / 24 | 额度用完时直接停止 / 最多等多少小时 |
+| `--max-usage 0~1` | 按提供方的用量设置 | Max 订阅：用量到这个比例就提前暂停、等重置；默认用到真正用完再等 |
+| `--quota-wait` / `--no-quota-wait`、`--quota-wait-max-hours` | 按提供方的用量设置（等待 / 24） | 额度用完时是否等待 / 最多等多少小时；不写时按 `configs\local.providers.json` 里所用提供方的 `usage` |
 | `--no-net-wait` / `--net-wait-max-hours` | 关 / 24 | 模型连不上时不暂停等待 / 最多等多少小时（见使用说明 4.8） |
 | `--autocompact` | 节省上下文开着时 500000，否则平台默认 | 上下文自动压缩窗口：`auto` 或 100000～1000000 token；提供方设置了窗口时默认用提供方的 |
 | `--tune 名称=值` | 不改 | 修改可调参数（规划回放倍速与每轮时长、解说提醒间隔、单次 act 帧数、Bash 时长、探索模式规划程序的时长、限额预测规则等），可写多个；全部名称与默认值见 [USAGE.md 4.11 节](USAGE.md#411-可调参数--tune) |
@@ -442,13 +442,13 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 | `configs\providers.json` | 是 | 模型平台：`label`、`status`、`auth`、`base_url`、`allowed_domains`（防火墙放行的域名）、`allowed_host_ports`（放行的宿主机端口，例如本机的兼容服务）、`gateway_check`、`key_env`、`key_file`、`model_suffix`、`images`、`autocompact`、`env`（传给 Claude Code 的模型槽位等）、`models`（模型档案：每行 `id`、显示名 `label`、推理强度 `efforts` 与 `default_effort`，可选的 `autocompact` 与 `context_limit`，见 9 节） |
 | `configs\codex.json` | 是 | Codex 执行器的提供方信息：`label`、`images`、`default_effort`、`allowed_domains`（防火墙为 Codex 放行的域名），以及按模型 ID 叠加在 Codex 模型目录上的 `models`（`label`、`context_limit`） |
 | `configs\local.codex.json` | 否 | 本机覆盖上面的键 |
-| `configs\local.providers.json` | 否 | 本机覆盖与自定义平台；密钥文件位置写在这里 |
+| `configs\local.providers.json` | 否 | 本机覆盖与自定义平台；密钥文件位置写在这里；各提供方的用量设置 `usage`（`max_usage`、`quota_wait`、`quota_wait_max_hours`，Anthropic 订阅也写在这里） |
 | `configs\hud.json` | 是 | HUD：智能体显示名 `names`、章节名、颜色、上下文窗口、`page_version`（变了时已打开的网页 HUD 自动重新加载）等 |
 | `configs\local.hud.json` | 否 | 本机覆盖 HUD 配置 |
 | `configs\local.hud-window.json`、`configs\local.hud-font.json` | 否 | HUD 窗口的位置、大小、置顶选择与字号（自动保存） |
 | `.env` | 否 | `CLAUDE_CODE_OAUTH_TOKEN` |
 | `configs\local.deploy.json` | 否 | 部署向导的回答 |
-| `configs\local.console.json` | 否 | 控制台记住的游戏位置与各模式的知识库阅读权限 |
+| `configs\local.console.json` | 否 | 控制台记住的游戏位置、各模式的知识库阅读权限，以及 `machine`：本机设置（运行方式、端口、录像与声音、HUD 服务与窗口），所有配置共用 |
 | `orchestrator\tuning.py` | 是 | 可调参数的名称、默认值与范围（规划回放的比例、倍速与每轮最长时长、思考语句提前量、解说提醒间隔等）；按运行修改用 `--tune` 或控制台，不用改这个文件 |
 | `orchestrator\config.py`（`RunConfig`） | 是 | 其余默认值，例如镜像名 `celeste-agent:0.1` |
 

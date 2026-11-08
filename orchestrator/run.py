@@ -104,7 +104,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="准备阶段（读知识库、写笔记）的上限分钟数，不计入现实用时；到时自动开放游戏工具")
     ap.add_argument("--max-usage", type=float, default=None,
                     help="可选：订阅额度 5 小时或 7 天窗口的已用比例达到该值（0~1）就提前暂停智能体、等额度重置后接着玩；"
-                         "默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
+                         "不写时按提供方的用量设置，默认不设，一直用到额度真正用完（用完时同样冻结游戏、等重置后接着玩）")
     ap.add_argument("--hud-port", type=int, default=47790, help="HUD 页面与数据的端口（OBS 浏览器源与置顶窗口都连它）")
     ap.add_argument("--limit-planning", action="store_true",
                     help="模拟规划硬限额：按章节记录，每进入一个没来过的房间按房间大小存入轮次，死亡补 1 轮，"
@@ -178,10 +178,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "（算出的逐帧轨迹可以用工作区的 show.trajectory() 交给系统画出来）")
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
-    ap.add_argument("--no-quota-wait", action="store_true",
-                    help="额度用完时直接停止（默认：游戏保持冻结，等额度重置后接着同一个会话继续）")
-    ap.add_argument("--quota-wait-max-hours", type=float, default=24.0,
-                    help="额度重置还要等超过这么多小时就停止本次运行（之后可用 --resume 续跑），默认 24")
+    ap.add_argument("--quota-wait", action=argparse.BooleanOptionalAction, default=None,
+                    help="额度用完时是否等待：等待时游戏保持冻结，额度重置后接着同一个会话继续；--no-quota-wait 直接停止。"
+                         "不写时按提供方的用量设置（configs/local.providers.json 的 usage），默认等待")
+    ap.add_argument("--quota-wait-max-hours", type=float, default=None,
+                    help="额度重置还要等超过这么多小时就停止本次运行（之后可用 --resume 续跑）；不写时按提供方的用量设置，默认 24")
     ap.add_argument("--quota-wait-cap-seconds", type=float, help=argparse.SUPPRESS)  # 只用于测试：等待额度的最长秒数
     ap.add_argument("--no-net-wait", action="store_true",
                     help="关闭模型服务不可用时的自动等待（含 Codex 容量不足；默认保留接管和录制、暂停计时并重试原会话；"
@@ -408,10 +409,14 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.autocompact = args.autocompact or ((previous["state"].get("autocompact") or None) if previous else None)
     cfg.study = not args.no_study
     cfg.study_minutes = args.study_minutes
-    cfg.max_usage = args.max_usage
-    cfg.quota_wait = not args.no_quota_wait
+    # 用量设置：命令行写了按命令行，否则按提供方账户（configs/local.providers.json 的 usage，见 machine_settings.py）
+    from .machine_settings import provider_usage
+    usage = provider_usage(cfg.provider_info)
+    cfg.max_usage = args.max_usage if args.max_usage is not None else usage["max_usage"]
+    cfg.quota_wait = args.quota_wait if args.quota_wait is not None else usage["quota_wait"]
     cfg.quota_wait_cap_s = args.quota_wait_cap_seconds
-    cfg.quota_wait_max_h = args.quota_wait_max_hours
+    cfg.quota_wait_max_h = (args.quota_wait_max_hours if args.quota_wait_max_hours is not None
+                            else usage["quota_wait_max_hours"])
     cfg.net_wait = not args.no_net_wait
     cfg.net_wait_max_h = args.net_wait_max_hours
     cfg.net_wait_cap_s = args.net_wait_cap_seconds

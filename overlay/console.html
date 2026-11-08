@@ -453,6 +453,15 @@
           <label class="field">现实时间上限（分钟）<input type="number" id="maxMinutes" min="1" max="9999999" step="1" value="1000" title="1～9999999；很大的值相当于不限时"></label>
         </div>
         <p class="hint">标签决定日志目录 runs/&lt;标签&gt;/ 与智能体的工作区；同一个系列一直用同一个标签（续跑、笔记都按标签找），临时试验可以用 dev- 开头。</p>
+        <div class="group-title" id="usageTitle">提供方账户的用量</div>
+        <div class="switches">
+          <label class="switch wide"><span class="text"><b>额度用完时等待</b><span>游戏冻结，额度重置后接着同一个会话</span></span><input type="checkbox" id="quotaWait" checked></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="field">额度等待上限（小时）<input type="number" id="quotaHours" min="0.1" max="240" step="0.1" placeholder="24"></label>
+          <label class="field">用量到多少提前暂停<input type="number" id="maxUsage" min="0.01" max="1" step="0.01" placeholder="不设（0～1）"></label>
+        </div>
+        <p class="hint" id="usageNote">存在这个提供方的设置里（configs/local.providers.json），改了立即保存，所有配置共用。</p>
       </fieldset>
 
       <fieldset>
@@ -515,14 +524,9 @@
 
       <details class="more" id="moreBox">
         <summary>更多设置</summary>
-        <div class="group-title">时间与额度</div>
-        <div class="switches">
-          <label class="switch wide"><span class="text"><b>额度用完时等待</b><span>游戏冻结，额度重置后接着同一个会话</span></span><input type="checkbox" id="quotaWait" checked></label>
-        </div>
-        <div class="row thirds" style="margin-top:8px">
+        <div class="group-title">时间</div>
+        <div class="row" style="margin-top:8px">
           <label class="field">准备阶段上限（分钟）<input type="number" id="studyMinutes" min="1" max="600" placeholder="60"></label>
-          <label class="field">额度等待上限（小时）<input type="number" id="quotaHours" min="0.1" max="240" step="0.1" placeholder="24"></label>
-          <label class="field">用量到多少提前暂停<input type="number" id="maxUsage" min="0.01" max="1" step="0.01" placeholder="不设（0～1）"></label>
         </div>
 
         <div class="group-title">规划轮次（只用于速通开模拟器）</div>
@@ -534,6 +538,28 @@
           <label class="field">长、高每变成几倍轮次乘几<input type="number" id="roomScale" min="1" max="10" step="0.1" placeholder="2"></label>
         </div>
 
+        <div class="group-title">测试</div>
+        <div class="row">
+          <label class="field">上下文自动压缩窗口<input type="text" id="autocompact" placeholder="默认 500000（节省上下文），或 auto / 100000～1000000"></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="field">工具结果里的碰撞图<select id="collisionImage"><option value="">默认（只在进新房间与 observe 时）</option><option value="always">每次都附</option><option value="room">只在进新房间与 observe 时</option><option value="off">不附（只写进工作区）</option></select></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="field">动作推进速度<input type="number" id="playSpeed" min="1" max="20" placeholder="1（实时）"></label>
+          <label class="field">转场与剧情推进速度<input type="number" id="autoSpeed" min="1" max="20" placeholder="1（与原版一致）"></label>
+        </div>
+        <div class="switches" style="margin-top:6px">
+          <label class="switch"><span class="text"><b>已在关卡里时跳过进档</b><span>不走菜单宏</span></span><input type="checkbox" id="skipEnter"></label>
+          <label class="switch"><span class="text"><b>不启动智能体</b><span>只开游戏工具服务，手动测试</span></span><input type="checkbox" id="noAgent"></label>
+          <label class="switch wide"><span class="text"><b>画帧号条码</b><span>录像左下角画帧号，只用于校准</span></span><input type="checkbox" id="recordMarker"></label>
+        </div>
+        <p class="hint">推进速度大于 1 是快进，只用于测试，录像会失真。</p>
+      </details>
+
+      <details class="more" id="machineBox">
+        <summary>本机设置</summary>
+        <p class="hint">这台机器的环境：所有配置共用，改了立即保存（configs/local.console.json），切换配置时不变。</p>
         <div class="group-title">录像与声音</div>
         <label class="field">录像组织<select id="recordingMode"><option value="chapter">每章独立视频（不录选章）</option><option value="continuous">连续录制（跨章收集）</option></select></label>
         <div class="switches">
@@ -544,7 +570,6 @@
         <div class="switches">
           <label class="switch"><span class="text"><b>思考时继续放音乐</b><span>直播用；关时声音随游戏冻结</span></span><input type="checkbox" id="continuousMusic"></label>
           <label class="switch"><span class="text"><b>结束后保留 OBS</b><span>直播时让推流接着开</span></span><input type="checkbox" id="keepObs"></label>
-          <label class="switch wide"><span class="text"><b>画帧号条码</b><span>录像左下角画帧号，只用于校准</span></span><input type="checkbox" id="recordMarker"></label>
         </div>
         <div class="row" style="margin-top:8px">
           <label class="field">ffmpeg 路径<input type="text" id="ffmpeg" placeholder="默认：录制配置 → PATH"></label>
@@ -558,28 +583,16 @@
           <label class="switch"><span class="text"><b>HUD 服务</b><span>关掉后主控不启动 HUD 服务</span></span><input type="checkbox" id="hudService" checked></label>
         </div>
 
-        <div class="group-title">测试与端口</div>
+        <div class="group-title">运行方式与端口</div>
         <div class="row">
           <label class="field">运行方式<select id="runMode"><option value="container">Docker 容器（默认）</option><option value="host">本机（只有游戏工具，没有沙箱）</option></select></label>
-          <label class="field">上下文自动压缩窗口<input type="text" id="autocompact" placeholder="默认 500000（节省上下文），或 auto / 100000～1000000"></label>
-        </div>
-        <div class="row" style="margin-top:8px">
-          <label class="field">工具结果里的碰撞图<select id="collisionImage"><option value="">默认（只在进新房间与 observe 时）</option><option value="always">每次都附</option><option value="room">只在进新房间与 observe 时</option><option value="off">不附（只写进工作区）</option></select></label>
-        </div>
-        <div class="row" style="margin-top:8px">
-          <label class="field">动作推进速度<input type="number" id="playSpeed" min="1" max="20" placeholder="1（实时）"></label>
-          <label class="field">转场与剧情推进速度<input type="number" id="autoSpeed" min="1" max="20" placeholder="1（与原版一致）"></label>
-        </div>
-        <div class="switches" style="margin-top:6px">
-          <label class="switch"><span class="text"><b>已在关卡里时跳过进档</b><span>不走菜单宏</span></span><input type="checkbox" id="skipEnter"></label>
-          <label class="switch"><span class="text"><b>不启动智能体</b><span>只开游戏工具服务，手动测试</span></span><input type="checkbox" id="noAgent"></label>
         </div>
         <div class="row thirds" style="margin-top:8px">
           <label class="field">桥接端口<input type="number" id="bridgePort" min="1024" max="65535" placeholder="47774"></label>
           <label class="field">游戏工具端口<input type="number" id="mcpPort" min="1024" max="65535" placeholder="47780"></label>
           <label class="field">HUD 端口<input type="number" id="hudPort" min="1024" max="65535" placeholder="47790"></label>
         </div>
-        <p class="hint">推进速度大于 1 是快进，只用于测试，录像会失真。</p>
+        <p class="hint" id="machineNote"></p>
       </details>
 
       <details class="more" id="tuneBox">
@@ -1152,6 +1165,8 @@ async function loadOptions() {
     : form?.engine === "claude" ? `claude:${form.provider || "anthropic"}` : "claude:anthropic";
   fillRuntimes(o.runtimes, preferredRuntime);
   ui.prov.lastRuntime = $("runtime").value;
+  fillMachine(o.machine || {});
+  fillUsage();
   const d = o.defaults;
   $("maxMinutes").value = d.max_minutes;
   $("agent").value = (o.deploy && o.deploy.agent) || "";
@@ -1681,6 +1696,8 @@ function profileReadonly() { return !!(ui.profiles && ui.profiles.current && ui.
 function profileForm() {
   const o = formOptions();
   delete o.kb_deny; delete o.kb_allow;
+  for (const [key] of MACHINE_FIELDS) delete o[key];        // 本机设置与提供方的用量设置不随配置保存
+  for (const key of USAGE_KEYS) delete o[key];
   o.seg_off = JSON.parse(JSON.stringify(ui.segOff || {}));
   return o;
 }
@@ -1738,30 +1755,22 @@ function applyProfileForm(form) {
   if (form.mode === "speedrun" || form.mode === "explore") ui.mode = form.mode;    // boot 里按 ui.mode 切换显示
   for (const [key, id] of [["live", "live"], ["sim", "sim"], ["sim_assist", "simAssist"], ["stiffness", "stiffness"],
       ["formal_thought", "formalThought"], ["save_context", "saveContext"], ["playback", "playback"], ["record", "record"],
-      ["hud_mod", "hudMod"], ["study", "study"], ["limit_planning", "limitPlanning"], ["quota_wait", "quotaWait"],
-      ["keep_obs_open", "keepObs"], ["start_paused", "startPaused"], ["allow_detour", "allowDetour"],
-      ["record_marker", "recordMarker"], ["skip_enter", "skipEnter"], ["no_agent", "noAgent"], ["hud_window", "hudWindow"],
-      ["hud", "hudService"], ["freeze_chapter_select", "freezeChapterSelect"], ["freeze_file_select", "freezeFileSelect"],
-      ["freeze_main_menu", "freezeMainMenu"]]) check(id, form[key]);
+      ["hud_mod", "hudMod"], ["study", "study"], ["limit_planning", "limitPlanning"],
+      ["start_paused", "startPaused"], ["allow_detour", "allowDetour"],
+      ["record_marker", "recordMarker"], ["skip_enter", "skipEnter"], ["no_agent", "noAgent"]]) check(id, form[key]);
   if (has("hud_mod")) ui.hudTouched = true;
   if (has("sim")) $("sim").dataset.touched = "1";
   if (has("study")) $("study").dataset.touched = "1";
   const perms = form.action_permissions || {};
   check("allowRestartChapter", perms.restart_chapter); check("allowReturnToMap", perms.return_to_map); check("allowSaveQuit", perms.save_quit);
   if (has("cutscene_mode")) $("cutsceneAgent").checked = form.cutscene_mode === "agent";
-  $("continuousMusic").checked = !!form.continuous_music;          // 表单只在勾选时带这两项
   if (!pick("collisionImage", form.collision_image || "")) $("collisionImage").value = "";
   if (has("max_minutes")) $("maxMinutes").value = form.max_minutes;
   if (has("autocompact")) $("autocompact").value = form.autocompact || "";
-  if (has("runtime")) pick("runMode", form.runtime);
-  if (has("recording_mode")) pick("recordingMode", form.recording_mode);
-  for (const [key, id] of [["study_minutes", "studyMinutes"], ["quota_wait_max_hours", "quotaHours"], ["play_speed", "playSpeed"],
-      ["auto_speed", "autoSpeed"], ["rounds_per_room", "roundsPerRoom"], ["room_scale", "roomScale"], ["bridge_port", "bridgePort"],
-      ["mcp_port", "mcpPort"], ["hud_port", "hudPort"]]) {
+  for (const [key, id] of [["study_minutes", "studyMinutes"], ["play_speed", "playSpeed"],
+      ["auto_speed", "autoSpeed"], ["rounds_per_room", "roundsPerRoom"], ["room_scale", "roomScale"]]) {
     if (has(key)) $(id).value = form[key] == null || form[key] === d[key] ? "" : form[key];   // 等于默认值时留空（灰色占位）
   }
-  for (const [key, id] of [["max_usage", "maxUsage"], ["audio_offset_ms", "audioOffset"]]) if (has(key)) $(id).value = form[key] ?? "";
-  for (const [key, id] of [["ffmpeg", "ffmpeg"], ["record_video_args", "videoArgs"]]) if (has(key)) $(id).value = form[key] || "";
   if (has("map") && (ui.options.maps || []).some(m => m.id === form.map && m.enabled)) ui.map = form.map;
   const chapterIds = (ui.options.chapters || []).map(c => c.id);
   if (Array.isArray(form.chapters)) ui.chapters = form.chapters.filter(c => chapterIds.includes(c));
@@ -1783,6 +1792,78 @@ function applyProfileForm(form) {
   onLive();
   updateCompactHint();
   updateSummary();
+}
+
+// ---------------------------------------------------------------- 本机设置与提供方账户（orchestrator/machine_settings.py）
+// 本机设置：这台机器的环境，所有配置共用，改了立即保存，不随配置保存；用量设置：存在所选提供方的设置里（Claude 执行器）
+const MACHINE_FIELDS = [["runtime", "runMode", "select"], ["bridge_port", "bridgePort", "port"], ["mcp_port", "mcpPort", "port"],
+  ["hud_port", "hudPort", "port"], ["hud", "hudService", "check"], ["hud_window", "hudWindow", "check"], ["ffmpeg", "ffmpeg", "text"],
+  ["record_video_args", "videoArgs", "text"], ["audio_offset_ms", "audioOffset", "number"], ["recording_mode", "recordingMode", "select"],
+  ["freeze_chapter_select", "freezeChapterSelect", "check"], ["freeze_file_select", "freezeFileSelect", "check"],
+  ["freeze_main_menu", "freezeMainMenu", "check"], ["keep_obs_open", "keepObs", "check"], ["continuous_music", "continuousMusic", "check"]];
+const USAGE_KEYS = ["max_usage", "quota_wait", "quota_wait_max_hours"];
+const USAGE_DEFAULTS = { max_usage: null, quota_wait: true, quota_wait_max_hours: 24 };
+
+function fillMachine(m) {
+  const d = ui.options.defaults;
+  for (const [key, id, kind] of MACHINE_FIELDS) {
+    const v = Object.prototype.hasOwnProperty.call(m, key) ? m[key] : d[key];   // 缺的项用默认值
+    if (kind === "check") $(id).checked = !!v;
+    else if (kind === "port") $(id).value = v == null || v === d[key] ? "" : v;   // 等于默认值时留空（灰色占位）
+    else $(id).value = v ?? "";
+  }
+}
+function machineValues() {
+  const o = formOptions();
+  return Object.fromEntries(MACHINE_FIELDS.map(([key]) => [key, o[key] ?? null]));
+}
+let machineTimer = 0;
+function saveMachineSoon() {
+  clearTimeout(machineTimer);
+  machineTimer = setTimeout(async () => {
+    try {
+      const r = await postJSON("/api/console/machine", { settings: machineValues() });
+      ui.options.machine = r.machine;
+      $("machineNote").textContent = "已保存。";
+    } catch (e) {
+      $("machineNote").textContent = "没保存：" + e.message;
+      toast("本机设置没保存：" + e.message, true);
+    }
+  }, 400);
+}
+
+function usageProvider() {
+  const [engine, provider] = ($("runtime").value || "claude:anthropic").split(":");
+  return engine === "claude" ? provider : null;
+}
+function fillUsage() {
+  const provider = usageProvider();
+  for (const id of ["quotaWait", "quotaHours", "maxUsage"]) $(id).disabled = !provider;
+  const label = $("runtime").selectedOptions[0]?.textContent || provider || "";
+  $("usageTitle").textContent = provider ? `提供方账户的用量（${label}）` : "提供方账户的用量（Codex 不适用）";
+  $("usageNote").textContent = provider ? "存在这个提供方的设置里（configs/local.providers.json），改了立即保存，所有配置共用。"
+    : "Codex 执行器没有额度等待。";
+  const v = (provider && ((ui.options || {}).provider_usage || {})[provider]) || USAGE_DEFAULTS;
+  $("quotaWait").checked = v.quota_wait !== false;
+  $("quotaHours").value = v.quota_wait_max_hours == null || v.quota_wait_max_hours === 24 ? "" : v.quota_wait_max_hours;
+  $("maxUsage").value = v.max_usage ?? "";
+}
+let usageTimer = 0;
+function saveUsageSoon() {
+  const provider = usageProvider();
+  if (!provider) return;
+  clearTimeout(usageTimer);
+  usageTimer = setTimeout(async () => {
+    try {
+      const usage = { quota_wait: $("quotaWait").checked, quota_wait_max_hours: numberOrNull("quotaHours"), max_usage: numberOrNull("maxUsage") };
+      const r = await postJSON("/api/console/provider-usage", { provider, usage });
+      (ui.options.provider_usage ||= {})[provider] = r.usage;
+      $("usageNote").textContent = "已保存到这个提供方。";
+    } catch (e) {
+      $("usageNote").textContent = "没保存：" + e.message;
+      toast("用量设置没保存：" + e.message, true);
+    }
+  }, 400);
 }
 
 // 自动压缩窗口留空时的实际值与来源（orchestrator/config.autocompact_choice）：模型档案 > 提供方 > 节省上下文的 500000
@@ -3254,7 +3335,7 @@ document.querySelectorAll("[data-pmode]").forEach(b => b.addEventListener("click
   setMode(b.dataset.pmode);
 }));
 document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => setKbView(b.dataset.view)));
-$("runtime").addEventListener("change", () => { $("agent").value = ""; ui.prov.lastRuntime = $("runtime").value; updateRuntimeNote(); updateSimRow(true); loadModels(); });
+$("runtime").addEventListener("change", () => { $("agent").value = ""; ui.prov.lastRuntime = $("runtime").value; updateRuntimeNote(); updateSimRow(true); fillUsage(); loadModels(); });
 $("sim").addEventListener("change", () => { $("sim").dataset.touched = "1"; });
 $("manageProviders").addEventListener("click", openProviders);
 $("providerClose").addEventListener("click", closeProviders);
@@ -3289,6 +3370,8 @@ $("live").addEventListener("change", onLive);
 $("hudMod").addEventListener("change", () => { ui.hudTouched = true; onLive(); });
 $("study").addEventListener("change", () => { $("study").dataset.touched = "1"; });
 $("saveContext").addEventListener("change", updateCompactHint);
+for (const [, id] of MACHINE_FIELDS) $(id).addEventListener("change", saveMachineSoon);
+for (const id of ["quotaWait", "quotaHours", "maxUsage"]) $(id).addEventListener("change", saveUsageSoon);
 $("save").addEventListener("change", onSaveChange);
 $("newSave").addEventListener("input", () => { updateSummary(); schedulePreview(); });
 $("refreshSaves").addEventListener("click", refreshSaves);

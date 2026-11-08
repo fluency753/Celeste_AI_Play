@@ -143,7 +143,32 @@ def options() -> dict:
             "maps": [{"id": k, "label": v, "enabled": True} for k, v in MAPS.items()]
                     + [{"id": "mod", "label": "MOD 地图", "enabled": False, "note": "未来版本中支持"}],
             "tunables": catalog(), "tunable_groups": list(GROUPS), "prefs": load_prefs(), "game": celeste_dir_info(),
-            "profiles": profiles_payload()}
+            "profiles": profiles_payload(), **machine_payload()}
+
+
+def machine_payload() -> dict:
+    """本机设置与各 Claude 提供方的用量设置（docs/开发/设置分层.md 第二步）。第一次读取时按当前配置与最近一次运行迁移。"""
+    from orchestrator import machine_settings, profiles
+    from orchestrator.runtimes import runtime
+    machine = machine_settings.load()
+    try:
+        machine_settings.seed_usage(profiles.meta(profiles.selected()).get("form"))
+    except (OSError, ValueError):
+        pass
+    usage = {row["id"]: machine_settings.usage_for(row["id"]) for row in runtime("claude").providers()}
+    return {"machine": machine, "provider_usage": usage}
+
+
+def save_machine(update) -> dict:
+    from orchestrator import machine_settings
+    return {"machine": machine_settings.save(update)}
+
+
+def save_provider_usage(data) -> dict:
+    from orchestrator import machine_settings
+    if not isinstance(data, dict) or set(data) - {"provider", "usage"} or not isinstance(data.get("provider"), str):
+        raise ValueError("用量设置的参数无效")
+    return {"provider": data["provider"], "usage": machine_settings.save_usage(data["provider"], data.get("usage") or {})}
 
 
 # ---------------------------------------------------------------- 控制台的本机设置（configs/local.console.json，不入库）
@@ -688,7 +713,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.16.1"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.17.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

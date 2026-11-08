@@ -532,7 +532,9 @@ class ConsoleTests(unittest.TestCase):
 
     def test_options_list_sides(self):
         from overlay import console_api
-        with patch('orchestrator.saves.inventory', return_value=[]):
+        # 本机设置第一次读取时会写 configs/local.console.json：这里只看 B／C 面，不碰本机配置
+        with patch('orchestrator.saves.inventory', return_value=[]), \
+                patch.object(console_api, 'machine_payload', return_value={}):
             data = console_api.options()
         sides = data['sides']
         self.assertEqual([(x['id'], x['side']) for x in sides if x['side'] == 'B'], [(c, 'B') for c in SIDE_CHAPTERS])

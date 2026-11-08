@@ -275,12 +275,14 @@ def _clean_name(name) -> str:
 
 
 def clean_form(form) -> dict | None:
-    """表单设置：控制台运行页的全部选项（不含知识库权限：那部分单独存）。只做形状检查，开跑时再按运行设置逐项校验。"""
+    """表单设置：控制台运行页的选项（不含知识库权限：那部分单独存；也不含本机设置与提供方的用量设置，
+    它们分别存在本机与提供方，见 machine_settings.py）。只做形状检查，开跑时再按运行设置逐项校验。"""
     if form is None:
         return None
     if not isinstance(form, dict):
         raise ValueError("表单设置须为对象")
-    form = {k: v for k, v in form.items() if k not in ("kb_deny", "kb_allow", "profile")}
+    from .machine_settings import strip
+    form = strip({k: v for k, v in form.items() if k not in ("kb_deny", "kb_allow", "profile")})
     if len(json.dumps(form, ensure_ascii=False).encode("utf-8")) > MAX_FORM_BYTES:
         raise ValueError("表单设置太大")
     return form

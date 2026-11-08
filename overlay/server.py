@@ -289,6 +289,10 @@ def make_handler(pinned: Path | None):
                             result = console_api.instance_launch()
                         elif self.path == "/api/console/prefs":
                             result = console_api.save_prefs(data)
+                        elif self.path == "/api/console/machine":
+                            result = console_api.save_machine(data.get("settings"))
+                        elif self.path == "/api/console/provider-usage":
+                            result = console_api.save_provider_usage(data)
                         elif self.path == "/api/console/prompt/preview":
                             result = console_api.prompt_preview(data.get("options"), data.get("engine"))
                         elif self.path == "/api/console/personal-prompt":

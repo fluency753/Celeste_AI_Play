@@ -102,6 +102,8 @@ class ConsoleStartupTests(unittest.IsolatedAsyncioTestCase):
                              {'id': 'claude:anthropic', 'label': 'Claude'}, {'id': 'claude:other', 'label': 'Other'}],
                 'defaults': DEFAULTS, 'saves': [{'name': 'test', 'slot': 0}], 'chapters': [],
                 'tunables': [], 'tunable_groups': [],
+                # 运行方式是本机设置（1.17.0 起不随配置保存；表单里旧的 runtime 不再采用）
+                'machine': {'runtime': 'host'},
                 'profiles': {'stored': True, 'selected': 'saved', 'profiles': [{'id': 'saved', 'name': '保存的配置'}],
                              'current': {'id': 'saved', 'form': {'engine': 'claude', 'provider': 'other', 'model': 'saved-model',
                                                                  'effort': 'high', 'runtime': 'host', 'agent': 'saved-agent'}}},
