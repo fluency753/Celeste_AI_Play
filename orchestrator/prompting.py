@@ -108,10 +108,18 @@ def formal_thought_rule(cfg) -> str:
             "（从上一次 act 结束到这次 act）你整个的思考、分析和判断，而不只是这一段按键的意图。" + temp)
 
 
-SAVE_CONTEXT_ACT = ("本次开启了节省上下文：同一房间里的 act 结果省略每次都一样的部分——观测文件只给一行（路径、帧号、快照编号，"
-                    "覆盖不完整时才写明缺什么）、不列可选推理强度、没有僵直时不写僵直说明、不重复本房间范围；"
+SAVE_CONTEXT_ACT = ("本次开启了节省上下文，act 结果更简短：轨迹不写列名（列依次为帧、x、y、vx、vy、状态、冲刺、着地）；"
+                    "实体只列起止位置不同的、按位移从大到小，其余只计数；没有僵直时不写僵直说明。"
+                    "同一房间里还省略每次都一样的部分：{file}不列可选推理强度，不重复本房间范围；"
+                    "Madeline 只写与默认不同的项（体力满、不贴墙、不下蹲、可操作时不写；剩余帧数只列不为 0 的）。"
                     "进新房间时和 observe 照常给全。")
-SAVE_CONTEXT_PRINT = "字符地图等大块输出只打印关心的区域，没变化的内容不必重复打印，需要时再读文件。"
+SAVE_CONTEXT_FILE = ("观测文件 /workspace/game/latest_obs.json 只写帧号和快照编号前 8 位（observe 区域精查也接受这个前缀；"
+                     "碰撞数据覆盖不完整时才写明缺什么），")
+SAVE_CONTEXT_PRINT = ("节省上下文：能合并的操作放进同一次调用（例如编译、运行和查看结果写在一条命令里）；"
+                      "程序只打印结论和需要的数字，大块输出写进文件，需要时只读其中一段；"
+                      "看地形不必整房打印字符画，用矩形列表或行程编码、只打印关心的区域，"
+                      "或直接看碰撞图（/workspace/game/collision.json 的 image）；"
+                      "反复用到的长命令写成短脚本再调用；没变化的内容不重复打印。")
 
 
 def kb_reference_rule(cfg) -> str:
@@ -159,12 +167,16 @@ def speedrun_allow_rule(cfg) -> str:
 
 
 def save_context_act(cfg) -> str:
-    """开了"节省上下文"（--save-context）时 act 说明里的一句；没开时为空。"""
-    return SAVE_CONTEXT_ACT if getattr(cfg, "save_context", False) else ""
+    """开了"节省上下文"（--save-context）时 act 说明里的一段：act 结果省略了什么、省略后怎么读；没开时为空。
+    观测文件那句只在有程序能力（正文给观测文件而不是布局）时写。"""
+    if not getattr(cfg, "save_context", False):
+        return ""
+    return SAVE_CONTEXT_ACT.format(file=SAVE_CONTEXT_FILE if workspace_capabilities(cfg).programs else "")
 
 
 def save_context_print(cfg) -> str:
-    """开了"节省上下文"时探索提示词辅助程序一节的一句（只是建议，不加限制）；没开时为空。"""
+    """开了"节省上下文"时程序一节的建议（合并调用、程序输出精简、地形不整房打印字符画、长命令写成脚本；
+    只是建议，不加限制）。这一节只在有程序能力时出现，两种模式、两种执行器都用；没开时为空。"""
     return SAVE_CONTEXT_PRINT if getattr(cfg, "save_context", False) else ""
 
 

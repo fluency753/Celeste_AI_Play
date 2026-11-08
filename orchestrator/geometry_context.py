@@ -269,7 +269,9 @@ def geometry_page(obs, *, region=None, offset=0, limit=32, expected_snapshot=Non
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 64:
         raise ValueError('offset 必须非负整数，limit 为 1–64')
     ident = observation_id(obs)
-    if expected_snapshot is not None and expected_snapshot != ident:
+    # 节省上下文时 act 正文只写快照编号的前 8 位，也接受这样的前缀
+    if expected_snapshot is not None and not (expected_snapshot == ident or (
+            isinstance(expected_snapshot, str) and len(expected_snapshot) >= 8 and ident.startswith(expected_snapshot))):
         raise ValueError('快照已改变，不能跨帧或跨房间混合分页；请从 offset=0 重新查询。')
     if offset and expected_snapshot is None:
         raise ValueError('分页必须带上次返回的 snapshot_id，避免跨帧混页。')

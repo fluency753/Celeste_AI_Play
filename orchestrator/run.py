@@ -165,8 +165,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "思考（汉字不超过 30 个），游戏内 HUD 只显示当前这一句，字号更大")
     ap.add_argument("--save-context", action=argparse.BooleanOptionalAction, default=None,
                     help="节省上下文（新运行默认开；续跑沿用原运行，没记过的旧运行按关，免得章节中途换返回格式）："
-                         "同一房间里的 act 结果省略每次都一样的样板（观测文件只给一行、不列可选推理强度、没僵直不写僵直说明、"
-                         "不重复本房间范围），探索提示词轻提只打印关心的区域")
+                         "act 结果更简短（轨迹不写列名、实体只列起止位置不同的、没僵直不写僵直说明；同一房间里观测文件只给一行、"
+                         "不列可选推理强度、不重复本房间范围、Madeline 只写非默认项）；提示词的程序一节建议精简输出；"
+                         "Claude 执行器没另设 --autocompact（提供方也没设）时自动压缩窗口用 500000")
     ap.add_argument("--live", dest="live", action="store_true", default=None,
                     help="直播模式（默认关，可与速通或探索模式叠加）：HUD 默认用可交互的网页形式，解说计时 10 秒，"
                          "可按用户要求退出关卡；速通 + 直播不改变速通目标，探索 + 直播另加直播节奏")

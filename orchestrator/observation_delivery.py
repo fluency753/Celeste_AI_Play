@@ -42,10 +42,14 @@ def observation_file(session, obs):
     }
 
 
+SHORT_SNAPSHOT_CHARS = 8     # 节省上下文时正文里的快照编号只写前几位；observe 的区域精查接受这个前缀
+
+
 def compact_reference(reference: dict) -> str:
-    """节省上下文：同一房间里观测文件只给一行（路径、帧号、快照编号）；碰撞数据覆盖不完整时才写明缺什么。"""
-    text = (f"观测文件：{reference['files']['observation']}（帧 {reference.get('frame')}，"
-            f"快照 {reference.get('snapshot_id')}）")
+    """节省上下文：同一房间里观测文件只给一行（帧号、快照编号前几位；文件位置固定，写在工具说明里）；
+    碰撞数据覆盖不完整时才写明缺什么。"""
+    snapshot = str(reference.get('snapshot_id') or '')[:SHORT_SNAPSHOT_CHARS]
+    text = f"观测文件已更新（帧 {reference.get('frame')}，快照 {snapshot}）"
     collision = reference.get('collision')
     if collision is None or not (collision.get('complete') and collision.get('geometryComplete')):
         text += '；碰撞数据：' + json.dumps({'collision': collision, 'collisionNote': reference.get('collisionNote')},

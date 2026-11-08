@@ -11,7 +11,7 @@
 - 跳和冲刺有约 5 帧的输入缓冲：提前几帧按下并按住，到能起跳或冲刺的那一帧会自动生效。
 - `stop_on`（可选）：`death` 死亡、`room` 换房间、`land` 落地（起跳前站在地上的那一帧不算，离地后再落地才触发）、`refill` 冲刺恢复、`uncontrollable` 失去控制、`controllable` 恢复控制、`complete` 通关、`story_input` 到达剧情输入节点、`story_decision` 到达剧情决策机会；默认 `["death", "room", "complete"]`。death 总会生效；agent 剧情模式还会自动加上 story_input、story_decision（TAS 格式除外）及可操作时的 uncontrollable；agent 模式已登记通关后，不再用 complete 反复截断结算输入。触发后立即停下，剩余按键不执行。
 - `plan_file`：把按键段写进工作区里的 JSON 文件，调用 `{tool:act}` 时传 `plan_file`（工作区里的路径）代替 `inputs`。文件也可以写成对象 `{"inputs": [...], "expect": [...], "tolerance": 1}`：`expect` 每帧一项，是这一帧推进之后 Madeline 的预期位置 `[x, y]`（`null` 表示这一帧不检查），实际与预期相差超过 `tolerance` 像素就在那一帧停下（`deviate`）。
-- 返回内容：实际执行了多少帧、停止原因、事件、取样轨迹（帧, x, y, vx, vy, 状态, 冲刺数, 是否着地），以及新的观测。
+- 返回内容：实际执行了多少帧、停止原因、事件、取样轨迹（帧, x, y, vx, vy, 状态, 冲刺数, 是否着地），以及新的观测。开了节省上下文时返回内容更简短（轨迹不写列名、实体只列起止位置不同的、同一房间里省略每次都一样的部分），省略了什么写在 `{tool:act}` 的工具说明里。
 
 ## 计划内自动重试（有程序通道时）
 

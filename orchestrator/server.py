@@ -342,7 +342,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                                     'auto_frames': outcome.auto_frames, 'auto_notes': outcome.auto_notes})
                 finally:
                     metrics.decision_end(result)
-                parts = [describe_step(outcome.result, max_rows=8)]
+                save_context = bool(getattr(session.cfg, "save_context", False))
+                parts = [describe_step(outcome.result, max_rows=8, brief=save_context)]
                 if accounting is not None:
                     accounting.on_death(metrics.state.deaths - deaths_before)
                     credit(outcome.obs)
@@ -354,7 +355,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     parts.append(notice)
                 new_room = room_key(outcome.obs) != state["described_room"]
                 # 节省上下文：同一房间里省略每次都一样的样板（进新房间时照常给全）
-                brief = bool(getattr(session.cfg, "save_context", False)) and not new_room
+                brief = save_context and not new_room
                 context, file_context, candidate = observation_context(outcome.obs, force=new_room, compact=brief)
                 if new_room:
                     parts.append("【进入新房间】完整碰撞数据已更新到当前观测文件。" if file_context else "【进入新房间】下面是截图、完整碰撞图及精确布局；后续只返回相对此布局的变化。")

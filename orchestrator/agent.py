@@ -41,7 +41,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from .config import REPO_ROOT, RunConfig, find_claude_exe, find_docker_exe
+from .config import REPO_ROOT, RunConfig, autocompact_window, find_claude_exe, find_docker_exe
 from .game_session import GameSession
 from .kb_study import KbStudy
 from .metrics import Metrics
@@ -455,9 +455,9 @@ class ClaudeRunner(SessionControls):
                 "--model", self._model_name(), "--effort", self.effort,
                 "--strict-mcp-config", "--permission-mode", "dontAsk",
                 *(["--resume", self.session_id] if self.resume else ["--session-id", self.session_id])]
-        autocompact = self.cfg.autocompact or (self.cfg.provider_info or {}).get("autocompact")
+        autocompact = autocompact_window(self.cfg)
         if autocompact:
-            args += ["--autocompact", str(autocompact)]
+            args += ["--autocompact", autocompact]
         return args
 
     def _delivered_rules_digest(self):
@@ -1000,7 +1000,7 @@ class ClaudeRunner(SessionControls):
         if reported:
             return reported
         # Match the effective configuration actually passed to Claude Code.
-        configured = self.cfg.autocompact or (self.cfg.provider_info or {}).get('autocompact')
+        configured = autocompact_window(self.cfg)
         try:
             return int(configured) if configured is not None else None
         except (TypeError, ValueError):

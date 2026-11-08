@@ -261,6 +261,33 @@ def skip_opportunity_hint(obs: dict) -> str:
     return hint + '当前播放阶段尚未识别，watch 会停止；请查看观测后明确操作。'
 
 
+MAX_STAMINA = 110        # Player.ClimbMaxStamina：体力满时节省上下文模式不写
+PLAYER_TIMERS = (("coyote time", "jumpGrace"), ("variable jump", "varJump"), ("dash cooldown", "dashCooldown"))
+
+
+def brief_player_lines(player: dict, controllable: bool) -> list[str]:
+    """节省上下文：Madeline 只写与默认不同的项——体力满、不贴墙、不下蹲、可操作时不写；剩余帧数只列不为 0 的。"""
+    x, y = player["pos"]
+    vx, vy = player["speed"]
+    hb = player["hitbox"]
+    parts = [f"Madeline：位置 ({x:.2f}, {y:.2f})", f"速度 ({vx:.1f}, {vy:.1f})", f"状态 {player['state']}",
+             f"着地 {_yn(player['onGround'])}", f"冲刺 {player['dashes']}/{player['maxDashes']}"]
+    if player.get("stamina") is not None and player["stamina"] < MAX_STAMINA:
+        parts.append(f"体力 {player['stamina']}")
+    parts.append(f"朝向 {player['facing']}")
+    walls = [side for side, key in (("左", "wallLeft"), ("右", "wallRight")) if player.get(key)]
+    if walls:
+        parts.append("贴墙 " + "、".join(walls))
+    if player.get("ducking"):
+        parts.append("下蹲")
+    if not controllable:
+        parts.append("不可操作")
+    timers = [f"{name} {(player.get('timers') or {}).get(key)}" for name, key in PLAYER_TIMERS
+              if (player.get("timers") or {}).get(key)]
+    box = f"碰撞箱 x {hb[0]}~{hb[0] + hb[2]}，y {hb[1]}~{hb[1] + hb[3]}"
+    return ["  ".join(parts), box + ("；剩余帧数：" + "，".join(timers) if timers else "")]
+
+
 def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, explore: bool = False,
                  compact_context: bool = False, file_context: bool = False, brief_room: bool = False) -> str:
     """full_room=True：整个房间的实体与地图（进入新房间、主动观察时）；False：只描述当前画面附近。
@@ -330,14 +357,17 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         vx, vy = player["speed"]
         hb = player["hitbox"]
         t = player["timers"]
-        lines.append(
-            f"Madeline：位置 ({x:.2f}, {y:.2f})  速度 ({vx:.1f}, {vy:.1f})  状态 {player['state']}  "
-            f"着地 {_yn(player['onGround'])}  冲刺 {player['dashes']}/{player['maxDashes']}  "
-            f"体力 {player['stamina']}  朝向 {player['facing']}  贴墙 左{_yn(player['wallLeft'])}/右{_yn(player['wallRight'])}  "
-            f"下蹲 {_yn(player['ducking'])}  可操作 {_yn(obs.get('controllable', False))}")
-        lines.append(
-            f"碰撞箱 x {hb[0]}~{hb[0] + hb[2]}，y {hb[1]}~{hb[1] + hb[3]}；"
-            f"剩余帧数：coyote time {t['jumpGrace']}，variable jump {t['varJump']}，dash cooldown {t['dashCooldown']}")
+        if brief_room:
+            lines.extend(brief_player_lines(player, obs.get('controllable', False)))
+        else:
+            lines.append(
+                f"Madeline：位置 ({x:.2f}, {y:.2f})  速度 ({vx:.1f}, {vy:.1f})  状态 {player['state']}  "
+                f"着地 {_yn(player['onGround'])}  冲刺 {player['dashes']}/{player['maxDashes']}  "
+                f"体力 {player['stamina']}  朝向 {player['facing']}  贴墙 左{_yn(player['wallLeft'])}/右{_yn(player['wallRight'])}  "
+                f"下蹲 {_yn(player['ducking'])}  可操作 {_yn(obs.get('controllable', False))}")
+            lines.append(
+                f"碰撞箱 x {hb[0]}~{hb[0] + hb[2]}，y {hb[1]}~{hb[1] + hb[3]}；"
+                f"剩余帧数：coyote time {t['jumpGrace']}，variable jump {t['varJump']}，dash cooldown {t['dashCooldown']}")
     if level:
         cam = level["camera"]
         b = level["bounds"]
@@ -407,6 +437,22 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     return "\n".join(lines)
 
 
+def describe_moved_entities(moving: dict, limit: int = 10) -> str:
+    """节省上下文的实体一行。桥接以动作开始时的位置为基准，只在实体位置变了（或新进入画面附近）的帧记一行，
+    所以这里的起点是第一次变化后的位置。起止位置（取整后）不同的按位移从大到小列出；
+    起止相同的（只是进入画面附近，或动了又回到原处）只计数。"""
+    shown = lambda v: (round(v[1]), round(v[2]), round(v[4]), round(v[5]))
+    moved = sorted(((ident, v) for ident, v in moving.items() if shown(v)[:2] != shown(v)[2:]),
+                   key=lambda item: -math.hypot(item[1][4] - item[1][1], item[1][5] - item[1][2]))
+    still = len(moving) - len(moved)
+    if not moved:
+        return f"画面附近 {still} 个实体位置变过，起止位置都相同。"
+    parts = [f"#{i} ({v[1]:.0f},{v[2]:.0f})→({v[4]:.0f},{v[5]:.0f})" for i, v in moved[:limit]]
+    rest = [f"另有 {len(moved) - limit} 个移动较小的未列"] if len(moved) > limit else []
+    rest += [f"另有 {still} 个起止位置相同"] if still else []
+    return f"移动过的实体 {len(moved)} 个：" + "；".join(parts + rest)
+
+
 def describe_deviation(dev: dict, tolerance: float) -> str:
     exp, act = dev.get("expected") or [], dev.get("actual") or []
     exp_text = f"({exp[0]:.2f}, {exp[1]:.2f}{', ' + exp[2] if len(exp) > 2 else ''})" if len(exp) >= 2 else "?"
@@ -436,7 +482,8 @@ def describe_attempts(attempts: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def describe_step(result: dict, max_rows: int = 30) -> str:
+def describe_step(result: dict, max_rows: int = 30, brief: bool = False) -> str:
+    """brief（节省上下文）：实体按位移从大到小列出，起止位置相同的只计数；轨迹不写列名（列名在 act 的工具说明里）。"""
     stop = result.get("stop", "?")
     lines = [f"执行了 {result['consumed']}/{result['planned']} 帧，停止原因：{STOP_TEXT.get(stop, stop)}"]
     if stop == 'recording_boundary':
@@ -459,7 +506,9 @@ def describe_step(result: dict, max_rows: int = 30) -> str:
         frame, ident, x, y = row
         first = moving.setdefault(ident, [frame, x, y, frame, x, y])
         first[3:] = [frame, x, y]
-    if moving:
+    if moving and brief:
+        lines.append(describe_moved_entities(moving))
+    elif moving:
         parts = [f"#{i} ({v[1]:.0f},{v[2]:.0f})→({v[4]:.0f},{v[5]:.0f})" for i, v in list(moving.items())[:10]]
         lines.append(f"这段动作中画面附近有 {len(moving)} 个实体移动过（编号 起点→终点）：" + "；".join(parts))
     traj = result.get("trajectory") or []
@@ -468,7 +517,8 @@ def describe_step(result: dict, max_rows: int = 30) -> str:
         event_frames = {e["frame"] for e in events}
         picked = [row for i, row in enumerate(traj)
                   if i % step == 0 or i == len(traj) - 1 or row[0] in event_frames]
-        lines.append(f"轨迹（每 {step} 帧取样，另含事件帧与最后一帧；列：帧, x, y, vx, vy, 状态, 冲刺, 着地）：")
+        lines.append(f"轨迹（每 {step} 帧取样，另含事件帧与最后一帧）：" if brief else
+                     f"轨迹（每 {step} 帧取样，另含事件帧与最后一帧；列：帧, x, y, vx, vy, 状态, 冲刺, 着地）：")
         for row in picked:
             if len(row) < 8 or row[1] is None:
                 lines.append(f"  {row[0]}: (Madeline 不在场)")

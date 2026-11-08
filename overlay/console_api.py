@@ -469,8 +469,8 @@ PLACEHOLDERS = {
     "{observe_collision_image}": "observe 说明里是否附碰撞图（--collision-image off 时只写进工作区）",
     "{collision_image_when}": "速通 interface_zh.md 里碰撞图什么时候返回（随 --collision-image）",
     "{formal_thought_act}": "开了“仅正式思考”时 act 工具说明里 thought 的补充；没开时为空",
-    "{save_context_rule}": "开了“节省上下文”时 act 工具说明里的一句（同一房间里的结果省略哪些样板、进新房间和 observe 照常给全）；没开时为空",
-    "{save_context_print}": "开了“节省上下文”时探索提示词辅助程序一节的一句（大块输出只打印关心的区域）；没开时为空",
+    "{save_context_rule}": "开了“节省上下文”时 act 工具说明里的一段（结果省略了什么、轨迹列名、进新房间和 observe 照常给全）；没开时为空",
+    "{save_context_print}": "开了“节省上下文”时 interface_zh.md 程序一节的建议（合并调用、程序只打印结论、地形不整房打印字符画、长命令写成脚本）；没开时为空",
     "{act_min_frames}": "单次 act 最少推进的帧数（可调参数 min_frames_per_act，默认 1；不超过本模式的上限）",
     "{act_max_frames}": "单次 act 最多推进的帧数（可调参数：速通 max_frames_per_act，探索 explore_act_frames）",
     "{explore_search_rule}": "探索模式自写模拟器与搜索程序推演帧数的一句（可调参数 explore_search_frames；不限时为空）",
@@ -688,7 +688,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.14.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.15.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

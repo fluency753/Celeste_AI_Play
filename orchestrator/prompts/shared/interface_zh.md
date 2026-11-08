@@ -92,4 +92,5 @@ watch 不是通用等待；“没有待处理剧情”不代表死亡或重试�
 
 需要生成碰撞矩阵时使用 /workspace/game/collision_matrix.py；展示进度或已有轨迹使用 /workspace/game/show.py；这些文件不替你执行游戏。
 {program_reference_rule}
+{save_context_print}
 <!-- /tool:programs -->
