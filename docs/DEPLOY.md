@@ -2,7 +2,7 @@
 
 这份文档讲怎样把整套系统部署到一台 Windows 电脑上：需要什么环境、怎样一键部署、怎样逐步手动部署、要运行哪些命令、有哪些开关与配置文件。日常使用的细节（每个功能的原理与实测）见 [USAGE.md](USAGE.md)，设计见 [DESIGN.md](DESIGN.md)，原生 GPT 与直播见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。
 
-> 项目尚未完成，部署流程会随开发更新。本文最后更新：2026-11-07。第一次部署可以先看简明的[上手指南](../上手指南.md)；让 AI 助手代为部署时，请它阅读[AI 协助指南](../AI协助指南.md)。
+> 项目尚未完成，部署流程会随开发更新。本文最后更新：2026-11-08。第一次部署可以先看简明的[上手指南](../上手指南.md)；让 AI 助手代为部署时，请它阅读[AI 协助指南](../AI协助指南.md)。
 
 文中的 `<Celeste 安装目录>`、`<OBS 安装目录>` 等尖括号内容换成你电脑上的实际路径。文中的测试存档叫 `test`，正式运行的存档写作 `<存档名>`，都换成自己游戏里的存档名。
 
@@ -53,7 +53,7 @@
 | --- | --- | --- | --- | --- |
 | Windows | 10 2004（build 19041）或更新、Windows 11 | — | — | 是 |
 | 《蔚蓝》Celeste | Steam 版 1.4.0.0 | 游戏本体 | Steam | 是 |
-| Everest | .NET 8 版本（桥接的 `everest.yaml` 要求 EverestCore 1.5935.0 或更新；开发中用的是 6642 以上的版本） | Mod 加载器 | [Olympus](https://everestapi.github.io/) 或 CeleMod | 是 |
+| Everest | 标准 .NET 8 版本，建议 6642 或更新（Bridge／Runtime 已用标准 6642 构建验证；`everest.yaml` 仍声明 EverestCore 1.5935.0，5935～6641 未在本轮验证，不等同已验证可编译） | Mod 加载器 | [Olympus](https://everestapi.github.io/) 或 CeleMod | 是 |
 | .NET SDK | 8.x | 编译桥接 Mod | `winget install Microsoft.DotNet.SDK.8` | 是（编译时） |
 | Python | 3.11 或更新（开发中用 3.14） | 主控、工具、部署向导 | `winget install Python.Python.3.13` | 是 |
 | WSL2 | 2.1.5 或更新 | Docker Desktop 的后端 | 管理员终端：`wsl --install --no-distribution`，重启 | 是 |

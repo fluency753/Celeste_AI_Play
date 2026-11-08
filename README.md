@@ -105,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | OBS 锁步插件 | `obs-plugin/` | 只把游玩帧（和规划回放帧）交给 ffmpeg 编码 |
 | 部署与诊断 | `setup.ps1`、`tools/` | 部署向导、桥接与插件构建、OBS 配置、状态查看、测试客户端 |
 
-主控要求桥接 1.4.0 或更新；桥接依赖 Everest（EverestCore 1.5935.0 起，.NET 8 版本）。容器的隔离可以用 `python -m orchestrator.verify --agent <标签>` 逐项验收。完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。
+主控要求桥接 1.4.0 或更新；桥接依赖标准 Everest（.NET 8；依赖声明为 EverestCore 1.5935.0，标准 6642 已通过构建验证，部署建议 6642 或更新）。容器的隔离可以用 `python -m orchestrator.verify --agent <标签>` 逐项验收。完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。
 
 <a id="开关"></a>
 

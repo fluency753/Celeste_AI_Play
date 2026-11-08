@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | 操作系统 | Windows 10 2004 或更新，或 Windows 11 | OBS 的应用音频捕获需要这一版本 |
 | 游戏 | Steam 版《蔚蓝》（Celeste）1.4.0.0 | 安装目录下文记作 `<Celeste 安装目录>`（Steam 库里的 `steamapps\common\Celeste`） |
-| Mod 加载器 | Everest（.NET 8 版本，实测 6642 可以编译） | 用 Olympus 或 CeleMod 安装 |
+| Mod 加载器 | 标准 Everest（.NET 8，6642 已通过 Bridge／Runtime 构建验证；建议 6642 或更新） | 用 Olympus 或 CeleMod 安装 |
 | 构建工具 | .NET 8 SDK | 编译桥接 Mod；可用官方脚本做用户级安装，无需管理员权限 |
 | 运行环境 | Python 3.11 或更新（实测 3.14） | 主控与测试客户端；依赖装在仓库内的虚拟环境 `.venv` 里 |
 | 录制 | OBS Studio 28 或更新（实测 32.2.2）与 ffmpeg | 安装目录下文记作 `<OBS 安装目录>`，写进 `configs\local.recording.json` 的 `obs_dir`（见 4.4 节） |

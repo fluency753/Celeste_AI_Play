@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -221,12 +222,30 @@ public static class BridgeRuntime {
     }
 
     private static EverestModuleMetadata? FindPayload() => Everest.Modules.FirstOrDefault(m => m.Metadata.Name == PayloadName)?.Metadata;
+    private static EverestModuleAssemblyContext[] ActiveDependencies(EverestModuleAssemblyContext context) {
+        // Standard Everest 6642's internal field is accessible via our publicizer.
+        // Use only standard members, including when running on a custom build.
+        // Standard Everest has no atomic snapshot API. If enumeration fails
+        // (for example, a concurrent addition invalidates it), refuse reload.
+        // This does not detect every possible concurrent change. Do not invent a lock
+        // which Everest's writers do not share.
+        var snapshot = new List<EverestModuleAssemblyContext>();
+        foreach (var dependency in context.ActiveDependencyContexts) snapshot.Add(dependency);
+        return snapshot.ToArray();
+    }
+
     private static void CheckReverseDependencies(EverestModuleMetadata metadata) {
         foreach (EverestModule module in Everest.Modules) {
             if (module.Metadata.Name == metadata.Name) continue;
             bool declared = module.Metadata.Dependencies.Any(d => d.Name == metadata.Name);
-            bool actual = module.Metadata.AssemblyContext?.GetActiveDependencyContextsSnapshot()
-                .Any(c => c.ModuleMeta.Name == metadata.Name) == true;
+            bool actual;
+            try {
+                actual = module.Metadata.AssemblyContext is { } context &&
+                    ActiveDependencies(context).Any(c => c.ModuleMeta.Name == metadata.Name);
+            } catch (Exception ex) {
+                throw new InvalidOperationException("Cannot inspect active dependencies of Mod " + module.Metadata.Name +
+                    "; bridge reload refused: " + ex.GetBaseException().Message, ex);
+            }
             if (declared || actual) throw new InvalidOperationException("Bridge reload would also reload dependent Mod " + module.Metadata.Name);
         }
     }

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <CelestePrefix Condition="'$(CelestePrefix)' == ''">$(CELESTE_DIR)</CelestePrefix>
+    <RuntimeBinary Condition="'$(RuntimeBinary)' == ''">../../game-runtime/bin/CelesteAIRuntime.dll</RuntimeBinary>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="$(CelestePrefix)/Celeste.dll" Publicize="true" />
+    <Reference Include="$(CelestePrefix)/FNA.dll" />
+    <Reference Include="$(RuntimeBinary)" />
+    <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+</Project>
