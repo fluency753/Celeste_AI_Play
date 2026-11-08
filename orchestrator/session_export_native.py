@@ -5,15 +5,16 @@ from pathlib import Path
 import re
 import math
 import hashlib
+import subprocess
+import tempfile
 
 from .session_export import rows, simulation_fact
 from . import session_export_projection as projection
 from .session_export_projection import project_native_tool, project_tool, iso_epoch, bounded_tree
 
 
-def scan_native(home, session_id, include_analysis=False):
+def scan_native(home, session_id, include_analysis=False, emit=None):
     warnings, calls, sources, tool_calls, lifecycle = [], [], [], [], []
-    detail_bytes = 0
     wrappers, current_turn = {}, None
     for area in ('sessions', 'archived_sessions'):
         root = Path(home) / area
@@ -58,34 +59,27 @@ def scan_native(home, session_id, include_analysis=False):
                         projected.update(call_id=ident, native_turn_id=current_turn, item_type='CodeModeWrapper',
                                          started_wall=iso_epoch(event.get('timestamp')), ended_wall=None,
                                          source=str(path), record_index=record_index)
-                        detail_bytes += len(json.dumps(projected, ensure_ascii=False).encode('utf-8'))
-                        if detail_bytes > 24 * 1024 * 1024:
-                            projected.pop('parameters', None)
-                            projected['details_omitted'] = 'native_total_detail_budget_24MiB'
-                        wrappers[ident] = projected
+                        if emit is not None:
+                            emit(projected)
+                            wrappers[ident] = {key: projected[key] for key in ('tool', 'call_id', 'native_turn_id', 'item_type', 'source', 'record_index', 'started_wall')}
+                        else:
+                            wrappers[ident] = projected
                     elif kind in ('function_call_output', 'custom_tool_call_output') and ident in wrappers:
                         row = wrappers[ident]
-                        if detail_bytes <= 24 * 1024 * 1024:
-                            output = project_tool(row['tool'], None, payload.get('output'))
-                            detail_bytes += len(json.dumps(output, ensure_ascii=False).encode('utf-8'))
-                            if detail_bytes <= 24 * 1024 * 1024:
-                                row.update({key: output[key] for key in ('result', 'result_meta', 'error')})
-                            else:
-                                row['details_omitted'] = 'native_total_detail_budget_24MiB'
-                        else:
-                            row['details_omitted'] = 'native_total_detail_budget_24MiB'
+                        output = project_tool(row['tool'], None, payload.get('output'))
+                        row.update({key: output[key] for key in ('result', 'result_meta', 'error')})
                         row['ended_wall'] = iso_epoch(event.get('timestamp'))
+                        if emit is not None:
+                            emit(row)
+                            del wrappers[ident]
                 if include_analysis and payload.get('type') == 'item_completed':
                     projected = project_native_tool(item, payload)
                     if projected is not None:
                         projected.update(source=str(path), record_index=record_index)
-                        size = len(json.dumps(projected, ensure_ascii=False).encode('utf-8'))
-                        detail_bytes += size
-                        if detail_bytes > 24 * 1024 * 1024:
-                            for key in ('parameters', 'result', 'game_states', 'file_changes', 'error'):
-                                projected.pop(key, None)
-                            projected['details_omitted'] = 'native_total_detail_budget_24MiB'
-                        tool_calls.append(projected)
+                        if emit is not None:
+                            emit(projected)
+                        else:
+                            tool_calls.append(projected)
                 if payload.get('type') != 'item_completed' or item.get('type') != 'DynamicToolCall' or item.get('tool') != 'celeste_simulate':
                     continue
                 began = payload.get('started_at_ms')
@@ -105,13 +99,8 @@ def scan_native(home, session_id, include_analysis=False):
                 calls.append(fact)
     if not sources:
         warnings.append('没有找到已核验身份的 Codex 原生会话日志；模拟明细可能缺失')
-    if include_analysis:
-        for row in wrappers.values():
-            if row.get('details_omitted'):
-                for key in ('parameters', 'result', 'game_states', 'file_changes', 'error'):
-                    row.pop(key, None)
-                row['details_omitted'] = 'native_total_detail_budget_24MiB'
-            tool_calls.append(row)
+    if include_analysis and emit is None:
+        tool_calls.extend(wrappers.values())
     result = {'calls': calls, 'warnings': warnings, 'sources': sources}
     if include_analysis:
         result['tool_calls'] = tool_calls
@@ -127,6 +116,53 @@ def reader_code(include_analysis=False):
                             if inspect.isfunction(value) and value.__module__ == projection.__name__) + '\n\n'
     code += '\n\n'.join(inspect.getsource(function) for function in (rows, simulation_fact, scan_native))
     return code
+
+
+def stream_reader_code(home='/home/agent/.codex'):
+    return reader_code(True) + '''
+sys.stdout.reconfigure(encoding='utf-8')
+count = 0
+def emit(row):
+    global count
+    print(json.dumps({'tool': row}, ensure_ascii=False))
+    count += 1
+summary = scan_native(''' + repr(str(home)) + ''', sys.argv[1], True, emit)
+print(json.dumps({'summary': summary, 'tool_count': count}, ensure_ascii=False))
+'''
+
+
+def read_native_stream(command):
+    """Drain fixed reader output to disk, then validate its completion footer."""
+    from .session_export_spool import SpoolRows
+    tools = SpoolRows()
+    try:
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            result = subprocess.run(command, stdout=output, stderr=errors, timeout=60)
+            if result.returncode:
+                errors.seek(0)
+                raise RuntimeError('原生日志流读取失败：' + errors.read(4096).decode('utf-8', 'replace'))
+            output.seek(0)
+            footer = None
+            for line in output:
+                record = json.loads(line)
+                if footer is not None:
+                    raise ValueError('原生日志流结束标记后仍有数据')
+                if isinstance(record, dict) and isinstance(record.get('tool'), dict):
+                    tools.append(record['tool'])
+                elif isinstance(record, dict) and isinstance(record.get('summary'), dict):
+                    footer = record
+                else:
+                    raise ValueError('原生日志流记录无效')
+            if footer is None or type(footer.get('tool_count')) is not int or footer['tool_count'] != len(tools):
+                raise ValueError('原生日志流未完整结束或记录数不一致')
+            summary = footer['summary']
+            if tools.store.nonfinite_replaced:
+                summary.setdefault('warnings', []).append(f'原生详情中 {tools.store.nonfinite_replaced} 个非有限数字置为 null，未作为零参与统计')
+            summary['tool_calls'] = tools
+            return summary
+    except BaseException:
+        tools.close()
+        raise
 
 
 def read_container_simulations(state, container=None, *, include_analysis=False):
@@ -146,13 +182,17 @@ def read_container_simulations(state, container=None, *, include_analysis=False)
     # Send a fixed reader over argv, with the identity as a separate argument. Output is a projection only.
     # The reader has no children. A kernel SIGALRM ends this exact process even
     # if the host-side Docker client times out/disconnects; no container is stopped.
-    code = 'import signal\nsignal.alarm(40)\n' + reader_code(include_analysis)
-    code += "\nprint(json.dumps(scan_native('/home/agent/.codex', sys.argv[1], " + str(bool(include_analysis)) + "), ensure_ascii=False))\n"
+    code = 'import signal\nsignal.alarm(40)\n' + (stream_reader_code() if include_analysis else reader_code())
+    if not include_analysis:
+        code += "\nprint(json.dumps(scan_native('/home/agent/.codex', sys.argv[1], False), ensure_ascii=False))\n"
     if include_analysis:
         # Keep Windows CreateProcess argv comfortably below its 32K limit.
         import base64
         import zlib
         payload = base64.b64encode(zlib.compress(code.encode('utf-8'))).decode('ascii')
         code = "import signal,base64,zlib\nsignal.alarm(40)\nexec(zlib.decompress(base64.b64decode(" + repr(payload) + ")))"
+        from .config import find_docker_exe
+        return read_native_stream([find_docker_exe(), 'exec', '-u', 'agent', '-w', '/', container,
+                                   '/usr/bin/python3', '-I', '-S', '-c', code, sid])
     result = docker('exec', '-u', 'agent', '-w', '/', container, '/usr/bin/python3', '-I', '-S', '-c', code, sid, timeout=60)
     return json.loads(result.stdout)

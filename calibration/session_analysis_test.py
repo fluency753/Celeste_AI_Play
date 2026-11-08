@@ -16,7 +16,8 @@ import unittest
 import zipfile
 
 from orchestrator.session_export import collect_session, write_export
-from orchestrator.session_export_native import scan_native, reader_code
+from orchestrator.session_export_native import scan_native, reader_code, stream_reader_code, read_native_stream
+from orchestrator.session_export_spool import ExportSpool, SpilledDict
 from orchestrator.session_export_projection import project_tool, clean_text
 from orchestrator.session_export_workspace import workspace_snapshot
 from orchestrator.session_analysis import Analysis
@@ -166,20 +167,168 @@ class AnalysisTests(unittest.TestCase):
         self.assertNotEqual(one['input_fingerprint'], two['input_fingerprint'])
         self.assertEqual(report['analysis']['repeated_inputs'], [])
 
-    def test_large_outputs_native_total_budget_and_missing_results(self):
+    def test_large_outputs_rotate_chunks_without_losing_later_states_or_details(self):
         home, path = self.native()
         for n in range(1800):
             self.append(path, {'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
                 'id': str(n), 'type': 'CommandExecution', 'command': 'echo ' + 'x ' * 4000, 'exit_code': 0, 'aggregated_output': ('x ' * 8000)}}})
-        native = scan_native(home, self.sid, True)
-        self.assertEqual(len(native['tool_calls']), 1800)
-        self.assertTrue(native['tool_calls'][-1].get('details_omitted'))
-        self.assertLess(len(json.dumps(native)), 26 * 1024 * 1024)
+        self.timing('turn_requested', 1000)
+        self.timing('turn_acknowledged', 1000, turn_id='uuid')
+        for n, room in enumerate(('b-08', 'c-00', 'd-10')):
+            self.append(path, {'type': 'event_msg', 'payload': {'type': 'item_completed', 'turn_id': 'uuid',
+                'started_at_ms': (1001+n*2)*1000, 'completed_at_ms': (1002+n*2)*1000, 'item': {
+                'id': room, 'type': 'DynamicToolCall', 'tool': 'celeste_act', 'arguments': {'inputs': ['1,R']},
+                'success': True, 'content_items': [{'type': 'text', 'text': json.dumps({'room': room, 'frame': n})}]}}})
+        self.timing('tool_requested', 1010, tool_id='tail-shell', tool='Bash')
+        self.runtime('item/completed', 1011, item={'type': 'commandExecution', 'id': 'tail-shell',
+                     'command': 'tail experiment', 'aggregatedOutput': 'TAIL_RESULT', 'exitCode': 0})
+        native = read_native_stream([sys.executable, '-I', '-S', '-c', stream_reader_code(home), self.sid])
+        self.assertEqual(len(native['tool_calls']), 1803)
+        self.assertGreater(native['tool_calls'].store.bytes, 24 * 1024 * 1024)
+        self.assertGreater(len(native['tool_calls'].store.chunks), 1)
+        native_root = native['tool_calls'].store.root
+        report = self.collect(native_reader=lambda state: native)
+        self.assertFalse(native_root.exists())
+        tools = {r['call_id']: r for r in report.analysis_records['tool_calls']}
+        self.assertEqual(tools['tail-shell']['last_observed_room'], 'd-10')
+        self.assertEqual(tools['1799']['result']['text_excerpt'], 'x ' * 4000 + '…')
+        store_root = report.detail_store.root
+        archive_path = write_export(report, self.root / 'large-export')
+        self.assertFalse(store_root.exists())
+        with zipfile.ZipFile(archive_path) as output:
+            saved = {r['call_id']: r for r in map(json.loads, output.read('tool_calls.jsonl').splitlines())}
+            states = [json.loads(line)['state']['room'] for line in output.read('game_states.jsonl').splitlines()]
+        self.assertEqual(states, ['b-08', 'c-00', 'd-10'])
+        self.assertEqual(saved['tail-shell']['result']['text_excerpt'], 'TAIL_RESULT')
+        self.assertEqual(saved['1799']['parameters']['command'], ('echo ' + 'x ' * 4000)[:8000] + '…')
+        self.assertFalse(any(r.get('details_omitted') for r in saved.values()))
         projected = project_tool('Read', {'path': '.env'}, [{'type': 'text', 'text': 'SENSITIVE_FILE'}, {'type': 'image', 'data': 'IMAGE_CANARY'}])
         self.assertNotIn('SENSITIVE_FILE', json.dumps(projected))
         self.assertNotIn('IMAGE_CANARY', json.dumps(projected))
         projected = project_tool('celeste_act', {'inputs': ['1,R']}, '[帧 123] 第2章 · 房间 d7 · 死亡 4\nMadeline：位置 (1, 2) 速度 (3, 4) 状态 Normal')
         self.assertEqual(projected['game_states'][0]['state']['player']['vx'], 3)
+
+    def test_stream_wrappers_explicit_room_clear_and_prediction_isolation(self):
+        home, path = self.native()
+        self.timing('turn_requested', 1000)
+        self.timing('turn_acknowledged', 1000, turn_id='uuid')
+        self.append(path, {'type': 'turn_context', 'payload': {'turn_id': 'uuid'}})
+        self.append(path, {'type': 'response_item', 'timestamp': '1970-01-01T00:16:41Z', 'payload': {
+            'type': 'custom_tool_call', 'name': 'exec', 'call_id': 'wrapper', 'input': 'game experiment'}})
+        for n, (tool, state) in enumerate((('celeste_act', {'room': 'd-10', 'frame': 10}),
+                                          ('celeste_simulate', {'room': 'PREDICTION_ONLY', 'frame': 20}),
+                                          ('celeste_observe', {'room': None, 'scene': 'AreaComplete', 'frame': 30}))):
+            self.append(path, {'type': 'event_msg', 'payload': {'type': 'item_completed', 'turn_id': 'uuid',
+                'started_at_ms': (1002+n)*1000, 'completed_at_ms': (1003+n)*1000, 'item': {
+                'type': 'DynamicToolCall', 'id': str(n), 'tool': tool, 'content_items': [{'type': 'text', 'text': json.dumps(state)}]}}})
+        self.append(path, {'type': 'response_item', 'timestamp': '1970-01-01T00:16:46Z', 'payload': {
+            'type': 'custom_tool_call_output', 'call_id': 'wrapper', 'output': 'WRAPPER_PUBLIC_RESULT'}})
+        self.timing('tool_requested', 1010, tool_id='after-clear', tool='Bash')
+        self.runtime('item/completed', 1011, item={'type': 'commandExecution', 'id': 'after-clear',
+                     'command': 'echo room', 'aggregatedOutput': '[帧 999] 房间 SHELL_ONLY', 'exitCode': 0})
+        native = read_native_stream([sys.executable, '-I', '-S', '-c', stream_reader_code(home), self.sid])
+        report = self.collect(native_reader=lambda state: native)
+        self.addCleanup(report.close)
+        tools = {r['call_id']: r for r in report.analysis_records['tool_calls']}
+        self.assertEqual(tools['wrapper']['parameters']['code'], 'game experiment')
+        self.assertEqual(tools['wrapper']['result']['text_excerpt'], 'WRAPPER_PUBLIC_RESULT')
+        self.assertIsNone(tools['after-clear']['last_observed_room'])
+        self.assertEqual([r['state']['room'] for r in report.analysis_records['game_states']], ['d-10', None])
+
+    def test_incomplete_native_stream_and_failed_write_clean_private_chunks(self):
+        roots = []
+        original = tempfile.TemporaryDirectory
+        def temporary(*args, **kwargs):
+            result = original(*args, **kwargs)
+            roots.append(Path(result.name))
+            return result
+        for code in ("print('{\"tool\":{}}')", "print('{\"summary\":{},\"tool_count\":1}')", "raise SystemExit(2)"):
+            with self.subTest(code=code), patch('orchestrator.session_export_spool.tempfile.TemporaryDirectory', side_effect=temporary):
+                with self.assertRaises((ValueError, RuntimeError)):
+                    read_native_stream([sys.executable, '-I', '-S', '-c', code])
+            self.assertFalse(any(root.exists() for root in roots))
+        self.runtime('item/completed', 1000, item={'type': 'commandExecution', 'id': 'sh',
+                     'command': 'experiment', 'aggregatedOutput': 'public result', 'exitCode': 0})
+        report = self.collect()
+        root = report.detail_store.root
+        original_open = Path.open
+        def opened(path, *args, **kwargs):
+            if path.name == 'tool_calls.jsonl':
+                raise PermissionError('injected output write failure')
+            return original_open(path, *args, **kwargs)
+        with patch.object(Path, 'open', opened), self.assertRaises(PermissionError):
+            write_export(report, self.root / 'failed-write')
+        self.assertFalse(root.exists())
+
+    def test_spooled_mapping_copy_mutation_and_json_keep_real_values(self):
+        store = ExportSpool()
+        self.addCleanup(store.close)
+        row = SpilledDict(store, {'id': 'record'})
+        row.spill({'result': {'room': 'd-10'}, 'parameters': ['1,R']})
+        for copied in (dict(row), {**row}, row.copy(), row | {}, {} | row, json.loads(json.dumps(row))):
+            self.assertEqual(copied['result'], {'room': 'd-10'})
+            self.assertEqual(copied['parameters'], ['1,R'])
+        self.assertIn({'room': 'd-10'}, row.values())
+        self.assertEqual(row, {'id': 'record', 'result': {'room': 'd-10'}, 'parameters': ['1,R']})
+        different = SpilledDict(store, {'id': 'record'})
+        different.spill({'result': {'room': 'c-00'}, 'parameters': ['1,R']})
+        self.assertNotEqual(row, different)
+        self.assertIn('d-10', repr(row))
+        self.assertEqual(row.setdefault('result'), {'room': 'd-10'})
+        row |= {'result': 'new inline result'}
+        self.assertEqual(row['result'], 'new inline result')
+        del row['parameters']
+        self.assertNotIn('parameters', row.references)
+        row.spill({'tail': 7})
+        self.assertEqual(row.popitem(), ('tail', 7))
+        row.clear()
+        self.assertEqual(row.references, {})
+
+    def test_nonfinite_native_metadata_is_unknown_without_losing_the_stream(self):
+        home, path = self.native()
+        self.append(path, {'type': 'event_msg', 'payload': {'type': 'item_completed', 'started_at_ms': 1000000,
+            'completed_at_ms': 1001000, 'item': {'type': 'CommandExecution', 'id': 'bad-exit',
+            'command': 'experiment', 'exit_code': float('nan'), 'aggregated_output': 'PUBLIC_RESULT'}}})
+        native = read_native_stream([sys.executable, '-I', '-S', '-c', stream_reader_code(home), self.sid])
+        self.assertTrue(any('非有限数字' in warning for warning in native['warnings']))
+        report = self.collect(native_reader=lambda state: native)
+        tool = report.analysis_records['tool_calls'][0]
+        self.assertIsNone(tool['exit_code'])
+        self.assertEqual(tool['result']['text_excerpt'], 'PUBLIC_RESULT')
+        write_export(report, self.root / 'nonfinite-native')
+
+    def test_restarted_controller_counter_does_not_overwrite_historical_turn(self):
+        for start, native_id, ident in ((1000, 'first-turn', 'first-call'), (1020, 'later-turn', 'later-call')):
+            self.timing('turn_requested', start)
+            self.timing('turn_acknowledged', start+1, turn_id=native_id)
+            self.timing('tool_requested', start+2, tool_id=ident, tool='Bash')
+            self.runtime('item/completed', start+3, turnId=native_id, item={'type': 'commandExecution',
+                'id': ident, 'command': 'experiment', 'aggregatedOutput': 'PUBLIC_RESULT', 'exitCode': 0})
+            self.timing('turn_ended', start+4, active_s=4, pending_tools=[])
+        report = self.collect(until='1970-01-01T00:16:50+00:00')
+        self.addCleanup(report.close)
+        turns = report.analysis_records['turns']
+        self.assertEqual(len(turns), 1)
+        self.assertEqual((turns[0]['requested_wall'], turns[0]['ended_wall'], turns[0]['native_turn_id']),
+                         (1000, 1004, 'first-turn'))
+        self.assertEqual(report.analysis_records['tool_calls'][0]['turn_id'], turns[0]['turn_id'])
+
+    def test_counter_reuse_preserves_acknowledged_turn_with_unknown_request_time(self):
+        for request_present in (True, False):
+            with self.subTest(request_present=request_present):
+                (self.run / 'decision_timing.jsonl').write_text('')
+                if request_present:
+                    self.timing('turn_requested', None)
+                self.timing('turn_acknowledged', 1001, turn_id='earlier')
+                self.timing('turn_ended', 1004, active_s=4, pending_tools=[])
+                self.timing('turn_requested', 1020)
+                self.timing('turn_acknowledged', 1021, turn_id='later')
+                report = self.collect()
+                self.addCleanup(report.close)
+                turns = {r['native_turn_id']: r for r in report.analysis_records['turns']}
+                self.assertEqual(set(turns), {'earlier', 'later'})
+                self.assertIsNone(turns['earlier']['requested_wall'])
+                self.assertEqual(turns['earlier']['ended_wall'], 1004)
 
     def test_readonly_controls_workspace_legacy_compat_and_artifact_integrity(self):
         db = self.run / 'control.sqlite3'
@@ -427,7 +576,7 @@ class AnalysisTests(unittest.TestCase):
                                  'before': {'room': 'before'}, 'after': {'room': 'after'}}))
         self.assertEqual(predicted['game_states'], [])
 
-    def test_actual_observation_fields_header_pairing_and_total_detail_budget(self):
+    def test_actual_observation_fields_header_pairing_and_spooled_delivery(self):
         result = project_tool('celeste_observe', {}, json.dumps({'level': {'room': 'd7', 'chapterTimeTicks': 20, 'deathsInRoom': 2},
                               'player': {'pos': [3, 4], 'speed': [1, 2], 'inControl': True}}))
         state = result['game_states'][0]['state']
@@ -440,12 +589,12 @@ class AnalysisTests(unittest.TestCase):
                      'changes': [{'path': 'a.py', 'kind': 'add', 'diff': 'PRIVATE_DIFF_CANARY'}]})
         self.append(self.run / 'tool_deliveries.jsonl', {'event': 'recorded', 'call_id': 'file', 'wall': 1001,
                     'receipt': 'r', 'file': {'filePath': 'a.py'}, 'proof': 'native-record'})
-        with patch.object(Analysis, 'DETAIL_LIMIT', 1):
+        with patch.object(ExportSpool, 'CHUNK_BYTES', 256):
             report = self.collect()
         tool = report.analysis_records['tool_calls'][0]
-        self.assertNotIn('file_changes', tool)
-        self.assertEqual(tool['deliveries'], {})
-        self.assertTrue(tool.get('delivery_details_omitted'))
+        self.assertEqual(tool['file_changes'], [{'path': 'a.py', 'kind': 'add'}])
+        self.assertEqual(tool['deliveries']['r']['event'], 'recorded')
+        self.assertGreater(len(report.detail_store.chunks), 1)
         self.assertEqual(tool['call_id'], 'file')
         self.assertNotIn('PRIVATE_DIFF_CANARY', json.dumps(self.collect().analysis_records))
 

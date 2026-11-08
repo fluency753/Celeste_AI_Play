@@ -32,17 +32,17 @@ source/sources 保存路径、record_index（成功解析的 JSON 对象序号�
 - thinking_before_s：主控在调用前测得的 thinking 累计差；thinking_interval_start_wall：已知计量开始边界。并发时可能为零，末尾未闭合思考不包含；不是消息间隔或私有推理时长。
 - parameters：允许字段，如 inputs/candidates/plan_file/input_format/stop_on、观测 detail/region、path/file_path、command/cwd/code 等。写文件正文仅保存字符数/哈希。
 - result.structured：已有执行帧数、停止原因、事件、额度回执/余额、候选预测停止原因/帧数等；result.text_excerpt：有界公开工具结果摘录。exit_code 为显式 Shell 退出码；file_changes 为补丁路径/操作，不保存完整 diff。
-- parameters_meta/result_meta：可用性、原字符数、保留量、截断、附件省略；details_omitted：达到总预算省略细节。参数树约16K字符、结果树约24K、摘录8K，深度7、单数组128项、单对象64项。源行上限32MiB，超限跳过报警。原生累计细节处理预算24MiB，合并预算64MiB；超限仍保留索引。预算是保守处理计数，不是文件大小承诺。分析模式模拟候选限8K并标记 analysis_candidates_truncated，旧默认不变。
+- parameters_meta/result_meta：可用性、原字符数、保留量、截断、附件省略；details_omitted：来源已省略详情时保留其原因，当前导出不再按累计详情量丢弃后半记录。参数树约16K字符、结果树约24K、摘录8K，深度7、单数组128项、单对象64项。源行上限32MiB，超限跳过报警。原生日志逐条输出已脱敏投影到宿主临时文件，以完整结束标记和记录数核验；读取失败时保留本机日志并明确报告原生来源缺口，不接收半截流。参数、结果、事件、动作和完整状态详情采用24MiB临时分块，内存保留标识、时间、归属和块偏移；最终逐条回填原JSONL字段，不另设公开详情协议。单条投影限制保持不变；块数是内部存储计数，不是导出总量限制。分析模式模拟候选限8K并标记 analysis_candidates_truncated，旧默认不变。
 - success 仅取显式结果/退出码；status 为 failed、returned、returned_unverified、interrupted_result_missing、result_missing、pending_or_missing。计时闭合不证明成功，缺失结果不等于失败。
 - context_state_id/last_observed_room：请求前最近保存观测，可能过时；after_state_ids：本工具返回的状态；observed_delta：共同存在字段的比较，不证明因果。sources 最多32条引用，完整投递事件另在时间线。
 
 敏感键、已知凭据、私有 reasoning/thinking/analysis、压缩正文、图片/音频/编码正文不导出。任意自然语言秘密无法穷尽识别，分享前需检查。不能通过独立 UserMessage 正文重建文件读取结果；投递 path、分页、截断和 recorded 证明可用时保存，queued 不等于接收。
 
-64MiB 合并预算同时计入工具、文件变更、投递摘要、动作细节和时间线 data 副本；耗尽后保留标识/时间/来源索引并标记 details_omitted 或 delivery_details_omitted，投递时间线只保存简明证明字段。NaN/Infinity 等非有限源数字在分析模式下变为 null 并记录警告，不以零替代。
+`analysis.coverage.detail_storage` 记录 temporary_chunked_spool 模式、chunk_bytes、chunks、projected_bytes、records 及 cumulative_budget_omissions=false。`single_record_truncated_tools` 汇总达到单条参数／结果投影边界的工具数，`source_detail_omitted_tools` 汇总原来源已经缺失详情的工具数；README 汇总提醒，不逐条刷屏。状态索引独立保留，缺少新观测时 last_observed_room 仍指最近已记录房间；明确的 room:null 才清空，不从 Shell、模拟结果或时间空窗推测房间变化。临时块仅含脱敏投影，写出成功或实际写入失败后释放；目标目录被拒绝且尚未写入时可用同一报告换目录重试。NaN/Infinity 等非有限源数字在分析模式下变为 null 并记录警告，不以零替代。
 
 ## 回合、事件与计量
 
-turns 中 controller_turn 为主控编号，native_turn_id 为 ACK UUID；requested_wall、acknowledged_wall、ended_wall、active_s 来自已记录事件。运行时独有回合可无 run_id；runtime_status/pending_tools 保存已知中断信息。
+turns 中 controller_turn 为主控编号，主控在同一目录重启时可能重用，关联应使用 turn_id；首次编号保留原稳定 ID，重复请求的 ID 另包含来源 record_index，已见请求／ACK 的记录不会被后续同编号覆盖，即使请求时间未知。native_turn_id 为 ACK UUID；requested_wall、acknowledged_wall、ended_wall、active_s 来自已记录事件。运行时独有回合可无 run_id；runtime_status/pending_tools 保存已知中断信息。
 
 timeline.kind 区分 controller.*、tool.requested/result、public.message、compaction.*、runtime.*、native.*、delivery.*、control.request/state 等，data 为各来源允许字段投影。public.message 通过 public_event_id+run_id 关联公开文本。token 事件仅保存运行时给出的 last/total 数字；累计 total 不相加；reasoningOutputTokens 是计数而非推理正文。不补算未知 token。
 

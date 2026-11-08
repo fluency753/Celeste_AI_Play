@@ -9,14 +9,19 @@ from pathlib import Path
 import sqlite3
 
 from .session_export import SessionSourceRows, timestamp, TIME_FIELDS
+from .session_export_spool import ExportSpool, SpilledDict, SpoolRows
 from .session_export_projection import bounded_tree, canonical_tool, clean_text, finite, iso_epoch, project_tool
 
 
 class AnalysisReport(dict):
     """Legacy JSON remains a dict; large analysis records are written to referenced files."""
-    def __init__(self, report, records):
+    def __init__(self, report, records, store):
         super().__init__(report)
         self.analysis_records = records
+        self.detail_store = store
+
+    def close(self):
+        self.detail_store.close()
 
 
 def stable_id(*parts):
@@ -34,6 +39,8 @@ def null_nonfinite(value):
         return None, 1
     if isinstance(value, (dict, list)):
         for key in list(value) if isinstance(value, dict) else range(len(value)):
+            if isinstance(value, SpilledDict) and key in value.references:
+                continue  # Spool append already validates JSON with allow_nan=False.
             value[key], replaced = null_nonfinite(value[key])
             count += replaced
     return value, count
@@ -61,8 +68,6 @@ def window_status(start, end, since, until):
 
 
 class Analysis:
-    DETAIL_LIMIT = 64 * 1024 * 1024
-
     def __init__(self, report, chain, snapshots, native, since=None, until=None):
         self.report, self.chain, self.snapshots, self.native = report, chain, snapshots, native or {}
         self.since, self.until = since, until
@@ -76,7 +81,7 @@ class Analysis:
         self.public_actions = {}
         self.parameter_priority = {}
         self.result_priority = {}
-        self.detail_bytes = 0
+        self.detail_store = ExportSpool()
         self.source_rows = SessionSourceRows(chain)
 
     def read(self, directory, name):
@@ -89,30 +94,24 @@ class Analysis:
         return {'session_id': self.session_id, 'run_id': self.run_ids[str(directory)], 'run': str(directory)}
 
     def event(self, context, kind, moment, source, index, data=None, tool_id=None, turn_id=None):
-        projected = self.detail(bounded_tree(data or {}, [6000, False]))
-        row = {**context, 'event_id': stable_id(context.get('run_id'), str(source), index, kind),
+        row = SpilledDict(self.detail_store, {**context, 'event_id': stable_id(context.get('run_id'), str(source), index, kind),
                'kind': kind, 'wall': wall(moment), 'time': timestamp(moment), 'tool_id': tool_id,
-               'turn_id': turn_id, 'source': str(source), 'record_index': index,
-               'data': projected if projected is not None else {}, 'details_omitted': projected is None}
+               'turn_id': turn_id, 'source': str(source), 'record_index': index, 'details_omitted': False})
+        row.spill({'data': bounded_tree(data or {}, [6000, False])})
         self.events.append(row)
         return row
-
-    def detail(self, value):
-        """Charge bounded details, including timeline copies, before retaining them."""
-        self.detail_bytes += len(json.dumps(value, ensure_ascii=False).encode())
-        return value if self.detail_bytes <= self.DETAIL_LIMIT else None
 
     def tool(self, directory, ident, name=None):
         context = self.context(directory) if directory is not None else {'session_id': self.session_id, 'run_id': None, 'run': None}
         key = stable_id(context['run_id'], self.session_id, 'tool', ident)
         if key not in self.tools:
-            self.tools[key] = {**context, 'tool_id': key, 'call_id': ident, 'tool': name or None,
+            self.tools[key] = SpilledDict(self.detail_store, {**context, 'tool_id': key, 'call_id': ident, 'tool': name or None,
                                'turn_id': None, 'native_turn_id': None, 'requested_wall': None, 'result_wall': None,
                                'requested_time_source': None, 'result_time_source': None,
                                'timing_ended_wall': None, 'active_s': None, 'runtime_duration_s': None,
                                'thinking_before_s': None, 'thinking_interval_start_wall': None,
                                'parameters': None, 'parameters_meta': {'available': False}, 'result': None,
-                               'result_meta': {'available': False}, 'success': None, 'sources': []}
+                               'result_meta': {'available': False}, 'success': None, 'sources': []})
         row = self.tools[key]
         if name and not row['tool']:
             row['tool'] = str(name)
@@ -129,25 +128,25 @@ class Analysis:
             row['sources'].append(ref)
 
     def apply(self, row, projected, source, index, priority):
-        if self.detail({key: projected.get(key) for key in ('parameters', 'result', 'game_states', 'file_changes', 'error')}) is None:
-            projected = {key: value for key, value in projected.items() if key not in ('parameters', 'result', 'game_states', 'file_changes', 'error')}
-            row['details_omitted'] = 'analysis_total_detail_budget_64MiB'
         ident = row['tool_id']
         if projected.get('tool') and (not row['tool'] or priority >= 3):
             row['tool'] = projected['tool']
         if projected.get('parameters') is not None and priority >= self.parameter_priority.get(ident, 0):
-            row['parameters'] = projected['parameters']
+            row.spill({'parameters': projected['parameters']})
             row['parameters_meta'] = projected.get('parameters_meta', {'available': True})
             self.parameter_priority[ident] = priority
         if projected.get('result') is not None and priority >= self.result_priority.get(ident, 0):
-            row['result'] = projected['result']
+            row.spill({'result': projected['result']})
             row['result_meta'] = projected.get('result_meta', {'available': True})
             self.result_priority[ident] = priority
         if isinstance(projected.get('success'), bool) and priority >= row.get('_success_priority', 0):
             row['success'], row['_success_priority'] = projected['success'], priority
         for key in ('runtime_duration_s', 'exit_code', 'file_changes', 'error', 'details_omitted', 'item_type'):
-            if projected.get(key) is not None:
-                row[key] = projected[key]
+            if projected.get(key) is not None or key == 'exit_code' and key in projected:
+                if key in ('file_changes', 'error'):
+                    row.spill({key: projected[key]})
+                else:
+                    row[key] = projected[key]
         if projected.get('native_turn_id'):
             row['native_turn_id'] = projected['native_turn_id']
         if row['requested_wall'] is None and wall(projected.get('started_wall')):
@@ -159,20 +158,29 @@ class Analysis:
         # Keep the most informative state projection, rather than duplicating
         # local/native copies of the same returned snapshot.
         if projected.get('game_states') and priority >= row.get('_states_priority', 0):
-            row['_state_facts'] = projected['game_states']
+            row.spill({'_state_facts': projected['game_states']})
             row['_states_priority'] = priority
         self.provenance(row, source, index, 'native_tool' if priority == 4 else 'runtime_tool' if priority == 3 else 'safe_summary')
 
     def timings(self, directory):
         context = self.context(directory)
         running, boundary = defaultdict(set), {}
+        current_turn_ids = {}
+        begun_turn_ids = set()
         for index, event in self.read(directory, 'decision_timing.jsonl'):
             number = event.get('turn')
-            turn_id = stable_id(context['run_id'], 'controller_turn', number) if number is not None else None
+            kind, moment = event.get('event'), wall(event.get('wall'))
+            turn_id = current_turn_ids.setdefault(number, stable_id(context['run_id'], 'controller_turn', number)) if number is not None else None
+            if kind == 'turn_requested' and turn_id in begun_turn_ids:
+                # A controller restarted in the same run directory may reset its
+                # local counter. Preserve its earlier acknowledged turn and tools.
+                turn_id = stable_id(context['run_id'], 'controller_turn', number, 'request', index)
+                current_turn_ids[number] = turn_id
+            if turn_id is not None and kind in ('turn_requested', 'turn_acknowledged'):
+                begun_turn_ids.add(turn_id)
             turn = self.turns.setdefault(turn_id, {**context, 'turn_id': turn_id, 'controller_turn': number,
                                                    'native_turn_id': None, 'requested_wall': None, 'ended_wall': None,
                                                    'active_s': None, 'thinking_before_tools_s': 0.0}) if turn_id else {}
-            kind, moment = event.get('event'), wall(event.get('wall'))
             ident = event.get('tool_id')
             tool = self.tool(directory, ident, str(event.get('tool', '')).split(' · ')[0]) if isinstance(ident, str) else None
             if kind == 'turn_requested':
@@ -357,17 +365,16 @@ class Analysis:
             allowed = ('receipt', 'event', 'path', 'file', 'truncated', 'next_offset', 'warnings', 'text_chars', 'images', 'item_id', 'proof', 'reason')
             data = {key: event[key] for key in allowed if key in event}
             if row:
-                receipts = row.setdefault('deliveries', {})
+                receipts = row.get('deliveries', {})
                 receipt = str(event.get('receipt') or 'observation')
-                projected = self.detail(bounded_tree(data))
-                if projected is None:
-                    row['delivery_details_omitted'] = 'analysis_total_detail_budget_64MiB'
-                elif receipt in receipts or len(receipts) < 64:
+                projected = bounded_tree(data)
+                if receipt in receipts or len(receipts) < 64:
                     previous = receipts.setdefault(receipt, {})
                     if previous.get('event') != 'recorded' or event.get('event') == 'recorded':
                         previous.update(projected, wall=wall(event.get('wall')))
                 else:
                     row['delivery_index_truncated'] = True
+                row.spill({'deliveries': receipts})
                 self.provenance(row, directory / 'tool_deliveries.jsonl', index, 'delivery_receipt')
             self.event(context, 'delivery.' + str(event.get('event')), event.get('wall'), directory / 'tool_deliveries.jsonl', index,
                        {key: data[key] for key in ('receipt', 'event', 'truncated', 'next_offset', 'text_chars', 'item_id', 'proof') if key in data},
@@ -410,17 +417,17 @@ class Analysis:
                 self.public_actions.setdefault((context['run_id'], event['id']), wall(event.get('wall')))
         for index, entry in self.read(directory, 'decisions.jsonl'):
             public_id = f"act:{entry.get('i')}:{entry.get('attempt', 0)}"
-            action = {**context, 'action_id': stable_id(context['run_id'], public_id), 'public_event_id': public_id,
+            action = SpilledDict(self.detail_store, {**context, 'action_id': stable_id(context['run_id'], public_id), 'public_event_id': public_id,
                       'public_event_wall': self.public_actions.get((context['run_id'], public_id)),
                       'call_id': None, 'source': str(directory / 'decisions.jsonl'), 'record_index': index,
-                      'elapsed_s': entry.get('t'), 'i': entry.get('i'), 'attempt': entry.get('attempt', 0)}
+                      'elapsed_s': entry.get('t'), 'i': entry.get('i'), 'attempt': entry.get('attempt', 0)})
             budget = [24000, False]
-            detail = self.detail(bounded_tree({key: entry[key] for key in ('effort', 'thought', 'inputs', 'plan_file',
+            detail = bounded_tree({key: entry[key] for key in ('effort', 'thought', 'inputs', 'plan_file',
                          'input_format', 'stop_on', 'stop', 'planned', 'consumed', 'events', 'game_s', 'auto_frames',
-                         'decision_wait_s', 'input_cursor', 'deviation') if key in entry}, budget))
-            action.update(detail or {})
+                         'decision_wait_s', 'input_cursor', 'deviation') if key in entry}, budget)
+            action.spill(detail or {})
             action['details_truncated'] = budget[1]
-            action['details_omitted'] = detail is None
+            action['details_omitted'] = False
             action['input_fingerprint'] = stable_id(entry.get('inputs'), entry.get('plan_file'), entry.get('input_format'), entry.get('stop_on'))
             self.actions.append(action)
             self.event(context, 'action.public_mention', action['public_event_wall'], directory / 'decisions.jsonl', index,
@@ -550,12 +557,14 @@ class Analysis:
                 row['wall_span_s'] = None
             for index, fact in enumerate(row.pop('_state_facts', [])):
                 state = fact.get('state') or {}
-                self.states.append({'state_id': stable_id(row['tool_id'], index), 'tool_id': row['tool_id'],
+                record = SpilledDict(self.detail_store, {'state_id': stable_id(row['tool_id'], index), 'tool_id': row['tool_id'],
                                     'run_id': row['run_id'], 'run': row['run'], 'session_id': self.session_id,
                                     'projection_index': index,
                                     'wall': row['result_wall'], 'kind': fact.get('kind'), 'evidence': fact.get('evidence'),
                                     'wall_semantics': 'tool result available time; not an inferred state capture time',
-                                    'state': state, 'sources': row['sources']})
+                                    'sources': row['sources']})
+                record.spill({'state': state})
+                self.states.append(record)
             for key in list(row):
                 if key.startswith('_'):
                     row.pop(key)
@@ -564,7 +573,7 @@ class Analysis:
         state_by_tool = defaultdict(list)
         for state in self.states:
             state_by_tool[state['tool_id']].append(state)
-            if state['kind'] != 'before' and state['wall'] is not None and state['state'].get('room') is not None:
+            if state['kind'] != 'before' and state['wall'] is not None and 'room' in state['state']:
                 state_by_run[state['run_id']].append(state)
         state_walls = {run_id: [state['wall'] for state in states] for run_id, states in state_by_run.items()}
 
@@ -576,13 +585,15 @@ class Analysis:
 
         for row in self.tools.values():
             before = prior(row['run_id'], row['requested_wall'])
+            before_state = before['state'] if before else {}
             row['context_state_id'] = before['state_id'] if before else None
-            row['last_observed_room'] = before['state'].get('room') if before else None
+            row['last_observed_room'] = before_state.get('room')
             after = state_by_tool[row['tool_id']]
+            after_state = after[-1]['state'] if after else {}
             row['after_state_ids'] = [state['state_id'] for state in after]
-            row['observed_delta'] = ({key: {'before': before['state'][key], 'after': after[-1]['state'][key]}
-                                      for key in sorted(before['state'].keys() & after[-1]['state'].keys())
-                                      if before['state'][key] != after[-1]['state'][key]} if before and after else None)
+            row.spill({'observed_delta': ({key: {'before': before_state[key], 'after': after_state[key]}
+                                          for key in sorted(before_state.keys() & after_state.keys())
+                                          if before_state[key] != after_state[key]} if before and after else None)})
             for phase, moment in [('requested', row['requested_wall']), ('result', row['result_wall'])]:
                 self.event({key: row[key] for key in ('session_id', 'run_id', 'run')}, 'tool.' + phase, moment,
                            'tool_calls.jsonl', row['tool_id'] + ':' + phase, {'status': row['status']}, row['tool_id'], row['turn_id'])
@@ -631,7 +642,22 @@ class Analysis:
             for row in collection:
                 row['schema_version'] = 1
         summary = summarize(records, self.chain, self.run_ids, self.since, self.until)
+        clipped = sum(bool(row['parameters_meta'].get('truncated') or row['result_meta'].get('truncated'))
+                      for row in records['tool_calls'])
+        omitted = sum(bool(row.get('details_omitted')) for row in records['tool_calls'])
+        summary['coverage']['single_record_truncated_tools'] = clipped
+        summary['coverage']['source_detail_omitted_tools'] = omitted
+        if clipped:
+            self.warnings.append(f'{clipped} 条工具记录达到单条参数／结果投影限制；详见 parameters_meta／result_meta.truncated。累计详情不再截尾，状态索引独立保留。')
+        if omitted:
+            self.warnings.append(f'{omitted} 条工具记录的原始来源已省略详情，不能从缺失内容补造状态。')
+        if self.detail_store.nonfinite_replaced:
+            self.warnings.append(f'详情投影中 {self.detail_store.nonfinite_replaced} 个非有限数字置为 null，未作为零参与统计')
         summary['coverage']['source_warnings'] = list(dict.fromkeys(self.warnings))
+        summary['coverage']['detail_storage'] = {'mode': 'temporary_chunked_spool',
+            'chunk_bytes': self.detail_store.CHUNK_BYTES, 'chunks': len(self.detail_store.chunks),
+            'projected_bytes': self.detail_store.bytes, 'records': self.detail_store.records,
+            'cumulative_budget_omissions': False}
         summary['sources'] = self.sources
         return summary, records
 
@@ -705,11 +731,19 @@ def summarize(records, chain, run_ids, since, until):
 
 
 def collect_analysis(report, chain, snapshots, native, since=None, until=None):
-    summary, records = Analysis(report, chain, snapshots, native, since, until).finish()
+    analysis = Analysis(report, chain, snapshots, native, since, until)
+    try:
+        summary, records = analysis.finish()
+    except BaseException:
+        analysis.detail_store.close()
+        raise
+    finally:
+        if isinstance(native.get('tool_calls'), SpoolRows):
+            native['tool_calls'].close()
     summary['coverage']['native_sources_available'] = bool(native.get('sources'))
     if not native.get('sources') and report['session']['engine'] == 'codex':
         summary['coverage']['limitations'].append('未取得原生会话日志；动态工具参数与结果可能只有本机摘要，code-mode 包装调用可能缺失。')
-    result = AnalysisReport(report, records)
+    result = AnalysisReport(report, records, analysis.detail_store)
     _, replaced = null_nonfinite(result)
     if replaced:
         result['warnings'].append(f'兼容字段中 {replaced} 个非有限数字置为 null')

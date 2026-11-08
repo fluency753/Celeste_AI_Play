@@ -492,6 +492,20 @@ def simulation_fact(ident, args, content, success, **metadata):
 
 
 def write_export(report, output, *, time_format=DEFAULT_TIME_FORMAT):
+    """Write a collected export once, then release its private temporary chunks."""
+    existed, completed = Path(output).exists(), False
+    try:
+        archive = _write_export(report, output, time_format=time_format)
+        completed = True
+        return archive
+    finally:
+        # A rejected destination has not started writing: allow the same report
+        # to be retried at a valid destination. An attempted write owns cleanup.
+        if hasattr(report, 'close') and (completed or not existed and Path(output).exists()):
+            report.close()
+
+
+def _write_export(report, output, *, time_format=DEFAULT_TIME_FORMAT):
     """Write only new artifacts; refuse source-tree/previous-export overwrites."""
     if not isinstance(time_format, str) or not time_format:
         raise ValueError('时间格式不能为空')
