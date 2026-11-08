@@ -48,6 +48,24 @@ def program_cap(cfg) -> float:
     from .agent import bash_limits_ms
     return bash_limits_ms(cfg)[1] / 1000
 
+def tool_change_notice(registered, current) -> list[str]:
+    """Codex 恢复会话沿用开会话时登记的工具说明，恢复时不能更新。写进说明的设置（节省上下文、仅正式思考、碰撞图、
+    动作帧数上下限、解说字数等）或程序升级改了说明时，恢复后的第一轮把说明变了的工具补发一次，以补发的为准。
+    登记里没有说明文字的工具（旧格式或测试替身）不比较。"""
+    now = {tool.get('name'): tool.get('description') or '' for tool in current or [] if isinstance(tool, dict)}
+    changed = []
+    for tool in registered or []:
+        if not isinstance(tool, dict):
+            continue
+        name, before = tool.get('name'), tool.get('description')
+        if name in now and isinstance(before, str) and before.strip() and before != now[name]:
+            changed.append(f"【{name}】{now[name]}")
+    if not changed:
+        return []
+    return ['（系统）本会话登记的工具说明是开会话时的版本，下面这些工具的说明已经变了（设置或程序更新），'
+            '调用和读结果时以这里为准：\n' + '\n\n'.join(changed)]
+
+
 class CodexRunner(ModelRecovery, SessionControls):
     capabilities = RuntimeCapabilities(fast=True, live_steering=True)
     supports_interrupt = True
@@ -662,7 +680,7 @@ class CodexRunner(ModelRecovery, SessionControls):
             raise RuntimeError('Codex 恢复返回了不同会话身份，拒绝开始模型轮次')
         return result
 
-    def _validate_resumed_tools(self, thread):
+    def _validate_resumed_tools(self, thread, current=None):
         # The protocol persists dynamic tools at thread/start and cannot replace
         # them on resume. Inspect only this runner's returned session metadata.
         path = thread.get('path')
@@ -705,20 +723,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                 notes.append('可用原生 Shell 读取、查找和处理工作区文件，遵守单次程序时限。')
             else:
                 notes.append(f"列目录可用 {available['read']} 读取目录路径；未登记的查找或搜索工具可用原生 Shell。")
-        notes += self._save_context_notice(meta.get('dynamic_tools', []))
+        notes += tool_change_notice(meta.get('dynamic_tools', []), current)
         self.tool_notice = ''.join(notes)
-
-    def _save_context_notice(self, tools):
-        """Codex 恢复会话沿用开新会话时登记的工具说明，不能更新。开着节省上下文、而登记的 act 说明还不是现在的格式
-        （例如 1.15.0 之前开的会话）时，恢复后的第一轮补一次当前格式，免得读不懂省略后的结果（例如轨迹没有列名）。"""
-        if not getattr(self.cfg, 'save_context', False):
-            return []
-        from .prompting import SAVE_CONTEXT_MARK, fill, save_context_act
-        act = next((tool for tool in tools if isinstance(tool, dict) and tool.get('name') == 'celeste_act'), None)
-        if act is None or SAVE_CONTEXT_MARK in str(act.get('description') or ''):
-            return []
-        return ['（系统）本会话登记的 celeste_act 说明早于当前的节省上下文格式，act 结果按这里读：'
-                + fill(save_context_act(self.cfg), self.cfg)]
 
     async def run(self):
         if not self.container:
@@ -754,9 +760,9 @@ class CodexRunner(ModelRecovery, SessionControls):
             if self.resume and self.session_id:
                 params["threadId"] = self.session_id
                 # thread/resume 使用持久化的动态工具；这里不传该版本协议没有的字段。
-                params.pop("dynamicTools", None)
+                current_tools = params.pop("dynamicTools", None)
                 result = await self._resume_thread(params)
-                await asyncio.to_thread(self._validate_resumed_tools, result['thread'])
+                await asyncio.to_thread(self._validate_resumed_tools, result['thread'], current_tools)
             else:
                 result = await self.rpc.request("thread/start", params)
             if (result.get('activePermissionProfile') or {}).get('id') != params['permissions']:
@@ -781,7 +787,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                     self.runtime_efforts = []
             # 模型档案给 HUD：configs/codex.json 的显示名与上下文上限，没写显示名时用模型目录的
             from .model_profile import hud_fields
-            self.metrics.update(**hud_fields(self.cfg, result['model'], catalog_label))
+            self.metrics.update(**hud_fields(self.cfg, result['model'], catalog_label),
+                                effort_levels=list(getattr(self, 'runtime_efforts', None) or []) or None)
             if self.manual_effort and self.manual_effort != self.metrics.state.effort:
                 self.metrics.request_effort(self.manual_effort,'恢复用户的手动推理强度设置')
             (self.run_dir / "codex_session.json").write_text(json.dumps({

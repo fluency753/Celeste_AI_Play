@@ -8,7 +8,9 @@
 模型行里可选的字段：
 - label：控制台下拉框与 HUD 的显示名；
 - autocompact：这个模型的自动压缩窗口（Claude 执行器）：auto，或 100000～1000000 的 token 数；
-- context_limit：HUD 上下文警示与笔记提醒的上限（token），与执行器报告的窗口、实际压缩窗口一起取最小的。
+- context_limit：HUD 上下文警示与笔记提醒的上限（token），与执行器报告的窗口、实际压缩窗口一起取最小的；
+- thought：思考语句的汉字数上限 {"max_hanzi": …, "temp_max_hanzi": …}（见 thought.hanzi_limit）；
+- images：观测里附不附截图（true／false），优先于提供方的 images。
 
 优先顺序：本次运行填写 > 模型档案 > 提供方 > 开关带来的默认值 > 内置默认值（见 config.autocompact_choice）。
 """
@@ -93,6 +95,20 @@ def model_label(cfg, model: str | None = None, fallback: str | None = None) -> s
 
 def model_context_limit(cfg, model: str | None = None) -> int | None:
     return positive_tokens(model_row(cfg, model).get("context_limit"))
+
+
+def model_thought(cfg) -> dict:
+    """模型行的思考字数上限：{"max_hanzi": 汉字数或 None, "temp_max_hanzi": 汉字数或 None}（5～400，别的写法不用）。"""
+    row = model_row(cfg).get("thought")
+    row = row if isinstance(row, dict) else {}
+    def hanzi(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and 5 <= value <= 400 else None
+    return {"max_hanzi": hanzi(row.get("max_hanzi")), "temp_max_hanzi": hanzi(row.get("temp_max_hanzi"))}
+
+
+def model_images(cfg) -> bool | None:
+    value = model_row(cfg).get("images")
+    return value if isinstance(value, bool) else None
 
 
 def hud_fields(cfg, model: str | None = None, catalog_label: str | None = None) -> dict:

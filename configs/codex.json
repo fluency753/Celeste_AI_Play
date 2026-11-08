@@ -1,5 +1,5 @@
 {
-  "_说明": "Codex 执行器的提供方信息（docs/开发/设置分层.md）。模型列表与推理强度以容器里 Codex 的模型目录为准；models 按模型 ID 叠加在目录上，可写 label（控制台与 HUD 的显示名）、context_limit（HUD 上下文警示与笔记提醒的上限）。本机覆盖写在 configs/local.codex.json（不入库），按顶层字段覆盖。allowed_domains 是容器防火墙为 Codex 放行的域名。",
+  "_说明": "Codex 执行器的提供方信息（docs/开发/设置分层.md）。模型列表与推理强度以容器里 Codex 的模型目录为准；models 按模型 ID 叠加在目录上，可写 label（控制台与 HUD 的显示名）、context_limit（HUD 上下文警示与笔记提醒的上限）、thought（思考汉字数上限 {max_hanzi, temp_max_hanzi}，没写时不限）、images（观测附不附截图）。本机覆盖写在 configs/local.codex.json（不入库），按顶层字段覆盖。allowed_domains 是容器防火墙为 Codex 放行的域名。",
   "label": "Codex",
   "images": true,
   "default_effort": "medium",

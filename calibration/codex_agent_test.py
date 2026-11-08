@@ -1007,28 +1007,37 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, '缺少当前必需工具'):
             self.runner._validate_resumed_tools(result['thread'])
 
-    async def test_resumed_session_with_an_older_act_description_is_told_the_current_save_context_format(self):
-        """Codex 恢复会话不能更新登记的工具说明：节省上下文开着、登记的 act 说明是旧格式时，恢复后补一次当前格式。"""
+    async def test_resumed_session_is_told_the_tool_descriptions_that_changed(self):
+        """Codex 恢复会话不能更新登记的工具说明：说明变了的工具（例如开了节省上下文后的 act）恢复后补发一次，
+        没变的、登记里没有说明文字的不补。"""
+        from orchestrator.codex_agent import tool_change_notice
         from orchestrator.modes import game_tools
         from orchestrator.prompting import SAVE_CONTEXT_MARK
+        self.cfg.save_context = True
+        current = await self.runner.tool_specs()
+        act_now = next(t for t in current if t['name'] == 'celeste_act')['description']
+        self.assertIn(SAVE_CONTEXT_MARK, act_now)
         path = self.root / 'resumed-thread.jsonl'
 
-        def notice(description, save_context):
+        def notice(registered_act):
             tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)] + [{'name': 'read'}]
             for tool in tools:
-                if tool['name'] == 'celeste_act':
-                    tool['description'] = description
+                if tool['name'] == 'celeste_act' and registered_act is not None:
+                    tool['description'] = registered_act
+                if tool['name'] == 'celeste_observe':
+                    tool['description'] = next(t for t in current if t['name'] == 'celeste_observe')['description']
             path.write_text(json.dumps({'payload': {'dynamic_tools': tools}}), encoding='utf-8')
-            self.cfg.save_context = save_context
-            self.runner._validate_resumed_tools({'id': 'original', 'path': str(path)})
+            self.runner._validate_resumed_tools({'id': 'original', 'path': str(path)}, current)
             return self.runner.tool_notice
 
-        old = notice('推进输入并返回新状态。本次开启了节省上下文：同一房间里的 act 结果省略每次都一样的部分', True)
-        self.assertIn('早于当前的节省上下文格式', old)
+        old = notice('推进输入并返回新状态。本次开启了节省上下文：同一房间里的 act 结果省略每次都一样的部分')
+        self.assertIn('下面这些工具的说明已经变了', old)
+        self.assertIn('【celeste_act】' + act_now, old)
         self.assertIn('帧、x、y、vx、vy、状态、冲刺、着地', old)
-        self.assertIn('celeste_act 结果更简短', old)                 # 按 Codex 的工具名写
-        self.assertNotIn('节省上下文格式', notice('……celeste_act ' + SAVE_CONTEXT_MARK + '……', True))
-        self.assertNotIn('节省上下文格式', notice('推进输入并返回新状态。', False))
+        self.assertNotIn('【celeste_observe】', old)                         # 没变的不补
+        self.assertNotIn('说明已经变了', notice(act_now))
+        self.assertNotIn('说明已经变了', notice(None))                       # 登记里没有说明文字：不比较
+        self.assertEqual(tool_change_notice([{'name': 'x', 'description': 'a'}], None), [])
 
     async def test_writer_conflict_preserves_identity_without_fork_or_recovery_file(self):
         self.runner.rpc.request = AsyncMock(side_effect=

@@ -2,7 +2,8 @@
 
 - 两种执行器都有总长度上限 thought_max_chars（默认 120 字，超过就退回）；
 - Claude Code 执行器另限汉字数 thought_max_hanzi（默认 30 个；英文术语、数字与标点不计），写进提示词与工具说明，
-  超过也退回，让智能体压缩后再提交（用户要求）。Codex 执行器不限汉字数，提示词与工具说明照旧。
+  超过也退回，让智能体压缩后再提交（用户要求）。模型档案（模型行的 thought）可以按模型另定，可调参数改过的优先。
+  Codex 执行器默认不限汉字数，提示词与工具说明照旧；configs/codex.json 的模型行写了 thought 时按它限。
 - 开了"仅正式思考"（--formal-thought）时，narrate 写的是临时思考（只进控制台）：Claude Code 执行器的汉字数上限改用
   thought_temp_max_hanzi（默认 120 个），总长度上限放宽到它的 3 倍（不少于 thought_max_chars）；act 的 thought 是正式
   思考，规则不变。Codex 执行器照旧。
@@ -26,12 +27,18 @@ def temp_thoughts(cfg) -> bool:
 
 
 def hanzi_limit(cfg, temp: bool = False) -> int | None:
-    """Claude Code 执行器的汉字数上限；Codex 执行器为 None（不限）。temp：开了"仅正式思考"时 narrate 的临时思考。"""
+    """思考语句的汉字数上限；None 表示不限。temp：开了"仅正式思考"时 narrate 的临时思考。
+    Claude Code 执行器：可调参数改过的 > 模型档案（模型行的 thought）> 默认（30 个，临时思考 120 个）。
+    Codex 执行器：只看模型档案（configs/codex.json 模型行的 thought），没写时不限；可调参数对它不起作用（与原来相同）。"""
+    from .model_profile import model_thought
+    key, row_key = (("thought_temp_max_hanzi", "temp_max_hanzi") if temp and temp_thoughts(cfg)
+                    else ("thought_max_hanzi", "max_hanzi"))
+    profile = model_thought(cfg)[row_key]
     if getattr(cfg, "engine", "claude") == "codex":
-        return None
-    if temp and temp_thoughts(cfg):
-        return getattr(cfg, "thought_temp_max_hanzi", 120)
-    return getattr(cfg, "thought_max_hanzi", 30)
+        return profile
+    if key in (getattr(cfg, "tuning", None) or {}) or profile is None:
+        return getattr(cfg, key, 120 if row_key == "temp_max_hanzi" else 30)
+    return profile
 
 
 def char_cap(cfg, temp: bool = False) -> int:

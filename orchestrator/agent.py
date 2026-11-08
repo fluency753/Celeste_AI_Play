@@ -197,7 +197,7 @@ class ClaudeRunner(SessionControls):
         self.metrics = metrics
         # 模型档案给 HUD：显示名、上下文上限、实际压缩窗口（docs/开发/设置分层.md）
         from .model_profile import hud_fields
-        self.metrics.update(**hud_fields(cfg))
+        self.metrics.update(**hud_fields(cfg), effort_levels=list(self.capabilities.effort_levels) or None)
         self.token = token
         self.session_id = session_id or str(uuid.uuid4())
         self._guide_reading = None

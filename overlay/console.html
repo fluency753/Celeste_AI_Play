@@ -602,6 +602,9 @@
         <div class="row">
           <label class="field">运行方式<select id="runMode"><option value="container">Docker 容器（默认）</option><option value="host">本机（只有游戏工具，没有沙箱）</option></select></label>
         </div>
+        <div class="row" style="margin-top:8px">
+          <label class="field">自写程序最多用几个 CPU 核（探索模式）<input type="number" id="agentCpus" min="1" step="1" placeholder="默认本机的核数"></label>
+        </div>
         <div class="row thirds" style="margin-top:8px">
           <label class="field">桥接端口<input type="number" id="bridgePort" min="1024" max="65535" placeholder="47774"></label>
           <label class="field">游戏工具端口<input type="number" id="mcpPort" min="1024" max="65535" placeholder="47780"></label>
@@ -1576,7 +1579,8 @@ function buildTunables() {
   const host = $("tuneList");
   host.replaceChildren();
   for (const group of o.tunable_groups) {
-    const items = o.tunables.filter(t => t.group === group && t.modes.includes(ui.mode) && !EXPLORE_KEYS.includes(t.key));
+    const items = o.tunables.filter(t => t.group === group && t.modes.includes(ui.mode) && !EXPLORE_KEYS.includes(t.key)
+                                    && !MACHINE_TUNE_KEYS.includes(t.key));
     if (!items.length) continue;
     const title = document.createElement("div"); title.className = "group-title"; title.textContent = group;
     host.appendChild(title);
@@ -1606,9 +1610,24 @@ function buildTunables() {
   $("exploreUnlimited").checked = ui.tune.explore_program_s === null;
   $("exploreSeconds").disabled = $("exploreUnlimited").checked;
   tuneCount();
+  updateExecutorItems();
+}
+
+// 只对某个执行器有用的项：选 Codex 时停用并说明（Codex 的思考字数按模型档案、压缩窗口按 Codex 自己的默认）
+function updateExecutorItems() {
+  const codex = runEngine() === "codex";
+  $("manageProviders").disabled = codex;
+  $("manageProviders").title = codex ? "管理的是 Claude Code 执行器的第三方提供方，Codex 不适用" : "";
+  $("autocompact").disabled = codex;
+  for (const key of CLAUDE_ONLY_TUNES) {
+    const input = $("tune-" + key);
+    if (!input) continue;
+    input.disabled = codex;
+    input.title = codex ? "Codex 不适用：思考字数按模型档案（configs/codex.json），没写时不限" : "";
+  }
 }
 function tuneCount() {
-  const n = Object.keys(ui.tune).filter(k => !EXPLORE_KEYS.includes(k)).length;
+  const n = Object.keys(ui.tune).filter(k => !EXPLORE_KEYS.includes(k) && !MACHINE_TUNE_KEYS.includes(k)).length;
   $("tuneCount").innerHTML = n ? `<b>已改 ${n} 项</b>` : "";
 }
 
@@ -1623,10 +1642,11 @@ function formOptions() {
                                    : { name: existing ? existing.name : "", slot: existing ? existing.slot : null, create: false };
   const tune = {};
   for (const [k, v] of Object.entries(ui.tune)) {
-    if (EXPLORE_KEYS.includes(k)) continue;
+    if (EXPLORE_KEYS.includes(k) || MACHINE_TUNE_KEYS.includes(k)) continue;
     const t = ui.options.tunables.find(x => x.key === k);
     if (t && t.modes.includes(ui.mode)) tune[k] = v;
   }
+  if (ui.mode === "explore" && numberOrNull("agentCpus") != null) tune.agent_cpus = numberOrNull("agentCpus");   // 本机设置
   if (ui.mode === "explore") {
     const s = numberOrNull("exploreSeconds");
     if ($("exploreUnlimited").checked) tune.explore_program_s = null;      // 不限时
@@ -1723,6 +1743,7 @@ function profileForm() {
   o.seg_off = JSON.parse(JSON.stringify(ui.segOff || {}));
   // 不随配置保存：本机设置、用量设置、直播与录屏、调试项、没固定的本次运行设置（orchestrator/machine_settings.strip）
   for (const key of notInProfile()) delete o[key];
+  if (o.tune) for (const key of MACHINE_TUNE_KEYS) delete o.tune[key];
   o.pins = [...(ui.pins || [])].sort();
   return o;
 }
@@ -1808,7 +1829,7 @@ function applyProfileForm(form) {
   }
   if (form.tune && typeof form.tune === "object") {
     ui.tune = {};
-    for (const [k, v] of Object.entries(form.tune)) if (ui.options.tunables.some(t => t.key === k)) ui.tune[k] = v;
+    for (const [k, v] of Object.entries(form.tune)) if (ui.options.tunables.some(t => t.key === k) && !MACHINE_TUNE_KEYS.includes(k)) ui.tune[k] = v;
   }
   onSaveChange();
   fillMaps();
@@ -1825,7 +1846,10 @@ const MACHINE_FIELDS = [["runtime", "runMode", "select"], ["bridge_port", "bridg
   ["hud_port", "hudPort", "port"], ["hud", "hudService", "check"], ["hud_window", "hudWindow", "check"], ["ffmpeg", "ffmpeg", "text"],
   ["record_video_args", "videoArgs", "text"], ["audio_offset_ms", "audioOffset", "number"], ["recording_mode", "recordingMode", "select"],
   ["freeze_chapter_select", "freezeChapterSelect", "check"], ["freeze_file_select", "freezeFileSelect", "check"],
-  ["freeze_main_menu", "freezeMainMenu", "check"], ["keep_obs_open", "keepObs", "check"], ["continuous_music", "continuousMusic", "check"]];
+  ["freeze_main_menu", "freezeMainMenu", "check"], ["keep_obs_open", "keepObs", "check"], ["continuous_music", "continuousMusic", "check"],
+  ["agent_cpus", "agentCpus", "number"]];
+const MACHINE_TUNE_KEYS = ["agent_cpus"];            // 可调参数里属于本机的：开跑时写成 --tune
+const CLAUDE_ONLY_TUNES = ["thought_max_hanzi", "thought_temp_max_hanzi"];
 const USAGE_KEYS = ["max_usage", "quota_wait", "quota_wait_max_hours"];
 const USAGE_DEFAULTS = { max_usage: null, quota_wait: true, quota_wait_max_hours: 24 };
 
@@ -1894,6 +1918,8 @@ function onPinChange(event) {
 
 function fillMachine(m) {
   const d = ui.options.defaults;
+  const cpus = (ui.options.tunables || []).find(t => t.key === "agent_cpus");
+  if (cpus) { $("agentCpus").max = cpus.high; $("agentCpus").placeholder = `默认本机的核数（${cpus.default}）`; }
   for (const [key, id, kind] of MACHINE_FIELDS) {
     const v = Object.prototype.hasOwnProperty.call(m, key) ? m[key] : d[key];   // 缺的项用默认值
     if (kind === "check") $(id).checked = !!v;
@@ -1903,7 +1929,9 @@ function fillMachine(m) {
 }
 function machineValues() {
   const o = formOptions();
-  return Object.fromEntries(MACHINE_FIELDS.map(([key]) => [key, o[key] ?? null]));
+  const values = Object.fromEntries(MACHINE_FIELDS.map(([key]) => [key, o[key] ?? null]));
+  values.agent_cpus = numberOrNull("agentCpus");
+  return values;
 }
 let machineTimer = 0;
 function saveMachineSoon() {
@@ -3423,7 +3451,7 @@ document.querySelectorAll("[data-pmode]").forEach(b => b.addEventListener("click
   setMode(b.dataset.pmode);
 }));
 document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => setKbView(b.dataset.view)));
-$("runtime").addEventListener("change", () => { $("agent").value = ""; ui.prov.lastRuntime = $("runtime").value; updateRuntimeNote(); updateSimRow(true); fillUsage(); loadModels(); });
+$("runtime").addEventListener("change", () => { $("agent").value = ""; ui.prov.lastRuntime = $("runtime").value; updateRuntimeNote(); updateSimRow(true); fillUsage(); updateExecutorItems(); loadModels(); });
 $("sim").addEventListener("change", () => { $("sim").dataset.touched = "1"; });
 $("manageProviders").addEventListener("click", openProviders);
 $("providerClose").addEventListener("click", closeProviders);

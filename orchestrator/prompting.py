@@ -76,8 +76,8 @@ THOUGHT_MOOD_SHORT = "语气不必一直冷静理智，可以自然带点情绪�
 
 
 def thought_brief_rule(cfg) -> str:
-    """Claude Code 执行器提示词里思考语句汉字数的一句（可调参数 thought_max_hanzi，见 orchestrator/thought.py）；
-    Codex 执行器为空。开了"仅正式思考"时只说 act 的 thought（正式思考），临时思考的字数写在 formal_thought_rule 里。"""
+    """提示词里思考语句汉字数的一句（上限见 orchestrator/thought.py 的 hanzi_limit）；
+    不限时为空（Codex 执行器的模型档案没写时）。开了"仅正式思考"时只说 act 的 thought（正式思考），临时思考的字数写在 formal_thought_rule 里。"""
     from .thought import hanzi_limit, temp_thoughts
     n = hanzi_limit(cfg)
     if n is None:
@@ -198,14 +198,14 @@ def thought_temp_limit(cfg) -> str:
 
 
 def thought_brief(cfg) -> str:
-    """act 工具说明里 thought 后的括注（Codex 执行器为空）。"""
+    """act 工具说明里 thought 后的括注（不限汉字数时为空）。"""
     from .thought import hanzi_limit
     n = hanzi_limit(cfg)
     return "" if n is None else f"（尽量简短，汉字不超过 {n} 个，英文术语不计）"
 
 
 def thought_limit(cfg) -> str:
-    """narrate 工具说明里 thought 的字数：Claude Code 执行器写汉字数上限，Codex 执行器照旧写总长度上限。"""
+    """narrate 工具说明里 thought 的字数：有汉字数上限时写它，不限时（Codex 默认）写总长度上限。"""
     from .thought import hanzi_limit
     n = hanzi_limit(cfg)
     return (f"{getattr(cfg, 'thought_max_chars', 120)} 字以内" if n is None

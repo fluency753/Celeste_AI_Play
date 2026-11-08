@@ -129,5 +129,79 @@ class PinPageTests(unittest.TestCase):
                 await browser.close()
 
 
+
+class ExecutorItemTests(unittest.TestCase):
+    """第四步：只对某个执行器有用的项选 Codex 时停用；CPU 核数是本机设置，开跑时写成可调参数，不进配置。"""
+
+    def test_codex_disables_claude_only_items_and_cpus_come_from_the_machine(self):
+        asyncio.run(self.check())
+
+    async def check(self):
+        try:
+            from playwright.async_api import async_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is needed to check the console")
+        from orchestrator.tuning import catalog
+        html = CONSOLE.read_text(encoding="utf-8")
+        tunables = catalog()
+        options = {
+            "runtimes": [{"id": "claude:anthropic", "engine": "claude", "provider": "anthropic", "label": "Claude"},
+                         {"id": "codex:codex", "engine": "codex", "provider": "codex", "label": "Codex"}],
+            "defaults": DEFAULTS, "saves": [], "chapters": [], "sides": [], "checkpoints": {},
+            "tunables": tunables, "tunable_groups": sorted({t["group"] for t in tunables}, key=[t["group"] for t in tunables].index),
+            "maps": [{"id": "celeste", "label": "蔚蓝", "enabled": True}],
+            "machine": {"agent_cpus": 1}, "provider_usage": {}, "last": {},
+            "profiles": {"stored": True, "selected": "mine", "profiles": [{"id": "mine", "name": "我的"}],
+                         "current": {"id": "mine", "name": "我的", "readonly": False,
+                                     "form": {"mode": "explore", "tune": {"agent_cpus": 2, "explore_act_frames": 300}, "pins": []}}},
+        }
+
+        async def handle(route):
+            url = urlparse(route.request.url)
+            if url.netloc != "console.test":
+                return await route.abort()
+            if url.path == "/console":
+                return await route.fulfill(content_type="text/html; charset=utf-8", body=html)
+            if url.path == "/api/console/options":
+                return await route.fulfill(json=options)
+            if url.path == "/api/models":
+                ident = "gpt-5.5" if parse_qs(url.query)["provider"] == ["codex"] else "opus"
+                return await route.fulfill(json={"models": [{"id": ident, "efforts": ["high"], "default_effort": "high"}]})
+            if url.path in ("/api/console/preview", "/api/console/prompt/preview"):
+                return await route.fulfill(json={"command": "预览", "text": "", "parts": [], "overridden": []})
+            if url.path == "/api/console/kb":
+                return await route.fulfill(json={"documents": [], "deny": [], "allow": []})
+            fixed = {"/api/console/last": {"last": {}}, "/api/console/runs": [],
+                     "/api/console/status": {"game": {}, "obs": {}, "orchestrator": {"running": False}}}
+            return await route.fulfill(json=fixed.get(url.path, {}))
+
+        async with async_playwright() as playwright:
+            try:
+                browser = await playwright.chromium.launch()
+            except Exception as error:  # noqa: BLE001
+                self.skipTest(f"Chromium unavailable: {error}")
+            try:
+                page = await browser.new_page()
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                await page.route("**/*", handle)
+                await page.goto("http://console.test/console#run", wait_until="domcontentloaded")
+                await expect(page.locator("#model")).to_have_value("opus")
+                self.assertEqual(await page.locator("#tune-agent_cpus").count(), 0)          # 不在可调参数表里
+                await expect(page.locator("#agentCpus")).to_have_value("1")                  # 本机设置的值，不按旧配置的 2
+                form = await page.evaluate("formOptions()")
+                self.assertEqual((form["tune"]["agent_cpus"], form["tune"]["explore_act_frames"]), (1, 300))
+                self.assertNotIn("agent_cpus", (await page.evaluate("profileForm()"))["tune"])
+                for selector in ("#manageProviders", "#autocompact", "#tune-thought_max_hanzi"):
+                    await expect(page.locator(selector)).to_be_enabled()
+                await page.select_option("#runtime", "codex:codex")
+                await expect(page.locator("#model")).to_have_value("gpt-5.5")
+                for selector in ("#manageProviders", "#autocompact", "#tune-thought_max_hanzi", "#quotaWait"):
+                    await expect(page.locator(selector)).to_be_disabled()
+                self.assertEqual(errors, [])
+            finally:
+                await browser.close()
+
+
 if __name__ == "__main__":
     unittest.main()

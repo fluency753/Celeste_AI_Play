@@ -332,6 +332,7 @@ class ViewModel:
     theme: str
     effort: str | None
     effort_level: int
+    effort_count: int
     effort_pending: str
     effort_color: str
     stats: tuple
@@ -385,11 +386,14 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
                     else any(s.get("chapter") == chapter for s in (m.get("splits") or [])))
 
     effort = m.get("effort")
-    level = EFFORT_LEVELS.index(effort) if effort in EFFORT_LEVELS else -1
+    # 刻度按所选模型可选的档位画（主控写进统计的 effort_levels）；旧主控没写时按 low～max 五档
+    levels = [str(v) for v in m.get("effort_levels") or []] or EFFORT_LEVELS
+    level = levels.index(effort) if effort in levels else -1
     effort_names = config.get("effort_names") or {}
     pending = m.get("effort_pending")
     pending_text = f"→ {effort_names.get(pending, pending)}" if pending and pending != effort else ""
-    effort_color = colors.get("effort_high", "#F5B841") if level >= 3 else colors.get("effort", "#7FA6F5")
+    high = level >= 0 and len(levels) > 1 and level / (len(levels) - 1) >= 0.75      # 与网页 HUD 相同：后四分之一算高档
+    effort_color = colors.get("effort_high", "#F5B841") if high else colors.get("effort", "#7FA6F5")
 
     # 各项统计按一局算（知识库、上下文与压缩次数不清零）：显示 累计值 − 这一局开始时的值；换图、换章、绕行都不清零
     base = m.get("chapter_base") or {}
@@ -462,7 +466,7 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     return ViewModel(
         name=display_name(m, config), status=text, dot=colors.get(kind, colors.get("idle", "#8F9AB3")),
         room=room, room_id=str(m.get("room") or ""), theme=theme,
-        effort=effort_names.get(effort, effort) if level >= 0 else None, effort_level=level,
+        effort=effort_names.get(effort, effort) if level >= 0 else None, effort_level=level, effort_count=len(levels),
         effort_pending=pending_text, effort_color=effort_color, stats=tuple(stats), tool_call=call,
         history=tuple(entries), meta=meta,
         **level_timer(m, chapter_done, ended))
@@ -575,7 +579,8 @@ def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: in
         val_style = S(18 * px, parse_color(vm.effort_color), num=True)
         pend_style = S(18 * px, parse_color(colors["thinking"]), num=True)
         val_w = text_width(vm.effort, val_style) + (text_width(vm.effort_pending, pend_style) if vm.effort_pending else 0)
-        meter_w = 5 * 3 * px + 4 * 2 * px
+        count = max(1, vm.effort_count)
+        meter_w = count * 3 * px + (count - 1) * 2 * px
         row_base = timer_base - 1 * px
         vx = right - val_w
         ex = draw_text(d, vx, row_base, vm.effort, val_style)
@@ -583,7 +588,7 @@ def render(vm: ViewModel, width: int, colors: dict | None = None, max_height: in
             draw_text(d, ex, row_base, vm.effort_pending, pend_style)
         mx = vx - 6 * px - meter_w
         on_c, off_c = parse_color(vm.effort_color), (255, 255, 255, 70)
-        for i, frac in enumerate((0.36, 0.52, 0.68, 0.84, 1.0)):
+        for i, frac in enumerate([0.36 + 0.64 * i / (count - 1) for i in range(count)] if count > 1 else [1.0]):
             h = 12 * px * frac
             bx = mx + i * 5 * px
             d.rounded_rectangle((bx, row_base - h, bx + 3 * px, row_base), radius=max(0, px),

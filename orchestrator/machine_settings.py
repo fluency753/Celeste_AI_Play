@@ -16,6 +16,8 @@ from . import config as _config
 MACHINE_KEYS = ("runtime", "bridge_port", "mcp_port", "hud_port", "hud", "hud_window", "ffmpeg", "record_video_args",
                 "audio_offset_ms", "recording_mode", "freeze_chapter_select", "freeze_file_select", "freeze_main_menu",
                 "keep_obs_open", "continuous_music")
+# 可调参数里属于本机的：自写程序最多用几个 CPU 核（默认本机核数）。存在本机设置里，开跑时由控制台写成 --tune
+MACHINE_TUNES = ("agent_cpus",)
 # 运行记录（run_state.json）里有的本机设置：迁移时没有表单值就按本机最近一次运行
 RUN_STATE_KEYS = ("runtime", "bridge_port", "recording_mode", "freeze_chapter_select", "freeze_file_select",
                   "freeze_main_menu")
@@ -47,7 +49,15 @@ def _read(path) -> dict:
 
 def defaults() -> dict:
     from .launch_options import DEFAULTS
-    return {key: DEFAULTS[key] for key in MACHINE_KEYS}
+    return {**{key: DEFAULTS[key] for key in MACHINE_KEYS}, **{key: None for key in MACHINE_TUNES}}
+
+
+def _tune(key, value):
+    """本机的可调参数：None（默认）或范围内的数，范围与可调参数表相同。"""
+    if value is None:
+        return None
+    from .tuning import coerce
+    return coerce(key, value)
 
 
 def validate(values: dict) -> dict:
@@ -55,12 +65,12 @@ def validate(values: dict) -> dict:
     from .launch_options import DEFAULTS, normalize
     if not isinstance(values, dict):
         raise ValueError("本机设置须为对象")
-    extra = set(values) - set(MACHINE_KEYS)
+    extra = set(values) - set(MACHINE_KEYS) - set(MACHINE_TUNES)
     if extra:
         raise ValueError("本机设置的字段无效：" + "、".join(sorted(extra)))
     merged = {**defaults(), **values}
     checked = normalize({"agent": "machine", **{k: v for k, v in merged.items() if k in DEFAULTS}})
-    return {key: checked[key] for key in MACHINE_KEYS}
+    return {**{key: checked[key] for key in MACHINE_KEYS}, **{key: _tune(key, merged[key]) for key in MACHINE_TUNES}}
 
 
 def _latest_run_state() -> dict:
@@ -69,15 +79,32 @@ def _latest_run_state() -> dict:
     return _read(states[0]) if states else {}
 
 
-def _seed() -> dict:
-    """第一次：当前选中配置的表单 > 本机最近一次运行 > 默认值，逐项取（取到的值不合规就跳过）。"""
+def _selected_form() -> dict:
     from . import profiles
     try:
         form = profiles.meta(profiles.selected()).get("form") or {}
     except (OSError, ValueError):
         form = {}
-    state = _latest_run_state()
+    return form if isinstance(form, dict) else {}
+
+
+def _seed_tunes(form: dict, keys=MACHINE_TUNES) -> dict:
+    """本机的可调参数按选中配置的表单取值（1.19.0 之前它们在可调参数里，随配置保存）；不合规的按默认。"""
+    tune = form.get("tune") if isinstance(form.get("tune"), dict) else {}
     seeded = {}
+    for key in keys:
+        try:
+            seeded[key] = _tune(key, tune.get(key))
+        except ValueError:
+            seeded[key] = None
+    return seeded
+
+
+def _seed() -> dict:
+    """第一次：当前选中配置的表单 > 本机最近一次运行 > 默认值，逐项取（取到的值不合规就跳过）。"""
+    form = _selected_form()
+    state = _latest_run_state()
+    seeded = _seed_tunes(form)
     for key in MACHINE_KEYS:
         for source in (form, state if key in RUN_STATE_KEYS else {}):
             if key in source and source[key] is not None:
@@ -96,11 +123,21 @@ def load() -> dict:
         data = _read(path)
         stored = data.get("machine")
         if isinstance(stored, dict):
+            missing = [key for key in MACHINE_TUNES if key not in stored]
+            if missing:                    # 1.17.0～1.18.0 存的本机设置还没有这些：按选中配置补上一次
+                stored = {**stored, **_seed_tunes(_selected_form(), missing)}
+                _write(path, {**data, "machine": stored})
+            tunes = {}
+            for key in MACHINE_TUNES:      # 换了机器等原因超出范围的：按默认，不连累别的本机设置
+                try:
+                    tunes[key] = _tune(key, stored.get(key))
+                except ValueError:
+                    tunes[key] = None
             try:
-                return validate({k: v for k, v in stored.items() if k in MACHINE_KEYS})
+                return {**validate({k: v for k, v in stored.items() if k in MACHINE_KEYS}), **tunes}
             except ValueError:
                 pass                       # 手改坏了：按默认值，下次保存时覆盖
-            return defaults()
+            return {**defaults(), **tunes}
         settings = _seed()
         _write(path, {**data, "machine": settings})
         return settings
@@ -219,7 +256,10 @@ def strip(form: dict) -> dict:
     pins = pins_of(form)
     drop = set(MACHINE_KEYS) | set(USAGE_KEYS) | set(INDEPENDENT_KEYS) | set(DEBUG_KEYS)
     drop |= {key for group, keys in RUN_GROUPS.items() if group not in pins for key in keys}
-    return {**{k: v for k, v in form.items() if k not in drop and k != "pins"}, "pins": pins}
+    kept = {k: v for k, v in form.items() if k not in drop and k != "pins"}
+    if isinstance(kept.get("tune"), dict):
+        kept["tune"] = {k: v for k, v in kept["tune"].items() if k not in MACHINE_TUNES}
+    return {**kept, "pins": pins}
 
 
 # ---------------------------------------------------------------- 记住的上次填写

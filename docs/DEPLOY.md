@@ -439,8 +439,8 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 | --- | --- | --- |
 | `configs\recording.json` | 是 | 录制默认值：`obs_dir`、`ffmpeg`、`video_args`、`audio_offset_ms`、`audio_source`（`game_nrt` 或 `obs_mix`）、OBS 配置文件与场景集合名、画布 1920×1080、60 fps、48 kHz、游戏窗口、HUD 浏览器源的地址、位置与大小 |
 | `configs\local.recording.json` | 否 | 本机覆盖上面的键（还可以写 `continuous_music`） |
-| `configs\providers.json` | 是 | 模型平台：`label`、`status`、`auth`、`base_url`、`allowed_domains`（防火墙放行的域名）、`allowed_host_ports`（放行的宿主机端口，例如本机的兼容服务）、`gateway_check`、`key_env`、`key_file`、`model_suffix`、`images`、`autocompact`、`env`（传给 Claude Code 的模型槽位等）、`models`（模型档案：每行 `id`、显示名 `label`、推理强度 `efforts` 与 `default_effort`，可选的 `autocompact` 与 `context_limit`，见 9 节） |
-| `configs\codex.json` | 是 | Codex 执行器的提供方信息：`label`、`images`、`default_effort`、`allowed_domains`（防火墙为 Codex 放行的域名），以及按模型 ID 叠加在 Codex 模型目录上的 `models`（`label`、`context_limit`） |
+| `configs\providers.json` | 是 | 模型平台：`label`、`status`、`auth`、`base_url`、`allowed_domains`（防火墙放行的域名）、`allowed_host_ports`（放行的宿主机端口，例如本机的兼容服务）、`gateway_check`、`key_env`、`key_file`、`model_suffix`、`images`、`autocompact`、`env`（传给 Claude Code 的模型槽位等）、`models`（模型档案：每行 `id`、显示名 `label`、推理强度 `efforts` 与 `default_effort`，可选的 `autocompact`、`context_limit`、`thought` 与 `images`，见 9 节） |
+| `configs\codex.json` | 是 | Codex 执行器的提供方信息：`label`、`images`、`default_effort`、`allowed_domains`（防火墙为 Codex 放行的域名），以及按模型 ID 叠加在 Codex 模型目录上的 `models`（`label`、`context_limit`、`thought`、`images`） |
 | `configs\local.codex.json` | 否 | 本机覆盖上面的键 |
 | `configs\local.providers.json` | 否 | 本机覆盖与自定义平台；密钥文件位置写在这里；各提供方的用量设置 `usage`（`max_usage`、`quota_wait`、`quota_wait_max_hours`，Anthropic 订阅也写在这里） |
 | `configs\hud.json` | 是 | HUD：智能体显示名 `names`、章节名、颜色、上下文窗口、`page_version`（变了时已打开的网页 HUD 自动重新加载）等 |
@@ -503,7 +503,7 @@ GPT 使用容器内 Codex 已登录的原生执行器（`--engine codex`），�
 
 `models` 列出可用的模型与它们实际支持的推理强度档位（按平台文档填写）；没有列表时主控与 HUD 会报错，不会猜测档位。兼容服务运行在本机时，用 `allowed_host_ports` 放行它的端口（需要重新构建镜像）。`images: false` 用于只支持文字的模型（观测里另有字符地图与精确数据）。
 
-每个模型行就是这个模型的档案（设计见 `docs/开发/设置分层.md`）：`label` 是控制台下拉框与 HUD 的显示名；可选的 `autocompact` 是这个模型的自动压缩窗口（`auto` 或 100000～1000000），优先于提供方的 `autocompact`，但运行页另外填写或命令行 `--autocompact` 时以那个为准；可选的 `context_limit` 是 HUD 上下文警示与笔记整理提醒的上限（与执行器报告的窗口、实际压缩窗口一起取最小的）。在 `configs\local.providers.json` 改内置平台的模型行时，要写出这个平台完整的 `models` 列表（本机覆盖按顶层字段整体替换）。旧的 `configs\hud.json` 的 `names` 仍然有效，模型行没写 `label` 时用它。
+每个模型行就是这个模型的档案（设计见 `docs/开发/设置分层.md`）：`label` 是控制台下拉框与 HUD 的显示名；可选的 `autocompact` 是这个模型的自动压缩窗口（`auto` 或 100000～1000000），优先于提供方的 `autocompact`，但运行页另外填写或命令行 `--autocompact` 时以那个为准；可选的 `context_limit` 是 HUD 上下文警示与笔记整理提醒的上限（与执行器报告的窗口、实际压缩窗口一起取最小的）；可选的 `thought` 是思考语句的汉字数上限 `{"max_hanzi": 30, "temp_max_hanzi": 120}`（5～400；运行时可调参数改过的优先；Codex 默认不限，写了才限）；可选的 `images`（true／false）决定观测里附不附截图，优先于提供方的 `images`。在 `configs\local.providers.json` 改内置平台的模型行时，要写出这个平台完整的 `models` 列表（本机覆盖按顶层字段整体替换）。旧的 `configs\hud.json` 的 `names` 仍然有效，模型行没写 `label` 时用它。
 
 ## 10. 更新、迁移与卸载
 

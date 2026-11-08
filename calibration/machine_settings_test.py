@@ -96,6 +96,50 @@ class MachineTests(Fixture):
                                                      "pins": ["chapters"]})
 
 
+class MachineTuneTests(Fixture):
+    def test_cpu_cores_are_a_machine_setting(self):
+        from orchestrator.tuning import HOST_CPUS
+        with patch.object(profiles, "selected", return_value="default"):
+            self.assertIsNone(ms.load()["agent_cpus"])
+            self.assertEqual(ms.save({"agent_cpus": 1})["agent_cpus"], 1)
+        with self.assertRaises(ValueError):
+            ms.save({"agent_cpus": HOST_CPUS + 1})
+        self.assertEqual(ms.strip({"tune": {"agent_cpus": 1, "explore_act_frames": 300}})["tune"], {"explore_act_frames": 300})
+
+    def test_first_load_takes_the_cores_from_the_selected_profile(self):
+        pid = profiles.create("旧配置", base=profiles.DEFAULT)
+        meta_path = self.root / "local" / "profiles" / pid / "profile.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["form"] = {"mode": "explore", "tune": {"agent_cpus": 1}}
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        with patch.object(profiles, "selected", return_value=pid):
+            self.assertEqual(ms.load()["agent_cpus"], 1)
+
+    def test_settings_stored_before_the_cores_moved_get_them_once(self):
+        pid = profiles.create("旧配置", base=profiles.DEFAULT)
+        meta_path = self.root / "local" / "profiles" / pid / "profile.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["form"] = {"mode": "explore", "tune": {"agent_cpus": 1}}
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        path = ms.prefs_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"machine": {"bridge_port": 47775}}), encoding="utf-8")
+        with patch.object(profiles, "selected", return_value=pid):
+            loaded = ms.load()
+        self.assertEqual((loaded["agent_cpus"], loaded["bridge_port"]), (1, 47775))
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["machine"]["agent_cpus"], 1)
+        with patch.object(profiles, "selected", return_value="default"):
+            self.assertEqual(ms.load()["agent_cpus"], 1)                         # 只补一次，之后不再按配置
+
+    def test_out_of_range_cores_fall_back_without_touching_the_rest(self):
+        from orchestrator.tuning import HOST_CPUS
+        path = ms.prefs_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"machine": {"bridge_port": 47775, "agent_cpus": HOST_CPUS + 5}}), encoding="utf-8")
+        loaded = ms.load()
+        self.assertEqual((loaded["agent_cpus"], loaded["bridge_port"]), (None, 47775))
+
+
 class LastTests(Fixture):
     def test_remembered_values_merge_and_seed_from_the_selected_profile(self):
         pid = profiles.create("旧配置", base=profiles.DEFAULT)

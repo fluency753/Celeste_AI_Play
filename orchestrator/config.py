@@ -346,8 +346,11 @@ class RunConfig:
 
     @property
     def images(self) -> bool:
-        """观测里附不附截图（只支持文字的模型关掉，观测里另有字符地图与精确数据）。"""
-        return bool((self.provider_info or {}).get("images", True))
+        """观测里附不附截图（只支持文字的模型关掉，观测里另有字符地图与精确数据）。
+        模型档案（模型行的 images）优先于提供方的 images。"""
+        from .model_profile import model_images
+        row = model_images(self)
+        return row if row is not None else bool((self.provider_info or {}).get("images", True))
 
     @property
     def workspace_dir(self) -> Path:

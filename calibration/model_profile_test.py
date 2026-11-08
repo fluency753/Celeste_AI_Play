@@ -143,6 +143,58 @@ class HudFieldTests(unittest.TestCase):
             self.assertEqual(runner._notes_window(), 300000)
 
 
+class ThoughtLimitTests(unittest.TestCase):
+    def test_claude_tuning_then_model_then_default(self):
+        from orchestrator.thought import hanzi_limit
+        cfg = RunConfig(agent="a", save="s", model="opus")
+        cfg.provider_info = {"models": [{"id": "opus", "thought": {"max_hanzi": 40, "temp_max_hanzi": "多"}}]}
+        self.assertEqual(hanzi_limit(cfg), 40)                                   # 模型档案
+        cfg.formal_thought = True
+        self.assertEqual(hanzi_limit(cfg, temp=True), 120)                       # 写法不对：默认
+        cfg.tuning, cfg.thought_max_hanzi = {"thought_max_hanzi": 50}, 50
+        self.assertEqual(hanzi_limit(cfg), 50)                                   # 可调参数改过的优先
+        cfg.model = "fable"
+        cfg.tuning, cfg.thought_max_hanzi = {}, 30
+        self.assertEqual(hanzi_limit(cfg), 30)
+
+    def test_codex_uses_only_its_model_profile(self):
+        from orchestrator.thought import hanzi_limit
+        cfg = RunConfig(agent="a", save="s", model="gpt-5.5", engine="codex")
+        cfg.provider_info = {**CODEX_DEFAULTS, "models": [{"id": "gpt-5.5", "thought": {"max_hanzi": 60}}]}
+        cfg.tuning, cfg.thought_max_hanzi = {"thought_max_hanzi": 20}, 20
+        self.assertEqual(hanzi_limit(cfg), 60)                                   # 可调参数对 Codex 不起作用
+        cfg.model = "other"
+        self.assertIsNone(hanzi_limit(cfg))                                      # 没写：不限（与原来相同）
+
+
+class ImageTests(unittest.TestCase):
+    def test_model_row_overrides_provider_images(self):
+        cfg = RunConfig(agent="a", save="s", model="flash")
+        cfg.provider_info = {"images": True, "models": [{"id": "flash", "images": False}, {"id": "pro", "images": "否"}]}
+        self.assertFalse(cfg.images)
+        cfg.model = "pro"
+        self.assertTrue(cfg.images)                                              # 写法不对：按提供方
+        cfg.provider_info["images"] = False
+        self.assertFalse(cfg.images)
+
+
+class EffortLevelTests(unittest.TestCase):
+    def test_in_game_hud_draws_the_model_levels(self):
+        import time
+        now = time.time()
+        base = {"agent": "a", "model": "gpt-5.5", "status": "thinking", "chapter": "Celeste/1-ForsakenCity"}
+        vm = modhud.view_model({**base, "effort": "xhigh"}, HUD, [], now)
+        self.assertEqual((vm.effort, vm.effort_level, vm.effort_count), ("xhigh", 3, 5))   # 旧主控没写档位：五档
+        vm = modhud.view_model({**base, "effort": "medium", "effort_levels": ["none", "low", "medium"]}, HUD, [], now)
+        self.assertEqual((vm.effort, vm.effort_level, vm.effort_count), ("medium", 2, 3))
+        self.assertEqual(vm.effort_color, HUD["colors"].get("effort_high", "#F5B841"))     # 最高一档算高档
+        vm = modhud.view_model({**base, "effort": "xhigh", "effort_levels": ["low", "high"]}, HUD, [], now)
+        self.assertIsNone(vm.effort)                                                      # 不在这个模型的档位里：不画
+        rendered = modhud.render(modhud.view_model({**base, "effort": "low", "effort_levels": ["low", "high"]}, HUD, [], now),
+                                 420, HUD.get("colors"))
+        self.assertGreater(rendered.image.size[1], 0)
+
+
 class ResumeTests(unittest.TestCase):
     def make_run(self, root: Path, **extra) -> Path:
         run = root / "runs" / "a" / "20261108-010000"
