@@ -218,6 +218,7 @@ class CodexRunner(ModelRecovery, SessionControls):
             usage = params.get("tokenUsage") or {}
             last = usage.get("last") or {}
             total = usage.get("total") or {}
+            self._record_output_usage(total.get('outputTokens'), last.get('outputTokens'))
             self.metrics.update(context_tokens=last.get("inputTokens", 0) + last.get("outputTokens", 0),
                                 context_window=usage.get("modelContextWindow"),
                                 output_tokens=total.get("outputTokens", 0),
@@ -457,7 +458,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                 '此会话保留了旧编程工具登记，但该入口已停用，本次未执行。请用容器内原生 Shell 和 apply_patch；'
                 f'可用 {self._reader_name()} 读取文件，或用原生 Shell 处理工作区。'}], 'success': False}, origin_turn)
         reload_ticket = (getattr(self.session, 'reload_epoch', 0),
-                         getattr(self.session, 'reload_observation_required', False))
+                         getattr(self.session, 'reload_observation_required', False),
+                         getattr(self.session, 'token_motion_epoch', 0))
         if not isinstance(args, dict):
             return await self._notes_response({"contentItems": [{"type": "inputText", "text": "工具参数必须是 JSON 对象"}], "success": False}, origin_turn)
         if name == 'celeste_cutscene' and 'frames' in args:
@@ -515,6 +517,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                                 or reload_ticket[0] != getattr(self.session, 'reload_epoch', 0)
                                 or getattr(self.session, 'reload_observation_required', False)):
                             raise ValueError('桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。')
+                        if name != 'celeste_observe' and (reload_ticket[2] != getattr(self.session, 'token_motion_epoch', 0) or getattr(self.session, 'token_observation_required', False)):
+                            raise ValueError('Token 推进改变了场景，旧动作未执行；请先默认 observe 后重新规划。')
                         if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
                                 or self.turn_done.is_set() or self.stop_requested or self.pausing):
                             raise ValueError('发起此请求的轮次已结束，动作未执行；等待当前轮次的新指令。')
@@ -820,6 +824,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                     self.metrics.update(status="chat_idle" if self.chat_only else "paused")
                 self.control_task = asyncio.create_task(self._controls())
                 self.heartbeat_task = asyncio.create_task(self._heartbeat())
+            self._start_token_worker()
             message = self._first_prompt()
             opening = not self.chat_only
             retry_rows, retry_input = [], False
@@ -965,6 +970,10 @@ class CodexRunner(ModelRecovery, SessionControls):
         finally:
             primary = sys.exception()
             cleanup_errors = []
+            try:
+                await self._finish_token_worker()
+            except BaseException as error:
+                cleanup_errors.append(error)
             tasks = [*self._receipt_tasks, *[task for task in
                      (self.heartbeat_task, self.control_task) if task is not None]]
             for task in tasks:

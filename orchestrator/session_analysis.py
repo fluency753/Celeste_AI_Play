@@ -434,6 +434,35 @@ class Analysis:
                        {'action_id': action['action_id'], 'public_event_id': public_id,
                         'time_semantics': 'public action announcement; not an execution completion time'})
 
+    def token_advances(self, directory):
+        context = self.context(directory)
+        source = directory / 'token_advances.jsonl'
+        from .session_export_projection import game_state
+        for index, entry in self.read(directory, source.name):
+            kind, batch = entry.get('event'), entry.get('batch') or {}
+            row = None
+            if kind in ('requested', 'committed', 'unknown') and type(batch.get('id')) is int:
+                row = self.tool(directory, 'token-batch:' + str(batch['id']), 'system.token_advance')
+                row['item_type'] = 'SystemTokenAdvance'
+                if kind == 'requested':
+                    row['requested_wall'] = wall(entry.get('wall'))
+                    row['requested_time_source'] = 'token_advances.requested.wall'
+                    row.spill({'parameters': {'frames': batch.get('requested'), 'before': batch.get('before')}})
+                    row['parameters_meta'] = {'available': True}
+                else:
+                    row['result_wall'] = wall(entry.get('wall'))
+                    row['result_time_source'] = 'token_advances.' + str(kind) + '.wall'
+                    row.spill({'result': batch})
+                    row['result_meta'] = {'available': True}
+                    row['success'] = True if kind == 'committed' else None
+                    row['execution_unknown'] = kind == 'unknown'
+                    if kind == 'committed' and isinstance(batch.get('after'), dict):
+                        row.spill({'_state_facts': [{'kind': 'after', 'evidence': 'token_advances.committed.after',
+                                                   'state': game_state(batch['after'])}]})
+                self.provenance(row, source, index, 'system_advance')
+            self.event(context, 'token.' + str(kind), entry.get('wall'), source, index,
+                       entry, tool_id=row['tool_id'] if row is not None else None)
+
     def snapshot(self, directory, state):
         context = self.context(directory)
         canonical, data = self.snapshots[directory]
@@ -449,7 +478,7 @@ class Analysis:
             if not isinstance(data, dict):
                 continue
             fields = (*TIME_FIELDS, 'decisions', 'deaths', 'frames_played', 'frames_auto', 'sim_calls', 'sim_rollouts',
-                      'tool_calls', 'compactions', 'retries', 'output_tokens', 'thinking_tokens')
+                      'tool_calls', 'compactions', 'retries', 'output_tokens', 'thinking_tokens', 'token_frames', 'token_s')
             row = {**context, 'snapshot_id': stable_id(context['run_id'], path.name, data.get('written_wall')),
                    'wall': wall(data.get('written_wall')), 'source': str(path), 'canonical': path == canonical,
                    'metrics_authoritative': state.get('_export_source_kind', 'run') == 'run',
@@ -531,6 +560,7 @@ class Analysis:
             self.deliveries(directory)
             self.controls(directory)
             self.decisions(directory)
+            self.token_advances(directory)
             self.snapshot(directory, state)
         self.native_lifecycle()
         self.native_tools()
@@ -543,8 +573,10 @@ class Analysis:
                     row['turn_id'] = matches[0]
             if row['native_turn_id'] is None and row.get('turn_id') in self.turns:
                 row['native_turn_id'] = self.turns[row['turn_id']].get('native_turn_id')
-            row['record_kind'] = 'code_mode_wrapper' if row.get('item_type') == 'CodeModeWrapper' else 'tool_execution'
-            row['status'] = ('failed' if row['success'] is False else 'returned' if row['success'] is True
+            row['record_kind'] = ('system_advance' if row.get('item_type') == 'SystemTokenAdvance' else
+                                  'code_mode_wrapper' if row.get('item_type') == 'CodeModeWrapper' else 'tool_execution')
+            row['status'] = ('execution_unknown' if row.get('execution_unknown') else
+                             'failed' if row['success'] is False else 'returned' if row['success'] is True
                              else 'returned_unverified' if row['result_wall'] is not None
                              else 'interrupted_result_missing' if row.get('interrupted_by_turn_end')
                              else 'result_missing' if row['timing_ended_wall'] is not None else 'pending_or_missing')

@@ -176,7 +176,13 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                   + (f"，知识库已读 {study.progress():.0%}" if study else ""), flush=True)
 
     def reload_ticket():
-        return (getattr(session, 'reload_epoch', 0), getattr(session, 'reload_observation_required', False))
+        return (getattr(session, 'reload_epoch', 0), getattr(session, 'reload_observation_required', False),
+                getattr(session, 'token_motion_epoch', 0))
+
+    async def flush_tokens():
+        flush = getattr(session, 'flush_token_drift', None)
+        if flush is not None:
+            await flush()
 
     def gated(name, ticket=None) -> str | None:
         """知识库没读完时不执行游戏工具，返回提示。"""
@@ -189,6 +195,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                                    or getattr(session, 'reload_observation_required', False)):
             journal.not_executed()
             return '桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。'
+        if name != 'observe' and (getattr(session, 'token_observation_required', False)
+                or ticket is not None and ticket[2] != getattr(session, 'token_motion_epoch', 0)):
+            journal.not_executed()
+            return 'Token 推进遇到死亡、换房或剧情，旧动作未执行；请先默认 observe 核验并重新规划。'
         if study is None or study.ready():
             return None
         reader = 'Read'
@@ -214,7 +224,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         if accounting is not None and accounting.enabled:
             line += "\n" + accounting.status_line()
         # 探索模式开了思考僵直：这次冻结已累计的时间与预计僵直（act 的结果里另有这次冻结的说明，不再重复）
-        text = getattr(session, "freeze_line", lambda: "")() if freeze else ""
+        text = getattr(session, "freeze_line", lambda: "")() if freeze or getattr(session.cfg, 'token_drift', False) else ""
         if text:
             line += "\n" + text
         return line
@@ -290,6 +300,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     return [json.dumps(page,ensure_ascii=False,separators=(',', ':'))]
                 if detail != 'overview' or region is not None or offset or snapshot_id is not None:
                     return ['区域或分页查询请用 detail="geometry"；默认 overview 会获取新观测。']
+                await flush_tokens()
                 obs, image = await asyncio.to_thread(session.observe)
                 observed_epoch = getattr(session, 'reload_epoch', 0)
                 credit(obs)
@@ -304,6 +315,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     content.append(notice)
                 delivery.commit(candidate)
                 state["described_room"] = room_key(obs)
+                session.token_observation_required = False
                 acknowledge = getattr(session, 'acknowledge_reload_observation', None)
                 if acknowledge:
                     acknowledge(observed_epoch)
@@ -327,6 +339,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                   stop_on: list[str] | None = None, input_format: str | None = None) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
+            if (note := gated('act', ticket)) is not None:
+                return [note]
+            await flush_tokens()
             if (note := gated('act', ticket)) is not None:
                 return [note]
             begin()
@@ -437,6 +452,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         async with journal.execution(call_lock):
             if (note := gated('finish_goal', ticket)) is not None:
                 return [note]
+            await flush_tokens()
+            if (note := gated('finish_goal', ticket)) is not None:
+                return [note]
             try:
                 report = await asyncio.to_thread(session.finish_goal, goal, evidence)
             except ActError as err:
@@ -461,6 +479,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         async with journal.execution(call_lock):
             if (note := gated('exit_level', ticket)) is not None:
                 return [note]
+            await flush_tokens()
+            if (note := gated('exit_level', ticket)) is not None:
+                return [note]
             begin()
             try:
                 result = await asyncio.to_thread(session.exit_level, reason, finish_run)
@@ -479,6 +500,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     async def travel(chapter: int | str, thought: str, checkpoint: int | str = 0) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
+            if (note := gated('travel', ticket)) is not None:
+                return [note]
+            await flush_tokens()
             if (note := gated('travel', ticket)) is not None:
                 return [note]
             begin()
@@ -512,6 +536,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         ticket = reload_ticket()
         async with journal.execution(call_lock):
             if (note := gated('cutscene', ticket)) is not None:return [note]
+            await flush_tokens()
+            if (note := gated('cutscene', ticket)) is not None:return [note]
             begin()
             try:
                 obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
@@ -533,6 +559,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                        request_file: str | None = None, request_id: str | None = None) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
+            if (note := gated('simulate', ticket)) is not None:
+                return [note]
+            await flush_tokens()
             if (note := gated('simulate', ticket)) is not None:
                 return [note]
             budget = getattr(session, 'planning_budget', None) or getattr(session, 'sim_energy', None)

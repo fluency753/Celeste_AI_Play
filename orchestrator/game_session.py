@@ -400,6 +400,11 @@ class GameSession:
         self._input_formats = None
         self._held_input = ("", "celeste_ai")   # 最近一次真正喂给游戏的那一帧按键与格式（思考僵直时保持它）
         self._freeze_base: tuple[float, float, float] | None = None   # 这次冻结开始时的（思考、工具、压缩）累计
+        self.token_motion_epoch = 0
+        self.token_observation_required = False
+        self._token_advancing = False
+        self._token_cancel = threading.Event()
+        self.token_guard = lambda: False
         self.replay_stiffness: dict | None = None   # 重放（orchestrator/replay.py）：下一次 act 前按记录僵直
         # Navigation owns the current piece, pending target and entry transition.
         plan = list(cfg.plan) if cfg.plan else [Piece(c) for c in (cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else []))]
@@ -468,7 +473,7 @@ class GameSession:
             raise RuntimeError('计划外地图需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
         self.client.step_options = self._step_options
         self.client.after_step = self._after_step
-        self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成")
+        self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成") or (self._token_advancing and (self._token_cancel.is_set() or not self.token_guard()))
         from .chapter_recording import menu_options
         reply = self.client.call("activate", entities=False, tiles=False, continuous_music=self.cfg.continuous_music,
                                  **menu_options(self.cfg))
@@ -812,6 +817,11 @@ class GameSession:
 
     def freeze_line(self) -> str:
         """observe 返回开头的一行：这次冻结已累计的时间与预计僵直。"""
+        if getattr(self.cfg, 'token_drift', False):
+            state = self.metrics.state.token_drift or {}
+            return (f"Token 推进：每 {self.cfg.tokens_per_frame} 个输出 token 推进1帧；"
+                    f"累计已推进 {state.get('consumed_frames', 0)} 帧，余数 {state.get('remainder_tokens', 0)} token。"
+                    '游戏可能在规划期间改变；死亡、换房或剧情后须默认 observe 核验。')
         stats = self.freeze_stats()
         if stats is None:
             return ""
@@ -834,37 +844,10 @@ class GameSession:
         if last.get("scene") != "Level" or not self._agent_controls(last) or story_pending(last):
             self._start_freeze()
             return {"note": f"思考僵直：{spent}，按规则应僵直 {stats['seconds']:g} 秒；角色当前不可操作，这次不僵直。"}
-        keys, fmt = (stats["keys"], stats.get("input_format", "celeste_ai")) if "keys" in stats else self._held_input
-        stops = list(STIFF_STOP_ON)
-        if self.cfg.cutscene_mode == "agent":
-            stops.append("story_input")
-            if fmt != 'celeste_tas':
-                stops.append("story_decision")
-            if self._pending_complete:     # 已登记通关后 complete 每帧都在，不能用它截断（与 _stop_list 相同）
-                stops.remove("complete")
-        extra = {"input_format": fmt} if fmt != "celeste_ai" else {}
-        self.metrics.update(status="executing")
-        t0 = time.monotonic()
-        try:
-            reply = self.client.call("step", inputs=[f"{stats['frames']},{keys}" if keys else str(stats["frames"])],
-                                     stop_on=stops, speed=self.cfg.play_speed, image=True, scope="room",
-                                     fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
-                                     on_event=self._on_progress, **self._stop_rooms(), **extra)
-        except Exception:
-            self._start_freeze()           # 不为同一段冻结反复尝试（例如桥接拒绝了按键格式），下一次 act 照常执行
-            raise
-        game_s = time.monotonic() - t0
-        result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
-        used = int(result.get("consumed") or 0)
-        # 先记游戏推进时间再重置冻结：僵直这段不能算进工具时间
-        self.metrics.add(auto_game_s=game_s, stiff_frames=used, stiff_s=used / 60)
-        self._start_freeze()               # 僵直已经执行：即使后面的按键出错，也不会再为同一段冻结僵直一次
-        self._log_frames(result, [keys] * used, "思考僵直", auto=True, input_format=fmt)
-        self._note_map(obs)
-        self._handle_events(result, obs)
-        self._commit_completion(obs)
-        self._note_obs_room(obs)
-        self.goals.check(self.goal_values(obs))
+        moved = self._advance_held(stats['frames'], '思考僵直', 'stiff',
+                                   (stats['keys'], stats.get('input_format', 'celeste_ai')) if 'keys' in stats else None)
+        result, obs, image = moved['result'], moved['obs'], moved['image']
+        keys, fmt, used, stop = moved['keys'], moved['input_format'], moved['consumed'], moved['stop']
         held = f"按住上一帧的按键（{keys}）" if keys else "（上一帧没有按键）"
         stop = result.get("stop")
         info = {**{k: stats.get(k) for k in ("think_s", "tool_s", "seconds", "frames")},
@@ -877,6 +860,76 @@ class GameSession:
                 "story_decision": "遇到剧情决策机会"}.get(stop, f"停下（{stop}）"))
         return {"info": info, "interrupted": True, "result": result, "obs": obs, "image": image,
                 "note": f"思考僵直：{spent}，先{held}僵直，第 {used} 帧{why}；这次 act 的按键没有执行。"}
+
+    def _advance_held(self, frames, label, counter, held=None):
+        """Shared real step, recording, frame clock and stop handling; lock held."""
+        keys, fmt = held or self._held_input
+        stops = list(STIFF_STOP_ON)
+        if self.cfg.cutscene_mode == "agent":
+            stops.append("story_input")
+            if fmt != 'celeste_tas':
+                stops.append("story_decision")
+            if self._pending_complete:     # 已登记通关后 complete 每帧都在，不能用它截断（与 _stop_list 相同）
+                stops.remove("complete")
+        extra = {"input_format": fmt} if fmt != "celeste_ai" else {}
+        self.metrics.update(status="executing")
+        t0 = time.monotonic()
+        try:
+            reply = self.client.call("step", inputs=[f"{frames},{keys}" if keys else str(frames)],
+                                     stop_on=stops, speed=self.cfg.play_speed, image=True, scope="room",
+                                     fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
+                                     on_event=self._on_progress, **self._stop_rooms(), **extra)
+        except Exception:
+            self._start_freeze()           # 不为同一段冻结反复尝试（例如桥接拒绝了按键格式），下一次 act 照常执行
+            raise
+        game_s = time.monotonic() - t0
+        result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
+        used = int(result.get("consumed") or 0)
+        # 先记游戏推进时间再重置冻结：僵直这段不能算进工具时间
+        self.metrics.add(auto_game_s=game_s, **{counter + "_frames": used, counter + "_s": used / 60})
+        self._start_freeze()               # 僵直已经执行：即使后面的按键出错，也不会再为同一段冻结僵直一次
+        self._log_frames(result, [keys] * used, label, auto=True, input_format=fmt)
+        self._note_map(obs)
+        self._handle_events(result, obs)
+        self._commit_completion(obs)
+        self._note_obs_room(obs)
+        self.goals.check(self.goal_values(obs))
+        return {'result': result, 'obs': obs, 'image': image, 'keys': keys,
+                'input_format': fmt, 'consumed': used, 'stop': result.get('stop')}
+
+    def token_frame_step(self, frames):
+        """A reported usage batch advances only at an authorized action boundary."""
+        with self.lock:
+            last = self.last_obs or {}
+            if (self.done or self.goals.stop_motion.is_set() or not self.token_guard()
+                    or getattr(self, 'reload_observation_required', False)):
+                return {'consumed': 0, 'stop': 'not_eligible'}
+            if last.get('scene') != 'Level' or not self._agent_controls(last) or story_pending(last):
+                return {'consumed': 0, 'stop': 'not_controllable'}
+            try:
+                self._before_advance()
+            except ActError as error:
+                return {'consumed': 0, 'stop': 'not_executed', 'reason': str(error)}
+            self._token_advancing = True
+            try:
+                moved = self._advance_held(frames, 'Token 推进', 'token')
+            finally:
+                self._token_advancing = False
+            obs = moved['obs']
+            self._write_workspace(obs)
+            self._update_metrics_from_obs(obs)
+            reset = getattr(self, 'reset_observation_delivery', None)
+            if reset is not None:
+                reset()
+            if moved['stop'] != 'done':
+                self.token_motion_epoch += 1
+                self.token_observation_required = True
+            return {'consumed': moved['consumed'], 'stop': moved['stop'],
+                    'input_format': moved['input_format'], 'keys': moved['keys'],
+                    'after': {'frame': obs.get('frame'), 'scene': obs.get('scene'),
+                              **{key: (obs.get('level') or {}).get(key) for key in ('sid', 'room', 'side')},
+                              'player': obs.get('player')},
+                    'events': moved['result'].get('events', [])}
 
     def close(self, release: bool = True) -> None:
         """试玩结束交还控制；release=False 仅供明确需要保留接管的内部调试使用。"""

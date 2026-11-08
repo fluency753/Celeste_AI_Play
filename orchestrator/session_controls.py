@@ -26,6 +26,8 @@ class SessionControls:
     capabilities = RuntimeCapabilities()
 
     def _begin_model_turn(self, **timing):
+        if tracker := getattr(self, 'usage_tracker', None):
+            tracker.begin_turn()
         # Chat keeps the game gate closed while model work is independently active.
         if self.chat_only:
             self.metrics.resume(quota=False)
@@ -84,6 +86,22 @@ class SessionControls:
         self.pause_at, self.paused_seconds = None, 0.0
         self.control_task = None
         self.heartbeat_task, self.pausing = None, False
+        self.token_drift = None
+        self._token_task, self._token_closing = None, False
+        self._token_compacting = False
+        self._token_pause_serial = getattr(self.metrics, 'pause_serial', 0)
+        self._token_event = asyncio.Event()
+        if (getattr(self.cfg, 'token_drift', False) and self.session is not None
+                and not self.chat_only and not getattr(self, 'prepare_only', False)):
+            from pathlib import Path
+            from .token_drift import TokenDrift
+            previous = getattr(self.metrics.state, 'resumed_from', None)
+            self.token_drift = TokenDrift(self.run_dir / 'token_drift.json', self.metrics,
+                self.cfg.tokens_per_frame, Path(previous) / 'token_drift.json' if previous else None)
+            if not self.metrics.playing:
+                self.token_drift.exclude_window('preparation')
+            self.session.token_guard = self._token_motion_eligible
+            self.session.flush_token_drift = self._flush_token_drift_locked
         if self.session is not None:
             self.session.note_reminders = self.note_reminders
             self.session.control_guard = self._game_guard
@@ -91,6 +109,133 @@ class SessionControls:
             self.session.request_pause = self._agent_pause
             self.session.effort_policy = self._agent_effort_policy
             self.session.effort_levels = lambda: self._effort_status()['effort_levels'] or []
+
+    def _token_motion_eligible(self):
+        return bool(self.token_drift is not None and not self._token_closing
+                    and not self._token_compacting and not self._game_guard()
+                    and self.metrics.playing and self.metrics._pause_start is None
+                    and not getattr(self, 'net_down_since', None)
+                    and not self.token_drift.unknown
+                    and not getattr(self.session, 'reload_observation_required', False)
+                    and not getattr(self.session, 'token_observation_required', False))
+
+    def _token_epoch(self):
+        obs = getattr(self.session, 'last_obs', None) or {}
+        level = obs.get('level') or {}
+        return (getattr(self.session, 'game_process_id', None), getattr(self.session, 'reload_epoch', 0),
+                getattr(self.session, 'token_motion_epoch', 0), level.get('sid'), level.get('room'))
+
+    def _record_output_usage(self, total, latest):
+        if self.token_drift is None:
+            return
+        self._sync_token_pause()
+        eligible = bool(self.turn_active and self._token_motion_eligible())
+        self.token_drift.receive(total, latest, f'{self.cfg.engine}:{self.session_id}', eligible, self._token_epoch())
+        if self.token_drift.pending:
+            self._token_event.set()
+
+    def _exclude_token_window(self, reason):
+        if self.token_drift is not None:
+            self.token_drift.exclude_window(reason)
+
+    def _sync_token_pause(self):
+        serial = getattr(self.metrics, 'pause_serial', 0)
+        if serial != self._token_pause_serial:
+            self._exclude_token_window('pause_window')
+            self._token_pause_serial = serial
+
+    def _start_token_worker(self):
+        if self.token_drift is None:
+            return
+        if self.token_drift.unknown:
+            self.paused = True
+            self.metrics.pause()
+            self.metrics.update(status='paused')
+            self._public_message('token-unknown', '上次 Token 推进的执行范围未确认，游戏保持暂停；请核验账本，不要重发该批输入。')
+        self._token_task = asyncio.create_task(self._token_worker())
+
+    async def _finish_token_worker(self):
+        self._token_closing = True
+        if self.token_drift is None:
+            return
+        self.session._token_cancel.set()
+        self._token_event.set()
+        task = self._token_task
+        cancelled = False
+        if task is not None:
+            # A to_thread call cannot be cancelled safely. Keep the connection
+            # and action ownership until its result has been committed/marked unknown.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    cancelled = True
+                    continue
+            task.result()
+        self.token_drift.discard('runner_finished')
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _token_worker(self):
+        while not self._token_closing:
+            await self._token_event.wait()
+            self._token_event.clear()
+            if self._token_closing:
+                return
+            try:
+                async with self.action_lock:
+                    tool_lock = getattr(self.session, 'tool_lock', None)
+                    if tool_lock is not None and tool_lock is not self.action_lock:
+                        async with tool_lock:
+                            await self._flush_token_drift_locked()
+                    else:
+                        await self._flush_token_drift_locked()
+            except Exception as error:
+                self.paused = True
+                self.metrics.pause()
+                self.metrics.update(status='paused')
+                self._public_message('token-error', f'Token 推进未完成，游戏保持暂停：{error}。已执行范围见 token_drift.json，不自动重放。')
+                # Unknown batches stay ineligible; retain the consumer for
+                # recoverable pre-execution failures after user inspection.
+                continue
+
+    async def _flush_token_drift_locked(self):
+        """The caller owns both existing async game locks; never reacquire them."""
+        ledger = self.token_drift
+        if ledger is None:
+            return
+        self._sync_token_pause()
+        while ledger.pending:
+            if not self._token_motion_eligible():
+                ledger.exclude_window('control_state_changed')
+                return
+            before = getattr(self.session, 'last_obs', None) or {}
+            frames = ledger.begin(self._token_epoch(), {'frame': before.get('frame'), 'epoch': self._token_epoch()})
+            if frames is None:
+                return
+            worker = asyncio.create_task(asyncio.to_thread(self.session.token_frame_step, frames))
+            try:
+                try:
+                    result = await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    self.session._token_cancel.set()
+                    while not worker.done():
+                        try:
+                            await asyncio.shield(worker)
+                        except asyncio.CancelledError:
+                            continue
+                    result = worker.result()
+                    ledger.commit(result)
+                    raise
+                ledger.commit(result)
+            except Exception as error:
+                ledger.fail(error)
+                self.paused = True
+                self.metrics.pause()
+                self.session.token_observation_required = True
+                raise
+            if not self._token_closing and self._token_motion_eligible():
+                self.metrics.update(status='tool' if self.metrics._tools else 'thinking')
 
     async def _agent_effort_policy(self, value):
         from .game_policy import effort_denial
@@ -125,6 +270,9 @@ class SessionControls:
     def _public_compaction(self, ident, *, completed=False, reminder_key=None):
         """ident：历史里这次压缩的编号（开始与完成用同一个，完成时替换"正在压缩"那一条）；
         reminder_key：笔记提醒按它去重（Claude Code 的 compact_boundary 带 uuid），不给时用 ident。"""
+        self._token_compacting = not completed
+        if not completed and self.token_drift is not None:
+            self._exclude_token_window('compacting')
         notes = getattr(self, 'note_reminders', None)
         resend = False
         if completed and notes is not None:
@@ -412,6 +560,8 @@ class SessionControls:
                                 raise RuntimeError('游戏操作已归还并保持暂停，但模型中断未确认：' + str(interrupt_error)) from interrupt_error
                             self.control.mark(row["id"], "submitted", "当前动作已结束，试玩已暂停")
                         elif row["kind"] == "resume":
+                            if self.token_drift is not None and self.token_drift.unknown:
+                                raise ValueError('Token 推进执行范围未确认，请先人工核验 token_drift.json；保持暂停，不自动重放。')
                             if getattr(self, '_bridge_reload_failed', False):
                                 raise ValueError('桥接重载尚未接回，请先重试重载；不能直接恢复游戏输入')
                             if self.chat_only:

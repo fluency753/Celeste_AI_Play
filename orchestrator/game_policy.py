@@ -50,6 +50,9 @@ def denial(controller, name, arguments=None):
         return '用户已中断本次运行，本次游戏工具未执行。'
     if name == 'stop_run':
         return None
+    ledger = getattr(controller, 'token_drift', None)
+    if ledger is not None and ledger.unknown:
+        return '上次 Token 推进的执行范围未确认，本次游戏工具未执行；请先人工核验 token_drift.json，不要重发原输入。'
     if getattr(controller, 'model_waiting', False):
         return '模型服务恢复等待中，本次游戏工具未执行。'
     if controller.paused or getattr(controller, 'pausing', False):

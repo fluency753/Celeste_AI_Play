@@ -156,6 +156,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="只用于探索模式：思考僵直（默认关；续跑沿用原运行）。一次冻结里思考、运行工具的时间各自满 2.5 分钟后，"
                          "按比例在下一次 act 前让角色保持上一帧的按键僵直（思考每 2.5 分钟 0.2 秒、工具每 2.5 分钟另加 0.4 秒，"
                          "见可调参数 stiff_unit_s、stiff_think_s、stiff_tool_s），不计入 act 的帧数上限")
+    ap.add_argument('--token-drift', action=argparse.BooleanOptionalAction, default=None,
+                    help='探索模式：按新增输出 token 保持最后输入推进游戏；默认关闭，比例用 --tune tokens_per_frame=500 设置，与思考僵直互斥')
     ap.add_argument("--collision-image", choices=("always", "room", "off"), default=None,
                     help="工具结果里附碰撞图：always 每次，room 只在进新房间与 observe 时，off 不附（工作区里每次照样写图）；"
                          "不写时续跑沿用原配置；未配置时统一默认 room")
@@ -455,6 +457,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         raise SystemExit("--stiffness（思考僵直）只用于探索模式")
     cfg.stiffness = (bool(previous["state"].get("stiffness", False)) if previous and args.stiffness is None
                      else bool(args.stiffness)) and cfg.mode == EXPLORE
+    cfg.token_drift = bool(previous['state'].get('token_drift', False)) if previous and args.token_drift is None else bool(args.token_drift)
+    if cfg.token_drift and cfg.mode != EXPLORE:
+        raise SystemExit('--token-drift 只用于探索模式')
+    if cfg.token_drift and cfg.stiffness:
+        raise SystemExit('Token 推进与按时间思考僵直不能同时开启')
     cfg.formal_thought = (bool(previous["state"].get("formal_thought", False)) if previous and args.formal_thought is None
                           else bool(args.formal_thought))
     cfg.collision_image = (previous["state"].get("collision_image") if previous and args.collision_image is None
@@ -659,7 +666,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         all_chapters = plan_pieces = None
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "allow_detour":bool(getattr(cfg,"allow_detour",False)), "play_scope":cfg.play_scope, "completion_policy":cfg.completion_policy, "visited_maps":cfg.visited_maps, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
-             "runtime": cfg.runtime, "pause_limit": cfg.pause_limit, "planning_rules": {"rounds_per_room": cfg.rounds_per_room, "room_scale": cfg.room_scale}, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "autocompact": cfg.autocompact, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
+             "runtime": cfg.runtime, "pause_limit": cfg.pause_limit, "planning_rules": {"rounds_per_room": cfg.rounds_per_room, "room_scale": cfg.room_scale}, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "token_drift": cfg.token_drift, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "autocompact": cfg.autocompact, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": cfg.cutscene_mode == 'agent' and cfg.resume_pending, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "kb_allow": list(cfg.kb_allow), "kb_extra": cfg.kb_extra, "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None,

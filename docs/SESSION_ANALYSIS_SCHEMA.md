@@ -26,7 +26,7 @@ source/sources 保存路径、record_index（成功解析的 JSON 对象序号�
 
 ## 工具字段
 
-- call_id：运行时原 ID；tool：名称；record_kind=tool_execution 为实际工具，code_mode_wrapper 为 exec/wait 包装调用。没有可靠父子 ID 时不猜配，包装和内部工具数量/时间不能相加。
+- call_id：运行时原 ID；tool：名称；record_kind=tool_execution 为实际工具，code_mode_wrapper 为 exec/wait 包装调用；system_advance 为主控 Token 推进批次（tool=system.token_advance），不代表 Agent 又调用了一次工具。没有可靠父子 ID 时不猜配，包装和内部工具数量/时间不能相加。Token 批次执行范围不明时 success=null、status=execution_unknown，不推测成功、失败或游戏状态，详见 [Token 推进](TOKEN_DRIFT.md)。
 - requested_wall/result_wall：已记录请求/结果可用时刻；requested_time_source/result_time_source：时间依据。timing_ended_wall 为主控计时闭合，中断清理也可闭合，不能视为返回。
 - active_s：主控暂停扣除后的单调用占用，包含游戏执行且并发可重叠；runtime_duration_s：执行器时长；wall_span_s：两端墙钟差，不可互相替代。逆序标记 clock_order_warning，不取绝对值。
 - thinking_before_s：主控在调用前测得的 thinking 累计差；thinking_interval_start_wall：已知计量开始边界。并发时可能为零，末尾未闭合思考不包含；不是消息间隔或私有推理时长。

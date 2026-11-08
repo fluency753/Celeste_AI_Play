@@ -21,6 +21,6 @@
 
 ## 数据参考
 
-游戏每秒 60 帧；思考时冻结。{stiffness_rule}{explore_reference_rule}
+游戏每秒 60 帧。{thinking_freeze_rule}{stiffness_rule}{explore_reference_rule}
 
 {explore_programs}

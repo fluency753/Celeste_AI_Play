@@ -498,6 +498,7 @@
           <label class="switch" id="rowSim"><span class="text"><b id="simTitle">预置模拟器</b><span id="simNote">逐帧精确地推演路线</span></span><input type="checkbox" id="sim" checked></label>
           <label class="switch" id="rowSimAssist" hidden><span class="text"><b>限额短路线预测（需自配标准模拟器）</b><span id="simAssistNote">按体力额度预测短路线</span></span><input type="checkbox" id="simAssist"></label>
           <label class="switch" id="rowStiffness" hidden><span class="text"><b>思考僵直</b><span>冻结期间的思考与工具时间按比例变成下一次动作前的僵直（参数在“可调参数”里）</span></span><input type="checkbox" id="stiffness"></label>
+          <label class="switch" id="rowTokenDrift" hidden><span class="text"><b>Token 推进</b><span>按新增输出 token 保持最后输入推进游戏，与思考僵直互斥；比例在可调参数中设置</span></span><input type="checkbox" id="tokenDrift"></label>
           <label class="switch"><span class="text"><b>仅正式思考</b><span>冻结期间的临时思考只显示在控制台，游戏内 HUD 只显示每次动作的正式思考</span></span><input type="checkbox" id="formalThought"></label>
           <label class="switch"><span class="text"><b>节省上下文</b><span>动作结果省略每次都一样的部分，提示词建议精简程序输出；Claude 的自动压缩窗口默认 50 万</span></span><input type="checkbox" id="saveContext" checked></label>
           <label class="switch"><span class="text"><b>规划回放</b><span>把推演过的路线画进游戏；需要在提示词里让智能体主动写推演程序，并适配系统的绘制接口</span></span><input type="checkbox" id="playback"></label>
@@ -1190,6 +1191,7 @@ async function loadOptions() {
   fillMachine(o.machine || {});
   fillUsage();
   const d = o.defaults;
+  $("tokenDrift").checked = !!d.token_drift;
   $("maxMinutes").value = d.max_minutes;
   $("agent").value = (o.deploy && o.deploy.agent) || "";
   // 先定章节选择再填存档：fillSaves 会调 onSaveChange，它要读 ui.chapters／ui.sides
@@ -1382,6 +1384,8 @@ function setMode(mode) {
   $("rowSim").hidden = mode !== "speedrun";
   $("rowSimAssist").hidden = mode !== "explore";
   $("rowStiffness").hidden = mode !== "explore";
+  $("rowTokenDrift").hidden = mode !== "explore";
+  if (mode !== "explore") $("tokenDrift").checked = false;
   $("fsExplore").hidden = mode !== "explore";
   $("liveNote").textContent = mode === "explore"
     ? "观众实时观看：解说更勤，每次决策约 10～20 秒，可按要求退出关卡；HUD 默认用可交互的网页形式"
@@ -1667,7 +1671,7 @@ function formOptions() {
   const options = {
     engine, provider, model: $("model").value, effort: $("effort").value, agent: $("agent").value.trim(),
     mode: ui.mode, live: $("live").checked, sim: $("sim").checked, sim_assist: $("simAssist").checked,
-    stiffness: $("stiffness").checked, formal_thought: $("formalThought").checked, save_context: $("saveContext").checked, playback: $("playback").checked, record: $("record").checked, hud_mod: $("hudMod").checked,
+    stiffness: $("stiffness").checked, token_drift: $("tokenDrift").checked, formal_thought: $("formalThought").checked, save_context: $("saveContext").checked, playback: $("playback").checked, record: $("record").checked, hud_mod: $("hudMod").checked,
     study: $("study").checked, limit_planning: $("limitPlanning").checked, quota_wait: $("quotaWait").checked,
     keep_obs_open: $("keepObs").checked, start_paused: $("startPaused").checked,
     action_permissions: {restart_chapter: $("allowRestartChapter").checked, return_to_map: $("allowReturnToMap").checked, save_quit: $("allowSaveQuit").checked},
@@ -1812,7 +1816,7 @@ function applyProfileForm(form) {
   const check = (id, value) => { if (typeof value === "boolean" && !$(id).disabled) $(id).checked = value; };
   if (has("agent")) $("agent").value = form.agent || "";
   if (form.mode === "speedrun" || form.mode === "explore") ui.mode = form.mode;    // boot 里按 ui.mode 切换显示
-  for (const [key, id] of [["live", "live"], ["sim", "sim"], ["sim_assist", "simAssist"], ["stiffness", "stiffness"],
+  for (const [key, id] of [["live", "live"], ["sim", "sim"], ["sim_assist", "simAssist"], ["stiffness", "stiffness"], ["token_drift", "tokenDrift"],
       ["formal_thought", "formalThought"], ["save_context", "saveContext"], ["playback", "playback"], ["record", "record"],
       ["hud_mod", "hudMod"], ["study", "study"], ["limit_planning", "limitPlanning"],
       ["start_paused", "startPaused"], ["allow_detour", "allowDetour"],
@@ -2782,6 +2786,7 @@ async function loadPromptPreview() {
                                         : o.engine !== "codex" && o.sim && o.runtime === "container" ? "开模拟器（/sim）" : "无模拟能力");
   else if (o.sim_assist) bits.push("限额预测");
   if (o.mode === "explore" && o.stiffness) bits.push("思考僵直");
+  if (o.mode === "explore" && o.token_drift) bits.push("Token 推进");
   if (o.formal_thought) bits.push("仅正式思考");
   if (o.save_context) bits.push("节省上下文");
   if (o.mode === "speedrun" && o.limit_planning && o.sim) bits.push("限制规划轮次");
@@ -3523,6 +3528,8 @@ $("live").addEventListener("change", onLive);
 $("hudMod").addEventListener("change", () => { ui.hudTouched = true; onLive(); });
 $("study").addEventListener("change", () => { $("study").dataset.touched = "1"; });
 $("saveContext").addEventListener("change", updateCompactHint);
+$("tokenDrift").addEventListener("change", () => { if ($("tokenDrift").checked) $("stiffness").checked = false; });
+$("stiffness").addEventListener("change", () => { if ($("stiffness").checked) $("tokenDrift").checked = false; });
 for (const [, id] of MACHINE_FIELDS) $(id).addEventListener("change", saveMachineSoon);
 document.querySelectorAll("[data-pin]").forEach(box => box.addEventListener("change", onPinChange));
 for (const id of ["quotaWait", "quotaHours", "maxUsage"]) $(id).addEventListener("change", saveUsageSoon);

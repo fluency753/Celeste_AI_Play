@@ -306,6 +306,8 @@ class RunConfig:
     explore_act_frames: int = 600    # 探索模式：单次 act 最多推进的帧数
     explore_search_frames: int | None = None  # 探索模式：自写模拟器与搜索程序每次最多推演的帧数（只写进提示词）；None = 不限
     stiffness: bool = False          # 探索模式的思考僵直（--stiffness）：冻结期间的思考与工具时间按比例变成下一次 act 前的僵直
+    token_drift: bool = False        # 探索模式：按新增输出 token 推进保持最后输入的游戏帧
+    tokens_per_frame: int = 500
     stiff_unit_s: float = 150.0      # 思考僵直：计时单位（思考、工具时间各自满一份才开始僵直，之后按比例）
     stiff_think_s: float = 0.2       # 每份思考时间的僵直秒数
     stiff_tool_s: float = 0.4        # 每份工具时间（Bash 程序、观测等）另外僵直的秒数

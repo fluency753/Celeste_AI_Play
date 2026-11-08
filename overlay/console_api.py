@@ -506,7 +506,8 @@ PLACEHOLDERS = {
     "{act_max_frames}": "单次 act 最多推进的帧数（可调参数：速通 max_frames_per_act，探索 explore_act_frames）",
     "{explore_search_rule}": "探索模式自写模拟器与搜索程序推演帧数的一句（可调参数 explore_search_frames；不限时为空）",
     "{cpu_rule}": "探索模式最多可以用几个 CPU 核的一句（可调参数 agent_cpus，默认本机的核数；容器运行时不超过 Docker 实际能用的核数）",
-    "{stiffness_rule}": "探索模式开了思考僵直时的说明（冻结期间的思考与工具时间按比例变成下一次 act 前的僵直；可调参数 stiff_unit_s、stiff_think_s、stiff_tool_s）；没开时为空",
+    "{stiffness_rule}": "探索模式的思考僵直或 Token 推进说明；前者按时间、后者按新增输出 token 换算帧数（tokens_per_frame 可调），两项互斥；均未开时为空",
+    "{thinking_freeze_rule}": "未启用 Token 推进时说明思考期间冻结；启用时为空",
     "{formal_thought_rule}": "开了“仅正式思考”时的说明（HUD 只显示 act 的正式思考，冻结期间 narrate 写的临时思考只显示在控制台；可调参数 thought_temp_max_hanzi）；没开时为空",
     "{bash_default}": "Bash 不写 timeout 时的上限（可调参数 bash_default_s）",
     "{bash_max}": "Bash 最长时长（可调参数 bash_max_s）",
@@ -719,7 +720,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.22.7"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.23.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

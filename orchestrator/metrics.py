@@ -63,6 +63,9 @@ class MetricsState:
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）
     stiff_frames: int = 0             # 思考僵直推进的帧数（探索模式开了 --stiffness 时）
     stiff_s: float = 0.0              # 思考僵直的游戏内秒数
+    token_frames: int = 0
+    token_s: float = 0.0
+    token_drift: dict | None = None
     retries: int = 0                  # 自动重试次数（重算程序运行次数，不唤醒大模型）
     pause_denials: int = 0            # 旧工具规划门禁拒绝数，仅兼容历史统计；主控模拟预算由独立账本记录
     plan_rounds_left: int | None = None  # 本章还剩的规划轮次（--limit-planning 时）；None = 不限（默认）
@@ -158,6 +161,7 @@ class Metrics:
         from .decision_timing import DecisionTiming
         self.timing = DecisionTiming(path.parent / "decision_timing.jsonl")
         self._lock = threading.Lock()
+        self.pause_serial = 0  # Detect even pause/resume windows with no usage notification.
         self._t0 = time.monotonic()
         self._offset = 0.0              # 续跑时上一段运行已用的现实用时
         self._paused = 0.0              # 从 _t0 起暂停（等待额度）的总秒数
@@ -363,6 +367,7 @@ class Metrics:
         with self._lock:
             self._flush_locked()
             self.timing.pause()
+            self.pause_serial += 1
             if self._pause_start is None:
                 now_m = time.monotonic()
                 start = now_m
@@ -408,7 +413,7 @@ class Metrics:
                 "stiff_frames", "stiff_s",
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
                 "completed_ticks", "splits", "detour", "detour_classifying", "detours", "plan_banked_ticks", "plan_session_ticks", "game_clock",
-                "output_tokens", "thinking_tokens", "waited_s", "quota_waits",
+                "output_tokens", "thinking_tokens", "token_frames", "token_s", "waited_s", "quota_waits",
                 "net_wait_s", "net_waits",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "formal_thought",
                 "formal_thought_wall", "context_tokens",
@@ -417,7 +422,7 @@ class Metrics:
     # 新的一局开始时 HUD 清零的累计值（知识库、上下文与压缩次数不清零）
     CHAPTER_COUNTERS = ("thinking_s", "tool_s", "deaths", "decisions", "tool_calls", "sim_calls", "sim_rollouts",
                         "retries", "frames_played", "frames_auto", "play_game_s", "auto_game_s", "narrates",
-                        "output_tokens", "thinking_tokens", "replays", "replay_s", "elapsed_s")
+                        "output_tokens", "thinking_tokens", "token_frames", "token_s", "replays", "replay_s", "elapsed_s")
 
     def restore(self, previous: dict, resumed_from: str) -> None:
         """续跑：接着上一段运行的统计累计（现实用时从上一段的值接着走）。"""

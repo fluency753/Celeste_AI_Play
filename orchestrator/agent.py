@@ -242,6 +242,9 @@ class ClaudeRunner(SessionControls):
         self._interrupt_responses = {}
         self._init_controls(disabled=prepare_only, start_paused=start_paused)
         self.action_lock = getattr(session, 'tool_lock', self.action_lock)
+        from .output_usage import ClaudeUsage
+        self.usage_tracker = ClaudeUsage(metrics, run_dir / 'output_usage.json', self.session_id,
+                                        self._record_output_usage)
         if session is not None:
             session.workspace_hook_guard = self._workspace_hook_guard
 
@@ -454,7 +457,7 @@ class ClaudeRunner(SessionControls):
         return list(self._provider_env()) if self.cfg.third_party else ["CLAUDE_CODE_OAUTH_TOKEN"]
 
     def _common_args(self) -> list[str]:
-        args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+        args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                 "--model", self._model_name(), "--effort", self.effort,
                 "--strict-mcp-config", "--permission-mode", "dontAsk",
                 *(["--resume", self.session_id] if self.resume else ["--session-id", self.session_id])]
@@ -612,6 +615,7 @@ class ClaudeRunner(SessionControls):
             if self.control:
                 self.control_task = asyncio.create_task(self._controls())
                 self.heartbeat_task = asyncio.create_task(self._heartbeat())
+            self._start_token_worker()
             while True:
                 if (note := self._effort_at_start()):
                     first = note + first
@@ -655,6 +659,10 @@ class ClaudeRunner(SessionControls):
         finally:
             primary = sys.exception()
             failure = primary
+            try:
+                await self._finish_token_worker()
+            except BaseException as error:
+                failure = _cleanup_failure(failure, error, 'Token 推进收尾')
             tasks = [task for task in (self.control_task, self.heartbeat_task) if task]
             for task in tasks:
                 task.cancel()
@@ -910,6 +918,7 @@ class ClaudeRunner(SessionControls):
         if self.stop_reason or self.quota_until is not None or not getattr(self.cfg, "net_wait", True):
             return
         if self.net_down_since is None:
+            self._exclude_token_window('network_retry')
             self.net_down_since = time.monotonic()
             print(f"[agent] 模型连不上（{status or '无响应'}：{str(text)[:80]}），Claude Code 正在重试", flush=True)
         if self.net_outage or not give_up:
@@ -1117,6 +1126,11 @@ class ClaudeRunner(SessionControls):
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if event.get('type') == 'stream_event':
+                from .output_usage import partial_usage_event
+                event = partial_usage_event(event)
+                if event is None:
+                    continue
             # 本机运行目录里的完整事件记录保留思考正文，供复盘（runs\evscan.py 等）；它不进 HUD 的会话列表
             self._events.write(json.dumps(_strip_images(event), ensure_ascii=False) + "\n")
             self._events.flush()
@@ -1157,7 +1171,13 @@ class ClaudeRunner(SessionControls):
     def _handle(self, event: dict) -> None:
         etype = event.get("type")
         subtype = event.get("subtype")
-        if etype == 'control_response':
+        if etype == 'stream_event':
+            if not self._command_active:
+                raw = event.get('event') or {}
+                if raw.get('type') == 'message_start':
+                    self._check_reply_model(event, raw.get('message') or {})
+                self.usage_tracker.partial(event)
+        elif etype == 'control_response':
             response = event.get('response') or {}
             future = self._interrupt_responses.get(response.get('request_id'))
             if future and not future.done():
@@ -1330,8 +1350,7 @@ class ClaudeRunner(SessionControls):
                 if network_error(status, result_text):
                     self._net_trouble(status, result_text, give_up=True)
             usage = event.get("usage") or {}
-            self.metrics.add(output_tokens=usage.get("output_tokens", 0),
-                             thinking_tokens=(usage.get("output_tokens_details") or {}).get("thinking_tokens", 0))
+            self.usage_tracker.result(event)
             print(f"[agent] 第 {self.turns} 轮结束：{subtype} is_error={event.get('is_error')} "
                   f"输出 {usage.get('output_tokens', 0)} token", flush=True)
             self._end_model_turn()

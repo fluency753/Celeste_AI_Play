@@ -8,6 +8,7 @@ import socket
 import tempfile
 from types import SimpleNamespace
 import unittest
+import uuid
 from unittest.mock import patch
 
 from calibration.bridge_reload_test import BoundaryResident, FakeCore
@@ -272,6 +273,10 @@ class TcpAdmissionTests(unittest.TestCase):
 
 
 class DirectRoutingTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch('orchestrator.game_process.CONTROLLER_MUTEX',
+                                'Local\\CelesteIdleReloadTest-' + uuid.uuid4().hex))
+
     def test_completed_idle_history_does_not_hide_a_later_player_hold(self):
         from tools import reload_bridge as cli
         core = FakeCore()

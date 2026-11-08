@@ -62,6 +62,27 @@ class AnalysisTests(unittest.TestCase):
         self.append(path, {'type': 'session_meta', 'payload': {'id': self.sid}})
         return home, path
 
+    def test_token_advances_export_actual_frames_and_state_without_inferred_unknown_state(self):
+        path = self.run/'token_advances.jsonl'
+        self.append(path, {'event': 'requested', 'wall': 1001,
+                           'batch': {'id': 1, 'requested': 2, 'before': {'frame': 100}}})
+        self.append(path, {'event': 'committed', 'wall': 1002,
+                           'batch': {'id': 1, 'requested': 2, 'consumed': 1, 'stop': 'room',
+                                     'after': {'frame': 101, 'room': 'next', 'player': {'pos': [20, 30]}}}})
+        self.append(path, {'event': 'requested', 'wall': 1003, 'batch': {'id': 2, 'requested': 1}})
+        self.append(path, {'event': 'unknown', 'wall': 1004,
+                           'batch': {'id': 2, 'status': 'unknown', 'error': 'ACK missing'}})
+        with closing(self.collect()) as report:
+            rows = report.analysis_records['tool_calls']
+            self.assertEqual([r['record_kind'] for r in rows], ['system_advance', 'system_advance'])
+            self.assertEqual(rows[0]['result']['consumed'], 1)
+            self.assertEqual(rows[1]['status'], 'execution_unknown')
+            self.assertIsNone(rows[1]['success'])
+            states = report.analysis_records['game_states']
+            self.assertEqual(len(states), 1)
+            self.assertEqual(states[0]['state']['room'], 'next')
+            self.assertEqual(states[0]['tool_id'], rows[0]['tool_id'])
+
     def test_turn_parallel_tools_cleanup_failure_and_no_private_reasoning(self):
         self.timing('turn_requested', 1000)
         self.timing('turn_acknowledged', 1001, turn_id='uuid')

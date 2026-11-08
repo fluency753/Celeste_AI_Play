@@ -27,9 +27,11 @@ class Tunable:
     optional: bool = False                               # 允许空值（不限）
 
 
-GROUPS = ("执行与解说", "规划回放", "速通：程序与规划", "探索：规划程序", "探索：思考僵直", "探索：限额预测")
+GROUPS = ("执行与解说", "规划回放", "速通：程序与规划", "探索：规划程序", "探索：思考僵直", "探索：Token 推进", "探索：限额预测")
 
 TUNABLES: tuple[Tunable, ...] = (
+    Tunable("tokens_per_frame", "每帧消耗输出 token", "探索：Token 推进", int, 500, 1, 1000000, "token/帧",
+            "开启 Token 推进后生效；输出总量已包含推理，不重复相加。整数帧在用量上报后的动作边界执行，余数滚存。", ("explore",)),
     Tunable("max_frames_per_act", "单次 act 最多推进的帧数", "执行与解说", int, 600, 60, 3600, "帧",
             "提示词与 act 的说明里的上限跟着变（探索模式用\"探索：规划程序\"里的那一项）", ("speedrun",)),
     Tunable("min_frames_per_act", "单次 act 最少推进的帧数", "执行与解说", int, 1, 1, 600, "帧",

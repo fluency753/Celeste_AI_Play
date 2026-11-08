@@ -228,6 +228,11 @@ def explore_search_rule(cfg) -> str:
 
 def stiffness_rule(cfg) -> str:
     """探索模式开了思考僵直（--stiffness）时提示词里的说明；没开时为空。数字来自可调参数 stiff_unit_s 等。"""
+    if getattr(cfg, 'token_drift', False):
+        return (f"Token 推进已开启：模型每新增 {cfg.tokens_per_frame} 个输出 token，游戏保持最后真实输入推进1帧，余数滚存；输出总量包含推理，不重复计算。"
+                "按运行时用量通知分批结算，不是逐token实时；不受act帧数上下限影响。暂停、服务等待、压缩、知识库准备和聊天不推进。"
+                "游戏可能在你规划或运行工具期间改变，请以最新帧号与观测为准，长思考前尽量停在保持当前输入也安全的位置。"
+                "Token推进遇到死亡、换房、通关或剧情立即停止；旧排队动作不执行，先默认observe核验后重新规划。不会代按确认或推进死亡动画。")
     if not getattr(cfg, "stiffness", False):
         return ""
     unit = float(getattr(cfg, "stiff_unit_s", 150.0))
@@ -358,6 +363,7 @@ def fill(text: str, cfg) -> str:
         "{explore_search_rule}": explore_search_rule(cfg),
         "{cpu_rule}": cpu_rule(cfg),
         "{stiffness_rule}": stiffness_rule(cfg),
+        "{thinking_freeze_rule}": "" if getattr(cfg, 'token_drift', False) else "思考时冻结。",
         "{thought_brief_rule}": thought_brief_rule(cfg),
         "{thought_mood}": THOUGHT_MOOD,
         "{thought_mood_short}": THOUGHT_MOOD_SHORT,

@@ -20,7 +20,7 @@ AGENT_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}"
 MODEL_PATTERN = r"[A-Za-z0-9._:/\[\]-]{1,100}"
 PROVIDER_PATTERN = r"[A-Za-z0-9_.-]{1,60}"
 
-SWITCHES = ("live", "sim", "sim_assist", "stiffness", "formal_thought", "save_context", "playback", "record", "hud_mod", "study", "limit_planning",
+SWITCHES = ("live", "sim", "sim_assist", "stiffness", "token_drift", "formal_thought", "save_context", "playback", "record", "hud_mod", "study", "limit_planning",
             "keep_obs_open", "start_paused", "quota_wait", "record_marker", "skip_enter", "no_agent", "hud_window", "hud", "allow_chapter_reset",
             "freeze_chapter_select", "freeze_file_select", "freeze_main_menu", "allow_detour")
 MAPS = {"celeste": "蔚蓝官方章节"}      # 以后可能加 MOD 地图
@@ -33,7 +33,7 @@ def minutes_text(value) -> str:
 
 DEFAULTS = {
     "engine": "claude", "provider": "anthropic", "model": "opus", "effort": "high", "agent": "",
-    "mode": SPEEDRUN, "live": False, "sim": None, "sim_assist": False, "stiffness": False, "formal_thought": False, "save_context": True, "collision_image": None, "playback": False, "record": True,
+    "mode": SPEEDRUN, "live": False, "sim": None, "sim_assist": False, "stiffness": False, "token_drift": False, "formal_thought": False, "save_context": True, "collision_image": None, "playback": False, "record": True,
     "hud_mod": None, "study": True, "limit_planning": False, "continuous_music": None, "keep_obs_open": False,
     "start_paused": False, "quota_wait": True, "allow_chapter_reset": False, "cutscene_mode": "auto", "chapters": [0], "segments": None,
     "sides": [],      # 另外要玩的 B／C 面（整章）：[[章节编号, "B"], ...]；空 = 只玩 A 面（命令与原来相同）
@@ -137,6 +137,10 @@ def normalize(options: dict) -> dict:
         o["hud_mod"] = not o["live"]             # 与命令行相同：不开直播时游戏内 HUD 默认开
     for key in SWITCHES:
         _bool(o, key)
+    if o['token_drift'] and o['mode'] != EXPLORE:
+        raise ValueError('Token 推进只用于探索模式')
+    if o['token_drift'] and o['stiffness']:
+        raise ValueError('Token 推进与按时间思考僵直不能同时开启')
     from .action_policy import ActionPermissions
     o['action_permissions'] = (ActionPermissions.legacy(o['allow_chapter_reset']) if o['action_permissions'] is None
                                else ActionPermissions.read(o['action_permissions'])).snapshot()
@@ -258,6 +262,8 @@ def build(options: dict, profile: str | None = None) -> list[str]:
         argv.append("--sim-assist" if o["sim_assist"] else "--no-sim-assist")
         if o["stiffness"]:
             argv.append("--stiffness")          # 思考僵直（探索模式，默认关）
+        if o["token_drift"]:
+            argv.append("--token-drift")
     if o["formal_thought"]:
         argv.append("--formal-thought")         # 仅正式思考（默认关）
     argv.append("--save-context" if o["save_context"] else "--no-save-context")   # 节省上下文（默认开）
@@ -398,6 +404,7 @@ def config_for(options: dict, profile: str | None = None):
     cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and (o["limit_planning"] or (o["engine"] != "codex" and capabilities.programs))
     cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"]
     cfg.stiffness = o["mode"] == EXPLORE and o["stiffness"]
+    cfg.token_drift = o["mode"] == EXPLORE and o["token_drift"]
     cfg.formal_thought = bool(o["formal_thought"])
     cfg.save_context = bool(o["save_context"])
     cfg.collision_image = o["collision_image"]

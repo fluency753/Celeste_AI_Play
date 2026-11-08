@@ -1168,7 +1168,13 @@ class DirectAbortCliTests(unittest.TestCase):
         unused = socket.create_server(('127.0.0.1', 0))
         hud_port = unused.getsockname()[1]
         unused.close()   # nothing listens: the original controller has exited
-        return subprocess.run([sys.executable, '-X', 'utf8', 'tools/reload_bridge.py', '--hud-port', str(hud_port), *args],
+        # Keep the real Windows admission lock, but in this fixture's namespace.
+        # A real Player may be running on the machine; this CLI only talks to FakeCore.
+        bootstrap = ('import runpy,sys,uuid; import orchestrator.game_process as game_process; '
+                     'game_process.CONTROLLER_MUTEX="Local\\\\CelesteReloadTest-"+uuid.uuid4().hex; '
+                     'sys.argv=["tools/reload_bridge.py",*sys.argv[1:]]; '
+                     'runpy.run_path("tools/reload_bridge.py",run_name="__main__")')
+        return subprocess.run([sys.executable, '-X', 'utf8', '-c', bootstrap, '--hud-port', str(hud_port), *args],
                               cwd=Path(__file__).resolve().parents[1], capture_output=True, encoding='utf-8', timeout=20)
 
     def test_direct_abort_restores_files_from_run_ledger_and_releases_hold(self):
