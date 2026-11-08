@@ -57,6 +57,14 @@ jobs:
           ref: ${{ steps.settings.outputs.obs_commit }}
           path: build/obs-plugin/obs-studio-${{ steps.settings.outputs.obs_version }}
           sparse-checkout: libobs
+      - name: Download pinned standard Everest references
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $config = Get-Content configs/component_build.json | ConvertFrom-Json
+          New-Item -ItemType Directory -Path build/release-references | Out-Null
+          $archive = Join-Path build/release-references ($config.everest_tag + '.zip')
+          gh release download $config.everest_tag --repo EverestAPI/Everest --pattern lib-stripped.zip --output $archive
       - run: python tools/package_release.py --tag "$env:RELEASE_TAG"
       - run: python tools/publish_release.py --tag "$env:RELEASE_TAG" --check
         if: github.event_name != 'push'
