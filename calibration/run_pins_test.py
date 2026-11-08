@@ -165,8 +165,10 @@ class ExecutorItemTests(unittest.TestCase):
             if url.path == "/api/console/options":
                 return await route.fulfill(json=options)
             if url.path == "/api/models":
-                ident = "gpt-5.5" if parse_qs(url.query)["provider"] == ["codex"] else "opus"
-                return await route.fulfill(json={"models": [{"id": ident, "efforts": ["high"], "default_effort": "high"}]})
+                if parse_qs(url.query)["provider"] == ["codex"]:
+                    return await route.fulfill(json={"models": [{"id": "gpt-5.5", "efforts": ["high"], "default_effort": "high"}]})
+                return await route.fulfill(json={"models": [{"id": "opus", "efforts": ["high"], "default_effort": "high",
+                                                             "thought": {"max_hanzi": 40}}]})
             if url.path in ("/api/console/preview", "/api/console/prompt/preview"):
                 return await route.fulfill(json={"command": "预览", "text": "", "parts": [], "overridden": []})
             if url.path == "/api/console/kb":
@@ -194,10 +196,13 @@ class ExecutorItemTests(unittest.TestCase):
                 self.assertNotIn("agent_cpus", (await page.evaluate("profileForm()"))["tune"])
                 for selector in ("#manageProviders", "#autocompact", "#tune-thought_max_hanzi"):
                     await expect(page.locator(selector)).to_be_enabled()
+                await expect(page.locator("#tune-thought_max_hanzi")).to_have_attribute("placeholder", "40（模型）")
+                await expect(page.locator("#tune-thought_temp_max_hanzi")).to_have_attribute("placeholder", "120")
                 await page.select_option("#runtime", "codex:codex")
                 await expect(page.locator("#model")).to_have_value("gpt-5.5")
                 for selector in ("#manageProviders", "#autocompact", "#tune-thought_max_hanzi", "#quotaWait"):
                     await expect(page.locator(selector)).to_be_disabled()
+                await expect(page.locator("#tune-thought_max_hanzi")).to_have_attribute("placeholder", "不适用")
                 self.assertEqual(errors, [])
             finally:
                 await browser.close()

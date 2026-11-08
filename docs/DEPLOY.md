@@ -443,12 +443,12 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 | `configs\codex.json` | 是 | Codex 执行器的提供方信息：`label`、`images`、`default_effort`、`allowed_domains`（防火墙为 Codex 放行的域名），以及按模型 ID 叠加在 Codex 模型目录上的 `models`（`label`、`context_limit`、`thought`、`images`） |
 | `configs\local.codex.json` | 否 | 本机覆盖上面的键 |
 | `configs\local.providers.json` | 否 | 本机覆盖与自定义平台；密钥文件位置写在这里；各提供方的用量设置 `usage`（`max_usage`、`quota_wait`、`quota_wait_max_hours`，Anthropic 订阅也写在这里） |
-| `configs\hud.json` | 是 | HUD：智能体显示名 `names`、章节名、颜色、上下文窗口、`page_version`（变了时已打开的网页 HUD 自动重新加载）等 |
+| `configs\hud.json` | 是 | HUD：章节名、颜色、`page_version`（变了时已打开的网页 HUD 自动重新加载）等；后备的显示名 `names`（模型行没写 `label` 时用）、所有模型共同的上下文警示上限 `compact_threshold`、档位名 `effort_names` |
 | `configs\local.hud.json` | 否 | 本机覆盖 HUD 配置 |
 | `configs\local.hud-window.json`、`configs\local.hud-font.json` | 否 | HUD 窗口的位置、大小、置顶选择与字号（自动保存） |
 | `.env` | 否 | `CLAUDE_CODE_OAUTH_TOKEN` |
 | `configs\local.deploy.json` | 否 | 部署向导的回答 |
-| `configs\local.console.json` | 否 | 控制台记住的游戏位置、各模式的知识库阅读权限，以及 `machine`：本机设置（运行方式、端口、录像与声音、HUD 服务与窗口），所有配置共用 |
+| `configs\local.console.json` | 否 | 控制台记住的游戏位置、各模式的知识库阅读权限；`machine`：本机设置（运行方式、端口、录像与声音、HUD 服务与窗口、自写程序最多用几个 CPU 核 `agent_cpus`）；`last`：没固定在配置里的本次运行设置（上次填写的）与直播、录屏的选择。都是所有配置共用（见 [USAGE.md](USAGE.md) 4.14） |
 | `orchestrator\tuning.py` | 是 | 可调参数的名称、默认值与范围（规划回放的比例、倍速与每轮最长时长、思考语句提前量、解说提醒间隔等）；按运行修改用 `--tune` 或控制台，不用改这个文件 |
 | `orchestrator\config.py`（`RunConfig`） | 是 | 其余默认值，例如镜像名 `celeste-agent:0.1` |
 
@@ -486,6 +486,8 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 
 GPT 使用容器内 Codex 已登录的原生执行器（`--engine codex`），不经过"Anthropic 接口 → OpenAI 接口"转换网关（旧的 `--provider openai` 预设已移除）。部署见 4.11 节；运行用 `start_gpt.ps1`（5.5 节），或在网页 HUD 里新建、准备并开始会话。详见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。
 
+模型列表与推理强度档位取自容器里 Codex 的模型目录（随 `CODEX_VERSION` 与登录的账号变化）。按模型的设置写在 `configs\codex.json`（本机覆盖 `configs\local.codex.json`）的 `models`，按模型 ID 叠加在目录上：`label`、`context_limit`、`thought`、`images`，含义与 Claude 模型行的相同（见 9.3 节末尾）。目录里已经没有的 ID 不会用上，控制台读取模型列表时会提示。
+
 ### 9.3 其他兼容 Anthropic 接口的平台
 
 在 `configs\local.providers.json` 里照 `deepseek` 加一项（部署向导的 platform 步骤选"其他平台"会帮你写）：
@@ -503,7 +505,7 @@ GPT 使用容器内 Codex 已登录的原生执行器（`--engine codex`），�
 
 `models` 列出可用的模型与它们实际支持的推理强度档位（按平台文档填写）；没有列表时主控与 HUD 会报错，不会猜测档位。兼容服务运行在本机时，用 `allowed_host_ports` 放行它的端口（需要重新构建镜像）。`images: false` 用于只支持文字的模型（观测里另有字符地图与精确数据）。
 
-每个模型行就是这个模型的档案（设计见 `docs/开发/设置分层.md`）：`label` 是控制台下拉框与 HUD 的显示名；可选的 `autocompact` 是这个模型的自动压缩窗口（`auto` 或 100000～1000000），优先于提供方的 `autocompact`，但运行页另外填写或命令行 `--autocompact` 时以那个为准；可选的 `context_limit` 是 HUD 上下文警示与笔记整理提醒的上限（与执行器报告的窗口、实际压缩窗口一起取最小的）；可选的 `thought` 是思考语句的汉字数上限 `{"max_hanzi": 30, "temp_max_hanzi": 120}`（5～400；运行时可调参数改过的优先；Codex 默认不限，写了才限）；可选的 `images`（true／false）决定观测里附不附截图，优先于提供方的 `images`。在 `configs\local.providers.json` 改内置平台的模型行时，要写出这个平台完整的 `models` 列表（本机覆盖按顶层字段整体替换）。旧的 `configs\hud.json` 的 `names` 仍然有效，模型行没写 `label` 时用它。
+每个模型行就是这个模型的档案（设计见 `docs/开发/设置分层.md`）：`label` 是控制台下拉框与 HUD 的显示名；可选的 `autocompact` 是这个模型的自动压缩窗口（`auto` 或 100000～1000000），优先于提供方的 `autocompact`，但运行页另外填写或命令行 `--autocompact` 时以那个为准；可选的 `context_limit` 是 HUD 上下文警示与笔记整理提醒的上限（与执行器报告的窗口、实际压缩窗口一起取最小的）；可选的 `thought` 是思考语句的汉字数上限 `{"max_hanzi": 30, "temp_max_hanzi": 120}`（整数，范围与同名可调参数 `thought_max_hanzi`、`thought_temp_max_hanzi` 相同；运行时可调参数改过的优先；Codex 默认不限，写了才限）；可选的 `images`（true／false）决定观测里附不附截图，优先于提供方的 `images`。在 `configs\local.providers.json` 改内置平台的模型行时，要写出这个平台完整的 `models` 列表（本机覆盖按顶层字段整体替换）。旧的 `configs\hud.json` 的 `names` 仍然有效，模型行没写 `label` 时用它。优先顺序是：本次运行填写（运行页或命令行）> 模型行 > 提供方 > 开关带来的默认值 > 内置默认值；每次运行实际用的值与来源记在运行目录 `run_state.json` 的 `model_profile`。
 
 ## 10. 更新、迁移与卸载
 
@@ -517,7 +519,7 @@ GPT 使用容器内 Codex 已登录的原生执行器（`--engine codex`），�
 | `overlay\hud.html` | 网页 HUD 会在 `configs\hud.json` 的 `page_version` 变化时自动重新加载；仍显示旧页面时，在 OBS 里刷新 HUD 浏览器源（或用 `tools\obs_setup.py stop` 关掉，下次运行时主控会重新启动它），并重开 HUD 窗口 |
 | `requirements.txt` | `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` |
 
-**迁移到另一台电脑**：按本文重新部署；要带走的本机内容有 `workspaces\`（智能体的程序与笔记）、`runs\`（运行记录与录像）、`sim\dist`（预置模拟器）、`kb\reference`（可以重新生成）、`configs\local*`（路径要按新电脑改）、`.env`（令牌可以重新生成）。
+**迁移到另一台电脑**：按本文重新部署；要带走的本机内容有 `workspaces\`（智能体的程序与笔记）、`runs\`（运行记录与录像）、`sim\dist`（预置模拟器）、`kb\reference`（可以重新生成）、`configs\local*`（路径要按新电脑改；本机设置里的 CPU 核数超过新电脑的核数时按默认）、`.env`（令牌可以重新生成）。
 
 **卸载**：
 

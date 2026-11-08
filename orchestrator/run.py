@@ -646,6 +646,8 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
              "controller_host": os.environ.get("CELESTE_CONTROLLER_HOST"), "controller_pid": os.getpid(),
              "controller_parent_pid": os.getppid(),
              "bridge_port": cfg.bridge_port}
+    from .model_profile import profile_sources
+    state["model_profile"] = profile_sources(cfg)       # 与模型相关的值及来源（复盘用，续跑不读）
     from .segments import Piece
     current_plan = cfg.plan or [Piece(c) for c in (cfg.chapters or ([] if cfg.chapter is None else [cfg.chapter]))]
     state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [p.row() for p in map(Piece.of,current_plan)]

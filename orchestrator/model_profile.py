@@ -97,18 +97,60 @@ def model_context_limit(cfg, model: str | None = None) -> int | None:
     return positive_tokens(model_row(cfg, model).get("context_limit"))
 
 
+THOUGHT_KEYS = {"max_hanzi": "thought_max_hanzi", "temp_max_hanzi": "thought_temp_max_hanzi"}
+
+
+def row_thought(row: dict) -> dict:
+    """一个模型行的思考字数上限：{"max_hanzi": 汉字数或 None, "temp_max_hanzi": 汉字数或 None}。
+    范围与同名可调参数相同（5～400、10～400），只认整数，别的写法不用。"""
+    from .tuning import coerce
+    thought = row.get("thought") if isinstance(row, dict) else None
+    thought = thought if isinstance(thought, dict) else {}
+    out = {}
+    for name, key in THOUGHT_KEYS.items():
+        value = thought.get(name)
+        try:
+            out[name] = coerce(key, value) if isinstance(value, int) and not isinstance(value, bool) else None
+        except ValueError:
+            out[name] = None
+    return out
+
+
 def model_thought(cfg) -> dict:
-    """模型行的思考字数上限：{"max_hanzi": 汉字数或 None, "temp_max_hanzi": 汉字数或 None}（5～400，别的写法不用）。"""
-    row = model_row(cfg).get("thought")
-    row = row if isinstance(row, dict) else {}
-    def hanzi(value):
-        return value if isinstance(value, int) and not isinstance(value, bool) and 5 <= value <= 400 else None
-    return {"max_hanzi": hanzi(row.get("max_hanzi")), "temp_max_hanzi": hanzi(row.get("temp_max_hanzi"))}
+    """所选模型的思考字数上限（见 row_thought）。"""
+    return row_thought(model_row(cfg))
 
 
 def model_images(cfg) -> bool | None:
     value = model_row(cfg).get("images")
     return value if isinstance(value, bool) else None
+
+
+def profile_sources(cfg) -> dict:
+    """与模型相关、按层合并后的值和来源，记进 run_state.json 的 model_profile（复盘时看出值是这次填的、
+    跟模型来的还是默认的）。来源：run 本次运行（表单、命令行或可调参数）、model 模型档案、provider 提供方、
+    save_context 节省上下文带来的默认值、default 内置默认值；Codex 不适用的项不记。"""
+    from .config import autocompact_choice
+    from .thought import hanzi_limit, temp_thoughts
+    codex = getattr(cfg, "engine", "claude") == "codex"
+    out = {}
+    if not codex:
+        value, source = autocompact_choice(cfg)
+        out["autocompact"] = {"value": value, "source": source or "default"}
+    thought = model_thought(cfg)
+    tuned = getattr(cfg, "tuning", None) or {}
+    keys = [("thought_max_hanzi", "max_hanzi", False)]
+    if temp_thoughts(cfg):
+        keys.append(("thought_temp_max_hanzi", "temp_max_hanzi", True))
+    for key, row_key, temp in keys:
+        if codex:
+            source = "model" if thought[row_key] is not None else "default"
+        else:
+            source = "run" if key in tuned else "model" if thought[row_key] is not None else "default"
+        out[key] = {"value": hanzi_limit(cfg, temp=temp), "source": source}
+    out["images"] = {"value": bool(cfg.images), "source": "model" if model_images(cfg) is not None else "provider"}
+    out["context_limit"] = {"value": model_context_limit(cfg), "source": "model" if model_context_limit(cfg) else "default"}
+    return out
 
 
 def hud_fields(cfg, model: str | None = None, catalog_label: str | None = None) -> dict:

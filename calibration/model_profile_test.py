@@ -92,12 +92,15 @@ class ModelListTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             repo, local = Path(folder) / "providers.json", Path(folder) / "local.providers.json"
             write(repo, {"demo": {"label": "Demo", "autocompact": "auto", "models": [
-                {"id": "big", "efforts": ["high"], "autocompact": "400000", "context_limit": 380000},
-                {"id": "small", "efforts": ["low"], "autocompact": "bad", "context_limit": -1}]}})
+                {"id": "big", "efforts": ["high"], "autocompact": "400000", "context_limit": 380000,
+                 "thought": {"max_hanzi": 40, "temp_max_hanzi": 5}},
+                {"id": "small", "efforts": ["low"], "autocompact": "bad", "context_limit": -1, "thought": {"max_hanzi": 2}}]}})
             with patch("orchestrator.config.PROVIDERS", repo), patch("orchestrator.config.LOCAL_PROVIDERS", local):
                 data = runtime("claude").models("demo")
         big, small = data["models"]
         self.assertEqual((big["autocompact"], big["context_limit"]), ("400000", 380000))
+        self.assertEqual(big["thought"], {"max_hanzi": 40})                     # 临时思考 5 个：低于可调参数的下限，不用
+        self.assertNotIn("thought", small)
         self.assertNotIn("autocompact", small)
         self.assertNotIn("context_limit", small)
         self.assertEqual(data["autocompact"], "auto")
@@ -110,8 +113,10 @@ class ModelListTests(unittest.TestCase):
                                                  {"id": "retired", "label": "旧模型"}]}
         with patch("orchestrator.model_catalog.load_models", return_value=json.loads(json.dumps(catalog))), \
                 patch("orchestrator.model_profile.codex_settings", return_value=settings):
-            rows = runtime("codex").models()["models"]
+            data = runtime("codex").models()
+        rows = data["models"]
         self.assertEqual([r["id"] for r in rows], ["gpt-5.5", "gpt-5.5-mini"])   # 目录里没有的 ID 不会冒出来
+        self.assertEqual(data["unknown_profiles"], ["retired"])                   # 控制台据此提示
         self.assertEqual((rows[0]["label"], rows[0]["context_limit"]), ("GPT-5.5", 250000))
         self.assertEqual(rows[1]["label"], "GPT-5.5 mini")
         self.assertNotIn("context_limit", rows[1])
@@ -165,6 +170,37 @@ class ThoughtLimitTests(unittest.TestCase):
         self.assertEqual(hanzi_limit(cfg), 60)                                   # 可调参数对 Codex 不起作用
         cfg.model = "other"
         self.assertIsNone(hanzi_limit(cfg))                                      # 没写：不限（与原来相同）
+
+
+class SourceTests(unittest.TestCase):
+    """run_state.json 的 model_profile：合并后的值与来源。"""
+
+    def test_claude_sources(self):
+        from orchestrator.model_profile import profile_sources
+        cfg = RunConfig(agent="a", save="s", model="opus", save_context=True)
+        cfg.provider_info = {"images": True, "models": [{"id": "opus", "thought": {"max_hanzi": 40}, "context_limit": 900000}]}
+        cfg.tuning = {}
+        out = profile_sources(cfg)
+        self.assertEqual(out["autocompact"], {"value": "500000", "source": "save_context"})
+        self.assertEqual(out["thought_max_hanzi"], {"value": 40, "source": "model"})
+        self.assertNotIn("thought_temp_max_hanzi", out)                          # 没开仅正式思考：不用
+        self.assertEqual(out["images"], {"value": True, "source": "provider"})
+        self.assertEqual(out["context_limit"], {"value": 900000, "source": "model"})
+        cfg.save_context, cfg.formal_thought = False, True
+        cfg.tuning, cfg.thought_max_hanzi = {"thought_max_hanzi": 50}, 50
+        out = profile_sources(cfg)
+        self.assertEqual(out["autocompact"], {"value": None, "source": "default"})
+        self.assertEqual(out["thought_max_hanzi"], {"value": 50, "source": "run"})
+        self.assertEqual(out["thought_temp_max_hanzi"], {"value": 120, "source": "default"})
+
+    def test_codex_sources_leave_out_what_does_not_apply(self):
+        from orchestrator.model_profile import profile_sources
+        cfg = RunConfig(agent="a", save="s", model="gpt-5.5", engine="codex")
+        cfg.provider_info = {**CODEX_DEFAULTS, "models": [{"id": "gpt-5.5", "images": False}]}
+        out = profile_sources(cfg)
+        self.assertNotIn("autocompact", out)
+        self.assertEqual(out["thought_max_hanzi"], {"value": None, "source": "default"})   # 不限
+        self.assertEqual(out["images"], {"value": False, "source": "model"})
 
 
 class ImageTests(unittest.TestCase):
@@ -221,7 +257,9 @@ class ResumeTests(unittest.TestCase):
             out = root / "out"
             out.mkdir()
             write_run_state(out, cfg, "sess", args.previous)
-            self.assertEqual(json.loads((out / "run_state.json").read_text(encoding="utf-8"))["autocompact"], "300000")
+            state = json.loads((out / "run_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["autocompact"], "300000")
+            self.assertEqual(state["model_profile"]["autocompact"], {"value": "300000", "source": "run"})
             cfg, _ = self.parse(root, "--resume", str(root / "runs" / "a" / "20261108-010000"), "--autocompact", "auto")
             self.assertEqual(cfg.autocompact, "auto")                           # 续跑时另外指定的优先
         with tempfile.TemporaryDirectory() as folder:

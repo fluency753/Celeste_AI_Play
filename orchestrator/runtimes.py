@@ -95,6 +95,9 @@ class Runtime:
                     row['label'] = extra['label'].strip()[:60]
                 if positive_tokens(extra.get('context_limit')):
                     row['context_limit'] = positive_tokens(extra['context_limit'])
+            # 模型档案里写了、目录里已经没有的模型：跳过，控制台提示（换了 Codex 版本或登录后常见）
+            listed = {row['id'] for row in catalog['models']}
+            catalog['unknown_profiles'] = [ident for ident in overrides if ident not in listed]
             return catalog
         try:
             info = load_provider(provider or 'anthropic')
@@ -107,7 +110,8 @@ class Runtime:
                 continue
             efforts = normalize_efforts(row.get('efforts'))
             if efforts:
-                from .model_profile import positive_tokens, valid_autocompact
+                from .model_profile import positive_tokens, row_thought, valid_autocompact
+                thought = {k: v for k, v in row_thought(row).items() if v is not None}
                 models.append({'id':row['id'], 'label':row.get('label', row['id']), 'description':row.get('description',''),
                                'efforts':efforts, 'default_effort':row.get('default_effort') if row.get('default_effort') in efforts
                                else self.default_effort if self.default_effort in efforts else efforts[0],
@@ -115,7 +119,8 @@ class Runtime:
                                **({'autocompact': valid_autocompact(row.get('autocompact'))}
                                   if valid_autocompact(row.get('autocompact')) else {}),
                                **({'context_limit': positive_tokens(row.get('context_limit'))}
-                                  if positive_tokens(row.get('context_limit')) else {})})
+                                  if positive_tokens(row.get('context_limit')) else {}),
+                               **({'thought': thought} if thought else {})})   # 控制台标在思考字数的可调参数上
         if not models:
             raise ValueError('该提供方未配置模型列表，请在 configs/local.providers.json 的 models 中添加模型。')
         return {'models':models, 'default_model':models[0]['id'], 'source':'provider_config',

@@ -1338,6 +1338,11 @@ async function loadModels(preferred) {
     if (engine === "claude" && provider === "anthropic" && ui.models.some(m => m.id === "opus")) sel.value = "opus";
     if (ui.models.some(m => m.id === preferred?.model)) sel.value = preferred.model;
     sel.disabled = !ui.models.length;
+    const unknown = (data.unknown_profiles || []).join("、");
+    if (unknown && ui.unknownProfiles !== unknown) {      // 每次打开控制台只提示一次
+      ui.unknownProfiles = unknown;
+      toast(`configs/codex.json（或本机覆盖）写了模型目录里没有的模型：${unknown}，这些行没有用上`, true);
+    }
   } catch (e) {
     if (request !== modelRequest) return null;
     ui.models = [];
@@ -1347,6 +1352,7 @@ async function loadModels(preferred) {
   }
   fillEfforts(preferred?.effort);
   updateCompactHint();
+  updateExecutorItems();
   const suggestedAgent = preferred?.agent === undefined ? suggestAgent() : "";
   if (!$("agent").value) $("agent").value = suggestedAgent;
   ui.modelsLoading = false;
@@ -1614,16 +1620,22 @@ function buildTunables() {
 }
 
 // 只对某个执行器有用的项：选 Codex 时停用并说明（Codex 的思考字数按模型档案、压缩窗口按 Codex 自己的默认）
+// 没改的思考字数：显示模型档案的值（providers.json 模型行的 thought），没写时显示默认值
 function updateExecutorItems() {
   const codex = runEngine() === "codex";
   $("manageProviders").disabled = codex;
   $("manageProviders").title = codex ? "管理的是 Claude Code 执行器的第三方提供方，Codex 不适用" : "";
   $("autocompact").disabled = codex;
+  const model = (ui.models || []).find(m => m.id === $("model").value) || {};
   for (const key of CLAUDE_ONLY_TUNES) {
     const input = $("tune-" + key);
     if (!input) continue;
+    const t = ((ui.options && ui.options.tunables) || []).find(x => x.key === key) || {};
+    const fromModel = (model.thought || {})[key.replace("thought_", "")];
     input.disabled = codex;
-    input.title = codex ? "Codex 不适用：思考字数按模型档案（configs/codex.json），没写时不限" : "";
+    input.placeholder = codex ? "不适用" : fromModel != null ? `${fromModel}（模型）` : String(t.default ?? "");
+    input.title = codex ? "Codex 不适用：思考字数按模型档案（configs/codex.json），没写时不限"
+                : fromModel != null ? `没改时按模型档案：${fromModel} 个（默认 ${t.default}）` : "";
   }
 }
 function tuneCount() {
@@ -3481,7 +3493,7 @@ $("provRemove").addEventListener("click", removeProvider);
 $("provTest").addEventListener("click", testProvider);
 $("provMarkReady").addEventListener("click", () => { $("provReady").checked = true; saveProvider(); });
 $("provConfirmCancel").addEventListener("click", () => $("provConfirm").close());
-$("model").addEventListener("change", () => { fillEfforts(); updateCompactHint(); schedulePreview(); });
+$("model").addEventListener("change", () => { fillEfforts(); updateCompactHint(); updateExecutorItems(); schedulePreview(); });
 $("live").addEventListener("change", onLive);
 $("hudMod").addEventListener("change", () => { ui.hudTouched = true; onLive(); });
 $("study").addEventListener("change", () => { $("study").dataset.touched = "1"; });
