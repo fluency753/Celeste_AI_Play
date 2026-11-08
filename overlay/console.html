@@ -1292,6 +1292,7 @@ async function loadModels(preferred) {
     const data = await getJSON(`/api/models?engine=${encodeURIComponent(engine)}&provider=${encodeURIComponent(provider)}`);
     if (request !== modelRequest) return null;
     ui.models = data.models || [];
+    ui.modelsAutocompact = data.autocompact || null;       // 提供方设置的压缩窗口（模型行没写时用它）
     sel.replaceChildren(...ui.models.map(m => new Option(m.label || m.id, m.id)));
     sel.value = data.default_model || (ui.models[0] || {}).id || "";
     if (engine === "claude" && provider === "anthropic" && ui.models.some(m => m.id === "opus")) sel.value = "opus";
@@ -1300,10 +1301,12 @@ async function loadModels(preferred) {
   } catch (e) {
     if (request !== modelRequest) return null;
     ui.models = [];
+    ui.modelsAutocompact = null;
     sel.replaceChildren(new Option("读不到模型列表", ""));
     toast(e.message, true);
   }
   fillEfforts(preferred?.effort);
+  updateCompactHint();
   const suggestedAgent = preferred?.agent === undefined ? suggestAgent() : "";
   if (!$("agent").value) $("agent").value = suggestedAgent;
   ui.modelsLoading = false;
@@ -1782,10 +1785,16 @@ function applyProfileForm(form) {
   updateSummary();
 }
 
-// 自动压缩窗口留空时的实际值：开了节省上下文是 500000，否则用 Claude Code 默认（提供方另设了窗口时用提供方的）
+// 自动压缩窗口留空时的实际值与来源（orchestrator/config.autocompact_choice）：模型档案 > 提供方 > 节省上下文的 500000
+// > Claude Code 默认。只对 Claude 执行器生效
 function updateCompactHint() {
-  $("autocompact").placeholder = $("saveContext").checked ? "默认 500000（节省上下文），或 auto / 100000～1000000"
-    : "默认（Claude Code 自动），或 auto / 100000～1000000";
+  const input = $("autocompact");
+  if (runEngine() === "codex") { input.placeholder = "Codex 不适用（按 Codex 自己的默认压缩）"; return; }
+  const model = (ui.models || []).find(m => m.id === $("model").value) || {};
+  const [value, source] = model.autocompact ? [model.autocompact, "模型"]
+    : ui.modelsAutocompact ? [ui.modelsAutocompact, "提供方"]
+    : $("saveContext").checked ? ["500000", "节省上下文"] : [null, null];
+  input.placeholder = value ? `默认 ${value}（${source}），或 auto / 100000～1000000` : "默认（Claude Code 自动），或 auto / 100000～1000000";
 }
 
 function unsavedEdits() {
@@ -3275,7 +3284,7 @@ $("provRemove").addEventListener("click", removeProvider);
 $("provTest").addEventListener("click", testProvider);
 $("provMarkReady").addEventListener("click", () => { $("provReady").checked = true; saveProvider(); });
 $("provConfirmCancel").addEventListener("click", () => $("provConfirm").close());
-$("model").addEventListener("change", () => { fillEfforts(); schedulePreview(); });
+$("model").addEventListener("change", () => { fillEfforts(); updateCompactHint(); schedulePreview(); });
 $("live").addEventListener("change", onLive);
 $("hudMod").addEventListener("change", () => { ui.hudTouched = true; onLive(); });
 $("study").addEventListener("change", () => { $("study").dataset.touched = "1"; });

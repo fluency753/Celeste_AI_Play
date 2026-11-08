@@ -289,7 +289,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 74;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 75;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -382,13 +382,14 @@ function telemetryLabel(m) {
 function modelKey(value) {
   return String(value || "").replace(/\[[^\]]*\]$/, "").replace(/^claude-/, "").replace(/(-\d+)+$/, "");
 }
-// 上下文警示的上限：执行器报告的窗口、实际传给 Claude Code 的压缩窗口、配置里的压缩阈值，取最小的
+// 上下文警示的上限：执行器报告的窗口、实际传给 Claude Code 的压缩窗口、模型档案的 context_limit、配置里的压缩阈值，取最小的
 // （Claude Code 报告的是模型最大上下文，压缩窗口设小时以压缩窗口为准；与 modhud.py 的 context_limit 相同）
 function contextLimit(m) {
-  const values = [m.context_window, m.compact_window, config && config.compact_threshold].filter(v => typeof v === "number" && v > 0);
+  const values = [m.context_window, m.compact_window, m.context_limit, config && config.compact_threshold].filter(v => typeof v === "number" && v > 0);
   return values.length ? Math.min(...values) : null;
 }
 function displayName(m) {
+  if (m.model_label) return m.model_label;     // 模型档案的显示名（providers.json / codex.json 模型行的 label）
   const names = (config && config.names) || {};
   const named = names[m.model] || names[modelKey(m.model)];
   if (telemetryLabel(m)) return named || m.model || '—';

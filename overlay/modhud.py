@@ -296,14 +296,17 @@ def model_key(model: str) -> str:
 
 def context_limit(m: dict, config: dict) -> float:
     """上下文到多少算"快满"（统计栏的上下文到它的 90% 变橙）：执行器报告的窗口、实际传给 Claude Code 的压缩窗口、
-    配置里的压缩阈值（默认 967000）取最小的。Claude Code 报告的是模型最大上下文，压缩窗口设小时以压缩窗口为准；
+    模型档案的 context_limit、配置里的压缩阈值（默认 967000）取最小的。Claude Code 报告的是模型最大上下文，压缩窗口设小时以压缩窗口为准；
     Codex 报告的窗口比配置的阈值小时以它为准。与 hud.html 的 contextLimit 相同。"""
-    values = [v for v in (m.get("context_window"), m.get("compact_window"), config.get("compact_threshold") or 967000)
+    values = [v for v in (m.get("context_window"), m.get("compact_window"), m.get("context_limit"),
+                          config.get("compact_threshold") or 967000)
               if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0]
     return min(values)
 
 
 def display_name(m: dict, config: dict) -> str:
+    if m.get("model_label"):                 # 模型档案的显示名（与网页 HUD 相同）
+        return str(m["model_label"])
     names = config.get("names") or {}
     for key in (m.get("agent"), m.get("model"), model_key(m.get("model", ""))):
         if key and key in names:

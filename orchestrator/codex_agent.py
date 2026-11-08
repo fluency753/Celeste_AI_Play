@@ -769,13 +769,19 @@ class CodexRunner(ModelRecovery, SessionControls):
             self.metrics.update(model=result["model"], effort=result.get("reasoningEffort") or self.cfg.effort)
             # Live controls must not use the catalog currently being browsed for
             # a different, new conversation in the HUD.
+            catalog_label = None
             if self.control:
                 from .model_catalog import load_models
                 try:
                     catalog = await asyncio.to_thread(load_models)
-                    self.runtime_efforts = next((m['efforts'] for m in catalog['models'] if m['id'] == result['model']), [])
+                    selected = next((m for m in catalog['models'] if m['id'] == result['model']), {})
+                    self.runtime_efforts = selected.get('efforts') or []
+                    catalog_label = selected.get('label')
                 except (RuntimeError, OSError, ValueError, TimeoutError):
                     self.runtime_efforts = []
+            # 模型档案给 HUD：configs/codex.json 的显示名与上下文上限，没写显示名时用模型目录的
+            from .model_profile import hud_fields
+            self.metrics.update(**hud_fields(self.cfg, result['model'], catalog_label))
             if self.manual_effort and self.manual_effort != self.metrics.state.effort:
                 self.metrics.request_effort(self.manual_effort,'恢复用户的手动推理强度设置')
             (self.run_dir / "codex_session.json").write_text(json.dumps({

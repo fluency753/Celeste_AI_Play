@@ -53,12 +53,22 @@ class Runtime:
         if not isinstance(cfg.provider, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,60}', cfg.provider):
             raise ValueError('提供方标识无效')
         try:
-            cfg.provider_info = ({'label':self.label, 'images':True,
-                                  'allowed_domains':['chatgpt.com', 'auth.openai.com', 'api.openai.com']}
-                                 if self.engine == 'codex' else load_provider(cfg.provider))
+            if self.engine == 'codex':
+                # configs/codex.json（label、images、default_effort、allowed_domains、按模型叠加的 models）
+                from .model_profile import codex_settings
+                cfg.provider_info = codex_settings()
+            else:
+                cfg.provider_info = load_provider(cfg.provider)
         except SystemExit as exc:
             raise ValueError(str(exc)) from exc
         return cfg
+
+    def effort_default(self):
+        """新运行没指定推理强度时用的档位：Codex 取 configs/codex.json 的 default_effort。"""
+        if self.engine == 'codex':
+            from .model_profile import codex_settings
+            return codex_settings()['default_effort']
+        return self.default_effort
 
     def token(self, cfg):
         if self.engine == 'codex':
@@ -76,7 +86,16 @@ class Runtime:
     def models(self, provider=None, *, refresh=False):
         if self.engine == 'codex':
             from .model_catalog import load_models
-            return load_models(refresh=refresh)
+            from .model_profile import codex_settings, positive_tokens
+            catalog = load_models(refresh=refresh)
+            overrides = {row['id']: row for row in codex_settings()['models']}
+            for row in catalog['models']:
+                extra = overrides.get(row['id']) or {}
+                if isinstance(extra.get('label'), str) and extra['label'].strip():
+                    row['label'] = extra['label'].strip()[:60]
+                if positive_tokens(extra.get('context_limit')):
+                    row['context_limit'] = positive_tokens(extra['context_limit'])
+            return catalog
         try:
             info = load_provider(provider or 'anthropic')
         except SystemExit as exc:
@@ -88,12 +107,19 @@ class Runtime:
                 continue
             efforts = normalize_efforts(row.get('efforts'))
             if efforts:
+                from .model_profile import positive_tokens, valid_autocompact
                 models.append({'id':row['id'], 'label':row.get('label', row['id']), 'description':row.get('description',''),
                                'efforts':efforts, 'default_effort':row.get('default_effort') if row.get('default_effort') in efforts
-                               else self.default_effort if self.default_effort in efforts else efforts[0]})
+                               else self.default_effort if self.default_effort in efforts else efforts[0],
+                               # 模型档案（docs/开发/设置分层.md）：控制台按它标出压缩窗口的默认值与来源
+                               **({'autocompact': valid_autocompact(row.get('autocompact'))}
+                                  if valid_autocompact(row.get('autocompact')) else {}),
+                               **({'context_limit': positive_tokens(row.get('context_limit'))}
+                                  if positive_tokens(row.get('context_limit')) else {})})
         if not models:
             raise ValueError('该提供方未配置模型列表，请在 configs/local.providers.json 的 models 中添加模型。')
-        return {'models':models, 'default_model':models[0]['id'], 'source':'provider_config'}
+        return {'models':models, 'default_model':models[0]['id'], 'source':'provider_config',
+                'autocompact': valid_autocompact(info.get('autocompact'))}
 
     def resolve(self, model, effort, provider=None):
         if self.engine == 'codex':

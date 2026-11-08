@@ -98,7 +98,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                                        "不相邻时主控直接传送到下一段的起点（需要桥接 1.0.6）。不能与 --chapter / --chapters 合用")
     ap.add_argument("--skip-enter", action="store_true", help="已在关卡内且可操作时，跳过菜单宏")
     ap.add_argument("--no-agent", action="store_true", help="不启动智能体，只运行工具服务直到 Ctrl+C")
-    ap.add_argument("--autocompact", help="上下文自动压缩的窗口大小：auto，或 100000~1000000 的 token 数（默认用 Claude Code 的设置）")
+    ap.add_argument("--autocompact", help="上下文自动压缩的窗口大小：auto，或 100000~1000000 的 token 数。不写时依次取模型档案（providers.json 模型行）、提供方的设置，开了节省上下文时用 500000，否则用 Claude Code 默认；续跑沿用原运行显式设的值")
     ap.add_argument("--no-study", action="store_true", help="跳过开始前的读知识库阶段（调试用）")
     ap.add_argument("--study-minutes", type=float, default=60.0,
                     help="准备阶段（读知识库、写笔记）的上限分钟数，不计入现实用时；到时自动开放游戏工具")
@@ -167,7 +167,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="节省上下文（新运行默认开；续跑沿用原运行，没记过的旧运行按关，免得章节中途换返回格式）："
                          "act 结果更简短（轨迹不写列名、实体只列起止位置不同的、没僵直不写僵直说明；同一房间里观测文件只给一行、"
                          "不列可选推理强度、不重复本房间范围、Madeline 只写非默认项）；提示词的程序一节建议精简输出；"
-                         "Claude 执行器没另设 --autocompact（提供方也没设）时自动压缩窗口用 500000")
+                         "Claude 执行器没另设 --autocompact（模型档案与提供方也没设）时自动压缩窗口用 500000")
     ap.add_argument("--live", dest="live", action="store_true", default=None,
                     help="直播模式（默认关，可与速通或探索模式叠加）：HUD 默认用可交互的网页形式，解说计时 10 秒，"
                          "可按用户要求退出关卡；速通 + 直播不改变速通目标，探索 + 直播另加直播节奏")
@@ -390,7 +390,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     if not any(a == '--model' or a.startswith('--model=') for a in sys.argv) and not previous:
         cfg.model = adapter.default_model
     if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv) and not previous:
-        cfg.effort = adapter.default_effort
+        cfg.effort = adapter.effort_default()
     adapter.configure(cfg, cfg.provider)
     cfg.codex_player_login = cfg.engine == 'codex' and (
         previous['state'].get('codex_player_login') is True if previous else args.codex_player_login)
@@ -404,7 +404,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             cfg.model = prepared_metadata.get('requested_model') or prepared_metadata['metrics']['model']
         if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv):
             cfg.effort = prepared_metadata['metrics']['effort']
-    cfg.autocompact = args.autocompact
+    # 续跑没另外指定时沿用原运行显式设的窗口（没设过的仍按模型档案、提供方与节省上下文取默认）
+    cfg.autocompact = args.autocompact or ((previous["state"].get("autocompact") or None) if previous else None)
     cfg.study = not args.no_study
     cfg.study_minutes = args.study_minutes
     cfg.max_usage = args.max_usage
@@ -633,7 +634,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         all_chapters = plan_pieces = None
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "allow_detour":bool(getattr(cfg,"allow_detour",False)), "play_scope":cfg.play_scope, "completion_policy":cfg.completion_policy, "visited_maps":cfg.visited_maps, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
-             "runtime": cfg.runtime, "pause_limit": cfg.pause_limit, "planning_rules": {"rounds_per_room": cfg.rounds_per_room, "room_scale": cfg.room_scale}, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
+             "runtime": cfg.runtime, "pause_limit": cfg.pause_limit, "planning_rules": {"rounds_per_room": cfg.rounds_per_room, "room_scale": cfg.room_scale}, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "autocompact": cfg.autocompact, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
              "piece_pending": cfg.cutscene_mode == 'agent' and cfg.resume_pending, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "kb_allow": list(cfg.kb_allow), "kb_extra": cfg.kb_extra, "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None,

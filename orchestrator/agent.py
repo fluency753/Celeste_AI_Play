@@ -195,7 +195,9 @@ class ClaudeRunner(SessionControls):
         self.run_dir = run_dir
         self.session = session
         self.metrics = metrics
-        self.metrics.update(compact_window=compact_budget(cfg))   # HUD 的上下文警示按实际压缩窗口
+        # 模型档案给 HUD：显示名、上下文上限、实际压缩窗口（docs/开发/设置分层.md）
+        from .model_profile import hud_fields
+        self.metrics.update(**hud_fields(cfg))
         self.token = token
         self.session_id = session_id or str(uuid.uuid4())
         self._guide_reading = None
@@ -999,7 +1001,8 @@ class ClaudeRunner(SessionControls):
     def _notes_window(self):
         # Claude Code 报告的是模型的最大上下文；实际传了数值压缩窗口时按两者中较小的算，
         # 否则窗口小于报告值（例如节省上下文的 500000）时，百分比提醒在压缩前永远到不了阈值。
-        windows = [w for w in (super()._notes_window(), compact_budget(self.cfg)) if w]
+        from .model_profile import model_context_limit
+        windows = [w for w in (super()._notes_window(), compact_budget(self.cfg), model_context_limit(self.cfg)) if w]
         return min(windows) if windows else None
 
     async def _send(self, text: str) -> None:

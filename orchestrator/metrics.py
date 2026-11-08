@@ -55,6 +55,8 @@ class MetricsState:
     context_tokens: int = 0
     context_window: int | None = None
     compact_window: int | None = None  # 实际传给 Claude Code 的自动压缩窗口（数值时）；HUD 取它与 context_window 中较小的
+    context_limit: int | None = None   # 模型档案的上下文上限（providers.json / codex.json 模型行的 context_limit）
+    model_label: str | None = None     # 模型档案的显示名（模型行的 label；Codex 另取模型目录的显示名）
     tool_calls: int | None = None
     compactions: int = 0
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）

@@ -144,6 +144,7 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False, fr
     cfg.formal_thought = bool(state.get("formal_thought"))
     cfg.collision_image = state.get("collision_image")
     cfg.save_context = bool(state.get("save_context"))
+    cfg.autocompact = state.get("autocompact") or None    # 原运行显式设的压缩窗口（没设过的按模型档案等取默认）
     runtime(cfg.engine).token(cfg)
     from .control import RunControl
     cfg.cutscene_mode=RunControl(directory).cutscene_preference() or state.get('cutscene_mode','auto')

@@ -170,13 +170,29 @@ def find_docker_exe() -> str:
 SAVE_CONTEXT_AUTOCOMPACT = "500000"   # 开了节省上下文、又没有另外设置时 Claude Code 的自动压缩窗口
 
 
-def autocompact_window(cfg) -> str | None:
-    """实际传给 Claude Code 的 --autocompact：本次运行设置的 > 提供方设置的 > 开了节省上下文时的 500000 > 不传（Claude Code 默认）。
+AUTOCOMPACT_SOURCES = {"run": "本次运行", "model": "模型", "provider": "提供方", "save_context": "节省上下文"}
+
+
+def autocompact_choice(cfg) -> tuple[str | None, str | None]:
+    """实际传给 Claude Code 的 --autocompact 与它的来源（docs/开发/设置分层.md 的优先顺序）：
+    本次运行设置的（"run"）> 模型档案（"model"，providers.json 模型行的 autocompact）> 提供方（"provider"）
+    > 开了节省上下文时的 500000（"save_context"）> 不传（None：Claude Code 默认）。
     Claude Code 取它与模型最大上下文中较小的一个，上下文不到 50 万的模型不受影响。"""
-    explicit = getattr(cfg, "autocompact", None) or (getattr(cfg, "provider_info", None) or {}).get("autocompact")
-    if explicit:
-        return str(explicit)
-    return SAVE_CONTEXT_AUTOCOMPACT if getattr(cfg, "save_context", False) else None
+    from .model_profile import model_autocompact
+    if getattr(cfg, "autocompact", None):
+        return str(cfg.autocompact), "run"
+    if value := model_autocompact(cfg):
+        return value, "model"
+    if value := (getattr(cfg, "provider_info", None) or {}).get("autocompact"):
+        return str(value), "provider"
+    if getattr(cfg, "save_context", False):
+        return SAVE_CONTEXT_AUTOCOMPACT, "save_context"
+    return None, None
+
+
+def autocompact_window(cfg) -> str | None:
+    """实际传给 Claude Code 的 --autocompact（来源见 autocompact_choice）。"""
+    return autocompact_choice(cfg)[0]
 
 
 def compact_budget(cfg) -> int | None:

@@ -1,12 +1,12 @@
 {
-  "_说明": "智能体可以用的模型提供方。所有提供方都用同一套环境：容器里的 Claude Code、同样的工具、提示词、知识库与沙箱；第三方提供方通过它们兼容 Anthropic 的接口接入。密钥不写在这里：放在本机，由 configs/local.providers.json 的 key_file 指向（configs/local* 不入库），或者放在环境变量 key_env 里。 env 里 {model} 是带 model_suffix 的模型名（例如 [1m] 让 Claude Code 按 100 万 token 上下文压缩），{model_base} 不带后缀。 第三方提供方可以写 allowed_host_ports：容器还要连宿主机上的这些端口（例如本机的接口转换网关）；status 不是 ready 时主控会提示这个提供方尚未实测；gateway_check 是主控开跑前在本机检查网关是否在运行的地址。",
+  "_说明": "智能体可以用的模型提供方。所有提供方都用同一套环境：容器里的 Claude Code、同样的工具、提示词、知识库与沙箱；第三方提供方通过它们兼容 Anthropic 的接口接入。密钥不写在这里：放在本机，由 configs/local.providers.json 的 key_file 指向（configs/local* 不入库），或者放在环境变量 key_env 里。 env 里 {model} 是带 model_suffix 的模型名（例如 [1m] 让 Claude Code 按 100 万 token 上下文压缩），{model_base} 不带后缀。 第三方提供方可以写 allowed_host_ports：容器还要连宿主机上的这些端口（例如本机的接口转换网关）；status 不是 ready 时主控会提示这个提供方尚未实测；gateway_check 是主控开跑前在本机检查网关是否在运行的地址。 models 是模型档案（docs/开发/设置分层.md）：每行可写 label（控制台下拉框与 HUD 的显示名）、efforts、default_effort，以及可选的 autocompact（这个模型的自动压缩窗口：auto 或 100000～1000000，优先于提供方的 autocompact）与 context_limit（HUD 上下文警示与笔记提醒的上限）。",
   "anthropic": {
     "label": "Anthropic",
     "auth": "subscription",
     "models": [
       {
         "id": "opus",
-        "label": "Opus",
+        "label": "Opus 5.5",
         "efforts": [
           "low",
           "medium",
@@ -17,7 +17,7 @@
       },
       {
         "id": "fable",
-        "label": "Fable",
+        "label": "Fable 5.1",
         "efforts": [
           "low",
           "medium",
@@ -28,7 +28,7 @@
       },
       {
         "id": "haiku",
-        "label": "Haiku",
+        "label": "Haiku 5.5",
         "efforts": [
           "low",
           "medium",
@@ -62,6 +62,7 @@
     "models": [
       {
         "id": "deepseek-flash",
+        "label": "DeepSeek V4.1 Flash",
         "efforts": [
           "low",
           "medium",
@@ -72,6 +73,7 @@
       },
       {
         "id": "deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
         "efforts": [
           "low",
           "medium",
