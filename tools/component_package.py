@@ -9,6 +9,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -30,6 +31,12 @@ class PackageError(ValueError):
 
 class Unavailable(PackageError):
     """No package for these sources; source compilation remains available."""
+
+
+def configure_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
 
 
 def sha256(path: Path) -> str:
@@ -284,4 +291,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_output()
     main()

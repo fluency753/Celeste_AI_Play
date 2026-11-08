@@ -135,4 +135,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    packages.configure_output()
     main()

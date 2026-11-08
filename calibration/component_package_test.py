@@ -1,8 +1,11 @@
 """Package identity, extraction, caching and installation with isolated real files."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -128,6 +131,21 @@ class ComponentPackageTests(unittest.TestCase):
         with patch.object(packages, "download", side_effect=AssertionError("network in check mode")):
             self.assertIsNone(packages.find_bundle(self.root)[0])
         self.assertFalse((self.root / "local").exists())
+
+    def test_validation_cli_uses_utf8_even_on_an_english_windows_pipe(self):
+        tool = Path(packages.__file__)
+        result = subprocess.run([sys.executable, str(tool), "--root", str(self.root), "--validate", str(self.bundle)],
+                                env=dict(os.environ, PYTHONIOENCODING="cp1252"), capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertIn("校验通过", result.stdout.decode("utf-8"))
+
+    def test_build_log_forwarding_uses_utf8_under_cp1252(self):
+        child = "import sys;sys.stdout.buffer.write('编译组件成功'.encode('utf-8'))"
+        code = "from tools.component_package import configure_output;from tools.package_release import run;import sys;configure_output();run(sys.executable,'-c'," + repr(child) + ")"
+        result = subprocess.run([sys.executable, "-c", code], env=dict(os.environ, PYTHONIOENCODING="cp1252"),
+                                cwd=Path(packages.__file__).resolve().parents[1], capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(result.stdout.decode("utf-8"), "编译组件成功")
 
     def test_explicit_release_tag_must_match_bundled_and_downloaded_manifest(self):
         path = self.root / "components"
