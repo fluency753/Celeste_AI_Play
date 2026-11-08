@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 
 from . import config as _config
 from .efforts import valid_effort
+from .session_store import shared_reader, write_json
 
 RESERVED = ("anthropic", "codex")          # Anthropic 订阅与原生 Codex 执行器，不能用作第三方提供方的标识
 DEFAULT_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
@@ -94,7 +95,8 @@ def _read_local() -> tuple[bytes | None, dict]:
     """本机覆盖文件的原始内容与解析结果；没有文件时是 (None, {})。不是有效的 JSON 对象时抛 ValueError。"""
     path = local_path()
     try:
-        raw = path.read_bytes()
+        with open(path, 'rb', opener=shared_reader) as stream:
+            raw = stream.read()
     except FileNotFoundError:
         return None, {}
     try:
@@ -111,12 +113,8 @@ def _version(raw: bytes | None) -> str:
 
 
 def _write_local(data: dict) -> None:
-    """原子写：先写同目录的 .tmp，再替换。"""
-    path = local_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    """与会话快照共用原子发布，允许本机读取者完成旧快照。"""
+    write_json(local_path(), data, indent=2)
 
 
 def _provider_ids(repo: dict, local: dict) -> list[str]:

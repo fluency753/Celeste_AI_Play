@@ -7,6 +7,7 @@ import re
 from .config import REPO_ROOT, RunConfig, load_provider, load_api_key, load_dotenv
 from .efforts import normalize_efforts
 from .execution import workspace_capabilities
+from .session_store import load_json
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class Runtime:
         names = set()
         for path in (_config.PROVIDERS, _config.LOCAL_PROVIDERS):
             try:
-                data = json.loads(path.read_text(encoding='utf-8-sig'))
+                data = load_json(path, encoding='utf-8-sig')
             except (OSError, ValueError):
                 continue   # 与 load_provider 相同：读不出的文件跳过（本机覆盖手改坏了也不至于整个下拉框读不出来）
             if isinstance(data, dict):

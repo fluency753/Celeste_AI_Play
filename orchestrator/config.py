@@ -97,12 +97,12 @@ LOCAL_PROVIDERS = REPO_ROOT / "configs" / "local.providers.json"   # 本机覆�
 
 def load_provider(name: str) -> dict:
     """模型提供方的设置（configs/providers.json，本机的 configs/local.providers.json 覆盖同名项）。"""
-    import json  # noqa: WPS433
+    from .session_store import load_json
 
     merged: dict = {}
     for path in (PROVIDERS, LOCAL_PROVIDERS):
         try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
+            data = load_json(path, encoding='utf-8-sig')
         except (OSError, ValueError):
             continue
         if isinstance(data.get(name), dict):

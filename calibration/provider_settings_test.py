@@ -8,6 +8,8 @@ import sys
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -96,6 +98,58 @@ class ProviderSandbox(unittest.TestCase):
 
 
 class MergeTests(ProviderSandbox):
+    @unittest.skipUnless(os.name == 'nt', 'Windows file sharing')
+    def test_listing_finishes_old_snapshot_while_save_and_remove_publish(self):
+        import builtins
+        ps.save(self.new_form())
+        request = self.form('myprov', label='更新后的平台')
+        old_version = ps.listing()['version']
+        opened, published = threading.Event(), threading.Event()
+        original_open = builtins.open
+
+        @contextmanager
+        def held_open(path, *args, **kwargs):
+            with original_open(path, *args, **kwargs) as stream:
+                if Path(path) == self.local and threading.current_thread() is not threading.main_thread():
+                    opened.set()
+                    if not published.wait(5):
+                        raise TimeoutError('writer did not publish while listing retained its snapshot')
+                yield stream
+
+        with patch.object(ps, 'open', held_open, create=True), ThreadPoolExecutor() as pool:
+            pending = pool.submit(ps.listing)
+            try:
+                self.assertTrue(opened.wait(5))
+                ps.save(request)
+                self.assertEqual(config.load_provider('myprov')['label'], '更新后的平台')
+                self.assertEqual(next(p for p in runtime('claude').providers() if p['id'] == 'myprov')['label'], '更新后的平台')
+                ps.remove({'id': 'myprov', 'version': ps.listing()['version']})
+                self.assertNotIn('myprov', self.read_local())
+            finally:
+                published.set()
+            old = pending.result(timeout=5)
+        self.assertEqual(old['version'], old_version)
+        self.assertEqual(self.provider('myprov', old)['label'], '我的平台')
+        self.assertEqual(list(self.local.parent.glob('*.tmp')), [])
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows file sharing')
+    def test_remove_retains_config_and_user_key_on_persistent_reader_then_retries(self):
+        user_key = self.key_file()
+        ps.save(self.new_form(key={'mode': 'file', 'file': str(user_key)}))
+        original = self.local.read_bytes()
+        key_before = user_key.read_bytes()
+        request = {'id': 'myprov', 'version': ps.listing()['version']}
+        with self.local.open('rb'):
+            with self.assertRaises(OSError):
+                ps.remove(request)
+        self.assertEqual(self.local.read_bytes(), original)
+        self.assertEqual(ps.listing()['version'], request['version'])
+        self.assertEqual(user_key.read_bytes(), key_before)
+        self.assertEqual(list(self.local.parent.glob('*.tmp')), [])
+        ps.remove(request)
+        self.assertNotIn('myprov', self.read_local())
+        self.assertEqual(user_key.read_bytes(), key_before)
+
     def test_save_keeps_unknown_fields_other_providers_and_notes(self):
         key = self.key_file()
         original = {"_说明": "本机说明", "deepseek": {"key_file": str(key), "my_note": {"a": 1}},
