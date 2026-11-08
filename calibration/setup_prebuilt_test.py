@@ -62,9 +62,40 @@ class SetupPrebuiltTests(unittest.TestCase):
     def test_corrupt_bundle_does_not_fall_back_or_deploy(self):
         bundle(self.root, self.root / "components")
         (self.root / "components/obs/celeste-lockstep.dll").write_bytes(b"corrupt")
-        with patch.object(wizard, "run", side_effect=AssertionError("must not deploy")):
-            with self.assertRaises(packages.PackageError):
-                wizard.step_bridge(self.answers)
+        out = io.StringIO()
+        with patch.object(wizard, "run", side_effect=AssertionError("must not deploy")), \
+             patch.object(wizard, "require_dotnet", side_effect=AssertionError("no source fallback")), \
+             contextlib.redirect_stdout(out):
+            wizard.step_bridge(self.answers)                  # 讲清原因后结束这一步，不打出报错、不中断整个向导
+        self.assertIn("组件校验失败：obs/celeste-lockstep.dll", out.getvalue())
+        self.assertIn("setup.ps1 -Only bridge", out.getvalue())
+
+    def test_download_that_does_not_match_github_is_reported_and_the_wizard_continues(self):
+        asset = {"name": packages.asset_name("v1.0.0"), "size": 3, "digest": "sha256:" + "0" * 64}
+        def fake_download(url, target, limit=packages.MAX_ARCHIVE):
+            target.write_bytes(b"zip")
+        steps, out = [], io.StringIO()
+        with contextlib.redirect_stdout(out), patch.object(packages, "release_asset", return_value=asset), \
+             patch.object(packages, "download", side_effect=fake_download), \
+             patch.object(wizard, "run", side_effect=AssertionError("must not deploy")), \
+             patch.object(wizard, "step_saves", side_effect=lambda a: steps.append("saves"), create=False), \
+             patch.object(wizard.sys, "argv", ["setup_wizard.py", "--only", "bridge,saves"]), \
+             patch.object(wizard.Answers, "save", lambda self: None), \
+             patch.object(wizard, "load_json", return_value={"celeste_dir": str(self.game)}):
+            self.assertEqual(wizard.main(), 0)
+        self.assertEqual(steps, ["saves"])                    # 后面的步骤照常做
+        self.assertIn("与 GitHub Release 的大小或 SHA256 不一致", out.getvalue())
+        self.assertNotIn("Traceback", out.getvalue())
+
+    def test_invalid_hud_port_is_reported_without_deploying(self):
+        bundle(self.root, self.root / "components")
+        path = self.root / "configs/local.console.json"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text('{"machine":{"hud_port":0}}')
+        out = io.StringIO()
+        with patch.object(wizard, "run", side_effect=AssertionError("must not deploy")), contextlib.redirect_stdout(out):
+            wizard.step_bridge(self.answers)
+        self.assertIn("本机 HUD 端口无效", out.getvalue())
 
     def test_check_is_read_only_and_dotnet_is_optional(self):
         with patch.object(wizard, "CHECK_ONLY", True), \
@@ -112,6 +143,16 @@ class SetupPrebuiltTests(unittest.TestCase):
         with patch("tools.build_obs_plugin.obs_running", return_value=True), \
              patch.object(wizard, "run", side_effect=AssertionError("never stop the user's OBS")):
             wizard.step_recording(self.answers)
+
+    def test_recording_install_failure_is_reported_and_keeps_the_old_plugin(self):
+        bundle(self.root, self.root / "components")
+        obs = self.recording()
+        out = io.StringIO()
+        with patch.object(packages, "install_obs", side_effect=packages.PackageError("OBS 在安装前启动，未替换插件")), \
+             patch.object(wizard, "run", side_effect=AssertionError("no source fallback")), contextlib.redirect_stdout(out):
+            wizard.step_recording(self.answers)
+        self.assertIn("OBS 锁步插件没有安装：OBS 在安装前启动", out.getvalue())
+        self.assertEqual((obs / "obs-plugins/64bit/celeste-lockstep.dll").read_bytes(), b"old")
 
 
 if __name__ == "__main__":

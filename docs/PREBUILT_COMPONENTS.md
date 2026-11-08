@@ -15,7 +15,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -ReleaseTag v1.22.0-beta.1
 powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only bridge,recording
 ```
 
-没有该 Release／附件、暂时离线、源码或版本已改变时，向导说明原因，允许改为源码编译；GitHub 附件缺少有效 SHA256／大小、下载结果不匹配、已有包内容损坏、路径非法或文件校验失败则停止安装，不绕过校验回退。开发版没有对应发布包时通常走源码编译。`-Check` 不下载、不解压、不创建缓存，也不安装 SDK。
+没有该 Release／附件、暂时离线、源码或版本已改变时，向导说明原因，允许改为源码编译；GitHub 附件缺少有效 SHA256／大小、下载结果不匹配、已有包内容损坏、路径非法或文件校验失败则停止安装这个组件，不绕过校验回退：向导说明原因（不打出 Python 报错），已安装的文件不动，接着做后面的步骤，排查后用 `setup.ps1 -Only bridge`（或 `recording`）单独重做。开发版没有对应发布包时通常走源码编译。`-Check` 不下载、不解压、不创建缓存，也不安装 SDK。
 
 ## 安装保护与兼容范围
 

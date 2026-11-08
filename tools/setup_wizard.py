@@ -280,6 +280,13 @@ def dotnet_env(a: Answers) -> dict:
     return env
 
 
+def component_failure(what: str, exc: BaseException, step: str) -> None:
+    """组件包校验失败、下载结果不符或安装条件不满足：讲清原因，不打出 Python 报错，不回退源码编译绕过校验；
+    这一步到此为止，向导接着做后面的步骤。"""
+    bad(f"{what}没有安装：{exc}")
+    say(f"  已安装的文件没有改动，也不会改用源码编译绕过校验。排查后单独重做这一步：setup.ps1 -Only {step}")
+
+
 def deployment_hud_port() -> int:
     from orchestrator.launch_options import DEFAULTS
     stored = load_json(REPO / "configs/local.console.json").get("machine")
@@ -302,7 +309,13 @@ def step_bridge(a: Answers) -> None:
         return
     if not ask_yes("现在安装或更新桥接 Mod？（优先使用对应版本预编译包）", default=not installed.exists()):
         return
-    bundle, reason = component_bundle(network=True)
+    from tools import component_package
+    try:
+        hud_port = deployment_hud_port()
+        bundle, reason = component_bundle(network=True)
+    except (component_package.PackageError, ValueError, OSError) as exc:
+        component_failure("桥接 Mod ", exc, "bridge")
+        return
     note(reason)
     extra = []
     if bundle:
@@ -311,7 +324,7 @@ def step_bridge(a: Answers) -> None:
         if not ask_yes("没有对应预编译包，改用本机源码编译？") or not require_dotnet(a):
             return
     result = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(REPO / "tools" / "deploy_bridge.ps1"),
-                  "-CelesteDir", str(game), "-HudPort", str(deployment_hud_port()), *extra], env=dotnet_env(a))
+                  "-CelesteDir", str(game), "-HudPort", str(hud_port), *extra], env=dotnet_env(a))
     (ok if result.returncode == 0 else bad)("桥接 Mod 安装" + ("完成；启动游戏后 log.txt 里应有 [CelesteAIBridge] loaded"
                                                                  if result.returncode == 0 else "失败，见上面的输出"))
 
@@ -537,15 +550,20 @@ def step_recording(a: Answers) -> None:
                default=not (plugin and plugin.exists())):
         from tools.build_obs_plugin import obs_running, obs_version
         from tools import component_package
-        if obs_running():
-            bad("OBS 正在运行，未关闭或修改它；请自行关闭后重新执行 recording 步骤")
+        try:
+            if obs_running():
+                bad("OBS 正在运行，未关闭或修改它；请自行关闭后重新执行 recording 步骤")
+                return
+            bundle, reason = component_bundle(network=True)
+            note(reason)
+            prebuilt = bool(bundle) and obs_version(obs).strip() in component_package.validate(bundle, REPO)["obs_versions"]
+            if prebuilt:
+                backup = component_package.install_obs(bundle / "obs/celeste-lockstep.dll", obs)
+                ok(f"预编译锁步插件已安装；旧 DLL 备份：{backup}")
+        except (component_package.PackageError, RuntimeError, OSError) as exc:
+            component_failure("OBS 锁步插件", exc, "recording")
             return
-        bundle, reason = component_bundle(network=True)
-        note(reason)
-        if bundle and obs_version(obs).strip() in component_package.validate(bundle, REPO)["obs_versions"]:
-            backup = component_package.install_obs(bundle / "obs/celeste-lockstep.dll", obs)
-            ok(f"预编译锁步插件已安装；旧 DLL 备份：{backup}")
-        elif ask_yes("没有适配当前 OBS 版本的预编译插件，改用源码编译并安装？"):
+        if not prebuilt and ask_yes("没有适配当前 OBS 版本的预编译插件，改用源码编译并安装？"):
             result = run([sys.executable, "tools/build_obs_plugin.py", "--obs-dir", str(obs)])
             (ok if result.returncode == 0 else bad)("锁步插件" + ("已安装" if result.returncode == 0 else "构建失败，见上面的输出"))
     note("声音延迟的校准（audio_offset_ms）在 checks 步骤里做：要游戏开着、停在 test 存档的关卡里")
