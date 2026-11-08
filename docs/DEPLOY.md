@@ -173,7 +173,7 @@ python -m venv .venv
 
 ```powershell
 winget install Microsoft.DotNet.SDK.8
-# 关掉游戏后：
+# 游戏运行且 Runtime 未变化时自动热重载；Runtime 变化或首次安装才维护重启：
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
@@ -507,7 +507,7 @@ GPT 使用容器内 Codex 已登录的原生执行器（`--engine codex`），�
 
 | 改动了 | 要做 |
 | --- | --- |
-| `game-bridge\`／`game-runtime\` | 首次安装或核心变更：关游戏后运行部署脚本；已安装相同核心的兼容逻辑更新可加 `-HotReload`，见 [受控重载](BRIDGE_RELOAD.md) |
+| `game-bridge\`／`game-runtime\` | 首次安装或核心变更走维护重启；Runtime 字节相同时部署脚本自动热重载，不因主控已结束而退出游戏，见 [受控重载](BRIDGE_RELOAD.md) |
 | `agent-container\` | `docker build -t celeste-agent:0.1 agent-container`（容器会自动重建） |
 | `obs-plugin\` 或 OBS 更新了 | 关 OBS，`tools\build_obs_plugin.py`（找不到 OBS 时加 `--obs-dir`），重跑录制校准 |
 | `overlay\hud.html` | 网页 HUD 会在 `configs\hud.json` 的 `page_version` 变化时自动重新加载；仍显示旧页面时，在 OBS 里刷新 HUD 浏览器源（或用 `tools\obs_setup.py stop` 关掉，下次运行时主控会重新启动它），并重开 HUD 窗口 |

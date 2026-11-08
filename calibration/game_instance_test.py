@@ -237,28 +237,33 @@ class SelectionTests(unittest.TestCase):
 
     def test_existing_obs_collection_is_retargeted_only_while_obs_is_closed(self):
         from tools import obs_setup
-        cfg = obs_setup.load_config()
-        with patch.object(gamepaths, '_console_prefs', return_value={'celeste_dir': str(self.source)}):
-            collection = obs_setup.scene_collection(cfg)
-        custom = {'id': 'game_capture', 'name': 'other', 'settings': {'window': 'Other:Cls:other.exe', 'priority': 2}}
-        collection['sources'].append(custom)
-        path = self.root / 'obs/basic/scenes' / f"{cfg['collection']}.json"
-        path.parent.mkdir(parents=True)
-        path.write_text(json.dumps(collection), encoding='utf-8')
-        with patch.object(obs_setup, 'obs_config_dir', return_value=self.root / 'obs'), \
-             patch.object(obs_setup, 'obs_running', return_value=True):
-            self.assertFalse(obs_setup.sync_game_capture(path, cfg))
-            self.assertIn('关闭 OBS', obs_setup.capture_mismatch(cfg))
-        with patch.object(obs_setup, 'obs_config_dir', return_value=self.root / 'obs'), \
-             patch.object(obs_setup, 'obs_running', return_value=False):
-            self.assertTrue(obs_setup.sync_game_capture(path, cfg))
-            self.assertIsNone(obs_setup.capture_mismatch(cfg))
-        data = json.loads(path.read_text(encoding='utf-8'))
-        windows = {s['name']: (s['settings']['window'], s['settings']['priority'])
-                   for s in data['sources'] if s['id'] in obs_setup.GAME_SOURCES}
-        self.assertEqual(windows['Celeste 游戏画面'], ('Celeste AI Play:SDL_app:Celeste.exe', 1))
-        self.assertEqual(windows['Celeste 游戏声音'], ('Celeste AI Play:SDL_app:Celeste.exe', 1))
-        self.assertEqual(windows['other'], ('Other:Cls:other.exe', 2))      # 用户自己的来源不动
+        for local in ({}, {'collection': '我的测试场景 2', 'collection_file': 'my_test_scene_2'}):
+            with self.subTest(local=local):
+                (self.root / 'local.recording.json').write_text(json.dumps(local), encoding='utf-8')
+                cfg = obs_setup.load_config()
+                with patch.object(gamepaths, '_console_prefs', return_value={'celeste_dir': str(self.source)}):
+                    collection = obs_setup.scene_collection(cfg)
+                custom = {'id': 'game_capture', 'name': 'other', 'settings': {'window': 'Other:Cls:other.exe', 'priority': 2}}
+                collection['sources'].append(custom)
+                path = self.root / 'obs/basic/scenes' / f"{cfg.get('collection_file', cfg['collection'])}.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(collection), encoding='utf-8')
+                original = path.read_bytes()
+                with patch.object(obs_setup, 'obs_config_dir', return_value=self.root / 'obs'), \
+                     patch.object(obs_setup, 'obs_running', return_value=True):
+                    self.assertFalse(obs_setup.sync_game_capture(path, cfg))
+                    self.assertEqual(path.read_bytes(), original)
+                    self.assertIn('关闭 OBS', obs_setup.capture_mismatch(cfg))
+                with patch.object(obs_setup, 'obs_config_dir', return_value=self.root / 'obs'), \
+                     patch.object(obs_setup, 'obs_running', return_value=False):
+                    self.assertTrue(obs_setup.sync_game_capture(path, cfg))
+                    self.assertIsNone(obs_setup.capture_mismatch(cfg))
+                data = json.loads(path.read_text(encoding='utf-8'))
+                windows = {s['name']: (s['settings']['window'], s['settings']['priority'])
+                           for s in data['sources'] if s['id'] in obs_setup.GAME_SOURCES}
+                self.assertEqual(windows['Celeste 游戏画面'], ('Celeste AI Play:SDL_app:Celeste.exe', 1))
+                self.assertEqual(windows['Celeste 游戏声音'], ('Celeste AI Play:SDL_app:Celeste.exe', 1))
+                self.assertEqual(windows['other'], ('Other:Cls:other.exe', 2))
 
 
 if __name__ == '__main__':

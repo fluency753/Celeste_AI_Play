@@ -1,4 +1,35 @@
-# 保持录像的桥接代码重载
+# 游戏不重启的桥接代码重载
+
+**Runtime 未变化时不为更新 Bridge 重启游戏。** 部署脚本先构建并比较 Runtime 文件：游戏运行且字节相同，自动选择在用主控或空闲维护重载；没有主控不再是退出游戏的理由。Runtime 不同或首次安装才走维护重启，脚本不会自动退出游戏。
+
+## 主控已经结束时
+
+默认部署命令也适用，无须启动 Player。可指定 `-BridgePort`；未指定时读取目标游戏的 Runtime 端口设置。维护实测用 `-SaveSlot` 核对已选择的存档槽（菜单没有存档时不虚构槽位）：
+
+```powershell
+.\tools\deploy_bridge.ps1 -CelesteDir "<游戏目录>" -SaveSlot 14
+```
+
+也可直接使用构建产物：
+
+```powershell
+.\.venv\Scripts\python.exe tools\reload_bridge.py --direct --game-dir "<游戏目录>" --save-slot 14 --dll game-bridge/bin/CelesteAIBridge.dll --runtime-dll game-runtime/bin/CelesteAIRuntime.dll
+```
+
+空闲入口先取得维护互斥锁，再只读检查 TCP 端口和监听进程身份；端口已有连接就拒绝，不以 HUD 的“未连接”代替占用核对。当前 IPC 协议没有原子 claim，互斥能约束遵循项目入口的主控，不能消除外部不协作客户端在检查后抢连的竞态。核对目标目录、Runtime 哈希、录制未占用后才临时接管，复用原有重载／备份／场景核验，成功后归还控制权。不启动模型、不开新录像、不代按菜单。
+
+维护记录默认位于 `local/bridge-maintenance/<端口>/`。`idle_maintenance.json` 仅记录准入身份及控制归还状态，`bridge_reload.json` 仍由原有重载流程维护。失败不重启：已进入交接或结果未知时保留冻结；用同一目录接回，或撤销未提交的更新：
+
+```powershell
+.\.venv\Scripts\python.exe tools\reload_bridge.py --direct --retry --run-dir local/bridge-maintenance/47774
+.\.venv\Scripts\python.exe tools\reload_bridge.py --direct --abort --run-dir local/bridge-maintenance/47774
+```
+
+归还控制权的回复丢失时，重试只核对／补齐归还，不再次重载。旧 Player 交接的 `--abort --direct --run-dir <原运行目录>` 保留原有撤销语义，不代替原 Player 自动归还控制权。若默认目录只剩已完成维护记录，重试须显式指定记录目录，避免与后来的交接混淆。
+
+更新与撤销的临时文件放在 Mod 监听目录之外，再原子替换 DLL／PDB，避免 Everest 将短暂存在的临时文件当作资源更新。标准安装使用游戏根目录；非标准路径使用维护备份目录。跨卷原子替换不支持，会明确失败并保留原交接，不退化成直接覆盖。
+
+## 原有主控与录像交接
 
 桥接 1.3.0 将常驻核心 `CelesteAIRuntime` 与可重载逻辑 `CelesteAIBridge` 拆成两个 Everest Mod。主控通过现有连接在动作边界重载桥接逻辑；常驻核心继续持有冻结门闸、帧号、IPC／OBS 时钟、注入按键绑定、双轨 FMOD 混音器及音频共享内存。主控不发送录制 stop/start，也不另开录制目录。当前版本为桥接 1.8.1、常驻核心 1.0.5，核心 ABI 仍为 1。
 

@@ -16,6 +16,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from orchestrator.bridge_reload import reload_bridge, BridgeReloadError, hold_message, options
 from orchestrator.config import RunConfig
@@ -205,6 +206,34 @@ class ReloadWorkerTests(unittest.TestCase):
         self.assertEqual([c for c, _ in self.session.calls].count('reload_finish'), 1)
         self.assertEqual(self.session.resets, 1)
         self.assertFalse(any(c in {'record', 'step', 'advance', 'deactivate'} for c, _ in self.session.calls))
+
+    def test_install_and_abort_stage_outside_watched_mods_and_clean_failed_write(self):
+        from orchestrator.bridge_reload import _replace_payload, _restore_payload
+        import os
+        target = self.root / 'Mods' / 'CelesteAIBridge' / 'bin' / self.target.name
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b'previous payload')
+        replace = os.replace
+        staged_paths = []
+
+        def checked_replace(staged, destination):
+            staged_paths.append(Path(staged))
+            self.assertEqual(Path(staged).parent, self.root)
+            self.assertTrue(Path(staged).is_file())
+            replace(staged, destination)
+
+        with patch('orchestrator.bridge_reload.os.replace', side_effect=checked_replace):
+            files = _replace_payload(self.source, target, self.root / 'backup')
+            self.assertEqual(target.read_bytes(), b'new payload')
+            _restore_payload({'files': files, 'lease': 'test'}, self.root)
+        self.assertEqual(target.read_bytes(), b'previous payload')
+        self.assertEqual(len(staged_paths), 2)
+        self.assertFalse(any(p.exists() for p in staged_paths))
+        with patch('orchestrator.bridge_reload.os.replace', side_effect=OSError('file locked')):
+            with self.assertRaisesRegex(OSError, 'file locked'):
+                _replace_payload(self.source, target, self.root / 'backup')
+        self.assertEqual(target.read_bytes(), b'previous payload')
+        self.assertEqual(list(self.root.glob('.celeste-ai-reload-*')), [])
 
     def test_free_roam_cannot_reload_to_bridge_without_map_set_guard(self):
         self.session.cfg.play_scope = 'visited'
@@ -1102,8 +1131,9 @@ class HoldReportingTests(unittest.TestCase):
 class FakeCore:
     """Line-protocol stand-in for the resident core, for the --direct CLI path."""
 
-    def __init__(self, stage='prepared', abortable=True):
+    def __init__(self, stage='prepared', abortable=True, payload_path=None):
         self.stage, self.abortable = stage, abortable
+        self.payload_path = payload_path
         self.commands = []
         self.server = socket.create_server(('127.0.0.1', 0))
         self.port = self.server.getsockname()[1]
@@ -1124,6 +1154,8 @@ class FakeCore:
                 reply = {'id': request['id'], 'ok': True, 'stage': self.stage, 'lease': 'lease-9',
                          'holding': self.stage != 'aborted', 'abortable': self.abortable and self.stage == 'prepared',
                          'restart_required': False, 'error': ''}
+                if self.payload_path:
+                    reply['payload_path'] = self.payload_path
                 stream.write((json.dumps(reply) + '\n').encode())
                 stream.flush()
 
@@ -1173,10 +1205,13 @@ class DirectAbortCliTests(unittest.TestCase):
         self.assertIn('不能撤销', result.stderr)
         self.assertNotIn('reload_abort', core.commands)
 
-    def test_direct_requires_abort(self):
-        result = self.run_cli('--direct')
-        self.assertEqual(result.returncode, 2)
-        self.assertIn('--direct 只用于 --abort', result.stderr)
+    def test_direct_requires_payload_before_any_connection(self):
+        with socket.create_server(('127.0.0.1', 0)) as server:
+            server.settimeout(.2)
+            result = self.run_cli('--direct', '--bridge-port', str(server.getsockname()[1]))
+            self.assertEqual(result.returncode, 2)
+            with self.assertRaises(socket.timeout):
+                server.accept()
 
 
 class Controls(SessionControls):

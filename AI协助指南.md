@@ -64,13 +64,13 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 向导做不完或需要单独重做时，按下面的顺序。每一步都是独立的一条命令。
 
 1. **Python 依赖**：`.\.venv\Scripts\python.exe -m pip install -r requirements.txt`
-2. **桥接 Mod 与常驻核心**（需要 .NET 8 SDK；**先确认游戏已关闭**）：
+2. **桥接 Mod 与常驻核心**（需要 .NET 8 SDK；先检查游戏／主控状态）：
 
    ```powershell
    .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
    ```
 
-   脚本先把已安装的两个 Mod 备份到 `local\backups\<时间>-bridge-runtime-deploy\`，再安装。游戏开着时它会拒绝并报错。已安装相同常驻核心、只更新桥接逻辑时，可以不重启游戏：`-HotReload -HudPort <在用主控的 HUD 端口>`（脚本默认 47792；控制台与命令行启动的主控默认 47790），这一步经在用的主控进行，也要先得到用户同意，规则见 `docs/BRIDGE_RELOAD.md`。回滚：关游戏后 `-Rollback "<部署时打印的备份目录>"`。
+   游戏运行时先比较 Runtime 字节：相同就自动热重载（主控已结束时使用空闲维护连接），不同则拒绝覆盖，按核心升级流程维护。离线安装前备份两个 Mod 到 `local\backups\<时间>-bridge-runtime-deploy\`；热重载的备份随交接记录保存。可显式指定 `-HotReload -HudPort <在用主控的 HUD 端口>`（脚本默认 47792；控制台默认 47790），规则见 `docs/BRIDGE_RELOAD.md`。离线回滚用 `-Rollback "<部署时打印的备份目录>"`，脚本不会替用户退出游戏。
 3. **智能体镜像**（Docker 引擎要在运行，约 1～2 分钟）：
 
    ```powershell
@@ -255,7 +255,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 - 部署前备份被替换的文件。`deploy_bridge.ps1` 会自动备份到 `local\backups\`，`obs_setup.py setup --reset` 会先备份原场景集合；其他手动替换的文件先自己备份。
 - 保留用户自己的 OBS 配置和 Mod 管理器配置。本项目的 OBS 设置都在单独的配置文件与场景集合 CelesteAI 里，不改用户自己的。
-- 桥接部署要关闭游戏，OBS 插件安装要关闭 OBS。关闭前确认没有运行在用它们，并告诉用户。
+- 桥接更新时 Runtime 文件相同必须走受控重载，主控已结束则使用空闲维护入口，不为更新 Bridge 重启游戏。Runtime 确实变化或首次安装才维护重启。OBS 插件安装要关闭 OBS，关闭前确认没有运行在用它，并告诉用户。
 
 **存档**
 

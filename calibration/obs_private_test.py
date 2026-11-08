@@ -65,6 +65,20 @@ class PrivateObsTests(unittest.TestCase):
         with patch('tools.build_obs_plugin.obs_version', return_value='32.2.2'):
             return obs_setup.private_create(log=lambda _: None, **kwargs)
 
+    def test_custom_collection_and_file_name_are_preserved_in_private_obs(self):
+        (self.root / 'local.recording.json').write_text(json.dumps({
+            'collection': '我的测试场景 2', 'collection_file': 'my_test_scene_2', 'profile': 'MyProfile',
+        }), encoding='utf-8')
+        self.create()
+        config = self.private / 'config/obs-studio'
+        scene = config / 'basic/scenes/my_test_scene_2.json'
+        self.assertEqual(json.loads(scene.read_text(encoding='utf-8'))['name'], '我的测试场景 2')
+        self.assertTrue((config / 'basic/profiles/MyProfile/basic.ini').is_file())
+        self.assertFalse((config / 'basic/scenes/CelesteAI.json').exists())
+        selection = obs_setup.read_selection(config)
+        self.assertEqual(selection['SceneCollection'], '我的测试场景 2')
+        self.assertEqual(selection['SceneCollectionFile'], 'my_test_scene_2')
+
     def test_copies_only_official_components_and_switches_to_private_config(self):
         self.assertIsNone(obs_setup.private_root())
         self.assertEqual(obs_setup.obs_config_dir(), self.appdata / 'obs-studio')

@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import time
 
 
@@ -23,9 +24,13 @@ class BridgeReloadError(RuntimeError):
 
 
 def options(data, *, fill_defaults=True):
-    if not isinstance(data, dict) or set(data) - {'dll', 'runtime_dll', 'expected_version', 'timeout_s', 'retry', 'abort'}:
-        raise ValueError('桥接重载参数只支持 dll、runtime_dll、expected_version、timeout_s、retry、abort')
+    if not isinstance(data, dict) or set(data) - {'dll', 'runtime_dll', 'expected_version', 'timeout_s', 'retry', 'abort', 'game_dir'}:
+        raise ValueError('桥接重载参数只支持 dll、runtime_dll、expected_version、timeout_s、retry、abort、game_dir')
     result = dict(data)
+    if 'game_dir' in result:
+        if not isinstance(result['game_dir'], str) or not result['game_dir'].strip():
+            raise ValueError('game_dir 须为部署目标游戏目录')
+        result['game_dir'] = str(Path(result['game_dir']).expanduser().resolve())
     if 'dll' in result:
         if not isinstance(result['dll'], str) or not result['dll'].strip():
             raise ValueError('dll 须为本机桥接构建产物路径')
@@ -175,6 +180,8 @@ def _check_runtime(request, installed):
     reference = _runtime_reference(request)
     if installed is None or not Path(installed).is_file():
         raise BridgeReloadError('找不到游戏正在使用的常驻核心文件，无法核对核心是否相同；未替换文件')
+    if request.get('game_dir') and Path(installed).resolve().parents[3] != Path(request['game_dir']):
+        raise BridgeReloadError('桥接所属游戏目录与部署目标不同；未替换文件')
     if _sha256(reference) != _sha256(installed):
         raise BridgeReloadError(f'新桥接构建所依赖的常驻核心（{reference}）与游戏中已安装的核心（{installed}）不同；'
                                 '核心变化必须维护重启安装，未替换文件')
@@ -196,6 +203,23 @@ def _held_counters(record, reply):
     return True
 
 
+def _write_payload(content, target, fallback_directory):
+    # Everest watches every file under Mods. A temporary asset there can be
+    # queued after it has disappeared, leaving its virtual path undefined.
+    staging_dir = next((parent.parent for parent in target.parents if parent.name.casefold() == 'mods'), fallback_directory)
+    if any(parent.name.casefold() == 'mods' for parent in (staging_dir.resolve(), *staging_dir.resolve().parents)):
+        raise BridgeReloadError('临时文件目录仍位于 Mods 内，不能安全替换桥接；保持原交接')
+    staged = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=staging_dir, prefix='.celeste-ai-reload-', suffix='.tmp', delete=False) as stream:
+            staged = Path(stream.name)
+            stream.write(content)
+        os.replace(staged, target)
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+
+
 def _restore_payload(record, run_dir):
     """撤销前把已替换的桥接文件还原成备份（与仍在运行的原桥接一致）；原来不存在的文件移入备份目录，不删除。"""
     restored = []
@@ -205,12 +229,7 @@ def _restore_payload(record, run_dir):
         if backup is not None:
             if not backup.is_file():
                 raise BridgeReloadError(f'备份文件缺失，不能还原 {target}；保持暂停')
-            staged = target.with_name(target.name + '.abort-tmp')
-            try:
-                staged.write_bytes(backup.read_bytes())
-                os.replace(staged, target)
-            finally:
-                staged.unlink(missing_ok=True)
+            _write_payload(backup.read_bytes(), target, backup.parent)
             restored.append(str(target))
         elif target.exists():
             aside = Path(run_dir) / 'bridge_reload_backups' / str(record.get('lease')) / ('added-' + target.name)
@@ -245,9 +264,10 @@ def _abort(call, run_dir, path, record):
 
 
 def _replace_payload(source, installed, directory):
-    target = Path(installed).resolve()
+    # Keep the logical Mods ancestor even when a mod directory is a junction.
+    target = Path(installed).absolute()
     source = Path(source).resolve()
-    if target.name != 'CelesteAIBridge.dll' or not target.is_file() or source == target:
+    if target.name != 'CelesteAIBridge.dll' or not target.is_file() or source == target.resolve():
         raise BridgeReloadError('常驻核心提供的 payload_path 无效，或构建产物就是安装文件；未替换')
     backup = directory
     backup.mkdir(parents=True, exist_ok=True)
@@ -260,12 +280,7 @@ def _replace_payload(source, installed, directory):
         if dst.exists() and not original.exists():
             shutil.copy2(dst, original)
         content = src.read_bytes()
-        staged = dst.with_name(dst.name + '.reload-tmp')
-        try:
-            staged.write_bytes(content)
-            os.replace(staged, dst)
-        finally:
-            staged.unlink(missing_ok=True)
+        _write_payload(content, dst, backup)
         records.append({'path': str(dst), 'sha256': hashlib.sha256(content).hexdigest(),
                         'backup': str(original) if original.exists() else None})
     return records
@@ -714,10 +729,20 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
         if (record['before'].get('boundary') or {}).get('requires_origin_hold') is True:
             if hello.get('reload_origin_scene_hold') is not True:
                 raise BridgeReloadError('新桥接未报告原场景冻结能力；继续保持交接，请用兼容核心与桥接接回')
-        _verify(record['before'], hello, obs)
+        # finish releases the hold. A lost acknowledgement can therefore be
+        # followed by ordinary menu animation before retry. Its pre-finish
+        # verification is durable; same-lease finished status confirms that
+        # attempt rather than requiring the now-released menu to stay frozen.
+        finished_verified = (current.get('stage') == 'finished'
+                             and record.get('verified_version') == hello.get('bridge')
+                             and (record.get('finish_outcome_unknown') or record.get('resident_finished')))
+        if not finished_verified:
+            _verify(record['before'], hello, obs)
         if current.get('stage') != 'finished':
+            record.update(phase='finishing', verified_version=hello.get('bridge'), finish_outcome_unknown=True)
+            _write(path, record)
             call('reload_finish', lease=lease)
-        record.update(resident_finished=True, phase='refreshing', version=hello.get('bridge'))
+        record.update(resident_finished=True, finish_outcome_unknown=False, phase='refreshing', version=hello.get('bridge'))
         _write(path, record)
         session.entry_guard_supported = hello.get('entry_guard') is True
         session.chapter_reset_guard_supported = hello.get('chapter_reset_guard') is True

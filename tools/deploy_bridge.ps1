@@ -1,7 +1,7 @@
 ﻿# 构建 CelesteAIBridge 并安装到游戏的 Mods 目录。
 # 用法（PowerShell）：
 #   .\tools\deploy_bridge.ps1 -CelesteDir "D:\path\to\steamapps\common\Celeste"
-# 默认维护部署需关闭游戏；-HotReload 仅替换已安装常驻核心所支持的桥接逻辑。
+# 游戏运行且 Runtime 字节相同时自动热重载；不因主控已结束而重启游戏。
 # 回滚（关闭游戏后）：-Rollback "<部署时打印的备份目录>"，先把当前两个 Mod 移到游戏目录的 CelesteAI-backups，
 # 再还原备份里的 Mod；备份里没有常驻核心（例如回到 1.1.x）时，核心只移走不还原，避免旧桥接与核心争用端口。
 param(
@@ -9,6 +9,8 @@ param(
     [string]$Configuration = "Release",
     [switch]$HotReload,
     [int]$HudPort = 47792,
+    [int]$BridgePort = 0,
+    [Nullable[int]]$SaveSlot = $null,
     [string]$Rollback = ""
 )
 
@@ -25,17 +27,18 @@ if ($HotReload -and $Rollback) {
     throw "-Rollback 只能在关闭游戏后单独使用，不能与 -HotReload 同时使用"
 }
 
-if (-not $HotReload) {
-    # 只看部署目标目录里的游戏：AI 专用副本可以在个人的《蔚蓝》开着时部署（反过来也一样）。
-    # 取不到路径的 Celeste.exe 按在运行处理；Everest 也可能经它私有的 dotnet 宿主运行，那种情况一律按在运行处理。
-    $gameRoot = (Resolve-Path -LiteralPath $CelesteDir).Path.TrimEnd('\') + '\'
-    $runningGame = Get-CimInstance Win32_Process -Filter "Name='Celeste.exe' OR Name='dotnet.exe'" | Where-Object {
-        ($_.Name -eq 'Celeste.exe' -and (-not $_.ExecutablePath -or $_.ExecutablePath.StartsWith($gameRoot, [StringComparison]::OrdinalIgnoreCase))) -or
-        ($_.Name -eq 'dotnet.exe' -and $_.CommandLine -match '(?i)(?:^|[\\/"\s])Celeste\.dll(?:["\s]|$)')
+# 只看部署目标目录里的游戏：AI 专用副本可以在个人的《蔚蓝》开着时部署（反过来也一样）。
+# 取不到路径的 Celeste.exe 按在运行处理；Everest 也可能经它私有的 dotnet 宿主运行，那种情况一律按在运行处理。
+$gameRoot = (Resolve-Path -LiteralPath $CelesteDir).Path.TrimEnd('\') + '\'
+function Get-RunningTargetGame {
+    Get-CimInstance Win32_Process -Filter "Name='Celeste.exe' OR Name='dotnet.exe'" | Where-Object {
+    ($_.Name -eq 'Celeste.exe' -and (-not $_.ExecutablePath -or $_.ExecutablePath.StartsWith($gameRoot, [StringComparison]::OrdinalIgnoreCase))) -or
+    ($_.Name -eq 'dotnet.exe' -and $_.CommandLine -match '(?i)(?:^|[\\/"\s])Celeste\.dll(?:["\s]|$)')
     }
-    if ($runningGame) {
-        throw "维护部署需要先安全关闭 $CelesteDir 里的游戏；已安装常驻核心的兼容逻辑更新请用 -HotReload"
-    }
+}
+$runningGame = Get-RunningTargetGame
+if ($runningGame -and $Rollback) {
+    throw "离线回滚要求游戏已关闭；未自动退出游戏，请使用兼容构建进行受控重载"
 }
 
 if ($Rollback) {
@@ -68,7 +71,10 @@ if ($Rollback) {
 dotnet build (Join-Path $project "CelesteAIBridge.csproj") -c $Configuration "-p:CelestePrefix=$CelesteDir"
 if ($LASTEXITCODE -ne 0) { throw "构建失败" }
 
-if ($HotReload) {
+# 构建期间用户可能打开了游戏，不能沿用构建前的离线快照覆盖在用文件。
+$runningGame = Get-RunningTargetGame
+
+if ($HotReload -or $runningGame) {
     $runtimeBuilt = Join-Path $runtimeProject "bin\CelesteAIRuntime.dll"
     $runtimeInstalled = Join-Path $CelesteDir "Mods\CelesteAIRuntime\bin\CelesteAIRuntime.dll"
     if (-not (Test-Path -LiteralPath $runtimeInstalled)) {
@@ -78,11 +84,24 @@ if ($HotReload) {
         throw "常驻核心构建与已安装版本不同；本次需要维护重启，未替换任何在用文件"
     }
     $python = Join-Path $repo ".venv\Scripts\python.exe"
-    & $python -X utf8 (Join-Path $repo "tools\reload_bridge.py") --hud-port $HudPort --dll (Join-Path $project "bin\CelesteAIBridge.dll") --runtime-dll $runtimeBuilt
+    if ($BridgePort -eq 0) {
+        $BridgePort = 47774
+        $runtimeSettingsPath = Join-Path $CelesteDir "Saves\modsettings-CelesteAIRuntime.celeste"
+        if (Test-Path -LiteralPath $runtimeSettingsPath) {
+            $match = [regex]::Match([IO.File]::ReadAllText($runtimeSettingsPath), '(?m)^Port:\s*(\d+)\s*$')
+            if ($match.Success) { $BridgePort = [int]$match.Groups[1].Value }
+        }
+    }
+    $reloadArguments = @('-X', 'utf8', (Join-Path $repo "tools\reload_bridge.py"), '--hud-port', "$HudPort",
+        '--bridge-port', "$BridgePort", '--game-dir', $CelesteDir,
+        '--dll', (Join-Path $project "bin\CelesteAIBridge.dll"), '--runtime-dll', $runtimeBuilt)
+    if ($null -ne $SaveSlot) { $reloadArguments += @('--save-slot', "$SaveSlot") }
+    & $python @reloadArguments
     if ($LASTEXITCODE -ne 0) { throw "受控重载未完成；游戏保持暂停，请查看主控提示及保留的交接记录" }
     exit 0
 }
 
+if (Get-RunningTargetGame) { throw "游戏刚刚启动；未离线覆盖组件，请重试以执行受控重载" }
 $deploymentBackup = Join-Path $repo ("local\backups\" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-bridge-runtime-deploy")
 New-Item -ItemType Directory -Force -Path $deploymentBackup | Out-Null
 foreach ($module in @("CelesteAIBridge", "CelesteAIRuntime")) {

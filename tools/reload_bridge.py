@@ -1,4 +1,4 @@
-"""通过在用主控受控重载桥接逻辑，保留原录像；首次安装常驻核心仍须重启游戏。"""
+"""经在用主控或空闲维护连接重载桥接；Runtime 相同时不重启游戏。"""
 from __future__ import annotations
 
 import argparse
@@ -37,16 +37,29 @@ def owner_alive(base):
     return bool(state.get('connected'))
 
 
-def abort_direct(port, run_dir, timeout):
+def abort_direct(port, run_dir, timeout, game_dir=None):
     """原主控已经退出：直接连接常驻核心，只撤销可证明安全的未提交交接。"""
     from orchestrator.bridge_reload import reload_bridge
     from tools.bridge_client import BridgeClient
-    client = BridgeClient(port=port, timeout=min(timeout, 10))
-    try:
-        session = type('DirectSession', (), {'bridge_call': staticmethod(lambda cmd, **args: client.call(cmd, **args))})()
-        return reload_bridge(session, run_dir, {'abort': True, 'timeout_s': timeout})
-    finally:
-        client.close()
+    import os
+    from contextlib import nullcontext
+    from orchestrator.game_process import controller_lease, idle_bridge_listener
+    with controller_lease() if os.name == 'nt' else nullcontext():
+        if os.name == 'nt':
+            idle_bridge_listener(port)
+        client = BridgeClient(port=port, timeout=min(timeout, 10))
+        try:
+            from orchestrator.idle_bridge_reload import MaintenanceConnection
+            session = MaintenanceConnection(client)
+            if game_dir:
+                state = session.bridge_call('reload_status')
+                state = state.get('reload', state)
+                target = state.get('runtime_path') or state.get('payload_path')
+                if not target or len(Path(target).resolve().parents) < 4 or Path(target).resolve().parents[3] != Path(game_dir).resolve():
+                    raise RuntimeError('撤销目标游戏目录无法匹配；未还原文件或撤销交接')
+            return reload_bridge(session, run_dir, {'abort': True, 'timeout_s': timeout})
+        finally:
+            client.close()
 
 
 def main():
@@ -61,14 +74,14 @@ def main():
     parser.add_argument('--abort', action='store_true',
                         help='撤销尚未提交的重载交接（只在常驻核心确认原桥接仍在、游戏未变化时生效），并还原已替换的桥接文件')
     parser.add_argument('--direct', action='store_true',
-                        help='与 --abort 一起使用：原主控已退出时直接连接常驻核心（主控仍在时拒绝，避免顶掉连接）')
+                        help='主控未运行时进行空闲维护（也支持 retry/abort）；先核对端口占用，不启动 Player')
     parser.add_argument('--bridge-port', type=int, default=47774, help='--direct 时常驻核心的 IPC 端口')
     parser.add_argument('--run-dir', help='--direct 时原主控的运行目录（含 bridge_reload.json），用来还原已替换的桥接文件')
+    parser.add_argument('--game-dir', help='核对部署目标游戏目录；提供此值时，主控未连接可自动转为空闲维护')
+    parser.add_argument('--save-slot', type=int, help='空闲维护时核对已选择的存档槽；主菜单没有选档时不虚构槽位')
     args = parser.parse_args()
     from orchestrator.bridge_reload import options
     try:
-        if args.direct and not args.abort:
-            raise ValueError('--direct 只用于 --abort')
         data = {'retry': args.retry}
         if args.timeout is not None:
             data['timeout_s'] = args.timeout
@@ -80,24 +93,54 @@ def main():
             data['runtime_dll'] = args.runtime_dll
         if args.expected_version:
             data['expected_version'] = args.expected_version
+        if args.game_dir:
+            data['game_dir'] = args.game_dir
         data = options(data, fill_defaults=False)
+        if args.save_slot is not None and args.save_slot < 0:
+            raise ValueError('save-slot 须为非负整数')
         base = f'http://127.0.0.1:{args.hud_port}'
-        if args.direct:
+        current = None
+        if not args.direct:
+            try:
+                current = request(base)
+            except RuntimeError:
+                if not args.game_dir:
+                    raise
+        idle = args.direct or (args.game_dir and not (current or {}).get('control', {}).get('connected'))
+        if idle:
             if owner_alive(base):
-                raise RuntimeError('在用主控仍连接着桥接；请不加 --direct，经主控撤销，避免另开连接顶掉主控')
+                raise RuntimeError('在用主控仍连接着桥接；请经主控更新，不另开维护连接')
+            from orchestrator.idle_bridge_reload import maintenance_directory, reload_idle
             run_dir = Path(args.run_dir).resolve() if args.run_dir else None
-            if run_dir is None:
-                print('未指定 --run-dir：若原主控已替换桥接文件，本次不会还原，下次启动游戏会载入替换后的文件', file=sys.stderr)
-            result = abort_direct(args.bridge_port, run_dir, args.timeout if args.timeout is not None else 120)
-            print(f'已撤销尚未提交的重载交接（lease {result.get("lease")}），原桥接继续运行；'
-                  + (f'已还原 {len(result.get("restored") or [])} 个文件。' if result.get('restored') else '没有需要还原的文件。'))
+            maintenance_dir = run_dir or maintenance_directory(args.bridge_port)
+            metadata_path = maintenance_dir / 'idle_maintenance.json'
+            from orchestrator.session_store import load_json
+            metadata = load_json(metadata_path) if metadata_path.exists() else {}
+            known_idle = bool(metadata) and (run_dir is not None or metadata.get('phase') != 'returned')
+            if args.abort and not known_idle:
+                result = abort_direct(args.bridge_port, run_dir, args.timeout if args.timeout is not None else 120, args.game_dir)
+                print(f'已撤销尚未提交的重载交接（lease {result.get("lease")}），未代替原主控归还游戏控制权。')
+            else:
+                if args.retry and run_dir is None and metadata.get('phase') == 'returned':
+                    raise RuntimeError('默认目录只保留了已完成维护；请用 --run-dir 明确要重试的交接，未连接游戏')
+                result = reload_idle(args.bridge_port, data, directory=maintenance_dir, game_dir=args.game_dir,
+                                     save_slot=args.save_slot, progress=lambda message: print(message, flush=True))
+                if result.get('already_returned'):
+                    print('指定记录中的维护此前已完成；未连接游戏或处理其他交接。')
+                else:
+                    print(f'空闲维护完成（{result.get("phase")}）；控制权已归还，未启动 Player 或重启游戏。')
+            print('维护记录：' + str(maintenance_dir))
             return 0
-        current = request(base)
         state = current.get('control') or {}
         if not state.get('connected') or not state.get('bridge_reload_control'):
             raise RuntimeError('当前主控未连接或没有常驻桥接重载能力；首次安装须维护重启，未连接桥接或替换文件'
                                + ('。原主控已退出时可用 --abort --direct 撤销未提交的交接' if args.abort else ''))
         run = current.get('run')
+        if args.game_dir:
+            from orchestrator.session_store import load_json
+            run_state = load_json(Path(run) / 'run_state.json')
+            if run_state.get('bridge_port') != args.bridge_port:
+                raise RuntimeError('在用主控的桥接端口与部署目标不同；未提交重载')
         accepted = request(base, {'run': run, 'kind': 'bridge_reload', 'text': json.dumps(data, ensure_ascii=False)})
         ident = accepted.get('id')
         if ident is None:
