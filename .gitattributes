@@ -4,6 +4,7 @@
 agent-container/* text eol=lf
 
 # 发布压缩包（GitHub Release 的 Source code）是精简版：不含开发记录与详细更新记录；git 克隆照常包含全部文件
+docs/开发 export-ignore
 docs/开发/** export-ignore
 CHANGELOG.md export-ignore
 AGENTS.md export-ignore
