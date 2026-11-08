@@ -15,7 +15,7 @@
 | 操作系统 | Windows 10 2004 或更新，或 Windows 11 | OBS 的应用音频捕获需要这一版本 |
 | 游戏 | Steam 版《蔚蓝》（Celeste）1.4.0.0 | 安装目录下文记作 `<Celeste 安装目录>`（Steam 库里的 `steamapps\common\Celeste`） |
 | Mod 加载器 | 标准 Everest（.NET 8，6642 已通过 Bridge／Runtime 构建验证；建议 6642 或更新） | 用 Olympus 或 CeleMod 安装 |
-| 构建工具 | .NET 8 SDK | 编译桥接 Mod；可用官方脚本做用户级安装，无需管理员权限 |
+| 构建工具（源码回退时） | .NET 8 SDK 或兼容的新 SDK | 对应预编译包存在时不需要；见 [预编译组件](PREBUILT_COMPONENTS.md) |
 | 运行环境 | Python 3.11 或更新（实测 3.14） | 主控与测试客户端；依赖装在仓库内的虚拟环境 `.venv` 里 |
 | 录制 | OBS Studio 28 或更新（实测 32.2.2）与 ffmpeg | 安装目录下文记作 `<OBS 安装目录>`，写进 `configs\local.recording.json` 的 `obs_dir`（见 4.4 节） |
 | 容器 | Docker Desktop（WSL2 后端，实测 29.9） | 智能体（Claude Code）整体运行在容器中，安装见 2.3 节 |
@@ -129,7 +129,9 @@ agent 操作触发关卡街机或主菜单 PICO-8 入口时，在切场景及解
 
 ### 3.1 构建与安装
 
-先关闭游戏。如果 .NET SDK 没有加入 PATH，先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。然后在仓库根目录的 PowerShell 中执行：
+推荐运行 `setup.ps1 -Only bridge,recording`，优先使用与当前源码一致的预编译组件。没有包可选择源码编译；包校验失败会停止安装。离线安装和公测标签见 [预编译组件说明](PREBUILT_COMPONENTS.md)。下面保留直接源码构建入口。
+
+首次安装或更新常驻核心时先关闭游戏；Runtime 字节相同的兼容桥接可不停游戏受控重载。如果源码构建的 .NET SDK 没有加入 PATH，先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。然后在仓库根目录的 PowerShell 中执行：
 
 ```powershell
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
@@ -450,7 +452,7 @@ M5 验收（2026-10-23，桥接 0.7.0，当时的网页 HUD）：`python calibra
 **一次性准备**
 
 1. 安装 OBS（28 或更新，实测 32.2.2；Steam 版即可）与 ffmpeg（`winget install Gyan.FFmpeg`）。
-2. 构建并安装锁步插件（先关闭 OBS；不需要 Visual Studio，脚本会用 pip 装 zig 交叉编译）：
+2. 推荐用 `setup.ps1 -Only recording` 优先安装对应 OBS 版本的预编译插件。请先自行关闭 OBS，向导不会代关。无匹配预编译插件时可选择源码构建（不需要 Visual Studio，脚本会用 pip 装 zig 交叉编译）：
 
    ```powershell
    .\.venv\Scripts\python.exe tools\build_obs_plugin.py

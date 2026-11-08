@@ -54,7 +54,7 @@
 | Windows | 10 2004（build 19041）或更新、Windows 11 | — | — | 是 |
 | 《蔚蓝》Celeste | Steam 版 1.4.0.0 | 游戏本体 | Steam | 是 |
 | Everest | 标准 .NET 8 版本，建议 6642 或更新（Bridge／Runtime 已用标准 6642 构建验证；`everest.yaml` 仍声明 EverestCore 1.5935.0，5935～6641 未在本轮验证，不等同已验证可编译） | Mod 加载器 | [Olympus](https://everestapi.github.io/) 或 CeleMod | 是 |
-| .NET SDK | 8.x | 编译桥接 Mod | `winget install Microsoft.DotNet.SDK.8` | 是（编译时） |
+| .NET SDK | 8.x 或兼容的新 SDK | 仅源码编译桥接 Mod 时需要 | `winget install Microsoft.DotNet.SDK.8` | 预编译安装不需要 |
 | Python | 3.11 或更新（开发中用 3.14） | 主控、工具、部署向导 | `winget install Python.Python.3.13` | 是 |
 | WSL2 | 2.1.5 或更新 | Docker Desktop 的后端 | 管理员终端：`wsl --install --no-distribution`，重启 | 是 |
 | Docker Desktop | 开发中用 29.9 | 智能体容器 | `winget install Docker.DockerDesktop` | 是（容器运行方式） |
@@ -104,11 +104,11 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 | --- | --- | --- |
 | 1 system | 检查 Windows 版本、Python、winget、git | — |
 | 2 game | 从 Steam 的库目录找《蔚蓝》，检查 Everest（`Celeste.dll`） | 确认或填写游戏目录；没装 Everest 时用 Olympus 装好、启动一次游戏 |
-| 3 dotnet | 找 .NET 8 SDK，没有就用 winget 装 | 已装在别处时填 `dotnet.exe` 所在目录 |
-| 4 bridge | 编译并安装 `CelesteAIRuntime` 常驻核心与 `CelesteAIBridge` 逻辑两个 Mod | 首次安装及核心更新先关游戏；兼容逻辑更新见受控重载 |
+| 3 dotnet | 检查可选的 .NET SDK；源码回退时才提示安装 | 预编译安装不需要 SDK |
+| 4 bridge | 优先下载／校验当前版本的预编译 Mod；缺包时可源码编译 | 首次安装及核心更新须维护重启；兼容逻辑更新走受控重载 |
 | 5 docker | 检查 Docker Desktop 与引擎，构建智能体镜像 `celeste-agent:0.1` | 没装时先装 WSL2（管理员、重启），再装 Docker Desktop 并启动到 Engine running |
 | 6 platform | 选择智能体接入的平台（Anthropic、DeepSeek 或其他兼容 Anthropic 接口的平台），配置令牌或密钥，填模型名；模型不在平台配置里时，填它支持的推理强度档位 | Anthropic：浏览器授权 `claude setup-token`，把令牌粘贴回来（输入不显示）；DeepSeek 等：给密钥文件或粘贴密钥；其他平台：接口地址与密钥。原生 GPT 不在这一步配置，见 4.11 节 |
-| 7 recording | 找 OBS 与 ffmpeg（没有就用 winget 装），编译安装锁步插件，写 `configs\local.recording.json`（有 NVIDIA 显卡时用 NVENC） | 选择要不要录制；编译插件前关掉 OBS |
+| 7 recording | 找 OBS 与 ffmpeg，优先安装对应版本预编译插件，不适配时可源码编译，写录制配置 | 选择要不要录制；请自行关闭 OBS 后安装，向导不代关 |
 | 8 sim | 检查预置模拟器 `sim\dist` | 有从开发机拷来的模拟器时给出目录；没有就用关模拟器的版本 |
 | 9 kb | 生成知识库参考资料原文（Celeste Wiki 技巧页面；装了草莓酱 Mod 时一并提取） | 选择要不要生成（要能访问 celeste.ink） |
 | 10 saves | 读出游戏里已有存档的名字 | 填调试存档与正式存档的名字；还没有的进游戏新建 |
@@ -169,7 +169,9 @@ python -m venv .venv
 
 依赖：`mcp`（游戏工具服务）、`pillow`（截图放大、MOD 形式 HUD 的绘制）、`uvicorn`（本机 HTTP 服务）、`pywebview`（HUD 窗口）、`numpy`（规划回放、纯享版）。
 
-### 4.4 .NET 8 SDK 与桥接 Mod
+### 4.4 预编译组件与源码编译
+
+推荐先运行 `setup.ps1 -Only bridge,recording`，向导优先使用当前版本的组件包；没有包或源码不同可回退编译，校验损坏则停止。源码 ZIP、离线包、公测版 `-ReleaseTag` 与清单说明见 [预编译组件](PREBUILT_COMPONENTS.md)。以下是保留的源码构建方式：
 
 ```powershell
 winget install Microsoft.DotNet.SDK.8
@@ -177,7 +179,7 @@ winget install Microsoft.DotNet.SDK.8
 .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
 ```
 
-Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本构建桥接及其常驻核心依赖，备份并安装 `Mods\CelesteAIBridge\` 与 `Mods\CelesteAIRuntime\` 两个 Mod；首次安装与核心更新必须关闭游戏。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.11.0，要求常驻核心 1.0.5，以 `game-bridge/everest.yaml` 为准），以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。1.3.0 是不兼容的部署结构变化，旧版需维护重启迁移；1.3.1／核心 1.0.2 同样需要维护重启安装。已经安装相同常驻核心的兼容逻辑更新，可用 `-HotReload -HudPort 47792` 经在用主控保持原录像重载；正常 Everest 重载仍会重建当前房间。回滚在关闭游戏后用 `-Rollback "<部署时打印的备份目录>"`：当前两个 Mod 先移到 `<Celeste 安装目录>\CelesteAI-backups\`（不删除），备份里没有常驻核心时核心不再加载，避免旧桥接与核心争用端口。完整流程、撤销、失败重试与验收边界见 [桥接重载](BRIDGE_RELOAD.md)。
+Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celeste`，装在其他 Steam 库里时以实际位置为准。脚本构建桥接及其常驻核心依赖，备份并安装 `Mods\CelesteAIBridge\` 与 `Mods\CelesteAIRuntime\` 两个 Mod；首次安装与核心更新必须关闭游戏。`dotnet` 不在 PATH 里时先执行 `$env:PATH = "<SDK 目录>;$env:PATH"`。启动游戏后 `log.txt` 里应有 `[CelesteAIBridge] loaded v<版本>`（当前桥接版本 1.11.1，要求常驻核心 1.0.6，以 `game-bridge/everest.yaml` 为准），以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。新主控要求 `hello.action_policy=1`，表示真实入场核验与三项操作权限门禁均已加载；不满足时在录制、选档前拒绝开始。1.3.0 是不兼容的部署结构变化，旧版需维护重启迁移；1.3.1／核心 1.0.2 同样需要维护重启安装。已经安装相同常驻核心的兼容逻辑更新，可用 `-HotReload -HudPort 47792` 经在用主控保持原录像重载；正常 Everest 重载仍会重建当前房间。回滚在关闭游戏后用 `-Rollback "<部署时打印的备份目录>"`：当前两个 Mod 先移到 `<Celeste 安装目录>\CelesteAI-backups\`（不删除），备份里没有常驻核心时核心不再加载，避免旧桥接与核心争用端口。完整流程、撤销、失败重试与验收边界见 [桥接重载](BRIDGE_RELOAD.md)。
 
 冒烟测试（游戏停在标题画面即可）：
 

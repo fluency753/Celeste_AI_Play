@@ -11,6 +11,7 @@ param(
     [int]$HudPort = 47792,
     [int]$BridgePort = 0,
     [Nullable[int]]$SaveSlot = $null,
+    [string]$ComponentRoot = "",
     [string]$Rollback = ""
 )
 
@@ -68,8 +69,18 @@ if ($Rollback) {
     exit 0
 }
 
-dotnet build (Join-Path $project "CelesteAIBridge.csproj") -c $Configuration "-p:CelestePrefix=$CelesteDir"
-if ($LASTEXITCODE -ne 0) { throw "构建失败" }
+if ($ComponentRoot) {
+    $ComponentRoot = (Resolve-Path -LiteralPath $ComponentRoot).Path
+    $python = Join-Path $repo ".venv\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $python)) { $python = "python" }
+    & $python -X utf8 (Join-Path $repo "tools\component_package.py") --root $repo --validate $ComponentRoot
+    if ($LASTEXITCODE -ne 0) { throw "预编译组件校验失败；未替换任何组件" }
+    $project = Join-Path $ComponentRoot "mods\CelesteAIBridge"
+    $runtimeProject = Join-Path $ComponentRoot "mods\CelesteAIRuntime"
+} else {
+    dotnet build (Join-Path $project "CelesteAIBridge.csproj") -c $Configuration "-p:CelestePrefix=$CelesteDir"
+    if ($LASTEXITCODE -ne 0) { throw "构建失败" }
+}
 
 # 构建期间用户可能打开了游戏，不能沿用构建前的离线快照覆盖在用文件。
 $runningGame = Get-RunningTargetGame

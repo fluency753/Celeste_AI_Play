@@ -41,6 +41,7 @@ TITLES = {"system": "系统与包管理器", "game": "游戏与 Everest", "dotne
           "sim": "预置模拟器", "kb": "知识库参考资料", "saves": "存档", "switches": "开关与启动脚本", "checks": "自检"}
 
 CHECK_ONLY = False
+RELEASE_TAG = None
 
 
 # ---------------------------------------------------------------- 基本工具
@@ -232,7 +233,7 @@ def find_dotnet(a: Answers) -> str | None:
     for exe in candidates:
         if exe and Path(exe).exists():
             sdks = run([exe, "--list-sdks"], capture=True).stdout or ""
-            if re.search(r"^8\.", sdks, re.M):
+            if any(int(major) >= 8 for major in re.findall(r"^(\d+)\.", sdks, re.M)):
                 return exe
     return None
 
@@ -243,19 +244,33 @@ def step_dotnet(a: Answers) -> None:
         ok(f".NET 8 SDK（{exe}）")
         a["dotnet_dir"] = str(Path(exe).parent)
         return
-    bad(".NET 8 SDK（编译桥接 Mod 用）")
+    note("没有 .NET 8 SDK：预编译部署不需要它；仅回退源码编译时才需要安装")
+
+
+def require_dotnet(a: Answers) -> bool:
+    if find_dotnet(a):
+        return True
     if CHECK_ONLY:
-        say("  装在别处（不在 PATH 里）时运行 setup.ps1 -Only dotnet，填 dotnet.exe 所在目录")
-        return
+        return False
     if winget_install("Microsoft.DotNet.SDK.8", ".NET 8 SDK") and (exe := find_dotnet(a)):
         ok(f".NET 8 SDK（{exe}）")
         a["dotnet_dir"] = str(Path(exe).parent)
-        return
+        return True
     custom = ask("已经装在别处的话，填 dotnet.exe 所在目录（留空跳过）", "")
     if custom:
         a["dotnet_dir"] = custom
         if find_dotnet(a):
             ok(".NET 8 SDK")
+            return True
+    return False
+
+
+def component_bundle(network: bool = False):
+    from tools import component_package
+    try:
+        return component_package.find_bundle(REPO, network=network and not CHECK_ONLY, tag=RELEASE_TAG)
+    except component_package.Unavailable as exc:
+        return None, str(exc)
 
 
 def dotnet_env(a: Answers) -> dict:
@@ -263,6 +278,15 @@ def dotnet_env(a: Answers) -> dict:
     if a.get("dotnet_dir"):
         env["PATH"] = a["dotnet_dir"] + os.pathsep + env.get("PATH", "")
     return env
+
+
+def deployment_hud_port() -> int:
+    from orchestrator.launch_options import DEFAULTS
+    stored = load_json(REPO / "configs/local.console.json").get("machine")
+    port = stored.get("hud_port", DEFAULTS["hud_port"]) if isinstance(stored, dict) else DEFAULTS["hud_port"]
+    if type(port) is not int or not 0 < port < 65536:
+        raise ValueError("本机 HUD 端口无效，未开始桥接部署")
+    return port
 
 
 def step_bridge(a: Answers) -> None:
@@ -276,18 +300,19 @@ def step_bridge(a: Answers) -> None:
         bad("桥接 Mod（CelesteAIBridge）还没装进游戏")
     if CHECK_ONLY or not game.exists():
         return
-    if not ask_yes("现在编译并安装桥接 Mod？", default=not installed.exists()):
+    if not ask_yes("现在安装或更新桥接 Mod？（优先使用对应版本预编译包）", default=not installed.exists()):
         return
-    if not find_dotnet(a):
-        bad("先装好 .NET 8 SDK（dotnet 步骤）")
-        return
-    if process_running("Celeste.exe"):
-        say("  游戏正在运行，要先关掉（DLL 被占用时无法覆盖）。")
-        if not ask_yes("关掉游戏后继续？"):
+    bundle, reason = component_bundle(network=True)
+    note(reason)
+    extra = []
+    if bundle:
+        extra = ["-ComponentRoot", str(bundle)]
+    else:
+        if not ask_yes("没有对应预编译包，改用本机源码编译？") or not require_dotnet(a):
             return
     result = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(REPO / "tools" / "deploy_bridge.ps1"),
-                  "-CelesteDir", str(game)], env=dotnet_env(a))
-    (ok if result.returncode == 0 else bad)("桥接 Mod 编译安装" + ("完成；启动游戏后 log.txt 里应有 [CelesteAIBridge] loaded"
+                  "-CelesteDir", str(game), "-HudPort", str(deployment_hud_port()), *extra], env=dotnet_env(a))
+    (ok if result.returncode == 0 else bad)("桥接 Mod 安装" + ("完成；启动游戏后 log.txt 里应有 [CelesteAIBridge] loaded"
                                                                  if result.returncode == 0 else "失败，见上面的输出"))
 
 
@@ -508,12 +533,21 @@ def step_recording(a: Answers) -> None:
     merge_json(LOCAL_RECORDING, {"obs_dir": str(obs), "ffmpeg": ffmpeg,
                                  "video_args": load_json(LOCAL_RECORDING).get("video_args") or video_args})
     ok(f"configs/local.recording.json 已写好（编码：{'NVIDIA NVENC' if nvenc else 'libx264'}）")
-    if ask_yes("编译并安装 OBS 锁步插件？（先关闭 OBS；会用 pip 装 zig 交叉编译，并从 GitHub 取 libobs 头文件）",
+    if ask_yes("安装 OBS 锁步插件？（优先使用对应版本预编译包；请先自行关闭 OBS）",
                default=not (plugin and plugin.exists())):
-        if process_running("obs64.exe"):
-            run([sys.executable, "tools/obs_setup.py", "stop"])
-        result = run([sys.executable, "tools/build_obs_plugin.py", "--obs-dir", str(obs)])
-        (ok if result.returncode == 0 else bad)("锁步插件" + ("已安装" if result.returncode == 0 else "构建失败，见上面的输出"))
+        from tools.build_obs_plugin import obs_running, obs_version
+        from tools import component_package
+        if obs_running():
+            bad("OBS 正在运行，未关闭或修改它；请自行关闭后重新执行 recording 步骤")
+            return
+        bundle, reason = component_bundle(network=True)
+        note(reason)
+        if bundle and obs_version(obs).strip() in component_package.validate(bundle, REPO)["obs_versions"]:
+            backup = component_package.install_obs(bundle / "obs/celeste-lockstep.dll", obs)
+            ok(f"预编译锁步插件已安装；旧 DLL 备份：{backup}")
+        elif ask_yes("没有适配当前 OBS 版本的预编译插件，改用源码编译并安装？"):
+            result = run([sys.executable, "tools/build_obs_plugin.py", "--obs-dir", str(obs)])
+            (ok if result.returncode == 0 else bad)("锁步插件" + ("已安装" if result.returncode == 0 else "构建失败，见上面的输出"))
     note("声音延迟的校准（audio_offset_ms）在 checks 步骤里做：要游戏开着、停在 test 存档的关卡里")
 
 
@@ -696,12 +730,14 @@ def step_checks(a: Answers) -> None:
 # ---------------------------------------------------------------- 主程序
 
 def main() -> int:
-    global CHECK_ONLY
+    global CHECK_ONLY, RELEASE_TAG
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true", help="只检查各项是否就绪，不改动任何东西")
     ap.add_argument("--only", help="只做这几步（逗号分隔）：" + ",".join(STEPS))
+    ap.add_argument("--release-tag", help="指定当前源码对应的精确 Release 标签（例如 v1.22.0-beta.1）")
     args = ap.parse_args()
     CHECK_ONLY = args.check
+    RELEASE_TAG = args.release_tag
     if os.name == "nt":
         os.system("")   # 打开终端的 ANSI 支持
     a = Answers(load_json(ANSWERS))

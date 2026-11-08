@@ -46,6 +46,8 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 
 也可以从 [Releases](https://github.com/fluency753/Celeste_AI_Play/releases) 下载某个版本的源码压缩包解压使用：压缩包是精简版（不含开发记录与详细更新记录），但没有 git，之后不能在控制台里更新或换版本，所以更推荐 `git clone`。
 
+正式版／公测版会附带 Windows 预编译组件包；部署向导优先安装与当前源码一致的 Bridge、Runtime 和 OBS 插件，没有对应包时可回退源码编译。预编译部署不需要 .NET SDK，Python 环境仍需准备。离线安装、公测标签和兼容范围见 [预编译组件说明](docs/PREBUILT_COMPONENTS.md)。
+
 ### 预置配置
 
 控制台顶部的“配置”里，除了程序自带的“默认”，还有随程序发布的只读预置配置：

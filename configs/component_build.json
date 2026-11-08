@@ -1,0 +1,8 @@
+{
+  "everest_tag": "stable-1.6642.0",
+  "everest_asset_sha256": "0c1e4f6e5930b36164827dbeb4e439a7727bebe2d45ce8d2c1cf00674f8614e0",
+  "obs_version": "33.0.0",
+  "obs_commit": "72e86655715d9a25d69ce446aa4dd44ba58e10d2",
+  "dotnet_sdk": "10.0.400",
+  "ziglang": "0.16.0"
+}

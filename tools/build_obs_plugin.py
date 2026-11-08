@@ -14,6 +14,7 @@ libobs 的头文件从 obs-studio 仓库按与本机 OBS 相同的版本取（�
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -47,7 +48,7 @@ def fetch_headers(version: str) -> Path:
     def git(*args):
         subprocess.run(["git", *args], cwd=dest, check=True)
     git("init", "-q")
-    git("remote", "add", "origin", "https://github.com/obsproject/obs-studio.git")
+    git("remote", "add", "origin", "git@github.com:obsproject/obs-studio.git")
     git("config", "core.sparseCheckout", "true")
     (dest / ".git" / "info" / "sparse-checkout").write_text("libobs/\n", encoding="utf-8")
     git("fetch", "-q", "--depth", "1", "origin", "tag", version)
@@ -63,6 +64,16 @@ def zig(*args: str) -> None:
     subprocess.run([sys.executable, "-m", "ziglang", *args], check=True)
 
 
+def obs_running() -> bool:
+    if os.name != "nt":
+        return False
+    result = subprocess.run(["tasklist", "/FI", "IMAGENAME eq obs64.exe", "/NH"],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode:
+        raise RuntimeError("无法确认 OBS 是否运行；未替换插件")
+    return "obs64.exe" in result.stdout.lower()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--obs-dir", help="OBS 安装目录（含 bin\\64bit\\obs64.exe）；不写时依次看 configs/local.recording.json 的 "
@@ -70,6 +81,8 @@ def main() -> int:
     ap.add_argument("--obs-version", help="不读本机 OBS，直接指定 libobs 版本（如 32.2.2）")
     ap.add_argument("--no-install", action="store_true")
     args = ap.parse_args()
+    if not args.no_install and obs_running():
+        raise SystemExit("OBS 正在运行，未构建或替换插件；请自行关闭后重试")
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     obs_dir = None
@@ -89,12 +102,10 @@ def main() -> int:
         "-L", str(BUILD), "-lobs", "-lws2_32", "-o", str(dll))
     print(f"已构建 {dll}", flush=True)
     if not args.no_install:
-        target = obs_dir / "obs-plugins" / "64bit"
-        try:
-            shutil.copy2(dll, target / dll.name)
-        except PermissionError as exc:
-            raise SystemExit(f"复制失败（OBS 是否还开着？）：{exc}") from exc
-        print(f"已安装到 {target}", flush=True)
+        sys.path.insert(0, str(REPO_ROOT))
+        from tools.component_package import install_obs
+        backup = install_obs(dll, obs_dir)
+        print(f"已安装到 {obs_dir / 'obs-plugins' / '64bit'}；旧 DLL 备份：{backup}", flush=True)
     return 0
 
 

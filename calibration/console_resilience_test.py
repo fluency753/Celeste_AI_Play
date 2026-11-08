@@ -96,7 +96,7 @@ loadOptionsUntilReady().then(() => {
 });
 """
         result = subprocess.run(["node", "-e", harness], input=function_source("loadOptionsUntilReady"),
-                                capture_output=True, text=True, timeout=30)
+                                capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         out = json.loads(result.stdout)
         self.assertEqual(out["calls"], 3)

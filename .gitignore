@@ -16,6 +16,9 @@ game-files/
 Saves/
 *.celeste
 
+# Release 组件包（可解压到源码根目录，本机文件）
+/components/
+
 # 构建产物
 bin/
 obj/

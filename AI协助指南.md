@@ -45,13 +45,15 @@ docker image inspect celeste-agent:0.1                                 # 智能�
 
 `restart_controller.py check` 默认查 47792 端口的 HUD 服务；控制台和主控用的是 47790，查它时加 `--hud-port 47790`。它报"Connection refused"（退出码 2）表示那个端口上没有 HUD 服务，通常就是没有在用的运行，不是故障。最直接的判断是控制台顶栏的"主控"灯。
 
-游戏的版本要求：桥接 Mod 版本见 `game-bridge/everest.yaml`（写作时为 CelesteAIBridge 1.11.0），依赖常驻核心 CelesteAIRuntime 1.0.5 与 EverestCore 1.5935.0；主控要求桥接 1.4.0 或更新。游戏启动后，游戏目录的 `log.txt` 里应有 `[CelesteAIBridge] loaded v<同一版本>`，以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。
+游戏的版本要求：桥接 Mod 版本见 `game-bridge/everest.yaml`（写作时为 CelesteAIBridge 1.11.1），依赖常驻核心 CelesteAIRuntime 1.0.6 与 EverestCore 1.5935.0；主控要求桥接 1.4.0 或更新。游戏启动后，游戏目录的 `log.txt` 里应有 `[CelesteAIBridge] loaded v<同一版本>`，以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。
 
 ## 3. 部署
 
 **版本**：`git clone` 下来的是最新的开发版（主线上的最新提交）。GitHub Releases 里的正式版（标签 `vX.Y.Z`）与公测版（预发布，标签带后缀）更稳定；用户想用某个正式版或公测版时，部署好后在控制台"关于"页的"换版本"里选，或在没有运行时用 `git fetch --tags` 加 `git reset --keep <标签>`（保持在 main 分支上，之后一键更新照常可用）。控制台"关于"页的检查更新与一键更新可以选通道（正式版、公测版、开发版）。不要用 `git checkout <标签>` 切到分离头指针，那样控制台的换版本会拒绝。
 
 ### 3.1 推荐：交互式部署向导
+
+向导优先安装当前版本的预编译组件，SDK 只在源码编译回退时要求；不能用 latest 或其他源码版本的 DLL 拼装。组件损坏须停止排查，不能绕过校验。OBS 在运行时请让用户自行关闭，不调用 stop 或结束进程。离线包、公测标签与兼容范围见 [预编译组件说明](docs/PREBUILT_COMPONENTS.md)。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
@@ -64,10 +66,10 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 向导做不完或需要单独重做时，按下面的顺序。每一步都是独立的一条命令。
 
 1. **Python 依赖**：`.\.venv\Scripts\python.exe -m pip install -r requirements.txt`
-2. **桥接 Mod 与常驻核心**（需要 .NET 8 SDK；先检查游戏／主控状态）：
+2. **桥接 Mod 与常驻核心**（优先预编译；仅源码编译需要 SDK，先检查游戏／主控状态）：
 
    ```powershell
-   .\tools\deploy_bridge.ps1 -CelesteDir "<Celeste 安装目录>"
+   powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only bridge
    ```
 
    游戏运行时先比较 Runtime 字节：相同就自动热重载（主控已结束时使用空闲维护连接），不同则拒绝覆盖，按核心升级流程维护。离线安装前备份两个 Mod 到 `local\backups\<时间>-bridge-runtime-deploy\`；热重载的备份随交接记录保存。可显式指定 `-HotReload -HudPort <在用主控的 HUD 端口>`（脚本默认 47792；控制台默认 47790），规则见 `docs/BRIDGE_RELOAD.md`。离线回滚用 `-Rollback "<部署时打印的备份目录>"`，脚本不会替用户退出游戏。
@@ -78,7 +80,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
    ```
 
 4. **模型平台**（需要用户参与，见 3.3 节）：`powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only platform`
-5. **OBS 锁步插件**（**先确认 OBS 已关闭**。`.\.venv\Scripts\python.exe tools\obs_setup.py stop` 会正常关闭正在运行的 OBS，并把 OBS 的配置选择还原成用户原来的（建了私有 OBS 时只关私有 OBS）；用户可能正在用 OBS 直播或录像，关之前先问用户）：
+5. **OBS 锁步插件**：推荐 `setup.ps1 -Only recording` 优先安装对应版本预编译包。下面保留源码编译入口（**先确认 OBS 已关闭**。`.\.venv\Scripts\python.exe tools\obs_setup.py stop` 会正常关闭正在运行的 OBS，并把 OBS 的配置选择还原成用户原来的（建了私有 OBS 时只关私有 OBS）；用户可能正在用 OBS 直播或录像，关之前先问用户）：
 
    ```powershell
    .\.venv\Scripts\python.exe tools\build_obs_plugin.py

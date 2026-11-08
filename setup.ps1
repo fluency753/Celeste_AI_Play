@@ -4,7 +4,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查，不改动
 # 这个脚本只负责 Python 与虚拟环境；其余步骤（游戏与 Everest、.NET、桥接 Mod、Docker 与镜像、智能体平台与密钥、
 # OBS 与录制、预置模拟器、知识库、存档、开关与启动脚本、自检）由 tools\setup_wizard.py 交互完成。详见 docs\DEPLOY.md。
-param([switch]$Check, [string]$Only = "")
+param([switch]$Check, [string]$Only = "", [string]$ReleaseTag = "")
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
@@ -30,6 +30,7 @@ function Find-Python {
 Write-Host "== Celeste_AI_Play 部署：Python 与虚拟环境 =="
 $venvPy = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $venvPy)) {
+    if ($Check) { Write-Host "  [缺少] .venv（只检查，不创建虚拟环境；请先运行部署）"; exit 1 }
     $python = Find-Python
     if (-not $python) {
         if ($Check) { Write-Host "  [缺少] Python 3.11 或更新"; exit 1 }
@@ -58,5 +59,8 @@ Write-Host "  [就绪] .venv"
 $wizardArgs = @()
 if ($Check) { $wizardArgs += "--check" }
 if ($Only) { $wizardArgs += @("--only", $Only) }
-& $venvPy -X utf8 tools\setup_wizard.py @wizardArgs
+if ($ReleaseTag) { $wizardArgs += @("--release-tag", $ReleaseTag) }
+$pythonFlags = @('-X', 'utf8')
+if ($Check) { $pythonFlags += '-B' }
+& $venvPy @pythonFlags tools\setup_wizard.py @wizardArgs
 exit $LASTEXITCODE

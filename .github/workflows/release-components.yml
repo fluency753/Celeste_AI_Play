@@ -1,0 +1,88 @@
+name: Build Release components
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-components.yml'
+      - 'configs/component_build.json'
+      - 'tools/component_package.py'
+      - 'tools/package_release.py'
+      - 'tools/publish_release.py'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (vX.Y.Z or vX.Y.Z-beta.N)
+        required: true
+        type: string
+      upload:
+        description: Upload to the existing Release after validation
+        type: boolean
+        default: false
+permissions:
+  contents: read
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - id: settings
+        run: |
+          python -c "import json,os; d=json.load(open('configs/component_build.json')); f=open(os.environ['GITHUB_OUTPUT'],'a'); [print(k+'='+d[k],file=f) for k in ['dotnet_sdk','ziglang','obs_version','obs_commit']]; json.dump({'sdk':{'version':d['dotnet_sdk'],'rollForward':'disable'}},open('global.json','w'))"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ steps.settings.outputs.dotnet_sdk }}
+      - run: python -m pip install pillow "ziglang==$env:ZIG_VERSION"
+        env:
+          ZIG_VERSION: ${{ steps.settings.outputs.ziglang }}
+      - name: Resolve candidate tag
+        run: |
+          if (-not $env:RELEASE_TAG) {
+            $version = python -c "from pathlib import Path; from tools.component_package import project_version; print(project_version(Path('.')))"
+            "RELEASE_TAG=v$version" >> $env:GITHUB_ENV
+          }
+      # CI checkout supplies the public headers; local Git remote operations use SSH.
+      - uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: ${{ steps.settings.outputs.obs_commit }}
+          path: build/obs-plugin/obs-studio-${{ steps.settings.outputs.obs_version }}
+          sparse-checkout: libobs
+      - run: python tools/package_release.py --tag "$env:RELEASE_TAG"
+      - run: python tools/publish_release.py --tag "$env:RELEASE_TAG" --check
+        if: github.event_name != 'push'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-components
+          path: build/release/*
+          if-no-files-found: error
+  publish:
+    needs: build
+    if: github.event_name == 'release' || inputs.upload
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-components
+          path: build/release
+      - run: python tools/publish_release.py --tag "$env:RELEASE_TAG" --repository "$env:GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
