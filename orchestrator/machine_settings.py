@@ -20,6 +20,14 @@ MACHINE_KEYS = ("runtime", "bridge_port", "mcp_port", "hud_port", "hud", "hud_wi
 RUN_STATE_KEYS = ("runtime", "bridge_port", "recording_mode", "freeze_chapter_select", "freeze_file_select",
                   "freeze_main_menu")
 USAGE_KEYS = ("max_usage", "quota_wait", "quota_wait_max_hours")
+# 本次运行的设置（docs/开发/设置分层.md 第三步）：按组固定在配置里；没固定的组记住上次填写的（本机，所有配置共用）
+RUN_GROUPS = {"model": ("engine", "provider", "model", "effort"), "agent": ("agent",),
+              "chapters": ("map", "chapters", "segments", "sides", "seg_off"), "save": ("save",),
+              "max_minutes": ("max_minutes",), "start_paused": ("start_paused",), "autocompact": ("autocompact",)}
+RUN_KEYS = tuple(key for keys in RUN_GROUPS.values() for key in keys)
+INDEPENDENT_KEYS = ("live", "record")       # 直播与 OBS 录屏：各自记住上次的选择，不进配置
+DEBUG_KEYS = ("record_marker", "skip_enter", "no_agent", "play_speed", "auto_speed")   # 调试项：每次回到默认，不记住
+LAST_MAX_BYTES = 50_000
 USAGE_DEFAULTS = {"max_usage": None, "quota_wait": True, "quota_wait_max_hours": 24}
 _lock = threading.Lock()
 
@@ -197,6 +205,61 @@ def seed_usage(form: dict | None) -> None:
     save_usage(provider, usage)
 
 
+def pins_of(form: dict) -> list[str]:
+    """配置固定了哪些组：新版写在 pins；旧版配置没有 pins，存过的本次运行设置全部算固定（迁移时行为不变）。"""
+    pins = form.get("pins")
+    if isinstance(pins, list):
+        return [group for group in RUN_GROUPS if group in pins]
+    return [group for group, keys in RUN_GROUPS.items() if any(key in form for key in keys)]
+
+
 def strip(form: dict) -> dict:
-    """配置的表单里去掉本机设置与用量设置（它们不再随配置保存）。"""
-    return {k: v for k, v in form.items() if k not in MACHINE_KEYS and k not in USAGE_KEYS}
+    """配置的表单里去掉不随配置保存的项：本机设置、用量设置、直播与录屏、调试项、没固定的本次运行设置；
+    写下 pins（固定了哪些组）。"""
+    pins = pins_of(form)
+    drop = set(MACHINE_KEYS) | set(USAGE_KEYS) | set(INDEPENDENT_KEYS) | set(DEBUG_KEYS)
+    drop |= {key for group, keys in RUN_GROUPS.items() if group not in pins for key in keys}
+    return {**{k: v for k, v in form.items() if k not in drop and k != "pins"}, "pins": pins}
+
+
+# ---------------------------------------------------------------- 记住的上次填写
+
+def _last_from(source: dict) -> dict:
+    return {key: source[key] for key in (*RUN_KEYS, *INDEPENDENT_KEYS) if key in source}
+
+
+def load_last() -> dict:
+    """没固定的本次运行设置与直播、录屏上次填写的值。还没有时按当前选中配置的表单给出（不写文件，第一次保存时才写）。"""
+    import json
+    stored = _read(prefs_path()).get("last")
+    if isinstance(stored, dict):
+        return _last_from(stored)
+    from . import profiles
+    try:
+        form = profiles.meta(profiles.selected()).get("form") or {}
+    except (OSError, ValueError):
+        form = {}
+    seeded = _last_from(form)
+    return seeded if len(json.dumps(seeded, ensure_ascii=False)) <= LAST_MAX_BYTES else {}
+
+
+def save_last(values: dict) -> dict:
+    """保存上次填写的值（只收本次运行的设置与直播、录屏；开跑时还会按运行设置逐项校验）。与原来记住的合并：
+    当前配置固定了的组不在 values 里，原来记住的值留着，换到不固定它们的配置时照样用得上。"""
+    import json
+    if not isinstance(values, dict):
+        raise ValueError("上次填写的值须为对象")
+    extra = set(values) - set(RUN_KEYS) - set(INDEPENDENT_KEYS)
+    if extra:
+        raise ValueError("上次填写的值里有不认识的项：" + "、".join(sorted(extra)))
+    if len(json.dumps(values, ensure_ascii=False).encode("utf-8")) > LAST_MAX_BYTES:
+        raise ValueError("上次填写的值太大")
+    path = prefs_path()
+    with _lock:
+        data = _read(path)
+        stored = data.get("last") if isinstance(data.get("last"), dict) else {}
+        merged = {**_last_from(stored), **values}
+        if len(json.dumps(merged, ensure_ascii=False).encode("utf-8")) > LAST_MAX_BYTES:
+            merged = dict(values)
+        _write(path, {**data, "last": merged})
+    return merged

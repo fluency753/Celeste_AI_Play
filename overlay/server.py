@@ -289,6 +289,9 @@ def make_handler(pinned: Path | None):
                             result = console_api.instance_launch()
                         elif self.path == "/api/console/prefs":
                             result = console_api.save_prefs(data)
+                        elif self.path == "/api/console/last":
+                            # 与本机设置、游戏位置写同一个文件（configs/local.console.json）：同样在操作锁里写
+                            result = console_api.save_last(data.get("values"))
                         elif self.path == "/api/console/machine":
                             result = console_api.save_machine(data.get("settings"))
                         elif self.path == "/api/console/provider-usage":

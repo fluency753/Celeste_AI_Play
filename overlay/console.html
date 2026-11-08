@@ -216,6 +216,8 @@
   .runs .meta { grid-column: 1; color: var(--muted); font-size: 12.5px; }
   .runs .side { grid-row: 1 / span 2; grid-column: 2; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
   .inline-check { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+  .pins { display: flex; flex-wrap: wrap; gap: 2px 16px; }
+  .pins .inline-check { color: var(--text); }
   .plan { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .plan button { border: 1px solid var(--line-strong); background: none; color: var(--muted); border-radius: 999px;
                  padding: 3px 11px; font-size: 13px; cursor: pointer; }
@@ -437,6 +439,19 @@
   <section class="pane" id="setupPane" aria-labelledby="setupTitle">
     <h2 id="setupTitle">新运行 <span class="aside" id="setupAside">设置好之后开始；同一时间只能有一次运行</span></h2>
     <form id="setup" autocomplete="off">
+      <details class="more" id="pinBox">
+        <summary>固定在配置里的本次运行设置 <b id="pinSummary"></b></summary>
+        <p class="hint">没固定的项记住上次填写的（本机，所有配置共用）；固定的项跟着配置走：切换配置时换成配置里的值，改了要点顶部的“保存”。直播与 OBS 录屏各自记住上次的选择，不随配置；调试项（推进速度、跳过进档、不启动智能体、帧号条码）每次回到默认。</p>
+        <div class="pins">
+          <label class="inline-check"><input type="checkbox" data-pin="model"> 执行器、模型与推理强度</label>
+          <label class="inline-check"><input type="checkbox" data-pin="agent"> 智能体标签</label>
+          <label class="inline-check"><input type="checkbox" data-pin="chapters"> 地图与章节</label>
+          <label class="inline-check"><input type="checkbox" data-pin="save"> 存档</label>
+          <label class="inline-check"><input type="checkbox" data-pin="max_minutes"> 现实时间上限</label>
+          <label class="inline-check"><input type="checkbox" data-pin="start_paused"> 开始时先暂停</label>
+          <label class="inline-check"><input type="checkbox" data-pin="autocompact"> 上下文自动压缩窗口</label>
+        </div>
+      </details>
       <fieldset id="fsAgent">
         <legend>智能体与模型</legend>
         <div class="field-inline">
@@ -1160,9 +1175,13 @@ function markdown(src, base = "") {
 async function loadOptions() {
   const o = ui.options = await getJSON("/api/console/options");
   ui.profiles = o.profiles || null;
-  const form = ui.profiles?.current?.form;
-  const preferredRuntime = form?.engine === "codex" ? "codex:codex"
-    : form?.engine === "claude" ? `claude:${form.provider || "anthropic"}` : "claude:anthropic";
+  const form = ui.profiles?.current?.form || null;
+  ui.pins = new Set(pinsOf(form));
+  const last = o.last || {};
+  const runFrom = group => (ui.pins.has(group) ? form : last) || {};
+  const modelFrom = runFrom("model");
+  const preferredRuntime = modelFrom.engine === "codex" ? "codex:codex"
+    : modelFrom.engine === "claude" ? `claude:${modelFrom.provider || "anthropic"}` : "claude:anthropic";
   fillRuntimes(o.runtimes, preferredRuntime);
   ui.prov.lastRuntime = $("runtime").value;
   fillMachine(o.machine || {});
@@ -1184,26 +1203,29 @@ async function loadOptions() {
   $("playback").checked = !!d.playback;
   // 第一次打开（还没选过配置）：把按情况挑出的那份记下来，免得之后本机原有设置清空时自动换成默认
   if (ui.profiles && !ui.profiles.stored) postJSON("/api/console/profiles/select", { id: ui.profiles.selected }).catch(() => null);
+  // 没固定的本次运行设置与直播、录屏：上次填写的；玩法与固定的项：配置里的
+  const remembered = pickKeys(last, [...unpinnedKeys(), ...INDEPENDENT_KEYS]);
+  try { applyProfileForm(remembered); }
+  catch (e) { toast("上次填写的设置有一部分用不了：" + e.message, true); }
   if (form) {
-    try { applyProfileForm(form); }
+    try { applyProfileForm(profilePart(form)); }
     catch (e) { toast("这份配置的表单设置有一部分用不了：" + e.message, true); }
   }
   setMode(ui.mode);
-  const initial = profileForm();
-  ui.profileBaseline = JSON.stringify(initial);
+  ui.profileBaseline = JSON.stringify(profileForm());
   renderProfiles();
+  renderPins();
   if (ui.page === "prompts") loadPersonalPrompt();
 
-  loadModels(form).then(selection => {
+  const agentFrom = runFrom("agent");
+  loadModels({ model: modelFrom.model, effort: modelFrom.effort, agent: agentFrom.agent }).then(selection => {
     if (!selection) return;
-    initial.model = selection.model;
-    initial.effort = selection.effort;
-    initial.agent ||= selection.suggestedAgent;
-    ui.profileBaseline = JSON.stringify(initial);
+    ui.profileBaseline = JSON.stringify(profileForm());
     updateProfileDirty();
   });
   await Promise.all(["speedrun", "explore"].map(m => loadKbList(m).catch(() => null)));
   ui.settingsLoading = false;
+  ui.lastReady = true;
   if (ui.page === "kb") renderKb();
   updateSummary();
   schedulePreview();
@@ -1643,6 +1665,7 @@ function schedulePreview() {
   const request = ++commandPreviewRequest;
   ++promptPreviewRequest;
   updateProfileDirty();
+  saveLastSoon();
   clearTimeout(ui.previewTimer);
   ui.previewOk = false;
   updateStartButton();
@@ -1677,6 +1700,7 @@ async function startRun(event) {
   if (!ui.previewOk || running()) return;
   $("start").disabled = true;
   try {
+    await saveLast().catch(() => null);          // 开跑前先记下这次填写的
     await postJSON("/api/console/start", { options: formOptions() });
     toast("已启动主控：正在检查游戏与 OBS、进入存档。");
     $("launchBanner").hidden = true;
@@ -1696,9 +1720,10 @@ function profileReadonly() { return !!(ui.profiles && ui.profiles.current && ui.
 function profileForm() {
   const o = formOptions();
   delete o.kb_deny; delete o.kb_allow;
-  for (const [key] of MACHINE_FIELDS) delete o[key];        // 本机设置与提供方的用量设置不随配置保存
-  for (const key of USAGE_KEYS) delete o[key];
   o.seg_off = JSON.parse(JSON.stringify(ui.segOff || {}));
+  // 不随配置保存：本机设置、用量设置、直播与录屏、调试项、没固定的本次运行设置（orchestrator/machine_settings.strip）
+  for (const key of notInProfile()) delete o[key];
+  o.pins = [...(ui.pins || [])].sort();
   return o;
 }
 function profileSnapshot() { try { return JSON.stringify(profileForm()); } catch (e) { return null; } }
@@ -1764,7 +1789,7 @@ function applyProfileForm(form) {
   const perms = form.action_permissions || {};
   check("allowRestartChapter", perms.restart_chapter); check("allowReturnToMap", perms.return_to_map); check("allowSaveQuit", perms.save_quit);
   if (has("cutscene_mode")) $("cutsceneAgent").checked = form.cutscene_mode === "agent";
-  if (!pick("collisionImage", form.collision_image || "")) $("collisionImage").value = "";
+  if (has("collision_image") && !pick("collisionImage", form.collision_image || "")) $("collisionImage").value = "";
   if (has("max_minutes")) $("maxMinutes").value = form.max_minutes;
   if (has("autocompact")) $("autocompact").value = form.autocompact || "";
   for (const [key, id] of [["study_minutes", "studyMinutes"], ["play_speed", "playSpeed"],
@@ -1776,7 +1801,7 @@ function applyProfileForm(form) {
   if (Array.isArray(form.chapters)) ui.chapters = form.chapters.filter(c => chapterIds.includes(c));
   if (Array.isArray(form.sides)) ui.sides = form.sides.filter(x => Array.isArray(x)
     && (ui.options.sides || []).some(o => o.id === x[0] && o.side === x[1])).map(x => [x[0], x[1]]);
-  ui.segOff = form.seg_off && typeof form.seg_off === "object" ? JSON.parse(JSON.stringify(form.seg_off)) : {};
+  if (has("seg_off")) ui.segOff = form.seg_off && typeof form.seg_off === "object" ? JSON.parse(JSON.stringify(form.seg_off)) : {};
   if (form.save && typeof form.save === "object") {
     if (form.save.create) { $("save").value = "new"; $("newSave").value = form.save.name || ""; }
     else if ((ui.options.saves || []).some(x => x.slot === form.save.slot && x.name === form.save.name)) $("save").value = `slot:${form.save.slot}`;
@@ -1803,6 +1828,69 @@ const MACHINE_FIELDS = [["runtime", "runMode", "select"], ["bridge_port", "bridg
   ["freeze_main_menu", "freezeMainMenu", "check"], ["keep_obs_open", "keepObs", "check"], ["continuous_music", "continuousMusic", "check"]];
 const USAGE_KEYS = ["max_usage", "quota_wait", "quota_wait_max_hours"];
 const USAGE_DEFAULTS = { max_usage: null, quota_wait: true, quota_wait_max_hours: 24 };
+
+// 本次运行的设置（与 orchestrator/machine_settings.RUN_GROUPS 相同，calibration/run_pins_test.py 核对）：按组固定在配置里，
+// 没固定的组记住上次填写的；直播与录屏各自记住；调试项每次回到默认
+const RUN_GROUPS = { model: ["engine", "provider", "model", "effort"], agent: ["agent"],
+  chapters: ["map", "chapters", "segments", "sides", "seg_off"], save: ["save"], max_minutes: ["max_minutes"],
+  start_paused: ["start_paused"], autocompact: ["autocompact"] };
+const PIN_LABELS = { model: "模型", agent: "标签", chapters: "章节", save: "存档", max_minutes: "时限",
+  start_paused: "先暂停", autocompact: "压缩窗口" };
+const INDEPENDENT_KEYS = ["live", "record"];
+const DEBUG_KEYS = ["record_marker", "skip_enter", "no_agent", "play_speed", "auto_speed"];
+
+function pickKeys(obj, keys) {
+  return Object.fromEntries(keys.filter(k => obj && Object.prototype.hasOwnProperty.call(obj, k)).map(k => [k, obj[k]]));
+}
+// 配置固定了哪些组：新版写在 pins；旧版配置没有 pins，存过的本次运行设置全部算固定（与主控的 pins_of 相同）
+function pinsOf(form) {
+  if (!form) return [];
+  if (Array.isArray(form.pins)) return Object.keys(RUN_GROUPS).filter(g => form.pins.includes(g));
+  return Object.keys(RUN_GROUPS).filter(g => RUN_GROUPS[g].some(k => Object.prototype.hasOwnProperty.call(form, k)));
+}
+function unpinnedKeys() {
+  return Object.entries(RUN_GROUPS).filter(([g]) => !(ui.pins || new Set()).has(g)).flatMap(([, keys]) => keys);
+}
+function notInProfile() {
+  return [...unpinnedKeys(), ...INDEPENDENT_KEYS, ...DEBUG_KEYS, ...MACHINE_FIELDS.map(f => f[0]), ...USAGE_KEYS];
+}
+// 配置里该用的部分：玩法与固定的本次运行设置（旧版配置里存的本机设置、直播与录屏等不再采用）
+function profilePart(form) {
+  const skip = new Set([...notInProfile(), "pins"]);
+  return Object.fromEntries(Object.entries(form || {}).filter(([k]) => !skip.has(k)));
+}
+function lastValues() {
+  const o = formOptions();
+  o.seg_off = JSON.parse(JSON.stringify(ui.segOff || {}));
+  return pickKeys(o, [...unpinnedKeys(), ...INDEPENDENT_KEYS]);
+}
+let lastTimer = 0, lastSent = null;
+function saveLastSoon(delay = 800) {
+  if (!ui.lastReady) return;
+  clearTimeout(lastTimer);
+  lastTimer = setTimeout(() => saveLast().catch(() => null), delay);
+}
+async function saveLast() {
+  if (!ui.lastReady) return;
+  if (ui.modelsLoading || ui.settingsLoading) { saveLastSoon(); return; }   // 模型列表还在读：读完再记，免得记下空的模型
+  const values = lastValues(), text = JSON.stringify(values);
+  if (text === lastSent) return;
+  const r = await postJSON("/api/console/last", { values });
+  lastSent = text;
+  ui.options.last = r.last;
+}
+function renderPins() {
+  const pins = ui.pins || new Set();
+  document.querySelectorAll("[data-pin]").forEach(box => { box.checked = pins.has(box.dataset.pin); box.disabled = !ui.profiles; });
+  $("pinSummary").textContent = pins.size ? [...pins].map(g => PIN_LABELS[g]).join("、") : "没有";
+}
+function onPinChange(event) {
+  ui.pins = ui.pins || new Set();
+  if (event.target.checked) ui.pins.add(event.target.dataset.pin); else ui.pins.delete(event.target.dataset.pin);
+  renderPins();
+  updateProfileDirty();
+  saveLastSoon(0);           // 取消固定的组：现在的值记成上次填写的
+}
 
 function fillMachine(m) {
   const d = ui.options.defaults;
@@ -1894,7 +1982,7 @@ async function switchProfile(id) {
   if (ui.profileDirty) lost.push("运行页的改动");
   if (unsavedEdits()) lost.push("正在编辑的知识库、提示词或个人追加要求");
   if (lost.length && !confirm(`${lost.join("和")}还没保存，切换配置会丢掉。继续切换？`)) { $("profile").value = ui.profiles.selected; return; }
-  try { await postJSON("/api/console/profiles/select", { id }); reloadForProfile(); }
+  try { await saveLast().catch(() => null); await postJSON("/api/console/profiles/select", { id }); reloadForProfile(); }
   catch (e) { toast(e.message, true); $("profile").value = ui.profiles.selected; }
 }
 
@@ -3371,6 +3459,7 @@ $("hudMod").addEventListener("change", () => { ui.hudTouched = true; onLive(); }
 $("study").addEventListener("change", () => { $("study").dataset.touched = "1"; });
 $("saveContext").addEventListener("change", updateCompactHint);
 for (const [, id] of MACHINE_FIELDS) $(id).addEventListener("change", saveMachineSoon);
+document.querySelectorAll("[data-pin]").forEach(box => box.addEventListener("change", onPinChange));
 for (const id of ["quotaWait", "quotaHours", "maxUsage"]) $(id).addEventListener("change", saveUsageSoon);
 $("save").addEventListener("change", onSaveChange);
 $("newSave").addEventListener("input", () => { updateSummary(); schedulePreview(); });

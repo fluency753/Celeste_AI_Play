@@ -156,7 +156,13 @@ def machine_payload() -> dict:
     except (OSError, ValueError):
         pass
     usage = {row["id"]: machine_settings.usage_for(row["id"]) for row in runtime("claude").providers()}
-    return {"machine": machine, "provider_usage": usage}
+    return {"machine": machine, "provider_usage": usage, "last": machine_settings.load_last(),
+            "run_groups": {group: list(keys) for group, keys in machine_settings.RUN_GROUPS.items()}}
+
+
+def save_last(values) -> dict:
+    from orchestrator import machine_settings
+    return {"last": machine_settings.save_last(values)}
 
 
 def save_machine(update) -> dict:
@@ -713,7 +719,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.17.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.18.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

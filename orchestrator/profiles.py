@@ -275,8 +275,9 @@ def _clean_name(name) -> str:
 
 
 def clean_form(form) -> dict | None:
-    """表单设置：控制台运行页的选项（不含知识库权限：那部分单独存；也不含本机设置与提供方的用量设置，
-    它们分别存在本机与提供方，见 machine_settings.py）。只做形状检查，开跑时再按运行设置逐项校验。"""
+    """表单设置：控制台运行页的玩法设置与固定在配置里的本次运行设置（pins 写明固定了哪些组）。不含知识库权限
+    （那部分单独存），也不含本机设置、提供方的用量设置、直播与录屏、调试项与没固定的本次运行设置（见 machine_settings.py）。
+    只做形状检查，开跑时再按运行设置逐项校验。"""
     if form is None:
         return None
     if not isinstance(form, dict):

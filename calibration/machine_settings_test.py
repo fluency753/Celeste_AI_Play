@@ -57,9 +57,14 @@ class MachineTests(Fixture):
         old = self.run_state("20261101-000000", recording_mode="chapter", bridge_port=47000)
         new = self.run_state("20261107-000000", recording_mode="continuous", freeze_chapter_select=False, bridge_port=48000)
         os.utime(old, (time.time() - 100, time.time() - 100))
-        with patch.object(profiles, "selected", return_value="preset1"):
+        pid = profiles.create("旧配置", base=profiles.DEFAULT)
+        meta_path = self.root / "local" / "profiles" / pid / "profile.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["form"] = {"mode": "explore", "recording_mode": "continuous", "freeze_chapter_select": False}   # 旧版存的表单
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        with patch.object(profiles, "selected", return_value=pid):
             settings = ms.load()
-        # 预置配置 1 的表单写了连续录制、不冻结选章；端口它没写：按最近一次运行
+        # 选中配置的表单写了连续录制、不冻结选章；端口它没写：按最近一次运行
         self.assertEqual((settings["recording_mode"], settings["freeze_chapter_select"], settings["bridge_port"]),
                          ("continuous", False, 48000))
         self.assertEqual(settings["hud_port"], 47790)                                   # 两处都没有：默认值
@@ -87,7 +92,34 @@ class MachineTests(Fixture):
     def test_profiles_no_longer_store_machine_or_usage_settings(self):
         form = {"mode": "explore", "recording_mode": "continuous", "bridge_port": 48000, "max_usage": 0.9,
                 "quota_wait": False, "chapters": [1], "tune": {"explore_act_frames": 300}}
-        self.assertEqual(profiles.clean_form(form), {"mode": "explore", "chapters": [1], "tune": {"explore_act_frames": 300}})
+        self.assertEqual(profiles.clean_form(form), {"mode": "explore", "chapters": [1], "tune": {"explore_act_frames": 300},
+                                                     "pins": ["chapters"]})
+
+
+class LastTests(Fixture):
+    def test_remembered_values_merge_and_seed_from_the_selected_profile(self):
+        pid = profiles.create("旧配置", base=profiles.DEFAULT)
+        meta_path = self.root / "local" / "profiles" / pid / "profile.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["form"] = {"mode": "explore", "agent": "series", "live": True, "recording_mode": "continuous"}
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        with patch.object(profiles, "selected", return_value=pid):
+            self.assertEqual(ms.load_last(), {"agent": "series", "live": True})   # 还没记过：按选中配置，不写文件
+        self.assertFalse((self.root / "configs" / "local.console.json").exists())
+        ms.save_last({"model": "opus", "agent": "a", "max_minutes": 60})
+        # 换到固定了模型与时限的配置：只送来没固定的组，原来记住的模型与时限留着
+        self.assertEqual(ms.save_last({"agent": "b", "live": False}),
+                         {"model": "opus", "agent": "b", "max_minutes": 60, "live": False})
+        self.assertEqual(ms.load_last()["agent"], "b")
+        for bad in ({"mode": "explore"}, {"recording_mode": "chapter"}, "x", {"agent": "x" * 60000}):
+            with self.subTest(bad=str(bad)[:30]), self.assertRaises(ValueError):
+                ms.save_last(bad)
+
+    def test_debug_independent_and_unpinned_groups_are_not_stored_in_profiles(self):
+        form = {"mode": "explore", "pins": ["chapters"], "chapters": [2], "agent": "x", "live": True, "record": False,
+                "play_speed": 3, "skip_enter": True}
+        self.assertEqual(ms.strip(form), {"mode": "explore", "chapters": [2], "pins": ["chapters"]})
+        self.assertEqual(ms.pins_of({"pins": ["save", "nope"]}), ["save"])
 
 
 class UsageTests(Fixture):

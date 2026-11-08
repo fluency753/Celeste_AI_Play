@@ -157,7 +157,7 @@ class ProfileStoreTests(ProfileFixture):
         self.assertTrue((profiles.root() / pid / "personal_prompts.json").is_file())
         self.assertTrue((profiles.root() / pid / "kb" / "explore" / "tools.md").is_file())
         m = profiles.meta(pid)
-        self.assertEqual((m["name"], m["form"], m["kb_deny"]["explore"]), ("复制", {"agent": "x"}, ["tools.md"]))
+        self.assertEqual((m["name"], m["form"], m["kb_deny"]["explore"]), ("复制", {"agent": "x", "pins": ["agent"]}, ["tools.md"]))   # 旧式表单：存过的本次运行设置算固定
         s = profiles.summary(pid)
         self.assertEqual((s["prompts"], s["personal"], s["kb"], s["form"]), (["runtime_zh.md"], 1, 1, True))
 
@@ -166,7 +166,7 @@ class ProfileStoreTests(ProfileFixture):
         self.assertEqual([r["id"] for r in profiles.listing()["profiles"]], ["default", "local", *sorted([pid, fresh])])
 
         profiles.save_form(pid, {"agent": "y"})
-        self.assertEqual(profiles.meta(pid)["form"], {"agent": "y"})
+        self.assertEqual(profiles.meta(pid)["form"], {"agent": "y", "pins": ["agent"]})
         profiles.rename(pid, "  新名字 ")
         self.assertEqual(profiles.meta(pid)["name"], "新名字")
         for bad in ("", " ", "x" * 41, "a\nb"):
@@ -191,7 +191,7 @@ class ProfileStoreTests(ProfileFixture):
             with self.assertRaises(ValueError):
                 profiles.rename(pid, "x")
         profiles.save_form(profiles.LEGACY, {"agent": "a"})        # 本机原有设置可以存表单设置
-        self.assertEqual(profiles.meta(profiles.LEGACY)["form"], {"agent": "a"})
+        self.assertEqual(profiles.meta(profiles.LEGACY)["form"], {"agent": "a", "pins": ["agent"]})
         for bad in ("../x", "a/b", "", None, 3, "x" * 41):
             with self.assertRaises(ValueError):
                 profiles.check(bad)
@@ -289,7 +289,7 @@ class ConsoleTests(ProfileFixture):
         payload = api.profile_create({"name": "系列", "base": "current", "form": {"agent": "series", "mode": "explore"}})
         pid = payload["selected"]
         self.assertEqual(payload["current"], {"id": pid, "name": "系列", "readonly": False, "builtin": False, "preset": False, "description": "",
-                                              "form": {"agent": "series", "mode": "explore"}})
+                                              "form": {"agent": "series", "mode": "explore", "pins": ["agent"]}})
         # 新配置复制了提示词修改与个人追加要求；改它不影响本机原有设置
         self.assertIn(line, api.prompt_read("runtime_zh.md")["text"])
         doc = api.personal_prompt_read("all")
@@ -424,7 +424,9 @@ class ShippedPresetTests(unittest.TestCase):
         for pid in shipped:
             m = profiles.meta(pid)
             self.assertTrue(m["name"] and m["description"])
-            form = {k: v for k, v in m["form"].items() if k != "seg_off"}
+            form = {k: v for k, v in m["form"].items() if k not in ("seg_off", "pins")}
+            self.assertTrue(set(m["form"].get("pins", [])) <= {"model", "agent", "chapters", "save", "max_minutes",
+                                                                "start_paused", "autocompact"})
             self.assertTrue(set(form) <= set(launch_options.DEFAULTS), set(form) - set(launch_options.DEFAULTS))
             keys = {t["key"] for t in tuning.catalog()}
             self.assertTrue(set(form.get("tune") or {}) <= keys)
