@@ -66,7 +66,7 @@ Codex 恢复线程时检查该线程实际持久化的动态工具。旧线程�
 
 ### 独立后台宿主
 
-Windows 上 `start_gpt.ps1 -Play` 默认通过 `orchestrator.background` 运行：由 Windows WMI 服务创建独立宿主，再启动主控。它不属于启动它的终端或聊天会话的进程树，关闭终端、编辑或回退聊天都不会结束试玩进程（这正是 [INCIDENT_20261024.md](INCIDENT_20261024.md) 里那次中断的修复）。不需要管理员权限，不创建定时任务。HUD 的暂停和继续照常通过控制通道工作；试玩结束后宿主随主控退出，不自动重启，也不进入额外章节。
+Windows 上 `start_gpt.ps1 -Play` 默认通过 `orchestrator.background` 运行：由 Windows WMI 服务创建独立宿主，再启动主控。它不属于启动它的终端或聊天会话的进程树，关闭终端、编辑或回退聊天都不会结束试玩进程（这正是 [INCIDENT_20261024.md](开发/INCIDENT_20261024.md) 里那次中断的修复）。不需要管理员权限，不创建定时任务。HUD 的暂停和继续照常通过控制通道工作；试玩结束后宿主随主控退出，不自动重启，也不进入额外章节。
 
 续跑用 `.\start_gpt.ps1 -Play -Resume runs\gpt-native\<运行目录>`，模型、知识范围、推理强度和剩余章节沿用原运行。后台启动与退出状态、PID、退出码和输出日志在 `local\background\<启动时间>\`（`status.json`、`output.log`）。单实例互斥量与工具端口检查避免重复接管游戏桥接。准备、聊天、HUD 服务与 HUD 窗口也可以由同一种宿主启动。
 

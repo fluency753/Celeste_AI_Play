@@ -1,6 +1,6 @@
 # Codex 开发与审查入口
 
-仅适用于 Codex 在本仓库的代码贡献；项目通用规范见 [AGENTS.md](../../AGENTS.md)。其他开发 agent 无须读取或执行本文，不将本文传给试玩 agent。
+仅适用于 Codex 在本仓库的代码贡献；项目通用规范见 [AGENTS.md](../../../AGENTS.md)。其他开发 agent 无须读取或执行本文，不将本文传给试玩 agent。
 
 ## 工作流程
 

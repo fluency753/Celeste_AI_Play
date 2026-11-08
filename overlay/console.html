@@ -876,7 +876,12 @@
     </section>
   </div>
   <section class="pane" aria-labelledby="changelogTitle">
-    <h2 id="changelogTitle">更新记录</h2>
+    <h2 id="changelogTitle">更新记录
+      <span class="segmented" role="radiogroup" aria-label="显示版本摘要还是详细更新记录" id="changelogMode" style="margin-left:10px">
+        <button type="button" role="radio" data-logmode="summary" aria-checked="true">版本摘要</button>
+        <button type="button" role="radio" data-logmode="detail" aria-checked="false">详细记录</button>
+      </span>
+    </h2>
     <div class="md scroll" id="changelog"></div>
   </section>
 </main>
@@ -3089,7 +3094,21 @@ async function loadAbout() {
   const base = a.github + "/blob/main/";
   $("todo").innerHTML = markdown(a.todo.replace(/^# .*\n/, ""), base) || "<p class='hint'>没有 TODO.md。</p>";
   if (!ui.updateChecked) checkUpdate();
-  $("changelog").innerHTML = markdown(a.changelog.replace(/^# .*\n/, ""), base) || "<p class='hint'>没有 CHANGELOG.md。</p>";
+  ui.about = a;
+  renderChangelog();
+}
+
+// 更新记录：默认显示给使用者的版本摘要（版本摘要.md），可切到开发过程的详细记录（CHANGELOG.md；发布压缩包里没有）
+function renderChangelog() {
+  const a = ui.about;
+  if (!a) return;
+  const base = a.github + "/blob/main/";
+  const detail = ui.logMode === "detail" && !!a.changelog;
+  document.querySelectorAll("[data-logmode]").forEach(b => b.setAttribute("aria-checked", String((b.dataset.logmode === "detail") === detail)));
+  $("changelogMode").hidden = !a.changelog || !a.summary;
+  const text = detail ? a.changelog : (a.summary || a.changelog);
+  $("changelog").innerHTML = markdown(text.replace(/^# .*\n/, ""), base)
+    || "<p class='hint'>没有版本摘要（版本摘要.md）。</p>";
 }
 
 // 检查更新：git fetch 后与 GitHub 上的最新版本比较；一键更新：只在能快进、没有主控在运行时拉取，然后重启 HUD 服务
@@ -3290,6 +3309,8 @@ $("profileCancel").addEventListener("click", closeProfileDialog);
 $("profileForm").addEventListener("submit", submitProfileDialog);
 $("aboutRefresh").addEventListener("click", loadAbout);
 $("checkUpdate").addEventListener("click", checkUpdate);
+document.querySelectorAll("[data-logmode]").forEach(b => b.addEventListener("click", () => { ui.logMode = b.dataset.logmode; store("logMode", ui.logMode); renderChangelog(); }));
+ui.logMode = recall("logMode") === "detail" ? "detail" : "summary";
 $("updateChannel").value = ["release", "prerelease", "dev"].includes(recall("updateChannel")) ? recall("updateChannel") : "dev";
 $("updateChannel").addEventListener("change", () => { store("updateChannel", updateChannel()); checkUpdate(); });
 $("applyUpdate").addEventListener("click", applyUpdate);

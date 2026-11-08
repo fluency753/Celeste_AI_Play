@@ -2,8 +2,8 @@
 
 项目还没有完成。下面是接下来要做的事，完成后从这里移到 [CHANGELOG.md](CHANGELOG.md)。
 
-隔离试玩、音频、录像、地图、路线和结构整理事项的背景与验收要求见 [待办设计说明](docs/TODO_DETAILS.md)。
-已完成的状态边界整理与缺陷成因见 [Codex 整改复盘（可选参考）](docs/codex/STATE_CONTRACTS.md)。
+隔离试玩、音频、录像、地图、路线和结构整理事项的背景与验收要求见 [待办设计说明](docs/开发/TODO_DETAILS.md)。
+已完成的状态边界整理与缺陷成因见 [Codex 整改复盘（可选参考）](docs/开发/codex/STATE_CONTRACTS.md)。
 
 ## 功能
 

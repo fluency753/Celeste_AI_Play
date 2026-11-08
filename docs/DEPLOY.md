@@ -341,7 +341,7 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 ```
 
 - `start_gpt.ps1` 的参数：`-Knowledge explore|full`（默认 explore，即探索模式；full 为速通模式）、`-Effort`（默认 medium）、`-Model`、`-Chapter`（默认 1）或 `-Chapters`、`-Scope chapter|campaign`、`-Save` 与 `-SaveSlot`（用已有存档时必填）或 `-CreateSave`（新建，只能从序章 `-Chapter 0` 开始）、`-Foreground`。试玩自动带 `--live --keep-obs-open --playback --continuous-music`。
-- 试玩默认由独立的后台宿主运行（`orchestrator.background`，用 Windows WMI 创建，不属于启动它的终端或聊天会话的进程树），所以关掉终端不会结束试玩；启动记录、输出日志与退出码在 `local\background\<启动时间>\`。同一时间只允许一个后台主控。原因见 [INCIDENT_20261024.md](INCIDENT_20261024.md)。
+- 试玩默认由独立的后台宿主运行（`orchestrator.background`，用 Windows WMI 创建，不属于启动它的终端或聊天会话的进程树），所以关掉终端不会结束试玩；启动记录、输出日志与退出码在 `local\background\<启动时间>\`。同一时间只允许一个后台主控。原因见 [INCIDENT_20261024.md](开发/INCIDENT_20261024.md)。
 - 探索模式进房先核验精确几何数据；第一次明显受阻、死亡、偏离预期或决策等待偏长时就提示复查，不要求连续失败。直播时每次决策 10～20 秒的节奏是提示词约定，不是强制中断模型的超时。有限模拟由智能体主动决定，后台不会自动消耗体力。模拟次数和累计路线数在预测成功时记账，不依赖回放是否启用；HUD 的"累计推演"不会因回放结束清零。
 - 网页 HUD 的会话管理、聊天、暂停与目标设置见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。
 

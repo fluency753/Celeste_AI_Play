@@ -688,7 +688,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.13.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.14.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -1080,7 +1080,7 @@ def about() -> dict:
             {"name": "Codex", "value": ('镜像内 ' + codex) if codex_ready else '镜像需要更新',
              "note": '容器执行；账号需单独初始化，不检查宿主 CLI', "ok": codex_ready},
         ],
-        "changelog": read("CHANGELOG.md"), "todo": read("TODO.md"),
+        "summary": read("版本摘要.md"), "changelog": read("CHANGELOG.md"), "todo": read("TODO.md"),
     }
 
 
