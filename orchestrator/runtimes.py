@@ -196,4 +196,7 @@ def config_from_state(state, metrics=None):
     from .action_policy import configure, permissions_from_state
     configure(cfg, permissions_from_state(state))
     cfg.allow_detour = bool(state.get('allow_detour', False)) and cfg.play_scope != 'visited'
-    return runtime(state['engine']).configure(cfg, state.get('provider'))
+    runtime(state['engine']).configure(cfg, state.get('provider'))
+    from .model_profile import restore_profile
+    restore_profile(cfg, state)
+    return cfg

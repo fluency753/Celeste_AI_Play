@@ -39,8 +39,9 @@ class TunableTests(unittest.TestCase):
         c = cfg()
         tuning.apply(c, {"playback_speed": 5.0, "max_frames_per_act": 600})
         self.assertEqual(c.playback_speed, 5.0)
-        self.assertEqual(c.tuning, {"playback_speed": 5.0})          # 只记与默认值不同的
-        self.assertEqual(tuning.argv({"playback_speed": 5.0, "remind_s": 30}), ["--tune", "playback_speed=5"])
+        self.assertEqual(c.tuning, {"playback_speed": 5.0, "max_frames_per_act": 600})
+        self.assertEqual(tuning.argv({"playback_speed": 5.0, "remind_s": 30}),
+                         ["--tune", "playback_speed=5", "--tune", "remind_s=30"])
 
     def test_prompt_numbers_follow_tunables(self):
         speed = cfg(mode="speedrun", knowledge_profile="full", sim=True, pause_limit=True, playback=True, live=True, live_remind_s=10.0)

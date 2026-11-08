@@ -719,7 +719,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.20.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.20.1"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -1267,7 +1267,7 @@ def resume(run_dir: str, fresh_session: bool = False, new_recording: bool = Fals
         current = selected_run(latest_run())
         if current is not None:
             release_chat(current)
-    argv = resume_args(directory, bool(fresh_session), bool(new_recording))
+    argv = resume_args(directory, bool(fresh_session), bool(new_recording), current_machine=True)
     return {**_launch(argv), "command": command_line(argv)}
 
 

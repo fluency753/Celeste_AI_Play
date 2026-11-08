@@ -90,13 +90,15 @@ async def _prepare(args, profile):
                 metrics.update(status="done" if runner.completed_preparation else "stopped")
                 hashes = {rel: hashlib.sha256((study.extra.get(rel) or (study.kb_dir / rel)).read_bytes()).hexdigest()
                           for rel in study.files}
+                from .model_profile import profile_state as model_profile_state
+                effective_profile = model_profile_state(cfg, resolved_model=metrics.state.model)
                 result = {"reason": reason, "quick_check": args.quick_check, "game_tools_registered": True, "success":runner.completed_preparation,
                           "engine":cfg.engine, "provider":cfg.provider, "runtime":cfg.runtime, "requested_model":cfg.model,
                           "knowledge_profile": cfg.knowledge_profile, "mode": cfg.mode,
                           "kb_study": study.summary(), "kb_hashes": hashes,
                           "kb_identity": study_identity(study.kb_dir),
                           "session_id": runner.session_id, "turns": runner.turns, "metrics": metrics.snapshot(),
-                          "codex_player_login": cfg.codex_player_login, **profile_state}
+                          "codex_player_login": cfg.codex_player_login, **profile_state, **effective_profile}
                 if login_required:
                     result['login_required'] = login_required
                 (directory / "prepare_summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -114,7 +116,7 @@ async def _prepare(args, profile):
             'session_id':runner.session_id, 'session_kind':'ready', 'prepared_dir':str(directory),
             'codex_player_login':cfg.codex_player_login,
             'sim':cfg.sim, 'sim_assist':False, 'cutscene_mode':cfg.cutscene_mode, 'max_minutes':240,
-            **profile_state})
+            **profile_state, **effective_profile})
         if adapter.fast and args.fast is not None:
             RunControl(directory).set_fast(args.fast == 'on')
     return 0 if runner.completed_preparation else 1

@@ -178,9 +178,11 @@ def autocompact_choice(cfg) -> tuple[str | None, str | None]:
     本次运行设置的（"run"）> 模型档案（"model"，providers.json 模型行的 autocompact）> 提供方（"provider"）
     > 开了节省上下文时的 500000（"save_context"）> 不传（None：Claude Code 默认）。
     Claude Code 取它与模型最大上下文中较小的一个，上下文不到 50 万的模型不受影响。"""
-    from .model_profile import model_autocompact
+    from .model_profile import model_autocompact, saved_choice
     if getattr(cfg, "autocompact", None):
         return str(cfg.autocompact), "run"
+    if entry := saved_choice(cfg, 'autocompact'):
+        return entry['value'], None if entry['source'] == 'default' else entry['source']
     if value := model_autocompact(cfg):
         return value, "model"
     if value := (getattr(cfg, "provider_info", None) or {}).get("autocompact"):

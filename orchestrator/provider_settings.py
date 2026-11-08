@@ -684,15 +684,21 @@ def remove(request, in_use=frozenset()) -> str:
         if not isinstance(entry, dict) or not entry:
             raise ValueError(f"{ident} 没有本机修改，已经是默认设置" if builtin else "没有这个提供方，请重新读取")
         keep = builtin and request.get("keep_key", False)
+        # Resetting a built-in provider is also an explicit account choice:
+        # leave a marker so legacy form migration cannot resurrect old limits.
+        reset_usage = {"usage": {}} if builtin and "usage" in entry else {}
         key_file = _str(_effective(repo, local, ident).get("key_file"))
         if keep:
-            kept = {k: entry[k] for k in ("key_env", "key_file") if k in entry}
+            kept = {**reset_usage, **{k: entry[k] for k in ("key_env", "key_file") if k in entry}}
             if kept:
                 local[ident] = kept
             else:
                 local.pop(ident)
         else:
-            local.pop(ident)
+            if reset_usage:
+                local[ident] = reset_usage
+            else:
+                local.pop(ident)
         target = None
         if request.get("delete_key_file"):
             if keep or not _console_saved(key_file):

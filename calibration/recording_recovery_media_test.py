@@ -355,7 +355,10 @@ class RecordingRecoveryMediaTests(unittest.TestCase):
             return rename(source, destination)
 
         with patch('orchestrator.session_store.os.rename', side_effect=competing_publication):
-            with self.assertRaises(FileExistsError):
+            # Windows may report either an existing destination or access
+            # denied for the same nonempty competing directory. The contract
+            # is refusal without replacing its owner or publishing a ledger.
+            with self.assertRaises((FileExistsError, PermissionError)):
                 self.recovery.prepare(self.saved)
         self.assertEqual(len(attempts), 1)
         self.assertEqual((target/'owner.txt').read_text(encoding='utf-8'), 'another publisher')

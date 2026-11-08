@@ -212,6 +212,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "统计与 Claude Code 会话。模型、推理强度、章节、--sim 等沿用原运行的设置")
     ap.add_argument("--fresh-session", action="store_true",
                     help="与 --resume 一起用：不接原来的 Claude Code 会话，开一个新会话（原会话无法恢复时用）")
+    ap.add_argument('--use-machine-settings', action='store_true',
+                    help='续跑采用当前本机 HUD、ffmpeg 与 OBS 保留偏好；连接、原执行环境、容器资源及在用录像沿原约束。控制台续跑自动启用')
     ap.add_argument("--new-recording", action="store_true",
                     help="与 --resume 一起用：原录像接不上时（OBS 关了或崩溃、独立音频停了）放弃它，这次续跑另起一段录像")
     ap.add_argument("--note-file", metavar="FILE",
@@ -268,6 +270,16 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             args.playback = bool(state.get("playback", True))
         args.skip_enter = True
         args.no_study = True
+    machine_origin = None
+    if args.use_machine_settings:
+        if not previous:
+            ap.error('--use-machine-settings 只能与 --resume 一起使用')
+        from .machine_settings import apply_resume_machine
+        try:
+            machine_origin = apply_resume_machine(args, previous['state'], sys.argv[1:])
+        except ValueError as exc:
+            ap.error(str(exc))
+        print('[run] 续跑采用当前本机 HUD、ffmpeg 与 OBS 保留偏好；连接、执行环境、容器资源及录像沿原约束', flush=True)
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort, provider=args.provider,
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
@@ -597,6 +609,14 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if not (cfg.sim_dir / "celeste-sim").is_file():
             raise SystemExit(f"找不到预置模拟器：{cfg.sim_dir / 'celeste-sim'}（模拟器只在本机，见使用说明的预置模拟器一节；"
                              "没有模拟器时用 --no-sim 运行关模拟器的版本）")
+    profile_origin = previous['state'] if previous else prepared_metadata
+    if profile_origin:
+        from .model_profile import restore_profile
+        restore_profile(cfg, profile_origin, explicit_tunes=parse_pairs(args.tune),
+                        explicit_autocompact=args.autocompact is not None,
+                        changed_save_context=args.save_context is not None and
+                        cfg.save_context != bool(profile_origin.get('save_context', False)))
+    cfg._machine_settings_origin = machine_origin
     return cfg, args
 
 
@@ -646,8 +666,10 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
              "controller_host": os.environ.get("CELESTE_CONTROLLER_HOST"), "controller_pid": os.getpid(),
              "controller_parent_pid": os.getppid(),
              "bridge_port": cfg.bridge_port}
-    from .model_profile import profile_sources
-    state["model_profile"] = profile_sources(cfg)       # 与模型相关的值及来源（复盘用，续跑不读）
+    from .model_profile import profile_state
+    state.update(profile_state(cfg))
+    if getattr(cfg, '_machine_settings_origin', None):
+        state['machine_settings_origin'] = cfg._machine_settings_origin
     from .segments import Piece
     current_plan = cfg.plan or [Piece(c) for c in (cfg.chapters or ([] if cfg.chapter is None else [cfg.chapter]))]
     state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [p.row() for p in map(Piece.of,current_plan)]

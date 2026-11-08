@@ -1732,6 +1732,7 @@ async function startRun(event) {
   if (!ui.previewOk || running()) return;
   $("start").disabled = true;
   try {
+    await flushUsageSaves();
     await saveLast().catch(() => null);          // 开跑前先记下这次填写的
     await postJSON("/api/console/start", { options: formOptions() });
     toast("已启动主控：正在检查游戏与 OBS、进入存档。");
@@ -1971,27 +1972,51 @@ function fillUsage() {
   $("usageTitle").textContent = provider ? `提供方账户的用量（${label}）` : "提供方账户的用量（Codex 不适用）";
   $("usageNote").textContent = provider ? "存在这个提供方的设置里（configs/local.providers.json），改了立即保存，所有配置共用。"
     : "Codex 执行器没有额度等待。";
-  const v = (provider && ((ui.options || {}).provider_usage || {})[provider]) || USAGE_DEFAULTS;
+  const v = (provider && (usageSaves.get(provider)?.latest || ((ui.options || {}).provider_usage || {})[provider])) || USAGE_DEFAULTS;
   $("quotaWait").checked = v.quota_wait !== false;
   $("quotaHours").value = v.quota_wait_max_hours == null || v.quota_wait_max_hours === 24 ? "" : v.quota_wait_max_hours;
   $("maxUsage").value = v.max_usage ?? "";
 }
-let usageTimer = 0;
+const usageSaves = new Map();
 function saveUsageSoon() {
   const provider = usageProvider();
   if (!provider) return;
-  clearTimeout(usageTimer);
-  usageTimer = setTimeout(async () => {
+  const entry = usageSaves.get(provider) || { timer: 0, pending: null, chain: Promise.resolve() };
+  // Capture account and values together; switching the form must not change a
+  // queued write's owner or cancel another account's pending edit.
+  entry.pending = { quota_wait: $("quotaWait").checked, quota_wait_max_hours: numberOrNull("quotaHours"), max_usage: numberOrNull("maxUsage") };
+  entry.latest = entry.pending;
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => flushUsageSave(provider), 400);
+  usageSaves.set(provider, entry);
+}
+function flushUsageSave(provider) {
+  const entry = usageSaves.get(provider);
+  if (!entry) return Promise.resolve();
+  clearTimeout(entry.timer);
+  const usage = entry.pending;
+  if (!usage) return entry.chain;
+  entry.pending = null;
+  entry.chain = entry.chain.then(async () => {
     try {
-      const usage = { quota_wait: $("quotaWait").checked, quota_wait_max_hours: numberOrNull("quotaHours"), max_usage: numberOrNull("maxUsage") };
       const r = await postJSON("/api/console/provider-usage", { provider, usage });
       (ui.options.provider_usage ||= {})[provider] = r.usage;
-      $("usageNote").textContent = "已保存到这个提供方。";
+      if (entry.latest === usage) entry.latest = r.usage;
+      if (usageProvider() === provider && entry.latest === r.usage) $("usageNote").textContent = "已保存到这个提供方。";
+      return true;
     } catch (e) {
-      $("usageNote").textContent = "没保存：" + e.message;
+      if (entry.latest === usage && !entry.pending) entry.pending = usage;
+      if (usageProvider() === provider) $("usageNote").textContent = "没保存：" + e.message;
       toast("用量设置没保存：" + e.message, true);
+      return false;
     }
-  }, 400);
+  });
+  return entry.chain;
+}
+function flushUsageSaves() {
+  return Promise.all([...usageSaves.keys()].map(flushUsageSave)).then(results => {
+    if (results.some(ok => ok === false)) throw new Error("提供方用量尚未保存，请重试后再继续。");
+  });
 }
 
 // 自动压缩窗口留空时的实际值与来源（orchestrator/config.autocompact_choice）：模型档案 > 提供方 > 节省上下文的 500000
@@ -2022,7 +2047,7 @@ async function switchProfile(id) {
   if (ui.profileDirty) lost.push("运行页的改动");
   if (unsavedEdits()) lost.push("正在编辑的知识库、提示词或个人追加要求");
   if (lost.length && !confirm(`${lost.join("和")}还没保存，切换配置会丢掉。继续切换？`)) { $("profile").value = ui.profiles.selected; return; }
-  try { await saveLast().catch(() => null); await postJSON("/api/console/profiles/select", { id }); reloadForProfile(); }
+  try { await flushUsageSaves(); await saveLast().catch(() => null); await postJSON("/api/console/profiles/select", { id }); reloadForProfile(); }
   catch (e) { toast(e.message, true); $("profile").value = ui.profiles.selected; }
 }
 

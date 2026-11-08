@@ -1001,8 +1001,7 @@ class ClaudeRunner(SessionControls):
     def _notes_window(self):
         # Claude Code 报告的是模型的最大上下文；实际传了数值压缩窗口时按两者中较小的算，
         # 否则窗口小于报告值（例如节省上下文的 500000）时，百分比提醒在压缩前永远到不了阈值。
-        from .model_profile import model_context_limit
-        windows = [w for w in (super()._notes_window(), compact_budget(self.cfg), model_context_limit(self.cfg)) if w]
+        windows = [w for w in (super()._notes_window(), compact_budget(self.cfg)) if w]
         return min(windows) if windows else None
 
     async def _send(self, text: str) -> None:

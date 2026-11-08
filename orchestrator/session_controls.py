@@ -106,7 +106,9 @@ class SessionControls:
                 self.control.reply(str(ident), text)
 
     def _notes_window(self):
-        return self.metrics.state.context_window
+        from .model_profile import model_context_limit
+        windows = [w for w in (self.metrics.state.context_window, model_context_limit(getattr(self, 'cfg', None))) if w]
+        return min(windows) if windows else None
 
     def _notes_usage(self):
         notes = getattr(self, 'note_reminders', None)

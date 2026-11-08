@@ -656,6 +656,39 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         from orchestrator.codex_native import finish_native_tools
         finish_native_tools(self.runner)
 
+    async def test_resolved_default_model_limits_reach_the_first_turn_and_state(self):
+        from calibration.note_reminders_test import runner_fixture
+        from orchestrator.session_store import write_json, load_json
+        from orchestrator.thought import hanzi_limit
+        with runner_fixture('codex') as (runner, _, _):
+            runner.cfg.model = ''
+            runner.cfg.provider = 'codex'
+            runner.cfg.provider_info['models'] = [{'id': 'actual', 'thought': {'max_hanzi': 20}, 'context_limit': 100000}]
+            write_json(runner.run_dir / 'run_state.json', {'agent': 'notes', 'model': '', 'engine': 'codex'})
+            captured = {}
+            async def rpc_request(method, params, **kwargs):
+                captured[method] = deepcopy(params)
+                if method == 'thread/start':
+                    return {'thread': {'id': 'fixture'}, 'model': 'actual',
+                            'activePermissionProfile': {'id': params['permissions']}}
+                if method == 'turn/start':
+                    raise RuntimeError('captured resolved first turn')
+                return {}
+            runner.rpc.start, runner.rpc.close, runner.rpc.request = AsyncMock(), AsyncMock(), rpc_request
+            with self.assertRaisesRegex(RuntimeError, 'captured resolved first turn'):
+                await runner.run()
+            before = {tool['name']: tool['description'] for tool in captured['thread/start']['dynamicTools']}
+            after = {tool['name']: tool['description'] for tool in await runner.tool_specs()}
+            changed = [name for name in before if before[name] != after[name]]
+            self.assertTrue(changed)
+            delivered = captured['turn/start']['input'][0]['text']
+            for name in changed:
+                self.assertIn(after[name], delivered)
+            self.assertEqual(hanzi_limit(runner.cfg), 20)
+            state = load_json(runner.run_dir / 'run_state.json')
+            self.assertEqual(state['model_profile']['thought_max_hanzi']['value'], 20)
+            self.assertEqual(state['model_profile_identity']['resolved_model'], 'actual')
+
     async def test_default_chat_keeps_workspace_edits_and_programs(self):
         runner = CodexRunner(self.cfg, self.root / 'chat', None, self.metrics, 'container', None, chat_only=True)
         captured = {}

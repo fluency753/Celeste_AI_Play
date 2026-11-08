@@ -31,6 +31,7 @@ INDEPENDENT_KEYS = ("live", "record")       # 直播与 OBS 录屏：各自记�
 DEBUG_KEYS = ("record_marker", "skip_enter", "no_agent", "play_speed", "auto_speed")   # 调试项：每次回到默认，不记住
 LAST_MAX_BYTES = 50_000
 USAGE_DEFAULTS = {"max_usage": None, "quota_wait": True, "quota_wait_max_hours": 24}
+RESUME_MACHINE_KEYS = ('hud_port', 'hud', 'hud_window', 'keep_obs_open', 'ffmpeg')
 _lock = threading.Lock()
 
 
@@ -156,6 +157,37 @@ def save(update: dict) -> dict:
     return settings
 
 
+def apply_resume_machine(args, state: dict, argv: list[str]) -> dict:
+    """控制台续跑采用安全的本机偏好；连接、容器与录像身份不随偏好切换。"""
+    settings = load()
+    def explicit(flag):
+        return any(arg == flag or arg.startswith(flag + '=') for arg in argv)
+    applied = {}
+    for key in RESUME_MACHINE_KEYS:
+        flag = '--' + key.replace('_', '-')
+        negative = '--no-' + key.replace('_', '-')
+        if explicit(flag) or explicit(negative):
+            continue
+        value = settings[key]
+        if key in ('hud', 'hud_window'):
+            setattr(args, 'no_' + key, not value)
+        else:
+            setattr(args, key, (value or None) if key == 'ffmpeg' else value)
+        applied[key] = value
+    for key in ('bridge_port', 'mcp_port'):
+        if not explicit('--' + key.replace('_', '-')) and key in state:
+            setattr(args, key, state[key])
+    ports = [args.bridge_port, args.mcp_port, args.hud_port]
+    if any(type(port) is not int or not 1024 <= port <= 65535 for port in ports) or len(set(ports)) != 3:
+        raise ValueError('合并后的 HUD／桥接／MCP 端口无效或冲突；请调整本机 HUD 端口或显式 --hud-port，不改动原会话连接')
+    retained = {
+        'connection': '沿用原会话的桥接与 MCP 端口，不重定向到其他游戏',
+        'runtime': '沿用原执行环境，不移动已有模型会话',
+        'agent_cpus': '沿用原运行的 CPU 配置，由容器核验实际可用量，不采用本机新偏好',
+        'recording': '沿用原录像组织、冻结策略及录制清单参数，不隐式重开录像'}
+    return {'current_machine': applied, 'retained': retained}
+
+
 def _write(path, data: dict) -> None:
     from .session_store import write_json
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -215,8 +247,8 @@ def save_usage(provider: str, values: dict) -> dict:
             raise ValueError(str(exc)) from None
         entry = dict(local.get(provider) or {}) if isinstance(local.get(provider), dict) else {}
         entry["usage"] = {k: v for k, v in usage.items() if v != USAGE_DEFAULTS[k]}
-        if not entry["usage"]:
-            entry.pop("usage")
+        # An explicit empty object means the user chose the defaults. Keep it
+        # so a legacy profile cannot migrate its old limits again.
         if entry:
             local[provider] = entry
         else:

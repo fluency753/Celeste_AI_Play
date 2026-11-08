@@ -159,21 +159,21 @@ def apply(cfg, values: dict) -> None:
     check_relations(values)
     for item in TUNABLES:
         setattr(cfg, item.key, values.get(item.key, item.default))
-    cfg.tuning = {k: v for k, v in values.items() if v != BY_KEY[k].default}
+    cfg.tuning = dict(values)
 
 
 def overrides(cfg) -> dict:
-    """这次运行改过的参数（与默认值不同的），记进 run_state 供续跑沿用。"""
-    return {t.key: getattr(cfg, t.key, t.default) for t in TUNABLES if getattr(cfg, t.key, t.default) != t.default}
+    """显式指定的参数及非默认有效值；显式默认值也是对模型档案的覆盖。"""
+    return {**dict(getattr(cfg, 'tuning', None) or {}),
+            **{t.key: getattr(cfg, t.key, t.default) for t in TUNABLES if getattr(cfg, t.key, t.default) != t.default}}
 
 
 def argv(values: dict) -> list[str]:
-    """{名称: 值} → --tune 参数（只写与默认值不同的）。"""
+    """{名称: 值} → --tune 参数，保留显式默认值。"""
     out = []
     for key, value in values.items():
         value = coerce(key, value)
-        if value != BY_KEY[key].default:
-            out += ["--tune", f"{key}={'' if value is None else format(value, 'g') if isinstance(value, float) else value}"]
+        out += ["--tune", f"{key}={'' if value is None else format(value, 'g') if isinstance(value, float) else value}"]
     return out
 
 

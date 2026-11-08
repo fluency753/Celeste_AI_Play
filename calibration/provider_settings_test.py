@@ -510,6 +510,7 @@ class GatewayTests(ProviderSandbox):
         self.assertEqual(container._labels(cfg)[f"{container.LABEL}.host_ports"], "4000")
         calls = []
         with patch.object(container, "docker", side_effect=lambda *a, **k: calls.append(a)), \
+             patch.object(container, "REPO_ROOT", self.root), \
              patch.object(type(cfg), "workspace_dir", property(lambda s: self.root / "ws")), \
              patch.object(type(cfg), "kb_dir", property(lambda s: self.root / "kb")):
             container._create(cfg, "test-container")

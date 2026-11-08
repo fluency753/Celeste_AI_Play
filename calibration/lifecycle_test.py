@@ -55,6 +55,12 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
             helper.write_text('# test helper\n', encoding='utf-8')
             stub = root / 'agent_stub.py'
             stub.write_text(STUB, encoding='utf-8')
+            providers_path = root / 'configs/providers.json'
+            providers_path.parent.mkdir()
+            provider_data = json.loads((Path(__file__).resolve().parents[1] / 'configs/providers.json').read_text(encoding='utf-8'))
+            opus = next(row for row in provider_data['anthropic']['models'] if row['id'] == 'opus')
+            opus.update(images=True, thought={'max_hanzi': 20}, context_limit=300000, autocompact='400000')
+            providers_path.write_text(json.dumps(provider_data), encoding='utf-8')
             directory = root / 'runs/claude-test/prepared'
             args = SimpleNamespace(engine='claude',provider='anthropic',agent='claude-test',model='opus',
                 effort='high',knowledge='explore',max_minutes=1,output=str(directory),mcp_port=0,
@@ -68,6 +74,8 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
             def prepare_fixture(cfg):
                 kb_access.prepare_view(cfg)
             with patch('orchestrator.config.REPO_ROOT',root), patch('orchestrator.preparation.REPO_ROOT',root), \
+                 patch('orchestrator.config.PROVIDERS', providers_path), \
+                 patch('orchestrator.config.LOCAL_PROVIDERS', root / 'configs/local.providers.json'), \
                  patch.object(kb_access, 'KB_ROOT', root/'kb'), \
                  patch.object(profiles, '_active', profiles.LEGACY), \
                  patch('orchestrator.runtimes.Runtime.token',return_value='stub'), \
@@ -92,7 +100,22 @@ class LifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 state = json.loads((directory/'run_state.json').read_text(encoding='utf-8'))
                 self.assertEqual(state['profile'], args.profile)
                 self.assertEqual(state['kb_deny'], ['help/extra.md'])
+                self.assertEqual(state['model_profile'], proof['model_profile'])
+                self.assertEqual(state['model_profile']['thought_max_hanzi']['value'], 20)
+                opus.update(images=False, thought={'max_hanzi': 10}, context_limit=150000, autocompact='200000')
+                providers_path.write_text(json.dumps(provider_data), encoding='utf-8')
                 cfg = config_from_state(state)
+                from orchestrator.thought import hanzi_limit
+                from orchestrator.config import autocompact_choice
+                self.assertTrue(cfg.images)
+                self.assertEqual(hanzi_limit(cfg), 20)
+                self.assertEqual(autocompact_choice(cfg), ('400000', 'model'))
+                from orchestrator.run import parse_args
+                with patch.object(sys, 'argv', ['run', '--agent', 'claude-test', '--save', 'fixture',
+                        '--engine', 'claude', '--mode', 'explore', '--chapters', '1', '--prepared', str(directory), '--no-agent']):
+                    playing, _ = parse_args()
+                self.assertTrue(playing.images)
+                self.assertEqual(hanzi_limit(playing), 20)
                 self.assertFalse((kb_access.prepare_view(cfg)/'help/extra.md').exists())
                 load_preparation(str(directory),cfg,KbStudy(cfg.kb_dir,1))
                 other = runtime('codex').configure(RunConfig(agent='claude-test',save='',model='test',knowledge_profile='explore'))

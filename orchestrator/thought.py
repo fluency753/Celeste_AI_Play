@@ -30,11 +30,16 @@ def hanzi_limit(cfg, temp: bool = False) -> int | None:
     """思考语句的汉字数上限；None 表示不限。temp：开了"仅正式思考"时 narrate 的临时思考。
     Claude Code 执行器：可调参数改过的 > 模型档案（模型行的 thought）> 默认（30 个，临时思考 120 个）。
     Codex 执行器：只看模型档案（configs/codex.json 模型行的 thought），没写时不限；可调参数对它不起作用（与原来相同）。"""
-    from .model_profile import model_thought
+    from .model_profile import model_thought, saved_choice
     key, row_key = (("thought_temp_max_hanzi", "temp_max_hanzi") if temp and temp_thoughts(cfg)
                     else ("thought_max_hanzi", "max_hanzi"))
+    codex = getattr(cfg, "engine", "claude") == "codex"
+    if not codex and key in (getattr(cfg, 'tuning', None) or {}):
+        return getattr(cfg, key)
+    if entry := saved_choice(cfg, key):
+        return entry['value']
     profile = model_thought(cfg)[row_key]
-    if getattr(cfg, "engine", "claude") == "codex":
+    if codex:
         return profile
     if key in (getattr(cfg, "tuning", None) or {}) or profile is None:
         return getattr(cfg, key, 120 if row_key == "temp_max_hanzi" else 30)

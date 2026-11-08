@@ -178,7 +178,7 @@ class UsageTests(Fixture):
         self.assertEqual(local["anthropic"], {"usage": {"max_usage": 0.9, "quota_wait": False}})
         self.assertEqual(local["deepseek"], {"key_file": "k.key", "usage": {"quota_wait_max_hours": 6}})
         ms.save_usage("anthropic", {})                                                    # 全部回到默认：不留空项
-        self.assertNotIn("anthropic", self.local_providers())
+        self.assertEqual(self.local_providers()['anthropic'], {'usage': {}})
         for provider, values in (("codex", {}), ("anthropic", {"max_usage": 2}), ("anthropic", {"quota_wait": "yes"}),
                                  ("anthropic", {"other": 1}), ("nobody", {})):
             with self.subTest(provider=provider, values=values), self.assertRaises(ValueError):

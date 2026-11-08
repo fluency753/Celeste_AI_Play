@@ -61,9 +61,13 @@ def codex_settings() -> dict:
 
 def model_row(cfg, model: str | None = None) -> dict:
     """所选模型（或指定的 model）在模型档案里的那一行；没有时为空。"""
-    ident = model if model is not None else getattr(cfg, "model", None)
+    resolved = getattr(cfg, '_resolved_profile_model', None)
+    ident = model if model is not None else resolved or getattr(cfg, "model", None)
     rows = (getattr(cfg, "provider_info", None) or {}).get("models") or []
-    return next((row for row in rows if isinstance(row, dict) and row.get("id") == ident), {})
+    row = next((row for row in rows if isinstance(row, dict) and row.get("id") == ident), None)
+    if row is None and (model is None or model == resolved):
+        row = next((row for row in rows if isinstance(row, dict) and row.get('id') == getattr(cfg, 'model', None)), None)
+    return row or {}
 
 
 def valid_autocompact(value) -> str | None:
@@ -94,6 +98,8 @@ def model_label(cfg, model: str | None = None, fallback: str | None = None) -> s
 
 
 def model_context_limit(cfg, model: str | None = None) -> int | None:
+    if entry := saved_choice(cfg, 'context_limit', model):
+        return entry['value']
     return positive_tokens(model_row(cfg, model).get("context_limit"))
 
 
@@ -122,8 +128,75 @@ def model_thought(cfg) -> dict:
 
 
 def model_images(cfg) -> bool | None:
+    if entry := saved_choice(cfg, 'images'):
+        return entry['value']
     value = model_row(cfg).get("images")
     return value if isinstance(value, bool) else None
+
+
+def saved_choice(cfg, key: str, model: str | None = None) -> dict | None:
+    """同一模型恢复时使用已生效的非敏感设置；不冻结账户或连接配置。"""
+    snapshot = getattr(cfg, '_saved_model_profile', None) or {}
+    if not snapshot:
+        return None
+    identity = snapshot.get('identity') or {}
+    aliases = {identity.get('requested_model'), identity.get('resolved_model')}
+    if (identity.get('engine') != cfg.engine or identity.get('provider') != cfg.provider
+            or cfg.model not in aliases or (model is not None and model not in aliases)):
+        return None
+    resolved = getattr(cfg, '_resolved_profile_model', None)
+    if resolved and identity.get('resolved_model') and resolved != identity['resolved_model']:
+        return None
+    return (snapshot.get('values') or {}).get(key)
+
+
+def restore_profile(cfg, state: dict, *, explicit_tunes=(), explicit_autocompact=False, changed_save_context=False):
+    """旧记录缺少的字段继续解析当前默认；已有有效快照不随配置文件漂移。"""
+    fields = state.get('model_profile')
+    if not isinstance(fields, dict):
+        return
+    identity = state.get('model_profile_identity')
+    if not isinstance(identity, dict):
+        identity = {
+            'engine': state.get('engine', 'claude'), 'provider': state.get('provider', 'anthropic'),
+            'requested_model': state.get('requested_model') or state.get('model'), 'resolved_model': state.get('model')}
+    values = {}
+    from .tuning import coerce
+    for key in ('images', 'context_limit', 'autocompact', *THOUGHT_KEYS.values()):
+        entry = fields.get(key)
+        if not isinstance(entry, dict) or 'value' not in entry:
+            continue
+        if (key in explicit_tunes or (key == 'autocompact' and
+                (explicit_autocompact or (changed_save_context and entry.get('source') in {'default', 'save_context'})))):
+            continue
+        value = entry['value']
+        valid = False
+        if key == 'images':
+            valid = isinstance(value, bool)
+        elif key == 'context_limit':
+            valid = value is None or positive_tokens(value) is not None
+        elif key == 'autocompact':
+            valid = value is None or valid_autocompact(value) is not None
+        elif value is None:
+            valid = cfg.engine == 'codex'
+        else:
+            try:
+                valid = coerce(key, value) == value
+            except ValueError:
+                pass
+        if valid:
+            source = entry.get('source')
+            values[key] = {'value': value, 'source': source if source in {'run', 'model', 'provider', 'save_context', 'default'} else 'default'}
+    cfg._saved_model_profile = {'identity': dict(identity), 'values': values}
+
+
+def profile_state(cfg, *, resolved_model: str | None = None) -> dict:
+    """只保存有效值、来源和模型身份；不包含凭据、地址或账户额度。"""
+    if resolved_model:
+        cfg._resolved_profile_model = resolved_model
+    identity = {'engine': cfg.engine, 'provider': cfg.provider, 'requested_model': cfg.model,
+                'resolved_model': getattr(cfg, '_resolved_profile_model', None) or cfg.model}
+    return {'model_profile': profile_sources(cfg), 'model_profile_identity': identity}
 
 
 def profile_sources(cfg) -> dict:
@@ -150,6 +223,11 @@ def profile_sources(cfg) -> dict:
         out[key] = {"value": hanzi_limit(cfg, temp=temp), "source": source}
     out["images"] = {"value": bool(cfg.images), "source": "model" if model_images(cfg) is not None else "provider"}
     out["context_limit"] = {"value": model_context_limit(cfg), "source": "model" if model_context_limit(cfg) else "default"}
+    for key in out:
+        if key in tuned or (key == 'autocompact' and cfg.autocompact):
+            continue
+        if entry := saved_choice(cfg, key):
+            out[key] = dict(entry)
     return out
 
 

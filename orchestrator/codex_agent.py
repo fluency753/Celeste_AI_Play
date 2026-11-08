@@ -757,13 +757,14 @@ class CodexRunner(ModelRecovery, SessionControls):
                       "config": {"model_reasoning_effort": self.manual_effort or self.cfg.effort}, "selectedCapabilityRoots": []}
             if self.cfg.model:
                 params["model"] = self.cfg.model
-            if self.resume and self.session_id:
+            resuming = bool(self.resume and self.session_id)
+            if resuming:
                 params["threadId"] = self.session_id
                 # thread/resume 使用持久化的动态工具；这里不传该版本协议没有的字段。
                 current_tools = params.pop("dynamicTools", None)
                 result = await self._resume_thread(params)
-                await asyncio.to_thread(self._validate_resumed_tools, result['thread'], current_tools)
             else:
+                current_tools = params['dynamicTools']
                 result = await self.rpc.request("thread/start", params)
             if (result.get('activePermissionProfile') or {}).get('id') != params['permissions']:
                 raise RuntimeError('Codex 未采用主控指定的容器权限配置，拒绝运行')
@@ -786,7 +787,13 @@ class CodexRunner(ModelRecovery, SessionControls):
                 except (RuntimeError, OSError, ValueError, TimeoutError):
                     self.runtime_efforts = []
             # 模型档案给 HUD：configs/codex.json 的显示名与上下文上限，没写显示名时用模型目录的
-            from .model_profile import hud_fields
+            from .model_profile import hud_fields, profile_state
+            resolved_profile = profile_state(self.cfg, resolved_model=result['model'])
+            effective_tools = await self.tool_specs()
+            if resuming:
+                await asyncio.to_thread(self._validate_resumed_tools, result['thread'], effective_tools)
+            else:
+                self.tool_notice += ''.join(tool_change_notice(current_tools, effective_tools))
             self.metrics.update(**hud_fields(self.cfg, result['model'], catalog_label),
                                 effort_levels=list(getattr(self, 'runtime_efforts', None) or []) or None)
             if self.manual_effort and self.manual_effort != self.metrics.state.effort:
@@ -799,6 +806,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                 state = load_json(state_path)
                 state.update(session_id=self.session_id, engine="codex", model=result["model"],
                              session_storage='container', session_container=self.container)
+                state.update(resolved_profile)
                 write_json(state_path, state, indent=2)
             parked_source = getattr(self.cfg, '_parked_source', None)
             if parked_source:
