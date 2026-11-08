@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "name": "预置配置 2 · 程序化建模探索（Codex）",
+  "description": "面向 Codex 的程序化建模探索方案，可搭配 Sol、Terra 等模型，模型与本次任务均不固定。探索模式、Agent 自行推进剧情，关闭两类预置模拟器与思考僵直，单次 act 40～600 帧，辅助程序单次 120 秒，自写模拟器与搜索不设推演帧数上限；开启节省上下文、先读知识库、开启规划回放、关闭游戏内 HUD，不允许重开章节、返回地图、保存退出或去计划外地图。个人追加要求强调自主建立和复用运动模型、规划程序、Git 与长期工作记忆；仅在 Codex 探索模式追加。不额外开放速通知识库。录像、端口等使用本机设置，模型、存档、标签、章节与预算按本次选择。",
+  "form": {
+    "mode": "explore",
+    "sim": false,
+    "sim_assist": false,
+    "stiffness": false,
+    "formal_thought": false,
+    "save_context": true,
+    "playback": true,
+    "hud_mod": false,
+    "study": true,
+    "limit_planning": false,
+    "action_permissions": {
+      "restart_chapter": false,
+      "return_to_map": false,
+      "save_quit": false
+    },
+    "allow_detour": false,
+    "cutscene_mode": "agent",
+    "study_minutes": 60,
+    "rounds_per_room": 3,
+    "room_scale": 2,
+    "tune": {
+      "min_frames_per_act": 40,
+      "explore_act_frames": 600,
+      "explore_program_s": 120,
+      "explore_search_frames": null
+    },
+    "pins": []
+  },
+  "kb_deny": {
+    "speedrun": [],
+    "explore": []
+  },
+  "kb_allow": {
+    "explore": []
+  }
+}
