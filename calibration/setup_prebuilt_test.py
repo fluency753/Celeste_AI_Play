@@ -53,7 +53,7 @@ class SetupPrebuiltTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("-HudPort") + 1], "48790")
 
     def test_absent_release_falls_back_to_source_with_sdk(self):
-        with patch.object(packages, "download", side_effect=urllib.error.HTTPError("x", 404, "missing", {}, None)), \
+        with patch.object(packages.urllib.request, "urlopen", side_effect=urllib.error.HTTPError("x", 404, "missing", {}, None)), \
              patch.object(wizard, "find_dotnet", return_value="dotnet.exe"), \
              patch.object(wizard, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
             wizard.step_bridge(self.answers)

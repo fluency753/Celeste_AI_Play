@@ -16,7 +16,7 @@ class ReleaseUploadTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         root = Path(folder.name)
-        files = [root / name for name in (packages.asset_name("v1.22.0"), "components.json", "SHA256SUMS")]
+        files = [root / name for name in (packages.asset_name("v1.22.0"), "components.json")]
         for file in files:
             file.write_bytes(file.name.encode())
         return files
@@ -26,11 +26,11 @@ class ReleaseUploadTests(unittest.TestCase):
         def asset(path):
             return {"name": path.name, "size": path.stat().st_size, "digest": "sha256:" + packages.sha256(path)}
         release = {"id": 42, "tag_name": "v1.22.0", "prerelease": False, "assets": [asset(files[0])]}
-        replies = [release, {"sha": "a" * 40}, asset(files[1]), asset(files[2])]
+        replies = [release, {"sha": "a" * 40}, asset(files[1])]
         with patch.object(publish, "api", side_effect=replies) as api:
             publish.upload(files, "v1.22.0", "test/repo", "token", "a" * 40)
         writes = [call for call in api.call_args_list if len(call.args) > 2]
-        self.assertEqual(len(writes), 2)
+        self.assertEqual(len(writes), 1)
         self.assertTrue(all(call.args[0].startswith("https://uploads.github.com/repos/test/repo/releases/42/assets?name=") for call in writes))
 
     def test_different_published_bytes_are_never_overwritten(self):
@@ -88,11 +88,41 @@ class ReleaseIdentityTests(unittest.TestCase):
         (self.bundle / "manifest.json").write_text(json.dumps(self.data))
         archive(self.bundle, self.dest / packages.asset_name("v1.22.0"))
         (self.dest / "components.json").write_text(json.dumps(self.data))
-        p = self.dest / packages.asset_name("v1.22.0")
-        (self.dest / "SHA256SUMS").write_text(f"{packages.sha256(p)}  {p.name}\n")
 
     def test_real_tag_and_source_identity_without_network(self):
-        self.assertEqual(len(publish.verify(self.root, self.dest, "v1.22.0")), 3)
+        self.assertEqual([p.name for p in publish.verify(self.root, self.dest, "v1.22.0")],
+                         [packages.asset_name("v1.22.0"), "components.json"])
+
+    def test_build_generates_only_archive_and_manifest(self):
+        (self.root / "Celeste.dll").write_bytes(b"standard reference fixture")
+        settings = {**self.settings, "everest_tag": "standard-fixture", "obs_version": "33.0.0", "obs_commit": "c" * 40}
+        (self.root / "configs/component_build.json").write_text(json.dumps(settings))
+        headers = self.root / "build/headers"
+        headers.mkdir(parents=True)
+        for folder, module in (("game-bridge", "CelesteAIBridge"), ("game-runtime", "CelesteAIRuntime")):
+            target = self.root / folder / "bin"
+            target.mkdir()
+            for suffix in ("dll", "pdb"):
+                (target / f"{module}.{suffix}").write_bytes(b"native build output")
+        plugin = self.root / "build/obs-plugin/celeste-lockstep.dll"
+        plugin.parent.mkdir()
+        plugin.write_bytes(b"OBS build output")
+        def run(*command, root):
+            if command[:2] == ("dotnet", "--version"):
+                return settings["dotnet_sdk"]
+            if command[0] == "git":
+                if "-C" in command:
+                    return settings["obs_commit"] if "rev-parse" in command else ""
+                return self.git(*command[1:])
+            if "--out" in command:
+                Path(command[command.index("--out") + 1]).write_bytes(b"launcher build output")
+            return ""
+        output = self.root / "build/release"
+        with patch.object(package_release, "run", side_effect=run), \
+             patch("tools.build_obs_plugin.fetch_headers", return_value=headers):
+            zipped = package_release.build(self.root, output, "v1.22.0", self.root)
+        self.assertEqual({p.name for p in output.iterdir()}, {packages.asset_name("v1.22.0"), "components.json"})
+        packages.unpack(zipped, self.root / "unpacked", self.root)
 
     def test_unpinned_references_and_mismatched_source_commit_refuse_upload(self):
         self.data["everest"]["reference_source"] = "explicit-local"

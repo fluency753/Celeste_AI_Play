@@ -1,10 +1,10 @@
 # 预编译组件包
 
-1.22.0 起，发布流程为每个正式版／公测版附加 `Celeste_AI_Play-<标签>-components-windows-x64.zip`、`components.json` 与 `SHA256SUMS`。GitHub 自动生成的 Source code 仍是源码包；组件包需要搭配同一版本的源码，不是独立客户端。
+预编译组件通过两个 Release 附件提供：`Celeste_AI_Play-<标签>-components-windows-x64.zip` 和 `components.json`。GitHub 自动生成的 Source code 仍是源码包；组件包需要搭配同一版本的源码，不是独立客户端。
 
 ## 安装
 
-照常运行 `setup.ps1`。向导先检查源码根目录的 `components/` 和 `local/components/<标签>/components/`，没有匹配包时从当前项目版本的精确 Release 标签下载，绝不取 `latest`。每次使用前核对项目／组件版本、源码指纹和所有文件的 SHA256；只有校验完成才发布缓存。源码指纹将 CRLF／LF 统一处理，支持没有 `.git` 的源码压缩包；本机配置、凭据、笔记与构建缓存不参与。
+照常运行 `setup.ps1`。向导先检查源码根目录的 `components/` 和 `local/components/<标签>/components/`，没有匹配包时从当前项目版本的精确 Release 标签下载，绝不取 `latest`。在线下载先按精确标签查询 GitHub Release 附件的 `digest` 和大小，核对完整 ZIP 后再解压；不再生成或要求独立 SHA256SUMS 文件。每次使用本地包、缓存或下载包前，均核对包内清单中的项目／组件版本、源码指纹和所有文件的 SHA256；只有校验完成才发布缓存。源码指纹将 CRLF／LF 统一处理，支持没有 `.git` 的源码压缩包；本机配置、凭据、笔记与构建缓存不参与。
 
 离线部署：从同一个 Release 下载源码和组件包，把组件 ZIP 解压到源码根目录，得到 `components/manifest.json`，再运行向导。程序根目录已有启动器；包中 `launchers/` 附有同版启动器文件，不应直接在该子目录启动。Python 环境和 Python 依赖仍由 `setup.ps1` 准备。
 
@@ -15,7 +15,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -ReleaseTag v1.22.0-beta.1
 powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only bridge,recording
 ```
 
-没有该 Release／附件、暂时离线、源码或版本已改变时，向导说明原因，允许改为源码编译；已有包内容损坏、路径非法或文件校验失败则停止安装，不绕过校验回退。开发版没有对应发布包时通常走源码编译。`-Check` 不下载、不解压、不创建缓存，也不安装 SDK。
+没有该 Release／附件、暂时离线、源码或版本已改变时，向导说明原因，允许改为源码编译；GitHub 附件缺少有效 SHA256／大小、下载结果不匹配、已有包内容损坏、路径非法或文件校验失败则停止安装，不绕过校验回退。开发版没有对应发布包时通常走源码编译。`-Check` 不下载、不解压、不创建缓存，也不安装 SDK。
 
 ## 安装保护与兼容范围
 

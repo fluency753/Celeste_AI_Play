@@ -24,15 +24,12 @@ def git(root: Path, *args: str) -> str:
 
 def verify(root: Path, directory: Path, tag: str) -> list[Path]:
     packages.check_tag(tag, packages.project_version(root))
-    files = [directory / packages.asset_name(tag), directory / "components.json", directory / "SHA256SUMS"]
+    files = [directory / packages.asset_name(tag), directory / "components.json"]
     with tempfile.TemporaryDirectory() as work:
         bundle = packages.unpack(files[0], Path(work) / "expanded", root)
         data = packages.validate(bundle, root)
     if data != json.loads(files[1].read_text(encoding="utf-8")):
         raise packages.PackageError("外部清单与包内清单不一致")
-    expected = f"{packages.sha256(files[0])}  {files[0].name}\n"
-    if files[2].read_text(encoding="ascii") != expected:
-        raise packages.PackageError("发布包校验清单不一致")
     settings = json.loads((root / "configs/component_build.json").read_text(encoding="utf-8"))
     if data["everest"]["reference_source"] != "official-pinned" or data["everest"]["asset_sha256"] != settings["everest_asset_sha256"]:
         raise packages.PackageError("发布要求使用固定校验值的官方标准 Everest 引用包")

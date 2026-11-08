@@ -207,6 +207,36 @@ def download(url: str, target: Path, limit: int = MAX_ARCHIVE) -> None:
             stream.write(chunk)
 
 
+def release_asset(tag: str) -> dict | None:
+    """Read the exact Release's ZIP identity; GitHub supplies the archive digest."""
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{tag}",
+        headers={"User-Agent": "Celeste-AI-Play-components", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        raw = response.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise PackageError("GitHub Release 元数据大小超限")
+    try:
+        release = json.loads(raw)
+    except (ValueError, UnicodeError) as exc:
+        raise PackageError("GitHub Release 元数据无效") from exc
+    if not isinstance(release, dict) or release.get("tag_name") != tag or not isinstance(release.get("assets"), list):
+        raise PackageError("GitHub Release 标签或附件信息无效")
+    if any(not isinstance(asset, dict) for asset in release["assets"]):
+        raise PackageError("GitHub Release 附件信息无效")
+    matches = [asset for asset in release["assets"] if asset.get("name") == asset_name(tag)]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise PackageError("GitHub Release 组件附件重复")
+    asset = matches[0]
+    if (type(asset.get("size")) is not int or not 0 < asset["size"] <= MAX_ARCHIVE
+            or not isinstance(asset.get("digest"), str)
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", asset["digest"])):
+        raise PackageError("GitHub Release 组件附件缺少有效的 SHA256 或大小")
+    return asset
+
+
 def find_bundle(root: Path, *, network: bool = False, tag: str | None = None) -> tuple[Path | None, str]:
     """Check mode uses network=False: no downloads, directory creation or writes."""
     requested_tag = tag
@@ -230,6 +260,9 @@ def find_bundle(root: Path, *, network: bool = False, tag: str | None = None) ->
         stage = Path(work)
         archive = stage / "package.zip"
         try:
+            asset = release_asset(tag)
+            if asset is None:
+                return None, f"{tag} 未发布预编译包，可使用源码编译"
             download(f"https://github.com/{REPOSITORY}/releases/download/{tag}/{asset_name(tag)}", archive)
         except urllib.error.HTTPError as exc:
             exc.close()
@@ -238,6 +271,8 @@ def find_bundle(root: Path, *, network: bool = False, tag: str | None = None) ->
             raise Unavailable(f"组件下载失败（HTTP {exc.code}），可重试或使用源码编译") from exc
         except (OSError, TimeoutError) as exc:
             raise Unavailable("暂时无法下载组件，可重试或使用源码编译") from exc
+        if archive.stat().st_size != asset["size"] or "sha256:" + sha256(archive) != asset["digest"]:
+            raise PackageError("组件 ZIP 与 GitHub Release 的大小或 SHA256 不一致")
         try:
             bundle = unpack(archive, stage / "expanded", root)
             validate(bundle, root, expected_tag=tag)

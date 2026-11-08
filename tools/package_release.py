@@ -120,7 +120,6 @@ def build(root: Path, output: Path, tag: str, reference_dir: Path | None = None)
         with zipfile.ZipFile(archive, "x", zipfile.ZIP_DEFLATED) as z:
             for name in sorted(packages.FILES | {"manifest.json"}):
                 z.write(stage / name, "components/" + name)
-        (output / "SHA256SUMS").write_text(f"{packages.sha256(archive)}  {archive.name}\n", encoding="ascii")
         (output / "components.json").write_text((stage / "manifest.json").read_text(encoding="utf-8"), encoding="utf-8")
     return archive
 

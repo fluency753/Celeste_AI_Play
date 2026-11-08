@@ -1,5 +1,6 @@
 """Package identity, extraction, caching and installation with isolated real files."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -51,6 +52,13 @@ def archive(source, target, extra=None):
                 z.write(path, "components/" + path.relative_to(source).as_posix())
         if extra:
             z.writestr(*extra)
+
+
+def release_metadata(zipped, **changes):
+    asset = {"name": packages.asset_name("v1.22.0"), "size": zipped.stat().st_size,
+             "digest": "sha256:" + packages.sha256(zipped)}
+    asset.update(changes)
+    return {"tag_name": "v1.22.0", "assets": [asset]}
 
 
 class ComponentPackageTests(unittest.TestCase):
@@ -116,19 +124,19 @@ class ComponentPackageTests(unittest.TestCase):
     def test_real_zip_download_is_validated_before_cache_publication(self):
         zipped = self.base / "package.zip"
         archive(self.bundle, zipped)
-        def fetch(url, target):
-            self.assertIn("/v1.22.0/", url)
-            self.assertNotIn("latest", url)
-            target.write_bytes(zipped.read_bytes())
-        with patch.object(packages, "download", side_effect=fetch) as download:
+        responses = [io.BytesIO(json.dumps(release_metadata(zipped)).encode()), io.BytesIO(zipped.read_bytes())]
+        with patch.object(packages.urllib.request, "urlopen", side_effect=responses) as network:
             path, _ = packages.find_bundle(self.root, network=True)
             packages.validate(path, self.root)
             self.assertEqual(path, self.root / "local/components/v1.22.0/components")
             packages.find_bundle(self.root, network=True)
-            self.assertEqual(download.call_count, 1)
+        self.assertEqual(network.call_count, 2)
+        self.assertTrue(network.call_args_list[0].args[0].full_url.endswith("/releases/tags/v1.22.0"))
+        self.assertTrue(network.call_args_list[1].args[0].full_url.endswith(
+            "/releases/download/v1.22.0/" + packages.asset_name("v1.22.0")))
 
     def test_check_mode_never_creates_cache_or_downloads(self):
-        with patch.object(packages, "download", side_effect=AssertionError("network in check mode")):
+        with patch.object(packages.urllib.request, "urlopen", side_effect=AssertionError("network in check mode")):
             self.assertIsNone(packages.find_bundle(self.root)[0])
         self.assertFalse((self.root / "local").exists())
 
@@ -156,15 +164,19 @@ class ComponentPackageTests(unittest.TestCase):
         self.assertIsNone(packages.find_bundle(self.root, tag="v1.22.0")[0])
         zipped = self.base / "wrong-tag.zip"
         archive(path, zipped)
-        with patch.object(packages, "download", side_effect=lambda url, target: target.write_bytes(zipped.read_bytes())):
+        with patch.object(packages.urllib.request, "urlopen", side_effect=[
+                io.BytesIO(json.dumps(release_metadata(zipped)).encode()), io.BytesIO(zipped.read_bytes())]):
             self.assertIsNone(packages.find_bundle(self.root, network=True, tag="v1.22.0")[0])
         self.assertFalse((self.root / "local/components/v1.22.0").exists())
 
     def test_release_missing_and_offline_are_not_corruption(self):
-        with patch.object(packages, "download", side_effect=urllib.error.HTTPError("x", 404, "missing", {}, None)):
+        with patch.object(packages.urllib.request, "urlopen", side_effect=urllib.error.HTTPError("x", 404, "missing", {}, None)):
             self.assertIsNone(packages.find_bundle(self.root, network=True)[0])
-        with patch.object(packages, "download", side_effect=TimeoutError("offline")):
+        with patch.object(packages.urllib.request, "urlopen", side_effect=TimeoutError("offline")):
             with self.assertRaises(packages.Unavailable):
+                packages.find_bundle(self.root, network=True)
+        with patch.object(packages.urllib.request, "urlopen", side_effect=urllib.error.HTTPError("x", 403, "rate limit exceeded", {}, None)):
+            with self.assertRaisesRegex(packages.Unavailable, "HTTP 403"):
                 packages.find_bundle(self.root, network=True)
 
     def test_corrupt_cache_is_not_silently_replaced(self):
@@ -172,7 +184,7 @@ class ComponentPackageTests(unittest.TestCase):
         bundle(self.root, cache)
         target = cache / "obs/celeste-lockstep.dll"
         target.write_bytes(b"bad cached bytes")
-        with patch.object(packages, "download", side_effect=AssertionError("must not download around corruption")):
+        with patch.object(packages.urllib.request, "urlopen", side_effect=AssertionError("must not download around corruption")):
             with self.assertRaisesRegex(packages.PackageError, "校验失败"):
                 packages.find_bundle(self.root, network=True)
         self.assertEqual(target.read_bytes(), b"bad cached bytes")
@@ -183,10 +195,67 @@ class ComponentPackageTests(unittest.TestCase):
         data["source_digest"] = "0" * 64
         (cache / "manifest.json").write_text(json.dumps(data))
         old = (cache / "obs/celeste-lockstep.dll").read_bytes()
-        with patch.object(packages, "download", side_effect=lambda url, target: target.write_bytes(b"not zip")):
+        zipped = self.base / "not-zip"
+        zipped.write_bytes(b"not zip")
+        with patch.object(packages.urllib.request, "urlopen", side_effect=[
+                io.BytesIO(json.dumps(release_metadata(zipped)).encode()), io.BytesIO(zipped.read_bytes())]):
             with self.assertRaises(packages.PackageError):
                 packages.find_bundle(self.root, network=True)
         self.assertEqual((cache / "obs/celeste-lockstep.dll").read_bytes(), old)
+
+    def test_github_digest_and_size_mismatch_keep_previous_cache(self):
+        cache = self.root / "local/components/v1.22.0/components"
+        data = bundle(self.root, cache)
+        data["source_digest"] = "0" * 64
+        manifest = cache / "manifest.json"
+        manifest.write_text(json.dumps(data))
+        old = manifest.read_bytes()
+        zipped = self.base / "package.zip"
+        archive(self.bundle, zipped)
+        for change in ({"digest": "sha256:" + "0" * 64}, {"size": zipped.stat().st_size + 1}):
+            with self.subTest(change=change), patch.object(packages.urllib.request, "urlopen", side_effect=[
+                    io.BytesIO(json.dumps(release_metadata(zipped, **change)).encode()), io.BytesIO(zipped.read_bytes())]):
+                with self.assertRaisesRegex(packages.PackageError, "GitHub Release.*不一致"):
+                    packages.find_bundle(self.root, network=True)
+            self.assertEqual(manifest.read_bytes(), old)
+            self.assertFalse(list(cache.parent.parent.glob("*.previous-*")))
+
+    def test_release_metadata_requires_valid_archive_identity(self):
+        zipped = self.base / "package.zip"
+        archive(self.bundle, zipped)
+        for changes in ({"digest": None}, {"digest": "sha1:" + "a" * 40}, {"digest": "sha256:" + "x" * 64},
+                        {"size": 0}, {"size": True}, {"size": packages.MAX_ARCHIVE + 1}):
+            with self.subTest(changes=changes), patch.object(packages.urllib.request, "urlopen", return_value=
+                    io.BytesIO(json.dumps(release_metadata(zipped, **changes)).encode())) as network:
+                with self.assertRaisesRegex(packages.PackageError, "缺少有效"):
+                    packages.find_bundle(self.root, network=True)
+                self.assertEqual(network.call_count, 1)
+        self.assertFalse((self.root / "local/components/v1.22.0").exists())
+
+    def test_missing_attachment_can_fall_back_and_legacy_checksum_is_ignored(self):
+        release = {"tag_name": "v1.22.0", "assets": [{"name": "SHA256SUMS"}]}
+        with patch.object(packages.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(release).encode())) as network:
+            self.assertIsNone(packages.find_bundle(self.root, network=True)[0])
+            self.assertEqual(network.call_count, 1)
+        zipped = self.base / "package.zip"
+        archive(self.bundle, zipped)
+        release["assets"].extend(release_metadata(zipped)["assets"])
+        with patch.object(packages.urllib.request, "urlopen", side_effect=[
+                io.BytesIO(json.dumps(release).encode()), io.BytesIO(zipped.read_bytes())]):
+            packages.validate(packages.find_bundle(self.root, network=True)[0], self.root)
+
+    def test_wrong_tag_duplicate_assets_and_invalid_metadata_are_rejected(self):
+        zipped = self.base / "package.zip"
+        archive(self.bundle, zipped)
+        release = release_metadata(zipped)
+        payloads = [b"not JSON", b" " * (1024 * 1024 + 1),
+                    json.dumps({**release, "tag_name": "v1.22.0-beta.1"}).encode(),
+                    json.dumps({**release, "assets": release["assets"] * 2}).encode(),
+                    json.dumps({**release, "assets": [None]}).encode()]
+        for raw in payloads:
+            with self.subTest(size=len(raw)), patch.object(packages.urllib.request, "urlopen", return_value=io.BytesIO(raw)):
+                with self.assertRaises(packages.PackageError):
+                    packages.find_bundle(self.root, network=True)
 
     def test_stale_and_corrupt_cache_is_still_a_hard_error(self):
         cache = self.root / "local/components/v1.22.0/components"
@@ -194,7 +263,7 @@ class ComponentPackageTests(unittest.TestCase):
         data["source_digest"] = "0" * 64
         (cache / "manifest.json").write_text(json.dumps(data))
         (cache / "obs/celeste-lockstep.dll").write_bytes(b"corrupt")
-        with patch.object(packages, "download", side_effect=AssertionError("must not bypass corrupt cache")):
+        with patch.object(packages.urllib.request, "urlopen", side_effect=AssertionError("must not bypass corrupt cache")):
             with self.assertRaisesRegex(packages.PackageError, "校验失败"):
                 packages.find_bundle(self.root, network=True)
 
