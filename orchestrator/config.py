@@ -179,6 +179,13 @@ def autocompact_window(cfg) -> str | None:
     return SAVE_CONTEXT_AUTOCOMPACT if getattr(cfg, "save_context", False) else None
 
 
+def compact_budget(cfg) -> int | None:
+    """自动压缩窗口是具体数值时返回它（auto 或不传时 None）。Claude Code 报告的 contextWindow 是模型的最大上下文，
+    不是压缩窗口：笔记提醒的百分比与 HUD 的上下文警示要取两者中较小的，否则窗口设小以后提醒永远等不到。"""
+    value = autocompact_window(cfg)
+    return int(value) if value and value.isdigit() else None
+
+
 @dataclass
 class RunConfig:
     agent: str                      # 智能体标签，如 opus5.5

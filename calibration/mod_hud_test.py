@@ -54,6 +54,18 @@ class ViewModelTests(unittest.TestCase):
         self.assertTrue(vm.history[-1].latest and not vm.history[0].latest)
         self.assertEqual((vm.timer_base, vm.timer_extra, vm.timer_live), (500_000_000, 123_456_789, True))
 
+    def test_context_warning_uses_the_smallest_known_limit(self):
+        """上下文到上限的 90% 变橙；上限取执行器报告的窗口、实际压缩窗口与配置阈值中最小的
+        （Claude Code 报告的是模型最大上下文，节省上下文把压缩窗口设成 500000 时按 500000 算）。"""
+        now = time.time()
+        tone = lambda **extra: {k: t for k, _, t in view_model(metrics(now, **extra), CONFIG, [], now).stats}["上下文"]
+        self.assertEqual(modhud.context_limit({}, CONFIG), CONFIG["compact_threshold"])
+        self.assertEqual(modhud.context_limit({"context_window": 1000000, "compact_window": 500000}, CONFIG), 500000)
+        self.assertEqual(modhud.context_limit({"context_window": 272000}, CONFIG), 272000)     # Codex 报告的较小窗口
+        self.assertEqual(tone(context_tokens=460000, context_window=1000000, compact_window=500000), "warn")
+        self.assertEqual(tone(context_tokens=460000, context_window=1000000), "")
+        self.assertEqual(tone(context_tokens=250000, context_window=272000), "warn")
+
     def test_run_base_resets_stats_except_kb_context_and_compactions(self):
         # 新的一局（续跑追加新计划）开始后：思考、工具、死亡、模拟器调用从 0 起算；上下文、压缩次数、知识库读取不清零
         now = time.time()

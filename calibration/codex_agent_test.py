@@ -1007,6 +1007,29 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, '缺少当前必需工具'):
             self.runner._validate_resumed_tools(result['thread'])
 
+    async def test_resumed_session_with_an_older_act_description_is_told_the_current_save_context_format(self):
+        """Codex 恢复会话不能更新登记的工具说明：节省上下文开着、登记的 act 说明是旧格式时，恢复后补一次当前格式。"""
+        from orchestrator.modes import game_tools
+        from orchestrator.prompting import SAVE_CONTEXT_MARK
+        path = self.root / 'resumed-thread.jsonl'
+
+        def notice(description, save_context):
+            tools = [{'name': 'celeste_' + name} for name in game_tools(self.cfg)] + [{'name': 'read'}]
+            for tool in tools:
+                if tool['name'] == 'celeste_act':
+                    tool['description'] = description
+            path.write_text(json.dumps({'payload': {'dynamic_tools': tools}}), encoding='utf-8')
+            self.cfg.save_context = save_context
+            self.runner._validate_resumed_tools({'id': 'original', 'path': str(path)})
+            return self.runner.tool_notice
+
+        old = notice('推进输入并返回新状态。本次开启了节省上下文：同一房间里的 act 结果省略每次都一样的部分', True)
+        self.assertIn('早于当前的节省上下文格式', old)
+        self.assertIn('帧、x、y、vx、vy、状态、冲刺、着地', old)
+        self.assertIn('celeste_act 结果更简短', old)                 # 按 Codex 的工具名写
+        self.assertNotIn('节省上下文格式', notice('……celeste_act ' + SAVE_CONTEXT_MARK + '……', True))
+        self.assertNotIn('节省上下文格式', notice('推进输入并返回新状态。', False))
+
     async def test_writer_conflict_preserves_identity_without_fork_or_recovery_file(self):
         self.runner.rpc.request = AsyncMock(side_effect=
             RuntimeError("thread original already has an active writer"))

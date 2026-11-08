@@ -54,6 +54,7 @@ class MetricsState:
     deaths: int = 0                   # 本局原生统计死亡增量（含菜单重试、保存退出；不含非计数剧情死亡）
     context_tokens: int = 0
     context_window: int | None = None
+    compact_window: int | None = None  # 实际传给 Claude Code 的自动压缩窗口（数值时）；HUD 取它与 context_window 中较小的
     tool_calls: int | None = None
     compactions: int = 0
     compact_s: float = 0.0            # 压缩本身花的时间（已包含在思考时间里）

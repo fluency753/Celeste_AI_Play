@@ -705,7 +705,20 @@ class CodexRunner(ModelRecovery, SessionControls):
                 notes.append('可用原生 Shell 读取、查找和处理工作区文件，遵守单次程序时限。')
             else:
                 notes.append(f"列目录可用 {available['read']} 读取目录路径；未登记的查找或搜索工具可用原生 Shell。")
+        notes += self._save_context_notice(meta.get('dynamic_tools', []))
         self.tool_notice = ''.join(notes)
+
+    def _save_context_notice(self, tools):
+        """Codex 恢复会话沿用开新会话时登记的工具说明，不能更新。开着节省上下文、而登记的 act 说明还不是现在的格式
+        （例如 1.15.0 之前开的会话）时，恢复后的第一轮补一次当前格式，免得读不懂省略后的结果（例如轨迹没有列名）。"""
+        if not getattr(self.cfg, 'save_context', False):
+            return []
+        from .prompting import SAVE_CONTEXT_MARK, fill, save_context_act
+        act = next((tool for tool in tools if isinstance(tool, dict) and tool.get('name') == 'celeste_act'), None)
+        if act is None or SAVE_CONTEXT_MARK in str(act.get('description') or ''):
+            return []
+        return ['（系统）本会话登记的 celeste_act 说明早于当前的节省上下文格式，act 结果按这里读：'
+                + fill(save_context_act(self.cfg), self.cfg)]
 
     async def run(self):
         if not self.container:

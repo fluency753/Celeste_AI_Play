@@ -58,6 +58,11 @@ class NoteReminderReviewTests(unittest.TestCase):
             command = runner._common_args()
             self.assertEqual(command[command.index('--autocompact') + 1], '2000')
             runner.metrics.update(context_window=4000)
+            # Claude Code 报告的是模型最大上下文：传了更小的数值窗口时按传的算，否则提醒在压缩前永远到不了阈值
+            self.assertEqual(runner._notes_window(), 2000)
+            runner.cfg.autocompact = 'auto'
+            self.assertEqual(runner._notes_window(), 4000)
+            runner.cfg.autocompact = '900000'
             self.assertEqual(runner._notes_window(), 4000)
 
 

@@ -89,6 +89,8 @@ class SwitchTests(unittest.TestCase):
             args = runner._common_args()
             self.assertEqual(args[args.index('--autocompact') + 1], '500000')
             self.assertEqual(runner._notes_window(), 500000)      # 笔记提醒按实际传给 Claude Code 的窗口算
+            runner.metrics.update(context_window=1000000)         # Claude Code 报告的是模型最大上下文
+            self.assertEqual(runner._notes_window(), 500000)
             runner.cfg.save_context = False
             self.assertNotIn('--autocompact', runner._common_args())
 

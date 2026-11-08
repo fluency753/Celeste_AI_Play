@@ -294,6 +294,15 @@ def model_key(model: str) -> str:
     return m
 
 
+def context_limit(m: dict, config: dict) -> float:
+    """上下文到多少算"快满"（统计栏的上下文到它的 90% 变橙）：执行器报告的窗口、实际传给 Claude Code 的压缩窗口、
+    配置里的压缩阈值（默认 967000）取最小的。Claude Code 报告的是模型最大上下文，压缩窗口设小时以压缩窗口为准；
+    Codex 报告的窗口比配置的阈值小时以它为准。与 hud.html 的 contextLimit 相同。"""
+    values = [v for v in (m.get("context_window"), m.get("compact_window"), config.get("compact_threshold") or 967000)
+              if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0]
+    return min(values)
+
+
 def display_name(m: dict, config: dict) -> str:
     names = config.get("names") or {}
     for key in (m.get("agent"), m.get("model"), model_key(m.get("model", ""))):
@@ -399,7 +408,7 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     studied = study > 0 or m.get("status") == "studying"
 
     ctx = m.get("context_tokens") or 0
-    limit = config.get("compact_threshold") or 967000
+    limit = context_limit(m, config)
     runs_n = m.get("sim_round_rollouts") or 0
     runs_text = (f"{runs_n / 10000:.{0 if runs_n >= 1e6 else 1}f}万" if runs_n >= 10000 else f"{runs_n:,}") + " 条"
     best = m.get("sim_best_frames") or 0
