@@ -265,6 +265,10 @@ def make_handler(pinned: Path | None):
                                       else 60000)
                     if pinned is not None:
                         raise ValueError("固定预览模式的 HUD 服务不提供控制台操作")
+                    if self.path == "/api/console/client-error":
+                        # 控制台页面的脚本错误：只写本机日志，不占用控制台操作的锁
+                        self._json(200, console_api.client_error(data), cors=False)
+                        return
                     if self.path == "/api/console/providers/test":
                         # 连通测试只读配置、最多等 20 秒：不占用控制台操作的锁，免得其他操作跟着等
                         self._json(200, console_api.providers_test(data), cors=False)

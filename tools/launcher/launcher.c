@@ -46,11 +46,39 @@ static const wchar_t *arguments(void) {
     return p;
 }
 
+#ifndef HUD_LAUNCHER
+/* 已经开着的控制台窗口：标题相同、而且属于 Python 进程（pythonw.exe / python.exe）。
+ * 只按标题找会找到资源管理器留下的同名代理窗口（例如任务栏的 Windows.Internal.Shell.TabProxyWindow：
+ * 控制台进程被强行结束后它可能还在），那时双击启动器只会把这个看不见的代理"提到前面"，控制台却没有打开。 */
+static int owned_by_python(HWND window) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return 0;
+    static wchar_t image[PATH_CHARS];
+    DWORD size = PATH_CHARS;
+    int ok = QueryFullProcessImageNameW(process, 0, image, &size);
+    CloseHandle(process);
+    if (!ok) return 0;
+    const wchar_t *name = wcsrchr(image, L'\\');
+    name = name ? name + 1 : image;
+    return _wcsicmp(name, L"pythonw.exe") == 0 || _wcsicmp(name, L"python.exe") == 0;
+}
+
+static HWND console_window(void) {
+    HWND window = NULL;
+    while ((window = FindWindowExW(NULL, window, NULL, TITLE)) != NULL) {
+        if (owned_by_python(window)) return window;
+    }
+    return NULL;
+}
+#endif
+
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR ignored, int show) {
     (void)instance; (void)previous; (void)ignored; (void)show;
     const wchar_t *args = arguments();
 #ifndef HUD_LAUNCHER
-    HWND window = FindWindowW(NULL, TITLE);
+    HWND window = console_window();
     if (window && !*args) {
         if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
         SetForegroundWindow(window);

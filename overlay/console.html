@@ -3425,13 +3425,43 @@ function poll(task, interval) {
   tick();
 }
 
+// 页面里的脚本错误报给 HUD 服务，记在本机 local/console-client.log：只在用户的机器上出现的问题也能查到原因
+let clientErrorReports = 0;
+function reportClientError(where, error) {
+  if (++clientErrorReports > 20) return;
+  try {
+    fetch("/api/console/client-error", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ where, message: String((error && error.message) || error || ""),
+                             stack: String((error && error.stack) || "").slice(0, 4000), page: ui.page }) }).catch(() => null);
+  } catch (e) { /* 报不出去也不影响页面 */ }
+}
+window.addEventListener("error", e => reportClientError("error", e.error || e.message));
+window.addEventListener("unhandledrejection", e => reportClientError("promise", e.reason));
+
+// 运行设置读不出来时（例如控制台窗口打开时 HUD 服务刚好在重启）自动重试，配置栏写明在重试，不再一直停在“读取中…”
+async function loadOptionsUntilReady() {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await loadOptions();
+      if (ui.settingsError) { ui.settingsError = null; toast("运行设置已读取。"); schedulePreview(); }
+      return;
+    } catch (e) {
+      ui.settingsError = "读取设置失败：" + e.message;
+      reportClientError("loadOptions#" + attempt, e);
+      const last = attempt >= 20;
+      $("profile").replaceChildren(new Option(last ? "读取失败" : "读取失败，正在重试…", ""));
+      $("profileHint").textContent = ui.settingsError + (last ? "。已停止重试：关掉控制台窗口再打开。" : "");
+      if (attempt === 1 || last) toast(ui.settingsError, true);
+      if (ui.page === "prompts") loadPromptPreview();
+      if (last) return;
+      await new Promise(resolve => setTimeout(resolve, Math.min(1000 * attempt, 5000)));
+    }
+  }
+}
+
 (function boot() {
   showPage((location.hash || "").slice(1) || recall("page") || "run");
-  loadOptions().catch(e => {
-    ui.settingsError = "读取设置失败：" + e.message;
-    toast(ui.settingsError, true);
-    if (ui.page === "prompts") loadPromptPreview();
-  });
+  loadOptionsUntilReady();
   poll(refreshStatus, 1500);
   poll(refreshRun, 700);
   setInterval(() => { const m = ui.hud && ui.hud.metrics; if (running() && m) renderRunTimers(m); }, 100);

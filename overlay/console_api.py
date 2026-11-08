@@ -688,7 +688,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.16.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.16.1"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -1001,6 +1001,31 @@ def rollback(data) -> dict:
     after = _version_at("HEAD")
     return {"switched": True, "before": before, "after": after, "files": len(changed),
             "notes": _change_notes(before, after, changed), "restart": True}
+
+
+CLIENT_LOG = REPO_ROOT / "local" / "console-client.log"
+CLIENT_LOG_MAX = 512 * 1024
+
+
+def client_error(data: dict) -> dict:
+    """控制台页面报来的脚本错误（读不出运行设置、未捕获的异常）：追加到本机 local/console-client.log，
+    超过 512 KB 时只留后一半。只用于排查只在用户机器上出现的问题，不进运行记录。"""
+    def text(key, limit):
+        value = data.get(key)
+        return value[:limit] if isinstance(value, str) else ""
+    line = json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "version": CONSOLE_VERSION,
+                       "where": text("where", 80), "page": text("page", 20), "message": text("message", 1000),
+                       "stack": text("stack", 4000)}, ensure_ascii=False)
+    CLIENT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if CLIENT_LOG.exists() and CLIENT_LOG.stat().st_size > CLIENT_LOG_MAX:
+            kept = CLIENT_LOG.read_bytes()[-CLIENT_LOG_MAX // 2:]
+            CLIENT_LOG.write_bytes(kept[kept.find(b"\n") + 1:])
+        with CLIENT_LOG.open("a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+    except OSError:
+        return {"logged": False}
+    return {"logged": True}
 
 
 def about() -> dict:
