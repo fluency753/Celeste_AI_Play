@@ -38,6 +38,9 @@ class PrivateObsTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.recording_config = patch('orchestrator.recording.LOCAL_CONFIG', self.root / 'local.recording.json')
+        self.recording_config.start()
+        self.addCleanup(self.recording_config.stop)
         self.private = self.root / 'repo/local/obs'
         self.personal = fake_obs(self.root / 'Steam/OBS Studio')
         self.appdata = self.root / 'AppData'

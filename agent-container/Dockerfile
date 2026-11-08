@@ -20,7 +20,8 @@ RUN python3 -m venv /opt/py \
         numpy==2.2.6 scipy==1.15.3 numba==0.61.2 pillow==11.2.1 networkx==3.4.2
 ENV PATH=/opt/py/bin:$PATH
 
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @anthropic-ai/sandbox-runtime@${SANDBOX_RUNTIME_VERSION} \
+RUN npm install -g --fetch-timeout=900000 @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @anthropic-ai/sandbox-runtime@${SANDBOX_RUNTIME_VERSION} \
+    && claude --version \
     && npm cache clean --force
 
 # 与宿主协议版本固定一致；模型客户端及原生编程工具直接在隔离容器运行。
