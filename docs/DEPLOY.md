@@ -217,7 +217,7 @@ Steam 版的默认位置是 `C:\Program Files (x86)\Steam\steamapps\common\Celes
 ```powershell
 winget install OBSProject.OBSStudio     # 或 Steam 版
 winget install Gyan.FFmpeg
-# 关掉 OBS 后编译安装锁步插件（不需要 Visual Studio：脚本用 pip 装 zig 交叉编译，从 GitHub 取同版本的 libobs 头文件）
+# 关掉 OBS 后编译安装锁步插件（不需要 Visual Studio：脚本用 pip 装 zig 交叉编译，从 GitHub 取同版本的 libobs 头文件：先走 HTTPS，不需要 GitHub 账号或密钥；不通时再试 SSH）
 .\.venv\Scripts\python.exe tools\build_obs_plugin.py
 ```
 

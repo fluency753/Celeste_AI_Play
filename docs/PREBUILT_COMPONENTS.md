@@ -21,7 +21,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only bridge,recording
 
 - Bridge／Runtime 使用同一个包，仍由 `tools/deploy_bridge.ps1` 备份并安装。常驻核心字节相同时可走在用主控或空闲维护的受控重载；首次安装或 Runtime 字节不同就拒绝运行中替换，由使用者安排维护重启，不自动关闭游戏。同版本核心也可能因工具链或引用程序集变化而产生不同字节，不能只看版本号判断可重载。
 - OBS 插件目前打包针对 **33.0.0** 构建的版本，仅在 OBS 产品版本匹配时使用；其他版本可回退源码构建。两条安装路径均拒绝 OBS 正在运行的情况，不替使用者停止 OBS。替换前备份旧 DLL，用临时文件发布；失败保留原 DLL 与备份，不改 OBS 设置。
-- .NET SDK 仅源码编译 Bridge／Runtime 时需要；预编译安装不需要 SDK。源码构建 OBS 插件仍需 zig 和对应 libobs 头文件。
+- .NET SDK 仅源码编译 Bridge／Runtime 时需要；预编译安装不需要 SDK。源码构建 OBS 插件仍需 zig 和对应 libobs 头文件（脚本先经 HTTPS 匿名下载，不通再试 SSH，都不通时说明原因）。
 - 包内不包含《蔚蓝》、Everest 或 FMOD 的程序集／资源，不包含预置模拟器、个人提示词、存档、录像或登录数据。
 
 手动安装已校验的本地组件：

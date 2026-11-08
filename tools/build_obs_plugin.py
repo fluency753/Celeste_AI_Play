@@ -37,6 +37,10 @@ def obs_version(obs_dir: Path) -> str:
     raise SystemExit("读不到 OBS 版本，请用 --obs-version 指定")
 
 
+# 先走 HTTPS（公开仓库，不需要任何密钥）；不通时再试 SSH（本机只配了 GitHub SSH 的情况）
+HEADER_REMOTES = ("https://github.com/obsproject/obs-studio.git", "git@github.com:obsproject/obs-studio.git")
+
+
 def fetch_headers(version: str) -> Path:
     dest = BUILD / f"obs-studio-{version}"
     if (dest / "libobs" / "obs-module.h").exists():
@@ -44,16 +48,28 @@ def fetch_headers(version: str) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
+    # 不弹出用户名密码或主机指纹的询问：取不到就换下一个地址，免得卡在无人应答的提示上
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": os.environ.get("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")}
 
     def git(*args):
-        subprocess.run(["git", *args], cwd=dest, check=True)
+        subprocess.run(["git", *args], cwd=dest, check=True, env=env)
     git("init", "-q")
-    git("remote", "add", "origin", "git@github.com:obsproject/obs-studio.git")
+    git("remote", "add", "origin", HEADER_REMOTES[0])
     git("config", "core.sparseCheckout", "true")
     (dest / ".git" / "info" / "sparse-checkout").write_text("libobs/\n", encoding="utf-8")
-    git("fetch", "-q", "--depth", "1", "origin", "tag", version)
-    git("checkout", "-q", f"tags/{version}")
-    return dest
+    failures = []
+    for remote in HEADER_REMOTES:
+        git("remote", "set-url", "origin", remote)
+        try:
+            git("fetch", "-q", "--depth", "1", "origin", "tag", version)
+        except subprocess.CalledProcessError as exc:
+            failures.append(f"{remote}（git 退出码 {exc.returncode}）")
+            print(f"取 libobs {version} 头文件失败：{remote}" + ("，改试 SSH" if remote != HEADER_REMOTES[-1] else ""), flush=True)
+            continue
+        git("checkout", "-q", f"tags/{version}")
+        return dest
+    raise SystemExit(f"取不到 OBS {version} 的 libobs 头文件：{'；'.join(failures)}。检查网络能否访问 GitHub，"
+                     "或确认这个版本号在 obs-studio 仓库里有对应的标签")
 
 
 def zig(*args: str) -> None:
