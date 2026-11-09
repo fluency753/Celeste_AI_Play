@@ -447,7 +447,8 @@ class Analysis:
                 if kind == 'requested':
                     row['requested_wall'] = wall(entry.get('wall'))
                     row['requested_time_source'] = 'token_advances.requested.wall'
-                    row.spill({'parameters': {'frames': batch.get('requested'), 'before': batch.get('before')}})
+                    row.spill({'parameters': {'frames': batch.get('requested'), 'before': batch.get('before'),
+                                               'origin': batch.get('origin')}})
                     row['parameters_meta'] = {'available': True}
                 else:
                     row['result_wall'] = wall(entry.get('wall'))
@@ -488,7 +489,7 @@ class Analysis:
                    'chapter_base': ({key: value for key, value in data['chapter_base'].items() if key in fields and finite(value)}
                                     if isinstance(data.get('chapter_base'), dict) else None),
                    **{key: bounded_tree(data.get(key)) for key in ('chapter', 'chapter_side', 'room', 'status', 'chapter_time_ticks',
-                      'completed_ticks', 'piece_done', 'splits', 'stop_reason', 'completed', 'user_stopped', 'context_tokens', 'context_window')},
+                      'completed_ticks', 'piece_done', 'splits', 'stop_reason', 'completed', 'user_stopped', 'context_tokens', 'context_window', 'token_drift')},
                    'resumed_from': state.get('resumed_from')}
             self.metrics.append(row)
             self.event(context, 'metrics.snapshot', row['wall'], path, 0, {'snapshot_id': row['snapshot_id'], 'status': row['status']})

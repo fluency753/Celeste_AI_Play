@@ -24,6 +24,7 @@ from .observation import enrich_obs, fmt_ticks, skip_opportunity_hint
 from .sandbox import run_program
 from .goals import GoalManager
 from .modes import act_frame_cap, act_frame_min, is_explore
+from .token_menu import TokenMenu, TokenMenuBoundary
 from .thought import thought_problem
 from .workspace_files import tas
 from .workspace_setup import install_game_helpers
@@ -399,6 +400,10 @@ class GameSession:
         self._last_room = None
         self._input_formats = None
         self._held_input = ("", "celeste_ai")   # 最近一次真正喂给游戏的那一帧按键与格式（思考僵直时保持它）
+        self.token_menu = TokenMenu(self) if getattr(cfg, 'token_drift', False) else None
+        self.token_ack_frames, self.token_ack_s = 0, 0.0
+        self.token_debt_pending = lambda: 0
+        self.token_last_observation = None
         self._freeze_base: tuple[float, float, float] | None = None   # 这次冻结开始时的（思考、工具、压缩）累计
         self.token_motion_epoch = 0
         self.token_observation_required = False
@@ -472,6 +477,7 @@ class GameSession:
         if detour_enabled(self.cfg) and not self.map_entry_set_supported:
             raise RuntimeError('计划外地图需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
         self.client.step_options = self._step_options
+        self.client.step_filter = self._token_step_filter
         self.client.after_step = self._after_step
         self.client.cancel_check = lambda: self.goals.immediate or (self.goals.stop_motion.is_set() and self.done_reason != "章节完成") or (self._token_advancing and (self._token_cancel.is_set() or not self.token_guard()))
         from .chapter_recording import menu_options
@@ -479,6 +485,8 @@ class GameSession:
                                  **menu_options(self.cfg))
         obs = reply["obs"]
         self._restore_held_input(obs.get("frame"))
+        if self.cfg.token_drift and self.token_menu is not None:
+            self.token_menu.restore(obs)
         self.story_input_supported = 'storyInput' in obs   # 桥接 1.0.3 起才有；中途把剧情切给智能体时也要检查
         if not self.cfg.checkpoints:       # 没有 configs/checkpoints.json：用桥接的检查点表（控制台按段调整要用）
             try:
@@ -720,11 +728,36 @@ class GameSession:
 
     def _after_step(self, args: dict, reply: dict) -> None:
         """所有推进入口共用：登记原生死亡增量、关卡帧数及最后按住的键。"""
+        if getattr(self, 'token_menu', None) is not None:
+            result = reply.get('result') or {}
+            original = getattr(self, '_token_original_planned', None)
+            if original is not None:
+                result.update(bridge_planned=result.get('planned'), planned=original, token_boundary_limited=True)
+                self._token_original_planned = None
+            self.token_ack_frames += int(result.get('consumed') or 0) + int(result.get('loadingFrames') or 0)
+            started = getattr(self, '_token_step_started', None)
+            if started is not None:
+                self.token_ack_s += max(0.0, time.monotonic() - started)
         deaths = (reply.get('result') or {}).get('registeredDeaths')
         if type(deaths) is int and deaths > 0:
             self.metrics.add(deaths=deaths)
         self._ingest_transition(reply.get('obs') or {}, reply.get('result'))
         self._count_level_frames(reply)
+        if getattr(self, 'token_menu', None) is not None:
+            consumed = int((reply.get('result') or {}).get('consumed') or 0)
+            if consumed:
+                before = self._held_input
+                if consumed > 1:
+                    before = self._input_held(args, consumed - 1, reply.get('obs') or {}) or before
+                fmt = args.get('input_format', 'celeste_ai')
+                if not before[0]:
+                    before = ('', fmt)  # Neutral has the same meaning in both formats.
+                self.token_menu.note(reply.get('obs') or {}, before)
+                if self.token_menu.state is not None:
+                    # Helpers can return/raise before their outer result writer.
+                    # Publish every acknowledged menu/recovery boundary once.
+                    self.last_obs = enrich_obs(reply.get('obs') or {})
+                    self.token_last_observation = (self.last_obs, reply.get('image'))
         self._remember_held_input(args, reply)
         self._note_first_goal_entry(reply.get('obs') or {})
         self._save_transition_wait(reply.get('obs') or {})
@@ -735,11 +768,16 @@ class GameSession:
         consumed = int(((reply or {}).get("result") or {}).get("consumed") or 0)
         if consumed <= 0:
             return
+        obs = (reply or {}).get('obs') or {}
+        held = self._input_held(args, consumed, obs)
+        if held is not None:
+            self._set_held_input(held, obs.get('frame'))
+
+    def _input_held(self, args, consumed, obs):
         keys = held_keys(args.get("inputs"), consumed)
         if keys is None:
             return
         fmt = args.get("input_format") or "celeste_ai"
-        obs = (reply or {}).get("obs") or {}
         # 与 expand_inputs 一样规范写法（"+" 分隔、大小写），再只留游玩按键
         tokens = [k.strip().upper() for k in keys.replace("+", ",").split(",") if k.strip()]
         if obs.get("scene", "Level") != "Level":
@@ -748,7 +786,65 @@ class GameSession:
             tokens = [k for k in tokens if k.startswith("A:") or set(k) <= PLAY_LETTERS]
         else:
             tokens = [k for k in tokens if set(k) <= TAS_HELD_LETTERS]
-        self._set_held_input((",".join(tokens), fmt), obs.get("frame"))
+        return ",".join(tokens), fmt
+
+    def token_playable(self, obs):
+        from .token_menu import paused_menu
+        return (obs.get('scene') == 'Level' and not paused_menu(obs) and not story_pending(obs)
+                and (bool(obs.get('controllable')) or seeker_control(obs)))
+
+    def _token_step_filter(self, args):
+        menu = self.token_menu
+        self._token_original_planned = None
+        if menu is not None:
+            self._token_step_started = time.monotonic()
+        if menu is None or self._token_advancing:
+            return args
+        obs = menu.latest or self.last_obs or {}
+        original = sum(int(part.split(',', 1)[0]) for part in args['inputs'])
+        limit = original
+        # Native control flags do not change when PlayerSeeker opens a menu.
+        # Bound the first possible menu input itself, including aliases/combos.
+        offset = 0
+        menu_letters = set('SQN' if args.get('input_format') == 'celeste_tas' else 'PN')
+        for part in args['inputs']:
+            count, _, keys = part.partition(',')
+            if int(count) > 0 and any(not token.startswith('A:') and set(token) & menu_letters
+                                      for token in keys.upper().replace('+', ',').split(',')):
+                limit = min(limit, offset + 1)
+                break
+            offset += int(count)
+        if menu.state is not None:
+            if args.get('input_format', 'celeste_ai') != menu.state['input_format']:
+                raise ActError('暂停待结算期间须沿用暂停前输入格式；请用原格式取消暂停，不能用菜单切换格式绕过结算。')
+            if self.token_playable(obs) and self.token_debt_pending():
+                raise TokenMenuBoundary('菜单恢复边界已到，本次后续输入未发送；先结算待补 Token 推进，原计划不自动继续。')
+            if obs.get('controllable') and story_pending(obs):
+                # Control and story flags can overlap. Check each acknowledged
+                # frame so a long plan cannot run beyond the story ending.
+                limit = min(limit, 1)
+            level = obs.get('level') or {}
+            if not obs.get('controllable') and (level.get('sid'), level.get('side'), level.get('room')) in SEEKER_ROOMS:
+                limit = min(limit, 1)
+        if limit < original:
+            remaining, selected = limit, []
+            for part in args['inputs']:
+                head, separator, keys = part.partition(',')
+                count = min(remaining, int(head))
+                if count:
+                    selected.append(str(count) + (separator + keys if separator else ''))
+                remaining -= count
+                if not remaining:
+                    break
+            self._token_original_planned = original
+            args = {**args, 'inputs': selected}
+        stops = list(args.get('stop_on') or [])
+        boundary = ('controllable' if menu.state is not None and obs.get('scene') == 'Level'
+                    and not obs.get('controllable') and not seeker_control(obs) else
+                    'uncontrollable' if obs.get('scene') == 'Level' and obs.get('controllable') and not story_pending(obs) else None)
+        if boundary and boundary not in stops:
+            stops.append(boundary)
+        return {**args, 'stop_on': stops}
 
     def _set_held_input(self, held: tuple[str, str], frame) -> None:
         """记下并存进运行目录（带当时的帧号，续跑时用来确认游戏停在同一帧）。"""
@@ -820,7 +916,7 @@ class GameSession:
         if getattr(self.cfg, 'token_drift', False):
             state = self.metrics.state.token_drift or {}
             return (f"Token 推进：每 {self.cfg.tokens_per_frame} 个输出 token 推进1帧；"
-                    f"累计已推进 {state.get('consumed_frames', 0)} 帧，余数 {state.get('remainder_tokens', 0)} token。"
+                    f"累计已推进 {state.get('consumed_frames', 0)} 帧，暂停待补 {state.get('deferred_frames', 0)} 帧，余数 {state.get('remainder_tokens', 0)} token。"
                     '游戏可能在规划期间改变；死亡、换房或剧情后须默认 observe 核验。')
         stats = self.freeze_stats()
         if stats is None:
@@ -865,6 +961,9 @@ class GameSession:
         """Shared real step, recording, frame clock and stop handling; lock held."""
         keys, fmt = held or self._held_input
         stops = list(STIFF_STOP_ON)
+        if counter == 'token' and seeker_control(self.last_obs or {}):
+            stops.remove('uncontrollable')
+            stops.append('controllable')
         if self.cfg.cutscene_mode == "agent":
             stops.append("story_input")
             if fmt != 'celeste_tas':
@@ -897,14 +996,14 @@ class GameSession:
         return {'result': result, 'obs': obs, 'image': image, 'keys': keys,
                 'input_format': fmt, 'consumed': used, 'stop': result.get('stop')}
 
-    def token_frame_step(self, frames):
+    def token_frame_step(self, frames, *, deferred=False):
         """A reported usage batch advances only at an authorized action boundary."""
         with self.lock:
             last = self.last_obs or {}
             if (self.done or self.goals.stop_motion.is_set() or not self.token_guard()
                     or getattr(self, 'reload_observation_required', False)):
                 return {'consumed': 0, 'stop': 'not_eligible'}
-            if last.get('scene') != 'Level' or not self._agent_controls(last) or story_pending(last):
+            if not self.token_playable(last):
                 return {'consumed': 0, 'stop': 'not_controllable'}
             try:
                 self._before_advance()
@@ -912,10 +1011,12 @@ class GameSession:
                 return {'consumed': 0, 'stop': 'not_executed', 'reason': str(error)}
             self._token_advancing = True
             try:
-                moved = self._advance_held(frames, 'Token 推进', 'token')
+                held = self.token_menu.held(last) if deferred else None
+                moved = self._advance_held(frames, 'Token 补推进' if deferred else 'Token 推进', 'token', held)
             finally:
                 self._token_advancing = False
             obs = moved['obs']
+            self.token_last_observation = (obs, moved['image'])
             self._write_workspace(obs)
             self._update_metrics_from_obs(obs)
             reset = getattr(self, 'reset_observation_delivery', None)
@@ -1051,6 +1152,8 @@ class GameSession:
     def _write_workspace(self, obs: dict, act_record: dict | None = None) -> None:
         self._save_transition_wait(obs)
         self.last_obs = obs
+        if getattr(self, 'token_menu', None) is not None:
+            self.token_menu.latest = obs
         self._transition_for(obs)
         if not self.workspace:
             return
@@ -1240,6 +1343,9 @@ class GameSession:
             elif story_input(self.last_obs or {}) == 'tutorial':
                 forced.append('controllable')
         stop = self._stop_list(stop_on or plan.stop_on, forced)
+        if self.token_menu is not None and self.token_menu.state is not None:
+            if plan.input_format != self.token_menu.state['input_format']:
+                raise ActError('暂停待结算期间须沿用暂停前输入格式；请用原格式取消暂停后再切换格式。')
         frames = self._check_plan(plan)
         pre_notes: list[str] = []
         if plan.retry and self.cfg.pause_limit:
@@ -1274,7 +1380,7 @@ class GameSession:
                              "deviation": result.get("deviation")})
             retry = plan.retry
             reason = result["stop"]
-            if result.get("stiffness_interrupted"):
+            if result.get("stiffness_interrupted") or result.get('token_boundary_limited'):
                 break                      # 僵直被死亡、换房等打断：这次 act 的按键（含自动重试）都不执行
             if (self.done or retry is None or attempt >= retry.max or reason not in retry.on
                     or not obs.get("controllable") or (obs.get("level") or {}).get("room") != start_room):
@@ -1429,6 +1535,8 @@ class GameSession:
                                          on_event=self._on_progress, **self._stop_rooms(), **extra)
                 game_s = time.monotonic() - t0
                 result, obs, image = reply["result"], enrich_obs(reply["obs"]), reply.get("image")
+            if self.token_menu is not None and self.token_menu.state is not None and result.get('stop') == 'controllable':
+                resumed.append('暂停或重试的恢复边界已到，原计划剩余输入未执行；先结算暂停累计的 Token 推进，再根据新观测重新规划。')
             if stiff.get("info"):
                 result["stiffness"] = stiff["info"]
             result['input_format'] = stiff["info"]["input_format"] if skipped else plan.input_format
@@ -1443,7 +1551,7 @@ class GameSession:
                 if used < len(locations):result['input_cursor']['next_location'] = locations[used]
                 elif source.get('following_location'):result['input_cursor']['next_location'] = source['following_location']
                 result['remaining_inputs'] = tas.compress(frames[used:])
-            if result.get('stop') == 'recording_boundary' and plan.input_format != 'celeste_tas':
+            if (result.get('stop') == 'recording_boundary' or result.get('token_boundary_limited')) and plan.input_format != 'celeste_tas':
                 result['remaining_inputs']=tas.compress(frames[result.get('consumed',0):])
             if self.sim_energy and not skipped:
                 from .sim_assist import moving_frames
@@ -1721,6 +1829,20 @@ class GameSession:
 
     def _auto_advance(self, obs: dict, image: str | None, *, stop_for_skip: bool = True, story_mode: str | None = None,
                       wait_budget: int = AGENT_STORY_WAIT_FRAMES):
+        if not getattr(self.cfg, 'token_drift', False):
+            return self._auto_advance_steps(obs, image, stop_for_skip=stop_for_skip,
+                                            story_mode=story_mode, wait_budget=wait_budget)
+        started = time.monotonic()
+        before = self.metrics.state.auto_game_s
+        try:
+            return self._auto_advance_steps(obs, image, stop_for_skip=stop_for_skip,
+                                            story_mode=story_mode, wait_budget=wait_budget)
+        except TokenMenuBoundary:
+            self.metrics.add(auto_game_s=max(0, time.monotonic()-started-(self.metrics.state.auto_game_s-before)))
+            raise
+
+    def _auto_advance_steps(self, obs: dict, image: str | None, *, stop_for_skip: bool = True,
+                            story_mode: str | None = None, wait_budget: int = AGENT_STORY_WAIT_FRAMES):
         """非可控段一律按正常速度推进（与原版一致，录像里不快进）。
         auto模式跳过剧情；agent模式在决策机会、实际输入节点或恢复控制时交回。
         显式 watch/advance/choose 后忽略本段的跳过机会，播至下一实际输入节点。"""
@@ -2165,7 +2287,11 @@ class GameSession:
                 return reply['obs']
             skipped=False
             if action=='skip':
-                skipped,obs,_,why=skip_by_pause_menu(self.client,on_step=log)
+                try:
+                    skipped,obs,_,why=skip_by_pause_menu(self.client,on_step=log)
+                except TokenMenuBoundary:
+                    self.metrics.add(play_game_s=time.monotonic()-started, frames_played=used)
+                    raise
             elif action=='choose':
                 if original_options and original_options != [(item.get('index'),item.get('text')) for item in options]:
                     refuse_input('对话选项已改变，请重新观察后再选择')
@@ -2323,6 +2449,11 @@ class GameSession:
                 obs = current if already_exited else leave_level_by_pause_menu(self.client, allowed_exit_ids=exit_ids)
                 if obs.get('scene') != 'Overworld':
                     raise RuntimeError('退出尚未完成')
+            except TokenMenuBoundary:
+                latest = self.token_last_observation[0] if self.token_last_observation else self.last_obs or {}
+                self.metrics.add(auto_game_s=time.monotonic()-started,
+                                 frames_auto=max(0, latest.get('frame', before)-before))
+                raise
             except (RuntimeError, OSError) as exc:
                 # A failure can follow real menu inputs. Publish the observed
                 # state without retrying an exit or losing the pending target.
@@ -2453,6 +2584,9 @@ class GameSession:
                               cutscene_mode=self.cfg.cutscene_mode, should_stop=self.goals.stop_motion.is_set,
                               on_map=on_map)
                 failure = None
+            except TokenMenuBoundary:
+                self.metrics.add(auto_game_s=time.monotonic()-started)
+                raise
             except (RuntimeError, OSError) as exc:
                 failure = exc
             self.metrics.add(auto_game_s=time.monotonic() - started)
@@ -2632,6 +2766,8 @@ class GameSession:
             self._run_ending(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
         except EndingNeedsAgent as exc:
             playable = str(exc)
+        except TokenMenuBoundary:
+            raise
         except RuntimeError as exc:
             problem = str(exc)
         reply = self.client.call("observe", image=True, scope="room", fields=True)
@@ -2806,6 +2942,8 @@ class GameSession:
         problem = None
         try:
             self._run_ending(self.client.call("observe", image=False, entities=False, tiles=False)["obs"], final=False)
+        except TokenMenuBoundary:
+            raise
         except RuntimeError as exc:
             problem = str(exc)
         reply = self.client.call("observe", image=True, scope="room", fields=True)
@@ -2838,6 +2976,17 @@ class GameSession:
             self._run_ending(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
 
     def _run_ending(self, obs: dict, *, final: bool = True) -> None:
+        if not getattr(self.cfg, 'token_drift', False):
+            return self._run_ending_steps(obs, final=final)
+        started = time.monotonic()
+        before = self.metrics.state.auto_game_s
+        try:
+            return self._run_ending_steps(obs, final=final)
+        except TokenMenuBoundary:
+            self.metrics.add(auto_game_s=max(0, time.monotonic()-started-(self.metrics.state.auto_game_s-before)))
+            raise
+
+    def _run_ending_steps(self, obs: dict, *, final: bool = True) -> None:
         """（调用方持有连接锁）最终章通关后走完片尾：剧情能跳过就用暂停菜单跳过，对白和等确认的界面按确认，
         展示并确认结算，停在选章地图。走不完抛 RuntimeError。
         final=False：计划外地图通关后的同一套 auto 收尾（_finish_detour）：不记 end_scene，回到选章地图就交回，

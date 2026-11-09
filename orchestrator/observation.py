@@ -485,7 +485,14 @@ def describe_attempts(attempts: list[dict]) -> str:
 def describe_step(result: dict, max_rows: int = 30, brief: bool = False) -> str:
     """brief（节省上下文）：实体按位移从大到小列出，起止位置相同的只计数；轨迹不写列名（列名在 act 的工具说明里）。"""
     stop = result.get("stop", "?")
-    lines = [f"执行了 {result['consumed']}/{result['planned']} 帧，停止原因：{STOP_TEXT.get(stop, stop)}"]
+    reason = ('Token 菜单恢复检查边界' if result.get('token_boundary_limited') and stop == 'done'
+              else STOP_TEXT.get(stop, stop))
+    lines = [f"执行了 {result['consumed']}/{result['planned']} 帧，停止原因：{reason}"]
+    if result.get('token_boundary_limited'):
+        lines.append('主控在菜单／剧情恢复检查边界截断了本次输入；剩余输入没有执行，也不会自动重试。'
+                     '待恢复可操作后先补 Token 推进，请根据当前观测重新规划。')
+        if result.get('input_format') != 'celeste_tas':
+            lines.append('本次未执行的输入：' + json.dumps(result.get('remaining_inputs', []), ensure_ascii=False))
     if stop == 'recording_boundary':
         lines.append('动作停在离开章节的分章录像边界。后续输入没有执行；请以当前菜单观测和主控结算反馈为准。')
         lines.append('本次未执行的输入：' + json.dumps(result.get('remaining_inputs',[]),ensure_ascii=False))

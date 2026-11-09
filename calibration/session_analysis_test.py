@@ -65,7 +65,7 @@ class AnalysisTests(unittest.TestCase):
     def test_token_advances_export_actual_frames_and_state_without_inferred_unknown_state(self):
         path = self.run/'token_advances.jsonl'
         self.append(path, {'event': 'requested', 'wall': 1001,
-                           'batch': {'id': 1, 'requested': 2, 'before': {'frame': 100}}})
+                           'batch': {'id': 1, 'requested': 2, 'origin': 'deferred', 'before': {'frame': 100}}})
         self.append(path, {'event': 'committed', 'wall': 1002,
                            'batch': {'id': 1, 'requested': 2, 'consumed': 1, 'stop': 'room',
                                      'after': {'frame': 101, 'room': 'next', 'player': {'pos': [20, 30]}}}})
@@ -76,6 +76,7 @@ class AnalysisTests(unittest.TestCase):
             rows = report.analysis_records['tool_calls']
             self.assertEqual([r['record_kind'] for r in rows], ['system_advance', 'system_advance'])
             self.assertEqual(rows[0]['result']['consumed'], 1)
+            self.assertEqual(rows[0]['parameters']['origin'], 'deferred')
             self.assertEqual(rows[1]['status'], 'execution_unknown')
             self.assertIsNone(rows[1]['success'])
             states = report.analysis_records['game_states']

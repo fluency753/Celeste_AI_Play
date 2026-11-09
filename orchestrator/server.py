@@ -4,12 +4,14 @@ from __future__ import annotations
 import asyncio
 import time
 import json
+from functools import wraps
 
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .game_session import ActError, GameSession
+from .token_menu import TokenMenuBoundary
 from .recording import RecordingHalt
 from .telemetry import publish
 from .kb_study import KbStudy
@@ -180,9 +182,54 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 getattr(session, 'token_motion_epoch', 0))
 
     async def flush_tokens():
+        before = getattr(metrics.state, 'token_frames', 0)
         flush = getattr(session, 'flush_token_drift', None)
         if flush is not None:
             await flush()
+        return getattr(metrics.state, 'token_frames', 0) - before
+
+    def repayment(paid):
+        batch = (getattr(metrics.state, 'token_drift', None) or {}).get('batch') or {}
+        return {'frames': paid, 'stop': batch.get('stop'), 'batch_id': batch.get('id')}
+
+    def token_boundary(fn):
+        @wraps(fn)
+        async def wrapped(*args, **kwargs):
+            if not getattr(session.cfg, 'token_drift', False):
+                return await fn(*args, **kwargs)
+            before = getattr(metrics.state, 'token_frames', 0)
+            accounted_frames = metrics.state.frames_played + metrics.state.frames_auto + before
+            accounted_s = metrics.state.play_game_s + metrics.state.auto_game_s
+            ack_frames, ack_s = getattr(session, 'token_ack_frames', 0), getattr(session, 'token_ack_s', 0.0)
+            try:
+                return await fn(*args, **kwargs)
+            except TokenMenuBoundary as error:
+                async with journal.execution(call_lock):
+                    missing_frames = max(0, getattr(session, 'token_ack_frames', 0) - ack_frames -
+                                         (metrics.state.frames_played + metrics.state.frames_auto +
+                                          getattr(metrics.state, 'token_frames', 0) - accounted_frames))
+                    missing_s = max(0.0, getattr(session, 'token_ack_s', 0.0) - ack_s -
+                                    (metrics.state.play_game_s + metrics.state.auto_game_s - accounted_s))
+                    if missing_frames or missing_s:
+                        metrics.add(frames_played=missing_frames, play_game_s=missing_s)
+                    await flush_tokens()
+                    paid = getattr(metrics.state, 'token_frames', 0) - before
+                    obs, image = session.token_last_observation or (session.last_obs or {}, None)
+                    context, file_context, candidate = observation_context(obs, force=True)
+                    content = images(obs, image, room_view=True)
+                    note = (str(error) + f' 本次已补推进 {paid} 帧，待补余额仍按账本保留。'
+                            '下面是最新观测；请重新规划，不重发原菜单宏或旧计划。')
+                    if getattr(session, 'token_observation_required', False):
+                        note += '补推进遇到场景中断，请先默认 observe 核验。'
+                    content.append(note + '\n\n' + describe_obs(obs, full_room=True, effort=header_line(),
+                                   explore=explore, compact_context=True, file_context=file_context) + '\n\n' + context)
+                    delivery.commit(candidate)
+                    state['described_room'] = room_key(obs)
+                    journal.detail({'token_boundary': str(error), 'token_repayment': repayment(paid),
+                                    'boundary_accounted_frames': missing_frames, 'boundary_accounted_s': missing_s})
+                    finish()
+                    return content
+        return wrapped
 
     def gated(name, ticket=None) -> str | None:
         """知识库没读完时不执行游戏工具，返回提示。"""
@@ -272,6 +319,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         return None
 
     @server.tool(name="observe", description=fill(observation_tool_description(session.cfg, 'observe'), session.cfg), structured_output=False)
+    @token_boundary
     async def observe(detail: str = 'overview', region: list[float] | None = None, offset: int = 0,
                       limit: int = 32, snapshot_id: str | None = None) -> list:
         async with journal.execution(call_lock):
@@ -302,6 +350,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     return ['区域或分页查询请用 detail="geometry"；默认 overview 会获取新观测。']
                 await flush_tokens()
                 obs, image = await asyncio.to_thread(session.observe)
+                session.token_observation_required = False  # The new overview acknowledges the prior boundary.
+                paid = await flush_tokens()
+                if paid and session.token_last_observation is not None:
+                    obs, image = session.token_last_observation
                 observed_epoch = getattr(session, 'reload_epoch', 0)
                 credit(obs)
                 context, file_context, candidate = observation_context(obs, force=True)
@@ -315,7 +367,6 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     content.append(notice)
                 delivery.commit(candidate)
                 state["described_room"] = room_key(obs)
-                session.token_observation_required = False
                 acknowledge = getattr(session, 'acknowledge_reload_observation', None)
                 if acknowledge:
                     acknowledge(observed_epoch)
@@ -335,6 +386,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     act_description += act_note(session.cfg)      # 开了计划外地图才有；关时与原来相同
 
     @server.tool(name="act", description=fill(act_description, session.cfg), structured_output=False)
+    @token_boundary
     async def act(thought: str, inputs: list[str] | None = None, plan_file: str | None = None,
                   stop_on: list[str] | None = None, input_format: str | None = None) -> list:
         ticket = reload_ticket()
@@ -352,6 +404,11 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 try:
                     options = {'input_format':input_format} if input_format is not None else {}
                     outcome = await asyncio.to_thread(session.act, inputs, thought, stop_on, plan_file, **options)
+                    paid = await flush_tokens()
+                    if paid and session.token_last_observation is not None:
+                        outcome.obs, outcome.image_b64 = session.token_last_observation
+                        outcome.result['token_repayment'] = repayment(paid)
+                        outcome.auto_notes.append(f'暂停累计的 Token 已补推进 {paid} 帧，停止原因 {repayment(paid)["stop"]}；下面是结算后观测，原计划未执行的部分不自动继续。')
                     result = outcome.result
                     journal.detail({'result': compact_step(outcome.result), 'attempts': outcome.attempts,
                                     'auto_frames': outcome.auto_frames, 'auto_notes': outcome.auto_notes})
@@ -403,7 +460,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         if 'description' in kw:
             kw['description'] = fill(kw['description'], session.cfg)
         # 不需要的工具不注册：装饰器原样返回函数，不进 MCP 工具列表
-        return server.tool(**kw) if enabled else (lambda fn: fn)
+        return (lambda fn: server.tool(**kw)(token_boundary(fn))) if enabled else (lambda fn: fn)
 
     @server.tool(name='stop_run',
                  description='仅在任务必需步骤仍无法执行、适用的获准恢复方式已尝试或确知不可用、且需要用户介入时调用。'
@@ -486,6 +543,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             try:
                 result = await asyncio.to_thread(session.exit_level, reason, finish_run)
                 journal.detail(result)
+            except TokenMenuBoundary:
+                raise
             except (ActError, RuntimeError) as err:
                 raise ToolError(str(err)) from err
             finally:
@@ -513,6 +572,13 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     journal.detail({'notes': notes})
                 finally:
                     metrics.decision_end(None)
+                paid = await flush_tokens()
+                if paid and session.token_last_observation is not None:
+                    obs, image = session.token_last_observation
+                    notes.append(f'菜单恢复后已补推进 {paid} 帧，下面是补推进后的最新观测；请重新规划。')
+                    if getattr(session, 'token_observation_required', False):
+                        notes.append('补推进遇到场景中断，请先默认 observe 核验。')
+                    journal.detail({'token_repayment': repayment(paid)})
                 credit(obs)
                 context, file_context, candidate = observation_context(obs, force=True)
                 content = images(obs, image)
@@ -541,6 +607,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             begin()
             try:
                 obs,image,info=await asyncio.to_thread(session.cutscene,action,choice)
+                paid = await flush_tokens()
+                if paid and session.token_last_observation is not None:
+                    obs,image = session.token_last_observation
+                    info['token_repayment'] = repayment(paid)
                 journal.detail(info)
             except ActError as err:
                 raise ToolError(str(err)) from err

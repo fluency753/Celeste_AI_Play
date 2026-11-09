@@ -97,11 +97,15 @@ class SessionControls:
             from .token_drift import TokenDrift
             previous = getattr(self.metrics.state, 'resumed_from', None)
             self.token_drift = TokenDrift(self.run_dir / 'token_drift.json', self.metrics,
-                self.cfg.tokens_per_frame, Path(previous) / 'token_drift.json' if previous else None)
+                self.cfg.tokens_per_frame, Path(previous) / 'token_drift.json' if previous else None,
+                menu_context=self._token_menu_active())
             if not self.metrics.playing:
                 self.token_drift.exclude_window('preparation')
             self.session.token_guard = self._token_motion_eligible
             self.session.flush_token_drift = self._flush_token_drift_locked
+            self.session.token_debt_pending = lambda: self.token_drift.deferred
+            loop = asyncio.get_running_loop()
+            self.session.token_boundary_wake = lambda: loop.call_soon_threadsafe(self._token_event.set)
         if self.session is not None:
             self.session.note_reminders = self.note_reminders
             self.session.control_guard = self._game_guard
@@ -110,14 +114,20 @@ class SessionControls:
             self.session.effort_policy = self._agent_effort_policy
             self.session.effort_levels = lambda: self._effort_status()['effort_levels'] or []
 
-    def _token_motion_eligible(self):
+    def _token_account_eligible(self):
         return bool(self.token_drift is not None and not self._token_closing
                     and not self._token_compacting and not self._game_guard()
                     and self.metrics.playing and self.metrics._pause_start is None
                     and not getattr(self, 'net_down_since', None)
                     and not self.token_drift.unknown
-                    and not getattr(self.session, 'reload_observation_required', False)
-                    and not getattr(self.session, 'token_observation_required', False))
+                    and not getattr(self.session, 'reload_observation_required', False))
+
+    def _token_motion_eligible(self):
+        return self._token_account_eligible() and not getattr(self.session, 'token_observation_required', False)
+
+    def _token_menu_active(self):
+        menu = getattr(self.session, 'token_menu', None)
+        return menu is not None and menu.state is not None
 
     def _token_epoch(self):
         obs = getattr(self.session, 'last_obs', None) or {}
@@ -129,9 +139,13 @@ class SessionControls:
         if self.token_drift is None:
             return
         self._sync_token_pause()
-        eligible = bool(self.turn_active and self._token_motion_eligible())
-        self.token_drift.receive(total, latest, f'{self.cfg.engine}:{self.session_id}', eligible, self._token_epoch())
-        if self.token_drift.pending:
+        deferred = self._token_menu_active()
+        if deferred:
+            self.token_drift.defer_pending()
+        eligible = bool(self.turn_active and (self._token_account_eligible() if deferred else self._token_motion_eligible()))
+        self.token_drift.receive(total, latest, f'{self.cfg.engine}:{self.session_id}', eligible,
+                                 self._token_epoch(), deferred=deferred)
+        if self.token_drift.pending or self.token_drift.deferred:
             self._token_event.set()
 
     def _exclude_token_window(self, reason):
@@ -155,6 +169,8 @@ class SessionControls:
         self._token_task = asyncio.create_task(self._token_worker())
 
     async def _finish_token_worker(self):
+        if self.token_drift is not None and self._token_menu_active():
+            self.token_drift.defer_pending()
         self._token_closing = True
         if self.token_drift is None:
             return
@@ -172,7 +188,25 @@ class SessionControls:
                     cancelled = True
                     continue
             task.result()
-        self.token_drift.discard('runner_finished')
+        async def finalize():
+            async with self.action_lock:
+                tool_lock = getattr(self.session, 'tool_lock', None)
+                async def settle_queue():
+                    if self._token_menu_active():
+                        self.token_drift.defer_pending()
+                    self.token_drift.discard('runner_finished')
+                if tool_lock is not None and tool_lock is not self.action_lock:
+                    async with tool_lock:
+                        await settle_queue()
+                else:
+                    await settle_queue()
+        finalizer = asyncio.create_task(finalize())
+        while not finalizer.done():
+            try:
+                await asyncio.shield(finalizer)
+            except asyncio.CancelledError:
+                cancelled = True
+        finalizer.result()
         if cancelled:
             raise asyncio.CancelledError
 
@@ -205,15 +239,31 @@ class SessionControls:
         if ledger is None:
             return
         self._sync_token_pause()
-        while ledger.pending:
-            if not self._token_motion_eligible():
+        if self._token_menu_active():
+            ledger.defer_pending()
+        while ledger.pending or ledger.deferred:
+            if not self._token_account_eligible():
                 ledger.exclude_window('control_state_changed')
                 return
+            deferred = bool(ledger.deferred)
+            if not self._token_motion_eligible():
+                if not deferred:
+                    ledger.exclude_window('control_state_changed')
+                return
             before = getattr(self.session, 'last_obs', None) or {}
-            frames = ledger.begin(self._token_epoch(), {'frame': before.get('frame'), 'epoch': self._token_epoch()})
+            menu = getattr(self.session, 'token_menu', None)
+            if self._token_menu_active() and not self.session.token_playable(before):
+                return
+            if deferred:
+                if menu is None:
+                    raise ValueError('暂停待补推进的按键快照缺失；保留欠帧，请核验 token_menu.json')
+                menu.held(before)  # Validate before committing an input batch.
+            frames = ledger.begin(self._token_epoch(), {'frame': before.get('frame'), 'epoch': self._token_epoch()},
+                                  deferred=deferred)
             if frames is None:
                 return
-            worker = asyncio.create_task(asyncio.to_thread(self.session.token_frame_step, frames))
+            worker = asyncio.create_task(asyncio.to_thread(self.session.token_frame_step, frames,
+                                                          **({'deferred': True} if deferred else {})))
             try:
                 try:
                     result = await asyncio.shield(worker)
@@ -236,6 +286,10 @@ class SessionControls:
                 raise
             if not self._token_closing and self._token_motion_eligible():
                 self.metrics.update(status='tool' if self.metrics._tools else 'thinking')
+            if result.get('stop') != 'done' or not result.get('consumed'):
+                return
+        if self._token_menu_active() and not ledger.deferred and self.session.token_playable(self.session.last_obs or {}):
+            self.session.token_menu.clear()
 
     async def _agent_effort_policy(self, value):
         from .game_policy import effort_denial

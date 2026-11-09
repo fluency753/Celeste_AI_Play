@@ -7,23 +7,23 @@ from .session_store import load_json, write_json
 
 
 class TokenDrift:
-    def __init__(self, path, metrics, tokens_per_frame, previous=None):
+    def __init__(self, path, metrics, tokens_per_frame, previous=None, *, menu_context=False):
         self.path, self.metrics, self.tokens_per_frame = path, metrics, tokens_per_frame
         self.state = {'schema': 1, 'source': None, 'last_total': None, 'remainder_tokens': 0,
                       'pending_frames': 0, 'eligible_tokens': 0, 'excluded_tokens': 0,
                       'consumed_frames': 0, 'dropped_frames': 0, 'batch_id': 0, 'batch': None, 'epoch': None,
-                      'excluded_gap': False}
+                      'excluded_gap': False, 'deferred_frames': 0}
         source = path if path.exists() else previous
         if source is not None and source.exists():
             saved = load_json(source)
             if saved.get('schema') != 1:
                 raise ValueError('Token 推进账本格式无效，未发送游戏输入')
             self.state.update(saved)
-            for key in ('remainder_tokens', 'pending_frames', 'batch_id', 'consumed_frames', 'dropped_frames'):
+            for key in ('remainder_tokens', 'pending_frames', 'deferred_frames', 'batch_id', 'consumed_frames', 'dropped_frames'):
                 if token_count(self.state.get(key)) is None:
                     raise ValueError('Token 推进账本计数无效，未发送游戏输入')
             # A resumed owner never replays previously queued movement.
-            self.state['dropped_frames'] += self.state['pending_frames']
+            self.state['deferred_frames' if menu_context else 'dropped_frames'] += self.state['pending_frames']
             self.state['pending_frames'] = 0
             self.state['excluded_gap'] = True
             if (self.state.get('batch') or {}).get('status') == 'pending':
@@ -39,18 +39,22 @@ class TokenDrift:
     def pending(self):
         return self.state['pending_frames']
 
+    @property
+    def deferred(self):
+        return self.state['deferred_frames']
+
     def _save(self):
         self.state['tokens_per_frame'] = self.tokens_per_frame
         write_json(self.path, self.state)
         self.metrics.update(token_drift={key: self.state.get(key) for key in (
             'tokens_per_frame', 'remainder_tokens', 'pending_frames', 'eligible_tokens',
-            'excluded_tokens', 'consumed_frames', 'dropped_frames', 'batch')})
+            'excluded_tokens', 'consumed_frames', 'dropped_frames', 'deferred_frames', 'batch')})
 
     def event(self, kind, **data):
         with self.path.with_name('token_advances.jsonl').open('a', encoding='utf-8') as stream:
             stream.write(json.dumps({'event': kind, 'wall': time.time(), **data}, ensure_ascii=False) + '\n')
 
-    def receive(self, total, latest, source, eligible, epoch):
+    def receive(self, total, latest, source, eligible, epoch, *, deferred=False):
         if token_count(total) is None:
             return
         same_source = self.state['source'] == source
@@ -82,11 +86,20 @@ class TokenDrift:
             self.state['epoch'] = list(epoch)
             self.state['eligible_tokens'] += delta
             frames, remainder = divmod(self.state['remainder_tokens'] + delta, self.tokens_per_frame)
-            self.state['pending_frames'] += frames
+            self.state['deferred_frames' if deferred else 'pending_frames'] += frames
             self.state['remainder_tokens'] = remainder
         self.event('usage', source=source, output_delta=delta, eligible=bool(eligible),
-                   pending_frames=self.pending, remainder_tokens=self.state['remainder_tokens'])
+                   pending_frames=self.pending, deferred_frames=self.deferred, deferred=bool(deferred),
+                   remainder_tokens=self.state['remainder_tokens'])
         self._save()
+
+    def defer_pending(self):
+        if self.pending:
+            frames = self.pending
+            self.state['deferred_frames'] += frames
+            self.state['pending_frames'] = 0
+            self._save()
+            self.event('deferred', frames=frames, deferred_frames=self.deferred)
 
     def exclude_window(self, reason):
         # Without an intermediate usage sample, the next positive delta may
@@ -102,18 +115,20 @@ class TokenDrift:
         if save:
             self._save()
 
-    def begin(self, epoch, before):
-        if self.unknown or not self.pending:
+    def begin(self, epoch, before, *, deferred=False):
+        available = self.deferred if deferred else self.pending
+        if self.unknown or not available:
             return None
-        if self.state['epoch'] != list(epoch):
+        if not deferred and self.state['epoch'] != list(epoch):
             self.discard('game_epoch_changed')
             return None
         # No artificial pacing. The bound is only a pause/cancel acknowledgement
         # boundary, and batches are sent consecutively while credit remains.
-        frames = min(self.pending, 60)
-        self.state['pending_frames'] -= frames
+        frames = min(available, 60)
+        self.state['deferred_frames' if deferred else 'pending_frames'] -= frames
         self.state['batch_id'] += 1
-        batch = {'id': self.state['batch_id'], 'status': 'pending', 'requested': frames, 'before': before}
+        batch = {'id': self.state['batch_id'], 'status': 'pending', 'requested': frames, 'before': before,
+                 'origin': 'deferred' if deferred else 'usage'}
         self.state['batch'] = batch
         self._save()  # Must succeed before any input can be submitted.
         self.event('requested', batch=batch)
@@ -126,9 +141,13 @@ class TokenDrift:
             raise ValueError('Token 推进返回的实际帧数无效，执行范围未确认')
         batch.update(status='committed', **result)
         self.state['consumed_frames'] += consumed
-        self.state['dropped_frames'] += batch['requested'] - consumed
+        if batch.get('origin') == 'deferred':
+            self.state['deferred_frames'] += batch['requested'] - consumed
+        else:
+            self.state['dropped_frames'] += batch['requested'] - consumed
         if result.get('stop') != 'done':
-            self.state['excluded_gap'] = True
+            if batch.get('origin') != 'deferred':
+                self.state['excluded_gap'] = True
             self.discard('step_' + str(result.get('stop')), save=False)
         self._save()
         self.event('committed', batch=batch)

@@ -37,6 +37,7 @@ class BridgeClient:
         self.last_call_failure = None
         self.cancel_check = None
         self.step_options = None
+        self.step_filter = None
         self.after_step = None
         self._cancel_sent = False
         self.reconnects = 0
@@ -104,6 +105,8 @@ class BridgeClient:
             # Session-owned constraints apply to every caller, including menu
             # helpers and retries, rather than only the public act tool.
             args.update(self.step_options())
+        if cmd == 'step' and getattr(self, 'step_filter', None) is not None:
+            args = self.step_filter(args)
         req_id = self.next_id
         self._cancel_sent = False
         if cmd == "step" and self.cancel_check is not None:

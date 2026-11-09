@@ -374,6 +374,51 @@ class TravelSessionTests(unittest.TestCase):
         events = [json.loads(line) for line in (session.run_dir / 'public_events.jsonl').read_text(encoding='utf-8').splitlines()]
         self.assertIn('去旧址找心', [e['text'] for e in events])
 
+    def test_mcp_travel_pays_menu_debt_before_delivering_destination(self):
+        from orchestrator.agent import ClaudeRunner
+        from orchestrator.server import build_server
+        from orchestrator.token_menu import TokenMenu
+        from calibration.token_menu_test import client_for
+        from calibration.story_wait_test import observation as complete_observation
+        session, game = self.session()
+        session.cfg.token_drift = True
+        session.token_menu = TokenMenu(session)
+        session.game_process_id = 123
+        observation = game.observation
+        def full_observation():
+            obs = observation()
+            if obs.get('player'):
+                obs['player'] = {**complete_observation()['player'], **obs['player']}
+            return obs
+        game.observation = full_observation
+        # Preserve the full native-menu fixture; only replace its wire with the
+        # actual BridgeClient so production ACK/filter hooks own the boundary.
+        game.after_step = game.step_options = None
+        session.client = client_for(session, game)
+        session.client.step_options = session._step_options
+        async def exercise():
+            server = build_server(session)
+            runner = ClaudeRunner(session.cfg, session.run_dir, session, session.metrics, 'fixture', session_id='fixture')
+            runner.turn_active = True
+            runner._begin_model_turn(runtime='claude')
+            try:
+                session.client.call('step', inputs=['1', '1,P'], stop_on=[])
+                session.metrics.start_play()
+                runner._record_output_usage(1000, 1000)
+                self.assertEqual(runner.token_drift.deferred, 2)
+                result = await server.call_tool('travel', {'chapter': 2, 'thought': '验证换章后先补推进'})
+                text = '\n'.join(getattr(item, 'text', '') for item in result.content)
+                self.assertIn('已补推进 2 帧', text)
+                self.assertIn(f"帧 {session.last_obs['frame']}", text)
+                self.assertEqual(runner.token_drift.deferred, 0)
+                self.assertEqual(session.metrics.state.token_frames, 2)
+                self.assertEqual(game.steps[-1], ['2'])
+                self.assertEqual(session.last_obs['level']['sid'], OLD_SITE)
+            finally:
+                await runner._finish_token_worker()
+                runner.close_events()
+        asyncio.run(exercise())
+
     def test_panel_order_follows_save_and_unfinished_chapter_starts_at_latest(self):
         self.areas = {**AREAS, 3: [RESORT, False, ['09-d', '08-a'], ['Normal']]}
         session, game = self.session()
