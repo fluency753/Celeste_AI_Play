@@ -19,6 +19,9 @@ from orchestrator.game_session import GameSession
 from orchestrator.metrics import Metrics
 from orchestrator.segments import Piece, piece_label
 from orchestrator.server import build_server
+from calibration.isolation import generated_dirs_fixture
+
+setUpModule, tearDownModule = generated_dirs_fixture()  # never write real workspaces/ or local/kb_views/
 
 
 class ReportGame(DetourGame):

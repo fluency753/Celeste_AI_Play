@@ -12,6 +12,9 @@ from orchestrator.game_session import GameSession
 from orchestrator.metrics import Metrics
 from orchestrator.server import build_server
 from tools.menu_navigation import checked_step, MenuActionBlocked
+from calibration.isolation import generated_dirs_fixture
+
+setUpModule, tearDownModule = generated_dirs_fixture()  # never write real workspaces/ or local/kb_views/
 
 
 class PicoBridge(FakeBridge):

@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 
 from orchestrator.chat import can_wake, can_wake_frozen, chat
+from calibration.isolation import generated_dirs_fixture
+
+setUpModule, tearDownModule = generated_dirs_fixture()  # never write real workspaces/ or local/kb_views/
 
 
 def make_run(folder, **summary):

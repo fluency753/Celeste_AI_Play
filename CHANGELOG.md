@@ -4,6 +4,9 @@
 
 ## 2026-11-11
 
+- **测试不再写进仓库里真实的工作区与知识库视图**：新增 `calibration/isolation.py` 的模块级夹具，把 `RunConfig.workspace_dir` 与 `kb_dir` 指向临时目录；`chat_frozen_test`、`codex_agent_test`、`goal_report_plan_test`、`pico8_guard_test`、`recording_roll_test`、`recording_session_test`、`request_ticket_test` 使用它，以前会在 `workspaces/<标签>/game` 与 `local/kb_views/` 下留下目录，本机有同名工作区时还会往里写辅助文件。只改测试，项目版本不变。
+  验证：逐模块扫描以及全量并行、`--serial` 各跑一次后，`workspaces/`、`local/`（测试结果除外）与 `configs/` 均无新增或改动；全量回归通过。
+
 - **项目 1.24.9：部署检查使用控制台填的游戏位置**：`setup.ps1 -Check` 与部署向导选游戏目录时，改按主控相同的顺序取：环境变量 `CELESTE_DIR`、控制台「存档与章节」页的游戏位置、向导记下的目录，最后才自动查找正在运行的游戏和 Steam 库；以前没有 `configs/local.deploy.json` 时会去检查 Steam 里的个人游戏，误报“桥接没装”。检查模式会写明按哪个来源检查；交互模式下填了与控制台不同的目录时提示主控仍按控制台的位置。项目／启动器同步1.24.9，Bridge／Runtime不变。
   验证：新增 `calibration.setup_game_dir_test` 3项（只有控制台位置时检查副本、控制台位置优先于旧回答、都没有时用自动找到的目录），前两项旧代码上失败；全量回归通过。
 

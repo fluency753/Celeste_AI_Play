@@ -23,6 +23,9 @@ from orchestrator.codex_native import native_tool_hook
 from orchestrator.modes import game_tools
 from orchestrator.planning_budget import PlanningBudget
 from orchestrator import kb_access  # Import before temporary config roots in legacy preparation fixtures.
+from calibration.isolation import generated_dirs_fixture
+
+setUpModule, tearDownModule = generated_dirs_fixture()  # never write real workspaces/ or local/kb_views/
 
 
 def response_text(result):

@@ -9,6 +9,9 @@ from calibration.token_menu_test import MenuBridge, client_for
 from orchestrator.config import RunConfig
 from orchestrator.game_session import ActError, GameSession, REQUEST_TICKET, RequestTicket
 from orchestrator.metrics import Metrics
+from calibration.isolation import generated_dirs_fixture
+
+setUpModule, tearDownModule = generated_dirs_fixture()  # never write real workspaces/ or local/kb_views/
 
 
 class SlowPlayback:

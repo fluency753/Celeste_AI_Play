@@ -12,6 +12,9 @@ from unittest.mock import Mock, patch
 from calibration.http_fixture import bound_server
 
 from orchestrator.recording import Recorder, RecordOptions, RecordingError
+from calibration.isolation import generated_dirs_fixture
+
+setUpModule, tearDownModule = generated_dirs_fixture()  # never write real workspaces/ or local/kb_views/
 
 
 class RecordingSessionTests(unittest.TestCase):

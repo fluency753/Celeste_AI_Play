@@ -14,6 +14,9 @@ from orchestrator.recording import (Recorder, RecordOptions, RecordingHalt, Reco
                                     salvage_movie)
 from orchestrator.purecut import read_ticks
 from orchestrator.purecut import _wav_header
+from calibration.isolation import generated_dirs_fixture
+
+setUpModule, tearDownModule = generated_dirs_fixture()  # never write real workspaces/ or local/kb_views/
 
 
 class FakeBridge:
