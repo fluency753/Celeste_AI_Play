@@ -99,6 +99,10 @@ class SessionControls:
             self.token_drift = TokenDrift(self.run_dir / 'token_drift.json', self.metrics,
                 self.cfg.tokens_per_frame, Path(previous) / 'token_drift.json' if previous else None,
                 menu_context=self._token_menu_active())
+            invalid = (getattr(self.session, 'token_menu', None) is not None and self.session.token_menu.state
+                       and self.session.token_menu.state.get('invalid'))
+            if invalid:
+                self._drop_token_menu_debt(invalid)
             if not self.metrics.playing:
                 self.token_drift.exclude_window('preparation')
             self.session.token_guard = self._token_motion_eligible
@@ -234,6 +238,25 @@ class SessionControls:
                 # recoverable pre-execution failures after user inspection.
                 continue
 
+    def _drop_token_menu_debt(self, reason):
+        """Game restarted or pause context no longer matches: drop the owed frames and the context."""
+        frames = self.token_drift.drop_deferred(reason)
+        menu = getattr(self.session, 'token_menu', None)
+        if menu is not None and menu.state is not None:
+            menu.clear()
+        if not frames:
+            return
+        note = (f'暂停前的按键无法确认（{reason}），暂停期间累计的 {frames} 帧待补推进已作废，'
+                '不补发旧按键；之后的 Token 推进照常。')
+        self.session.token_menu_notice = note
+        print(f'[token] {note}', flush=True)
+        try:
+            from .telemetry import publish
+            publish(self.run_dir, f'system:token-menu-drop:{self.token_drift.state["batch_id"]}:{int(time.time())}',
+                    note, role='system', kind='系统')
+        except OSError:
+            pass
+
     async def _flush_token_drift_locked(self):
         """The caller owns both existing async game locks; never reacquire them."""
         ledger = self.token_drift
@@ -256,9 +279,15 @@ class SessionControls:
             if self._token_menu_active() and not self.session.token_playable(before):
                 return
             if deferred:
-                if menu is None:
-                    raise ValueError('暂停待补推进的按键快照缺失；保留欠帧，请核验 token_menu.json')
-                menu.held(before)  # Validate before committing an input batch.
+                try:
+                    if menu is None:
+                        raise ValueError('暂停待补推进的按键快照缺失')
+                    menu.held(before)  # Validate before committing an input batch.
+                except ValueError as error:
+                    # Never replay unconfirmed keys; without a confirmed source the
+                    # owed frames have no input to replay, so they are dropped.
+                    self._drop_token_menu_debt(str(error))
+                    continue
             frames = ledger.begin(self._token_epoch(), {'frame': before.get('frame'), 'epoch': self._token_epoch()},
                                   deferred=deferred)
             if frames is None:

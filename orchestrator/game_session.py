@@ -841,7 +841,8 @@ class GameSession:
         stops = list(args.get('stop_on') or [])
         boundary = ('controllable' if menu.state is not None and obs.get('scene') == 'Level'
                     and not obs.get('controllable') and not seeker_control(obs) else
-                    'uncontrollable' if obs.get('scene') == 'Level' and obs.get('controllable') and not story_pending(obs) else None)
+                    'uncontrollable' if menu.state is not None and obs.get('scene') == 'Level' and obs.get('controllable')
+                    and not story_pending(obs) else None)
         if boundary and boundary not in stops:
             stops.append(boundary)
         return {**args, 'stop_on': stops}

@@ -540,6 +540,84 @@ class MenuDebtTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.r.token_drift.deferred, 2)
         program.assert_not_called()
 
+    async def resumed_runner(self, process_id, same_game=False):
+        """Resume this run in a new directory after the previous owner left 3 owed frames."""
+        await self.pause()
+        await self.usage(1500)
+        self.assertEqual(self.r.token_drift.deferred, 3)
+        (self.root/'summary.json').write_text(json.dumps({'game_released': False}), encoding='utf-8')
+        next_dir = self.root/'next'
+        next_dir.mkdir()
+        metrics = Metrics(next_dir/'metrics.json', 'fixture', 'fixture', 'medium', 600)
+        metrics.state.resumed_from = str(self.root)
+        session = GameSession(self.cfg, next_dir, metrics)
+        session.game_process_id = process_id
+        bridge = MenuBridge()            # the restarted game sits in a fresh, unpaused level
+        bridge.obs['frame'] = 500
+        if same_game:                    # frozen hand-over: still paused on the same frame
+            bridge.obs = copy.deepcopy(self.bridge.obs)
+        session.client = client_for(session, bridge)
+        session.last_obs = copy.deepcopy(bridge.obs)
+        session._held_input = ('R' if same_game else '', 'celeste_ai')
+        session._start_level_clock(session.last_obs)
+        session.token_menu.restore(bridge.obs)
+        await self.r._finish_token_worker()   # the previous owner has ended
+        runner = ClaudeRunner(self.cfg, next_dir, session, metrics, 'fixture', session_id='fixture2')
+        runner.turn_active = True
+        runner._begin_model_turn(runtime='claude')
+        runner._start_token_worker()
+        self.addAsyncCleanup(session.close)
+        self.addAsyncCleanup(runner.close_events)
+        self.addAsyncCleanup(runner._finish_token_worker)
+        return session, runner, bridge, build_server(session), next_dir
+
+    async def test_game_restart_before_resume_drops_owed_frames_and_play_continues(self):
+        session, runner, bridge, server, next_dir = await self.resumed_runner(999)
+        self.assertEqual(runner.token_drift.deferred, 0)
+        self.assertIsNone(session.token_menu.state)
+        ledger = json.loads((next_dir/'token_drift.json').read_text(encoding='utf-8'))
+        self.assertGreaterEqual(ledger['dropped_frames'], 3)
+        rows = [json.loads(line) for line in (next_dir/'token_advances.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertTrue(any(r['event'] == 'discarded' and r.get('origin') == 'deferred' and r['frames'] == 3 for r in rows))
+        result = await server.call_tool('act', {'inputs': ['10,R'], 'thought': '续跑后继续'})
+        text = '\n'.join(getattr(x, 'text', '') for x in result.content)
+        self.assertIn('3 帧待补推进已作废', text)
+        self.assertEqual([step['inputs'] for step in bridge.steps], [['10,R']])
+        self.assertFalse(runner.paused)
+        result = await server.call_tool('act', {'inputs': ['5,L'], 'thought': '提示只出现一次'})
+        self.assertNotIn('作废', '\n'.join(getattr(x, 'text', '') for x in result.content))
+        public = (next_dir/'public_events.jsonl').read_text(encoding='utf-8')
+        self.assertIn('待补推进已作废', public)
+
+    async def test_resume_with_moved_frame_drops_instead_of_replaying_keys(self):
+        session, runner, bridge, server, next_dir = await self.resumed_runner(123)
+        self.assertEqual(runner.token_drift.deferred, 0)
+        await server.call_tool('act', {'inputs': ['4,L'], 'thought': '续跑后继续'})
+        self.assertEqual([step['inputs'] for step in bridge.steps], [['4,L']])
+
+    async def test_resume_on_same_frozen_game_still_repays_with_pre_pause_keys(self):
+        session, runner, bridge, server, next_dir = await self.resumed_runner(123, same_game=True)
+        self.assertEqual(runner.token_drift.deferred, 3)
+        result = await server.call_tool('act', {'inputs': ['1,P', '20,L'], 'thought': '恢复后补推进'})
+        self.assertEqual(bridge.steps[-1]['inputs'], ['3,R'])
+        self.assertEqual(runner.token_drift.deferred, 0)
+        self.assertNotIn('作废', '\n'.join(getattr(x, 'text', '') for x in result.content))
+
+    async def test_token_drift_does_not_add_uncontrollable_stop_in_auto_story_mode(self):
+        seen = []
+        original = self.bridge.call
+        def call(command, **args):
+            if command == 'step':
+                seen.append(list(args.get('stop_on') or []))
+            return original(command, **args)
+        self.bridge.call = call
+        await self.act(['10,R'])                 # agent story mode forces it regardless of Token drift
+        self.assertIn('uncontrollable', seen[-1])
+        self.cfg.cutscene_mode = 'auto'
+        await self.act(['10,R'])
+        self.assertNotIn('uncontrollable', seen[-1])
+        self.assertEqual(self.bridge.steps[-1]['inputs'], ['10,R'])
+
     async def test_limited_plan_keeps_actual_death_reason(self):
         from orchestrator.observation import STOP_TEXT
         self.bridge.interrupt = 'death'

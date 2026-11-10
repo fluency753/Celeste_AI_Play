@@ -115,6 +115,17 @@ class TokenDrift:
         if save:
             self._save()
 
+    def drop_deferred(self, reason):
+        """The pause context is gone (game restarted, identity changed): owed
+        frames can no longer be replayed with the pre-pause keys."""
+        frames = self.deferred
+        if frames:
+            self.state['dropped_frames'] += frames
+            self.state['deferred_frames'] = 0
+            self._save()
+            self.event('discarded', reason=reason, frames=frames, origin='deferred')
+        return frames
+
     def begin(self, epoch, before, *, deferred=False):
         available = self.deferred if deferred else self.pending
         if self.unknown or not available:
