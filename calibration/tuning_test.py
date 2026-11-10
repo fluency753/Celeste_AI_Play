@@ -181,13 +181,11 @@ class TunableTests(unittest.TestCase):
 
     def test_bash_limits(self):
         from orchestrator.agent import bash_limits_ms
-        from orchestrator.codex_agent import program_cap
         self.assertEqual(bash_limits_ms(cfg()), (300000, 600000))
         self.assertEqual(bash_limits_ms(cfg(mode="explore")), (120000, 120000))
-        self.assertEqual(program_cap(cfg(mode="explore", explore_program_s=30)), 30)
+        self.assertEqual(bash_limits_ms(cfg(mode="explore", explore_program_s=30))[1], 30000)
         # 不限时：上限放到 24 小时，实际由整次运行的现实时间上限约束
         self.assertEqual(bash_limits_ms(cfg(mode="explore", explore_program_s=None)), (86400000, 86400000))
-        self.assertEqual(program_cap(cfg(mode="explore", explore_program_s=None)), 86400)
         self.assertIsNone(tuning.parse_pairs(["explore_program_s=none"])["explore_program_s"])
 
     def test_run_args(self):

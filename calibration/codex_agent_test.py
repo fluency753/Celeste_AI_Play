@@ -1092,7 +1092,7 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         def publish():
             path.write_text(json.dumps({'payload': {'id': 'session', 'dynamic_tools': tools}}), encoding='utf-8')
         publish()
-        with self.assertRaisesRegex(RuntimeError, 'migrate_codex_simulate'):
+        with self.assertRaisesRegex(RuntimeError, '缺少 request_id.*新建准备会话'):
             self.runner._validate_resumed_tools({'id': 'session', 'path': str(path)})
         self.runner.rpc.request.assert_not_awaited()
         self.cfg.sim_assist = False

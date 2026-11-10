@@ -42,12 +42,6 @@ def codex_prompt(cfg, *, guide=None, include_task=True) -> str:
     return runtime_prompt(cfg, guide=guide, include_task=include_task)
 
 
-def program_cap(cfg) -> float:
-    """原生 Shell 单次程序的最长秒数：探索模式用 explore_program_s（提示词里写的上限），
-    速通模式用 Bash 最长时长 bash_max_s（与 Claude Code 的 Bash 相同）。"""
-    from .agent import bash_limits_ms
-    return bash_limits_ms(cfg)[1] / 1000
-
 def tool_change_notice(registered, current) -> list[str]:
     """Codex 恢复会话沿用开会话时登记的工具说明，恢复时不能更新。写进说明的设置（节省上下文、仅正式思考、碰撞图、
     动作帧数上下限、解说字数等）或程序升级改了说明时，恢复后的第一轮把说明变了的工具补发一次，以补发的为准。
@@ -746,9 +740,8 @@ class CodexRunner(ModelRecovery, SessionControls):
             simulator = next(tool for tool in meta['dynamic_tools'] if tool['name'] == 'celeste_simulate')
             properties = (simulator.get('inputSchema') or {}).get('properties') or {}
             if 'request_id' not in properties:
-                raise RuntimeError('原会话的模拟接口缺少 request_id；保持原会话及预测设置，未开始模型轮次。'
-                                   '请停止宿主后运行 tools/migrate_codex_simulate.py --run <原运行目录> --apply，'
-                                   '完成定长迁移后恢复同一会话。')
+                raise RuntimeError('原会话的模拟接口缺少 request_id（11-03 以前建立的会话），未开始模型轮次；'
+                                   '请新建准备会话，或关闭模拟辅助后再恢复原会话。')
         self.registered_tools = names
         available = {name: self._file_tool_name(name) for name in FILE_TOOLS}
         absent = [name for name, actual in available.items() if actual is None]

@@ -158,7 +158,7 @@ class ContainerCodexTests(unittest.TestCase):
                     journal.write_text(raw, encoding='utf-8')
                     with self.assertRaisesRegex(RuntimeError, '迁移尚未完成.*拒绝开始模型轮次') as error:
                         codex.read_metadata('fixture', str(path))
-                    self.assertIn('migrate_codex_simulate.py', str(error.exception))
+                    self.assertIn('新建准备会话', str(error.exception))
                     self.assertEqual(path.read_text(encoding='utf-8'), original)
             journal.unlink()
             journal.mkdir()

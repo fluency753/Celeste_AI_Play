@@ -52,11 +52,6 @@ def act_frame_cap(cfg) -> int:
     return int(getattr(cfg, "max_frames_per_act", 600))
 
 
-def remind_seconds(live: bool) -> float:
-    """解说计时：思考累计这么久没有 narrate 就在下一次工具调用时提醒。直播 10 秒，其余半分钟。"""
-    return 10.0 if live else 30.0
-
-
 def has_cutscene_tool(cfg) -> bool:
     """剧情工具：探索模式、直播模式（用户可在 HUD 切换剧情处理方式），或明确 --cutscene-mode agent 时开放。"""
     return is_explore(cfg) or bool(getattr(cfg, "live", False)) or getattr(cfg, "cutscene_mode", "auto") == "agent"

@@ -108,20 +108,9 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 
 动态工具登记随原会话持久化，固定版本协议的 `thread/resume` 也没有 `dynamicTools` 字段，新增接口不会在恢复时补入。新会话只登记无前缀的 `read/glob/grep`；旧会话的 `celeste_read/celeste_glob/celeste_grep` 保留兼容，进入同一后端和门禁，不双登记或重复计量。恢复时按每个工具实际登记选择名称（同时存在时优先无前缀名），首条消息给出旧名映射，KB 提醒与重试建议也使用实际登记名；不会改写文件原文中的工具名称。缺少 `read`／`glob`／`grep` 的旧会话仍可恢复：主控记录日志，并在恢复后的第一条消息里说明哪些工具不可用；只有还要按行核验必读知识库（准备未完成）却没有 `read` 时才拒绝，须新建准备会话。具有旧 `path/offset/limit` 登记的会话可继续兼容读取（含目录列表），但新增 PDF `pages` 参数和搜索工具需要使用新建会话的完整登记。
 
-`tools/sync_codex_session_env.py` 是迁移前的宿主记录维护工具，不得用于容器记录。容器会话在运行状态里记录 `session_storage=container`，不再用宿主归档目录推断其状态。容器会话也不因宿主存在同 ID 的归档副本而从 HUD 隐藏。
+容器会话在运行状态里记录 `session_storage=container`，不再用宿主归档目录推断其状态。容器会话也不因宿主存在同 ID 的归档副本而从 HUD 隐藏。
 
-旧容器会话已有 `celeste_simulate(candidates, input_format)`、仅缺少预测必需的 `request_id` 时，可以保留原会话进行显式维护：
-
-```powershell
-# 先只检查；不会启动模型、连接游戏或修改原会话。
-.\.venv\Scripts\python.exe -X utf8 tools\migrate_codex_simulate.py --run <原运行目录>
-# 正常停止该会话的聊天／试玩宿主后，备份并迁移；不能只暂停模型而保留 App Server。
-.\.venv\Scripts\python.exe -X utf8 tools\migrate_codex_simulate.py --run <原运行目录> --apply
-```
-
-维护只访问已存在且归属匹配的容器会话卷，不借用宿主登录或新建会话。宿主维护互斥、容器内 App Server 占用检查及原生线程文件锁共同防止并发写入。备份和阶段日志在该卷的 `simulation-schema-migrations/<会话编号>/`，报告写到本机 `local/`。只补 `request_id`，余额查询仍可省略参数；不补 `request_file`，批量候选继续内联提交。
-
-原首行 UTF-8 字节长度通过简短工具说明及 JSON 尾部空格保持不变，其他工具、会话身份、全部历史字节和索引偏移不变；空间不足、归档、独立工具缓存或未知布局明确拒绝，不截断历史、不直接改 SQLite。未完成的维护禁止开始模型轮次，使用同一命令可从阶段日志继续完成，不用备份覆盖后来追加的历史。维护成功后按原运行目录恢复，并核验原会话 ID 和模拟能力；恢复遇其他写入者时明确失败，不再静默复制历史另起线程。
+11-03 以前建立的容器会话若开着模拟辅助、`celeste_simulate` 缺少 `request_id`，恢复时会明确拒绝；请新建准备会话，或关闭模拟辅助后再恢复。
 
 ## 验证边界
 

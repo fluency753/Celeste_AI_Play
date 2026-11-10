@@ -33,7 +33,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import config
-from .session_store import load_json
 
 DEFAULT = "default"
 LEGACY = "local"
@@ -464,19 +463,4 @@ def state_profile(state: dict | None) -> str:
     """运行记录里的配置：没记的旧运行是本机原有设置。"""
     value = (state or {}).get("profile") or LEGACY
     return value
-
-
-def runs_using(pid: str, runs_dir: Path | None = None) -> int:
-    """有几次运行记着用了这份配置（续跑时要用它）。"""
-    base = runs_dir or config.REPO_ROOT / "runs"
-    n = 0
-    if not base.is_dir():
-        return 0
-    for state in base.glob("*/*/run_state.json"):
-        try:
-            if load_json(state, encoding="utf-8-sig").get("profile") == pid:
-                n += 1
-        except (OSError, ValueError, AttributeError):
-            continue
-    return n
 

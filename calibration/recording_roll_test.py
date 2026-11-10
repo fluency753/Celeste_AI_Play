@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock, Mock
 
-from orchestrator.recording import (Recorder, RecordOptions, RecordingHalt, RecordingError, RecordingOwnershipError, analyze_frames, next_segment_dir,
+from orchestrator.recording import (Recorder, RecordOptions, RecordingHalt, RecordingError, RecordingOwnershipError, analyze_frames,
                                     salvage_movie)
 from orchestrator.purecut import read_ticks
 from orchestrator.purecut import _wav_header
@@ -922,15 +922,6 @@ class SegmentAndCsvTests(unittest.TestCase):
             self.assertEqual(result['missing_frames'], 0)
             self.assertEqual(result['repeats'], 0)
             self.assertEqual(result['replay_frames'], 2)
-
-    def test_next_segment_dir(self):
-        with tempfile.TemporaryDirectory() as folder:
-            base = Path(folder) / 'recording'
-            self.assertEqual(next_segment_dir(base).name, 'recording_2')
-            (Path(folder) / 'recording_2').mkdir()
-            (Path(folder) / 'recording_2' / 'session.json').write_text('{}', encoding='utf-8')
-            self.assertEqual(next_segment_dir(base).name, 'recording_3')
-            self.assertEqual(next_segment_dir(Path(folder) / 'recording_3').name, 'recording_4')
 
     def test_half_written_last_row_does_not_break_analysis(self):
         with tempfile.TemporaryDirectory() as folder:

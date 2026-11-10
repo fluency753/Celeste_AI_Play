@@ -31,7 +31,6 @@ playback/pending/，交给回放线程。搜索中增量预览读取已刷新的
 """
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import math
@@ -54,22 +53,6 @@ STOPS = {0: "done", 1: "death", 2: "room", 3: "cutscene", 4: "unsupported", 5: "
 KIND_OPEN, KIND_DEATH, KIND_EXIT, KIND_BEST = 0, 1, 2, 3
 BACKTRACK_PX = 40.0     # 出口离起点这么近的，多半是掉头回上一个房间
 PREVIEW_BYTES = 8 * 1024 * 1024  # 所有待播与正在绘制的增量记录共同持有的字节预算
-
-
-def canon_hash(inputs) -> int:
-    """按键序列的规范化哈希（用于对齐输入与轨迹记录）：展开成逐帧按键、每帧按键排序。"""
-    frames: list[str] = []
-    for seg in inputs or []:
-        seg = str(seg)
-        head, _, keys = seg.partition(",")
-        try:
-            n = int(head.strip())
-        except ValueError:
-            n, keys = 1, seg
-        toks = sorted(t.strip().upper() for t in keys.replace("+", ",").split(",") if t.strip())
-        frames.extend([",".join(toks)] * max(0, n))
-    digest = hashlib.blake2b(";".join(frames).encode("utf-8"), digest_size=8).digest()
-    return int.from_bytes(digest, "little")
 
 
 @dataclass

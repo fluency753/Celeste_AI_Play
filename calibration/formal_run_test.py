@@ -8,11 +8,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestrator.config import REPO_ROOT, RunConfig
-from orchestrator.modes import KNOWLEDGE_OF_MODE, game_tools, remind_seconds
+from orchestrator.modes import KNOWLEDGE_OF_MODE, game_tools
 from orchestrator.observation import describe_obs
 from orchestrator.prompting import play_prompt
 from orchestrator import run as run_module
-from orchestrator.run import _keeps_game_frozen, _previous_kept_frozen
+from orchestrator.run import _previous_kept_frozen, _shutdown_mode
+
+
+def _keeps_game_frozen(cfg, args, session, *, interrupted=False):
+    return _shutdown_mode(cfg, args, session, interrupted=interrupted) != 'release'
 
 
 def _observation():
@@ -31,7 +35,7 @@ def _cfg(mode="speedrun", sim=True, live=False, sim_assist=False, cutscene_mode=
     cfg = RunConfig(agent="t", save="test", model="opus")
     cfg.mode, cfg.knowledge_profile = mode, KNOWLEDGE_OF_MODE[mode]
     cfg.sim, cfg.live, cfg.sim_assist, cfg.cutscene_mode = sim, live, sim_assist, cutscene_mode
-    cfg.live_remind_s = remind_seconds(live)
+    cfg.live_remind_s = 10.0 if live else 30.0
     cfg.chapter, cfg.chapters = 1, None
     return cfg
 

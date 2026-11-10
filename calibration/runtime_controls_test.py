@@ -117,7 +117,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.controls()
         await self.until(lambda: self.action(ident)['status'] == 'waiting')
         self.assertFalse(self.cfg.allow_chapter_reset)
-        self.assertIs(self.runner.control.chapter_reset_preference(), False)
+        self.assertIs(all(self.runner.control.action_permissions_preference().values()), False)
         await self.until(lambda: self.runner.control.snapshot().get('chapter_reset_control'))
         self.assertIs(self.runner.control.snapshot()['allow_chapter_reset'], False)
         self.runner.turn_active = False
@@ -134,7 +134,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.cfg.allow_chapter_reset)
             self.assertEqual(self.action(ident)['status'], 'queued')
         await self.until(lambda: self.cfg.allow_chapter_reset)
-        self.assertIs(self.runner.control.chapter_reset_preference(), True)
+        self.assertIs(all(self.runner.control.action_permissions_preference().values()), True)
 
     async def test_individual_permission_updates_persist_notify_and_preserve_pause(self):
         self.runner.paused = True

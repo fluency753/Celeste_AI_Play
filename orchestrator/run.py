@@ -1157,11 +1157,6 @@ def _previous_kept_frozen(previous: dict) -> bool:
     return summary.get("game_released") is False
 
 
-def _keeps_game_frozen(cfg, args, session, *, interrupted=False) -> bool:
-    """Compatibility query; game ownership and live recording retention differ."""
-    return _shutdown_mode(cfg, args, session, interrupted=interrupted) != 'release'
-
-
 def _shutdown_mode(cfg, args, session, *, interrupted=False, model_failed=False):
     """An automatic goal ends capture while retaining the game's freeze gate.
 

@@ -1,5 +1,4 @@
 """Use only collision data belonging to this observation; never merge frames."""
-import json
 import math
 
 
@@ -49,11 +48,6 @@ def collision_summary(obs: dict) -> str:
     shapes = '形状完整' if data['geometryComplete'] else '含未知或未完整表达的形状'
     return (f"统一碰撞快照：帧 {data['frame']}，{scope}，{len(data['objects'])} 个碰撞体；{coverage}，{shapes}。"
             '实体位置和碰撞状态只对当前帧成立；停着不代表不会移动，局部未见不代表已消失。')
-
-
-def collision_json(obs: dict) -> str:
-    return json.dumps({'collision': current_collision(obs), 'collisionNote': collision_summary(obs)},
-                      ensure_ascii=False, separators=(',', ':'))
 
 
 def terrain_rects(data: dict) -> list[list[float]]:

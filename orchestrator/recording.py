@@ -23,7 +23,6 @@ from __future__ import annotations
 import csv
 import json
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -53,18 +52,6 @@ class RecordingOwnershipError(RecordingError):
 
 class RecordingHalt(RecordingError):
     """这一段录像失败、又没能另起一段：不能再推进游戏（推进的帧录不上）。"""
-
-
-def next_segment_dir(directory: Path) -> Path:
-    """同一运行目录里的下一段录像：recording → recording_2 → recording_3 …（跳过已有会话的目录）。"""
-    directory = Path(directory)
-    match = re.fullmatch(r'(.+)_(\d+)', directory.name)
-    base, number = (match.group(1), int(match.group(2))) if match else (directory.name, 1)
-    while True:
-        number += 1
-        candidate = directory.with_name(f'{base}_{number}')
-        if not (candidate / 'session.json').exists():
-            return candidate
 
 
 def salvage_movie(directory: Path, ffmpeg: str, log: Callable[[str], None] = print) -> Path | None:

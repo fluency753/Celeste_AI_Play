@@ -84,10 +84,6 @@ class RunControl:
             row = db.execute("SELECT data FROM preferences WHERE key='fast'").fetchone()
             return json.loads(row[0]) if row else None
 
-    def chapter_reset_preference(self):
-        permissions = self.action_permissions_preference()
-        return all(permissions.values()) if permissions is not None else None
-
     def action_permissions_preference(self):
         from .action_policy import ActionPermissions
         with self._db() as db:
@@ -96,10 +92,6 @@ class RunControl:
                 return ActionPermissions.read(json.loads(current[0])).snapshot()
             row = db.execute("SELECT data FROM preferences WHERE key='allow_chapter_reset'").fetchone()
             return ActionPermissions.legacy(json.loads(row[0])).snapshot() if row else None
-
-    def set_chapter_reset(self, enabled):
-        from .action_policy import ActionPermissions
-        self.set_action_permissions(ActionPermissions.legacy(enabled).snapshot())
 
     def set_action_permissions(self, data):
         from .action_policy import ActionPermissions

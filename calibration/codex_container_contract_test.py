@@ -10,8 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from orchestrator.agent import bash_limits_ms
-from orchestrator.codex_agent import CodexRunner, program_cap
+from orchestrator.codex_agent import CodexRunner
 from orchestrator.codex_rpc import CodexRPC, process_options
 from orchestrator.config import RunConfig
 from orchestrator.execution import workspace_capabilities
@@ -61,7 +60,6 @@ class ContainerContractTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(caps.agent_location, 'container')
                     self.assertEqual(caps.program_location, 'container')
                     self.assertTrue(caps.builtin_tools)
-                    self.assertEqual(program_cap(cfg), bash_limits_ms(cfg)[1]/1000)
 
     def test_native_options_keep_shell_and_hooks_without_interactive_sessions(self):
         flags = process_options(container=True)
@@ -143,13 +141,6 @@ class ContainerContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(adapter.archived('session-id', root, state={'session_storage':'container'}))
             self.assertTrue(adapter.archived('session-id', root,
                             state={'session_storage':'container', 'archived':True}))
-
-    async def test_container_session_cannot_be_modified_by_host_legacy_sync(self):
-        from orchestrator.codex_session_environment import synchronize
-        with patch('orchestrator.codex_session_environment.thread_metadata', AsyncMock()) as metadata:
-            with self.assertRaisesRegex(ValueError, '容器会话不得用宿主'):
-                await synchronize(Path('.'), {'engine':'codex','session_storage':'container'}, Path('.'), apply=True)
-            metadata.assert_not_awaited()
 
 
 if __name__ == '__main__':

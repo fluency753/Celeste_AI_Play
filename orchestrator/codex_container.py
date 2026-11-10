@@ -179,7 +179,7 @@ def read_metadata(container: str, path: str) -> dict:
     if result.returncode:
         if 'SIMULATION_SCHEMA_MIGRATION_PENDING' in result.stderr:
             raise RuntimeError('该会话的模拟接口迁移尚未完成，拒绝开始模型轮次；'
-                               '请正常停止宿主后重试 tools/migrate_codex_simulate.py --run <原运行目录> --apply')
+                               '迁移工具已移除，请新建准备会话')
         raise RuntimeError('无法核验容器内 Codex 会话登记；确认会话属于当前工作区并已显式导入旧会话')
     try:
         metadata = json.loads(result.stdout)

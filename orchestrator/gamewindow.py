@@ -54,10 +54,6 @@ def _image_path(ctypes, wt, kernel32, pid: int) -> str:
         kernel32.CloseHandle(handle)
 
 
-def _image_name(ctypes, wt, kernel32, pid: int) -> str:
-    return os.path.basename(_image_path(ctypes, wt, kernel32, pid)).lower()
-
-
 def process_path(pid: int) -> str:
     """进程的完整可执行文件路径；取不到或不是 Windows 时返回空串。"""
     if not _IS_WINDOWS:

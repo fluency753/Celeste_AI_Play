@@ -60,10 +60,10 @@ class PolicyConfigurationTests(unittest.TestCase):
             self.assertTrue(all(control.action_permissions_preference().values()))
             control.set_action_permissions(MIXED)
             self.assertEqual(RunControl(Path(folder)).action_permissions_preference(), MIXED)
-            self.assertFalse(control.chapter_reset_preference())
+            self.assertFalse(all(control.action_permissions_preference().values()))
             with self.assertRaises(ValueError):
                 control.enqueue('action_permissions', '{"save_quit":1}')
-            control.set_chapter_reset(False)
+            control.set_action_permissions(ActionPermissions.legacy(False).snapshot())
             self.assertEqual(control.action_permissions_preference(), ActionPermissions().snapshot())
 
     def test_runtime_snapshot_successor_and_chat_keep_latest_policy(self):

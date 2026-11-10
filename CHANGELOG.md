@@ -4,6 +4,9 @@
 
 ## 2026-11-11
 
+- **项目 1.24.2：删除不再使用的代码与旧 Codex 会话维护工具**：删掉正式代码从不调用的函数（`collision_json`、`canon_hash`、`runs_using`、`_image_name`、`chapter_reset_preference`／`set_chapter_reset`、`remind_seconds`、`next_segment_dir`、`_keeps_game_frozen`、`program_cap`）以及没有任何调用方的程序输出保存与预览（`run_program(save_output=...)`、`tool_payload`）；原本借这些函数断言的测试改用实际接口。删除迁入容器前的宿主 Codex 会话同步工具 `tools/sync_codex_session_env.py`（`orchestrator/codex_session_environment.py`）和旧会话模拟接口迁移 `tools/migrate_codex_simulate.py`（`orchestrator/codex_simulation_migration.py`）：11-03 以前建立、开着模拟辅助且 `celeste_simulate` 缺少 `request_id` 的 Codex 会话恢复时明确拒绝，请新建准备会话或关闭模拟辅助后再恢复。项目／启动器同步1.24.2，Bridge／Runtime不变。
+  验证：受影响的 11 个测试模块 226 项整组通过；全量回归通过。
+
 - **项目 1.24.1：修复 Token 推进的两处暂停结算问题**：①续跑前重启过游戏（或暂停上下文与当前游戏不符）时，暂停期间的欠帧不再卡住整局——主控不补发旧按键，把这部分欠帧记为放弃（`token_drift.json` 的 `dropped_frames`，`token_advances.jsonl` 记 `discarded`／`origin: deferred`），清除暂停上下文，HUD 与下一次 act／observe 结果各说明一次，之后的 Token 推进照常；以前 observe 只提示“来源未确认”、act 报通用错误，运行无法继续。同一游戏冻结交接的续跑仍按暂停前按键补推进。②开启 Token 推进不再给自动剧情模式的每个 act 额外加“失控即停”，只在暂停上下文存在时才加；agent 剧情模式本来就有这一条，不变。关闭 Token 推进时行为不变；项目／启动器同步1.24.1，Bridge／Runtime不变。
   验证：`calibration.token_menu_test` 新增4项（重启后续跑可继续且提示一次、帧号不符不补旧键、同一冻结游戏仍按原键补推进、自动剧情模式不加失控截断），旧代码上均失败；Token 相关41项整组通过；全量回归通过。
 

@@ -541,34 +541,6 @@ M5 验收（2026-10-23，桥接 0.7.0，当时的网页 HUD）：`python calibra
 
 桥接 1.0.10 修正冻结中重新启动独立录音的暂停继承：子总线不再把父总线的暂停记成自身暂停；显式暂停指令在录音停止期间仍被保留。无需修改 OBS 音轨或系统音频设备。
 
-### 同步旧 Codex 会话环境
-
-更新仓库后，可一次检查或同步本仓库已登记的旧 Codex 会话：
-
-```powershell
-python tools/sync_codex_session_env.py --all                  # 只检查差异
-python tools/sync_codex_session_env.py --all --apply          # 备份后批量同步
-python tools/sync_codex_session_env.py --run runs/<标签>/<时间戳> --apply
-```
-
-此脚本仅用于迁移前的宿主 Codex 会话；容器会话明确拒绝宿主离线同步，参见 [Codex 容器执行](CODEX_CONTAINER.md)。
-
-脚本仅处理 Codex，按会话身份去重，使用该会话最近一次保存的设置生成当前工具定义；不改存档选择、模型、推理强度、模式、推演开关和额度。Codex 的旧工具登记由停用宿主后的离线迁移补齐，保留同一会话 ID 和原对话历史，再通过 app-server 恢复校验，不发起模型轮次。容器按当前镜像及原有运行设置校验，必要时重建，保留工作区和会话数据卷。
-
-正在试玩或聊天的工作区、已归档会话会跳过；不自动中断、切换或唤醒它们。报告及原始记录备份存于 `local/session-env-sync-*/`。提示词和知识库在下次启动时从仓库加载，脚本不伪造准备完成或知识库已读记录，也不连接游戏、启动录制或修改 OBS／CeleMod 配置。
-
-原生离线检查：`dotnet run --project calibration/audio_mixer "-p:CelestePrefix=<游戏目录>" -- "<游戏目录>"`。除 BGM 连续性外，还会静音 BGM 检查冲刺、对话的真实双轨 PCM、参数切换、暂停恢复、循环整体清理和数千次实例回收。设置 `ASYNC_SOURCE=1` 与 `LIFECYCLE_ONLY=1` 可只测与游戏相同的异步音频源；测试源使用无声输出，不连接运行中的游戏或 OBS。
-
-**校准测试**（游戏停在 test 存档的关卡里、Madeline 站在平地上，OBS 已启动；这个测试专门测量 OBS 的音频管线，固定用 `obs_mix`）：
-
-```powershell
-.\.venv\Scripts\python.exe calibration\m6_recording_test.py --rounds 40 --think 0.7
-```
-
-不调用模型，模拟 40 轮"停 0.7 秒 → 推进约 1 秒"并录制，检查：成片帧数 = 推进的帧数、游戏帧号连续；每一帧画面里的帧号条码与记录一致（证明 OBS 采到的正是那一帧）；WAV 长度 = 帧数 × 800；每段都量到声音延迟、对齐误差不超过一帧；gameplay.mp4 含画面与声音。
-
-M6 验收（2026-10-23，桥接 0.8.5，OBS 32.2.2，RTX 5080 + NVENC，`obs_mix`）：校准测试全部通过——2219 帧画面与条码逐帧一致，40 段全部量到声音延迟，对齐误差中位数 0 毫秒、最大 12.7 毫秒。实测 Opus 5.5 游玩 4 分 31 秒（15 次决策、死亡 4 次），成片 1633 帧（27.2 秒），帧号连续、无缺帧无重复，19 段中 15 段量到声音延迟（130～152 毫秒），HUD 一同录入。录 2219 帧期间游戏进程内存只增长约 30 MB。
-
 ### 4.5 预置模拟器（不限额直接调用 /sim，限额经主控预测）
 
 速通模式的 `--sim` 按是否限额分两种提供方式（`orchestrator/sim_mode.py`）：**不限额**时把本机 `sim\dist` 只读挂到容器的 `/sim`，由智能体在工作区程序里直接调用，推演多少都由它决定，适合大规模搜索最优路线（4.5.1，目前只有 Claude 执行器提供）；**限额**（同时开 `--limit-planning`）时模拟器只由主控私有持有，智能体经 `simulate` 工具在硬预算内请求（4.5.2，两个执行器相同，Codex 只有这一种）。限额不用 `/sim` 是因为挂着 `/sim` 就没法计量——任何 Shell 命令都能调用它，只能封锁 Shell，那样暂停和聊天期间也没法操作工作区；走主控入口则工作区文件与程序始终可用。知识库里与模拟器用法有关的段落（`kb/speedrun/search_methods.md`、`kb/shared/tools/observe/files.md`）用 `<!-- sim:direct -->` / `<!-- sim:controller -->` 标出，生成知识库视图时只留当前方式的那一段（Codex 总是后者）。

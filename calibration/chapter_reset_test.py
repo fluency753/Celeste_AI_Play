@@ -144,15 +144,16 @@ class ChapterResetTests(unittest.TestCase):
         self.assertFalse(options['allow_chapter_reset'])
 
     def test_policy_survives_reopen_and_rejects_bad_values(self):
+        from orchestrator.action_policy import ActionPermissions
         control = RunControl(self.root)
-        self.assertIsNone(control.chapter_reset_preference())
+        self.assertIsNone(control.action_permissions_preference())
         for enabled in (False, False, True, False):
-            control.set_chapter_reset(enabled)
-            self.assertIs(RunControl(self.root).chapter_reset_preference(), enabled)
+            control.set_action_permissions(ActionPermissions.legacy(enabled).snapshot())
+            self.assertIs(all(RunControl(self.root).action_permissions_preference().values()), enabled)
         with self.assertRaises(ValueError):
             control.enqueue('chapter_reset', 'maybe')
         with self.assertRaises(ValueError):
-            control.set_chapter_reset('false')
+            ActionPermissions.legacy('false')
 
     def test_user_requested_startup_navigation_can_leave_old_level_before_agent_policy(self):
         from orchestrator.run import enter_save

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from orchestrator.game_session import GameSession
-from orchestrator.run import _keeps_game_frozen, _run_session
+from orchestrator.run import _run_session, _shutdown_mode
 
 
 class ReleaseTests(unittest.IsolatedAsyncioTestCase):
@@ -24,7 +24,7 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
             session._decisions_log = Mock()
 
             async def finish(*_):
-                cfg._keep_frozen = _keeps_game_frozen(cfg, args, session, interrupted=True)
+                cfg._keep_frozen = _shutdown_mode(cfg, args, session, interrupted=True) != 'release'
                 return {'completed': False, 'stop_reason': '用户中断'}
 
             with patch('orchestrator.run.GameSession', return_value=session), \
