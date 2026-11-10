@@ -545,6 +545,8 @@ M5 验收（2026-10-23，桥接 0.7.0，当时的网页 HUD）：`python calibra
 
 速通模式的 `--sim` 按是否限额分两种提供方式（`orchestrator/sim_mode.py`）：**不限额**时把本机 `sim\dist` 只读挂到容器的 `/sim`，由智能体在工作区程序里直接调用，推演多少都由它决定，适合大规模搜索最优路线（4.5.1，目前只有 Claude 执行器提供）；**限额**（同时开 `--limit-planning`）时模拟器只由主控私有持有，智能体经 `simulate` 工具在硬预算内请求（4.5.2，两个执行器相同，Codex 只有这一种）。限额不用 `/sim` 是因为挂着 `/sim` 就没法计量——任何 Shell 命令都能调用它，只能封锁 Shell，那样暂停和聊天期间也没法操作工作区；走主控入口则工作区文件与程序始终可用。知识库里与模拟器用法有关的段落（`kb/speedrun/search_methods.md`、`kb/shared/tools/observe/files.md`）用 `<!-- sim:direct -->` / `<!-- sim:controller -->` 标出，生成知识库视图时只留当前方式的那一段（Codex 总是后者）。
 
+主控代为预测时，每批在一次性的断网容器里运行（标签 `celeste.sim-assist=1`、`celeste.run=<运行目录名>`），结束后删除。删除失败时记在运行目录的 `sim_private/leftover_containers.json`（容器名、所属运行、失败原因与尝试次数），下次预测前只重试删除，不会重跑预测或重复扣费；仍有残留时可手动 `docker rm -f <容器名>`，或用 `docker ps -a --filter label=celeste.sim-assist=1` 查看。
+
 #### 4.5.1 不限额：`/sim` 直接调用（Claude 执行器；容器方式下本机有模拟器时默认开启，`--no-sim` 关闭）
 
 

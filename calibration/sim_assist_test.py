@@ -113,6 +113,76 @@ class SimEnergyTests(unittest.TestCase):
         self.assertEqual(moving_frames(rows, [0, 0]), 2)
         self.assertEqual(moving_frames([], [0, 0]), 0)
 
+    def fake_docker(self, rm_replies):
+        """docker run answers like a worker; docker rm follows the scripted replies."""
+        replies = '\n'.join(json.dumps(r) for r in [
+            {"ok": True, "info": {"frame": 1}}, {"ok": True, "results": [{"ok": True, "frames": []}]}])
+        calls = []
+        def response(argv, **kwargs):
+            calls.append(argv)
+            if argv[1] == 'run':
+                kwargs['stdout'].write(replies.encode('utf-8'))
+                return SimpleNamespace(returncode=0)
+            reply = rm_replies.pop(0) if rm_replies else SimpleNamespace(returncode=0, stderr='')
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        return calls, response
+
+    def test_failed_container_cleanup_is_recorded_and_only_removal_is_retried(self):
+        import subprocess
+        cfg = RunConfig(agent="test", save="test", model="test")
+        private = self.root / 'sim_private'
+        private.mkdir()
+        busy = SimpleNamespace(returncode=1, stderr='Error response from daemon: removal already in progress')
+        calls, response = self.fake_docker([busy, subprocess.TimeoutExpired('docker', 10)])
+        with patch("orchestrator.sim_assist.find_docker_exe", return_value="docker"), \
+             patch("orchestrator.sim_assist.subprocess.run", side_effect=response):
+            first = run_predictions(cfg, private, [["60,R"]])        # result kept despite cleanup failure
+            self.assertEqual(first["results"][0]["ok"], True)
+            ledger = json.loads((private / 'leftover_containers.json').read_text(encoding='utf-8'))
+            leftover = ledger[0]['name']
+            self.assertEqual((ledger[0]['run'], ledger[0]['attempts']), (str(self.root.resolve()), 1))
+            run = next(argv for argv in calls if argv[1] == 'run')
+            self.assertIn(f"celeste.run={self.root.resolve().name}", run)
+            calls.clear()
+            run_predictions(cfg, private, [["60,R"]])                 # retry removal first: timeout again
+            self.assertEqual([argv[1:3] for argv in calls][:2], [['rm', '-f'], ['run', '--rm']])
+            self.assertEqual(calls[0][-1], leftover)
+            self.assertEqual(sum(argv[1] == 'run' for argv in calls), 1)   # never re-runs the old prediction
+            self.assertEqual(json.loads((private / 'leftover_containers.json').read_text(encoding='utf-8'))[0]['attempts'], 2)
+            calls.clear()
+            run_predictions(cfg, private, [["60,R"]])                 # removal now succeeds
+            self.assertFalse((private / 'leftover_containers.json').exists())
+
+    def test_missing_container_counts_as_removed_and_foreign_names_are_never_removed(self):
+        cfg = RunConfig(agent="test", save="test", model="test")
+        private = self.root / 'sim_private'
+        private.mkdir()
+        (private / 'leftover_containers.json').write_text(json.dumps(
+            [{'name': 'user-database'}, {'name': 'celeste-sim-assist-' + 'a' * 32, 'attempts': 1}]), encoding='utf-8')
+        gone = SimpleNamespace(returncode=1, stderr='Error: No such container: celeste-sim-assist-' + 'a' * 32)
+        calls, response = self.fake_docker([gone])
+        with patch("orchestrator.sim_assist.find_docker_exe", return_value="docker"), \
+             patch("orchestrator.sim_assist.subprocess.run", side_effect=response):
+            run_predictions(cfg, private, [["60,R"]])
+        self.assertNotIn('user-database', [argv[-1] for argv in calls])
+        self.assertFalse((private / 'leftover_containers.json').exists())
+
+    def test_worker_failure_still_records_a_stuck_container_and_raises(self):
+        cfg = RunConfig(agent="test", save="test", model="test")
+        private = self.root / 'sim_private'
+        private.mkdir()
+        def response(argv, **kwargs):
+            if argv[1] == 'run':
+                return SimpleNamespace(returncode=125)
+            return SimpleNamespace(returncode=1, stderr='daemon not responding')
+        with patch("orchestrator.sim_assist.find_docker_exe", return_value="docker"), \
+             patch("orchestrator.sim_assist.subprocess.run", side_effect=response):
+            with self.assertRaisesRegex(RuntimeError, '模拟辅助服务失败'):
+                run_predictions(cfg, private, [["60,R"]])
+        self.assertEqual(len(json.loads((private / 'leftover_containers.json').read_text(encoding='utf-8'))), 1)
+
     def test_worker_only_gets_private_state_and_has_no_network(self):
         replies = '\n'.join(json.dumps(r) for r in [
             {"ok": True, "info": {"frame": 1}}, {"ok": True, "results": [{"ok": True, "frames": []}]}])

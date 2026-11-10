@@ -191,10 +191,64 @@ class SimEnergy:
                 raise
 
 
+LEFTOVERS = 'leftover_containers.json'
+CONTAINER_NAME = re.compile(r'celeste-sim-assist-[0-9a-f]{32}')
+
+
+def _remove_container(docker, name):
+    """(gone, error): gone also when the container no longer exists."""
+    try:
+        reply = subprocess.run([docker, "rm", "-f", name], capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=10)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return False, f"{type(exc).__name__}: {exc}"[-300:]
+    if reply.returncode == 0 or 'no such container' in (reply.stderr or '').lower():
+        return True, ''
+    return False, ((reply.stderr or '').strip() or f'退出码 {reply.returncode}')[-300:]
+
+
+def _read_leftovers(path):
+    try:
+        rows = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return []
+    return [row for row in rows if isinstance(row, dict) and CONTAINER_NAME.fullmatch(str(row.get('name')))] \
+        if isinstance(rows, list) else []
+
+
+def _write_leftovers(path, rows):
+    try:
+        if rows:
+            path.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
+        elif path.exists():
+            path.unlink()
+    except OSError as exc:
+        print(f'[sim] 残留容器记录写入失败：{exc}', flush=True)
+
+
+def retry_leftovers(directory: Path, docker=None):
+    """Retry removing workers an earlier cleanup could not remove. Only removal is retried, never a prediction."""
+    path = Path(directory) / LEFTOVERS
+    rows = _read_leftovers(path)
+    if not rows:
+        return []
+    docker = docker or find_docker_exe()
+    remaining = []
+    for row in rows:
+        gone, error = _remove_container(docker, row['name'])
+        if not gone:
+            remaining.append({**row, 'attempts': int(row.get('attempts') or 1) + 1, 'error': error, 'wall': time.time()})
+    _write_leftovers(path, remaining)
+    return remaining
+
+
 def run_predictions(cfg, directory: Path, candidates):
     """A private, networkless worker; never expose /sim or full scene state to agent Bash."""
     docker, name = find_docker_exe(), "celeste-sim-assist-" + uuid.uuid4().hex
+    retry_leftovers(directory, docker)
+    owner = Path(directory).resolve().parent
     command = [docker, "run", "--rm", "-i", "--name", name, "--network", "none", "--read-only",
+               "--label", "celeste.sim-assist=1", "--label", f"celeste.run={owner.name}",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "32",
                "--memory", "512m", "--cpus", "2", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
                "-e", "DOTNET_EnableDiagnostics=0", "-v", f"{cfg.sim_dir}:/sim:ro",
@@ -222,11 +276,14 @@ def run_predictions(cfg, directory: Path, candidates):
         return {"info": replies[0]["info"], "results": results}
     finally:
         # Killing a timed-out Docker client does not reliably stop its container.
-        # 收尾失败不能把已经拿到的结果变成异常（主控限额预测会按“已提交未获结果”扣费）
-        try:
-            subprocess.run([docker, "rm", "-f", name], capture_output=True, timeout=10)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        # 收尾失败不能把已经拿到的结果变成异常（主控限额预测会按“已提交未获结果”扣费）：
+        # 记下残留容器及其所属运行，下次预测前只重试删除。
+        gone, cleanup_error = _remove_container(docker, name)
+        if not gone:
+            print(f'[sim] 模拟容器 {name} 删除失败，已记录待重试：{cleanup_error}', flush=True)
+            path = Path(directory) / LEFTOVERS
+            _write_leftovers(path, [*_read_leftovers(path), {'name': name, 'run': str(owner), 'wall': time.time(),
+                                                            'attempts': 1, 'error': cleanup_error}])
 
 
 def write_replay(workspace, predictions, start_frame):
