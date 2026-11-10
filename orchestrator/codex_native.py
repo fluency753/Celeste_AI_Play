@@ -41,14 +41,7 @@ async def native_tool_hook(runner, data):
         if previous and (previous['name'] != name or previous['turn'] != data.get('turn_id')):
             return _denied('工具回执与原请求不匹配；请核对状态。')
         if event == 'PostToolUse':
-            if previous and previous['running']:
-                previous['running'] = False
-                runner.metrics.tool_end(ident)
-                if runner.playback and previous.get('canonical', name) == 'Bash':
-                    runner.playback.note_tool_result(ident)
-                notes = getattr(getattr(runner, 'native_session', runner.session), 'note_reminders', None)
-                if notes is not None:
-                    notes.observe_file()
+            finish_native_call(runner, ident)
             return {'decision': 'allow', 'reason': '', 'context': ''}
         turn = data.get('turn_id')
         def turn_guard():
@@ -110,6 +103,37 @@ async def native_tool_hook(runner, data):
                     if len(calls) <= 512:
                         break
         return decision
+
+
+def finish_native_call(runner, ident, *, observe_file=True):
+    """Close one running native call (Post receipt or its completion event); idempotent."""
+    call = runner.__dict__.get('_native_tool_calls', {}).get(ident)
+    if not call or not call['running']:
+        return False
+    call['running'] = False
+    runner.metrics.tool_end(ident)
+    if runner.playback and call.get('canonical', call['name']) == 'Bash':
+        runner.playback.note_tool_result(ident)
+    notes = getattr(getattr(runner, 'native_session', runner.session), 'note_reminders', None)
+    if observe_file and notes is not None:
+        notes.observe_file()
+    return True
+
+
+NATIVE_ITEMS = {'commandExecution': 'Bash', 'fileChange': 'apply_patch', 'imageView': 'view_image'}
+
+
+def complete_native_item(runner, item):
+    """item/completed is the reliable end of a native tool; it covers a lost or late Post receipt.
+
+    Without it, planning playback keeps waiting for the program's result until
+    the turn ends, and an action waiting behind it would be released then.
+    """
+    ident = item.get('id')
+    call = runner.__dict__.get('_native_tool_calls', {}).get(ident) if isinstance(ident, str) else None
+    if not call or call['name'] != NATIVE_ITEMS.get(item.get('type')):
+        return False
+    return finish_native_call(runner, ident)
 
 
 def finish_native_tools(runner):

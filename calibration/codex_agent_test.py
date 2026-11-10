@@ -1289,6 +1289,69 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.mode, self.cfg.knowledge_profile = "speedrun", "full"
         self.assertEqual(await call(), 600)
 
+    async def test_game_request_voided_while_waiting_sends_no_input(self):
+        """A request waiting (e.g. on planning playback) must not reach the game after it became void."""
+        from orchestrator.game_session import REQUEST_TICKET
+        self.runner.study = None
+        sent = []
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def call_tool(name, args):
+            entered.set()
+            await release.wait()                     # the host is still waiting before the first input
+            def step():                              # GameSession's step choke point
+                REQUEST_TICKET.get().before_input()
+                sent.append(name)
+                REQUEST_TICKET.get().before_input()  # later inputs of a started request are not blocked
+            await asyncio.to_thread(step)
+            return CallToolResult.model_validate({'content': [{'type': 'text', 'text': 'executed'}]})
+        self.server.call_tool = call_tool
+        voiders = {
+            'turn_ended': lambda: self.runner._event('turn/completed', {'threadId': 'session',
+                                                                         'turn': {'id': 'turn', 'status': 'interrupted'}}),
+            'resampled_after_disconnect': lambda: self.runner._event('error', {'threadId': 'session', 'turnId': 'turn',
+                'willRetry': True, 'error': {'message': 'stream disconnected before completion'}}),
+            'next_turn': lambda: setattr(self.runner, 'turn_id', 'turn-2'),
+            'still_valid': lambda: None,
+        }
+        for label, void in voiders.items():
+            with self.subTest(label=label):
+                self.runner.turn_id, self.runner.turn_active = 'turn', True
+                self.runner.turn_done.clear()
+                sent.clear(); entered.clear(); release.clear()
+                task = asyncio.create_task(self.runner._request('item/tool/call', {
+                    'callId': 'act-' + label, 'tool': 'celeste_act', 'arguments': {'inputs': ['10,R'], 'thought': 't'}}))
+                await asyncio.wait_for(entered.wait(), 1)
+                void()
+                release.set()
+                result = await asyncio.wait_for(task, 2)
+                if label == 'still_valid':
+                    self.assertTrue(result['success'], response_text(result))
+                    self.assertEqual(sent, ['act'])
+                else:
+                    self.assertFalse(result['success'])
+                    self.assertEqual(sent, [])
+                    self.assertIn('未执行', response_text(result))
+
+    async def test_lost_post_receipt_is_reconciled_by_completion_event_mid_turn(self):
+        self.runner.playback = Mock()
+        data = self.native_request('search-program')
+        self.assertEqual((await native_tool_hook(self.runner, data))['decision'], 'allow')
+        self.assertTrue(self.metrics.tools_running)
+        # The Post hook never reaches the host; the item completion arrives in the same turn.
+        self.runner._event('item/completed', {'threadId': 'session', 'turnId': 'turn',
+                           'item': {'type': 'commandExecution', 'id': 'search-program', 'status': 'completed'}})
+        self.assertFalse(self.metrics.tools_running)
+        self.runner.playback.note_tool_result.assert_called_once_with('search-program')
+        self.assertFalse(self.runner.turn_done.is_set())     # released mid-turn, not at turn wrap-up
+        late = await native_tool_hook(self.runner, {**data, 'hook_event_name': 'PostToolUse'})
+        self.assertEqual(late['decision'], 'allow')
+        self.runner.playback.note_tool_result.assert_called_once()
+        # A different item kind with the same id is not mistaken for this call.
+        self.assertEqual((await native_tool_hook(self.runner, self.native_request('other')))['decision'], 'allow')
+        self.runner._event('item/completed', {'threadId': 'session', 'turnId': 'turn',
+                           'item': {'type': 'fileChange', 'id': 'other', 'status': 'completed'}})
+        self.assertTrue(self.metrics.tools_running)
+
     async def test_native_program_output_keeps_its_app_server_result_without_legacy_repackaging(self):
         import io
         self.cfg.live=False
@@ -1303,7 +1366,11 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         await native_tool_hook(self.runner, {**data, 'hook_event_name':'PostToolUse'})
         self.assertEqual(event, before)
         self.assertIsNone(self.runner.fatal)
-        saved = json.loads(self.runner._events.getvalue())['params']['item']
+        lines = self.runner._events.getvalue().splitlines()
+        saved = json.loads(lines[0])['params']['item']
+        # The completion event closed the call before the (late) Post receipt arrived.
+        self.assertEqual(json.loads(lines[1])['params']['fact']['phase'], 'completed_by_event')
+        self.assertEqual(len(lines), 2)
         self.assertEqual(saved['aggregatedOutput'], raw)
         self.assertNotIn('stdout_truncated', saved)
         self.assertFalse(self.metrics.tools_running)

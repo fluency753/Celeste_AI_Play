@@ -1,6 +1,7 @@
 """游戏会话：通过桥接推进游戏，处理非可控段，记录逐帧日志与决策日志。所有方法都是同步的，由服务端放到线程里调用。"""
 from __future__ import annotations
 
+import contextvars
 import json
 import hashlib
 import sys
@@ -266,6 +267,29 @@ def parse_plan(data, text: str = "", max_retries: int = MAX_RETRIES,
 
 class ActError(ValueError):
     """动作不合法：退回给智能体重写，不消耗游戏帧。"""
+
+
+class RequestTicket:
+    """One model tool request. Its game input may start only while the request is still valid.
+
+    An executor sets it around a tool call; every wait (locks, planning playback,
+    thought lead) happens before the first input, so validity is checked there.
+    Once input has started, the rest of the same request keeps its executed range.
+    """
+    def __init__(self, check):
+        self.check, self.started = check, False
+
+    def refused(self):
+        return None if self.started else self.check()
+
+    def before_input(self):
+        if not self.started:
+            if reason := self.check():
+                raise ActError(reason)
+            self.started = True
+
+
+REQUEST_TICKET = contextvars.ContextVar('celeste_request_ticket', default=None)
 
 
 class EndingNeedsAgent(RuntimeError):
@@ -794,6 +818,8 @@ class GameSession:
                 and (bool(obs.get('controllable')) or seeker_control(obs)))
 
     def _token_step_filter(self, args):
+        if not getattr(self, '_token_advancing', False) and (ticket := REQUEST_TICKET.get()) is not None:
+            ticket.before_input()   # Raises before anything is sent if the model request has ended.
         menu = self.token_menu
         self._token_original_planned = None
         if menu is not None:
@@ -1497,6 +1523,8 @@ class GameSession:
         if attempt == 0 and self.playback is not None:
             # 规划回放（游戏不推进）：先等排队的轮次放完（不持有连接锁，回放线程要用），再把镜头送回 Madeline
             self.playback.drain()
+            if (ticket := REQUEST_TICKET.get()) is not None and (reason := ticket.refused()):
+                raise ActError(reason)   # The request ended while planning playback was draining.
             self._before_advance()
             with self.lock:
                 self.playback.final()

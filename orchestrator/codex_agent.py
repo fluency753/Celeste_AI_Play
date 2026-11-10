@@ -106,6 +106,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         self._last_public = 0.0
         self._network_usage = None
         self._network_usage_turn = None
+        self._sampling_epoch = 0   # Bumped when Codex re-samples a turn; requests from the abandoned attempt are void.
         self._init_controls(disabled=prepare_only, start_paused=start_paused)
         self.native_session.note_reminders = self.note_reminders
         self.native_session.native_tool_hook = self._native_hook
@@ -206,6 +207,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         if self._network_usage_turn != turn:
             self._network_usage_turn, self._network_usage = turn, None
         if method == 'error' and params.get('willRetry') is True:
+            # A retried model request drops tool calls of the failed attempt; the model issues them again.
+            self._sampling_epoch += 1
             error = params.get('error') or {}
             if is_model_unavailable(error):
                 reason = error.get('message', '') if isinstance(error, dict) else str(error)
@@ -269,6 +272,10 @@ class CodexRunner(ModelRecovery, SessionControls):
                     self.metrics.set_thought(latest)
                 self._last_public = time.monotonic()
         elif method in ("item/started", "item/completed"):
+            if method == "item/completed":
+                from .codex_native import complete_native_item
+                if complete_native_item(self, item):
+                    self._tool_fact('completed_by_event', item.get('id'), item.get('type'), turn=params.get('turnId'))
             if item.get("type") == "userMessage":
                 self._input_recorded(item, params.get('threadId'), params.get('turnId'))
             if method == "item/completed" and item.get("type") == "agentMessage" and self.control:
@@ -488,7 +495,14 @@ class CodexRunner(ModelRecovery, SessionControls):
         requested = params.get('tool', '')
         name = LEGACY_FILE_TOOLS.get(requested, requested)
         args = params.get('arguments') or {}
-        origin_turn = self.turn_id
+        origin_turn, origin_epoch = self.turn_id, self._sampling_epoch
+        def request_void():
+            if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
+                    or self.turn_done.is_set() or self.stop_requested or self.pausing):
+                return '发起此请求的轮次已结束，动作未执行；等待当前轮次的新指令。'
+            if self._sampling_epoch != origin_epoch:
+                return '模型连接中断后已重新生成，这次请求作废，动作未执行；如仍需要请重新发起。'
+            return None
         if name in {'celeste_bash', 'celeste_write'}:
             return await self._notes_response({'contentItems': [{'type': 'inputText', 'text':
                 '此会话保留了旧编程工具登记，但该入口已停用，本次未执行。请用容器内原生 Shell 和 apply_patch；'
@@ -555,15 +569,14 @@ class CodexRunner(ModelRecovery, SessionControls):
                             raise ValueError('桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。')
                         if name != 'celeste_observe' and (reload_ticket[2] != getattr(self.session, 'token_motion_epoch', 0) or getattr(self.session, 'token_observation_required', False)):
                             raise ValueError('Token 推进改变了场景，旧动作未执行；请先默认 observe 后重新规划。')
-                        if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
-                                or self.turn_done.is_set() or self.stop_requested or self.pausing):
-                            raise ValueError('发起此请求的轮次已结束，动作未执行；等待当前轮次的新指令。')
+                        if reason := request_void():
+                            raise ValueError(reason)
                         dispatched = True
-                        result = await self.game_server.call_tool(name.removeprefix("celeste_"), args)
+                        result = await self._call_game(name, args, request_void)
                         return await self._game_response(result, name, ident, origin_turn)
                 else:
                     dispatched = True
-                    result = await self.game_server.call_tool(name.removeprefix("celeste_"), args)
+                    result = await self._call_game(name, args, request_void)
                     return await self._game_response(result, name, ident, origin_turn)
             else:
                 raise ValueError(f"未开放的工具：{name}")
@@ -576,6 +589,16 @@ class CodexRunner(ModelRecovery, SessionControls):
             return await self._notes_response({"contentItems": [{"type": "inputText", "text": str(exc)}], "success": False}, origin_turn)
         finally:
             self.metrics.tool_end(ident)
+
+    async def _call_game(self, name, args, request_void):
+        # The ticket follows the call into worker threads; the game session checks it
+        # after every wait and before the request's first input.
+        from .game_session import REQUEST_TICKET, RequestTicket
+        token = REQUEST_TICKET.set(RequestTicket(request_void))
+        try:
+            return await self.game_server.call_tool(name.removeprefix("celeste_"), args)
+        finally:
+            REQUEST_TICKET.reset(token)
 
     async def _file_response(self, result, tool, call_id, origin_turn):
         """read/glob/grep：正文与图像经同轮 steer 送达，工具结果只带确认摘要。
