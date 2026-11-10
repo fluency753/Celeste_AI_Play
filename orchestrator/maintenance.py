@@ -24,7 +24,7 @@ ENTRY_SCENES = LOADING_SCENES | {'LevelEnter'}
 
 
 def _wait_for_save_ready(client, obs, validate, publish, *, max_frames=600, timeout=15):
-    """只等已知加载/入场或房间转场；不发送确认，不代选剧情。
+    """只等已知加载/入场、房间转场或死亡重生；不发送确认，不代选剧情。
 
     加载器空闲时本就运行，只观测它；冻结的入场/关卡转场每次仅给一帧中性输入。
     同一预算贯穿所有场景，包含桥接报告的加载帧；RPC本身另受连接超时约束。
@@ -57,8 +57,10 @@ def _wait_for_save_ready(client, obs, validate, publish, *, max_frames=600, time
         if obs.get('storyInput') or any(row.get('waitingForInput') for row in obs.get('story', [])):
             stop(f'转场等待遇到剧情输入（{obs.get("storyInput") or "story"}）；'
                  '未确认或跳过剧情，未停止录制或退出游戏')
+        # The death animation ends in the respawn wipe; the game refuses pause until both finish.
         waiting = scene in ENTRY_SCENES or (scene == 'Level' and (
-            level.get('transitioning') is True or level.get('screenWipe') is True))
+            level.get('transitioning') is True or level.get('screenWipe') is True
+            or (obs.get('player') or {}).get('dead') is True))
         if not waiting:
             stop('当前关卡不能保存退出，且不在已知转场中；未自动推进剧情，请先完成当前操作')
         if used >= max_frames or time.monotonic() >= deadline:

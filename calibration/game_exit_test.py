@@ -117,6 +117,23 @@ class GameExitTests(unittest.TestCase):
         self.assertIsNone(result['scene'])
         self.assertEqual(sum(args.get('inputs') == ['1'] for _, args in game.calls), 3)
 
+    def test_run_frozen_on_death_waits_for_respawn_then_saves_and_exits(self):
+        # A run stopped on death leaves the game frozen on the death frame (seen in the real game).
+        game = EntryGame([
+            {'scene': 'Level', 'frame': 629, 'level': {'canPause': False, 'screenWipe': False},
+             'player': {'dead': True}},
+            {'scene': 'Level', 'frame': 630, 'level': {'canPause': False, 'screenWipe': False},
+             'player': {'dead': True}},
+            {'scene': 'Level', 'frame': 631, 'level': {'canPause': False, 'screenWipe': True},
+             'player': {'dead': False, 'state': 'IntroRespawn'}}])
+        progress = []
+        with patch('orchestrator.maintenance.GameProcess', return_value=Process(game)):
+            result = save_and_exit(game, save_slot=10, run_dir=None, progress=progress.append)
+        self.assertEqual(result['phase'], 'finished')
+        self.assertTrue(game.saved and game.exited)
+        self.assertEqual(next(row['transition_frames'] for row in progress if row['phase'] == 'transition_ready'), 3)
+        self.assertEqual(sum(args.get('inputs') == ['1'] for _, args in game.calls), 3)
+
     def test_wait_refuses_story_input_and_slot_change_before_any_save_or_record(self):
         for state in ({'scene': 'LevelEnter', 'storyInput': 'postcard'},
                       {'scene': 'LevelEnter', 'story': [{'kind': 'postcard', 'waitingForInput': True}]},

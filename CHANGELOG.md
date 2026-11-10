@@ -4,6 +4,9 @@
 
 ## 2026-11-11
 
+- **项目 1.24.10：维护退出会等死亡动画结束**：试玩停在 Madeline 死亡那一帧（死亡即停）时，`python -m orchestrator.maintenance` 以前直接报“当前关卡不能保存退出，且不在已知转场中”，要手动推进到重生后才能保存退出；现在把死亡动画与随后的重生擦除一起当作已知转场，在原有 600 帧／15 秒预算内逐帧中性推进，等到能打开暂停菜单再保存退出。仍不代按任何确认，剧情输入、未知的不可暂停状态和超时照旧停下。项目／启动器同步1.24.10，Bridge／Runtime不变。
+  验证：AI 副本实机冒烟（测试存档槽位 7，1A）时复现：死亡帧上维护退出被拒，推进到重生后同一命令保存退出并经主菜单正常关闭游戏（退出码 0）；新增 `calibration.game_exit_test` 1 项（死亡帧→重生擦除→保存退出），旧代码上以同样的报错失败；全量回归通过。
+
 - **测试不再写进仓库里真实的工作区与知识库视图**：新增 `calibration/isolation.py` 的模块级夹具，把 `RunConfig.workspace_dir` 与 `kb_dir` 指向临时目录；`chat_frozen_test`、`codex_agent_test`、`goal_report_plan_test`、`pico8_guard_test`、`recording_roll_test`、`recording_session_test`、`request_ticket_test` 使用它，以前会在 `workspaces/<标签>/game` 与 `local/kb_views/` 下留下目录，本机有同名工作区时还会往里写辅助文件。只改测试，项目版本不变。
   验证：逐模块扫描以及全量并行、`--serial` 各跑一次后，`workspaces/`、`local/`（测试结果除外）与 `configs/` 均无新增或改动；全量回归通过。
 
