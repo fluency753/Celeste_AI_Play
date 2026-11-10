@@ -66,6 +66,122 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(final[0]["wall"], 123)
         self.assertNotIn("PRIVATE", json.dumps(final))
 
+    def test_retry_public_events_and_decision_fallback_stay_hidden_across_polls(self):
+        from orchestrator.telemetry import publish
+        publish(self.root, 'act:1:0', '同一条说明', kind='尝试')
+        publish(self.root, 'act:1:1', '同一条说明（自动重试 1）', kind='尝试')
+        self.assertEqual([r['id'] for r in self.reader.snapshot({})], ['act:1:0'])
+        (self.root/'decisions.jsonl').write_text('\n'.join(json.dumps({'i': 1, 'attempt': n,
+            'thought': '同一条说明' + (f'（自动重试 {n}）' if n else '')}) for n in range(3))+'\n', encoding='utf-8')
+        publish(self.root, 'act:2:0', '新说明', kind='尝试')
+        for _ in range(2):
+            self.assertEqual([r['id'] for r in self.reader.snapshot({})], ['act:1:0', 'act:2:0'])
+
+    def test_retry_filter_precedes_retention_and_preserves_roles_and_real_public_text(self):
+        from orchestrator.telemetry import publish
+        publish(self.root, 'act:1:0', '原始说明')
+        for n in range(1, 101):
+            publish(self.root, f'act:1:{n}', f'原始说明（自动重试 {n}）')
+        publish(self.root, 'public:normal', '原始说明（自动重试 1）')
+        publish(self.root, 'act:7:1', '用户输入', role='user')
+        publish(self.root, 'act:8:1', '系统通知', role='system')
+        self.assertEqual([r['id'] for r in self.reader.snapshot({}, 80)],
+                         ['act:1:0', 'public:normal', 'act:7:1', 'act:8:1'])
+
+    def test_old_decision_only_records_with_unknown_attempt_are_not_guessed(self):
+        values = [{'i': 1, 'thought': '旧首轮'}, {'i': 1, 'attempt': 1, 'thought': '旧重试'},
+                  {'i': 2, 'attempt': -1, 'thought': '负数未知'},
+                  {'i': 3, 'attempt': 'unknown', 'thought': '格式未知'}]
+        (self.root/'decisions.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in values), encoding='utf-8')
+        self.assertEqual({r['id'] for r in self.reader.snapshot({})}, {'act:1:0', 'act:2:-1', 'act:3:unknown'})
+
+    def test_real_http_history_and_web_page_keep_only_first_retry_bubble(self):
+        import threading
+        from urllib.request import urlopen
+        from overlay.server import HudServer, make_handler
+        from orchestrator.telemetry import publish
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest('Playwright is needed to check the HUD consumer')
+        publish(self.root, 'act:1:0', '首条说明', kind='尝试')
+        publish(self.root, 'act:1:1', '首条说明（自动重试 1）', kind='尝试')
+        server = HudServer(('127.0.0.1', 0), make_handler(self.root))
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        url = f'http://127.0.0.1:{server.server_address[1]}'
+        try:
+            with urlopen(url+'/hud/history', timeout=5) as response:
+                self.assertEqual([r['id'] for r in json.load(response)['items']], ['act:1:0'])
+            with sync_playwright() as playwright:
+                try:
+                    browser = playwright.chromium.launch()
+                except Exception as exc:
+                    self.skipTest(f'Chromium unavailable: {exc}')
+                try:
+                    page = browser.new_page(viewport={'width': 600, 'height': 1100})
+                    pending = set()
+                    page.on('request', lambda request: pending.add(request))
+                    page.on('requestfinished', lambda request: pending.discard(request))
+                    page.on('requestfailed', lambda request: pending.discard(request))
+                    page.route('**/api/models*', lambda route: route.fulfill(json={'models': []}))
+                    page.route('**/api/control', lambda route: route.fulfill(json={'run': str(self.root), 'control': {'connected': False}}))
+                    page.route('**/hud/state', lambda route: route.fulfill(json={'config': {}, 'metrics': {'status': 'paused'}}))
+                    page.goto(url+'/hud')
+                    page.locator('#thought .thought-entry').first.wait_for()
+                    self.assertEqual(page.locator('#thought .thought-entry').count(), 1)
+                    publish(self.root, 'act:1:2', '首条说明（自动重试 2）', kind='尝试')
+                    publish(self.root, 'act:2:0', '首条说明', kind='尝试')
+                    page.evaluate('pollHistory()')
+                    self.assertEqual(page.locator('#thought .thought-entry').count(), 1)
+                    publish(self.root, 'act:3:0', '新说明', kind='尝试')
+                    page.evaluate('pollHistory()')
+                    page.wait_for_function("document.querySelectorAll('#thought .thought-entry').length === 2")
+                    self.assertEqual(page.locator('#thought .thought-entry').evaluate_all('(nodes) => nodes.map(n => n.dataset.id)'),
+                                     ['act:1:0', 'act:3:0'])
+                    # Stop new polls and drain real requests before closing the
+                    # browser, rather than disconnecting during a server write.
+                    import time
+                    page.route('**/*', lambda route: route.abort())
+                    deadline = time.monotonic()+3
+                    while pending and time.monotonic() < deadline:
+                        page.wait_for_timeout(20)
+                    self.assertFalse([request.url for request in pending])
+                finally:
+                    browser.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+
+    def test_consecutive_new_calls_collapse_and_intervening_messages_start_new_bubbles(self):
+        from orchestrator.telemetry import publish
+        for i in range(1, 24):
+            publish(self.root, f'act:{i}:0', '相同说明', kind='尝试')
+            self.assertEqual([r['id'] for r in self.reader.snapshot({})], ['act:1:0'])
+        publish(self.root, 'narrate:1', '中间解说')
+        publish(self.root, 'act:24:0', '相同说明', kind='尝试')
+        publish(self.root, 'user:1', '用户介入', role='user')
+        publish(self.root, 'act:25:0', '相同说明', kind='尝试')
+        self.assertEqual([r['id'] for r in self.reader.snapshot({})],
+                         ['act:1:0', 'narrate:1', 'act:24:0', 'user:1', 'act:25:0'])
+
+    def test_hidden_action_completion_does_not_reappear_after_intervening_narration(self):
+        path = self.root/'public_events.jsonl'
+        values = [{'id': 'act:1:0', 'text': '相同', 'wall': 10},
+                  {'id': 'act:2:0', 'text': '相同', 'wall': 11}]
+        path.write_text(''.join(json.dumps(r)+'\n' for r in values), encoding='utf-8')
+        first = self.reader.snapshot({})
+        self.assertEqual([r['id'] for r in first], ['act:1:0'])
+        with path.open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps({'id': 'narrate:1', 'text': '新解说', 'wall': 12})+'\n')
+        (self.root/'decisions.jsonl').write_text(json.dumps({'i': 2, 'attempt': 0,
+            'thought': '相同', 't': 30})+'\n', encoding='utf-8')
+        final = self.reader.snapshot({'started_wall': 0})
+        self.assertEqual([r['id'] for r in final], ['act:1:0', 'narrate:1'])
+        self.assertEqual(final[0]['wall'], first[0]['wall'])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,10 +2,37 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from pathlib import Path
 from orchestrator.control import RunControl
+
+
+def is_auto_retry(ident):
+    """Only the act publisher owns this structured retry identity."""
+    return isinstance(ident, str) and re.fullmatch(r'act:[0-9]+:[1-9][0-9]*', ident) is not None
+
+
+def is_act_message(item):
+    return (item.get('role') in (None, 'assistant') and isinstance(item.get('id'), str)
+            and re.fullmatch(r'act:[0-9]+:[0-9]+', item['id']) is not None)
+
+
+def visible_messages(items):
+    visible, last_text = [], None
+    for item in items:
+        if is_act_message(item):
+            if is_auto_retry(item['id']):
+                continue
+            text = item.get('text')
+            if isinstance(text, str) and text and text == last_text:
+                continue
+            last_text = text if isinstance(text, str) and text else None
+        else:
+            last_text = None
+        visible.append(item)
+    return visible
 
 
 class JsonTail:
@@ -39,6 +66,7 @@ class PublicHistory:
         self.public = JsonTail(directory / "public_events.jsonl")
         self.actions = JsonTail(directory / "decisions.jsonl")
         self.items = {}
+        self.action_walls = {}  # Recent begin timestamps survive hidden bubbles until their completion rows arrive.
         self.lock = threading.Lock()
 
     def snapshot(self, metrics, limit=12):
@@ -48,6 +76,12 @@ class PublicHistory:
                     previous = self.items.get(event["id"])
                     if previous:
                         event["wall"] = previous["wall"]
+                    elif is_act_message(event) and event['id'] in self.action_walls:
+                        event['wall'] = self.action_walls[event['id']]
+                    if is_act_message(event):
+                        self.action_walls[event['id']] = event['wall']
+                        if len(self.action_walls) > 256:
+                            self.action_walls.pop(next(iter(self.action_walls)))
                     self.items[event["id"]] = event
             # Completed recordings made before the shared event stream keep their history.
             for event in ([] if self.public.path.exists() else self.events.read()):
@@ -77,7 +111,8 @@ class PublicHistory:
                     previous = self.items.get(ident)   # 动作开始时已作为公开事件记下：保留那时的时间
                     kind = previous["kind"] if previous and previous.get("kind") in ("正式思考", "尝试") else act_kind
                     self.items[ident] = {"id": ident, "text": text, "kind": kind,
-                                         "wall": previous["wall"] if previous else (metrics.get("started_wall") or 0) + action.get("t", 0)}
+                                         "wall": previous["wall"] if previous else self.action_walls.get(
+                                             ident, (metrics.get("started_wall") or 0) + action.get("t", 0))}
             if (self.events.path.parent / "control.sqlite3").exists():
                 for message in RunControl(self.events.path.parent).snapshot()["messages"]:
                     if message["role"] == "user":
@@ -85,7 +120,8 @@ class PublicHistory:
                         self.items[message["id"]] = {"id": message["id"], "text": message["text"], "role": "user",
                             "kind": "用户 · " + delivery, "wall": message["wall"]}
             # 保留最近 80 条（控制台的对话栏要看得更多）；HUD 只取最后 12 条
-            ordered = sorted(self.items.values(), key=lambda item: (item["wall"], item["id"]))[-80:]
+            ordered = sorted(self.items.values(), key=lambda item: (item["wall"], item["id"]))
+            ordered = visible_messages(ordered)[-80:]
             self.items = {item["id"]: item for item in ordered}
             return ordered[-max(1, min(int(limit), 80)):]
 

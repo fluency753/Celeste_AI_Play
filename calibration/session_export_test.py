@@ -54,6 +54,19 @@ class SessionExportTests(unittest.TestCase):
         self.put(chat / 'metrics.json', {'elapsed_s': 9999, 'written_wall': 5000, 'sim_energy': {'balance': 999}})
         return chat
 
+    def test_hidden_retry_bubbles_still_export_the_complete_original_events(self):
+        from overlay.history import PublicHistory
+        events = [{'id': f'act:1:{n}', 'text': f'尝试原文{n}', 'wall': 1001+n} for n in range(3)]
+        events.append({'id': 'act:2:0', 'text': '尝试原文0', 'wall': 1004})
+        for event in events:
+            self.append(self.one/'public_events.jsonl', event)
+        path = self.one/'public_events.jsonl'
+        before = path.read_bytes()
+        self.assertEqual([r['id'] for r in PublicHistory(self.one).snapshot({})], ['act:1:0'])
+        report = collect_session(self.one, runs_root=self.runs)
+        self.assertEqual([r['text'] for r in report['public_text']], [e['text'] for e in events])
+        self.assertEqual(path.read_bytes(), before)
+
     def test_idle_preparation_chat_and_save_name_join_the_export_without_overriding_play_metrics(self):
         chat = self.make_idle_chat('prepared')
         self.append(chat / 'public_events.jsonl', {'id': 'public:prepared', 'text': '准备完成', 'wall': 1005})

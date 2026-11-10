@@ -30,6 +30,30 @@ def metrics(now, **extra):
 
 
 class ViewModelTests(unittest.TestCase):
+    def test_retry_bubbles_and_metrics_fallback_do_not_reappear(self):
+        now = time.time()
+        items = [{'id': 'act:1:0', 'text': '原文', 'kind': '尝试'},
+                 {'id': 'act:1:1', 'text': '原文（自动重试 1）', 'kind': '尝试'},
+                 {'id': 'public:real', 'text': '原文（自动重试 2）', 'kind': '解说'}]
+        m = metrics(now, thought='原文（自动重试 2）', formal_thought='原文')
+        vm = view_model(m, CONFIG, items, now)
+        self.assertEqual([e.text for e in vm.history], ['原文', '原文（自动重试 2）'])
+        self.assertEqual(modhud.composed_history([], m), [])  # metrics can arrive before either log
+        formal = view_model({**m, 'formal_only': True}, CONFIG, items, now)
+        self.assertEqual([e.text for e in formal.history], ['原文'])
+        repeated = [{'id': f'act:{i}:0', 'text': '原文', 'kind': '尝试'} for i in range(1, 24)]
+        self.assertEqual(modhud.composed_history(repeated, {**m, 'thought': '原文'}), repeated[:1])
+
+    def test_retry_fallback_requires_exact_formal_label_and_does_not_hide_replay(self):
+        now = time.time()
+        for text, formal in [('普通解说', '原文'), ('原文（自动重试 0）', '原文'),
+                             ('原文（自动重试 1）后续', '原文'), ('原文（自动重试 1）', ''),
+                             ('原文（自动重试 1）', None)]:
+            with self.subTest(text=text, formal=formal):
+                self.assertEqual(modhud.composed_history([], metrics(now, thought=text, formal_thought=formal))[-1]['text'], text)
+        m = metrics(now, thought='原文（自动重试 1）', formal_thought='原文', replaying=True,
+                    live=False, replay_label='原文（自动重试 1）')
+        self.assertEqual(modhud.composed_history([], m)[-1]['text'], m['replay_label'])
     def test_actual_side_overrides_official_a_label(self):
         now = time.time()
         for side in ('A', 'B', 'C'):

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import struct
 import sys
 import threading
@@ -346,10 +347,15 @@ class ViewModel:
 
 def composed_history(items: list[dict], m: dict) -> list[dict]:
     """与网页 HUD 的 composedThoughts() 相同：最新一句思考还没进历史时补在末尾。"""
-    items = list(items or [])
+    from .history import visible_messages
+    items = visible_messages(items or [])
     replaying = bool(m.get("replaying")) or m.get("status") == "replaying"
     text = (m.get("replay_label") if replaying and not m.get("live") else m.get("thought")) or ""
     text = text.strip()
+    formal = str(m.get('formal_thought') or '').strip()
+    # This only suppresses the metrics fallback, never a real public message.
+    if not replaying and formal and text.startswith(formal) and re.fullmatch(r'（自动重试 [1-9][0-9]*）', text[len(formal):]):
+        return items[-12:]
     if text and not any(str(i.get("text", "")).strip() == text for i in items[-6:]):
         items.append({"id": "latest", "text": text, "kind": "解说", "wall": m.get("thought_updated_wall")})
     return items[-12:]
