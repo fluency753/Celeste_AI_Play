@@ -134,6 +134,11 @@ class SessionControls:
         menu = getattr(self.session, 'token_menu', None)
         return menu is not None and menu.state is not None
 
+    def _token_outside_level(self):
+        """Left the level through the menu (map, chapter select, loading): only in-level time is charged."""
+        menu = getattr(self.session, 'token_menu', None)
+        return bool(menu is not None and menu.state is not None and menu.state.get('stage') == 'navigation')
+
     def _token_epoch(self):
         obs = getattr(self.session, 'last_obs', None) or {}
         level = obs.get('level') or {}
@@ -144,10 +149,12 @@ class SessionControls:
         if self.token_drift is None:
             return
         self._sync_token_pause()
-        deferred = self._token_menu_active()
+        outside = self._token_outside_level()
+        deferred = self._token_menu_active() and not outside
         if deferred:
             self.token_drift.defer_pending()
-        eligible = bool(self.turn_active and (self._token_account_eligible() if deferred else self._token_motion_eligible()))
+        eligible = bool(self.turn_active and not outside and
+                        (self._token_account_eligible() if deferred else self._token_motion_eligible()))
         self.token_drift.receive(total, latest, f'{self.cfg.engine}:{self.session_id}', eligible,
                                  self._token_epoch(), deferred=deferred)
         if self.token_drift.pending or self.token_drift.deferred:
@@ -263,6 +270,9 @@ class SessionControls:
         if ledger is None:
             return
         self._sync_token_pause()
+        if self._token_outside_level():
+            ledger.discard('outside_level')   # Owed in-level frames wait for the next level.
+            return
         if self._token_menu_active():
             ledger.defer_pending()
         while ledger.pending or ledger.deferred:

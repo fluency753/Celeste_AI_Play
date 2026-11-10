@@ -173,6 +173,8 @@ class TokenMenu:
                        self.state.get('navigation_seen') and self.state['identity'][:2] == current[:2]))
         if not matches or self.state.get('invalid'):
             raise ValueError('暂停待补推进的输入来源未确认：' + (self.state or {}).get('invalid', '游戏或存档身份与暂停时不同'))
+        if self.state.get('navigation_seen'):
+            return '', self.state['input_format']   # Left the level: the old level's keys no longer apply.
         return self.state['keys'], self.state['input_format']
 
     def clear(self):

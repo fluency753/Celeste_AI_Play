@@ -426,15 +426,20 @@ class MenuDebtTests(unittest.IsolatedAsyncioTestCase):
         async with self.s.tool_lock:
             obs = await asyncio.to_thread(leave_level_by_pause_menu, self.s.client, allowed_exit_ids=(exit_id,))
             self.assertEqual(obs['scene'], 'Overworld')
+            self.s.last_obs = obs
             await self.r._flush_token_drift_locked()
             self.assertEqual(self.r.token_drift.deferred, 2)
+        await self.usage(5000)                          # thinking on the map is not charged
+        self.assertEqual((self.r.token_drift.deferred, self.r.token_drift.pending), (2, 0))
+        async with self.s.tool_lock:
             self.s.client.call('step', inputs=['2,D'])  # authorized UI navigation remains possible
             self.assertEqual(self.bridge.obs['scene'], 'Overworld')
             self.s.client.call('step', inputs=['1,C'])
+            entered = self.bridge.obs['player']['pos'][0]
             await self.r._flush_token_drift_locked()
         self.assertEqual(self.r.token_drift.deferred, 0)
-        self.assertEqual(self.bridge.steps[-1]['inputs'], ['2,R'])
-        self.assertEqual(self.bridge.obs['player']['pos'][0], 12)
+        self.assertEqual(self.bridge.steps[-1]['inputs'], ['2'])   # neutral, not the old level's R
+        self.assertEqual(self.bridge.obs['player']['pos'][0], entered)
 
     async def test_return_to_map_keeps_debt_without_blocking_navigation(self):
         await self.check_exit_navigation('menu_pause_return')
