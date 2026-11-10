@@ -24,6 +24,6 @@
 
 ## 验证
 
-`python -m unittest calibration.tool_history_test calibration.hud_history_test calibration.mod_hud_test` 验证来源隔离、真实 HTTP 消费、状态、遮盖、半行、超长行、重放与迟到事件。
+`python tools/run_tests.py calibration.tool_history_test calibration.hud_history_test calibration.mod_hud_test` 验证来源隔离、真实 HTTP 消费、状态、遮盖、半行、超长行、重放与迟到事件。
 
 安装 Playwright 及可用浏览器后，在仓库根目录运行 `node calibration/tool_history_ui_check.cjs`。Windows 可设置 `PLAYWRIGHT_CHANNEL=msedge` 使用已安装的 Edge。检查使用隔离页面与假接口，不操作游戏：覆盖初始空模型与控制接口慢响应后顶部时间、上下文正常更新，以及验证切换、展开保留、命令文本转义、跨运行拒绝，以及 OBS 工具请求为零；截图写入 `local/tool-history-preview.png`。

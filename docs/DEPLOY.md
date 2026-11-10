@@ -249,7 +249,7 @@ winget install Gyan.FFmpeg
 .\.venv\Scripts\python.exe tools\obs_setup.py stop
 ```
 
-校准测试固定用 `obs_mix` 录音，应"全部通过"：帧数一致、帧号条码一致、声音恢复边在第一帧开头、暂停前最后一帧不被截断；最后一行给出建议的 `audio_offset_ms`（只在改用 `obs_mix` 时需要写进配置）。默认的 `game_nrt` 有自己的检查：`python -m unittest calibration.recording_audio_test`，以及录完后用 `python tools\check_recording_audio.py <recording 目录>\audio.wav` 离线检查断口。OBS 更新后要重新编译插件、重跑校准。
+校准测试固定用 `obs_mix` 录音，应"全部通过"：帧数一致、帧号条码一致、声音恢复边在第一帧开头、暂停前最后一帧不被截断；最后一行给出建议的 `audio_offset_ms`（只在改用 `obs_mix` 时需要写进配置）。默认的 `game_nrt` 有自己的检查：`python tools/run_tests.py calibration.recording_audio_test`，以及录完后用 `python tools\check_recording_audio.py <recording 目录>\audio.wav` 离线检查断口。OBS 更新后要重新编译插件、重跑校准。
 
 ### 4.8 预置模拟器
 

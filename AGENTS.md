@@ -22,7 +22,7 @@ Runtime 不维护剧情、死亡、玩家可操作性等重载场景策略，也
 
 - `powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check`：检查部署环境。
 - `python -m overlay.server --port 47790`：启动本地 `/hud` 与 `/console`。
-- `python -m unittest discover -s calibration -p '*_test.py'`：运行 Python 回归测试。
+- `python tools/run_tests.py`：默认运行 Python 全量并行回归（4进程，浏览器／视频模块最多2组）；`--serial` 保留原发现顺序的串行运行，指定模块／类／方法也走此入口。详细选项、结果与中断说明见 [docs/TESTING.md](docs/TESTING.md)。不要把 `*_test.py` 逐个当脚本执行，其中含手工实机验收入口。
 - `dotnet build game-bridge -c Release "-p:CelestePrefix=<游戏目录>"`：引用已安装的游戏程序集构建桥接。
 - `dotnet run --project calibration/story_text "-p:CelestePrefix=<游戏目录>"`：运行原生剧情检查。
 - `python tools/build_obs_plugin.py --no-install`：仅构建 OBS 插件，不安装。

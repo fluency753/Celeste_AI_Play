@@ -129,7 +129,7 @@ Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计�
 
 进程归属的独立验收：`python -m calibration.codex_container_ownership_check`，仅操作临时专用容器，结束后清理。长期 OAuth 刷新、完整真实关卡试玩和真实上下文压缩不属于本轮短验收覆盖范围。
 
-Git 文件权限可用显式隔离回归检查：先构建待测镜像，再设置 `CELESTE_CODEX_GIT_IMAGE=<镜像标签>` 并运行 `python -m unittest calibration.codex_git_permissions_test -v`。它只创建临时工作区和专用容器，不挂账号卷、不连接模型或游戏；通过镜像内固定版本 Codex 原生沙箱及生产 Shell 包装验证初始化、跨进程提交、只读档位和越界拒绝。未设置变量时跳过，不在普通回归中自动访问 Docker。真实模型接收、原生工具钩子与同会话跨轮次验证另行执行。
+Git 文件权限可用显式隔离回归检查：先构建待测镜像，再设置 `CELESTE_CODEX_GIT_IMAGE=<镜像标签>` 并运行 `python tools/run_tests.py calibration.codex_git_permissions_test -v`。它只创建临时工作区和专用容器，不挂账号卷、不连接模型或游戏；通过镜像内固定版本 Codex 原生沙箱及生产 Shell 包装验证初始化、跨进程提交、只读档位和越界拒绝。未设置变量时跳过，不在普通回归中自动访问 Docker。真实模型接收、原生工具钩子与同会话跨轮次验证另行执行。
 
 ### 共享 player 登录专项回归
 

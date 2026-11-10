@@ -40,7 +40,7 @@ Codex 模型容量不足或明确的临时服务拒绝由主控保留原线程�
 
 发送超时、轮次变更或确认异常时不把图像编码退回文字、不重发到新轮次：保留已经执行的游戏结果、明确图片交付失败并暂停，避免重复执行动作。恢复后重新 observe；用户已经暂停时，更新续接应显式传 `--start-paused`，不自动恢复试玩。普通 MCP/Claude 图像通道不变。图像本身仍消耗视觉 token，不能将“无 Base64 文本”理解为零上下文开销。
 
-自动回归：`python -m unittest calibration.codex_agent_test calibration.collision_contract_test`。可选真实模型验收（只建临时线程，不连接游戏）：`python -m calibration.codex_image_delivery_check --model <模型标识> --output local/<新的证据目录>`。该检查使用生产适配层，故意打印工具结果，要求读出两张随机码图片，并检查最终文字无图片编码；会使用模型额度。
+自动回归：`python tools/run_tests.py calibration.codex_agent_test calibration.collision_contract_test`。可选真实模型验收（只建临时线程，不连接游戏）：`python -m calibration.codex_image_delivery_check --model <模型标识> --output local/<新的证据目录>`。该检查使用生产适配层，故意打印工具结果，要求读出两张随机码图片，并检查最终文字无图片编码；会使用模型额度。
 
 
 ### 准备与开始试玩
@@ -70,7 +70,7 @@ Windows 上 `start_gpt.ps1 -Play` 默认通过 `orchestrator.background` 运行�
 
 续跑用 `.\start_gpt.ps1 -Play -Resume runs\gpt-native\<运行目录>`，模型、知识范围、推理强度和剩余章节沿用原运行。后台启动与退出状态、PID、退出码和输出日志在 `local\background\<启动时间>\`（`status.json`、`output.log`）。单实例互斥量与工具端口检查避免重复接管游戏桥接。准备、聊天、HUD 服务与 HUD 窗口也可以由同一种宿主启动。
 
-验证：`python -m unittest calibration.background_test` 结束启动命令的进程后，确认独立宿主及其子进程仍在运行，随后正常结束并记录退出码。
+验证：`python tools/run_tests.py calibration.background_test` 结束启动命令的进程后，确认独立宿主及其子进程仍在运行，随后正常结束并记录退出码。
 
 ### 通关后唤起聊天与切换会话
 
@@ -295,7 +295,7 @@ HUD 底部的"剧情"下拉框提供"自动跳过"和"agent决定"，开始前�
 
 收集品文字摘要仅用于探索模式；完整房间数据在两种模式均保留全部实体，不替智能体判断路线。
 
-验证：`python -m unittest calibration.observation_context_test`，以及用房间 11 的实际归档观测检查格式化输出。
+验证：`python tools/run_tests.py calibration.observation_context_test`，以及用房间 11 的实际归档观测检查格式化输出。
 
 ### 探索模式的模拟体力
 
@@ -354,7 +354,7 @@ Codex 通过 `baseInstructions` 更新短配置，恢复首条只说明状态和
 
 更新桥接和 OBS 插件后要重启两者。这个实现针对 Windows、60 fps 与官方 bank；不把外部音频资源复制进仓库，也不保证其他 Mod 的自定义 bank 可用。结束或取消试玩时仍先结束录像，再解除游戏接管、恢复正常运行。
 
-验证：`python -m unittest calibration.recording_audio_test`；原生离线混音测试不需要运行游戏、不改动存档：`dotnet run --project calibration/audio_mixer -p:CelestePrefix="<Celeste 安装目录>" -- "<Celeste 安装目录>"`。覆盖两条音轨的实际 PCM 不是静音、直播与录像各自的进度、规划回放时完整版音轨继续放音乐且音效总线暂停而纯享版不推进、没有新混音块时写静音、一次性音效、音量与停止同步、环形槽覆盖检测。录完的 `audio.wav` 可以用 `python tools/check_recording_audio.py` 离线检查断口。
+验证：`python tools/run_tests.py calibration.recording_audio_test`；原生离线混音测试不需要运行游戏、不改动存档：`dotnet run --project calibration/audio_mixer -p:CelestePrefix="<Celeste 安装目录>" -- "<Celeste 安装目录>"`。覆盖两条音轨的实际 PCM 不是静音、直播与录像各自的进度、规划回放时完整版音轨继续放音乐且音效总线暂停而纯享版不推进、没有新混音块时写静音、一次性音效、音量与停止同步、环形槽覆盖检测。录完的 `audio.wav` 可以用 `python tools/check_recording_audio.py` 离线检查断口。
 
 实测（2026-10-24，单音轨版本）：同一段菜单画面推进 120 帧、等待 2 秒、再推进 120 帧。等待期间直播音乐从 47722 ms 走到 49749 ms，录像音乐保持在 47333 ms，混音帧数保持 120；成片 240 帧，PCM 每声道 192000 个采样（48 kHz），缺帧和重复都是 0；AAC / MKV 时长 4.021 秒（含编码器封装延迟），原始音频严格 4.000 秒。结束后确认桥接未接管、锁步关闭、独立混音已释放，游戏恢复运行。
 

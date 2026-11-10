@@ -33,7 +33,7 @@
 
 ## 验证
 
-- `python -m unittest calibration.geometry_context_test calibration.collision_contract_test calibration.collision_view_test calibration.observation_context_test`：真实会话与工具分发、同房移动／消失、剧情更新、历史与当前文件隔离、旧协议和显示保护。
+- `python tools/run_tests.py calibration.geometry_context_test calibration.collision_contract_test calibration.collision_view_test calibration.observation_context_test`：真实会话与工具分发、同房移动／消失、剧情更新、历史与当前文件隔离、旧协议和显示保护。
 - `dotnet run --project calibration/collision_snapshot "-p:CelestePrefix=<游戏目录>"`：使用实际 Collider、Grid 与实体的无 GPU 原生检查。
 
 这些检查不会连接正在运行的游戏。模型能否据此稳定规划路线、实际游戏中的图像观感以及特殊 MOD 碰撞语义，应分别实测；接口成功和合成图不能替代这些验收。

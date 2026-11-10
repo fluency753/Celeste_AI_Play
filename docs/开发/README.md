@@ -13,4 +13,6 @@
 | [tas-input-alignment.md](tas-input-alignment.md) | TAS 输入格式的对齐约定 |
 | [codex/](codex/CODEX.md) | Codex 开发助手专用的开发与审查入口、状态边界复盘与验收记录 |
 
+[Python回归测试](../TESTING.md)：默认并行入口、串行诊断、结果与中断清理。
+
 详细的更新记录在根目录的 `CHANGELOG.md`（同样不进发布压缩包）；给使用者看的版本摘要在根目录的 `版本摘要.md`。
