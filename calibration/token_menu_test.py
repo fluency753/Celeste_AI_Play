@@ -438,8 +438,8 @@ class MenuDebtTests(unittest.IsolatedAsyncioTestCase):
             entered = self.bridge.obs['player']['pos'][0]
             await self.r._flush_token_drift_locked()
         self.assertEqual(self.r.token_drift.deferred, 0)
-        self.assertEqual(self.bridge.steps[-1]['inputs'], ['2'])   # neutral, not the old level's R
-        self.assertEqual(self.bridge.obs['player']['pos'][0], entered)
+        self.assertEqual(self.bridge.steps[-1]['inputs'], ['2,R'])  # pre-pause keys, like thinking stiffness
+        self.assertEqual(self.bridge.obs['player']['pos'][0], entered + 2)
 
     async def test_return_to_map_keeps_debt_without_blocking_navigation(self):
         await self.check_exit_navigation('menu_pause_return')
