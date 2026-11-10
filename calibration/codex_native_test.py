@@ -297,7 +297,9 @@ class NativeSandboxTests(unittest.TestCase):
 
     def test_hook_process_fails_closed_and_post_failure_does_not_claim_unexecuted(self):
         import os
-        env = {**os.environ, 'MCP_PORT':'invalid'}
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        env = {**os.environ, 'MCP_PORT':'invalid', 'CODEX_HOME':folder.name}
         for phase in ('PreToolUse', 'PostToolUse'):
             result = subprocess.run([sys.executable, '-X', 'utf8', str(ROOT/'agent-container/codex-tool-hook.py')],
                        input=json.dumps({'hook_event_name':phase}), env=env,

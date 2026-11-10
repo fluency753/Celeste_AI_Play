@@ -2,6 +2,10 @@
 
 Codex App Server 与原生 Shell、补丁编辑工具均运行在智能体容器内。宿主主控通过 `docker exec -i` 的标准输入输出管理模型会话，游戏操作仍进入同一主控实现，不开放桥接端口、宿主文件系统或 Docker socket。新建、准备、聊天、取名、恢复和模型列表查询均使用容器设施；旧宿主会话维护脚本只用于迁移前记录。
 
+原生工具门禁或完成回执异常写入会话专属持久卷中的 `/home/agent/.codex/diagnostics/codex-hook-errors.jsonl`（即 `$CODEX_HOME/diagnostics/codex-hook-errors.jsonl`）。字段包含 `wall`（Unix 秒）、`elapsed_s`（本次 hook 的现实耗时）、`stage`（`input/configuration/request/response_json/decision`）、`hook_event_name`、`session_id`、`turn_id`、`tool_use_id`、`tool_name`；异常包含 `exception_type/message/traceback`，完成回执被拒绝时包含 `decision/reason`，未提供的关联字段为 null。保留异常链，不保存工具参数、命令、返回正文或认证 token；错误文本中的本次门禁 token 脱敏。日志写入失败会在 stderr 报告，并继续返回原有的 Pre 拒绝或 Post“操作已执行、回执未确认”说明。stderr 可能被 CLI 捕获，不保证进入宿主的 `codex_stderr.log`。
+
+可在不调用门禁、不恢复游戏的情况下，用 `docker cp <容器名>:/home/agent/.codex/diagnostics/codex-hook-errors.jsonl <本机目标路径>` 提取；没有失败记录时文件可以不存在。该文件不在共享登录卷内，当前不会自动附入会话导出包。更新此 hook 需要重新构建智能体镜像，已运行容器不会仅因源码更新而改变。上游模型 API 断连与 hook 到本机 `/gate` 的 HTTP 失败属于不同通道，排查时应结合各自日志，不能根据上游断连直接归因本机回执失败。
+
 ## 安装与账号
 
 ```powershell
