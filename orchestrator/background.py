@@ -59,10 +59,16 @@ def launch(arguments, *, probe=False, service="play", directory=None):
     created = json.loads(result.stdout.strip())
     if created["ReturnValue"]:
         raise LaunchRejected(f"Windows 独立启动失败：{created}")
+    from .session_store import load_json
     for _ in range(100):
         status = directory / "status.json"
         if status.exists():
-            data = json.loads(status.read_text(encoding="utf-8"))
+            try:
+                # Shared read; the host may be replacing the file at this instant (Windows sharing violation).
+                data = load_json(status)
+            except (OSError, ValueError):
+                time.sleep(.1)
+                continue
             if data.get("error"):
                 raise RuntimeError(data["error"])
             return directory, data
@@ -75,9 +81,8 @@ def worker(manifest):
     data = json.loads(manifest.read_text(encoding="utf-8"))
     status = {"host_pid": os.getpid(), "started_wall": time.time(), "state": "starting"}
     def save():
-        temporary = directory / "status.tmp"
-        temporary.write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(directory / "status.json")
+        from .session_store import write_json
+        write_json(directory / "status.json", status)   # Atomic, retries short Windows sharing conflicts.
     mutex = None
     try:
         if not data.get("probe") and data.get("service") not in {"hud", "hud-window"}:

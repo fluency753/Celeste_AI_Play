@@ -42,7 +42,8 @@ _wake_lock = threading.Lock()
 def waking(directory):
     try:
         host = json.loads((directory / "chat_host.json").read_text(encoding="utf-8"))
-        status = json.loads((Path(host["directory"]) / "status.json").read_text(encoding="utf-8"))
+        from orchestrator.session_store import load_json
+        status = load_json(Path(host["directory"]) / "status.json")   # shared read: never blocks the host's replace
         return status.get("state") == "running" and time.time() - host["wall"] < 60
     except (OSError, ValueError, KeyError, TypeError):
         return False

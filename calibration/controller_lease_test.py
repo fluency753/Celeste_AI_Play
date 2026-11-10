@@ -95,6 +95,24 @@ class LaunchRejectionTests(unittest.TestCase):
             finally:
                 self.assertTrue(directory.is_dir())   # restart must handle an existing directory
 
+    def test_transient_status_read_conflict_waits_for_the_host_instead_of_failing(self):
+        """Windows can refuse a read while the host replaces status.json; the launcher keeps waiting."""
+        from orchestrator import session_store
+        directory = self.root / 'local/background/attempt'
+        def started(*args, **kwargs):
+            (directory / 'status.json').write_text('{"state": "running", "host_pid": 7}', encoding='utf-8')
+            return SimpleNamespace(stdout='{"ReturnValue":0,"ProcessId":7}')
+        real, calls = session_store.load_json, []
+        def flaky(path, **kwargs):
+            calls.append(path)
+            if len(calls) == 1:
+                raise PermissionError(13, 'The process cannot access the file because it is being used by another process')
+            return real(path, **kwargs)
+        with patch.object(session_store, 'load_json', side_effect=flaky):
+            folder, data = self.launch(side_effect=started)
+        self.assertEqual((folder, data['state']), (directory, 'running'))
+        self.assertEqual(len(calls), 2)
+
     def test_wmi_failure_code_is_a_definitive_rejection(self):
         with self.assertRaises(background.LaunchRejected):
             self.launch(return_value=SimpleNamespace(stdout='{"ReturnValue":9,"ProcessId":null}'))
