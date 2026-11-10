@@ -4,6 +4,9 @@
 
 ## 2026-11-11
 
+- **项目 1.24.3：精简并行回归入口并修正进程内导入顺序**：`tools/run_tests.py` 保留按模块分进程并行（默认4个）、本机耗时缓存均衡分组、`--serial` 与指定模块／类／方法；删去进程归属（Windows Job Object）、收集对账、进度文件、重型模块分组、入库的历史耗时种子与逐次运行报告目录，日志改为只保留最近一次（`local/test-results/latest/`），中断时用 `taskkill /T`／进程组结束测试进程。每个进程先像 `unittest discover` 一样导入全部测试模块再运行分到的模块：有的模块会在测试临时替换仓库路径期间才第一次被导入，只按需导入会让它在整个进程里沿用临时路径，导致提示词与知识库相关测试随分组偶发失败。入口代码由约 600 行减到约 200 行；项目／启动器同步1.24.3，Bridge／Runtime不变。
+  验证：入口自测 5 项（含导入顺序回归）通过；全量并行连跑 3 次均通过（约 70 秒，2 核），`--serial` 全量通过（约 224 秒）。
+
 - **项目 1.24.2：删除不再使用的代码与旧 Codex 会话维护工具**：删掉正式代码从不调用的函数（`collision_json`、`canon_hash`、`runs_using`、`_image_name`、`chapter_reset_preference`／`set_chapter_reset`、`remind_seconds`、`next_segment_dir`、`_keeps_game_frozen`、`program_cap`）以及没有任何调用方的程序输出保存与预览（`run_program(save_output=...)`、`tool_payload`）；原本借这些函数断言的测试改用实际接口。删除迁入容器前的宿主 Codex 会话同步工具 `tools/sync_codex_session_env.py`（`orchestrator/codex_session_environment.py`）和旧会话模拟接口迁移 `tools/migrate_codex_simulate.py`（`orchestrator/codex_simulation_migration.py`）：11-03 以前建立、开着模拟辅助且 `celeste_simulate` 缺少 `request_id` 的 Codex 会话恢复时明确拒绝，请新建准备会话或关闭模拟辅助后再恢复。项目／启动器同步1.24.2，Bridge／Runtime不变。
   验证：受影响的 11 个测试模块 226 项整组通过；全量回归通过。
 

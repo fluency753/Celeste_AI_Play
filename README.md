@@ -103,7 +103,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | 主控 | `orchestrator/`，本机 Python | 唯一同时连接游戏、智能体、HUD 与 OBS 的组件：游戏工具服务、决策循环、执行与自动重试、规划回放、录制、换章、额度与断网等待、中断续跑 |
 | 智能体容器 | `agent-container/`，Docker 镜像 `celeste-agent:0.1` | 容器里的执行器只能连所用模型平台与主控端口；智能体自写的程序在零网络沙箱里运行，看不到令牌与密钥 |
 | 知识库 | `kb/`，只读挂进容器 | 物理常量、机制规则、技巧与数据格式；只讲游戏规则，不讲关卡怎么过 |
-| HUD 与控制台 | `overlay/` | 游戏内 HUD 的绘制、网页 HUD、桌面控制台（`CelesteAIConsole.exe`，1.24.2） |
+| HUD 与控制台 | `overlay/` | 游戏内 HUD 的绘制、网页 HUD、桌面控制台（`CelesteAIConsole.exe`，1.24.3） |
 | OBS 锁步插件 | `obs-plugin/` | 只把游玩帧（和规划回放帧）交给 ffmpeg 编码 |
 | 部署与诊断 | `setup.ps1`、`tools/` | 部署向导、桥接与插件构建、OBS 配置、状态查看、测试客户端 |
 
@@ -111,7 +111,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 
 <a id="开关"></a>
 
-开发回归默认运行 `python tools/run_tests.py`，按模块并行；加 `--serial` 可串行诊断，也可在命令后指定测试模块／类／方法。进程限制、日志与结果说明见 [docs/TESTING.md](docs/TESTING.md)。
+开发回归默认运行 `python tools/run_tests.py`，按模块并行；加 `--serial` 可串行诊断，也可在命令后指定测试模块／类／方法。进程数、日志与结果说明见 [docs/TESTING.md](docs/TESTING.md)。
 
 ## 命令行与开关
 
