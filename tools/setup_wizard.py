@@ -191,17 +191,24 @@ def find_celeste_candidates() -> list[Path]:
 
 
 def step_game(a: Answers) -> None:
-    current = a.get("celeste_dir")
+    # Same order the controller uses: environment variable, the console's game location, then this wizard's answer.
+    from orchestrator.gamepaths import SOURCE_NAMES, _configured_sources
+    configured = _configured_sources()
+    current = str(configured[0][0]) if configured else a.get("celeste_dir")
     candidates = find_celeste_candidates()
     default = current or (str(candidates[0]) if candidates else None)
     if CHECK_ONLY:
         if not default:
             bad("找不到《蔚蓝》安装目录（Steam 版）")
             return
+        if configured:
+            note(f"按{SOURCE_NAMES[configured[0][1]]}检查：{default}")
     else:
         if candidates:
             note("找到的《蔚蓝》安装目录：" + "；".join(map(str, candidates)))
         default = ask("《蔚蓝》的安装目录（含 Celeste.exe）", default)
+        if configured and configured[0][1] in ("env", "console") and Path(default) != configured[0][0]:
+            note(f"主控仍按{SOURCE_NAMES[configured[0][1]]}使用 {configured[0][0]}；要换游戏位置请在那里修改")
     game = Path(default)
     if not (game / "Celeste.exe").exists():
         bad(f"{game} 里没有 Celeste.exe")

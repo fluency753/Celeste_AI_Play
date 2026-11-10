@@ -123,7 +123,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Only platform,switches # �
 .\.venv\Scripts\python.exe tools\setup_wizard.py --check                       # 虚拟环境建好以后，也可以直接运行向导
 ```
 
-向导的回答保存在 `configs\local.deploy.json`（不入库），下次运行时作为默认值；中途按 Ctrl+C 也会保存已填的部分。它生成或修改的本机文件：
+向导的回答保存在 `configs\local.deploy.json`（不入库），下次运行时作为默认值；中途按 Ctrl+C 也会保存已填的部分。检查和部署用的游戏目录与主控相同：先看环境变量 `CELESTE_DIR`，再看控制台「存档与章节」页填的游戏位置，最后才用向导记下的目录。它生成或修改的本机文件：
 
 | 文件 | 内容 |
 | --- | --- |
