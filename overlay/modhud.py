@@ -66,7 +66,7 @@ STATUS = {
     "starting": ("等待", "idle"), "studying": ("读知识库", "studying"), "thinking": ("思考中", "thinking"),
     "tool": ("运行工具", "tool"), "compacting": ("压缩上下文", "thinking"), "executing": ("执行中", "executing"),
     "auto": ("自动推进", "idle"), "retrying": ("自动重试", "retrying"), "replaying": ("规划回放", "replay"),
-    "quota_wait": ("等待额度重置", "idle"), "net_wait": ("模型服务不可用，等待恢复", "retrying"),
+    "quota_wait": ("等待额度重置", "idle"), "net_wait": ("模型连接中断，等待重试", "retrying"),
     "model_wait": ("模型被换，正在换回", "retrying"), "done": ("已完成", "idle"), "stopped": ("已结束", "idle"),
 }
 EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
@@ -364,7 +364,7 @@ def composed_history(items: list[dict], m: dict) -> list[dict]:
 def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewModel:
     colors = {**DEFAULT_COLORS, **(config.get("colors") or {})}
     replaying = bool(m.get("replaying")) or m.get("status") == "replaying"
-    text, kind = STATUS["replaying"] if replaying else STATUS.get(m.get("status"), (m.get("status") or "", "idle"))
+    text, kind = STATUS["replaying"] if replaying and m.get("status") != "net_wait" else STATUS.get(m.get("status"), (m.get("status") or "", "idle"))
     playing = (m.get("started_wall") or 0) > 0
     counting = playing or (m.get("kb_progress") is not None and m.get("kb_progress") >= 1)
     ended = m.get("status") in ("done", "stopped")
@@ -411,9 +411,9 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     if counting and not ended and m.get("status") in ("thinking", "compacting") and (m.get("thinking_since_wall") or 0) > 0:
         thinking += max(0.0, now - m["thinking_since_wall"])
     tool = since("tool_s")
-    if counting and not ended and m.get("status") == "tool" and (m.get("thinking_since_wall") or 0) > 0:
+    if counting and not ended and m.get("activity_status", m.get("status")) == "tool" and (m.get("thinking_since_wall") or 0) > 0:
         tool += max(0.0, now - m["thinking_since_wall"])
-    if m.get("status") == "retrying" and (m.get("phase_since_wall") or 0) > 0:
+    if m.get("activity_status", m.get("status")) == "retrying" and (m.get("phase_since_wall") or 0) > 0:
         tool += max(0.0, now - m["phase_since_wall"])
     study = m.get("study_s") or 0
     if m.get("status") == "studying" and (m.get("written_wall") or 0) > 0:

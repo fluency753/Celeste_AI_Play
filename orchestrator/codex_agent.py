@@ -110,6 +110,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                             environment={'MCP_PORT': str(cfg.mcp_port), 'CELESTE_NATIVE_TOKEN': self.native_token})
         self._events = None
         self._last_public = 0.0
+        self._network_usage = None
+        self._network_usage_turn = None
         self._init_controls(disabled=prepare_only, start_paused=start_paused)
         self.native_session.note_reminders = self.note_reminders
         self.native_session.native_tool_hook = self._native_hook
@@ -201,9 +203,46 @@ class CodexRunner(ModelRecovery, SessionControls):
         tools.append(spec("celeste_finish_preparation", "仅准备模式可用：全库阅读完成后结束，不启动游戏。", {}))
         return tools
 
+    def _network_event(self, method, params):
+        """A local command completing is not evidence that the model API reconnected."""
+        if (params.get('threadId') != self.session_id or params.get('turnId') != self.turn_id
+                or not self.turn_active or self.turn_done.is_set()):
+            return
+        turn = (self.session_id, self.turn_id)
+        if self._network_usage_turn != turn:
+            self._network_usage_turn, self._network_usage = turn, None
+        if method == 'error' and params.get('willRetry') is True:
+            error = params.get('error') or {}
+            if is_model_unavailable(error):
+                reason = error.get('message', '') if isinstance(error, dict) else str(error)
+                if self.metrics.network_retry_begin(reason):
+                    self._exclude_token_window('network_retry')
+            return
+        progress = (method in ('item/agentMessage/delta', 'item/reasoning/textDelta',
+                               'item/reasoning/summaryTextDelta') and bool(params.get('delta')))
+        if method == 'thread/tokenUsage/updated':
+            total = (params.get('tokenUsage') or {}).get('total') or {}
+            value = total.get('totalTokens')
+            if value is None:
+                parts = [total.get('inputTokens'), total.get('outputTokens')]
+                if all(type(part) is int and part >= 0 for part in parts):
+                    value = sum(parts)
+            if type(value) is int and value >= 0:
+                progress = self._network_usage is not None and value > self._network_usage
+                self._network_usage = max(self._network_usage or 0, value)
+        if progress and self.metrics.state.network_retrying:
+            self.metrics.network_retry_end()
+
     def _event(self, method, params):
         if method.startswith('rawResponse'):
             return  # Raw messages may include analysis; never publish them.
+        if self.session_id and params.get('threadId') not in (None, self.session_id):
+            return
+        if method == 'turn/completed' and self.turn_id:
+            completed = (params.get('turn') or {}).get('id') or params.get('turnId')
+            if completed and completed != self.turn_id:
+                return
+        self._network_event(method, params)
         # 不记录 reasoning 正文或摘要；公开消息和结构化用量可以用于 HUD。
         item = params.get("item") or {}
         if "reasoning" not in method.lower() and item.get("type") != "reasoning" and self._events:
@@ -259,6 +298,9 @@ class CodexRunner(ModelRecovery, SessionControls):
                 self.fatal = f"独立游戏执行器出现未允许的宿主工具：{item['type']}，已停止"
                 self.turn_done.set()
         elif method == "turn/completed":
+            if (params.get('threadId') == self.session_id and
+                    (params.get('turn', {}).get('id') == self.turn_id or params.get('turnId') == self.turn_id)):
+                self.metrics.network_retry_end('turn_ended')
             from .codex_native import finish_native_tools
             finish_native_tools(self)
             self.turn_result = params.get("turn") or {}

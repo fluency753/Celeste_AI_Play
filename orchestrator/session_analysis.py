@@ -212,7 +212,7 @@ class Analysis:
                     boundary[turn_id] = moment
                 self.provenance(tool, directory / 'decision_timing.jsonl', index, 'controller_timing')
             allowed = ('tool_id', 'tool', 'game_tool', 'playing', 'decision_wait_s', 'decision_active_s',
-                       'success', 'result', 'request_ack_s', 'active_s', 'pending_tools', 'turn_id')
+                       'success', 'result', 'request_ack_s', 'active_s', 'pending_tools', 'turn_id', 'reason', 'outcome')
             self.event(context, 'controller.' + str(kind), moment, directory / 'decision_timing.jsonl', index,
                        {key: event[key] for key in allowed if key in event}, tool['tool_id'] if tool else None, turn_id)
 
@@ -479,7 +479,8 @@ class Analysis:
             if not isinstance(data, dict):
                 continue
             fields = (*TIME_FIELDS, 'decisions', 'deaths', 'frames_played', 'frames_auto', 'sim_calls', 'sim_rollouts',
-                      'tool_calls', 'compactions', 'retries', 'output_tokens', 'thinking_tokens', 'token_frames', 'token_s')
+                      'tool_calls', 'compactions', 'retries', 'output_tokens', 'thinking_tokens', 'token_frames', 'token_s',
+                      'network_retry_episodes')
             row = {**context, 'snapshot_id': stable_id(context['run_id'], path.name, data.get('written_wall')),
                    'wall': wall(data.get('written_wall')), 'source': str(path), 'canonical': path == canonical,
                    'metrics_authoritative': state.get('_export_source_kind', 'run') == 'run',
@@ -488,7 +489,8 @@ class Analysis:
                    'game_clock': bounded_tree(data.get('game_clock')),
                    'chapter_base': ({key: value for key, value in data['chapter_base'].items() if key in fields and finite(value)}
                                     if isinstance(data.get('chapter_base'), dict) else None),
-                   **{key: bounded_tree(data.get(key)) for key in ('chapter', 'chapter_side', 'room', 'status', 'chapter_time_ticks',
+                   **{key: bounded_tree(data.get(key)) for key in ('chapter', 'chapter_side', 'room', 'status', 'activity_status',
+                      'network_retrying', 'network_retry_since_wall', 'network_retry_reason', 'chapter_time_ticks',
                       'completed_ticks', 'piece_done', 'splits', 'stop_reason', 'completed', 'user_stopped', 'context_tokens', 'context_window', 'token_drift')},
                    'resumed_from': state.get('resumed_from')}
             self.metrics.append(row)

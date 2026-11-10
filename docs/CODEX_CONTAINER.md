@@ -2,6 +2,10 @@
 
 Codex App Server 与原生 Shell、补丁编辑工具均运行在智能体容器内。宿主主控通过 `docker exec -i` 的标准输入输出管理模型会话，游戏操作仍进入同一主控实现，不开放桥接端口、宿主文件系统或 Docker socket。新建、准备、聊天、取名、恢复和模型列表查询均使用容器设施；旧宿主会话维护脚本只用于迁移前记录。
 
+模型 API 的可重试断连由 CLI 自动重连。主控收到属于当前会话／回合的明确网络错误后，网页 HUD、控制台及游戏内 HUD 显示“模型连接中断，等待重试”，并停止累计思考时间。仅以同回合的新模型文本／推理增量或递增 token 用量结束等待，本地 Shell 输出、工具完成及重复用量不能证明网络已恢复。运行时没有普通的重连成功通知，因此结束点表示“再次观测到模型进展”；首次报错之前的空窗不推测为断网。此状态不清空工具、不取消回合、不改变游戏输入，真实工具仍正常计量，执行器内部重试的现实预算口径保持原状。
+
+`metrics.json` 的 `network_retrying`、`network_retry_since_wall`（Unix 秒）、`network_retry_reason` 标识当前重试，`network_retry_s`（秒）和 `network_retry_episodes` 为累计值。HUD 快照的 `status=net_wait` 只表示显示状态，`activity_status` 保留原活动状态供工具计时；用户暂停和结束优先。`decision_timing.jsonl` 记录 `network_retry_started/ended`，结束的 `outcome` 区分模型重新产出、回合结束和暂停。已有正式网络暂停的 `net_wait_s` 口径不变；旧数据缺少新字段时留空，不追溯修改历史统计。Claude 的短暂自动重试也使用相同计量，但其正式网络等待仍追溯首错，可能与 `network_retry_s` 重叠，不能相加。续跑只恢复累计值，重新确认连接状态。
+
 原生工具门禁或完成回执异常写入会话专属持久卷中的 `/home/agent/.codex/diagnostics/codex-hook-errors.jsonl`（即 `$CODEX_HOME/diagnostics/codex-hook-errors.jsonl`）。字段包含 `wall`（Unix 秒）、`elapsed_s`（本次 hook 的现实耗时）、`stage`（`input/configuration/request/response_json/decision`）、`hook_event_name`、`session_id`、`turn_id`、`tool_use_id`、`tool_name`；异常包含 `exception_type/message/traceback`，完成回执被拒绝时包含 `decision/reason`，未提供的关联字段为 null。保留异常链，不保存工具参数、命令、返回正文或认证 token；错误文本中的本次门禁 token 脱敏。日志写入失败会在 stderr 报告，并继续返回原有的 Pre 拒绝或 Post“操作已执行、回执未确认”说明。stderr 可能被 CLI 捕获，不保证进入宿主的 `codex_stderr.log`。
 
 可在不调用门禁、不恢复游戏的情况下，用 `docker cp <容器名>:/home/agent/.codex/diagnostics/codex-hook-errors.jsonl <本机目标路径>` 提取；没有失败记录时文件可以不存在。该文件不在共享登录卷内，当前不会自动附入会话导出包。更新此 hook 需要重新构建智能体镜像，已运行容器不会仅因源码更新而改变。上游模型 API 断连与 hook 到本机 `/gate` 的 HTTP 失败属于不同通道，排查时应结合各自日志，不能根据上游断连直接归因本机回执失败。

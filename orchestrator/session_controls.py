@@ -118,6 +118,7 @@ class SessionControls:
         return bool(self.token_drift is not None and not self._token_closing
                     and not self._token_compacting and not self._game_guard()
                     and self.metrics.playing and self.metrics._pause_start is None
+                    and not self.metrics.state.network_retrying
                     and not getattr(self, 'net_down_since', None)
                     and not self.token_drift.unknown
                     and not getattr(self.session, 'reload_observation_required', False))

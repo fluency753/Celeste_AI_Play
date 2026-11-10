@@ -175,22 +175,26 @@ class NetWaitIntegrationTests(unittest.IsolatedAsyncioTestCase):
             cfg = RunConfig(agent="net-test", save="test", model="opus", runtime="host")
             metrics = Metrics(root / "metrics.json", "net-test", "opus", "high", 600)
             runner = ClaudeRunner(cfg, root, SimpleNamespace(done=False), metrics, "")
-            for attempt in (1, 2):
-                runner._handle({"type": "system", "subtype": "api_retry", "attempt": attempt, "error_status": 529,
-                                "error": "overloaded_error"})
-            self.assertIsNotNone(runner.net_down_since)
-            self.assertFalse(runner.net_outage)
-            runner._handle({"type": "assistant", "message": {"id": "m", "model": "claude-opus-5-5",
-                                                             "content": [{"type": "text", "text": "继续"}]}})
-            self.assertIsNone(runner.net_down_since)
-            # 401 / 429 不当作断网
-            runner._handle({"type": "system", "subtype": "api_retry", "attempt": 5, "error_status": 429, "error": "rate_limit_error"})
-            self.assertIsNone(runner.net_down_since)
-            # 这一轮以连接错误结束（Claude Code 放弃重试）：直接认定断网
-            runner._handle({"type": "result", "subtype": "error_during_execution", "is_error": True,
-                            "result": "API Error: Connection error.", "usage": {}})
-            self.assertTrue(runner.net_outage)
-            runner.close_events()
+            runner.turn_active = True
+            runner._begin_model_turn(runtime='claude')
+            try:
+                for attempt in (1, 2):
+                    runner._handle({"type": "system", "subtype": "api_retry", "attempt": attempt, "error_status": 529,
+                                    "error": "overloaded_error"})
+                self.assertIsNotNone(runner.net_down_since)
+                self.assertFalse(runner.net_outage)
+                runner._handle({"type": "assistant", "message": {"id": "m", "model": "claude-opus-5-5",
+                                                                 "content": [{"type": "text", "text": "继续"}]}})
+                self.assertIsNone(runner.net_down_since)
+                # 401 / 429 不当作断网
+                runner._handle({"type": "system", "subtype": "api_retry", "attempt": 5, "error_status": 429, "error": "rate_limit_error"})
+                self.assertIsNone(runner.net_down_since)
+                # 这一轮以连接错误结束（Claude Code 放弃重试）：直接认定断网
+                runner._handle({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                                "result": "API Error: Connection error.", "usage": {}})
+                self.assertTrue(runner.net_outage)
+            finally:
+                runner.close_events()
 
 
 if __name__ == "__main__":

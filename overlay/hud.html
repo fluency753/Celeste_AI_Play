@@ -309,7 +309,7 @@ const STATUS = {
   retrying:  ["自动重试", "retrying", false],
   replaying: ["规划回放", "replay", true],
   quota_wait:["等待额度重置", "idle", false],
-  net_wait:  ["模型服务不可用，等待恢复", "retrying", false],
+  net_wait:  ["模型连接中断，等待重试", "retrying", false],
   model_wait:["模型被换，正在换回", "retrying", false],
   done:      ["已完成", "idle", false],
   stopped:   ["已结束", "idle", false],
@@ -633,7 +633,7 @@ function render() {
   const now = Date.now() / 1000 + offset;
   // 规划回放与智能体的思考同时进行（回放画上一轮，智能体在想下一轮）：回放期间状态栏显示"规划回放"
   const replaying = !!m.replaying || m.status === "replaying";
-  const [text, kind, breathe] = replaying ? STATUS.replaying : (STATUS[m.status] || [m.status, "idle", false]);
+  const [text, kind, breathe] = (replaying && m.status !== "net_wait") ? STATUS.replaying : (STATUS[m.status] || [m.status, "idle", false]);
   const playing = m.started_wall > 0;
   // 思考与工具时间从知识库读完就开始走（准备阶段的其余部分：写笔记、写程序、规划第一个房间）
   const counting = playing || (m.kb_progress != null && m.kb_progress >= 1);
@@ -706,8 +706,8 @@ function render() {
   setText($("thinking"), clock(thinking));
   // 工具时间：容器里的 Bash、Read 等与游戏工具从调用到返回的时间（不含游戏推进）；运行工具时同样实时走表
   let tool = since(m, "tool_s");
-  if (counting && !ended && m.status === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
-  if (m.status === "retrying" && m.phase_since_wall > 0) tool += Math.max(0, now - m.phase_since_wall);
+  if (counting && !ended && (m.activity_status || m.status) === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
+  if ((m.activity_status || m.status) === "retrying" && m.phase_since_wall > 0) tool += Math.max(0, now - m.phase_since_wall);
   setText($("tool"), clock(tool));
 
   // 知识库读取：开局到知识库读完的用时（读完后不再走）；跳过准备阶段（--no-study）时显示"—"

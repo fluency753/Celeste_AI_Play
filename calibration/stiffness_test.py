@@ -316,10 +316,7 @@ class StiffnessReviewTests(unittest.TestCase):
 
     def test_codex_compaction_time_is_recorded(self):
         from orchestrator.codex_agent import CodexRunner
-        runner = CodexRunner.__new__(CodexRunner)
-        runner._events, runner.control, runner.compacted, runner.paused, runner.chat_only = None, None, set(), False, False
-        runner.metrics = self.s.metrics
-        runner._public_compaction = lambda *a, **k: None
+        runner = CodexRunner(self.cfg, self.root, self.s, self.s.metrics, 'no-container')
         runner._event("item/started", {"item": {"type": "contextCompaction", "id": "c"}})
         time.sleep(0.05)
         runner._event("item/completed", {"item": {"type": "contextCompaction", "id": "c"}})

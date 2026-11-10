@@ -12,6 +12,8 @@
 - 准备阶段：开始游玩之前（读知识库、写笔记与程序）不计入现实用时；
   现实用时从第一次真正执行游戏工具时开始（没有准备阶段时从启动时开始）。
 - 等待额度：Max 用量到达上限后等待额度重置的时间单独记（waited_s），不计入现实用时与准备时间。
+- 执行器内部自动重连：从明确错误到重新观测模型产出的区间不计思考，工具生命周期和现实预算不变；
+  network_retry_s 单独记录，可与工具时间及追溯首错的正式网络暂停重叠，不能相加。
 - 推理强度：effort 是当前生效的强度；智能体用 set_effort 申请的强度先记在 effort_pending，本轮结束后才生效，
   每次切换记进 effort_log。
 - 续跑（--resume）时从上一段运行的统计接着累计。
@@ -133,6 +135,11 @@ class MetricsState:
     quota_wait_until: float | None = None  # 正在等待时：预计恢复的时刻（墙钟，秒）
     net_wait_s: float = 0.0           # 模型连不上（断网等）时暂停等待的总时间（不计入现实用时与思考僵直）
     net_waits: int = 0                # 网络等待的次数
+    network_retrying: bool = False   # 执行器在原回合内自动重连，不改变暂停／工具生命周期
+    network_retry_since_wall: float = 0.0
+    network_retry_reason: str = ""
+    network_retry_s: float = 0.0     # 已观测的自动重连等待，可与真实工具时间重叠；现实预算照旧
+    network_retry_episodes: int = 0
     resumed_from: str | None = None   # 续跑时：上一段运行的日志目录
     output_tokens: int = 0
     thinking_tokens: int = 0
@@ -198,14 +205,45 @@ class Metrics:
         now = time.monotonic()
         game = self.state.play_game_s + self.state.auto_game_s + self.state.replay_act_s
         dt = now - self._seg_mark
+        if self._in_turn and self._pause_start is None and self.state.network_retrying and dt > 0:
+            self.state.network_retry_s += dt
         if (self.playing or self.kb_done) and self._in_turn and self._pause_start is None and dt > 0:
             if self._tools:
                 self.state.tool_s += max(0.0, dt - max(0.0, game - self._seg_game))
-            else:
+            elif not self.state.network_retrying:
                 self.state.thinking_s += dt
                 self._unnarrated += dt
         self._seg_mark, self._seg_game = now, game
         self.state.thinking_since_wall = time.time()
+
+    def network_retry_begin(self, reason: str) -> bool:
+        """An observed provider retry excludes thinking, without cancelling tools or pausing the turn."""
+        with self._lock:
+            if not self._in_turn or self._pause_start is not None:
+                return False
+            self._flush_locked()
+            first = not self.state.network_retrying
+            self.state.network_retrying = True
+            self.state.network_retry_reason = str(reason)[:240]
+            if first:
+                self.state.network_retry_since_wall = time.time()
+                self.state.network_retry_episodes += 1
+                self.timing.emit('network_retry_started', reason=self.state.network_retry_reason)
+            self._write_locked()
+            return first
+
+    def _network_retry_end_locked(self, outcome):
+        if self.state.network_retrying:
+            self.timing.emit('network_retry_ended', outcome=outcome)
+            self.state.network_retrying = False
+            self.state.network_retry_since_wall = 0.0
+            self.state.network_retry_reason = ''
+
+    def network_retry_end(self, outcome='model_progress') -> None:
+        with self._lock:
+            self._flush_locked()
+            self._network_retry_end_locked(outcome)
+            self._write_locked()
 
     def narrated(self) -> None:
         """实时展示：智能体调用了 narrate，半分钟计时器从头算。"""
@@ -272,6 +310,7 @@ class Metrics:
         """Claude Code 报告这一轮结束（或进程退出）。"""
         with self._lock:
             self._flush_locked()
+            self._network_retry_end_locked('turn_ended')
             self.timing.end(self.timing.clock())
             self._in_turn = False
             self._tools.clear()
@@ -361,11 +400,14 @@ class Metrics:
             self.state.status = "thinking"
             self._write_locked()
 
-    def pause(self, until_wall: float | None = None, *, status: str = "quota_wait", since: float | None = None) -> None:
+    def pause(self, until_wall: float | None = None, *, status: str = "quota_wait", since: float | None = None,
+              thinking_already_excluded: bool = False) -> None:
         """等待额度重置（或网络恢复，status="net_wait"）：现实用时（或准备时间）停止走表。
         since（monotonic）：从更早的时刻算起暂停——例如模型第一次连不上的时刻；那之后已经记成思考的时间退回来。"""
         with self._lock:
             self._flush_locked()
+            retrying = self.state.network_retrying
+            self._network_retry_end_locked('paused')
             self.timing.pause()
             self.pause_serial += 1
             if self._pause_start is None:
@@ -373,7 +415,7 @@ class Metrics:
                 start = now_m
                 if since is not None and since < now_m:
                     back = now_m - since
-                    if (self.playing or self.kb_done) and self._in_turn and not self._tools:
+                    if (self.playing or self.kb_done) and self._in_turn and not self._tools and not retrying and not thinking_already_excluded:
                         take = min(back, self.state.thinking_s)
                         self.state.thinking_s -= take
                         self._unnarrated = max(0.0, self._unnarrated - take)
@@ -414,7 +456,7 @@ class Metrics:
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
                 "completed_ticks", "splits", "detour", "detour_classifying", "detours", "plan_banked_ticks", "plan_session_ticks", "game_clock",
                 "output_tokens", "thinking_tokens", "token_frames", "token_s", "waited_s", "quota_waits",
-                "net_wait_s", "net_waits",
+                "net_wait_s", "net_waits", "network_retry_s", "network_retry_episodes",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "formal_thought",
                 "formal_thought_wall", "context_tokens",
                 "effort_pending", "effort_changes", "effort_log", "pause_denials", "plan_rounds_used", "replays", "replay_s", "replay_act_s",
@@ -422,7 +464,8 @@ class Metrics:
     # 新的一局开始时 HUD 清零的累计值（知识库、上下文与压缩次数不清零）
     CHAPTER_COUNTERS = ("thinking_s", "tool_s", "deaths", "decisions", "tool_calls", "sim_calls", "sim_rollouts",
                         "retries", "frames_played", "frames_auto", "play_game_s", "auto_game_s", "narrates",
-                        "output_tokens", "thinking_tokens", "token_frames", "token_s", "replays", "replay_s", "elapsed_s")
+                        "output_tokens", "thinking_tokens", "token_frames", "token_s", "replays", "replay_s", "elapsed_s",
+                        "network_retry_s", "network_retry_episodes")
 
     def restore(self, previous: dict, resumed_from: str) -> None:
         """续跑：接着上一段运行的统计累计（现实用时从上一段的值接着走）。"""
@@ -559,7 +602,15 @@ class Metrics:
     def snapshot(self) -> dict:
         with self._lock:
             self.state.elapsed_s = self.elapsed()
-            return asdict(self.state)
+            return self._snapshot_locked()
+
+    def _snapshot_locked(self):
+        data = asdict(self.state)
+        data['activity_status'] = self.state.status
+        if (self.state.network_retrying and self._in_turn and self._pause_start is None
+                and self.state.status not in ('done', 'stopped', 'paused', 'chat_idle')):
+            data['status'] = 'net_wait'
+        return data
 
     def write(self) -> None:
         with self._lock:
@@ -572,7 +623,7 @@ class Metrics:
             self.state.study_s = self._running(time.monotonic())
         tmp = self._path.with_suffix(".tmp")
         try:
-            tmp.write_text(json.dumps(asdict(self.state), ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.write_text(json.dumps(self._snapshot_locked(), ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             return
         # Windows 上目标文件正被别的进程打开（HUD 服务每秒读十几次）时替换会被拒绝：稍等重试；

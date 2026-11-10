@@ -18,9 +18,9 @@ from .session_store import load_json
 TZ = timezone(timedelta(hours=8), 'Asia/Shanghai')
 DEFAULT_TIME_FORMAT = '%m-%d %H:%M:%S'
 TIME_FIELDS = ('elapsed_s', 'thinking_s', 'tool_s', 'play_game_s', 'auto_game_s',
-               'study_s', 'compact_s', 'replay_s', 'waited_s', 'net_wait_s')
+               'study_s', 'compact_s', 'replay_s', 'waited_s', 'net_wait_s', 'network_retry_s')
 TIME_LABELS = ('累计有效现实时间', '思考', '工具', '游戏操作墙钟耗时', '自动推进墙钟耗时',
-               '知识库准备', '上下文压缩', '规划回放', '额度等待', '网络等待')
+               '知识库准备', '上下文压缩', '规划回放', '额度等待', '网络等待', '执行器自动重连（可重叠）')
 
 
 def timestamp(wall):

@@ -116,7 +116,7 @@ def write_analysis(report, output):
         lines.append(f"| {row['last_observed_room']} | {row['tools']} | {row['actions']} | {row['thinking_before_tools_s']:.3f} |")
     if analysis['snapshot_deltas']:
         delta = analysis['snapshot_deltas'][-1]
-        values = {key: delta['counters'].get(key, {}).get('delta') for key in ('thinking_s', 'tool_s', 'play_game_s', 'compact_s', 'net_wait_s')}
+        values = {key: delta['counters'].get(key, {}).get('delta') for key in ('thinking_s', 'tool_s', 'play_game_s', 'compact_s', 'net_wait_s', 'network_retry_s')}
         lines += ['', '## 最近恢复链的快照比较（非精确窗口统计）', '',
                   f"基准 {delta['base_snapshot_id']} → 末次 {delta['end_snapshot_id']}；游戏时钟变化 {delta['game_clock_seconds_delta']} 秒。",
                   '累计秒数变化：`' + json.dumps(values, ensure_ascii=False) + '`。前段快照可能受后续聊天影响，不能当作已证明的恢复基线。']

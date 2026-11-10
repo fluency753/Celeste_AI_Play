@@ -915,12 +915,22 @@ class ClaudeRunner(SessionControls):
 
     def _net_trouble(self, status, text: str, give_up: bool) -> None:
         """Claude Code 报告连不上模型（一次重试，或这一轮以连接错误结束）。重试次数够了或它已放弃时认定断网。"""
-        if self.stop_reason or self.quota_until is not None or not getattr(self.cfg, "net_wait", True):
+        if self.stop_reason or self.quota_until is not None:
+            return
+        if not self.turn_active or self.metrics._pause_start is not None:
+            return  # A late retry notice must not revive a paused or finished turn.
+        if not self.metrics._in_turn:
+            # A usage sample can cross a pause/resume boundary before timing has
+            # opened the next turn. Preserve token exclusion without reviving it.
+            self._exclude_token_window('network_retry')
             return
         if self.net_down_since is None:
             self._exclude_token_window('network_retry')
             self.net_down_since = time.monotonic()
             print(f"[agent] 模型连不上（{status or '无响应'}：{str(text)[:80]}），Claude Code 正在重试", flush=True)
+        self.metrics.network_retry_begin(f"{status or '无响应'}：{str(text)[:200]}")
+        if not getattr(self.cfg, "net_wait", True):
+            return
         if self.net_outage or not give_up:
             return
         self.net_outage = True
@@ -932,6 +942,7 @@ class ClaudeRunner(SessionControls):
     def _net_ok(self) -> None:
         """收到模型的正常输出：之前的连接重试已经自己好了。"""
         if self.net_down_since is not None and not self.net_outage:
+            self.metrics.network_retry_end()
             print(f"[agent] 模型连接已恢复（重试 {time.monotonic() - self.net_down_since:.0f} 秒）", flush=True)
             self.net_down_since = None
         self.net_streak = 0
@@ -942,7 +953,7 @@ class ClaudeRunner(SessionControls):
         since = self.net_down_since or time.monotonic()
         self.net_streak += 1
         min_wait = min(600.0, 30.0 * 2 ** (self.net_streak - 1))
-        self.metrics.pause(status="net_wait", since=since)
+        self.metrics.pause(status="net_wait", since=since, thinking_already_excluded=True)
         self.metrics.update(thought="")
         n = self.metrics.state.net_waits + 1
         publish(self.run_dir, f"system:net-wait:{n}:{int(time.time())}",
@@ -1176,6 +1187,8 @@ class ClaudeRunner(SessionControls):
                 raw = event.get('event') or {}
                 if raw.get('type') == 'message_start':
                     self._check_reply_model(event, raw.get('message') or {})
+                    if (raw.get('message') or {}).get('model') != '<synthetic>':
+                        self._net_ok()
                 self.usage_tracker.partial(event)
         elif etype == 'control_response':
             response = event.get('response') or {}
