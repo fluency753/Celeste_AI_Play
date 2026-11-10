@@ -20,6 +20,7 @@ from .container import ensure_container
 from .metrics import Metrics
 from .execution import workspace_capabilities
 from .session_store import load_json, write_json
+from . import run_log
 
 
 def can_wake(directory, *, state=None):
@@ -120,6 +121,8 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False, fr
         raise ValueError("只能唤起已准备、已完成试玩，或中断后保持冻结的会话")
     if fresh_session:
         directory = successor_run(directory)
+    run_log.attach(directory)
+    if fresh_session:
         print(f"[chat] 接班会话：新运行目录 {directory}（之后用 --resume 这个目录续跑）", flush=True)
     state = load_json(directory / "run_state.json")
     pending = bool(state.get("session_pending"))
@@ -192,8 +195,15 @@ def main():
     parser.add_argument('--fresh-session', action='store_true',
                         help='接班会话：同一工作区与容器里开一个全新的会话，新建运行目录记下它，之后 --resume 新目录续跑')
     args = parser.parse_args()
-    asyncio.run(chat(args.run.resolve(), args.name_save, args.allow_programs, args.sim, args.fresh_session))
+    try:
+        asyncio.run(chat(args.run.resolve(), args.name_save, args.allow_programs, args.sim, args.fresh_session))
+    except BaseException as exc:
+        directory = run_log.current_directory()   # Refusals before the session starts stay in the console log.
+        if run_log.record_crash(directory, exc):
+            print(f"[chat] 聊天主控因异常退出，完整异常链见 {directory / run_log.ERROR_NAME}", flush=True)
+        raise
 
 
 if __name__ == "__main__":
+    run_log.install()
     main()

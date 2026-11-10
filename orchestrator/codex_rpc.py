@@ -6,9 +6,15 @@ import json
 import os
 import re
 import shutil
+import sys
+import time
 import tomllib
 import uuid
 from pathlib import Path
+
+DISCONNECT_LOG = 'app_server_exits.jsonl'
+STDERR_TAIL_BYTES = 4000
+STDERR_TAIL_LINES = 12
 
 
 def codex_executable() -> str:
@@ -77,10 +83,15 @@ class CodexRPC:
         self.before_start = before_start
         self.environment = environment or {}
         self.owner = uuid.uuid4().hex
+        self.closing = False
+        self.disconnect = None       # What was observed when the stream ended unexpectedly.
+        self._stderr_start = 0
 
     async def start(self):
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.stderr = (self.directory / "codex_stderr.log").open("ab")
+        stderr_path = self.directory / "codex_stderr.log"
+        self._stderr_start = stderr_path.stat().st_size if stderr_path.exists() else 0
+        self.stderr = stderr_path.open("ab")
         env = dict(os.environ)
         for key in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_APP_TOOLS_PIPE_PATH", "CODEX_TOOL_CALL_ID",
                     "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"):
@@ -143,6 +154,56 @@ class CodexRPC:
         except Exception as exc:
             await self.send({"id": message["id"], "error": {"code": -32000, "message": str(exc)}})
 
+    def _stderr_tail(self) -> str:
+        """Last lines this server wrote to stderr (earlier servers in the same file excluded)."""
+        try:
+            with open(self.directory / "codex_stderr.log", "rb") as stream:
+                size = stream.seek(0, os.SEEK_END)
+                stream.seek(max(self._stderr_start, size - STDERR_TAIL_BYTES))
+                data = stream.read()
+        except OSError as error:
+            return f'（读取失败：{error}）'
+        lines = data.decode('utf-8', errors='replace').splitlines()
+        return '\n'.join(lines[-STDERR_TAIL_LINES:]).strip()
+
+    async def _note_disconnect(self, failure):
+        """Record exit code, stderr tail and container state before callers see the disconnect."""
+        code = None
+        if self.proc is not None and hasattr(self.proc, 'wait'):
+            try:
+                code = await asyncio.wait_for(self.proc.wait(), 3)
+            except Exception:  # noqa: BLE001 - still running (timeout) or not waitable
+                code = getattr(self.proc, 'returncode', None)
+        info = {'wall': time.time(), 'exit_code': code, 'protocol_error': str(failure) if failure else None,
+                'stderr_tail': self._stderr_tail(), 'container': self.container}
+        if self.container:
+            from .codex_container import container_state
+            info['container_state'] = await asyncio.to_thread(container_state, self.container)
+        self.disconnect = info
+        try:
+            with open(self.directory / DISCONNECT_LOG, 'a', encoding='utf-8') as stream:
+                stream.write(json.dumps(info, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+        tail = info['stderr_tail'].replace('\n', ' | ') if info['stderr_tail'] else '（stderr 无输出）'
+        print(f'[codex] App Server 连接意外结束：{self.disconnect_detail()}；stderr：{tail}', flush=True)
+
+    def disconnect_detail(self) -> str:
+        info = self.disconnect
+        if not info:
+            return '未取得退出信息'
+        code = info.get('exit_code')
+        parts = ['进程仍在运行，输出流已断开' if code is None else f'进程退出码 {code}']
+        if info.get('container_state'):
+            parts.append(f"容器 {info['container_state']}")
+        if info.get('protocol_error'):
+            parts.append(info['protocol_error'])
+        return '，'.join(parts)
+
+    def disconnect_message(self, prefix='Codex app-server 已断开') -> str:
+        return (f'{prefix}（{self.disconnect_detail()}）；详见 {self.directory / DISCONNECT_LOG} '
+                f'与 {self.directory / "codex_stderr.log"}')
+
     async def _read(self):
         failure = None
         try:
@@ -164,11 +225,18 @@ class CodexRPC:
             failure = ConnectionError(f'Codex app-server 协议读取失败：{type(exc).__name__}: {exc}')
             raise
         finally:
+            # Our own close() and task cancellation are not disconnects.
+            if not self.closing and not isinstance(sys.exception(), asyncio.CancelledError):
+                try:
+                    await self._note_disconnect(failure)
+                except Exception as error:  # noqa: BLE001 - evidence must not hide the disconnect
+                    print(f'[codex] 记录 App Server 断开信息失败：{error}', flush=True)
             for future in self.pending.values():
                 if not future.done():
-                    future.set_exception(failure or ConnectionError("Codex app-server 已断开；检查 codex_stderr.log"))
+                    future.set_exception(failure or ConnectionError(self.disconnect_message()))
 
     async def close(self):
+        self.closing = True   # The stream ending from here on is our own shutdown.
         failure = None
         try:
             if self.proc and self.proc.returncode is None:

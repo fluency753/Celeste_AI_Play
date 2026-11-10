@@ -10,6 +10,8 @@ Codex App Server 与原生 Shell、补丁编辑工具均运行在智能体容器
 
 原生工具的 Post 回执丢失或迟到时，主控以同一调用的 `item/completed`（`commandExecution`／`fileChange`／`imageView`，`id` 即钩子的 `tool_use_id`）结束计时并放行规划回放，不再等到回合收尾；工具历史记 `completed_by_event`，迟到的回执不重复记账。动态游戏请求带请求票据：主控在所有等待（动作锁、规划回放、思考展示）之后、第一次游戏输入之前核验发起轮次仍有效，轮次已结束、已换到新轮次、用户暂停或停止、模型断线后重新生成（`error.willRetry`）时，旧请求不执行、不显示思考；已开始输入的请求保留已执行范围，不重试。
 
+App Server 本身（容器里的 `docker exec` 进程）的输出流意外结束时，主控先等它最多 3 秒拿到退出码，再读本次 App Server 写进 `codex-control/codex_stderr.log` 的最后几行（同一文件里更早的 App Server 输出不算），用 `docker inspect` 记下容器状态（状态、退出码、OOM、启动时间），追加到 `codex-control/app_server_exits.jsonl`，并写进报错与运行目录的 `controller.log`。退出码为空表示进程仍在运行、只是输出流断开；容器状态读取失败（例如 Docker 本身不可用）时记下失败原因。主控自己关闭 App Server 时不记。
+
 可在不调用门禁、不恢复游戏的情况下，用 `docker cp <容器名>:/home/agent/.codex/diagnostics/codex-hook-errors.jsonl <本机目标路径>` 提取；没有失败记录时文件可以不存在。该文件不在共享登录卷内，当前不会自动附入会话导出包。更新此 hook 需要重新构建智能体镜像，已运行容器不会仅因源码更新而改变。上游模型 API 断连与 hook 到本机 `/gate` 的 HTTP 失败属于不同通道，排查时应结合各自日志，不能根据上游断连直接归因本机回执失败。
 
 ## 安装与账号

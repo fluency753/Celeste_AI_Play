@@ -461,6 +461,12 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     ensure.assert_not_called()
                     self.assertIn('--container unused-container login', summary['stop_reason'])
                     self.assertEqual(summary['session_id'], 'retained-thread')
+                    self.assertNotIn('error', summary)
+                else:
+                    # A crashed run says why in its own summary, not just "中断".
+                    self.assertTrue(summary['stop_reason'].startswith('主控异常：RuntimeError: '))
+                    self.assertEqual(summary['error']['type'], 'RuntimeError')
+                    self.assertIn('自动等待已关闭', summary['error']['message'])
             finally:
                 session.close(False)
         finally:

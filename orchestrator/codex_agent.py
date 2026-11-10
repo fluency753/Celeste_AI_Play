@@ -198,6 +198,10 @@ class CodexRunner(ModelRecovery, SessionControls):
         tools.append(spec("celeste_finish_preparation", "仅准备模式可用：全库阅读完成后结束，不启动游戏。", {}))
         return tools
 
+    def _rpc_disconnect_message(self, prefix):
+        describe = getattr(self.rpc, 'disconnect_message', None)
+        return describe(prefix) if callable(describe) else prefix + '；检查 codex_stderr.log'
+
     def _network_event(self, method, params):
         """A local command completing is not evidence that the model API reconnected."""
         if (params.get('threadId') != self.session_id or params.get('turnId') != self.turn_id
@@ -897,7 +901,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                     if self.stop_requested:
                         return await self._stopped_reason()
                     if self.rpc.reader.done():
-                        raise ConnectionError("暂停期间 Codex app-server 已断开")
+                        raise ConnectionError(self._rpc_disconnect_message("暂停期间 Codex app-server 已断开"))
                     if self.control_task.done():
                         self.control_task.result()
                         raise RuntimeError("用户控制通道已停止")
@@ -960,7 +964,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                         if getattr(self.session, "agent_stop", None):
                             return self.session.done_reason
                     if self.rpc.reader.done():
-                        raise ConnectionError("Codex app-server 已断开；检查 codex_stderr.log")
+                        raise ConnectionError(self._rpc_disconnect_message("Codex app-server 已断开"))
                     if self._elapsed(started) >= self.cfg.budget_seconds:
                         await self.rpc.request("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id})
                         return "现实时间预算用完"

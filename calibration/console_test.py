@@ -221,6 +221,31 @@ class LaunchFailureTests(unittest.TestCase):
                 self.assertFalse(console_api.orchestrator_status()["failed"])   # 中断：写了总结，退出码 1 正常
 
 
+class RunCrashTests(unittest.TestCase):
+    def test_latest_run_ended_by_controller_exception_is_reported_with_its_log(self):
+        from overlay import console_api
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            run = root / "runs" / "dev" / "20261111-050000"
+            run.mkdir(parents=True)
+            (root / "runs" / "latest.txt").write_text(str(run), encoding="utf-8")
+            summary = {"stop_reason": "主控异常：ConnectionError: Codex app-server 已断开",
+                       "error": {"type": "ConnectionError", "message": "Codex app-server 已断开"}}
+            (run / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+            (run / "controller.log").write_text("2026-11-11 05:00:00.000 [codex] App Server 连接意外结束\n", encoding="utf-8")
+            (run / "controller_error.txt").write_text("Traceback ...", encoding="utf-8")
+            with patch.object(console_api, "REPO_ROOT", root), patch.object(console_api, "LAUNCH_RECORD", root / "none.json"), \
+                 patch.object(console_api, "_port_open", return_value=False), \
+                 patch.object(console_api, "_mutex_exists", return_value=False):
+                crash = console_api.orchestrator_status()["crash"]
+                self.assertEqual(crash["error"], "ConnectionError: Codex app-server 已断开")
+                self.assertEqual(crash["error_file"], str(run / "controller_error.txt"))
+                self.assertIn("App Server 连接意外结束", crash["log_tail"])
+                summary.pop("error")      # A normal stop (中断、预算用完) is not a crash.
+                (run / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+                self.assertIsNone(console_api.orchestrator_status()["crash"])
+
+
 class FakeRunner(SessionControls):
     supports_interrupt = True
 

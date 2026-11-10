@@ -77,7 +77,30 @@ def orchestrator_status(mcp_port: int = 47780) -> dict:
     return {"running": running, "run": str(run) if run else None, "host": launch.get("host"),
             "host_state": host.get("state"), "host_exit_code": host.get("exit_code"), "failed": failed,
             "launched": launch.get("argv"), "launched_wall": launch.get("wall"),
-            "log_tail": _tail(Path(launch["host"]) / "output.log") if failed else ""}
+            "log_tail": _tail(Path(launch["host"]) / "output.log") if failed else "",
+            "crash": None if running or failed else _crash(run)}
+
+
+CRASH_NOTICE_S = 24 * 3600
+
+
+def _crash(run: Path | None) -> dict | None:
+    """最新运行写了总结但因主控异常结束（summary.json 带 error），一天内在控制台提示。"""
+    if run is None:
+        return None
+    path = run / "summary.json"
+    error = _read_json(path).get("error")
+    if not isinstance(error, dict):
+        return None
+    try:
+        if time.time() - path.stat().st_mtime > CRASH_NOTICE_S:
+            return None
+    except OSError:
+        return None
+    from orchestrator.run_log import ERROR_NAME, LOG_NAME
+    return {"run": str(run), "error": f"{error.get('type')}: {error.get('message')}",
+            "error_file": str(run / ERROR_NAME) if (run / ERROR_NAME).exists() else None,
+            "log_tail": _tail(run / LOG_NAME)}
 
 
 def _tail(path: Path, limit: int = 1600) -> str:
@@ -720,7 +743,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.24.10"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.24.11"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

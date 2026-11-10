@@ -2138,6 +2138,13 @@ async function refreshStatus() {
     $("launchBanner").hidden = false;
     $("launchText").textContent = `主控没能完成这次运行就退出了（退出码 ${orch.host_exit_code ?? "—"}），没有写出运行总结。最后几行输出：`;
     $("launchLog").textContent = orch.log_tail || "";
+    ui.launchKey = orch.launched_wall;
+  } else if (orch.crash && ui.dismissedLaunch !== orch.crash.run) {
+    $("launchBanner").hidden = false;
+    $("launchText").textContent = `主控在运行中因异常退出：${orch.crash.error}。运行总结已写出`
+      + (orch.crash.error_file ? `，完整异常链见 ${orch.crash.error_file}` : "") + "。运行记录 controller.log 的最后几行：";
+    $("launchLog").textContent = orch.crash.log_tail || "";
+    ui.launchKey = orch.crash.run;
   }
   updateStartButton();
   updateKbSave();
@@ -3645,7 +3652,7 @@ $("compose").addEventListener("submit", sendMessage);
 $("message").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("compose").requestSubmit(); } });
 $("releaseGame").addEventListener("click", releaseGame);
 $("resumeLatest").addEventListener("click", () => resumeRun());
-$("launchDismiss").addEventListener("click", () => { $("launchBanner").hidden = true; ui.dismissedLaunch = ui.status && ui.status.orchestrator.launched_wall; });
+$("launchDismiss").addEventListener("click", () => { $("launchBanner").hidden = true; ui.dismissedLaunch = ui.launchKey; });
 window.addEventListener("beforeunload", (e) => {
   if (ui.leaving) return;      // 切换、新建或删除配置后重新载入：已经问过了
   if ((ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty) || provDirty() || [...personalDrafts.values()].some(draft => draft.text !== draft.saved)) { e.preventDefault(); e.returnValue = ""; }

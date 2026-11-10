@@ -61,6 +61,19 @@ def launch_command(container: str, owner: str, *command: str, environment=None) 
                         '--owner', owner, '--', *command, environment=environment)
 
 
+def container_state(container: str) -> str:
+    """One line of container state for disconnect evidence; never raises."""
+    template = '{{.State.Status}} 退出码={{.State.ExitCode}} OOM={{.State.OOMKilled}} 启动于={{.State.StartedAt}}'
+    try:
+        result = subprocess.run([find_docker_exe(), 'inspect', '-f', template, container], capture_output=True,
+                                text=True, encoding='utf-8', errors='replace', timeout=10)
+    except Exception as error:  # noqa: BLE001 - Docker itself may be what went away
+        return f'状态未知（{type(error).__name__}: {error}）'
+    if result.returncode:
+        return f'状态未知（docker inspect：{(result.stderr or result.stdout).strip()[:300]}）'
+    return result.stdout.strip()
+
+
 def login_args(*args: str) -> list[str]:
     wrapper = ('if [ "$CELESTE_CODEX_PLAYER_LOGIN" = 1 ]; then '
                'exec python3 /usr/local/lib/celeste/codex-app-server.py --login-command -- "$@"; fi; exec "$@"')

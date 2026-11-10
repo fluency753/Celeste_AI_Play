@@ -45,6 +45,7 @@ from .modes import EXPLORE, KNOWLEDGE_OF_MODE, MODE_OF_KNOWLEDGE, SPEEDRUN, desc
 from .playback import Playback
 from .server import TRANSPORT_SECURITY, build_server
 from .session_store import load_json, write_json
+from . import run_log
 
 
 def parse_args() -> tuple[RunConfig, argparse.Namespace]:
@@ -1427,6 +1428,11 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                            kb_study=study.summary() if study else None, recording=recording)
             if cleanup_errors:
                 summary['cleanup_errors'] = [f'{label}：{error}' for label, error in cleanup_errors]
+            if run_log.is_crash(primary):
+                # Without this the summary only says "中断"; the traceback goes to controller_error.txt.
+                summary['error'] = run_log.describe(primary)
+                if not goal.get("completion_report"):
+                    summary['stop_reason'] = run_log.crash_reason(primary)
             if parked and primary is None and not cleanup_errors and recording_stopped:
                 summary.update(parked=True, parked_slot=cfg.save_slot, parked_save=cfg.save,
                                parked_frame=runner.parked_frame)
@@ -1707,6 +1713,7 @@ def main() -> int:
     from .runtimes import runtime
     token = None if args.no_agent else runtime(cfg.engine).token(cfg)
     run_dir = make_run_dir(cfg.agent)
+    run_log.attach(run_dir)   # Timestamped copy of this process's output, including what came before.
     print(f"[run] 日志目录：{run_dir}", flush=True)
     mod_hud = None
     recorder = None
@@ -1766,6 +1773,10 @@ def main() -> int:
     except RecordingError as exc:
         print(f"[record] {exc}", flush=True)
         return 2
+    except BaseException as exc:
+        if run_log.record_crash(run_dir, exc):
+            print(f"[run] 主控因异常退出，完整异常链见 {run_dir / run_log.ERROR_NAME}", flush=True)
+        raise
     finally:
         try:
             keep_frozen = bool(getattr(cfg, '_keep_frozen', False))
@@ -1824,5 +1835,6 @@ def claim_controller_lease():
 
 if __name__ == "__main__":
     sys.path.insert(0, str(REPO_ROOT))
+    run_log.install()   # Held until the run directory exists, then written to its controller.log.
     _controller_lease = claim_controller_lease()  # held until this process exits
     sys.exit(main())

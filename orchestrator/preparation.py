@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import hashlib
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -19,15 +20,21 @@ from .kb_layout import study_identity
 from .workspace_setup import install_game_helpers
 from .live import LiveStatus
 from .metrics import Metrics
+from . import run_log
 from overlay.server import start_in_thread
 
 
 async def prepare(args):
     profile = getattr(args, 'profile', None)
-    if profile is None:
-        return await _prepare(args, None)
-    with profiles.using(profile):
-        return await _prepare(args, profile)
+    try:
+        if profile is None:
+            return await _prepare(args, None)
+        with profiles.using(profile):
+            return await _prepare(args, profile)
+    except BaseException as exc:
+        if run_log.record_crash(getattr(args, 'prepare_directory', None), exc):
+            print(f"[prepare] 准备因异常退出，完整异常链见 {args.prepare_directory / run_log.ERROR_NAME}", flush=True)
+        raise
 
 
 async def _prepare(args, profile):
@@ -56,6 +63,8 @@ async def _prepare(args, profile):
     if (directory/'prepare_summary.json').exists():
         raise ValueError('准备目录已有结果，请选择新的输出目录。')
     directory.mkdir(parents=True, exist_ok=True)
+    args.prepare_directory = directory
+    run_log.attach(directory)
     print(f"[{cfg.engine}] 准备日志：{directory}", flush=True)
     container = await asyncio.to_thread(ensure_container, cfg)
     game = cfg.workspace_dir / "game"
@@ -101,6 +110,8 @@ async def _prepare(args, profile):
                           "codex_player_login": cfg.codex_player_login, **profile_state, **effective_profile}
                 if login_required:
                     result['login_required'] = login_required
+                if run_log.is_crash(crash := sys.exception()):
+                    result.update(reason=run_log.crash_reason(crash), error=run_log.describe(crash))
                 (directory / "prepare_summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
                 print(f"[{cfg.engine}] {reason}；实际阅读 {study.progress():.1%}", flush=True)
     finally:
@@ -144,4 +155,5 @@ def main():
 
 
 if __name__ == "__main__":
+    run_log.install()
     raise SystemExit(main())

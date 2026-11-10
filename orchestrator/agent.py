@@ -718,7 +718,14 @@ class ClaudeRunner(SessionControls):
                     if ((self.net_outage or self.quota_until is not None or self.model_mismatch is not None)
                             and not self.stop_reason):
                         return False      # 主控为等待网络 / 额度、换回模型结束了进程
-                    self.stop_reason = self.stop_reason or 'Claude Code 输出流已结束'
+                    if not self.stop_reason:
+                        try:   # The exit code tells a crash from a normal exit; the stream may close first.
+                            code = await asyncio.wait_for(self.proc.wait(), 3)
+                        except Exception:  # noqa: BLE001
+                            code = getattr(self.proc, 'returncode', None)
+                        self.stop_reason = ('Claude Code 输出流已结束（' + ('进程仍在运行' if code is None else f'退出码 {code}')
+                                            + f'；报错输出见 {self.run_dir / "claude_stderr.log"}）')
+                        print(f'[agent] {self.stop_reason}', flush=True)
                     return True
                 if not self.metrics.playing and self.study is not None:
                     # 准备阶段：不消耗现实用时预算，只受准备阶段上限约束

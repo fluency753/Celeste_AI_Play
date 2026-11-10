@@ -780,7 +780,7 @@ Codex 开局会在原工作区内完成一轮模型预检，通过后才接管�
 
 - 同一时间只能有一次运行。控制台检测到有主控在运行（包括从命令行启动的）时，"开始运行"不可用，知识库与提示词也不能保存修改。
 - 桥接只接受一个连接，新连接会顶掉主控的连接。所以控制台平时不连桥接：游戏状态来自桥接（0.13.1 起）每 0.25 秒写进共享内存的状态字段；只有确认没有主控在运行时，"交还游戏控制"才会连一次桥接。
-- 控制台启动的主控在后台运行，输出在 `local/background/<时间>/output.log`；没能完成运行就退出（没有写出运行总结）时，控制台会显示最后几行输出。
+- 控制台启动的主控在后台运行，输出在 `local/background/<时间>/output.log`；没能完成运行就退出（没有写出运行总结）时，控制台会显示最后几行输出。同样的输出另有一份带时间戳的 `controller.log` 放在运行目录里（命令行启动的也有）。运行中因主控异常结束时，总结里的结束原因写成“主控异常：类型: 原文”，控制台一天内提示这次异常并显示 `controller.log` 的最后几行，完整异常链在运行目录的 `controller_error.txt`。
 - 运行页的玩法设置与固定项、知识库的阅读权限与修改、提示词修改、个人追加要求属于顶部选中的"配置"；游戏位置、本机设置、没固定的本次运行设置（上次填写的）、直播与录屏的选择记在 `configs/local.console.json`；提供方账户的用量记在 `configs/local.providers.json`（4.14）。都是本机文件，不入库。
 - 命令行另外支持 `--prepared`（用原生 GPT 预先准备好的会话开局，见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)）、`--fresh-session`（续跑时开新会话）、`--note-file`（续跑时附用户留言）和 `--goal`／`--goal-file`（启动时登记目标）。
 
@@ -936,12 +936,15 @@ HUD 的「新建并准备」默认绑定点击时控制台选中的预设，准�
 | frames.jsonl | 每个推进帧一行：帧号、按键、思考语句、所属决策、Madeline 位置速度状态；自动推进的帧标 `auto` | 已实现 |
 | public_events.jsonl | 公开解说历史：每次 `narrate` 与 `act` 的思考语句（只有这句话本身），HUD 的思考一栏读它 | 已实现 |
 | agent_events.jsonl | Claude Code 输出的全部事件（图片数据已省略），可复盘智能体的每一步 | 已实现 |
-| summary.json | 结束时的汇总与结束原因 | 已实现 |
+| summary.json | 结束时的汇总与结束原因；主控因异常结束时结束原因为“主控异常：类型: 原文”，另有 `error`（类型、原文、异常链、附注） | 已实现 |
+| controller.log | 主控进程的全部输出（`[run]`、`[codex]`、`[agent]` 等提示与未捕获异常的堆栈），每行带本地时间；从控制台或命令行启动都有，开跑前的预检输出也在里面。聊天唤起与准备阶段写进各自目录的同名文件，每个进程开头一行分隔 | 已实现 |
+| controller_error.txt | 主控、聊天或准备因异常退出时追加：时间、进程号与完整异常链（含 `raise ... from` 的原因与清理失败附注）；用户中断与参数拒绝不记 | 已实现 |
 | run_state.json | 续跑所需的设置、章节队列与 Claude Code 会话编号；用了提示词本机修改时另记文件名与指纹 | 已实现 |
 | system_prompt.md | 本次运行发给智能体的完整提示词 | 已实现 |
 | save_backup/ | 开跑前的存档备份 | 已实现 |
 | playback/ | 规划回放：每轮的概况 `playbacks.jsonl`（推演条数、画了哪些线、渲染用时） | 已实现 |
-| claude_stderr.log、mcp.json、agent_cwd/ | Claude Code 的错误输出；本机方式下的工具服务配置与空工作目录 | 已实现 |
+| claude_stderr.log、mcp.json、agent_cwd/ | Claude Code 的错误输出；本机方式下的工具服务配置与空工作目录。Claude Code 输出流意外结束时，结束原因带进程退出码 | 已实现 |
+| codex-control/ | Codex 执行器：`codex_stderr.log`（App Server 的错误输出）与 `app_server_exits.jsonl`（App Server 连接意外结束时一行：时间、进程退出码或“仍在运行”、本次 App Server 写到 stderr 的最后几行、容器状态与协议读取错误；主控自己关闭时不记）；`codex_events.jsonl` 在运行目录里，含模型接口断线重试（`error`、`willRetry`）与每轮失败原文 | 已实现 |
 | recording/ | OBS 锁步录制的成片 gameplay.mp4、纯享版 gameplay_pure.mp4 与对账文件（见 4.4 节） | 已实现（录屏默认开启，`--no-record` 关闭） |
 | inputs.tas | 回放用的逐帧按键与系统事件 | 未实现 |
 | manifest.json | 版本、配置与哈希 | 未实现 |
