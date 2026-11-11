@@ -34,6 +34,11 @@ def hidden_dialog(title):
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Keep-alive: the 2 x 100 fetches share a connection. With HTTP/1.0 each fetch opened a new
+    # loopback connection, and under the parallel suite's connection churn Windows occasionally
+    # refused one before it reached this server ("TypeError: Failed to fetch", about 1 in 50 reloads).
+    protocol_version = 'HTTP/1.1'
+
     def do_GET(self):
         body = b'{}' if self.path == '/data' else b'<html><body>Isolated HUD host test</body></html>'
         self.send_response(200)

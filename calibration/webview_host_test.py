@@ -144,9 +144,11 @@ class WebviewHostTests(unittest.TestCase):
             self.skipTest('pywebview is not installed')
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / 'result.json'
+            # Longer than the fixture's own waits (15 s load, then 15 s per page phase and reload), so a
+            # slow machine gets the fixture's diagnosis instead of a bare timeout.
             result = subprocess.run([sys.executable, '-X', 'utf8', '-m', 'calibration.webview_host_fixture', str(output)],
                                     cwd=Path(__file__).resolve().parents[1], capture_output=True,
-                                    text=True, encoding='utf-8', timeout=40)
+                                    text=True, encoding='utf-8', timeout=90)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             data = json.loads(output.read_text(encoding='utf-8'))
         self.assertNotIn('error', data)
