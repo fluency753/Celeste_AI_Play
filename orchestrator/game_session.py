@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextvars
 import json
 import hashlib
+import secrets
 import sys
 import threading
 import time
@@ -409,6 +410,7 @@ class GameSession:
         self._transition_observed = None
         self._transition_saved = None
         self._last_stop_evidence = None
+        self._stop_confirmation = None
         self.goals = GoalManager(run_dir)
         self._goal_progress = {}
         self._entered_level = False
@@ -2394,9 +2396,15 @@ class GameSession:
             return report
 
     def stop_run(self, reason: str) -> dict:
-        """智能体报告任务阻塞：不算通关、不操作游戏，主控把试玩暂停（章节内保持冻结，菜单正常运行），等用户处理后继续或停止。
+        """确认后记录任务阻塞并暂停，章节内保持冻结，菜单正常运行。
         暂停由 HUD 控制器提供（request_pause）；没有控制器时（例如测试）只记下报告。"""
         reason = " ".join((reason or "").split())
+        code = None
+        if reason.startswith('确认阻塞 '):
+            prefix, separator, detail = reason.partition('：')
+            if separator:
+                code = prefix.removeprefix('确认阻塞 ')
+                reason = detail.strip()
         if not reason:
             raise ActError('报告任务阻塞必须说明原因')
         if len(reason) > 200:
@@ -2413,6 +2421,7 @@ class GameSession:
             control_note = guard() if guard else None
             if (progress and progress['remaining_frames'] and self.client is not None and not failure
                     and not getattr(self, 'reload_observation_required', False) and not control_note):
+                self._stop_confirmation = None
                 return self._stop_diagnostic('recovery_available', reason, frame, progress)
             level, player = obs.get('level') or {}, obs.get('player') or {}
             evidence = (self._transition_epoch(), obs.get('scene'), self._transition_identity(obs, level),
@@ -2420,11 +2429,21 @@ class GameSession:
                         level.get('screenWipe'), level.get('deaths'), player.get('state'), failure)
             if (type(frame) is int or failure) and evidence == self._last_stop_evidence:
                 return self._stop_diagnostic('duplicate', reason, frame, progress, control_note=control_note)
+            # Retrying the same bridge failure can change its request serial.
+            scope = (evidence[:-1], bool(failure), self.goals.snapshot()['revision'])
+            if self._stop_confirmation is None or self._stop_confirmation[0] != scope:
+                self._stop_confirmation = (scope, secrets.token_hex(6))
+            expected = self._stop_confirmation[1]
+            if code != expected:
+                result = self._stop_diagnostic('confirmation_required', reason, frame, progress)
+                return {**result, 'confirmation_prefix': f'确认阻塞 {expected}：'}
             reports = list((self.agent_stop or {}).get('reports') or [])
             reports.append({'reason': reason, 'wall': time.time(), 'decision': self.decision_index})
-            self.agent_stop = {'reason': reason, 'source': 'agent', 'reports': reports}
-            (self.run_dir/'agent_stop.json').write_text(json.dumps(self.agent_stop,ensure_ascii=False,indent=2),encoding='utf-8')
+            report = {'reason': reason, 'source': 'agent', 'reports': reports}
+            write_json(self.run_dir / 'agent_stop.json', report, indent=2)
+            self.agent_stop = report
             self._last_stop_evidence = evidence
+            self._stop_confirmation = None
         pause = getattr(self, 'request_pause', None)
         paused = bool(pause and pause(reason))
         return {'status': 'reported', 'reason': reason, 'source': 'agent', 'paused': paused,

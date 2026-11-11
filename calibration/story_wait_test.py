@@ -351,6 +351,12 @@ class StoryWaitTests(unittest.TestCase):
         self.assertFalse(result.is_error)
         return json.loads(result.content[0].text.splitlines()[0])
 
+    def _confirm_stop_report(self, server, reason='角色没有恢复'):
+        pending = self._stop_report(server, reason)
+        self.assertEqual(pending['status'], 'confirmation_required')
+        self.assertFalse(pending['paused'])
+        return self._stop_report(server, pending['confirmation_prefix'] + reason)
+
     def _wire_bridge(self, bridge):
         with patch('tools.bridge_client.socket.create_connection', return_value=BridgeWire(bridge)):
             client = BridgeClient(port=1)
@@ -575,12 +581,13 @@ class StoryWaitTests(unittest.TestCase):
         steps = client.steps.copy()
         self.session.observe()
         self.assertEqual(client.steps, steps)
-        self.assertEqual(self._stop_report(server)['status'], 'reported')
+        self.assertEqual(self._confirm_stop_report(server)['status'], 'reported')
         self.assertEqual(self._stop_report(server, '同一帧仍然无角色')['status'], 'duplicate')
         self.assertEqual(len(pauses), 1)
         self.assertEqual(len(self.session.agent_stop['reports']), 1)
         path = self.root / 'stop_run_diagnostics.jsonl'
-        self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['status'], 'duplicate')
+        statuses = [json.loads(line)['status'] for line in path.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(statuses, ['confirmation_required', 'duplicate'])
 
     def test_transport_failure_allows_stop_report_despite_cached_respawn_evidence(self):
         _, server = self._death_fixture(pause_at=97880)
@@ -602,7 +609,12 @@ class StoryWaitTests(unittest.TestCase):
         client.call('observe')
         self.session.client = client
         try:
-            self.assertEqual(self._stop_report(server, '桥接没有返回可核验的推进结果')['status'], 'reported')
+            reason = '桥接没有返回可核验的推进结果'
+            pending = self._stop_report(server, reason)
+            self.assertEqual(pending['status'], 'confirmation_required')
+            command, serial = client.last_call_failure
+            client.last_call_failure = (command, serial + 1)
+            self.assertEqual(self._stop_report(server, pending['confirmation_prefix'] + reason)['status'], 'reported')
         finally:
             self.session.client = None
 
@@ -623,7 +635,7 @@ class StoryWaitTests(unittest.TestCase):
         self.assertEqual(len(client.steps), count + 1)
         self.session.observe()
         self.assertEqual(len(client.steps), count + 1)
-        self.assertEqual(self._stop_report(server)['status'], 'reported')
+        self.assertEqual(self._confirm_stop_report(server)['status'], 'reported')
 
     def test_respawn_observe_does_not_add_frames_to_tas(self):
         client, _ = self._death_fixture(pause_at=97880)

@@ -64,7 +64,19 @@ class CutsceneTests(unittest.TestCase):
         self.s.control_guard=lambda: '用户已暂停试玩，不能执行游戏操作。'
         self.s.request_pause=Mock(return_value=True)
         server=build_server(self.s,study=Mock(ready=Mock(return_value=False)))
-        result=asyncio.run(server.call_tool('stop_run',{'reason':'游戏动作持续报桥接协议错误'}))
+        reason = '游戏动作持续报桥接协议错误'
+        result = asyncio.run(server.call_tool('stop_run', {'reason': reason}))
+        text = result.content[0].text
+        pending = json.loads(text.splitlines()[0])
+        self.assertEqual(pending['status'], 'confirmation_required')
+        self.assertIn('自己的规划程序或保守安全认证失败', text)
+        self.assertIn(pending['confirmation_prefix'], text)
+        self.s.request_pause.assert_not_called()
+        self.assertFalse((self.path/'agent_stop.json').exists())
+        self.assertFalse((self.path/'public_events.jsonl').exists())
+        repeated = self.s.stop_run(reason)
+        self.assertEqual(repeated['confirmation_prefix'], pending['confirmation_prefix'])
+        result=asyncio.run(server.call_tool('stop_run',{'reason':pending['confirmation_prefix'] + reason}))
         self.assertIn('主控已把试玩暂停',result.content[0].text)
         self.s.request_pause.assert_called_once_with('游戏动作持续报桥接协议错误')
         self.assertFalse(self.s.done)                      # 不结束运行：游戏保持冻结，等用户继续或停止
@@ -76,6 +88,22 @@ class CutsceneTests(unittest.TestCase):
         self.assertIn('用户已暂停',blocked.content[0].text)  # 暂停期间游戏工具不执行
         self.assertEqual(self.s.client.steps,[])
         with self.assertRaises(ActError):self.s.stop_run('原因'*150)   # 原因限 200 字
+
+    def test_stop_run_confirmation_is_reissued_after_a_target_or_frame_change(self):
+        self.s.request_pause = Mock(return_value=True)
+        self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
+        reason = '桥接协议故障，请重新加载桥接'
+        first = self.s.stop_run(reason)
+        self.s.goals.clear()
+        second = self.s.stop_run(first['confirmation_prefix'] + reason)
+        self.s.last_obs['frame'] += 1
+        third = self.s.stop_run(second['confirmation_prefix'] + reason)
+        self.assertEqual([r['status'] for r in (first, second, third)], ['confirmation_required'] * 3)
+        self.assertEqual(len({r['confirmation_prefix'] for r in (first, second, third)}), 3)
+        self.s.request_pause.assert_not_called()
+        self.assertEqual(self.s.stop_run(third['confirmation_prefix'] + reason)['status'], 'reported')
+        self.assertEqual(self.s.stop_run(third['confirmation_prefix'] + reason)['status'], 'duplicate')
+        self.s.request_pause.assert_called_once_with(reason)
 
     def test_stop_run_requires_reason_and_preserves_existing_completion(self):
         with self.assertRaises(ActError):self.s.stop_run('  ')

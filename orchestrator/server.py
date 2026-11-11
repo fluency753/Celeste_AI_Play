@@ -476,8 +476,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         return (lambda fn: server.tool(**kw)(token_boundary(fn))) if enabled else (lambda fn: fn)
 
     @server.tool(name='stop_run',
-                 description='仅在任务必需步骤仍无法执行、适用的获准恢复方式已尝试或确知不可用、且需要用户介入时调用。'
-                 'reason 用 200 字以内说明状态、尝试与结果，以及需要用户做什么。普通死亡、自动等待交回控制、单次工具拒绝不足以判定阻塞。'
+                 description='报告任务必需步骤的阻塞。首次调用只给出恢复步骤或复核提示；按返回要求复核并确认后，主控才暂停。'
+                 '阻塞说明限 200 字，写明状态、尝试及所需协助。普通死亡、自动等待交回控制、单次工具拒绝不足以判定阻塞。'
                  '主控有可用的入场或重生恢复路径时会返回下一步。报告被接受并暂停时结束本轮等待用户。'
                  '暂停或知识库未读完时仍可报告真实阻塞。',
                  structured_output=False)
@@ -493,7 +493,13 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             except ActError as err:
                 return [str(err)]
             if result['status'] != 'reported':
-                if result['status'] == 'recovery_available':
+                if result['status'] == 'confirmation_required':
+                    tail = ('本次未暂停。先复核最新观测或故障回执：哪个任务必需步骤无法执行？'
+                            '还有什么获准的下一步能自己做？自己的规划程序或保守安全认证失败时，先改进规划、换路线或做可恢复的试验。'
+                            '只在确认确需用户做具体操作时，再次调用本工具。'
+                            f'reason 以「{result["confirmation_prefix"]}」开头，后接 200 字以内的复核证据及用户需要做的事。'
+                            '有可行下一步时直接继续，无需确认。')
+                elif result['status'] == 'recovery_available':
                     progress = result['transition']
                     tail = (f'当前为已核实的入场或重生过渡，累计推进 {progress["advanced_frames"]} 帧，'
                             f'剩余等待预算 {progress["remaining_frames"]} 帧。60 帧约为 1 秒。'
