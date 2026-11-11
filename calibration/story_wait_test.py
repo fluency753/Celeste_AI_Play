@@ -825,6 +825,64 @@ class StoryWaitTests(unittest.TestCase):
         self.assertTrue(all(inputs == ['30'] for inputs in client.steps))
         self.assertIn('等待预算', '\n'.join(info['auto_notes']))
 
+    def test_skip_tool_waits_until_control_after_skip_fade(self):
+        start = observation(node='dialogue')
+        start['level']['paused'] = True
+        start['pauseMenu'] = {'focused': True, 'selection': 0, 'items': [
+            {'id': 'menu_pause_skip_cutscene', 'index': 0, 'selectable': True, 'disabled': False}]}
+
+        def after(client, inputs):
+            if inputs == ['1,C', '1']:
+                client.obs.pop('pauseMenu')
+                client.obs.update(storyInput=None, storyDecision=None, controllable=True)
+                client.obs['level'].update(paused=False, skippingCutscene=True, inCutscene=False,
+                                           dialogOpen=False, dialogWaiting=False)
+                client.obs['player'].update(state='Normal', inControl=True)
+            if client.frames == 5:
+                client.obs['level']['skippingCutscene'] = False
+
+        client = self.bridge(start, after)
+        result = asyncio.run(build_server(self.session).call_tool('cutscene', {'action': 'skip'}))
+        info = json.loads(next(item.text for item in result.content if hasattr(item, 'text')).splitlines()[0])
+        self.assertTrue(info['skipped'])
+        self.assertEqual((info['frames'], info['auto_frames']), (2, 3))
+        self.assertEqual(client.steps, [['1,C', '1'], ['1'], ['1'], ['1']])
+        self.assertTrue(self.session.last_obs['controllable'])
+        self.assertFalse(self.session.last_obs['level']['skippingCutscene'])
+
+    def test_skip_wait_stops_when_new_input_appears(self):
+        def after(client, inputs):
+            client.obs.update(storyInput='choice', storyDecision='choice')
+            client.obs['level'].update(skippingCutscene=False, inCutscene=True)
+
+        client = self.bridge(observation(skippingCutscene=True), after)
+        obs, _, info = self.session.cutscene('watch')
+        self.assertEqual(client.steps, [['30']])
+        self.assertEqual((obs['storyInput'], info['auto_frames']), ('choice', 30))
+
+    def test_skip_wait_respects_budget_even_when_bridge_reports_control(self):
+        start = observation(controllable=True, skippingCutscene=True)
+        client = self.bridge(start)
+        obs, _, waited, notes = self.session._auto_advance(start, None, wait_budget=3)
+        self.assertEqual(client.steps, [['1'], ['1'], ['1']])
+        self.assertEqual(waited, 3)
+        self.assertTrue(obs['level']['skippingCutscene'])
+        self.assertIn('等待预算', '\n'.join(notes))
+
+    def test_act_waits_for_observe_to_resume_an_interrupted_skip(self):
+        def after(client, inputs):
+            client.obs['level']['skippingCutscene'] = False
+
+        client = self.bridge(observation(controllable=True, cutscene=False, skippingCutscene=True), after)
+        with self.assertRaisesRegex(ActError, '按键未发送'):
+            self.session.act(['1,R'], '移动', None)
+        self.assertEqual(client.steps, [])
+        obs, _ = self.session.observe()
+        self.assertFalse(obs['level']['skippingCutscene'])
+        self.assertEqual(client.steps, [['1']])
+        self.session.act(['1,R'], '移动', None)
+        self.assertEqual(client.steps, [['1'], ['1,R']])
+
     def test_advance_shares_one_budget_before_and_after_confirmation(self):
         def after(client, inputs):
             if inputs == ['1,C', '1']:

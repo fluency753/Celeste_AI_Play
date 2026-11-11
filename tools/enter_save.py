@@ -13,7 +13,7 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.bridge_client import BridgeClient, summarize_obs
-from tools.cutscene import leave_level_by_pause_menu, skip_by_pause_menu, story_pending
+from tools.cutscene import leave_level_by_pause_menu, skip_by_pause_menu, story_input, story_pending
 from tools.menu_navigation import checked_step, MenuActionBlocked, MenuPromptRequired
 
 QUIET = dict(image=False, entities=False, tiles=False, trajectory=False)
@@ -112,14 +112,28 @@ def _enter_save(c: BridgeClient, save_name: str, max_actions: int = 120, chapter
                     # 面板里确认的是目标面，进来的却是别的面：停下报告，不再退出重进
                     raise RuntimeError(f"进入的是第 {chapter} 章的 {level_side(obs)} 面，不是要求的 {side} 面；已停下，没有继续")
                 elsewhere = True            # 停在同一章的别的面里（续跑、换章）：先返回地图，再在面板里选面
+            if level.get("skippingCutscene"):
+                if story_input(obs) or level.get("paused") or obs.get("pauseMenu"):
+                    if not elsewhere:
+                        return obs
+                    raise RuntimeError(f"等待剧情跳过时遇到待输入界面，已停止：\n{summarize_obs(obs)}")
+                # 跳过淡出时，桥接可能提前报告角色可操作。
+                active = obs.get("controllable")
+                reply = step(c, ["1" if active else "30"], speed=1,
+                             stop_on=["story_input"] if active else ["controllable", "story_input"])
+                obs = reply["obs"]
+                result = reply["result"]
+                if not (result.get("consumed") or result.get("loadingFrames")):
+                    raise RuntimeError(f"等待剧情跳过时没有取得新帧，已停止：\n{summarize_obs(obs)}")
+                continue
             if elsewhere and (obs.get("controllable") or level.get("paused")):
                 obs = leave_level_by_pause_menu(c)  # 在别的存档或别的章节里：先返回地图
                 continue
             # 桥接 1.0.3 起"可操作"只看角色的真实状态，剧情刚开始的几帧也算可操作：自动跳过剧情时先试着跳过再交出
             if obs.get("controllable") and (cutscene_mode == 'agent' or not level.get("inCutscene")
-                                            or level.get("skippingCutscene") or level["room"] in tried_skip):
+                                            or level["room"] in tried_skip):
                 return obs
-            if level["inCutscene"] and not level["skippingCutscene"] and level["room"] not in tried_skip:
+            if level["inCutscene"] and level["room"] not in tried_skip:
                 skipped, obs, _, reason = skip_by_pause_menu(c)
                 # no_pause 是入场动画期间的暂时状态，不能记成该房间已处理。
                 if skipped or reason == "no_skip":

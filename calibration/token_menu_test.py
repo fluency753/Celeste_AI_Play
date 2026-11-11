@@ -233,6 +233,19 @@ class MenuDebtTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.r.token_drift.deferred, 0)
         self.assertIn('补推进 3 帧', reply)
 
+    async def test_skip_fade_defers_menu_debt_until_control_is_returned(self):
+        await self.pause()
+        await self.usage(1000)
+        self.bridge.obs['level']['skippingCutscene'] = True
+        await self.act(['1,P'])
+        self.assertTrue(self.bridge.obs['controllable'])
+        self.assertEqual(self.r.token_drift.deferred, 2)
+        self.assertEqual(self.m.state.token_frames, 0)
+        self.bridge.obs['level']['skippingCutscene'] = False
+        await self.tool('observe')
+        self.assertEqual(self.bridge.steps[-1]['inputs'], ['2,R'])
+        self.assertEqual((self.r.token_drift.deferred, self.m.state.token_frames), (0, 2))
+
     async def test_repayment_death_preserves_unconsumed_debt(self):
         await self.pause()
         await self.usage(1500)

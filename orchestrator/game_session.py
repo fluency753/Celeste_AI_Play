@@ -114,7 +114,8 @@ def awaiting_confirm(obs: dict, *, ending: bool = False) -> bool:
     ending=True：最终章通关后的片尾（completed 已为真）也算。"""
     level = obs.get("level") or {}
     return (obs.get("scene") == "Level" and not obs.get("controllable") and bool(level.get("frozen"))
-            and not level.get("inCutscene") and not level.get("dialogOpen") and not level.get("dialogWaiting")
+            and not level.get("inCutscene") and not level.get("skippingCutscene")
+            and not level.get("dialogOpen") and not level.get("dialogWaiting")
             and not level.get("paused") and not obs.get("pauseMenu") and not level.get("transitioning")
             and (ending or not level.get("completed")) and not story_input(obs))
 
@@ -819,6 +820,7 @@ class GameSession:
     def token_playable(self, obs):
         from .token_menu import paused_menu
         return (obs.get('scene') == 'Level' and not paused_menu(obs) and not story_pending(obs)
+                and not (obs.get('level') or {}).get('skippingCutscene')
                 and (bool(obs.get('controllable')) or seeker_control(obs)))
 
     def _token_step_filter(self, args):
@@ -1097,11 +1099,13 @@ class GameSession:
             if not reload_observation and not self.done:
                 self._note_first_goal_entry(obs)
             may_advance = not reload_observation and not self.done and not self.goals.stop_motion.is_set()
+            level = obs.get('level') or {}
             if (may_advance and self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas'
-                    and (story_pending(obs) or self._transition_for(obs))):
+                    and (level.get('skippingCutscene') or story_pending(obs) or self._transition_for(obs))):
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
-            elif (may_advance and self.cfg.cutscene_mode == 'auto' and obs.get('scene') == 'Level' and (obs.get('level') or {}).get('inCutscene')
+            elif (may_advance and self.cfg.cutscene_mode == 'auto' and obs.get('scene') == 'Level'
+                  and (level.get('inCutscene') or level.get('skippingCutscene'))
                   and not self._ending_agent and not self._ending_pending):
                 # 自动跳过剧情：剧情（含跳过的淡出）还没结束就先推进完，不让智能体看着黑屏或剧情画面判断
                 obs, image, _, notes = self._auto_advance(obs, image)
@@ -1366,6 +1370,11 @@ class GameSession:
             raise ActError(problem)
         forced: list[str] = []          # 剧情交给智能体时强制加的截断条件（自动重试重算计划后也保留）
         if self.cfg.cutscene_mode == 'agent':
+            last = self.last_obs or {}
+            level = last.get('level') or {}
+            if (plan.input_format != 'celeste_tas' and level.get('skippingCutscene')
+                    and not (level.get('paused') or last.get('pauseMenu') or story_input(last))):
+                raise ActError('剧情仍在跳过，本次按键未发送。请用 observe 或 cutscene(action="watch") 等待恢复控制。')
             forced.append('story_input')
             if plan.input_format != 'celeste_tas':
                 forced.append('story_decision')
@@ -1809,7 +1818,8 @@ class GameSession:
     def _settled(obs: dict) -> bool:
         """auto 剧情模式下可以把按键交给智能体了：角色可操作，而且剧情（含正在跳过的剧情）已经结束。
         有的剧情在跳过的淡出过程中角色已报告可操作（例如 5A 开场），这时还要接着推进到剧情结束。"""
-        return bool(obs.get('controllable')) and not (obs.get('level') or {}).get('inCutscene')
+        level = obs.get('level') or {}
+        return bool(obs.get('controllable')) and not (level.get('inCutscene') or level.get('skippingCutscene'))
 
     def _handed_over(self, obs: dict) -> bool:
         """Madeline 不可操作，但按键照样交给智能体、主控不自动推进：在操控 PlayerSeeker；或不可操作又不在剧情里、
@@ -1818,7 +1828,8 @@ class GameSession:
 
     def _agent_controls(self, obs: dict) -> bool:
         """按键由智能体操作：Madeline 可操作，或 _handed_over。"""
-        return bool(obs.get('controllable')) or self._at_chapter_menu(obs) or self._handed_over(obs)
+        return not (obs.get('level') or {}).get('skippingCutscene') and (
+            bool(obs.get('controllable')) or self._at_chapter_menu(obs) or self._handed_over(obs))
 
     def _resume_auto_handling(self) -> list[str]:
         """（调用方持有连接锁）自动跳过剧情时，上一次的自动推进可能被用户暂停打断，游戏停在转场、剧情或对白中途：
@@ -1850,6 +1861,8 @@ class GameSession:
                 notes = [*notes, *more]
             raise ActError('执行前主控接着推进了上次被打断的转场或剧情，章节已通关：' + '；'.join(map(str, notes))
                            + '。这次动作没有执行，请先 observe 再操作。')
+        if (obs.get('level') or {}).get('skippingCutscene'):
+            raise ActError('剧情仍在跳过，这次动作没有执行。' + '；'.join(map(str, notes)))
         if not obs.get('controllable'):
             if self._handed_over(obs):
                 # PlayerSeeker，或不可操作又不在剧情里、主控已等满时限交回：照常执行智能体的按键
@@ -1937,6 +1950,8 @@ class GameSession:
                 break
             scene = obs.get("scene")
             automatic_transition = _automatic_loader_transition(obs)
+            level = obs.get("level") or {}
+            skipping = scene == 'Level' and level.get('skippingCutscene')
             remember(obs)
             node = story_input(obs)
             if mode == 'agent' and node:
@@ -1949,12 +1964,13 @@ class GameSession:
                               'postcard': '明信片已显示完毕，请用 advance 确认。'}.get(node,
                               f'当前输入节点 {node} 尚未支持，主控停止等待；请查看观测后明确操作。'))
                 break
-            if mode == 'agent' and stop_for_skip and story_decision(obs) == 'skip':
+            if mode == 'agent' and stop_for_skip and not skipping and story_decision(obs) == 'skip':
                 notes.append(skip_opportunity_hint(obs))
                 break
             self._commit_completion(obs)
             if self.done or (mode != 'agent' and self.chapter_finished):break
-            if mode == 'agent' and (self._pending_complete or scene in END_SCENES) and not story_pending(obs) and not automatic_transition:
+            if mode == 'agent' and (self._pending_complete or scene in END_SCENES) and not (
+                    story_pending(obs) or automatic_transition or skipping):
                 notes.append('结尾或结算由你操作：观察当前界面，用 act 发送确认 C、返回 B 或所需的空帧。以主控结算反馈为准。'
                              if self._pending_complete else '当前菜单或转场由你输入操作，按本次目标自行导航；主控不代选。')
                 break
@@ -1988,7 +2004,32 @@ class GameSession:
                 # 结算画面却没有记下通关（正常不会出现）：章节确已结束，照旧结束本次试玩
                 self._mark_done(f"离开关卡（{scene}）")
                 break
-            level = obs.get("level") or {}
+            if skipping:
+                if node:
+                    notes.append('剧情跳过期间出现输入节点，已交回当前观测。')
+                    break
+                if total >= wait_budget:
+                    break
+                controllable = obs.get('controllable')
+                inputs = [str(min(1 if controllable else 30, wait_budget - total))]
+                stops = ['story_input', 'death', 'room', 'menu_prompt']
+                if not level.get('completed'):
+                    stops.append('complete')
+                if not controllable:
+                    stops.append('controllable')
+                reply = self.client.call('step', inputs=inputs, stop_on=stops, speed=1,
+                                         image=False, entities=False, tiles=False,
+                                         progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
+                result, obs = reply['result'], reply['obs']
+                log_step(inputs, result, obs)
+                if result.get('block'):
+                    from .action_policy import block_note
+                    notes.append(block_note(result['block'], detour=detour_enabled(self.cfg)))
+                if (result.get('stop') in BLOCK_STOPS | {'death', 'complete', 'menu_prompt', 'recording_boundary', 'cancelled'}
+                        or not (result['consumed'] or result.get('loadingFrames'))):
+                    notes.append('剧情跳过等待已中止，已交回当前观测。')
+                    break
+                continue
             watching_while_controllable = (mode == 'agent' and not stop_for_skip and scene == 'Level'
                                           and obs.get('controllable')
                                           and (obs.get('storyPlaybackState') or {}).get('state') == 'playing')
@@ -2122,6 +2163,8 @@ class GameSession:
                 frozen_frames += reply["result"]["consumed"]
             if idle:
                 idle_frames += reply["result"]["consumed"]
+        if (obs.get('level') or {}).get('skippingCutscene') and total >= wait_budget:
+            notes.append('剧情跳过达到等待预算，已交回当前观测。')
         if confirms and not awaiting_confirm(obs):
             notes.append(f"画面冻结等确认（如磁带、吃心后的提示），主控按了 {confirms} 次确认 C 继续")
         if map_wait:
@@ -2347,7 +2390,8 @@ class GameSession:
             self.metrics.add(play_game_s=time.monotonic()-started,frames_played=used)
             self._commit_completion(obs)
             self._note_obs_room(obs)
-            if not self.done and (story_pending(obs) or not obs.get('controllable')):
+            if not self.done and (story_pending(obs) or not obs.get('controllable')
+                                  or (obs.get('level') or {}).get('skippingCutscene')):
                 obs,_,more,notes=self._auto_advance(obs,None,stop_for_skip=False,story_mode='agent',
                                                   wait_budget=max(0, AGENT_STORY_WAIT_FRAMES-auto_frames))
                 auto_frames += more; auto_notes.extend(notes)
@@ -2695,8 +2739,11 @@ class GameSession:
             elif entering:
                 notes = [f'主控已进入{dest.label}，停在入场画面：agent 剧情模式下由你自己确认（cutscene 或 act）。']
             else:
-                room = (obs.get('level') or {}).get('room')
-                notes = [f'主控已把你送到{dest.label}：现在在房间 {room}，第一帧可操作，游戏冻结中；继续游玩。']
+                level = obs.get('level') or {}
+                room = level.get('room')
+                ready = obs.get('controllable') and not (level.get('skippingCutscene') or story_input(obs))
+                status = '角色可操作，游戏冻结中；继续游玩。' if ready else '请查看当前观测，按界面状态继续。'
+                notes = [f'主控已把你送到{dest.label}：现在在房间 {room}。{status}']
                 if dest.checkpoint > 0 and dest.room and room != dest.room:
                     notes.append(f'注意：进到的房间 {room} 不是这个检查点的房间 {dest.room}，请先看观测确认位置。')
             if self.chapter_finished and not self.done and obs.get('scene') == 'Level':

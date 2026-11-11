@@ -9,6 +9,7 @@ from functools import wraps
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
+from tools.cutscene import story_decision, story_input
 
 from .game_session import ActError, GameSession
 from .token_menu import TokenMenuBoundary
@@ -626,7 +627,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             finally:
                 finish()
 
-    @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段。watch等待已核实的入场、重生或桥接明确识别的演出。未知状态交回；入场和重生共享本次过渡的累计等待预算。advance确认当前完整对白、明信片、旧纸的一页或confirm画面，choose选择可见选项index；教学和breathing呼吸小游戏用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
+    @optional_tool(tool_cutscene, name='cutscene', description='剧情可尝试跳过时先交回决定：skip尝试暂停菜单跳过整段，成功后按原速有界等待角色恢复控制或出现下一输入节点。watch等待已核实的入场、重生或桥接明确识别的演出。未知状态交回；入场和重生共享本次过渡的累计等待预算。advance确认当前完整对白、明信片、旧纸的一页或confirm画面，choose选择可见选项index；教学和breathing呼吸小游戏用act。确认后也仅播放已识别动画，旧纸可用act的U/D翻页、B关闭。无需wait，主控不代选或猜测未知界面。', structured_output=False)
     async def cutscene(action: str, choice: int | None = None) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
@@ -640,6 +641,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 if paid and session.token_last_observation is not None:
                     obs,image = session.token_last_observation
                     info['token_repayment'] = repayment(paid)
+                    info.update(story_input=story_input(obs), story_decision=story_decision(obs),
+                                scene=obs.get('scene'), finished=session.done)
                 journal.detail(info)
             except ActError as err:
                 raise ToolError(str(err)) from err

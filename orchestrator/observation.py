@@ -332,6 +332,8 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         lines.append('当前剧情输入节点：breathing；呼吸小游戏用 act 的 J、X 或 U 控制羽毛，松开使羽毛下落；watch 不代替操作。')
     elif node:
         lines.append('当前剧情输入节点：'+node+'；主控已停止自动播放，教学用 act；对白和选项可明确用 act 输入，或调用 advance / choose。')
+    elif (level or {}).get('skippingCutscene'):
+        lines.append('剧情仍在跳过，暂未交回角色控制。')
     elif obs.get('storyDecision') == 'skip':
         lines.append(skip_opportunity_hint(obs))
     elif obs.get('controllable') and (level or {}).get('inCutscene'):
@@ -357,14 +359,15 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         vx, vy = player["speed"]
         hb = player["hitbox"]
         t = player["timers"]
+        controllable = bool(obs.get('controllable')) and not (level or {}).get('skippingCutscene')
         if brief_room:
-            lines.extend(brief_player_lines(player, obs.get('controllable', False)))
+            lines.extend(brief_player_lines(player, controllable))
         else:
             lines.append(
                 f"Madeline：位置 ({x:.2f}, {y:.2f})  速度 ({vx:.1f}, {vy:.1f})  状态 {player['state']}  "
                 f"着地 {_yn(player['onGround'])}  冲刺 {player['dashes']}/{player['maxDashes']}  "
                 f"体力 {player['stamina']}  朝向 {player['facing']}  贴墙 左{_yn(player['wallLeft'])}/右{_yn(player['wallRight'])}  "
-                f"下蹲 {_yn(player['ducking'])}  可操作 {_yn(obs.get('controllable', False))}")
+                f"下蹲 {_yn(player['ducking'])}  可操作 {_yn(controllable)}")
             lines.append(
                 f"碰撞箱 x {hb[0]}~{hb[0] + hb[2]}，y {hb[1]}~{hb[1] + hb[3]}；"
                 f"剩余帧数：coyote time {t['jumpGrace']}，variable jump {t['varJump']}，dash cooldown {t['dashCooldown']}")

@@ -59,6 +59,8 @@ class StartCutsceneTests(unittest.TestCase):
         self.assertFalse(GameSession._settled(skipping_screen()))
         done = skipping_screen()
         done['level']['inCutscene'] = False
+        self.assertFalse(GameSession._settled(done))
+        done['level']['skippingCutscene'] = False
         self.assertTrue(GameSession._settled(done))
         done['controllable'] = False
         self.assertFalse(GameSession._settled(done))
@@ -75,7 +77,8 @@ class StartCutsceneTests(unittest.TestCase):
     def test_settled_screen_is_left_alone(self):
         client = SkipClient()
         s = self.session(client)
-        s.last_obs['level']['inCutscene'] = False
+        client.obs['level'].update(inCutscene=False, skippingCutscene=False)
+        s.last_obs = copy.deepcopy(client.obs)
         self.assertEqual(s._resume_auto_handling(), [])
         self.assertEqual(client.steps, [])
 
@@ -88,9 +91,12 @@ class StartCutsceneTests(unittest.TestCase):
 
     def test_agent_mode_observe_does_not_auto_skip(self):
         client = SkipClient()
+        client.obs['level'].update(skippingCutscene=False, canPause=True)
+        client.obs['storyDecision'] = 'skip'
         s = self.session(client, mode='agent')
-        s.observe()
-        self.assertEqual(client.steps, [])                                   # 正在跳过时不算待处理剧情，原样交给智能体
+        obs, _ = s.observe()
+        self.assertEqual(obs['storyDecision'], 'skip')
+        self.assertEqual(client.steps, [])
 
 
 if __name__ == '__main__':

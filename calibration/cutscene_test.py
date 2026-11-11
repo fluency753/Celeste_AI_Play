@@ -416,6 +416,25 @@ class CutsceneTests(unittest.TestCase):
             self.assertEqual(enter_save(client,'player',chapter=2,save_slot=1,cutscene_mode='auto'),end)
         skip.assert_called_once()
 
+    def test_auto_entry_waits_for_skip_flag_to_clear(self):
+        fade = {'scene': 'Level', 'controllable': True, 'save': {'name': 'player', 'slot': 1},
+                'level': {'sid': 'Celeste/2-OldSite', 'room': 'start', 'inCutscene': False, 'skippingCutscene': True}}
+        ready = copy.deepcopy(fade)
+        ready['level']['skippingCutscene'] = False
+        client = ScriptClient([fade, fade, ready])
+        result = enter_save(client, 'player', chapter=2, save_slot=1, cutscene_mode='auto')
+        self.assertFalse(result['level']['skippingCutscene'])
+        self.assertEqual(client.steps, [['1'], ['1']])
+
+    def test_entry_hands_back_a_story_node_without_sending_input_during_skip(self):
+        fade = {'scene': 'Level', 'controllable': True, 'save': {'name': 'player', 'slot': 1},
+                'level': {'sid': 'Celeste/2-OldSite', 'room': 'start', 'inCutscene': False, 'skippingCutscene': True}}
+        choice = dict(fade, storyInput='choice')
+        client = ScriptClient([fade, choice])
+        result = enter_save(client, 'player', chapter=2, save_slot=1, cutscene_mode='agent')
+        self.assertEqual(result['storyInput'], 'choice')
+        self.assertEqual(client.steps, [['1']])
+
     def test_session_connect_accepts_intro_only_in_agent_mode(self):
         client=SceneClient({'scene':'IntroVignette','save':{'name':'player','slot':1}})
         self.s.cfg.chapter=0;self.s.cfg.save_slot=1
