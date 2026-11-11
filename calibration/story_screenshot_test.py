@@ -103,5 +103,9 @@ class StoryScreenshotTests(unittest.TestCase):
                 session.reload_epoch = 1
                 reloaded = asyncio.run(server.call_tool('act', act))
                 self.assertIn('继续前进。', ''.join(item.text for item in reloaded.content if item.type == 'text'))
+                # A restarted game numbers entities from scratch while the bridge reload count stays put.
+                session.game_process_id = 4242
+                restarted = asyncio.run(server.call_tool('act', act))
+                self.assertIn('继续前进。', ''.join(item.text for item in restarted.content if item.type == 'text'))
             finally:
                 session.close(False)

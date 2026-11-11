@@ -164,7 +164,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         files_enabled = workspace_capabilities(session.cfg).programs
         context, file_context, candidate = delivery.prepare(
             session, obs, files_enabled=files_enabled, force=force, compact=compact)
-        epoch = getattr(session, 'reload_epoch', 0)
+        # Bridge entity IDs restart with the game process as well as on a bridge reload.
+        epoch = (getattr(session, 'game_process_id', None), getattr(session, 'reload_epoch', 0))
         new_dialogues = set()
         story = []
         for item in obs.get('story') or []:

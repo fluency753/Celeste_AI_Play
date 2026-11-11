@@ -172,6 +172,19 @@ class CutsceneTests(unittest.TestCase):
         self.assertEqual(changed['criterion'], '列出复核证据')
         self.s.request_pause.assert_not_called()
 
+    def test_broken_local_categories_fall_back_to_builtin_table(self):
+        self.s.request_pause = Mock(return_value=True)
+        self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
+        (self.path / 'local.stop_categories.json').write_text('{"hint": ', encoding='utf-8')
+        reason = 'hint：两条路线都试过，请提示起跳点'
+        with self.assertLogs('orchestrator.stop_categories', 'WARNING') as logs:
+            first = self.s.stop_run(reason)
+        self.assertIn('local.stop_categories.json', logs.output[0])
+        self.assertEqual((first['status'], first['category_label']), ('confirmation_required', '卡关求提示'))
+        with self.assertLogs('orchestrator.stop_categories', 'WARNING'):
+            second = self.s.stop_run(first['confirmation_prefix'] + '两条路线都试过，请提示起跳点')
+        self.assertEqual((second['status'], second['step']), ('confirmation_required', 2))
+
     def test_stop_run_requires_reason_and_preserves_existing_completion(self):
         with self.assertRaises(ActError):self.s.stop_run('  ')
         self.assertFalse(self.s.done)

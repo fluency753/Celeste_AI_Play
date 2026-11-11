@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import logging
 from pathlib import Path
 import re
 
@@ -51,8 +52,15 @@ def _rows(path, *, optional=False):
 
 
 def load_stop_categories() -> dict[str, StopCategory]:
+    """Built-in categories plus local ones. A broken local file must not keep the agent from
+    reporting a real blockage: use the built-in table for this report and warn."""
+    try:
+        local = _rows(LOCAL_CATEGORIES, optional=True)
+    except (OSError, ValueError) as exc:
+        logging.getLogger(__name__).warning('%s 无法使用，本次按内置阻塞分类：%s', LOCAL_CATEGORIES.name, exc)
+        local = {}
     categories = {}
-    for key, row in (_rows(DEFAULT_CATEGORIES) | _rows(LOCAL_CATEGORIES, optional=True)).items():
+    for key, row in (_rows(DEFAULT_CATEGORIES) | local).items():
         item = _category(key, row)
         categories[key] = StopCategory(item['label'], item['criterion'], STEPS[item['kind']])
     if not categories:
