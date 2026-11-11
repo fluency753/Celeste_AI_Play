@@ -819,7 +819,7 @@
   </section>
   <section class="pane" style="grid-column:1 / -1" aria-labelledby="stopConfirmationTitle">
     <h2 id="stopConfirmationTitle">阻塞确认提示 <span class="aside">本机所有配置共用</span></h2>
-    <p class="hint" id="stopConfirmationHint">智能体调用 stop_run 进入待确认时看到的复核文字。分类要求、确认进度和确认码由主控填写。保存后，下一次待确认回执即使用新文字。</p>
+    <p class="hint" id="stopConfirmationHint">待确认回执会显示智能体所选类别的复核要求和这段通用文字。保存后，下一次待确认回执即生效。</p>
     <label for="stopConfirmationText">通用复核文字</label>
     <textarea id="stopConfirmationText" class="code" style="width:100%;min-height:100px" aria-describedby="stopConfirmationHint" spellcheck="false" disabled></textarea>
     <div class="presets" style="margin-top:10px">
@@ -828,6 +828,28 @@
       <button class="btn small" id="stopConfirmationReload" type="button">重新读取</button>
     </div>
     <p class="hint" id="stopConfirmationStatus" role="status">尚未加载</p>
+    <h3>分类复核要求</h3>
+    <p class="hint">修改正在确认的类别会使旧确认码失效。</p>
+    <label for="stopCategorySelect">阻塞类别</label>
+    <select id="stopCategorySelect" disabled></select>
+    <form id="stopCategoryForm">
+      <fieldset id="stopCategoryFields" disabled style="border:0;padding:0;margin:10px 0 0;min-width:0">
+        <label for="stopCategoryId">类别 ID</label>
+        <input id="stopCategoryId" name="categoryId" pattern="[a-z][a-z0-9_]*" required>
+        <label for="stopCategoryLabel">显示名</label>
+        <input id="stopCategoryLabel" name="label" maxlength="4000" required>
+        <label for="stopCategoryKind">类型</label>
+        <select id="stopCategoryKind" name="kind" required></select>
+        <label for="stopCategoryCriterion" style="display:block;margin-top:10px">该类别的复核要求</label>
+        <textarea id="stopCategoryCriterion" name="criterion" class="code" style="width:100%;min-height:80px" maxlength="4000" required></textarea>
+      </fieldset>
+      <div class="presets" style="margin-top:10px">
+        <button class="btn small primary" id="stopCategorySave" type="submit" disabled>保存分类</button>
+        <button class="btn small" id="stopCategoryReset" type="button" hidden>恢复默认</button>
+        <button class="btn small" id="stopCategoryReload" type="button">重新读取分类</button>
+      </div>
+    </form>
+    <p class="hint" id="stopCategoryStatus" role="status">尚未加载</p>
   </section>
   <section class="pane" aria-labelledby="promptTitle">
     <h2 id="promptTitle">提示词 <span class="aside">按运行页的当前设置生成</span></h2>
@@ -1105,6 +1127,7 @@ function showPage(page) {
     loadPromptPreview();
     if (ui.options) loadPersonalPrompt();
     if (!stopConfirmationDirty()) editStopConfirmation('read');
+    if (!stopCategoryDirty()) editStopCategory('read');
   }
   if (page === "about" && !ui.aboutLoaded) loadAbout();
 }
@@ -2050,7 +2073,7 @@ function updateCompactHint() {
 
 function unsavedEdits() {
   return (ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty)
-    || [...personalDrafts.values()].some(draft => draft.text !== draft.saved) || stopConfirmationDirty();
+    || [...personalDrafts.values()].some(draft => draft.text !== draft.saved) || stopConfirmationDirty() || stopCategoryDirty();
 }
 
 function reloadForProfile() {
@@ -2749,6 +2772,74 @@ async function editStopConfirmation(action) {
   } finally {
     stopConfirmation.busy = false;
     renderStopConfirmation();
+  }
+}
+
+const stopCategory = {doc:null, selected:null, busy:false};
+const stopCategoryKinds = {controller_defect:'主控缺陷', user_help:'需要用户协助'};
+function currentStopCategory() {
+  return stopCategory.doc?.categories.find(row => row.id === stopCategory.selected);
+}
+function stopCategoryValues() {
+  const fields = $('stopCategoryForm').elements;
+  return {kind:fields.kind.value, label:fields.label.value, criterion:fields.criterion.value};
+}
+function stopCategoryDirty() {
+  if (!stopCategory.doc) return false;
+  const row = currentStopCategory(), values = stopCategoryValues();
+  return row ? Object.entries(values).some(([key, value]) => value !== row[key])
+    : !!($('stopCategoryId').value || values.label || values.criterion || values.kind !== 'user_help');
+}
+function renderStopCategory() {
+  const {doc, busy} = stopCategory, row = currentStopCategory();
+  $('stopCategorySelect').disabled = busy || !doc;
+  $('stopCategoryFields').disabled = busy || !doc;
+  $('stopCategorySave').disabled = busy || !stopCategoryDirty();
+  $('stopCategoryReset').hidden = !row?.custom;
+  $('stopCategoryReset').disabled = busy;
+  $('stopCategoryReset').textContent = row?.builtin ? '恢复默认' : '删除本机分类';
+  $('stopCategoryReload').disabled = busy;
+}
+function showStopCategory(id) {
+  const {categories, steps} = stopCategory.doc;
+  stopCategory.selected = id;
+  const row = currentStopCategory(), select = $('stopCategorySelect');
+  select.replaceChildren(...categories.map(item => new Option(`${item.label}（${steps[item.kind]} 次）`, item.id)),
+    new Option('新增类别…', ''));
+  select.value = id;
+  $('stopCategoryKind').replaceChildren(...Object.entries(steps).map(([kind, count]) =>
+    new Option(`${stopCategoryKinds[kind]}（共 ${count} 次提交）`, kind)));
+  $('stopCategoryKind').value = row?.kind || 'user_help';
+  $('stopCategoryId').value = row?.id || '';
+  $('stopCategoryId').readOnly = !!row;
+  $('stopCategoryLabel').value = row?.label || '';
+  $('stopCategoryCriterion').value = row?.criterion || '';
+  renderStopCategory();
+}
+async function editStopCategory(action) {
+  if (stopCategory.busy) return;
+  const endpoint = '/api/console/stop-categories', status = $('stopCategoryStatus');
+  const id = $('stopCategoryId').value, reading = action === 'read';
+  stopCategory.busy = true;
+  status.textContent = reading ? '读取中…' : '保存中…';
+  renderStopCategory();
+  try {
+    const doc = reading ? await getJSON(endpoint) : await postJSON(endpoint, {
+      action, id, fields:stopCategoryValues(), version:stopCategory.doc.version,
+    });
+    if (!Array.isArray(doc?.categories) || !doc.steps || typeof doc.version !== 'string') {
+      throw new Error('控制台服务返回的分类数据无效');
+    }
+    stopCategory.doc = doc;
+    const selected = reading ? stopCategory.selected : id;
+    showStopCategory(selected === '' || doc.categories.some(row => row.id === selected)
+      ? selected : doc.categories[0]?.id || '');
+    status.textContent = reading ? `已读取 ${doc.categories.length} 个类别` : '分类已更新';
+  } catch (e) {
+    status.textContent = (reading ? '读取失败：' : '保存失败：') + e.message;
+  } finally {
+    stopCategory.busy = false;
+    renderStopCategory();
   }
 }
 
@@ -3660,6 +3751,26 @@ $('stopConfirmationSave').addEventListener('click', () => editStopConfirmation('
 $('stopConfirmationReset').addEventListener('click', () => editStopConfirmation('reset'));
 $('stopConfirmationReload').addEventListener('click', () => {
   if (!stopConfirmationDirty() || confirm('放弃未保存的复核提示并重新读取？')) editStopConfirmation('read');
+});
+$('stopCategorySelect').addEventListener('change', event => {
+  if (stopCategoryDirty() && !confirm('放弃未保存的分类修改？')) {
+    event.target.value = stopCategory.selected;
+    return;
+  }
+  showStopCategory(event.target.value);
+  $('stopCategoryStatus').textContent = '';
+});
+$('stopCategoryForm').addEventListener('input', renderStopCategory);
+$('stopCategoryForm').addEventListener('submit', event => {
+  event.preventDefault();
+  if (stopCategoryDirty()) editStopCategory(currentStopCategory() ? 'save' : 'add');
+});
+$('stopCategoryReset').addEventListener('click', () => {
+  const row = currentStopCategory();
+  if (row?.custom && confirm(row.builtin ? '恢复该类别的默认设置？' : '删除这个本机类别？')) editStopCategory('reset');
+});
+$('stopCategoryReload').addEventListener('click', () => {
+  if (!stopCategoryDirty() || confirm('放弃未保存的分类修改并重新读取？')) editStopCategory('read');
 });
 
 $("promptCopy").addEventListener("click", async (e) => {

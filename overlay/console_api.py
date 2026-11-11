@@ -575,6 +575,16 @@ def stop_confirmation_write(text, version) -> dict:
     return save(text, version)
 
 
+def stop_categories_read() -> dict:
+    from orchestrator.stop_categories import editor_read
+    return editor_read()
+
+
+def stop_categories_write(data) -> dict:
+    from orchestrator.stop_categories import editor_save
+    return editor_save(data.get('id'), data.get('action'), data.get('fields'), data.get('version'))
+
+
 def personal_prompt_write(scope, text, version) -> dict:
     from orchestrator import personal_prompts, profiles
     with profiles.using(_editable_profile('个人追加要求')):
@@ -753,7 +763,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.24.26"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.24.27"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

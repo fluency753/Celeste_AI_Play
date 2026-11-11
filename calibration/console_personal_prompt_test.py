@@ -114,6 +114,33 @@ class PersonalPromptHTTPTests(unittest.TestCase):
             self.assertEqual(self.request()[1], saved)
             self.assertEqual(self.request(data={'text': '', 'version': saved['version']}), (200, default))
 
+    def test_stop_category_editor_updates_runtime_and_preserves_other_rows(self):
+        from orchestrator import stop_categories
+        self.base = self.base.replace('/personal-prompt', '/stop-categories')
+        path = Path(self.temp.name) / 'local.stop_categories.json'
+        with patch.object(stop_categories, 'LOCAL_CATEGORIES', path):
+            code, default = self.request()
+            self.assertEqual(code, 200)
+            self.assertEqual(default['steps'], {'controller_defect': 2, 'user_help': 3})
+            hint = next(row for row in default['categories'] if row['id'] == 'hint')
+            fields = {'label': '求助', 'kind': 'user_help', 'criterion': '列出试过的路线'}
+            data = {'id': 'hint', 'action': 'save', 'fields': fields, 'version': default['version']}
+            self.assertEqual(self.request(data=data, origin='https://example.com')[0], 400)
+            code, saved = self.request(data=data)
+            self.assertEqual(code, 200)
+            self.assertEqual(stop_categories.load_stop_categories()['hint'].criterion, fields['criterion'])
+            self.assertEqual(self.request(data=data)[0], 400)
+            add = {**data, 'action': 'add', 'id': 'another', 'version': saved['version']}
+            code, added = self.request(data=add)
+            self.assertEqual(code, 200)
+            self.assertIn('another', stop_categories.load_stop_categories())
+            code, restored = self.request(data={'action': 'reset', 'id': 'hint', 'version': added['version']})
+            self.assertEqual(code, 200)
+            self.assertEqual(stop_categories.load_stop_categories()['hint'].criterion, hint['criterion'])
+            self.assertIn('another', json.loads(path.read_text(encoding='utf-8')))
+            self.assertEqual(self.request(data={'action': 'reset', 'id': 'another', 'version': restored['version']}),
+                             (200, default))
+
     def test_stop_confirmation_serializes_saves_across_console_processes(self):
         from orchestrator import stop_confirmation
         path = Path(self.temp.name) / 'local.stop_confirmation.json'

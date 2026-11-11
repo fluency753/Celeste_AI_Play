@@ -145,6 +145,7 @@ class CutsceneTests(unittest.TestCase):
         self.s.request_pause.assert_not_called()
 
     def test_stop_run_reloads_local_categories_without_restarting(self):
+        from orchestrator import stop_categories
         from orchestrator.session_store import write_json
         self.s.request_pause = Mock(return_value=True)
         self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
@@ -162,11 +163,13 @@ class CutsceneTests(unittest.TestCase):
         restored = self.s.stop_run(first['confirmation_prefix'] + '测试证据及所需协助')
         self.assertEqual(restored['status'], 'confirmation_required')
         self.assertNotEqual(first['confirmation_prefix'], restored['confirmation_prefix'])
-        write_json(path, {'new_category': {**rule, 'kind': 'user_help'}})
+        stop_categories.editor_save('new_category', 'save', {**rule, 'kind': 'user_help', 'criterion': '列出复核证据'},
+                                    stop_categories.editor_read()['version'])
         changed = self.s.stop_run(restored['confirmation_prefix'] + '测试证据及所需协助')
         self.assertEqual((changed['status'], changed['step'], changed['required_steps']),
                          ('confirmation_required', 1, 3))
         self.assertNotEqual(restored['confirmation_prefix'], changed['confirmation_prefix'])
+        self.assertEqual(changed['criterion'], '列出复核证据')
         self.s.request_pause.assert_not_called()
 
     def test_stop_run_requires_reason_and_preserves_existing_completion(self):
