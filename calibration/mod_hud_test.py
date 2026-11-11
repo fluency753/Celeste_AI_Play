@@ -78,6 +78,12 @@ class ViewModelTests(unittest.TestCase):
         self.assertTrue(vm.history[-1].latest and not vm.history[0].latest)
         self.assertEqual((vm.timer_base, vm.timer_extra, vm.timer_live), (500_000_000, 123_456_789, True))
 
+    def test_compaction_label_takes_precedence_over_replay_without_ticking_paused_thinking(self):
+        now = time.time()
+        vm = view_model(metrics(now, status="compacting", activity_status="paused", replaying=True), CONFIG, [], now)
+        self.assertEqual(vm.status, "压缩上下文")
+        self.assertEqual({k: v for k, v, _ in vm.stats}["思考"], "0:01:40")
+
     def test_context_warning_uses_the_smallest_known_limit(self):
         """上下文到上限的 90% 变橙；上限取执行器报告的窗口、实际压缩窗口与配置阈值中最小的
         （Claude Code 报告的是模型最大上下文，节省上下文把压缩窗口设成 500000 时按 500000 算）。"""

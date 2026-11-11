@@ -262,12 +262,12 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.s.client.steps[-1]['inputs'], ['1,L'])
 
     async def test_queued_credit_discarded_when_paused_compacting_or_reloading(self):
-        for reason in ('paused', '_token_compacting'):
+        for block in (lambda active: setattr(self.r, 'paused', active), self.m.set_compacting):
             async with self.r.action_lock:
                 self.r._record_output_usage(self.m.state.output_tokens + 1000, 1000)
-                setattr(self.r, reason, True)
+                block(True)
             await self.settle()
-            setattr(self.r, reason, False)
+            block(False)
         self.s.reload_observation_required = True
         self.r._record_output_usage(4000, 1000)
         await self.settle()

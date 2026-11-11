@@ -364,7 +364,8 @@ def composed_history(items: list[dict], m: dict) -> list[dict]:
 def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewModel:
     colors = {**DEFAULT_COLORS, **(config.get("colors") or {})}
     replaying = bool(m.get("replaying")) or m.get("status") == "replaying"
-    text, kind = STATUS["replaying"] if replaying and m.get("status") != "net_wait" else STATUS.get(m.get("status"), (m.get("status") or "", "idle"))
+    status = m.get("status")
+    text, kind = STATUS["replaying"] if replaying and status not in ("net_wait", "compacting") else STATUS.get(status, (status or "", "idle"))
     playing = (m.get("started_wall") or 0) > 0
     counting = playing or (m.get("kb_progress") is not None and m.get("kb_progress") >= 1)
     ended = m.get("status") in ("done", "stopped")
@@ -408,7 +409,8 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
         return max(0, (m.get(key) or 0) - (base.get(key) or 0))
 
     thinking = since("thinking_s")
-    if counting and not ended and m.get("status") in ("thinking", "compacting") and (m.get("thinking_since_wall") or 0) > 0:
+    if (counting and not ended and status != "net_wait" and m.get("activity_status", status) in ("thinking", "compacting")
+            and (m.get("thinking_since_wall") or 0) > 0):
         thinking += max(0.0, now - m["thinking_since_wall"])
     tool = since("tool_s")
     if counting and not ended and m.get("activity_status", m.get("status")) == "tool" and (m.get("thinking_since_wall") or 0) > 0:

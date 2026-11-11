@@ -88,7 +88,6 @@ class SessionControls:
         self.heartbeat_task, self.pausing = None, False
         self.token_drift = None
         self._token_task, self._token_closing = None, False
-        self._token_compacting = False
         self._token_pause_serial = getattr(self.metrics, 'pause_serial', 0)
         self._token_event = asyncio.Event()
         if (getattr(self.cfg, 'token_drift', False) and self.session is not None
@@ -120,7 +119,7 @@ class SessionControls:
 
     def _token_account_eligible(self):
         return bool(self.token_drift is not None and not self._token_closing
-                    and not self._token_compacting and not self._game_guard()
+                    and not self.metrics.compacting and not self._game_guard()
                     and self.metrics.playing and self.metrics._pause_start is None
                     and not self.metrics.state.network_retrying
                     and not getattr(self, 'net_down_since', None)
@@ -364,7 +363,7 @@ class SessionControls:
     def _public_compaction(self, ident, *, completed=False, reminder_key=None):
         """ident：历史里这次压缩的编号（开始与完成用同一个，完成时替换"正在压缩"那一条）；
         reminder_key：笔记提醒按它去重（Claude Code 的 compact_boundary 带 uuid），不给时用 ident。"""
-        self._token_compacting = not completed
+        self.metrics.set_compacting(not completed)
         if not completed and self.token_drift is not None:
             self._exclude_token_window('compacting')
         notes = getattr(self, 'note_reminders', None)

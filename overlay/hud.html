@@ -289,7 +289,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 75;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 76;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -429,7 +429,8 @@ function reloadAllowed() {
 function since(m, key) { return Math.max(0, (m[key] || 0) - (((m.chapter_base || {})[key]) || 0)); }
 function levelSeconds(m, now) {
   const clock = m.game_clock;
-  const moving = (m.status === "executing" || m.status === "auto");
+  const activity = m.status === "compacting" ? m.activity_status : m.status;
+  const moving = activity === "executing" || activity === "auto";
   if (clock && typeof clock === "object") {
     let seconds = (clock.frames || 0) / 60;
     if (moving && clock.level !== false && clock.wall > 0) seconds += Math.min(0.15, Math.max(0, now - clock.wall));   // 只在关卡里外推
@@ -631,9 +632,9 @@ function render() {
   setText($("toolCountLabel"), "工具调用");
   setText($("chatCalls"), m.tool_calls == null ? '—' : `${since(m, "tool_calls")} 次`);
   const now = Date.now() / 1000 + offset;
-  // 规划回放与智能体的思考同时进行（回放画上一轮，智能体在想下一轮）：回放期间状态栏显示"规划回放"
+  // 规划回放可以和模型同时运行；连接中断或上下文压缩优先显示。
   const replaying = !!m.replaying || m.status === "replaying";
-  const [text, kind, breathe] = (replaying && m.status !== "net_wait") ? STATUS.replaying : (STATUS[m.status] || [m.status, "idle", false]);
+  const [text, kind, breathe] = (replaying && !["net_wait", "compacting"].includes(m.status)) ? STATUS.replaying : (STATUS[m.status] || [m.status, "idle", false]);
   const playing = m.started_wall > 0;
   // 思考与工具时间从知识库读完就开始走（准备阶段的其余部分：写笔记、写程序、规划第一个房间）
   const counting = playing || (m.kb_progress != null && m.kb_progress >= 1);
@@ -700,7 +701,7 @@ function render() {
   }
 
   let thinking = since(m, "thinking_s");
-  if (counting && !ended && (m.status === "thinking" || m.status === "compacting") && m.thinking_since_wall > 0) {
+  if (counting && !ended && m.status !== "net_wait" && ["thinking", "compacting"].includes(m.activity_status || m.status) && m.thinking_since_wall > 0) {
     thinking += Math.max(0, now - m.thinking_since_wall);
   }
   setText($("thinking"), clock(thinking));

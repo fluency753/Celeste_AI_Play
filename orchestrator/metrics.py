@@ -175,6 +175,7 @@ class Metrics:
         self._pause_start: float | None = None
         self._effort_reason = ""
         self._in_turn = False           # 智能体正在进行一轮（主控发出消息之后、这一轮结束之前）
+        self.compacting = False
         self._tools: set[str] = set()   # 正在运行的工具调用（tool_use 的编号）
         self._tool_labels: dict[str, str] = {}   # 正在运行的工具调用 → HUD 上的说明
         self._seg_mark = time.monotonic()  # 上一次把时间结算进思考或工具的时刻
@@ -245,6 +246,12 @@ class Metrics:
             self._network_retry_end_locked(outcome)
             self._write_locked()
 
+    def set_compacting(self, active: bool) -> None:
+        with self._lock:
+            if self.compacting != active:
+                self.compacting = active
+                self._write_locked()
+
     def narrated(self) -> None:
         """实时展示：智能体调用了 narrate，半分钟计时器从头算。"""
         with self._lock:
@@ -313,6 +320,7 @@ class Metrics:
             self._network_retry_end_locked('turn_ended')
             self.timing.end(self.timing.clock())
             self._in_turn = False
+            self.compacting = False
             self._tools.clear()
             self._tool_labels.clear()
             self.state.tool_call = ""
@@ -485,6 +493,7 @@ class Metrics:
             self.state.status = "starting"
             self.state.phase_since_wall = self.state.thinking_since_wall = now
             self._in_turn = False
+            self.compacting = False
             self._tools.clear()
             self._seg_mark, self._seg_game = time.monotonic(), self.state.play_game_s + self.state.auto_game_s + self.state.replay_act_s
             self._write_locked()
@@ -610,6 +619,8 @@ class Metrics:
         if (self.state.network_retrying and self._in_turn and self._pause_start is None
                 and self.state.status not in ('done', 'stopped', 'paused', 'chat_idle')):
             data['status'] = 'net_wait'
+        elif self.compacting and self.state.status not in ('done', 'stopped', 'net_wait', 'quota_wait', 'model_wait'):
+            data['status'] = 'compacting'
         return data
 
     def write(self) -> None:

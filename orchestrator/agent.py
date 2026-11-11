@@ -1235,10 +1235,7 @@ class ClaudeRunner(SessionControls):
         elif etype == "system" and subtype == "status":
             if event.get("status") == "compacting":
                 self._public_compaction(self.metrics.state.compactions)
-                self.metrics.update(status="compacting")
                 print("[agent] 上下文压缩中……", flush=True)
-            elif event.get("compact_result"):
-                self.metrics.update(status=self._idle_status())
         elif etype == "system" and subtype == "api_retry":
             print(f"[agent] API 重试：{event.get('error')} status={event.get('error_status')} attempt={event.get('attempt')}", flush=True)
             if network_error(event.get("error_status"), event.get("error")):

@@ -1,6 +1,8 @@
 """Chat activity is measured independently of the closed game gate."""
 import asyncio
+import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,13 +69,46 @@ class CodexChatLoopTests(unittest.IsolatedAsyncioTestCase):
                     metrics.tool_begin('read', label='Read')
                 item = {'type': 'contextCompaction', 'id': str(pending_tool)}
                 runner._event('item/started', {'item': item})
-                self.assertEqual(metrics.state.status, 'compacting')
+                self.assertEqual(metrics.snapshot()['status'], 'compacting')
                 runner._event('item/completed', {'item': item})
                 self.assertEqual(metrics.state.status, 'tool' if pending_tool else 'thinking')
                 if pending_tool:
                     metrics.tool_end('read')
                     self.assertEqual(metrics.state.status, 'thinking')
                 runner._end_model_turn()
+
+    async def test_resuming_game_during_codex_compaction_keeps_published_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / 'metrics.json'
+            metrics = Metrics(path, 'test', 'model', 'medium', 600)
+            cfg = RunConfig(agent='test', save='test', model='model', runtime='host')
+            runner = CodexRunner(cfg, root, None, metrics, 'unused', start_paused=True)
+            runner.pause_at = time.monotonic()
+            metrics.pause(status='paused')
+            runner._begin_model_turn(runtime='codex')
+            item = {'type': 'contextCompaction', 'id': 'while-paused'}
+            runner._event('item/started', {'item': item})
+            runner.control.enqueue('resume')
+            task = asyncio.create_task(runner._controls())
+            try:
+                async with asyncio.timeout(3):
+                    while runner.paused:
+                        await asyncio.sleep(.01)
+                visible = json.loads(path.read_text(encoding='utf-8'))
+                self.assertEqual((visible['status'], visible['activity_status']), ('compacting', 'thinking'))
+                runner._event('item/completed', {'item': item})
+                self.assertEqual(metrics.snapshot()['status'], 'thinking')
+                self.assertEqual(metrics.state.compactions, 1)
+
+                runner._event('item/started', {'item': {**item, 'id': 'interrupted'}})
+                runner._end_model_turn()
+                self.assertEqual(metrics.snapshot()['status'], 'thinking')
+                self.assertEqual(metrics.state.compactions, 1)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                runner.close_events()
 
     async def test_claude_chat_send_and_result_share_the_activity_lifecycle(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,6 +124,10 @@ class CodexChatLoopTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(metrics.state.status, 'thinking')
                 self.assertNotIn('只回复用户', runner._write.call_args.args[0])
                 self.assertTrue(runner.paused)
+                runner._handle({'type': 'system', 'subtype': 'status', 'status': 'compacting'})
+                self.assertEqual(metrics.snapshot()['status'], 'compacting')
+                runner._handle({'type': 'system', 'subtype': 'compact_boundary', 'compact_metadata': {}})
+                self.assertEqual(metrics.snapshot()['status'], 'thinking')
                 await asyncio.sleep(.01)
                 runner._handle({'type': 'result', 'subtype': 'success', 'usage': {}})
                 self.assertEqual(metrics.state.status, 'chat_idle')

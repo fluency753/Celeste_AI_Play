@@ -291,14 +291,11 @@ class CodexRunner(ModelRecovery, SessionControls):
                 starts = self.__dict__.setdefault("_compaction_started", {})
                 if method == "item/started":
                     starts.setdefault(item.get("id"), time.monotonic())
-                    self.metrics.update(status="compacting")
                 elif item.get("id") not in self.compacted:
                     self.compacted.add(item.get("id"))
                     began = starts.pop(item.get("id"), None)
                     # 压缩本身的时长（与 Claude Code 一样记进 compact_s；思考僵直从思考时间里扣掉它）
                     self.metrics.add(compactions=1, compact_s=round(time.monotonic() - began, 3) if began else 0.0)
-                    if self.metrics.state.status == 'compacting' and (self.chat_only or not self.paused):
-                        self.metrics.update(status='tool' if self.metrics.tools_running else 'thinking')
             elif item.get("type") in ("mcpToolCall", "collabToolCall"):
                 self.fatal = f"独立游戏执行器出现未允许的宿主工具：{item['type']}，已停止"
                 self.turn_done.set()

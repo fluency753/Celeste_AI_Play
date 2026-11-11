@@ -2246,7 +2246,7 @@ function renderRunTimers(m) {
   const since = (key) => Math.max(0, (m[key] || 0) - (base[key] || 0));
   const now = serverNow();
   let thinking = since("thinking_s"), tool = since("tool_s");
-  if (["thinking", "compacting"].includes(m.status) && m.thinking_since_wall > 0) thinking += Math.max(0, now - m.thinking_since_wall);
+  if (m.status !== "net_wait" && ["thinking", "compacting"].includes(m.activity_status || m.status) && m.thinking_since_wall > 0) thinking += Math.max(0, now - m.thinking_since_wall);
   if ((m.activity_status || m.status) === "tool" && m.thinking_since_wall > 0) tool += Math.max(0, now - m.thinking_since_wall);
   $("mThinking").textContent = clock(thinking);
   $("mTool").textContent = clock(tool);
@@ -2258,7 +2258,7 @@ function renderRun(m) {
   const key = String(m.model || "").replace(/\[[^\]]*\]$/, "").replace(/^claude-/, "").replace(/-\d+(?:-\d+)*$/, "");
   $("runName").textContent = names[m.agent] || names[m.model] || names[key] || m.agent || "—";
   const replaying = m.replaying || m.status === "replaying";
-  const [text, color] = (replaying && m.status !== "net_wait") ? STATUS.replaying : (STATUS[m.status] || [m.status || "—", "var(--muted)"]);
+  const [text, color] = (replaying && !["net_wait", "compacting"].includes(m.status)) ? STATUS.replaying : (STATUS[m.status] || [m.status || "—", "var(--muted)"]);
   $("runStatus").textContent = m.status === "studying" ? `${text} ${Math.round((m.kb_progress || 0) * 100)}%` : text;
   $("runDot").style.background = color;
   const chapterName = (cfg.chapters || {})[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
@@ -2279,7 +2279,7 @@ function renderRun(m) {
   $("mEffort").textContent = m.effort_pending && m.effort_pending !== m.effort ? `${m.effort} → ${m.effort_pending}` : (m.effort || "—");
   $("mContext").textContent = tokens(m.context_tokens);
   $("runToolCall").textContent = m.tool_call ? `正在调用：${m.tool_call}${m.tool_status ? " — " + m.tool_status : ""}` : "";
-  $("runAside").textContent = m.status === "paused" ? "已暂停" : "";
+  $("runAside").textContent = (m.activity_status || m.status) === "paused" ? "已暂停" : "";
 }
 
 function renderControls() {
