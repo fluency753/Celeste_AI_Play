@@ -1,8 +1,8 @@
 """Parallel regression entry: discover-equivalent imports, failure reporting and timing cache."""
-import contextlib
-import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -44,12 +44,15 @@ class RegressionRunnerTests(unittest.TestCase):
                     pass
             ''')
 
-    def run_main(self, *extra):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            code = runner.main(['--start-directory', str(self.tests), '--output', str(self.root / 'out'),
-                                '--timings-cache', str(self.root / 'times.json'), *extra])
-        return code, out.getvalue()
+    def run_main(self, *extra, start=None):
+        result = subprocess.run(
+            [sys.executable, str(runner.ROOT / 'tools' / 'run_tests.py'),
+             '--start-directory', str(start or self.tests), '--output', str(self.root / 'out'),
+             '--timings-cache', str(self.root / 'times.json'), *extra],
+            cwd=runner.ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            encoding='utf-8', timeout=30,
+        )
+        return result.returncode, result.stdout
 
     def test_parallel_run_passes_counts_and_caches_module_times(self):
         code, out = self.run_main('--workers', '2')
@@ -74,6 +77,27 @@ class RegressionRunnerTests(unittest.TestCase):
         self.assertIn('visible failure detail', out)
         self.assertIn('module_that_does_not_exist', out)
         self.assertIn('FAILED', out)
+
+    def test_parallel_and_serial_discover_nested_package_failures(self):
+        package = self.tests / 'pkg'
+        package.mkdir()
+        write(package, '__init__.py', '')
+        write(package, 'nested_test.py', '''
+            import unittest
+
+            class NestedTests(unittest.TestCase):
+                def test_nested(self):
+                    self.fail('nested package failure')
+            ''')
+        parallel_code, parallel = self.run_main('--workers', '2')
+        serial_code, serial = self.run_main('--serial')
+        self.assertEqual(parallel_code, 1, parallel)
+        self.assertEqual(serial_code, 1, serial)
+        self.assertIn('FAILED run=4 failures=1 errors=0 skipped=1', parallel)
+        self.assertIn('Ran 4 tests', serial)
+        for report in (parallel, serial):
+            self.assertIn('pkg.nested_test', report)
+            self.assertIn('nested package failure', report)
 
     def test_named_tests_and_serial_run_in_process(self):
         code, _ = self.run_main('suite.gamma_test.GammaTests.test_ok')
@@ -106,11 +130,8 @@ class RegressionRunnerTests(unittest.TestCase):
                 def test_value_bound_at_import(self):
                     self.assertEqual(derived_module.VALUE, 'real')
             ''')
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            code = runner.main(['--start-directory', str(lone), '--output', str(self.root / 'lone-out'),
-                                '--timings-cache', str(self.root / 'lone.json'), '--workers', '1'])
-        self.assertEqual(code, 0, out.getvalue())
+        code, out = self.run_main('--workers', '1', start=lone)
+        self.assertEqual(code, 0, out)
 
     def test_partition_balances_by_history_and_guesses_unknown_modules(self):
         groups = runner.partition(['a', 'b', 'c', 'd'], {'a': 10.0, 'b': 6.0, 'c': 4.0}, 2)

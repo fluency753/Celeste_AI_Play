@@ -25,10 +25,6 @@ def import_path(start):
     return os.pathsep.join([str(start), str(ROOT), *filter(None, [os.environ.get('PYTHONPATH')])])
 
 
-def modules(start, pattern):
-    return sorted(path.stem for path in Path(start).glob(pattern) if path.is_file())
-
-
 def load_times(cache):
     try:
         data = json.loads(Path(cache).read_text(encoding='utf-8'))
@@ -56,11 +52,20 @@ def module_of(suite):
         if isinstance(test, unittest.TestSuite):
             if (name := module_of(test)) is not None:
                 return name
-        elif isinstance(test, unittest.loader._FailedTest):
+        elif type(test).__module__ == 'unittest.loader':
             return test._testMethodName
         else:
             return type(test).__module__
     return None
+
+
+def discover_suites(start, pattern):
+    discovered = unittest.TestLoader().discover(str(start), pattern=pattern, top_level_dir=str(start))
+    suites = {}
+    for suite in discovered:
+        if (name := module_of(suite)) is not None:
+            suites.setdefault(name, unittest.TestSuite()).addTest(suite)
+    return suites
 
 
 def worker(start, pattern, names, verbosity, report):
@@ -72,12 +77,11 @@ def worker(start, pattern, names, verbosity, report):
     """
     runner = unittest.TextTestRunner(stream=sys.stderr, verbosity=verbosity)
     totals, seconds = {'run': 0, 'failures': 0, 'errors': 0, 'skipped': 0}, {}
-    discovered = unittest.TestLoader().discover(str(start), pattern=pattern, top_level_dir=str(start))
-    suites = {module_of(suite): suite for suite in discovered}
+    suites = discover_suites(start, pattern)
     for name in names:
         began = time.monotonic()
         print(f'[worker] {name}', file=sys.stderr, flush=True)
-        result = runner.run(suites.get(name) or unittest.TestSuite())
+        result = runner.run(suites[name])
         seconds[name] = round(time.monotonic() - began, 3)
         totals['run'] += result.testsRun
         totals['failures'] += len(result.failures) + len(result.unexpectedSuccesses)
@@ -107,7 +111,7 @@ def failure_report(log):
 
 
 def run_parallel(start, pattern, workers, verbosity, output, cache):
-    names = modules(start, pattern)
+    names = sorted(discover_suites(start, pattern))
     if not names:
         print(f'[tests] {start} 下没有匹配 {pattern} 的测试模块', flush=True)
         return 1

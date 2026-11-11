@@ -163,6 +163,7 @@ class ExitBridge(MenuBridge):
 class MenuDebtTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cfg = RunConfig(agent='fixture', save='fixture', save_slot=15, model='fixture', engine='claude',
                              mode='explore', knowledge_profile='explore', runtime='host', sim=False,
@@ -186,7 +187,6 @@ class MenuDebtTests(unittest.IsolatedAsyncioTestCase):
         await self.r._finish_token_worker()
         self.r.close_events()
         self.s.close()
-        self.temp.cleanup()
 
     async def tool(self, name='act', **args):
         result = await self.server.call_tool(name, args)
