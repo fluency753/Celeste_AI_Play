@@ -22,6 +22,7 @@ from .codex_read import read_file, search_files
 from .session_controls import RuntimeCapabilities, SessionControls
 from .session_store import load_json, write_json
 from .telemetry import public_event, publish
+from .token_drift import token_observe_notice
 
 
 def spec(name, description, properties, required=()):
@@ -569,6 +570,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                                 or getattr(self.session, 'reload_observation_required', False)):
                             raise ValueError('桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。')
                         if name != 'celeste_observe' and (reload_ticket[2] != getattr(self.session, 'token_motion_epoch', 0) or getattr(self.session, 'token_observation_required', False)):
+                            if notice := token_observe_notice(self.session):
+                                raise ValueError('旧动作未执行。' + notice)
                             raise ValueError('Token 推进改变了场景，旧动作未执行；请先默认 observe 后重新规划。')
                         if reason := request_void():
                             raise ValueError(reason)
@@ -694,6 +697,27 @@ class CodexRunner(ModelRecovery, SessionControls):
     async def _steer_user(self, text):
         await self.rpc.request("turn/steer", {"threadId": self.session_id,
             "expectedTurnId": self.turn_id, "input": [{"type": "text", "text": text}]})
+
+    def _offer_token_change(self, origin_turn, epoch):
+        if self._steerable(origin_turn) and not self.paused:
+            task = asyncio.create_task(self._notify_token_change(origin_turn, epoch))
+            self._receipt_tasks.add(task)
+            task.add_done_callback(self._receipt_tasks.discard)
+
+    async def _notify_token_change(self, origin_turn, epoch):
+        notice = token_observe_notice(self.session)
+        if (not notice or self.session.token_motion_epoch != epoch
+                or not self._steerable(origin_turn) or self.paused):
+            return
+        try:
+            reply = await self.rpc.request('turn/steer', {'threadId': self.session_id,
+                'expectedTurnId': origin_turn, 'input': [{'type': 'text', 'text': notice}]}, timeout=5)
+            if not isinstance(reply, dict) or reply.get('turnId') != origin_turn:
+                raise RuntimeError('未确认通知已提交给原轮次')
+        except (RuntimeError, TimeoutError, OSError) as exc:
+            self._audit_delivery('token_change_unconfirmed', error=str(exc), turn=origin_turn)
+        else:
+            self._audit_delivery('token_change_queued', turn=origin_turn)
 
     async def _validate_effort(self, value):
         from .model_catalog import resolve_selection

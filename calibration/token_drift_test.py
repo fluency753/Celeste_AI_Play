@@ -5,11 +5,12 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from calibration.stiffness_test import StepClient
 from calibration.story_wait_test import BridgeWire, observation
 from orchestrator.agent import ClaudeRunner
+from orchestrator.codex_agent import CodexRunner
 from orchestrator.config import RunConfig
 from orchestrator.game_session import GameSession
 from orchestrator.launch_options import build, config_for
@@ -17,6 +18,7 @@ from orchestrator.metrics import Metrics
 from orchestrator.output_usage import ClaudeUsage, partial_usage_event
 from orchestrator.server import build_server
 from orchestrator.token_drift import TokenDrift
+from orchestrator.tool_gate import decide_tool
 from tools.bridge_client import BridgeClient
 
 
@@ -221,6 +223,90 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         self.s.client.after_step = self.s._after_step
         return fixture
 
+    async def use_codex(self):
+        await self.r._finish_token_worker()
+        self.r.close_events()
+        self.cfg.engine = 'codex'
+        self.s._token_cancel.clear()
+        self.r = CodexRunner(self.cfg, self.root, self.s, self.m, None,
+                             game_server=self.server, session_id='fixture')
+        self.r.turn_active, self.r.turn_id = True, 'turn-1'
+        self.r._begin_model_turn(runtime='codex')
+        self.r._start_token_worker()
+        self.r._record_output_usage(1, 1)  # Close the saved ledger's resume gap.
+
+    async def test_codex_background_death_notifies_active_turn_without_holding_game_locks(self):
+        bridge = self.wire_bridge()
+        await self.use_codex()
+        bridge.results = [('death', 1, {**level_obs(dead=True), 'frame': 101}, [])]
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def steer(method, params, *, timeout):
+            entered.set()
+            await release.wait()
+            return {'turnId': 'turn-1'}
+
+        with patch.object(self.r.rpc, 'request', side_effect=steer) as request:
+            self.r._record_output_usage(1501, 1500)
+            try:
+                await asyncio.wait_for(entered.wait(), 3)
+                method, params = request.call_args.args
+                self.assertEqual((method, params['expectedTurnId']), ('turn/steer', 'turn-1'))
+                self.assertIn('角色死亡（帧 101）', params['input'][0]['text'])
+                self.assertEqual(self.m.state.status, 'thinking')
+                response = await asyncio.wait_for(self.r._request('item/tool/call', {
+                    'threadId': 'fixture', 'turnId': 'turn-1', 'tool': 'celeste_act',
+                    'arguments': {'inputs': ['1,L'], 'thought': '旧计划'}}), 3)
+                self.assertFalse(response['success'])
+                self.assertIn('角色死亡', response['contentItems'][0]['text'])
+                self.assertEqual(len(bridge.steps), 1)
+                self.assertEqual(self.r.token_drift.state['dropped_frames'], 2)
+                self.assertFalse(self.r.paused)
+                self.assertTrue(self.r.turn_active)
+            finally:
+                release.set()
+                await asyncio.gather(*self.r._receipt_tasks)
+        self.assertIn('角色死亡', (self.root/'public_events.jsonl').read_text(encoding='utf-8'))
+
+    async def test_codex_steer_failure_preserves_boundary_for_tools_and_next_turn(self):
+        await self.use_codex()
+        obs = observation(node='dialogue', controllable=False)
+        self.s.client.results = [('story_input', 1, {**obs, 'frame': 101}, [])]
+        with patch.object(self.r.rpc, 'request', new_callable=AsyncMock,
+                          side_effect=RuntimeError('turn closed')) as request:
+            self.r._record_output_usage(1001, 1000)
+            await self.settle()
+            await asyncio.gather(*self.r._receipt_tasks)
+        request.assert_awaited_once()
+        self.assertFalse(self.r.paused)
+        self.assertFalse(self.r.turn_done.is_set())
+        self.assertIn('出现剧情输入', self.r._turn_message('继续', []))
+        self.assertIn('出现剧情输入', await self.tool('observe'))
+        self.assertNotIn('出现剧情输入', self.r._turn_message('继续', []))
+
+    async def test_codex_does_not_steer_a_notice_into_a_different_turn(self):
+        await self.use_codex()
+        self.s.client.results = [('room', 1, {**level_obs(room='b'), 'frame': 101}, [])]
+        with patch.object(self.r.rpc, 'request', new_callable=AsyncMock) as request:
+            async with self.r.action_lock:
+                self.r._record_output_usage(1001, 1000)
+                await self.r._flush_token_drift_locked()
+                self.r.turn_id = 'turn-2'
+            await asyncio.gather(*self.r._receipt_tasks)
+        request.assert_not_awaited()
+        self.assertIn('新房间 b', self.r._turn_message('继续', []))
+
+    async def test_claude_next_turn_receives_chapter_completion_notice(self):
+        obs = level_obs()
+        obs['level']['completed'] = True
+        self.s.client.results = [('complete', 1, {**obs, 'frame': 101}, [])]
+        self.r._record_output_usage(1000, 1000)
+        await self.settle()
+        self.assertIn('游戏登记章节通关', self.r._turn_message('继续', []))
+        self.assertIn('游戏登记章节通关', (await decide_tool('Bash', session=self.s))['context'])
+        self.assertIn('游戏登记章节通关', (await decide_tool('mcp__celeste__narrate', session=self.s))['context'])
+        self.assertIn('游戏登记章节通关', await self.tool('act', inputs=['1,L'], thought='旧动作'))
+
     async def test_real_step_keeps_held_keys_and_accounts_frames(self):
         self.r._record_output_usage(1200, 1200)
         await self.settle()
@@ -312,6 +398,7 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.s.client.steps), 1)
         message = await self.tool('act', inputs=['1,L'], thought='重新尝试')
         self.assertIn('先默认 observe', message)
+        self.assertIn('房间切换（帧 100，新房间 b）', message)
         self.assertEqual(len(self.s.client.steps), 1)
         await self.tool('observe')
         self.assertFalse(self.s.token_observation_required)

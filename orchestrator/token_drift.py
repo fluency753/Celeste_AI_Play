@@ -6,6 +6,24 @@ from .output_usage import token_count
 from .session_store import load_json, write_json
 
 
+TOKEN_CHANGES = {
+    'death': '角色死亡',
+    'room': '房间切换',
+    'complete': '游戏登记章节通关',
+    'story_input': '出现剧情输入',
+    'story_decision': '出现剧情决策机会',
+    'uncontrollable': '角色失去控制',
+    'controllable': '角色恢复控制',
+}
+
+
+def token_observe_notice(session):
+    if getattr(session, 'token_observation_required', False):
+        if change := getattr(session, 'token_change_notice', None):
+            return f'（主控）{change}。若试玩仍在继续且尚未获取新观测，请先默认 observe，再重新规划。'
+    return None
+
+
 class TokenDrift:
     def __init__(self, path, metrics, tokens_per_frame, previous=None, *, menu_context=False):
         self.path, self.metrics, self.tokens_per_frame = path, metrics, tokens_per_frame

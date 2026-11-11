@@ -437,6 +437,7 @@ class GameSession:
         self._freeze_base: tuple[float, float, float] | None = None   # 这次冻结开始时的（思考、工具、压缩）累计
         self.token_motion_epoch = 0
         self.token_observation_required = False
+        self.token_change_notice = None
         self._token_advancing = False
         self._token_cancel = threading.Event()
         self.token_guard = lambda: False

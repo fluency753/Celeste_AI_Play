@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from .control import RunControl
 from .button_prompts import notification
+from .token_drift import TOKEN_CHANGES, token_observe_notice
 
 
 @dataclass(frozen=True)
@@ -244,6 +245,9 @@ class SessionControls:
                 # recoverable pre-execution failures after user inspection.
                 continue
 
+    def _offer_token_change(self, origin_turn, epoch):
+        """Executors without live steering deliver this via the next tool or turn."""
+
     def _drop_token_menu_debt(self, reason):
         """Game restarted or pause context no longer matches: drop the owed frames and the context."""
         frames = self.token_drift.drop_deferred(reason)
@@ -301,6 +305,7 @@ class SessionControls:
                                   deferred=deferred)
             if frames is None:
                 return
+            origin_turn = getattr(self, 'turn_id', None)
             worker = asyncio.create_task(asyncio.to_thread(self.session.token_frame_step, frames,
                                                           **({'deferred': True} if deferred else {})))
             try:
@@ -323,9 +328,22 @@ class SessionControls:
                 self.metrics.pause()
                 self.session.token_observation_required = True
                 raise
-            if not self._token_closing and self._token_motion_eligible():
+            if not self._token_closing and self._token_account_eligible():
                 self.metrics.update(status='tool' if self.metrics._tools else 'thinking')
             if result.get('stop') != 'done' or not result.get('consumed'):
+                if change := TOKEN_CHANGES.get(result.get('stop')):
+                    after = result['after']
+                    place = f'，新房间 {after["room"]}' if result['stop'] == 'room' and after.get('room') else ''
+                    notice = f'Token 推进触发{change}（帧 {after["frame"]}{place}）'
+                    self.session.token_change_notice = notice
+                    try:
+                        from .telemetry import publish
+                        publish(self.run_dir, f'system:token-change:{ledger.state["batch_id"]}',
+                                notice, role='system', kind='系统')
+                    except OSError as error:
+                        print(f'[token] 变化通知未写入 HUD：{error}', flush=True)
+                    if not self._token_closing:
+                        self._offer_token_change(origin_turn, self.session.token_motion_epoch)
                 return
         if self._token_menu_active() and not ledger.deferred and self.session.token_playable(self.session.last_obs or {}):
             self.session.token_menu.clear()
@@ -404,7 +422,7 @@ class SessionControls:
             parts = [supplied, notice]
         else:
             parts = [supplied or fallback]
-        return '\n\n'.join(part for part in [context, *parts] if part)
+        return '\n\n'.join(part for part in [context, *parts, token_observe_notice(self.session)] if part)
 
     async def _stopped_reason(self):
         if self.interrupted_for_resume:

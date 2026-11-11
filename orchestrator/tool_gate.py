@@ -25,6 +25,11 @@ async def decide_tool(tool_name, *, metrics=None, live_remind_s=None, session=No
         context = '\n'.join(value for value in (context, '\n'.join(text for _, text in offered)) if value)
     if offered:
         notes.acknowledge(offered)
+    from .token_drift import token_observe_notice
+    if notice := token_observe_notice(session):
+        from .game_policy import GAME_ACTIONS
+        if tool_name.removeprefix('mcp__celeste__') not in GAME_ACTIONS:
+            context = '\n'.join(value for value in (context, notice) if value)
     return {'decision': 'allow', 'reason': '', 'context': context}
 
 

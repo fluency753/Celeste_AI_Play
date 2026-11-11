@@ -13,6 +13,7 @@ from tools.cutscene import story_decision, story_input
 
 from .game_session import ActError, GameSession
 from .token_menu import TokenMenuBoundary
+from .token_drift import token_observe_notice
 from .recording import RecordingHalt
 from .telemetry import publish
 from .kb_study import KbStudy
@@ -201,7 +202,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
 
     def repayment(paid):
         batch = (getattr(metrics.state, 'token_drift', None) or {}).get('batch') or {}
-        return {'frames': paid, 'stop': batch.get('stop'), 'batch_id': batch.get('id')}
+        result = {'frames': paid, 'stop': batch.get('stop'), 'batch_id': batch.get('id')}
+        if notice := token_observe_notice(session):
+            result['notice'] = notice
+        return result
 
     def token_boundary(fn):
         @wraps(fn)
@@ -232,7 +236,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                             + ('待补余额仍按账本保留。' if getattr(session, 'token_debt_pending', lambda: 0)() else '')
                             + ''.join(take_token_notes())
                             + '下面是最新观测；请重新规划，不重发原菜单宏或旧计划。')
-                    if getattr(session, 'token_observation_required', False):
+                    if notice := token_observe_notice(session):
+                        note += notice
+                    elif getattr(session, 'token_observation_required', False):
                         note += '补推进遇到场景中断，请先默认 observe 核验。'
                     content.append(note + '\n\n' + describe_obs(obs, full_room=True, effort=header_line(),
                                    explore=explore, compact_context=True, file_context=file_context) + '\n\n' + context)
@@ -258,6 +264,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         if name != 'observe' and (getattr(session, 'token_observation_required', False)
                 or ticket is not None and ticket[2] != getattr(session, 'token_motion_epoch', 0)):
             journal.not_executed()
+            if notice := token_observe_notice(session):
+                return '旧动作未执行。' + notice
             return 'Token 推进遇到死亡、换房或剧情，旧动作未执行；请先默认 observe 核验并重新规划。'
         if study is None or study.ready():
             return None
@@ -362,8 +370,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 if detail != 'overview' or region is not None or offset or snapshot_id is not None:
                     return ['区域或分页查询请用 detail="geometry"；默认 overview 会获取新观测。']
                 await flush_tokens()
+                token_change = getattr(session, 'token_change_notice', None)
                 obs, image = await asyncio.to_thread(session.observe)
                 session.token_observation_required = False  # The new overview acknowledges the prior boundary.
+                session.token_change_notice = None
                 paid = await flush_tokens()
                 if paid and session.token_last_observation is not None:
                     obs, image = session.token_last_observation
@@ -372,6 +382,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 context, file_context, candidate = observation_context(obs, force=True)
                 content = images(obs, image)
                 notes = (getattr(session, "observe_notes", None) or []) + take_token_notes()
+                if token_change:
+                    notes.insert(0, token_change)
+                if notice := token_observe_notice(session):
+                    notes.append(notice)
                 content.append(("主控：" + "；".join(notes) + "\n\n" if notes else "")
                                + describe_obs(obs, full_room=True, effort=header_line(), explore=explore, compact_context=True, file_context=file_context)
                                + "\n\n" + context
@@ -422,6 +436,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                         outcome.obs, outcome.image_b64 = session.token_last_observation
                         outcome.result['token_repayment'] = repayment(paid)
                         outcome.auto_notes.append(f'暂停累计的 Token 已补推进 {paid} 帧，停止原因 {repayment(paid)["stop"]}；下面是结算后观测，原计划未执行的部分不自动继续。')
+                        if notice := token_observe_notice(session):
+                            outcome.auto_notes.append(notice)
                     outcome.auto_notes.extend(take_token_notes())
                     result = outcome.result
                     journal.detail({'result': compact_step(outcome.result), 'attempts': outcome.attempts,
@@ -606,7 +622,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 if paid and session.token_last_observation is not None:
                     obs, image = session.token_last_observation
                     notes.append(f'菜单恢复后已补推进 {paid} 帧，下面是补推进后的最新观测；请重新规划。')
-                    if getattr(session, 'token_observation_required', False):
+                    if notice := token_observe_notice(session):
+                        notes.append(notice)
+                    elif getattr(session, 'token_observation_required', False):
                         notes.append('补推进遇到场景中断，请先默认 observe 核验。')
                     journal.detail({'token_repayment': repayment(paid)})
                 credit(obs)
