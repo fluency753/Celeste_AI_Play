@@ -305,9 +305,10 @@ def _restart(path, port, host, bridge_port, timeout, retry):
                     finally:
                         process.close()
                 # The runner writes its summary before the outer cleanup appends game_released.
-                if not (old / 'summary.json').exists():
-                    return None
-                summary = read(old / 'summary.json')
+                try:
+                    summary = read(old / 'summary.json')
+                except FileNotFoundError as exc:
+                    raise HandoffRejected('旧主控已退出但没有写出 summary.json，无法核验接管与录制，停止自动续接') from exc
                 if summary.get('game_released') is not False:
                     raise HandoffRejected('旧主控未保留游戏接管，停止自动续接')
                 if before['recording']:

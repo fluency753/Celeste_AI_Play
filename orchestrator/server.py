@@ -504,6 +504,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     tail = (f'本次未暂停。{result["category_label"]}已提交 {result["step"]}/{result["required_steps"]} 次。'
                             f'复核要求：{result["criterion"]}'
                             '核对受阻的任务必需步骤，以及是否还有获准的下一步能自己做。'
+                            '反复 observe 看到同一冻结帧不算恢复试验。'
                             '确需用户帮助时，再次调用本工具。'
                             f'reason 以「{result["confirmation_prefix"]}」开头，后接 200 字以内的复核证据及用户需要做的事。'
                             '有可行下一步时直接继续，无需确认。')

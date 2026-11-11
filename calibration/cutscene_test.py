@@ -74,7 +74,7 @@ class CutsceneTests(unittest.TestCase):
         self.assertIn('bridge_io', unclassified_text)
         self.assertIn('hint', unclassified_text)
         self.s.request_pause.assert_not_called()
-        result = asyncio.run(server.call_tool('stop_run', {'reason': 'bridge_io：' + reason}))
+        result = asyncio.run(server.call_tool('stop_run', {'reason': 'bridge_io  :  ' + reason}))
         text = result.content[0].text
         pending = json.loads(text.splitlines()[0])
         self.assertEqual(pending['status'], 'confirmation_required')
@@ -85,7 +85,9 @@ class CutsceneTests(unittest.TestCase):
         self.assertFalse((self.path/'public_events.jsonl').exists())
         repeated = self.s.stop_run('bridge_io：' + reason)
         self.assertEqual(repeated['confirmation_prefix'], pending['confirmation_prefix'])
-        result=asyncio.run(server.call_tool('stop_run',{'reason':pending['confirmation_prefix'] + reason}))
+        code = pending['confirmation_prefix'].split()[1].split('：')[0]
+        confirmed_reason = f'确认阻塞{code.upper()} : bridge_io ： {reason}'
+        result = asyncio.run(server.call_tool('stop_run', {'reason': confirmed_reason}))
         self.assertIn('主控已把试玩暂停',result.content[0].text)
         self.s.request_pause.assert_called_once_with('游戏动作持续报桥接协议错误')
         self.assertFalse(self.s.done)                      # 不结束运行：游戏保持冻结，等用户继续或停止

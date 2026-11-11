@@ -140,6 +140,22 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(result['after']['recording']['id'], 'recording-id')
         self.assertEqual((len(self.calls), len(self.launches)), (1, 1))
 
+    def test_exited_host_without_summary_reports_missing_handoff_immediately(self):
+        original = self.control
+
+        def interrupt(port, payload=None):
+            result = original(port, payload)
+            if payload:
+                (self.old / 'summary.json').unlink()
+            return result
+
+        with patch.object(restart, 'control', interrupt), patch.object(restart.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(restart.HandoffRejected, '旧主控已退出但没有写出 summary.json'):
+                self.execute()
+        sleep.assert_not_called()
+        self.assertEqual(restart.read(self.journal)['phase'], 'failed')
+        self.assertEqual(self.launches, [])
+
     def test_exited_host_without_retained_game_does_not_start_new_controller(self):
         original = self.control
         for released in (True, None):

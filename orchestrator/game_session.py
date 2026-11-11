@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextvars
 import json
 import hashlib
+import re
 import secrets
 import sys
 import threading
@@ -2401,15 +2402,14 @@ class GameSession:
         暂停由 HUD 控制器提供（request_pause）；没有控制器时（例如测试）只记下报告。"""
         reason = " ".join((reason or "").split())
         code = None
-        if reason.startswith('确认阻塞 '):
-            prefix, separator, detail = reason.partition('：')
-            if separator:
-                code = prefix.removeprefix('确认阻塞 ')
-                reason = detail.strip()
+        if confirmation := re.match(r'确认阻塞\s*([0-9a-fA-F]{12})\s*[:：]\s*', reason):
+            code = confirmation.group(1).lower()
+            reason = reason[confirmation.end():]
         if not reason:
             raise ActError('报告任务阻塞必须说明原因')
-        category, separator, detail = reason.partition('：')
-        if len(detail.strip() if separator else reason) > 200:
+        fields = re.split(r'\s*[:：]\s*', reason, maxsplit=1)
+        category, detail = fields[0], fields[-1]
+        if len(detail) > 200:
             raise ActError('阻塞原因请压缩到 200 字以内')
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
@@ -2426,9 +2426,10 @@ class GameSession:
                 self._stop_confirmation = None
                 return self._stop_diagnostic('recovery_available', reason, frame, progress)
             level, player = obs.get('level') or {}, obs.get('player') or {}
-            evidence = (self._transition_epoch(), obs.get('scene'), self._transition_identity(obs, level),
-                        frame, story_input(obs), story_decision(obs), obs.get('controllable'),
-                        level.get('screenWipe'), level.get('deaths'), player.get('state'), failure)
+            state = (self._transition_epoch(), obs.get('scene'), self._transition_identity(obs, level),
+                     story_input(obs), story_decision(obs), obs.get('controllable'),
+                     level.get('screenWipe'), level.get('deaths'), player.get('state'))
+            evidence = (*state, frame, failure)
             if (type(frame) is int or failure) and evidence == self._last_stop_evidence:
                 return self._stop_diagnostic('duplicate', reason, frame, progress, control_note=control_note)
             try:
@@ -2439,7 +2440,7 @@ class GameSession:
                 pending_category, pending_rule = self._stop_confirmation[0][:2]
                 if categories.get(pending_category) != pending_rule:
                     self._stop_confirmation = None
-            rule = categories.get(category) if separator else None
+            rule = categories.get(category) if len(fields) == 2 else None
             if rule is None:
                 if len(reason) > 200:
                     raise ActError('阻塞原因请压缩到 200 字以内')
@@ -2451,8 +2452,11 @@ class GameSession:
             if not reason:
                 raise ActError('报告任务阻塞必须在类别之后说明原因')
             required = rule.required_steps
+            # Ordinary Token motion must not expire a confirmation while the agent writes it.
+            manual_frame = frame - self.metrics.state.token_frames if type(frame) is int else frame
             # Retrying the same bridge failure can change its request serial.
-            scope = (category, rule, evidence[:-1], bool(failure), self.goals.snapshot()['revision'],
+            scope = (category, rule, state, manual_frame, self.token_motion_epoch,
+                     bool(failure), self.goals.snapshot()['revision'],
                      self.piece, tuple(self.chapter_queue))
             if self._stop_confirmation is None or self._stop_confirmation[0] != scope:
                 self._stop_confirmation = (scope, 1, secrets.token_hex(6))

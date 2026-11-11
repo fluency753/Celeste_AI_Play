@@ -221,6 +221,35 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.m.state.frames_played, 0)
         self.assertEqual(self.r.token_drift.state['consumed_frames'], 2)
 
+    async def test_token_frames_do_not_restart_three_step_stop_confirmation(self):
+        with patch('orchestrator.stop_categories.LOCAL_CATEGORIES', self.root / 'local.stop_categories.json'):
+            reason = '两条路线均未抵达高台，请提示起跳点'
+            first = json.loads((await self.tool('stop_run', reason='hint：' + reason)).splitlines()[0])
+            self.s.client.results = [('done', 3, {**level_obs(), 'frame': 103}, []),
+                                     ('done', 2, {**level_obs(), 'frame': 105}, [])]
+            self.r._record_output_usage(1500, 1500)
+            await self.settle()
+            self.assertEqual((self.s.last_obs['frame'], self.m.state.token_frames), (103, 3))
+            second = json.loads((await self.tool('stop_run', reason=first['confirmation_prefix'] + reason)).splitlines()[0])
+            self.assertEqual((second['step'], second['required_steps'], self.r.paused), (2, 3, False))
+            self.r._record_output_usage(2500, 1000)
+            await self.settle()
+            self.assertEqual((self.s.last_obs['frame'], self.m.state.token_frames), (105, 5))
+            final = json.loads((await self.tool('stop_run', reason=second['confirmation_prefix'] + reason)).splitlines()[0])
+            self.assertEqual((final['status'], final['paused'], self.r.paused), ('reported', True, True))
+
+    async def test_token_room_transition_invalidates_stop_confirmation(self):
+        with patch('orchestrator.stop_categories.LOCAL_CATEGORIES', self.root / 'local.stop_categories.json'):
+            reason = '需要用户核验工具状态'
+            first = json.loads((await self.tool('stop_run', reason='state_verification：' + reason)).splitlines()[0])
+            self.s.client.results = [('room', 1, {**level_obs(room='b'), 'frame': 101}, [])]
+            self.r._record_output_usage(500, 500)
+            await self.settle()
+            self.assertEqual((self.s.last_obs['frame'], self.m.state.token_frames), (101, 1))
+            changed = json.loads((await self.tool('stop_run', reason=first['confirmation_prefix'] + reason)).splitlines()[0])
+            self.assertEqual((changed['status'], changed['step'], self.r.paused), ('confirmation_required', 1, False))
+            self.assertNotEqual(first['confirmation_prefix'], changed['confirmation_prefix'])
+
     async def test_actual_reader_never_persists_partial_content(self):
         from types import SimpleNamespace
         reader = asyncio.StreamReader()
