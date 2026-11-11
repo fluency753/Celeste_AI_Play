@@ -367,6 +367,55 @@ class StoryWaitTests(unittest.TestCase):
         self.session.game_process_id = 778
         return build_server(self.session)
 
+    def test_stop_confirmation_tracks_acknowledged_operations_not_the_frame_number(self):
+        bridge = StoryBridge(observation(controllable=True, cutscene=False))
+        server = self._wire_bridge(bridge)
+        reason = '需要核验工具状态'
+        first = self._stop_report(server, 'state_verification：' + reason)
+
+        # The frame can change on a fresh observation without an input acknowledgement.
+        bridge.obs['frame'] += 1
+        asyncio.run(server.call_tool('observe', {}))
+        self.assertEqual(self._stop_report(server, 'state_verification：' + reason)['confirmation_prefix'],
+                         first['confirmation_prefix'])
+        # A zero-frame acknowledgement can also carry a more recent observed frame.
+        bridge.obs['frame'] += 1
+        real_call = bridge.call
+
+        def zero_step(command, **args):
+            if command == 'step':
+                return {'obs': copy.deepcopy(bridge.obs), 'result': {
+                    'consumed': 0, 'planned': 1, 'stop': 'done', 'events': [], 'trajectory': []}}
+            return real_call(command, **args)
+
+        act = {'inputs': ['1,R'], 'thought': '检查是否可以移动'}
+        with patch.object(bridge, 'call', side_effect=zero_step):
+            asyncio.run(server.call_tool('act', act))
+        self.assertEqual(self.session.last_obs['frame'], 102)
+        self.assertEqual(self._stop_report(server, 'state_verification：' + reason)['confirmation_prefix'],
+                         first['confirmation_prefix'])
+
+        asyncio.run(server.call_tool('act', act))
+        restarted = self._stop_report(server, first['confirmation_prefix'] + reason)
+        self.assertEqual((restarted['status'], restarted['step']), ('confirmation_required', 1))
+        self.assertNotEqual(restarted['confirmation_prefix'], first['confirmation_prefix'])
+        self.assertEqual(self._stop_report(server, restarted['confirmation_prefix'] + reason)['status'], 'reported')
+        self.assertEqual(self._stop_report(server, 'state_verification：' + reason)['status'], 'duplicate')
+        asyncio.run(server.call_tool('act', act))
+        self.assertEqual(self._stop_report(server, 'state_verification：' + reason)['status'], 'confirmation_required')
+
+    def test_local_step_guard_preserves_confirmation_and_bridge_health(self):
+        bridge = StoryBridge(observation(controllable=True, cutscene=False))
+        server = self._wire_bridge(bridge)
+        reason = '需要核验工具状态'
+        first = self._stop_report(server, 'state_verification：' + reason)
+        self.session.client.cancel_check = lambda: True
+        with self.assertRaises(InterruptedError):
+            self.session.client.call('step', inputs=['1,R'])
+        self.assertIsNone(self.session.client.last_call_failure)
+        self.assertEqual(bridge.steps, [])
+        self.assertEqual(self._stop_report(server, first['confirmation_prefix'] + reason)['status'], 'reported')
+
     def test_menu_retry_without_death_event_or_wipe_can_choose_waiting(self):
         bridge = RespawnBridge(ready=3067, death_event=False, screen_wipe=False)
         bridge.death_frame = 2937
@@ -591,33 +640,34 @@ class StoryWaitTests(unittest.TestCase):
         self.assertEqual(statuses, ['confirmation_required', 'duplicate'])
 
     def test_transport_failure_allows_stop_report_despite_cached_respawn_evidence(self):
-        _, server = self._death_fixture(pause_at=97880)
+        bridge, _ = self._death_fixture(pause_at=97880)
         self.session.control_guard = None
-        client = BridgeClient.__new__(BridgeClient)
-        client.next_id = 8
-        replies = iter(({}, ConnectionError('桥接已断开'), {'obs': self.session.last_obs}))
+        server = self._wire_bridge(bridge)
+        client = self.session.client
+        wire = client.file
+        read = wire.readline
 
-        def broken(*args, **kwargs):
-            reply = next(replies)
-            if isinstance(reply, Exception):
-                raise reply
-            return reply
+        def disconnected_step():
+            if wire.request['cmd'] == 'step':
+                raise TimeoutError('桥接未返回推进回执')
+            return read()
 
-        client._call = broken
-        client.call('step', inputs=['30'])
-        with self.assertRaises(ConnectionError):
+        with patch.object(wire, 'readline', side_effect=disconnected_step):
+            with self.assertRaises(TimeoutError):
+                client.call('step', inputs=['30'])
             client.call('observe')
-        client.call('observe')
-        self.session.client = client
-        try:
             reason = '桥接没有返回可核验的推进结果'
             pending = self._stop_report(server, 'bridge_io：' + reason)
             self.assertEqual(pending['status'], 'confirmation_required')
-            command, serial = client.last_call_failure
-            client.last_call_failure = (command, serial + 1)
+            failure = client.last_call_failure
+            self.assertEqual(failure[0], 'step')
+            with self.assertRaises(TimeoutError):
+                client.call('step', inputs=['30'])
+            self.assertNotEqual(client.last_call_failure, failure)
             self.assertEqual(self._stop_report(server, pending['confirmation_prefix'] + reason)['status'], 'reported')
-        finally:
-            self.session.client = None
+            with self.assertRaises(TimeoutError):
+                client.call('step', inputs=['30'])
+            self.assertEqual(self._stop_report(server, 'bridge_io：' + reason)['status'], 'duplicate')
 
     def test_respawn_wait_stops_on_zero_progress_and_preserves_report_path(self):
         client, server = self._death_fixture(pause_at=97880)

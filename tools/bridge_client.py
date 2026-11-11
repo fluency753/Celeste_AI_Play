@@ -83,7 +83,8 @@ class BridgeClient:
         try:
             reply = self._call(cmd, on_event, allow_reconnect=allow_reconnect, **args)
         except Exception:
-            if record_failure:
+            # A local step guard can reject the call before allocating a request ID.
+            if record_failure and (cmd != 'step' or self.next_id != serial):
                 self.last_call_failure = (cmd, serial)
             raise
         if cmd in {'step', 'observe'}:

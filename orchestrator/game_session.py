@@ -414,6 +414,7 @@ class GameSession:
         self._transition_saved = None
         self._last_stop_evidence = None
         self._stop_confirmation = None
+        self._stop_motion_revision = 0
         self.goals = GoalManager(run_dir)
         self._goal_progress = {}
         self._entered_level = False
@@ -757,23 +758,29 @@ class GameSession:
 
     def _after_step(self, args: dict, reply: dict) -> None:
         """所有推进入口共用：登记原生死亡增量、关卡帧数及最后按住的键。"""
+        result = reply.get('result') or {}
+        consumed = int(result.get('consumed') or 0)
+        loading = int(result.get('loadingFrames') or 0)
+        if consumed > 0 or loading > 0:
+            # Ordinary Token motion can happen while the agent writes a confirmation.
+            if not self._token_advancing or result.get('stop') in {
+                    'death', 'room', 'complete', 'controllable', 'uncontrollable', 'story_input', 'story_decision'}:
+                self._stop_motion_revision += 1
         if getattr(self, 'token_menu', None) is not None:
-            result = reply.get('result') or {}
             original = getattr(self, '_token_original_planned', None)
             if original is not None:
                 result.update(bridge_planned=result.get('planned'), planned=original, token_boundary_limited=True)
                 self._token_original_planned = None
-            self.token_ack_frames += int(result.get('consumed') or 0) + int(result.get('loadingFrames') or 0)
+            self.token_ack_frames += consumed + loading
             started = getattr(self, '_token_step_started', None)
             if started is not None:
                 self.token_ack_s += max(0.0, time.monotonic() - started)
-        deaths = (reply.get('result') or {}).get('registeredDeaths')
+        deaths = result.get('registeredDeaths')
         if type(deaths) is int and deaths > 0:
             self.metrics.add(deaths=deaths)
         self._ingest_transition(reply.get('obs') or {}, reply.get('result'))
         self._count_level_frames(reply)
         if getattr(self, 'token_menu', None) is not None:
-            consumed = int((reply.get('result') or {}).get('consumed') or 0)
             if consumed:
                 before = self._held_input
                 if consumed > 1:
@@ -2472,8 +2479,12 @@ class GameSession:
             level, player = obs.get('level') or {}, obs.get('player') or {}
             state = (self._transition_epoch(), obs.get('scene'), self._transition_identity(obs, level),
                      story_input(obs), story_decision(obs), obs.get('controllable'),
-                     level.get('screenWipe'), level.get('deaths'), player.get('state'))
-            evidence = (*state, frame, failure)
+                     level.get('screenWipe'), level.get('deaths'), level.get('completed'),
+                     bool(level.get('paused') or obs.get('pauseMenu')), player.get('dead'),
+                     player.get('state') if not obs.get('controllable') else None)
+            # Repeated retries of the same failed bridge command can have different request IDs.
+            evidence = (state, self._stop_motion_revision, failure[0] if failure else None,
+                        self.goals.snapshot()['revision'], self.piece, tuple(self.chapter_queue))
             if (type(frame) is int or failure) and evidence == self._last_stop_evidence:
                 return self._stop_diagnostic('duplicate', reason, frame, progress, control_note=control_note)
             try:
@@ -2496,12 +2507,7 @@ class GameSession:
             if not reason:
                 raise ActError('报告任务阻塞必须在类别之后说明原因')
             required = rule.required_steps
-            # Ordinary Token motion must not expire a confirmation while the agent writes it.
-            manual_frame = frame - self.metrics.state.token_frames if type(frame) is int else frame
-            # Retrying the same bridge failure can change its request serial.
-            scope = (category, rule, state, manual_frame, self.token_motion_epoch,
-                     bool(failure), self.goals.snapshot()['revision'],
-                     self.piece, tuple(self.chapter_queue))
+            scope = (category, rule, evidence)
             if self._stop_confirmation is None or self._stop_confirmation[0] != scope:
                 self._stop_confirmation = (scope, 1, secrets.token_hex(6))
             _, step, expected = self._stop_confirmation

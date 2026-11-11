@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from calibration.stiffness_test import StepClient
-from calibration.story_wait_test import observation
+from calibration.story_wait_test import BridgeWire, observation
 from orchestrator.agent import ClaudeRunner
 from orchestrator.config import RunConfig
 from orchestrator.game_session import GameSession
@@ -17,6 +17,7 @@ from orchestrator.metrics import Metrics
 from orchestrator.output_usage import ClaudeUsage, partial_usage_event
 from orchestrator.server import build_server
 from orchestrator.token_drift import TokenDrift
+from tools.bridge_client import BridgeClient
 
 
 def partial(kind, **fields):
@@ -213,6 +214,13 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         result = await self.server.call_tool(name, args)
         return '\n'.join(getattr(item, 'text', '') for item in result.content)
 
+    def wire_bridge(self):
+        fixture = self.s.client
+        with patch('tools.bridge_client.socket.create_connection', return_value=BridgeWire(fixture)):
+            self.s.client = BridgeClient(port=1)
+        self.s.client.after_step = self.s._after_step
+        return fixture
+
     async def test_real_step_keeps_held_keys_and_accounts_frames(self):
         self.r._record_output_usage(1200, 1200)
         await self.settle()
@@ -222,11 +230,12 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.r.token_drift.state['consumed_frames'], 2)
 
     async def test_token_frames_do_not_restart_three_step_stop_confirmation(self):
+        bridge = self.wire_bridge()
         with patch('orchestrator.stop_categories.LOCAL_CATEGORIES', self.root / 'local.stop_categories.json'):
             reason = '两条路线均未抵达高台，请提示起跳点'
             first = json.loads((await self.tool('stop_run', reason='hint：' + reason)).splitlines()[0])
-            self.s.client.results = [('done', 3, {**level_obs(), 'frame': 103}, []),
-                                     ('done', 2, {**level_obs(), 'frame': 105}, [])]
+            bridge.results = [('done', 3, {**level_obs(), 'frame': 103}, []),
+                              ('done', 2, {**level_obs(), 'frame': 105}, [])]
             self.r._record_output_usage(1500, 1500)
             await self.settle()
             self.assertEqual((self.s.last_obs['frame'], self.m.state.token_frames), (103, 3))
@@ -238,11 +247,30 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
             final = json.loads((await self.tool('stop_run', reason=second['confirmation_prefix'] + reason)).splitlines()[0])
             self.assertEqual((final['status'], final['paused'], self.r.paused), ('reported', True, True))
 
-    async def test_token_room_transition_invalidates_stop_confirmation(self):
+    async def test_ordinary_token_motion_does_not_make_a_report_new(self):
+        bridge = self.wire_bridge()
+        # Exercise a new attempt in the same session without holding a user pause.
+        self.s.request_pause = lambda reason: False
         with patch('orchestrator.stop_categories.LOCAL_CATEGORIES', self.root / 'local.stop_categories.json'):
             reason = '需要用户核验工具状态'
             first = json.loads((await self.tool('stop_run', reason='state_verification：' + reason)).splitlines()[0])
-            self.s.client.results = [('room', 1, {**level_obs(room='b'), 'frame': 101}, [])]
+            self.assertEqual(json.loads((await self.tool('stop_run', reason=first['confirmation_prefix'] + reason))
+                                        .splitlines()[0])['status'], 'reported')
+            moving = {**level_obs(), 'frame': 103}
+            moving['player']['state'] = 'Dash'
+            bridge.results = [('done', 3, moving, [])]
+            self.r._record_output_usage(1500, 1500)
+            await self.settle()
+            self.assertEqual((self.s.last_obs['frame'], self.m.state.token_frames), (103, 3))
+            repeated = json.loads((await self.tool('stop_run', reason='state_verification：' + reason)).splitlines()[0])
+            self.assertEqual(repeated['status'], 'duplicate')
+
+    async def test_token_room_transition_invalidates_stop_confirmation(self):
+        bridge = self.wire_bridge()
+        with patch('orchestrator.stop_categories.LOCAL_CATEGORIES', self.root / 'local.stop_categories.json'):
+            reason = '需要用户核验工具状态'
+            first = json.loads((await self.tool('stop_run', reason='state_verification：' + reason)).splitlines()[0])
+            bridge.results = [('room', 1, {**level_obs(room='b'), 'frame': 101}, [])]
             self.r._record_output_usage(500, 500)
             await self.settle()
             self.assertEqual((self.s.last_obs['frame'], self.m.state.token_frames), (101, 1))
