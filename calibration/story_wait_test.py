@@ -969,9 +969,49 @@ class StoryWaitTests(unittest.TestCase):
                     client.obs = observation(controllable=True, cutscene=False)
                     client.obs['frame'] = frame
                 client = self.bridge(start, after)
+                self.session._held_input = ('R,G', 'celeste_ai')
                 _, _, count, _ = self.session._auto_advance(start, None)
-                self.assertEqual(client.steps, [['30']])
-                self.assertEqual(count, 30)
+                self.assertEqual(client.steps, [['30']] if change == 'death' else [['1,R,G']])
+                self.assertEqual(count, 30 if change == 'death' else 1)
+
+    def test_room_transition_keeps_the_acknowledged_grab_until_control_returns(self):
+        start = observation(controllable=True, cutscene=False)
+        start['player']['holding'] = 'TheoCrystal'
+
+        def after(client, inputs):
+            if client.frames == 40:
+                client.obs['controllable'] = False
+                client.obs['level']['transitioning'] = True
+            elif 'G' not in ''.join(inputs[0].split(',')[1:]):
+                client.obs['player']['holding'] = None
+            if client.frames == 43:
+                client.obs['controllable'] = True
+                client.obs['level'].update(room='next', transitioning=False)
+
+        bridge = StoryBridge(start, after)
+        server = self._wire_bridge(bridge)
+        result = asyncio.run(server.call_tool('act', {'inputs': ['40,RGC'], 'thought': '抱着 Theo 换房'}))
+        self.assertFalse(result.is_error)
+        self.assertEqual(bridge.steps, [['40,RGC'], ['1,RG'], ['1,RG'], ['1,RG']])
+        self.assertEqual(self.session.last_obs['player']['holding'], 'TheoCrystal')
+        self.assertEqual(self.session._held_input, ('RG', 'celeste_ai'))
+        self.assertEqual(self.session.last_obs['level']['room'], 'next')
+
+    def test_room_transition_does_not_keep_inputs_into_automatic_story(self):
+        start = observation(cutscene=False, transitioning=True)
+
+        def after(client, inputs):
+            if client.frames == 1:
+                client.obs['level'].update(transitioning=False, inCutscene=True)
+                client.obs['storyPlaybackState'] = {'state': 'playing', 'source': 'fixture'}
+            else:
+                client.obs.update(storyInput='dialogue', storyDecision='dialogue')
+
+        bridge = self.bridge(start, after)
+        self.session._held_input = ('R,G', 'celeste_ai')
+        obs, _, _, _ = self.session._auto_advance(start, None)
+        self.assertEqual(bridge.steps, [['1,R,G'], ['30']])
+        self.assertEqual(obs['storyInput'], 'dialogue')
 
     def test_unknown_dummy_handover_allows_explicit_act_without_pre_wait(self):
         start = observation(cutscene=False)

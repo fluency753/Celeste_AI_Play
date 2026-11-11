@@ -861,10 +861,10 @@ class GameSession:
         if obs.get("scene", "Level") != "Level":
             tokens, fmt = [], "celeste_ai"
         elif fmt == "celeste_ai":
-            tokens = [k for k in tokens if k.startswith("A:") or set(k) <= PLAY_LETTERS]
+            tokens = [k if k.startswith('A:') else ''.join(key for key in k if key in PLAY_LETTERS) for k in tokens]
         else:
             tokens = [k for k in tokens if set(k) <= TAS_HELD_LETTERS]
-        return ",".join(tokens), fmt
+        return ','.join(filter(None, tokens)), fmt
 
     def token_playable(self, obs):
         from .token_menu import paused_menu
@@ -2210,24 +2210,42 @@ class GameSession:
                 before_frame = obs['frame']
                 inputs = [str(min(int(inputs[0]), transition.progress(before_frame)['remaining_frames']))]
                 stops = ['controllable', 'story_input', 'story_decision', 'death', 'room', 'complete']
+            keys, input_format = self._held_input
+            player = obs.get('player') or {}
+            keep_room_input = (keys and input_format == 'celeste_ai' and scene == 'Level' and level.get('transitioning')
+                               and player and not (player.get('dead') or player.get('state') == 'IntroRespawn'
+                                                   or transition or self.token_after_death(obs)
+                                                   or node or story_pending(obs) or story_decision(obs)))
+            if keep_room_input:
+                # A transition can lead straight into a cutscene without a
+                # controllable edge. Recheck the scene before sending more keys.
+                inputs = [f'1,{keys}']
+                stops = ['controllable', 'story_input', 'story_decision', 'death', 'complete', 'menu_prompt']
             reply = self.client.call("step", inputs=inputs, stop_on=stops,
                                      speed=1 if transition else self.cfg.auto_speed, image=False, entities=False, tiles=False,
                                      progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
             log_step(inputs, reply["result"], reply['obs'])
             obs = reply["obs"]
+            stop = reply['result'].get('stop')
             following = self._transition_for(obs) if mode == 'agent' else None
             if mode == 'agent' and ((following and following.kind == 'respawn' and following is not transition)
-                                    or (not transition and (obs.get('player') or {}).get('dead'))):
+                                    or (not transition and (obs.get('player') or {}).get('dead'))
+                                    or keep_room_input and stop == 'death'):
                 notes.append('自动播放期间发生了新的死亡，本次交回控制；可自行选择确认键或 observe/watch 等待重生。')
                 break
-            if transition:
-                if reply['result'].get('stop') in BLOCK_STOPS:
+            if (keep_room_input or transition) and stop in BLOCK_STOPS:
+                if transition:
                     transition.stalled_at = obs.get('frame', before_frame)
-                    if reply['result'].get('block'):
-                        from .action_policy import block_note
-                        notes.append(block_note(reply['result']['block'], detour=detour_enabled(self.cfg)))
-                    break
-                if reply['result'].get('stop') in {'room', 'death', 'complete', 'recording_boundary', 'cancelled'}:
+                if reply['result'].get('block'):
+                    from .action_policy import block_note
+                    notes.append(block_note(reply['result']['block'], detour=detour_enabled(self.cfg)))
+                break
+            if keep_room_input and (stop in {
+                    'death', 'room', 'complete', 'menu_prompt', 'recording_boundary', 'cancelled'}
+                    or not (reply['result']['consumed'] or reply['result'].get('loadingFrames'))):
+                break
+            if transition:
+                if stop in {'room', 'death', 'complete', 'recording_boundary', 'cancelled'}:
                     break
                 if not story_input(obs) and story_decision(obs) == 'skip':
                     notes.append(skip_opportunity_hint(obs))
