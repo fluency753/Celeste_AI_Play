@@ -90,9 +90,11 @@ class TokenMenu:
         epoch = load_json(previous / 'token_drift.json').get('epoch')
         source = load_json(previous / 'run_state.json')
         identity = self.identity(obs)
-        if (not isinstance(epoch, list) or len(epoch) != 5 or epoch[0] != identity[0]
-                or epoch[3] != identity[2] or epoch[4] != (obs.get('level') or {}).get('room')
-                or source.get('save_slot') != identity[1]):
+        if not isinstance(epoch, list) or len(epoch) not in (5, 6):
+            return None
+        room = (obs.get('level') or {}).get('room')
+        if (epoch[0] != identity[0] or epoch[-1] != room or source.get('save_slot') != identity[1]
+                or (epoch[3] != identity[2] if len(epoch) == 5 else epoch[2:5] != identity[1:])):
             return None
         def rows(name):
             path = previous / name

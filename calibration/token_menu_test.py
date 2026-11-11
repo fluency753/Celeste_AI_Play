@@ -28,6 +28,7 @@ class MenuBridge:
         self.dialogue_on_resume = False
         self.confirm_finishes_story = False
         self.seeker = False
+        self.retry_death_stop = True
 
     def call(self, command, **args):
         if command == 'hello':
@@ -39,6 +40,7 @@ class MenuBridge:
         planned = sum(int(s.split(',')[0]) for s in args['inputs'])
         used, stop, deaths = 0, 'done', 0
         trajectory = []
+        events = []
         if self.obs['controllable'] and 'controllable' in stops:
             stop = 'controllable'
         elif not self.obs['controllable'] and 'uncontrollable' in stops:
@@ -71,7 +73,8 @@ class MenuBridge:
                             self.respawn = 3
                             self.obs['player']['dead'] = True
                             deaths += 1
-                            if 'death' in stops:
+                            self.obs['level']['deaths'] += 1
+                            if self.retry_death_stop and 'death' in stops:
                                 stop = 'death'
                     elif self.respawn:
                         self.respawn -= 1
@@ -92,9 +95,12 @@ class MenuBridge:
                                 self.obs['player']['dead'] = True
                                 deaths += 1
                     paused = self.obs['level']['paused']
+                    was_controllable = self.obs['controllable']
                     self.obs['pauseMenu'] = ({'focused': True, 'selection': (self.obs.get('pauseMenu') or {}).get('selection', 0), 'items': [
                         {'index': 0, 'id': 'menu_pause_resume', 'text': '继续', 'selectable': True, 'disabled': False}]} if paused else None)
                     self.obs['controllable'] = not paused and not self.respawn and not self.seeker
+                    if self.obs['controllable'] and not was_controllable:
+                        events.append({'type': 'controllable', 'frame': self.obs['frame']})
                     self.obs['player']['inControl'] = self.obs['controllable']
                     self.obs['player']['state'] = 'IntroRespawn' if self.respawn else 'Dummy' if self.seeker else 'Normal'
                     self.obs['level']['chapterTimeTicks'] += 166667 if not paused else 0
@@ -115,7 +121,7 @@ class MenuBridge:
             self.lose_ack = False
             raise ConnectionError('fixture lost repayment ACK')
         return {'obs': copy.deepcopy(self.obs), 'result': {'consumed': used, 'planned': planned,
-                'stop': stop, 'registeredDeaths': deaths, 'trajectory': trajectory, 'events': []}}
+                'stop': stop, 'registeredDeaths': deaths, 'trajectory': trajectory, 'events': events}}
 
 
 def client_for(session, bridge):
@@ -221,14 +227,13 @@ class MenuDebtTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('帧 118', reply)
         self.assertIsNone(self.s.token_menu.state)
 
-    async def test_retry_does_not_clear_debt_and_recovers_before_repayment(self):
+    async def test_retry_death_replaces_pause_keys_with_neutral_repayment(self):
         await self.pause()
         await self.usage(1500)
-        await self.act(['1,C', '10,R'])
-        self.assertEqual(self.r.token_drift.deferred, 3)
-        reply = await self.act(['10'])
-        self.assertEqual(self.bridge.steps[-2]['consumed'], 3)
-        self.assertEqual(self.bridge.steps[-1]['inputs'], ['3,R'])
+        self.bridge.retry_death_stop = False  # Native retry can report only the increased death count.
+        reply = await self.act(['1,C', '10,R'])
+        self.assertEqual(self.bridge.steps[-1]['consumed'], 3)
+        self.assertEqual(self.bridge.steps[-1]['inputs'], ['3'])
         self.assertEqual(self.m.state.deaths, 1)
         self.assertEqual(self.r.token_drift.deferred, 0)
         self.assertIn('补推进 3 帧', reply)
@@ -251,10 +256,34 @@ class MenuDebtTests(unittest.IsolatedAsyncioTestCase):
         await self.usage(1500)
         self.bridge.interrupt = 'death'
         await self.act(['1,P', '20,L'])
-        self.assertEqual((self.m.state.token_frames, self.r.token_drift.deferred), (1, 2))
+        self.assertEqual((self.m.state.token_frames, self.r.token_drift.deferred), (3, 0))
+        self.assertEqual(self.bridge.steps[-1]['inputs'], ['2'])
         self.assertTrue(self.s.token_observation_required)
         await self.usage(500)
-        self.assertEqual(self.r.token_drift.deferred, 3)
+        self.assertEqual((self.m.state.token_frames, self.r.token_drift.deferred), (4, 0))
+        self.assertEqual(self.bridge.steps[-1]['inputs'], ['1'])
+
+    async def test_act_death_uses_token_time_until_the_next_explicit_movement(self):
+        self.bridge.interrupt = 'death'
+        await self.act(['6,R'])
+        self.assertEqual(self.s._held_input, ('', 'celeste_ai'))
+        self.assertEqual(len(self.bridge.steps), 1)
+        await self.tool('observe')
+        self.assertEqual(len(self.bridge.steps), 1)
+        await self.usage(2000)
+        self.assertEqual([step['inputs'] for step in self.bridge.steps[1:]], [['4'], ['1']])
+        self.assertTrue(self.bridge.obs['controllable'])
+        await self.tool('observe')
+        await self.act(['1,L'])
+        await self.usage(500)
+        self.assertEqual(self.bridge.steps[-1]['inputs'], ['1,L'])
+
+    async def test_act_can_apply_new_input_after_respawning_within_the_same_step(self):
+        self.bridge.interrupt = 'death'
+        await self.act(['6,R'])
+        await self.act(['3', '1,L'])
+        await self.usage(500)
+        self.assertEqual(self.bridge.steps[-1]['inputs'], ['1,L'])
 
     async def test_hud_pause_and_compaction_exclude_new_usage_without_erasing_debt(self):
         await self.pause()

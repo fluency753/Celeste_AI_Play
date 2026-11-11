@@ -238,7 +238,9 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
     async def test_codex_background_death_notifies_active_turn_without_holding_game_locks(self):
         bridge = self.wire_bridge()
         await self.use_codex()
-        bridge.results = [('death', 1, {**level_obs(dead=True), 'frame': 101}, [])]
+        bridge.results = [('death', 1, {**level_obs(dead=True), 'frame': 101}, []),
+                          ('controllable', 1, {**level_obs(), 'frame': 102}, []),
+                          ('done', 1, {**level_obs(), 'frame': 103}, [])]
         entered, release = asyncio.Event(), asyncio.Event()
 
         async def steer(method, params, *, timeout):
@@ -253,14 +255,15 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
                 method, params = request.call_args.args
                 self.assertEqual((method, params['expectedTurnId']), ('turn/steer', 'turn-1'))
                 self.assertIn('角色死亡（帧 101）', params['input'][0]['text'])
-                self.assertEqual(self.m.state.status, 'thinking')
                 response = await asyncio.wait_for(self.r._request('item/tool/call', {
                     'threadId': 'fixture', 'turnId': 'turn-1', 'tool': 'celeste_act',
                     'arguments': {'inputs': ['1,L'], 'thought': '旧计划'}}), 3)
                 self.assertFalse(response['success'])
-                self.assertIn('角色死亡', response['contentItems'][0]['text'])
-                self.assertEqual(len(bridge.steps), 1)
-                self.assertEqual(self.r.token_drift.state['dropped_frames'], 2)
+                self.assertIn('默认 observe', response['contentItems'][0]['text'])
+                await self.settle()
+                self.assertEqual([step['inputs'] for step in bridge.steps], [['3,R,G'], ['2'], ['1']])
+                self.assertEqual(self.r.token_drift.state['dropped_frames'], 0)
+                self.assertEqual(self.m.state.status, 'thinking')
                 self.assertFalse(self.r.paused)
                 self.assertTrue(self.r.turn_active)
             finally:
@@ -283,6 +286,32 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('出现剧情输入', self.r._turn_message('继续', []))
         self.assertIn('出现剧情输入', await self.tool('observe'))
         self.assertNotIn('出现剧情输入', self.r._turn_message('继续', []))
+
+    async def test_room_change_during_death_still_stops_token_motion(self):
+        bridge = self.wire_bridge()
+        bridge.results = [('death', 1, {**level_obs(dead=True), 'frame': 101}, []),
+                          ('room', 1, {**level_obs(room='b'), 'frame': 102}, [])]
+        self.r._record_output_usage(1500, 1500)
+        await self.settle()
+        self.r._record_output_usage(2000, 500)
+        await self.settle()
+        self.assertEqual([step['inputs'] for step in bridge.steps], [['3,R,G'], ['2']])
+        self.assertEqual(self.r.token_drift.state['dropped_frames'], 1)
+        self.assertTrue(self.s.token_observation_required)
+        self.assertIn('房间切换', await self.tool('act', inputs=['1,L'], thought='旧动作'))
+
+    async def test_death_and_room_change_in_the_same_frame_require_a_new_observation(self):
+        bridge = self.wire_bridge()
+        bridge.results = [('death', 1, {**level_obs(room='b', dead=True), 'frame': 101},
+                           [{'type': 'room', 'frame': 101, 'detail': 'b'}])]
+        self.r._record_output_usage(1500, 1500)
+        await self.settle()
+        self.r._record_output_usage(2000, 500)
+        await self.settle()
+        self.assertEqual([step['inputs'] for step in bridge.steps], [['3,R,G']])
+        self.assertEqual(self.s._held_input, ('', 'celeste_ai'))
+        self.assertEqual(self.r.token_drift.state['dropped_frames'], 2)
+        self.assertTrue(self.s.token_observation_required)
 
     async def test_codex_does_not_steer_a_notice_into_a_different_turn(self):
         await self.use_codex()

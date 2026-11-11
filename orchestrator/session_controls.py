@@ -128,7 +128,12 @@ class SessionControls:
                     and not getattr(self.session, 'reload_observation_required', False))
 
     def _token_motion_eligible(self):
-        return self._token_account_eligible() and not getattr(self.session, 'token_observation_required', False)
+        if not self._token_account_eligible():
+            return False
+        if not getattr(self.session, 'token_observation_required', False):
+            return True
+        obs = self.session.last_obs or {}
+        return self.session.token_after_death(obs) and (self.session.token_playable(obs) or self.session.token_death_recovering(obs))
 
     def _token_menu_active(self):
         menu = getattr(self.session, 'token_menu', None)
@@ -142,8 +147,11 @@ class SessionControls:
     def _token_epoch(self):
         obs = getattr(self.session, 'last_obs', None) or {}
         level = obs.get('level') or {}
+        # Tool observation revisions also change at death/recovery in the
+        # same room. Credit remains valid there and is settled with empty input.
         return (getattr(self.session, 'game_process_id', None), getattr(self.session, 'reload_epoch', 0),
-                getattr(self.session, 'token_motion_epoch', 0), level.get('sid'), level.get('room'))
+                (obs.get('save') or {}).get('slot', getattr(self.cfg, 'save_slot', None)),
+                level.get('sid'), level.get('side') or 'A', level.get('room'))
 
     def _record_output_usage(self, total, latest):
         if self.token_drift is None:
@@ -289,7 +297,8 @@ class SessionControls:
                 return
             before = getattr(self.session, 'last_obs', None) or {}
             menu = getattr(self.session, 'token_menu', None)
-            if self._token_menu_active() and not self.session.token_playable(before):
+            if (self._token_menu_active() and not self.session.token_playable(before)
+                    and not self.session.token_death_recovering(before)):
                 return
             if deferred:
                 try:
@@ -334,7 +343,9 @@ class SessionControls:
                 if change := TOKEN_CHANGES.get(result.get('stop')):
                     after = result['after']
                     place = f'，新房间 {after["room"]}' if result['stop'] == 'room' and after.get('room') else ''
-                    notice = f'Token 推进触发{change}（帧 {after["frame"]}{place}）'
+                    notice = (f'角色已通过 Token 空输入推进完成重生并恢复控制（帧 {after["frame"]}）'
+                              if result['stop'] == 'controllable' and result.get('continue_neutral') else
+                              f'Token 推进触发{change}（帧 {after["frame"]}{place}）')
                     self.session.token_change_notice = notice
                     try:
                         from .telemetry import publish
@@ -344,7 +355,8 @@ class SessionControls:
                         print(f'[token] 变化通知未写入 HUD：{error}', flush=True)
                     if not self._token_closing:
                         self._offer_token_change(origin_turn, self.session.token_motion_epoch)
-                return
+                if not result.get('continue_neutral') or not result.get('consumed'):
+                    return
         if self._token_menu_active() and not ledger.deferred and self.session.token_playable(self.session.last_obs or {}):
             self.session.token_menu.clear()
 

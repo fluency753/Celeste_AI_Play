@@ -454,7 +454,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     if paid and session.token_last_observation is not None:
                         outcome.obs, outcome.image_b64 = session.token_last_observation
                         outcome.result['token_repayment'] = repayment(paid)
-                        outcome.auto_notes.append(f'暂停累计的 Token 已补推进 {paid} 帧，停止原因 {repayment(paid)["stop"]}；下面是结算后观测，原计划未执行的部分不自动继续。')
+                        batch = (getattr(metrics.state, 'token_drift', None) or {}).get('batch') or {}
+                        source = '暂停累计的 Token 已补推进' if batch.get('origin') == 'deferred' else 'Token 已推进'
+                        outcome.auto_notes.append(f'{source} {paid} 帧，停止原因 {batch.get("stop")}；下面是结算后观测，原计划未执行的部分不自动继续。')
                         if notice := token_observe_notice(session):
                             outcome.auto_notes.append(notice)
                     outcome.auto_notes.extend(take_token_notes())
@@ -549,9 +551,12 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                             '有可行下一步时直接继续，无需确认。')
                 elif result['status'] == 'recovery_available':
                     progress = result['transition']
+                    recovery_note = ('Token 会按空输入继续推进重生。可用 observe 读取当前状态，或按画面显式发送确认。'
+                                     if session.token_death_recovering(session.last_obs or {}) else
+                                     '重生时可按画面用 act 显式确认以缩短部分死亡动画，或选择 observe / cutscene(watch) 正常速度有界等待。')
                     tail = (f'当前为已核实的入场或重生过渡，累计推进 {progress["advanced_frames"]} 帧，'
                             f'剩余等待预算 {progress["remaining_frames"]} 帧。60 帧约为 1 秒。'
-                            '重生时可按画面用 act 显式确认以缩短部分死亡动画，或选择 observe / cutscene(watch) 正常速度有界等待。'
+                            f'{recovery_note}'
                             '此次报告没有推进游戏或触发暂停。')
                 else:
                     tail = '相同状态及证据的报告已记录为诊断。请检查最新观测或提供新故障证据。此次报告没有再次触发暂停。'

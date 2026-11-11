@@ -438,6 +438,7 @@ class GameSession:
         self.token_motion_epoch = 0
         self.token_observation_required = False
         self.token_change_notice = None
+        self._token_death_context = None
         self._token_advancing = False
         self._token_cancel = threading.Event()
         self.token_guard = lambda: False
@@ -535,6 +536,12 @@ class GameSession:
         if self.cfg.save_slot is not None and slot != self.cfg.save_slot:
             raise RuntimeError(f'当前存档槽位 {slot} 与指定槽位 {self.cfg.save_slot} 不一致')
         self._restore_transition_wait(obs)
+        if self.token_menu is not None and (wait := self._transition_for(obs, remember=False)) and wait.kind == 'respawn':
+            self._token_death_context = self._token_context(obs)
+            self._set_held_input(('', self._held_input[1]), obs.get('frame'))
+            if self.token_menu.state is not None:
+                self.token_menu.state['keys'] = ''
+                self.token_menu.save()
         if self.cfg.play_scope == 'visited':
             self._bind_visited_maps(obs)
         if obs.get('scene') == 'Level' and not self.chapter_finished and self.piece is not None:
@@ -762,12 +769,13 @@ class GameSession:
         result = reply.get('result') or {}
         consumed = int(result.get('consumed') or 0)
         loading = int(result.get('loadingFrames') or 0)
+        menu = self.token_menu
         if consumed > 0 or loading > 0:
             # Ordinary Token motion can happen while the agent writes a confirmation.
             if not self._token_advancing or result.get('stop') in {
                     'death', 'room', 'complete', 'controllable', 'uncontrollable', 'story_input', 'story_decision'}:
                 self._stop_motion_revision += 1
-        if getattr(self, 'token_menu', None) is not None:
+        if menu is not None:
             original = getattr(self, '_token_original_planned', None)
             if original is not None:
                 result.update(bridge_planned=result.get('planned'), planned=original, token_boundary_limited=True)
@@ -779,35 +787,68 @@ class GameSession:
         deaths = result.get('registeredDeaths')
         if type(deaths) is int and deaths > 0:
             self.metrics.add(deaths=deaths)
-        self._ingest_transition(reply.get('obs') or {}, reply.get('result'))
+        before_obs = self.last_obs or {}
+        obs = reply.get('obs') or {}
+        previous_wait = self._transition_wait
+        self._ingest_transition(obs, result)
         self._count_level_frames(reply)
-        if getattr(self, 'token_menu', None) is not None:
-            if consumed:
-                before = self._held_input
-                if consumed > 1:
-                    before = self._input_held(args, consumed - 1, reply.get('obs') or {}) or before
-                fmt = args.get('input_format', 'celeste_ai')
-                if not before[0]:
-                    before = ('', fmt)  # Neutral has the same meaning in both formats.
-                self.token_menu.note(reply.get('obs') or {}, before)
-                if self.token_menu.state is not None:
-                    # Helpers can return/raise before their outer result writer.
-                    # Publish every acknowledged menu/recovery boundary once.
-                    self.last_obs = enrich_obs(reply.get('obs') or {})
-                    self.token_last_observation = (self.last_obs, reply.get('image'))
-        self._remember_held_input(args, reply)
+        new_respawn = (self._transition_wait is not previous_wait and self._transition_wait is not None
+                       and self._transition_wait.kind == 'respawn')
+        same_context = self._token_context(before_obs) == self._token_context(obs)
+        player = obs.get('player') or {}
+        registered_respawn = (same_context and type(deaths) is int and deaths > 0 and not obs.get('controllable')
+                              and (obs.get('player') is None or player.get('dead') or player.get('state') == 'IntroRespawn'))
+        death = (menu is not None and obs.get('scene') == 'Level'
+                 and not (self._seeker_act or seeker_control(before_obs))
+                 and (new_respawn or registered_respawn or result.get('stop') == 'death'
+                      or any(e.get('type') == 'death' for e in result.get('events') or [])))
+        if death:
+            self._token_death_context = self._token_context(obs) if same_context else None
+            if menu.state is not None:
+                menu.state['keys'] = ''
+        elif not self.token_after_death(obs):
+            self._token_death_context = None
+        if menu is not None and consumed:
+            before = self._held_input
+            if consumed > 1:
+                before = self._input_held(args, consumed - 1, obs) or before
+            fmt = args.get('input_format', 'celeste_ai')
+            if not before[0]:
+                before = ('', fmt)  # Neutral has the same meaning in both formats.
+            menu.note(obs, before)
+            if menu.state is not None:
+                # Helpers can return/raise before their outer result writer.
+                # Publish every acknowledged menu/recovery boundary once.
+                self.last_obs = enrich_obs(obs)
+                self.token_last_observation = (self.last_obs, reply.get('image'))
+        if death:
+            self._set_held_input(('', args.get('input_format') or 'celeste_ai'), obs.get('frame'))
+        else:
+            self._remember_held_input(args, reply, before_obs=before_obs)
         self._note_first_goal_entry(reply.get('obs') or {})
         self._save_transition_wait(reply.get('obs') or {})
 
-    def _remember_held_input(self, args: dict, reply: dict) -> None:
+    def _remember_held_input(self, args: dict, reply: dict, *, before_obs=None) -> None:
         """桥接每次推进之后：记下最后真正喂给游戏的那一帧按键（主控的自动推进也算），并存进运行目录供续跑接上。
         停在关卡以外（菜单、加载）时按空帧算；本项目格式只保留游玩按键（确认、返回、暂停、日志不算按住）。"""
-        consumed = int(((reply or {}).get("result") or {}).get("consumed") or 0)
+        result = (reply or {}).get('result') or {}
+        consumed = int(result.get('consumed') or 0)
         if consumed <= 0:
             return
         obs = (reply or {}).get('obs') or {}
         held = self._input_held(args, consumed, obs)
         if held is not None:
+            if self.token_after_death(obs):
+                frame = obs.get('frame')
+                regained_before_last_input = (type(frame) is int and self.token_playable(obs)
+                                              and any(event.get('type') == 'controllable'
+                                                      and type(event.get('frame')) is int and event['frame'] < frame
+                                                      for event in result.get('events') or []))
+                if (not self._token_advancing and held[0]
+                        and (self.token_playable(before_obs or {}) or regained_before_last_input)):
+                    self._token_death_context = None
+                else:
+                    held = ('', held[1])
             self._set_held_input(held, obs.get('frame'))
 
     def _input_held(self, args, consumed, obs):
@@ -830,6 +871,22 @@ class GameSession:
         return (obs.get('scene') == 'Level' and not paused_menu(obs) and not story_pending(obs)
                 and not (obs.get('level') or {}).get('skippingCutscene')
                 and (bool(obs.get('controllable')) or seeker_control(obs)))
+
+    def _token_context(self, obs):
+        return self._transition_epoch(), self._transition_identity(obs, obs.get('level') or {})
+
+    def token_after_death(self, obs):
+        return (obs.get('scene') == 'Level' and self._token_death_context is not None
+                and self._token_death_context == self._token_context(obs))
+
+    def token_death_recovering(self, obs):
+        from .token_menu import paused_menu
+        level, player = obs.get('level') or {}, obs.get('player') or {}
+        return (self.token_after_death(obs) and not obs.get('controllable') and not paused_menu(obs)
+                and not (story_pending(obs) or story_input(obs) or story_decision(obs)
+                         or level.get('skippingCutscene') or level.get('transitioning'))
+                and (obs.get('player') is None or player.get('dead') or player.get('state') == 'IntroRespawn'
+                     or level.get('screenWipe')))
 
     def _token_step_filter(self, args):
         if not getattr(self, '_token_advancing', False) and (ticket := REQUEST_TICKET.get()) is not None:
@@ -998,11 +1055,11 @@ class GameSession:
         return {"info": info, "interrupted": True, "result": result, "obs": obs, "image": image,
                 "note": f"思考僵直：{spent}，先{held}僵直，第 {used} 帧{why}；这次 act 的按键没有执行。"}
 
-    def _advance_held(self, frames, label, counter, held=None):
+    def _advance_held(self, frames, label, counter, held=None, *, respawning=False):
         """Shared real step, recording, frame clock and stop handling; lock held."""
         keys, fmt = held or self._held_input
         stops = list(STIFF_STOP_ON)
-        if counter == 'token' and seeker_control(self.last_obs or {}):
+        if counter == 'token' and (respawning or seeker_control(self.last_obs or {})):
             stops.remove('uncontrollable')
             stops.append('controllable')
         if self.cfg.cutscene_mode == "agent":
@@ -1044,7 +1101,8 @@ class GameSession:
             if (self.done or self.goals.stop_motion.is_set() or not self.token_guard()
                     or getattr(self, 'reload_observation_required', False)):
                 return {'consumed': 0, 'stop': 'not_eligible'}
-            if not self.token_playable(last):
+            respawning = self.token_death_recovering(last)
+            if not (self.token_playable(last) or respawning):
                 return {'consumed': 0, 'stop': 'not_controllable'}
             try:
                 self._before_advance()
@@ -1053,7 +1111,10 @@ class GameSession:
             self._token_advancing = True
             try:
                 held = self.token_menu.held(last) if deferred else None
-                moved = self._advance_held(frames, 'Token 补推进' if deferred else 'Token 推进', 'token', held)
+                if self.token_after_death(last):
+                    held = ('', (held or self._held_input)[1])
+                moved = self._advance_held(frames, 'Token 补推进' if deferred else 'Token 推进', 'token', held,
+                                           respawning=respawning)
             finally:
                 self._token_advancing = False
             obs = moved['obs']
@@ -1063,10 +1124,15 @@ class GameSession:
             reset = getattr(self, 'reset_observation_delivery', None)
             if reset is not None:
                 reset()
-            if moved['stop'] != 'done':
+            stop = moved['stop']
+            continues = (self.token_after_death(obs) and self._token_context(last) == self._token_context(obs)
+                         and (stop == 'death' or respawning and stop == 'controllable'))
+            if stop != 'done':
                 self.token_motion_epoch += 1
                 self.token_observation_required = True
-            return {'consumed': moved['consumed'], 'stop': moved['stop'],
+                if not continues:
+                    self._token_death_context = None
+            return {'consumed': moved['consumed'], 'stop': stop, 'continue_neutral': continues,
                     'input_format': moved['input_format'], 'keys': moved['keys'],
                     'after': {'frame': obs.get('frame'), 'scene': obs.get('scene'),
                               **{key: (obs.get('level') or {}).get(key) for key in ('sid', 'room', 'side')},
@@ -1109,7 +1175,8 @@ class GameSession:
             may_advance = not reload_observation and not self.done and not self.goals.stop_motion.is_set()
             level = obs.get('level') or {}
             if (may_advance and self.cfg.cutscene_mode == 'agent' and obs.get('input_format') != 'celeste_tas'
-                    and (level.get('skippingCutscene') or story_pending(obs) or self._transition_for(obs))):
+                    and (level.get('skippingCutscene') or story_pending(obs)
+                         or not self.token_death_recovering(obs) and self._transition_for(obs))):
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
             elif (may_advance and self.cfg.cutscene_mode == 'auto' and obs.get('scene') == 'Level'
@@ -1622,10 +1689,13 @@ class GameSession:
 
             auto_frames, notes = 0, list(resumed)
             transition = self._transition_for(obs)
-            respawn_handover = (self.cfg.cutscene_mode == 'agent' and
+            token_respawning = self.token_death_recovering(obs)
+            respawn_handover = token_respawning or (self.cfg.cutscene_mode == 'agent' and
                                (transition is not None and transition.kind == 'respawn'
                                 or (obs.get('player') or {}).get('dead')))
-            if respawn_handover:
+            if token_respawning:
+                notes.append('已死亡并清空按键。后续 Token 会用空输入推进重生；你仍可按画面明确操作。')
+            elif respawn_handover:
                 notes.append('已出现死亡或房间重试后的重生状态，本次动作后未自动等待。'
                              + ('TAS 格式继续用显式 TAS 输入或空帧推进，observe 不自动等待。'
                                 if plan.input_format == 'celeste_tas' else
@@ -1844,7 +1914,8 @@ class GameSession:
         先接着自动推进到可操作，再执行智能体的按键，不把按键落在剧情上。推进后仍不可操作（又被暂停）就不执行这次动作。"""
         last = self.last_obs or {}
         if (self.cfg.cutscene_mode != 'auto' or self._ending_agent or not last or self._settled(last)
-                or self._handed_over(last) or self._detour_agent or self._agent_menu(last)):
+                or self._handed_over(last) or self._detour_agent or self._agent_menu(last)
+                or self.token_death_recovering(last)):
             return []
         obs = enrich_obs(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
         if obs.get('scene') != 'Level' or self._settled(obs) or self._handed_over(obs) or self._agent_menu(obs):

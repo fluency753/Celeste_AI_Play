@@ -170,12 +170,13 @@ class TokenDrift:
             raise ValueError('Token 推进返回的实际帧数无效，执行范围未确认')
         batch.update(status='committed', **result)
         self.state['consumed_frames'] += consumed
-        if batch.get('origin') == 'deferred':
-            self.state['deferred_frames'] += batch['requested'] - consumed
-        else:
-            self.state['dropped_frames'] += batch['requested'] - consumed
-        if result.get('stop') != 'done':
-            if batch.get('origin') != 'deferred':
+        deferred = batch.get('origin') == 'deferred'
+        continues = bool(result.get('continue_neutral'))
+        remaining = batch['requested'] - consumed
+        balance = 'deferred_frames' if deferred else 'pending_frames' if continues else 'dropped_frames'
+        self.state[balance] += remaining
+        if result.get('stop') != 'done' and not continues:
+            if not deferred:
                 self.state['excluded_gap'] = True
             self.discard('step_' + str(result.get('stop')), save=False)
         self._save()
