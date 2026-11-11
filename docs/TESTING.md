@@ -24,7 +24,7 @@
 
 每个进程先像 `unittest discover` 一样导入全部测试模块，再只运行分到的模块。这样模块的导入时机与串行运行相同：有的模块会在测试临时替换仓库路径期间才第一次被导入，提前导入可避免它在整个进程里沿用临时路径。
 
-自动化测试必须隔离本机配置、工作区、端口及进程归属，不连接在用主控或修改用户配置。新增测试依赖进程外的共享资源时应先隔离；暂时不能隔离时用 `--serial` 诊断。用到智能体工作区或知识库视图的测试模块在开头加 `setUpModule, tearDownModule = generated_dirs_fixture()`（`calibration/isolation.py`），把 `workspaces/` 与 `local/kb_views/` 换到临时目录。
+自动化测试必须隔离本机配置、工作区、端口及进程归属，不连接在用主控或修改用户配置。新增测试依赖进程外的共享资源时应先隔离；暂时不能隔离时用 `--serial` 诊断。用到智能体工作区或知识库视图的测试模块在开头加 `setUpModule, tearDownModule = generated_dirs_fixture()`（`calibration/isolation.py`），把 `workspaces/` 与 `local/kb_views/` 换到临时目录。读取本机设置的代码（控制台选中的配置、个人追加要求、AI 副本标记等）在测试里要换成固定值，不能让结果随本机设置变化。在临时目录里建符号链接或 Windows 目录联接的测试，在建临时目录之后紧接着注册 `self.addCleanup(unlink_links, 根目录)`（同一文件），让链接在目录删除前先移除：Windows 上的 Python 3.14 删除目录时，若同一次删除中链接的目标先被删掉，链接会留下、目录删不掉。Windows 上关文件要早于删临时目录：临时目录的清理在 `setUp` 里最先注册（清理按注册的倒序执行），不要放在 `tearDown` 里。
 
 ## 输出与失败
 

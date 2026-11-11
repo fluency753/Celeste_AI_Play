@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from calibration.isolation import unlink_links
 from orchestrator import personal_prompts as personal
 
 
@@ -18,6 +19,7 @@ class PersonalPromptTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
+        self.addCleanup(unlink_links, self.root)    # Before the folder goes (cleanups run last first).
         self.path = self.root/'local/personal_prompts.json'
         replacement = patch.object(personal, 'STORE', self.path)
         replacement.start()

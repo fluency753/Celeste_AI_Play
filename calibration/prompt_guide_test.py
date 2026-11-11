@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.config import RunConfig
+from calibration.isolation import unlink_links
 from orchestrator import prompt_guide, prompting
 
 
@@ -18,6 +19,7 @@ class PromptGuideTests(unittest.TestCase):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
         self.root = Path(self.folder.name)
+        self.addCleanup(unlink_links, self.root)    # Before the folder goes (cleanups run last first).
         self.cfg = SimpleNamespace(workspace_dir=self.root / 'workspace', engine='codex', provider='codex')
         self.parts = [prompting.PromptPart('a', 'first', 'a.md'),
                       prompting.PromptPart('b', 'second', 'b.md', '\n\n'),

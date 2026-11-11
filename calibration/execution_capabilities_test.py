@@ -30,8 +30,13 @@ class WorkspaceCapabilityTests(unittest.TestCase):
                     self.assertIn('observe', note)
 
     def test_host_claude_explore_launch_preview_and_prompt_need_only_game_tools(self):
+        from orchestrator import profiles
         from orchestrator.run import parse_args
         from overlay.console_api import prompt_preview
+        # 预览和提示词都按内置默认配置生成：不读本机选中的配置、提示词修改和个人追加要求
+        default = patch('overlay.console_api._profile', return_value=profiles.DEFAULT)
+        default.start()
+        self.addCleanup(default.stop)
         for live, cutscene in itertools.product((False, True), ('auto', 'agent')):
             argv = ['run', '--engine', 'claude', '--agent', 'test', '--save', 'test',
                     '--runtime', 'host', '--mode', 'explore', '--no-sim-assist', '--chapter', '0',
@@ -44,7 +49,8 @@ class WorkspaceCapabilityTests(unittest.TestCase):
             preview = prompt_preview({'engine': 'claude', 'agent': 'test', 'runtime': 'host',
                 'save': {'name': 'test', 'slot': 10}, 'mode': 'explore', 'sim_assist': False, 'live': live,
                 'cutscene_mode': cutscene})
-            self.assertEqual(preview['text'], play_prompt(cfg))
+            with profiles.using(profiles.DEFAULT):
+                self.assertEqual(preview['text'], play_prompt(cfg))
             self.assertIsNone(preview['first_message'])
             for unavailable in ('/workspace', '/kb/', 'Bash', '编写模拟器', '自行写程序'):
                 self.assertNotIn(unavailable, preview['text'])
