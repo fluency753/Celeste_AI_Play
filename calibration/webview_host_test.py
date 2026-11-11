@@ -149,8 +149,8 @@ class WebviewHostTests(unittest.TestCase):
             result = subprocess.run([sys.executable, '-X', 'utf8', '-m', 'calibration.webview_host_fixture', str(output)],
                                     cwd=Path(__file__).resolve().parents[1], capture_output=True,
                                     text=True, encoding='utf-8', timeout=90)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            data = json.loads(output.read_text(encoding='utf-8'))
+            data = json.loads(output.read_text(encoding='utf-8')) if output.exists() else {}
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr + json.dumps(data, ensure_ascii=False))
         self.assertNotIn('error', data)
         self.assertFalse(data['dialog_only_found'])
         self.assertTrue(data['real_hidden_form_found'])

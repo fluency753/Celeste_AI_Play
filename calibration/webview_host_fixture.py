@@ -1,6 +1,7 @@
 """Isolated native pywebview lifecycle used by webview_host_test; never visits live services."""
 import json
 import ctypes
+import os
 import ctypes.wintypes as wt
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -57,7 +58,23 @@ class API:
 
 
 def main():
-    result = {'responses': 0, 'requests': 0, 'phases': []}
+    began = time.monotonic()
+    result = {'responses': 0, 'requests': 0, 'phases': [], 'timings': {}}
+
+    def mark(stage):
+        result['timings'][stage] = round(time.monotonic() - began, 2)
+
+    def report_if_stuck():
+        # If the native window never closes, still hand back what happened instead of
+        # leaving the caller with a bare timeout.
+        def report():
+            result.setdefault('error', 'fixture did not finish within 20 s of closing; timings show the last step reached')
+            Path(sys.argv[1]).write_text(json.dumps(result), encoding='utf-8')
+            os._exit(1)
+        timer = threading.Timer(20, report)
+        timer.daemon = True
+        timer.start()
+
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f'http://127.0.0.1:{server.server_port}/'
@@ -83,6 +100,7 @@ def main():
         try:
             if not window.events.loaded.wait(15):
                 raise TimeoutError('initial load did not finish')
+            mark('loaded')
             from System import Action
             handles = []
             window.native.Invoke(Action(lambda: handles.append(int(window.native.Handle.ToInt64()))))
@@ -99,6 +117,7 @@ def main():
                     window.load_url(url + '?reload')
                     if not window.events.loaded.wait(15):
                         raise TimeoutError('reload did not finish')
+                    mark('reload loaded')
                 window.run_js('''window.testResult=null;
                     (async()=>{try{
                       const ack=await pywebview.api.echo('ready');
@@ -110,6 +129,7 @@ def main():
                     value = window.evaluate_js('window.testResult')
                     if value:
                         result['phases'].append(value)
+                        mark(phase)
                         break
                     if time.monotonic() >= deadline:
                         raise TimeoutError('JS bridge or fetch did not finish')
@@ -117,12 +137,17 @@ def main():
         except Exception:
             result['error'] = traceback.format_exc()
         finally:
+            mark('closing')
+            report_if_stuck()
             window.destroy()
+            mark('window destroyed')
             server.shutdown()
             server.server_close()
+            mark('server closed')
 
     try:
         webview.start(check, gui='edgechromium')
+        mark('window loop ended')
     finally:
         user32 = ctypes.WinDLL('user32', use_last_error=True)
         user32.DestroyWindow.argtypes = [wt.HWND]
