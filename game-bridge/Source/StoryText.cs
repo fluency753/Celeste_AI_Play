@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -10,9 +11,17 @@ using Monocle;
 
 namespace CelesteAI.Bridge;
 
+internal enum StoryHudKind { None, Story, MiniDialogue }
+
 /// <summary>Read the rendered page, never the dialog script or unrevealed glyphs.</summary>
 internal static class StoryText {
-    internal static bool HasVisibleStoryHud(Scene? scene) => StoryPlayback.HasVisibleStoryHud(scene);
+    internal static bool HasVisibleStoryHud(Scene? scene) => VisibleStoryHud(scene) != StoryHudKind.None;
+    internal static StoryHudKind VisibleStoryHud(Scene? scene) {
+        if (StoryPlayback.HasVisibleStoryHud(scene)) return StoryHudKind.Story;
+        if (scene is Level level && CompleteMiniTextboxes(level, includePendingRemoval: true).Any())
+            return StoryHudKind.MiniDialogue;
+        return StoryHudKind.None;
+    }
     internal static IEnumerable<T> SceneEntities<T>(Scene scene) where T : Entity {
         if (scene.Entities == null) yield break;
         foreach (var entity in scene.Entities)
@@ -25,6 +34,17 @@ internal static class StoryText {
     // RenderOnly still draws a queued removal in this frame; its input and
     // presentation are already retired, but its last pixels can remain visible.
     internal static T? RenderedEntity<T>(Scene scene) where T : Entity => scene.Entities?.FindFirst<T>();
+
+    private static IEnumerable<MiniTextbox> CompleteMiniTextboxes(Level level, bool includePendingRemoval = false) {
+        if (level.Entities == null || level.FrozenOrPaused || level.SkippingCutscene || level.RetryPlayerCorpse != null)
+            yield break;
+        foreach (var entity in level.Entities)
+            if (entity is MiniTextbox { Visible: true, ease: > 0f, text.Nodes: { Count: > 0 } nodes } box &&
+                box.index >= nodes.Count &&
+                (includePendingRemoval || !level.Entities.toRemove.Contains(box)))
+                yield return box;
+    }
+
     private static readonly Dictionary<(Type, string), HashSet<Type>> IteratorTypes = new();
 
     // Read the current iterator without running it. Everest wraps iterators in
@@ -291,13 +311,13 @@ internal static class StoryText {
         return result.ToString().Trim();
     }
 
-    internal static string ReadPage(FancyText.Text? text, int start, float alpha = 1f) {
+    internal static string ReadPage(FancyText.Text? text, int start, float alpha = 1f, bool allPages = false) {
         if (text?.Nodes == null || alpha <= 0f) return "";
         var result = new StringBuilder();
         for (int i = Math.Max(0, start); i < text.Nodes.Count; i++) {
             var node = text.Nodes[i];
-            if (node is FancyText.NewPage) break;
-            if (node is FancyText.NewLine) {
+            if (!allPages && node is FancyText.NewPage) break;
+            if (node is FancyText.NewLine or FancyText.NewPage) {
                 if (result.Length > 0) result.Append('\n');
             } else if (node is FancyText.Char ch && ch.Fade * alpha * ch.Color.A >= 1f) {
                 if (ch.Character is >= 0 and <= 0x10ffff && ch.Character is not (>= 0xd800 and <= 0xdfff))
@@ -320,6 +340,11 @@ internal static class StoryText {
                 Entry(w, "dialogue", ReadPage(box.text, box.Start, Ease.CubeInOut(box.ease)), DialogueReady(box),
                     box.Page, box.portraitExists ? box.portrait : null);
             }
+            // The native reveal advances index across all pages; after it
+            // finishes, the agent can read the whole message in one result.
+            foreach (var mini in CompleteMiniTextboxes(level))
+                Entry(w, "mini_dialogue", ReadPage(mini.text, 0, allPages: true),
+                    portrait: mini.portrait != null ? mini.portraitData : null, entityId: EntityState.IdOf(mini));
             var ending = SceneEntity<PrologueEndingText>(level);
             if (ending is { Visible: true }) Entry(w, "ending", ReadPage(ending.text, 0));
             foreach (var memorial in SceneEntities<MemorialText>(level))
@@ -385,12 +410,13 @@ internal static class StoryText {
     }
 
     private static void Entry(Utf8JsonWriter w, string kind, string text, bool waiting = false,
-                              int? page = null, FancyText.Portrait? portrait = null) {
+                              int? page = null, FancyText.Portrait? portrait = null, int? entityId = null) {
         if (text.Length == 0) return;
         w.WriteStartObject();
         w.WriteString("kind", kind);
         w.WriteString("text", text);
         w.WriteBoolean("waitingForInput", waiting);
+        if (entityId.HasValue) w.WriteNumber("id", entityId.Value);
         if (page.HasValue) w.WriteNumber("page", page.Value);
         if (portrait != null) {
             w.WriteStartObject("speakerPortrait");

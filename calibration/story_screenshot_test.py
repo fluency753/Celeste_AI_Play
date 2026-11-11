@@ -48,14 +48,20 @@ class StoryScreenshotTests(unittest.TestCase):
 
     @patch('orchestrator.server.workspace_capabilities',
            lambda cfg: WorkspaceCapabilities('host', True, True, None))
-    def test_same_room_act_keeps_story_hud_image_in_real_tool_dispatch(self):
+    def test_same_room_act_delivers_mini_dialogue_and_hud_without_stopping_movement(self):
         image = png((640, 360))
 
         class HudBridge(FakeBridge):
+            mini_id = None
+            mini_only = True
+
             def call(self, command, **args):
                 reply = super().call(command, **args)
-                if 'obs' in reply:
-                    reply['obs']['screenshot'] = {'scope': 'story_hud'}
+                if 'obs' in reply and self.mini_id is not None:
+                    reply['obs']['screenshot'] = {'scope': 'story_hud', 'mini_dialogue_only': self.mini_only}
+                    reply['obs']['story'] = [{'kind': 'mini_dialogue', 'text': '继续前进。',
+                                             'id': self.mini_id, 'speakerPortrait': {'sprite': 'theo'},
+                                             'waitingForInput': False}]
                     reply['image'] = image
                 return copy.deepcopy(reply)
 
@@ -69,10 +75,33 @@ class StoryScreenshotTests(unittest.TestCase):
             try:
                 server = build_server(session)
                 asyncio.run(server.call_tool('observe', {}))
-                result = asyncio.run(server.call_tool('act', {'inputs': ['1,R'], 'thought': '操作当前界面'}))
+                session.client.mini_id = 9
+                act = {'inputs': ['1,R'], 'thought': '继续移动'}
+                result = asyncio.run(server.call_tool('act', act))
+                text = '\n'.join(item.text for item in result.content if item.type == 'text')
+                self.assertIn('当前迷你对白（无需确认）（头像标识 theo）：继续前进。', text)
+                self.assertIn('执行了 1/1 帧', text)
                 pictures = [item for item in result.content if getattr(item, 'type', '') == 'image']
                 self.assertEqual(len(pictures), 1)
                 self.assertEqual(pictures[0].meta['celeste']['role'], 'screenshot')
                 self.assertEqual(Image.open(io.BytesIO(base64.b64decode(pictures[0].data))).size, (640, 360))
+                repeated = asyncio.run(server.call_tool('act', act))
+                repeated_text = ''.join(item.text for item in repeated.content if item.type == 'text')
+                self.assertNotIn('继续前进。', repeated_text)
+                self.assertNotIn('截图包含当前原生剧情界面', repeated_text)
+                self.assertFalse(any(item.type == 'image' for item in repeated.content))
+                session.client.mini_only = False
+                ordinary_hud = asyncio.run(server.call_tool('act', act))
+                self.assertTrue(any(item.type == 'image' for item in ordinary_hud.content))
+                session.client.mini_only = True
+                observed = asyncio.run(server.call_tool('observe', {}))
+                self.assertNotIn('继续前进。', ''.join(item.text for item in observed.content if item.type == 'text'))
+                self.assertTrue(any(item.type == 'image' for item in observed.content))
+                session.client.mini_id = 10
+                again = asyncio.run(server.call_tool('act', act))
+                self.assertIn('继续前进。', ''.join(item.text for item in again.content if item.type == 'text'))
+                session.reload_epoch = 1
+                reloaded = asyncio.run(server.call_tool('act', act))
+                self.assertIn('继续前进。', ''.join(item.text for item in reloaded.content if item.type == 'text'))
             finally:
                 session.close(False)

@@ -145,6 +145,8 @@ class BridgeClient:
                     reply['obs']['screenshot'] = {'scope': reply.get('imageScope'),
                                                  'format': reply.get('imageFormat'),
                                                  'error': reply.get('imageError')}
+                    if reply.get('imageMiniDialogueOnly') is True:
+                        reply['obs']['screenshot']['mini_dialogue_only'] = True
                 after = getattr(self, "after_step", None)
                 if cmd == "step" and after is not None:
                     after(args, reply)     # 例如记下最后真正喂给游戏的那一帧按键（思考僵直时保持它）

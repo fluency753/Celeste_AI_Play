@@ -196,8 +196,9 @@ def room_json(obs: dict, *, compact_context: bool = False, geometry_context: dic
     }
     if level.get('dialogOpen') or level.get('dialogChoices') or level.get('inCutscene'):
         data['dialog']={key:level.get(key) for key in ('dialogOpen','dialogWaiting','dialogChoices','dialogChoiceIndex','dialogChoiceReady')}
-    if obs.get('story'):
-        data['story']=obs['story']
+    story = [item for item in obs.get('story') or [] if not compact_context or item.get('kind') != 'mini_dialogue']
+    if story:
+        data['story'] = story
     if 'storyInput' in obs:
         data['storyInput']=obs['storyInput']
     if 'storyDecision' in obs:
@@ -345,7 +346,13 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
         portrait=story.get('speakerPortrait') or {}
         speaker=portrait.get('sprite')
         if story.get('text'):
-            label = '当前纪念碑文字' if story.get('kind') == 'memorial' else ('当前对白（头像标识 '+speaker+'）' if speaker else '当前剧情文字')
+            kind = story.get('kind')
+            if kind == 'mini_dialogue':
+                label = '当前迷你对白（无需确认）' + (f'（头像标识 {speaker}）' if speaker else '')
+            elif kind == 'memorial':
+                label = '当前纪念碑文字'
+            else:
+                label = '当前对白（头像标识 '+speaker+'）' if speaker else '当前剧情文字'
             lines.append(label+'：'+story['text'])
         if story.get('controls'):
             lines.append('当前教学按键：'+json.dumps(story['controls'],ensure_ascii=False))

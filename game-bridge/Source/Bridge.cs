@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.11.1";
+    public const string Version = "1.12.0";
     internal static bool RecordOnlyChapters { get; private set; }
     internal static bool ChapterRecordingEnabled => RecordOnlyChapters && RecordingAudio.Enabled;
     internal static bool RecordingChapterActive { get; private set; }
@@ -64,7 +64,7 @@ internal static class Bridge {
     // they are answered after that frame, so the snapshot and the image agree.
     private static readonly List<DeferredObservation> DeferredObservations = new();
 
-    private sealed record RenderReply(long Id, Action<Utf8JsonWriter> Body, string Buffer, Scene? Scene, long Frame, bool StoryHud);
+    private sealed record RenderReply(long Id, Action<Utf8JsonWriter> Body, string Buffer, Scene? Scene, long Frame, StoryHudKind StoryHud);
     private sealed record DeferredObservation(long Id, JsonElement Args, bool DefaultImage);
 
     public static void Enqueue(Request request) => Inbox.Enqueue(request);
@@ -481,7 +481,7 @@ internal static class Bridge {
 
     /// <summary>这一帧画完要截图回复（观测）：规划回放这一帧不换镜头、不画线。</summary>
     public static bool CapturePending => PendingRenders.Count > 0;
-    internal static bool WantsStoryHudImage => PendingRenders.Exists(pending => pending.Buffer != "gameplay" && pending.StoryHud
+    internal static bool WantsStoryHudImage => PendingRenders.Exists(pending => pending.Buffer != "gameplay" && pending.StoryHud != StoryHudKind.None
         && pending.Frame == Frame && ReferenceEquals(pending.Scene, Engine.Scene));
 
     /// <summary>绘制完成后调用：处理需要截图的回复。</summary>
@@ -491,11 +491,13 @@ internal static class Bridge {
         }
         foreach (RenderReply pending in PendingRenders) {
             var capture = pending.Frame == Frame && ReferenceEquals(pending.Scene, Engine.Scene)
-                ? FrameGrabber.CapturePngBase64(pending.Buffer, pending.StoryHud)
+                ? FrameGrabber.CapturePngBase64(pending.Buffer, pending.StoryHud != StoryHudKind.None)
                 : new FrameGrabber.Capture(null, null, "截图前游戏场景或帧已改变，本次不附错帧图片，请重新观测。");
             IpcServer.Send(Reply.Ok(pending.Id, w => {
                 pending.Body(w);
                 w.WriteString("imageScope", capture.StoryHud ? "story_hud" : "world");
+                if (capture.StoryHud && pending.StoryHud == StoryHudKind.MiniDialogue)
+                    w.WriteBoolean("imageMiniDialogueOnly", true);
                 if (capture.Image != null) {
                     w.WriteString("imageFormat", capture.Format);
                     w.WriteString("image", capture.Image);
@@ -622,7 +624,7 @@ internal static class Bridge {
         }
         if (finished.WantImage) {
             PendingRenders.Add(new RenderReply(finished.RequestId, Body, finished.Buffer, Engine.Scene, Frame,
-                StoryText.HasVisibleStoryHud(Engine.Scene)));
+                StoryText.VisibleStoryHud(Engine.Scene)));
         } else {
             IpcServer.Send(Reply.Ok(finished.RequestId, Body));
         }
@@ -1162,7 +1164,7 @@ internal static class Bridge {
             w.WriteRawValue(obs, skipInputValidation: true);
         }
         if (image) {
-            PendingRenders.Add(new RenderReply(id, Body, buffer, Engine.Scene, Frame, StoryText.HasVisibleStoryHud(Engine.Scene)));
+            PendingRenders.Add(new RenderReply(id, Body, buffer, Engine.Scene, Frame, StoryText.VisibleStoryHud(Engine.Scene)));
         } else {
             IpcServer.Send(Reply.Ok(id, Body));
         }

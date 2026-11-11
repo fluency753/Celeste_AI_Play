@@ -151,6 +151,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     # 思考与工具时间由主控按 Claude Code 输出流里的 tool_use / tool_result 事件统计（见 metrics.py），这里不计时
     state = {"described_room": None}
     delivery = ObservationDelivery()
+    sent_mini_dialogues = set()
 
     def reset_observation_delivery():
         nonlocal delivery
@@ -161,7 +162,25 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
 
     def observation_context(obs, *, force=False, compact=False):
         files_enabled = workspace_capabilities(session.cfg).programs
-        return delivery.prepare(session, obs, files_enabled=files_enabled, force=force, compact=compact)
+        context, file_context, candidate = delivery.prepare(
+            session, obs, files_enabled=files_enabled, force=force, compact=compact)
+        epoch = getattr(session, 'reload_epoch', 0)
+        new_dialogues = set()
+        story = []
+        for item in obs.get('story') or []:
+            if item.get('kind') == 'mini_dialogue' and type(item.get('id')) is int:
+                key = (epoch, item['id'])
+                if key in sent_mini_dialogues or key in new_dialogues:
+                    continue
+                new_dialogues.add(key)
+            story.append(item)
+        visible_obs = {**obs, 'story': story} if 'story' in obs else obs
+        return context, file_context, (candidate, new_dialogues), visible_obs
+
+    def commit_observation(candidate):
+        geometry, new_dialogues = candidate
+        delivery.commit(geometry)
+        sent_mini_dialogues.update(new_dialogues)
 
     def room_key(obs: dict):
         level = obs.get("level") or {}
@@ -230,7 +249,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     await flush_tokens()
                     paid = getattr(metrics.state, 'token_frames', 0) - before
                     obs, image = session.token_last_observation or (session.last_obs or {}, None)
-                    context, file_context, candidate = observation_context(obs, force=True)
+                    context, file_context, candidate, visible_obs = observation_context(obs, force=True)
                     content = images(obs, image, room_view=True)
                     note = (str(error) + f' 本次已补推进 {paid} 帧，'
                             + ('待补余额仍按账本保留。' if getattr(session, 'token_debt_pending', lambda: 0)() else '')
@@ -240,9 +259,9 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                         note += notice
                     elif getattr(session, 'token_observation_required', False):
                         note += '补推进遇到场景中断，请先默认 observe 核验。'
-                    content.append(note + '\n\n' + describe_obs(obs, full_room=True, effort=header_line(),
+                    content.append(note + '\n\n' + describe_obs(visible_obs, full_room=True, effort=header_line(),
                                    explore=explore, compact_context=True, file_context=file_context) + '\n\n' + context)
-                    delivery.commit(candidate)
+                    commit_observation(candidate)
                     state['described_room'] = room_key(obs)
                     journal.detail({'token_boundary': str(error), 'token_repayment': repayment(paid),
                                     'boundary_accounted_frames': missing_frames, 'boundary_accounted_s': missing_s})
@@ -379,7 +398,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     obs, image = session.token_last_observation
                 observed_epoch = getattr(session, 'reload_epoch', 0)
                 credit(obs)
-                context, file_context, candidate = observation_context(obs, force=True)
+                context, file_context, candidate, visible_obs = observation_context(obs, force=True)
                 content = images(obs, image)
                 notes = (getattr(session, "observe_notes", None) or []) + take_token_notes()
                 if token_change:
@@ -387,12 +406,12 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 if notice := token_observe_notice(session):
                     notes.append(notice)
                 content.append(("主控：" + "；".join(notes) + "\n\n" if notes else "")
-                               + describe_obs(obs, full_room=True, effort=header_line(), explore=explore, compact_context=True, file_context=file_context)
+                               + describe_obs(visible_obs, full_room=True, effort=header_line(), explore=explore, compact_context=True, file_context=file_context)
                                + "\n\n" + context
                                + ("\n" + ws_note if session.workspace and not file_context else ""))
                 if notice := completion_notice():
                     content.append(notice)
-                delivery.commit(candidate)
+                commit_observation(candidate)
                 state["described_room"] = room_key(obs)
                 acknowledge = getattr(session, 'acknowledge_reload_observation', None)
                 if acknowledge:
@@ -458,17 +477,20 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 new_room = room_key(outcome.obs) != state["described_room"]
                 # 节省上下文：同一房间里省略每次都一样的样板（进新房间时照常给全）
                 brief = save_context and not new_room
-                context, file_context, candidate = observation_context(outcome.obs, force=new_room, compact=brief)
+                context, file_context, candidate, visible_obs = observation_context(outcome.obs, force=new_room, compact=brief)
+                if (not new_room and (visible_obs.get('screenshot') or {}).get('mini_dialogue_only')
+                        and not any(item.get('kind') == 'mini_dialogue' for item in visible_obs.get('story') or [])):
+                    visible_obs = {**visible_obs, 'screenshot': None}
                 if new_room:
                     parts.append("【进入新房间】完整碰撞数据已更新到当前观测文件。" if file_context else "【进入新房间】下面是截图、完整碰撞图及精确布局；后续只返回相对此布局的变化。")
-                parts.append(describe_obs(outcome.obs, full_room=new_room, effort=header_line(freeze=False, levels_line=not brief),
+                parts.append(describe_obs(visible_obs, full_room=new_room, effort=header_line(freeze=False, levels_line=not brief),
                                           explore=explore, compact_context=True, file_context=file_context, brief_room=brief))
                 parts.append(context)
                 if session.workspace and not file_context:
                     parts.append(ws_note)
-                content = images(outcome.obs, outcome.image_b64, show_screenshot=new_room, room_view=new_room)
+                content = images(visible_obs, outcome.image_b64, show_screenshot=new_room, room_view=new_room)
                 content.append("\n\n".join(parts))
-                delivery.commit(candidate)
+                commit_observation(candidate)
                 state["described_room"] = room_key(outcome.obs)
                 return content
             except RecordingHalt as err:
@@ -628,14 +650,14 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                         notes.append('补推进遇到场景中断，请先默认 observe 核验。')
                     journal.detail({'token_repayment': repayment(paid)})
                 credit(obs)
-                context, file_context, candidate = observation_context(obs, force=True)
+                context, file_context, candidate, visible_obs = observation_context(obs, force=True)
                 content = images(obs, image)
                 content.append(("主控：" + "；".join(notes) + "\n\n" if notes else "")
-                               + describe_obs(obs, full_room=True, effort=header_line(), explore=explore,
+                               + describe_obs(visible_obs, full_room=True, effort=header_line(), explore=explore,
                                               compact_context=True, file_context=file_context)
                                + "\n\n" + context
                                + ("\n" + ws_note if session.workspace and not file_context else ""))
-                delivery.commit(candidate)
+                commit_observation(candidate)
                 state["described_room"] = room_key(obs)
                 return content
             except RecordingHalt as err:
@@ -665,12 +687,12 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             except ActError as err:
                 raise ToolError(str(err)) from err
             new_room = room_key(obs) != state['described_room']
-            context, file_context, candidate = observation_context(obs, force=new_room)
+            context, file_context, candidate, visible_obs = observation_context(obs, force=new_room)
             result=images(obs, image, room_view=new_room)
-            result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(obs,full_room=False,effort=header_line(),explore=explore,compact_context=True,file_context=file_context)+'\n'+context)
+            result.append(json.dumps(info,ensure_ascii=False)+'\n'+describe_obs(visible_obs,full_room=False,effort=header_line(),explore=explore,compact_context=True,file_context=file_context)+'\n'+context)
             if notice := completion_notice():
                 result.append(notice)
-            delivery.commit(candidate)
+            commit_observation(candidate)
             state['described_room'] = room_key(obs)
             return result
 

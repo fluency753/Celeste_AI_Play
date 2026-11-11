@@ -79,6 +79,37 @@ using (var snapshot=Snapshot())
     if (snapshot.RootElement.GetProperty("story").GetArrayLength()!=0) throw new Exception("Completed memorial leaked");
 Console.WriteLine("PASS: memorial reaches story JSON only in visible gameplay state");
 
+level.Completed=false;
+entities.entities.Clear();
+var mini=(MiniTextbox)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(MiniTextbox));
+mini.Visible=true; mini.ease=.25f; mini.closing=true; mini.start=2; mini.index=5;
+mini.text=new FancyText.Text {Nodes=new() {Glyph('旧'),new FancyText.NewPage(),Glyph('已'),Glyph('显'),Glyph('藏')}};
+mini.portrait=(Monocle.Sprite)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Monocle.Sprite));
+mini.portraitData=new FancyText.Portrait { Sprite="theo", Animation="normal" };
+entities.entities.Add(mini);
+using (var snapshot=Snapshot()) {
+    var entry=snapshot.RootElement.GetProperty("story")[0];
+    Check("mini_dialogue",entry.GetProperty("kind").GetString()!);
+    Check("旧\n已显藏",entry.GetProperty("text").GetString()!);
+    Check("theo",entry.GetProperty("speakerPortrait").GetProperty("sprite").GetString()!);
+    if (entry.GetProperty("id").GetInt32()!=EntityState.IdOf(mini)) throw new Exception("Unstable mini dialogue id");
+    if (entry.GetProperty("waitingForInput").GetBoolean()) throw new Exception("Mini dialogue cannot request input");
+}
+Check("",StoryText.InputNode(level) ?? "");
+Check("",StoryText.DecisionNode(level) ?? "");
+if (!StoryText.HasVisibleStoryHud(level)) throw new Exception("Closing mini dialogue still draws its HUD");
+mini.index=4;
+using (var snapshot=Snapshot())
+    if (snapshot.RootElement.GetProperty("story").GetArrayLength()!=0) throw new Exception("Incomplete mini dialogue leaked");
+if (StoryText.HasVisibleStoryHud(level)) throw new Exception("Incomplete mini dialogue must not request a HUD image");
+mini.index=5; level.Paused=true;
+using (var snapshot=Snapshot())
+    if (snapshot.RootElement.GetProperty("story").GetArrayLength()!=0) throw new Exception("Paused mini dialogue leaked");
+if (StoryText.HasVisibleStoryHud(level)) throw new Exception("Mini dialogue is hidden during pause");
+level.Paused=false; mini.ease=0;
+if (StoryText.HasVisibleStoryHud(level)) throw new Exception("Closed mini dialogue leaked into HUD detection");
+Console.WriteLine("PASS: mini dialogue delivers all pages after the native reveal completes, retains HUD during fades, and never requests input");
+
 // A cutscene flag is not a loss of player input: the prologue starts this way.
 level.Completed=false;
 var player=(Player)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Player));

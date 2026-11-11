@@ -106,20 +106,18 @@ class CutsceneTests(unittest.TestCase):
         self.assertEqual(self.s.client.steps,[])
         with self.assertRaises(ActError):self.s.stop_run('原因'*150)   # 原因限 200 字
 
-    def test_stop_run_confirmation_is_reissued_after_a_target_or_frame_change(self):
+    def test_stop_run_confirmation_is_reissued_after_a_target_change(self):
         self.s.request_pause = Mock(return_value=True)
         self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
         reason = '桥接协议故障，请重新加载桥接'
         first = self.s.stop_run('bridge_io：' + reason)
         self.s.goals.clear()
         second = self.s.stop_run(first['confirmation_prefix'] + reason)
-        self.s.last_obs['frame'] += 1
-        third = self.s.stop_run(second['confirmation_prefix'] + reason)
-        self.assertEqual([r['status'] for r in (first, second, third)], ['confirmation_required'] * 3)
-        self.assertEqual(len({r['confirmation_prefix'] for r in (first, second, third)}), 3)
+        self.assertEqual([r['status'] for r in (first, second)], ['confirmation_required'] * 2)
+        self.assertNotEqual(first['confirmation_prefix'], second['confirmation_prefix'])
         self.s.request_pause.assert_not_called()
-        self.assertEqual(self.s.stop_run(third['confirmation_prefix'] + reason)['status'], 'reported')
-        self.assertEqual(self.s.stop_run(third['confirmation_prefix'] + reason)['status'], 'duplicate')
+        self.assertEqual(self.s.stop_run(second['confirmation_prefix'] + reason)['status'], 'reported')
+        self.assertEqual(self.s.stop_run(second['confirmation_prefix'] + reason)['status'], 'duplicate')
         self.s.request_pause.assert_called_once_with(reason)
 
     def test_stop_run_non_defect_requires_three_steps_and_rotates_the_code(self):

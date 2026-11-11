@@ -1907,6 +1907,8 @@ class GameSession:
 
         def remember(observation):
             for item in observation.get('story') or []:
+                if item.get('kind') == 'mini_dialogue':
+                    continue
                 text = item.get('text', '')
                 if not text:
                     continue
