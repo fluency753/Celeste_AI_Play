@@ -117,6 +117,49 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(args[args.index('--bridge-port')+1],'48984')
         self.assertEqual(args[args.index('--mcp-port')+1],'48980')
 
+    def test_waits_for_final_summary_after_old_host_exit(self):
+        original = self.control
+        summary = self.old / 'summary.json'
+
+        def interrupt(port, payload=None):
+            result = original(port, payload)
+            if payload:
+                write_json(self.host / 'status.json', {'state': 'running', 'child_pid': 100, 'host_pid': 101})
+                write_json(summary, {'recording': {'state': 'retained', 'id': 'recording-id'}})
+            return result
+
+        def finish_cleanup(_):
+            self.assertEqual(self.launches, [])
+            self.assertEqual(restart.read(self.journal)['phase'], 'waiting_exit')
+            write_json(summary, {**restart.read(summary), 'game_released': False})
+            write_json(self.host / 'status.json', {'state': 'exited', 'exit_code': 1})
+
+        with patch.object(restart, 'control', interrupt), patch.object(restart.time, 'sleep', finish_cleanup):
+            result = self.execute()
+        self.assertEqual(result['phase'], 'finished')
+        self.assertEqual(result['after']['recording']['id'], 'recording-id')
+        self.assertEqual((len(self.calls), len(self.launches)), (1, 1))
+
+    def test_exited_host_without_retained_game_does_not_start_new_controller(self):
+        original = self.control
+        for released in (True, None):
+            with self.subTest(game_released=released):
+                self.snapshot['control']['connected'] = True
+                write_json(self.host / 'status.json', {'state': 'running', 'child_pid': 100, 'host_pid': 101})
+                (self.old / 'summary.json').unlink(missing_ok=True)
+
+                def interrupt(port, payload=None):
+                    result = original(port, payload)
+                    if payload:
+                        write_json(self.old / 'summary.json', {'game_released': released})
+                    return result
+
+                with patch.object(restart, 'control', interrupt):
+                    with self.assertRaisesRegex(ValueError, '旧主控未保留游戏接管'):
+                        self.execute()
+                self.assertEqual(restart.read(self.journal)['phase'], 'failed')
+                self.assertEqual(self.launches, [])
+
     def test_map_handoff_requires_closed_prefix_accounting_and_allows_menu_frames(self):
         self.bridge.update(frozen=False,scene='Overworld')
         original_control=self.control;original_launch=self.launch

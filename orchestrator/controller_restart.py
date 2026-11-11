@@ -283,20 +283,6 @@ def _restart(path, port, host, bridge_port, timeout, retry):
                     raise HandoffRejected('中断未被执行：' + action['detail'])
                 if action['status'] != 'submitted':
                     return None
-                if not (old / 'summary.json').exists():
-                    return None
-                summary = read(old / 'summary.json')
-                if summary.get('game_released') is not False:
-                    raise HandoffRejected('旧主控未保留游戏接管，停止自动续接')
-                if before['recording']:
-                    held = summary.get('recording') or {}
-                    closed = (operation.get('boundary') == 'menu' and held.get('encoder_finished') is True
-                              and held.get('postprocess_pending') is True and held.get('capture_state') == 'finished'
-                              and type(held.get('frames')) is int)
-                    if held.get('id') != before['recording']['id'] or not (held.get('state') == 'retained' or closed):
-                        raise HandoffRejected('旧录制未成功保留；未另建录制')
-                    if closed:
-                        operation['closed_frames'] = held['frames']
                 if read(Path(before['host']) / 'status.json').get('state') not in {'exited', 'failed'}:
                     return None
                 # Holding a process handle distinguishes actual exit from a
@@ -318,6 +304,21 @@ def _restart(path, port, host, bridge_port, timeout, retry):
                         return None
                     finally:
                         process.close()
+                # The runner writes its summary before the outer cleanup appends game_released.
+                if not (old / 'summary.json').exists():
+                    return None
+                summary = read(old / 'summary.json')
+                if summary.get('game_released') is not False:
+                    raise HandoffRejected('旧主控未保留游戏接管，停止自动续接')
+                if before['recording']:
+                    held = summary.get('recording') or {}
+                    closed = (operation.get('boundary') == 'menu' and held.get('encoder_finished') is True
+                              and held.get('postprocess_pending') is True and held.get('capture_state') == 'finished'
+                              and type(held.get('frames')) is int)
+                    if held.get('id') != before['recording']['id'] or not (held.get('state') == 'retained' or closed):
+                        raise HandoffRejected('旧录制未成功保留；未另建录制')
+                    if closed:
+                        operation['closed_frames'] = held['frames']
                 try:
                     with controller_lease():
                         pass
