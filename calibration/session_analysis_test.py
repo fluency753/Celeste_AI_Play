@@ -93,6 +93,33 @@ class AnalysisTests(unittest.TestCase):
             events = [e for e in report.analysis_records['timeline'] if e['kind'] == 'agent.reported_blocked']
             self.assertEqual([e['data']['category'] for e in events], [None, 'transition_recovery'])
 
+    def test_blockage_diagnostics_are_separate_and_time_filtered_in_the_export_bundle(self):
+        path = self.run / 'stop_run_diagnostics.jsonl'
+        statuses = ['classification_required', 'confirmation_required', 'recovery_available', 'duplicate']
+        for index, status in enumerate(statuses):
+            entry = {'status': status, 'reason': '检查观测', 'wall': 1000 + index, 'frame': 20, 'decision': 2}
+            if status == 'confirmation_required':
+                entry.update(category='hint', step=2, required_steps=3, confirmation_prefix='DO_NOT_EXPORT')
+            if status == 'recovery_available':
+                entry['transition'] = {'kind': 'respawn', 'frame': 20, 'advanced_frames': 5, 'remaining_frames': 595}
+            self.append(path, entry)
+        self.append(path, {'wall': 1005, 'status': 'duplicate', 'reason': '窗口终点之外'})
+        with path.open('a', encoding='utf-8') as stream:
+            stream.write('{"status":')
+        self.put(self.run / 'agent_stop.json', {'reports': [{'wall': 1004, 'reason': '已确认', 'category': 'hint'}]})
+        with closing(self.collect(since='1970-01-01T00:16:40+00:00', until='1970-01-01T00:16:45+00:00')) as report:
+            archive = write_export(report, self.root / 'blockage-export')
+        with zipfile.ZipFile(archive) as bundle:
+            raw = bundle.read('timeline.jsonl')
+        events = [row for row in map(json.loads, raw.splitlines()) if row['kind'].startswith('agent.')]
+        self.assertEqual([row['wall'] for row in events], [1000, 1001, 1002, 1003, 1004])
+        self.assertEqual([row['kind'] for row in events], ['agent.blockage_attempt'] * 4 + ['agent.reported_blocked'])
+        self.assertEqual([row['data']['status'] for row in events[:4]], statuses)
+        self.assertIsNone(events[0]['data']['step'])
+        self.assertEqual((events[1]['data']['step'], events[1]['data']['required_steps']), (2, 3))
+        self.assertEqual(events[2]['data']['transition']['remaining_frames'], 595)
+        self.assertNotIn(b'DO_NOT_EXPORT', raw)
+
     def test_turn_parallel_tools_cleanup_failure_and_no_private_reasoning(self):
         self.timing('turn_requested', 1000)
         self.timing('turn_acknowledged', 1001, turn_id='uuid')

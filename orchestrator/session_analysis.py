@@ -495,6 +495,9 @@ class Analysis:
                    'resumed_from': state.get('resumed_from')}
             self.metrics.append(row)
             self.event(context, 'metrics.snapshot', row['wall'], path, 0, {'snapshot_id': row['snapshot_id'], 'status': row['status']})
+
+    def blockages(self, directory):
+        context = self.context(directory)
         stopped = directory / 'agent_stop.json'
         if stopped.exists():
             try:
@@ -505,6 +508,18 @@ class Analysis:
                                    {key: entry.get(key) for key in ('reason', 'decision', 'category')})
             except (OSError, ValueError, AttributeError):
                 self.warnings.append(f'{stopped}: 无法读取阻塞报告')
+
+        source = 'stop_run_diagnostics.jsonl'
+        for index, entry in self.read(directory, source):
+            if not isinstance(entry.get('status'), str) or not entry['status']:
+                continue
+            fields = ('status', 'reason', 'decision', 'category', 'frame', 'control_note', 'step', 'required_steps')
+            data = {key: entry.get(key) for key in fields}
+            transition = entry.get('transition')
+            data['transition'] = ({key: transition.get(key) for key in
+                                   ('kind', 'start_frame', 'frame', 'advanced_frames', 'remaining_frames', 'stalled')}
+                                  if isinstance(transition, dict) else None)
+            self.event(context, 'agent.blockage_attempt', entry.get('wall'), directory / source, index, data)
 
     def native_lifecycle(self):
         compact_ids = {row['data'].get('item_id') for row in self.events if row['kind'].startswith('compaction.')}
@@ -565,6 +580,7 @@ class Analysis:
             self.decisions(directory)
             self.token_advances(directory)
             self.snapshot(directory, state)
+            self.blockages(directory)
         self.native_lifecycle()
         self.native_tools()
         for row in self.tools.values():

@@ -2466,9 +2466,9 @@ class GameSession:
                     step += 1
                     expected = secrets.token_hex(6)
                     self._stop_confirmation = (scope, step, expected)
-                result = self._stop_diagnostic('confirmation_required', reason, frame, progress, category=category)
+                result = self._stop_diagnostic('confirmation_required', reason, frame, progress, category=category,
+                                               step=step, required_steps=required)
                 return {**result, 'category_label': rule.label, 'criterion': rule.criterion,
-                        'step': step, 'required_steps': required,
                         'confirmation_prefix': f'确认阻塞 {expected}：{category}：'}
             reports = list((self.agent_stop or {}).get('reports') or [])
             reports.append({'reason': reason, 'category': category, 'wall': time.time(), 'decision': self.decision_index})
@@ -2483,13 +2483,16 @@ class GameSession:
                 'source': 'agent', 'paused': paused,
                 'finished': False, 'completed': False}
 
-    def _stop_diagnostic(self, status, reason, frame, progress, *, control_note=None, category=None):
+    def _stop_diagnostic(self, status, reason, frame, progress, *, control_note=None, category=None,
+                         step=None, required_steps=None):
         result = {'status': status, 'reason': reason, 'source': 'agent', 'frame': frame,
                   'transition': progress, 'paused': False, 'finished': False, 'completed': False}
         if isinstance(control_note, str) and control_note:
             result['control_note'] = control_note
         if category is not None:
             result['category'] = category
+        if step is not None:
+            result.update(step=step, required_steps=required_steps)
         try:
             with (self.run_dir/'stop_run_diagnostics.jsonl').open('a', encoding='utf-8') as stream:
                 stream.write(json.dumps({**result, 'wall': time.time(), 'decision': self.decision_index},

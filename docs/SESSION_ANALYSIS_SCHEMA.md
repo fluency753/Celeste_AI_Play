@@ -46,6 +46,8 @@ turns 中 controller_turn 为主控编号，主控在同一目录重启时可能
 
 timeline.kind 区分 controller.*、tool.requested/result、public.message、compaction.*、runtime.*、native.*、delivery.*、control.request/state 等，data 为各来源允许字段投影。public.message 通过 public_event_id+run_id 关联公开文本。token 事件仅保存运行时给出的 last/total 数字；累计 total 不相加；reasoningOutputTokens 是计数而非推理正文。不补算未知 token。
 
+`agent.reported_blocked` 来自已接受的正式报告。`agent.blockage_attempt` 来自 `stop_run_diagnostics.jsonl`，按记录时间筛选。它的 `data.status` 区分 `classification_required`（待分类）、`confirmation_required`（待确认）、`recovery_available`（有恢复步骤）和 `duplicate`（重复报告）。`data` 还保留原因、分类、决策序号、游戏帧、恢复进度和控制说明。待确认时，`step` 与 `required_steps` 分别为已提交次数和所需总次数。历史日志未记录的字段为 `null`。时间线不读取 `confirmation_prefix` 字段。
+
 metric_snapshots 保留 canonical、counters、game_clock、章节/房间与来源。canonical 优先 metrics，回退 summary；只用已有 written_wall，不用 mtime 冒充采样时间。
 
 如源中有 chapter_base，保留其显式数值计量基线；null 时不补算。thinking_s/tool_s 可能包含读完知识库后的游玩准备活动，elapsed_s 从真正开始游玩计起，因此这些累计项不能直接相加验证总时长。单调用时长和主控累计值也不具有逐条可加关系。
