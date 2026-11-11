@@ -1,12 +1,38 @@
-"""从本次运行日志增量读取公开解说和动作说明；不读取内部推理。"""
+"""从当前会话最近的运行日志增量读取公开消息。"""
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import re
+import sqlite3
 import threading
 import time
 from pathlib import Path
-from orchestrator.control import RunControl
+from orchestrator.conversations import session_key
+from orchestrator.session_store import load_json
+
+
+TAIL_BYTES = 512 * 1024
+PREVIOUS_RUNS = 4
+
+
+def read_object(path):
+    try:
+        value = load_json(path, encoding="utf-8-sig")
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def user_messages(directory):
+    path = directory / "control.sqlite3"
+    if not path.is_file():
+        return []
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=.2)) as db:
+            return db.execute("SELECT id,text,status,wall FROM actions WHERE kind='message' ORDER BY id DESC LIMIT 60").fetchall()
+    except sqlite3.Error:
+        return []
 
 
 def is_auto_retry(ident):
@@ -38,23 +64,37 @@ def visible_messages(items):
 class JsonTail:
     def __init__(self, path):
         self.path, self.offset, self.pending = path, 0, b""
+        self.discarding = False
 
     def read(self):
         try:
             with self.path.open("rb") as stream:
-                if stream.seek(0, 2) < self.offset:
+                end = stream.seek(0, 2)
+                if end < self.offset:
                     self.offset, self.pending = 0, b""
+                    self.discarding = False
+                if end - self.offset + len(self.pending) > TAIL_BYTES:
+                    self.offset, self.pending = end - TAIL_BYTES, b""
+                    stream.seek(self.offset - 1)
+                    self.discarding = stream.read(1) != b"\n"
                 stream.seek(self.offset)
-                raw = self.pending + stream.read()
+                raw = self.pending + stream.read(end - self.offset)
                 self.offset = stream.tell()
         except OSError:
             return []
+        if self.discarding:
+            _, newline, raw = raw.partition(b"\n")
+            if not newline:
+                return []
+            self.discarding = False
         lines = raw.split(b"\n")
         self.pending = lines.pop()
         result = []
         for line in lines:
             try:
-                result.append(json.loads(line))
+                value = json.loads(line)
+                if isinstance(value, dict):
+                    result.append(value)
             except (ValueError, UnicodeError):
                 continue
         return result
@@ -113,12 +153,11 @@ class PublicHistory:
                     self.items[ident] = {"id": ident, "text": text, "kind": kind,
                                          "wall": previous["wall"] if previous else self.action_walls.get(
                                              ident, (metrics.get("started_wall") or 0) + action.get("t", 0))}
-            if (self.events.path.parent / "control.sqlite3").exists():
-                for message in RunControl(self.events.path.parent).snapshot()["messages"]:
-                    if message["role"] == "user":
-                        delivery = {"queued": "等待发送", "waiting": "等待提交", "submitted": "已提交", "error": "发送失败"}.get(message["status"], "")
-                        self.items[message["id"]] = {"id": message["id"], "text": message["text"], "role": "user",
-                            "kind": "用户 · " + delivery, "wall": message["wall"]}
+            for action_id, text, status, wall in user_messages(self.events.path.parent):
+                ident = f"user:{action_id}"
+                delivery = {"queued": "等待发送", "waiting": "等待提交", "submitted": "已提交", "error": "发送失败"}.get(status, "")
+                self.items[ident] = {"id": ident, "text": text, "role": "user",
+                    "kind": "用户 · " + delivery, "wall": wall}
             # 保留最近 80 条（控制台的对话栏要看得更多）；HUD 只取最后 12 条
             ordered = sorted(self.items.values(), key=lambda item: (item["wall"], item["id"]))
             ordered = visible_messages(ordered)[-80:]
@@ -130,13 +169,54 @@ _histories = {}
 _lock = threading.Lock()
 
 
-def read_history(directory, metrics, limit=12):
-    if directory is None:
-        return []
+def run_history(directory, metrics, limit):
     with _lock:
         if directory not in _histories:
-            if len(_histories) >= 6:
+            if len(_histories) >= 12:
                 _histories.pop(next(iter(_histories)))
             _histories[directory] = PublicHistory(directory)
         reader = _histories[directory]
     return reader.snapshot(metrics or {}, limit)
+
+
+def history_identity(state):
+    ident, provider = state.get("session_id"), state.get("provider")
+    if (state.get("engine") in ("claude", "codex") and isinstance(ident, str) and ident
+            and (provider is None or isinstance(provider, str))):
+        return session_key(state), state.get("agent")
+    return None
+
+
+def read_history(directory, metrics, limit=12):
+    if directory is None:
+        return []
+    limit = max(1, min(int(limit), 80))
+    directory = directory.resolve()
+    items = run_history(directory, metrics, limit)
+    if len(items) == limit:
+        return items
+
+    state = read_object(directory / "run_state.json")
+    identity = history_identity(state)
+    if identity is None:
+        return items
+    seen = {directory}
+    for _ in range(PREVIOUS_RUNS):
+        link = state.get("resumed_from")
+        if not isinstance(link, str) or not Path(link).is_absolute():
+            break
+        try:
+            previous = Path(link).resolve()
+        except (OSError, RuntimeError, ValueError):
+            break
+        if previous.parent != directory.parent or previous in seen:
+            break
+        state = read_object(previous / "run_state.json")
+        if history_identity(state) != identity:
+            break
+        seen.add(previous)
+        earlier = run_history(previous, read_object(previous / "metrics.json"), limit - len(items))
+        items = [{**item, "id": f"{previous.name}:{item['id']}"} for item in earlier] + items
+        if len(items) == limit:
+            break
+    return items

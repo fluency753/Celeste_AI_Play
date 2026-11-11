@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from overlay.history import PublicHistory
+from overlay.history import JsonTail, PublicHistory, TAIL_BYTES, read_history
 
 
 class HistoryTests(unittest.TestCase):
@@ -51,6 +51,81 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(len(data), 12)
         self.assertEqual(data[0]["text"], "消息 68")
         self.assertEqual(data[-1]["text"], "消息 79")
+
+    def test_initial_history_read_skips_old_bytes_and_waits_for_complete_tail(self):
+        path = self.root / "tail.jsonl"
+        path.write_bytes(b'{"old":true}\n' + b'x' * TAIL_BYTES + b'\n{"recent":true}\n{"partial":')
+        reader = JsonTail(path)
+        self.assertEqual(reader.read(), [{"recent": True}])
+        with path.open("ab") as stream:
+            stream.write(b'true}\n')
+        self.assertEqual(reader.read(), [{"partial": True}])
+
+    def test_hud_http_backfills_same_session_after_restart_and_goal_change(self):
+        import threading
+        from urllib.request import Request, urlopen
+        from orchestrator.control import RunControl
+        from orchestrator.telemetry import publish
+        from overlay.server import HudServer, make_handler
+
+        old, current = self.root / "old", self.root / "current"
+        state = {"engine": "codex", "session_id": "same-session", "agent": "fixture"}
+        for directory, data in ((old, state), (current, {**state, "resumed_from": str(old)})):
+            directory.mkdir()
+            (directory / "run_state.json").write_text(json.dumps(data), encoding="utf-8")
+        for n in range(15):
+            publish(old, f"act:{n}:0", f"上一段消息 {n}", kind="尝试")
+        old_control = RunControl(old)
+        old_control.enqueue("message", "上一段用户消息")
+        control = RunControl(current)
+        control.heartbeat(goals_enabled=True)
+
+        server = HudServer(("127.0.0.1", 0), make_handler(current))
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+
+        def history():
+            with urlopen(url + "/hud/history", timeout=5) as response:
+                return json.load(response)
+
+        try:
+            initial = history()
+            self.assertEqual(initial["run"], str(current))
+            self.assertEqual(len(initial["items"]), 12)
+            self.assertEqual(initial["items"][0]["text"], "上一段消息 4")
+            request = Request(url + "/api/control", json.dumps({
+                "run": str(current), "kind": "goal",
+                "text": json.dumps({"text": "新目标", "conditions": [], "match": "all"}),
+            }).encode("utf-8"), {"Content-Type": "application/json"})
+            with urlopen(request, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+            self.assertEqual(history(), initial)
+
+            publish(current, "act:14:0", "当前段消息", kind="尝试")
+            items = history()["items"]
+            self.assertEqual(len(items), 12)
+            self.assertEqual([item["text"] for item in items[-3:]],
+                             ["上一段消息 14", "上一段用户消息", "当前段消息"])
+            self.assertEqual(len({item["id"] for item in items}), 12)
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
+
+    def test_backfill_stops_at_different_session_or_outside_run_group(self):
+        group = self.root / "group"
+        current, foreign = group / "current", group / "foreign"
+        outside = self.root / "outside"
+        state = {"engine": "codex", "session_id": "same-session", "agent": "fixture"}
+        for directory, data in ((current, state), (foreign, {**state, "session_id": "other"}), (outside, state)):
+            directory.mkdir(parents=True)
+            (directory / "run_state.json").write_text(json.dumps(data), encoding="utf-8")
+            (directory / "public_events.jsonl").write_text(
+                json.dumps({"id": "msg", "wall": 1, "text": directory.name}) + "\n", encoding="utf-8")
+        for previous in (foreign, outside):
+            (current / "run_state.json").write_text(json.dumps({**state, "resumed_from": str(previous)}), encoding="utf-8")
+            self.assertEqual([item["text"] for item in read_history(current, {})], ["current"])
 
     def test_compaction_system_message_updates_without_private_summary(self):
         started = {"method": "item/started", "params": {"startedAtMs": 123000,
