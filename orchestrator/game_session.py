@@ -27,6 +27,7 @@ from .sandbox import run_program
 from .goals import GoalManager
 from .modes import act_frame_cap, act_frame_min, is_explore
 from .token_menu import TokenMenu, TokenMenuBoundary
+from .stop_categories import load_stop_categories
 from .thought import thought_problem
 from .workspace_files import tas
 from .workspace_setup import install_game_helpers
@@ -2407,7 +2408,8 @@ class GameSession:
                 reason = detail.strip()
         if not reason:
             raise ActError('报告任务阻塞必须说明原因')
-        if len(reason) > 200:
+        category, separator, detail = reason.partition('：')
+        if len(detail.strip() if separator else reason) > 200:
             raise ActError('阻塞原因请压缩到 200 字以内')
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
@@ -2429,31 +2431,61 @@ class GameSession:
                         level.get('screenWipe'), level.get('deaths'), player.get('state'), failure)
             if (type(frame) is int or failure) and evidence == self._last_stop_evidence:
                 return self._stop_diagnostic('duplicate', reason, frame, progress, control_note=control_note)
+            try:
+                categories = load_stop_categories()
+            except (OSError, ValueError) as exc:
+                raise ActError(f'阻塞分类配置无法读取：{exc}') from exc
+            if self._stop_confirmation is not None:
+                pending_category, pending_rule = self._stop_confirmation[0][:2]
+                if categories.get(pending_category) != pending_rule:
+                    self._stop_confirmation = None
+            rule = categories.get(category) if separator else None
+            if rule is None:
+                if len(reason) > 200:
+                    raise ActError('阻塞原因请压缩到 200 字以内')
+                result = self._stop_diagnostic('classification_required', reason, frame, progress)
+                return {**result, 'categories': [
+                    {'id': key, 'label': item.label, 'criterion': item.criterion, 'required_steps': item.required_steps}
+                    for key, item in categories.items()]}
+            reason = detail.strip()
+            if not reason:
+                raise ActError('报告任务阻塞必须在类别之后说明原因')
+            required = rule.required_steps
             # Retrying the same bridge failure can change its request serial.
-            scope = (evidence[:-1], bool(failure), self.goals.snapshot()['revision'])
+            scope = (category, rule, evidence[:-1], bool(failure), self.goals.snapshot()['revision'],
+                     self.piece, tuple(self.chapter_queue))
             if self._stop_confirmation is None or self._stop_confirmation[0] != scope:
-                self._stop_confirmation = (scope, secrets.token_hex(6))
-            expected = self._stop_confirmation[1]
-            if code != expected:
-                result = self._stop_diagnostic('confirmation_required', reason, frame, progress)
-                return {**result, 'confirmation_prefix': f'确认阻塞 {expected}：'}
+                self._stop_confirmation = (scope, 1, secrets.token_hex(6))
+            _, step, expected = self._stop_confirmation
+            if code != expected or step + 1 < required:
+                if code == expected:
+                    step += 1
+                    expected = secrets.token_hex(6)
+                    self._stop_confirmation = (scope, step, expected)
+                result = self._stop_diagnostic('confirmation_required', reason, frame, progress, category=category)
+                return {**result, 'category_label': rule.label, 'criterion': rule.criterion,
+                        'step': step, 'required_steps': required,
+                        'confirmation_prefix': f'确认阻塞 {expected}：{category}：'}
             reports = list((self.agent_stop or {}).get('reports') or [])
-            reports.append({'reason': reason, 'wall': time.time(), 'decision': self.decision_index})
-            report = {'reason': reason, 'source': 'agent', 'reports': reports}
+            reports.append({'reason': reason, 'category': category, 'wall': time.time(), 'decision': self.decision_index})
+            report = {'reason': reason, 'category': category, 'source': 'agent', 'reports': reports}
             write_json(self.run_dir / 'agent_stop.json', report, indent=2)
             self.agent_stop = report
             self._last_stop_evidence = evidence
             self._stop_confirmation = None
         pause = getattr(self, 'request_pause', None)
         paused = bool(pause and pause(reason))
-        return {'status': 'reported', 'reason': reason, 'source': 'agent', 'paused': paused,
+        return {'status': 'reported', 'reason': reason, 'category': category, 'category_label': rule.label,
+                'source': 'agent', 'paused': paused,
                 'finished': False, 'completed': False}
 
-    def _stop_diagnostic(self, status, reason, frame, progress, *, control_note=None):
+    def _stop_diagnostic(self, status, reason, frame, progress, *, control_note=None, category=None):
         result = {'status': status, 'reason': reason, 'source': 'agent', 'frame': frame,
                   'transition': progress, 'paused': False, 'finished': False, 'completed': False}
         if isinstance(control_note, str) and control_note:
             result['control_note'] = control_note
+        if category is not None:
+            result['category'] = category
         try:
             with (self.run_dir/'stop_run_diagnostics.jsonl').open('a', encoding='utf-8') as stream:
                 stream.write(json.dumps({**result, 'wall': time.time(), 'decision': self.decision_index},

@@ -1,0 +1,32 @@
+{
+  "bridge_io": {
+    "kind": "controller_defect",
+    "label": "游戏工具或桥接异常",
+    "criterion": "指出合规调用发生的超时、协议错误，或执行及回执与工具约定的差异，并引用实际结果。"
+  },
+  "transition_recovery": {
+    "kind": "controller_defect",
+    "label": "入场或重生恢复",
+    "criterion": "指出已核实的过渡状态、恢复尝试和结果，以及主控恢复行为与约定的差异。"
+  },
+  "state_verification": {
+    "kind": "controller_defect",
+    "label": "状态或目标核验",
+    "criterion": "指出主控报告的游戏、结算或目标状态与可核实事实的矛盾。"
+  },
+  "hint": {
+    "kind": "user_help",
+    "label": "卡关求提示",
+    "criterion": "说明卡在哪一步、试过哪些不同办法、还需要哪一条提示。"
+  },
+  "user_decision": {
+    "kind": "user_help",
+    "label": "需要用户决策、授权或核验",
+    "criterion": "指出需要用户处理的权限、决策，或只有用户能核验的具体事实。"
+  },
+  "external_dependency": {
+    "kind": "user_help",
+    "label": "外部依赖不可用",
+    "criterion": "指出已核实不可用的外部依赖，以及用户能怎样恢复。"
+  }
+}

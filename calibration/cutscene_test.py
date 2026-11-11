@@ -53,6 +53,7 @@ class SceneClient:
 class CutsceneTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.path=Path(self.temp.name)
+        self.enterContext(patch('orchestrator.stop_categories.LOCAL_CATEGORIES', self.path / 'local.stop_categories.json'))
         cfg=RunConfig(agent='story-test',save='player',model='test',runtime='host',cutscene_mode='agent')
         self.s=GameSession(cfg,self.path,Metrics(self.path/'metrics.json','test','test','high',60))
         self.s.client=SceneClient(dialog());self.s.last_obs=dialog()
@@ -65,16 +66,24 @@ class CutsceneTests(unittest.TestCase):
         self.s.request_pause=Mock(return_value=True)
         server=build_server(self.s,study=Mock(ready=Mock(return_value=False)))
         reason = '游戏动作持续报桥接协议错误'
-        result = asyncio.run(server.call_tool('stop_run', {'reason': reason}))
+        unclassified = asyncio.run(server.call_tool('stop_run', {'reason': 'unknown：' + reason}))
+        unclassified_text = unclassified.content[0].text
+        unclassified_data = json.loads(unclassified_text.splitlines()[0])
+        self.assertEqual(unclassified_data['status'], 'classification_required')
+        self.assertNotIn('confirmation_prefix', unclassified_data)
+        self.assertIn('bridge_io', unclassified_text)
+        self.assertIn('hint', unclassified_text)
+        self.s.request_pause.assert_not_called()
+        result = asyncio.run(server.call_tool('stop_run', {'reason': 'bridge_io：' + reason}))
         text = result.content[0].text
         pending = json.loads(text.splitlines()[0])
         self.assertEqual(pending['status'], 'confirmation_required')
-        self.assertIn('自己的规划程序或保守安全认证失败', text)
+        self.assertEqual((pending['category'], pending['step'], pending['required_steps']), ('bridge_io', 1, 2))
         self.assertIn(pending['confirmation_prefix'], text)
         self.s.request_pause.assert_not_called()
         self.assertFalse((self.path/'agent_stop.json').exists())
         self.assertFalse((self.path/'public_events.jsonl').exists())
-        repeated = self.s.stop_run(reason)
+        repeated = self.s.stop_run('bridge_io：' + reason)
         self.assertEqual(repeated['confirmation_prefix'], pending['confirmation_prefix'])
         result=asyncio.run(server.call_tool('stop_run',{'reason':pending['confirmation_prefix'] + reason}))
         self.assertIn('主控已把试玩暂停',result.content[0].text)
@@ -84,6 +93,8 @@ class CutsceneTests(unittest.TestCase):
         self.assertEqual(self.s.client.steps,[])
         report=json.loads((self.path/'agent_stop.json').read_text(encoding='utf-8'))
         self.assertEqual((report['source'],len(report['reports'])),('agent',1))
+        self.assertEqual(report['reports'][0]['category'], 'bridge_io')
+        self.assertIn('游戏工具或桥接异常', (self.path/'public_events.jsonl').read_text(encoding='utf-8'))
         blocked=asyncio.run(server.call_tool('act',{'inputs':['1,R'],'thought':'继续移动'}))
         self.assertIn('用户已暂停',blocked.content[0].text)  # 暂停期间游戏工具不执行
         self.assertEqual(self.s.client.steps,[])
@@ -93,7 +104,7 @@ class CutsceneTests(unittest.TestCase):
         self.s.request_pause = Mock(return_value=True)
         self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
         reason = '桥接协议故障，请重新加载桥接'
-        first = self.s.stop_run(reason)
+        first = self.s.stop_run('bridge_io：' + reason)
         self.s.goals.clear()
         second = self.s.stop_run(first['confirmation_prefix'] + reason)
         self.s.last_obs['frame'] += 1
@@ -104,6 +115,55 @@ class CutsceneTests(unittest.TestCase):
         self.assertEqual(self.s.stop_run(third['confirmation_prefix'] + reason)['status'], 'reported')
         self.assertEqual(self.s.stop_run(third['confirmation_prefix'] + reason)['status'], 'duplicate')
         self.s.request_pause.assert_called_once_with(reason)
+
+    def test_stop_run_non_defect_requires_three_steps_and_rotates_the_code(self):
+        self.s.request_pause = Mock(return_value=True)
+        self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
+        reason = '两条路线均无法到达上方出口，请提示目标平台'
+        first = self.s.stop_run('hint：' + reason)
+        second = self.s.stop_run(first['confirmation_prefix'] + reason)
+        self.assertEqual((first['step'], second['step'], second['required_steps']), (1, 2, 3))
+        self.assertNotEqual(first['confirmation_prefix'], second['confirmation_prefix'])
+        replayed = self.s.stop_run(first['confirmation_prefix'] + reason)
+        self.assertEqual((replayed['step'], replayed['confirmation_prefix']), (2, second['confirmation_prefix']))
+        self.s.request_pause.assert_not_called()
+        self.assertIsNone(self.s.agent_stop)
+        self.assertEqual(self.s.stop_run(second['confirmation_prefix'] + reason)['status'], 'reported')
+        self.s.request_pause.assert_called_once_with(reason)
+
+    def test_stop_run_category_change_invalidates_previous_confirmation(self):
+        self.s.request_pause = Mock(return_value=True)
+        self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
+        first = self.s.stop_run('hint：需要路线提示')
+        second = self.s.stop_run(first['confirmation_prefix'].replace('hint：', 'bridge_io：') + '桥接协议故障')
+        self.assertEqual((second['status'], second['category'], second['step']),
+                         ('confirmation_required', 'bridge_io', 1))
+        self.s.request_pause.assert_not_called()
+
+    def test_stop_run_reloads_local_categories_without_restarting(self):
+        from orchestrator.session_store import write_json
+        self.s.request_pause = Mock(return_value=True)
+        self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
+        reason = 'new_category：测试证据及所需协助'
+        self.assertEqual(self.s.stop_run(reason)['status'], 'classification_required')
+        path = self.path / 'local.stop_categories.json'
+        rule = {'kind': 'controller_defect', 'label': '本机新增类别', 'criterion': '核对测试证据'}
+        write_json(path, {'new_category': rule})
+        first = self.s.stop_run(reason)
+        self.assertEqual((first['category_label'], first['required_steps']), ('本机新增类别', 2))
+        path.unlink()
+        self.assertEqual(self.s.stop_run(first['confirmation_prefix'] + '测试证据及所需协助')['status'],
+                         'classification_required')
+        write_json(path, {'new_category': rule})
+        restored = self.s.stop_run(first['confirmation_prefix'] + '测试证据及所需协助')
+        self.assertEqual(restored['status'], 'confirmation_required')
+        self.assertNotEqual(first['confirmation_prefix'], restored['confirmation_prefix'])
+        write_json(path, {'new_category': {**rule, 'kind': 'user_help'}})
+        changed = self.s.stop_run(restored['confirmation_prefix'] + '测试证据及所需协助')
+        self.assertEqual((changed['status'], changed['step'], changed['required_steps']),
+                         ('confirmation_required', 1, 3))
+        self.assertNotEqual(restored['confirmation_prefix'], changed['confirmation_prefix'])
+        self.s.request_pause.assert_not_called()
 
     def test_stop_run_requires_reason_and_preserves_existing_completion(self):
         with self.assertRaises(ActError):self.s.stop_run('  ')

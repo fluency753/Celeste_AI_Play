@@ -476,7 +476,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         return (lambda fn: server.tool(**kw)(token_boundary(fn))) if enabled else (lambda fn: fn)
 
     @server.tool(name='stop_run',
-                 description='报告任务必需步骤的阻塞。首次调用只给出恢复步骤或复核提示；按返回要求复核并确认后，主控才暂停。'
+                 description='报告任务必需步骤的阻塞。reason 以「类别ID：」开头；类别不明时工具会返回可选类别。'
+                 '首次有效分类计为第 1 次，按回执确认，主控缺陷共 2 次，其他问题共 3 次后才暂停。'
                  '阻塞说明限 200 字，写明状态、尝试及所需协助。普通死亡、自动等待交回控制、单次工具拒绝不足以判定阻塞。'
                  '主控有可用的入场或重生恢复路径时会返回下一步。报告被接受并暂停时结束本轮等待用户。'
                  '暂停或知识库未读完时仍可报告真实阻塞。',
@@ -493,10 +494,17 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             except ActError as err:
                 return [str(err)]
             if result['status'] != 'reported':
-                if result['status'] == 'confirmation_required':
-                    tail = ('本次未暂停。先复核最新观测或故障回执：哪个任务必需步骤无法执行？'
-                            '还有什么获准的下一步能自己做？自己的规划程序或保守安全认证失败时，先改进规划、换路线或做可恢复的试验。'
-                            '只在确认确需用户做具体操作时，再次调用本工具。'
+                if result['status'] == 'classification_required':
+                    choices = '\n'.join(
+                        f'- {item["id"]}（{item["label"]}，共 {item["required_steps"]} 次）：{item["criterion"]}'
+                        for item in result['categories'])
+                    tail = ('本次未暂停。请按最新可核实证据选择一个类别，提交「类别ID：阻塞说明」。'
+                            '有自己能做的下一步，或证据与任一类别不符时，继续处理。\n' + choices)
+                elif result['status'] == 'confirmation_required':
+                    tail = (f'本次未暂停。{result["category_label"]}已提交 {result["step"]}/{result["required_steps"]} 次。'
+                            f'复核要求：{result["criterion"]}'
+                            '核对受阻的任务必需步骤，以及是否还有获准的下一步能自己做。'
+                            '确需用户帮助时，再次调用本工具。'
                             f'reason 以「{result["confirmation_prefix"]}」开头，后接 200 字以内的复核证据及用户需要做的事。'
                             '有可行下一步时直接继续，无需确认。')
                 elif result['status'] == 'recovery_available':
@@ -511,7 +519,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                         tail += note
                 return [json.dumps(result, ensure_ascii=False) + '\n' + tail]
             publish(session.run_dir, f"system:agent-stop:{len(session.agent_stop['reports'])}",
-                    '智能体报告任务阻塞：' + result['reason'] + ('；试玩已暂停，等待用户处理。' if result['paused'] else ''),
+                    f'智能体报告任务阻塞（{result["category_label"]}）：' + result['reason'] +
+                    ('；试玩已暂停，等待用户处理。' if result['paused'] else ''),
                     role='system', kind='系统')
             tail = ('主控已把试玩暂停，章节内保持冻结，菜单正常运行，等待用户处理。请结束本轮，不再调用工具。' if result['paused']
                     else '主控已记下阻塞原因，等待用户处理。请结束本轮，不再调用工具。')

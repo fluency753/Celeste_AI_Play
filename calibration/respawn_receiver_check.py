@@ -103,7 +103,7 @@ async def check(model, directory):
 
                 wire.readline = disconnected_read
                 prompt = ('此阶段请先调用 act 执行一次30帧空输入，实际核验恢复路径。'
-                          '若工具报告桥接连接故障，不重发输入，调用 stop_run 报告并说明返回状态。')
+                          '若工具报告桥接连接故障，不重发输入，按 stop_run 的分类和确认回执完成报告并说明返回状态。')
             elif name == 'confirm_after_refused_stop':
                 prompt = ('目前刚自然死亡，角色暂缺。先调用 stop_run 检查主控响应；然后按用户要求用 act 显式发送 C 缩短死亡动画。'
                           '依据实际工具结果完成恢复；不要等待动画或请求用户处理。最后用中文说明结果。')
@@ -121,7 +121,8 @@ async def check(model, directory):
             current.update(steps=copy.deepcopy(bridge.steps), frame=bridge.obs['frame'],
                            controllable=bridge.obs['controllable'], pauses=pauses.copy())
             if name == 'transport_failure':
-                current['passed'] = bool(pauses and session.agent_stop and len(bridge.steps) == 1
+                current['passed'] = bool(len(pauses) == 1 and session.agent_stop
+                                         and session.agent_stop.get('category') == 'bridge_io' and len(bridge.steps) == 1
                                          and client.last_call_failure and current['calls'][0]['tool'] == 'celeste_act'
                                          and current['calls'][0]['response']['success'] is False)
             elif name == 'confirm_after_refused_stop':

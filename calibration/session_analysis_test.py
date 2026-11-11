@@ -84,6 +84,15 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual(states[0]['state']['room'], 'next')
             self.assertEqual(states[0]['tool_id'], rows[0]['tool_id'])
 
+    def test_blockage_timeline_preserves_category_when_recorded(self):
+        self.put(self.run / 'agent_stop.json', {'reports': [
+            {'wall': 1001, 'reason': '旧记录', 'decision': 1},
+            {'wall': 1002, 'reason': '入场恢复不符合工具约定', 'decision': 2, 'category': 'transition_recovery'},
+        ]})
+        with closing(self.collect()) as report:
+            events = [e for e in report.analysis_records['timeline'] if e['kind'] == 'agent.reported_blocked']
+            self.assertEqual([e['data']['category'] for e in events], [None, 'transition_recovery'])
+
     def test_turn_parallel_tools_cleanup_failure_and_no_private_reasoning(self):
         self.timing('turn_requested', 1000)
         self.timing('turn_acknowledged', 1001, turn_id='uuid')

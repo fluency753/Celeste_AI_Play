@@ -145,6 +145,7 @@ class StoryWaitTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        self.enterContext(patch('orchestrator.stop_categories.LOCAL_CATEGORIES', self.root / 'local.stop_categories.json'))
         cfg = RunConfig(agent='story-wait-test', save='test', model='test', runtime='host',
                         cutscene_mode='agent', knowledge_profile='explore', chapter=3)
         cfg.thought_lead_s = 0
@@ -352,7 +353,7 @@ class StoryWaitTests(unittest.TestCase):
         return json.loads(result.content[0].text.splitlines()[0])
 
     def _confirm_stop_report(self, server, reason='角色没有恢复'):
-        pending = self._stop_report(server, reason)
+        pending = self._stop_report(server, 'transition_recovery：' + reason)
         self.assertEqual(pending['status'], 'confirmation_required')
         self.assertFalse(pending['paused'])
         return self._stop_report(server, pending['confirmation_prefix'] + reason)
@@ -610,7 +611,7 @@ class StoryWaitTests(unittest.TestCase):
         self.session.client = client
         try:
             reason = '桥接没有返回可核验的推进结果'
-            pending = self._stop_report(server, reason)
+            pending = self._stop_report(server, 'bridge_io：' + reason)
             self.assertEqual(pending['status'], 'confirmation_required')
             command, serial = client.last_call_failure
             client.last_call_failure = (command, serial + 1)

@@ -502,7 +502,7 @@ class Analysis:
                 for index, entry in enumerate(data.get('reports') or [], 1):
                     if isinstance(entry, dict):
                         self.event(context, 'agent.reported_blocked', entry.get('wall'), stopped, index,
-                                   {key: entry.get(key) for key in ('reason', 'decision')})
+                                   {key: entry.get(key) for key in ('reason', 'decision', 'category')})
             except (OSError, ValueError, AttributeError):
                 self.warnings.append(f'{stopped}: 无法读取阻塞报告')
 
