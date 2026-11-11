@@ -817,6 +817,18 @@
     </div>
     <p class="hint" id="personalPromptStatus" role="status">尚未加载</p>
   </section>
+  <section class="pane" style="grid-column:1 / -1" aria-labelledby="stopConfirmationTitle">
+    <h2 id="stopConfirmationTitle">阻塞确认提示 <span class="aside">本机所有配置共用</span></h2>
+    <p class="hint" id="stopConfirmationHint">智能体调用 stop_run 进入待确认时看到的复核文字。分类要求、确认进度和确认码由主控填写。保存后，下一次待确认回执即使用新文字。</p>
+    <label for="stopConfirmationText">通用复核文字</label>
+    <textarea id="stopConfirmationText" class="code" style="width:100%;min-height:100px" aria-describedby="stopConfirmationHint" spellcheck="false" disabled></textarea>
+    <div class="presets" style="margin-top:10px">
+      <button class="btn small primary" id="stopConfirmationSave" type="button" disabled>保存</button>
+      <button class="btn small" id="stopConfirmationReset" type="button" disabled>恢复默认并保存</button>
+      <button class="btn small" id="stopConfirmationReload" type="button">重新读取</button>
+    </div>
+    <p class="hint" id="stopConfirmationStatus" role="status">尚未加载</p>
+  </section>
   <section class="pane" aria-labelledby="promptTitle">
     <h2 id="promptTitle">提示词 <span class="aside">按运行页的当前设置生成</span></h2>
     <div class="kb-head">
@@ -1092,6 +1104,7 @@ function showPage(page) {
   if (page === "prompts") {
     loadPromptPreview();
     if (ui.options) loadPersonalPrompt();
+    if (!stopConfirmationDirty()) editStopConfirmation('read');
   }
   if (page === "about" && !ui.aboutLoaded) loadAbout();
 }
@@ -2037,7 +2050,7 @@ function updateCompactHint() {
 
 function unsavedEdits() {
   return (ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty)
-    || [...personalDrafts.values()].some(draft => draft.text !== draft.saved);
+    || [...personalDrafts.values()].some(draft => draft.text !== draft.saved) || stopConfirmationDirty();
 }
 
 function reloadForProfile() {
@@ -2701,6 +2714,42 @@ async function savePersonalPrompt(clear = false) {
     loadPromptPreview();
   } catch (e) { draft.status = '保存失败：' + e.message + '。草稿已保留；版本冲突时可重新读取。'; }
   finally { draft.saving = false; if (scope === $('personalPromptScope').value) renderPersonalPrompt(); }
+}
+
+const stopConfirmation = {doc:null, busy:false};
+function stopConfirmationDirty() {
+  return !!stopConfirmation.doc && $('stopConfirmationText').value !== stopConfirmation.doc.text;
+}
+function renderStopConfirmation() {
+  const {doc, busy} = stopConfirmation;
+  const dirty = stopConfirmationDirty();
+  $('stopConfirmationText').disabled = busy || !doc;
+  $('stopConfirmationSave').disabled = busy || !dirty;
+  $('stopConfirmationReset').disabled = busy || !(doc?.custom || dirty);
+  $('stopConfirmationReload').disabled = busy;
+}
+async function editStopConfirmation(action) {
+  if (stopConfirmation.busy) return;
+  const text = $('stopConfirmationText'), status = $('stopConfirmationStatus');
+  const endpoint = '/api/console/stop-confirmation';
+  const reading = action === 'read';
+  stopConfirmation.busy = true;
+  status.textContent = reading ? '读取中…' : '保存中…';
+  renderStopConfirmation();
+  try {
+    const doc = reading ? await getJSON(endpoint) : await postJSON(endpoint, {
+      text: action === 'reset' ? '' : text.value, version: stopConfirmation.doc.version,
+    });
+    stopConfirmation.doc = doc;
+    text.value = doc.text;
+    text.maxLength = doc.max_chars;
+    status.textContent = `${reading ? '已读取' : '已保存'}${doc.custom ? '本机复核提示' : '默认复核提示'}`;
+  } catch (e) {
+    status.textContent = (reading ? '读取失败：' : '保存失败：') + e.message;
+  } finally {
+    stopConfirmation.busy = false;
+    renderStopConfirmation();
+  }
 }
 
 // other：另一执行器那一版的全部行（标出差异时）；这一版里有、那一版里没有的行用 mark 标出
@@ -3603,6 +3652,15 @@ $('personalPromptText').addEventListener('input', () => {
 $('personalPromptSave').addEventListener('click', () => savePersonalPrompt());
 $('personalPromptClear').addEventListener('click', () => savePersonalPrompt(true));
 $('personalPromptReload').addEventListener('click', () => loadPersonalPrompt(true));
+$('stopConfirmationText').addEventListener('input', () => {
+  renderStopConfirmation();
+  $('stopConfirmationStatus').textContent = stopConfirmationDirty() ? '有未保存的修改' : '无未保存的修改';
+});
+$('stopConfirmationSave').addEventListener('click', () => editStopConfirmation('save'));
+$('stopConfirmationReset').addEventListener('click', () => editStopConfirmation('reset'));
+$('stopConfirmationReload').addEventListener('click', () => {
+  if (!stopConfirmationDirty() || confirm('放弃未保存的复核提示并重新读取？')) editStopConfirmation('read');
+});
 
 $("promptCopy").addEventListener("click", async (e) => {
   const text = ui.prompt ? ui.prompt.text : "";
@@ -3655,7 +3713,7 @@ $("resumeLatest").addEventListener("click", () => resumeRun());
 $("launchDismiss").addEventListener("click", () => { $("launchBanner").hidden = true; ui.dismissedLaunch = ui.launchKey; });
 window.addEventListener("beforeunload", (e) => {
   if (ui.leaving) return;      // 切换、新建或删除配置后重新载入：已经问过了
-  if ((ui.kbFile && ui.kbFile.dirty) || (ui.promptFile && ui.promptFile.dirty) || provDirty() || [...personalDrafts.values()].some(draft => draft.text !== draft.saved)) { e.preventDefault(); e.returnValue = ""; }
+  if (unsavedEdits() || provDirty()) { e.preventDefault(); e.returnValue = ""; }
 });
 
 // 危险操作点两次：第一次只把按钮换成确认文字，3 秒内再点才执行

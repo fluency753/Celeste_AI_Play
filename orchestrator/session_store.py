@@ -1,8 +1,10 @@
 """Persistent session JSON and the HUD empty startup state."""
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import time
 
 
@@ -10,6 +12,31 @@ if os.name == 'nt':
     from .windows_state_file import replace_shared, shared_reader
 else:
     shared_reader = None
+
+_write_lock = threading.RLock()
+
+
+@contextmanager
+def locked_write(lock_path):
+    """Serialize a read/modify/write cycle across threads and processes."""
+    with _write_lock:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open('a+b') as stream:
+            stream.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                stream.seek(0)
+                if os.name == 'nt':
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(stream, fcntl.LOCK_UN)
 
 
 def load_json(path, *, encoding='utf-8'):

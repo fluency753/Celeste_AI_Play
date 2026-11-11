@@ -1,14 +1,13 @@
 """Local additive instructions, independent of shared prompt template overrides."""
-from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
 import stat
 import tempfile
-import threading
 
 from .config import REPO_ROOT
+from .session_store import locked_write
 
 
 STORE = REPO_ROOT / 'local' / 'personal_prompts.json'   # 本机原有设置的文件；别的配置见 orchestrator/profiles.py
@@ -21,7 +20,6 @@ _LABELS = {
     'claude:explore': 'Claude 执行器 · 探索',
     'claude:speedrun': 'Claude 执行器 · 速通',
 }
-_thread_lock = threading.RLock()
 
 
 def store_path():
@@ -93,32 +91,6 @@ def _load(path):
     return {_scope(scope): _text(text) for scope, text in document['scopes'].items()}
 
 
-@contextmanager
-def _write_lock(path):
-    """Serialize separate HUD processes as well as requests within one process."""
-    with _thread_lock:
-        _check_path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = path.with_suffix(path.suffix + '.lock')
-        _check_path(lock_path)
-        with lock_path.open('a+b') as stream:
-            stream.seek(0)
-            if os.name == 'nt':
-                import msvcrt
-                msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(stream, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                stream.seek(0)
-                if os.name == 'nt':
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(stream, fcntl.LOCK_UN)
-
-
 def read(scope):
     scope = _scope(scope)
     return _record(scope, _load(Path(store_path()).absolute()).get(scope, ''))
@@ -127,7 +99,9 @@ def read(scope):
 def save(scope, text, version):
     scope, text = _scope(scope), _text(text)
     path = Path(store_path()).absolute()
-    with _write_lock(path):
+    lock_path = path.with_suffix(path.suffix + '.lock')
+    _check_path(lock_path)
+    with locked_write(lock_path):
         values = _load(path)
         old = values.get(scope, '')
         if not isinstance(version, str) or version != _version(old):

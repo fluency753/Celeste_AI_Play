@@ -146,6 +146,7 @@ class StoryWaitTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.enterContext(patch('orchestrator.stop_categories.LOCAL_CATEGORIES', self.root / 'local.stop_categories.json'))
+        self.enterContext(patch('orchestrator.stop_confirmation.PATH', self.root / 'local.stop_confirmation.json'))
         cfg = RunConfig(agent='story-wait-test', save='test', model='test', runtime='host',
                         cutscene_mode='agent', knowledge_profile='explore', chapter=3)
         cfg.thought_lead_s = 0
@@ -366,6 +367,45 @@ class StoryWaitTests(unittest.TestCase):
         self.session.last_obs = copy.deepcopy(bridge.obs)
         self.session.game_process_id = 778
         return build_server(self.session)
+
+    def test_stop_confirmation_wording_reaches_codex_on_next_receipt(self):
+        from orchestrator import stop_confirmation
+        from orchestrator.codex_agent import CodexRunner
+
+        server = self._wire_bridge(StoryBridge(observation(controllable=True, cutscene=False)))
+        runner = CodexRunner(self.session.cfg, self.root, self.session, self.session.metrics, '', game_server=server)
+        runner.session_id, runner.turn_id, runner.turn_active = 'test', 'test-turn', True
+
+        async def report(call_id, reason):
+            result = await runner._request('item/tool/call', {
+                'callId': call_id, 'tool': 'celeste_stop_run', 'arguments': {'reason': reason},
+            })
+            self.assertTrue(result['success'], result)
+            text = result['contentItems'][0]['text']
+            return json.loads(text.splitlines()[0]), text
+
+        async def check():
+            reason = '已复核任务进度，需要用户提示下一步'
+            first, before = await report('first', 'hint：' + reason)
+            self.assertIn(stop_confirmation.DEFAULT, before)
+            custom = '请核对最近一次真实动作后的状态。'
+            stop_confirmation.save(custom, stop_confirmation.read()['version'])
+            second, after = await report('second', first['confirmation_prefix'] + reason)
+            self.assertEqual((second['step'], second['required_steps'], second['paused']), (2, 3, False))
+            self.assertIn(custom, after)
+            self.assertNotIn(stop_confirmation.DEFAULT, after)
+            self.assertIn(second['criterion'], after)
+            self.assertIn(f'reason 以「{second["confirmation_prefix"]}」开头', after)
+
+            stop_confirmation.PATH.write_text('broken', encoding='utf-8')
+            with self.assertLogs('orchestrator.stop_confirmation', level='WARNING'):
+                pending, fallback = await report('fallback', 'hint：' + reason)
+            self.assertEqual(pending['confirmation_prefix'], second['confirmation_prefix'])
+            self.assertIn(stop_confirmation.DEFAULT, fallback)
+            final, _ = await report('final', second['confirmation_prefix'] + reason)
+            self.assertEqual(final['status'], 'reported')
+
+        asyncio.run(check())
 
     def test_stop_confirmation_tracks_acknowledged_operations_not_the_frame_number(self):
         bridge = StoryBridge(observation(controllable=True, cutscene=False))

@@ -1,8 +1,10 @@
 """Local personal requirements: real HTTP persistence and browser draft lifecycle."""
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -42,7 +44,7 @@ class PersonalPromptHTTPTests(unittest.TestCase):
         if origin:
             headers['Origin'] = origin
         request = Request(self.base + ('?scope=' + scope if data is None else ''),
-                          data=json.dumps(data, ensure_ascii=False).encode() if data is not None else None,
+                          data=json.dumps(data).encode() if data is not None else None,
                           headers=headers)
         try:
             with urlopen(request, timeout=3) as response:
@@ -92,6 +94,50 @@ class PersonalPromptHTTPTests(unittest.TestCase):
         with urlopen(request, timeout=3) as response:
             self.assertEqual(json.load(response)['text'], text)
         self.assertEqual(self.request()[1]['text'], text)
+
+    def test_stop_confirmation_shared_editor_save_conflict_and_reset(self):
+        from orchestrator import stop_confirmation
+        self.base = self.base.replace('/personal-prompt', '/stop-confirmation')
+        path = Path(self.temp.name) / 'local.stop_confirmation.json'
+        with patch.object(stop_confirmation, 'PATH', path):
+            code, default = self.request()
+            self.assertEqual((code, default['text'], default['custom']), (200, stop_confirmation.DEFAULT, False))
+            self.assertFalse(path.exists())
+            data = {'text': '复核工具回执', 'version': default['version']}
+            self.assertEqual(self.request(data=data, origin='https://example.com')[0], 400)
+            self.assertFalse(path.exists())
+            code, saved = self.request(data=data)
+            self.assertEqual((code, saved['text'], saved['custom']), (200, data['text'], True))
+            self.assertEqual(self.request()[1], saved)
+            self.assertEqual(self.request(data=data)[0], 400)
+            self.assertEqual(self.request(data={'text': '\ud800', 'version': saved['version']})[0], 400)
+            self.assertEqual(self.request()[1], saved)
+            self.assertEqual(self.request(data={'text': '', 'version': saved['version']}), (200, default))
+
+    def test_stop_confirmation_serializes_saves_across_console_processes(self):
+        from orchestrator import stop_confirmation
+        path = Path(self.temp.name) / 'local.stop_confirmation.json'
+        script = '''
+from pathlib import Path
+import sys
+from orchestrator import stop_confirmation as setting
+setting.PATH = Path(sys.argv[1])
+try:
+    setting.save(sys.argv[3], sys.argv[2])
+except ValueError as exc:
+    if '请重新读取后保存' not in str(exc):
+        raise
+    sys.exit(3)
+'''
+        with patch.object(stop_confirmation, 'PATH', path):
+            version = stop_confirmation.read()['version']
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                attempts = {text: pool.submit(subprocess.run, [sys.executable, '-X', 'utf8', '-c', script,
+                                                                str(path), version, text], timeout=15)
+                            for text in ('first', 'second')}
+                codes = {text: result.result().returncode for text, result in attempts.items()}
+            self.assertEqual(sorted(codes.values()), [0, 3])
+            self.assertEqual(codes[stop_confirmation.read()['text']], 0)
 
 
 class PersonalPromptBrowserTests(unittest.TestCase):

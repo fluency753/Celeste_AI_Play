@@ -542,13 +542,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     tail = ('本次未暂停。请按最新可核实证据选择一个类别，提交「类别ID：阻塞说明」。'
                             '有自己能做的下一步，或证据与任一类别不符时，继续处理。\n' + choices)
                 elif result['status'] == 'confirmation_required':
+                    from .stop_confirmation import wording
                     tail = (f'本次未暂停。{result["category_label"]}已提交 {result["step"]}/{result["required_steps"]} 次。'
-                            f'复核要求：{result["criterion"]}'
-                            '核对受阻的任务必需步骤，以及是否还有获准的下一步能自己做。'
-                            '反复 observe 看到同一冻结帧不算恢复试验。'
-                            '确需用户帮助时，再次调用本工具。'
-                            f'reason 以「{result["confirmation_prefix"]}」开头，后接 200 字以内的复核证据及用户需要做的事。'
-                            '有可行下一步时直接继续，无需确认。')
+                            f'\n复核要求：{result["criterion"]}\n{wording()}\n'
+                            f'reason 以「{result["confirmation_prefix"]}」开头，后接 200 字以内的复核证据及用户需要做的事。')
                 elif result['status'] == 'recovery_available':
                     progress = result['transition']
                     recovery_note = ('Token 会按空输入继续推进重生。可用 observe 读取当前状态，或按画面显式发送确认。'

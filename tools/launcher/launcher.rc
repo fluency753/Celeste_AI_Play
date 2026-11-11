@@ -9,8 +9,8 @@
 #else
 #define DESCRIPTION "Celeste AI 控制台"
 #define ORIGINAL_FILENAME "CelesteAIConsole.exe"
-#define APP_VERSION 1,24,25,0
-#define APP_VERSION_TEXT "1.24.25"
+#define APP_VERSION 1,24,26,0
+#define APP_VERSION_TEXT "1.24.26"
 #endif
 
 1 ICON "icon.ico"

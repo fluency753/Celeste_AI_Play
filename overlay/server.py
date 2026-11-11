@@ -157,6 +157,7 @@ def make_handler(pinned: Path | None):
                                "/api/console/kb/file": lambda: console_api.kb_read(query.get("mode", "speedrun"),
                                                                                    query.get("path", "")),
                                "/api/console/personal-prompt": lambda: console_api.personal_prompt_read(query.get("scope", "all")),
+                               "/api/console/stop-confirmation": console_api.stop_confirmation_read,
                                "/api/console/prompt/file": lambda: console_api.prompt_read(query.get("name", ""))}.get(path)
                     if handler is None:
                         self._send(404, b"not found", "text/plain", cors=False)
@@ -301,6 +302,8 @@ def make_handler(pinned: Path | None):
                             result = console_api.prompt_preview(data.get("options"), data.get("engine"))
                         elif self.path == "/api/console/personal-prompt":
                             result = console_api.personal_prompt_write(data.get("scope"), data.get("text"), data.get("version"))
+                        elif self.path == "/api/console/stop-confirmation":
+                            result = console_api.stop_confirmation_write(data.get("text"), data.get("version"))
                         elif self.path == "/api/console/prompt/file":
                             result = console_api.prompt_write(str(data.get("name", "")), data.get("text"), data.get("version"))
                         elif self.path == "/api/console/prompt/reset":
