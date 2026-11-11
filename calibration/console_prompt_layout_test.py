@@ -11,7 +11,7 @@ CONSOLE = Path(__file__).resolve().parents[1] / 'overlay/console.html'
 class ConsolePromptLayoutTests(unittest.TestCase):
     def test_prompt_headers_scroll_under_clickable_console_navigation(self):
         try:
-            from playwright.sync_api import sync_playwright
+            from playwright.sync_api import expect, sync_playwright
         except ImportError:
             self.skipTest('Playwright is needed to check console layout')
 
@@ -30,6 +30,11 @@ class ConsolePromptLayoutTests(unittest.TestCase):
             '/api/console/prompt/preview': preview,
             '/api/console/personal-prompt': {'catalog': [{'scope': 'all', 'label': '通用'}],
                                             'text': '', 'max_chars': 1000, 'readonly': True},
+            '/api/console/stop-confirmation': {'text': '通用复核', 'max_chars': 4000,
+                                               'custom': False, 'version': 'fixture'},
+            '/api/console/stop-categories': {'steps': {'user_help': 3}, 'version': 'fixture', 'categories': [
+                {'id': 'hint', 'label': '卡关求提示', 'kind': 'user_help', 'criterion': '分类复核'},
+            ]},
             '/api/console/runs': [],
             '/api/console/status': {'game': {}, 'obs': {}, 'orchestrator': {}},
         }
@@ -49,7 +54,7 @@ class ConsolePromptLayoutTests(unittest.TestCase):
             except Exception as error:
                 self.skipTest(f'Chromium unavailable: {error}')
             try:
-                for width in (1835, 800):
+                for width in (1835, 1000, 800):
                     with self.subTest(width=width):
                         page = browser.new_page(viewport={'width': width, 'height': 900})
                         errors = []
@@ -75,6 +80,15 @@ class ConsolePromptLayoutTests(unittest.TestCase):
                                 }'''))
                         # Exercise the real jump consumer, then change pages without a forced click.
                         page.locator('#promptParts .prow button').nth(1).click()
+                        messages = page.get_by_role('region', name='按钮与主控消息')
+                        confirmation = messages.get_by_role('textbox', name='通用复核文字', include_hidden=True)
+                        self.assertTrue(confirmation.is_hidden())
+                        details = messages.locator('details')
+                        details.locator('summary').click()
+                        self.assertTrue(confirmation.is_visible())
+                        expect(confirmation).to_have_value('通用复核')
+                        expect(messages.get_by_label('该类别的复核要求')).to_have_value('分类复核')
+                        self.assertTrue(details.evaluate('e => e.scrollWidth <= e.clientWidth'))
                         page.locator('.tab[data-page="run"]').click()
                         self.assertTrue(page.locator('#page-prompts').is_hidden())
                         self.assertTrue(page.locator('#page-run').is_visible())

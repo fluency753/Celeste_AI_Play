@@ -817,40 +817,6 @@
     </div>
     <p class="hint" id="personalPromptStatus" role="status">尚未加载</p>
   </section>
-  <section class="pane" style="grid-column:1 / -1" aria-labelledby="stopConfirmationTitle">
-    <h2 id="stopConfirmationTitle">阻塞确认提示 <span class="aside">本机所有配置共用</span></h2>
-    <p class="hint" id="stopConfirmationHint">待确认回执会显示智能体所选类别的复核要求和这段通用文字。保存后，下一次待确认回执即生效。</p>
-    <label for="stopConfirmationText">通用复核文字</label>
-    <textarea id="stopConfirmationText" class="code" style="width:100%;min-height:100px" aria-describedby="stopConfirmationHint" spellcheck="false" disabled></textarea>
-    <div class="presets" style="margin-top:10px">
-      <button class="btn small primary" id="stopConfirmationSave" type="button" disabled>保存</button>
-      <button class="btn small" id="stopConfirmationReset" type="button" disabled>恢复默认并保存</button>
-      <button class="btn small" id="stopConfirmationReload" type="button">重新读取</button>
-    </div>
-    <p class="hint" id="stopConfirmationStatus" role="status">尚未加载</p>
-    <h3>分类复核要求</h3>
-    <p class="hint">修改正在确认的类别会使旧确认码失效。</p>
-    <label for="stopCategorySelect">阻塞类别</label>
-    <select id="stopCategorySelect" disabled></select>
-    <form id="stopCategoryForm">
-      <fieldset id="stopCategoryFields" disabled style="border:0;padding:0;margin:10px 0 0;min-width:0">
-        <label for="stopCategoryId">类别 ID</label>
-        <input id="stopCategoryId" name="categoryId" pattern="[a-z][a-z0-9_]*" required>
-        <label for="stopCategoryLabel">显示名</label>
-        <input id="stopCategoryLabel" name="label" maxlength="4000" required>
-        <label for="stopCategoryKind">类型</label>
-        <select id="stopCategoryKind" name="kind" required></select>
-        <label for="stopCategoryCriterion" style="display:block;margin-top:10px">该类别的复核要求</label>
-        <textarea id="stopCategoryCriterion" name="criterion" class="code" style="width:100%;min-height:80px" maxlength="4000" required></textarea>
-      </fieldset>
-      <div class="presets" style="margin-top:10px">
-        <button class="btn small primary" id="stopCategorySave" type="submit" disabled>保存分类</button>
-        <button class="btn small" id="stopCategoryReset" type="button" hidden>恢复默认</button>
-        <button class="btn small" id="stopCategoryReload" type="button">重新读取分类</button>
-      </div>
-    </form>
-    <p class="hint" id="stopCategoryStatus" role="status">尚未加载</p>
-  </section>
   <section class="pane" aria-labelledby="promptTitle">
     <h2 id="promptTitle">提示词 <span class="aside">按运行页的当前设置生成</span></h2>
     <div class="kb-head">
@@ -869,10 +835,46 @@
     <p class="hint" id="promptWhat" style="margin-top:0">—</p>
     <div class="pbar" id="promptBar" role="img" aria-label="这一版由哪些部分组成，按长度"></div>
     <div class="plist" id="promptParts"></div>
-    <div class="subhead">按钮与主控消息</div>
-    <p class="hint">选择消息或点“编辑” → 修改正文 → 保存。窄窗口会自动跳到下方编辑器；保存仅影响本机，下一次生成该消息时生效。</p>
-    <div id="buttonPromptList" class="plist"></div>
-    <p class="hint">正文可在运行中保存，下一次对应消息生成时生效；来源与实际状态由主控附加。暂停、停止等按钮的控制行为不由文本配置改变。唤起聊天不会额外发起模型轮次。</p>
+    <section aria-labelledby="controllerMessageTitle">
+      <h3 class="subhead" id="controllerMessageTitle">按钮与主控消息</h3>
+      <p class="hint">选择消息或点“编辑” → 修改正文 → 保存。窄窗口会自动跳到下方编辑器；保存仅影响本机，下一次生成该消息时生效。</p>
+      <details class="more" style="margin:10px 0">
+        <summary><b>阻塞确认提示</b></summary>
+        <p class="hint" id="stopConfirmationHint">待确认回执会显示智能体所选类别的复核要求和这段通用文字。本机所有配置共用，保存后下一次待确认回执即生效。</p>
+        <label for="stopConfirmationText">通用复核文字</label>
+        <textarea id="stopConfirmationText" class="code" style="width:100%;min-height:100px" aria-describedby="stopConfirmationHint" spellcheck="false" disabled></textarea>
+        <div class="presets" style="margin-top:10px">
+          <button class="btn small primary" id="stopConfirmationSave" type="button" disabled>保存</button>
+          <button class="btn small" id="stopConfirmationReset" type="button" disabled>恢复默认并保存</button>
+          <button class="btn small" id="stopConfirmationReload" type="button">重新读取</button>
+        </div>
+        <p class="hint" id="stopConfirmationStatus" role="status">尚未加载</p>
+        <h4>分类复核要求</h4>
+        <p class="hint">修改正在确认的类别会使旧确认码失效。</p>
+        <label for="stopCategorySelect">阻塞类别</label>
+        <select id="stopCategorySelect" disabled></select>
+        <form id="stopCategoryForm">
+          <fieldset id="stopCategoryFields" disabled style="border:0;padding:0;margin:10px 0 0;min-width:0">
+            <div class="row">
+              <label class="field">类别 ID<input type="text" id="stopCategoryId" name="categoryId" pattern="[a-z][a-z0-9_]*" required></label>
+              <label class="field">显示名<input type="text" id="stopCategoryLabel" name="label" maxlength="4000" required></label>
+            </div>
+            <label for="stopCategoryKind">类型</label>
+            <select id="stopCategoryKind" name="kind" required></select>
+            <label for="stopCategoryCriterion" style="display:block;margin-top:10px">该类别的复核要求</label>
+            <textarea id="stopCategoryCriterion" name="criterion" class="code" style="width:100%;min-height:80px" maxlength="4000" required></textarea>
+          </fieldset>
+          <div class="presets" style="margin-top:10px">
+            <button class="btn small primary" id="stopCategorySave" type="submit" disabled>保存分类</button>
+            <button class="btn small" id="stopCategoryReset" type="button" hidden>恢复默认</button>
+            <button class="btn small" id="stopCategoryReload" type="button">重新读取分类</button>
+          </div>
+        </form>
+        <p class="hint" id="stopCategoryStatus" role="status">尚未加载</p>
+      </details>
+      <div id="buttonPromptList" class="plist"></div>
+      <p class="hint">正文可在运行中保存，下一次对应消息生成时生效；来源与实际状态由主控附加。暂停、停止等按钮的控制行为不由文本配置改变。唤起聊天不会额外发起模型轮次。</p>
+    </section>
     <div class="presets" style="margin-top:12px">
       <button type="button" class="chip" id="promptCopy">复制全文</button>
       <button type="button" class="chip" data-goto="run">回到运行页修改设置</button>
