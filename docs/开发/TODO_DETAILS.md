@@ -89,6 +89,11 @@ agent 长期占用、冻结个人 Celeste 进程，会妨碍用户游玩；共�
 
 已经集中导航状态、执行器工作区能力、回放作业与来源交接、录像停止阶段及录音混音快照，契约与成因见 [Codex 整改复盘（可选参考）](codex/STATE_CONTRACTS.md)。下面仅列仍需推进的独立范围，不把完成的整改继续列为待办。
 
+### Steam 自动重登录与 Celeste 异常退出
+
+- 2026-11-11 晚，Steam 经本机代理的 WebSocket 连接断开。客户端自动连回服务器后，登录请求收到 `Rate Limit Exceeded`（84），随后停止自动重连。次日手动重启 Steam 并完成更新后，原有凭据成功登录。首次断线的来源和服务端限流条件未知。
+- 更新后，原 Celeste 进程继续运行。下午的 Steam minidump 记录了 `CClientPipe::BWriteAndReadResult: BWrite failed`，同时显示进程仍加载更新前的 `steamclient64.dll` 和 `gameoverlayrenderer64.dll`。旧游戏进程与新 Steam 客户端之间的 IPC 异常是可能原因，具体触发调用尚未确定。两轮相同游戏输入复放均未复现退出，复放使用新游戏进程，未覆盖跨 Steam 重启的情形。
+
 ### 继续明确游戏编排边界
 
 `ChapterNavigation` 已统一当前／待进入目标及确认消费，自动菜单与 agent 输入使用同一提交入口。`GameSession` 仍编排剧情、输入、目标计量及宿主收尾，后续按责任拆分状态与失败契约；不能仅搬函数或重新复制导航状态。
