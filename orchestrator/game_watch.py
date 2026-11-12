@@ -356,7 +356,6 @@ class GameExitWatch:
             'error_log': _file_fact(game_dir / 'errorLog.txt', started),
             'steam_dumps': _dumps(steam, started),
         }
-        self.records.append(record)
         try:
             with open(self.run_dir / EXIT_LOG, 'a', encoding='utf-8') as stream:
                 stream.write(json.dumps(record, ensure_ascii=False) + '\n')
@@ -370,6 +369,7 @@ class GameExitWatch:
                  f"时间 {record['exited_at'] or '未知'}；{steam_text}"
                  + (f"；游戏启动后 Steam 写了 {len(dumps)} 个 dump" if dumps else '')
                  + f'；详情见 {EXIT_LOG}')
+        self.records.append(record)      # Last: a visible record means the file and the log line are done.
 
 
 def _file_fact(path: Path, since: float | None) -> dict | None:

@@ -8,6 +8,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
+from calibration.isolation import unlink_links
 from orchestrator import game_watch
 from orchestrator.game_session import GameSession
 
@@ -104,6 +105,7 @@ class GameWatchTests(unittest.TestCase):
             (self.root / 'alias').symlink_to(real, target_is_directory=True)
         except OSError:
             self.skipTest('cannot create a directory link here')
+        self.addCleanup(unlink_links, self.root)     # Before the temporary folder's own cleanup.
         self.assertTrue(game_watch._inside(str(self.root / 'alias/Celeste.exe'), real.resolve()))
 
     def test_steam_started_before_the_game_is_fine(self):

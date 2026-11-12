@@ -296,8 +296,9 @@ class CarryTmpTests(unittest.TestCase):
         def backup_then_link(*args, **kwargs):
             result = original_run(*args, **kwargs)
             git.rmdir()
+            # cmd prints in the console code page (GBK here), not UTF-8: never let decoding drop the output.
             linked = run_host(['cmd', '/c', 'mklink', '/J', str(git), str(target)],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, errors='replace', timeout=10)
             self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
             return result
 
