@@ -1,5 +1,6 @@
 """运行目录里的主控记录：带时间戳的输出副本与异常退出证据。"""
 import io
+from contextlib import redirect_stderr
 from pathlib import Path
 import re
 import tempfile
@@ -56,6 +57,16 @@ class RunLogTests(unittest.TestCase):
         self.assertEqual(stream.write('无窗口\n'), 4)
         self.assertFalse(stream.isatty())
         self.assertIn('无窗口', (self.directory / run_log.LOG_NAME).read_text(encoding='utf-8'))
+
+    def test_handled_exception_reaches_log_when_original_stderr_fails(self):
+        log = run_log.RunLog()
+        self.addCleanup(log.close)
+        path = log.attach(self.directory)
+        with redirect_stderr(run_log._Mirror(Broken(), log)):
+            run_log.log_exception('[tools] phase=fixture', self.crashed())
+        text = path.read_text(encoding='utf-8')
+        self.assertIn('OSError: pipe closed', text)
+        self.assertIn('ConnectionError: Codex app-server 已断开', text)
 
     def test_attach_without_install_does_nothing(self):
         self.assertIsNone(run_log._ACTIVE)    # Tests and imports never replace sys.stdout.

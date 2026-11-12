@@ -1,9 +1,12 @@
 """桥接只接受一个连接：别的客户端连上时主控的旧连接会被关掉。请求发不出去时重连重发；只读指令等回复时断开也重连重发；
 step 发出后才断开不重发，照常报错。"""
 import json
+from contextlib import redirect_stderr
+from io import StringIO
 import socket
 import threading
 import unittest
+from unittest.mock import Mock, patch
 
 from tools.bridge_client import BridgeClient
 
@@ -86,6 +89,36 @@ class ReconnectTests(unittest.TestCase):
             self.assertEqual(self.bridge.received, ["step"])
             return
         self.assertEqual(self.bridge.received, [])
+
+    def test_read_error_is_preserved_even_when_readonly_retry_succeeds(self):
+        self.addCleanup(self.client.file.close)
+        failed = Mock()
+        error = ConnectionResetError(10054, 'original reset')
+        failed.readline.side_effect = error
+        ready = Mock()
+        ready.readline.return_value = b'{"id":1,"ok":true,"obs":{"frame":1}}\n'
+        self.client.file = failed
+        with patch.object(self.client, 'reconnect', side_effect=lambda: setattr(self.client, 'file', ready)) as retry:
+            with redirect_stderr(StringIO()) as output:
+                self.assertTrue(self.client.call('observe')['ok'])
+        retry.assert_called_once()
+        self.assertIn('ConnectionResetError', output.getvalue())
+        self.assertIn('10054', output.getvalue())
+        self.assertIn('phase=receive_before_retry command=observe request_id=1', output.getvalue())
+
+    def test_act_read_error_keeps_original_exception_and_never_resends(self):
+        self.addCleanup(self.client.file.close)
+        error = OSError(10054, 'original read failure')
+        wire = self.client.file = Mock()
+        wire.readline.side_effect = error
+        with patch.object(self.client, 'reconnect') as retry, redirect_stderr(StringIO()) as output:
+            with self.assertRaises(OSError) as raised:
+                self.client.call('step', inputs=['1,R'])
+        self.assertIs(raised.exception, error)
+        self.assertIn('phase=receive command=step request_id=1', output.getvalue())
+        self.assertIn('original read failure', output.getvalue())
+        wire.write.assert_called_once()
+        retry.assert_not_called()
 
 
 if __name__ == "__main__":

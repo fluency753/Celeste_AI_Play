@@ -16,6 +16,7 @@ from xml.etree.ElementTree import ParseError as ET_ERRORS
 from .telemetry import publish
 from .config import REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id, CHAPTER_SIDS
 from .metrics import Metrics
+from .run_log import log_exception
 from .session_store import load_json, write_json
 from .navigation import ChapterNavigation
 from .action_policy import BLOCK_STOPS
@@ -280,8 +281,8 @@ class RequestTicket:
     thought lead) happens before the first input, so validity is checked there.
     Once input has started, the rest of the same request keeps its executed range.
     """
-    def __init__(self, check):
-        self.check, self.started = check, False
+    def __init__(self, check, call_id=None):
+        self.check, self.started, self.call_id = check, False, call_id
 
     def refused(self):
         return None if self.started else self.check()
@@ -2289,9 +2290,10 @@ class GameSession:
                 self.before_advance()
             except RecordingHalt as exc:
                 # 录像录不上又没能另起一段：不推进这些录不上的帧（主控已把试玩暂停）
+                log_exception('[run] phase=recording_guard', exc)
                 raise ActError(f"录像中断：{exc}。主控已暂停试玩，游戏保持冻结，等用户处理；这次按键没有执行，请结束本轮。") from exc
             except Exception as exc:  # noqa: BLE001
-                print(f"[run] 推进前检查出错（忽略）：{exc}", flush=True)
+                log_exception('[run] 推进前检查出错（忽略）', exc)
 
     # ---- 日志与统计 ----
 

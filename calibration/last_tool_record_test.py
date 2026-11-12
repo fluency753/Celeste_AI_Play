@@ -4,9 +4,11 @@ Only the game bridge, model capability lookup and filesystem fault boundary
 are fixtures. No live controller, account, OBS or user configuration is read.
 """
 import asyncio
+from contextlib import redirect_stderr
 from copy import deepcopy
 from dataclasses import replace
 import json
+from io import StringIO
 from pathlib import Path
 import tempfile
 import threading
@@ -20,6 +22,7 @@ from orchestrator.codex_agent import CodexRunner
 from orchestrator.config import RunConfig
 from orchestrator.game_session import ActError, GameSession
 from orchestrator.metrics import Metrics
+from orchestrator import run_log
 from orchestrator.server import build_server
 
 
@@ -214,6 +217,26 @@ class LastToolRecordTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.bridge.steps), 1)
         self.assertEqual(self.bridge.obs['frame'], 13)
         self.assertEqual(self.document()['last_action']['id'], record['id'])
+
+    async def test_codex_tool_failure_logs_the_original_exception_with_call_and_frame(self):
+        runner = CodexRunner(self.cfg, self.run, self.session, self.metrics, 'unused', game_server=self.server)
+        runner.session_id, runner.turn_id, runner.turn_active = 'fixture-thread', 'fixture-turn', True
+        self.bridge.fail_after_step = ConnectionResetError(10054, 'original receive failure')
+        logger = run_log.RunLog()
+        self.addCleanup(logger.close)
+        path = logger.attach(self.run)
+        with redirect_stderr(run_log._Mirror(StringIO(), logger)):
+            reply = await runner._request('item/tool/call', {'callId': 'act-lost-reply', 'tool': 'celeste_act',
+                'arguments': {'inputs': ['1,R'], 'thought': '核对失联回执'}})
+        self.assertFalse(reply['success'])
+        self.assertIn('Error executing tool act', reply['contentItems'][0]['text'])
+        record = self.document()['last_action']
+        self.assertEqual(record['execution_status'], 'unconfirmed')
+        self.assertEqual(self.bridge.steps, [['1,R']])
+        log = path.read_text(encoding='utf-8')
+        self.assertIn(f'receipt_id={record["id"]} call_id=act-lost-reply phase=mcp_call', log)
+        self.assertIn('before_frame=12 last_observed_frame=12', log)
+        self.assertIn('ConnectionResetError: [Errno 10054] original receive failure', log)
 
     async def test_recovery_observe_cannot_erase_an_unconfirmed_action_that_executed(self):
         self.bridge.fail_after_step = True

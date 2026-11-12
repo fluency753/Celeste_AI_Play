@@ -18,6 +18,7 @@ import json
 import socket
 import sys
 import time
+import traceback
 from pathlib import Path
 
 DEFAULT_PORT = 47774
@@ -43,15 +44,29 @@ class BridgeClient:
         self.reconnects = 0
 
     def _connect(self) -> None:
-        self.sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
-        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self.file = self.sock.makefile("rwb")
+        try:
+            self.sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.file = self.sock.makefile("rwb")
+        except OSError as error:
+            self._log_failure(error, 'connect')
+            raise
+
+    def _log_failure(self, error, phase, command=None, request_id=None):
+        context = f'[bridge] {getattr(self, "host", "?")}:{getattr(self, "port", "?")} phase={phase}'
+        if command is not None:
+            context += f' command={command} request_id={request_id}'
+        error.add_note(context)
+        try:
+            print(''.join(traceback.format_exception(error)), file=sys.stderr, end='', flush=True)
+        except (OSError, ValueError):
+            pass
 
     def reconnect(self) -> None:
         try:
             self.close()
-        except OSError:
-            pass
+        except OSError as error:
+            self._log_failure(error, 'reconnect_close')
         self._connect()
         self.reconnects += 1
 
@@ -61,18 +76,17 @@ class BridgeClient:
         finally:
             self.sock.close()
 
-    def _send(self, data: bytes, *, allow_reconnect: bool = True) -> None:
+    def _send(self, data: bytes, *, command, request_id, allow_reconnect: bool = True) -> None:
         try:
             self.file.write(data)
             self.file.flush()
-        except TimeoutError:
-            raise
-        except OSError:
-            if not allow_reconnect:
+        except OSError as error:
+            retry = allow_reconnect and not isinstance(error, TimeoutError)
+            self._log_failure(error, 'send_before_retry' if retry else 'send', command, request_id)
+            if not retry:
                 raise
             self.reconnect()          # 请求没送到桥接：重连后重发一次
-            self.file.write(data)
-            self.file.flush()
+            self._send(data, command=command, request_id=request_id, allow_reconnect=False)
 
     def call(self, cmd: str, on_event=None, *, allow_reconnect: bool = True, **args) -> dict:
         serial = getattr(self, 'next_id', None)
@@ -115,23 +129,27 @@ class BridgeClient:
         self.next_id += 1
         payload = {"id": req_id, "cmd": cmd, **args}
         data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-        self._send(data, allow_reconnect=allow_reconnect)
+        self._send(data, command=cmd, request_id=req_id, allow_reconnect=allow_reconnect)
         retried = False
         while True:
             try:
                 line = self.file.readline()
-            except TimeoutError:
+                if not line:
+                    raise ConnectionError("bridge closed the connection")
+            except OSError as error:
+                retry = allow_reconnect and cmd in READ_ONLY and not retried and not isinstance(error, TimeoutError)
+                self._log_failure(error, 'receive_before_retry' if retry else 'receive', cmd, req_id)
+                if not retry:
+                    raise
+                retried = True
+                self.reconnect()
+                self._send(data, command=cmd, request_id=req_id)
+                continue
+            try:
+                reply = json.loads(line)
+            except ValueError as error:
+                self._log_failure(error, 'decode_reply', cmd, req_id)
                 raise
-            except OSError:
-                line = b""
-            if not line:
-                if allow_reconnect and cmd in READ_ONLY and not retried:
-                    retried = True
-                    self.reconnect()
-                    self._send(data)
-                    continue
-                raise ConnectionError("bridge closed the connection")
-            reply = json.loads(line)
             if "event" in reply:
                 if on_event is not None:
                     on_event(reply)
@@ -154,8 +172,7 @@ class BridgeClient:
 
     def cancel_pending(self) -> None:
         """仅从 on_event 回调使用；共用当前连接，id=0 的确认由读取循环忽略。"""
-        self.file.write(b'{"id":0,"cmd":"cancel"}\n')
-        self.file.flush()
+        self._send(b'{"id":0,"cmd":"cancel"}\n', command='cancel', request_id=0, allow_reconnect=False)
         self._cancel_sent = True
 
 

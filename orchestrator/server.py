@@ -347,7 +347,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             collision = renderer(obs) if renderer is not None else render_collision_view(obs)
         except Exception as exc:  # noqa: BLE001
             # 画图失败时游戏可能已经推进：照常返回结果，只少这张图（报错会让智能体以为没执行而重发同样的按键）
-            print(f"[collision] 画碰撞图失败：{exc}", flush=True)
+            journal.log_failure(exc, phase='render_collision')
             content.append('（这次没有附碰撞图：画图失败；碰撞数据仍在 /workspace/game/latest_obs.json。）')
             return content
         if collision is not None:
@@ -419,6 +419,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     acknowledge(observed_epoch)
                 return content
             except ValueError as exc:
+                journal.log_failure(exc, phase='observe')
                 return [str(exc)]
             finally:
                 finish()
@@ -497,8 +498,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 state["described_room"] = room_key(outcome.obs)
                 return content
             except RecordingHalt as err:
+                journal.log_failure(err, phase='act_recording')
                 return [f'录制交接未完成：{err}。出错的推进请求未发送，之前已执行的输入不重复；试玩已暂停，等待处理。']
             except ActError as err:
+                journal.log_failure(err, phase='act')
                 current = journal.current.get()
                 if (current is not None and current['before'].get('decision') is not None
                         and current['before']['decision'] == getattr(session, 'decision_index', None)):
@@ -534,6 +537,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 result = await asyncio.to_thread(session.stop_run, reason)
                 journal.detail(result)
             except ActError as err:
+                journal.log_failure(err, phase='stop_run')
                 return [str(err)]
             if result['status'] != 'reported':
                 if result['status'] == 'classification_required':
@@ -597,7 +601,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                         f"主控已接受智能体的目标达成报告：{report['goal']}。依据：{report['evidence']}",
                         role='system', kind='系统')
             except OSError as err:
-                print(f'[run] 无法写入目标达成的 HUD 消息：{err}', flush=True)
+                journal.log_failure(err, phase='publish_goal')
             return ['主控已记录目标及达成依据，按智能体报告结束试玩并收尾录像。没有发送游戏输入。请结束本轮。']
 
     from .detour import map_rule
@@ -664,8 +668,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                 state["described_room"] = room_key(obs)
                 return content
             except RecordingHalt as err:
+                journal.log_failure(err, phase='travel_recording')
                 return [f'录制交接未完成：{err}。换图请求未发送，试玩已暂停，等待处理。']
             except ActError as err:
+                journal.log_failure(err, phase='travel')
                 return [f"换图未执行：{err}"]
             finally:
                 finish()
@@ -727,8 +733,10 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     # Business denial and submitted/unknown outcomes must reach the model.
                     # MCP masks uncaught exception details, hiding both scope and next steps.
                     journal.detail({'simulation_notice': str(exc)})
+                    journal.log_failure(exc, phase='simulate')
                     return [str(exc)]
-                except OSError:
+                except OSError as exc:
+                    journal.log_failure(exc, phase='simulate')
                     return ['模拟处理或持久化失败，执行结果尚未确认；请保留同一 request_id 核验，不更换编号重放请求。']
             journal.detail(result)
             return [json.dumps(result, ensure_ascii=False)]
@@ -757,8 +765,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         metrics.narrated()
         try:  # 进 HUD 的公开解说历史（只记这句话本身）
             publish(session.run_dir, f"narrate:{time.time_ns()}", text, kind="临时思考" if temp_thoughts else "解说")
-        except OSError:
-            pass
+        except OSError as exc:
+            journal.log_failure(exc, phase='publish_narration')
         return ["已更新（临时思考，只显示在控制台）。" if temp_thoughts else "已更新。"]
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
@@ -775,6 +783,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             try:
                 await policy(level)
             except ValueError as exc:
+                journal.log_failure(exc, phase='set_effort')
                 return [str(exc)]
         current, pending = metrics.state.effort, metrics.state.effort_pending
         if level == current:

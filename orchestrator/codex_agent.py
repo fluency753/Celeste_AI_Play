@@ -576,11 +576,11 @@ class CodexRunner(ModelRecovery, SessionControls):
                         if reason := request_void():
                             raise ValueError(reason)
                         dispatched = True
-                        result = await self._call_game(name, args, request_void)
+                        result = await self._call_game(name, args, request_void, ident)
                         return await self._game_response(result, name, ident, origin_turn)
                 else:
                     dispatched = True
-                    result = await self._call_game(name, args, request_void)
+                    result = await self._call_game(name, args, request_void, ident)
                     return await self._game_response(result, name, ident, origin_turn)
             else:
                 raise ValueError(f"未开放的工具：{name}")
@@ -594,11 +594,11 @@ class CodexRunner(ModelRecovery, SessionControls):
         finally:
             self.metrics.tool_end(ident)
 
-    async def _call_game(self, name, args, request_void):
+    async def _call_game(self, name, args, request_void, call_id):
         # The ticket follows the call into worker threads; the game session checks it
         # after every wait and before the request's first input.
         from .game_session import REQUEST_TICKET, RequestTicket
-        token = REQUEST_TICKET.set(RequestTicket(request_void))
+        token = REQUEST_TICKET.set(RequestTicket(request_void, call_id=call_id))
         try:
             return await self.game_server.call_tool(name.removeprefix("celeste_"), args)
         finally:

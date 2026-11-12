@@ -13,6 +13,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import TextContent
 
+from .run_log import log_exception
+
 
 ACTION_TOOLS = {'act', 'cutscene', 'travel', 'exit_level'}
 
@@ -141,7 +143,7 @@ class ToolJournal:
             # 记录只是恢复时的参考：写不进去也照常执行（连 stop_run 都不能因此被拒），
             # 完成时再写一次；那次也失败才在结果里提醒（见 finish）
             record['start_write_failed'] = str(exc) or type(exc).__name__
-            print(f'[tools] 调用记录开始时未能写入，照常执行：{exc}', flush=True)
+            self.log_failure(exc, phase='persist_start')
 
     @asynccontextmanager
     async def execution(self, lock):
@@ -164,6 +166,19 @@ class ToolJournal:
         record = self.current.get()
         if record is not None:
             record['detail'] = deepcopy(value)
+
+    def log_failure(self, error, *, phase):
+        from .game_session import REQUEST_TICKET
+        record = self.current.get() or {}
+        ticket = REQUEST_TICKET.get()
+        before = record.get('before') or {}
+        observed = getattr(self.session, 'last_obs', None)
+        last_frame = observed.get('frame') if isinstance(observed, dict) else None
+        log_exception(f"[tools] tool={record.get('tool')} receipt_id={record.get('id')} "
+                      f"call_id={ticket.call_id if ticket else None} phase={phase} "
+                      f"handler_entered={record.get('handler_entered', False)} "
+                      f"input_boundary_passed={ticket.started if ticket else None} "
+                      f"before_frame={before.get('frame')} last_observed_frame={last_frame}", error)
 
     def not_executed(self):
         """Only explicit pre-dispatch/validation branches may assert no execution."""
@@ -197,7 +212,7 @@ class ToolJournal:
                 record['result'] = {'is_error': bool(result.is_error), 'content': content}
             self._publish()
         except (OSError, ValueError, TypeError, ToolError) as exc:
-            print(f'[tools] 调用记录未能更新：{exc}', flush=True)
+            self.log_failure(exc, phase='persist_finish')
             return ('调用已经处理，上面的实际结果仍有效；但 last_tool.json 完成记录写入失败，'
                     '文件可能仍为 running 或旧记录。恢复时先观察核验，不要据此重放动作。')
         finally:
@@ -223,6 +238,8 @@ class RecordedMCPServer(MCPServer):
             try:
                 result = await super().call_tool(name, arguments, context)
             except BaseException as exc:
+                if isinstance(exc, Exception):
+                    self.journal.log_failure(exc, phase='mcp_call')
                 warning = self.journal.finish(record, error=exc)
                 if warning and isinstance(exc, Exception):
                     raise ToolError(str(exc) + '；' + warning) from exc

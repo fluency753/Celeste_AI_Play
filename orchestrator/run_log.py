@@ -100,9 +100,10 @@ class _Mirror:
         self._stream, self._log = stream, log
 
     def write(self, text):
-        result = self._stream.write(text) if self._stream is not None else len(text)
-        self._log.write(text)
-        return result
+        try:
+            return self._stream.write(text) if self._stream is not None else len(text)
+        finally:
+            self._log.write(text)
 
     def writelines(self, lines):
         for line in lines:
@@ -178,6 +179,14 @@ def is_crash(error: BaseException | None) -> bool:
     """Interrupts and deliberate exits are not crashes."""
     return error is not None and not isinstance(
         error, (KeyboardInterrupt, SystemExit, GeneratorExit, asyncio.CancelledError))
+
+
+def log_exception(context: str, error: Exception) -> None:
+    """Record an exception that the caller will handle without exiting the main process."""
+    try:
+        print(f'{context}\n' + ''.join(traceback.format_exception(error)), file=sys.stderr, end='', flush=True)
+    except (OSError, ValueError):
+        pass  # A failing output stream must not replace the original exception.
 
 
 def record_crash(directory: Path | None, error: BaseException) -> Path | None:
