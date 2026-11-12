@@ -1,4 +1,5 @@
 """Behavior export over real file readers; no controller, model or game connection."""
+import base64
 import csv
 from contextlib import closing
 from datetime import datetime, timezone
@@ -149,6 +150,41 @@ class AnalysisTests(unittest.TestCase):
         for marker in ('PRIVATE_REASONING_CANARY', 'COMPACTION_CANARY', 'SECRET_TOKEN'):
             self.assertNotIn(marker, body)
         self.assertIn('reasoningOutputTokens', body)
+
+    def test_export_unwraps_bash_in_local_and_container_history(self):
+        home, path = self.native()
+        command = ("printf '中文\\n'\npython plan.py --password " + r'"head\"TAIL_CANARY"'
+                   + "\npython plan.py --password \\\n  " + r"$'head\'ANSI_CANARY' --next x"
+                   + """\ncurl -d '{"password":"JSON_CANARY","other":"kept"}' example.com""")
+        encoded = base64.b64encode(command.encode()).decode()
+        launcher = f'/usr/bin/python3 /usr/local/lib/celeste/codex-shell.py --seconds 120 --command-base64 {encoded}'
+        wrapped = f"/bin/bash -c '{launcher}'"
+        self.runtime('item/completed', 1002, turnId='local-turn', item={
+            'type': 'commandExecution', 'id': 'local-shell', 'command': wrapped, 'cwd': '/workspace', 'exitCode': 0})
+        self.append(path, {'type': 'event_msg', 'payload': {
+            'type': 'item_completed', 'turn_id': 'native-turn', 'started_at_ms': 1003000,
+            'item': {'type': 'CommandExecution', 'id': 'native-shell',
+                     'command': ['/bin/bash', '-c', launcher], 'cwd': '/workspace', 'exit_code': 2}}})
+
+        def native_reader(state):
+            return read_native_stream([sys.executable, '-I', '-S', '-c', stream_reader_code(home), state['session_id']])
+
+        with closing(self.collect(native_reader=native_reader)) as report:
+            archive = write_export(report, self.root / 'shell-export')
+        with zipfile.ZipFile(archive) as bundle:
+            raw = bundle.read('tool_calls.jsonl')
+        rows = {row['call_id']: row for row in map(json.loads, raw.splitlines())}
+        for call_id, exit_code in (('local-shell', 0), ('native-shell', 2)):
+            self.assertEqual(rows[call_id]['parameters'], {
+                'command': ("printf '中文\\n'\npython plan.py --password [隐藏]"
+                            "\npython plan.py --password \\\n  [隐藏] --next x"
+                            """\ncurl -d '{"password":"[隐藏]","other":"kept"}' example.com"""),
+                'cwd': '/workspace', 'timeout_s': '120'})
+            self.assertEqual(rows[call_id]['exit_code'], exit_code)
+        self.assertNotIn(encoded.encode(), raw)
+        self.assertNotIn(b'TAIL_CANARY', raw)
+        self.assertNotIn(b'ANSI_CANARY', raw)
+        self.assertNotIn(b'JSON_CANARY', raw)
 
     def test_native_isolated_reader_all_tools_wrappers_state_and_simulation_link(self):
         home, path = self.native()

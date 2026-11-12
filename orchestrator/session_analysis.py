@@ -11,6 +11,7 @@ import sqlite3
 from .session_export import SessionSourceRows, timestamp, TIME_FIELDS
 from .session_export_spool import ExportSpool, SpilledDict, SpoolRows
 from .session_export_projection import bounded_tree, canonical_tool, clean_text, finite, iso_epoch, project_tool
+from .tool_facts import native_shell_args
 
 
 class AnalysisReport(dict):
@@ -266,7 +267,7 @@ class Analysis:
                     content = item.get('content')
                     success = item.get('success')
                     if kind == 'commandExecution':
-                        args = {key: item[key] for key in ('command', 'cwd') if key in item}
+                        args = native_shell_args(item)
                         content = item.get('aggregatedOutput') if method == 'item/completed' else None
                         if type(item.get('exitCode')) is int:
                             success = item['exitCode'] == 0

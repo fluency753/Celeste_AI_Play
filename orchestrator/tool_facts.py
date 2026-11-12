@@ -1,16 +1,50 @@
-"""Bounded public tool summaries shared by execution and HUD; never result bodies."""
+"""Public tool field helpers shared by execution, HUD, and export."""
+import base64
 import json
+import math
 import re
+
+
+def native_shell_args(item):
+    """Unwrap the exact Codex shell launcher for display only."""
+    args = {key: item[key] for key in ('command', 'cwd') if key in item}
+    command = args.get('command')
+    shell = r'/(?:usr/)?bin/(?:ba)?sh'
+    wrapper = (r'/usr/bin/python3 /usr/local/lib/celeste/codex-shell\.py --seconds '
+               r'(?P<seconds>[0-9]+(?:\.[0-9]+)?(?:e[+-][0-9]+)?) --command-base64 '
+               r'(?P<payload>[A-Za-z0-9+/=]+)')
+    if isinstance(command, str):
+        wrapped = re.fullmatch(rf"(?P<shell>{shell} -c ')?{wrapper}(?(shell)')", command)
+    elif (isinstance(command, list) and len(command) == 3 and all(isinstance(part, str) for part in command)
+          and re.fullmatch(shell, command[0]) and command[1] == '-c'):
+        wrapped = re.fullmatch(wrapper, command[2])
+    else:
+        return args
+    if not wrapped:
+        return args
+    seconds = float(wrapped['seconds'])
+    if not math.isfinite(seconds) or seconds <= 0:
+        return args
+    args['timeout_s'] = wrapped['seconds']
+    try:
+        args['command'] = base64.b64decode(wrapped['payload'], validate=True).decode('utf-8')
+    except ValueError:
+        args['command'] = '[原始命令无法还原]'
+    return args
 
 
 def safe_text(value, limit=700):
     text = str(value)
     text = re.sub(r'(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[隐藏]', text)
+    name = r'(?:api[_-]?key|(?:access[_-]?|refresh[_-]?)?token|password|authorization|secret|credential)'
+    quoted = r'''"(?:\\[\s\S]|[^"\\])*"'''
+    field_value = rf"""(?:{quoted}|'(?:\\[\s\S]|[^'\\])*'|[^\s,}}]+)"""
+    text = re.sub(rf'''(?i)((["']){name}\2\s*:\s*){field_value}''', r'\1\2[隐藏]\2', text)
+    space = r'(?:\\\r?\n|\s)'
+    shell_value = rf'''(?:\$'(?:\\[\s\S]|[^'\\])*'|'[^']*'|{quoted}|\\[\s\S]|[^\s;'"\\|&()<>])+'''
+    text = re.sub(rf'''(?i)({name}(?:["']=|\s*[:=]){space}*|--{name}{space}+){shell_value}''', r'\1[隐藏]', text)
     text = re.sub(r'\bsk-[A-Za-z0-9_-]{8,}', '[隐藏]', text)
     text = re.sub(r'[A-Za-z0-9+/=]{160,}', '[编码省略]', text)
-    name = r'(?:api[_-]?key|access[_-]?token|password|authorization)'
-    value = r'''(?:'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\\[\s\S]|[^\s;'"\\|&()<>])+'''
-    text = re.sub(rf'(?i)({name}\s*[:=]\s*|--{name}\s+){value}', r'\1[隐藏]', text)
     return text[:limit] + ('…' if len(text) > limit else '')
 
 

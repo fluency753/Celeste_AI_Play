@@ -1,5 +1,4 @@
 """Read-only, run-owned tool facts. Never expose model reasoning or result bodies."""
-import base64
 import json
 import os
 from pathlib import Path
@@ -9,37 +8,14 @@ import time
 from collections import deque
 import math
 
-from orchestrator.tool_facts import safe_text, request_summary, result_summary
+from orchestrator.tool_facts import native_shell_args, safe_text, request_summary, result_summary
 from orchestrator.session_store import load_json
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_SHELL_WRAPPER = re.compile(
-    r"(?P<shell>/(?:usr/)?bin/(?:ba)?sh -c ')?"
-    r'/usr/bin/python3 /usr/local/lib/celeste/codex-shell\.py --seconds '
-    r'(?P<seconds>[0-9]+(?:\.[0-9]+)?(?:e[+-][0-9]+)?) --command-base64 '
-    r"(?P<payload>[A-Za-z0-9+/=]+)(?(shell)')"
-)
 
 
 def mapping(value):
     return value if isinstance(value, dict) else {}
-
-
-def _native_shell_args(item):
-    args = {key: item[key] for key in ('command', 'cwd') if key in item}
-    command = args.get('command')
-    wrapped = NATIVE_SHELL_WRAPPER.fullmatch(command) if isinstance(command, str) else None
-    if not wrapped:
-        return args
-    seconds = float(wrapped['seconds'])
-    if not math.isfinite(seconds) or seconds <= 0:
-        return args
-    args['timeout_s'] = wrapped['seconds']
-    try:
-        args['command'] = base64.b64decode(wrapped['payload'], validate=True).decode('utf-8')
-    except ValueError:
-        args['command'] = '[原始命令无法还原]'
-    return args
 
 
 class BoundedTail:
@@ -163,7 +139,7 @@ class ToolHistory:
         if kind != 'dynamicToolCall':
             args = item.get('arguments')
             if kind == 'commandExecution':
-                args = _native_shell_args(item)
+                args = native_shell_args(item)
             elif kind == 'fileChange':
                 changes = item.get('changes')
                 args = {'path': ', '.join(str(c.get('path', '')) for c in (changes if isinstance(changes, list) else []) if isinstance(c, dict))[:1200]}

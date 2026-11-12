@@ -11,6 +11,7 @@ import tempfile
 from .session_export import rows, simulation_fact
 from . import session_export_projection as projection
 from .session_export_projection import project_native_tool, project_tool, iso_epoch, bounded_tree
+from .tool_facts import native_shell_args, safe_text
 
 
 def scan_native(home, session_id, include_analysis=False, emit=None):
@@ -109,9 +110,9 @@ def scan_native(home, session_id, include_analysis=False, emit=None):
 
 
 def reader_code(include_analysis=False):
-    code = 'import json, math, re, hashlib\nfrom pathlib import Path\nfrom datetime import datetime\nimport sys\n'
+    code = 'import base64, json, math, re, hashlib\nfrom pathlib import Path\nfrom datetime import datetime\nimport sys\n'
     if include_analysis:
-        code += inspect.getsource(projection.safe_text) + '\n\n'
+        code += '\n\n'.join(inspect.getsource(function) for function in (native_shell_args, safe_text)) + '\n\n'
         code += '\n\n'.join(inspect.getsource(value) for value in vars(projection).values()
                             if inspect.isfunction(value) and value.__module__ == projection.__name__) + '\n\n'
     code += '\n\n'.join(inspect.getsource(function) for function in (rows, simulation_fact, scan_native))

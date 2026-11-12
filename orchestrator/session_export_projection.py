@@ -5,7 +5,7 @@ import math
 import re
 from datetime import datetime
 
-from .tool_facts import safe_text
+from .tool_facts import native_shell_args, safe_text
 
 
 def finite(value):
@@ -20,12 +20,6 @@ def clean_text(value, limit=4000):
     # Consume the complete bearer value before generic key:value redaction can
     # remove only the word "Bearer" and leave its credential behind.
     text = re.sub(r'(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[REDACTED]', text)
-    sensitive = r'api[_-]?key|(?:access[_-]?|refresh[_-]?)?token|password|authorization|secret|credential'
-    text = re.sub(r'''(?i)((?:["']?(?:''' + sensitive + r''')["']?)\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;]+)''',
-                  r'\1[REDACTED]', text)
-    text = re.sub(r'''(?i)(--(?:token|api-key|api_key|password|secret|authorization)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s;]+)''',
-                  r'\1[REDACTED]', text)
-    text = re.sub(r'''(?i)([A-Z_]*(?:API_KEY|TOKEN|PASSWORD|SECRET)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s;]+)''', r'\1[REDACTED]', text)
     return safe_text(text, limit)
 
 
@@ -250,7 +244,7 @@ def project_native_tool(item, payload):
     success = item.get('success')
     extra = {}
     if kind == 'CommandExecution':
-        name, args = 'Bash', {key: item[key] for key in ('command', 'cwd') if key in item}
+        name, args = 'Bash', native_shell_args(item)
         content = item.get('aggregated_output', item.get('aggregatedOutput'))
         code = item.get('exit_code', item.get('exitCode'))
         success = code == 0 if type(code) is int else None

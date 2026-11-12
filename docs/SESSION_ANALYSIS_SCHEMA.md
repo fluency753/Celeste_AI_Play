@@ -31,6 +31,7 @@ source/sources 保存路径、record_index（成功解析的 JSON 对象序号�
 - active_s：主控暂停扣除后的单调用占用，包含游戏执行且并发可重叠；runtime_duration_s：执行器时长；wall_span_s：两端墙钟差，不可互相替代。逆序标记 clock_order_warning，不取绝对值。
 - thinking_before_s：主控在调用前测得的 thinking 累计差；thinking_interval_start_wall：已知计量开始边界。并发时可能为零，末尾未闭合思考不包含；不是消息间隔或私有推理时长。
 - parameters：允许字段，如 inputs/candidates/plan_file/input_format/stop_on、观测 detail/region、path/file_path、command/cwd/code 等。写文件正文仅保存字符数/哈希。
+- Codex Bash 的标准沙箱包装会在导出时还原为脱敏后的 `parameters.command`，保留 `cwd`，并将包装器时限以秒数字符串单列为 `parameters.timeout_s`。本机事件与原生会话日志均适用，旧记录可重新导出。
 - result.structured：已有执行帧数、停止原因、事件、额度回执/余额、候选预测停止原因/帧数等；result.text_excerpt：有界公开工具结果摘录。exit_code 为显式 Shell 退出码；file_changes 为补丁路径/操作，不保存完整 diff。
 - parameters_meta/result_meta：可用性、原字符数、保留量、截断、附件省略；details_omitted：来源已省略详情时保留其原因，当前导出不再按累计详情量丢弃后半记录。参数树约16K字符、结果树约24K、摘录8K，深度7、单数组128项、单对象64项。源行上限32MiB，超限跳过报警。原生日志逐条输出已脱敏投影到宿主临时文件，以完整结束标记和记录数核验；读取失败时保留本机日志并明确报告原生来源缺口，不接收半截流。参数、结果、事件、动作和完整状态详情采用24MiB临时分块，内存保留标识、时间、归属和块偏移；最终逐条回填原JSONL字段，不另设公开详情协议。单条投影限制保持不变；块数是内部存储计数，不是导出总量限制。分析模式模拟候选限8K并标记 analysis_candidates_truncated，旧默认不变。
 - success 仅取显式结果/退出码；status 为 failed、returned、returned_unverified、interrupted_result_missing、result_missing、pending_or_missing。计时闭合不证明成功，缺失结果不等于失败。
