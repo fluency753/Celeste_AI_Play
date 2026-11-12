@@ -509,6 +509,7 @@ class GameSession:
             raise RuntimeError('自由探索需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
         if detour_enabled(self.cfg) and not self.map_entry_set_supported:
             raise RuntimeError('计划外地图需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
+        self._watch_game_exit(hello)
         self.client.step_options = self._step_options
         self.client.step_filter = self._token_step_filter
         self.client.after_step = self._after_step
@@ -1140,6 +1141,17 @@ class GameSession:
                               'player': obs.get('player')},
                     'events': moved['result'].get('events', [])}
 
+    def _watch_game_exit(self, hello: dict) -> None:
+        """运行中记录游戏进程退出（退出码、时间、Steam 状态，见 game_watch）；只是诊断，失败不影响试玩。"""
+        run_dir = getattr(self, 'run_dir', None)
+        if run_dir is None:
+            return
+        watch = getattr(self, 'game_watch', None)
+        if watch is None:
+            from .game_watch import GameExitWatch
+            watch = self.game_watch = GameExitWatch(run_dir, log=lambda line: print(line, flush=True))
+        watch.attach(hello)
+
     def close(self, release: bool = True) -> None:
         """试玩结束交还控制；release=False 仅供明确需要保留接管的内部调试使用。"""
         client, self.client = self.client, None
@@ -1151,6 +1163,9 @@ class GameSession:
                 finally:
                     client.close()
         finally:
+            watch = getattr(self, 'game_watch', None)
+            if watch is not None:
+                watch.close()
             self._frames_log.close()
             self._decisions_log.close()
 

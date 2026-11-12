@@ -1428,6 +1428,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                            kb_study=study.summary() if study else None, recording=recording)
             if cleanup_errors:
                 summary['cleanup_errors'] = [f'{label}：{error}' for label, error in cleanup_errors]
+            if game_exits := list(getattr(getattr(session, 'game_watch', None), 'records', None) or []):
+                summary['game_exits'] = game_exits      # Also in game_exits.jsonl the moment the game exits.
             if run_log.is_crash(primary):
                 # Without this the summary only says "中断"; the traceback goes to controller_error.txt.
                 summary['error'] = run_log.describe(primary)

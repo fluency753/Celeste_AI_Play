@@ -94,7 +94,7 @@ agent 长期占用、冻结个人 Celeste 进程，会妨碍用户游玩；共�
 - 2026-11-11 晚，Steam 经本机代理的 WebSocket 连接断开。客户端自动连回服务器后，登录请求收到 `Rate Limit Exceeded`（84），随后停止自动重连。次日手动重启 Steam 并完成更新后，原有凭据成功登录。首次断线的来源和服务端限流条件未知。
 - 更新后，原 Celeste 进程继续运行。下午的 Steam minidump 记录了 `CClientPipe::BWriteAndReadResult: BWrite failed`，同时显示进程仍加载更新前的 `steamclient64.dll` 和 `gameoverlayrenderer64.dll`。旧游戏进程与新 Steam 客户端之间的 IPC 异常是可能原因，具体触发调用尚未确定。两轮相同游戏输入复放均未复现退出，复放使用新游戏进程，未覆盖跨 Steam 重启的情形。
 - 用户电脑上 11-07～11-11 的 8 份 `assert_celeste.exe_*.dmp` 都与 Everest 正常退出（日志以 `Uninitialized legacy MonoMod compatibility layer` 结尾）在同一秒写下，断言均为 steamnetworkingsockets 的 `Trying to close low level socket support, but we still have sockets open!`：Steam 在每次退出时都可能写 dump，有 dump 只标出退出时刻，原因要看断言内容。本次的 `BWrite failed` 不是这类退出断言；游戏日志停在序章加载后、`errorLog.txt` 未更新、Windows 也没有崩溃报告，与 Steam 进程内处理器写 dump 后直接结束进程相符，支持上面的 IPC 推断。
-- 可考虑的预防：开跑前比较 Steam 客户端与游戏进程的启动时间，Steam 晚于游戏启动时先维护重启游戏；运行中持有游戏进程句柄，桥接断开时记录游戏是否已退出、退出码与时间。
+- 1.24.38 起：开跑前游戏加载了 steamclient、而 Steam 客户端晚于游戏启动或已退出时拒绝开始；运行中持有游戏进程的只读句柄，退出时写 `game_exits.jsonl`（退出码、时间、Steam 先后、日志与 dump 位置）。尚未覆盖：运行途中 Steam 重启只能事后记录，不会提前暂停。
 
 ### 继续明确游戏编排边界
 

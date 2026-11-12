@@ -32,6 +32,9 @@ def preflight_bridge(port):
             require_capability(hello)
         except ValueError as exc:
             raise RuntimeError(str(exc) + '未开始录制或进档。') from exc
+        # Steam 在游戏启动后重启过或已退出：游戏调用 Steam 时可能被直接结束，先请用户重启游戏。
+        from .game_watch import require_live_steam
+        require_live_steam(hello, log=lambda line: print(line, flush=True))
         return hello
     finally:
         client.close()
