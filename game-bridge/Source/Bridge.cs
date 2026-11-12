@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.12.0";
+    public const string Version = "1.12.1";
     internal static bool RecordOnlyChapters { get; private set; }
     internal static bool ChapterRecordingEnabled => RecordOnlyChapters && RecordingAudio.Enabled;
     internal static bool RecordingChapterActive { get; private set; }
@@ -90,7 +90,7 @@ internal static class Bridge {
         var identity = ReloadBoundary.Capture();
         SetAudio(IdleAudio);
         string data = JsonSerializer.Serialize(new { schema = 1, continuousMusic, audioMode = (int)audioMode,
-            sfxPausedByUs, lockstepEngaged, DrawFrameMarker, idleTokens, identity,
+            sfxPausedByUs, lockstepEngaged, presentationModePending, DrawFrameMarker, idleTokens, identity,
             SceneControl.FreezeChapterSelect, SceneControl.FreezeFileSelect, SceneControl.FreezeMainMenu,
             RecordOnlyChapters, RecordingChapterActive, recordingHasFrame, recordingNrt, recordingSid, recordingSide,
             recordingAudioFailure });
@@ -113,6 +113,7 @@ internal static class Bridge {
         audioMode = (AudioMode)state.GetProperty("audioMode").GetInt32();
         sfxPausedByUs = state.GetProperty("sfxPausedByUs").GetBoolean();
         lockstepEngaged = state.GetProperty("lockstepEngaged").GetBoolean();
+        presentationModePending = state.TryGetProperty("presentationModePending", out var pendingMode) && pendingMode.GetBoolean();
         DrawFrameMarker = state.GetProperty("DrawFrameMarker").GetBoolean();
         idleTokens = state.GetProperty("idleTokens").GetInt32();
         if (state.TryGetProperty("FreezeChapterSelect", out var freeze)) {
@@ -419,19 +420,44 @@ internal static class Bridge {
         ClockServer.Send($"F {token} {Frame} {ticks}");
     }
 
-    /// <summary>锁步时改成不限速的游戏循环（关垂直同步），由令牌决定推进；结束后恢复原设置。</summary>
+    private static bool presentationModePending;
+
+    /// <summary>时钟模式立即切换；窗口恢复后再改变会重建后备缓冲的 VSync 设置。</summary>
     private static void UpdateLoopMode() {
         bool want = Active && ClockServer.Connected && ClockServer.LockstepRequested;
-        if (want == lockstepEngaged) return;
-        lockstepEngaged = want;
-        try {
+        bool changed = want != lockstepEngaged;
+        if (changed) {
+            lockstepEngaged = want;
             Engine.Instance.IsFixedTimeStep = !want;
-            Engine.Graphics.SynchronizeWithVerticalRetrace = !want && global::Celeste.Settings.Instance.VSync;
+            presentationModePending = true;
+            Log.Info($"lockstep {(want ? "engaged" : "released")}");
+        }
+        if (!presentationModePending) return;
+        try {
+            // ApplyChanges resets FNA3D's D3D11 swap chain using the client size.
+            // A minimized window can leave it stuck at a tiny render target.
+            bool minimized = (SDL2.SDL.SDL_GetWindowFlags(Engine.Instance.Window.Handle) &
+                (uint)SDL2.SDL.SDL_WindowFlags.SDL_WINDOW_MINIMIZED) != 0;
+            if (!TakePresentationUpdate(minimized)) {
+                if (changed) Log.Info("lockstep presentation deferred while window is minimized");
+                return;
+            }
+            bool vsync = !want && global::Celeste.Settings.Instance.VSync;
+            bool currentVsync = Engine.Instance.GraphicsDevice.PresentationParameters.PresentationInterval != PresentInterval.Immediate;
+            if (Engine.Graphics.SynchronizeWithVerticalRetrace == vsync && currentVsync == vsync) return;
+            Engine.Graphics.SynchronizeWithVerticalRetrace = vsync;
             Engine.Graphics.ApplyChanges();
+            Log.Info($"lockstep presentation applied (VSync={vsync})");
         } catch (Exception ex) {
+            presentationModePending = false;
             Log.Warn($"switching game loop mode failed: {ex.Message}");
         }
-        Log.Info($"lockstep {(want ? "engaged" : "released")}");
+    }
+
+    internal static bool TakePresentationUpdate(bool windowMinimized) {
+        if (windowMinimized || !presentationModePending) return false;
+        presentationModePending = false;
+        return true;
     }
 
     /// <summary>游戏冻结时声音也冻结：超过 60 毫秒没有推进就暂停 FMOD 主总线，推进时立即恢复。

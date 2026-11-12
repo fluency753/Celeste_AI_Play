@@ -152,8 +152,25 @@ try {
         session.Level = oldRoom; session.Time = oldTime; SaveData.Instance.FileSlot = oldSlot;
     }
     Bridge.ImportReloadState(identitySnapshot);
+    var pending = System.Text.Json.Nodes.JsonNode.Parse(identitySnapshot)!.AsObject();
+    pending["presentationModePending"] = true;
+    Bridge.ImportReloadState(pending.ToJsonString());
+    using (var reloaded = JsonDocument.Parse(Bridge.ExportReloadState()))
+        Check(reloaded.RootElement.GetProperty("presentationModePending").GetBoolean(),
+            "Pending display update was lost across the bridge reload snapshot");
+    Check(!Bridge.TakePresentationUpdate(windowMinimized: true),
+        "The minimized window allowed a display update");
+    Check(Bridge.TakePresentationUpdate(windowMinimized: false),
+        "Restoring the window did not consume the deferred display update");
+    Check(!Bridge.TakePresentationUpdate(windowMinimized: false),
+        "The deferred display update was consumed twice");
+    Bridge.ImportReloadState(pending.ToJsonString());
     var legacy = System.Text.Json.Nodes.JsonNode.Parse(identitySnapshot)!.AsObject(); legacy.Remove("identity");
+    legacy.Remove("presentationModePending");
     Bridge.ImportReloadState(legacy.ToJsonString());
+    using (var reloaded = JsonDocument.Parse(Bridge.ExportReloadState()))
+        Check(!reloaded.RootElement.GetProperty("presentationModePending").GetBoolean(),
+            "An older bridge snapshot unexpectedly scheduled a display update");
     for (int i = 0; i < 30; i++) ClockToken(nextToken++, false);
     Check(receivedEnergy.All(e => e > 0), "Actual dual PCM receiver has no audible baseline");
     for (int cycle = 0; cycle < 3; cycle++) {

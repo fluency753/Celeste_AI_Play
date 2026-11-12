@@ -31,7 +31,7 @@
 
 ## 原有主控与录像交接
 
-桥接 1.3.0 将常驻核心 `CelesteAIRuntime` 与可重载逻辑 `CelesteAIBridge` 拆成两个 Everest Mod。主控通过现有连接在动作边界重载桥接逻辑；常驻核心继续持有冻结门闸、帧号、IPC／OBS 时钟、注入按键绑定、双轨 FMOD 混音器及音频共享内存。主控不发送录制 stop/start，也不另开录制目录。当前版本为桥接 1.11.1、常驻核心 1.0.6，核心 ABI 仍为 1。
+桥接 1.3.0 将常驻核心 `CelesteAIRuntime` 与可重载逻辑 `CelesteAIBridge` 拆成两个 Everest Mod。主控通过现有连接在动作边界重载桥接逻辑；常驻核心继续持有冻结门闸、帧号、IPC／OBS 时钟、注入按键绑定、双轨 FMOD 混音器及音频共享内存。主控不发送录制 stop/start，也不另开录制目录。核心 ABI 为 1。
 
 核心 1.0.6 修复了对 Ultra 专用依赖快照方法的误用。现在仅使用标准 Everest 的内部 `AssemblyContext`／`ActiveDependencyContexts` 成员（经项目 publicizer 访问），自行枚举实际程序集依赖；prepare 与 commit 均预检，查询失败拒绝重载，commit 拒绝保留原交接。没有调用或探测 Ultra 专用 API。标准 Everest 没有原子依赖图快照接口，本检查不保证与第三方后台动态加载之间的原子性。标准 6642 的完整构建与隔离原生检查见 [兼容验证](../calibration/everest_compat/README.md)。安装本次新核心须安排维护重启；不可直接覆盖在用 Runtime，本次兼容修复不自动部署或重启游戏。
 
@@ -88,6 +88,8 @@ Bridge 统一识别后台完成且原生明信片仍附着于 `OverworldLoader`�
 该工具只访问现有 HUD 的 `/api/control`，不会创建第二条桥接连接顶掉主控。DLL 路径、可选 PDB 与哈希由主控检查；`--dll` 与部署脚本一样要求常驻核心逐字节相同：主控在 DLL 同目录或仓库 `game-runtime\bin` 查找一同构建的 `CelesteAIRuntime.dll`（也可用 `--runtime-dll` 指定），与游戏实际加载的核心（`hello.runtime_path`，旧桥接没有时按 `Mods\CelesteAIRuntime\bin` 推断）比较哈希，不同或找不到就拒绝，不替换文件。必须先拿到常驻核心确认的 lease 和实际安装路径，才备份并原子替换 payload。备份放在运行目录的 `bridge_reload_backups/<lease>/`，交接阶段保存在 `bridge_reload.json`。
 
 ## 运行行为与边界
+
+桥接 1.12.1 起，锁步时钟和固定步长立即切换。窗口最小化时，VSync 的应用等到窗口还原，避免 FNA3D 按最小化窗口尺寸重建交换链。热重载会携带待应用标记，恢复时按最新的锁步状态和游戏设置决定 VSync。
 
 主控取得共享 action lock，等待当前 step、呈现确认和回放结束；从读取 `hello`／观测到常驻核心确认冻结之间持续占用游戏连接锁，回放线程不能插入一段回放。原录音计量（帧号、两路音频帧与回放帧）以核心冻结后在 prepare／status 回复中报告的数值为准；重试时若交接记录还是旧版的快照，也改用冻结中的数值，避免因准备前多画了一段回放而永远核验失败。重载空档由核心冻结关卡、向 OBS 回复 `N`，不推进桥接帧、录音帧或成片帧，并把冻结期间的游戏循环限制在约每秒 60 次（锁步录制会关闭固定帧率；冻结帧不进录像，限速只省 CPU／显卡）。新逻辑完成加载后，核验原存档、SID、side、房间、章节计时、桥接帧号、录音计量、注入按键绑定及原录制目录，再结束交接并恢复重载前的用户暂停状态。
 
