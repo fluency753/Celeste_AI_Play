@@ -26,6 +26,7 @@ from .config import REPO_ROOT, RunConfig, find_docker_exe
 LABEL = "celeste-ai-play"
 PLAYER_LOGIN_MOUNT = '/var/lib/celeste-codex-login'
 PLAYER_LOGIN_VOLUME = 'celeste-player-codex-auth-v1'
+CODEX_CONTEXT_CONFIG_LABEL = f'{LABEL}.codex_initial_context'
 
 
 def slug(agent: str) -> str:
@@ -130,6 +131,20 @@ def _git_mount_matches(cfg: RunConfig, mounts: list) -> bool:
     return not any(row.get('Destination', '').startswith('/workspace/.git/') for row in mounts)
 
 
+def _codex_volume(cfg: RunConfig) -> str:
+    return f'celeste-codex-{slug(cfg.workspace_dir.name)}'
+
+
+def _prepare_context_volume(cfg: RunConfig) -> None:
+    from .codex_container import context_config_snapshot
+    volume = _codex_volume(cfg)
+    volumes = docker('volume', 'ls', '--filter', f'name={volume}', '--format', '{{.Name}}')
+    if volume not in volumes.stdout.splitlines() and (snapshot := context_config_snapshot()):
+        # The volume retains the original snapshot even if docker run fails
+        # before there is a container to retry.
+        docker('volume', 'create', '--label', f'{CODEX_CONTEXT_CONFIG_LABEL}={snapshot}', volume)
+
+
 def _create(cfg: RunConfig, name: str) -> None:
     workspace = cfg.workspace_dir
     workspace.mkdir(parents=True, exist_ok=True)
@@ -151,7 +166,7 @@ def _create(cfg: RunConfig, name: str) -> None:
     git = _workspace_git(cfg)
     args += ['-v', f'{git}:/workspace/.git']
     if cfg.engine == 'codex':
-        args += ['-v', f'celeste-codex-{slug(cfg.workspace_dir.name)}:/home/agent/.codex',
+        args += ['-v', f'{_codex_volume(cfg)}:/home/agent/.codex',
                  '-e', 'CODEX_HOME=/home/agent/.codex']
         if cfg.codex_player_login:
             args += ['-v', f'{PLAYER_LOGIN_VOLUME}:{PLAYER_LOGIN_MOUNT}',
@@ -229,7 +244,9 @@ def apply_cpu_limit(cfg: RunConfig, name: str, log=print) -> None:
 
 def ensure_container(cfg: RunConfig, log=print) -> str:
     """返回已就绪（防火墙生效）的容器名；知识库先按当前环境生成。"""
+    from .codex_container import ACCOUNT_AGENT, initialize_context_config
     from .kb_access import prepare_view
+    player_codex = cfg.engine == 'codex' and cfg.agent != ACCOUNT_AGENT
     prepare_view(cfg, log)
     image = docker("image", "inspect", "-f", "{{.Id}}", cfg.image, check=False)
     if image.returncode != 0:
@@ -271,6 +288,8 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
             docker("start", name)
     else:
         log(f"[container] 创建 {name}（工作区 {cfg.workspace_dir}）")
+        if player_codex:
+            _prepare_context_volume(cfg)
         _create(cfg, name)
 
     if cfg.knowledge_profile == "explore" or getattr(cfg, "mode", None) == "explore":
@@ -278,6 +297,11 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if docker("exec", name, "test", "-f", "/run/firewall-ready", check=False).returncode == 0:
+            if player_codex:
+                fmt = '{{with .Labels}}{{index . "' + CODEX_CONTEXT_CONFIG_LABEL + '"}}{{end}}'
+                snapshot = docker('volume', 'inspect', '--format', fmt, _codex_volume(cfg)).stdout.strip()
+                if snapshot:
+                    initialize_context_config(name, snapshot)
             if cfg.engine != 'codex':
                 init_workspace_git(cfg, name, log)
             return name

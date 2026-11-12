@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -54,6 +55,94 @@ class ContainerCodexTests(unittest.TestCase):
                                       'codex','app-server','--listen','stdio://'])
             with self.assertRaises(ValueError):
                 codex.exec_command('-bad', 'codex')
+
+    def test_context_snapshot_copies_only_portable_settings(self):
+        path = self.root / 'config.toml'
+        with patch.dict(os.environ, {'CODEX_HOME': str(self.root)}):
+            self.assertEqual(codex.context_config_snapshot(), '')
+            path.write_text('model_context_window = 500000\nmodel_auto_compact_token_limit = 450000\n'
+                            'sandbox_mode = "danger-full-access"\n[mcp_servers.fixture]\nsecret = "fixture"\n',
+                            encoding='utf-8-sig')
+            self.assertEqual(json.loads(codex.context_config_snapshot()),
+                             {'model_context_window': 500000, 'model_auto_compact_token_limit': 450000})
+            path.write_text('model_context_window = true', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'model_context_window'):
+                codex.context_config_snapshot()
+
+    def test_context_init_is_atomic_one_time_and_preserves_existing_config(self):
+        snapshot = '{"model_context_window":500000}'
+        config = self.home / 'config.toml'
+        with patch.object(codex, 'exec_command', side_effect=self.worker_command), \
+             patch.dict(os.environ, {'CODEX_HOME': str(self.home)}):
+            codex.initialize_context_config('fixture', snapshot)
+            self.assertEqual(tomllib.loads(config.read_text(encoding='utf-8')), {'model_context_window': 500000})
+            config.unlink()
+            codex.initialize_context_config('fixture', snapshot)
+            self.assertFalse(config.exists())
+            (self.home / '.celeste-context-config-initialized').unlink()
+            config.write_text('model_context_window = 600000\n', encoding='utf-8')
+            codex.initialize_context_config('fixture', snapshot)
+            self.assertEqual(tomllib.loads(config.read_text(encoding='utf-8')), {'model_context_window': 600000})
+            self.assertFalse(list(self.home.glob('.context-config-*')))
+
+    def test_initialization_retry_uses_the_creation_snapshot(self):
+        cfg = RunConfig(agent='fixture', save='fixture', model='fixture', engine='codex')
+        path = self.root / 'config.toml'
+        path.write_text('model_context_window = 500000\n', encoding='utf-8')
+        labels, mounts = {}, []
+        volume_snapshot = None
+        runs = 0
+
+        def docker(*args, **kwargs):
+            nonlocal volume_snapshot, runs
+            if args[:2] == ('image', 'inspect'):
+                output = 'image-id'
+            elif args[0] == 'inspect':
+                if not labels:
+                    return subprocess.CompletedProcess(args, 1, '', '')
+                output = f'true|image-id|{json.dumps(labels)}|{json.dumps(mounts)}'
+            elif args[:2] == ('volume', 'ls'):
+                output = container._codex_volume(cfg) if volume_snapshot else ''
+            elif args[:2] == ('volume', 'create'):
+                volume_snapshot = args[3].split('=', 1)[1]
+                output = container._codex_volume(cfg)
+            elif args[:2] == ('volume', 'inspect'):
+                output = volume_snapshot
+            elif args[0] == 'run':
+                runs += 1
+                if runs == 1:
+                    raise RuntimeError('run failed before creating a container')
+                labels.update(dict(args[i + 1].split('=', 1) for i, arg in enumerate(args) if arg == '--label'))
+                mounts.extend({'Destination': destination, 'Type': 'bind', 'RW': True, 'Source': str(source.resolve())}
+                              for destination, source in (('/workspace', cfg.workspace_dir),
+                                                          ('/workspace/.git', cfg.workspace_dir / '.git')))
+                output = 'container-id'
+            else:
+                output = ''
+            return subprocess.CompletedProcess(args, 0, output, '')
+
+        with patch('orchestrator.config.REPO_ROOT', self.root), patch.object(container, 'REPO_ROOT', self.root), \
+             patch('orchestrator.kb_access.prepare_view'), patch.object(container, 'docker', side_effect=docker), \
+             patch.object(container, '_save_tmp', side_effect=AssertionError('reuse must not rebuild')), \
+             patch.dict(os.environ, {'CODEX_HOME': str(self.root)}), \
+             patch.object(codex, 'initialize_context_config', side_effect=[RuntimeError('lost reply'), None]) as init:
+            with self.assertRaisesRegex(RuntimeError, 'run failed'):
+                container.ensure_container(cfg, log=lambda _: None)
+            path.write_text('model_context_window = 600000\n', encoding='utf-8')
+            with self.assertRaisesRegex(RuntimeError, 'lost reply'):
+                container.ensure_container(cfg, log=lambda _: None)
+            container.ensure_container(cfg, log=lambda _: None)
+        self.assertEqual([json.loads(call.args[1]) for call in init.call_args_list],
+                         [{'model_context_window': 500000}, {'model_context_window': 500000}])
+
+    def test_existing_volume_skips_desktop_snapshot(self):
+        cfg = RunConfig(agent='fixture', save='fixture', model='fixture', engine='codex')
+        with patch.object(container, 'docker', return_value=subprocess.CompletedProcess([], 0,
+                          container._codex_volume(cfg) + '\n', '')) as docker, \
+             patch.object(codex, 'context_config_snapshot') as snapshot:
+            container._prepare_context_volume(cfg)
+        docker.assert_called_once()
+        snapshot.assert_not_called()
 
     def test_only_claude_agent_creation_mounts_the_preset_simulator(self):
         for engine in ('codex', 'claude'):

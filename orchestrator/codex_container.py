@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import tomllib
 
 from .config import find_docker_exe
 
@@ -18,6 +20,7 @@ CODEX_HOME = '/home/agent/.codex'
 CODEX_VERSION = '0.165.0-alpha.1.2'
 ACCOUNT_AGENT = 'codex-account'
 LOGIN_BUSY = 73
+CONTEXT_CONFIG_KEYS = ('model_context_window', 'model_auto_compact_token_limit')
 
 
 class CodexLoginBusy(RuntimeError):
@@ -92,6 +95,62 @@ def terminate_owned_server(container: str, owner: str) -> None:
 def _run(container, *command, input=None, timeout=30):
     return subprocess.run(exec_command(container, *command), input=input,
                           capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+
+
+def context_config_snapshot() -> str:
+    """Only transfer portable model window settings from the desktop config."""
+    path = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex') / 'config.toml'
+    try:
+        config = tomllib.loads(path.read_text(encoding='utf-8-sig'))
+    except FileNotFoundError:
+        return ''
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f'无法读取本机 Codex 配置 {path}（{type(exc).__name__}）') from exc
+    settings = {key: config[key] for key in CONTEXT_CONFIG_KEYS if key in config}
+    for key, value in settings.items():
+        if type(value) is not int or not 0 < value < 2**63:
+            raise ValueError(f'本机 Codex 配置 {key} 须为正整数')
+    return json.dumps(settings, separators=(',', ':')) if settings else ''
+
+
+CONFIG_INIT = r'''
+import json, os, sys, tempfile
+from pathlib import Path
+
+root = Path(os.environ['CODEX_HOME'])
+if root.is_symlink() or not root.is_dir():
+    raise ValueError('Codex home unavailable')
+marker = root / '.celeste-context-config-initialized'
+if not os.path.lexists(marker):
+    settings = json.load(sys.stdin)
+    keys = ('model_context_window', 'model_auto_compact_token_limit')
+    if not settings or not isinstance(settings, dict) or set(settings).difference(keys) or any(
+            type(value) is not int or not 0 < value < 2**63 for value in settings.values()):
+        raise ValueError('Invalid Codex context configuration snapshot')
+    out = tempfile.NamedTemporaryFile(dir=root, prefix='.context-config-', mode='w', encoding='utf-8', delete=False)
+    try:
+        with out:
+            out.writelines(f'{key} = {value}\n' for key, value in settings.items())
+            out.flush()
+            os.fsync(out.fileno())
+        try:
+            os.link(out.name, root / 'config.toml')
+        except FileExistsError:
+            pass
+    finally:
+        Path(out.name).unlink()
+    try:
+        marker.touch(exist_ok=False)
+    except FileExistsError:
+        pass
+'''
+
+
+def initialize_context_config(container: str, snapshot: str) -> None:
+    result = _run(container, 'python3', '-c', CONFIG_INIT, input=snapshot)
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f'容器 {container} 的 Codex 上下文配置初始化失败：{detail}')
 
 
 def login_status(container: str) -> dict:
