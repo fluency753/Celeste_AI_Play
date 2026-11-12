@@ -19,7 +19,8 @@ import subprocess
 import uuid
 
 from .purecut import _wav_header
-from .session_store import rename_directory, replace_file
+from .recording_files import finished_movie
+from .session_store import load_json, rename_directory, replace_file
 
 
 class RecoveryError(RuntimeError):
@@ -190,7 +191,7 @@ def prefix_counts(saved):
 
 
 def storage_bytes(saved):
-    """Bytes kept under .recovery (backups, attempts, prefixes, generations); nothing is pruned automatically."""
+    """Bytes kept under .recovery, including any files left after cleanup."""
     total = 0
     for folder, _, names in os.walk(_root(saved) / '.recovery', followlinks=False):
         for name in names:
@@ -439,7 +440,7 @@ def _rows(path):
             yield values
 
 
-def _normalize(saved, relative):
+def _normalize(saved, relative, expected_hashes=None):
     root = _root(saved)
     source = _inside(root, relative)
     output = _inside(root, 'normalized/' + relative)
@@ -450,6 +451,8 @@ def _normalize(saved, relative):
         for name in files:
             locks.enter_context(_closed_file(source / name))
         hashes = {name: _hash(source / name) for name in files}
+        if expected_hashes is not None and hashes != expected_hashes:
+            raise RecoveryError('An immutable capture source changed after validation')
         report_path = output / 'report.json'
         if report_path.exists():
             report = json.loads(report_path.read_text(encoding='utf-8'))
@@ -607,7 +610,9 @@ def _finalize(saved, ledger):
                       'summary': ledger['published'], 'files': files})
         _write(root / '.recovery/ledger.json', ledger)
         return _publish(root, ledger, ledger['transaction'], saved)
-    prefixes = [_normalize(saved, relative) for relative in ledger['chunks']]
+    previous_hashes = {row['source']: row['source_hashes']
+                       for row in (ledger.get('published') or {}).get('recovery_history', [])}
+    prefixes = [_normalize(saved, relative, previous_hashes.get(relative)) for relative in ledger['chunks']]
     useful = [(path, report) for path, report in prefixes if path is not None and report['frames']]
     if not useful:
         summary = {'frames': 0, 'replays': 0, 'prefix_frames': 0, 'boundaries': [],
@@ -681,6 +686,73 @@ def finalize(saved):
     with _lock(root):
         ledger = _load(saved)
         return _finalize(saved, ledger) if ledger else None
+
+
+def prune_finished(saved, generation, log):
+    """Discard derived files after both movies and the session are published."""
+    root = _root(saved)
+    with _lock(root):
+        current = load_json(root / 'session.json')
+        ledger = _load(saved)
+        published = (ledger or {}).get('published') or {}
+        if (not isinstance(current, dict) or current.get('id') != saved['id']
+                or current.get('state') != 'finished' or current.get('postprocess_pending')
+                or not ledger or ledger['phase'] != 'committed' or ledger.get('transaction')
+                or not generation or published.get('generation') != generation):
+            raise RecoveryError('录制归属或发布状态已变化，跳过清理')
+        for pure in (False, True) if published['frames'] > published['replays'] else (False,):
+            movie = finished_movie(root, pure=pure)
+            if movie is None or movie.is_symlink() or not movie.stat().st_size:
+                raise RecoveryError('正式成片未就绪，跳过清理')
+        if not all(_inside(root, f'{generation}/{name}').is_file() for name in ledger['published_files']):
+            raise RecoveryError('当前发布代次缺少修复文件，跳过清理')
+
+        def discard(relative, names, *, empty_directory=False):
+            directory = _inside(root, relative)
+            for name in names:
+                try:
+                    _inside(root, f'{relative}/{name}').unlink(missing_ok=True)
+                except (OSError, RecoveryError) as exc:
+                    log(f'[record] 清理 {relative}/{name} 失败：{exc}')
+            if empty_directory and directory.is_dir() and not any(directory.iterdir()):
+                directory.rmdir()
+
+        for row in published.get('recovery_history', []):
+            source = row['source']
+            if source not in ledger['chunks']:
+                continue
+            if row.get('normalized_hashes'):
+                relative = f'normalized/{source}'
+                retired = f'{relative}-pruned'
+                names = (*MEDIA, 'report.json', 'ffmpeg.log')
+                try:
+                    discard(retired, names, empty_directory=True)
+                    cache, staging = _inside(root, relative), _inside(root, retired)
+                    if cache.is_dir() and not staging.exists() and all(p.name in names for p in cache.iterdir()):
+                        # Retire the complete cache before removing individual files.
+                        rename_directory(cache, staging)
+                        discard(retired, names, empty_directory=True)
+                except (OSError, RecoveryError) as exc:
+                    log(f'[record] 清理 {relative} 失败：{exc}')
+            if (source != 'base' and row.get('validation') == 'clean-encoder-packets'
+                    and not any(row.get(field) for field in ('unused_video_frames', 'unused_csv_rows',
+                                'unused_full_pcm_bytes', 'unused_play_pcm_bytes',
+                                'unusable_csv_tail_rows', 'unusable_csv_tail_bytes'))):
+                try:
+                    discard(source, ('gameplay.mp4',))
+                except (OSError, RecoveryError) as exc:
+                    log(f'[record] 清理 {source} 的中间成片失败：{exc}')
+        for directory in (root / '.recovery').iterdir():
+            if directory.name != generation and re.fullmatch(r'generation-[0-9a-f]{32}', directory.name):
+                try:
+                    discard(directory.name, (*MEDIA, 'concat.txt', 'ffmpeg.log'), empty_directory=True)
+                except (OSError, RecoveryError) as exc:
+                    log(f'[record] 清理 {directory.name} 失败：{exc}')
+        remaining = storage_bytes(saved)
+        if published.get('recovery_bytes') != remaining:
+            published['recovery_bytes'] = remaining
+            _write(root / '.recovery/ledger.json', ledger)
+        return remaining
 
 
 def prepare(saved):

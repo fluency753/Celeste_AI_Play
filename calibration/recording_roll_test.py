@@ -710,6 +710,51 @@ class RollTests(unittest.TestCase):
         self.assertEqual(Recorder.saved_session(self.run)['state'], 'finishing')
         self.assertEqual(Recorder.resume_mode(Recorder.saved_session(self.run), self.bridge.hello), 'recover')
 
+    def test_successful_final_movies_prune_rebuildable_files_and_keep_recovery(self):
+        from orchestrator import recording_recovery
+        recorder = self.recorder()
+        self.bridge.advance(3)
+        recorder.stop()
+        root = recorder.opts.dir.resolve()
+        recovered = Recorder.recover(self.bridge.call, Recorder.saved_session(self.run), self.run, log=lambda _: None)
+        capture = Path(self.bridge.plugin['dir'])
+        self.bridge.advance(2)
+        (capture/'segments.csv').write_text(','.join(recording_recovery.SEG_FIELDS) + '\n', encoding='utf-8')
+        (capture/'gameplay.mp4').write_bytes(b'private intermediate')
+        old = root/'.recovery'/('generation-' + '0'*32)
+        old.mkdir()
+        (old/'video.mkv').write_bytes(b'obsolete intermediate')
+        (old/'previous-gameplay.mp4').write_bytes(b'archive')
+
+        def make_pure(directory, *_):
+            path = directory/'gameplay_pure.mp4'
+            path.write_bytes(b'pure movie')
+            return {'state': 'finished', 'frames': 5, 'seconds': 5/60, 'removed': 0, 'file': str(path)}
+
+        with patch('orchestrator.recording.make_pure', side_effect=make_pure):
+            result = recovered.stop()
+        saved = Recorder.saved_session(self.run)
+        self.assertEqual(saved['state'], 'finished')
+        self.assertEqual(result['frames'], 5)
+        self.assertTrue((root/'gameplay.mp4').is_file())
+        self.assertTrue((root/'gameplay_pure.mp4').is_file())
+        self.assertTrue((capture/'video.mkv').is_file())
+        self.assertFalse((capture/'gameplay.mp4').exists())
+        self.assertFalse((root/'.recovery/normalized'/capture.name).exists())
+        self.assertFalse((old/'video.mkv').exists())
+        self.assertEqual((old/'previous-gameplay.mp4').read_bytes(), b'archive')
+        generation = root/'.recovery'/result['recovery']['generation']
+        self.assertEqual((generation/'video.mkv').read_bytes(), b'fffff')
+        self.assertEqual(result['recovery']['recovery_bytes'], recording_recovery.storage_bytes(saved))
+        recording_recovery.prune_finished(saved, generation.name, lambda _: None)
+
+        recording_recovery.prepare(saved)
+        (capture/'video.mkv').write_bytes(b'changed')
+        with self.assertRaisesRegex(recording_recovery.RecoveryError, 'immutable capture source changed'):
+            recording_recovery.finalize(saved)
+        (capture/'video.mkv').write_bytes(b'ff')
+        self.assertEqual(recording_recovery.finalize(saved)['frames'], 5)
+
     def test_archived_movies_are_moved_never_deleted_and_stale_backups_are_kept(self):
         from orchestrator import recording_recovery
         recorder = self.recorder()

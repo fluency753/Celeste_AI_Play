@@ -84,15 +84,14 @@ def _has_files(directory: Path) -> bool:
 
 
 def log_storage(saved: dict, log: Callable[[str], None] = print) -> None:
-    """恢复目录只增不删：每次恢复或收尾时报告占用，方便用户自己决定何时整理。"""
+    """报告恢复资料与可能尚未清理的中间文件占用。"""
     from .recording_recovery import storage_bytes
     try:
         size = storage_bytes(saved)
     except Exception:  # noqa: BLE001（只是提示）
         return
     if size:
-        log(f'[record] 恢复目录 .recovery 当前占用 {size / 2**30:.2f} GiB（原件备份、各次采集、校验过的前缀与累计版本，'
-            '主控不会自动删除）')
+        log(f'[record] 恢复目录 .recovery 当前占用 {size / 2**30:.2f} GiB')
 
 
 def load_config() -> dict:
@@ -869,7 +868,6 @@ class Recorder:
                 recovered = finalize(self._session_data('finishing'))
             except (RecoveryError, OSError, ValueError) as exc:
                 raise RecordingError(f'录制采集已停止，但累计文件发布未完成：{exc}；保留原文件，可重试收尾') from exc
-            log_storage(self._session_data('finishing'), self.log)
         files = {p.name: p.stat().st_size for p in sorted(directory.iterdir()) if p.is_file()} if directory.exists() else {}
         result = {
             "state": plugin.get("state") if complete else ('finishing' if self._stop.capture_stopped else 'recording'),
@@ -917,6 +915,19 @@ class Recorder:
             self._recovery_start = None
         self._postprocess_pending = False if complete else self._postprocess_pending
         self._save_session(result['state'] if complete else ('finishing' if self._stop.capture_stopped else 'recording'))
+        pure = result.get('pure') or {}
+        if recovered is not None:
+            saved = self._session_data(result['state'])
+            if (not _rolling and result['state'] == 'finished' and movie is not None
+                    and (pure.get('state') == 'finished' or
+                         pure.get('state') == 'skipped' and recovered['frames'] == recovered['replays'])):
+                from .recording_recovery import prune_finished, RecoveryError
+                try:
+                    remaining = prune_finished(saved, recovered.get('generation'), self.log)
+                    result['recovery'] = {**recovered, 'recovery_bytes': remaining}
+                except (RecoveryError, OSError, ValueError, KeyError, TypeError) as exc:
+                    self.log(f'[record] 成片已保存，恢复目录清理未完成：{exc}')
+            log_storage(saved, self.log)
         self.result = result
         try:
             (directory / "recording.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -928,7 +939,6 @@ class Recorder:
                  f"其中规划回放 {check.get('replay_frames') or 0} 帧（补帧 {check.get('replay_filled') or 0}），缺帧 {check.get('missing_frames')}，重复 {check.get('repeats')}"
                  + (f"，错误：{result['error']}" if result["error"] else "")
                  + (f"；成片 {movie}" if movie is not None else ""))
-        pure = result.get("pure") or {}
         if pure.get("state") == "finished":
             self.log(f"[record] 纯享版：{pure['frames']} 帧（{pure['seconds']:.1f} 秒，去掉规划回放 {pure['removed']} 帧）；{pure['file']}")
         return result
