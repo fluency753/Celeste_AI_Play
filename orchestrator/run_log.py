@@ -181,10 +181,34 @@ def is_crash(error: BaseException | None) -> bool:
         error, (KeyboardInterrupt, SystemExit, GeneratorExit, asyncio.CancelledError))
 
 
-def log_exception(context: str, error: Exception) -> None:
-    """Record an exception that the caller will handle without exiting the main process."""
+def is_rejection(error: BaseException) -> bool:
+    """A refusal reported back to the agent: ValueErrors all the way down the cause/context chain.
+
+    Anything else underneath (a broken connection, a bug) is not a plain refusal.
+    """
+    seen, current = set(), error
+    while current is not None and id(current) not in seen:
+        if not isinstance(current, ValueError):
+            return False
+        seen.add(id(current))
+        current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+    return True
+
+
+def log_exception(context: str, error: Exception, *, stack: bool = True) -> None:
+    """Record an exception that the caller will handle without exiting the main process.
+
+    stack=False writes one line (type and message) for expected refusals.
+    """
     try:
-        print(f'{context}\n' + ''.join(traceback.format_exception(error)), file=sys.stderr, end='', flush=True)
+        if stack:
+            text = f'{context}\n' + ''.join(traceback.format_exception(error))
+        else:
+            message = ' '.join(str(error).split())
+            if len(message) > REASON_CHARS:
+                message = message[:REASON_CHARS - 1] + '…'
+            text = f'{context} {type(error).__name__}: {message}\n'
+        print(text, file=sys.stderr, end='', flush=True)
     except (OSError, ValueError):
         pass  # A failing output stream must not replace the original exception.
 

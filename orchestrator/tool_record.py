@@ -13,7 +13,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import TextContent
 
-from .run_log import log_exception
+from .run_log import is_rejection, log_exception
 
 
 ACTION_TOOLS = {'act', 'cutscene', 'travel', 'exit_level'}
@@ -168,6 +168,7 @@ class ToolJournal:
             record['detail'] = deepcopy(value)
 
     def log_failure(self, error, *, phase):
+        """Refusals (ValueError chains such as ActError) get one line; transport and unexpected errors the full stack."""
         from .game_session import REQUEST_TICKET
         record = self.current.get() or {}
         ticket = REQUEST_TICKET.get()
@@ -178,7 +179,8 @@ class ToolJournal:
                       f"call_id={ticket.call_id if ticket else None} phase={phase} "
                       f"handler_entered={record.get('handler_entered', False)} "
                       f"input_boundary_passed={ticket.started if ticket else None} "
-                      f"before_frame={before.get('frame')} last_observed_frame={last_frame}", error)
+                      f"before_frame={before.get('frame')} last_observed_frame={last_frame}", error,
+                      stack=not is_rejection(error))
 
     def not_executed(self):
         """Only explicit pre-dispatch/validation branches may assert no execution."""

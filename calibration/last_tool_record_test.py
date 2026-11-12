@@ -137,6 +137,22 @@ class LastToolRecordTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('动作未执行', json.dumps(record['result'], ensure_ascii=False))
         self.assertEqual(self.document()['last_action'], previous_action)
 
+    async def test_refusal_logs_one_line_but_transport_cause_keeps_the_stack(self):
+        await self.act()
+        with redirect_stderr(StringIO()) as output:
+            await self.act(inputs=['700,R'])     # 普通退回：一行，不打堆栈
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 1, output.getvalue())
+        self.assertIn('phase=act', lines[0])
+        self.assertIn('ActError: ', lines[0])
+        wrapped = ActError('执行后的输入回执丢失')
+        wrapped.__cause__ = ConnectionResetError(10054, 'original receive failure')
+        self.bridge.fail_after_step = wrapped
+        with redirect_stderr(StringIO()) as output:
+            await self.act()
+        self.assertIn('Traceback', output.getvalue())
+        self.assertIn('ConnectionResetError: [Errno 10054] original receive failure', output.getvalue())
+
     async def test_server_gate_refusal_preserves_the_previous_action(self):
         await self.act()
         previous_action = self.document()['last_action']

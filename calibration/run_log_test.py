@@ -68,6 +68,33 @@ class RunLogTests(unittest.TestCase):
         self.assertIn('OSError: pipe closed', text)
         self.assertIn('ConnectionError: Codex app-server 已断开', text)
 
+    def test_refusals_are_value_errors_all_the_way_down(self):
+        self.assertTrue(run_log.is_rejection(ValueError('参数不对')))
+        try:
+            try:
+                raise ValueError('内层')
+            except ValueError as inner:
+                raise ValueError('外层') from inner
+        except ValueError as outer:
+            self.assertTrue(run_log.is_rejection(outer))
+        self.assertFalse(run_log.is_rejection(self.crashed()))       # ConnectionError underneath
+        try:
+            try:
+                raise KeyError('bug')
+            except KeyError:
+                raise ValueError('包装后的错误')                      # Implicit context still counts.
+        except ValueError as error:
+            self.assertFalse(run_log.is_rejection(error))
+        self.assertFalse(run_log.is_rejection(OSError('pipe closed')))
+
+    def test_refusal_is_one_line_without_stack(self):
+        with redirect_stderr(io.StringIO()) as output:
+            run_log.log_exception('[tools] phase=act', ValueError('动作未执行：\n超过 600 帧'), stack=False)
+        self.assertEqual(output.getvalue(), '[tools] phase=act ValueError: 动作未执行： 超过 600 帧\n')
+        with redirect_stderr(io.StringIO()) as output:
+            run_log.log_exception('[tools] phase=act', ValueError('长' * 1000), stack=False)
+        self.assertLessEqual(len(output.getvalue()), len('[tools] phase=act ValueError: \n') + run_log.REASON_CHARS)
+
     def test_attach_without_install_does_nothing(self):
         self.assertIsNone(run_log._ACTIVE)    # Tests and imports never replace sys.stdout.
         self.assertIsNone(run_log.attach(self.directory))

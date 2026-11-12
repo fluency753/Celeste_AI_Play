@@ -29,7 +29,7 @@ docker build -t celeste-agent:0.1 agent-container
 
 HUD 新建的 Codex player 会话各自持有工作区、线程和配置。登录单独保存在项目的 `celeste-player-codex-auth-v1` 持久卷，默认在这些新工作区间串行复用。命令行可用 `--codex-player-login` 选择同一身份。既有独立工作区继续在自己的卷维护凭据，测试可使用独立工作区。设备登录和 App Server 在共享卷上持有同一把独占锁，App Server 退出后下一个工作区才能接力，由持有者原生续期。
 
-首次创建 Player 的 Codex 工作区卷时，主控从本机 `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）复制已配置的 `model_context_window` 和 `model_auto_compact_token_limit`，生成该工作区自己的 `/home/agent/.codex/config.toml`。宿主文件缺失或没有这两项时使用 Codex 默认值。现有卷沿用其配置，复用、重启或重建容器时不会同步桌面改动；已启动的工作区可以单独配置。模型目录账号容器使用自己的配置。其他宿主设置及登录凭据走各自的入口。
+首次创建 Player 的 Codex 工作区卷时，主控从本机 `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）复制已配置的 `model_context_window` 和 `model_auto_compact_token_limit`，生成该工作区自己的 `/home/agent/.codex/config.toml`。宿主文件缺失或没有这两项时使用 Codex 默认值；文件读不了、格式有误或某项不是正整数时，主控输出提示并跳过该项（读不了则两项都跳过），照常创建工作区。现有卷沿用其配置，复用、重启或重建容器时不会同步桌面改动；已启动的工作区可以单独配置。模型目录账号容器使用自己的配置。其他宿主设置及登录凭据走各自的入口。
 
 首次准备或试玩发现缺少登录时会输出 `--container NAME login` 命令。授权完成后，命令行重试原命令，HUD 点击「登录后重试准备」继续使用同一工作区。登录正被其他工作区占用时先退出聊天或挂起试玩。模型列表使用独立账号容器的目录接口，可在无登录状态下读取目录，目录结果只用于选型。
 

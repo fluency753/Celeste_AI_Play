@@ -65,9 +65,18 @@ class ContainerCodexTests(unittest.TestCase):
                             encoding='utf-8-sig')
             self.assertEqual(json.loads(codex.context_config_snapshot()),
                              {'model_context_window': 500000, 'model_auto_compact_token_limit': 450000})
+            # A bad value or an unreadable file is reported and skipped, never blocking creation.
+            logs = []
+            path.write_text('model_context_window = true\nmodel_auto_compact_token_limit = 450000\n', encoding='utf-8')
+            self.assertEqual(json.loads(codex.context_config_snapshot(logs.append)),
+                             {'model_auto_compact_token_limit': 450000})
+            self.assertTrue(any('model_context_window' in line for line in logs))
+            logs.clear()
             path.write_text('model_context_window = true', encoding='utf-8')
-            with self.assertRaisesRegex(ValueError, 'model_context_window'):
-                codex.context_config_snapshot()
+            self.assertEqual(codex.context_config_snapshot(logs.append), '')
+            path.write_text('model_context_window = [unclosed', encoding='utf-8')
+            self.assertEqual(codex.context_config_snapshot(logs.append), '')
+            self.assertTrue(any('TOMLDecodeError' in line and '默认值' in line for line in logs), logs)
 
     def test_context_init_is_atomic_one_time_and_preserves_existing_config(self):
         snapshot = '{"model_context_window":500000}'

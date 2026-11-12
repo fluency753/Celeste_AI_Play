@@ -16,10 +16,10 @@ def clean_text(value, limit=4000):
     text = str(value)
     text = re.sub(r'data:[^\s\"\'<>]+', '[attachment omitted]', text, flags=re.I)
     text = re.sub(r'<(analysis|thinking|reasoning)>.*?</\1>', '[private reasoning omitted]', text, flags=re.I | re.S)
-    text = re.sub(r'''(?i)(\bauthorization\s*[:=]\s*)(?:bearer|basic|digest|negotiate)\s+[^\r\n"'<>]+''', r'\1[REDACTED]', text)
+    text = re.sub(r'''(?i)(\bauthorization\s*[:=]\s*)(?:bearer|basic|digest|negotiate)\s+[^\r\n"'<>]+''', r'\1[隐藏]', text)
     # Consume the complete bearer value before generic key:value redaction can
     # remove only the word "Bearer" and leave its credential behind.
-    text = re.sub(r'(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[REDACTED]', text)
+    text = re.sub(r'(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[隐藏]', text)
     return safe_text(text, limit)
 
 

@@ -654,8 +654,11 @@ class AnalysisTests(unittest.TestCase):
     def test_bearer_header_redaction_through_cli_archive_and_prediction_not_observation(self):
         secret = 'BearerSecretCanaryABC123'
         for text in (f'Authorization: Bearer {secret}', f'curl -H "authorization: bEaReR {secret}"',
-                     f'{{"Authorization":"Bearer {secret}"}}', f'Authorization: Basic {secret}'):
+                     f'{{"Authorization":"Bearer {secret}"}}', f'Authorization: Basic {secret}',
+                     f'echo Bearer {secret}'):
             self.assertNotIn(secret, clean_text(text))
+            self.assertIn('[隐藏]', clean_text(text))      # One credential marker across HUD and export.
+            self.assertNotIn('REDACTED', clean_text(text))
         self.runtime('item/completed', 1001, item={'type': 'commandExecution', 'id': 'sh',
                      'command': f'curl -H "Authorization: Bearer {secret}"',
                      'aggregatedOutput': f'Authorization: Bearer {secret}', 'exitCode': 0})

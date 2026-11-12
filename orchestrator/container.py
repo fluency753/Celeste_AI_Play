@@ -135,11 +135,11 @@ def _codex_volume(cfg: RunConfig) -> str:
     return f'celeste-codex-{slug(cfg.workspace_dir.name)}'
 
 
-def _prepare_context_volume(cfg: RunConfig) -> None:
+def _prepare_context_volume(cfg: RunConfig, log=print) -> None:
     from .codex_container import context_config_snapshot
     volume = _codex_volume(cfg)
     volumes = docker('volume', 'ls', '--filter', f'name={volume}', '--format', '{{.Name}}')
-    if volume not in volumes.stdout.splitlines() and (snapshot := context_config_snapshot()):
+    if volume not in volumes.stdout.splitlines() and (snapshot := context_config_snapshot(log)):
         # The volume retains the original snapshot even if docker run fails
         # before there is a container to retry.
         docker('volume', 'create', '--label', f'{CODEX_CONTEXT_CONFIG_LABEL}={snapshot}', volume)
@@ -289,7 +289,7 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
     else:
         log(f"[container] 创建 {name}（工作区 {cfg.workspace_dir}）")
         if player_codex:
-            _prepare_context_volume(cfg)
+            _prepare_context_volume(cfg, log)
         _create(cfg, name)
 
     if cfg.knowledge_profile == "explore" or getattr(cfg, "mode", None) == "explore":

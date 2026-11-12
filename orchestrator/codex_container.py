@@ -97,19 +97,30 @@ def _run(container, *command, input=None, timeout=30):
                           capture_output=True, text=True, encoding='utf-8', timeout=timeout)
 
 
-def context_config_snapshot() -> str:
-    """Only transfer portable model window settings from the desktop config."""
+def context_config_snapshot(log=print) -> str:
+    """Only transfer portable model window settings from the desktop config.
+
+    This is a convenience copy: an unreadable file or an invalid value is reported and
+    skipped (Codex defaults apply) instead of blocking container creation.
+    """
     path = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex') / 'config.toml'
     try:
         config = tomllib.loads(path.read_text(encoding='utf-8-sig'))
     except FileNotFoundError:
         return ''
     except (OSError, ValueError) as exc:
-        raise RuntimeError(f'无法读取本机 Codex 配置 {path}（{type(exc).__name__}）') from exc
-    settings = {key: config[key] for key in CONTEXT_CONFIG_KEYS if key in config}
-    for key, value in settings.items():
-        if type(value) is not int or not 0 < value < 2**63:
-            raise ValueError(f'本机 Codex 配置 {key} 须为正整数')
+        log(f'[container] 无法读取本机 Codex 配置 {path}（{type(exc).__name__}），'
+            '新工作区的上下文窗口与自动压缩阈值使用 Codex 默认值')
+        return ''
+    settings = {}
+    for key in CONTEXT_CONFIG_KEYS:
+        if key not in config:
+            continue
+        value = config[key]
+        if type(value) is int and 0 < value < 2**63:
+            settings[key] = value
+        else:
+            log(f'[container] 本机 Codex 配置 {key} 不是正整数，未复制；新工作区使用 Codex 默认值')
     return json.dumps(settings, separators=(',', ':')) if settings else ''
 
 
