@@ -8,7 +8,9 @@ def safe_text(value, limit=700):
     text = re.sub(r'(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[隐藏]', text)
     text = re.sub(r'\bsk-[A-Za-z0-9_-]{8,}', '[隐藏]', text)
     text = re.sub(r'[A-Za-z0-9+/=]{160,}', '[编码省略]', text)
-    text = re.sub(r'''(?i)((?:api[_-]?key|access[_-]?token|password|authorization)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)''', r'\1[隐藏]', text)
+    name = r'(?:api[_-]?key|access[_-]?token|password|authorization)'
+    value = r'''(?:'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\\[\s\S]|[^\s;'"\\|&()<>])+'''
+    text = re.sub(rf'(?i)({name}\s*[:=]\s*|--{name}\s+){value}', r'\1[隐藏]', text)
     return text[:limit] + ('…' if len(text) > limit else '')
 
 

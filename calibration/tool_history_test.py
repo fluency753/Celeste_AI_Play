@@ -1,6 +1,8 @@
 """Actual runtime event consumers; no bridge, model or user configuration."""
+import base64
 import json
 from pathlib import Path
+import shlex
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -85,6 +87,38 @@ class ToolHistoryTests(unittest.TestCase):
         self.assertEqual(rows[0]['status'], 'returned')
         self.assertIsNone(rows[0]['parameters'])
         self.assertIsNone(rows[0]['result'])
+
+    def test_native_shell_history_shows_decoded_and_redacted_command(self):
+        original = "printf '%s\\n' 'hello world' | head -1\nprogram --password 'sample secret'"
+        encoded = base64.b64encode(original.encode()).decode()
+        wrapper = '/usr/bin/python3 /usr/local/lib/celeste/codex-shell.py --seconds 120 --command-base64 '
+        command = '/bin/bash -c ' + shlex.quote(wrapper + encoded)
+        for method in ('item/started', 'item/completed'):
+            self.app_event(method, {'type': 'commandExecution', 'id': 'shell', 'command': command,
+                                    'cwd': '/workspace', 'exitCode': 0})
+        self.app_event('item/completed', {'type': 'commandExecution', 'id': 'malformed', 'command': wrapper + 'A==='})
+        unwrapped = "printf '%s' " + shlex.quote(wrapper + encoded)
+        self.app_event('item/completed', {'type': 'commandExecution', 'id': 'literal', 'command': unwrapped})
+        split = command.replace(' --command-base64 ', '\n--command-base64 ')
+        self.app_event('item/completed', {'type': 'commandExecution', 'id': 'split', 'command': split})
+        rows = {row['id']: row for row in self.reader.snapshot()['items']}
+        self.assertEqual(rows['shell']['parameters'], {'command': original.replace("'sample secret'", '[隐藏]'),
+                                                       'cwd': '/workspace', 'timeout_s': '120'})
+        self.assertIn("printf '%s\\n' 'hello world' | head -1", rows['shell']['text'])
+        self.assertNotIn('sample secret', rows['shell']['text'])
+        self.assertEqual(rows['malformed']['parameters']['command'], '[原始命令无法还原]')
+        self.assertEqual(rows['literal']['parameters']['command'], unwrapped)
+        self.assertEqual(rows['split']['parameters']['command'], split)
+
+    def test_shell_redaction_consumes_quoted_and_escaped_credential_values(self):
+        for option, prefix in ((r'--password "example\" secret"', '--password '),
+                               (r'--api-key value\ continued', '--api-key '),
+                               (r"--access-token 'first'\''second'", '--access-token '),
+                               ('--password example,secret', '--password '),
+                               (r'PASSWORD="example\" secret"', 'PASSWORD=')):
+            with self.subTest(option=option):
+                self.assertEqual(safe_text(f'program {option} --next value'),
+                                 f'program {prefix}[隐藏] --next value')
 
     def test_delivery_before_call_and_replays_do_not_invent_receipt_or_duplicate_images(self):
         path = self.run/'tool_deliveries.jsonl'
