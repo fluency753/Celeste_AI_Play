@@ -94,6 +94,18 @@ class GameWatchTests(unittest.TestCase):
         self.assertEqual(game_watch.game_dir_from(self.system.hello), self.system.game_dir.resolve())
         self.assertIsNone(game_watch.game_dir_from({'process_id': 40}))
 
+    def test_game_directory_match_tolerates_other_spellings_of_the_same_folder(self):
+        # The resolved game folder can be spelled differently from the process path
+        # (8.3 short names such as C:\Users\ADMINI~1 on Windows, links elsewhere).
+        real = self.system.game_dir
+        self.assertTrue(game_watch._inside(str(real / 'Celeste.exe'), real.resolve()))
+        self.assertFalse(game_watch._inside(str(self.root / 'Other/Celeste.exe'), real))
+        try:
+            (self.root / 'alias').symlink_to(real, target_is_directory=True)
+        except OSError:
+            self.skipTest('cannot create a directory link here')
+        self.assertTrue(game_watch._inside(str(self.root / 'alias/Celeste.exe'), real.resolve()))
+
     def test_steam_started_before_the_game_is_fine(self):
         facts = game_watch.require_live_steam(self.system.hello, self.logs.append, self.system)
         self.assertEqual((facts['relation'], facts['steam_client_loaded'], facts['stale']),

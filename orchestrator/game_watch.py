@@ -44,13 +44,16 @@ def game_dir_from(hello: dict) -> Path | None:
 
 
 def _inside(path: str | None, directory: Path) -> bool:
+    """Compare as written and fully resolved: 8.3 short names (C:\\Users\\ADMINI~1) and links can differ."""
     if not path:
         return False
-    try:
-        return Path(os.path.normcase(os.path.abspath(path))).is_relative_to(
-            Path(os.path.normcase(os.path.abspath(directory))))
-    except (OSError, ValueError):
-        return False
+    for form in (os.path.abspath, os.path.realpath):
+        try:
+            if Path(os.path.normcase(form(path))).is_relative_to(Path(os.path.normcase(form(directory)))):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 class WindowsProcesses:
