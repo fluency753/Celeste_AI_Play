@@ -30,7 +30,7 @@ from .goals import GoalManager
 from .modes import act_frame_cap, act_frame_min, is_explore
 from .token_menu import TokenMenu, TokenMenuBoundary
 from .stop_categories import REASON_MAX_CHARS as STOP_REASON_MAX, load_stop_categories
-from .thought import thought_problem
+from .thought import fit_thought
 from .workspace_files import tas
 from .workspace_setup import install_game_helpers
 from .segments import (Piece, checkpoint_name, checkpoint_room, chapters_of, piece_label, pieces_of, plan_has_sides, segment_key,
@@ -1473,9 +1473,7 @@ class GameSession:
         thought = (thought or "").strip()
         if not thought:
             raise ActError("thought 不能为空：用一两句话说明这段操作的意图")
-        problem = thought_problem(self.cfg, thought)
-        if problem:
-            raise ActError(problem)
+        thought, thought_note = fit_thought(self.cfg, thought)     # 超长不退回：照常执行，显示截短后的
         forced: list[str] = []          # 剧情交给智能体时强制加的截断条件（自动重试重算计划后也保留）
         if self.cfg.cutscene_mode == 'agent':
             last = self.last_obs or {}
@@ -1495,7 +1493,7 @@ class GameSession:
             if plan.input_format != self.token_menu.state['input_format']:
                 raise ActError('暂停待结算期间须沿用暂停前输入格式；请用原格式取消暂停后再切换格式。')
         frames = self._check_plan(plan)
-        pre_notes: list[str] = []
+        pre_notes: list[str] = [thought_note] if thought_note else []
         if plan.retry and self.cfg.pause_limit:
             # 每次尝试都要由智能体自己想过、带一句新的思考语句发起，所以不自动重试
             plan = replace(plan, retry=None)
@@ -2774,9 +2772,7 @@ class GameSession:
         thought = (thought or "").strip()
         if not thought:
             raise ActError("thought 不能为空：用一两句话说明为什么去")
-        problem = thought_problem(self.cfg, thought)
-        if problem:
-            raise ActError(problem)
+        thought, thought_note = fit_thought(self.cfg, thought)
         from .segments import load_table
         table = self._table or load_table()
         try:
@@ -2900,6 +2896,8 @@ class GameSession:
         obs = self._track_motion(obs)
         self._update_metrics_from_obs(obs)
         self._write_workspace(obs)
+        if thought_note:
+            notes.append(thought_note)
         return obs, image, notes
 
     def _handle_events(self, result: dict, obs=None) -> None:

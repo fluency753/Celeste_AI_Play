@@ -42,6 +42,10 @@ class ThoughtLengthTests(unittest.TestCase):
         c = explore(formal_thought=True)
         self.assertIsNone(thought_problem(c, "字" * 120 + " wallbounce hyper", temp=True))
         self.assertIn("临时思考", thought_problem(c, "字" * 121, temp=True))
+        from orchestrator.thought import fit_thought
+        shown, note = fit_thought(c, "字" * 121, temp=True)            # 超长不退回：截短显示并说明
+        self.assertEqual(shown, "字" * 119 + "…")
+        self.assertIn("临时思考 有 121 个汉字，超过上限 120 个", note)
         self.assertIn("31 个汉字", thought_problem(c, "字" * 31))
         c.thought_temp_max_hanzi = 60
         self.assertIn("61 个汉字", thought_problem(c, "字" * 61, temp=True))

@@ -1,12 +1,14 @@
-"""思考语句（act 的 thought 与 narrate）的长度要求。
+"""思考语句（act／travel 的 thought 与 narrate）的长度要求。
 
-- 两种执行器都有总长度上限 thought_max_chars（默认 120 字，超过就退回）；
-- Claude Code 执行器另限汉字数 thought_max_hanzi（默认 30 个；英文术语、数字与标点不计），写进提示词与工具说明，
-  超过也退回，让智能体压缩后再提交（用户要求）。模型档案（模型行的 thought）可以按模型另定，可调参数改过的优先。
+- 两种执行器都有总长度上限 thought_max_chars（默认 120 字）；
+- Claude Code 执行器另限汉字数 thought_max_hanzi（默认 30 个；英文术语、数字与标点不计），写进提示词与工具说明。
+  模型档案（模型行的 thought）可以按模型另定，可调参数改过的优先。
   Codex 执行器默认不限汉字数，提示词与工具说明照旧；configs/codex.json 的模型行写了 thought 时按它限。
 - 开了"仅正式思考"（--formal-thought）时，narrate 写的是临时思考（只进控制台）：Claude Code 执行器的汉字数上限改用
   thought_temp_max_hanzi（默认 120 个），总长度上限放宽到它的 3 倍（不少于 thought_max_chars）；act 的 thought 是正式
   思考，规则不变。Codex 执行器照旧。
+- 超过上限时不退回（2026-11-13 用户改；此前整条退回，每次白费一次调用）：动作照常执行，显示与记录用截短后的
+  文字（fit_thought），并在结果里告诉智能体超了多少、显示成了什么。
 """
 from __future__ import annotations
 
@@ -56,7 +58,7 @@ def char_cap(cfg, temp: bool = False) -> int:
 
 
 def thought_problem(cfg, text: str, temp: bool = False) -> str | None:
-    """思考语句超长时退回给智能体的说明（不带句号）；没问题时为 None。temp：narrate 的临时思考（开了"仅正式思考"时）。"""
+    """思考语句超长时的说明（不带句号）；没问题时为 None。temp：narrate 的临时思考（开了"仅正式思考"时）。"""
     name = "临时思考" if temp and temp_thoughts(cfg) else "thought"
     cap = char_cap(cfg, temp)
     if len(text) > cap:
@@ -67,3 +69,30 @@ def thought_problem(cfg, text: str, temp: bool = False) -> str | None:
         if n > limit:
             return f"{name} 太长：有 {n} 个汉字，请压缩到 {limit} 个以内（英文术语不计）"
     return None
+
+
+BREAKS = "，。；！？、,.;!? "
+
+
+def fit_thought(cfg, text: str, temp: bool = False) -> tuple[str, str | None]:
+    """超长的思考语句截到上限以内，用于显示与记录；返回（要显示的文字，给智能体的说明或 None）。
+    尽量在靠后的标点处截断，末尾加省略号。动作照常执行，说明随结果送回，让之后的写短些。"""
+    if thought_problem(cfg, text, temp) is None:
+        return text, None
+    full_cap, full_limit = char_cap(cfg, temp), hanzi_limit(cfg, temp)
+    cap, limit = full_cap - 1, None if full_limit is None else full_limit - 1      # 留一个字给省略号
+    kept, hanzi = 0, 0
+    for ch in text:
+        if kept >= cap or (limit is not None and hanzi + count_hanzi(ch) > limit):
+            break
+        kept += 1
+        hanzi += count_hanzi(ch)
+    shown = text[:kept]
+    cut = max(shown.rfind(mark) for mark in BREAKS)
+    if cut >= kept * 0.6:          # 靠后有标点：在那里断开，句子完整些
+        shown = shown[:cut]
+    shown = shown.rstrip(BREAKS) + "…"
+    name = "临时思考" if temp and temp_thoughts(cfg) else "thought"
+    over = (f"有 {len(text)} 字，超过上限 {full_cap} 字" if len(text) > full_cap
+            else f"有 {count_hanzi(text)} 个汉字，超过上限 {full_limit} 个（英文术语不计）")
+    return shown, f"{name} {over}：没有退回，显示的是截短后的「{shown}」；之后请写在上限以内"

@@ -924,6 +924,30 @@ class StoryFlowTests(unittest.TestCase):
             self.s._auto_advance(obs,None)
         skip.assert_called_once()
 
+    def test_overlong_thought_still_runs_the_action_and_is_shown_cut(self):
+        # 以前整条退回，动作白发一次；现在照常执行，显示与记录用截短后的文字，并在结果里告诉智能体。
+        import asyncio
+        from orchestrator.server import build_server
+        self.s.cfg.cutscene_mode='auto';self.s.last_obs=dialog()
+        long_thought='先往右跳上平台，再用 dash 冲过尖刺，然后抓墙往上爬到出口，最后落在检查点旁边。'
+        shown='先往右跳上平台，再用 dash 冲过尖刺，然后抓墙往上爬到出口…'
+        with patch.object(self.s,'_execute',return_value=({'stop':'done','consumed':1,'planned':1},self.s.last_obs,None,0,0,[])) as execute:
+            outcome=self.s.act(['1,R'],long_thought,None)
+            self.assertEqual(execute.call_args.args[2],shown)             # HUD、公开记录与决策记录用的都是它
+            note=outcome.auto_notes[0]
+            self.assertIn('thought 有 32 个汉字，超过上限 30 个',note)
+            self.assertIn(f'没有退回，显示的是截短后的「{shown}」',note)
+            self.assertEqual(self.s.act(['1,R'],'字'*30,None).auto_notes,[])   # 正好到上限：不动、不提示
+            execute.reset_mock()
+            self.s.act(['1,R'],'x'*130,None)                              # 总长度上限（两种执行器都有）
+            self.assertEqual(execute.call_args.args[2],'x'*119+'…')
+        server=build_server(self.s,study=Mock(ready=Mock(return_value=False)))
+        reply=asyncio.run(server.call_tool('narrate',{'thought':'冲'*31})).content[0].text
+        self.assertIn('已更新。',reply)
+        self.assertIn('thought 有 31 个汉字，超过上限 30 个',reply)
+        self.assertEqual(self.s.metrics.state.thought,'冲'*29+'…')
+        self.assertEqual(asyncio.run(server.call_tool('narrate',{'thought':'往右走'})).content[0].text,'已更新。')
+
     def test_auto_mode_does_not_reject_act_at_dialogue_node(self):
         # 自动跳过剧情（速通、非直播时没有剧情工具）：停在对白上时不拒绝 act，由主控接着自动推进
         self.s.cfg.cutscene_mode='auto';self.s.last_obs=dialog()

@@ -102,7 +102,7 @@ class TunableTests(unittest.TestCase):
             self.assertNotIn(placeholder, changed + text)
 
     def test_thought_brief_per_engine(self):
-        """Claude Code 执行器的提示词与工具说明都要求思考语句汉字不超过 30 个（英文术语不计），超过就退回；
+        """Claude Code 执行器的提示词与工具说明都要求思考语句汉字不超过 30 个（英文术语不计），超过时不退回、截短显示；
         Codex 执行器不加，工具说明照旧。"""
         import asyncio
         from types import SimpleNamespace
@@ -148,11 +148,17 @@ class TunableTests(unittest.TestCase):
         self.assertIn("汉字不超过 12 个", play_prompt(cfg(mode="explore", knowledge_profile="explore", chapter=1,
                                                        thought_max_hanzi=12)))
         self.assertIn("压缩到 12 个以内", thought_problem(claude, "冲" * 13))
-        # act 与 narrate 都按同一规则退回
-        tools_server = build_server(SimpleNamespace(cfg=cfg(mode="explore", knowledge_profile="explore", chapter=1),
-                                                    metrics=None, workspace=None))
-        reply = asyncio.run(tools_server.call_tool("narrate", {"thought": "冲" * 31}))
-        self.assertIn("有 31 个汉字", json.dumps(reply, ensure_ascii=False, default=str))
+        # 超长不退回：截到上限以内显示，并说明超了多少（act、travel 与 narrate 用同一个 fit_thought；
+        # 工具入口见 cutscene_test 的 test_overlong_thought_still_runs_the_action_and_is_shown_cut）
+        from orchestrator.thought import fit_thought
+        shown, note = fit_thought(claude, "冲" * 13)
+        self.assertEqual((shown, count_hanzi(shown)), ("冲" * 11 + "…", 11))
+        self.assertIn("有 13 个汉字，超过上限 12 个", note)
+        self.assertEqual(fit_thought(claude, "冲" * 12), ("冲" * 12, None))
+        self.assertEqual(fit_thought(codex, ok + "冲"), (ok + "冲", None))          # Codex 执行器不限汉字数
+        shown, note = fit_thought(codex, "冲" * 121)
+        self.assertEqual((len(shown), shown[-1]), (120, "…"))
+        self.assertIn("有 121 字，超过上限 120 字", note)
 
     def test_retry_limits(self):
         plan = {"inputs": ["10,R"], "retry": {"command": "python3 p.py", "max": 7, "timeout_s": 90}}

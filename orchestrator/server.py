@@ -754,10 +754,8 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
         text = " ".join((thought or "").split())
         if not text:
             return ["thought 不能为空。"]
-        from .thought import thought_problem
-        problem = thought_problem(session.cfg, text, temp=temp_thoughts)
-        if problem:
-            return [problem + "。"]
+        from .thought import fit_thought
+        text, cut_note = fit_thought(session.cfg, text, temp=temp_thoughts)     # 超长不退回：显示截短后的
         if temp_thoughts:
             metrics.set_temp_thought(text)
         else:
@@ -768,7 +766,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             publish(session.run_dir, f"narrate:{time.time_ns()}", text, kind="临时思考" if temp_thoughts else "解说")
         except OSError as exc:
             journal.log_failure(exc, phase='publish_narration')
-        return ["已更新（临时思考，只显示在控制台）。" if temp_thoughts else "已更新。"]
+        return [("已更新（临时思考，只显示在控制台）。" if temp_thoughts else "已更新。") + (cut_note + "。" if cut_note else "")]
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
     async def set_effort(level: str, reason: str = "") -> list:

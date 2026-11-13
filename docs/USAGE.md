@@ -801,7 +801,7 @@ Codex 开局会在原工作区内完成一轮模型预检，通过后才接管�
 | 执行与解说 | `max_frames_per_act` | 速通模式单次 act 最多推进的帧数（提示词与 act 的说明里的上限跟着变；探索模式用下面的 `explore_act_frames`） | 600 帧 | 60～3600 |
 | 执行与解说 | `min_frames_per_act` | 单次 act 最少推进的帧数，两种模式都用（超过本模式的上限时按上限算）。只在角色可以操作时检查，不足时退回；死亡、换房等截断条件照样提前停下 | 1 帧 | 1～600 |
 | 执行与解说 | `thought_max_chars` | 思考语句最长字数（act 的 thought 与 narrate 的长度上限） | 120 字 | 20～400 |
-| 执行与解说 | `thought_max_hanzi` | 思考语句最多汉字数，只对 Claude Code 执行器（英文术语、数字与标点不计）。写进提示词与工具说明，超过时 act 与 narrate 退回让智能体压缩。没改时按模型档案（`providers.json` 模型行的 `thought.max_hanzi`），模型档案也没写时用默认；选 Codex 时这一项停用 | 30 个 | 5～400 |
+| 执行与解说 | `thought_max_hanzi` | 思考语句最多汉字数，只对 Claude Code 执行器（英文术语、数字与标点不计）。写进提示词与工具说明；超过时不退回，动作照常执行，HUD 与记录里是截短后的文字（尽量在标点处断开，末尾加省略号），结果里告诉智能体超了多少。没改时按模型档案（`providers.json` 模型行的 `thought.max_hanzi`），模型档案也没写时用默认；选 Codex 时这一项停用 | 30 个 | 5～400 |
 | 执行与解说 | `thought_temp_max_hanzi` | 临时思考最多汉字数：只在开了 `--formal-thought`（仅正式思考）时用、只对 Claude Code 执行器，`narrate` 写的临时思考的汉字数上限（总长度上限放宽到它的 3 倍）；act 的正式思考仍按上一项。没改时按模型档案的 `thought.temp_max_hanzi`；选 Codex 时停用 | 120 个 | 10～400 |
 | 执行与解说 | `thought_lead_s` | 动作前等 HUD 换上新思考（游戏冻结着等，录像里不占时间） | 0.4 秒 | 0～3 |
 | 执行与解说 | `remind_s` | 解说提醒间隔（思考累计这么久没有 narrate，就在下一次调用工具时提醒（不开直播）） | 30 秒 | 5～600 |

@@ -40,7 +40,7 @@ TUNABLES: tuple[Tunable, ...] = (
     Tunable("thought_max_chars", "思考语句最长字数", "执行与解说", int, 120, 20, 400, "字",
             "act 的 thought 与 narrate 的长度上限"),
     Tunable("thought_max_hanzi", "思考语句最多汉字数", "执行与解说", int, 30, 5, 400, "个",
-            "只对 Claude Code 执行器：act 的 thought 与 narrate 里的汉字数（英文术语、数字与标点不计），超过就退回让智能体压缩；"
+            "只对 Claude Code 执行器：act 的 thought 与 narrate 里的汉字数（英文术语、数字与标点不计），超过时照常执行、显示截短后的文字并告诉智能体；"
             "提示词与工具说明里的数字跟着变"),
     Tunable("thought_temp_max_hanzi", "临时思考最多汉字数", "执行与解说", int, 120, 10, 400, "个",
             "只在开了“仅正式思考”时用、只对 Claude Code 执行器：narrate 写的临时思考（只显示在控制台）的汉字数上限，"
