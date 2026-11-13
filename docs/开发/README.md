@@ -6,6 +6,7 @@
 | --- | --- |
 | [发布流程.md](发布流程.md) | 版本号、版本摘要、标签与 GitHub Release 的发布步骤 |
 | [TODO_DETAILS.md](TODO_DETAILS.md) | 开发计划（`TODO.md`）各项的背景、范围与验收要求 |
+| [REVIEW_20261113.md](REVIEW_20261113.md) | 2026-11-13 项目复盘：安全、拖累模型的地方、冗余设计、实现欠缺与待办重排的依据 |
 | [AGENT_DOCUMENTS.md](AGENT_DOCUMENTS.md) | 智能体文档目录、按工具组织的接口、动态工具名与旧路径兼容 |
 | [INCIDENT_20261024.md](INCIDENT_20261024.md) | 故障说明：后台进程依附在聊天会话上，随会话关闭而退出（因此长时间运行要用独立后台宿主启动） |
 | [NOTE_REMINDERS.md](NOTE_REMINDERS.md) | 主控对智能体笔记维护的提醒规则 |
