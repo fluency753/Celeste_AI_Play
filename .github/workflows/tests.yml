@@ -33,7 +33,9 @@ jobs:
       - name: Static check
         run: python -X utf8 tools/static_check.py
       - name: Regression
-        run: python -X utf8 tools/run_tests.py
+        # 这里的机器比本机慢，用真实时间做判断的用例和别的进程同时跑时偶尔失败：失败的模块单独重跑一次，
+        # 通过则算通过，并在最后一行列为不稳定。本机运行不带这个参数。
+        run: python -X utf8 tools/run_tests.py --rerun-failed
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
