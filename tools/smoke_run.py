@@ -26,6 +26,7 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+MEDIA = ('.mp4', '.mkv', '.wav', '.csv')
 
 
 def read_json(path: Path):
@@ -234,8 +235,9 @@ def check(run: Path, bridge_port: int = 47774) -> int:
             row('失败', '录像', f"总结里没有录像条目：{json.dumps(summary.get('recording'), ensure_ascii=False)[:200]}")
         for entry in entries:
             folder = Path(entry['dir'])
-            missing = [name for name, size in entry['files'].items()
-                       if not (folder / name).is_file() or (folder / name).stat().st_size != size]
+            # 视频、声音与逐帧表的大小要和总结里记的一致；会话记录之类的小文件收尾后还会更新，只要求存在。
+            missing = [name for name, size in entry['files'].items() if not (folder / name).is_file()
+                       or (name.endswith(MEDIA) and (folder / name).stat().st_size != size)]
             videos = [name for name in entry['files'] if name.endswith(('.mp4', '.mkv'))]
             checked = entry.get('check') or {}
             good = (entry.get('state') == 'finished' and not entry.get('error') and not missing and videos
@@ -248,10 +250,11 @@ def check(run: Path, bridge_port: int = 47774) -> int:
 
     exits = summary.get('game_exits')
     row('失败' if exits else '通过', '游戏进程没有中途退出', f'{len(exits)} 次退出，见 game_exits.jsonl' if exits else '—')
-    finished_cleanly = bool(summary.get('completed') or summary.get('user_stopped'))
-    released = summary.get('game_released')
-    row('通过' if (released if finished_cleanly else True) else '失败', '收尾后的游戏',
-        ('已交还控制' if released else '保持冻结（可续跑）') + f"，停在 {summary.get('end_scene')}")
+    # 通关的运行应当交还控制；到达停止条件、预算用完或中断的运行按约定冻结在原地，等续跑或手动交还。
+    released, scene = summary.get('game_released'), summary.get('end_scene')
+    row('失败' if summary.get('completed') and not released else '通过', '收尾后的游戏',
+        ('已交还控制' if released else '通关后没有交还控制' if summary.get('completed') else '按约定保持冻结（可续跑）')
+        + (f'，停在 {scene}' if scene else ''))
     row('通过' if port_open(bridge_port) else '失败', '游戏还开着', f'桥接端口 {bridge_port}')
 
     width = max(len(name) for _, name, _ in rows)

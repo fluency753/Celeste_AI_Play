@@ -24,13 +24,15 @@ class SmokeCheckTests(unittest.TestCase):
         (game / 'latest_obs.json').write_text('{}', encoding='utf-8')
         (self.video / 'gameplay.mp4').write_bytes(b'v' * 10)
         (self.video / 'frames.csv').write_bytes(b'f' * 4)
+        (self.video / 'session.json').write_bytes(b'{"rewritten": "after the summary"}')   # 收尾后还会更新，大小不必一致
         self.summary = {
             'stop_reason': '分段完成', 'completed': True, 'game_released': True, 'end_scene': 'Overworld',
             'start_sid': 'Celeste/0-Intro', 'deaths': 1, 'frames_played': 900,
             'splits': [{'chapter': 'Celeste/0-Intro', 'ticks': 588030000, 'deaths': 1}],
             'recording': {'state': 'finished', 'chapters': [
                 {'state': 'finished', 'error': '', 'frames': 900, 'dir': str(self.video),
-                 'files': {'gameplay.mp4': 10, 'frames.csv': 4}, 'check': {'rows': 900, 'missing_frames': 0, 'repeats': 0}}]}}
+                 'files': {'gameplay.mp4': 10, 'frames.csv': 4, 'session.json': 5},
+                 'check': {'rows': 900, 'missing_frames': 0, 'repeats': 0}}]}}
         self.decisions = [{'i': 1, 'stop': 'done'}, {'i': 2, 'stop': 'death'}, {'i': 3, 'stop': 'room'}]
         self.write()
         (self.run / 'run_state.json').write_text(json.dumps({'agent': 'smoke', 'save': 'test', 'save_slot': 7, 'record': True}),
@@ -92,7 +94,7 @@ class SmokeCheckTests(unittest.TestCase):
         code, text = self.check()
         self.assertEqual(code, 0, text)
         self.assertIn('[未覆盖] 死亡后重生并继续', text)
-        self.assertIn('保持冻结（可续跑），停在 Level', text)
+        self.assertIn('按约定保持冻结（可续跑），停在 Level', text)
         self.assertIn('未覆盖：死亡后重生并继续、完成的段', text)
 
     def test_a_stop_condition_replaces_the_segment_row(self):
