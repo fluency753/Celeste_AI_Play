@@ -67,6 +67,29 @@ class HudServerAccessTests(unittest.TestCase):
         # 控制台的接口对本机的其他页面也不开放跨源读取（选一个不调外部程序的接口）。
         self.assertEqual(self.get('/api/console/stop-categories', Origin='http://127.0.0.1:47792')[:2], (200, None))
 
+    def test_refused_post_is_answered_only_after_its_body_has_been_read(self):
+        # 请求体没读就回话并关连接，系统发的是复位：Windows 上对方可能连这条回复都收不到
+        # （provider_settings_test 在用户电脑上偶发“连接中断”的原因）。这里分两段发请求体来核对：
+        # 服务要等请求体到齐才回话。
+        import socket
+        body = b'{"padding":"' + b'x' * 50000 + b'"}'
+        for name, headers in (('foreign origin', b'Host: 127.0.0.1\r\nOrigin: https://evil.example\r\n'),
+                              ('foreign host', b'Host: evil.example\r\n'),
+                              ('not json', b'Host: 127.0.0.1\r\nContent-Type: text/plain\r\n')):
+            with self.subTest(case=name), socket.create_connection(('127.0.0.1', self.server.server_port), timeout=5) as wire:
+                extra = b'' if b'Content-Type' in headers else b'Content-Type: application/json\r\n'
+                wire.sendall(b'POST /api/console/prefs HTTP/1.1\r\n' + headers + extra
+                             + b'Content-Length: ' + str(len(body)).encode() + b'\r\n\r\n' + body[:100])
+                wire.settimeout(0.3)
+                with self.assertRaises(TimeoutError, msg='answered before the request body arrived'):
+                    wire.recv(65536)
+                wire.settimeout(5)
+                wire.sendall(body[100:])
+                received = b''
+                while chunk := wire.recv(65536):
+                    received += chunk
+                self.assertIn(received.split(b' ', 2)[1], (b'400', b'403'), received[:80])
+
     def test_request_without_host_header_is_not_a_browser(self):
         import socket
         with socket.create_connection(('127.0.0.1', self.server.server_port), timeout=3) as wire:

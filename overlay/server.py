@@ -115,6 +115,7 @@ def restart_service(port: int) -> None:
 
 LOCAL_HOST = re.compile(r"(127\.0\.0\.1|localhost|\[::1\])(:\d+)?")
 LOCAL_ORIGIN = re.compile(r"http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?")
+UNREAD_BODY_LIMIT = 4_000_000    # 比接受的最大请求体（知识库文件 3.5 MB）略大；更大的不读，直接关
 
 
 def make_handler(pinned: Path | None):
@@ -122,7 +123,25 @@ def make_handler(pinned: Path | None):
         def log_message(self, fmt, *args):  # 安静运行
             pass
 
+        def _discard_unread_body(self) -> None:
+            """回复之前把还没读的请求体读掉（有上限）。请求被拒绝时请求体往往还没读；不读就关连接，
+            系统发的是复位，对方可能连这条回复都收不到（Windows 上页面只看到“连接中断”，看不到拒绝的原因）。"""
+            if self.command != "POST" or getattr(self, "_body_taken", False):
+                return
+            self._body_taken = True
+            try:
+                remaining = min(int(self.headers.get("Content-Length", 0)), UNREAD_BODY_LIMIT)
+                self.connection.settimeout(2)
+                while remaining > 0:
+                    chunk = self.rfile.read(min(remaining, 65536))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except (OSError, ValueError):
+                pass
+
         def _send(self, code: int, body: bytes, ctype: str, cors: bool | str = True) -> None:
+            self._discard_unread_body()
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Cache-Control", "no-store")
@@ -267,6 +286,7 @@ def make_handler(pinned: Path | None):
             length = int(self.headers.get("Content-Length", 0))
             if not 0 < length <= limit:
                 raise ValueError("请求大小无效")
+            self._body_taken = True
             data = json.loads(self.rfile.read(length))
             if not isinstance(data, dict):
                 raise ValueError("请求必须是 JSON 对象")
