@@ -133,8 +133,20 @@ public static class Program {
             }
             using (var wrong = new Wire(ipcPort)) {
                 wrong.Send("{\"id\":4,\"cmd\":\"auth\",\"token\":\"" + new string('0', 64) + "\"}\n{\"id\":5,\"cmd\":\"step\"}\n");
-                Check(Json(wrong.Line()).GetProperty("auth").GetString() == "required", "wrong token was not refused");
+                // More lines were already sent behind the refused one: the explanation must still arrive (not be lost to a reset).
+                JsonElement refused = Json(wrong.Line());
+                Check(refused.TryGetProperty("auth", out var need) && need.GetString() == "required", "wrong token was not refused with an explanation");
                 Check(wrong.Closed(), "wrong-token connection stayed open");
+            }
+            using (var flood = new Wire(ipcPort)) {
+                // A refused client that keeps sending is only read for a bounded amount, then dropped (its reply may be lost).
+                try {
+                    flood.Send("{\"id\":6,\"cmd\":\"hello\"}\n" + new string('y', 300000));
+                } catch (IOException) {
+                    // Dropped while still sending.
+                }
+                flood.Line();
+                Check(flood.Closed(), "a refused client that keeps sending was not disconnected");
             }
             using (var notObject = new Wire(ipcPort)) {
                 notObject.Send("[1,2,3]\n");

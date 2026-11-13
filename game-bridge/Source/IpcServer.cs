@@ -82,6 +82,8 @@ public static class IpcAuth {
 public static class IpcServer {
     private const int AuthTimeoutMs = 5000;
     private const int MaxPending = 8;
+    private const int RefusalDrainMs = 500;
+    private const int RefusalDrainBytes = 65536;
 
     private static TcpListener? listener;
     private static volatile bool running;
@@ -217,6 +219,7 @@ public static class IpcServer {
             WriteLine(stream, Reply.Refused(id,
                 "Authentication required: send {\"cmd\":\"auth\",\"token\":…} first, with the token from " + IpcAuth.FilePath(tokenPort) +
                 ". A controller older than project 1.25.0 cannot connect to this resident core; update the controller."));
+            Dismiss(c, stream);
             return false;
         }
         lock (ClientLock) {
@@ -229,6 +232,27 @@ public static class IpcServer {
         c.ReceiveTimeout = 0;
         c.SendTimeout = 0;
         return true;
+    }
+
+    /// <summary>
+    /// 回完拒绝说明后的收尾：先关掉发送方向（对方读到说明后随即读到结束），再把对方已经发来的内容读掉一小会儿。
+    /// 接收缓冲里还有没读的数据时直接关连接，系统会发复位，对方可能连刚回的那条说明都收不到（Windows 上实测如此）。
+    /// </summary>
+    private static void Dismiss(TcpClient c, NetworkStream stream) {
+        try {
+            c.Client.Shutdown(SocketShutdown.Send);
+            c.ReceiveTimeout = RefusalDrainMs;
+            var scratch = new byte[4096];
+            long until = Environment.TickCount64 + RefusalDrainMs;
+            int budget = RefusalDrainBytes;
+            while (budget > 0 && Environment.TickCount64 < until) {
+                int read = stream.Read(scratch, 0, scratch.Length);
+                if (read <= 0) break;
+                budget -= read;
+            }
+        } catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException) {
+            // 对方已经断开，或等到了时限
+        }
     }
 
     private static void WriteLine(NetworkStream stream, string json) {
