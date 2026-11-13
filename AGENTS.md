@@ -26,6 +26,7 @@ Runtime 不维护剧情、死亡、玩家可操作性等重载场景策略，也
 - `dotnet build game-bridge -c Release "-p:CelestePrefix=<游戏目录>"`：引用已安装的游戏程序集构建桥接。
 - `dotnet run --project calibration/story_text "-p:CelestePrefix=<游戏目录>"`：运行原生剧情检查。
 - `dotnet run --project calibration/ipc_auth`：核对常驻核心两个本机端口的连接口令与首行校验，不需要游戏文件。
+- `python tools/smoke_run.py --save-slot <测试存档槽位>`：发布前的实机冒烟（真实的游戏、容器、模型与录像，十几到几十分钟，要花模型的钱；转正式版之前跑一次）。
 - `python tools/static_check.py`：静态检查，只拦未定义的名字与语法错误（需要 `pyflakes`）。全量回归、静态检查与端口检查在每次推送时由 `.github/workflows/tests.yml` 在 Windows 与 Linux 上运行。
 - `python tools/build_obs_plugin.py --no-install`：仅构建 OBS 插件，不安装。
 
