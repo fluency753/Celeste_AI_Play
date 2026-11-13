@@ -175,6 +175,60 @@ class GameWatchTests(unittest.TestCase):
         self.assertEqual(len(watch.records), 1)
         self.wait_for(lambda: self.system.open_handles == 0)
 
+    def test_exit_is_remembered_until_another_game_answers_and_listeners_are_told(self):
+        told = []
+        watch = game_watch.GameExitWatch(self.run, self.logs.append, self.system, poll_s=0.01, on_exit=told.append)
+        self.addCleanup(watch.close)
+        self.assertTrue(watch.attach(self.system.hello))
+        self.assertIsNone(watch.gone)
+        self.assertIsNone(game_watch.exit_stop_reason(watch, finished=False))
+        self.system.end_game(0)
+        self.wait_for(lambda: told)
+        self.assertEqual(told, watch.records)
+        self.assertIs(watch.gone, watch.records[0])
+        self.assertEqual(game_watch.exit_text(watch.gone), '游戏进程已退出（退出码 0x00000000，正常退出）')
+        self.assertEqual(game_watch.exit_stop_reason(watch, finished=False), '游戏进程已退出（退出码 0x00000000，正常退出）')
+        self.assertIsNone(game_watch.exit_stop_reason(watch, finished=True))     # 已经通关或由用户结束：原因不改
+        watch.close()
+        self.assertIsNotNone(watch.gone)                                        # 结束监视不等于游戏回来了
+        # 重新启动的游戏回了 hello：不再算“已退出”。
+        self.system.processes[41] = dict(self.system.processes[40], exited=None, code=None, started=GAME_STARTED + 900)
+        self.assertTrue(watch.attach(dict(self.system.hello, process_id=41)))
+        self.assertIsNone(watch.gone)
+        self.assertEqual(len(watch.records), 1)
+
+    def test_exit_text_tells_normal_from_abnormal_and_a_failing_listener_is_logged(self):
+        self.assertEqual(game_watch.exit_text({'exit_code': 0xC0000005, 'exit_code_hex': '0xC0000005'}),
+                         '游戏进程已退出（退出码 0xC0000005，异常退出）')
+        self.assertEqual(game_watch.exit_text({'exit_code': None, 'exit_code_hex': None}), '游戏进程已退出（退出码未知）')
+        self.assertIsNone(game_watch.exit_stop_reason(None, finished=False))
+
+        def broken(record):
+            raise OSError('disk full')
+        watch = game_watch.GameExitWatch(self.run, self.logs.append, self.system, poll_s=0.01, on_exit=broken)
+        self.addCleanup(watch.close)
+        self.assertTrue(watch.attach(self.system.hello))
+        self.system.end_game(1)
+        self.wait_for(lambda: any('退出通知未送出' in line for line in self.logs))
+        self.assertEqual(len(watch.records), 1)                                 # 记录本身已经写下
+
+    def test_session_announces_the_exit_in_public_events(self):
+        session = GameSession.__new__(GameSession)
+        session.run_dir, session.client = self.run, None
+        session._frames_log, session._decisions_log = Mock(), Mock()
+        with patch.object(game_watch, '_system', return_value=self.system):
+            session._watch_game_exit(self.system.hello)
+            self.assertIsNone(session.game_exit_notice())
+            self.system.end_game(0xC0000005)
+            self.wait_for(lambda: session.game_exit_notice())
+            events = self.run / 'public_events.jsonl'     # Written by the waiting thread: wait for the whole line.
+            self.wait_for(lambda: events.exists() and events.read_text(encoding='utf-8').endswith('\n'))
+            event = json.loads(events.read_text(encoding='utf-8').splitlines()[0])
+            self.assertEqual((event['role'], event['kind']), ('system', '系统'))
+            self.assertIn('游戏进程已退出（退出码 0xC0000005，异常退出）。主控已无法操作游戏', event['text'])
+            self.assertEqual(session.game_exit_notice(), '游戏进程已退出（退出码 0xC0000005，异常退出）')
+            session.close()
+
     def test_close_without_exit_leaves_no_record_and_releases_the_handle(self):
         watch = game_watch.GameExitWatch(self.run, self.logs.append, self.system, poll_s=0.01)
         self.assertTrue(watch.attach(self.system.hello))

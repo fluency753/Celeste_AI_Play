@@ -89,7 +89,8 @@ def _crash(run: Path | None) -> dict | None:
     if run is None:
         return None
     path = run / "summary.json"
-    error = _read_json(path).get("error")
+    summary = _read_json(path)
+    error = summary.get("error")
     if not isinstance(error, dict):
         return None
     try:
@@ -98,7 +99,10 @@ def _crash(run: Path | None) -> dict | None:
     except OSError:
         return None
     from orchestrator.run_log import ERROR_NAME, LOG_NAME
+    # 游戏进程先退出、主控随后因连接失败结束时，总结的停止原因写的是前者（orchestrator/run.py）。
+    cause = summary.get("stop_reason") if summary.get("stop_cause") == "game_exit" else None
     return {"run": str(run), "error": f"{error.get('type')}: {error.get('message')}",
+            "cause": cause if isinstance(cause, str) else None,
             "error_file": str(run / ERROR_NAME) if (run / ERROR_NAME).exists() else None,
             "log_tail": _tail(run / LOG_NAME)}
 
@@ -763,7 +767,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.25.2"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.25.3"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

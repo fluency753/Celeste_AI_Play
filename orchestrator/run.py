@@ -1428,13 +1428,23 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                            kb_study=study.summary() if study else None, recording=recording)
             if cleanup_errors:
                 summary['cleanup_errors'] = [f'{label}：{error}' for label, error in cleanup_errors]
-            if game_exits := list(getattr(getattr(session, 'game_watch', None), 'records', None) or []):
+            game_watch = getattr(session, 'game_watch', None)
+            if game_watch is not None:
+                game_watch.close()      # Looks once more, so a game that has just exited is on record.
+            if game_exits := list(getattr(game_watch, 'records', None) or []):
                 summary['game_exits'] = game_exits      # Also in game_exits.jsonl the moment the game exits.
             if run_log.is_crash(primary):
                 # Without this the summary only says "中断"; the traceback goes to controller_error.txt.
                 summary['error'] = run_log.describe(primary)
                 if not goal.get("completion_report"):
                     summary['stop_reason'] = run_log.crash_reason(primary)
+            from .game_watch import exit_stop_reason
+            # Only when the run broke off (an exception or an interrupt). A reason the runner returned itself
+            # (the user's stop, the time budget) stays; game_exits above still shows the exit.
+            if gone := exit_stop_reason(game_watch, finished=bool(primary is None or session.done
+                                                                   or goal.get("completion_report"))):
+                # The cause, not its consequence: the connection failure stays in summary['error'].
+                summary.update(stop_reason=gone, stop_cause='game_exit')
             if parked and primary is None and not cleanup_errors and recording_stopped:
                 summary.update(parked=True, parked_slot=cfg.save_slot, parked_save=cfg.save,
                                parked_frame=runner.parked_frame)

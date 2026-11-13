@@ -143,6 +143,35 @@ class CutsceneTests(unittest.TestCase):
             self.s.stop_run('hint：' + '字' * 1001)
         self.s.stop_run('hint：' + '字' * 1000)              # 刚好到上限不退回
 
+    def test_stop_run_is_accepted_at_once_when_the_controller_knows_the_game_is_gone(self):
+        from types import SimpleNamespace
+        self.s.request_pause = Mock(return_value=True)
+        self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
+        reason = '游戏进程已退出'
+        self.assertEqual(self.s.stop_run('external_dependency：' + reason)['status'], 'confirmation_required')
+        self.s.request_pause.assert_not_called()
+        record = {'pid': 40, 'exit_code': 0xC0000005, 'exit_code_hex': '0xC0000005', 'exited_at': '2026-11-13T10:00:00'}
+        self.s.game_watch = SimpleNamespace(gone=record, close=lambda: None)
+        self.assertEqual(self.s.game_exit_notice(), '游戏进程已退出（退出码 0xC0000005，异常退出）')
+        self.assertEqual(self.s.stop_run('未分类的说明')['status'], 'classification_required')   # 仍要选一个类别
+        result = self.s.stop_run('external_dependency：' + reason)      # 不带确认码，也不用提交三次
+        self.assertEqual((result['status'], result['category'], result['paused']), ('reported', 'external_dependency', True))
+        self.s.request_pause.assert_called_once_with(reason)
+        self.assertEqual(self.s.stop_run('external_dependency：' + reason)['status'], 'duplicate')
+        self.s.game_watch.gone = None
+
+    def test_stop_run_does_not_offer_transition_recovery_for_a_dead_game(self):
+        from types import SimpleNamespace
+        self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': False}
+        transition = Mock(progress=Mock(return_value={'advanced_frames': 5, 'remaining_frames': 90}))
+        with patch.object(self.s, '_transition_for', return_value=transition):
+            self.assertEqual(self.s.stop_run('transition_recovery：重生没有结束')['status'], 'recovery_available')
+            self.s.game_watch = SimpleNamespace(gone={'pid': 40, 'exit_code': 0, 'exit_code_hex': '0x00000000'},
+                                                close=lambda: None)
+            self.assertEqual(self.s.game_exit_notice(), '游戏进程已退出（退出码 0x00000000，正常退出）')
+            self.assertEqual(self.s.stop_run('external_dependency：游戏进程已退出')['status'], 'reported')
+        self.s.game_watch.gone = None
+
     def test_stop_run_non_defect_requires_three_steps_and_rotates_the_code(self):
         self.s.request_pause = Mock(return_value=True)
         self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}

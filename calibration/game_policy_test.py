@@ -130,6 +130,21 @@ class GamePolicyTests(unittest.TestCase):
         self.assertIsNotNone(denial(self.controller, 'stop_run'))
         self.assertIsNone(denial(self.controller, 'narrate'))
 
+    def test_game_tools_explain_a_dead_game_while_report_and_controls_stay_available(self):
+        notice = []
+        self.session.game_exit_notice = lambda: notice[0] if notice else None
+        self.assertIsNone(denial(self.controller, 'act'))
+        notice.append('游戏进程已退出（退出码 0xC0000005，异常退出）')
+        for name in GAME_ACTIONS:
+            with self.subTest(tool=name):
+                text = denial(self.controller, name)
+                self.assertIn('游戏进程已退出（退出码 0xC0000005，异常退出），本次游戏工具未执行', text)
+                self.assertIn('external_dependency：游戏进程已退出', text)
+        self.assertIsNone(denial(self.controller, 'stop_run'))
+        self.assertIsNone(denial(self.controller, 'narrate'))
+        notice.clear()                                   # 新的游戏连上之后恢复
+        self.assertIsNone(denial(self.controller, 'observe'))
+
     def test_stop_goal_and_done_are_authoritative_before_hud_catches_up(self):
         self.session.goals.stop_motion.set()
         self.assertIsNotNone(denial(self.controller, 'act'))

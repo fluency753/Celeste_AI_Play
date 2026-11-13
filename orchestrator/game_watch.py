@@ -266,15 +266,32 @@ def require_live_steam(hello: dict, log=print, system=None) -> dict | None:
     return facts
 
 
+def exit_text(record: dict) -> str:
+    """一句话说明一次退出。退出码 0 记作正常退出（有人关了游戏，或游戏自己结束），其余记作异常退出。"""
+    code = record.get('exit_code')
+    if code is None:
+        return '游戏进程已退出（退出码未知）'
+    return f"游戏进程已退出（退出码 {record.get('exit_code_hex')}，{'正常退出' if code == 0 else '异常退出'}）"
+
+
+def exit_stop_reason(watch, *, finished: bool) -> str | None:
+    """运行总结的停止原因：这次运行没有正常结束（finished 为假：因异常或中断而停）、而受监视的游戏进程
+    已经退出时用这一句，否则 None。没有它时总结里只有连接失败之类的后果（“主控异常：ConnectionRefusedError…”）。"""
+    record = getattr(watch, 'gone', None)
+    return None if finished or record is None else exit_text(record)
+
+
 class GameExitWatch:
     """运行中等游戏进程退出并留下记录；只持有等待／查询权限的句柄，不影响游戏。"""
 
-    def __init__(self, run_dir: Path, log=print, system=None, poll_s: float = POLL_SECONDS):
+    def __init__(self, run_dir: Path, log=print, system=None, poll_s: float = POLL_SECONDS, on_exit=None):
         self.run_dir = Path(run_dir)
         self.log = log
         self.system = system
         self.poll_s = poll_s
+        self.on_exit = on_exit      # 记下一次退出后调用（在等待线程里），参数是那条记录
         self.records: list[dict] = []
+        self.gone: dict | None = None   # 受监视的进程已退出、之后还没有新的游戏连上时，是它的退出记录
         self.pid = None
         self._lock = threading.Lock()
         self._stop: threading.Event | None = None
@@ -289,6 +306,7 @@ class GameExitWatch:
             if pid == self.pid and self._thread is not None and self._thread.is_alive():
                 return True
         self.close()
+        self.gone = None            # 桥接刚回了 hello：现在有一个活着的游戏
         try:
             system = _system(self.system)
             if system is None:
@@ -369,7 +387,13 @@ class GameExitWatch:
                  f"时间 {record['exited_at'] or '未知'}；{steam_text}"
                  + (f"；游戏启动后 Steam 写了 {len(dumps)} 个 dump" if dumps else '')
                  + f'；详情见 {EXIT_LOG}')
+        self.gone = record
         self.records.append(record)      # Last: a visible record means the file and the log line are done.
+        if self.on_exit is not None:
+            try:
+                self.on_exit(record)
+            except Exception as exc:  # noqa: BLE001 - the record itself is already written
+                self.log(f'[game] 游戏退出通知未送出（{type(exc).__name__}: {exc}）')
 
 
 def _file_fact(path: Path, since: float | None) -> dict | None:

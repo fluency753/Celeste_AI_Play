@@ -50,6 +50,11 @@ def denial(controller, name, arguments=None):
         return '用户已中断本次运行，本次游戏工具未执行。'
     if name == 'stop_run':
         return None
+    notice = getattr(session, 'game_exit_notice', None)
+    if callable(notice) and (gone := notice()):
+        # 游戏进程没了（game_watch 核实过）：给一句明确的话，免得智能体对着连接错误反复重试。
+        return (f'{gone}，本次游戏工具未执行。重新启动游戏并续跑之前无法观察或操作；'
+                '请调用 stop_run，reason 写「external_dependency：游戏进程已退出」，报告会直接接受，然后结束本轮等用户处理。')
     ledger = getattr(controller, 'token_drift', None)
     if ledger is not None and ledger.unknown:
         return '上次 Token 推进的执行范围未确认，本次游戏工具未执行；请先人工核验 token_drift.json，不要重发原输入。'

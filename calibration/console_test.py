@@ -239,6 +239,13 @@ class RunCrashTests(unittest.TestCase):
                  patch.object(console_api, "_mutex_exists", return_value=False):
                 crash = console_api.orchestrator_status()["crash"]
                 self.assertEqual(crash["error"], "ConnectionError: Codex app-server 已断开")
+                self.assertIsNone(crash["cause"])
+                # 游戏进程先退出：提示里先写原因，再写主控的异常。
+                exited = dict(summary, stop_reason="游戏进程已退出（退出码 0xC0000005，异常退出）", stop_cause="game_exit")
+                (run / "summary.json").write_text(json.dumps(exited), encoding="utf-8")
+                self.assertEqual(console_api.orchestrator_status()["crash"]["cause"],
+                                 "游戏进程已退出（退出码 0xC0000005，异常退出）")
+                (run / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
                 self.assertEqual(crash["error_file"], str(run / "controller_error.txt"))
                 self.assertIn("App Server 连接意外结束", crash["log_tail"])
                 summary.pop("error")      # A normal stop (中断、预算用完) is not a crash.

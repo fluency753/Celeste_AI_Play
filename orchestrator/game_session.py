@@ -1149,8 +1149,25 @@ class GameSession:
         watch = getattr(self, 'game_watch', None)
         if watch is None:
             from .game_watch import GameExitWatch
-            watch = self.game_watch = GameExitWatch(run_dir, log=lambda line: print(line, flush=True))
+            watch = self.game_watch = GameExitWatch(run_dir, log=lambda line: print(line, flush=True),
+                                                    on_exit=self._game_exited)
         watch.attach(hello)
+
+    def _game_exited(self, record: dict) -> None:
+        """游戏进程在运行中退出（game_watch 的等待线程里调用）：在 HUD 与控制台的消息栏留一条系统消息。"""
+        from .game_watch import EXIT_LOG, exit_text
+        from .telemetry import publish
+        publish(self.run_dir, f"system:game-exit:{record.get('pid')}:{record.get('exited_at')}",
+                f'{exit_text(record)}。主控已无法操作游戏，需要重新启动游戏后续跑；详情见运行目录的 {EXIT_LOG}。',
+                role='system', kind='系统')
+
+    def game_exit_notice(self) -> str | None:
+        """受监视的游戏进程已经退出、之后没有新的游戏连上时，返回一句说明；否则 None。"""
+        record = getattr(getattr(self, 'game_watch', None), 'gone', None)
+        if record is None:
+            return None
+        from .game_watch import exit_text
+        return exit_text(record)
 
     def close(self, release: bool = True) -> None:
         """试玩结束交还控制；release=False 仅供明确需要保留接管的内部调试使用。"""
@@ -2581,7 +2598,9 @@ class GameSession:
             progress = transition.progress(frame) if transition else None
             guard = getattr(self, 'control_guard', None)
             control_note = guard() if guard else None
-            if (progress and progress['remaining_frames'] and self.client is not None and not failure
+            # 主控自己核实了游戏进程已退出：不再提示等过渡，报告也不必逐次确认。
+            game_gone = self.game_exit_notice()
+            if (progress and progress['remaining_frames'] and self.client is not None and not failure and not game_gone
                     and not getattr(self, 'reload_observation_required', False) and not control_note):
                 self._stop_confirmation = None
                 return self._stop_diagnostic('recovery_available', reason, frame, progress)
@@ -2593,7 +2612,7 @@ class GameSession:
                      player.get('state') if not obs.get('controllable') else None)
             # Repeated retries of the same failed bridge command can have different request IDs.
             evidence = (state, self._stop_motion_revision, failure[0] if failure else None,
-                        self.goals.snapshot()['revision'], self.piece, tuple(self.chapter_queue))
+                        self.goals.snapshot()['revision'], self.piece, tuple(self.chapter_queue), game_gone)
             if (type(frame) is int or failure) and evidence == self._last_stop_evidence:
                 return self._stop_diagnostic('duplicate', reason, frame, progress, control_note=control_note)
             try:
@@ -2620,7 +2639,7 @@ class GameSession:
             if self._stop_confirmation is None or self._stop_confirmation[0] != scope:
                 self._stop_confirmation = (scope, 1, secrets.token_hex(6))
             _, step, expected = self._stop_confirmation
-            if code != expected or step + 1 < required:
+            if not game_gone and (code != expected or step + 1 < required):
                 if code == expected:
                     step += 1
                     expected = secrets.token_hex(6)

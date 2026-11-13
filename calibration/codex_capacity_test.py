@@ -386,7 +386,10 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_auth_error_retains_real_recorder_and_writes_resume_reason(self):
         await self.exercise('workspace routing discovery unauthorized (401)', auth=True)
 
-    async def exercise(self, failure, *, auth=False):
+    async def test_crash_after_the_game_process_exited_names_the_exit_as_the_reason(self):
+        await self.exercise(CAPACITY, game_gone=True)
+
+    async def exercise(self, failure, *, auth=False, game_gone=False):
         from calibration.recording_session_test import RecordingSessionTests
         from orchestrator.recording import Recorder
         from orchestrator.run import _run_connected_session
@@ -406,6 +409,9 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 session = GameSession(cfg, root, metrics)
             session.client = SimpleNamespace(call=fixture.call, close=Mock())
             session.connect = Mock(return_value={'scene': 'Level'})
+            exit_record = {'pid': 40, 'exit_code': 0xC0000005, 'exit_code_hex': '0xC0000005'}
+            if game_gone:      # What game_watch holds once the watched process has exited.
+                session.game_watch = SimpleNamespace(gone=exit_record, records=[exit_record], close=Mock())
             args = SimpleNamespace(prepared=None, fresh_session=False, no_agent=False, record=True,
                                    start_paused=False)
             if auth:
@@ -462,9 +468,17 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn('--container unused-container login', summary['stop_reason'])
                     self.assertEqual(summary['session_id'], 'retained-thread')
                     self.assertNotIn('error', summary)
+                elif game_gone:
+                    # The cause comes first; the controller's own failure stays in summary['error'].
+                    self.assertEqual((summary['stop_reason'], summary['stop_cause']),
+                                     ('游戏进程已退出（退出码 0xC0000005，异常退出）', 'game_exit'))
+                    self.assertEqual(summary['game_exits'], [exit_record])
+                    self.assertEqual(summary['error']['type'], 'RuntimeError')
+                    session.game_watch.close.assert_called()
                 else:
                     # A crashed run says why in its own summary, not just "中断".
                     self.assertTrue(summary['stop_reason'].startswith('主控异常：RuntimeError: '))
+                    self.assertNotIn('stop_cause', summary)
                     self.assertEqual(summary['error']['type'], 'RuntimeError')
                     self.assertIn('自动等待已关闭', summary['error']['message'])
             finally:

@@ -2179,7 +2179,9 @@ async function refreshStatus() {
     ui.launchKey = orch.launched_wall;
   } else if (orch.crash && ui.dismissedLaunch !== orch.crash.run) {
     $("launchBanner").hidden = false;
-    $("launchText").textContent = `主控在运行中因异常退出：${orch.crash.error}。运行总结已写出`
+    $("launchText").textContent = (orch.crash.cause
+        ? `${orch.crash.cause}，主控随后因异常结束：${orch.crash.error}。需要重新启动游戏后续跑；运行总结已写出`
+        : `主控在运行中因异常退出：${orch.crash.error}。运行总结已写出`)
       + (orch.crash.error_file ? `，完整异常链见 ${orch.crash.error_file}` : "") + "。运行记录 controller.log 的最后几行：";
     $("launchLog").textContent = orch.crash.log_tail || "";
     ui.launchKey = orch.crash.run;
