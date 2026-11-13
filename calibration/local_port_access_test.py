@@ -25,7 +25,7 @@ class HudServerAccessTests(unittest.TestCase):
 
     def get(self, path, **headers):
         try:
-            with urlopen(Request(self.base + path, headers=headers), timeout=3) as response:
+            with urlopen(Request(self.base + path, headers=headers), timeout=15) as response:
                 return response.status, response.headers.get('Access-Control-Allow-Origin'), response.read()
         except HTTPError as error:
             with error:
@@ -64,7 +64,8 @@ class HudServerAccessTests(unittest.TestCase):
             with self.subTest(origin=origin):
                 self.assertEqual(self.get('/hud/state', Origin=origin)[:2], (200, origin))
                 self.assertEqual(self.get('/hud/tools', Origin=origin)[:2], (200, origin))
-        self.assertIsNone(self.get('/api/console/about', Origin='http://127.0.0.1:47792')[1])
+        # 控制台的接口对本机的其他页面也不开放跨源读取（选一个不调外部程序的接口）。
+        self.assertEqual(self.get('/api/console/stop-categories', Origin='http://127.0.0.1:47792')[:2], (200, None))
 
     def test_request_without_host_header_is_not_a_browser(self):
         import socket

@@ -553,7 +553,9 @@ class RunRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 server = SimpleNamespace(streamable_http_app=lambda **kw: None)
                 playback = SimpleNamespace(collect=False,close=Mock())
                 try:
+                    # find_ffmpeg 读本机配置与 PATH；录制器本身是替身，这里不依赖这台机器装没装 ffmpeg。
                     with patch('orchestrator.run.Recorder',return_value=recorder) as recorder_class, \
+                         patch('orchestrator.recording.find_ffmpeg',return_value='ffmpeg'), \
                          patch('orchestrator.run.ensure_container',return_value='test-container'), \
                          patch('orchestrator.run.build_server',return_value=server), \
                          patch('orchestrator.run.add_gate_route'), \

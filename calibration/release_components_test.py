@@ -118,7 +118,9 @@ class ReleaseIdentityTests(unittest.TestCase):
                 Path(command[command.index("--out") + 1]).write_bytes(b"launcher build output")
             return ""
         output = self.root / "build/release"
+        # 清单里记的 ziglang 版本取自本机安装的包；测试不依赖这台机器装没装它。
         with patch.object(package_release, "run", side_effect=run), \
+             patch.object(package_release.importlib.metadata, "version", return_value=settings["ziglang"]), \
              patch("tools.build_obs_plugin.fetch_headers", return_value=headers):
             zipped = package_release.build(self.root, output, "v1.22.0", self.root)
         self.assertEqual({p.name for p in output.iterdir()}, {packages.asset_name("v1.22.0"), "components.json"})

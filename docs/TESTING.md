@@ -31,3 +31,15 @@
 各进程的完整输出写在 `local/test-results/latest/worker-N.log`，每次运行覆盖上一次。某个进程失败时，控制台直接打印它的失败详情；最后一行汇总运行、失败、错误与跳过数和总耗时。
 
 退出码：`0` 全部通过；`1` 有失败、错误、导入错误、进程异常退出或一个用例都没运行；`130` 被 Ctrl+C 中断，此时结束全部测试进程及其子进程（Windows 用 `taskkill /T`）。
+
+## 持续集成
+
+`.github/workflows/tests.yml` 在每次推送和拉取请求时运行：
+
+- Python 全量回归：Windows（Python 3.14）与 Linux（Python 3.13）各一次，命令与本机相同；失败时各进程的日志作为附件上传。
+- 静态检查 `python tools/static_check.py`：只拦会在运行时出错的写法（未定义的名字、语法错误），未使用的导入等只报数量。本机运行需要先装 `pyflakes`。
+- 端口检查 `dotnet run --project calibration/ipc_auth`：Windows 与 Linux 各一次，不需要游戏文件。
+
+组件构建（桥接、常驻核心、OBS 插件、启动器）在 `release-components.yml`，两者互不依赖。
+
+测试不能依赖这台机器装了什么：需要 ffmpeg、ziglang、git 历史或真实桌面环境的地方用替身，或者按环境跳过并写明原因。持续集成的机器比本机慢，Windows 运行器的计时粒度约 16 毫秒；用真实时间做判断的测试要留足余量。目前按环境跳过的只有 `background_test`（GitHub 的 Windows 运行器上后台宿主 20 秒内没有启动，原因未查）。

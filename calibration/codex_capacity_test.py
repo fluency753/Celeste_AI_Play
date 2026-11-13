@@ -240,7 +240,9 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['runner'].session_id, 'same-thread')
 
     async def test_continuous_capacity_failure_has_a_total_deadline_and_retains_control(self):
-        result = await self.run_case(failures=None, configure=lambda cfg: setattr(cfg, 'net_wait_max_h', .00002))
+        # 总时限 0.18 秒：每次等待上限 25 毫秒，快的机器发不到 12 次；慢的机器（GitHub 的 Windows 运行器，
+        # 计时粒度约 16 毫秒）也来得及发第二次。原先 72 毫秒在那里只来得及发一次。
+        result = await self.run_case(failures=None, configure=lambda cfg: setattr(cfg, 'net_wait_max_h', .00005))
         self.assertIsNotNone(result['error'])
         self.assertGreaterEqual(len(result['sent']), 2)
         self.assertLess(len(result['sent']), 12)
@@ -364,7 +366,8 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
             elapsed = metrics.elapsed()
             await asyncio.sleep(.04)
             observations['premature_elapsed'] = metrics.elapsed() - elapsed
-        result = await self.run_case(waiting=controls, configure=lambda cfg: setattr(cfg, 'net_wait_cap_s', .4))
+        # 等待要比“暂停再继续”这一来回长得多：慢的机器上来回本身就可能超过 0.4 秒，等待先结束了。
+        result = await self.run_case(waiting=controls, configure=lambda cfg: setattr(cfg, 'net_wait_cap_s', 1.5))
         self.assertIsNone(result['error'])
         self.assertTrue(observations['still_waiting'])
         self.assertLess(observations['premature_elapsed'], .02)
