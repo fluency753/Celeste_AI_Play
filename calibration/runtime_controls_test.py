@@ -87,7 +87,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     async def until(self, condition):
-        async with asyncio.timeout(3):
+        async with asyncio.timeout(15):     # 上限而已：慢的机器上 3 秒不够
             while not condition():
                 await asyncio.sleep(.01)
 

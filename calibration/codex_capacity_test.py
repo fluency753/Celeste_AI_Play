@@ -74,7 +74,7 @@ class ModelAvailabilityClassificationTests(unittest.TestCase):
 
 class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
     async def until(self, condition):
-        async with asyncio.timeout(3):
+        async with asyncio.timeout(15):     # 上限而已：慢的机器上 3 秒不够
             while not condition():
                 await asyncio.sleep(.002)
 
@@ -240,9 +240,11 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['runner'].session_id, 'same-thread')
 
     async def test_continuous_capacity_failure_has_a_total_deadline_and_retains_control(self):
-        # 总时限 0.18 秒：每次等待上限 25 毫秒，快的机器发不到 12 次；慢的机器（GitHub 的 Windows 运行器，
-        # 计时粒度约 16 毫秒）也来得及发第二次。原先 72 毫秒在那里只来得及发一次。
-        result = await self.run_case(failures=None, configure=lambda cfg: setattr(cfg, 'net_wait_max_h', .00005))
+        # 每次等待上限 0.1 秒、总时限 0.72 秒：快的机器发不到 12 次；慢的机器（GitHub 的 Windows 运行器）
+        # 也来得及发第二次。原先是 25 毫秒与 72 毫秒，在那里只来得及发一次。
+        def short_outage(cfg):
+            cfg.net_wait_cap_s, cfg.net_wait_max_h = .1, .0002
+        result = await self.run_case(failures=None, configure=short_outage)
         self.assertIsNotNone(result['error'])
         self.assertGreaterEqual(len(result['sent']), 2)
         self.assertLess(len(result['sent']), 12)
