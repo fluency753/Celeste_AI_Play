@@ -26,7 +26,8 @@ from pathlib import Path
 DEFAULT_PORT = 47774
 # 只读、重发无副作用的指令：连接在等回复时断开（例如被别的客户端挤掉），重连后可以安全地重发
 READ_ONLY = frozenset({"hello", "observe", "areas"})
-# 常驻核心 1.1.0 起：监听后把随机口令写进当前用户的本机应用数据目录，连接的第一行要先报口令（见 IpcServer.cs）。
+# 常驻核心 1.1.0 起：监听后把随机口令写进用户主目录下的 .celeste-ai-play（1.1.2 之前在本机应用数据目录），
+# 连接的第一行要先报口令（见 IpcServer.cs）。
 # 测试用这个环境变量把口令目录换到别处，不碰本机真实的口令文件。
 TOKEN_DIR_ENV = "CELESTE_AI_TOKEN_DIR"
 AUTH_ID = -1
@@ -37,17 +38,10 @@ class BridgeAuthError(ConnectionError):
 
 
 def token_dir() -> Path:
-    """口令文件所在目录，与 .NET 的 LocalApplicationData 一致。"""
+    """口令文件所在目录，与常驻核心的 IpcAuth.Folder 一致：用户主目录下的 .celeste-ai-play。
+    不用 AppData：打包应用及其子进程写 AppData 会被系统重定向到应用私有的位置，另一方读不到。"""
     override = os.environ.get(TOKEN_DIR_ENV)
-    if override:
-        return Path(override)
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    elif sys.platform == "darwin":
-        base = str(Path.home() / "Library" / "Application Support")
-    else:
-        base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "CelesteAIPlay"
+    return Path(override) if override else Path.home() / ".celeste-ai-play"
 
 
 def token_path(port: int) -> Path:
@@ -224,7 +218,7 @@ class BridgeClient:
                 if not reply.get("ok") and reply.get("auth") == "required":
                     raise BridgeAuthError(
                         f"游戏里的常驻核心要求连接口令，但本机没有读到口令文件 {token_path(self.port)}。"
-                        "口令由游戏启动时写入当前用户的本机应用数据目录：确认游戏与主控用同一个系统用户运行")
+                        "口令由游戏启动时写入用户主目录：确认游戏与主控用同一个系统用户运行，常驻核心是 1.1.2 或更新")
                 if not reply.get("ok"):
                     raise RuntimeError(f"{cmd} failed: {reply.get('error')}")
                 if isinstance(reply.get('obs'), dict) and ('imageScope' in reply or 'imageError' in reply):

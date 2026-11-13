@@ -150,16 +150,14 @@ class BridgeAuthTests(unittest.TestCase):
         self.assertIsNone(bridge_client.read_token(4322))
 
     def test_token_directory_matches_the_resident_core(self):
-        with patch.dict(os.environ, {'LOCALAPPDATA': r'C:\Users\me\AppData\Local', 'XDG_DATA_HOME': '/data'}):
-            os.environ.pop(bridge_client.TOKEN_DIR_ENV)
-            with patch.object(bridge_client.sys, 'platform', 'win32'):
-                self.assertEqual(bridge_client.token_dir(), Path(r'C:\Users\me\AppData\Local') / 'CelesteAIPlay')
-            with patch.object(bridge_client.sys, 'platform', 'linux'):
-                self.assertEqual(bridge_client.token_path(47774), Path('/data/CelesteAIPlay/ipc-47774.token'))
-            with patch.object(bridge_client.sys, 'platform', 'darwin'):
-                self.assertEqual(bridge_client.token_dir(),
-                                 Path.home() / 'Library' / 'Application Support' / 'CelesteAIPlay')
-
+        # 用户主目录下，不在 AppData 里（打包应用写 AppData 会被重定向，另一方读不到）
+        os.environ.pop(bridge_client.TOKEN_DIR_ENV)
+        self.assertEqual(bridge_client.token_dir(), Path.home() / '.celeste-ai-play')
+        self.assertEqual(bridge_client.token_path(47774), Path.home() / '.celeste-ai-play' / 'ipc-47774.token')
+        self.assertNotIn('AppData', bridge_client.token_dir().parts)
+        source = (Path(bridge_client.__file__).resolve().parents[1] / 'game-bridge/Source/IpcServer.cs').read_text(encoding='utf-8')
+        self.assertIn('SpecialFolder.UserProfile), ".celeste-ai-play")', source)
+        self.assertNotIn('SpecialFolder.LocalApplicationData', source)
 
 if __name__ == '__main__':
     unittest.main()

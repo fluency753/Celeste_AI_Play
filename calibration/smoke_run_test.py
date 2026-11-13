@@ -95,12 +95,28 @@ class SmokeCheckTests(unittest.TestCase):
         self.assertIn('保持冻结（可续跑），停在 Level', text)
         self.assertIn('未覆盖：死亡后重生并继续、完成的段', text)
 
+    def test_a_stop_condition_replaces_the_segment_row(self):
+        self.summary.update(completed=False, game_released=False, end_scene='Level', splits=[],
+                            goal={'text': '进入房间 3 就算完成', 'conditions': [{'field': 'room', 'op': 'eq', 'value': '3'}],
+                                  'reached': True})
+        self.write()
+        code, text = self.check()
+        self.assertEqual(code, 0, text)
+        self.assertIn('[通过] 到达停止条件', text)
+        self.assertNotIn('完成的段', text)
+        self.summary['goal']['reached'] = False                 # 模型没打过去：不算主控的失败
+        self.write()
+        code, text = self.check()
+        self.assertEqual(code, 0, text)
+        self.assertIn('[未覆盖] 到达停止条件', text)
+
     def test_missing_summary_and_segment_syntax(self):
         (self.run / 'summary.json').unlink()
         code, text = self.check()
         self.assertEqual(code, 1)
         self.assertIn('没有 summary.json', text)
         self.assertEqual(smoke_run.parse_segments('0.0,1.0-1'), [[0, 0], [1, 0], [1, 1]])
+        self.assertEqual(smoke_run.parse_segments('1.0'), [[1, 0]])
         for bad in ('1', '1.x', 'a.0', '1.0-b'):
             with self.assertRaises(ValueError):
                 smoke_run.parse_segments(bad)

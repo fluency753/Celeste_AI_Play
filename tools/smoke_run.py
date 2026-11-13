@@ -1,8 +1,8 @@
 """发布前的实机冒烟：用便宜的模型在测试存档上真实跑一小段，再核对进档、动作、观测、死亡重生、录像与收尾。
 
 回归测试里的游戏、模型与 OBS 都是替身；这条命令把真实的游戏、桥接、容器、模型与录像接在一起跑一遍，
-默认是序章加第一章到第一个检查点（--segments 0.0,1.0），探索模式、分章录制、跳过准备阶段。
-转正式版之前跑一次；它要花模型的钱、占用游戏十几到几十分钟，不在回归和持续集成里。
+默认从第一章开头玩到进入第 3 个房间（过了前两面）为止，探索模式、分章录制、跳过准备阶段。
+转正式版之前跑一次；它要花模型的钱、占用游戏十几分钟，不在回归和持续集成里。
 
 用法（Windows，仓库根目录；控制台的游戏位置是 AI 专用副本，Docker Desktop 已启动，没有别的运行）：
     .\\.venv\\Scripts\\python.exe -X utf8 tools\\smoke_run.py --save-slot 7
@@ -10,6 +10,7 @@
 
 启动方式与控制台相同（独立宿主），用内置的“默认”配置，不改本机选中的配置。模型打不过去不算失败：
 核对的是主控这一侧（有没有异常、记录与录像是否完整、游戏有没有按约定交还或冻结），结果逐项列出。
+到达目标后主控按约定把游戏冻结在原地；核对完由这条命令交还控制（--keep-frozen 时不交还）。
 """
 from __future__ import annotations
 
@@ -20,6 +21,8 @@ import socket
 import subprocess
 import sys
 import time
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -79,9 +82,16 @@ def prepare(args) -> None:
     if docker.returncode:
         raise SystemExit('Docker 没有在运行；先启动 Docker Desktop')
     if not port_open(args.bridge_port):
-        from orchestrator import game_instance
         print('[smoke] 游戏没开，启动 AI 专用副本…', flush=True)
-        game_instance.launch(log=lambda line: print(line, flush=True))
+        try:
+            # 让控制台服务去启动（与在控制台里点“启动”相同）：游戏不成为这条命令所在程序的子进程。
+            request = Request(f'http://127.0.0.1:{args.hud_port}/api/console/instance/launch', data=b'{}',
+                              headers={'Content-Type': 'application/json'})
+            with urlopen(request, timeout=30) as response:
+                json.load(response)
+        except (URLError, OSError, ValueError):
+            from orchestrator import game_instance
+            game_instance.launch(log=lambda line: print(line, flush=True))
         deadline = time.monotonic() + 180
         while not port_open(args.bridge_port):
             if time.monotonic() > deadline:
@@ -96,9 +106,17 @@ def launch(args) -> Path:
                'agent': args.agent, 'mode': 'explore', 'chapters': sorted({c for c, _ in args.segment_list}),
                'segments': args.segment_list, 'save': {'name': args.save, 'slot': args.save_slot, 'create': False},
                'max_minutes': args.max_minutes, 'study': False, 'record': True, 'recording_mode': 'chapter',
-               'cutscene_mode': 'auto', 'bridge_port': args.bridge_port}
+               'cutscene_mode': 'auto', 'bridge_port': args.bridge_port, 'hud_port': args.hud_port}
+    extra = []
+    if args.until_room:
+        goal = ROOT / 'local' / 'smoke' / 'goal.json'
+        goal.parent.mkdir(parents=True, exist_ok=True)
+        goal.write_text(json.dumps({'text': f'进入房间 {args.until_room} 就算完成，不用再往前。', 'match': 'all',
+                                    'conditions': [{'field': 'room', 'op': 'eq', 'value': args.until_room}]},
+                                   ensure_ascii=False), encoding='utf-8')
+        extra = ['--goal-file', str(goal)]
     before = console_api.latest_run()
-    started = console_api.start(options, profile=args.profile)
+    started = console_api.start(options, profile=args.profile, extra=extra)
     print(f"[smoke] 已启动：{started['command']}", flush=True)
     deadline = time.monotonic() + 300
     while True:
@@ -199,8 +217,14 @@ def check(run: Path, bridge_port: int = 47774) -> int:
         row('未覆盖', '死亡后重生并继续', '这次没有死亡')
 
     splits = summary.get('splits') or []
-    row('通过' if splits else '未覆盖', '完成的段',
-        '；'.join(f"{s.get('chapter')} {s.get('ticks', 0) / 1e7:.3f} 秒（死亡 {s.get('deaths')}）" for s in splits) or '一段都没有完成')
+    goal = summary.get('goal') or {}
+    if goal.get('conditions'):
+        row('通过' if goal.get('reached') else '未覆盖', '到达停止条件',
+            (goal.get('text') or '') + ('' if goal.get('reached') else '（没有到达：模型没打过去，或预算先用完）'))
+    else:
+        row('通过' if splits else '未覆盖', '完成的段',
+            '；'.join(f"{s.get('chapter')} {s.get('ticks', 0) / 1e7:.3f} 秒（死亡 {s.get('deaths')}）" for s in splits)
+            or '一段都没有完成')
 
     if state.get('record') is False:
         row('未覆盖', '录像', '这次没有录像')
@@ -250,11 +274,15 @@ def main(argv=None) -> int:
     parser.add_argument('--model', default='deepseek-flash', help='模型（默认 deepseek-flash）')
     parser.add_argument('--effort', default='high')
     parser.add_argument('--agent', default='smoke', help='智能体标签：容器、工作区与运行目录都用它（默认 smoke）')
-    parser.add_argument('--segments', default='0.0,1.0', help='要玩的段（默认序章加第一章到第一个检查点）')
-    parser.add_argument('--max-minutes', type=float, default=40, help='现实时间预算（默认 40 分钟）')
-    parser.add_argument('--grace-minutes', type=float, default=25, help='预算之外留给启动、收尾与录像后处理的时间')
+    parser.add_argument('--segments', default='1.0', help='要玩的段（默认第一章从开头起的第一段；序章加第一章写 0.0,1.0）')
+    parser.add_argument('--until-room', default='3', metavar='房间',
+                        help='进入这个房间就停止（默认 3：过了第一章前两面）；写空字符串则玩完所选的段')
+    parser.add_argument('--max-minutes', type=float, default=25, help='现实时间预算（默认 25 分钟）')
+    parser.add_argument('--grace-minutes', type=float, default=20, help='预算之外留给启动、收尾与录像后处理的时间')
     parser.add_argument('--profile', default='default', help='使用的配置（默认内置的“默认”）')
+    parser.add_argument('--keep-frozen', action='store_true', help='结束后不交还游戏控制（留着冻结的现场）')
     parser.add_argument('--bridge-port', type=int, default=47774)
+    parser.add_argument('--hud-port', type=int, default=47790)
     args = parser.parse_args(argv)
     if args.check:
         return check(args.check.resolve(), args.bridge_port)
@@ -267,7 +295,16 @@ def main(argv=None) -> int:
     run = launch(args)
     print(f'[smoke] 运行目录 {run}', flush=True)
     wait(run, args)
-    return check(run, args.bridge_port)
+    code = check(run, args.bridge_port)
+    summary = read_json(run / 'summary.json') or {}
+    if not args.keep_frozen and not summary.get('game_released') and port_open(args.bridge_port):
+        from overlay import console_api
+        try:
+            released = console_api.release(args.bridge_port)
+            print(f"[smoke] 已交还游戏控制：{released.get('note') or released}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - 核对结果已经给出，交还失败只提示
+            print(f'[smoke] 没能交还游戏控制（{type(exc).__name__}: {exc}）；在控制台里点“交还控制”', flush=True)
+    return code
 
 
 if __name__ == '__main__':

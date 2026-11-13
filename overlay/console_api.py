@@ -767,7 +767,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.25.6"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.25.7"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -1282,10 +1282,11 @@ def _launch(argv: list[str]) -> dict:
     return {"host": str(host), "status": status_}
 
 
-def start(options: dict, profile: str | None = None) -> dict:
-    """profile：不给时用控制台选中的配置；实机冒烟（tools/smoke_run.py）指定内置的“默认”，不改选中的配置。"""
+def start(options: dict, profile: str | None = None, extra: list[str] | None = None) -> dict:
+    """profile：不给时用控制台选中的配置；extra：追加在后面的命令行参数。两者只给实机冒烟
+    （tools/smoke_run.py）用：指定内置的“默认”配置、附上停止条件，不改控制台选中的配置。"""
     from orchestrator.launch_options import build, command_line, normalize
-    argv = build(options, profile=profile or _profile())
+    argv = build(options, profile=profile or _profile()) + list(extra or ())
     o = normalize(options)
     if o["sides"]:
         # 计划了 B／C 面：启动前就按存档核对这些面已解锁（与主控开跑前的核对相同），没解锁时在控制台直接报错

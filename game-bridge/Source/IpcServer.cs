@@ -17,13 +17,16 @@ public sealed record Request(long Id, string Cmd, JsonElement Args);
 /// <summary>
 /// 本机端口的连接口令与首行读取。端口只监听 127.0.0.1，但本机上任何程序、以及浏览器里的网页
 /// （把一段数据直接发到本机端口）都连得上，所以连接要先证明自己读得到当前用户的文件：
-/// 核心启动监听后生成随机口令，写进当前用户的本机应用数据目录；主控读它，连接后第一行先报口令。
+/// 核心启动监听后生成随机口令，写进用户主目录下的 .celeste-ai-play；主控读它，连接后第一行先报口令。
 /// </summary>
 public static class IpcAuth {
     public const int MaxFirstLine = 8192;
 
+    // 不放在 AppData 里：打包应用（MSIX）和它启动的子进程写 AppData 时，系统把文件改放到该应用私有的位置，
+    // 别的进程在原路径下看不到。游戏与主控只要有一方是从这类应用里启动的（例如某些桌面客户端的命令行），
+    // 另一方就读不到口令。用户主目录下的文件夹不受这种重定向影响。
     public static string Folder =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CelesteAIPlay");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".celeste-ai-play");
 
     public static string FilePath(int port) => Path.Combine(Folder, $"ipc-{port}.token");
 
