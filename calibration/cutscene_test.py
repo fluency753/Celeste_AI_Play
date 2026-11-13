@@ -104,7 +104,7 @@ class CutsceneTests(unittest.TestCase):
         blocked=asyncio.run(server.call_tool('act',{'inputs':['1,R'],'thought':'继续移动'}))
         self.assertIn('用户已暂停',blocked.content[0].text)  # 暂停期间游戏工具不执行
         self.assertEqual(self.s.client.steps,[])
-        with self.assertRaises(ActError):self.s.stop_run('原因'*150)   # 原因限 200 字
+        with self.assertRaisesRegex(ActError, '1002 字.*1000 字以内'):self.s.stop_run('原因'*501)   # 只挡明显失控的长度
 
     def test_stop_run_confirmation_is_reissued_after_a_target_change(self):
         self.s.request_pause = Mock(return_value=True)
@@ -119,6 +119,29 @@ class CutsceneTests(unittest.TestCase):
         self.assertEqual(self.s.stop_run(second['confirmation_prefix'] + reason)['status'], 'reported')
         self.assertEqual(self.s.stop_run(second['confirmation_prefix'] + reason)['status'], 'duplicate')
         self.s.request_pause.assert_called_once_with(reason)
+
+    def test_stop_run_keeps_a_detailed_reason_in_full(self):
+        # 一段写清现场、试过的办法和所需协助的说明有几百字；以前超过 200 字整条退回，智能体只能反复删改重交。
+        import asyncio, json
+        from orchestrator.server import build_server
+        self.s.request_pause = Mock(return_value=True)
+        self.s.last_obs = {'scene': 'Level', 'frame': 10, 'controllable': True}
+        server = build_server(self.s, study=Mock(ready=Mock(return_value=False)))
+        tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+        self.assertIn('最长 1000 字', tools['stop_run'].description)
+        self.assertNotIn('200 字', tools['stop_run'].description)
+        reason = '现场、试过的办法与所需协助。' * 40          # 560 字
+        first = self.s.stop_run('bridge_io：' + reason)
+        self.assertEqual(first['status'], 'confirmation_required')
+        pending = asyncio.run(server.call_tool('stop_run', {'reason': 'bridge_io：' + reason})).content[0].text
+        self.assertIn('（1000 字以内）', pending)
+        self.assertNotIn('200 字', pending)
+        self.assertEqual(self.s.stop_run(first['confirmation_prefix'] + reason)['status'], 'reported')
+        self.s.request_pause.assert_called_once_with(reason)
+        self.assertEqual(json.loads((self.path / 'agent_stop.json').read_text(encoding='utf-8'))['reason'], reason)
+        with self.assertRaisesRegex(ActError, '1001 字'):
+            self.s.stop_run('hint：' + '字' * 1001)
+        self.s.stop_run('hint：' + '字' * 1000)              # 刚好到上限不退回
 
     def test_stop_run_non_defect_requires_three_steps_and_rotates_the_code(self):
         self.s.request_pause = Mock(return_value=True)

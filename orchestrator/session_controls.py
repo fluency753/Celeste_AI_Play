@@ -392,14 +392,15 @@ class SessionControls:
 
     def _public_compaction(self, ident, *, completed=False, reminder_key=None):
         """ident：历史里这次压缩的编号（开始与完成用同一个，完成时替换"正在压缩"那一条）；
-        reminder_key：笔记提醒按它去重（Claude Code 的 compact_boundary 带 uuid），不给时用 ident。"""
+        reminder_key：笔记、指南与留言提醒按它去重（Claude Code 的 compact_boundary 带 uuid），不给时用 ident。"""
         self.metrics.set_compacting(not completed)
         if not completed and self.token_drift is not None:
             self._exclude_token_window('compacting')
         notes = getattr(self, 'note_reminders', None)
         resend = False
         if completed and notes is not None:
-            resend = notes.compacted(ident if reminder_key is None else reminder_key)
+            resend = notes.compacted(ident if reminder_key is None else reminder_key,
+                                     guide=getattr(self, '_guide_reading', None))
         from .telemetry import publish
         done = '上下文压缩完成。' + ('局间留言原文会在智能体压缩后的第一次工具调用时重发给它。' if resend else '')
         publish(self.run_dir, 'system:compaction:' + str(ident),

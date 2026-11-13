@@ -239,6 +239,15 @@ class GuideReading:
                 self.delivered.pop(key)
             self._save()
 
+    def compacted(self):
+        """上下文压缩后，读过的正文不保证还在上下文里：清掉送达记录。智能体按提醒重读后会重新记上；
+        在那之前重接会话，阅读安排会要求整篇重读，而不是“无需重读”。"""
+        self.lines = set()
+        if self.delivered:
+            self.delivered = {}
+            if self.session_id:
+                self._save()
+
     def note_result(self, info):
         guide = self.guide
         if not self.session_id or not guide.get('path') or not isinstance(info, dict) or info.get('filePath') != guide['path']:

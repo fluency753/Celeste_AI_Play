@@ -29,7 +29,7 @@ from .sandbox import run_program
 from .goals import GoalManager
 from .modes import act_frame_cap, act_frame_min, is_explore
 from .token_menu import TokenMenu, TokenMenuBoundary
-from .stop_categories import load_stop_categories
+from .stop_categories import REASON_MAX_CHARS as STOP_REASON_MAX, load_stop_categories
 from .thought import thought_problem
 from .workspace_files import tas
 from .workspace_setup import install_game_helpers
@@ -2569,8 +2569,8 @@ class GameSession:
             raise ActError('报告任务阻塞必须说明原因')
         fields = re.split(r'\s*[:：]\s*', reason, maxsplit=1)
         category, detail = fields[0], fields[-1]
-        if len(detail) > 200:
-            raise ActError('阻塞原因请压缩到 200 字以内')
+        if len(detail) > STOP_REASON_MAX:
+            raise ActError(f'阻塞说明有 {len(detail)} 字，请压缩到 {STOP_REASON_MAX} 字以内')
         with self.lock:
             if self.done or self.goals.stop_motion.is_set():
                 raise ActError('本次试玩已结束或正在按目标收尾')
@@ -2606,8 +2606,8 @@ class GameSession:
                     self._stop_confirmation = None
             rule = categories.get(category) if len(fields) == 2 else None
             if rule is None:
-                if len(reason) > 200:
-                    raise ActError('阻塞原因请压缩到 200 字以内')
+                if len(reason) > STOP_REASON_MAX:
+                    raise ActError(f'阻塞说明有 {len(reason)} 字，请压缩到 {STOP_REASON_MAX} 字以内')
                 result = self._stop_diagnostic('classification_required', reason, frame, progress)
                 return {**result, 'categories': [
                     {'id': key, 'label': item.label, 'criterion': item.criterion, 'required_steps': item.required_steps}

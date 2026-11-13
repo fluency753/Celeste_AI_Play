@@ -9,6 +9,11 @@ USER_NOTE_RESEND = ('（系统·留言重发）上下文刚完成压缩，开场
                     '其中的要求和规则继续有效；按当前进度继续，不要因此重新开始章节或重做已经完成的开局步骤，'
                     '也不因此自行恢复游戏。\n（用户留言）\n')
 
+# 操作指南是智能体开局时自己读进上下文的工作区文件：压缩后正文只剩摘要，规则跟着丢。压缩完成后提醒重读一次。
+GUIDE_REREAD = ('（系统·指南提醒）上下文刚完成压缩，之前读过的操作指南正文可能只剩摘要。'
+                '继续正式试玩前，请重读 {path}（只查某一节时见同目录的 index.md）；仅聊天、准备资料或取名时按需查阅。'
+                '遵守当前暂停或仅聊天状态，不因此自行恢复游戏。')
+
 
 class NoteReminders:
     def __init__(self, workspace, threshold, user_note=None):
@@ -59,10 +64,11 @@ class NoteReminders:
             self.last_hash = value
             self.observable = True
 
-    def compacted(self, ident):
-        """压缩完成：排队笔记提醒（有工作区时）与留言原文重发（有 --note-file 时），同一次压缩只排一次。
-        返回这次是否排了留言重发。"""
-        if self.path is None and self.user_note is None:
+    def compacted(self, ident, guide=None):
+        """压缩完成：排队笔记提醒（有工作区时）、操作指南重读提醒（guide 是本会话的 GuideReading，指南发布在
+        工作区时才有）与留言原文重发（有 --note-file 时），同一次压缩只排一次。返回这次是否排了留言重发。"""
+        guide_path = guide.guide.get('path') if guide is not None else None
+        if self.path is None and self.user_note is None and not guide_path:
             return False
         with self.lock:
             key = str(ident)
@@ -80,6 +86,10 @@ class NoteReminders:
                     '（系统·笔记提醒）上下文刚完成压缩。请读取 /workspace/notes.md，'
                     '与最新观测、最近动作结果核对；笔记缺失则建立简短索引，过期或矛盾则更新整理。'
                     '遵守当前暂停或仅聊天状态，不因此自行恢复游戏。')
+            if guide_path:
+                guide.compacted()
+                self.pending.pop('guide', None)
+                self.pending['guide'] = (self.cycle, GUIDE_REREAD.format(path=guide_path))
             if self.user_note is not None:
                 self.pending.pop('note', None)   # 重新插入，排在笔记提醒之后
                 self.pending['note'] = (self.cycle, USER_NOTE_RESEND + self.user_note)

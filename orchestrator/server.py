@@ -25,6 +25,7 @@ from .collision_view import render_collision_view
 from .geometry_context import geometry_page
 from .observation_delivery import ObservationDelivery, FILE_JSON_HEADER, ROOM_JSON_HEADER
 from .execution import workspace_capabilities
+from .stop_categories import REASON_MAX_CHARS as STOP_REASON_MAX
 from .tool_record import RecordedMCPServer, compact_step
 
 ACT_DESCRIPTION = """推进游戏若干帧并返回结果、角色状态{act_collision_image}。{observation_delivery_rule} observe(detail="geometry",region=[x,y,w,h])可按需查看最近缓存的局部精确对象；detail="player"查询完整玩家内部状态。不把当帧阻挡当成永久不可达。{save_context_rule}
@@ -523,7 +524,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
     @server.tool(name='stop_run',
                  description='报告任务必需步骤的阻塞。reason 以「类别ID：」开头；类别不明时工具会返回可选类别。'
                  '首次有效分类计为第 1 次，按回执确认，主控缺陷共 2 次，其他问题共 3 次后才暂停。'
-                 '阻塞说明限 200 字，写明状态、尝试及所需协助。普通死亡、自动等待交回控制、单次工具拒绝不足以判定阻塞。'
+                 f'阻塞说明写明状态、尝试及所需协助，最长 {STOP_REASON_MAX} 字。普通死亡、自动等待交回控制、单次工具拒绝不足以判定阻塞。'
                  '主控有可用的入场或重生恢复路径时会返回下一步。报告被接受并暂停时结束本轮等待用户。'
                  '暂停或知识库未读完时仍可报告真实阻塞。',
                  structured_output=False)
@@ -550,7 +551,7 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
                     from .stop_confirmation import wording
                     tail = (f'本次未暂停。{result["category_label"]}已提交 {result["step"]}/{result["required_steps"]} 次。'
                             f'\n复核要求：{result["criterion"]}\n{wording()}\n'
-                            f'reason 以「{result["confirmation_prefix"]}」开头，后接 200 字以内的复核证据及用户需要做的事。')
+                            f'reason 以「{result["confirmation_prefix"]}」开头，后接复核证据及用户需要做的事（{STOP_REASON_MAX} 字以内）。')
                 elif result['status'] == 'recovery_available':
                     progress = result['transition']
                     recovery_note = ('Token 会按空输入继续推进重生。可用 observe 读取当前状态，或按画面显式发送确认。'

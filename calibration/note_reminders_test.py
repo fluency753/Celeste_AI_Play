@@ -189,6 +189,34 @@ class NoteReminderStateTests(unittest.TestCase):
             self.assertTrue(notes.compacted('two'))
             self.assertEqual(notes.take().count('（用户留言）'), 1)
 
+    def test_guide_reread_is_queued_once_per_compaction_between_notes_and_user_note(self):
+        class Reading:
+            guide = {'path': '/workspace/game/instructions/abc123/guide.md'}
+            forgotten = 0
+
+            def compacted(self):
+                self.forgotten += 1
+
+        reading = Reading()
+        with tempfile.TemporaryDirectory() as folder:
+            notes = NoteReminders(Path(folder), lambda: 60, user_note='留言原文')
+            notes.compacted('zero')                              # 指南没有发布在工作区：不提醒
+            self.assertEqual([key[0] for key, _ in notes.peek()], ['after', 'note'])
+            notes.take()
+            self.assertTrue(notes.compacted('one', guide=reading))
+            self.assertEqual([key[0] for key, _ in notes.peek()], ['after', 'guide', 'note'])
+            text = notes.take()
+            self.assertIn('（系统·指南提醒）', text)
+            self.assertIn('请重读 /workspace/game/instructions/abc123/guide.md', text)
+            self.assertIn('不因此自行恢复游戏', text)
+            notes.compacted('one', guide=reading)                # 同一次压缩的重复事件
+            self.assertEqual((notes.take(), reading.forgotten), ('', 1))
+            notes.compacted('two', guide=reading)
+            self.assertEqual((notes.take().count('（系统·指南提醒）'), reading.forgotten), (1, 2))
+        only_guide = NoteReminders(None, lambda: 60)
+        only_guide.compacted('one', guide=reading)
+        self.assertEqual([key[0] for key, _ in only_guide.peek()], ['guide'])
+
     def test_user_note_resend_works_without_workspace_and_blank_note_is_ignored(self):
         notes = NoteReminders(None, lambda: 60, user_note='留言原文')
         notes.usage(900, 1000)
@@ -369,6 +397,26 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([key[0] for key, _ in runner.note_reminders.peek()], ['after'])
             events = (runner.run_dir / 'public_events.jsonl').read_text(encoding='utf-8')
             self.assertNotIn('局间留言', events)
+
+    async def test_compaction_asks_both_executors_to_reread_the_published_guide(self):
+        from orchestrator import prompt_guide
+        for engine, compact in (('claude', claude_compaction), ('codex', codex_compaction)):
+            with self.subTest(engine=engine), runner_fixture(engine) as (runner, session, notes), \
+                    patch.object(prompt_guide, 'GUIDE_READ_ROOT', runner.run_dir / 'guide-reading'):
+                guide = prompt_guide.publish_guide(runner.cfg)
+                reading = runner._guide_reading = prompt_guide.GuideReading(runner.cfg, guide, 'session-1')
+                reading.note_result({'filePath': guide['path'], 'startLine': 1, 'numLines': guide['total_lines'],
+                                     'totalLines': guide['total_lines']})
+                self.assertIn('无需重读', prompt_guide.GuideReading(runner.cfg, guide, 'session-1').read_plan())
+                compact(runner, 'c1')
+                offered = dict((key[0], text) for key, text in runner.note_reminders.peek())
+                self.assertEqual(list(offered), ['after', 'guide'])
+                self.assertIn('请重读 ' + guide['path'], offered['guide'])
+                # 重读之前重接会话：阅读安排要求整篇重读，不再说“无需重读”。
+                self.assertIn('一次读取正文', prompt_guide.GuideReading(runner.cfg, guide, 'session-1').read_plan())
+                reading.note_result({'filePath': guide['path'], 'startLine': 1, 'numLines': guide['total_lines'],
+                                     'totalLines': guide['total_lines']})
+                self.assertIn('无需重读', prompt_guide.GuideReading(runner.cfg, guide, 'session-1').read_plan())
 
     async def test_naming_runner_does_not_resend_note_file(self):
         with runner_fixture('claude', user_note='留言', naming_only=True) as (runner, session, notes):

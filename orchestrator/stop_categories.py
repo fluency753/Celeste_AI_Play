@@ -13,6 +13,9 @@ CONFIG_DIR = Path(__file__).resolve().parents[1] / 'configs'
 DEFAULT_CATEGORIES = CONFIG_DIR / 'stop_categories.json'
 LOCAL_CATEGORIES = CONFIG_DIR / 'local.stop_categories.json'
 STEPS = {'controller_defect': 2, 'user_help': 3}
+# 阻塞说明的长度上限（类别之后的正文）。写不下现场、试过的办法和所需协助时，智能体只能反复删改重交，
+# 所以只挡明显失控的长度；HUD 的消息栏可以滚动。
+REASON_MAX_CHARS = 1000
 
 
 @dataclass(frozen=True)
