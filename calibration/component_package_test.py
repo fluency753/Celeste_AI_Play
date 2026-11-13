@@ -18,7 +18,7 @@ from tools import component_package as packages
 def fixture(root):
     for name, text in {
         "overlay/console_api.py": 'CONSOLE_VERSION = "1.22.0"\n',
-        "game-runtime/everest.yaml": '- Name: CelesteAIRuntime\n  Version: 1.0.6\n',
+        "game-runtime/everest.yaml": '- Name: CelesteAIRuntime\n  Version: 1.1.0\n',
         "game-bridge/everest.yaml": '- Name: CelesteAIBridge\n  Version: 1.11.1\n',
         "requirements.txt": "", "setup.ps1": "# setup\n", "tools/input.py": "# source\n",
     }.items():

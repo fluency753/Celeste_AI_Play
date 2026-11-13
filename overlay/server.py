@@ -113,6 +113,10 @@ def restart_service(port: int) -> None:
     threading.Thread(target=leave, daemon=True).start()
 
 
+LOCAL_HOST = re.compile(r"(127\.0\.0\.1|localhost|\[::1\])(:\d+)?")
+LOCAL_ORIGIN = re.compile(r"http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?")
+
+
 def make_handler(pinned: Path | None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # 安静运行
@@ -122,20 +126,30 @@ def make_handler(pinned: Path | None):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Cache-Control", "no-store")
-            # OBS 浏览器源用本地文件打开页面时，页面来自另一个源，需要允许它跨源取数据（控制台的接口不需要，也不允许）
-            # cors="local"：只允许本机页面（127.0.0.1 / localhost 的其他端口）跨源读取，网上的页面读不到
-            if cors == "local":
+            # 跨源读取只给本机页面（127.0.0.1 / localhost 的其他端口，例如另一个 HUD 服务）；网上的页面读不到。
+            # 不放行来源为 null 的页面：本地文件与任何网站里的沙箱框架都是 null，分不开。控制台的接口一律不给。
+            if cors:
                 origin = self.headers.get("Origin") or ""
-                if re.fullmatch(r"http://(127\.0\.0\.1|localhost)(:\d+)?", origin):
+                if LOCAL_ORIGIN.fullmatch(origin):
                     self.send_header("Access-Control-Allow-Origin", origin)
                     self.send_header("Vary", "Origin")
-            elif cors:
-                self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
+        def _local_request(self) -> bool:
+            """请求头的 Host 必须是本机名字。网页把自己的域名解析到 127.0.0.1 再来访问时，
+            Host 仍是它的域名，据此拒绝；不带 Host 的不是浏览器，放行。"""
+            host = (self.headers.get("Host") or "").strip().lower()
+            if not host or LOCAL_HOST.fullmatch(host):
+                return True
+            self._send(403, "只接受用本机地址（127.0.0.1 或 localhost）访问".encode("utf-8"),
+                       "text/plain; charset=utf-8", cors=False)
+            return False
+
         def do_GET(self):
+            if not self._local_request():
+                return
             path = self.path.split("?", 1)[0]
             if path in ("/", "/hud", "/hud/"):
                 self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
@@ -259,6 +273,8 @@ def make_handler(pinned: Path | None):
             return data
 
         def do_POST(self):
+            if not self._local_request():
+                return
             if self.path.startswith("/api/console/"):
                 from . import console_api
                 try:

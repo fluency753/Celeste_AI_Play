@@ -21,6 +21,9 @@ from orchestrator.server import build_server
 from orchestrator.telemetry import public_event
 from overlay.history import PublicHistory
 
+# 工具门禁只认本机钩子的 JSON 请求（orchestrator/tool_gate.py）
+HOOK_HEADERS = {'content-type': 'application/json', 'host': 'host.docker.internal:47780'}
+
 
 class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
     async def test_opening_recovery_keeps_user_message_and_consumes_duplicate_resume(self):
@@ -178,7 +181,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         from orchestrator.tool_gate import add_gate_route
         app = SimpleNamespace(router=SimpleNamespace(routes=[]))
         add_gate_route(app, session=self.session)
-        response = await app.router.routes[0].endpoint(SimpleNamespace(json=AsyncMock(return_value={
+        response = await app.router.routes[0].endpoint(SimpleNamespace(headers=HOOK_HEADERS, json=AsyncMock(return_value={
             'tool_name': tool, 'session_id': self.runner.session_id})))
         return json.loads(response.body)
 
@@ -223,9 +226,9 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.runtime = 'container'
         endpoint = app.router.routes[0].endpoint
         self.runner.turn_active = True
-        response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Bash', 'session_id': self.runner.session_id})))
+        response = await endpoint(SimpleNamespace(headers=HOOK_HEADERS, json=AsyncMock(return_value={'tool_name': 'Bash', 'session_id': self.runner.session_id})))
         self.assertEqual(json.loads(response.body)['decision'], 'allow')
-        response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={'tool_name': 'Read', 'session_id': self.runner.session_id})))
+        response = await endpoint(SimpleNamespace(headers=HOOK_HEADERS, json=AsyncMock(return_value={'tool_name': 'Read', 'session_id': self.runner.session_id})))
         self.assertEqual(json.loads(response.body)['decision'], 'allow')
         self.assertTrue(self.runner.paused)
         self.runner.turn_active = True
@@ -260,7 +263,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.runner.turn_active = True
 
         async def request(session_id=None, tool='Bash'):
-            response = await endpoint(SimpleNamespace(json=AsyncMock(return_value={
+            response = await endpoint(SimpleNamespace(headers=HOOK_HEADERS, json=AsyncMock(return_value={
                 'tool_name': tool, 'tool_use_id': 'workspace-call',
                 'session_id': self.runner.session_id if session_id is None else session_id})))
             return json.loads(response.body)
@@ -269,7 +272,7 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         del self.session.workspace_hook_guard
         self.assertEqual((await request())['decision'], 'deny')
         self.session.workspace_hook_guard = owner
-        malformed = await endpoint(SimpleNamespace(json=AsyncMock(return_value=[])))
+        malformed = await endpoint(SimpleNamespace(headers=HOOK_HEADERS, json=AsyncMock(return_value=[])))
         self.assertEqual(json.loads(malformed.body)['decision'], 'deny')
         for phase in ('prepare_only', 'paused', 'chat_only', 'goal_finishing'):
             with self.subTest(phase=phase):

@@ -15,6 +15,8 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
+import re
 import socket
 import sys
 import time
@@ -24,6 +26,42 @@ from pathlib import Path
 DEFAULT_PORT = 47774
 # 只读、重发无副作用的指令：连接在等回复时断开（例如被别的客户端挤掉），重连后可以安全地重发
 READ_ONLY = frozenset({"hello", "observe", "areas"})
+# 常驻核心 1.1.0 起：监听后把随机口令写进当前用户的本机应用数据目录，连接的第一行要先报口令（见 IpcServer.cs）。
+# 测试用这个环境变量把口令目录换到别处，不碰本机真实的口令文件。
+TOKEN_DIR_ENV = "CELESTE_AI_TOKEN_DIR"
+AUTH_ID = -1
+
+
+class BridgeAuthError(ConnectionError):
+    """常驻核心没有接受这次连接：口令不对，或需要口令而本机读不到口令文件。"""
+
+
+def token_dir() -> Path:
+    """口令文件所在目录，与 .NET 的 LocalApplicationData 一致。"""
+    override = os.environ.get(TOKEN_DIR_ENV)
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    elif sys.platform == "darwin":
+        base = str(Path.home() / "Library" / "Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "CelesteAIPlay"
+
+
+def token_path(port: int) -> Path:
+    return token_dir() / f"ipc-{port}.token"
+
+
+def read_token(port: int) -> str | None:
+    """这个端口当前的连接口令；没有文件、读不了或格式不对时为 None。"""
+    try:
+        with open(token_path(port), "rb") as stream:
+            text = stream.read(200).decode("ascii", errors="replace").strip()
+    except OSError:
+        return None
+    return text if re.fullmatch(r"[0-9a-f]{64}", text) else None
 
 
 class BridgeClient:
@@ -48,9 +86,35 @@ class BridgeClient:
             self.sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
             self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.file = self.sock.makefile("rwb")
+            self._authenticate()
         except OSError as error:
             self._log_failure(error, 'connect')
             raise
+
+    def _authenticate(self) -> None:
+        """连接后先报口令。本机没有这个端口的口令文件时不发（旧的常驻核心没有口令；
+        新核心会在第一条指令上回复需要口令，见 _call）。"""
+        self.authenticated = False
+        token = read_token(self.port)
+        if token is None:
+            return
+        self.file.write((json.dumps({"id": AUTH_ID, "cmd": "auth", "token": token}) + "\n").encode("utf-8"))
+        self.file.flush()
+        line = self.file.readline()
+        if not line:
+            raise BridgeAuthError(f"桥接在核对连接口令时关闭了连接（口令文件 {token_path(self.port)}）")
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            reply = None
+        if isinstance(reply, dict) and reply.get("ok") is True and reply.get("auth") is True:
+            self.authenticated = True
+        elif isinstance(reply, dict) and reply.get("auth") == "required":
+            self.close()
+            raise BridgeAuthError(
+                f"游戏里的常驻核心没有接受连接口令（口令文件 {token_path(self.port)}）。"
+                "口令在游戏启动时生成：确认连的是本机正在运行的这份游戏，或重启游戏后再试")
+        # 其他回复（例如 unknown cmd 'auth'）：没有口令的旧常驻核心，留着的是以前的口令文件，照常继续
 
     def _log_failure(self, error, phase, command=None, request_id=None):
         context = f'[bridge] {getattr(self, "host", "?")}:{getattr(self, "port", "?")} phase={phase}'
@@ -157,6 +221,10 @@ class BridgeClient:
                     self.cancel_pending()
                 continue
             if reply.get("id") == req_id:
+                if not reply.get("ok") and reply.get("auth") == "required":
+                    raise BridgeAuthError(
+                        f"游戏里的常驻核心要求连接口令，但本机没有读到口令文件 {token_path(self.port)}。"
+                        "口令由游戏启动时写入当前用户的本机应用数据目录：确认游戏与主控用同一个系统用户运行")
                 if not reply.get("ok"):
                     raise RuntimeError(f"{cmd} failed: {reply.get('error')}")
                 if isinstance(reply.get('obs'), dict) and ('imageScope' in reply or 'imageError' in reply):

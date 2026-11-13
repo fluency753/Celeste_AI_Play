@@ -27,6 +27,10 @@ def preflight_bridge(port):
     try:
         hello = client.call('hello')
         validate_bridge(hello)
+        if not getattr(client, 'authenticated', False):
+            # 常驻核心 1.1.0 之前，本机端口不核对来人：能连就能操作游戏。不拦开跑，只提醒更新。
+            print('[run] 游戏里的常驻核心还没有连接口令保护（早于 1.1.0）：本机上的其他程序、甚至浏览器里的网页'
+                  '都可能连上桥接端口操作游戏。请更新桥接 Mod 与常驻核心（需要关闭游戏后部署）。', flush=True)
         from .action_policy import require_capability
         try:
             require_capability(hello)

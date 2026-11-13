@@ -19,6 +19,9 @@ from orchestrator.tool_gate import add_gate_route
 from orchestrator.codex_native import native_tool_hook
 from orchestrator.server import build_server
 
+# 工具门禁只认本机钩子的 JSON 请求（orchestrator/tool_gate.py）
+HOOK_HEADERS = {'content-type': 'application/json', 'host': 'host.docker.internal:47780'}
+
 
 @contextmanager
 def runner_fixture(engine='codex', user_note=None, **options):
@@ -391,12 +394,12 @@ class NoteReminderRunnerTests(unittest.IsolatedAsyncioTestCase):
             runner.paused = True
             runner.pausing = True
             runner.turn_active = True
-            denied = await endpoint(SimpleNamespace(json=AsyncMock(return_value={
+            denied = await endpoint(SimpleNamespace(headers=HOOK_HEADERS, json=AsyncMock(return_value={
                 'tool_name': 'Read', 'session_id': 'old-session'})))
             self.assertEqual(json.loads(denied.body)['decision'], 'deny')
             self.assertTrue(runner.note_reminders.peek())
             runner.pausing = False
-            allowed = await endpoint(SimpleNamespace(json=AsyncMock(return_value={
+            allowed = await endpoint(SimpleNamespace(headers=HOOK_HEADERS, json=AsyncMock(return_value={
                 'tool_name': 'Read', 'session_id': runner.session_id})))
             body = json.loads(allowed.body)
             self.assertEqual(body['decision'], 'allow')

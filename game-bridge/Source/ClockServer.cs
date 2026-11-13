@@ -13,6 +13,7 @@ namespace CelesteAI.Bridge;
 /// 录制时插件每个视频节拍发来一个令牌 "T id"，桥接推进一帧，等这一帧呈现到屏幕后回 "F id 帧号 章节计时"；
 /// 没有要推进的帧时回 "N id"。插件用 "L 1" / "L 0" 开关锁步，用 "S {json}" 报告录制状态；
 /// 桥接用 "R {json}" 把主控的录制指令转给插件。
+/// 新连接的第一行必须是本协议的一行，才会顶替当前的插件连接；其他连接直接关掉。
 /// </summary>
 public static class ClockServer {
     private static TcpListener? listener;
@@ -23,6 +24,9 @@ public static class ClockServer {
     private static readonly SemaphoreSlim TokenSignal = new(0);
     private static Thread? acceptThread;
     private static readonly ConcurrentBag<Thread> readThreads = new();
+    private static readonly ConcurrentDictionary<TcpClient, byte> Pending = new();
+    private const int FirstLineTimeoutMs = 10000;
+    private const int MaxPending = 8;
     private static long generation;
 
     public static volatile bool LockstepRequested;
@@ -54,6 +58,9 @@ public static class ClockServer {
         Interlocked.Increment(ref generation);
         try { listener?.Stop(); } catch { /* ignored */ }
         Drop(null);
+        foreach (TcpClient waiting in Pending.Keys) {
+            try { waiting.Close(); } catch { /* ignored */ }
+        }
         Join(acceptThread);
         while (readThreads.TryTake(out Thread? reader)) Join(reader);
         acceptThread = null; listener = null;
@@ -113,46 +120,78 @@ public static class ClockServer {
                 if (!running || epoch != Interlocked.Read(ref generation)) return;
                 continue;
             }
-            accepted.NoDelay = true;
-            Drop(null);
-            lock (ClientLock) {
-                if (!running || epoch != Interlocked.Read(ref generation)) { accepted.Close(); return; }
-                client = accepted;
+            if (Pending.Count >= MaxPending) {
+                try { accepted.Close(); } catch { /* ignored */ }
+                continue;
             }
-            Log.Info("clock: OBS plugin connected");
-            var thread = new Thread(() => ReadLoop(epoch, accepted)) { IsBackground = true, Name = "CelesteAIBridge-clock-read" };
+            accepted.NoDelay = true;
+            Pending[accepted] = 0;
+            var thread = new Thread(() => Serve(epoch, accepted)) { IsBackground = true, Name = "CelesteAIBridge-clock-read" };
             readThreads.Add(thread); thread.Start();
         }
     }
 
-    private static void ReadLoop(long epoch, TcpClient c) {
+    /// <summary>本协议的一行：T／L／S 开头，后面是空格或行尾。</summary>
+    private static bool ProtocolLine(string line) =>
+        line.Length >= 1 && (line[0] is 'T' or 'L' or 'S') && (line.Length == 1 || line[1] == ' ');
+
+    /// <summary>
+    /// 新连接先读第一行：是本协议的一行才顶替当前连接并开始处理，否则直接关掉
+    /// （例如网页发到本机端口的 HTTP 请求），碰不到正在录制的插件连接。
+    /// </summary>
+    private static void Serve(long epoch, TcpClient c) {
+        string? first = null;
         try {
+            c.ReceiveTimeout = FirstLineTimeoutMs;
+            first = IpcAuth.ReadFirstLine(c.GetStream());
+            c.ReceiveTimeout = 0;
+        } catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException or InvalidOperationException) {
+            first = null;
+        } finally {
+            Pending.TryRemove(c, out _);
+        }
+        if (first == null || !ProtocolLine(first)) {
+            try { c.Close(); } catch { /* ignored */ }
+            return;
+        }
+        Drop(null);
+        lock (ClientLock) {
+            if (!running || epoch != Interlocked.Read(ref generation)) { c.Close(); return; }
+            client = c;
+        }
+        Log.Info("clock: OBS plugin connected");
+        try {
+            Handle(first);
             using var reader = new StreamReader(c.GetStream(), new UTF8Encoding(false));
             string? line;
             while (running && epoch == Interlocked.Read(ref generation) && (line = reader.ReadLine()) != null) {
                 lock (ClientLock) if (!ReferenceEquals(client, c)) break;
-                if (line.Length < 1) continue;
-                switch (line[0]) {
-                    case 'T':
-                        if (long.TryParse(line.AsSpan(2), out long id)) {
-                            Tokens.Enqueue(id);
-                            TokenSignal.Release();
-                            if (BridgeRuntime.HoldingReload) AcknowledgeIdle();
-                        }
-                        break;
-                    case 'L':
-                        LockstepRequested = line.Length > 2 && line[2] == '1';
-                        Log.Info($"clock: lockstep {(LockstepRequested ? "on" : "off")}");
-                        break;
-                    case 'S':
-                        PluginStatus = line.Length > 2 ? line[2..] : null;
-                        break;
-                }
+                Handle(line);
             }
         } catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException) {
             // 断开
         }
         Drop(c);
         Log.Info("clock: OBS plugin disconnected");
+    }
+
+    private static void Handle(string line) {
+        if (!ProtocolLine(line)) return;
+        switch (line[0]) {
+            case 'T':
+                if (line.Length > 2 && long.TryParse(line.AsSpan(2), out long id)) {
+                    Tokens.Enqueue(id);
+                    TokenSignal.Release();
+                    if (BridgeRuntime.HoldingReload) AcknowledgeIdle();
+                }
+                break;
+            case 'L':
+                LockstepRequested = line.Length > 2 && line[2] == '1';
+                Log.Info($"clock: lockstep {(LockstepRequested ? "on" : "off")}");
+                break;
+            case 'S':
+                PluginStatus = line.Length > 2 ? line[2..] : null;
+                break;
+        }
     }
 }

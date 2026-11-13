@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 连接口令与首行校验的独立检查：只编译常驻核心里的两个端口服务，不需要游戏文件。
+       用法：dotnet run，project 参数写 calibration/ipc_auth。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../../game-bridge/Source/IpcServer.cs" Link="IpcServer.cs" />
+    <Compile Include="../../game-bridge/Source/ClockServer.cs" Link="ClockServer.cs" />
+  </ItemGroup>
+</Project>

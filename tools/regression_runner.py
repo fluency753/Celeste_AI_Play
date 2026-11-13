@@ -194,6 +194,8 @@ def main(argv=None):
     parser.add_argument('--timings-cache', default=str(CACHE), help=argparse.SUPPRESS)
     parser.add_argument('--worker', metavar='REPORT', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    # 回归里的桥接都是替身：不读本机真实的连接口令文件（tools/bridge_client.py）。
+    os.environ.setdefault('CELESTE_AI_TOKEN_DIR', str(RESULTS / 'no-ipc-tokens'))
     verbosity = 2 if args.verbose else 1
     start = Path(args.start_directory).resolve()
     if args.worker:

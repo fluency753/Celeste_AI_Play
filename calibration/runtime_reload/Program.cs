@@ -86,9 +86,17 @@ void Pump() => BridgeRuntime.Tick(() => originalTicks++, () => originalTicks++);
 using var ipc = new TcpClient(); ipc.Connect(IPAddress.Loopback, ipcPort);
 using var stream = ipc.GetStream(); using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
 using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+// The resident core only serves a connection that presents its token first.
+writer.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?> {
+    ["id"] = 0, ["cmd"] = "auth", ["token"] = File.ReadAllText(IpcAuth.FilePath(ipcPort)).Trim() }));
+using (var authReply = JsonDocument.Parse(reader.ReadLine()!))
+    Check(authReply.RootElement.TryGetProperty("auth", out var granted) && granted.ValueKind == JsonValueKind.True,
+        "Resident core refused the connection token: " + authReply.RootElement);
 using var clock = new TcpClient(); clock.Connect(IPAddress.Loopback, clockPort);
 using var clockReader = new StreamReader(clock.GetStream(), Encoding.UTF8, leaveOpen: true);
 using var clockWriter = new StreamWriter(clock.GetStream(), new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+// Like the OBS plugin: a connection becomes the clock peer with its first protocol line.
+clockWriter.WriteLine("S {\"state\":\"idle\"}");
 long requestId = 0;
 long nextToken = 1;
 double[] receivedEnergy = new double[2];

@@ -45,7 +45,7 @@ docker image inspect celeste-agent:0.1                                 # 智能�
 
 `restart_controller.py check` 默认查 47792 端口的 HUD 服务；控制台和主控用的是 47790，查它时加 `--hud-port 47790`。它报"Connection refused"（退出码 2）表示那个端口上没有 HUD 服务，通常就是没有在用的运行，不是故障。最直接的判断是控制台顶栏的"主控"灯。
 
-游戏的版本要求：桥接 Mod 版本见 `game-bridge/everest.yaml`（写作时为 CelesteAIBridge 1.11.1），依赖常驻核心 CelesteAIRuntime 1.0.6 与 EverestCore 1.5935.0；主控要求桥接 1.4.0 或更新。游戏启动后，游戏目录的 `log.txt` 里应有 `[CelesteAIBridge] loaded v<同一版本>`，以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。
+游戏的版本要求：桥接 Mod 与常驻核心的版本见 `game-bridge/everest.yaml`、`game-runtime/everest.yaml`，依赖 EverestCore 1.5935.0；常驻核心 1.1.0 起主控连接要先报口令（自动读取，游戏与主控须用同一个系统用户运行）；主控要求桥接 1.4.0 或更新。游戏启动后，游戏目录的 `log.txt` 里应有 `[CelesteAIBridge] loaded v<同一版本>`，以及 `[CelesteAIRuntime]` 一行含 `input re-init guard on`。
 
 ## 3. 部署
 

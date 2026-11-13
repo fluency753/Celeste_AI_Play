@@ -2,6 +2,7 @@
 
 Simulation allowance belongs to the host simulation entry, not this transport.
 """
+import re
 
 
 async def decide_tool(tool_name, *, metrics=None, live_remind_s=None, session=None,
@@ -33,6 +34,9 @@ async def decide_tool(tool_name, *, metrics=None, live_remind_s=None, session=No
     return {'decision': 'allow', 'reason': '', 'context': context}
 
 
+GATE_HOST = re.compile(r'(127\.0\.0\.1|localhost|host\.docker\.internal)(:\d+)?')
+
+
 def add_gate_route(app, metrics=None, live_remind_s: float | None = None, session=None) -> None:
     """容器里的 PreToolUse 钩子（agent-container/celeste-gate.py）每次调用工具前 POST 到这里。
     实时展示时（live_remind_s 不为空）兼作解说更新计时器的提醒通道：思考状态累计满 live_remind_s 秒没有 narrate，
@@ -42,6 +46,12 @@ def add_gate_route(app, metrics=None, live_remind_s: float | None = None, sessio
     from starlette.routing import Route
 
     async def endpoint(request: Request):
+        # 只认容器钩子的请求：JSON 类型（网页不经预检发不出这种请求）且 Host 是本机或容器看到的宿主名
+        # （网页把自己的域名解析到本机再来访问时，Host 仍是它的域名）。提醒一经取出就算送达，不能让外人取走。
+        content_type = request.headers.get('content-type', '').split(';')[0].strip().lower()
+        if content_type != 'application/json' or not GATE_HOST.fullmatch(request.headers.get('host', '').strip().lower()):
+            return JSONResponse({'decision': 'deny', 'reason': '工具门禁只接受本机钩子的 JSON 请求，本次未执行。', 'context': ''},
+                                status_code=403)
         try:
             data = await request.json()
         except ValueError:
