@@ -34,6 +34,14 @@ def hidden_dialog(title):
     return hwnd, callback, template
 
 
+# Both limits only tell "stuck" from "slow". A warm machine finishes the whole check in a few seconds;
+# the first WebView2 start on a cold, busy machine has taken more than 15 s before its first page loaded
+# (CI windows-2025 runner, 2026-11-13). The test passes its own values so its subprocess limit stays above them.
+CHECK_LIMIT_S = 180     # window load, two page phases and one reload, together
+CLOSE_LIMIT_S = 60      # window teardown after the check
+SERVED = {'page': 0, 'data': 0}     # what the browser actually asked this server for
+
+
 class Handler(BaseHTTPRequestHandler):
     # Keep-alive: the 2 x 100 fetches share a connection. With HTTP/1.0 each fetch opened a new
     # loopback connection, and under the parallel suite's connection churn Windows occasionally
@@ -41,6 +49,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
     def do_GET(self):
+        SERVED['data' if self.path == '/data' else 'page'] += 1
         body = b'{}' if self.path == '/data' else b'<html><body>Isolated HUD host test</body></html>'
         self.send_response(200)
         self.send_header('Content-Type', 'application/json' if self.path == '/data' else 'text/html')
@@ -59,7 +68,9 @@ class API:
 
 def main():
     began = time.monotonic()
-    result = {'responses': 0, 'requests': 0, 'phases': [], 'timings': {}}
+    check_limit = float(sys.argv[2]) if len(sys.argv) > 2 else CHECK_LIMIT_S
+    close_limit = float(sys.argv[3]) if len(sys.argv) > 3 else CLOSE_LIMIT_S
+    result = {'responses': 0, 'requests': 0, 'phases': [], 'timings': {}, 'served': SERVED}
 
     def mark(stage):
         result['timings'][stage] = round(time.monotonic() - began, 2)
@@ -68,10 +79,10 @@ def main():
         # If the native window never closes, still hand back what happened instead of
         # leaving the caller with a bare timeout.
         def report():
-            result.setdefault('error', 'fixture did not finish within 20 s of closing; timings show the last step reached')
+            result.setdefault('error', f'fixture did not finish within {close_limit:g} s of closing; timings show the last step reached')
             Path(sys.argv[1]).write_text(json.dumps(result), encoding='utf-8')
             os._exit(1)
-        timer = threading.Timer(20, report)
+        timer = threading.Timer(close_limit, report)
         timer.daemon = True
         timer.start()
 
@@ -97,9 +108,15 @@ def main():
         result['responses'] += 1
 
     def check():
+        deadline = time.monotonic() + check_limit
+
+        def left():
+            return max(.1, deadline - time.monotonic())
+
         try:
-            if not window.events.loaded.wait(15):
-                raise TimeoutError('initial load did not finish')
+            mark('check started')
+            if not window.events.loaded.wait(left()):
+                raise TimeoutError(f'initial load did not finish within {check_limit:g} s')
             mark('loaded')
             from System import Action
             handles = []
@@ -115,8 +132,8 @@ def main():
             for phase in ('initial', 'reloaded'):
                 if phase == 'reloaded':
                     window.load_url(url + '?reload')
-                    if not window.events.loaded.wait(15):
-                        raise TimeoutError('reload did not finish')
+                    if not window.events.loaded.wait(left()):
+                        raise TimeoutError(f'reload did not finish within {check_limit:g} s of the start of the check')
                     mark('reload loaded')
                 window.run_js('''window.testResult=null;
                     (async()=>{try{
@@ -124,7 +141,6 @@ def main():
                       for(let i=0;i<100;i++) await (await fetch('/data',{cache:'no-store'})).json();
                       window.testResult={ack,fetches:100};
                     }catch(e){window.testResult={error:String(e)};}})();''')
-                deadline = time.monotonic() + 15
                 while True:
                     value = window.evaluate_js('window.testResult')
                     if value:
@@ -132,7 +148,7 @@ def main():
                         mark(phase)
                         break
                     if time.monotonic() >= deadline:
-                        raise TimeoutError('JS bridge or fetch did not finish')
+                        raise TimeoutError(f'JS bridge or fetch did not finish within {check_limit:g} s of the start of the check')
                     time.sleep(.05)
         except Exception:
             result['error'] = traceback.format_exc()

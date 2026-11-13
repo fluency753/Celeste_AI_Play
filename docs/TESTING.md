@@ -46,7 +46,7 @@
 
 `.github/workflows/tests.yml` 在每次推送和拉取请求时运行：
 
-- Python 全量回归：Windows（Python 3.14）与 Linux（Python 3.13）各一次，命令与本机相同，失败不重跑；失败时各进程的日志作为附件上传。Linux 上另装 ffmpeg 与 Playwright 的 Chromium，页面测试和用真实 ffmpeg 的录制测试在那里运行；Windows 上没有装，这些用例自行跳过。
+- Python 全量回归：Windows（Python 3.14）与 Linux（Python 3.13）各一次，命令与本机相同，失败不重跑；各进程的日志作为附件上传（通过时也传，保留 14 天：里面有真实系统步骤的用时，用来分清运行器慢还是用例卡住）。Linux 上另装 ffmpeg 与 Playwright 的 Chromium，页面测试和用真实 ffmpeg 的录制测试在那里运行；Windows 上没有装，这些用例自行跳过。
 - 静态检查 `python tools/static_check.py`：只拦会在运行时出错的写法（未定义的名字、语法错误），未使用的导入等只报数量。本机运行需要先装 `pyflakes`。
 - 端口检查 `dotnet run --project calibration/ipc_auth`：Windows 与 Linux 各一次，不需要游戏文件。
 
@@ -61,4 +61,5 @@
 - **“等待期间发生某事”与“等待自己到期”的先后由测试决定**：不要靠把等待设成 0.2 秒、再赌另一边更快。`codex_capacity_test` 的 `WaitClock` 是一个例子：模型等待读到的时钟与睡眠由测试控制，等待不占真实时间，只在测试放行后才到期。
 - **两条语句之间也会过去时间**：要一个精确的时长，就直接设定它（例如暂停后把现实用时定在某个值），不要用“刚开始计时就暂停，所以大约是 0”。
 - **别的进程写的文件，存在不等于写完**：读到空内容或半行要当作“还没写好”。
-- **上限不能比被测代码自己的等待短**：`background_test` 等后台宿主启动，被测的 `launch()` 自己最多等 40 秒，测试的上限要比它长。
+- **上限不能比被测代码自己的等待短**：`background_test` 等后台宿主启动，它的上限由被测的 `launch()` 自己的两段等待（`POWERSHELL_WAIT_S`、`HOST_READY_WAIT_S`）算出来，再加余量；被测代码改了等待，测试跟着变。
+- **等真实的系统组件，上限按分钟给**：PowerShell 与 WMI、WebView2、新启动的 Python 进程这些，冷启动要多久由机器决定，运行器刚开机又同时跑着四个测试进程时可以用掉几十秒（2026-11-13 一次运行里，PowerShell 建进程超过 30 秒、WebView2 首次加载超过 15 秒，各让一项用例失败）。这类等待只用来判断“卡住了”：条件一成立就返回，所以上限给到一两分钟也不会让平时变慢；到期时把走到了哪一步、各步用时写进失败信息（`webview_host_fixture` 的 `timings` 与 `served`），才能分清是慢还是卡住。被测代码自己的等待如果也是这种性质（`launch()` 等 PowerShell），同样放宽，不在测试里绕开。

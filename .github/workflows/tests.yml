@@ -42,12 +42,15 @@ jobs:
         run: python -X utf8 tools/static_check.py
       - name: Regression
         run: python -X utf8 tools/run_tests.py
+      # Kept for passing runs too: the logs carry how long the real-system steps took (PowerShell and WMI,
+      # WebView2), which is the evidence for telling a slow runner from a stuck test.
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
           name: test-logs-${{ matrix.os }}
           path: local/test-results/latest
           if-no-files-found: ignore
+          retention-days: 14
   ports:
     runs-on: ${{ matrix.os }}
     strategy:

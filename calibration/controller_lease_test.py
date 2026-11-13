@@ -4,9 +4,10 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from orchestrator import background
 from orchestrator.game_process import CONTROLLER_MUTEX, ERROR_ALREADY_EXISTS, hold_cli_controller_lease
@@ -126,6 +127,31 @@ class LaunchRejectionTests(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired) as caught:
             self.launch(side_effect=subprocess.TimeoutExpired('powershell.exe', 30))
         self.assertNotIsInstance(caught.exception, background.LaunchRejected)
+
+    def test_slow_machine_is_waited_for_instead_of_reported_as_a_failed_launch(self):
+        """A cold or busy machine can take tens of seconds to start PowerShell and then the host; both
+        waits are 'stuck' detectors, far above the old 30 s and 10 s. The clock here is the test's own."""
+        directory = self.root / 'local/background/attempt'
+        clock = SimpleNamespace(now=1000.0)
+        def sleep(seconds):
+            clock.now += seconds
+            if clock.now >= 1045 and not (directory / 'status.json').exists():     # host reports in after 45 s
+                (directory / 'status.json').write_text('{"state": "running", "host_pid": 7}', encoding='utf-8')
+        fake_time = SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep, strftime=time.strftime, time=time.time)
+        run = MagicMock(return_value=SimpleNamespace(stdout='{"ReturnValue":0,"ProcessId":7}'))
+        with patch.object(background, 'time', fake_time):
+            folder, data = self.launch(new=run)
+        self.assertEqual((folder, data['state']), (directory, 'running'))
+        self.assertEqual(run.call_args.kwargs['timeout'], background.POWERSHELL_WAIT_S)
+        self.assertGreaterEqual(background.POWERSHELL_WAIT_S, 90)
+
+    def test_host_that_never_reports_is_still_given_up_on(self):
+        clock = SimpleNamespace(now=0.0)
+        fake_time = SimpleNamespace(monotonic=lambda: clock.now, strftime=time.strftime, time=time.time,
+                                    sleep=lambda seconds: setattr(clock, 'now', clock.now + seconds))
+        with patch.object(background, 'time', fake_time), self.assertRaisesRegex(RuntimeError, '宿主未确认就绪'):
+            self.launch(return_value=SimpleNamespace(stdout='{"ReturnValue":0,"ProcessId":7}'))
+        self.assertGreaterEqual(clock.now, background.HOST_READY_WAIT_S)
 
 
 if __name__ == '__main__':

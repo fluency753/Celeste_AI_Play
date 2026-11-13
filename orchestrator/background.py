@@ -24,6 +24,13 @@ def console_python() -> str:
     return sys.executable
 
 
+# 两个上限只用来判断“卡住了”；正常启动一两秒就返回，上限放宽不会让它变慢。刚开机、杀毒软件在扫描或机器很忙时，
+# PowerShell 冷启动加上 WMI 调用可以用掉几十秒（2026-11-13 持续集成的 Windows 运行器上超过了原来的 30 秒）。
+# 到期时宿主进程可能已经建好（所以不算 LaunchRejected，调用方不会换目录重试），宁可多等，不要早早报错。
+POWERSHELL_WAIT_S = 120     # 等 PowerShell 通过 WMI 建出宿主进程
+HOST_READY_WAIT_S = 60      # 再等宿主写出状态文件
+
+
 class LaunchRejected(RuntimeError):
     """Windows 明确没有创建宿主进程（WMI 返回失败或 PowerShell 调用失败），可以安全地换目录重试。"""
 
@@ -52,7 +59,7 @@ def launch(arguments, *, probe=False, service="play", directory=None):
     try:
         result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
                                 capture_output=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW,
-                                timeout=30, check=True)
+                                timeout=POWERSHELL_WAIT_S, check=True)
     except subprocess.CalledProcessError as exc:
         # ErrorActionPreference=Stop: Invoke-CimMethod failed, so no process exists.
         raise LaunchRejected(f"Windows 独立启动失败：{(exc.stderr or exc.stdout or '').strip() or exc}") from exc
@@ -60,7 +67,8 @@ def launch(arguments, *, probe=False, service="play", directory=None):
     if created["ReturnValue"]:
         raise LaunchRejected(f"Windows 独立启动失败：{created}")
     from .session_store import load_json
-    for _ in range(100):
+    deadline = time.monotonic() + HOST_READY_WAIT_S
+    while time.monotonic() < deadline:
         status = directory / "status.json"
         if status.exists():
             try:

@@ -9,7 +9,12 @@ import tempfile
 import time
 import unittest
 
+from orchestrator.background import HOST_READY_WAIT_S, POWERSHELL_WAIT_S
+
 ROOT = Path(__file__).resolve().parents[1]
+# 这里等的都是真实的系统组件（PowerShell、WMI、新的 Python 进程），快慢由机器决定；上限只判断“卡住了”。
+LAUNCH_LIMIT_S = POWERSHELL_WAIT_S + HOST_READY_WAIT_S + 30     # 比 launch() 自己的两段等待加起来还长
+EXIT_LIMIT_S = 120                                              # 探测用的子进程睡 12 秒后退出；它启动得慢也等
 
 
 @unittest.skipUnless(os.name == "nt", "Windows WMI 生命周期测试")
@@ -24,10 +29,9 @@ class BackgroundTest(unittest.TestCase):
             launcher = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             try:
-                # launch() 自己最多等 PowerShell 30 秒、再等宿主报到 10 秒；这里的上限要比它长，
-                # 否则慢的机器上（PowerShell 冷启动就要十几秒）是测试先放弃，而不是 launch() 失败。
+                # 上限比 launch() 自己的等待长：慢的机器上该由 launch() 报出它的原因，而不是测试先放弃。
                 began = time.monotonic()
-                deadline = began + 60
+                deadline = began + LAUNCH_LIMIT_S
                 while time.monotonic() < deadline:
                     if launcher.poll() is not None:
                         self.fail(launcher.stderr.read().decode(errors="replace"))
@@ -38,7 +42,7 @@ class BackgroundTest(unittest.TestCase):
                         time.sleep(.1)
                 else:
                     background = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "local" / "background").rglob("*"))[-12:]
-                    self.fail(f"launch() 60 秒内没有返回；local/background 里最近的文件：{background}")
+                    self.fail(f"launch() {LAUNCH_LIMIT_S} 秒内没有返回；local/background 里最近的文件：{background}")
                 print(f"[background_test] launch() 用时 {time.monotonic() - began:.1f} 秒", file=sys.stderr, flush=True)
                 launcher.terminate()
                 launcher.wait(timeout=5)
@@ -51,13 +55,21 @@ class BackgroundTest(unittest.TestCase):
                     self.assertTrue(handle, f"后台进程 {pid} 随启动命令退出")
                     kernel.CloseHandle(handle)
                 status_path = Path(launched["directory"]) / "status.json"
-                deadline = time.monotonic() + 18
+                waited = time.monotonic()
+                deadline = waited + EXIT_LIMIT_S
+                state = launched
                 while time.monotonic() < deadline:
-                    state = json.loads(status_path.read_text(encoding="utf-8"))
+                    try:
+                        state = json.loads(status_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):     # The host is replacing the file at this instant.
+                        time.sleep(.1)
+                        continue
                     if state["state"] == "exited":
                         break
                     time.sleep(.2)
-                self.assertEqual(state["state"], "exited")
+                print(f"[background_test] 宿主在启动命令结束后 {time.monotonic() - waited:.1f} 秒写出退出记录",
+                      file=sys.stderr, flush=True)
+                self.assertEqual(state["state"], "exited", f"{EXIT_LIMIT_S} 秒内没有等到退出记录：{state}")
                 self.assertEqual(state["exit_code"], 0)
             finally:
                 if launcher.poll() is None:

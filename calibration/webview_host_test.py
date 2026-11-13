@@ -144,12 +144,16 @@ class WebviewHostTests(unittest.TestCase):
             self.skipTest('pywebview is not installed')
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / 'result.json'
-            # Longer than the fixture's own waits (15 s load, then 15 s per page phase and reload), so a
-            # slow machine gets the fixture's diagnosis instead of a bare timeout.
-            result = subprocess.run([sys.executable, '-X', 'utf8', '-m', 'calibration.webview_host_fixture', str(output)],
+            # WebView2 is a real system component: how long its first start takes is the machine's business,
+            # so these limits only tell "stuck" from "slow" (a warm machine needs a few seconds). The process
+            # limit is above the fixture's own two, so a stuck run reports the stage it reached, not a bare timeout.
+            check_limit, close_limit = 180, 60
+            result = subprocess.run([sys.executable, '-X', 'utf8', '-m', 'calibration.webview_host_fixture', str(output),
+                                     str(check_limit), str(close_limit)],
                                     cwd=Path(__file__).resolve().parents[1], capture_output=True,
-                                    text=True, encoding='utf-8', timeout=90)
+                                    text=True, encoding='utf-8', timeout=check_limit + close_limit + 60)
             data = json.loads(output.read_text(encoding='utf-8')) if output.exists() else {}
+            print(f"[webview_host_test] 各阶段用时 {data.get('timings')}；页面请求 {data.get('served')}", file=sys.stderr, flush=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr + json.dumps(data, ensure_ascii=False))
         self.assertNotIn('error', data)
         self.assertFalse(data['dialog_only_found'])
