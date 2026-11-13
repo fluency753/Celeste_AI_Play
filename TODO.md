@@ -24,8 +24,6 @@
 - 预编译的 OBS 锁步插件多带一份 32.x；`setup.ps1 -Check` 改读控制台的游戏位置（没有 `configs/local.deploy.json` 时会误报桥接没装）。
 - 控制台启动器只在发布时构建，不随每个小版本提交 exe。
 - 运行目录的占用清单与清理建议（只列出、由用户决定删什么）。
-- 查清 `background_test`（真实的后台宿主启动）在 GitHub 的 Windows 运行器上为什么 20 秒内没有启动；现在在那里跳过。
-- 持续集成的 Windows 任务每轮有一到三个模块首轮失败、单独重跑才通过（最常见的是 `codex_capacity_test`，用几十毫秒的真实时间窗口判断重试与等待；另见过 `claude_process_test`、`time_query_test`、`runtime_controls_test`）：把这些用例改成不依赖真实时间，或查清它们在慢机器上失败的原因。
 
 ## 第三优先：MOD 地图（以草莓酱为主）
 

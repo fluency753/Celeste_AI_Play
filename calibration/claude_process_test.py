@@ -176,8 +176,11 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(handle.closed for handle in self.logs))
         self.assertFalse(self.metrics.tools_running)
         for proc, marker in self.pid_files:
-            if marker.exists():  # A child killed before its first instruction has no marker.
-                self.assertEqual(int(marker.read_text(encoding='ascii')), proc.pid)
+            # A child killed before its first instruction has no marker; one killed between creating
+            # the file and writing into it leaves it empty (seen on a slow machine).
+            written = marker.read_text(encoding='ascii') if marker.exists() else ''
+            if written:
+                self.assertEqual(int(written), proc.pid)
         released = self.work.with_name('work-released')
         # Process identity/exit checks above are mandatory; this additionally
         # checks CWD release without turning a transient Windows file lock into a test failure.

@@ -96,15 +96,18 @@ class TimeQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(data['game']['bridge_elapsed_seconds'])
 
     async def test_wall_delta_and_legacy_operators_have_distinct_countdown_semantics(self):
-        self.metrics.start_play();self.metrics.pause(status='paused');self.metrics._offset=100
+        self.metrics.start_play();self.metrics.pause(status='paused')
+        # 暂停后现实用时不再走；把它定在正好 100 秒。开始计时与暂停之间隔了多久（慢的机器上有几十毫秒）不该算进来。
+        self.metrics._offset=0;self.metrics._offset=100-self.metrics.elapsed()
+        self.assertAlmostEqual(self.metrics.elapsed(),100,places=6)
         self.session.goals.set({'conditions':[
             {'field':'elapsed','op':'delta_gte','value':20}, {'field':'elapsed','op':'gte','value':150},
             {'field':'elapsed','op':'lte','value':200}, {'field':'elapsed','op':'eq','value':50}], 'match':'any'},
             {**self.session.goal_values(),'elapsed':90})
         data=await self.query();conditions=data['goal']['time_conditions']
-        self.assertAlmostEqual(conditions[0]['used_seconds'],10,delta=.05)
-        self.assertAlmostEqual(conditions[0]['remaining_seconds'],10,delta=.05)
-        self.assertAlmostEqual(conditions[1]['remaining_seconds'],50,delta=.05)
+        self.assertAlmostEqual(conditions[0]['used_seconds'],10,delta=.002)
+        self.assertAlmostEqual(conditions[0]['remaining_seconds'],10,delta=.002)
+        self.assertAlmostEqual(conditions[1]['remaining_seconds'],50,delta=.002)
         self.assertIsNone(conditions[2]['remaining_seconds']);self.assertTrue(conditions[2]['satisfied_now'])
         self.assertIsNone(conditions[3]['remaining_seconds']);self.assertFalse(conditions[3]['satisfied_now'])
         self.assertFalse(data['goal']['reached'])

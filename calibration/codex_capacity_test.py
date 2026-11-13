@@ -8,6 +8,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -24,6 +25,39 @@ from orchestrator.server import build_server
 
 
 CAPACITY = 'Selected model is at capacity. Please try a different model.'
+
+
+class WaitClock:
+    """模型等待（codex_recovery._wait_for_model）读到的时钟与睡眠。
+
+    等待每睡一次就把时钟往前拨过要睡的那一段，不占真实时间；hold 为真时等待原地不动（照常检查
+    停止、断线等条件）。这样“等待期间用户做了某事”与“等待自己到期”谁先谁后由测试决定，不看机器快慢：
+    原先用几十到几百毫秒的真实等待，在慢的机器上（持续集成的 Windows 运行器）等待常常先到期。
+    事件循环、metrics 与控制通道仍用真实时钟。"""
+
+    def __init__(self, hold):
+        self.skew, self.hold = 0.0, hold
+
+    def monotonic(self):
+        return time.monotonic() + self.skew
+
+    async def sleep(self, seconds):
+        if self.hold:
+            await asyncio.sleep(.002)
+        else:
+            self.skew += seconds
+            await asyncio.sleep(0)
+
+
+class Proxy:
+    """一个模块，只换掉其中几个名字。"""
+
+    def __init__(self, module, **overrides):
+        self._module = module
+        self.__dict__.update(overrides)
+
+    def __getattr__(self, name):
+        return getattr(self._module, name)
 
 
 class CountingBridge(FakeBridge):
@@ -87,11 +121,14 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                             mode='explore', runtime='container', sim=False, sim_assist=False,
                             collision_image='off', record=False)
             cfg.min_frames_per_act = 1
-            cfg.net_wait_cap_s = .025
+            cfg.net_wait_cap_s = 60        # 秒数都是 WaitClock 上的：一次等待不占真实时间
             cfg.net_probe_s = .005
-            cfg.net_wait_max_h = .01
+            cfg.net_wait_max_h = 1
             if configure:
                 configure(cfg)
+            # 有 waiting 步骤时，等待先原地不动，等这些步骤做完（或它自己放行）才走到期。
+            clock = self.clock = WaitClock(hold=waiting is not None)
+            clock_time = Proxy(time, monotonic=clock.monotonic)
             metrics = Metrics(root/'metrics.json', 'capacity-test', 'test', 'high', 60, study=preparing)
             with patch('orchestrator.config.REPO_ROOT', root):
                 session = GameSession(cfg, root, metrics)
@@ -171,16 +208,23 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
             watcher = None
             if waiting:
                 async def watch():
-                    await self.until(lambda: getattr(runner, 'model_waiting', False))
-                    await waiting(runner, session, metrics)
+                    try:
+                        await self.until(lambda: getattr(runner, 'model_waiting', False))
+                        await waiting(runner, session, metrics)
+                    finally:
+                        clock.hold = False
                 watcher = asyncio.create_task(watch())
             try:
                 with patch('orchestrator.config.REPO_ROOT', root), \
                         patch('orchestrator.personal_prompts.STORE', root/'personal.json'), \
                         patch('orchestrator.prompting.OVERRIDES', root/'prompts'), \
-                        patch('orchestrator.model_catalog.load_models', return_value={'models': []}):
+                        patch('orchestrator.model_catalog.load_models', return_value={'models': []}), \
+                        patch('orchestrator.codex_recovery.time', clock_time), \
+                        patch('orchestrator.codex_agent.time', clock_time), \
+                        patch('orchestrator.session_controls.time', clock_time), \
+                        patch('orchestrator.codex_recovery.asyncio', Proxy(asyncio, sleep=clock.sleep)):
                     try:
-                        state['reason'] = await asyncio.wait_for(runner.run(), 5)
+                        state['reason'] = await asyncio.wait_for(runner.run(), 60)   # 只是上限：卡住时不至于一直等
                     except (RuntimeError, OSError, TimeoutError) as exc:
                         state['error'] = exc
                 if watcher:
@@ -202,6 +246,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                 if watcher and not watcher.done():
                     watcher.cancel()
                     await asyncio.gather(watcher, return_exceptions=True)
+                runner.close_events()      # 运行被上限打断时也要关上，否则 Windows 上临时目录删不掉
                 session.close(False)
 
     async def test_goal_acceptance_reaches_turn_with_historical_blocker(self):
@@ -240,14 +285,11 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['runner'].session_id, 'same-thread')
 
     async def test_continuous_capacity_failure_has_a_total_deadline_and_retains_control(self):
-        # 每次等待上限 0.1 秒、总时限 0.72 秒：快的机器发不到 12 次；慢的机器（GitHub 的 Windows 运行器）
-        # 也来得及发第二次。原先是 25 毫秒与 72 毫秒，在那里只来得及发一次。
-        def short_outage(cfg):
-            cfg.net_wait_cap_s, cfg.net_wait_max_h = .1, .0002
-        result = await self.run_case(failures=None, configure=short_outage)
+        # 总时限 120 秒（WaitClock 上的）：第一次失败后等 30 秒重试，再等 60 秒重试，第三次失败后等到总时限为止。
+        result = await self.run_case(failures=None, configure=lambda cfg: setattr(cfg, 'net_wait_max_h', 120 / 3600))
         self.assertIsNotNone(result['error'])
-        self.assertGreaterEqual(len(result['sent']), 2)
-        self.assertLess(len(result['sent']), 12)
+        self.assertIn('等待已达上限', str(result['error']))
+        self.assertEqual(len(result['sent']), 3)
         self.assertEqual(result['shutdown'], 'retain')
         self.assertTrue(result['runner'].retain_on_model_failure)
         self.assertFalse(result['runner'].interrupted_for_resume)
@@ -293,7 +335,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
         async def interrupt(runner, session, metrics):
             runner.control.enqueue('interrupt')
             await self.until(lambda: runner.stop_requested)
-        result = await self.run_case(waiting=interrupt, configure=lambda cfg: setattr(cfg, 'net_wait_cap_s', .25))
+        result = await self.run_case(waiting=interrupt)
         self.assertIsNone(result['error'])
         self.assertTrue(result['runner'].interrupted_for_resume)
         self.assertEqual(result['shutdown'], 'retain')
@@ -303,7 +345,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
         async def stop(runner, session, metrics):
             runner.control.enqueue('stop')
             await self.until(lambda: session.done)
-        result = await self.run_case(waiting=stop, configure=lambda cfg: setattr(cfg, 'net_wait_cap_s', .25))
+        result = await self.run_case(waiting=stop)
         self.assertIsNone(result['error'])
         self.assertEqual(result['shutdown'], 'release')
         self.assertTrue(result['session'].goals.immediate)
@@ -315,22 +357,21 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
             session.goals.set({'conditions': [{'field': 'elapsed', 'op': 'gte', 'value': 0}]},
                               session.goal_values())
             await self.until(lambda: session.done)
-        result = await self.run_case(waiting=reach, configure=lambda cfg: setattr(cfg, 'net_wait_cap_s', .25))
+        result = await self.run_case(waiting=reach)
         self.assertIsNone(result['error'])
         self.assertEqual(result['shutdown'], 'freeze')
         self.assertTrue(result['session'].goals.snapshot()['reached'])
         self.assertEqual(len(result['sent']), 1)
 
     async def test_wait_does_not_consume_run_or_naming_budget(self):
-        def config(cfg):
-            cfg.max_minutes = .005
-            cfg.net_wait_cap_s = .4
+        # 预算 20 秒，等待 30 秒（WaitClock 上的）：等待若计入现实用时，预算就用完了。
+        # 真实的处理时间远小于 20 秒，不会自己把预算用完（原先预算只有 0.3 秒，慢的机器上会）。
         for naming in (False, True):
             with self.subTest(naming=naming):
-                result = await self.run_case(configure=config, naming=naming)
+                result = await self.run_case(configure=lambda cfg: setattr(cfg, 'max_minutes', 1 / 3), naming=naming)
                 self.assertIsNone(result['error'])
                 self.assertEqual(len(result['sent']), 2)
-                self.assertGreater(result['metrics'].state.net_wait_s, .1)
+                self.assertGreaterEqual(result['metrics'].state.net_wait_s, 30)
                 self.assertIn(result['reason'], ('隔离验证完成', '存档命名完成'))
 
     async def test_preparation_limit_excludes_capacity_wait(self):
@@ -345,13 +386,14 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
         async def pause_then_resume(runner, session, metrics):
             runner.control.enqueue('pause')
             await self.until(lambda: runner.paused and not runner.pausing)
+            self.clock.hold = False            # 用户暂停之后，让等待自己到期
             await self.until(lambda: not runner.model_waiting)
             observations['paused_after_wait'] = runner.paused
             elapsed = metrics.elapsed()
             await asyncio.sleep(.04)
             observations['elapsed_during_user_pause'] = metrics.elapsed() - elapsed
             runner.control.enqueue('resume')
-        result = await self.run_case(waiting=pause_then_resume, configure=lambda cfg: setattr(cfg, 'net_wait_cap_s', .2))
+        result = await self.run_case(waiting=pause_then_resume)
         self.assertIsNone(result['error'])
         self.assertTrue(observations['paused_after_wait'])
         self.assertLess(observations['elapsed_during_user_pause'], .02)
@@ -368,8 +410,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
             elapsed = metrics.elapsed()
             await asyncio.sleep(.04)
             observations['premature_elapsed'] = metrics.elapsed() - elapsed
-        # 等待要比“暂停再继续”这一来回长得多：慢的机器上来回本身就可能超过 0.4 秒，等待先结束了。
-        result = await self.run_case(waiting=controls, configure=lambda cfg: setattr(cfg, 'net_wait_cap_s', 1.5))
+        result = await self.run_case(waiting=controls)
         self.assertIsNone(result['error'])
         self.assertTrue(observations['still_waiting'])
         self.assertLess(observations['premature_elapsed'], .02)
@@ -378,7 +419,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
     async def test_rpc_disconnect_during_wait_retains_control_without_replay(self):
         async def disconnect(runner, session, metrics):
             runner.rpc.reader.set_result(None)
-        result = await self.run_case(waiting=disconnect, configure=lambda cfg: setattr(cfg, 'net_wait_cap_s', .2))
+        result = await self.run_case(waiting=disconnect)
         self.assertIsNotNone(result['error'])
         self.assertEqual(len(result['sent']), 1)
         self.assertEqual(result['shutdown'], 'retain')

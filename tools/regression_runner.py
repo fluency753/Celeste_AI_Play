@@ -76,7 +76,7 @@ def worker(start, pattern, names, verbosity, report):
     repository root, and would keep that temporary path for the whole process.
     """
     runner = unittest.TextTestRunner(stream=sys.stderr, verbosity=verbosity)
-    totals, seconds, failed = {'run': 0, 'failures': 0, 'errors': 0, 'skipped': 0}, {}, []
+    totals, seconds = {'run': 0, 'failures': 0, 'errors': 0, 'skipped': 0}, {}
     suites = discover_suites(start, pattern)
     for name in names:
         began = time.monotonic()
@@ -87,9 +87,7 @@ def worker(start, pattern, names, verbosity, report):
         totals['failures'] += len(result.failures) + len(result.unexpectedSuccesses)
         totals['errors'] += len(result.errors)
         totals['skipped'] += len(result.skipped)
-        if not result.wasSuccessful():
-            failed.append(name)
-    Path(report).write_text(json.dumps({**totals, 'seconds': seconds, 'failed': failed}), encoding='utf-8')
+    Path(report).write_text(json.dumps({**totals, 'seconds': seconds}), encoding='utf-8')
     return 0 if not totals['failures'] and not totals['errors'] else 1
 
 
@@ -112,35 +110,7 @@ def failure_report(log):
     return text[min(marks):].strip() if marks else text[-4000:]
 
 
-def worker_command(start, pattern, verbosity, report, modules):
-    return [sys.executable, '-X', 'utf8', '-m', 'tools.regression_runner', '--worker', str(report),
-            '--start-directory', str(start), '--pattern', pattern, *(['-v'] if verbosity > 1 else []), *modules]
-
-
-def rerun_alone(start, pattern, verbosity, output, env, modules):
-    """首轮失败的模块在一个新进程里依次重跑一遍（此时没有别的测试进程抢时间）。返回是否全部通过。"""
-    log_path, report = output / 'worker-rerun.log', output / 'worker-rerun.json'
-    print(f'[tests] 单独重跑首轮失败的 {len(modules)} 个模块：{"、".join(modules)}', flush=True)
-    with log_path.open('w', encoding='utf-8') as log:
-        proc = subprocess.Popen(worker_command(start, pattern, verbosity, report, modules), cwd=ROOT, env=env,
-                                stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != 'nt')
-        try:
-            code = proc.wait()
-        except KeyboardInterrupt:
-            stop(proc)
-            raise
-    try:
-        data = json.loads(report.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        data = None
-    if code == 0 and data and data['run']:
-        return True
-    print(f'[worker rerun] 失败（退出码 {code}）；日志 {log_path}', flush=True)
-    print(failure_report(log_path), flush=True)
-    return False
-
-
-def run_parallel(start, pattern, workers, verbosity, output, cache, rerun_failed=False):
+def run_parallel(start, pattern, workers, verbosity, output, cache):
     names = sorted(discover_suites(start, pattern))
     if not names:
         print(f'[tests] {start} 下没有匹配 {pattern} 的测试模块', flush=True)
@@ -153,11 +123,12 @@ def run_parallel(start, pattern, workers, verbosity, output, cache, rerun_failed
     print(f'[tests] {len(names)} 个模块，{len(groups)} 个进程；日志 {output}', flush=True)
     began, procs = time.monotonic(), []
     status, totals, seconds = 0, {'run': 0, 'failures': 0, 'errors': 0, 'skipped': 0}, {}
-    failed, crashed, unstable = [], False, []
     try:
         for index, group in enumerate(groups):
             log = (output / f'worker-{index}.log').open('w', encoding='utf-8')
-            command = worker_command(start, pattern, verbosity, output / f'worker-{index}.json', group['modules'])
+            command = [sys.executable, '-X', 'utf8', '-m', 'tools.regression_runner',
+                       '--worker', str(output / f'worker-{index}.json'), '--start-directory', str(start),
+                       '--pattern', pattern, *(['-v'] if verbosity > 1 else []), *group['modules']]
             proc = subprocess.Popen(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
                                     start_new_session=os.name != 'nt')
             procs.append((index, proc, log))
@@ -174,9 +145,6 @@ def run_parallel(start, pattern, workers, verbosity, output, cache, rerun_failed
                 for key in totals:
                     totals[key] += data[key]
                 seconds.update(data['seconds'])
-                failed += data.get('failed', [])
-            # A worker that died, or failed without naming a module, is a hard failure: nothing to rerun.
-            crashed = crashed or data is None or bool(code and not data.get('failed'))
             ok = data is not None and not code
             print(f'[worker {index}] {"OK" if ok else f"失败（退出码 {code}）"} '
                   f'run={data["run"] if data else "?"}；日志 {log.name}', flush=True)
@@ -188,16 +156,6 @@ def run_parallel(start, pattern, workers, verbosity, output, cache, rerun_failed
             log.close()
         print('[tests] 已中断', flush=True)
         return 130
-    if rerun_failed and status and failed and not crashed:
-        # 只给“和别的测试同时跑才失败”的用例第二次机会（持续集成的机器慢，用真实时间做判断的用例会受影响）；
-        # 单独重跑仍失败（真正的缺陷、导入失败）或有进程异常退出，照旧算失败。
-        try:
-            if rerun_alone(start, pattern, verbosity, output, env, failed):
-                status, unstable = 0, failed
-                totals['failures'] = totals['errors'] = 0
-        except KeyboardInterrupt:
-            print('[tests] 已中断', flush=True)
-            return 130
     if not totals['run']:
         status = 1
     if seconds:
@@ -208,8 +166,7 @@ def run_parallel(start, pattern, workers, verbosity, output, cache, rerun_failed
         except OSError as error:
             print(f'[tests] 耗时缓存写入失败：{error}', flush=True)
     print(f'[tests] {"OK" if status == 0 else "FAILED"} run={totals["run"]} failures={totals["failures"]} '
-          f'errors={totals["errors"]} skipped={totals["skipped"]} {time.monotonic() - began:.1f}s'
-          + (f'；首轮失败、单独重跑通过（不稳定）：{"、".join(unstable)}' if unstable else ''), flush=True)
+          f'errors={totals["errors"]} skipped={totals["skipped"]} {time.monotonic() - began:.1f}s', flush=True)
     return status
 
 
@@ -230,8 +187,6 @@ def main(argv=None):
     parser.add_argument('tests', nargs='*', help='只运行这些模块／类／方法（在当前进程里串行），可带 calibration. 前缀')
     parser.add_argument('--serial', action='store_true', help='在当前进程里按原发现顺序串行运行')
     parser.add_argument('--workers', type=int, default=4, help='并行进程数，默认 4')
-    parser.add_argument('--rerun-failed', action='store_true',
-                        help='并行一轮后，把失败的模块单独重跑一次，通过则算通过并标为不稳定（给持续集成用；本机默认不重跑）')
     parser.add_argument('-v', '--verbose', action='store_true', help='逐个列出用例')
     parser.add_argument('--start-directory', default=str(ROOT / 'calibration'), help=argparse.SUPPRESS)
     parser.add_argument('--pattern', default='*_test.py', help=argparse.SUPPRESS)
@@ -249,8 +204,7 @@ def main(argv=None):
         parser.error('--workers 至少为 1')
     if args.serial or args.tests:
         return run_here(start, args.pattern, args.tests, verbosity)
-    return run_parallel(start, args.pattern, args.workers, verbosity, Path(args.output), args.timings_cache,
-                        rerun_failed=args.rerun_failed)
+    return run_parallel(start, args.pattern, args.workers, verbosity, Path(args.output), args.timings_cache)
 
 
 if __name__ == '__main__':

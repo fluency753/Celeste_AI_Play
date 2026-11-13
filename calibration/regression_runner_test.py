@@ -78,47 +78,6 @@ class RegressionRunnerTests(unittest.TestCase):
         self.assertIn('module_that_does_not_exist', out)
         self.assertIn('FAILED', out)
 
-    def test_rerun_failed_gives_a_module_one_more_run_alone_and_names_it_as_unstable(self):
-        flag = self.root / 'ran-once'
-        write(self.tests, 'flaky_test.py', f'''
-            from pathlib import Path
-            import unittest
-
-            class FlakyTests(unittest.TestCase):
-                def test_passes_the_second_time(self):
-                    flag = Path({str(flag)!r})
-                    first = not flag.exists()
-                    flag.write_text('x')
-                    self.assertFalse(first, 'first run fails')
-            ''')
-        code, out = self.run_main('--workers', '2')                    # 默认不重跑：失败就是失败
-        self.assertEqual(code, 1, out)
-        flag.unlink()
-        code, out = self.run_main('--workers', '2', '--rerun-failed')
-        self.assertEqual(code, 0, out)
-        self.assertIn('单独重跑首轮失败的 1 个模块：flaky_test', out)
-        self.assertIn('OK run=4 failures=0 errors=0 skipped=1', out)
-        self.assertIn('首轮失败、单独重跑通过（不稳定）：flaky_test', out)
-        self.assertTrue((self.root / 'out' / 'worker-rerun.log').exists())
-
-    def test_rerun_failed_does_not_hide_a_real_failure_or_an_import_error(self):
-        write(self.tests, 'delta_test.py', '''
-            import unittest
-
-            class DeltaTests(unittest.TestCase):
-                def test_broken(self):
-                    self.assertEqual(1, 2, 'visible failure detail')
-            ''')
-        code, out = self.run_main('--workers', '2', '--rerun-failed')
-        self.assertEqual(code, 1, out)
-        self.assertIn('单独重跑首轮失败的 1 个模块：delta_test', out)
-        self.assertIn('[worker rerun] 失败', out)
-        self.assertIn('FAILED run=4 failures=1', out)
-        write(self.tests, 'omega_test.py', 'import module_that_does_not_exist\n')
-        code, out = self.run_main('--workers', '2', '--rerun-failed')
-        self.assertEqual(code, 1, out)
-        self.assertIn('module_that_does_not_exist', out)
-
     def test_parallel_and_serial_discover_nested_package_failures(self):
         package = self.tests / 'pkg'
         package.mkdir()

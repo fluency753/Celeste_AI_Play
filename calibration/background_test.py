@@ -9,9 +9,10 @@ import tempfile
 import time
 import unittest
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 @unittest.skipUnless(os.name == "nt", "Windows WMI 生命周期测试")
-@unittest.skipIf(os.environ.get("GITHUB_ACTIONS"), "GitHub 的 Windows 运行器上后台宿主 20 秒内没有启动（原因未查），本机照常运行")
 class BackgroundTest(unittest.TestCase):
     def test_host_survives_launcher_termination(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -23,13 +24,22 @@ class BackgroundTest(unittest.TestCase):
             launcher = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             try:
-                deadline = time.monotonic() + 20
-                while not marker.exists() and time.monotonic() < deadline:
+                # launch() 自己最多等 PowerShell 30 秒、再等宿主报到 10 秒；这里的上限要比它长，
+                # 否则慢的机器上（PowerShell 冷启动就要十几秒）是测试先放弃，而不是 launch() 失败。
+                began = time.monotonic()
+                deadline = began + 60
+                while time.monotonic() < deadline:
                     if launcher.poll() is not None:
                         self.fail(launcher.stderr.read().decode(errors="replace"))
-                    time.sleep(.1)
-                self.assertTrue(marker.exists())
-                launched = json.loads(marker.read_text(encoding='utf-8'))
+                    try:
+                        launched = json.loads(marker.read_text(encoding='utf-8'))
+                        break
+                    except (OSError, ValueError):     # Not written yet, or only partly.
+                        time.sleep(.1)
+                else:
+                    background = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "local" / "background").rglob("*"))[-12:]
+                    self.fail(f"launch() 60 秒内没有返回；local/background 里最近的文件：{background}")
+                print(f"[background_test] launch() 用时 {time.monotonic() - began:.1f} 秒", file=sys.stderr, flush=True)
                 launcher.terminate()
                 launcher.wait(timeout=5)
                 kernel = ctypes.WinDLL("kernel32", use_last_error=True)
