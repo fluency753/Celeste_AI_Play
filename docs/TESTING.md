@@ -36,7 +36,7 @@
 
 `.github/workflows/tests.yml` 在每次推送和拉取请求时运行：
 
-- Python 全量回归：Windows（Python 3.14）与 Linux（Python 3.13）各一次，带 `--rerun-failed`：并行一轮后，失败的模块在一个新进程里单独重跑一次，通过则算通过，最后一行列出“首轮失败、单独重跑通过（不稳定）”的模块；单独重跑仍失败、或有测试进程异常退出，照旧算失败。本机运行默认不重跑。失败时各进程的日志作为附件上传。
+- Python 全量回归：Windows（Python 3.14）与 Linux（Python 3.13）各一次，带 `--rerun-failed`：并行一轮后，失败的模块在一个新进程里单独重跑一次，通过则算通过，最后一行列出“首轮失败、单独重跑通过（不稳定）”的模块；单独重跑仍失败、或有测试进程异常退出，照旧算失败。本机运行默认不重跑。失败时各进程的日志作为附件上传。Linux 上另装 ffmpeg 与 Playwright 的 Chromium，页面测试和用真实 ffmpeg 的录制测试在那里运行；Windows 上没有装，这些用例自行跳过。
 - 静态检查 `python tools/static_check.py`：只拦会在运行时出错的写法（未定义的名字、语法错误），未使用的导入等只报数量。本机运行需要先装 `pyflakes`。
 - 端口检查 `dotnet run --project calibration/ipc_auth`：Windows 与 Linux 各一次，不需要游戏文件。
 

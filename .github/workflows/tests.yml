@@ -30,6 +30,14 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
       - run: python -m pip install -r requirements.txt pyflakes
+      # 页面测试（Playwright + Chromium）与用真实 ffmpeg 的录制测试在没有这些工具时自行跳过；Linux 上装上，多覆盖一些。
+      - name: Browser and ffmpeg for the page and recording tests
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
       - name: Static check
         run: python -X utf8 tools/static_check.py
       - name: Regression
