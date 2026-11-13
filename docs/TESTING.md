@@ -42,4 +42,4 @@
 
 组件构建（桥接、常驻核心、OBS 插件、启动器）在 `release-components.yml`，两者互不依赖。
 
-测试不能依赖这台机器装了什么：需要 ffmpeg、ziglang、git 历史或真实桌面环境的地方用替身，或者按环境跳过并写明原因。持续集成的机器比本机慢，Windows 运行器的计时粒度约 16 毫秒；用真实时间做判断的测试要留足余量。目前按环境跳过的只有 `background_test`（GitHub 的 Windows 运行器上后台宿主 20 秒内没有启动，原因未查）。`codex_capacity_test` 用几十毫秒的真实时间窗口判断重试与等待，在 Windows 运行器上每次有不同的用例失败，靠单独重跑通过；改成不依赖真实时间之前，它会经常出现在“不稳定”里。
+测试不能依赖这台机器装了什么：需要 ffmpeg、ziglang、git 历史或真实桌面环境的地方用替身，或者按环境跳过并写明原因。持续集成的机器比本机慢，Windows 运行器的计时粒度约 16 毫秒；用真实时间做判断的测试要留足余量。目前按环境跳过的只有 `background_test`（GitHub 的 Windows 运行器上后台宿主 20 秒内没有启动，原因未查）。Windows 任务每轮有一到三个模块首轮失败、单独重跑通过：最常见的是 `codex_capacity_test`（用几十毫秒的真实时间窗口判断重试与等待），另见过 `claude_process_test`、`time_query_test`、`runtime_controls_test`；改掉之前，它们会出现在最后一行的“不稳定”里，值得留意的是同一个模块连续多次出现、或单独重跑也失败。
