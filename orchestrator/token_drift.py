@@ -72,7 +72,7 @@ class TokenDrift:
         with self.path.with_name('token_advances.jsonl').open('a', encoding='utf-8') as stream:
             stream.write(json.dumps({'event': kind, 'wall': time.time(), **data}, ensure_ascii=False) + '\n')
 
-    def receive(self, total, latest, source, eligible, epoch, *, deferred=False):
+    def receive(self, total, latest, source, eligible, epoch, *, deferred=False, preserve_pending=False):
         if token_count(total) is None:
             return
         same_source = self.state['source'] == source
@@ -97,7 +97,10 @@ class TokenDrift:
         self.state['excluded_gap'] = not allowed_now
         if not eligible:
             self.state['excluded_tokens'] += delta
-            self.discard('usage_excluded', save=False)
+            # Skipping a mixed-boundary sample does not invalidate already
+            # earned credit. Compaction may also exclude usage while it settles.
+            if not allowed_now and not preserve_pending:
+                self.discard('usage_excluded', save=False)
         else:
             if self.state['epoch'] is not None and self.state['epoch'] != list(epoch):
                 self.discard('game_epoch_changed', save=False)
@@ -119,11 +122,14 @@ class TokenDrift:
             self._save()
             self.event('deferred', frames=frames, deferred_frames=self.deferred)
 
-    def exclude_window(self, reason):
+    def exclude_window(self, reason, *, discard=True):
         # Without an intermediate usage sample, the next positive delta may
         # straddle excluded time. Drop it rather than charging an unknown span.
         self.state['excluded_gap'] = True
-        self.discard(reason)
+        if discard:
+            self.discard(reason)
+        else:
+            self._save()
 
     def discard(self, reason, *, save=True):
         if self.pending:

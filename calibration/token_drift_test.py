@@ -166,6 +166,17 @@ class UsageTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 build({**base, **change})
 
+    def test_cross_compaction_usage_preserves_unsettled_credit(self):
+        d = TokenDrift(self.root/'token_drift.json', self.m, 500)
+        d.receive(1000, 1000, 'source', True, (1,))
+        d.exclude_window('compacting', discard=False)
+        d.receive(1500, 500, 'source', False, (1,), preserve_pending=True)
+        d.receive(2000, 500, 'source', True, (1,))
+        self.assertEqual((d.pending, d.state['eligible_tokens'], d.state['excluded_tokens']), (2, 1000, 1000))
+        self.assertEqual(d.begin((1,), {}), 2)
+        d.commit({'consumed': 2, 'stop': 'done'})
+        self.assertEqual((d.pending, d.state['consumed_frames'], d.state['dropped_frames']), (0, 2, 0))
+
     def test_samples_inside_excluded_window_keep_resume_boundary_unknown(self):
         d = TokenDrift(self.root/'token_drift.json', self.m, 500)
         d.receive(100, 100, 'source', True, (1,))
@@ -434,13 +445,12 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         await self.tool('act', inputs=['1,L'], thought='根据新房间移动')
         self.assertEqual(self.s.client.steps[-1]['inputs'], ['1,L'])
 
-    async def test_queued_credit_discarded_when_paused_compacting_or_reloading(self):
-        for block in (lambda active: setattr(self.r, 'paused', active), self.m.set_compacting):
-            async with self.r.action_lock:
-                self.r._record_output_usage(self.m.state.output_tokens + 1000, 1000)
-                block(True)
-            await self.settle()
-            block(False)
+    async def test_queued_credit_discarded_when_paused_or_reloading(self):
+        async with self.r.action_lock:
+            self.r._record_output_usage(1000, 1000)
+            self.r.paused = True
+        await self.settle()
+        self.r.paused = False
         self.s.reload_observation_required = True
         self.r._record_output_usage(4000, 1000)
         await self.settle()
@@ -481,7 +491,7 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
             controls.cancel()
             await asyncio.gather(controls, return_exceptions=True)
 
-    async def test_compaction_after_initial_check_cancels_before_send_without_unknown(self):
+    async def test_compaction_after_initial_check_keeps_authorized_batch(self):
         bridge = self.wire_bridge()
         self.s.client.cancel_check = lambda: (
             self.s._token_advancing and (self.s._token_cancel.is_set() or not self.s.token_guard()))
@@ -494,12 +504,12 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.s, '_before_advance', side_effect=compact_before_send):
             self.r._record_output_usage(500, 500)
             await self.settle()
-        self.assertEqual(bridge.steps, [])
+        self.assertEqual(len(bridge.steps), 1)
         self.assertFalse(self.r.token_drift.unknown)
         self.assertFalse(self.r.paused)
         batch = self.r.token_drift.state['batch']
-        self.assertEqual((batch['status'], batch['consumed'], batch['stop']), ('committed', 0, 'not_executed'))
-        self.assertEqual(self.r.token_drift.state['dropped_frames'], 1)
+        self.assertEqual((batch['status'], batch['consumed'], batch['stop']), ('committed', 1, 'done'))
+        self.assertEqual(self.r.token_drift.state['dropped_frames'], 0)
         self.r._public_compaction('race', completed=True)
         observed = await self.tool('observe')
         self.assertNotIn('执行范围未确认', observed)
@@ -507,8 +517,30 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         self.r._record_output_usage(1500, 500)
         await self.settle()
-        self.assertEqual(len(bridge.steps), 1)
-        self.assertEqual(self.m.state.token_frames, 1)
+        self.assertEqual(len(bridge.steps), 2)
+        self.assertEqual(self.m.state.token_frames, 2)
+
+    async def test_compaction_excludes_new_usage_but_settles_existing_credit(self):
+        bridge = self.wire_bridge()
+        self.s.client.cancel_check = lambda: (
+            self.s._token_advancing and (self.s._token_cancel.is_set() or not self.s.token_guard()))
+        async with self.r.action_lock:
+            self.r._record_output_usage(65000, 65000)
+            self.r._public_compaction('queued')
+            self.r._record_output_usage(66000, 1000)
+            self.assertEqual(self.r.token_drift.pending, 130)
+        await self.settle()
+        self.assertEqual([s['inputs'] for s in bridge.steps], [['60,R,G'], ['60,R,G'], ['10,R,G']])
+        self.assertEqual(self.m.state.token_frames, 130)
+        self.assertEqual(self.r.token_drift.state['dropped_frames'], 0)
+        self.assertEqual(self.r.token_drift.state['excluded_tokens'], 1000)
+        self.r._public_compaction('queued', completed=True)
+        self.r._record_output_usage(66500, 500)
+        await self.settle()
+        self.assertEqual(self.m.state.token_frames, 130)  # mixed-boundary usage is excluded
+        self.r._record_output_usage(67000, 500)
+        await self.settle()
+        self.assertEqual(self.m.state.token_frames, 131)
 
     async def test_interrupted_receipt_after_send_still_has_unknown_range(self):
         bridge = self.wire_bridge()
@@ -528,6 +560,25 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('主控', refusal)
         self.assertNotIn('请先人工核验 token_drift.json', refusal)
         self.assertEqual(len(bridge.steps), 1)
+
+    async def test_user_pause_after_initial_check_still_cancels_unsent_batch(self):
+        bridge = self.wire_bridge()
+        self.s.client.cancel_check = lambda: (
+            self.s._token_advancing and (self.s._token_cancel.is_set() or not self.s.token_guard()))
+        before = self.s._before_advance
+
+        def pause_before_send():
+            before()
+            self.r.paused = True
+
+        with patch.object(self.s, '_before_advance', side_effect=pause_before_send):
+            self.r._record_output_usage(500, 500)
+            await self.settle()
+        self.assertEqual(bridge.steps, [])
+        self.assertTrue(self.r.paused)
+        self.assertFalse(self.r.token_drift.unknown)
+        batch = self.r.token_drift.state['batch']
+        self.assertEqual((batch['consumed'], batch['stop']), (0, 'not_executed'))
 
     async def test_pause_compaction_and_network_without_usage_do_not_repay_gap(self):
         total = 100

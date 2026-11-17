@@ -121,7 +121,7 @@ class SessionControls:
 
     def _token_account_eligible(self):
         return bool(self.token_drift is not None and not self._token_closing
-                    and not self.metrics.compacting and not self._game_guard()
+                    and not self._game_guard()
                     and self.metrics.playing and self.metrics._pause_start is None
                     and not self.metrics.state.network_retrying
                     and not getattr(self, 'net_down_since', None)
@@ -162,16 +162,18 @@ class SessionControls:
         deferred = self._token_menu_active() and not outside
         if deferred:
             self.token_drift.defer_pending()
-        eligible = bool(self.turn_active and not outside and
-                        (self._token_account_eligible() if deferred else self._token_motion_eligible()))
+        authorized = bool(self.turn_active and not outside and
+                          (self._token_account_eligible() if deferred else self._token_motion_eligible()))
+        eligible = authorized and not self.metrics.compacting
         self.token_drift.receive(total, latest, f'{self.cfg.engine}:{self.session_id}', eligible,
-                                 self._token_epoch(), deferred=deferred)
+                                 self._token_epoch(), deferred=deferred,
+                                 preserve_pending=authorized and self.metrics.compacting)
         if self.token_drift.pending or self.token_drift.deferred:
             self._token_event.set()
 
-    def _exclude_token_window(self, reason):
+    def _exclude_token_window(self, reason, *, discard=True):
         if self.token_drift is not None:
-            self.token_drift.exclude_window(reason)
+            self.token_drift.exclude_window(reason, discard=discard)
 
     def _sync_token_pause(self):
         serial = getattr(self.metrics, 'pause_serial', 0)
@@ -398,7 +400,7 @@ class SessionControls:
         reminder_key：笔记、指南与留言提醒按它去重（Claude Code 的 compact_boundary 带 uuid），不给时用 ident。"""
         self.metrics.set_compacting(not completed)
         if not completed and self.token_drift is not None:
-            self._exclude_token_window('compacting')
+            self._exclude_token_window('compacting', discard=False)
         notes = getattr(self, 'note_reminders', None)
         resend = False
         if completed and notes is not None:
