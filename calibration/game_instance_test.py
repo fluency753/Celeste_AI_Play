@@ -250,12 +250,14 @@ class SelectionTests(unittest.TestCase):
                 path.write_text(json.dumps(collection), encoding='utf-8')
                 original = path.read_bytes()
                 with patch.object(obs_setup, 'obs_config_dir', return_value=self.root / 'obs'), \
-                     patch.object(obs_setup, 'obs_running', return_value=True):
+                     patch.object(obs_setup, 'obs_running', return_value=True), \
+                     patch.object(obs_setup, 'plugin_log_status', return_value={}):
                     self.assertFalse(obs_setup.sync_game_capture(path, cfg))
                     self.assertEqual(path.read_bytes(), original)
                     self.assertIn('关闭 OBS', obs_setup.capture_mismatch(cfg))
                 with patch.object(obs_setup, 'obs_config_dir', return_value=self.root / 'obs'), \
-                     patch.object(obs_setup, 'obs_running', return_value=False):
+                     patch.object(obs_setup, 'obs_running', return_value=False), \
+                     patch.object(obs_setup, 'plugin_log_status', return_value={}):
                     self.assertTrue(obs_setup.sync_game_capture(path, cfg))
                     self.assertIsNone(obs_setup.capture_mismatch(cfg))
                 data = json.loads(path.read_text(encoding='utf-8'))

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -192,10 +193,20 @@ def capture_target(cfg: dict) -> tuple[str, int]:
     if marker:
         title = marker["window_title"].replace(":", "#3A")
         return f"{title}:SDL_app:Celeste.exe", 1
-    return cfg["game_window"], 2
+    priority = cfg.get('game_window_priority', 2)
+    if type(priority) is not int or priority not in (1, 2):
+        raise ValueError('game_window_priority 须为 1（标题）或 2（可执行文件）')
+    return cfg["game_window"], priority
 
 
 GAME_SOURCES = ("game_capture", "wasapi_process_output_capture")
+
+
+def clock_port(cfg: dict) -> int:
+    port = cfg.get('clock_port', 47776)
+    if type(port) is not int or not 1024 <= port <= 65535:
+        raise ValueError('OBS 时钟端口 clock_port 须为 1024～65535 的整数')
+    return port
 
 
 def sync_game_capture(collection: Path, cfg: dict) -> bool:
@@ -223,6 +234,10 @@ def sync_game_capture(collection: Path, cfg: dict) -> bool:
 
 def capture_mismatch(cfg: dict) -> str | None:
     """AI 副本模式下 OBS 正在运行、而它的场景集合仍不按副本窗口标题采集时，返回说明；其他情况返回 None。"""
+    expected = clock_port(cfg)
+    info = plugin_log_status()
+    if info.get('connected') and info.get('clock_port') != expected:
+        return f"OBS 锁步插件连接了时钟端口 {info.get('clock_port')}，当前配置要求 {expected}；请关闭 OBS 后重新启动"
     window, priority = capture_target(cfg)
     if priority != 1:
         return None
@@ -447,6 +462,8 @@ def obs_running() -> bool:
 
 
 def launch(cfg: dict, obs_dir: Path, minimized: bool, reset: bool = False) -> None:
+    port = clock_port(cfg)
+    environment = {**os.environ, 'CELESTE_AI_CLOCK_PORT': str(port)}
     root = private_root()
     if obs_running():
         raise SystemExit(f"{label()} 已经在运行；主控可以沿用当前场景。需要重新启动时请先关闭它。")
@@ -470,16 +487,19 @@ def launch(cfg: dict, obs_dir: Path, minimized: bool, reset: bool = False) -> No
     # 独立于启动它的进程：启动脚本所在的终端或作业被关掉时，OBS 不跟着被结束
     flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     try:
-        subprocess.Popen(args, cwd=exe.parent, creationflags=flags | 0x01000000)   # CREATE_BREAKAWAY_FROM_JOB
+        subprocess.Popen(args, cwd=exe.parent, env=environment, creationflags=flags | 0x01000000)   # CREATE_BREAKAWAY_FROM_JOB
     except OSError:
-        subprocess.Popen(args, cwd=exe.parent, creationflags=flags)
+        subprocess.Popen(args, cwd=exe.parent, env=environment, creationflags=flags)
     print(f"已启动 {label()}（{exe}）")
+    info = {}
     started = time.monotonic()
     while time.monotonic() - started < 30:
         time.sleep(0.5)
         info = plugin_log_status()
-        if info.get("connected"):
+        if info.get("connected") and info.get('clock_port') == port:
             break
+    else:
+        raise SystemExit(f"OBS 未在 30 秒内连接目标时钟端口 {port}；实际端口 {info.get('clock_port')}，日志 {info.get('log')}。未开始录制或进档")
     print_status()
 
 
@@ -543,7 +563,9 @@ def plugin_log_status() -> dict:
     text = log.read_text(encoding="utf-8", errors="replace")
     connected = text.rfind("[celeste-lockstep] connected")
     disconnected = text.rfind("[celeste-lockstep] disconnected")
-    return {"log": str(log), "loaded": "[celeste-lockstep] loaded" in text, "connected": connected > disconnected}
+    ports = re.findall(r'\[celeste-lockstep\] connected to bridge clock port (\d+)', text)
+    return {"log": str(log), "loaded": "[celeste-lockstep] loaded" in text, "connected": connected > disconnected,
+            'clock_port': int(ports[-1]) if ports else None}
 
 
 def print_status() -> None:

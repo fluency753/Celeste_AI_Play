@@ -20,7 +20,7 @@ App Server 本身（容器里的 `docker exec` 进程）的输出流意外结束
 docker build -t celeste-agent:0.1 agent-container
 ```
 
-镜像固定 Codex CLI 版本。首次准备或试玩创建工作区后，使用提示里的容器名称登录，按输出在浏览器完成授权。
+镜像固定 Codex CLI 0.169.0，与主控的版本核验保持一致。模型目录以账号实时返回为准，登录过期时需重新授权，升级客户端不能代替授权。更新该固定版本后须重建镜像；模型目录账号容器和目标工作区在下次使用时按既有流程重建，持久卷保留，在运行的其他容器不会自动更新。首次准备或试玩创建工作区后，使用提示里的容器名称登录，按输出在浏览器完成授权。
 
 ```powershell
 .\.venv\Scripts\python.exe -m orchestrator.codex_container --container '<容器名>' login

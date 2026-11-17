@@ -22,11 +22,13 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include "clock-target.h"
 
 OBS_DECLARE_MODULE()
 
 #define PLUGIN "celeste-lockstep"
-#define CLOCK_PORT 47776
+static int clock_port = 47776;
+static char audio_mapping_name[64];
 #define WAIT_MS 10
 #define KEEP_RING 1024
 #define AUDIO_RING_SECONDS 6
@@ -469,7 +471,7 @@ static bool gp_start(void *data)
 		if (o->fps_num != 60 * o->fps_den)
 			return start_failed(o, "independent game audio requires 60 fps");
 		o->rate = 48000;
-		o->audio_mapping = OpenFileMappingA(FILE_MAP_READ, FALSE, "Local\\CelesteAIRecordAudio-47776");
+		o->audio_mapping = OpenFileMappingA(FILE_MAP_READ, FALSE, audio_mapping_name);
 		if (o->audio_mapping)
 			o->audio_view = MapViewOfFile(o->audio_mapping, FILE_MAP_READ, 0, 0, 0);
 		const int32_t *h = (const int32_t *)o->audio_view;
@@ -1169,7 +1171,7 @@ static DWORD WINAPI net_thread(LPVOID param)
 		SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		struct sockaddr_in addr = {0};
 		addr.sin_family = AF_INET;
-		addr.sin_port = htons(CLOCK_PORT);
+		addr.sin_port = htons((u_short)clock_port);
 		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 		if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
 			closesocket(s);
@@ -1186,7 +1188,7 @@ static DWORD WINAPI net_thread(LPVOID param)
 		g.reply_kind = 0;
 		LeaveCriticalSection(&g.lock);
 		InterlockedExchange(&g.connected, 1);
-		blog(LOG_INFO, "[" PLUGIN "] connected to bridge clock port %d", CLOCK_PORT);
+		blog(LOG_INFO, "[" PLUGIN "] connected to bridge clock port %d", clock_port);
 		if (g.lockstep)
 			send_line("L 1");
 		len = 0;
@@ -1235,6 +1237,15 @@ static DWORD WINAPI net_thread(LPVOID param)
 
 bool obs_module_load(void)
 {
+	char value[16] = {0};
+	SetLastError(ERROR_SUCCESS);
+	DWORD length = GetEnvironmentVariableA("CELESTE_AI_CLOCK_PORT", value, sizeof(value));
+	bool missing = length == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND;
+	if (length >= sizeof(value) || !parse_clock_port(missing ? NULL : value, &clock_port)) {
+		blog(LOG_ERROR, "[" PLUGIN "] invalid CELESTE_AI_CLOCK_PORT: expected integer 1024..65535");
+		return false;
+	}
+	snprintf(audio_mapping_name, sizeof(audio_mapping_name), "Local\\CelesteAIRecordAudio-%d", clock_port);
 	InitializeCriticalSection(&g.lock);
 	InitializeCriticalSection(&send_lock);
 	InitializeConditionVariable(&g.reply_cv);

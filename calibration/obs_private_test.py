@@ -152,7 +152,7 @@ class PrivateObsTests(unittest.TestCase):
         started = []
         with patch.object(obs_setup.subprocess, 'Popen', side_effect=lambda args, **_: started.append(args)), \
                 patch.object(obs_setup, 'ensure_hud_service'), patch.object(obs_setup, 'print_status'), \
-                patch.object(obs_setup, 'plugin_log_status', return_value={'connected': True}), \
+                patch.object(obs_setup, 'plugin_log_status', return_value={'connected': True, 'clock_port': 47776}), \
                 patch.object(obs_setup.time, 'sleep'):
             obs_setup.launch(obs_setup.load_config(), self.personal, minimized=True)
         self.assertEqual(Path(started[0][0]), self.private / 'bin/64bit/obs64.exe')

@@ -17,7 +17,7 @@ from .config import find_docker_exe
 
 
 CODEX_HOME = '/home/agent/.codex'
-CODEX_VERSION = '0.165.0-alpha.1.2'
+CODEX_VERSION = '0.169.0'
 ACCOUNT_AGENT = 'codex-account'
 LOGIN_BUSY = 73
 CONTEXT_CONFIG_KEYS = ('model_context_window', 'model_auto_compact_token_limit')

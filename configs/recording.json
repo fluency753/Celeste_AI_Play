@@ -5,6 +5,7 @@
   "video_args": "-c:v libx264 -preset veryfast -crf 16 -g 120",
   "audio_offset_ms": 0,
   "audio_source": "game_nrt",
+  "clock_port": 47776,
   "profile": "CelesteAI",
   "collection": "CelesteAI",
   "scene": "Celeste AI",
