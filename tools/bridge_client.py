@@ -37,6 +37,10 @@ class BridgeAuthError(ConnectionError):
     """常驻核心没有接受这次连接：口令不对，或需要口令而本机读不到口令文件。"""
 
 
+class StepNotSent(InterruptedError):
+    """A local cancellation rejected this step before its request was allocated."""
+
+
 def token_dir() -> Path:
     """口令文件所在目录，与常驻核心的 IpcAuth.Folder 一致：用户主目录下的 .celeste-ai-play。
     不用 AppData：打包应用及其子进程写 AppData 会被系统重定向到应用私有的位置，另一方读不到。"""
@@ -171,7 +175,7 @@ class BridgeClient:
     def _call(self, cmd: str, on_event=None, *, allow_reconnect: bool = True, **args) -> dict:
         """发送一条指令并等待它的回复。执行中桥接推送的事件（{"event": …}，例如 step 的 progress）交给 on_event。"""
         if cmd == "step" and self.cancel_check is not None and self.cancel_check():
-            raise InterruptedError("用户停止请求已生效，不再推进游戏")
+            raise StepNotSent("推进条件已变化，本次 step 尚未发送，未执行输入")
         if cmd == 'step' and getattr(self, 'before_step', None) is not None:
             self.before_step()
         if cmd == 'step' and self.step_options is not None:

@@ -481,6 +481,54 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
             controls.cancel()
             await asyncio.gather(controls, return_exceptions=True)
 
+    async def test_compaction_after_initial_check_cancels_before_send_without_unknown(self):
+        bridge = self.wire_bridge()
+        self.s.client.cancel_check = lambda: (
+            self.s._token_advancing and (self.s._token_cancel.is_set() or not self.s.token_guard()))
+        before = self.s._before_advance
+
+        def compact_before_send():
+            before()
+            self.r._public_compaction('race')
+
+        with patch.object(self.s, '_before_advance', side_effect=compact_before_send):
+            self.r._record_output_usage(500, 500)
+            await self.settle()
+        self.assertEqual(bridge.steps, [])
+        self.assertFalse(self.r.token_drift.unknown)
+        self.assertFalse(self.r.paused)
+        batch = self.r.token_drift.state['batch']
+        self.assertEqual((batch['status'], batch['consumed'], batch['stop']), ('committed', 0, 'not_executed'))
+        self.assertEqual(self.r.token_drift.state['dropped_frames'], 1)
+        self.r._public_compaction('race', completed=True)
+        observed = await self.tool('observe')
+        self.assertNotIn('执行范围未确认', observed)
+        self.r._record_output_usage(1000, 500)  # close the excluded compaction window
+        await self.settle()
+        self.r._record_output_usage(1500, 500)
+        await self.settle()
+        self.assertEqual(len(bridge.steps), 1)
+        self.assertEqual(self.m.state.token_frames, 1)
+
+    async def test_interrupted_receipt_after_send_still_has_unknown_range(self):
+        bridge = self.wire_bridge()
+        read = self.s.client.file.readline
+
+        def interrupted_receipt():
+            read()  # the external game executes the submitted input
+            raise InterruptedError('fixture receipt interrupted after execution')
+
+        with patch.object(self.s.client.file, 'readline', side_effect=interrupted_receipt):
+            self.r._record_output_usage(500, 500)
+            await self.settle()
+        self.assertEqual(len(bridge.steps), 1)
+        self.assertTrue(self.r.token_drift.unknown)
+        self.assertTrue(self.r.paused)
+        refusal = await self.tool('observe')
+        self.assertIn('主控', refusal)
+        self.assertNotIn('请先人工核验 token_drift.json', refusal)
+        self.assertEqual(len(bridge.steps), 1)
+
     async def test_pause_compaction_and_network_without_usage_do_not_repay_gap(self):
         total = 100
         self.r._record_output_usage(total, 100)

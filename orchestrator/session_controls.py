@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from .control import RunControl
 from .button_prompts import notification
 from .token_drift import TOKEN_CHANGES, token_observe_notice
+from .run_log import log_exception
 
 
 @dataclass(frozen=True)
@@ -245,10 +246,12 @@ class SessionControls:
                     else:
                         await self._flush_token_drift_locked()
             except Exception as error:
+                log_exception('[token] 推进失败，保持暂停', error)
                 self.paused = True
                 self.metrics.pause()
                 self.metrics.update(status='paused')
-                self._public_message('token-error', f'Token 推进未完成，游戏保持暂停：{error}。已执行范围见 token_drift.json，不自动重放。')
+                self._public_message('token-error', f'Token 推进未完成，游戏保持暂停：{error}。'
+                                     '账本 token_drift.json 位于主控运行目录，需要主控维护核验，不自动重放。')
                 # Unknown batches stay ineligible; retain the consumer for
                 # recoverable pre-execution failures after user inspection.
                 continue

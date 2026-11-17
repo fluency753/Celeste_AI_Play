@@ -57,7 +57,9 @@ def denial(controller, name, arguments=None):
                 '请调用 stop_run，reason 写「external_dependency：游戏进程已退出」，报告会直接接受，然后结束本轮等用户处理。')
     ledger = getattr(controller, 'token_drift', None)
     if ledger is not None and ledger.unknown:
-        return '上次 Token 推进的执行范围未确认，本次游戏工具未执行；请先人工核验 token_drift.json，不要重发原输入。'
+        return ('上次 Token 推进的执行范围未确认，主控已暂停观测与输入，本次游戏工具未执行。'
+                '请报告游戏工具或桥接异常，等待主控维护核验，不要重发输入。'
+                '账本保存在主控侧，不需要在工作区查找文件。')
     if getattr(controller, 'model_waiting', False):
         return '模型服务恢复等待中，本次游戏工具未执行。'
     if controller.paused or getattr(controller, 'pausing', False):

@@ -37,7 +37,7 @@ from .segments import (Piece, checkpoint_name, checkpoint_room, chapters_of, pie
                        segments_of, split_segments, validate_segments)
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
-from bridge_client import BridgeClient  # noqa: E402
+from tools.bridge_client import BridgeClient, StepNotSent  # noqa: E402
 from cutscene import (skip_by_pause_menu, leave_level_by_pause_menu, story_pending, story_input, story_decision,  # noqa: E402
                       cutscene_skippable)
 from tools.enter_save import PANEL_SIDES  # noqa: E402
@@ -1117,6 +1117,8 @@ class GameSession:
                     held = ('', (held or self._held_input)[1])
                 moved = self._advance_held(frames, 'Token 补推进' if deferred else 'Token 推进', 'token', held,
                                            respawning=respawning)
+            except StepNotSent as error:
+                return {'consumed': 0, 'stop': 'not_executed', 'reason': str(error)}
             finally:
                 self._token_advancing = False
             obs = moved['obs']
