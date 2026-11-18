@@ -20,8 +20,8 @@ from orchestrator.server import build_server
 
 
 def command(script):
-    return ('& "' + sys.executable + '" "' + str(script) + '"' if os.name == 'nt'
-            else shlex.join([sys.executable, str(script)]))
+    return ('& "' + sys.executable + '" -X utf8 "' + str(script) + '"' if os.name == 'nt'
+            else shlex.join([sys.executable, '-X', 'utf8', str(script)]))
 
 
 class CallbackTests(unittest.TestCase):
@@ -51,7 +51,7 @@ class CallbackTests(unittest.TestCase):
         self.assertIsNone(c.notify('same unresolved pause'))
         c.close()
         result = self.rows()[-1]
-        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(result['status'], 'succeeded', result)
         self.assertIn('$(echo injected)', result['output_tail'])
         payload = json.loads((self.root/'pause_callbacks'/f'{ident}.json').read_text(encoding='utf-8'))
         self.assertEqual(payload['reason'], reason)
@@ -91,6 +91,16 @@ class CallbackTests(unittest.TestCase):
         c.close()
         self.assertEqual(list(self.root.glob('pause_callback*')), [])
 
+    def test_fixture_python_uses_utf8_when_ambient_mode_is_disabled(self):
+        self.script.write_text('import sys\nprint(sys.flags.utf8_mode)\n', encoding='utf-8')
+        with patch.dict(os.environ, {'PYTHONUTF8':'0'}):
+            c = self.callback()
+            c.notify('fixture')
+            c.close()
+        result = self.rows()[-1]
+        self.assertEqual(result['status'], 'succeeded', result)
+        self.assertEqual(result['output_tail'].strip(), '1')
+
     def test_fatal_entry_preserves_original_exception_and_finishes_notification(self):
         from orchestrator import run
         cfg = RunConfig(agent='fixture', save='fixture', model='fixture', pause_callback_command=command(self.script))
@@ -101,7 +111,7 @@ class CallbackTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as raised:
                 run.main()
         self.assertIs(raised.exception, error)
-        self.assertEqual(self.rows()[-1]['status'], 'succeeded')
+        self.assertEqual(self.rows()[-1]['status'], 'succeeded', self.rows()[-1])
         self.assertEqual(self.rows()[0]['outcome'], 'failed')
 
     def test_launch_configuration_and_explicit_disable(self):

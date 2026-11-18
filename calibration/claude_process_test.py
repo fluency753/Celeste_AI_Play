@@ -19,6 +19,13 @@ from orchestrator.metrics import Metrics
 from orchestrator.session_store import rename_directory
 
 
+# Real interpreters and Git's POSIX shell can start slowly on a cold CI worker.
+# These are hang bounds, not a claim about normal process startup latency.
+PROCESS_START_WAIT_S = 120
+PROCESS_REAP_WAIT_S = 30
+PROCESS_RUN_WAIT_S = PROCESS_START_WAIT_S + 4 * PROCESS_REAP_WAIT_S + 10
+
+
 CHILD = '''import json,os,sys,time
 from pathlib import Path
 Path(sys.argv[2]).write_text(str(os.getpid()),encoding='ascii')
@@ -55,9 +62,9 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         self.stack.enter_context(patch.object(kb_access, 'KB_ROOT', self.root/'kb'))
         self.stack.enter_context(patch.object(personal_prompts, 'STORE', self.root/'personal.json'))
         self.stack.enter_context(patch.object(prompting, 'OVERRIDES', self.root/'prompts'))
-        for key, value in {'PROCESS_GRACE_S': .5, 'PROCESS_TERMINATE_S': .1,
-                           'PROCESS_KILL_S': .3, 'DOCKER_CLEANUP_S': 1.0,
-                           'READER_CLOSE_S': .3, 'NETWORK_PROBE_S': .05}.items():
+        for key, value in {'PROCESS_GRACE_S': .5, 'PROCESS_TERMINATE_S': PROCESS_REAP_WAIT_S,
+                           'PROCESS_KILL_S': PROCESS_REAP_WAIT_S, 'DOCKER_CLEANUP_S': PROCESS_REAP_WAIT_S,
+                           'READER_CLOSE_S': PROCESS_REAP_WAIT_S, 'NETWORK_PROBE_S': .05}.items():
             self.stack.enter_context(patch.object(agent, key, value))
         self.cfg = RunConfig(agent='process-fixture', save='fixture', model='fixture', sim=False,
                              mode='explore', knowledge_profile='explore', runtime='container')
@@ -79,6 +86,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         self.spawn_error = self.docker_error = self.body_error = self.close_error = None
         self.docker_mode = 'normal'
         self.docker_exit = 0
+        self.cleanup_delay = 0
         self.docker_commands = []
         self.cleanup_started = asyncio.Event()
         self.spawned = asyncio.Event()
@@ -119,7 +127,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
                     program = ('import os,sys;from pathlib import Path;'
                                'Path(sys.argv[1]).write_text(str(os.getpid()),encoding="ascii");'
                                + ('import time;time.sleep(60)' if self.docker_mode == 'hang'
-                                  else f'raise SystemExit({self.docker_exit})'))
+                                  else f'import time;time.sleep({self.cleanup_delay});raise SystemExit({self.docker_exit})'))
                     proc = await self.real_spawn(self.python, '-c', program, str(marker), **options)
                     self.pid_files.append((proc, marker))
             else:
@@ -160,7 +168,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         for proc in self.children:
             if proc.returncode is None:
                 proc.kill()
-                await asyncio.wait_for(proc.wait(), 2)
+                await asyncio.wait_for(proc.wait(), PROCESS_REAP_WAIT_S)
         for task in self.readers:
             if not task.done():
                 task.cancel()
@@ -188,7 +196,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         rename_directory(released, self.work)
 
     async def run_process(self):
-        return await asyncio.wait_for(self.runner._run_process(self.work, 'Fixture'), 5)
+        return await asyncio.wait_for(self.runner._run_process(self.work, 'Fixture'), PROCESS_RUN_WAIT_S)
 
     async def test_real_stdio_child_normal_completion_reaps_reader_and_log(self):
         self.assertTrue(await self.run_process())
@@ -229,7 +237,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
     async def test_body_cancel_reaps_real_child_and_preserves_task_cancellation(self):
         self.mode = 'hang'
         task = asyncio.create_task(self.runner._run_process(self.work, 'Fixture'))
-        async with asyncio.timeout(3):
+        async with asyncio.timeout(PROCESS_START_WAIT_S):
             while not self.metrics.tools_running:
                 await asyncio.sleep(.01)
         task.cancel()
@@ -243,7 +251,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         self.mode = 'hang'
         expected = self.body_error = ValueError('body pipe failure')
         task = asyncio.create_task(self.runner._run_process(self.work, 'Fixture'))
-        await asyncio.wait_for(self.cleanup_started.wait(), 3)
+        await asyncio.wait_for(self.cleanup_started.wait(), PROCESS_START_WAIT_S)
         self.assertFalse(task.done())
         task.cancel()
         with self.assertRaises(asyncio.CancelledError) as caught:
@@ -265,6 +273,25 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         self.docker_exit = 1
         with self.assertRaisesRegex(RuntimeError, '清理未确认.*Docker 返回 1'):
             await self.run_process()
+        self.assert_reaped()
+
+    async def test_slow_cleanup_does_not_replace_original_heartbeat_error(self):
+        self.runner.container = 'fixture'
+        self.cleanup_delay = 1.2  # Deliberately longer than the old one-second fixture deadline.
+        expected = OSError('stop heartbeat unavailable')
+        original = self.runner.control.heartbeat
+
+        def heartbeat(**fields):
+            if fields.get('stopped'):
+                raise expected
+            return original(**fields)
+
+        with patch.object(self.runner.control, 'heartbeat', heartbeat), self.assertRaises(OSError) as caught:
+            await asyncio.wait_for(self.runner.run(), PROCESS_RUN_WAIT_S)
+        self.assertIs(caught.exception, expected)
+        self.assertTrue(self.runner._events.closed)
+        self.assertTrue(self.runner.control_task.done())
+        self.assertTrue(self.runner.heartbeat_task.done())
         self.assert_reaped()
 
     async def test_remote_wrapper_only_normalizes_pkill_no_match(self):
@@ -322,7 +349,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
             return original(**fields)
 
         with patch.object(self.runner.control, 'heartbeat', heartbeat), self.assertRaises(OSError) as caught:
-            await asyncio.wait_for(self.runner.run(), 5)
+            await asyncio.wait_for(self.runner.run(), PROCESS_RUN_WAIT_S)
         self.assertIs(caught.exception, expected)
         self.assertTrue(self.runner._events.closed)
         self.assertTrue(self.runner.control_task.done())
@@ -339,7 +366,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
             return original(**fields)
 
         with patch.object(self.runner.control, 'heartbeat', heartbeat), self.assertRaises(OSError) as caught:
-            await asyncio.wait_for(self.runner.run(), 5)
+            await asyncio.wait_for(self.runner.run(), PROCESS_RUN_WAIT_S)
         self.assertIs(caught.exception, expected)
         self.assertIn('secondary heartbeat failure', '\n'.join(expected.__notes__))
         self.assertTrue(self.runner._events.closed)
@@ -363,7 +390,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.runner, '_controls', control_channel), \
              patch.object(agent.asyncio, 'create_subprocess_exec', failed_spawn):
             task = asyncio.create_task(self.runner.run())
-            await asyncio.wait_for(entered.wait(), 3)
+            await asyncio.wait_for(entered.wait(), PROCESS_START_WAIT_S)
             task.cancel()
             with self.assertRaises(asyncio.CancelledError) as caught:
                 await task
@@ -386,7 +413,7 @@ class ClaudeProcessTests(unittest.IsolatedAsyncioTestCase):
         self.docker_mode = 'hang'
         with patch('urllib.request.urlopen', return_value=object()) as fallback:
             task = asyncio.create_task(self.runner._probe_network())
-            async with asyncio.timeout(3):
+            async with asyncio.timeout(PROCESS_START_WAIT_S):
                 while not self.children:
                     await asyncio.sleep(.005)
             task.cancel()

@@ -172,6 +172,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_real_http_history_and_web_page_keep_only_first_retry_bubble(self):
         import threading
+        from urllib.parse import urlparse
         from urllib.request import urlopen
         from overlay.server import HudServer, make_handler
         from orchestrator.telemetry import publish
@@ -181,6 +182,7 @@ class HistoryTests(unittest.TestCase):
             self.skipTest('Playwright is needed to check the HUD consumer')
         publish(self.root, 'act:1:0', '首条说明', kind='尝试')
         publish(self.root, 'act:1:1', '首条说明（自动重试 1）', kind='尝试')
+        (self.root/'metrics.json').write_text(json.dumps({'status':'paused'}), encoding='utf-8')
         server = HudServer(('127.0.0.1', 0), make_handler(self.root))
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
@@ -192,16 +194,19 @@ class HistoryTests(unittest.TestCase):
                 try:
                     browser = playwright.chromium.launch()
                 except Exception as exc:
-                    self.skipTest(f'Chromium unavailable: {exc}')
+                    if sys.platform != 'win32':
+                        self.skipTest(f'Chromium unavailable: {exc}')
+                    browser = playwright.chromium.launch(channel='msedge')
                 try:
                     page = browser.new_page(viewport={'width': 600, 'height': 1100})
+                    page.route('**/*', lambda route: route.continue_()
+                               if urlparse(route.request.url).netloc == urlparse(url).netloc else route.abort())
                     pending = set()
                     page.on('request', lambda request: pending.add(request))
                     page.on('requestfinished', lambda request: pending.discard(request))
                     page.on('requestfailed', lambda request: pending.discard(request))
                     page.route('**/api/models*', lambda route: route.fulfill(json={'models': []}))
                     page.route('**/api/control', lambda route: route.fulfill(json={'run': str(self.root), 'control': {'connected': False}}))
-                    page.route('**/hud/state', lambda route: route.fulfill(json={'config': {}, 'metrics': {'status': 'paused'}}))
                     page.goto(url+'/hud')
                     page.locator('#thought .thought-entry').first.wait_for()
                     self.assertEqual(page.locator('#thought .thought-entry').count(), 1)
