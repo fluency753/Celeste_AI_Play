@@ -289,7 +289,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 76;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 77;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -316,6 +316,7 @@ const STATUS = {
 };
 // 推理强度：显示执行器实际确认的档位，显示英文档位名（configs/hud.json 的 effort_names 可覆盖）
 let state = null, config = null, offset = 0;
+let stateReceivedAt = 0, stateReceivedWall = 0, statePollFailed = false, statePollBusy = false;
 let historyRun = null, historySignature = "", historyReady = false, followHistory = true;
 let historyEndpoint = null;
 const $ = (id) => document.getElementById(id);
@@ -443,22 +444,28 @@ function levelSeconds(m, now) {
 }
 
 async function poll() {
+  if (statePollBusy) return;
+  statePollBusy = true;
   try {
     const t0 = Date.now() / 1000;
-    const res = await fetch(STATE_URL, { cache: "no-store" });
+    const res = await fetch(STATE_URL, { cache: "no-store", signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`HUD HTTP ${res.status}`);
     const data = await res.json();
+    if (!data.metrics || !(data.now > 0)) throw new Error('HUD 数据不可用');
     if (data.config && data.config.page_version && data.config.page_version !== PAGE_VERSION && reloadAllowed()) {
       location.reload(); return;
     }
     const t1 = Date.now() / 1000;
     offset = data.now - (t0 + t1) / 2;
+    stateReceivedAt = t1; stateReceivedWall = data.now; statePollFailed = false;
     if (!config || JSON.stringify(config) !== JSON.stringify(data.config)) { config = data.config; applyColors(); applyObsLayout(); }
     // 切换会话或数据暂时不可用时保留上次画面，避免整个卡片闪空。
     if (data.metrics) state = data.metrics;
     // 新的思考语句一出现就取一次历史（不等 0.75 秒一次的轮询）：动作开始前只等 thought_lead_s（默认 0.4 秒）
     const thoughtKey = state ? JSON.stringify([state.thought, state.thought_updated_wall]) : null;
     if (thoughtKey !== lastThoughtKey) { lastThoughtKey = thoughtKey; pollHistory(); }
-  } catch (e) { /* 主控未启动时保持上一帧 */ }
+  } catch (e) { statePollFailed = true; }
+  finally { statePollBusy = false; }
 }
 let lastThoughtKey = null, historyInflight = false;
 
@@ -631,7 +638,10 @@ function render() {
   setText($("chatSource"), source);
   setText($("toolCountLabel"), "工具调用");
   setText($("chatCalls"), m.tool_calls == null ? '—' : `${since(m, "tool_calls")} 次`);
-  const now = Date.now() / 1000 + offset;
+  const stale = statePollFailed || (stateReceivedAt > 0 && Date.now() / 1000 - stateReceivedAt > 5);
+  // A failed/hung HUD poll is not evidence of ongoing model work. Retain
+  // the last data, but stop extrapolating its timers until data returns.
+  const now = stale && stateReceivedWall > 0 ? stateReceivedWall : Date.now() / 1000 + offset;
   // 规划回放可以和模型同时运行；连接中断或上下文压缩优先显示。
   const replaying = !!m.replaying || m.status === "replaying";
   const [text, kind, breathe] = (replaying && !["net_wait", "compacting"].includes(m.status)) ? STATUS.replaying : (STATUS[m.status] || [m.status, "idle", false]);
@@ -642,15 +652,18 @@ function render() {
 
   setText($("name"), displayName(m));
   let statusText = text;
+  if (m.status === 'net_wait' && /at capacity|overloaded|modelCapacity/i.test(m.network_retry_reason || '')) statusText = '模型容量不足，等待重试';
   if (m.status === "studying") statusText = `${text} ${Math.round((m.kb_progress || 0) * 100)}%`;
   if (m.status === "quota_wait" && m.quota_wait_until) {
     const d = new Date(m.quota_wait_until * 1000);
     statusText = `${text}（${pad(d.getHours())}:${pad(d.getMinutes())} 恢复）`;
   }
+  if (stale) statusText = 'HUD 数据连接中断';
   setText($("status"), statusText);
+  $('status').title = stale ? '计时停留在最后一次成功读取的数据，连接恢复后更新。' : (m.network_retry_reason || '');
   const dot = $("dot");
-  dot.style.background = c[kind] || "#8F9AB3";
-  dot.classList.toggle("breathe", breathe);
+  dot.style.background = c[stale ? 'retrying' : kind] || "#8F9AB3";
+  dot.classList.toggle("breathe", breathe && !stale);
 
   const chapters = (config && config.chapters) || {};
   const chapterLabel = chapters[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");

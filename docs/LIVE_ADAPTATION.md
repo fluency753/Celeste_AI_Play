@@ -84,6 +84,8 @@ Windows 上 `start_gpt.ps1 -Play` 默认通过 `orchestrator.background` 运行�
 
 HUD 读取当前运行的 `metrics.json`、`control.sqlite3` 和 `public_events.jsonl`，不读取任何聊天客户端自己的日志。模型与推理强度由执行器确认；取不到的字段保持未知。公开事件只包含消息、动作说明和压缩状态，不导出内部推理。
 
+Codex 明确报告模型服务重试时，停止累计思考并保留具体错误原因；容量不足单独显示为“模型容量不足，等待重试”。等待、原因变化和恢复输出会写入系统公开消息，恢复必须有真实输出或累计输出 token 增长作为证据，仅输入用量增加不算。不能把首个明确错误之前的无输出空窗推断为网络等待。网页 HUD 自身数据读取失败、数据不可用或超过 5 秒无响应时显示“HUD 数据连接中断”，按最后成功响应冻结显示计时；这只影响显示外推，不改主控账本，数据恢复后重新更新。
+
 - `orchestrator/session_controls.py`：公共消息队列、暂停 / 继续、停止、目标更新 / 清除、剧情模式、推理强度偏好和心跳。执行器声明 `RuntimeCapabilities`，实现推理强度校验与协议中断；支持在活动轮次追加输入时再实现 steer。
 - Codex 用 `turn/steer` 追加提示；Claude Code 没有这个能力，通过官方 stream-json 的 interrupt 控制请求结束当前轮，下一轮只提交一次待投递消息（参考 anthropics/claude-agent-sdk-python 的 `_internal/query.py`）。两个执行器都等已经开始的游戏工具结束后才确认暂停。
 - Fast 是 Codex 的能力，Claude Code 不显示这个开关，也拒绝相应的控制请求。推理强度选项来自当前执行器的能力或模型目录，后端再次校验。

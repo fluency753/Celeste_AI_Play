@@ -2303,6 +2303,8 @@ function renderRun(m) {
   const replaying = m.replaying || m.status === "replaying";
   const [text, color] = (replaying && !["net_wait", "compacting"].includes(m.status)) ? STATUS.replaying : (STATUS[m.status] || [m.status || "—", "var(--muted)"]);
   $("runStatus").textContent = m.status === "studying" ? `${text} ${Math.round((m.kb_progress || 0) * 100)}%` : text;
+  if (m.status === 'net_wait' && /at capacity|overloaded|modelCapacity/i.test(m.network_retry_reason || '')) $('runStatus').textContent = '模型容量不足，等待重试';
+  $('runStatus').title = m.network_retry_reason || '';
   $("runDot").style.background = color;
   const chapterName = (cfg.chapters || {})[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
   const chapter = /^[BC]$/.test(m.chapter_side || "") ? chapterName.replace(/A$/, m.chapter_side) : chapterName;   // 与 HUD 相同：4B、8C

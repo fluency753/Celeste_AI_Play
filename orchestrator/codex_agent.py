@@ -216,24 +216,35 @@ class CodexRunner(ModelRecovery, SessionControls):
             self._sampling_epoch += 1
             error = params.get('error') or {}
             if is_model_unavailable(error):
-                reason = error.get('message', '') if isinstance(error, dict) else str(error)
+                reason = ('；'.join(str(error[k]) for k in ('additionalDetails', 'message') if error.get(k))
+                          if isinstance(error, dict) else str(error))
+                previous = self.metrics.state.network_retry_reason
                 if self.metrics.network_retry_begin(reason):
                     self._exclude_token_window('network_retry')
+                if previous != self.metrics.state.network_retry_reason:
+                    self._network_notice('模型服务等待重试：' + self.metrics.state.network_retry_reason)
             return
         progress = (method in ('item/agentMessage/delta', 'item/reasoning/textDelta',
                                'item/reasoning/summaryTextDelta') and bool(params.get('delta')))
         if method == 'thread/tokenUsage/updated':
             total = (params.get('tokenUsage') or {}).get('total') or {}
-            value = total.get('totalTokens')
-            if value is None:
-                parts = [total.get('inputTokens'), total.get('outputTokens')]
-                if all(type(part) is int and part >= 0 for part in parts):
-                    value = sum(parts)
+            # Re-sending the same request can increase input usage without any
+            # model output. Only generated output proves recovery.
+            value = total.get('outputTokens')
             if type(value) is int and value >= 0:
                 progress = self._network_usage is not None and value > self._network_usage
                 self._network_usage = max(self._network_usage or 0, value)
         if progress and self.metrics.state.network_retrying:
+            self._network_notice('模型服务已恢复输出，继续原会话。', recovered=True)
             self.metrics.network_retry_end()
+
+    def _network_notice(self, text, *, recovered=False):
+        ident = f'system:model-retry:{self.metrics.state.network_retry_since_wall}:{recovered}'
+        try:
+            publish(self.run_dir, ident, text, role='system', kind='系统')
+        except Exception as exc:
+            from .run_log import log_exception
+            log_exception('[codex] 模型等待提示写入失败', exc)
 
     def _event(self, method, params):
         if method.startswith('rawResponse'):

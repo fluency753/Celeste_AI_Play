@@ -91,25 +91,50 @@ class NetworkRetryTests(unittest.TestCase):
     def test_unrelated_or_stale_events_cannot_change_the_current_retry(self):
         self.r._event('error', {**ERROR, 'threadId':'other'})
         self.assertFalse(self.m.state.network_retrying)
-        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'totalTokens':99}})
+        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'outputTokens':99}})
         self.retry()
         self.r._event('item/agentMessage/delta', {'threadId':'session', 'turnId':'old', 'delta':'late'})
         self.r._event('item/agentMessage/delta', {'threadId':'other', 'turnId':'turn', 'delta':'other'})
         self.assertTrue(self.m.state.network_retrying)
-        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'totalTokens':100}})
+        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'outputTokens':100}})
         self.assertFalse(self.m.state.network_retrying)
         self.retry()
-        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'totalTokens':100}})
+        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'outputTokens':100}})
         self.assertTrue(self.m.state.network_retrying)
-        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'totalTokens':101}})
+        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'outputTokens':101}})
         self.assertFalse(self.m.state.network_retrying)
 
     def test_first_usage_snapshot_is_only_a_baseline_not_proof_of_recovery(self):
         self.retry()
-        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'totalTokens':100}})
+        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'outputTokens':100}})
         self.assertTrue(self.m.state.network_retrying)
-        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'totalTokens':101}})
+        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'outputTokens':101}})
         self.assertFalse(self.m.state.network_retrying)
+
+    def test_capacity_reason_persists_and_input_only_usage_does_not_restore_thinking(self):
+        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'outputTokens':10, 'inputTokens':90, 'totalTokens':100}})
+        self.advance(5)
+        error = {**ERROR, 'error': {**ERROR['error'], 'message':'Reconnecting... 2/5',
+                                  'additionalDetails':'Selected model is at capacity. Please try a different model.'}}
+        self.r._event('error', error)
+        self.advance(30)
+        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'outputTokens':10, 'inputTokens':190, 'totalTokens':200}})
+        self.assertTrue(self.m.state.network_retrying)
+        self.assertEqual(self.m.snapshot()['thinking_s'], 5)
+        self.assertIn('at capacity', self.m.state.network_retry_reason)
+        self.assertIn('容量不足', view_model(self.m.snapshot(), {}, [], 1000+self.now).status)
+        self.r._event('error', error)
+        rows = [json.loads(line) for line in (self.root/'public_events.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['role'], 'system')
+        self.assertIn('at capacity', rows[0]['text'])
+        self.advance(15)
+        self.event('thread/tokenUsage/updated', tokenUsage={'total':{'outputTokens':11, 'inputTokens':190, 'totalTokens':201}})
+        self.assertFalse(self.m.state.network_retrying)
+        self.assertEqual((self.m.state.thinking_s, self.m.state.network_retry_s), (5, 45))
+        rows = [json.loads(line) for line in (self.root/'public_events.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(len(rows), 2)
+        self.assertIn('恢复输出', rows[1]['text'])
 
     def test_pause_and_turn_end_settle_retry_without_reviving_it_on_resume(self):
         self.advance(5)

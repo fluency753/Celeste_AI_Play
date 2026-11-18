@@ -366,6 +366,8 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     replaying = bool(m.get("replaying")) or m.get("status") == "replaying"
     status = m.get("status")
     text, kind = STATUS["replaying"] if replaying and status not in ("net_wait", "compacting") else STATUS.get(status, (status or "", "idle"))
+    if status == 'net_wait' and re.search(r'at capacity|overloaded|modelCapacity', m.get('network_retry_reason') or '', re.I):
+        text = '模型容量不足，等待重试'
     playing = (m.get("started_wall") or 0) > 0
     counting = playing or (m.get("kb_progress") is not None and m.get("kb_progress") >= 1)
     ended = m.get("status") in ("done", "stopped")

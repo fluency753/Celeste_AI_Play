@@ -1,5 +1,6 @@
 """Production metrics -> isolated HTTP server -> real HUD/console and native view model."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -33,10 +34,19 @@ class NetworkRetryHudTests(unittest.TestCase):
             # A concurrent local program still owns its tool interval.
             metrics.tool_begin('shell', label='Bash')
             metrics.update(status='tool', replaying=True)
+            state_unavailable = False
+            state_delay = 0
+            state_requests = []
 
             class Handler(make_handler(root)):
                 def do_GET(self):
-                    if self.path.startswith('/api/'):
+                    if self.path == '/hud/state':
+                        state_requests.append(time.monotonic())
+                        if state_delay:
+                            time.sleep(state_delay)
+                    if self.path == '/hud/state' and state_unavailable:
+                        self._json(503, {'error':'fixture HUD outage'})
+                    elif self.path.startswith('/api/'):
                         self._json(200, {'control':{'connected':False}, 'running':False})
                     else:
                         try:
@@ -59,7 +69,9 @@ class NetworkRetryHudTests(unittest.TestCase):
                     try:
                         browser = p.chromium.launch()
                     except Exception as error:
-                        self.skipTest(f'Chromium unavailable: {error}')
+                        if os.name != 'nt':
+                            self.skipTest(f'Chromium unavailable: {error}')
+                        browser = p.chromium.launch(channel='msedge')
                     try:
                         page = browser.new_page()
                         page.route('**/*', lambda route:route.continue_()
@@ -102,6 +114,42 @@ class NetworkRetryHudTests(unittest.TestCase):
                         page.wait_for_timeout(1200)
                         second = page.evaluate(render)
                         self.assertNotEqual(first[1], second[1])
+
+                        runner._event('error', {**ERROR, 'error': {**ERROR['error'],
+                            'additionalDetails':'Selected model is at capacity. Please try a different model.'}})
+                        first = page.evaluate(render)
+                        self.assertIn('容量不足', first[0])
+                        page.goto(base+'/hud')
+                        page.wait_for_function("document.querySelector('#status').textContent.includes('容量不足')")
+                        self.assertIn('at capacity', page.locator('#status').get_attribute('title'))
+                        first = page.locator('#thinking').inner_text()
+                        page.wait_for_timeout(1200)
+                        self.assertEqual(first, page.locator('#thinking').inner_text())
+                        runner._event('item/agentMessage/delta', {
+                            'threadId':'session', 'turnId':'turn', 'itemId':'public', 'delta':'恢复输出'})
+                        page.wait_for_function("document.querySelector('#status').textContent==='思考中'")
+                        state_unavailable = True
+                        page.wait_for_function("document.querySelector('#status').textContent==='HUD 数据连接中断'")
+                        first = page.locator('#thinking').inner_text()
+                        page.wait_for_timeout(1200)
+                        self.assertEqual(first, page.locator('#thinking').inner_text())
+                        state_unavailable = False
+                        page.wait_for_function("document.querySelector('#status').textContent==='思考中'")
+                        first = page.locator('#thinking').inner_text()
+                        page.wait_for_timeout(1200)
+                        self.assertNotEqual(first, page.locator('#thinking').inner_text())
+
+                        # A hung read must time out rather than stack ~50
+                        # concurrent polls or overwrite a newer recovery.
+                        state_delay = 6
+                        before_requests = len(state_requests)
+                        page.wait_for_timeout(1500)
+                        self.assertLessEqual(len(state_requests) - before_requests, 2)
+                        page.wait_for_function("document.querySelector('#status').textContent==='HUD 数据连接中断'", timeout=7000)
+                        state_delay = 0
+                        page.wait_for_function("document.querySelector('#status').textContent==='思考中'", timeout=7000)
+                        page.wait_for_timeout(1500)
+                        self.assertEqual(page.locator('#status').inner_text(), '思考中')
                     finally:
                         browser.close()
             finally:
