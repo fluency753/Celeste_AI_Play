@@ -236,8 +236,11 @@ def capture_mismatch(cfg: dict) -> str | None:
     """AI 副本模式下 OBS 正在运行、而它的场景集合仍不按副本窗口标题采集时，返回说明；其他情况返回 None。"""
     expected = clock_port(cfg)
     info = plugin_log_status()
-    if info.get('connected') and info.get('clock_port') != expected:
-        return f"OBS 锁步插件连接了时钟端口 {info.get('clock_port')}，当前配置要求 {expected}；请关闭 OBS 后重新启动"
+    # 插件在 OBS 整个运行期间只用启动时的端口：现在没连上（例如上一个实例的游戏已经关了）也要核对，
+    # 否则主控会沿用这个 OBS，到开始录制时才失败。端口取加载时写出的那行，没有就取连上过的那行。
+    port = info.get('configured_port') or info.get('clock_port')
+    if port is not None and port != expected:
+        return f"已在运行的 OBS 的锁步插件用的是时钟端口 {port}，当前配置要求 {expected}；请关闭 OBS 后重新启动"
     window, priority = capture_target(cfg)
     if priority != 1:
         return None
@@ -564,8 +567,11 @@ def plugin_log_status() -> dict:
     connected = text.rfind("[celeste-lockstep] connected")
     disconnected = text.rfind("[celeste-lockstep] disconnected")
     ports = re.findall(r'\[celeste-lockstep\] connected to bridge clock port (\d+)', text)
+    # 1.27.2 起插件加载时写出它用的时钟端口；更早的插件只能从连上过的那行看出来
+    configured = re.findall(r'\[celeste-lockstep\] loaded \(clock port (\d+)\)', text)
     return {"log": str(log), "loaded": "[celeste-lockstep] loaded" in text, "connected": connected > disconnected,
-            'clock_port': int(ports[-1]) if ports else None}
+            'clock_port': int(ports[-1]) if ports else None,
+            'configured_port': int(configured[-1]) if configured else None}
 
 
 def print_status() -> None:

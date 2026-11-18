@@ -63,6 +63,34 @@ class ObsClockTests(unittest.TestCase):
                     stream.write('[celeste-lockstep] disconnected\n')
                 self.assertFalse(obs_setup.plugin_log_status()['connected'])
 
+    def test_running_obs_on_another_clock_is_refused_even_while_disconnected(self):
+        # The plugin keeps the port it was started with for the whole OBS session.
+        cases = {
+            'loaded line only (never connected yet)': '[celeste-lockstep] loaded (clock port 47776)\n',
+            'connected earlier, game since closed': ('[celeste-lockstep] loaded\n'
+                                                     '[celeste-lockstep] connected to bridge clock port 47776\n'
+                                                     '[celeste-lockstep] disconnected from bridge\n'),
+        }
+        for name, text in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                log = Path(tmp) / 'obs.log'
+                log.write_text(text, encoding='utf-8')
+                with patch.object(obs_setup, 'latest_log', return_value=log), \
+                     patch.object(obs_setup, 'capture_target', return_value=('Celeste:SDL_app:Celeste.exe', 2)):
+                    self.assertFalse(obs_setup.plugin_log_status()['connected'])
+                    self.assertIn('47776', obs_setup.capture_mismatch({'clock_port': 47777}))
+                    self.assertIsNone(obs_setup.capture_mismatch({'clock_port': 47776}))
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'obs.log'
+            log.write_text('[celeste-lockstep] loaded\n', encoding='utf-8')     # older plugin, never connected: unknown
+            with patch.object(obs_setup, 'latest_log', return_value=log), \
+                 patch.object(obs_setup, 'capture_target', return_value=('Celeste:SDL_app:Celeste.exe', 2)):
+                self.assertIsNone(obs_setup.capture_mismatch({'clock_port': 47777}))
+
+    def test_plugin_writes_its_clock_port_when_loaded(self):
+        source = (Path(__file__).resolve().parents[1] / 'obs-plugin' / 'celeste-lockstep.c').read_text(encoding='utf-8')
+        self.assertIn('"[" PLUGIN "] loaded (clock port %d)", clock_port', source)
+
     def test_wrong_clock_is_not_a_successful_launch(self):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(obs_setup, 'private_root', return_value=Path(tmp)), \

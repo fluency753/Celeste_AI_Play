@@ -289,7 +289,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 77;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 78;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -451,16 +451,17 @@ async function poll() {
     const res = await fetch(STATE_URL, { cache: "no-store", signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error(`HUD HTTP ${res.status}`);
     const data = await res.json();
-    if (!data.metrics || !(data.now > 0)) throw new Error('HUD 数据不可用');
+    if (!(data.now > 0)) throw new Error('HUD 回复缺少服务时间');
     if (data.config && data.config.page_version && data.config.page_version !== PAGE_VERSION && reloadAllowed()) {
       location.reload(); return;
     }
     const t1 = Date.now() / 1000;
     offset = data.now - (t0 + t1) / 2;
-    stateReceivedAt = t1; stateReceivedWall = data.now; statePollFailed = false;
+    statePollFailed = false;
     if (!config || JSON.stringify(config) !== JSON.stringify(data.config)) { config = data.config; applyColors(); applyObsLayout(); }
-    // 切换会话或数据暂时不可用时保留上次画面，避免整个卡片闪空。
-    if (data.metrics) state = data.metrics;
+    // 服务有回复但这一次没有运行数据（metrics.json 正在被替换的瞬间读不到，或者还没有运行）时，
+    // 保留上次画面、计时照走，不算连接中断；连续 5 秒拿不到新数据才由 render 里的时限显示中断。
+    if (data.metrics) { state = data.metrics; stateReceivedAt = t1; stateReceivedWall = data.now; }
     // 新的思考语句一出现就取一次历史（不等 0.75 秒一次的轮询）：动作开始前只等 thought_lead_s（默认 0.4 秒）
     const thoughtKey = state ? JSON.stringify([state.thought, state.thought_updated_wall]) : null;
     if (thoughtKey !== lastThoughtKey) { lastThoughtKey = thoughtKey; pollHistory(); }

@@ -157,6 +157,87 @@ class NetworkRetryHudTests(unittest.TestCase):
                 thread.join()
                 server.server_close()
 
+    def test_reply_without_run_data_keeps_last_frame_instead_of_reporting_disconnection(self):
+        """metrics.json is replaced while the HUD reads it: the server answers with metrics=None.
+        One such reply must not flash the connection-lost status into the recorded HUD; only data
+        missing past the existing 5-second limit counts as an interruption."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest('Playwright unavailable')
+        from overlay.server import load_config
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metrics = Metrics(root/'metrics.json', 'fixture', 'fixture', 'medium', 600)
+            metrics.turn_begin()
+            metrics.update(status='thinking')
+            missing = {'replies': 0}
+
+            class Handler(make_handler(root)):
+                def do_GET(self):
+                    if self.path == '/hud/state' and missing['replies']:
+                        missing['replies'] -= 1
+                        # Same reply the server gives when read_metrics() cannot read the file this instant.
+                        body = {'now': time.time(), 'config': load_config(), 'metrics': None, 'run': str(root)}
+                        self._send(200, json.dumps(body, ensure_ascii=False).encode('utf-8'),
+                                   'application/json; charset=utf-8')
+                    elif self.path.startswith('/api/'):
+                        self._json(200, {'control':{'connected':False}, 'running':False})
+                    else:
+                        try:
+                            super().do_GET()
+                        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                            pass
+
+                def do_POST(self):
+                    self._json(403, {'error':'isolated read-only test'})
+
+                def log_message(self, *args):
+                    pass
+
+            server = HudServer(('127.0.0.1', 0), Handler)
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                base = f'http://127.0.0.1:{server.server_port}'
+                with sync_playwright() as p:
+                    try:
+                        browser = p.chromium.launch()
+                    except Exception as error:
+                        if os.name != 'nt':
+                            self.skipTest(f'Chromium unavailable: {error}')
+                        browser = p.chromium.launch(channel='msedge')
+                    try:
+                        page = browser.new_page()
+                        page.route('**/*', lambda route:route.continue_()
+                            if urlparse(route.request.url).netloc==urlparse(base).netloc else route.abort())
+                        page.goto(base+'/hud')
+                        page.wait_for_function("document.querySelector('#status').textContent==='思考中'")
+                        page.evaluate("""() => { window.statusSeen = [];
+                            const el = document.querySelector('#status');
+                            new MutationObserver(() => window.statusSeen.push(el.textContent))
+                                .observe(el, {childList: true, characterData: true, subtree: true}); }""")
+                        first = page.locator('#thinking').inner_text()
+                        missing['replies'] = 3          # about 0.3 s of polls without run data
+                        page.wait_for_timeout(1500)
+                        self.assertEqual(missing['replies'], 0, 'the page never polled during the gap')
+                        self.assertNotIn('HUD 数据连接中断', page.evaluate('window.statusSeen'))
+                        self.assertEqual(page.locator('#status').inner_text(), '思考中')
+                        self.assertNotEqual(first, page.locator('#thinking').inner_text())   # the clock kept running
+
+                        # Run data that stays missing is still reported, by the existing 5-second limit.
+                        missing['replies'] = 10 ** 6
+                        page.wait_for_function("document.querySelector('#status').textContent==='HUD 数据连接中断'",
+                                               timeout=20000)
+                        missing['replies'] = 0
+                        page.wait_for_function("document.querySelector('#status').textContent==='思考中'", timeout=20000)
+                    finally:
+                        browser.close()
+            finally:
+                server.shutdown()
+                thread.join()
+                server.server_close()
+
 
 if __name__ == '__main__':
     unittest.main()

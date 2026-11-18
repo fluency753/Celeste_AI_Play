@@ -2,7 +2,7 @@
 
 新运行默认 `--recording-mode chapter`：每章一个录像，不录选章过程，包含章节开场、游玩和完整结算；从章节退出时的加载与解锁提示也保留，回到选章地图后结束本片。补收集等需要跨章连续录像时使用 `--recording-mode continuous`。旧运行续跑沿用原来的连续录制，避免中途改变录像组织。
 
-多实例同时运行时，在目标游戏的 `Saves/modsettings-CelesteAIRuntime.celeste` 分配独立的 `Port` 和 `ClockPort`，主控的 `--bridge-port` 对应前者。`configs/local.recording.json` 的 `clock_port` 对应后者，默认 47776。OBS 启动工具通过进程环境 `CELESTE_AI_CLOCK_PORT` 传给锁步插件，视频时钟和游戏音频共享内存均使用该端口；非法端口会拒绝启动或加载。已运行 OBS 的连接端口不匹配时，主控拒绝沿用，须先结束录制并重新启动 OBS。原安装也可用 `game_window` 指定唯一标题窗口串，并设 `game_window_priority: 1` 按标题匹配；默认值 2 按可执行文件匹配。专用副本仍自动使用其标记中的窗口标题。
+多实例同时运行时，在目标游戏的 `Saves/modsettings-CelesteAIRuntime.celeste` 分配独立的 `Port` 和 `ClockPort`，主控的 `--bridge-port` 对应前者。`configs/local.recording.json` 的 `clock_port` 对应后者，默认 47776。OBS 启动工具通过进程环境 `CELESTE_AI_CLOCK_PORT` 传给锁步插件，视频时钟和游戏音频共享内存均使用该端口；非法端口会拒绝启动或加载。插件在 OBS 整个运行期间只用启动时的端口，加载时写进 OBS 日志（`loaded (clock port N)`，1.27.2 起）；已在运行的 OBS 的插件端口与配置不同时，即使插件暂时没连上，主控也拒绝沿用，须先结束录制并重新启动 OBS。原安装也可用 `game_window` 指定唯一标题窗口串，并设 `game_window_priority: 1` 按标题匹配；默认值 2 按可执行文件匹配。专用副本仍自动使用其标记中的窗口标题。
 
 三个菜单冻结开关独立配置。网页 HUD 展开“录像与冻结”可选择录像组织及菜单冻结，点击“会话管理 → 开始试玩”时应用；采集中只展示实际配置，旧运行续跑沿用原设置。控制台入口为“运行 → 新运行 → 更多设置 → 录像与声音”。
 

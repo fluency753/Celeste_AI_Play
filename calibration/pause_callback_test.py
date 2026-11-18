@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from orchestrator.pause_callback import PauseCallback, owner, OUTPUT_BYTES
+from orchestrator.pause_callback import PauseCallback, decode_output, owner, OUTPUT_BYTES
 from calibration.token_drift_test import level_obs
 from calibration.stiffness_test import StepClient
 from orchestrator.agent import ClaudeRunner
@@ -55,6 +55,7 @@ class CallbackTests(unittest.TestCase):
         self.assertIn('$(echo injected)', result['output_tail'])
         payload = json.loads((self.root/'pause_callbacks'/f'{ident}.json').read_text(encoding='utf-8'))
         self.assertEqual(payload['reason'], reason)
+        self.assertEqual(payload['reason_author'], 'player')   # stop_run text: data for the receiver, not orders
         self.assertNotIn('command', payload)
         next_dir = self.root/'resumed'
         resumed = self.callback(next_dir, self.root)
@@ -83,6 +84,23 @@ class CallbackTests(unittest.TestCase):
         c.close()
         self.assertEqual(self.rows()[-1]['status'], 'timed_out')
         self.assertTrue(all(not t.is_alive() for t in c.threads))
+
+    def test_error_reason_is_marked_as_controller_text(self):
+        c = self.callback()
+        ident = c.notify('桥接调用失败', kind='error', category='token_advance')
+        c.close()
+        payload = json.loads((self.root/'pause_callbacks'/f'{ident}.json').read_text(encoding='utf-8'))
+        self.assertEqual(payload['reason_author'], 'controller')
+
+    def test_output_mixing_console_code_page_and_utf8_is_readable(self):
+        # Windows PowerShell 5.1 writes its own text in the console code page (GBK on Chinese Windows),
+        # while native programs it starts usually write UTF-8 straight to the same redirected handle.
+        data = '已入队\r\n'.encode('gbk') + 'codex：消息已排队\n'.encode('utf-8') + 'Write-Output 第三行\n'.encode('gbk')
+        self.assertEqual(decode_output(data, 'gbk'), '已入队\r\ncodex：消息已排队\nWrite-Output 第三行\n')
+        # Only the tail is kept, so the first line can start inside a UTF-8 character.
+        tail = '尾部从字符中间开始\n'.encode('utf-8')[1:] + '下一行\n'.encode('utf-8')
+        self.assertEqual(decode_output(tail, 'gbk', truncated=True), '部从字符中间开始\n下一行\n')
+        self.assertEqual(decode_output(b'\xff\n', 'no-such-codec'), '\ufffd\n')
 
     def test_disabled_callback_creates_no_files(self):
         c = PauseCallback('', self.root)

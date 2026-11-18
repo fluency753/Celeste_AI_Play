@@ -593,7 +593,7 @@
         </div>
         <label class="field" style="margin-top:8px">视频编码参数<input type="text" id="videoArgs" placeholder="默认见 configs/recording.json，例如 -c:v h264_nvenc -preset p5"></label>
         <label class="field" style="margin-top:8px">阻塞／错误回调命令<input type="text" id="pauseCallbackCommand" maxlength="4000" placeholder="留空关闭；在本机后台执行，事件 JSON 路径由 CELESTE_PAUSE_EVENT_FILE 提供"></label>
-        <div class="hint">用于新开游玩；续跑沿用原运行的回调设置。</div>
+        <div class="hint">用于新开游玩与控制台续跑（留空即关闭）；正在进行的试玩不受影响。</div>
 
         <div class="group-title">HUD</div>
         <div class="switches">

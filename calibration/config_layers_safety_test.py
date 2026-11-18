@@ -148,6 +148,24 @@ class LayerSafetyTests(Fixture):
         cfg, args = self.parse('--resume', str(directory), '--use-machine-settings', '--hud-port', '48009')
         self.assertEqual(args.hud_port, 48009)
 
+    def test_console_resume_follows_current_pause_callback_setting(self):
+        directory = self.make_run(pause_callback_command='old-notify')
+        with patch('orchestrator.launch_options.REPO_ROOT', self.root):
+            argv = resume_args(directory, current_machine=True)
+        ms.save({'pause_callback_command': ''})          # cleared in the console: resuming there stops notifying
+        with patch.object(sys, 'argv', ['run', *argv, '--no-agent']):
+            cfg, _ = parse_args()
+        self.assertEqual(cfg.pause_callback_command, '')
+        ms.save({'pause_callback_command': 'new-notify'})
+        with patch.object(sys, 'argv', ['run', *argv, '--no-agent']):
+            cfg, _ = parse_args()
+        self.assertEqual(cfg.pause_callback_command, 'new-notify')
+        with patch.object(sys, 'argv', ['run', *argv, '--no-agent', '--no-pause-callback']):
+            cfg, _ = parse_args()
+        self.assertEqual(cfg.pause_callback_command, '')    # an explicit flag still wins
+        cfg, _ = self.parse('--resume', str(directory))        # command-line resume and maintenance keep the original
+        self.assertEqual(cfg.pause_callback_command, 'old-notify')
+
     def test_legacy_run_without_profile_snapshot_uses_current_defaults(self):
         self.provider()
         cfg, _ = self.parse('--resume', str(self.make_run()))

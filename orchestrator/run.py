@@ -58,7 +58,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--start-paused", action="store_true", help="原生 GPT 启动后保持暂停，可先聊天再点继续")
     callback_args = ap.add_mutually_exclusive_group()
     callback_args.add_argument('--pause-callback-command', default=None,
-                    help='阻塞／错误暂停时在宿主执行的通知命令；默认关闭，续跑沿用，显式空字符串关闭')
+                    help='阻塞／错误暂停时在宿主执行的通知命令；默认关闭，命令行续跑沿用原命令（控制台续跑用当前本机设置），显式空字符串关闭')
     callback_args.add_argument('--no-pause-callback', dest='pause_callback_command', action='store_const', const='',
                               help='关闭本次运行的阻塞／错误回调（包括续跑）')
     goal_args = ap.add_mutually_exclusive_group()
@@ -221,7 +221,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--fresh-session", action="store_true",
                     help="与 --resume 一起用：不接原来的 Claude Code 会话，开一个新会话（原会话无法恢复时用）")
     ap.add_argument('--use-machine-settings', action='store_true',
-                    help='续跑采用当前本机 HUD、ffmpeg 与 OBS 保留偏好；连接、原执行环境、容器资源及在用录像沿原约束。控制台续跑自动启用')
+                    help='续跑采用当前本机 HUD、ffmpeg、OBS 保留偏好与暂停回调命令；连接、原执行环境、容器资源及在用录像沿原约束。控制台续跑自动启用')
     ap.add_argument("--new-recording", action="store_true",
                     help="与 --resume 一起用：原录像接不上时（OBS 关了或崩溃、独立音频停了）放弃它，这次续跑另起一段录像")
     ap.add_argument("--note-file", metavar="FILE",
@@ -287,7 +287,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             machine_origin = apply_resume_machine(args, previous['state'], sys.argv[1:])
         except ValueError as exc:
             ap.error(str(exc))
-        print('[run] 续跑采用当前本机 HUD、ffmpeg 与 OBS 保留偏好；连接、执行环境、容器资源及录像沿原约束', flush=True)
+        print('[run] 续跑采用当前本机 HUD、ffmpeg、OBS 保留偏好与暂停回调命令；连接、执行环境、容器资源及录像沿原约束', flush=True)
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort, provider=args.provider,
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)

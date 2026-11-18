@@ -17,6 +17,32 @@ from .session_store import load_json, write_json
 
 TIMEOUT_S = 30
 OUTPUT_BYTES = 16384
+# 谁写的 reason：blockage 是 Player 自己在 stop_run 里写的说明，可能夹带针对接收方的要求；
+# error 由主控组成，可能引用异常或模型服务返回的原文。两种都只能当排查线索，不当指令。
+REASON_AUTHORS = {'blockage': 'player'}
+
+
+def decode_output(data: bytes, fallback: str | None = None, *, truncated: bool = False) -> str:
+    """命令输出的尾部逐行解码：先按 UTF-8，不是 UTF-8 的行按控制台代码页。Windows PowerShell 5.1
+    写到重定向输出的文字用控制台代码页（中文系统是 GBK），它调用的原生程序常直接写 UTF-8，两种会混在一起。"""
+    if fallback is None:
+        fallback = 'oem' if os.name == 'nt' else 'utf-8'
+    if truncated:
+        # 只留了尾部时，开头可能切在 UTF-8 多字节字符中间：丢掉至多 3 个续字节
+        cut = 0
+        while cut < min(3, len(data)) and 0x80 <= data[cut] <= 0xBF:
+            cut += 1
+        data = data[cut:]
+    out = []
+    for line in data.splitlines(keepends=True):
+        try:
+            out.append(line.decode('utf-8'))
+        except UnicodeDecodeError:
+            try:
+                out.append(line.decode(fallback, errors='replace'))
+            except LookupError:
+                out.append(line.decode('utf-8', errors='replace'))
+    return ''.join(out)
 
 
 def validate_command(value):
@@ -60,7 +86,8 @@ class PauseCallback:
                     return None
                 ident = uuid.uuid4().hex
                 event = {'schema': 1, 'event_id': ident, 'wall': time.time(), 'kind': kind,
-                         'category': category, 'reason': str(reason), 'run_dir': str(self.directory.resolve()),
+                         'category': category, 'reason': str(reason),
+                         'reason_author': REASON_AUTHORS.get(kind, 'controller'), 'run_dir': str(self.directory.resolve()),
                          'controller_log': str((self.directory / 'controller.log').resolve()), **facts}
                 state = self.directory / 'run_state.json'
                 if state.exists():
@@ -134,7 +161,7 @@ class PauseCallback:
                 result['returncode'] = process.returncode
                 size = output.seek(0, 2)
                 output.seek(max(0, size - OUTPUT_BYTES))
-                result['output_tail'] = output.read(OUTPUT_BYTES).decode('utf-8', errors='replace')
+                result['output_tail'] = decode_output(output.read(OUTPUT_BYTES), truncated=size > OUTPUT_BYTES)
                 result['output_truncated'] = size > OUTPUT_BYTES
         except Exception as exc:
             result.update(error_type=type(exc).__name__, error=str(exc))

@@ -1255,7 +1255,9 @@ bool obs_module_load(void)
 	obs_register_output(&gp_info);
 	obs_add_tick_callback(on_tick, NULL);
 	g.net_thread = CreateThread(NULL, 0, net_thread, NULL, 0, NULL);
-	blog(LOG_INFO, "[" PLUGIN "] loaded");
+	/* 主控据此核对已在运行的 OBS 用的是哪个时钟端口（插件在 OBS 整个运行期间不换端口），
+	 * 不必等插件连上游戏 */
+	blog(LOG_INFO, "[" PLUGIN "] loaded (clock port %d)", clock_port);
 	return true;
 }
 

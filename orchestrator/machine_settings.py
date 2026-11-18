@@ -31,7 +31,8 @@ INDEPENDENT_KEYS = ("live", "record")       # 直播与 OBS 录屏：各自记�
 DEBUG_KEYS = ("record_marker", "skip_enter", "no_agent", "play_speed", "auto_speed")   # 调试项：每次回到默认，不记住
 LAST_MAX_BYTES = 50_000
 USAGE_DEFAULTS = {"max_usage": None, "quota_wait": True, "quota_wait_max_hours": 24}
-RESUME_MACHINE_KEYS = ('hud_port', 'hud', 'hud_window', 'keep_obs_open', 'ffmpeg')
+RESUME_MACHINE_KEYS = ('hud_port', 'hud', 'hud_window', 'keep_obs_open', 'ffmpeg', 'pause_callback_command')
+RESUME_NEGATIVE_FLAGS = {'pause_callback_command': '--no-pause-callback'}   # 其余是 --no-<键名>
 _lock = threading.Lock()
 
 
@@ -167,10 +168,12 @@ def apply_resume_machine(args, state: dict, argv: list[str]) -> dict:
     applied = {}
     for key in RESUME_MACHINE_KEYS:
         flag = '--' + key.replace('_', '-')
-        negative = '--no-' + key.replace('_', '-')
+        negative = RESUME_NEGATIVE_FLAGS.get(key, '--no-' + key.replace('_', '-'))
         if explicit(flag) or explicit(negative):
             continue
         value = settings[key]
+        # 暂停回调：控制台里改了或清空了这项，控制台续跑就按现在的设置（空字符串即关闭），
+        # 不再沿用原运行保存的命令。命令行续跑（不带 --use-machine-settings）与主控维护仍沿用原命令。
         if key in ('hud', 'hud_window'):
             setattr(args, 'no_' + key, not value)
         else:
