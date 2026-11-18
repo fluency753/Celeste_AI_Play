@@ -217,6 +217,7 @@ class RunConfig:
     bridge_port: int = 47774
     mcp_port: int = 47780
     max_minutes: float = 240.0      # 现实时间上限（宽松；主要指标是游戏内计时）
+    pause_callback_command: str = ''  # 本机可选的阻塞／错误通知命令，不发给 Player
     max_frames_per_act: int = 600   # 单次 act 最多推进的帧数（速通模式；探索模式用 explore_act_frames，见 modes.act_frame_cap）
     min_frames_per_act: int = 1     # 单次 act 最少推进的帧数（两种模式；不超过上限，见 modes.act_frame_min）
     play_speed: int = 1             # 智能体动作块的推进速度（1 = 实时 60 帧/秒）

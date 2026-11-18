@@ -94,6 +94,17 @@ class AnalysisTests(unittest.TestCase):
             events = [e for e in report.analysis_records['timeline'] if e['kind'] == 'agent.reported_blocked']
             self.assertEqual([e['data']['category'] for e in events], [None, 'transition_recovery'])
 
+    def test_pause_callback_timeline_omits_host_command_and_output(self):
+        self.append(self.run/'pause_callbacks.jsonl', {'event_id':'cb1', 'wall':1000,
+            'status':'requested', 'kind':'blockage', 'reason':'需要维护', 'command':'PRIVATE_COMMAND'})
+        self.append(self.run/'pause_callbacks.jsonl', {'event_id':'cb1', 'wall':1001,
+            'status':'failed', 'returncode':7, 'output_tail':'PRIVATE_OUTPUT'})
+        with closing(self.collect()) as report:
+            events = [e for e in report.analysis_records['timeline'] if e['kind']=='controller.pause_callback']
+            self.assertEqual([e['data']['event_id'] for e in events], ['cb1','cb1'])
+            self.assertEqual(events[-1]['data']['returncode'], 7)
+            self.assertNotIn('PRIVATE_', json.dumps(events))
+
     def test_blockage_diagnostics_are_separate_and_time_filtered_in_the_export_bundle(self):
         path = self.run / 'stop_run_diagnostics.jsonl'
         statuses = ['classification_required', 'confirmation_required', 'recovery_available', 'duplicate']

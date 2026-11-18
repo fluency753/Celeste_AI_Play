@@ -423,6 +423,7 @@ class ClaudeRunner(SessionControls):
                     "试玩保持暂停，游戏冻结。在 HUD 点“继续”会再试一次；也可以中断，之后续跑。")
             print(f"[agent] {text}", flush=True)
             publish(self.run_dir, f"system:model-paused:{int(time.time() * 1000)}", text, role="system", kind="系统")
+            self._failure_callback(text, category='model_mismatch')
             while self.paused and not (self.session.done or self.stop_requested):
                 if self.control_task and self.control_task.done():
                     await self.control_task
@@ -987,6 +988,7 @@ class ClaudeRunner(SessionControls):
             if time.monotonic() >= deadline:
                 hours = getattr(self.cfg, "net_wait_max_h", 24.0)
                 self.stop_reason = f"模型连续 {hours:g} 小时连不上"
+                self._failure_callback(self.stop_reason, category='model_connection', outcome='failed')
                 print(f"[agent] {self.stop_reason}，停止运行（之后可以用 --resume 续跑）", flush=True)
                 break
             end = time.monotonic() + probe_every

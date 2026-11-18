@@ -28,6 +28,10 @@ class SessionControls:
     capabilities = RuntimeCapabilities()
 
     def _begin_model_turn(self, **timing):
+        if (not self.chat_only and not self.paused and self.metrics.playing
+                and not (self.token_drift is not None and self.token_drift.unknown)):
+            from .pause_callback import owner
+            owner(self.cfg, self.run_dir).resumed()
         if tracker := getattr(self, 'usage_tracker', None):
             tracker.begin_turn()
         # Chat keeps the game gate closed while model work is independently active.
@@ -189,6 +193,7 @@ class SessionControls:
             self.metrics.pause()
             self.metrics.update(status='paused')
             self._public_message('token-unknown', '上次 Token 推进的执行范围未确认，游戏保持暂停；请核验账本，不要重发该批输入。')
+            self._failure_callback('Token 推进存在未确认批次', category='token_advance')
         self._token_task = asyncio.create_task(self._token_worker())
 
     async def _finish_token_worker(self):
@@ -252,6 +257,7 @@ class SessionControls:
                 self.paused = True
                 self.metrics.pause()
                 self.metrics.update(status='paused')
+                self._failure_callback(str(error), category='token_advance', error=error)
                 self._public_message('token-error', f'Token 推进未完成，游戏保持暂停：{error}。'
                                      '账本 token_drift.json 位于主控运行目录，需要主控维护核验，不自动重放。')
                 # Unknown batches stay ineligible; retain the consumer for
@@ -341,6 +347,7 @@ class SessionControls:
                 self.paused = True
                 self.metrics.pause()
                 self.session.token_observation_required = True
+                self._failure_callback(str(error), category='token_advance', error=error)
                 raise
             if not self._token_closing and self._token_account_eligible():
                 self.metrics.update(status='tool' if self.metrics._tools else 'thinking')
@@ -452,7 +459,21 @@ class SessionControls:
         # Allow the acceptance to reach the originating turn before closing the executor.
         return max(0, 15 - (time.monotonic() - accepted)) if accepted is not None else None
 
-    def _agent_pause(self, reason):
+    def _failure_callback(self, reason, *, kind='error', category=None, error=None, outcome='paused'):
+        if (getattr(self, 'prepare_only', False) or self.chat_only
+                or not getattr(self.cfg, 'pause_callback_command', '')):
+            return
+        try:
+            from .pause_callback import owner
+            metrics = self.metrics.state
+            owner(self.cfg, self.run_dir).notify(reason, kind=kind, category=category, error=error,
+                outcome=outcome, agent=self.cfg.agent, model=getattr(metrics, 'model', None),
+                session_id=getattr(self, 'session_id', None), chapter=getattr(metrics, 'chapter', None),
+                room=getattr(metrics, 'room', None))
+        except Exception as exc:
+            log_exception('[callback] 通知失败，原暂停不变', exc)
+
+    def _agent_pause(self, reason, *, kind='blockage', category=None, error=None):
         """智能体用 stop_run 报告任务阻塞（在工具线程里调用）：与用户在 HUD 暂停相同，试玩暂停、章节内保持冻结，菜单正常运行，
         由用户在 HUD 继续或停止；只是不打断当前轮（工具结果已让智能体结束本轮）。"""
         if getattr(self, 'prepare_only', False) or self.chat_only:
@@ -462,6 +483,8 @@ class SessionControls:
             self.pause_at = time.monotonic()
             self.metrics.pause()
         self.metrics.update(status='paused')
+        report = getattr(self.session, 'agent_stop', None) or {}
+        self._failure_callback(reason, kind=kind, category=category or report.get('category'), error=error)
         return True
 
     def _workspace_notice(self):
@@ -685,7 +708,15 @@ class SessionControls:
                                     self.pause_at = time.monotonic()
                                     self.metrics.pause()
                                 self.metrics.update(status="net_wait" if getattr(self, 'model_waiting', False) else "paused")
+                            try:
+                                fault = json.loads(row['text']).get('pause_fault') if row['text'] else None
+                            except (ValueError, AttributeError):
+                                fault = None
+                            if isinstance(fault, dict) and isinstance(fault.get('reason'), str):
+                                self._failure_callback(fault['reason'], category=fault.get('category'))
                             if interrupt_error is not None:
+                                log_exception('[control] 游戏已暂停，但模型中断失败', interrupt_error)
+                                self._failure_callback(str(interrupt_error), category='model_interrupt', error=interrupt_error)
                                 raise RuntimeError('游戏操作已归还并保持暂停，但模型中断未确认：' + str(interrupt_error)) from interrupt_error
                             self.control.mark(row["id"], "submitted", "当前动作已结束，试玩已暂停")
                         elif row["kind"] == "resume":
@@ -702,6 +733,8 @@ class SessionControls:
                                 self.metrics.resume(quota=False)
                             self.paused = False
                             if was_paused:
+                                from .pause_callback import owner
+                                owner(self.cfg, self.run_dir).resumed()
                                 self.resume_notice = notification('resume', facts='用户已恢复试玩；任务范围、权限和停止条件未改变。', cfg=self.cfg)
                             self.control.mark(row["id"], "submitted", "已继续试玩")
                     except Exception as exc:
@@ -812,6 +845,7 @@ class SessionControls:
             self.paused = True
             self.cfg._keep_frozen = True
             self.metrics.update(status='paused')
+            self._failure_callback(str(exc), category='bridge_reload', error=exc)
             raise
         finally:
             self.pausing = False

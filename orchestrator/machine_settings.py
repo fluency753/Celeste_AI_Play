@@ -15,7 +15,7 @@ from . import config as _config
 
 MACHINE_KEYS = ("runtime", "bridge_port", "mcp_port", "hud_port", "hud", "hud_window", "ffmpeg", "record_video_args",
                 "audio_offset_ms", "recording_mode", "freeze_chapter_select", "freeze_file_select", "freeze_main_menu",
-                "keep_obs_open", "continuous_music")
+                "keep_obs_open", "continuous_music", "pause_callback_command")
 # 可调参数里属于本机的：自写程序最多用几个 CPU 核（默认本机核数）。存在本机设置里，开跑时由控制台写成 --tune
 MACHINE_TUNES = ("agent_cpus",)
 # 运行记录（run_state.json）里有的本机设置：迁移时没有表单值就按本机最近一次运行
@@ -107,6 +107,8 @@ def _seed() -> dict:
     state = _latest_run_state()
     seeded = _seed_tunes(form)
     for key in MACHINE_KEYS:
+        if key == 'pause_callback_command':
+            continue  # Executable host commands require explicit local configuration, never preset migration.
         for source in (form, state if key in RUN_STATE_KEYS else {}):
             if key in source and source[key] is not None:
                 try:

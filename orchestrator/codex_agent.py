@@ -682,7 +682,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                 self._audit_delivery('observation_unconfirmed', tool=tool, call_id=str(call_id), error=str(exc))
                 if tool == 'celeste_observe' and getattr(self.session, 'reload_epoch', 0):
                     self.session.reload_observation_required = True
-                self._agent_pause('观测图像交付失败')
+                self._agent_pause('观测图像交付失败', kind='error', category='observation_delivery', error=exc)
                 content.append({'type': 'inputText', 'text':
                     '图像交付失败：' + str(exc) + '。上面的游戏执行结果仍有效，勿重复已执行动作；'
                     '试玩保持暂停，请结束本轮并等待处理。恢复后重新observe，不沿用旧图。'})

@@ -499,6 +499,13 @@ class Analysis:
 
     def blockages(self, directory):
         context = self.context(directory)
+        for index, entry in self.read(directory, 'pause_callbacks.jsonl'):
+            # Execution command and command output stay on the host. Export the
+            # event and outcome needed to correlate the incident and notification.
+            data = {key: entry.get(key) for key in ('event_id', 'status', 'kind', 'category', 'reason',
+                    'outcome', 'returncode', 'elapsed_s', 'output_truncated', 'controller_log')}
+            self.event(context, 'controller.pause_callback', entry.get('wall'),
+                       directory / 'pause_callbacks.jsonl', index, data)
         stopped = directory / 'agent_stop.json'
         if stopped.exists():
             try:

@@ -60,7 +60,8 @@ class MachineTests(Fixture):
         pid = profiles.create("旧配置", base=profiles.DEFAULT)
         meta_path = self.root / "local" / "profiles" / pid / "profile.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        meta["form"] = {"mode": "explore", "recording_mode": "continuous", "freeze_chapter_select": False}   # 旧版存的表单
+        meta["form"] = {"mode": "explore", "recording_mode": "continuous", "freeze_chapter_select": False,
+                        "pause_callback_command": "must-not-execute-from-preset"}   # 旧版存的表单
         meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         with patch.object(profiles, "selected", return_value=pid):
             settings = ms.load()
@@ -68,6 +69,7 @@ class MachineTests(Fixture):
         self.assertEqual((settings["recording_mode"], settings["freeze_chapter_select"], settings["bridge_port"]),
                          ("continuous", False, 48000))
         self.assertEqual(settings["hud_port"], 47790)                                   # 两处都没有：默认值
+        self.assertEqual(settings['pause_callback_command'], '')
         self.assertEqual(self.prefs()["machine"], settings)
         with patch.object(profiles, "selected", return_value="default"):
             self.assertEqual(ms.load(), settings)                                       # 写下来以后不再迁移

@@ -592,6 +592,8 @@
           <label class="field">声音偏移（毫秒）<input type="number" id="audioOffset" min="-2000" max="2000" placeholder="默认用校准结果"></label>
         </div>
         <label class="field" style="margin-top:8px">视频编码参数<input type="text" id="videoArgs" placeholder="默认见 configs/recording.json，例如 -c:v h264_nvenc -preset p5"></label>
+        <label class="field" style="margin-top:8px">阻塞／错误回调命令<input type="text" id="pauseCallbackCommand" maxlength="4000" placeholder="留空关闭；在本机后台执行，事件 JSON 路径由 CELESTE_PAUSE_EVENT_FILE 提供"></label>
+        <div class="hint">用于新开游玩；续跑沿用原运行的回调设置。</div>
 
         <div class="group-title">HUD</div>
         <div class="switches">
@@ -1725,6 +1727,7 @@ function formOptions() {
     bridge_port: withDefault("bridgePort", "bridge_port"), mcp_port: withDefault("mcpPort", "mcp_port"),
     hud_port: withDefault("hudPort", "hud_port"), ffmpeg: $("ffmpeg").value.trim(),
     record_video_args: $("videoArgs").value.trim(), audio_offset_ms: numberOrNull("audioOffset"),
+    pause_callback_command: $("pauseCallbackCommand").value.trim(),
     recording_mode: $("recordingMode").value, freeze_chapter_select: $("freezeChapterSelect").checked,
     freeze_file_select: $("freezeFileSelect").checked, freeze_main_menu: $("freezeMainMenu").checked,
     tune, kb_deny: kbDeny(ui.mode), kb_allow: ui.mode === "explore" ? kbAllow(ui.mode) : [],
@@ -1902,7 +1905,7 @@ const MACHINE_FIELDS = [["runtime", "runMode", "select"], ["bridge_port", "bridg
   ["record_video_args", "videoArgs", "text"], ["audio_offset_ms", "audioOffset", "number"], ["recording_mode", "recordingMode", "select"],
   ["freeze_chapter_select", "freezeChapterSelect", "check"], ["freeze_file_select", "freezeFileSelect", "check"],
   ["freeze_main_menu", "freezeMainMenu", "check"], ["keep_obs_open", "keepObs", "check"], ["continuous_music", "continuousMusic", "check"],
-  ["agent_cpus", "agentCpus", "number"]];
+  ["agent_cpus", "agentCpus", "number"], ["pause_callback_command", "pauseCallbackCommand", "text"]];
 const MACHINE_TUNE_KEYS = ["agent_cpus"];            // 可调参数里属于本机的：开跑时写成 --tune
 const CLAUDE_ONLY_TUNES = ["thought_max_hanzi", "thought_temp_max_hanzi"];
 const USAGE_KEYS = ["max_usage", "quota_wait", "quota_wait_max_hours"];

@@ -56,6 +56,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--prepared", help="复用 preparation 完成的知识库准备与独立会话（校验知识库未变化）")
     ap.add_argument("--codex-player-login", action="store_true", help="新工作区使用项目持久的 Codex player 登录")
     ap.add_argument("--start-paused", action="store_true", help="原生 GPT 启动后保持暂停，可先聊天再点继续")
+    callback_args = ap.add_mutually_exclusive_group()
+    callback_args.add_argument('--pause-callback-command', default=None,
+                    help='阻塞／错误暂停时在宿主执行的通知命令；默认关闭，续跑沿用，显式空字符串关闭')
+    callback_args.add_argument('--no-pause-callback', dest='pause_callback_command', action='store_const', const='',
+                              help='关闭本次运行的阻塞／错误回调（包括续跑）')
     goal_args = ap.add_mutually_exclusive_group()
     goal_args.add_argument("--goal", metavar="TEXT", help="启动时登记本次试玩的文字目标")
     goal_args.add_argument("--goal-file", type=Path, metavar="JSON", help="从 UTF-8 JSON 登记试玩目标和自动停止条件")
@@ -286,6 +291,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort, provider=args.provider,
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
                     play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
+    from .pause_callback import validate_command
+    try:
+        cfg.pause_callback_command = validate_command(args.pause_callback_command if args.pause_callback_command is not None
+            else previous['state'].get('pause_callback_command', '') if previous else '')
+    except ValueError as exc:
+        ap.error(str(exc))
     cfg.chapter = args.chapter
     cfg.recording_mode = args.recording_mode or ((previous['state'].get('recording_mode') or 'continuous') if previous else 'chapter')
     for key, default in (('freeze_chapter_select',True),('freeze_file_select',False),('freeze_main_menu',False)):
@@ -682,6 +693,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     current_plan = cfg.plan or [Piece(c) for c in (cfg.chapters or ([] if cfg.chapter is None else [cfg.chapter]))]
     state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [p.row() for p in map(Piece.of,current_plan)]
     state.update({key:getattr(cfg,key) for key in ('recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu')})
+    state['pause_callback_command'] = cfg.pause_callback_command
     if cfg.codex_player_login:
         state['codex_player_login'] = True
     if getattr(cfg, "profile", "local") != "local":
@@ -1516,7 +1528,8 @@ def recording_guard(recorder: Recorder, run_dir: Path):
             halt = exc if isinstance(exc, RecordingHalt) else RecordingHalt(f'录制安全检查失败：{exc}')
             from .control import RunControl
             try:
-                RunControl(run_dir).enqueue('pause')
+                RunControl(run_dir).enqueue('pause', json.dumps({'pause_fault': {
+                    'category': 'recording', 'reason': str(exc)}}, ensure_ascii=False))
             except Exception as again:  # noqa: BLE001
                 print(f'[record] 暂停试玩失败：{again}', flush=True)
             print(f'[record] {exc}：试玩已暂停', flush=True)
@@ -1636,6 +1649,20 @@ def resume_recording_mode(cfg, args, saved, hello) -> str:
 
 def main() -> int:
     cfg, args = parse_args()
+    try:
+        return _main(cfg, args)
+    except BaseException as exc:
+        callback = getattr(cfg, '_pause_callback', None)
+        if callback is not None and run_log.is_crash(exc):
+            callback.notify(run_log.crash_reason(exc), category='controller', error=exc,
+                            outcome='failed', agent=cfg.agent)
+        raise
+    finally:
+        if callback := getattr(cfg, '_pause_callback', None):
+            callback.close()
+
+
+def _main(cfg, args) -> int:
     if cfg.create_save:
         from .saves import validate_selection
         validate_selection(cfg.save, True, cfg.chapter)
@@ -1726,6 +1753,8 @@ def main() -> int:
     token = None if args.no_agent else runtime(cfg.engine).token(cfg)
     run_dir = make_run_dir(cfg.agent)
     run_log.attach(run_dir)   # Timestamped copy of this process's output, including what came before.
+    from .pause_callback import owner
+    callback = owner(cfg, run_dir, args.previous['dir'] if args.previous else None)
     print(f"[run] 日志目录：{run_dir}", flush=True)
     mod_hud = None
     recorder = None
@@ -1784,6 +1813,8 @@ def main() -> int:
         return 130
     except RecordingError as exc:
         print(f"[record] {exc}", flush=True)
+        callback.notify(str(exc), category='recording', error=exc, outcome='failed', agent=cfg.agent,
+                        session_id=(args.previous or {}).get('state', {}).get('session_id'))
         return 2
     except BaseException as exc:
         if run_log.record_crash(run_dir, exc):

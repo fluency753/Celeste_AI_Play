@@ -10,6 +10,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock, Mock
 
+
+def assert_recording_pause(test, control, *, once=False):
+    queued = control.return_value.enqueue
+    if once:
+        test.assertEqual(queued.call_count, 1)
+    test.assertEqual(queued.call_args.args[0], 'pause')
+    fault = json.loads(queued.call_args.args[1])['pause_fault']
+    test.assertEqual(fault['category'], 'recording')
+    test.assertTrue(fault['reason'])
+
 from orchestrator.recording import (Recorder, RecordOptions, RecordingHalt, RecordingError, RecordingOwnershipError, analyze_frames,
                                     salvage_movie)
 from orchestrator.purecut import read_ticks
@@ -353,7 +363,7 @@ class RollTests(unittest.TestCase):
         with patch('orchestrator.control.RunControl') as control:
             with self.assertRaises(RecordingHalt):
                 guard()
-            control.return_value.enqueue.assert_called_with('pause')
+            assert_recording_pause(self, control)
         self.assertIn('试玩已暂停', (self.run / 'public_events.jsonl').read_text(encoding='utf-8'))
 
     def test_multiple_stopped_encoder_recoveries_keep_identity_and_global_indices(self):
@@ -688,7 +698,7 @@ class RollTests(unittest.TestCase):
              patch('orchestrator.control.RunControl') as control:
             with self.assertRaisesRegex(RecordingHalt, '重启.*--resume'):
                 recording_guard(recorder, self.run)()
-            control.return_value.enqueue.assert_called_with('pause')
+            assert_recording_pause(self, control)
         self.assertFalse(any(c == 'record' for c, _ in self.bridge.commands[before:]))
 
     def test_stop_after_obs_restart_does_not_wait_for_a_lost_encoder(self):
@@ -940,7 +950,7 @@ class RollTests(unittest.TestCase):
                 with patch('orchestrator.control.RunControl') as control:
                     with self.assertRaisesRegex(ActError, '这次按键没有执行'):
                         session._execute(plan, ['R'], 'check', [], None, 0)
-                    control.return_value.enqueue.assert_called_once_with('pause')
+                    assert_recording_pause(self, control, once=True)
                 self.assertEqual(session.client.mock_calls, [])
                 self.assertEqual(len([a for c, a in self.bridge.commands if c == 'record']), before)
 
@@ -954,7 +964,7 @@ class RollTests(unittest.TestCase):
         with patch('orchestrator.control.RunControl') as control:
             with self.assertRaises(ActError):
                 session._before_advance()
-            control.return_value.enqueue.assert_called_once_with('pause')
+            assert_recording_pause(self, control, once=True)
         with patch.object(recorder, 'check_window', side_effect=RuntimeError('window unavailable')):
             session._before_advance()
 

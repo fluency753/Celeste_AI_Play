@@ -358,6 +358,19 @@ class SessionActionTests(unittest.TestCase):
                 for flag in expected[1:]:self.assertIn(flag,args)
                 self.assertIn('--start-paused',args)
 
+    def test_ready_session_start_uses_explicit_local_callback(self):
+        from orchestrator.session_actions import _launch_play
+        from orchestrator.machine_settings import save
+        operation = self.operation()
+        with patch('orchestrator.session_actions.start_chat'):
+            _finish(self.anchor, operation)
+        save({'pause_callback_command':'Write-Output "host notification"'})
+        current = selected_run(self.anchor)
+        with patch('orchestrator.session_actions.launch',return_value=(self.root/'host',{})) as launch:
+            _launch_play(current,{'chapter':0,'save':'test','create_save':False,'save_slot':10})
+        args = launch.call_args.args[0]
+        self.assertEqual(args[args.index('--pause-callback-command')+1], 'Write-Output "host notification"')
+
     def test_invalid_recording_options_never_release_chat_or_write_preparation(self):
         from orchestrator.session_actions import _launch_play
         operation=self.operation()

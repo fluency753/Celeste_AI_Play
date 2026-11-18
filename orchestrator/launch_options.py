@@ -45,6 +45,7 @@ DEFAULTS = {
     "play_speed": 1, "auto_speed": 1, "rounds_per_room": 3, "room_scale": 2.0, "record_marker": False,
     "skip_enter": False, "no_agent": False, "hud_window": True, "hud": True, "bridge_port": 47774,
     "mcp_port": 47780, "hud_port": 47790, "ffmpeg": "", "record_video_args": "", "audio_offset_ms": None,
+    "pause_callback_command": "",
     "tune": {}, "kb_deny": [], "kb_allow": [],
 }
 
@@ -217,6 +218,8 @@ def normalize(options: dict) -> dict:
         raise ValueError("三个端口不能相同")
     o["ffmpeg"] = _text(o, "ffmpeg", 400, "ffmpeg 路径")
     o["record_video_args"] = _text(o, "record_video_args", 600, "视频编码参数")
+    from .pause_callback import validate_command
+    o['pause_callback_command'] = validate_command(o['pause_callback_command'])
     o["audio_offset_ms"] = _number(o, "audio_offset_ms", -2000, 2000, "声音偏移", optional=True)
     from .tuning import BY_KEY, check_relations, coerce
     tune = o["tune"] or {}
@@ -315,6 +318,8 @@ def build(options: dict, profile: str | None = None) -> list[str]:
         argv += ["--ffmpeg", o["ffmpeg"]]
     if o["record_video_args"]:
         argv += ["--record-video-args", o["record_video_args"]]
+    if o['pause_callback_command']:
+        argv += ['--pause-callback-command', o['pause_callback_command']]
     for key, flag in (("record_marker", "--record-marker"), ("skip_enter", "--skip-enter"), ("no_agent", "--no-agent")):
         if o[key]:
             argv.append(flag)

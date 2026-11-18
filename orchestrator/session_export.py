@@ -240,7 +240,7 @@ def collect_session(run, *, runs_root=None, native_reader=None, since=None, unti
                          'metrics_authoritative': state['_export_source_kind'] == 'run',
                          'snapshot_source': str(metrics_file), 'metrics': metrics})
         for name in ('run_state.json', 'public_events.jsonl', 'decisions.jsonl', 'control.sqlite3',
-                     'sim_energy.json', 'decision_timing.jsonl', 'save_name_result.json', metrics_file.name):
+                     'sim_energy.json', 'decision_timing.jsonl', 'save_name_result.json', 'pause_callbacks.jsonl', metrics_file.name):
             path = directory / name
             if path.exists():
                 source_files.append({'path': str(path), 'size_at_capture': path.stat().st_size})

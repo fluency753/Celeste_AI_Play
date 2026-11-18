@@ -279,6 +279,8 @@ agent 操作触发关卡街机或主菜单 PICO-8 入口时，在切场景及解
 
 录制相关的 `--keep-obs-open`、`--continuous-music` / `--freeze-music`、`--ffmpeg`、`--record-video-args`、`--audio-offset-ms`、`--record-marker` 见 4.4 节；`--engine codex`、`--prepared`、`--start-paused` 用于原生 GPT 执行器，见 [LIVE_ADAPTATION.md](LIVE_ADAPTATION.md)。
 
+阻塞或错误需要人工处理时，可用本机设置“阻塞／错误回调命令”或 `--pause-callback-command` 自动执行通知命令；默认关闭，续跑沿用原命令，`--no-pause-callback` 显式关闭。事件 JSON、去重和 `codex queue` 示例见 [PAUSE_CALLBACK.md](PAUSE_CALLBACK.md)。
+
 容器里的智能体：
 
 - **工具**：Bash、Read、Write、Edit、Glob、Grep 与游戏工具（见下文"游戏工具"）。WebSearch、WebFetch 在托管配置里被拒绝；Claude Code 以受限模式启动，不读取任何用户、项目或本地设置文件，文件工具只能访问 `/workspace` 与 `/kb`。

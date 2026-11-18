@@ -309,6 +309,9 @@ def _launch_play(current, options):
     if scope == 'visited' and (options.get('create_save') or type(options.get('save_slot')) is not int):
         raise ValueError('已到访地图自由探索须选择已有存档槽位')
     capture_args = recording_args(options)  # validate before any preparation writes or launches
+    from .machine_settings import load as machine_settings
+    callback_command = machine_settings()['pause_callback_command']
+    callback_args = ['--pause-callback-command', callback_command] if callback_command else []
     state = read_json(current / 'run_state.json')
     directory = Path(state['prepared_dir']).resolve()
     preparation = read_json(directory / 'prepare_summary.json')
@@ -330,4 +333,4 @@ def _launch_play(current, options):
                           '--prepared',str(directory),'--chapter',str(options['chapter']), '--effort',manual_effort or read_json(current/'metrics.json').get('effort',state['effort']),
                           '--live','--keep-obs-open','--playback','--continuous-music','--start-paused','--cutscene-mode',mode] +
                          capture_args + (['--create-save'] if options['create_save'] else ['--save-slot',str(options['save_slot'])])
-                         + (['--profile', str(state['profile'])] if state.get('profile') else []))
+                         + (['--profile', str(state['profile'])] if state.get('profile') else []) + callback_args)
