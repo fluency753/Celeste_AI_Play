@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
 from bisect import bisect_right
 from contextlib import nullcontext
 import multiprocessing as mp
@@ -11,6 +12,7 @@ import re
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -19,10 +21,6 @@ from pathlib import Path
 
 MAX_REQUEST = 32 * 1024 * 1024
 MAX_RESPONSE = 48 * 1024 * 1024
-PREVIEW_TRACKS = 48
-PREVIEW_TRACKS_PER_REPLY = 24
-PREVIEW_POINTS = 24_000
-PREVIEW_POINTS_PER_TRACK = 4096
 NAME = re.compile(r'[a-f0-9]{32}')
 INPUT_KEYS = {'inputs', 'stop_on_death', 'stop_on_room', 'track'}
 
@@ -55,46 +53,50 @@ def pipe(lane, name, flags):
     return os.fdopen(fd, 'rb' if flags == os.O_RDONLY else 'wb')
 
 
-def preview_tracks(results, track_limit, point_limit, exit_distance):
-    if track_limit <= 0 or point_limit <= 0:
-        return []
-    eligible = []
-    limit = min(point_limit, PREVIEW_POINTS_PER_TRACK)
+def room_tracks(results):
+    tracks = []
     for result in results:
         frames = result.get('frames', [])
         exit_frame = next((frame for frame, kind, _ in result.get('events', ()) if kind in {'room_exit', 'room'}), None)
         size = len(frames) if exit_frame is None else bisect_right(frames, exit_frame, key=lambda row: row[0])
-        if 0 < size <= limit and len(frames[0]) >= 3 and len(frames[size - 1]) >= 3:
-            eligible.append((frames, size, 'room' if exit_frame is not None else result.get('stop')))
-    if not eligible:
-        return []
+        if size and len(frames[0]) >= 3 and len(frames[size - 1]) >= 3:
+            tracks.append((frames, size, 'room' if exit_frame is not None else result.get('stop')))
+    return tracks
+
+
+def pack_preview(tracks, needed, available, frame, codec, exit_distance):
+    if available < len(codec._LOG_MAGIC) + codec._LOG_HEAD.size:
+        return b''
 
     def valid_exit(track):
         frames, size, stop = track
         first, last = frames[0], frames[size - 1]
         return stop == 'room' and (last[1] - first[1]) ** 2 + (last[2] - first[2]) ** 2 > exit_distance ** 2
 
-    exits = [i for i, track in enumerate(eligible) if valid_exit(track)]
-    best = min(exits, key=lambda i: eligible[i][1], default=None)
-    count = min(track_limit, len(eligible))
-    if best is not None and count == 1:
-        indexes = [best]
-    else:
-        ordinary = [i for i in range(len(eligible)) if i != best]
-        slots = count - (best is not None)
-        indexes = [ordinary[(j * (len(ordinary) - 1)) // max(1, slots - 1)] for j in range(slots)]
+    indexes = range(len(tracks))
+    if needed > available:
+        limit = available - len(codec._LOG_MAGIC)
+        best = min((i for i, track in enumerate(tracks) if valid_exit(track)
+                    and codec._LOG_HEAD.size + 4 * (track[1] - 1) <= limit),
+                   key=lambda i: tracks[i][1], default=None)
+        # The existing renderer chooses routes when there is enough memory. If
+        # the transport is full, spread its slots across the response.
+        count = max(1, len(tracks) * available // needed)
+        indexes = [(i * (len(tracks) - 1)) // max(1, count - 1) for i in range(count)]
         if best is not None:
-            indexes.insert(0, best)
+            indexes = [best, *(i for i in indexes if i != best)]
     selected = []
+    remaining = available - len(codec._LOG_MAGIC)
     for i in indexes:
-        frames, size, stop = eligible[i]
-        if size <= point_limit:
-            selected.append((i, {'stop': stop, 'frames': [row[:3] for row in frames[:size]]}))
-            point_limit -= size
-    return [track for _, track in sorted(selected)]
+        frames, size, stop = tracks[i]
+        if codec._LOG_HEAD.size + 4 * (size - 1) <= remaining:
+            record = codec._pack_record([(row[1], row[2]) for row in frames[:size] if len(row) >= 3], stop, frame)
+            selected.append((i, record))
+            remaining -= len(record)
+    return codec._LOG_MAGIC + b''.join(record for _, record in sorted(selected)) if selected else b''
 
 
-def simulation_event(data, request, start, digest, audit, budget, decoding, exit_distance):
+def simulation_event(data, request, start, digest, audit, budget, decoding, byte_limit, codec, exit_distance):
     with (decoding if len(data) > 2 * 1024 * 1024 else nullcontext()):
         response = json.loads(data)
         results = response.get('results', [response] if 'inputs' in request else [])
@@ -104,20 +106,29 @@ def simulation_event(data, request, start, digest, audit, budget, decoding, exit
         event = {'simulated': len(completed)}
         if digest and start and start['digest'] == digest:
             event['start'] = start
-            now = time.monotonic()
-            with audit:
-                if now >= budget[0]:
-                    budget[:] = [now + .5, PREVIEW_TRACKS, PREVIEW_POINTS]
-                traces = preview_tracks(completed, min(int(budget[1]), PREVIEW_TRACKS_PER_REPLY),
-                                        int(budget[2]), exit_distance)
-                if traces:
-                    budget[1] -= len(traces)
-                    budget[2] -= sum(len(track['frames']) for track in traces)
-                    event['traces'] = traces
+            try:
+                now = time.monotonic()
+                with audit:
+                    if now >= budget[0]:
+                        budget[:] = [now + .5, byte_limit]
+                    remaining = int(budget[1])
+                if remaining < len(codec._LOG_MAGIC) + codec._LOG_HEAD.size:
+                    return event
+                tracks = room_tracks(completed)
+                if tracks:
+                    needed = len(codec._LOG_MAGIC) + sum(codec._LOG_HEAD.size + 4 * (size - 1) for _, size, _ in tracks)
+                    with audit:
+                        available = min(int(budget[1]), needed)
+                        budget[1] -= available
+                    packed = pack_preview(tracks, needed, available, start['frame'], codec, exit_distance)
+                    if packed:
+                        event['replay'] = base64.b64encode(packed).decode('ascii')
+            except (ArithmeticError, ValueError, TypeError, KeyError, struct.error) as exc:
+                print(f'simulation replay encoding failed: {exc}', file=sys.stderr, flush=True)
         return event
 
 
-def simulate(p, reader, writer, audit, budget, decoding, exit_distance):
+def simulate(p, reader, writer, audit, budget, decoding, byte_limit, codec, exit_distance):
     start = None
     digest = None
     next_check = 0.0
@@ -163,7 +174,8 @@ def simulate(p, reader, writer, audit, budget, decoding, exit_distance):
                             digest = json.loads(Path('/control/relay_snapshot.json').read_text(encoding='utf-8'))
                         except (OSError, ValueError):
                             digest = None
-                    event = simulation_event(data, request, start, digest, audit, budget, decoding, exit_distance)
+                    event = simulation_event(data, request, start, digest, audit, budget, decoding,
+                                             byte_limit, codec, exit_distance)
                     if event:
                         with audit:
                             print(json.dumps(event, separators=(',', ':')), flush=True)
@@ -176,7 +188,8 @@ def lane_timeout(*_):
     raise TimeoutError('主控模拟通道超时')
 
 
-def worker(path, audit, budget, decoding, exit_distance):
+def worker(path, audit, budget, decoding, byte_limit, exit_distance):
+    import replay_codec
     signal.signal(signal.SIGALRM, lane_timeout)
     lane = os.open(path, os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -186,7 +199,7 @@ def worker(path, audit, budget, decoding, exit_distance):
             with subprocess.Popen(['/sim/celeste-sim', 'serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.DEVNULL) as p:
                 try:
-                    simulate(p, reader, writer, audit, budget, decoding, exit_distance)
+                    simulate(p, reader, writer, audit, budget, decoding, byte_limit, replay_codec, exit_distance)
                 except (OSError, ValueError, RuntimeError) as exc:
                     try:
                         signal.alarm(2)
@@ -219,13 +232,13 @@ def reject(path):
         pass
 
 
-def main(endpoint, exit_distance):
+def main(endpoint, byte_limit, exit_distance):
     if not NAME.fullmatch(endpoint):
         raise ValueError('invalid simulation endpoint')
     root = Path('/relay') / endpoint
     root.mkdir()
     audit = mp.Lock()
-    budget = mp.Array('d', [0, 0, 0], lock=False)  # 窗口截止时间、剩余路线和剩余轨迹点
+    budget = mp.Array('d', [0, 0], lock=False)  # 窗口截止时间、剩余编码字节数
     decoding = mp.Semaphore(3)
     workers = {}
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -241,7 +254,7 @@ def main(endpoint, exit_distance):
                     if len(workers) >= 24:
                         reject(path)
                         continue
-                    child = mp.Process(target=worker, args=(path, audit, budget, decoding, exit_distance), daemon=True)
+                    child = mp.Process(target=worker, args=(path, audit, budget, decoding, byte_limit, exit_distance), daemon=True)
                     child.start()
                     workers[path] = child
             time.sleep(.002)
@@ -254,4 +267,4 @@ def main(endpoint, exit_distance):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], float(sys.argv[2]))
+    main(sys.argv[1], int(sys.argv[2]), float(sys.argv[3]))

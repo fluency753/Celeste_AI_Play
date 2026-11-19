@@ -1,6 +1,8 @@
 """Controller-owned, unmetered simulation for container speedruns."""
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import shutil
@@ -14,8 +16,6 @@ from .session_store import write_json
 from .sim_assist import LEFTOVERS, _read_leftovers, _remove_container, _write_leftovers, retry_leftovers
 
 RELAY_PATH = '/workspace/.sim-relay'
-REPLAY_TRACK_LIMIT = 48
-REPLAY_POINT_LIMIT = 24_000
 
 
 def replay_key(session):
@@ -71,6 +71,7 @@ def prepare(cfg):
 
 class SimRelay:
     def __init__(self, session):
+        from .playback import PREVIEW_BYTES
         self.session = session
         self.docker = find_docker_exe()
         self.endpoint = uuid.uuid4().hex
@@ -84,9 +85,10 @@ class SimRelay:
         self.calls = self.count = 0
         self.timer = None
         self.preview_key = None
-        self.preview_tracks = []
+        self.preview_chunks = []
         self.preview_count = 0
-        self.preview_points = 0
+        self.preview_bytes = 0
+        self.preview_byte_limit = PREVIEW_BYTES
 
     def start(self):
         with self.lifecycle:
@@ -104,6 +106,7 @@ class SimRelay:
         write_json(self.ledger, [*rows, {'name': name, 'run': str(self.session.run_dir), 'attempts': 0}], indent=1)
         self.name = name
         engine = REPO_ROOT / 'agent-container' / 'sim-relay.py'
+        codec = REPO_ROOT / 'orchestrator' / 'workspace_files' / 'show.py'
         available_cpus = subprocess.check_output([self.docker, 'info', '--format', '{{.NCPU}}'], timeout=8, text=True)
         cpus = str(max(1, int(available_cpus)))
         command = [self.docker, 'run', '--rm', '--init', '--pull', 'never', '--name', name, '--network', 'none',
@@ -112,8 +115,10 @@ class SimRelay:
                    '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m,mode=1777',
                    '--label', 'celeste.sim-assist=1', '--label', f'celeste.run={self.session.run_dir.name}',
                    '-e', 'DOTNET_EnableDiagnostics=0', *worker_mounts(cfg),
-                   '-v', f'{engine}:/engine.py:ro', '-v', f'{volume(cfg)}:/relay', '-v', f'{private}:/control:ro',
-                   '--entrypoint', 'python3', cfg.image, '-u', '/engine.py', self.endpoint, str(BACKTRACK_PX)]
+                   '-v', f'{engine}:/engine.py:ro', '-v', f'{codec}:/replay_codec.py:ro',
+                   '-v', f'{volume(cfg)}:/relay', '-v', f'{private}:/control:ro',
+                   '--entrypoint', 'python3', cfg.image, '-u', '/engine.py', self.endpoint,
+                   str(self.preview_byte_limit), str(BACKTRACK_PX)]
         self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
@@ -143,17 +148,23 @@ class SimRelay:
                 key = (start['sid'], start['room'], start['frame'], start.get('digest'))
                 if key[3] and key == replay_key(self.session):
                     if key != self.preview_key:
-                        self.preview_key, self.preview_count, self.preview_tracks, self.preview_points = key, 0, [], 0
+                        self.preview_key, self.preview_count, self.preview_chunks, self.preview_bytes = key, 0, [], 0
                     self.preview_count += event['simulated']
-                    for track in event.get('traces', ()):
-                        if len(self.preview_tracks) >= REPLAY_TRACK_LIMIT:
-                            break
-                        points = len(track['frames'])
-                        if self.preview_points + points <= REPLAY_POINT_LIMIT:
-                            self.preview_tracks.append(track)
-                            self.preview_points += points
+                    self._accept_replay(event.get('replay'))
             if self.timer is None and not self.closed:
                 self._schedule_flush()
+
+    def _accept_replay(self, payload):
+        available = self.preview_byte_limit - self.preview_bytes
+        if not isinstance(payload, str) or len(payload) > 4 * ((available + 2) // 3):
+            return
+        try:
+            chunk = base64.b64decode(payload, validate=True)
+        except (ValueError, binascii.Error):
+            return
+        if 0 < len(chunk) <= available:
+            self.preview_chunks.append(chunk)
+            self.preview_bytes += len(chunk)
 
     def _schedule_flush(self):
         self.timer = threading.Timer(.5, self.flush)
@@ -165,16 +176,16 @@ class SimRelay:
             with self.lock:
                 calls, count = self.calls, self.count
                 self.calls = self.count = 0
-                key, preview_count, tracks = self.preview_key, self.preview_count, self.preview_tracks
-                self.preview_key, self.preview_count, self.preview_tracks, self.preview_points = None, 0, [], 0
+                key, preview_count, chunks = self.preview_key, self.preview_count, self.preview_chunks
+                self.preview_key, self.preview_count, self.preview_chunks, self.preview_bytes = None, 0, [], 0
             try:
                 if count:
                     try:
                         self.session.metrics.add(sim_calls=calls, sim_rollouts=count)
                     except OSError as exc:
                         print(f'[sim] 主控模拟统计落盘失败：{exc}', flush=True)
-                if tracks and not self.closed and key == replay_key(self.session):
-                    self.session.playback.collect_prediction(tracks, key[2], relay_batch=(key, preview_count))
+                if chunks and not self.closed and key == replay_key(self.session):
+                    self.session.playback.collect_relay_preview(chunks, key, preview_count)
             except Exception as exc:  # 路线展示故障不影响推演及统计
                 print(f'[sim] 主控模拟回放提交失败：{exc}', flush=True)
             finally:

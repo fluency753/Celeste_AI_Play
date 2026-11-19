@@ -83,28 +83,9 @@ class _Log:
             self.file = open(os.path.join(_LOG_DIR, name), "ab", buffering=1 << 20)
             self.file.write(_LOG_MAGIC)
             self.size = len(_LOG_MAGIC)
-        xs = [int(round(x * 8)) for x, _ in rows]
-        ys = [int(round(y * 8)) for _, y in rows]
-        n = len(rows)
-        sig = []
-        for k in range(8):
-            j = (k * (n - 1)) // 7
-            sig.append(max(-32768, min(32767, (xs[j] - xs[0]) // 4)))
-            sig.append(max(-32768, min(32767, (ys[j] - ys[0]) // 4)))
-        deltas = array.array("h")
-        px, py = xs[0], ys[0]
-        for x, y in zip(xs[1:], ys[1:]):
-            dx = max(-32768, min(32767, x - px))
-            dy = max(-32768, min(32767, y - py))
-            deltas.append(dx)
-            deltas.append(dy)
-            px, py = px + dx, py + dy
-        head = _LOG_HEAD.pack(time.time(), int(start_frame), _RESULTS.get(str(result).lower(), 0), n, 0,
-                              xs[0], ys[0], xs[-1], ys[-1], *sig)
-        body = deltas.tobytes()
-        self.file.write(head)
-        self.file.write(body)
-        self.size += len(head) + len(body)
+        record = _pack_record(rows, result, start_frame)
+        self.file.write(record)
+        self.size += len(record)
         if self.count % 256 == 0:
             self.file.flush()
 
@@ -115,6 +96,28 @@ class _Log:
             except OSError:
                 pass
             self.file = None
+
+
+def _pack_record(rows, result, start_frame) -> bytes:
+    """Pack one nonempty trajectory for a file or the controller relay."""
+    xs = [int(round(x * 8)) for x, _ in rows]
+    ys = [int(round(y * 8)) for _, y in rows]
+    n = len(rows)
+    sig = []
+    for k in range(8):
+        j = (k * (n - 1)) // 7
+        sig.append(max(-32768, min(32767, (xs[j] - xs[0]) // 4)))
+        sig.append(max(-32768, min(32767, (ys[j] - ys[0]) // 4)))
+    deltas = array.array("h")
+    px, py = xs[0], ys[0]
+    for x, y in zip(xs[1:], ys[1:]):
+        dx = max(-32768, min(32767, x - px))
+        dy = max(-32768, min(32767, y - py))
+        deltas.extend((dx, dy))
+        px, py = px + dx, py + dy
+    head = _LOG_HEAD.pack(time.time(), int(start_frame), _RESULTS.get(str(result).lower(), 0), n, 0,
+                          xs[0], ys[0], xs[-1], ys[-1], *sig)
+    return head + deltas.tobytes()
 
 
 _log = _Log()

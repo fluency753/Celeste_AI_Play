@@ -519,7 +519,24 @@ class Playback:
                 self._enqueue(_RoundJob(owner.label, [sources[i] for i in indexes], [moved[i] for i in indexes],
                                         account=owner.account_rollouts, completion=completion))
 
-    def collect_prediction(self, predictions: list[dict], start_frame: int, *, relay_batch=None) -> None:
+    def collect_relay_preview(self, chunks: list[bytes], key: tuple, count: int) -> None:
+        """Queue packed native samples under the same memory and render policy as local previews."""
+        from .sim_relay import replay_key
+        with self._submit_lock:
+            if self._closed or not self._can_draw(self._generation) or key != replay_key(self.session):
+                return
+            with self._cv:
+                if self._backlog >= 2:
+                    return
+            accepted = []
+            for chunk in chunks:
+                if self._preview_bytes + len(chunk) <= PREVIEW_BYTES:
+                    self._preview_bytes += len(chunk)
+                    accepted.append(chunk)
+            if accepted:
+                self._enqueue(_RoundJob("主控模拟", accepted, [], account=False, relay_batch=(key, count)))
+
+    def collect_prediction(self, predictions: list[dict], start_frame: int) -> None:
         """Collect native predictions immediately; GameSession already counted/charged them."""
         if not self.collect:
             return
@@ -527,17 +544,6 @@ class Playback:
         # Claim precisely these files before a concurrent Bash collector can see them.
         with self._submit_lock:
             if self._closed:
-                return
-            if relay_batch is not None:
-                from .sim_relay import replay_key
-                if not self._can_draw(self._generation) or relay_batch[0] != replay_key(self.session):
-                    return
-                with self._cv:
-                    if self._backlog >= 2:
-                        return
-                paths = write_replay(self.session.workspace, predictions, start_frame, directory=self.pending)
-                if paths:
-                    self._enqueue(_RoundJob("主控模拟", paths, paths, account=False, relay_batch=relay_batch))
                 return
             paths = write_replay(self.session.workspace, predictions, start_frame)
             if not paths:
@@ -677,6 +683,7 @@ class Playback:
                 elif job.relay_batch is not None:
                     from .sim_relay import replay_key
                     key, count = job.relay_batch
+                    preview_size = sum(map(len, job.sources))
                     with self.session.lock:
                         if self._can_draw(job.generation) and key == replay_key(self.session):
                             self._play_round(job.label, job.sources, False, preview=True,
@@ -696,6 +703,8 @@ class Playback:
             finally:
                 if isinstance(job, _RoundJob):
                     self._delete(job.moved)
+                    if job.relay_batch is not None:
+                        job.sources.clear()
                 if preview_size:
                     sources = []  # 先释放工作线程的字节引用，再归还共享容量。
                     with self._submit_lock:

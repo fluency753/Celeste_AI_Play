@@ -12,6 +12,7 @@ from orchestrator.metrics import Metrics
 from orchestrator.playback import Playback, MAGIC, HEADER, read_logs
 from orchestrator.rollout_tail import RecordTail
 from orchestrator.planning_budget import PlanningBudget
+from orchestrator.workspace_files import show
 
 
 def record(index):
@@ -592,23 +593,23 @@ class StreamTests(unittest.TestCase):
         session.last_obs['level'].update(sid='city', room='1')
         session.sim_snapshot_digest = 'scene'
         key = ('city', '1', 20, 'scene')
-        tracks = [{'stop': 'room', 'frames': [[21, 0, 0], [22, 50, 0]]},
-                  {'stop': 'death', 'frames': [[21, 0, 1], [22, 15, 1]]}]
-        playback.collect_prediction(tracks, 20, relay_batch=(key, 450))
+        tracks = [MAGIC + show._pack_record([(0, 0), (50, 0)], 'room', 20)
+                  + show._pack_record([(0, 1), (15, 1)], 'death', 20)]
+        playback.collect_relay_preview(tracks, key, 450)
         self.wait()
         playback._call.assert_called_once()
         self.assertEqual(len(playback._call.call_args.args[0]['tracks']), 2)
         self.assertEqual(playback._call.call_args.kwargs['runs'], 450)
         self.assertEqual(self.metrics.state.sim_rollouts, 0)
         with session.lock:
-            playback.collect_prediction(tracks, 20, relay_batch=(key, 999))
-            playback.collect_prediction(tracks, 20, relay_batch=(key, 999))
-            playback.collect_prediction(tracks, 20, relay_batch=(key, 999))
+            playback.collect_relay_preview(tracks, key, 999)
+            playback.collect_relay_preview(tracks, key, 999)
+            playback.collect_relay_preview(tracks, key, 999)
             self.assertEqual(playback._backlog, 2)
             session.sim_snapshot_digest = 'advanced'
         self.wait()
         playback._call.assert_called_once()
-        self.assertFalse(list(playback.pending.iterdir()))
+        self.assertEqual(playback._preview_bytes, 0)
 
     def test_mixed_native_and_bash_retry_keep_independent_rollout_ownership(self):
         self.metrics.add(sim_calls=1, sim_rollouts=1)
