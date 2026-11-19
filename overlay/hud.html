@@ -290,7 +290,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 80;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 81;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -321,46 +321,6 @@ let stateReceivedAt = 0, stateReceivedWall = 0, statePollFailed = false, statePo
 let historyRun = null, historySignature = "", historyReady = false, followHistory = true;
 let historyEndpoint = null;
 const $ = (id) => document.getElementById(id);
-// HTML clipboard fragments rely on white-space CSS that paste targets may discard.
-// History is plain text: keep its line breaks without a competing rich-text flavor.
-document.addEventListener('copy', event => {
-  if (event.defaultPrevented || !event.clipboardData) return;
-  const focused = document.activeElement;
-  if (focused && (focused.matches('input,textarea') || focused.isContentEditable)) return;
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed) return;
-  if (![$('thought'), $('toolActivity')].some(region =>
-      region.contains(selection.anchorNode) && region.contains(selection.focusNode))) return;
-  event.clipboardData.setData('text/plain', selection.toString());
-  event.preventDefault();
-});
-document.querySelectorAll('.head,.window-bar').forEach(region=>region.addEventListener('pointerdown', (event) => {
-  if (event.target.closest('button') || !document.documentElement.classList.contains('hud-desktop')) return;
-  event.preventDefault(); window.pywebview?.api.drag_region('move');
-}));
-window.addEventListener('hud-window-state', event=>{
-  const pinned=!!event.detail.topmost;
-  $('windowPin').setAttribute('aria-pressed',String(pinned));
-  $('windowPin').title=pinned?'取消置顶':'将 HUD 保持在最前';
-});
-for (const [id,action] of [['windowPin','pin'],['windowMinimize','minimize'],['windowClose','close']]) {
-  $(id).onclick=()=>window.pywebview?.api.window_action(action);
-}
-for (const handle of document.querySelectorAll('[data-resize]')) {
-  handle.addEventListener('pointerdown', (event) => {
-    event.preventDefault(); window.pywebview?.api.drag_region(handle.dataset.resize);
-  });
-}
-let fontWheelAt = 0;
-window.addEventListener('wheel', (event) => {
-  if (!event.ctrlKey || !document.documentElement.classList.contains('hud-desktop')) return;
-  event.preventDefault();
-  if (performance.now() - fontWheelAt < 70 || !event.deltaY) return;
-  fontWheelAt = performance.now();
-  window.pywebview?.api.change_font(event.deltaY < 0 ? 1 : -1).then(scale => {
-    if (scale && config) { config.font_scale = scale; applyTypography(); }
-  });
-}, {passive: false});
 
 function pad(n, w = 2) { return String(Math.floor(n)).padStart(w, "0"); }
 function clock(sec) {
@@ -520,8 +480,6 @@ function selectHistory(tools) {
   $('showTools').setAttribute('aria-selected', String(tools));
   if (tools) pollTools();
 }
-$('showMessages').onclick = () => selectHistory(false);
-$('showTools').onclick = () => selectHistory(true);
 
 function toolEntry(item, opened) {
   const entry = document.createElement('details');
@@ -972,9 +930,6 @@ async function loadSaveChoices() {
   } catch(error){savesError=error.message;}
   finally{savesLoading=false;updateSaveChoice();await pollControl();}
 }
-$('sessionSave').onchange=()=>{updateSaveChoice();pollControl();};
-$('sessionSaveName').oninput=()=>pollControl();
-$('sessionPanel').addEventListener('toggle',()=>{if($('sessionPanel').open)loadSaveChoices();});
 let modelCatalog={models:[]}, modelsLoading=false, modelCatalogError='', modelRequest=0;
 function chosenRuntime(){ const [engine,provider]=$('sessionRuntime').value.split(':');return controlData?.runtimes?{engine,provider}:{}; }
 let liveEffortSignature='',changingEffort=false;
@@ -1026,9 +981,6 @@ async function loadModelChoices(refresh=false) {
   } catch(error){if(requestId===modelRequest)modelCatalogError=error.message;}
   finally {if(requestId===modelRequest){modelsLoading=false;$('modelChoiceStatus').textContent=modelCatalogError || (modelCatalog.source==='provider_config'?'模型列表来自本机提供方配置。':'');await pollControl();}}
 }
-$('sessionRuntime').onchange=()=>{modelCatalog={models:[]};$('sessionModel').replaceChildren();$('sessionEffort').replaceChildren();loadModelChoices();};
-$('sessionModel').onchange=()=>{updateModelEfforts();pollControl();};
-$('sessionModelRefresh').onclick=()=>loadModelChoices(true);
 let controlPollRequested=0, controlPollApplied=0;
 async function pollControl() {
   if (OBS_SURFACE) return;
@@ -1181,20 +1133,6 @@ async function sessionAction(kind, options) {
   lifecycleBusy=false;
   await pollControl();
 }
-$('sessionNew').onclick=()=>sessionAction('new_session',{...chosenRuntime(),name:$('sessionName').value,model:$('sessionModel').value,effort:$('sessionEffort').value});
-$('sessionRetryLogin').onclick=()=>sessionAction('new_session',{retry_login:true});
-$('sessionDisconnect').onclick=()=>sessionAction('disconnect');
-$('sessionScope').onchange=()=>{ $('sessionCompletion').value=$('sessionScope').value==='visited'?'continue':'stop'; $('sessionChapter').disabled=$('sessionScope').value==='visited'; };
-$('sessionPlay').onclick=()=>{
-  const raw=$('sessionChapter').value.trim(), chapter=Number(raw);
-  if(!raw || !Number.isInteger(chapter) || chapter<0 || chapter>10){
-    lifecycleError='请填写0～10的A面章节编号（0为序章）。'; pollControl(); return;
-  }
-  const choice=selectedSave();
-  if(!choice || (!choice.create_save && !choice.save)){lifecycleError='请显式选择存档。';pollControl();return;}
-  if(choice.create_save && chapter!==0){lifecycleError='新存档须从序章（0）开始。';pollControl();return;}
-  sessionAction('play_session',{chapter,...choice,scope:$('sessionScope').value,completion_policy:$('sessionCompletion').value,sim_assist:$('sessionSimAssist').checked,...readRecordingOptions()});
-};
 async function sendControl(kind, text='', onAccepted=null) {
   if (!controlData) return false;
   controlError = '';
@@ -1207,52 +1145,6 @@ async function sendControl(kind, text='', onAccepted=null) {
     await pollControl(); return true;
   } catch (error) { controlError=error.message; $('controlStatus').textContent = error.message; return false; }
 }
-$('togglePlay').onclick = async () => {
-  const primary=primaryControlView(controlData,{wakingAgent,lifecycleBusy,switchingSession});
-  if(primary.disabled || !primary.action) return;
-  $('togglePlay').disabled = true;
-  if (primary.action==='wake') {
-    wakingAgent = true;
-    await sendControl('wake');
-    wakingAgent = false;
-    await pollControl();
-  } else await sendControl(primary.action);
-};
-$('parkPlay').onclick = async () => {
-  $('parkPlay').disabled = true;
-  try { await sendControl('park'); }
-  finally { $('parkPlay').disabled = false; }
-};
-$('toggleFast').onclick = async () => {
-  $('toggleFast').disabled = true;
-  await sendControl('fast', controlData?.control.fast ? 'off' : 'on');
-};
-$('cutsceneMode').onchange=async()=>{await sendControl('cutscene_mode',$('cutsceneMode').value);};
-$('playbackToggle').onclick=async()=>{
-  $('playbackToggle').disabled=true;
-  if (!await sendControl('playback',controlData?.control.playback_enabled ? 'off' : 'on')) await pollControl();
-};
-for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {
-  $('permission'+id).onchange=async()=>sendControl('action_permissions',JSON.stringify({[key]:$('permission'+id).value==='allow'}));
-}
-$('permissionDetour').onchange=async()=>sendControl('detour',$('permissionDetour').value==='allow' ? 'on' : 'off');
-$('simApply').onclick=saveSimulation;
-$('simReset').onclick=()=>{simEdited.clear();$('simBalance').value='';simError='';simApplied=false;renderSimulation(controlData.control);};
-$('actLimitFrames').oninput=()=>{actLimitEdited=true;actLimitApplied=false;};
-$('actLimitFrames').onkeydown=event=>{   // 帧数框里按 Enter 只应用帧数（照常校验），不触发聊天发送
-  if(event.key==='Enter' && !event.isComposing){event.preventDefault();saveActLimit();}
-};
-$('actLimitSave').onclick=saveActLimit;
-$('actLimitReset').onclick=()=>{actLimitEdited=false;actLimitError='';actLimitApplied=false;renderActLimit(controlData.control);};
-$('liveEffort').onchange=async()=>{
-  const level=$('liveEffort').value;
-  changingEffort=true;$('liveEffort').disabled=true;
-  await sendControl('effort',level);
-  changingEffort=false;await pollControl();
-};
-$('goalText').oninput=editGoal;
-$('goalMatch').onchange=editGoal;
-$('goalAdd').onclick=()=>{if($('goalConditions').children.length<12){$('goalConditions').append(goalRow());editGoal();}};
 async function saveGoal(kind) {
   goalError='';
   if (!controlData?.control) {
@@ -1278,38 +1170,154 @@ async function saveGoal(kind) {
   if(controlData) renderGoal(controlData.control);
   await pollControl();
 }
-$('goalSave').onclick=()=>saveGoal('goal');
-$('goalClear').onclick=()=>saveGoal('goal_clear');
-$('goalStop').onclick=()=>saveGoal('stop');
-$('buttonPromptsOpen').onclick=()=>window.open(new URL('/console#prompts',CONTROL_URL).href,'_blank','noopener');
-$('sessionSelect').onchange = async () => {
-  switchingSession = true; $('sessionSelect').disabled = true;
-  const target = $('sessionSelect').value;
-  const success = await sendControl('switch', target);
-  if (success) $('agentInput').value = '';
-  switchingSession = false; sessionSignature = '';
-  await pollControl();
-};
-$('agentControls').onsubmit = async event => {
-  event.preventDefault(); const text = $('agentInput').value.trim();
-  if (!text || sendingMessage || $('agentSend').disabled) return;
-  sendingMessage = true; $('agentSend').disabled = true;
-  if (await sendControl('message', text)) $('agentInput').value = '';
-  sendingMessage = false; await pollControl();
-};
-$('agentInput').onkeydown = event => {
-  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
-    event.preventDefault(); $('agentControls').requestSubmit();
+// OBS 只启动状态与消息渲染，不依赖桌面按钮或控制接口。
+function initInteractiveHud() {
+  document.addEventListener('copy', event => {
+    if (event.defaultPrevented || !event.clipboardData) return;
+    const focused = document.activeElement;
+    if (focused && (focused.matches('input,textarea') || focused.isContentEditable)) return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+    if (![$('thought'), $('toolActivity')].some(region =>
+        region.contains(selection.anchorNode) && region.contains(selection.focusNode))) return;
+    event.clipboardData.setData('text/plain', selection.toString());
+    event.preventDefault();
+  });
+  document.querySelectorAll('.head,.window-bar').forEach(region=>region.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('button') || !document.documentElement.classList.contains('hud-desktop')) return;
+    event.preventDefault(); window.pywebview?.api.drag_region('move');
+  }));
+  window.addEventListener('hud-window-state', event=>{
+    const pinned=!!event.detail.topmost;
+    $('windowPin').setAttribute('aria-pressed',String(pinned));
+    $('windowPin').title=pinned?'取消置顶':'将 HUD 保持在最前';
+  });
+  for (const [id,action] of [['windowPin','pin'],['windowMinimize','minimize'],['windowClose','close']]) {
+    $(id).onclick=()=>window.pywebview?.api.window_action(action);
   }
-};
-pollControl(); setInterval(pollControl, 750);
-loadModelChoices();
-loadSaveChoices();
-setInterval(poll, Number(params.get("poll") || 100));
+  for (const handle of document.querySelectorAll('[data-resize]')) {
+    handle.addEventListener('pointerdown', (event) => {
+      event.preventDefault(); window.pywebview?.api.drag_region(handle.dataset.resize);
+    });
+  }
+  let fontWheelAt = 0;
+  window.addEventListener('wheel', (event) => {
+    if (!event.ctrlKey || !document.documentElement.classList.contains('hud-desktop')) return;
+    event.preventDefault();
+    if (performance.now() - fontWheelAt < 70 || !event.deltaY) return;
+    fontWheelAt = performance.now();
+    window.pywebview?.api.change_font(event.deltaY < 0 ? 1 : -1).then(scale => {
+      if (scale && config) { config.font_scale = scale; applyTypography(); }
+    });
+  }, {passive: false});
+
+  $('showMessages').onclick = () => selectHistory(false);
+  $('showTools').onclick = () => selectHistory(true);
+
+  $('sessionSave').onchange=()=>{updateSaveChoice();pollControl();};
+  $('sessionSaveName').oninput=()=>pollControl();
+  $('sessionPanel').addEventListener('toggle',()=>{if($('sessionPanel').open)loadSaveChoices();});
+
+  $('sessionRuntime').onchange=()=>{modelCatalog={models:[]};$('sessionModel').replaceChildren();$('sessionEffort').replaceChildren();loadModelChoices();};
+  $('sessionModel').onchange=()=>{updateModelEfforts();pollControl();};
+  $('sessionModelRefresh').onclick=()=>loadModelChoices(true);
+
+  $('sessionNew').onclick=()=>sessionAction('new_session',{...chosenRuntime(),name:$('sessionName').value,model:$('sessionModel').value,effort:$('sessionEffort').value});
+  $('sessionRetryLogin').onclick=()=>sessionAction('new_session',{retry_login:true});
+  $('sessionDisconnect').onclick=()=>sessionAction('disconnect');
+  $('sessionScope').onchange=()=>{ $('sessionCompletion').value=$('sessionScope').value==='visited'?'continue':'stop'; $('sessionChapter').disabled=$('sessionScope').value==='visited'; };
+  $('sessionPlay').onclick=()=>{
+    const raw=$('sessionChapter').value.trim(), chapter=Number(raw);
+    if(!raw || !Number.isInteger(chapter) || chapter<0 || chapter>10){
+      lifecycleError='请填写0～10的A面章节编号（0为序章）。'; pollControl(); return;
+    }
+    const choice=selectedSave();
+    if(!choice || (!choice.create_save && !choice.save)){lifecycleError='请显式选择存档。';pollControl();return;}
+    if(choice.create_save && chapter!==0){lifecycleError='新存档须从序章（0）开始。';pollControl();return;}
+    sessionAction('play_session',{chapter,...choice,scope:$('sessionScope').value,completion_policy:$('sessionCompletion').value,sim_assist:$('sessionSimAssist').checked,...readRecordingOptions()});
+  };
+
+  $('togglePlay').onclick = async () => {
+    const primary=primaryControlView(controlData,{wakingAgent,lifecycleBusy,switchingSession});
+    if(primary.disabled || !primary.action) return;
+    $('togglePlay').disabled = true;
+    if (primary.action==='wake') {
+      wakingAgent = true;
+      await sendControl('wake');
+      wakingAgent = false;
+      await pollControl();
+    } else await sendControl(primary.action);
+  };
+  $('parkPlay').onclick = async () => {
+    $('parkPlay').disabled = true;
+    try { await sendControl('park'); }
+    finally { $('parkPlay').disabled = false; }
+  };
+  $('toggleFast').onclick = async () => {
+    $('toggleFast').disabled = true;
+    await sendControl('fast', controlData?.control.fast ? 'off' : 'on');
+  };
+  $('cutsceneMode').onchange=async()=>{await sendControl('cutscene_mode',$('cutsceneMode').value);};
+  $('playbackToggle').onclick=async()=>{
+    $('playbackToggle').disabled=true;
+    if (!await sendControl('playback',controlData?.control.playback_enabled ? 'off' : 'on')) await pollControl();
+  };
+  for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {
+    $('permission'+id).onchange=async()=>sendControl('action_permissions',JSON.stringify({[key]:$('permission'+id).value==='allow'}));
+  }
+  $('permissionDetour').onchange=async()=>sendControl('detour',$('permissionDetour').value==='allow' ? 'on' : 'off');
+  $('simApply').onclick=saveSimulation;
+  $('simReset').onclick=()=>{simEdited.clear();$('simBalance').value='';simError='';simApplied=false;renderSimulation(controlData.control);};
+  $('actLimitFrames').oninput=()=>{actLimitEdited=true;actLimitApplied=false;};
+  $('actLimitFrames').onkeydown=event=>{   // 帧数框里按 Enter 只应用帧数（照常校验），不触发聊天发送
+    if(event.key==='Enter' && !event.isComposing){event.preventDefault();saveActLimit();}
+  };
+  $('actLimitSave').onclick=saveActLimit;
+  $('actLimitReset').onclick=()=>{actLimitEdited=false;actLimitError='';actLimitApplied=false;renderActLimit(controlData.control);};
+  $('liveEffort').onchange=async()=>{
+    const level=$('liveEffort').value;
+    changingEffort=true;$('liveEffort').disabled=true;
+    await sendControl('effort',level);
+    changingEffort=false;await pollControl();
+  };
+  $('goalText').oninput=editGoal;
+  $('goalMatch').onchange=editGoal;
+  $('goalAdd').onclick=()=>{if($('goalConditions').children.length<12){$('goalConditions').append(goalRow());editGoal();}};
+
+  $('goalSave').onclick=()=>saveGoal('goal');
+  $('goalClear').onclick=()=>saveGoal('goal_clear');
+  $('goalStop').onclick=()=>saveGoal('stop');
+  $('buttonPromptsOpen').onclick=()=>window.open(new URL('/console#prompts',CONTROL_URL).href,'_blank','noopener');
+  $('sessionSelect').onchange = async () => {
+    switchingSession = true; $('sessionSelect').disabled = true;
+    const target = $('sessionSelect').value;
+    const success = await sendControl('switch', target);
+    if (success) $('agentInput').value = '';
+    switchingSession = false; sessionSignature = '';
+    await pollControl();
+  };
+  $('agentControls').onsubmit = async event => {
+    event.preventDefault(); const text = $('agentInput').value.trim();
+    if (!text || sendingMessage || $('agentSend').disabled) return;
+    sendingMessage = true; $('agentSend').disabled = true;
+    if (await sendControl('message', text)) $('agentInput').value = '';
+    sendingMessage = false; await pollControl();
+  };
+  $('agentInput').onkeydown = event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+      event.preventDefault(); $('agentControls').requestSubmit();
+    }
+  };
+  pollControl(); setInterval(pollControl, 750);
+  loadModelChoices();
+  loadSaveChoices();
+  setInterval(pollTools, 1000);
+}
+poll(); setInterval(poll, Number(params.get("poll") || 100));
 pollHistory(); setInterval(pollHistory, 750);
-if (!OBS_SURFACE) setInterval(pollTools, 1000);
 // 先安排下一帧；一次渲染异常不能永久停掉整个状态面板。
 (function loop() { requestAnimationFrame(loop); render(); })();
+if (!OBS_SURFACE) initInteractiveHud();
 </script>
 </body>
 </html>

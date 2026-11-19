@@ -13,7 +13,7 @@ class HudGoalDurationTests(unittest.TestCase):
         html=(Path(__file__).resolve().parent.parent/'overlay/hud.html').read_text(encoding='utf-8')
         source=html[html.index('const GOAL_FIELDS ='):html.index('function editGoal()')]
         source+=html[html.index('function goalRow('):html.index('function renderGoal(')]
-        source+=html[html.index('async function saveGoal('):html.index("$('goalSave').onclick=")]
+        source+=html[html.index('async function saveGoal('):html.index('function initInteractiveHud(')]
         harness=r'''
 const fs=require('fs'),assert=require('assert');
 class E {

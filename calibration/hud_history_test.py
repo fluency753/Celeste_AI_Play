@@ -247,6 +247,54 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual([r['id'] for r in self.reader.snapshot({})],
                          ['act:1:0', 'narrate:1', 'act:24:0', 'user:1', 'act:25:0'])
 
+    def test_obs_page_displays_live_stats_and_history_without_playback_button(self):
+        import re
+        from overlay.server import PAGE
+        try:
+            from playwright.sync_api import Error, expect, sync_playwright
+        except ImportError:
+            self.skipTest('Playwright is needed to run the OBS HUD page')
+
+        html, removed = re.subn(r'<button id="playbackToggle"[^>]*>.*?</button>', '',
+                                PAGE.read_text(encoding='utf-8'))
+        self.assertEqual(removed, 1)
+        metrics = {'status': 'paused', 'model': 'fixture-model', 'hud_mod': False}
+        history = [{'id': 'obs:1', 'text': 'OBS 试玩消息'}]
+        errors, unexpected = [], []
+
+        def respond(route):
+            url = route.request.url
+            if url == 'http://hud.test/hud?surface=obs':
+                return route.fulfill(content_type='text/html; charset=utf-8', body=html)
+            if url == 'http://hud.test/hud/state':
+                return route.fulfill(json={'now': 42, 'config': {}, 'metrics': metrics})
+            if url == 'http://hud.test/hud/history':
+                return route.fulfill(json={'run': 'obs-fixture', 'items': history})
+            if url.startswith('http://hud.test/api/'):
+                unexpected.append(url)
+            return route.abort()
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Error as exc:
+                if sys.platform != 'win32':
+                    self.skipTest(f'Chromium unavailable: {exc}')
+                browser = playwright.chromium.launch(channel='msedge')
+            with browser:
+                page = browser.new_page(viewport={'width': 420, 'height': 760})
+                page.route('**/*', respond)
+                page.on('pageerror', lambda error: errors.append(str(error)))
+                page.goto('http://hud.test/hud?surface=obs')
+                expect(page.locator('#card')).to_be_visible(timeout=5000)
+                expect(page.locator('#thought')).to_contain_text('OBS 试玩消息')
+                metrics['hud_mod'] = True
+                expect(page.locator('#card')).to_be_hidden()
+                metrics['hud_mod'] = False
+                expect(page.locator('#card')).to_be_visible()
+                self.assertEqual(errors, [])
+                self.assertEqual(unexpected, [])
+
     def test_hidden_action_completion_does_not_reappear_after_intervening_narration(self):
         path = self.root/'public_events.jsonl'
         values = [{'id': 'act:1:0', 'text': '相同', 'wall': 10},
