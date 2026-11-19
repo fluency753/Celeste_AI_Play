@@ -190,6 +190,32 @@ class ContainerCodexTests(unittest.TestCase):
             self.assertFalse(container._sim_mount_matches(cfg, [mount]))
             self.assertTrue(container._sim_mount_matches(cfg, []))
 
+    def test_direct_sim_also_mounts_local_map_data_read_only(self):
+        cfg = RunConfig(agent='fixture', save='fixture', model='fixture', engine='codex', sim=True)
+        with patch('orchestrator.config.REPO_ROOT', self.root):
+            sim = {'Destination': '/sim', 'Type': 'bind', 'RW': False, 'Source': str(cfg.sim_dir.resolve())}
+            maps_dir = self.root / 'sim' / 'maps'
+            maps = {'Destination': '/maps', 'Type': 'bind', 'RW': False, 'Source': str(maps_dir.resolve())}
+            # 没有地图数据：不挂 /maps，挂了反而要重建
+            self.assertIsNone(container._agent_maps(cfg))
+            self.assertFalse(container._sim_mount_matches(cfg, [sim, maps]))
+            maps_dir.mkdir(parents=True, exist_ok=True)
+            self.assertEqual(container._agent_maps(cfg), maps_dir)
+            self.assertFalse(container._sim_mount_matches(cfg, [sim]))
+            self.assertTrue(container._sim_mount_matches(cfg, [sim, maps]))
+            for unexpected in ({'RW': True}, {'Source': str(self.root)}, {'Destination': '/maps/x'}, {'Type': 'volume'}):
+                with self.subTest(unexpected=unexpected):
+                    self.assertFalse(container._sim_mount_matches(cfg, [sim, {**maps, **unexpected}]))
+            with patch.object(container, 'REPO_ROOT', self.root), patch.object(container, 'docker') as docker:
+                container._create(cfg, 'fixture')
+            args = docker.call_args.args
+            mounts = [args[index + 1] for index, arg in enumerate(args[:-1]) if arg == '-v']
+            self.assertIn(f'{maps_dir}:/maps:ro', mounts)
+            # 限额（模拟器只在主控手里）与中转模式都不把地图挂进智能体容器
+            cfg.pause_limit = True
+            self.assertIsNone(container._agent_maps(cfg))
+            self.assertFalse(container._sim_mount_matches(cfg, [maps]))
+
     def test_auth_is_explicit_stdin_atomic_and_failure_does_not_expose_secrets(self):
         source = self.root/'selected-auth.json'
         secret = {'tokens': {'access_token':'sensitive-fixture'}}

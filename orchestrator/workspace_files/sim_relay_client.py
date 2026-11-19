@@ -103,10 +103,12 @@ def print_run(result, out=sys.stdout, err=sys.stderr):
 
 
 def run_request(args) -> dict:
-    """run 的请求：与原命令行相同，--through-rooms 时换房不停（跨房间推演）。"""
+    """run 的请求：与原命令行相同，--through-rooms 时换房不停（跨房间推演），--through-deaths 时死亡后接着推演重生。"""
     request = {'inputs': plan_of(args)}
     if getattr(args, 'through_rooms', False):
         request['stop_on_room'] = False
+    if getattr(args, 'through_deaths', False):
+        request['stop_on_death'] = False
     return request
 
 
@@ -117,6 +119,7 @@ def main():
     parser.add_argument('--inputs', nargs='+')
     parser.add_argument('--inputs-file')
     parser.add_argument('--through-rooms', action='store_true')
+    parser.add_argument('--through-deaths', action='store_true')
     args = parser.parse_args()
     if args.command in ('info', 'run') and not args.state:
         parser.error('--state is required')

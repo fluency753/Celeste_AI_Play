@@ -267,8 +267,9 @@ public static class InputInjector {
         GamePadDPad dpad;
         Vector2 stick = Vector2.Zero;
         if (input.AngleDeg is { } deg) {
-            float rad = MathHelper.ToRadians(deg);
-            stick = new Vector2(MathF.Cos(rad), MathF.Sin(rad)); // 手柄 Y 轴向上为正
+            // 不用平台的 MathF（各平台末位不同）：与预置模拟器共用同一份纯算术求值，逐位一致
+            StickTrig.FromDegrees(deg, out float cos, out float sin);
+            stick = new Vector2(cos, sin); // 手柄 Y 轴向上为正
             dpad = new GamePadDPad(ButtonState.Released, ButtonState.Released, ButtonState.Released, ButtonState.Released);
         } else {
             dpad = new GamePadDPad(

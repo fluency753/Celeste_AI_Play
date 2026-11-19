@@ -17,6 +17,7 @@
 | `shared/tools/observe/collision_matrix.md` | `/workspace/game/collision_matrix.py` 生成的文件型碰撞矩阵：生成方法、文件格式与 Python 查询接口（不含通行判断） |
 | `techniques.md` | 移动技巧：Strawberry Jam 各训练场（Beginner→Grandmaster）与 celeste.ink 收录的全部原版技巧（super/hyper/wavedash/ultra/cornerboost/wallbounce/dream block tech 等）的条件、帧窗口、数值、harness 输入例、序章/1A/2A 可用性；SJ 各大厅技巧对照表 |
 | `search_methods.md` | 搜索方法：为什么纯随机拼按键效率低，以及在有限知识下更高效地找出更优路线的七种做法（按状态去重的逐层搜索、评分、交叉熵法调整抽样、只在关键时刻分支、补全动作集、分段复用中间状态、对照真实游戏校准模拟器），每种都写原理、为什么有效、具体做法与伪代码、参数经验值、常见错误和配合方式；附组合流程与实现上的常见坑 |
+| `chapter_map.md` | 速通模式的整章地图：主控写在 `/workspace/game/map/` 的整章官方地图（所有房间的边界、地形网格、实体与触发器）的格式与用法 |
 | `mechanics.md` | 机制库：章节计时与 freeze frames（freeze frames 不计 IGT）、SJ 机制库（Library）全部小节的规则、后续章节实体（Theo、水母、泡泡、羽毛、云、岩浆块、弹球/河豚、水、月亮块）的交互规则 |
 | `reference/`（可选，本机生成） | 外部资料原文照录：Celeste Wiki（celeste.ink）全部技巧页面，草莓酱训练场（Beginner → Grandmaster）与机制库的全部文本（英文、简体中文），以及在本机导入的社区资料（例如反向钟《Celeste 机制详解》源码解读、岩浆块机制说明，附原 PDF）。索引见 `reference/README.md`；默认正确，数值不一致时以本知识库里对照代码核实的文件为准。原文不入公开仓库，由部署者在本机用 `tools/fetch_reference.py`、`tools/import_reference_pdf.py` 生成（见 `docs/USAGE.md`）；没有生成时 `/kb/reference/` 不存在，各文件里指向它的引用可以忽略 |
 | `shared/tools/` | 按工具组织的完整参考：观测、输入与计划、剧情、文件和程序；不要求准备阶段通读 |

@@ -1400,6 +1400,7 @@ class GameSession:
                 if not (self.workspace / room_rel).exists():
                     self._write_json(room_rel, {"decision": self.decision_index, "obs": obs,
                                                "snapshot": {"historical": True, "kind": "first_observation", "frame": obs.get('frame')}})
+            self._write_chapter_map(level)
             if act_record is not None:
                 self._write_json("game/last_act.json", act_record)
         except OSError:
@@ -1410,6 +1411,24 @@ class GameSession:
             self._write_collision_view(obs)
         except Exception as exc:  # noqa: BLE001
             print(f"[collision] 写碰撞图失败：{exc}", flush=True)
+
+    def _write_chapter_map(self, level: dict) -> None:
+        """速通模式：第一次在某章某一面得到观测时，把整章地图写进 game/map/（见 chapter_map.py）。每章每面只试一次。"""
+        from . import chapter_map
+        sid, side = level.get('sid'), level.get('side')
+        if not (sid and side in ('A', 'B', 'C') and chapter_map.wanted(self.cfg)):
+            return
+        tried = getattr(self, '_chapter_maps_tried', None)
+        if tried is None:
+            tried = self._chapter_maps_tried = set()
+        if (sid, side) in tried:
+            return
+        tried.add((sid, side))
+        path, error = chapter_map.export(self.cfg, self.workspace, sid, side)
+        if error:
+            print(f"[map] {sid} {side}：{error}", flush=True)
+        elif path is not None:
+            print(f"[map] 整章地图已写入 {chapter_map.relative_path(sid, side)}", flush=True)
 
     def collision_png(self, obs: dict) -> bytes | None:
         """这一帧的分色碰撞图：同一帧只画一次（写工作区与工具结果共用）。"""

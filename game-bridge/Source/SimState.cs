@@ -142,6 +142,8 @@ internal static class SimState {
         // 上一帧写入的按键：模拟器的第一帧据此判断"新按下"
         w.WriteString("held", Bridge.CurrentInput.ToSimulatorString());
         w.WriteString("input_format", Bridge.CurrentInput.Tas ? "celeste_tas" : "celeste_ai");
+        // A:角度 的摇杆向量求值方式（见 StickTrig）；模拟器据此区分旧版桥接（平台 MathF）写出的状态
+        w.WriteString("angleMath", "fdlibm");
         w.WriteStartObject("virtual");
         var c = new Ctx();
         foreach ((string name, VirtualInput? input) in new (string, VirtualInput?)[] {
@@ -230,16 +232,32 @@ internal static class SimState {
         w.WriteStartObject("counters");
         foreach (Session.Counter counter in s.Counters) w.WriteNumber(counter.Key, counter.Value);
         w.WriteEndObject();
-        w.WriteStartArray("doNotLoad");
-        foreach (EntityID id in s.DoNotLoad) {
+        WriteIds(w, "doNotLoad", s.DoNotLoad);
+        // 新房间里按进度决定的实体（山脊石门、无冲刺草莓、心、磁带、5A 的 Badeline）与死亡重生要用的会话字段
+        w.WriteStartArray("levelFlags");
+        foreach (string f in s.LevelFlags.OrderBy(x => x, StringComparer.Ordinal)) w.WriteStringValue(f);
+        w.WriteEndArray();
+        WriteIds(w, "strawberries", s.Strawberries);
+        WriteIds(w, "keys", s.Keys);
+        w.WriteBoolean("startedFromBeginning", s.StartedFromBeginning);
+        w.WriteBoolean("restartedFromGolden", s.RestartedFromGolden);
+        w.WriteBoolean("heartGem", s.HeartGem);
+        w.WriteBoolean("cassette", s.Cassette);
+        w.WriteBoolean("hitCheckpoint", s.HitCheckpoint);
+        w.WriteNumber("dashesAtLevelStart", s.DashesAtLevelStart);
+        w.WriteEndObject();
+        w.WriteEndObject();
+    }
+
+    private static void WriteIds(Utf8JsonWriter w, string name, IEnumerable<EntityID> ids) {
+        w.WriteStartArray(name);
+        foreach (EntityID id in ids.OrderBy(i => i.Level, StringComparer.Ordinal).ThenBy(i => i.ID)) {
             w.WriteStartArray();
             w.WriteStringValue(id.Level);
             w.WriteNumberValue(id.ID);
             w.WriteEndArray();
         }
         w.WriteEndArray();
-        w.WriteEndObject();
-        w.WriteEndObject();
     }
 
     private static void WriteRooms(Utf8JsonWriter w, Level level) {

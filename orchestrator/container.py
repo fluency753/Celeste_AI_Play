@@ -3,7 +3,8 @@
 容器里：/workspace 挂载宿主机的 workspaces/<标签>/（可写），/kb 挂载仓库的 kb/（只读），
 /home/agent/.claude 是独立的数据卷（会话记录，便于中断后续跑）。游戏目录、存档、OBS 都不挂载。
 Codex 使用独立的 /home/agent/.codex 持久卷，普通启动不导入宿主登录或会话。
-不限额直接调用预置模拟器时（见 sim_mode.py），本机的 sim/dist 只读挂到 /sim；限额时模拟器仅由
+不限额直接调用预置模拟器时（见 sim_mode.py），本机的 sim/dist 只读挂到 /sim（有官方地图数据 sim/maps 时另挂到 /maps，
+供容器里的模拟器跨房间与重生）；限额时模拟器仅由
 主控的私有 worker 使用，不挂入 agent 容器。工作区的 /workspace/.git 固定为真实目录并单独嵌套挂载（两个执行器相同），
 智能体可以直接在工作区根目录用 git 管理自己的程序与笔记。
 配置变了要重建容器时，旧容器 /tmp 里的东西（智能体常把程序和中间结果放在 Claude Code 的 /tmp/claude-<uid>）
@@ -135,11 +136,28 @@ def _git_mount_matches(cfg: RunConfig, mounts: list) -> bool:
     return not any(row.get('Destination', '').startswith('/workspace/.git/') for row in mounts)
 
 
+def _agent_maps(cfg: RunConfig) -> Path | None:
+    """直接调用 /sim 时一并只读挂到 /maps 的官方地图数据（sim/maps，不入库）：速通模式允许智能体读整章地图，
+    容器里的模拟器据此跨房间推演、死亡后重生（它在 /sim 旁找不到 maps 时找上一级的 /maps）。"""
+    from .sim_mode import agent_sim
+    from .sim_relay import enabled
+    maps = cfg.sim_dir.parent / 'maps'
+    return maps if agent_sim(cfg) and not enabled(cfg) and maps.is_dir() else None
+
+
 def _sim_mount_matches(cfg: RunConfig, mounts: list) -> bool:
     from .sim_mode import agent_sim
     from .sim_relay import RELAY_PATH, enabled, public_dir, volume
     found = [row for row in mounts if row.get('Destination') == '/sim' or row.get('Destination', '').startswith('/sim/')]
     relays = [row for row in mounts if row.get('Destination') == RELAY_PATH]
+    maps = [row for row in mounts if row.get('Destination') == '/maps' or row.get('Destination', '').startswith('/maps/')]
+    expected_maps = _agent_maps(cfg)
+    if expected_maps is None:
+        if maps:
+            return False
+    elif (len(maps) != 1 or maps[0].get('Destination') != '/maps' or maps[0].get('Type') != 'bind' or maps[0].get('RW') is not False
+          or _mount_source(maps[0].get('Source', '')) != _mount_source(str(expected_maps.resolve()))):
+        return False
     if enabled(cfg):
         if len(relays) != 1 or relays[0].get('Type') != 'volume' or relays[0].get('Name') != volume(cfg) or not relays[0].get('RW'):
             return False
@@ -201,6 +219,8 @@ def _create(cfg: RunConfig, name: str) -> None:
         args += ['-v', f'{public_dir(cfg)}:/sim:ro', '-v', f'{volume(cfg)}:{RELAY_PATH}']
     elif agent_sim(cfg):
         args += ["-v", f"{cfg.sim_dir}:/sim:ro"]
+        if (maps := _agent_maps(cfg)) is not None:
+            args += ["-v", f"{maps}:/maps:ro"]
     if cfg.seccomp_unconfined:
         args += ["--security-opt", "seccomp=unconfined"]
     for key, value in _labels(cfg).items():

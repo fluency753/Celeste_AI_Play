@@ -191,6 +191,8 @@ class RelayClientCliTests(unittest.TestCase):
         self.assertEqual(client.run_request(args), {'inputs': ['12,R']})
         args.through_rooms = True
         self.assertEqual(client.run_request(args), {'inputs': ['12,R'], 'stop_on_room': False})
+        args.through_deaths = True
+        self.assertEqual(client.run_request(args), {'inputs': ['12,R'], 'stop_on_room': False, 'stop_on_death': False})
 
     def test_inputs_file_is_accepted_like_native_cli(self):
         client = self.client()

@@ -5,7 +5,7 @@
 - `/workspace`：你的工作区，可写。里面的文件跨房间、跨章节、跨运行保留，之前写的程序和笔记都还在，先看看有什么。
 - `/kb`：只读知识库，记录游戏的物理常量与机制规则（只讲规则，不讲关卡怎么过）。**开始游玩前按第一条消息的必读清单完整读完**（主控按行核对，读完之前游戏工具不执行），其余资料需要时再查。上面的物理参数只是简表，精确的帧数、更新顺序与边界条件以知识库为准；各种高级技巧的触发条件、输入写法与帧窗口见 `/kb/techniques.md`。{kb_reference_rule}
 - 预装 Python 3（numpy、scipy、numba、pillow、networkx）与 gcc / g++。容器没有网络，不能安装新的软件包，也不能访问任何网站。
-- 每次 `{tool:observe}` / `{tool:act}` 之后，主控会把数据写进工作区：完整观测在 `/workspace/game/latest_obs.json`，上一次 `{tool:act}` 的逐帧轨迹在 `/workspace/game/last_act.json`，每个房间第一次的观测另存一份在 `/workspace/game/rooms/` 下。文件格式见 `/kb/shared/tools/observe/files.md`。
+- 每次 `{tool:observe}` / `{tool:act}` 之后，主控会把数据写进工作区：完整观测在 `/workspace/game/latest_obs.json`，上一次 `{tool:act}` 的逐帧轨迹在 `/workspace/game/last_act.json`，每个房间第一次的观测另存一份在 `/workspace/game/rooms/` 下；本机提供时，进入每章的每一面还会写出整章地图 `/workspace/game/map/<章节>_<面>.json`（所有房间的边界、地形网格、实体与触发器，包括没去过的房间，格式见 `/kb/chapter_map.md`）。文件格式见 `/kb/shared/tools/observe/files.md`。
 - **程序读精确数据，不读截图。** 上面这些文件是完整的精确数据（工具正文可能只给状态与文件位置），房间几何以观测里的 `collision` 为准，`entities` 的每一项还带全部状态字段 `fields`；`last_act.json` 是上一次 `{tool:act}` 的全精度逐帧轨迹（`trajectoryFormat` 给出列名），以及画面附近实体的逐帧位置 `entityTrajectory`。房间几何、实体位置与状态都从这里取，不要从截图或字符地图里识别。主控预测使用其私有的当前帧快照。
 - `{tool:act}` 可以直接执行计划文件：把按键段写成 JSON 文件（例如 `["12,R", "1,R,J", "15,R,J"]`），调用 `{tool:act}` 时传 `plan_file`（工作区里的路径）而不传 `inputs`，省去把按键抄进参数。计划文件还可以写成对象（格式见 `/kb/shared/tools/observe/files.md` §3）：
   - `expect`：模拟器预测的逐帧位置（可附状态名）与 `tolerance` 容差。实际与预测相差超过容差，就在那一帧停下（`deviate`），并告诉你从第几帧开始不一致。
