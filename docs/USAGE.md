@@ -550,7 +550,7 @@ M5 验收（2026-10-23，桥接 0.7.0，当时的网页 HUD）：`python calibra
 
 速通模式的 `--sim` 按是否限额分两种提供方式。**不限额**时，工作区程序通过 `/sim` 并行推演。装有完整 `sim/dist` 的新运行默认由主控通过断网 Linux 容器代跑，保留 `serve`、`Sim`、`SimPool` 和检查点用法。旧运行续跑沿用原方式，可用 `--sim-relay` 或 `--no-sim-relay` 显式选择，切换会按现有容器重建流程更新挂载。**限额**（同时开 `--limit-planning`）时，智能体通过 `simulate` 工具在硬预算内请求预测。
 
-主控首次代为预测时启动断网容器（标签 `celeste.sim-assist=1`、`celeste.run=<运行目录名>`）。同一运行的各批请求共用该容器，每批重新载入当次游戏快照。收尾时删除容器，超时或协议错误时也会丢弃该容器。`sim_private/leftover_containers.json` 从启动前记录容器归属，确认删除后清除。删除失败或主控异常退出后，下次预测前会清理本次运行记录的容器，续跑继承原运行的记录。清理只操作容器，不重跑预测或重复扣费。可用 `docker ps -a --filter label=celeste.sim-assist=1` 查看残留。
+`sim\dist` 里有 Windows 版 `celeste-sim.exe` 时，主控的限额预测（`simulate`、探索模式的 `--sim-assist`）直接在本机运行它：同一运行复用一个进程，每批重新载入快照，超时或协议错误时结束进程，托管堆上限 512 MB，不启动容器也不需要 Docker。它与 Linux 版由同一份源码构建，本机跑全部校准用例的对照结果与修改前的构建逐项相同（2026-11-19）。不限额的 `/sim`（含主控代跑）要在智能体的 Linux 容器里调用，仍用 Linux 版。没有 Windows 版时，主控首次代为预测时启动断网容器（标签 `celeste.sim-assist=1`、`celeste.run=<运行目录名>`）。同一运行的各批请求共用该容器，每批重新载入当次游戏快照。收尾时删除容器，超时或协议错误时也会丢弃该容器。`sim_private/leftover_containers.json` 从启动前记录容器归属，确认删除后清除。删除失败或主控异常退出后，下次预测前会清理本次运行记录的容器，续跑继承原运行的记录。清理只操作容器，不重跑预测或重复扣费。可用 `docker ps -a --filter label=celeste.sim-assist=1` 查看残留。
 
 #### 4.5.1 不限额：`/sim`（容器方式，Claude 默认开启，Codex 用 `--sim` 开启）
 

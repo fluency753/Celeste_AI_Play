@@ -120,11 +120,12 @@ class SimEnergyTests(unittest.TestCase):
 import json, os, sys, time
 from pathlib import Path
 state_file, mode = Path(sys.argv[1]), sys.argv[2]
+expected_state = sys.argv[3] if len(sys.argv) > 3 else '/state/state.json'
 frame = None
 for line in sys.stdin:
     request = json.loads(line)
     if 'state' in request:
-        assert request == {'state': '/state/state.json'}
+        assert request == {'state': expected_state}, request
         frame = json.loads(state_file.read_text())['frame']
         print(json.dumps({'ok': True, 'info': {'frame': frame, 'pid': os.getpid()}}), flush=True)
     else:
@@ -146,6 +147,10 @@ for line in sys.stdin:
         directory = self.root / 'sim_private'
         directory.mkdir()
         (directory / 'state.json').write_text('{"frame": 10}', encoding='utf-8')
+        # 这几项检查 Docker 方式：本机 sim/dist 里放了 Windows 版时也不要改走直接运行
+        native = patch('orchestrator.sim_assist.native_exe', return_value=None)
+        native.start()
+        self.addCleanup(native.stop)
         worker = PredictionWorker(RunConfig(agent='test', save='test', model='test'), directory, timeout=timeout)
         worker_calls, remove_calls = [], []
         real_popen = subprocess.Popen
@@ -175,6 +180,73 @@ for line in sys.stdin:
             self.addCleanup(mocked.stop)
         self.addCleanup(worker.close)
         return worker, worker_calls, remove_calls
+
+    def native_fixture(self, modes=None, timeout=5):
+        directory = self.root / 'sim_private'
+        directory.mkdir()
+        (directory / 'state.json').write_text('{"frame": 10}', encoding='utf-8')
+        exe = self.root / 'dist' / 'celeste-sim.exe'
+        starts = []
+        real_popen = subprocess.Popen
+        modes = iter(modes or [])
+
+        def start(command, **options):
+            starts.append((command, options))
+            return real_popen([sys.executable, '-u', '-c', self._SIMULATOR, str(directory / 'state.json'),
+                               next(modes, 'ok'), str(directory.resolve() / 'state.json')],
+                              stdin=options['stdin'], stdout=options['stdout'], stderr=options['stderr'])
+
+        for target, options in (('native_exe', {'return_value': exe}),
+                                ('find_docker_exe', {'side_effect': AssertionError('Docker must not be used')}),
+                                ('subprocess.Popen', {'side_effect': start}),
+                                ('subprocess.run', {'side_effect': AssertionError('no container to remove')})):
+            mocked = patch('orchestrator.sim_assist.' + target, **options)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        worker = PredictionWorker(RunConfig(agent='test', save='test', model='test'), directory, timeout=timeout)
+        self.addCleanup(worker.close)
+        return worker, exe, starts
+
+    def test_windows_build_runs_directly_with_host_snapshot_path(self):
+        worker, exe, starts = self.native_fixture()
+        first = worker.predict([['1,R']])
+        (worker.directory / 'state.json').write_text('{"frame": 20}', encoding='utf-8')
+        second = worker.predict([['1,L'], ['1,R']])
+        self.assertEqual(first['info']['pid'], second['info']['pid'])
+        self.assertEqual([r['frames'][0][0] for r in second['results']], [20, 20])
+        self.assertEqual(len(starts), 1)
+        command, options = starts[0]
+        self.assertEqual(command, [str(exe), 'serve'])
+        self.assertEqual(options['env']['DOTNET_EnableDiagnostics'], '0')
+        self.assertIn('DOTNET_GCHeapHardLimit', options['env'])
+        self.assertEqual(options['cwd'], str(worker.directory))
+        worker.close()
+        worker.close()
+        self.assertFalse((worker.directory / 'leftover_containers.json').exists())
+
+    def test_windows_build_timeout_restarts_process_without_replaying_input(self):
+        worker, exe, starts = self.native_fixture(['timeout', 'ok'], timeout=1)
+        with self.assertRaisesRegex(RuntimeError, '模拟器在 1 秒内未完成本批'):
+            worker.predict([['1,R']])
+        self.assertIsNone(worker.process)
+        worker.timeout = 5
+        self.assertEqual(len(worker.predict([['4']])['results']), 1)
+        self.assertEqual(len(starts), 2)
+
+    def test_windows_build_is_used_only_on_windows_with_the_exe_present(self):
+        from orchestrator import sim_assist
+        cfg = RunConfig(agent='test', save='test', model='test')
+        with tempfile.TemporaryDirectory() as folder:
+            dist = Path(folder)   # 在改 os.name 之前建好路径对象
+            exe = dist / 'celeste-sim.exe'
+            with patch.object(RunConfig, 'sim_dir', property(lambda c: dist)), \
+                    patch.object(sim_assist.os, 'name', 'nt'):
+                self.assertIsNone(sim_assist.native_exe(cfg))
+                exe.write_bytes(b'fixture; never executed')
+                self.assertEqual(sim_assist.native_exe(cfg), exe)
+            with patch.object(RunConfig, 'sim_dir', property(lambda c: dist)), \
+                    patch.object(sim_assist.os, 'name', 'posix'):
+                self.assertIsNone(sim_assist.native_exe(cfg))
 
     def test_private_worker_reuses_process_and_reloads_each_snapshot(self):
         worker, starts, removes = self.worker_fixture()

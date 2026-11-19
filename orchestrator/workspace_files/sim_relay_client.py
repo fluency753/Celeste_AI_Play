@@ -77,12 +77,41 @@ class Relay:
         return bytes(response)
 
 
+CSV_HEADER = 'frame,x,y,vx,vy,state,dashes,onGround'
+
+
+def plan_of(args):
+    """与原命令行相同：--inputs 的各段，加上 --inputs-file 里的非空、非 # 注释行。"""
+    plan = list(args.inputs or [])
+    if args.inputs_file:
+        plan += [line for line in Path(args.inputs_file).read_text(encoding='utf-8').splitlines()
+                 if line.strip() and not line.lstrip().startswith('#')]
+    return plan
+
+
+def print_run(result, out=sys.stdout, err=sys.stderr):
+    """按原命令行 run 的格式输出：标准错误先列读入时的警告，标准输出是带表头的 CSV（没有 Madeline 的帧其余列留空），
+    标准错误最后一行是 stop: 原因 [详情]（例如换房间时的目标房间）。"""
+    for warning in result.get('warnings') or []:
+        print('warning: ' + str(warning), file=err)
+    print(CSV_HEADER, file=out)
+    for row in result['frames']:
+        cells = ['' if value is None else str(value) for value in row]
+        print(','.join(cells + [''] * (8 - len(cells))), file=out)
+    detail = result.get('detail')
+    print(f"stop: {result.get('stop')}{' ' + str(detail) if detail is not None else ''}", file=err)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('command', choices=('serve', 'info', 'run'))
     parser.add_argument('--state')
     parser.add_argument('--inputs', nargs='+')
+    parser.add_argument('--inputs-file')
     args = parser.parse_args()
+    if args.command in ('info', 'run') and not args.state:
+        parser.error('--state is required')
+    plan = plan_of(args) if args.command == 'run' else None
     with Relay() as relay:
         info = None
         if args.state:
@@ -92,12 +121,10 @@ def main():
         if args.command == 'info':
             print(json.dumps(info['info']))
         elif args.command == 'run':
-            result = json.loads(relay.request(json.dumps({'inputs': args.inputs}).encode() + b'\n'))
+            result = json.loads(relay.request(json.dumps({'inputs': plan}).encode() + b'\n'))
             if not result.get('ok'):
                 raise ValueError(result['error'])
-            for row in result['frames']:
-                print(','.join('' if value is None else str(value) for value in row))
-            print('stop:', result.get('stop'), file=sys.stderr)
+            print_run(result)
         else:
             for line in sys.stdin.buffer:
                 try:

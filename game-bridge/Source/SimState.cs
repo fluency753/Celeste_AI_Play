@@ -312,6 +312,7 @@ internal static class SimState {
             w.WriteNumber("k", k++);
             w.WriteString("type", TypeName(comp.GetType()));
             if (!Skip(comp.GetType())) {
+                if (comp is Coroutine routine) WriteCoroutineCore(w, routine, c, 0);
                 w.WritePropertyName("f");
                 WriteFields(w, comp, c, 0);
             }
@@ -541,7 +542,12 @@ internal static class SimState {
     private static bool Skip(Type type) {
         if (SkipCache.TryGetValue(type, out bool s)) return s;
         s = false;
-        if (type.Namespace is { } ns && (ns.StartsWith("FMOD") || ns.StartsWith("Microsoft.Xna.Framework.Graphics") || ns.StartsWith("Microsoft.Xna.Framework.Audio"))) {
+        if (type.Namespace is { } ns && (ns.StartsWith("FMOD") || ns.StartsWith("Microsoft.Xna.Framework.Graphics") || ns.StartsWith("Microsoft.Xna.Framework.Audio")
+                                         || ns.StartsWith("System.Reflection"))) {
+            s = true;
+        }
+        // 反射对象（Mod 缓存的 FieldInfo、Type 等）：模拟器用不上，展开后体积很大（一个 Mod 字段就能写出几百 KB）
+        if (typeof(MemberInfo).IsAssignableFrom(type) || typeof(System.Reflection.Assembly).IsAssignableFrom(type) || typeof(Module).IsAssignableFrom(type)) {
             s = true;
         }
         for (Type? t = type; !s && t != null; t = t.BaseType) {
@@ -698,9 +704,131 @@ internal static class SimState {
         w.WriteStartObject();
         w.WriteString("$o", TypeName(type));
         w.WriteNumber("$id", id);
+        if (v is Coroutine co) WriteCoroutineCore(w, co, c, depth);
         w.WritePropertyName("f");
         WriteFields(w, v, c, depth);
         w.WriteEndObject();
+    }
+
+    // ---- 被 Mod 包装的协程 ----
+
+    private static readonly System.Reflection.Assembly GameAssembly = typeof(Player).Assembly;
+
+    /// <summary>
+    /// Mod 用钩子包装原版协程（例如 On.Celeste.Player.DashCoroutine）时，协程栈里放的是 Mod 程序集里的迭代器，
+    /// 原版迭代器藏在它的字段里，层数一多还会被深度上限截断。模拟器没有 Mod 的类型，原来只能整条丢掉，协程随即结束
+    /// （冲刺不按时结束等）。这里在 "core" 里另写一份与协程栈逐项对应的原版形状：需要替换的项写成只含原版迭代器的
+    /// Flattened（与没装 Mod 时相同），不需要的项写 null，找不到唯一的原版迭代器时写 {"$lost": 原因}。
+    /// 整个栈都不涉及 Mod 时不写。写在 "f" 前面，原版迭代器的对象编号先在这里出现。
+    /// </summary>
+    private static void WriteCoroutineCore(Utf8JsonWriter w, Coroutine routine, Ctx c, int depth) {
+        if (routine.enumerators is not { Count: > 0 } stack) return;
+        IEnumerator[] items = stack.ToArray(); // 栈顶在前，与写 enumerators 时的顺序相同
+        if (items.All(item => !HasForeign(item, 0))) return;
+        w.WriteStartArray("core");
+        foreach (IEnumerator item in items) {
+            if (!HasForeign(item, 0)) {
+                w.WriteNullValue();
+                continue;
+            }
+            var core = new List<IEnumerator>();
+            string? lost = CoreOf(item, core, 0);
+            w.WriteStartObject();
+            if (lost != null) {
+                w.WriteString("$lost", lost);
+                w.WriteEndObject();
+                continue;
+            }
+            // 与原版的深度相同：协程(depth) → enumerators → Flattened → enums → 迭代器
+            w.WriteString("$s", TypeName(typeof(Celeste.Mod.SwapImmediatelyExtension.Flattened)));
+            w.WriteStartObject("f");
+            w.WriteStartArray("enums");
+            foreach (IEnumerator e in core) Value(w, e, c, depth + 4);
+            w.WriteEndArray();
+            object? current = null;
+            try {
+                current = item.Current;
+            } catch (Exception) {
+            }
+            w.WritePropertyName("current");
+            Value(w, current, c, depth + 3);
+            w.WriteEndObject();
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static bool IsGameIterator(Type t) =>
+        t.Assembly == GameAssembly && t.Name.StartsWith("<", StringComparison.Ordinal) && typeof(IEnumerator).IsAssignableFrom(t);
+
+    /// <summary>迭代器链（Flattened 的 enums 逐层往下）里有没有不在游戏程序集里的类型。</summary>
+    private static bool HasForeign(object? item, int depth) {
+        if (item == null || depth > 16) return false;
+        if (item is Celeste.Mod.SwapImmediatelyExtension.Flattened flat) return flat.enums != null && flat.enums.Any(e => HasForeign(e, depth + 1));
+        return item.GetType().Assembly != GameAssembly;
+    }
+
+    /// <summary>按栈顶在前的顺序收集一项里的原版迭代器；Mod 的包装里要恰好找到一个，否则返回原因。</summary>
+    private static string? CoreOf(object? item, List<IEnumerator> core, int depth) {
+        if (item == null) return null;
+        if (depth > 16) return "chain too deep";
+        if (item is Celeste.Mod.SwapImmediatelyExtension.Flattened flat) {
+            if (flat.enums == null) return null;
+            foreach (IEnumerator e in flat.enums) {
+                string? lost = CoreOf(e, core, depth + 1);
+                if (lost != null) return lost;
+            }
+            return null;
+        }
+        Type t = item.GetType();
+        if (t.Assembly == GameAssembly) {
+            if (item is IEnumerator own) core.Add(own);
+            return null;
+        }
+        var found = new List<IEnumerator>();
+        FindGameIterators(item, found, new HashSet<object>(ReferenceEqualityComparer.Instance), 0);
+        if (found.Count != 1) return $"{found.Count} vanilla iterators inside {TypeName(t)}";
+        core.Add(found[0]);
+        return null;
+    }
+
+    /// <summary>
+    /// 在 Mod 的包装对象里找原版迭代器：只沿着迭代器、迭代器集合、Flattened 结构、SwapImmediately 与编译器生成的类
+    /// （闭包）往下，不进实体、组件、场景、委托、反射对象和画面声音类对象。找到原版迭代器就停在那里，不进它内部。
+    /// </summary>
+    private static void FindGameIterators(object? o, List<IEnumerator> found, HashSet<object> seen, int depth) {
+        if (o == null || depth > 16 || o is string or Entity or Component or Scene or Delegate || !seen.Add(o)) return;
+        Type t = o.GetType();
+        if (t.IsPrimitive || t.IsEnum || Skip(t)) return;
+        if (IsGameIterator(t)) {
+            if (!found.Contains((IEnumerator) o)) found.Add((IEnumerator) o);
+            return;
+        }
+        if (o is Celeste.Mod.SwapImmediatelyExtension.Flattened flat) {
+            if (flat.enums != null) foreach (IEnumerator e in flat.enums) FindGameIterators(e, found, seen, depth + 1);
+            return;
+        }
+        if (o is IEnumerable items and not IEnumerator && (t.IsArray || IsGenericCollection(t))) {
+            int n = 0;
+            foreach (object? item in items) {
+                if (n++ >= MaxCollection) break;
+                if (item is IEnumerator or Celeste.Mod.SwapImmediatelyExtension.Flattened) FindGameIterators(item, found, seen, depth + 1);
+            }
+            return;
+        }
+        bool walk = o is IEnumerator || t.Name.StartsWith("<", StringComparison.Ordinal) || t.Name.Contains("SwapImmediately") || t.IsValueType;
+        if (!walk) return;
+        foreach (var (_, f) in FieldsOf(t)) {
+            object? v;
+            try {
+                v = f.GetValue(o);
+            } catch (Exception) {
+                continue;
+            }
+            if (v is IEnumerator || (v is IEnumerable and not string && v.GetType() is { } vt && (vt.IsArray || IsGenericCollection(vt)))
+                || (v != null && (v.GetType().Name.StartsWith("<", StringComparison.Ordinal) || v.GetType().Name.Contains("SwapImmediately"))))
+                FindGameIterators(v, found, seen, depth + 1);
+        }
     }
 
     private static bool IsGameObject(object o) {

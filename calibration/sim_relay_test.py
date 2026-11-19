@@ -88,3 +88,37 @@ class SimRelayTests(unittest.TestCase):
             relay.flush()
             self.playback.collect_prediction.assert_called_once()
             self.metrics.add.assert_called_with(sim_calls=1, sim_rollouts=10)
+
+
+class RelayClientCliTests(unittest.TestCase):
+    """代跑时 /sim/celeste-sim 换成了转发客户端：run 的输出要与原命令行一致，智能体已有的程序照常解析。"""
+
+    def client(self):
+        import importlib.util
+        source = Path(__file__).resolve().parent.parent / 'orchestrator' / 'workspace_files' / 'sim_relay_client.py'
+        spec = importlib.util.spec_from_file_location('_relay_client', source)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_run_output_matches_native_cli(self):
+        client = self.client()
+        out, err = io.StringIO(), io.StringIO()
+        client.print_run({'ok': True, 'stop': 'room', 'detail': '6c', 'warnings': ['unknown bit tag lucid'],
+                          'frames': [[2312, 2016.9166, -1135, 295, 0, 'Dash', 1, 0], [2313]]}, out, err)
+        # 原命令行（celeste-sim run）：表头、逐帧 CSV（没有 Madeline 的帧其余 7 列留空）、stop 带详情
+        self.assertEqual(out.getvalue().splitlines(),
+                         ['frame,x,y,vx,vy,state,dashes,onGround', '2312,2016.9166,-1135,295,0,Dash,1,0', '2313,,,,,,,'])
+        self.assertEqual(err.getvalue().splitlines(), ['warning: unknown bit tag lucid', 'stop: room 6c'])
+        err = io.StringIO()
+        client.print_run({'ok': True, 'stop': 'done', 'detail': None, 'frames': []}, io.StringIO(), err)
+        self.assertEqual(err.getvalue(), 'stop: done\n')
+
+    def test_inputs_file_is_accepted_like_native_cli(self):
+        client = self.client()
+        with TemporaryDirectory() as folder:
+            plan = Path(folder) / 'plan.txt'
+            plan.write_text('# 注释\n12,R\n\n1,R,J\n', encoding='utf-8')
+            args = SimpleNamespace(inputs=['3'], inputs_file=str(plan))
+            self.assertEqual(client.plan_of(args), ['3', '12,R', '1,R,J'])
+            self.assertEqual(client.plan_of(SimpleNamespace(inputs=None, inputs_file=None)), [])

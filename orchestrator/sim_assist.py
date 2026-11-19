@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from queue import Empty, Queue
 import re
 import subprocess
@@ -253,15 +254,42 @@ def inherit_leftovers(previous, directory):
         write_json(directory / LEFTOVERS, rows, indent=1)
 
 
+# 主控直接运行的 Windows 模拟器：与 Linux 版同一份源码（sim/dist 里的 celeste-sim.exe，自带运行时的单文件程序）。
+# 它只读主控写的快照、只接受校验过的按键，不接触工作区和网络，所以不必经 Docker；托管堆上限对应容器的内存限制。
+NATIVE_ENV = {'DOTNET_EnableDiagnostics': '0', 'DOTNET_GCHeapHardLimit': '0x20000000'}
+
+
+def native_exe(cfg) -> Path | None:
+    """Windows 上 sim/dist 里有 celeste-sim.exe 时返回它（主控限额预测改为本机直接运行）；否则 None，照旧用 Docker。"""
+    if os.name != 'nt':
+        return None
+    path = cfg.sim_dir / 'celeste-sim.exe'
+    return path if path.is_file() else None
+
+
 class PredictionWorker:
-    """One private Linux simulator for a run. Calls are serialized by the session lock."""
+    """One private simulator for a run: the Windows build run directly when present, otherwise a disconnected
+    Linux container. Calls are serialized by the session lock."""
 
     def __init__(self, cfg, directory, *, timeout=15):
         self.cfg, self.directory, self.timeout = cfg, Path(directory).resolve(), timeout
         self.docker = self.name = self.process = self.stderr_thread = None
         self.error_tail = b''
+        self.native = native_exe(cfg)
+
+    def _state_path(self):
+        return str(self.directory / 'state.json') if self.native else '/state/state.json'
 
     def _start(self):
+        if self.native:
+            self.error_tail = b''
+            env = {**os.environ, **NATIVE_ENV}
+            flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            self.process = subprocess.Popen([str(self.native), 'serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, cwd=str(self.directory), env=env, creationflags=flags)
+            self.stderr_thread = threading.Thread(target=self._drain_stderr, args=(self.process.stderr,), daemon=True)
+            self.stderr_thread.start()
+            return
         self.docker = find_docker_exe()
         leftovers = retry_leftovers(self.directory, self.docker)
         self.name = 'celeste-sim-assist-' + uuid.uuid4().hex
@@ -303,7 +331,7 @@ class PredictionWorker:
 
         def exchange(process):
             try:
-                state, size = self._request(process, {'state': '/state/state.json'}, REPLY_LIMIT)
+                state, size = self._request(process, {'state': self._state_path()}, REPLY_LIMIT)
                 if not isinstance(state.get('info'), dict):
                     raise RuntimeError('模拟容器未确认读取当前快照')
                 reply, _ = self._request(process, {'batch': [
@@ -327,7 +355,7 @@ class PredictionWorker:
             try:
                 result = outcome.get(timeout=self.timeout)
             except Empty:
-                raise TimeoutError(f'模拟容器在 {self.timeout:g} 秒内未完成本批') from None
+                raise TimeoutError(f'{"模拟器" if self.native else "模拟容器"}在 {self.timeout:g} 秒内未完成本批') from None
             if isinstance(result, Exception):
                 raise result
             return result
