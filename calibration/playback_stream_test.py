@@ -65,6 +65,41 @@ class StreamTests(unittest.TestCase):
     def start(self, mid='message', call='call'):
         self.playback.note_tool_use(mid,call,'Bash',{'command':'python search.py','description':'search'})
 
+    def test_enable_starts_preview_and_disabled_rounds_still_count(self):
+        self.playback.set_enabled(False)
+        self.start()
+        self.file.write_bytes(MAGIC+record(1))
+        self.poll()
+        self.playback._call.assert_not_called()
+        self.playback.note_tool_result('call')
+        self.wait()
+        self.assertEqual(self.metrics.state.sim_rollouts, 1)
+        self.playback._call.assert_not_called()
+        self.playback.set_enabled(True)
+        self.assertTrue(self.playback._streamer.is_alive())
+        self.start('next-message', 'next-call')
+        self.file.write_bytes(MAGIC+record(2))
+        self.poll()
+        self.wait()
+        self.playback._call.assert_called_once()
+
+    def test_old_render_cannot_cross_disable_and_enable_while_waiting_for_connection(self):
+        playback = self.playback
+        playback.session.lock = threading.Lock()
+        playback.session.client = Mock()
+        old_generation = playback._generation
+        with playback.session.lock:
+            thread = threading.Thread(target=Playback._call,
+                                      args=(playback, {}, 1, 'fixture', 1),
+                                      kwargs={'generation': old_generation})
+            thread.start()
+            playback.set_enabled(False)
+            playback.set_enabled(True)
+        thread.join(3)
+        self.assertFalse(thread.is_alive())
+        playback.session.client.call.assert_not_called()
+        self.assertEqual(self.metrics.state.replays, 0)
+
     def test_tail_waits_for_complete_record_and_does_not_touch_writer(self):
         tail=RecordTail(MAGIC,HEADER)
         data=MAGIC+record(1)+record(2)[:10]

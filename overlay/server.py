@@ -449,6 +449,8 @@ def make_handler(pinned: Path | None):
                     raise ValueError('当前主控尚未提供在线推演设置，请先使用支持此功能的主控')
                 if data.get('kind') == 'act_limit' and not control.snapshot().get('act_limit_control'):
                     raise ValueError('当前主控尚未提供在线动作帧数设置，请先使用支持此功能的主控')
+                if data.get('kind') == 'playback' and not control.snapshot().get('playback_control'):
+                    raise ValueError('当前主控尚未提供在线规划回放开关')
                 if data.get('kind') == 'bridge_reload' and not control.snapshot().get('bridge_reload_control'):
                     raise ValueError('当前主控或桥接尚未支持不停录重载；需要先安装常驻核心并重新接入')
                 if data.get('kind') == 'park' and not control.snapshot().get('park_control'):

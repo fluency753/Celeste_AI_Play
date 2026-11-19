@@ -296,13 +296,13 @@ class _Msg:
     pending: set = field(default_factory=set)
     label: str = ""
     program: bool = False
-    previewed: bool = False
+    preview_key: tuple[int, str] | None = None
     tail: object = field(default_factory=lambda: RecordTail(MAGIC, HEADER))
 
 
 @dataclass
 class _PreviewCompletion:
-    keys: tuple[str, ...]
+    keys: tuple[tuple[int, str], ...]
     offsets: list[int]  # 每个已收走来源中，增量读取器消费到的位置
     # 同一次接管按来源拆成几组时，各组共用这一份预览结果：第一组取走 _preview_success 后记在这里，
     # 后面的组照用，不会因为取不到而把已经预览过的路线整批重画
@@ -318,7 +318,7 @@ class _SearchOwner:
 
 @dataclass
 class _PreviewJob:
-    key: str
+    key: tuple[int, str]
 
 
 @dataclass
@@ -328,6 +328,7 @@ class _RoundJob:
     moved: list[Path]  # 入队后由工作线程独占，所有退出路径都要释放
     account: bool = True
     completion: _PreviewCompletion | None = None
+    generation: int | None = None
 
 
 class Playback:
@@ -341,6 +342,8 @@ class Playback:
         # 两类来源都可以回放，但文件与消息不授权模拟，也不增减主控预算。
         self.collect = session.workspace is not None
         self.enabled = bool(self.collect and cfg.playback)
+        self.disable_requested = threading.Event()
+        self._generation = 0
         self.dir = session.workspace / "game" / "simlog" if session.workspace is not None else None
         self.archive = session.run_dir / "playback"
         self.pending = self.archive / "pending"
@@ -372,9 +375,28 @@ class Playback:
         if self.collect:
             self._worker = threading.Thread(target=self._run, name="playback", daemon=True)
             self._worker.start()
-        if self.enabled and getattr(cfg, 'playback_stream_interval_s', 1) > 0:
+        self._start_streamer()
+
+    def _start_streamer(self) -> None:
+        if self.enabled and self._streamer is None and getattr(self.cfg, 'playback_stream_interval_s', 1) > 0:
             self._streamer = threading.Thread(target=self._stream, name='playback-preview', daemon=True)
             self._streamer.start()
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Switch drawing at a game connection boundary, keeping trajectory accounting."""
+        with self._submit_lock:
+            if self._closed:
+                raise ValueError('规划回放已结束')
+            if self.enabled != enabled:
+                self._generation += 1
+            self.enabled = enabled
+            if not enabled:
+                with self._cv:
+                    self.rounds.clear()
+            self._start_streamer()
+
+    def _can_draw(self, generation: int | None) -> bool:
+        return self.enabled and not self.disable_requested.is_set() and generation == self._generation
 
     # ---- 从输出流分轮（在读输出流的线程里调用，只做轻活） ----
 
@@ -417,12 +439,14 @@ class Playback:
         self._queue_preview(mid, msg)
         for key, _ in ready:
             del self._msgs[key]
-        self._submit(msg.label, previews=tuple((key, other.tail) for key, other in ready if other.previewed))
+        self._submit(msg.label, previews=tuple((other.preview_key, other.tail) for _, other in ready if other.preview_key))
 
     def _stream(self):
         while not self._stream_stop.wait(max(.1, getattr(self.cfg, 'playback_stream_interval_s', 1))):
             try:
                 with self._submit_lock:
+                    if not self.enabled:
+                        continue
                     active = [(mid, msg) for mid, msg in self._msgs.items() if msg.program and msg.pending]
                     # Shared log directory cannot attribute simultaneous programs reliably.
                     if len(active) == 1:
@@ -431,7 +455,8 @@ class Playback:
                 self.log(f'[playback] 搜索中预览暂不可用：{exc}')
 
     def _queue_preview(self, mid, msg):
-        if self._closed or not self.enabled or not msg.program or getattr(self.cfg, 'playback_stream_interval_s', 1) <= 0:
+        generation = self._generation
+        if self._closed or not self._can_draw(generation) or not msg.program or getattr(self.cfg, 'playback_stream_interval_s', 1) <= 0:
             return
         available = PREVIEW_BYTES - self._preview_bytes
         if available < len(MAGIC) + HEADER.size:
@@ -441,16 +466,19 @@ class Playback:
         sources = msg.tail.read(files, budget=available, max_record_bytes=PREVIEW_BYTES, on_skip=self.log)
         if not sources:
             return
-        previous = self._live_pending.get(mid)
+        key = (generation, mid)
+        previous = self._live_pending.get(key)
         chunks = (previous[1] if previous else []) + sources
         self._preview_bytes += sum(map(len, sources))
-        self._live_pending[mid] = (msg.label, chunks)
-        msg.previewed = True
+        self._live_pending[key] = (msg.label, chunks)
+        msg.preview_key = key
         if previous is None:
-            self._enqueue(_PreviewJob(mid))
+            self._enqueue(_PreviewJob(key))
 
     def _enqueue(self, job):
         """调用方持有 _submit_lock；接收与关闭哨兵具有相同的串行边界。"""
+        if isinstance(job, _RoundJob) and self._can_draw(self._generation):
+            job.generation = self._generation
         with self._cv:
             self._backlog += 1
         self._jobs.put(job)
@@ -619,16 +647,20 @@ class Playback:
             job = self._jobs.get()
             if job is None:
                 return
+            generation = self._generation
+            for key in tuple(self._preview_success):
+                if key[0] != generation:
+                    self._preview_success.pop(key)
             preview_size = 0
             try:
                 if isinstance(job, _PreviewJob):
                     with self._submit_lock:
                         label, sources = self._live_pending.pop(job.key)
                         preview_size = sum(map(len, sources))
-                    if not self._stream_stop.is_set():
+                    if self._can_draw(job.key[0]):
                         previous = self._preview_success.get(job.key, True)
                         self._preview_success[job.key] = False
-                        success = bool(self._play_round(label, sources, False, preview=True))
+                        success = bool(self._play_round(label, sources, False, preview=True, generation=job.key[0]))
                         self._preview_success[job.key] = previous and success
                 else:
                     label, sources, account, completion = job.label, job.sources, job.account, job.completion
@@ -637,9 +669,9 @@ class Playback:
                             results = [self._preview_success.pop(key, False) for key in completion.keys]
                             completion.shared['success'] = all(results)
                         self._finish_previewed_round(label, sources, account, completion.offsets,
-                                                     completion.shared['success'])
+                                                     completion.shared['success'], job.generation)
                     else:
-                        self._play_round(label, sources, account)
+                        self._play_round(label, sources, account, generation=job.generation)
             except Exception as exc:  # 回放出问题不影响游玩
                 self.log(f"[playback] 回放失败：{exc}")
             finally:
@@ -653,10 +685,10 @@ class Playback:
                     self._backlog -= 1
                     self._cv.notify_all()
 
-    def _finish_previewed_round(self, label, sources, account, offsets, success):
+    def _finish_previewed_round(self, label, sources, account, offsets, success, generation):
         """补画已收走日志的未读尾部；文件保留到补画和最终记账都完成。"""
         full = read_logs(sources)
-        if self.enabled:
+        if self._can_draw(generation):
             # read_logs may omit invalid/unreadable sources; use source
             # identity rather than assuming its source indexes are unchanged.
             end_by_source = {id(source):end for source, end in zip(sources, offsets)}
@@ -666,13 +698,13 @@ class Playback:
             try:
                 success = True
                 for batch in self._remaining_batches(full, unread):
-                    if not self.enabled or not self._play_round(label, [], False, preview=True, log=batch):
+                    if not self._can_draw(generation) or not self._play_round(label, [], False, preview=True, log=batch, generation=generation):
                         success = False
                         break
             except Exception as exc:
                 self.log(f'[playback] 尾部补画失败，回退最终回放：{exc}')
                 success = False
-        self._play_round(label, [], account, skip_render=success, log=full)
+        self._play_round(label, [], account, skip_render=success, log=full, generation=generation)
 
     def _remaining_batches(self, log, indexes, budget=None):
         budget = PREVIEW_BYTES if budget is None else budget
@@ -691,7 +723,7 @@ class Playback:
             yield log.subset(np.asarray(batch))
 
     def _play_round(self, label: str, sources: list, account: bool = True,
-                    preview=False, skip_render=False, log=None) -> bool | None:
+                    preview=False, skip_render=False, log=None, generation=None) -> bool | None:
         t0 = time.monotonic()
         rd = self._digest(read_logs(sources) if log is None else log, label,
                           all_tracks=preview and not self._stream_sample)
@@ -700,7 +732,7 @@ class Playback:
             # completed normally; do not abort subsequent eligible tail batches.
             return True if preview else None
         with self._cv:
-            if self.enabled and not preview:
+            if self._can_draw(generation) and not preview:
                 # final() needs counts only. Keeping decoded tracks here would
                 # retain every previous round's arrays until the next real act.
                 self.rounds.append(Round(rd.label, rd.rollouts, [], best_exit=rd.best_exit))
@@ -725,7 +757,7 @@ class Playback:
             if not best:
                 return
             rd.tracks = best
-        if not self.enabled or not rd.tracks:
+        if not self._can_draw(generation) or not rd.tracks:
             self.metrics.update(sim_round_rollouts=0)
             return
         speed = float(self.cfg.playback_speed)
@@ -744,7 +776,7 @@ class Playback:
                                 hold=max(1, int(18 / factor)), fade=0)
         seg["camera"] = "keep"
         try:
-            reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=rd.rollouts)
+            reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=rd.rollouts, generation=generation)
         finally:
             self.metrics.update(sim_round_rollouts=0)   # 这一轮画完：HUD 的"推演路径"清零
         record = {"t": time.time(), "decision": self.session.decision_index + 1, "round": number, "label": rd.label,
@@ -778,21 +810,23 @@ class Playback:
         scale = (bounds[2] * bounds[3]) / (320 * 180) if bounds and bounds[2] > 0 and bounds[3] > 0 else 1.0
         return max(1, round(self.cfg.playback_round_s * scale * 60))
 
-    def _call(self, seg: dict, round_no: int, label: str, runs: int, in_act: bool = False) -> dict | None:
+    def _call(self, seg: dict, round_no: int, label: str, runs: int, *, generation: int | None) -> dict | None:
         """发一段回放给桥接并等它放完（持有游戏连接的锁）。HUD 在这期间显示"规划回放"。"""
-        self.metrics.update(replaying=True, replay_round=round_no, replay_rounds=max(round_no,len(self.rounds)),
-                            replay_label=label, replay_runs=runs)
-        t0 = time.monotonic()
         reply = None
-        try:
-            with self.session.lock:
+        with self.session.lock:
+            if not self._can_draw(generation):
+                return None
+            self.metrics.update(replaying=True, replay_round=round_no, replay_rounds=max(round_no,len(self.rounds)),
+                                replay_label=label, replay_runs=runs)
+            t0 = time.monotonic()
+            try:
                 reply = self.session.client.call("playback", **seg)
-        except Exception as exc:  # 回放失败不影响执行
-            self.log(f"[playback] 回放失败：{exc}")
-        finally:
-            dt = time.monotonic() - t0
-            self.metrics.add(replay_s=dt, replays=1, **({"replay_act_s": dt} if in_act else {}))
-            self.metrics.update(replaying=False, replay_round=0, replay_label="", replay_runs=0)
+            except Exception as exc:  # 回放失败不影响执行
+                self.log(f"[playback] 回放失败：{exc}")
+            finally:
+                dt = time.monotonic() - t0
+                self.metrics.add(replay_s=dt, replays=1)
+                self.metrics.update(replaying=False, replay_round=0, replay_label="", replay_runs=0)
         if reply and reply.get("skipped"):
             self.log(f"[playback] 画面还在转场（{reply['skipped']}），这一段不回放")
         elif reply and reply.get("render_avg_ms") and float(reply["render_avg_ms"]) > 14:
@@ -880,7 +914,7 @@ class Playback:
             with self._submit_lock:
                 stale = list(self._msgs.items())
                 label = next((msg.label for _, msg in reversed(stale) if msg.label), "")
-                previews = tuple((mid, msg.tail) for mid, msg in stale if msg.previewed)
+                previews = tuple((msg.preview_key, msg.tail) for _, msg in stale if msg.preview_key)
                 for mid, _ in stale:
                     self._msgs.pop(mid, None)
                 for tid, mid in list(self._tool_msg.items()):
@@ -894,7 +928,7 @@ class Playback:
     def final(self) -> None:
         """GameSession 在执行一次计划之前调用（排队的轮次已经放完；游戏冻结着，调用方持有游戏连接的锁）：
         镜头回到 Madeline（本来就在那里时桥接直接结束），然后开始真实执行。"""
-        if not self.enabled:
+        if not self._can_draw(self._generation):
             return
         with self._cv:
             rounds, self.rounds = self.rounds, []

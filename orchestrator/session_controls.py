@@ -513,7 +513,7 @@ class SessionControls:
                 phase="pausing" if self.pausing else "chatting" if self.turn_active else "idle",
                 session_id=self.session_id, chat_only=self.chat_only,
                 **self._fast_status(),
-                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._act_limit_status(), **self._chapter_reset_status(), **self._detour_status(), **self._bridge_reload_status())
+                **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._act_limit_status(), **self._chapter_reset_status(), **self._detour_status(), **self._bridge_reload_status(), **self._playback_status())
             await asyncio.sleep(.5)
 
     async def _controls(self):
@@ -596,6 +596,11 @@ class SessionControls:
                                 self.cfg.allow_detour = self.session.cfg.allow_detour = allowed
                             self.pending_messages.append({**row, 'text': notification('action_permissions', facts=notice(self.session.cfg, allowed, permissions_note, travel=bool(getattr(self.session, 'travel_tool', False))), cfg=self.cfg)})
                             self.control.mark(row['id'], 'waiting', '计划外地图许可已生效，正在通知 agent')
+                        elif row['kind'] == 'playback':
+                            if not self._playback_status()['playback_control']:
+                                raise ValueError('当前没有可切换的规划回放')
+                            note = await asyncio.to_thread(self.session.update_playback, row['text'] == 'on')
+                            self.control.mark(row['id'], 'submitted', note)
                         elif row['kind'] == 'act_limit':
                             if not self._act_limit_status()['act_limit_control']:
                                 raise ValueError('当前没有在试玩，不能修改动作帧数上限')
@@ -767,7 +772,7 @@ class SessionControls:
                 self.control.heartbeat(paused=self.paused, phase="chatting" if self.turn_active else "idle",
                     session_id=self.session_id, chat_only=self.chat_only,
                     **self._fast_status(),
-                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._act_limit_status(), **self._chapter_reset_status(), **self._detour_status(), **self._bridge_reload_status())
+                    **self._effort_status(), **self._goal_status(), **self._cutscene_status(), **self._chapter_status(), **self._sim_status(), **self._act_limit_status(), **self._chapter_reset_status(), **self._detour_status(), **self._bridge_reload_status(), **self._playback_status())
                 await asyncio.sleep(.1)
         except asyncio.CancelledError:
             raise
@@ -855,6 +860,13 @@ class SessionControls:
         return {'bridge_reload_control': bool(self._owns_bridge_connection()
                                              and getattr(self.session, 'bridge_reload_supported', False)),
                 'bridge_reload_failed': getattr(self, '_bridge_reload_failed', False)}
+
+    def _playback_status(self):
+        playback = getattr(self.session, 'playback', None)
+        enabled = bool(getattr(playback, 'collect', False) and not self.chat_only
+                       and not getattr(self, 'prepare_only', False) and not self.session.done
+                       and not getattr(self, '_bridge_reload_failed', False))
+        return {'playback_control': enabled, 'playback_enabled': bool(enabled and playback.enabled)}
 
     def _act_limit_status(self):
         enabled = (not self.chat_only and not getattr(self, 'prepare_only', False)

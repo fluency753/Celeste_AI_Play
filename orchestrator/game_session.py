@@ -1467,6 +1467,32 @@ class GameSession:
         return {'key': key, 'frames': act_frame_cap(self.cfg), 'min_frames': act_frame_min(self.cfg),
                 'min': item.low, 'max': item.high}
 
+    def update_playback(self, enabled: bool) -> str:
+        playback = self.playback
+        if playback is None or not playback.collect:
+            raise ActError('当前没有可切换的规划回放')
+        if not enabled:
+            playback.disable_requested.set()
+        try:
+            with self.lock:
+                if self.done or self.goals.stop_motion.is_set():
+                    raise ActError('试玩已结束，不能切换规划回放')
+                if enabled != playback.enabled:
+                    path = self.run_dir / 'run_state.json'
+                    state = load_json(path)
+                    state['playback'] = enabled
+                    write_json(path, state, indent=2)
+                    playback.set_enabled(enabled)
+                    self.cfg.playback = enabled
+                if not enabled:
+                    try:
+                        self.client.call('playback_clear')
+                    except (OSError, RuntimeError) as exc:
+                        return f'规划回放已关闭，画面清理未确认：{exc}'
+                return '规划回放已打开' if enabled else '规划回放已关闭'
+        finally:
+            playback.disable_requested.clear()
+
     def update_act_limit(self, data: dict) -> dict:
         """Apply the current mode's action cap only after its resume state is durable."""
         from .tuning import coerce, overrides, DEFAULTS

@@ -1025,7 +1025,7 @@ HUD 的「新建并准备」默认绑定点击时控制台选中的预设，准�
 | 改了 `agent-container/` 之后 | 重新执行 `docker build -t celeste-agent:0.1 agent-container`；主控发现镜像变了会自动重建容器，工作区保留 |
 | `--provider deepseek` 提示找不到密钥 | 按 4.9 节建 `configs\local.providers.json`，或设环境变量 `DEEPSEEK_API_KEY` |
 | 智能体总被提示“本章的规划轮次已经用完” | 这是速通主控预测的硬预算；依据已有结果继续任务。Shell 与文件工具仍可用；关闭限额会关闭这项预测能力，不会变成无限制模拟 |
-| 录像里没有规划回放 | 需要启用 `--playback` 并产生成功预测或通过 `show.trajectory()` 提交展示轨迹；回放不会自行调用模拟器。主控输出搜 `[playback]` |
+| 录像里没有规划回放 | 用控制台或网页 HUD 的「规划回放」开关开启，或开局指定 `--playback`。回放使用成功预测或 `show.trajectory()` 提交的轨迹。切换在当前绘制片段结束时生效，续跑沿用最后设置。主控输出搜 `[playback]` |
 | HUD 上思考很久不变 | 思考期间的更新取决于智能体有没有调用 `narrate`（看 `agent_events.jsonl`）；解说计时会在它下一次调用工具时提醒，一段连续的长思考中间没有提醒的机会 |
 | PowerShell 里中文显示成乱码 | 日志文件本身是 UTF-8；用 `tools\run_status.py` 查看，或先执行 `chcp 65001` |
 

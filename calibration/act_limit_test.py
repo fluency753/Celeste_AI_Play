@@ -8,7 +8,7 @@ import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from orchestrator.config import RunConfig
 from orchestrator.control import RunControl
@@ -108,9 +108,9 @@ class ActLimitTests(unittest.TestCase):
         thread = threading.Thread(target=http.serve_forever, daemon=True)
         thread.start()
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        def post():
+        def post(kind='act_limit', text='{"frames":300}'):
             request = urllib.request.Request(f'http://127.0.0.1:{http.server_port}/api/control',
-                data=json.dumps({'run': str(self.root), 'kind': 'act_limit', 'text': '{"frames":300}'}).encode(),
+                data=json.dumps({'run': str(self.root), 'kind': kind, 'text': text}).encode(),
                 headers={'Content-Type': 'application/json'})
             return opener.open(request)
         try:
@@ -125,6 +125,16 @@ class ActLimitTests(unittest.TestCase):
                 ident = json.load(response)['id']
             self.assertEqual(control.pending()[0]['id'], ident)
             self.assertEqual(control.pending()[0]['kind'], 'act_limit')
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                post('playback', 'on')
+            with rejected.exception as rejection:
+                self.assertEqual(rejection.code, 400)
+                self.assertIn('在线规划回放开关', rejection.read().decode())
+            control.heartbeat(playback_control=True)
+            with post('playback', 'off') as response:
+                playback_id = json.load(response)['id']
+            action = next(row for row in control.pending() if row['id'] == playback_id)
+            self.assertEqual((action['kind'], action['text']), ('playback', 'off'))
         finally:
             http.shutdown()
             http.server_close()
@@ -132,6 +142,42 @@ class ActLimitTests(unittest.TestCase):
 
 
 class ActLimitControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_playback_switch_persists_and_clears_at_the_boundary(self):
+        from orchestrator.playback import Playback
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cfg = RunConfig(agent='test', save='test', model='test', engine='codex', mode='explore')
+            cfg.playback = True
+            cfg.playback_stream_interval_s = 0
+            metrics = Metrics(root/'metrics.json', 'test', 'test', 'high', 60)
+            with patch('orchestrator.config.REPO_ROOT', root):
+                session = GameSession(cfg, root, metrics)
+            session.client = Mock(sock=None)
+            session.playback = Playback(cfg, session, metrics)
+            runner = CodexRunner(cfg, root, session, metrics, '')
+            (root/'run_state.json').write_text('{"playback":true,"save":"test"}', encoding='utf-8')
+            task = asyncio.create_task(runner._controls())
+            try:
+                for enabled in (False, True):
+                    ident = runner.control.enqueue('playback', 'on' if enabled else 'off')
+                    async with asyncio.timeout(3):
+                        while True:
+                            if task.done():
+                                await task
+                            row = next(row for row in runner.control.snapshot()['actions'] if row['id'] == ident)
+                            if row['status'] in {'submitted', 'error'}:
+                                break
+                            await asyncio.sleep(.01)
+                    self.assertEqual(row['status'], 'submitted', row)
+                    self.assertEqual(runner._playback_status()['playback_enabled'], enabled)
+                    self.assertEqual(json.loads((root/'run_state.json').read_text(encoding='utf-8')), {'playback': enabled, 'save': 'test'})
+                session.client.call.assert_called_once_with('playback_clear')
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                session.playback.close()
+                session.close(release=False)
+
     async def test_update_waits_for_action_boundary_then_publishes_canonical_settings_and_notification(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

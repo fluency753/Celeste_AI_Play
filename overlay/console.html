@@ -655,6 +655,7 @@
       <div class="toolcall" id="runToolCall"></div>
       <div class="controls" id="runControls">
         <button class="btn blue" type="button" id="pauseToggle">暂停</button>
+        <button class="btn" type="button" id="playbackToggle" aria-pressed="false" title="在当前绘制片段结束后切换" hidden>规划回放：关</button>
         <select id="liveEffort" aria-label="推理强度：自动或固定"></select>
         <select id="liveCutscene" aria-label="剧情处理"><option value="auto">剧情：自动跳过</option><option value="agent">剧情：交给智能体</option></select>
         <select id="liveRestartChapter" aria-label="重启章节权限"><option value="deny">重启章节：禁止</option><option value="allow">重启章节：允许</option></select>
@@ -2373,6 +2374,12 @@ function renderControls() {
   $("pauseToggle").disabled = !connected;
   $("pauseToggle").textContent = c.paused ? "继续" : "暂停";
   $("pauseToggle").classList.toggle("primary", !!c.paused);
+  const replay = $("playbackToggle");
+  const pendingReplay = (c.actions || []).some(a => a.kind === "playback" && ["queued", "waiting"].includes(a.status));
+  replay.hidden = !c.playback_control;
+  replay.disabled = !connected || pendingReplay;
+  replay.setAttribute("aria-pressed", String(!!c.playback_enabled));
+  replay.textContent = `规划回放：${c.playback_enabled ? "开" : "关"}${pendingReplay ? "（待切换）" : ""}`;
   const effort = $("liveEffort");
   const levels = c.effort_levels || [];
   const wanted = ["auto", ...levels].join(",");
@@ -3887,6 +3894,11 @@ $("promptRevert").addEventListener("click", () => { if (ui.promptFile) { $("prom
 $("promptReset").addEventListener("click", () => { if (ui.promptFile && confirmTwice("promptReset", "再点一次：删掉本机修改")) resetPromptFile(ui.promptFile.name); });
 $("promptBack").addEventListener("click", closePromptEditor);
 $("pauseToggle").addEventListener("click", () => sendControl(ui.control && ui.control.paused ? "resume" : "pause"));
+$("playbackToggle").addEventListener("click", async () => {
+  $("playbackToggle").disabled = true;
+  try { await sendControl("playback", ui.control?.playback_enabled ? "off" : "on"); }
+  finally { renderControls(); }
+});
 $("liveEffort").addEventListener("change", (e) => sendControl("effort", e.target.value));
 $("liveCutscene").addEventListener("change", (e) => sendControl("cutscene_mode", e.target.value));
 for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {

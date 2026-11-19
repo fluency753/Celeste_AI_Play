@@ -31,7 +31,7 @@ class RunControl:
     def enqueue(self, kind, text=""):
         if kind not in {"message", "pause", "resume", "fast", "effort", "detach", "goal", "goal_clear", "stop", "cutscene_mode",
                         "interrupt", "park", "chapters", "sim_update", "act_limit", "chapter_reset", "action_permissions", "bridge_reload",
-                        "detour"}:
+                        "detour", "playback"}:
             raise ValueError("未知控制指令")
         text = str(text).strip()
         if kind == 'act_limit':
@@ -48,6 +48,8 @@ class RunControl:
             raise ValueError('章节重置策略须为 allow 或 deny')
         if kind == 'detour' and text not in {'on', 'off'}:
             raise ValueError('计划外地图许可须为 on 或 off')
+        if kind == 'playback' and text not in {'on', 'off'}:
+            raise ValueError('规划回放须为 on 或 off')
         if kind == 'cutscene_mode' and text not in {'auto','agent'}:
             raise ValueError('剧情模式须为 auto 或 agent')
         if kind == "goal":

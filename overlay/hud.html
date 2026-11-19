@@ -279,7 +279,7 @@
       <div id="simStatus" role="status">正在读取推演设置…</div>
     </details>
     <textarea id="agentInput" aria-label="给独立 agent 的提示" placeholder="给 agent 发提示… Enter 发送，Shift+Enter 换行" maxlength="4000"></textarea>
-    <div class="control-buttons" style="flex-wrap:wrap"><button id="togglePlay" type="button" disabled>暂停</button><button id="toggleFast" type="button" aria-pressed="false" title="切换独立 agent 的 Fast 模式，下一轮生效" disabled>Fast：—</button><select id="liveEffort" aria-label="当前会话推理强度" title="手动固定推理强度，下一轮生效；自动表示由 agent 调整" disabled><option value="auto">推理：自动</option></select><select id="cutsceneMode" aria-label="剧情处理模式" title="可在开始前和游玩中切换；agent决定时自行观看、推进、选择或跳过" disabled><option value="auto">剧情：自动跳过</option><option value="agent">剧情：agent决定</option></select><select id="permissionRestartChapter" aria-label="重启章节权限" disabled><option value="deny">重启章节：禁止</option><option value="allow">重启章节：允许</option></select><select id="permissionReturnToMap" aria-label="返回地图权限" disabled><option value="deny">返回地图：禁止</option><option value="allow">返回地图：允许</option></select><select id="permissionSaveQuit" aria-label="保存退出权限" disabled><option value="deny">保存退出：禁止</option><option value="allow">保存退出：允许</option></select><select id="permissionDetour" aria-label="计划外地图许可" title="允许 agent 自行返回地图去其他已解锁的官方章节、面与检查点，计划不变；开启时一并允许返回地图" disabled><option value="deny">计划外地图：禁止</option><option value="allow">计划外地图：允许</option></select><button id="agentSend" type="submit" disabled>发送</button></div>
+    <div class="control-buttons" style="flex-wrap:wrap"><button id="togglePlay" type="button" disabled>暂停</button><button id="playbackToggle" type="button" aria-pressed="false" hidden disabled>规划回放：关</button><button id="toggleFast" type="button" aria-pressed="false" title="切换独立 agent 的 Fast 模式，下一轮生效" disabled>Fast：—</button><select id="liveEffort" aria-label="当前会话推理强度" title="手动固定推理强度，下一轮生效；自动表示由 agent 调整" disabled><option value="auto">推理：自动</option></select><select id="cutsceneMode" aria-label="剧情处理模式" title="可在开始前和游玩中切换；agent决定时自行观看、推进、选择或跳过" disabled><option value="auto">剧情：自动跳过</option><option value="agent">剧情：agent决定</option></select><select id="permissionRestartChapter" aria-label="重启章节权限" disabled><option value="deny">重启章节：禁止</option><option value="allow">重启章节：允许</option></select><select id="permissionReturnToMap" aria-label="返回地图权限" disabled><option value="deny">返回地图：禁止</option><option value="allow">返回地图：允许</option></select><select id="permissionSaveQuit" aria-label="保存退出权限" disabled><option value="deny">保存退出：禁止</option><option value="allow">保存退出：允许</option></select><select id="permissionDetour" aria-label="计划外地图许可" title="允许 agent 自行返回地图去其他已解锁的官方章节、面与检查点，计划不变；开启时一并允许返回地图" disabled><option value="deny">计划外地图：禁止</option><option value="allow">计划外地图：允许</option></select><button id="agentSend" type="submit" disabled>发送</button></div>
     <div id="controlStatus" role="status">正在连接主控…</div>
   </form>
 </div>
@@ -290,7 +290,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 79;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 80;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -1105,6 +1105,16 @@ async function pollControl() {
     detourInput.disabled=!c.connected || !c.detour_control || (!c.allow_detour && c.detour_supported === false) || busy || pendingPermissions;
     $('cutsceneMode').value=pendingStory?.text || c.cutscene_mode || 'auto';
     $('cutsceneMode').disabled=!c.connected || !c.cutscene_control || busy || !!pendingStory;
+    const replay = $('playbackToggle');
+    const pendingReplay = (c.actions || []).some(a=>a.kind==='playback' && ['queued','waiting'].includes(a.status));
+    const lastReplay = c.actions?.[0];
+    if (c.connected && !busy && lastReplay?.kind === 'playback' && ['submitted','error'].includes(lastReplay.status)) {
+      $('controlStatus').textContent = lastReplay.detail;
+    }
+    replay.hidden = !c.playback_control;
+    replay.disabled = !c.connected || busy || pendingReplay;
+    replay.setAttribute('aria-pressed', String(!!c.playback_enabled));
+    replay.textContent = `规划回放：${c.playback_enabled ? '开' : '关'}${pendingReplay ? '（待切换）' : ''}`;
     const manageable = controlData.session_management && (controlData.can_create_session || controlData.can_wake) && c.phase !== 'chatting' && !switchingSession && !controlData.waking && !busy;
     const selectedModel=modelCatalog.models.find(item=>item.id===$('sessionModel').value);
     $('sessionNew').disabled = !manageable || modelsLoading || !!modelCatalogError || !selectedModel?.efforts.includes($('sessionEffort').value);
@@ -1218,6 +1228,10 @@ $('toggleFast').onclick = async () => {
   await sendControl('fast', controlData?.control.fast ? 'off' : 'on');
 };
 $('cutsceneMode').onchange=async()=>{await sendControl('cutscene_mode',$('cutsceneMode').value);};
+$('playbackToggle').onclick=async()=>{
+  $('playbackToggle').disabled=true;
+  if (!await sendControl('playback',controlData?.control.playback_enabled ? 'off' : 'on')) await pollControl();
+};
 for (const [key,id] of [['restart_chapter','RestartChapter'],['return_to_map','ReturnToMap'],['save_quit','SaveQuit']]) {
   $('permission'+id).onchange=async()=>sendControl('action_permissions',JSON.stringify({[key]:$('permission'+id).value==='allow'}));
 }
