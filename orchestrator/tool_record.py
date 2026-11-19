@@ -16,7 +16,7 @@ from mcp.types import TextContent
 from .run_log import is_rejection, log_exception
 
 
-ACTION_TOOLS = {'act', 'cutscene', 'travel', 'exit_level'}
+ACTION_TOOLS = {'act', 'cutscene', 'travel', 'exit_level', 'practice_room'}
 
 
 # act 结果里的逐帧轨迹很大（几百 KB 到几 MB），完整的在 /workspace/game/last_act.json，调用记录里只留行数和最后一帧

@@ -128,7 +128,7 @@ PLAYBACK_NOTE = "主控预测完成的路线可以画进游戏给观众看；回
 AGENT_PLAYBACK_NOTE = "用模拟器推演过的路线，系统会按已刷新的记录画进游戏给观众看（搜索进行中也会画；不推进游戏、不计入章节计时），详见\"规划回放\"。"
 
 
-def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServer:
+def build_server(session: GameSession, study: KbStudy | None = None, *, catalog: bool = False) -> MCPServer:
     server = RecordedMCPServer(session, name="celeste", instructions="《蔚蓝》游戏工具：observe 查看当前帧，act 推进若干帧。",
                        log_level="WARNING")
     metrics = session.metrics
@@ -606,6 +606,28 @@ def build_server(session: GameSession, study: KbStudy | None = None) -> MCPServe
             return ['主控已记录目标及达成依据，按智能体报告结束试玩并收尾录像。没有发送游戏输入。请结束本轮。']
 
     from .detour import map_rule
+    @optional_tool(catalog or 'practice_room' in tools, name='practice_room',
+                   description='整章速通且允许重启章节时，按房间名在当前目标地图的指定出生点开始灰计时练习。保留会话与录像；换房后先 observe。使用原生菜单重启章节，恢复从章首计时。',
+                   structured_output=False)
+    async def practice_room(room: str) -> list:
+        ticket = reload_ticket()
+        async with journal.execution(call_lock):
+            if (note := gated('practice_room', ticket)) is not None:
+                return [note]
+            await flush_tokens()
+            if (note := gated('practice_room', ticket)) is not None:
+                return [note]
+            begin()
+            try:
+                result = await asyncio.to_thread(session.practice_room, room)
+                journal.detail(result)
+                return [json.dumps(result, ensure_ascii=False) + '\n请先 observe 再安排下一次动作。']
+            except ActError as err:
+                journal.log_failure(err, phase='practice_room')
+                raise ToolError(str(err)) from err
+            finally:
+                finish()
+
     @optional_tool(tool_exit_level, name='exit_level', description='按用户要求离开当前关卡。默认 finish_run=false：需返回地图权限，仅返回地图继续原任务，不算通关，不停止录像、不清除后续章节；返回后先 observe，只进入当前计划或许可允许的地图，' + map_rule(session.cfg) + '。只有用户明确要求结束整次试玩时才设 finish_run=true：按允许的返回地图或保存退出操作收尾整次任务。不得从“返回地图换章”推断为结束任务；权限不足时说明原因，不以保存退出绕过。', structured_output=False)
     async def exit_level(reason: str, finish_run: bool = False) -> list:
         ticket = reload_ticket()

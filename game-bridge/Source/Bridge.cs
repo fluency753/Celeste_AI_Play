@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.12.2";
+    public const string Version = "1.13.0";
     internal static bool RecordOnlyChapters { get; private set; }
     internal static bool ChapterRecordingEnabled => RecordOnlyChapters && RecordingAudio.Enabled;
     internal static bool RecordingChapterActive { get; private set; }
@@ -770,6 +770,7 @@ internal static class Bridge {
                     w.WriteBoolean("create_save", true);
                     w.WriteBoolean("checkpoints", true);
                     w.WriteBoolean("load_room_modes", true);
+                    w.WriteBoolean("speedrun_practice_room", true);
                     w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("entry_guard", MapEntryGuard.Available);
                     w.WriteBoolean("map_entry_set", MapEntryGuard.Available);
@@ -952,6 +953,10 @@ internal static class Bridge {
                 LoadRoom(req.Id, a);
                 break;
 
+            case "speedrun_practice_room":
+                PracticeRoom(req.Id, a);
+                break;
+
             case "areas":
                 // 官方章节（A 面）与各自的检查点：按段通关用（段 k = 检查点 k 到下一个检查点或章节结尾，0 是章节开头）
                 IpcServer.Send(Reply.Ok(req.Id, WriteAreas));
@@ -1119,6 +1124,36 @@ internal static class Bridge {
             w.WriteNumber("chapter", area.ID);
             w.WriteNumber("mode", (int)area.Mode);
         }));
+    }
+
+    private static void PracticeRoom(long id, JsonElement args) {
+        if (!Active || job != null || Playback.Running || Engine.Scene is not Level level || level.Completed) {
+            IpcServer.Send(Reply.Error(id, "practice requires an active, unfinished level with no step or playback"));
+            return;
+        }
+        Session current = level.Session;
+        AreaKey area = current.Area;
+        if (!IsOfficial(AreaData.Get(area)) || SaveData.Instance?.FileSlot != GetInt(args, "slot", -1) ||
+            area.SID != GetString(args, "sid", "") || (int)area.Mode != GetInt(args, "mode", -1)) {
+            IpcServer.Send(Reply.Error(id, "practice target does not match the current official chapter, side and save"));
+            return;
+        }
+        string room = GetString(args, "room", "");
+        if (room.Length == 0 || current.MapData.Get(room) is not { Spawns.Count: > 0 }) {
+            IpcServer.Send(Reply.Error(id, "practice room does not exist or has no spawn"));
+            return;
+        }
+        // Keep StartCheckpoint null so the original Restart Chapter menu returns to the chapter start.
+        var practice = new Session(area) {
+            Level = room,
+            FirstLevel = false,
+            StartedFromBeginning = false,
+            Inventory = current.Inventory,
+            Dreaming = current.Dreaming,
+            CoreMode = current.CoreMode,
+        };
+        Engine.Scene = new LevelLoader(practice);
+        IpcServer.Send(Reply.Ok(id, w => w.WriteString("room", room)));
     }
 
     private static void Teleport(long id, JsonElement a) {

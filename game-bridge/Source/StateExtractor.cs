@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading;
 using Celeste;
 using Microsoft.Xna.Framework;
 using Monocle;
@@ -23,6 +25,9 @@ internal sealed class SnapshotOptions {
 /// 视野或整房间范围由选项指定；实体当前不可见、暂未启用碰撞时仍报告其形状与状态。
 /// </summary>
 internal static class StateExtractor {
+    private sealed record ChapterSessionId(long Value);
+    private static readonly ConditionalWeakTable<Session, ChapterSessionId> ChapterSessions = new();
+    private static long nextChapterSession;
     public const int ViewWidth = 320;
     public const int ViewHeight = 180;
 
@@ -95,6 +100,7 @@ internal static class StateExtractor {
             w.WriteString("side", session.Area.Mode switch { AreaMode.Normal => "A", AreaMode.BSide => "B", _ => "C" });
             w.WriteString("room", session.Level);
             w.WriteNumber("chapterTimeTicks", session.Time);
+            w.WriteBoolean("chapterTimeValid", session.StartedFromBeginning);
             w.WriteEndObject();
         }
 
@@ -294,6 +300,9 @@ internal static class StateExtractor {
             : (int) Math.Ceiling(Engine.FreezeTimer / Engine.RawDeltaTime - 1e-4f));
         w.WriteBoolean("completed", level.Completed);
         w.WriteNumber("chapterTimeTicks", s.Time);
+        w.WriteBoolean("chapterTimeValid", s.StartedFromBeginning);
+        w.WriteNumber("chapterSessionId", ChapterSessions.GetValue(s,
+            _ => new ChapterSessionId(Interlocked.Increment(ref nextChapterSession))).Value);
         w.WriteNumber("deaths", s.Deaths);
         w.WriteNumber("deathsInRoom", s.DeathsInCurrentLevel);
         w.WriteEndObject();

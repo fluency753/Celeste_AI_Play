@@ -2,9 +2,9 @@
 import re
 
 
-OPTIONAL_SECTIONS = {'finish_goal'}
+OPTIONAL_SECTIONS = {'finish_goal', 'practice_room'}
 SECTION_NAMES = ('observe', 'act', 'narrate', 'set_effort', 'stop_run', 'finish_goal', 'exit_level',
-                 'cutscene', 'simulate', 'travel', 'files', 'programs')
+                 'cutscene', 'simulate', 'travel', 'practice_room', 'files', 'programs')
 PART_NAMES = {f'tool_{name}_zh.md': name for name in SECTION_NAMES}
 _MARKER = re.compile(r'^<!-- (/?)tool:([a-z_]+) -->[ \t]*(?:\r?\n|$)', re.MULTILINE)
 

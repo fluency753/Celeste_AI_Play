@@ -52,7 +52,7 @@ def request_summary(name, args):
     name = str(name or 'unknown').removeprefix('mcp__celeste__').removeprefix('celeste_')
     args = args if isinstance(args, dict) else {}
     allowed = ('detail', 'region', 'offset', 'limit', 'snapshot_id', 'path', 'file_path', 'plan_file',
-               'action', 'choice', 'stop_on', 'input_format', 'timeout_s', 'description', 'command',
+               'action', 'choice', 'room', 'stop_on', 'input_format', 'timeout_s', 'description', 'command',
                'cwd', 'workdir', 'inputs', 'candidates', 'pattern', 'glob', 'include', 'output_mode', 'effort', 'reason')
     params = {key: args[key] for key in allowed if key in args}
     # Everything is display-only, with per-field and whole-record budgets.
@@ -65,7 +65,8 @@ def request_summary(name, args):
              'Read': '读取文件', 'read': '读取文件', 'Write': '写文件', 'write': '写文件',
              'Bash': '执行程序', 'bash': '执行程序', 'apply_patch': '编辑文件', 'view_image': '查看图片', 'act': '游戏动作', 'simulate': '模拟预测',
              'cutscene': '剧情操作', 'narrate': '公开解说', 'set_effort': '调整推理强度',
-             'stop_run': '报告阻塞', 'finish_goal': '报告目标达成', 'exit_level': '退出关卡'}.get(name, name)
+             'stop_run': '报告阻塞', 'finish_goal': '报告目标达成', 'exit_level': '退出关卡',
+             'practice_room': '进入练习房间'}.get(name, name)
     if name.lower() in {'read', 'write'}:
         label += ' · ' + safe_text(args.get('path') or args.get('file_path') or '路径未知', 150)
     if name == 'act':

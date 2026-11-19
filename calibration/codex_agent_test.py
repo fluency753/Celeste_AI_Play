@@ -900,7 +900,8 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         # when preparation starts with each capability disabled.
         self.server.list_tools = AsyncMock(return_value=[])
         expected_game = {'celeste_observe', 'celeste_act', 'celeste_narrate', 'celeste_set_effort',
-                         'celeste_stop_run', 'celeste_finish_goal', 'celeste_exit_level', 'celeste_cutscene', 'celeste_simulate'}
+                         'celeste_stop_run', 'celeste_finish_goal', 'celeste_exit_level', 'celeste_cutscene',
+                         'celeste_simulate', 'celeste_practice_room'}
         catalogs = []
         for preparing, chat, live, simulate, cutscene in [
                 (True, False, False, False, 'auto'),

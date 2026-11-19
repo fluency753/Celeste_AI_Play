@@ -45,6 +45,7 @@ class MetricsState:
     elapsed_s: float = 0.0
     budget_s: float = 0.0
     wall_budget_remaining_s: float | None = None
+    chapter_time_valid: bool | None = None   # 原生章节计时是否从章首开始
     thinking_s: float = 0.0
     tool_s: float = 0.0
     play_game_s: float = 0.0
@@ -485,7 +486,7 @@ class Metrics:
     RESTORED = ("thinking_s", "tool_s", "play_game_s", "auto_game_s", "decisions", "frames_played", "frames_auto",
                 "stiff_frames", "stiff_s",
                 "deaths", "compactions", "compact_s", "retries", "replan_s", "study_s", "kb_progress",
-                "completed_ticks", "splits", "detour", "detour_classifying", "detours", "plan_banked_ticks", "plan_session_ticks", "game_clock",
+                "completed_ticks", "splits", "detour", "detour_classifying", "detours", "plan_banked_ticks", "plan_session_ticks", "game_clock", "chapter_time_valid",
                 "output_tokens", "thinking_tokens", "token_frames", "token_s", "waited_s", "quota_waits",
                 "net_wait_s", "net_waits", "network_retry_s", "network_retry_episodes",
                 "chapter", "room", "chapter_time_ticks", "dashes", "max_dashes", "thought", "formal_thought",

@@ -189,7 +189,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         schema_cfg = copy(self.cfg)
         schema_cfg.live, schema_cfg.sim_assist, schema_cfg.cutscene_mode = True, True, 'agent'
         schema_source = build_server(SimpleNamespace(
-            cfg=schema_cfg, metrics=self.metrics, workspace=self.cfg.workspace_dir))
+            cfg=schema_cfg, metrics=self.metrics, workspace=self.cfg.workspace_dir), catalog=True)
         for tool in await schema_source.list_tools():
             data = tool.model_dump(by_alias=True)
             tools.append({"type": "function", "name": "celeste_" + data["name"],
@@ -793,8 +793,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         names = {tool['name'] for tool in meta.get('dynamic_tools', [])}
         from .modes import game_tools
         required = {'celeste_' + name for name in game_tools(self.cfg)}
-        # Existing prepared/player threads predate this optional completion path.
-        missing = required - names - {'celeste_finish_goal'}
+        # Older prepared/player threads use the original tool registrations.
+        missing = required - names - {'celeste_finish_goal', 'celeste_practice_room'}
         if missing:
             raise RuntimeError('旧会话缺少当前必需工具：' + ', '.join(sorted(missing))
                                + '。该容器记录的接口不完整，请新建准备会话；不会借用宿主工具绕过缺失接口。')
@@ -813,6 +813,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         notes = []
         if 'celeste_finish_goal' not in names:
             notes.append('（系统）此旧会话未登记 celeste_finish_goal。文字任务达成后请向用户说明结果，请用户在 HUD 停止并保存；自动条件仍由主控核验。')
+        if 'celeste_practice_room' in required - names:
+            notes.append('（系统）此旧会话未登记 celeste_practice_room。获准时仍可通过原生菜单重开章节；直达练习房间需新会话。')
         if any(actual is not None and actual != name for name, actual in available.items()):
             mapping = '、'.join(f'{name} → {actual}' for name, actual in available.items() if actual is not None)
             notes.append('（系统）本会话沿用持久化的文件工具登记，请按实际名称调用：' + mapping + '。'

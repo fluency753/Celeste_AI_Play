@@ -54,7 +54,8 @@ from .prompting import (play_prompt, study_prompt, resume_prompt, net_resume_pro
 from .telemetry import publish
 
 GAME_TOOLS = ['mcp__celeste__' + name for name in
-              ('observe', 'act', 'set_effort', 'cutscene', 'exit_level', 'simulate', 'stop_run', 'finish_goal', 'travel')]
+              ('observe', 'act', 'set_effort', 'cutscene', 'exit_level', 'simulate', 'stop_run', 'finish_goal', 'travel',
+               'practice_room')]
 NARRATE_TOOL = "mcp__celeste__narrate"   # 所有模式都有：更新 HUD 上的思考语句（算思考时间，不算工具）
 # /effort 命令成功时 Claude Code 的回复，例如 "Set effort level to low (this session only): ..."
 EFFORT_OK = re.compile(r"^Set effort level to ([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\s|$)")

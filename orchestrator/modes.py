@@ -62,6 +62,10 @@ def game_tools(cfg) -> list[str]:
     tools = ["observe", "act", "narrate", "set_effort", "stop_run", "finish_goal"]
     if getattr(cfg, "live", False):
         tools.append("exit_level")          # 直播时观众/用户可以要求退出关卡
+    from .action_policy import permissions_for
+    if (not is_explore(cfg) and getattr(cfg, 'play_scope', 'chapter') != 'visited'
+            and permissions_for(cfg).restart_chapter):
+        tools.append('practice_room')
     if has_cutscene_tool(cfg):
         tools.append("cutscene")
     from .sim_mode import controller_sim

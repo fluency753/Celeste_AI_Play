@@ -300,8 +300,9 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
 
     head = f"[帧 {obs.get('frame')}] "
     if level:
+        timing = '（灰计时）' if level.get('chapterTimeValid') is False else ''
         head += (f"{chapter_label(level)} · 房间 {level['room']} · 章节计时 {fmt_ticks(level['chapterTimeTicks'])}"
-                 f" · 死亡 {level['deaths']}（本房间 {level['deathsInRoom']}）")
+                 f"{timing} · 死亡 {level['deaths']}（本房间 {level['deathsInRoom']}）")
     else:
         head += f"场景 {obs.get('scene')}"
     if effort:
@@ -310,7 +311,8 @@ def describe_obs(obs: dict, full_room: bool = True, effort: str | None = None, e
     if level and not (compact_context and current_collision(obs) is not None):
         lines.append(collision_summary(obs))
     if (level or {}).get('completed'):
-        lines.append('游戏已登记通关成绩，但吃心提示、片尾或结算可能仍未确认；这不等于已返回选章地图。')
+        lines.append('灰计时已到达终点。整章速通仍需从章首完成一次有效尝试。' if level.get('chapterTimeValid') is False else
+                     '游戏已登记通关成绩，但吃心提示、片尾或结算可能仍未确认；这不等于已返回选章地图。')
     if obs.get('menu'):
         lines.append('当前菜单：' + json.dumps(obs['menu'], ensure_ascii=False))
     if obs.get('ui'):

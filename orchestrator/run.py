@@ -539,6 +539,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             cfg._parked_source = previous['dir']
             cfg._parked_needs_release_check = parked.get('game_released') is not True
         cfg.resume_completion_pending = bool(state.get('completion_pending'))
+        old_metrics = previous['metrics']
+        if old_metrics.get('chapter_time_valid') is False and old_metrics.get('chapter'):
+            cfg.resume_practice_map = (old_metrics['chapter'], old_metrics.get('chapter_side') or 'A')
         # 分类事实与当前许可独立。旧记录仍可由原开关或已记录的绕行身份/成绩恢复。
         cfg.resume_detour_classifying = cfg.play_scope != 'visited' and bool(
             previous['metrics'].get('detour_classifying') or previous['metrics'].get('detour')
@@ -914,6 +917,7 @@ def check_resume_position(cfg: RunConfig) -> bool:
     from tools.bridge_client import BridgeClient
     from tools.enter_save import load_save_and_freeze
     from .action_policy import controller_navigation
+    from .segments import Piece
 
     client = BridgeClient(port=cfg.bridge_port, timeout=120)
     def load_selected_save():
@@ -972,6 +976,17 @@ def check_resume_position(cfg: RunConfig) -> bool:
         if cfg.cutscene_mode == 'agent' and right_save and cfg.resume_completion_pending and obs.get('scene') in {'AreaComplete','LevelExit','OverworldLoader','Overworld'}:
             return True
         completion = obs.get('completion') or {}
+        if (right_save and cfg.mode == 'speedrun' and cfg.play_scope != 'visited'
+                and (not cfg.plan or Piece.of(cfg.plan[0]).whole())):
+            target = (want, first_side(cfg))
+            if ((completion.get('sid'), completion.get('side')) == target
+                    and completion.get('chapterTimeValid') is False):
+                return True
+            if (not completion and cfg.resume_practice_map == target
+                    and (obs.get('scene') in {'LevelExit', 'OverworldLoader'}
+                         or (obs.get('scene') == 'Overworld'
+                             and (obs.get('menu') or {}).get('current') in {'OuiChapterSelect', 'OuiChapterPanel'}))):
+                return True  # 灰计时结算由 Player 操作，续跑不代按选章。
         from .detour import classifying
         if (cfg.cutscene_mode == 'agent' and right_save and classifying(cfg) and cfg.play_scope != 'visited'
                 and obs.get('scene') == 'AreaComplete' and completion.get('sid')
@@ -1478,6 +1493,8 @@ def total_time_ticks(state, session) -> int:
     这一截已完成时不再加；停在计划外地图时不加它的章节计时，只加计划章节此前各段会话（含离开前最后那段）。
     没有绕行时与原来相同。"""
     if state.piece_done or session.chapter_finished or session.done_reason in ("章节完成", "分段完成"):
+        return state.completed_ticks
+    if getattr(session, '_requires_single_run', lambda: False)() and getattr(state, 'chapter_time_valid', None) is False:
         return state.completed_ticks
     banked = int(getattr(state, 'plan_banked_ticks', 0) or 0)
     if getattr(session, 'off_plan', lambda: False)():

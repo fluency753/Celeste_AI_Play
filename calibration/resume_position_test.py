@@ -63,6 +63,21 @@ class ResumePositionTests(unittest.TestCase):
         obs['save']['slot']=9
         self.assertFalse(self.check(obs,cutscene_mode='agent')[0])
 
+    def test_gray_speedrun_results_and_return_to_select_survive_resume_without_input(self):
+        target = ('Celeste/2-OldSite', 'A')
+        for scene in ('AreaComplete', 'LevelExit', 'OverworldLoader', 'Overworld'):
+            with self.subTest(scene=scene):
+                obs = {'scene': scene, 'save': {'name': 'opus5.5', 'slot': 8}}
+                if scene == 'AreaComplete':
+                    obs['completion'] = {'sid': target[0], 'side': target[1], 'chapterTimeValid': False}
+                if scene == 'Overworld':
+                    obs['menu'] = {'current': 'OuiChapterSelect'}
+                kept, client = self.check(obs, mode='speedrun', cutscene_mode='auto', resume_practice_map=target)
+                self.assertTrue(kept)
+                self.assertEqual(client.calls, ['observe'])
+                obs['save']['slot'] = 7
+                self.assertFalse(self.check(obs, mode='speedrun', cutscene_mode='auto', resume_practice_map=target)[0])
+
     def test_restart_without_chapter_loads_native_session_without_exiting(self):
         from calibration.menu_navigation_test import GameIpc, file_select, reply
         loaded = level()

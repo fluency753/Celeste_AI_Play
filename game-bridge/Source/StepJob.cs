@@ -263,7 +263,8 @@ internal sealed class StepJob {
         if (!lastControllable && controllable) Emit(frame, "controllable", null);
         if (!lastOnGround && onGround) Emit(frame, "land", null);
         if (alive && dashes > lastDashes) Emit(frame, "refill", dashes.ToString());
-        if (level is { Completed: true }) Emit(frame, "complete", null);
+        if (level is { Completed: true })
+            Emit(frame, "complete", level.Session.StartedFromBeginning ? null : "invalid_chapter_time");
         string? storyInput = StoryText.InputNode(Engine.Scene);
         if (storyInput != null && storyInput != lastStoryInput) Emit(frame, "story_input", storyInput);
         lastStoryInput = storyInput;
@@ -299,6 +300,7 @@ internal sealed class StepJob {
             w.WriteString("sid", s.Area.SID);
             w.WriteString("room", s.Level);
             w.WriteNumber("chapterTimeTicks", s.Time);
+            w.WriteBoolean("chapterTimeValid", s.StartedFromBeginning);
             w.WriteNumber("deaths", s.Deaths);
             w.WriteNumber("dashes", p?.Dashes ?? 0);
             w.WriteNumber("maxDashes", p?.MaxDashes ?? 0);

@@ -108,16 +108,21 @@ class GamePolicyTests(unittest.TestCase):
             stop_requested=False, model_waiting=False, paused=False, pausing=False)
 
     def test_game_actions_require_running_while_controls_remain_available(self):
+        from orchestrator.action_policy import ActionPermissions, configure
+        speedrun = RunConfig(agent='test', save='test', model='test', mode='speedrun')
+        configure(speedrun, ActionPermissions(restart_chapter=True))
         for name in GAME_ACTIONS:
-            self.assertIsNone(denial(self.controller, name))
-            for flag in ('prepare_only', 'chat_only', 'goal_finishing', 'stop_requested',
-                         'model_waiting', 'paused', 'pausing'):
-                with self.subTest(tool=name, flag=flag):
-                    setattr(self.controller, flag, True)
-                    self.assertIsNotNone(denial(self.controller, name))
-                    for control in CONTROL_TOOLS:
-                        self.assertIsNone(denial(self.controller, control))
-                    setattr(self.controller, flag, False)
+            cfg = speedrun if name == 'practice_room' else self.controller.cfg
+            with patch.object(self.controller, 'cfg', cfg):
+                self.assertIsNone(denial(self.controller, name))
+                for flag in ('prepare_only', 'chat_only', 'goal_finishing', 'stop_requested',
+                             'model_waiting', 'paused', 'pausing'):
+                    with self.subTest(tool=name, flag=flag):
+                        setattr(self.controller, flag, True)
+                        self.assertIsNotNone(denial(self.controller, name))
+                        for control in CONTROL_TOOLS:
+                            self.assertIsNone(denial(self.controller, control))
+                        setattr(self.controller, flag, False)
 
     def test_report_is_available_paused_but_needs_a_live_session(self):
         self.controller.paused = True

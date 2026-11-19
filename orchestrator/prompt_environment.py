@@ -5,7 +5,7 @@ from .execution import workspace_capabilities
 
 
 GAME_NAMES = ('observe', 'act', 'narrate', 'set_effort', 'stop_run', 'finish_goal', 'exit_level',
-              'cutscene', 'simulate', 'travel')
+              'cutscene', 'simulate', 'travel', 'practice_room')
 
 
 def tool_name(cfg, name):

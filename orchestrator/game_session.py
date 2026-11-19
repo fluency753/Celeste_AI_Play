@@ -505,6 +505,7 @@ class GameSession:
         self.chapter_reset_guard_supported = hello.get('chapter_reset_guard') is True
         self.action_policy_supported = hello.get('action_policy')
         self.map_entry_set_supported = hello.get('map_entry_set') is True
+        self.speedrun_practice_supported = hello.get('speedrun_practice_room') is True
         if self.cfg.play_scope == 'visited' and not self.map_entry_set_supported:
             raise RuntimeError('自由探索需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
         if detour_enabled(self.cfg) and not self.map_entry_set_supported:
@@ -554,7 +555,8 @@ class GameSession:
             if sid != CHAPTER_SIDS.get(self.piece.chapter) and not detouring:
                 raise RuntimeError(f'当前地图 {sid} 与指定章节不一致，请自行返回选章地图重新选择')
             side = (obs.get('level') or {}).get('side') or 'A'
-            if self.piece.side != 'A' and sid == CHAPTER_SIDS.get(self.piece.chapter) and side != self.piece.side \
+            if (self.piece.side != 'A' or (self.speedrun_practice_supported and self._requires_single_run())) \
+                    and sid == CHAPTER_SIDS.get(self.piece.chapter) and side != self.piece.side \
                     and not detouring:
                 raise RuntimeError(f'当前地图是 {sid} {side} 面，指定的是{piece_label(self.piece, self._table)}：'
                                    '面不一致，请自行返回选章地图重新选择')
@@ -563,13 +565,14 @@ class GameSession:
             # 续跑追加了新计划：上一个计划最后那段会话的计时不累加进新计划的第一截（没开过计划外地图时两项都是 0）
             self.metrics.update(plan_banked_ticks=0, plan_session_ticks=0)
         self._note_map(obs)
-        self._pending_complete |=bool((obs.get('level') or {}).get('completed')) and not self._in_detour()
+        self._pending_complete = (self._pending_complete or bool((obs.get('level') or {}).get('completed'))) \
+            and not self._in_detour() and not self._invalid_speedrun_time(obs)
         if self.cfg.play_scope != 'visited' and self.piece is None and not self.chapter_finished:        # 没指定章节（进入选章页当前选中的章节）：按游戏里的章节整章玩
             chapter = next((i for i, s in CHAPTER_SIDS.items() if s == (obs.get('level') or {}).get('sid')), None)
             if chapter is not None:
                 self.piece = Piece(chapter)
         parked_menu = getattr(self.cfg, '_parked_source', None) and self._at_chapter_menu(obs)
-        if obs.get("scene") != "Level" and not parked_menu and not (self.cfg.cutscene_mode == 'agent' and (
+        if obs.get("scene") != "Level" and not parked_menu and not self._practice_ending(obs) and not (self.cfg.cutscene_mode == 'agent' and (
                 story_pending(obs) or ((self._pending_complete or self.chapter_finished or self._in_detour()) and obs.get('scene') in END_SCENES)
                 or (obs.get('scene') == 'Overworld' and (obs.get('menu') or {}).get('current') in {'OuiChapterSelect','OuiChapterPanel'}))):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
@@ -662,6 +665,10 @@ class GameSession:
                 raise ActError('计划外地图需要桥接 1.10.0 的地图集合门禁；未发送输入')
             return self._detour_exit_policy(step_options(self.cfg, maps=OFFICIAL_MAPS, slot=self.cfg.save_slot,
                                                          departure=departure))
+        if (piece is not None and getattr(self, 'speedrun_practice_supported', False)
+                and self.map_entry_set_supported and self._requires_single_run()):
+            return self._detour_exit_policy(step_options(self.cfg, maps=[{'sid': CHAPTER_SIDS[chapter], 'side': piece.side}],
+                                                         slot=self.cfg.save_slot, departure=departure))
         return self._detour_exit_policy(step_options(self.cfg, sid=CHAPTER_SIDS.get(chapter), slot=self.cfg.save_slot,
                                                      departure=departure))
 
@@ -1068,8 +1075,8 @@ class GameSession:
             stops.append("story_input")
             if fmt != 'celeste_tas':
                 stops.append("story_decision")
-            if self._pending_complete:     # 已登记通关后 complete 每帧都在，不能用它截断（与 _stop_list 相同）
-                stops.remove("complete")
+        if (self.cfg.cutscene_mode == 'agent' and self._pending_complete) or self._practice_ending(self.last_obs or {}):
+            stops.remove('complete')
         extra = {"input_format": fmt} if fmt != "celeste_ai" else {}
         self.metrics.update(status="executing")
         t0 = time.monotonic()
@@ -1579,6 +1586,7 @@ class GameSession:
         # Completed remains true throughout the heart prompt and results. Once
         # reported, it must not truncate every subsequent agent confirmation.
         ending = ((self.cfg.cutscene_mode == 'agent' and self._pending_complete) or self._ending_agent
+                  or self._practice_ending(self.last_obs or {})
                   or self._detour_completed())
         if ending:
             stop = [item for item in stop if item != 'complete']
@@ -1591,9 +1599,32 @@ class GameSession:
         """这次 act 可用的按键：agent 剧情模式、片尾交给智能体时，以及开了计划外地图（要自己用 P、B 操作暂停菜单与
         选章界面）时开放桥接的全部按键；其余 auto 剧情模式只开放游玩按键与 C。"""
         if (self.cfg.cutscene_mode == 'agent' or self._ending_agent or self._detour_agent
+                or self._speedrun_menu_allowed() or self._practice_ending(self.last_obs or {})
                 or detour_enabled(self.cfg) or self._in_detour()):   # 开关关掉时还在计划外地图里：照样能离开
             return LETTERS
         return AGENT_LETTERS
+
+    def _requires_single_run(self) -> bool:
+        piece = getattr(self, 'piece', None)
+        return (not is_explore(self.cfg) and getattr(self.cfg, 'play_scope', 'chapter') != 'visited'
+                and (piece is None or piece.whole()))
+
+    def _speedrun_menu_allowed(self) -> bool:
+        from .action_policy import permissions_for
+        if not self._requires_single_run():
+            return False
+        permissions = permissions_for(self.cfg)
+        return permissions.restart_chapter or permissions.return_to_map
+
+    def _invalid_speedrun_time(self, obs=None) -> bool:
+        if not self._requires_single_run():
+            return False
+        source = (obs or {}).get('level') or (obs or {}).get('completion') or {}
+        return source.get('chapterTimeValid', getattr(self.metrics.state, 'chapter_time_valid', None)) is False
+
+    def _practice_ending(self, obs) -> bool:
+        return self._invalid_speedrun_time(obs) and (
+            bool((obs.get('level') or {}).get('completed')) or obs.get('scene') in END_SCENES)
 
     def _least_frames(self, plan: PlanSpec, planned: int) -> int:
         """这次 act 最少要推进的帧数。只管正常游玩：角色不可操作时（菜单、结算、对白等剧情输入）不限制；
@@ -1948,10 +1979,11 @@ class GameSession:
         last = self.last_obs or {}
         if (self.cfg.cutscene_mode != 'auto' or self._ending_agent or not last or self._settled(last)
                 or self._handed_over(last) or self._detour_agent or self._agent_menu(last)
-                or self.token_death_recovering(last)):
+                or self.token_death_recovering(last) or self._practice_ending(last)):
             return []
         obs = enrich_obs(self.client.call("observe", image=False, entities=False, tiles=False)["obs"])
-        if obs.get('scene') != 'Level' or self._settled(obs) or self._handed_over(obs) or self._agent_menu(obs):
+        if (obs.get('scene') != 'Level' or self._settled(obs) or self._handed_over(obs)
+                or self._agent_menu(obs) or self._practice_ending(obs)):
             return []
         obs, _, _, notes = self._auto_advance(obs, None)
         self.last_obs = obs
@@ -2050,6 +2082,9 @@ class GameSession:
             guard = getattr(self, 'control_guard', None)
             if guard and guard():
                 notes.append('用户已暂停，主控停止自动播放。')
+                break
+            if self._practice_ending(obs):
+                notes.append('本次为灰计时练习，未登记整章速通成绩。请自行操作结算并返回选章，从章首重新计时。')
                 break
             if (obs.get('level') or {}).get('paused') or obs.get('pauseMenu'):
                 if mode == 'auto' and menu_closes < 3 and not self._agent_menu(obs):
@@ -2348,6 +2383,8 @@ class GameSession:
                       chapter_time_ticks=event.get('chapterTimeTicks', values.get('chapter_time_ticks')))
         values['game_elapsed'] = values['frame']/60 if values['frame'] is not None else None
         values["map"] = f"{event.get('sid', self.metrics.state.chapter)}:{values['side']}"
+        if self._requires_single_run() and event.get('chapterTimeValid') is False:
+            values['map_complete'] = False
         self._goal_progress = dict(values)
         # 开过计划外地图时进度事件不带面别：只有上一次完整观测确认的计划章节 A 面会话还在接着走（_plan_time_progress）
         # 才按它推进段与终点；这一步里换了地图或会话时，等推进结束后的完整观测（_note_obs_room）再判断
@@ -2391,6 +2428,8 @@ class GameSession:
             if progress.get('frame') is not None and (values['frame'] is None or progress['frame'] >= values['frame']):
                 values.update(progress)
             values["elapsed"] = self.metrics.elapsed()
+        if self._invalid_speedrun_time(observation):
+            values['map_complete'] = False
         values['game_epoch'] = getattr(self, 'game_process_id', None)
         values['game_elapsed'] = values['frame']/60 if values['frame'] is not None else None
         return values
@@ -2431,7 +2470,8 @@ class GameSession:
         obs = self.last_obs or {}
         agent = self.cfg.cutscene_mode == 'agent'
         # 停在计划外地图（哪怕已通关）不是计划通关：不清后续章节、不记分段成绩
-        if (not self.goals.immediate and not self._in_detour() and (not agent or self._agent_completion_ready(obs))
+        if (not self.goals.immediate and not self._in_detour() and not self._invalid_speedrun_time(obs)
+                and (not agent or self._agent_completion_ready(obs))
                 and (self._pending_complete or (obs.get('level') or {}).get('completed'))):
             self.chapter_queue.clear()
             if agent:
@@ -2679,6 +2719,87 @@ class GameSession:
             print(f'[run] 阻塞诊断未写入：{exc}', flush=True)
         return result
 
+    def practice_room(self, room: str) -> dict:
+        from .action_policy import permissions_for
+        from .recording import RecordingHalt
+        from tools.cutscene import QUIET
+        from tools.menu_navigation import checked_step
+
+        if not isinstance(room, str) or not room.strip() or len(room) > 120:
+            raise ActError('房间名须为 1～120 字。')
+        with self.lock:
+            if self.done or self.goals.stop_motion.is_set() or self._pending_complete or self.chapter_finished:
+                raise ActError('任务已停止或正在确认有效通关，未发送操作。')
+            if not self._requires_single_run() or not permissions_for(self.cfg).restart_chapter:
+                raise ActError('此工具需要整章速通和重启章节权限，未发送操作。')
+            self._require_reload_observation()
+            before = self.client.call('observe', **QUIET)['obs']
+            level = before.get('level') or {}
+            piece = self.piece
+            sid, side = level.get('sid'), level.get('side')
+            slot = (before.get('save') or {}).get('slot')
+            if (before.get('scene') != 'Level' or level.get('completed') or piece is None
+                    or sid != CHAPTER_SIDS.get(piece.chapter) or side != piece.side
+                    or slot is None or slot != self.cfg.save_slot):
+                raise ActError('请先在本次存档进入目标章节及面别，未发送操作。')
+            attempt = level.get('chapterSessionId')
+            if not self.speedrun_practice_supported or type(attempt) is not int:
+                raise ActError('房间练习需要桥接 1.13.0 或更新版本，未发送操作。')
+            self._before_advance()
+            if self.goals.stop_motion.is_set():
+                raise ActError('已请求停止，换房未发送。')
+            if (ticket := REQUEST_TICKET.get()) is not None:
+                ticket.before_input()
+            obs = before
+            started = time.monotonic()
+            sent = False
+            try:
+                self.client.call('speedrun_practice_room', room=room, slot=slot, sid=sid,
+                                 mode={'A': 0, 'B': 1, 'C': 2}[side], allow_reconnect=False)
+                sent = True
+                for _ in range(60):
+                    current = obs.get('level') or {}
+                    if (obs.get('scene') == 'Level' and type(current.get('chapterSessionId')) is int
+                            and current['chapterSessionId'] != attempt):
+                        break
+                    if obs.get('scene') not in {'Level', 'LevelLoader', 'LevelExit', 'LevelEnter', 'IntroVignette'}:
+                        raise ActError(f'已停在 {obs.get("scene")}，没有继续发送输入。')
+                    obs = checked_step(self.client, ['6'], speed=1, **QUIET)['obs']
+                current = obs.get('level') or {}
+                if (obs.get('scene') != 'Level' or current.get('chapterSessionId') in {None, attempt}
+                        or (current.get('sid'), current.get('side'), (obs.get('save') or {}).get('slot')) != (sid, side, slot)
+                        or current.get('room') != room or current.get('chapterTimeValid') is not False):
+                    raise ActError('未核实到目标练习房间及灰计时。')
+            except (RecordingHalt, TokenMenuBoundary):
+                raise
+            except (RuntimeError, OSError, ActError) as exc:
+                try:
+                    obs = self.client.call('observe', **QUIET)['obs']
+                except (RuntimeError, OSError, ValueError):
+                    sent = sent or isinstance(exc, OSError)
+                raise ActError(f'速通操作未确认：{exc}。若已发生转场，请先 observe 核对，勿直接重试。') from exc
+            finally:
+                consumed = max(0, (obs.get('frame') or 0) - (before.get('frame') or 0))
+                if consumed or sent or obs.get('scene') != before.get('scene'):
+                    self.metrics.add(auto_game_s=time.monotonic() - started, frames_auto=consumed)
+                    self._held_input = ('', 'celeste_ai')
+                    self._last_positions, self._last_room = {}, None
+                    self._collision_png = None
+                    try:
+                        obs = self.client.call('observe', image=False, scope='room', fields=True)['obs']
+                    except (RuntimeError, OSError, ValueError):
+                        pass
+                    obs = enrich_obs(obs)
+                    self._note_map(obs)
+                    self._update_metrics_from_obs(obs)
+                    self._write_workspace(self._track_motion(obs))
+                    self._start_freeze()
+            return {'map': sid, 'side': side, 'room': room,
+                    'attempt': current['chapterSessionId'], 'previous_attempt': attempt,
+                    'previous_chapter_ticks': level.get('chapterTimeTicks'),
+                    'previous_chapter_time_valid': level.get('chapterTimeValid'),
+                    'chapter_time_valid': current['chapterTimeValid'], 'frame': obs.get('frame')}
+
     def exit_level(self, reason: str, finish_run: bool = False) -> dict:
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 120:
             raise ActError('退出原因须为1～120字')
@@ -2921,6 +3042,9 @@ class GameSession:
                 if wait is None or type(e.get('frame')) is not int or e['frame'] >= wait.start_frame:
                     self._transition_wait = None
             elif e["type"] == "complete":
+                if self._requires_single_run() and (e.get('detail') == 'invalid_chapter_time'
+                                                    or self._invalid_speedrun_time(obs)):
+                    continue
                 if self._in_detour():
                     # 计划外地图通关：只记绕行成绩，不登记计划的待确认通关、不结束本次试玩
                     if not self.done:
@@ -2933,7 +3057,7 @@ class GameSession:
 
     def _commit_completion(self, obs):
         self._note_map(obs)
-        if self.done:
+        if self.done or self._invalid_speedrun_time(obs):
             return
         if (self.cfg.cutscene_mode == 'agent' and not self._pending_complete and (obs.get('level') or {}).get('completed')
                 and not self._in_detour()):
@@ -3000,7 +3124,7 @@ class GameSession:
             if not self.done:
                 self._detour_complete()
             return
-        if self.done or self.chapter_finished or self._ending_pending or self._ending_agent:
+        if self.done or self.chapter_finished or self._ending_pending or self._ending_agent or self._invalid_speedrun_time():
             return
         st = self.metrics.state
         values = self.goal_values()
@@ -3099,7 +3223,7 @@ class GameSession:
         """auto 剧情模式开了计划外地图（或还在计划外地图里）时，智能体在正常游玩中自己按 P 打开的暂停菜单
         （不在剧情里）：由它操作，主控不当作跳过剧情留下的菜单关掉，也不自动推进。"""
         level = obs.get('level') or {}
-        return (self.cfg.cutscene_mode == 'auto' and (detour_enabled(self.cfg) or self._in_detour())
+        return (self.cfg.cutscene_mode == 'auto' and (detour_enabled(self.cfg) or self._in_detour() or self._speedrun_menu_allowed())
                 and obs.get('scene') == 'Level'
                 and bool(level.get('paused') or obs.get('pauseMenu')) and not level.get('inCutscene')
                 and not level.get('skippingCutscene'))
@@ -3109,6 +3233,8 @@ class GameSession:
     def _plan_ticks(self) -> int:
         """这一截的成绩计时：此前各段会话之和加当前这段（没有累加过时与原来相同，就是当前章节计时）。"""
         state = self.metrics.state
+        if self._requires_single_run() and getattr(state, 'chapter_time_valid', None) is not None:
+            return int(state.chapter_time_ticks)
         return int(state.chapter_time_ticks) + int(getattr(state, 'plan_banked_ticks', 0) or 0)
 
     def _note_plan_time(self, ticks, live: bool) -> None:
@@ -3139,6 +3265,10 @@ class GameSession:
     def _note_map(self, obs) -> None:
         """按实际观测（关卡或结算画面）认出正在玩的地图：不是计划章节（章节＋面，通常是 A 面）的就是计划外地图。
         开关打开过就一直区分（关掉后也按实际地图结束绕行）；从没打开过时与原来相同，不做任何记录。"""
+        if isinstance(obs, dict):
+            timing = (obs.get('level') or obs.get('completion') or {}).get('chapterTimeValid')
+            if type(timing) is bool and timing != getattr(self.metrics.state, 'chapter_time_valid', None):
+                self.metrics.update(chapter_time_valid=timing)
         if detour_enabled(self.cfg):
             self._detour_latched = True
             if not self.metrics.state.detour_classifying:
