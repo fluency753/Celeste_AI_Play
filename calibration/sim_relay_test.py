@@ -33,6 +33,14 @@ class SimRelayTests(unittest.TestCase):
         self.assertFalse(_sim_mount_matches(self.cfg, [raw, relay_mount]))
         self.assertFalse(_sim_mount_matches(self.cfg, [managed]))
 
+    def test_worker_gets_map_data_only_when_present(self):
+        # 官方地图数据（sim/maps）只挂给主控的私有模拟进程，用于跨房间推演；没有时照旧只挂发布目录
+        self.assertEqual(sim_relay.worker_mounts(self.cfg), ['-v', f'{self.cfg.sim_dir}:/sim:ro'])
+        maps = self.cfg.sim_dir.parent / 'maps'
+        maps.mkdir(parents=True)
+        self.assertEqual(sim_relay.worker_mounts(self.cfg),
+                         ['-v', f'{self.cfg.sim_dir}:/sim:ro', '-v', f'{maps}:/maps:ro'])
+
     def test_failed_start_cleanup_cannot_be_overtaken_by_start(self):
         with patch('orchestrator.sim_relay.find_docker_exe', return_value='docker'):
             relay = sim_relay.SimRelay(self.session)
@@ -113,6 +121,13 @@ class RelayClientCliTests(unittest.TestCase):
         err = io.StringIO()
         client.print_run({'ok': True, 'stop': 'done', 'detail': None, 'frames': []}, io.StringIO(), err)
         self.assertEqual(err.getvalue(), 'stop: done\n')
+
+    def test_through_rooms_turns_off_stop_on_room(self):
+        client = self.client()
+        args = SimpleNamespace(inputs=['12,R'], inputs_file=None, through_rooms=False)
+        self.assertEqual(client.run_request(args), {'inputs': ['12,R']})
+        args.through_rooms = True
+        self.assertEqual(client.run_request(args), {'inputs': ['12,R'], 'stop_on_room': False})
 
     def test_inputs_file_is_accepted_like_native_cli(self):
         client = self.client()

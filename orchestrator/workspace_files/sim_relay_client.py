@@ -102,16 +102,25 @@ def print_run(result, out=sys.stdout, err=sys.stderr):
     print(f"stop: {result.get('stop')}{' ' + str(detail) if detail is not None else ''}", file=err)
 
 
+def run_request(args) -> dict:
+    """run 的请求：与原命令行相同，--through-rooms 时换房不停（跨房间推演）。"""
+    request = {'inputs': plan_of(args)}
+    if getattr(args, 'through_rooms', False):
+        request['stop_on_room'] = False
+    return request
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('command', choices=('serve', 'info', 'run'))
     parser.add_argument('--state')
     parser.add_argument('--inputs', nargs='+')
     parser.add_argument('--inputs-file')
+    parser.add_argument('--through-rooms', action='store_true')
     args = parser.parse_args()
     if args.command in ('info', 'run') and not args.state:
         parser.error('--state is required')
-    plan = plan_of(args) if args.command == 'run' else None
+    request = run_request(args) if args.command == 'run' else None
     with Relay() as relay:
         info = None
         if args.state:
@@ -121,7 +130,7 @@ def main():
         if args.command == 'info':
             print(json.dumps(info['info']))
         elif args.command == 'run':
-            result = json.loads(relay.request(json.dumps({'inputs': plan}).encode() + b'\n'))
+            result = json.loads(relay.request(json.dumps(request).encode() + b'\n'))
             if not result.get('ok'):
                 raise ValueError(result['error'])
             print_run(result)

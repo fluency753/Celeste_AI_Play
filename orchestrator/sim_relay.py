@@ -32,6 +32,16 @@ def volume(cfg):
     return 'celeste-sim-relay-' + identity(cfg)
 
 
+def worker_mounts(cfg) -> list[str]:
+    """私有模拟进程的只读挂载：发布目录挂到 /sim；本机有官方地图数据（sim/maps，与发布目录同级、不入库）时挂到 /maps，
+    模拟器据此跨房间推演（它在自身目录旁找不到 maps 时找上一级的 maps）。地图不进智能体容器的 /sim。"""
+    mounts = ['-v', f'{cfg.sim_dir}:/sim:ro']
+    maps = cfg.sim_dir.parent / 'maps'
+    if maps.is_dir():
+        mounts += ['-v', f'{maps}:/maps:ro']
+    return mounts
+
+
 def prepare(cfg):
     from .container import docker
     public = public_dir(cfg)
@@ -87,7 +97,7 @@ class SimRelay:
                    '--security-opt', 'no-new-privileges', '--pids-limit', '768', '--cpus', cpus, '--memory', '3g',
                    '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m,mode=1777',
                    '--label', 'celeste.sim-assist=1', '--label', f'celeste.run={self.session.run_dir.name}',
-                   '-e', 'DOTNET_EnableDiagnostics=0', '-v', f'{cfg.sim_dir}:/sim:ro',
+                   '-e', 'DOTNET_EnableDiagnostics=0', *worker_mounts(cfg),
                    '-v', f'{engine}:/engine.py:ro', '-v', f'{volume(cfg)}:/relay', '-v', f'{private}:/control:ro',
                    '--entrypoint', 'python3', cfg.image, '-u', '/engine.py', self.endpoint]
         self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
