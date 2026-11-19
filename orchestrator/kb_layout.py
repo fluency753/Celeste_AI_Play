@@ -12,6 +12,7 @@ from .session_store import rename_directory
 VERSION = 1
 MANIFEST = '.knowledge.json'
 LAYOUT_MARKER = '.knowledge-layout'
+CELESTE_SOURCE = 'reference/celeste-source.txt'
 TOOL_REFERENCES = {'observation.md': 'shared/tools/observe.md', 'actions.md': 'shared/tools/act.md',
                    'story.md': 'shared/tools/cutscene.md', 'workspace.md': 'shared/tools/files.md',
                    'programs.md': 'shared/tools/programs.md'}
@@ -45,6 +46,10 @@ def enabled(root):
     return (root/'shared').is_dir() or (root/'speedrun').is_dir()
 
 
+def local_source(root):
+    return root.parent/'local'/'kb'/Path(CELESTE_SOURCE).name
+
+
 def catalog(root, mode):
     from .kb_study import required_files
     for name in ('shared/data.md', 'shared/tools.md', mode+'/README.md'):
@@ -75,6 +80,9 @@ def catalog(root, mode):
             if visible_file(source, root/'reference'):
                 path = source.relative_to(root).as_posix()
                 docs.append(Document(path, source, path in reference_required))
+        source = local_source(root)
+        if source.is_file() and not any(doc.path == CELESTE_SOURCE for doc in docs):
+            docs.append(Document(CELESTE_SOURCE, source))
     return docs
 
 
@@ -83,6 +91,8 @@ def lookup(root, mode, path):
 
 
 def edit_path(root, source, overlay):
+    if not source.is_relative_to(root):
+        return source
     canonical = overlay/source.relative_to(root)
     doc = next((d for mode in ('explore', 'speedrun') for d in catalog(root, mode) if d.source == source), None)
     candidates = [canonical, *(overlay/name for name in doc.old_sources)] if doc else [canonical]
@@ -93,6 +103,7 @@ def edit_path(root, source, overlay):
 
 
 def selected(cfg, root):
+    from .kb_access import apply_required
     mode = 'explore' if cfg.knowledge_profile == 'explore' else 'speedrun'
     docs = catalog(root, mode)
     files = {}
@@ -110,7 +121,7 @@ def selected(cfg, root):
     for name in cfg.kb_allow:
         if name.startswith('speedrun/'):
             doc = lookup(root, 'speedrun', name[len('speedrun/'):])
-            if doc:
+            if doc and doc.path != CELESTE_SOURCE:
                 source = edit_path(root, doc.source, overlay) if overlay else doc.source
                 files[name] = source if source.is_file() else doc.source
                 identities[name] = doc.path
@@ -126,7 +137,8 @@ def selected(cfg, root):
                     required.add(name)
     deny = {aliases.get(name, name) for name in cfg.kb_deny}
     files = {name: source for name, source in files.items() if name not in deny and identities.get(name, name) not in deny}
-    return files, sorted(required & files.keys()), {a: p for a, p in aliases.items() if p in files}
+    overrides = {aliases.get(name, name): enabled for name, enabled in getattr(cfg, 'kb_required', {}).items()}
+    return files, sorted(apply_required(required, overrides, files)), {a: p for a, p in aliases.items() if p in files}
 
 
 def view_key(cfg, root):
@@ -145,8 +157,10 @@ def _variant_identity(cfg):
 
 
 def binding_key(cfg):
-    return (cfg.engine, cfg.knowledge_profile, cfg.profile, tuple(sorted(cfg.kb_deny)),
+    identity = (cfg.engine, cfg.knowledge_profile, cfg.profile, tuple(sorted(cfg.kb_deny)),
             tuple(sorted(cfg.kb_allow)), cfg.kb_extra, cfg.kb_overlay, str(cfg.workspace_dir), *_variant_identity(cfg))
+    required = getattr(cfg, 'kb_required', {})
+    return (*identity, tuple(sorted(required.items()))) if required else identity
 
 
 def build(cfg, root, view):

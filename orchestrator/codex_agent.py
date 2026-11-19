@@ -507,6 +507,8 @@ class CodexRunner(ModelRecovery, SessionControls):
             raise RuntimeError(f"只接受客户端动态工具请求，拒绝 {method}")
         requested = params.get('tool', '')
         name = LEGACY_FILE_TOOLS.get(requested, requested)
+        if name == 'celeste_practice_room':
+            name = 'celeste_goto_room'
         args = params.get('arguments') or {}
         origin_turn, origin_epoch = self.turn_id, self._sampling_epoch
         def request_void():
@@ -794,7 +796,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         from .modes import game_tools
         required = {'celeste_' + name for name in game_tools(self.cfg)}
         # Older prepared/player threads use the original tool registrations.
-        missing = required - names - {'celeste_finish_goal', 'celeste_practice_room'}
+        missing = required - names - {'celeste_finish_goal', 'celeste_goto_room'}
         if 'celeste_start_speedrun_recording' in missing:
             raise RuntimeError('旧会话没有登记限时速通的开录工具；请用 --fresh-session 新建 Player 会话。')
         if missing:
@@ -815,8 +817,11 @@ class CodexRunner(ModelRecovery, SessionControls):
         notes = []
         if 'celeste_finish_goal' not in names:
             notes.append('（系统）此旧会话未登记 celeste_finish_goal。文字任务达成后请向用户说明结果，请用户在 HUD 停止并保存；自动条件仍由主控核验。')
-        if 'celeste_practice_room' in required - names:
-            notes.append('（系统）此旧会话未登记 celeste_practice_room。获准时仍可通过原生菜单重开章节；直达练习房间需新会话。')
+        if 'celeste_goto_room' in required - names:
+            if 'celeste_practice_room' in names:
+                notes.append('（系统）此会话仍用 celeste_practice_room(room) 跳房；列表及指定重生点需新会话。')
+            else:
+                notes.append('（系统）此会话未登记 celeste_goto_room。原生菜单可重开；直达房间需新会话。')
         if any(actual is not None and actual != name for name, actual in available.items()):
             mapping = '、'.join(f'{name} → {actual}' for name, actual in available.items() if actual is not None)
             notes.append('（系统）本会话沿用持久化的文件工具登记，请按实际名称调用：' + mapping + '。'

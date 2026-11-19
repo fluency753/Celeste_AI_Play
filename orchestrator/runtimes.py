@@ -185,6 +185,7 @@ def config_from_state(state, metrics=None):
     # 挂给智能体的 /kb 与原运行相同（否则唤起会话时容器标签对不上，会被重建）
     cfg.kb_deny = list(state.get('kb_deny') or [])
     cfg.kb_allow = list(state.get('kb_allow') or [])
+    cfg.kb_required = dict(state.get('kb_required') or {})
     cfg.kb_extra = str(state.get('kb_extra') or '')
     # 原运行用的配置（没记的是本机原有设置）：提示词修改与个人追加要求在唤起的会话里也从它读（chat.py 激活）
     from .profiles import check, kb_overlay_for, state_profile

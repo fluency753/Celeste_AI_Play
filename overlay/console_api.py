@@ -226,8 +226,8 @@ def load_prefs() -> dict:
 def save_prefs(update: dict) -> dict:
     """保存控制台的本机设置：游戏位置（空 = 自动查找）与各模式不给智能体看的知识库文件。"""
     from orchestrator.gamepaths import is_game_dir
-    from orchestrator.kb_access import normalize_allow, normalize_deny
-    if not isinstance(update, dict) or set(update) - {"celeste_dir", "kb_deny", "kb_allow"}:
+    from orchestrator.kb_access import normalize_allow, normalize_deny, normalize_required
+    if not isinstance(update, dict) or set(update) - {"celeste_dir", "kb_deny", "kb_allow", "kb_required"}:
         raise ValueError("设置无效")
     data = _read_json(PREFS)
     if "celeste_dir" in update:
@@ -238,7 +238,7 @@ def save_prefs(update: dict) -> dict:
         if value and not is_game_dir(value):
             raise ValueError(f"{value} 里没有 Celeste.exe：请填《蔚蓝》的安装目录（含 Celeste.exe 的那一层）")
         data["celeste_dir"] = str(Path(value)) if value else ""
-    deny_update = allow_update = None
+    deny_update = allow_update = required_update = None
     if "kb_deny" in update:
         deny = update["kb_deny"]
         if not isinstance(deny, dict) or set(deny) - {"speedrun", "explore"}:
@@ -249,12 +249,17 @@ def save_prefs(update: dict) -> dict:
         if not isinstance(allow, dict) or set(allow) - {"explore"}:
             raise ValueError("开放速通资料的设置无效（只有探索模式）")
         allow_update = {"explore": normalize_allow("explore", allow.get("explore"))}
-    if deny_update is not None or allow_update is not None:
+    if 'kb_required' in update:
+        required = update['kb_required']
+        if not isinstance(required, dict) or set(required) - {'speedrun', 'explore'}:
+            raise ValueError('知识库必读设置无效')
+        required_update = {mode: normalize_required(mode, items) for mode, items in required.items()}
+    if deny_update is not None or allow_update is not None or required_update is not None:
         from orchestrator import profiles
         pid = _editable_profile("知识库的阅读权限")
         if pid != profiles.LEGACY:        # 新建配置的权限存在它自己的 profile.json
-            profiles.set_kb_permissions(pid, deny_update, allow_update)
-            deny_update = allow_update = None
+            profiles.set_kb_permissions(pid, deny_update, allow_update, required_update)
+            deny_update = allow_update = required_update = None
     if deny_update is not None:
         current = data.get("kb_deny") if isinstance(data.get("kb_deny"), dict) else {}
         current.update(deny_update)
@@ -263,6 +268,10 @@ def save_prefs(update: dict) -> dict:
         current = data.get("kb_allow") if isinstance(data.get("kb_allow"), dict) else {}
         current.update(allow_update)
         data["kb_allow"] = current
+    if required_update is not None:
+        current = data.get('kb_required') if isinstance(data.get('kb_required'), dict) else {}
+        current.update(required_update)
+        data['kb_required'] = current
     PREFS.parent.mkdir(parents=True, exist_ok=True)
     tmp = PREFS.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -439,11 +448,23 @@ def kb_list(mode: str) -> dict:
     prefs = load_prefs()
     deny = [x for x in prefs["kb_deny"].get(mode, []) if x in known]
     allow = [x for x in prefs["kb_allow"].get(mode, []) if x in known]
+    required = {path: value for path, value in prefs.get('kb_required', {}).get(mode, {}).items() if path in known}
+    available = {doc['path'] for doc in docs
+                 if (doc['path'] in allow if doc.get('opt_in') else doc['path'] not in deny)}
+    via = {}
+    for doc in docs:
+        path, target = doc['path'], doc['study_target']
+        doc['required'] = required.get(path, doc['required'])
+        if path != target and doc['required'] and path in available and target in available:
+            via.setdefault(target, []).append(path)
+    for doc in docs:
+        if sources := via.get(doc['path']):
+            doc['required_via'] = sources
     sim_readme = REPO_ROOT / "sim" / "dist" / "README.md"     # Claude 执行器开模拟器时另要读完
     from orchestrator.kb_layout import enabled
     from orchestrator.kb_access import KB_ROOT
     source_label = 'kb/shared + kb/'+mode if enabled(KB_ROOT) else root.relative_to(REPO_ROOT).as_posix()
-    return {"mode": mode, "root": source_label, "documents": docs, "deny": deny, "allow": allow,
+    return {"mode": mode, "root": source_label, "documents": docs, "deny": deny, "allow": allow, "required": required,
             "sim_readme": mode == "speedrun" and sim_readme.is_file(), "profile": pid, "readonly": profiles.readonly(pid),
             "edits_dir": _rel(profiles.kb_edits_dir(pid))}
 
@@ -668,7 +689,7 @@ def _prompt_preview(cfg) -> dict:
         from orchestrator import kb_layout
         from orchestrator.kb_access import KB_ROOT
         files = (kb_layout.selected(cfg, KB_ROOT)[1] if kb_layout.enabled(KB_ROOT) else
-                 [rel for rel in required_files(root_of(cfg.mode)) if rel not in set(cfg.kb_deny)])
+                 [rel for rel in required_files(root_of(cfg.mode), cfg.kb_required) if rel not in set(cfg.kb_deny)])
         paths = [f"{CONTAINER_KB}/{rel}" for rel in files]
         from orchestrator.sim_mode import agent_sim
         if agent_sim(cfg):          # Claude 开模拟器：/sim/README.md 排在知识库正文之后、社区原文之前（与 KbStudy 相同）
@@ -767,7 +788,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.31.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.32.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

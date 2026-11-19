@@ -626,24 +626,24 @@ def build_server(session: GameSession, study: KbStudy | None = None, *, catalog:
                 finish()
 
     from .detour import map_rule
-    @optional_tool(catalog or 'practice_room' in tools, name='practice_room',
-                   description='整章速通且允许重启章节时，按房间名在当前目标地图的指定出生点开始灰计时练习。限时任务只在开录前可用；换房后先 observe。使用原生菜单重启章节，恢复从章首计时。',
+    @optional_tool(catalog or 'goto_room' in tools, name='goto_room',
+                   description='已进入目标关卡时，列出当前地图有重生点的房间（省略参数），或跳到该地图的指定房间。spawn_index 从 0 起算，按列表中的重生点顺序。跳房使本趟计时变灰，已有录像继续。原生重开可恢复有效计时。',
                    structured_output=False)
-    async def practice_room(room: str) -> list:
+    async def goto_room(room: str | None = None, spawn_index: int | None = None) -> list:
         ticket = reload_ticket()
         async with journal.execution(call_lock):
-            if (note := gated('practice_room', ticket)) is not None:
+            if (note := gated('goto_room', ticket)) is not None:
                 return [note]
             await flush_tokens()
-            if (note := gated('practice_room', ticket)) is not None:
+            if (note := gated('goto_room', ticket)) is not None:
                 return [note]
             begin()
             try:
-                result = await asyncio.to_thread(session.practice_room, room)
+                result = await asyncio.to_thread(session.goto_room, room, spawn_index)
                 journal.detail(result)
-                return [json.dumps(result, ensure_ascii=False) + '\n请先 observe 再安排下一次动作。']
+                return [json.dumps(result, ensure_ascii=False) + ('\n请先 observe 再安排下一次动作。' if room is not None else '')]
             except ActError as err:
-                journal.log_failure(err, phase='practice_room')
+                journal.log_failure(err, phase='goto_room')
                 raise ToolError(str(err)) from err
             finally:
                 finish()

@@ -518,6 +518,7 @@ class GameSession:
         self.action_policy_supported = hello.get('action_policy')
         self.map_entry_set_supported = hello.get('map_entry_set') is True
         self.speedrun_practice_supported = hello.get('speedrun_practice_room') is True
+        self.speedrun_spawn_selection = hello.get('speedrun_goto_room') is True
         if self.cfg.play_scope == 'visited' and not self.map_entry_set_supported:
             raise RuntimeError('自由探索需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
         if detour_enabled(self.cfg) and not self.map_entry_set_supported:
@@ -665,6 +666,12 @@ class GameSession:
             raise ActError('桥接已重载，当前房间和玩家状态可能变化；请先默认 observe 获取新观测，再重新决定动作。旧计划未执行。')
 
     def _step_options(self):
+        options = self._action_step_options()
+        if getattr(self, 'speedrun_recording', False):
+            options['speed'] = 1
+        return options
+
+    def _action_step_options(self):
         from .action_policy import require_capability, step_options
         try:
             require_capability({'action_policy': getattr(self, 'action_policy_supported', None)})
@@ -2554,7 +2561,8 @@ class GameSession:
                                       'last_attempt': self.metrics.state.speedrun_last_attempt}
                 if self.cfg.speedrun_record_on_demand:
                     result['speedrun'].update(recording=self.speedrun_recording,
-                                              practice_speed=self._advance_speed(self.cfg.play_speed))
+                                              practice_speed=self.cfg.play_speed,
+                                              advance_speed=self._advance_speed(self.cfg.play_speed))
             return result
 
     def finish_user_stop(self):
@@ -2854,17 +2862,19 @@ class GameSession:
     def _advance_speed(self, speed: int) -> int:
         return 1 if getattr(self, 'speedrun_recording', False) else speed
 
-    def practice_room(self, room: str) -> dict:
+    def goto_room(self, room: str | None = None, spawn_index: int | None = None) -> dict:
         from .action_policy import permissions_for
         from .recording import RecordingHalt
         from tools.cutscene import QUIET
         from tools.menu_navigation import checked_step
 
-        if not isinstance(room, str) or not room.strip() or len(room) > 120:
+        if room is not None and (not isinstance(room, str) or not room.strip() or len(room) > 120):
             raise ActError('房间名须为 1～120 字。')
+        if spawn_index is not None and (room is None or type(spawn_index) is not int or spawn_index < 0):
+            raise ActError('指定重生点时须提供房间名和从 0 起算的整数 spawn_index。')
         with self.lock:
-            if self.speedrun_recording or self.speedrun_recording_uncertain:
-                raise ActError('已进入正式录制阶段。请使用原生菜单从章首再试。')
+            if self.speedrun_recording_uncertain:
+                raise ActError('开录状态待核验，未发送换房操作。')
             if self.done or self.goals.stop_motion.is_set() or self._pending_complete or self.chapter_finished:
                 raise ActError('任务已停止或正在确认有效通关，未发送操作。')
             if not self._requires_single_run() or not permissions_for(self.cfg).restart_chapter:
@@ -2882,6 +2892,13 @@ class GameSession:
             attempt = level.get('chapterSessionId')
             if not self.speedrun_practice_supported or type(attempt) is not int:
                 raise ActError('房间练习需要桥接 1.13.0 或更新版本，未发送操作。')
+            where = {'slot': slot, 'sid': sid, 'mode': {'A': 0, 'B': 1, 'C': 2}[side]}
+            supports_spawns = self.speedrun_spawn_selection
+            if not supports_spawns and (room is None or spawn_index is not None):
+                raise ActError('列出房间和指定重生点需要 Bridge 1.15.0 或更新版本。')
+            if room is None:
+                result = self.client.call('speedrun_goto_room', **where)
+                return {'map': sid, 'side': side, 'rooms': result['rooms']}
             self._before_advance()
             if self.goals.stop_motion.is_set():
                 raise ActError('已请求停止，换房未发送。')
@@ -2891,8 +2908,10 @@ class GameSession:
             started = time.monotonic()
             sent = False
             try:
-                self.client.call('speedrun_practice_room', room=room, slot=slot, sid=sid,
-                                 mode={'A': 0, 'B': 1, 'C': 2}[side], allow_reconnect=False)
+                if spawn_index is not None:
+                    where['spawn_index'] = spawn_index
+                command = 'speedrun_goto_room' if supports_spawns else 'speedrun_practice_room'
+                reply = self.client.call(command, room=room, **where, allow_reconnect=False)
                 sent = True
                 for _ in range(60):
                     current = obs.get('level') or {}
@@ -2901,12 +2920,14 @@ class GameSession:
                         break
                     if obs.get('scene') not in {'Level', 'LevelLoader', 'LevelExit', 'LevelEnter', 'IntroVignette'}:
                         raise ActError(f'已停在 {obs.get("scene")}，没有继续发送输入。')
-                    obs = checked_step(self.client, ['6'], speed=1, **QUIET)['obs']
+                    obs = checked_step(self.client, ['6'], speed=1, scope='room', **QUIET)['obs']
                 current = obs.get('level') or {}
                 if (obs.get('scene') != 'Level' or current.get('chapterSessionId') in {None, attempt}
                         or (current.get('sid'), current.get('side'), (obs.get('save') or {}).get('slot')) != (sid, side, slot)
                         or current.get('room') != room or current.get('chapterTimeValid') is not False):
                     raise ActError('未核实到目标练习房间及灰计时。')
+                if spawn_index is not None and (not reply.get('spawn') or obs.get('respawnPoint') != reply['spawn']):
+                    raise ActError('已核实换房和灰计时，但未核实到指定重生点。')
             except (RecordingHalt, TokenMenuBoundary):
                 raise
             except (RuntimeError, OSError, ActError) as exc:
@@ -2932,6 +2953,7 @@ class GameSession:
                     self._write_workspace(self._track_motion(obs))
                     self._start_freeze()
             return {'map': sid, 'side': side, 'room': room,
+                    'spawn_index': spawn_index, 'respawn_point': obs.get('respawnPoint'),
                     'attempt': current['chapterSessionId'], 'previous_attempt': attempt,
                     'previous_chapter_ticks': level.get('chapterTimeTicks'),
                     'previous_chapter_time_valid': level.get('chapterTimeValid'),

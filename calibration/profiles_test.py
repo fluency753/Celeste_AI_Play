@@ -332,6 +332,36 @@ class ConsoleTests(ProfileFixture):
             api.profile_select("default")
             self.assertEqual(api.load_prefs()["kb_deny"], {"speedrun": [], "explore": []})
 
+    def test_kb_required_edits_are_per_mode_per_profile_and_reach_launch(self):
+        from orchestrator.launch_options import config_for
+        from orchestrator.run import parse_args
+        api = self.console
+        with patch.object(kb_access, 'KB_ROOT', self.kb):
+            api.profile_select('local')
+            required = {'tools.md': False, 'speedrun/techniques.md': True}
+            api.save_prefs({'kb_required': {'explore': required}})
+            pid = api.profile_create({'name': '自选必读', 'base': 'current', 'form': None})['selected']
+            self.assertEqual(api.load_prefs()['kb_required'], {'explore': required, 'speedrun': {}})
+            listing = {d['path']: d for d in api.kb_list('explore')['documents']}
+            self.assertFalse(listing['tools.md']['required'])
+            self.assertTrue(listing['speedrun/techniques.md']['required'])
+            options = {'agent': 'test', 'save': SAVE, 'mode': 'explore', 'chapters': [1], 'sim': False,
+                       'kb_required': required, 'kb_allow': ['speedrun/techniques.md']}
+            self.assertEqual(config_for(options).kb_required, required)
+            args = build(options, profile=pid)
+            self.assertEqual(json.loads(args[args.index('--kb-required') + 1]), required)
+            with patch('sys.argv', ['orchestrator.run', *args]):
+                current, _ = parse_args()
+            self.assertEqual(current.kb_required, required)
+            flag = args.index('--kb-required')
+            with patch('sys.argv', ['orchestrator.run', *args[:flag], *args[flag + 2:]]):
+                direct, _ = parse_args()
+            self.assertEqual(direct.kb_required, {})
+            api.save_prefs({'kb_required': {'explore': {'tools.md': True}}})
+            self.assertEqual(profiles.meta(pid)['kb_required']['explore'], {})
+            api.profile_select('local')
+            self.assertEqual(api.load_prefs()['kb_required']['explore'], required)
+
     def test_delete_guards(self):
         api = self.console
         pid = api.profile_create({"name": "系列", "base": "default"})["selected"]

@@ -212,6 +212,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--kb-allow", metavar="文件,...",
                     help="探索模式额外开放的速通知识库文件（写成 speedrun/<kb 内的相对路径>，逗号分隔，例如 "
                          "speedrun/techniques.md）：挂在 /kb/speedrun/ 下，选读、不要求准备阶段读完。默认不开放。续跑沿用")
+    ap.add_argument('--kb-required', metavar='JSON',
+                    help='逐项覆盖必读状态的 JSON 对象，键是知识库路径，值是 true 或 false。续跑沿用')
     ap.add_argument("--kb-extra", metavar="目录",
                     help="追加本机资料：把这个目录（相对路径按仓库根目录算，例如 local/kb_extra/<系列>）里的文件加进挂给"
                          "智能体的 /kb，同名文件覆盖默认版本。用于某个系列赛自己加的资料，不入库、不影响别的运行。"
@@ -515,6 +517,14 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         raise SystemExit(f"--kb-extra：找不到目录 {cfg.kb_extra_dir}")
     prepared_profile = prepared_metadata.get('profile')
     use_profile(cfg, previous, args.profile if args.profile is not None else prepared_profile)
+    if args.kb_required is not None:
+        from .kb_access import normalize_required
+        try:
+            cfg.kb_required = normalize_required(cfg.mode, json.loads(args.kb_required))
+        except ValueError as exc:
+            ap.error(f'--kb-required：{exc}')
+    elif previous or prepared_metadata:
+        cfg.kb_required = dict(kb_state.get('kb_required') or {})
     if prepared_profile is not None and cfg.profile != prepared_profile:
         raise SystemExit('--profile 与准备会话绑定的配置不一致，请沿用原配置或重新准备')
     args.record = args.record is not False  # 默认开启
@@ -713,6 +723,7 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
              "controller_host": os.environ.get("CELESTE_CONTROLLER_HOST"), "controller_pid": os.getpid(),
              "controller_parent_pid": os.getppid(),
              "bridge_port": cfg.bridge_port}
+    state['kb_required'] = dict(cfg.kb_required)
     from .model_profile import profile_state
     state.update(profile_state(cfg))
     if getattr(cfg, '_machine_settings_origin', None):
@@ -1139,7 +1150,7 @@ async def run_async(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, tok
         prepare_view(cfg)        # 有不给看的文件或本机追加资料时，同步合并后的副本（挂进容器 /kb）
     if cfg.study and workspace_capabilities(cfg).workspace_read and not args.no_agent:
         from .sim_mode import sim_readme
-        study = KbStudy(cfg.kb_dir, cfg.study_minutes, sim_readme(cfg))   # Claude 开 /sim 时另读 /sim/README.md
+        study = KbStudy(cfg.kb_dir, cfg.study_minutes, sim_readme(cfg), required=cfg.kb_required)
         if not study.has_reference and cfg.knowledge_profile == "full":
             print("[run] 提示：kb/reference/ 不存在，准备阶段只读知识库本身（见使用说明 2.5 节生成参考资料原文）", flush=True)
     prepared = None
@@ -1784,7 +1795,7 @@ def _main(cfg, args) -> int:
         from .kb_access import prepare_view
         prepare_view(cfg)
         from .sim_mode import sim_readme
-        preparation_study = KbStudy(cfg.kb_dir, cfg.study_minutes, sim_readme(cfg))
+        preparation_study = KbStudy(cfg.kb_dir, cfg.study_minutes, sim_readme(cfg), required=cfg.kb_required)
         load_preparation(args.prepared, cfg, preparation_study)
     previous = args.previous
     from .parked_run import check_reserved_slot

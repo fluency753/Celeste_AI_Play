@@ -52,6 +52,58 @@ class SharedDocsTests(unittest.TestCase):
         self.assertNotIn('speedrun/techniques.md', required_files(selected))
         self.assertNotEqual(selected, view)
 
+    def test_local_source_is_one_readonly_optional_speedrun_document(self):
+        source = kb_layout.local_source(self.kb)
+        source.parent.mkdir(parents=True)
+        code = '========== SOURCE FILE: Celeste/Player.cs ==========\npublic class Player {}\n'
+        source.write_text(code, encoding='utf-8')
+        path = kb_layout.CELESTE_SOURCE
+        rows = [row for row in kb_access.documents('speedrun') if row['local_only']]
+        self.assertEqual([row['path'] for row in rows], [path])
+        self.assertFalse(rows[0]['required'])
+        self.assertFalse(rows[0]['editable'])
+        self.assertNotIn('speedrun/' + path, [row['path'] for row in kb_access.documents('explore')])
+        with self.assertRaises(ValueError):
+            kb_access.normalize_allow('explore', ['speedrun/' + path])
+        with self.assertRaises(ValueError):
+            kb_access.write_document('speedrun', path, 'edited')
+        cfg = replace(self.cfg, mode='speedrun', knowledge_profile='full')
+        from orchestrator.prompting import kb_reference_rule
+        self.assertIn('/kb/' + path, kb_reference_rule(cfg))
+        self.assertNotIn(path, kb_reference_rule(self.cfg))
+        self.assertEqual((kb_access.prepare_view(cfg) / path).read_text(encoding='utf-8'), code)
+        self.assertNotIn(path, required_files(cfg.kb_dir))
+        required = replace(cfg, kb_required={path: True, 'README.md': False})
+        view = kb_access.prepare_view(required)
+        self.assertIn(path, required_files(view))
+        self.assertNotIn('README.md', required_files(view))
+        self.assertNotEqual(view, cfg.kb_dir)
+        denied = replace(required, kb_deny=[path])
+        view = kb_access.prepare_view(denied)
+        self.assertFalse((view / path).exists())
+        self.assertNotIn(path, required_files(view))
+        self.assertNotIn(path, kb_reference_rule(denied))
+
+    def test_pdf_uses_paired_text_for_an_explicit_read_requirement(self):
+        original = 'reference/community/pdf/example.pdf'
+        transcript = 'reference/community/example.md'
+        (self.kb / original).parent.mkdir(parents=True)
+        (self.kb / original).write_bytes(b'%PDF-1.5 fixture original')
+        (self.kb / transcript).write_text('text matching original\n', encoding='utf-8')
+        rows = {row['path']: row for row in kb_access.documents('speedrun')}
+        self.assertEqual(rows[original]['study_target'], transcript)
+        self.assertEqual(kb_access.normalize_required('speedrun', {original: True}), {original: True})
+        cfg = replace(self.cfg, mode='speedrun', knowledge_profile='full',
+                      kb_required={original: True, transcript: False})
+        view = kb_access.prepare_view(cfg)
+        self.assertTrue((view / original).is_file())
+        study = KbStudy(view, 1)
+        self.assertNotIn(original, study.files)
+        self.assertIn(transcript, study.files)
+        self.assertEqual(study.total[transcript], 1)
+        denied = replace(cfg, kb_deny=[transcript])
+        self.assertNotIn(transcript, required_files(kb_access.prepare_view(denied)))
+
     def test_engine_rendering_preserves_protocol_values_and_fenced_programs(self):
         codex = kb_access.prepare_view(self.cfg)
         claude = kb_access.prepare_view(replace(self.cfg, engine='claude'))

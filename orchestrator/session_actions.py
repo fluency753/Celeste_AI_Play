@@ -128,7 +128,7 @@ def _finish(anchor, operation):
                  'codex_player_login': prepared.get('codex_player_login') is True,
                  'prepared_dir': str(directory), 'runtime': 'container', 'sim': False, 'sim_assist': False,
                  'max_minutes': 1000,
-                 **{key: prepared[key] for key in ('profile', 'kb_deny', 'kb_allow') if key in prepared}}
+                 **{key: prepared[key] for key in ('profile', 'kb_deny', 'kb_allow', 'kb_required') if key in prepared}}
         write_json(directory / 'run_state.json', state)
         if runtime(engine).fast:
             RunControl(directory).set_fast(operation['fast'])
@@ -276,7 +276,7 @@ def play_session(anchor, current, options):
     from .kb_study import KbStudy
     from .kb_access import prepare_view
     prepare_view(cfg)
-    load_preparation(str(directory), cfg, KbStudy(cfg.kb_dir, 60))
+    load_preparation(str(directory), cfg, KbStudy(cfg.kb_dir, 60, required=cfg.kb_required))
     # Chat may have been forked when a desktop client owned the preparation thread.
     preparation = read_json(directory / 'prepare_summary.json')
     latest = REPO_ROOT / 'runs/latest.txt'

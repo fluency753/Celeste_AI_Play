@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -47,7 +48,7 @@ DEFAULTS = {
     "skip_enter": False, "no_agent": False, "hud_window": True, "hud": True, "bridge_port": 47774,
     "mcp_port": 47780, "hud_port": 47790, "ffmpeg": "", "record_video_args": "", "audio_offset_ms": None,
     "pause_callback_command": "",
-    "tune": {}, "kb_deny": [], "kb_allow": [],
+    "tune": {}, "kb_deny": [], "kb_allow": [], "kb_required": {},
 }
 
 
@@ -246,9 +247,10 @@ def normalize(options: dict) -> dict:
         clean[key] = coerce(key, value)
     check_relations(clean)
     o["tune"] = clean
-    from .kb_access import normalize_allow, normalize_deny
+    from .kb_access import normalize_allow, normalize_deny, normalize_required
     o["kb_deny"] = normalize_deny(o["mode"], o["kb_deny"])
     o["kb_allow"] = normalize_allow(o["mode"], o["kb_allow"]) if o["mode"] == "explore" else []
+    o["kb_required"] = normalize_required(o["mode"], o["kb_required"])
     if any("," in x for x in o["kb_deny"] + o["kb_allow"]):
         raise ValueError("知识库文件名里不能有逗号")
     return o
@@ -346,6 +348,8 @@ def build(options: dict, profile: str | None = None) -> list[str]:
         argv += ["--kb-deny", ",".join(o["kb_deny"])]
     if o["kb_allow"]:
         argv += ["--kb-allow", ",".join(o["kb_allow"])]
+    if o["kb_required"]:
+        argv += ['--kb-required', json.dumps(o['kb_required'], ensure_ascii=False)]
     if profile and profile != "local":
         from .profiles import check
         argv += ["--profile", check(profile)]
@@ -455,6 +459,7 @@ def config_for(options: dict, profile: str | None = None):
     cfg.study, cfg.study_minutes = o["study"], o["study_minutes"]
     cfg.kb_deny = list(o["kb_deny"])
     cfg.kb_allow = list(o["kb_allow"])
+    cfg.kb_required = dict(o['kb_required'])
     apply(cfg, o["tune"])
     cfg.live_remind_s = cfg.remind_live_s if cfg.live else cfg.remind_s
     if profile:

@@ -67,7 +67,7 @@ def game_tools(cfg) -> list[str]:
     from .action_policy import permissions_for
     if (not is_explore(cfg) and getattr(cfg, 'play_scope', 'chapter') != 'visited'
             and permissions_for(cfg).restart_chapter):
-        tools.append('practice_room')
+        tools.append('goto_room')
     if has_cutscene_tool(cfg):
         tools.append("cutscene")
     from .sim_mode import controller_sim

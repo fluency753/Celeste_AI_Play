@@ -16,7 +16,7 @@ CORE_ORDER = ["README.md", "player_physics.md", "input.md", "entities.md", "tech
               "game_data.md"]
 
 
-def required_files(kb_dir: Path) -> list[str]:
+def required_files(kb_dir: Path, overrides=None) -> list[str]:
     """需要读完的文件（知识库内的相对路径）。草莓酱文本只要求英文原版，中文版是同一内容的翻译。"""
     from .kb_layout import read_manifest
     manifest = read_manifest(kb_dir)
@@ -42,6 +42,12 @@ def required_files(kb_dir: Path) -> list[str]:
     for name in ("gyms_en.md", "library_en.md"):
         if (sj / name).exists():
             files.append(f"reference/strawberry_jam/{name}")
+    if overrides:
+        from .kb_access import apply_required
+        available = {path.relative_to(kb_dir).as_posix() for path in kb_dir.rglob('*') if path.is_file()}
+        required = apply_required(files, overrides, available)
+        files = [name for name in files if name in required]
+        files.extend(sorted(required.difference(files)))
     return files
 
 
@@ -62,12 +68,12 @@ def _ranges(lines: list[int]) -> str:
 
 
 class KbStudy:
-    def __init__(self, kb_dir: Path, minutes: float, extra: dict[str, Path] | None = None):
+    def __init__(self, kb_dir: Path, minutes: float, extra: dict[str, Path] | None = None, *, required=None):
         """extra：知识库以外也要读完的文件，容器里的绝对路径 → 本机路径（例如主控提供的额外参考资料），
         排在知识库正文之后、社区原文之前。"""
         self.kb_dir = kb_dir
         self.minutes = minutes
-        self.files = required_files(kb_dir)
+        self.files = required_files(kb_dir, required)
         self.extra = dict(extra or {})
         if self.extra:
             k = next((i for i, rel in enumerate(self.files) if rel.startswith("reference/")), len(self.files))

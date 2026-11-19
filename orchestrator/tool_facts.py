@@ -66,7 +66,7 @@ def request_summary(name, args):
              'Bash': '执行程序', 'bash': '执行程序', 'apply_patch': '编辑文件', 'view_image': '查看图片', 'act': '游戏动作', 'simulate': '模拟预测',
              'cutscene': '剧情操作', 'narrate': '公开解说', 'set_effort': '调整推理强度',
              'stop_run': '报告阻塞', 'finish_goal': '报告目标达成', 'exit_level': '退出关卡',
-             'practice_room': '进入练习房间', 'start_speedrun_recording': '开启正式速通录像'}.get(name, name)
+             'goto_room': '查询或跳转房间', 'start_speedrun_recording': '开启正式速通录像'}.get(name, name)
     if name.lower() in {'read', 'write'}:
         label += ' · ' + safe_text(args.get('path') or args.get('file_path') or '路径未知', 150)
     if name == 'act':

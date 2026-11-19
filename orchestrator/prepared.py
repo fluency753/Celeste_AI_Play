@@ -75,12 +75,13 @@ if __name__ == "__main__":
         cfg.kb_overlay = profiles.kb_overlay_for(cfg.profile)
         cfg.kb_deny = list(metadata.get('kb_deny') or [])
         cfg.kb_allow = list(metadata.get('kb_allow') or [])
+        cfg.kb_required = dict(metadata.get('kb_required') or {})
     from .runtimes import runtime
     runtime(args.engine).configure(cfg, args.provider)
     from .sim_mode import controller_owned, sim_readme
     cfg.sim = args.knowledge == "full" and not controller_owned(cfg) and (cfg.sim_dir / "celeste-sim").is_file()
     from .kb_access import prepare_view
     prepare_view(cfg)
-    study = KbStudy(cfg.kb_dir, 60, sim_readme(cfg))
+    study = KbStudy(cfg.kb_dir, 60, sim_readme(cfg), required=cfg.kb_required)
     data = load_preparation(args.directory, cfg, study)
     print("准备会话校验通过：", data["session_id"])

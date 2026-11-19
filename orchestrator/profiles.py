@@ -171,7 +171,15 @@ def _meta_path(pid: str) -> Path:
 
 
 def _empty_kb() -> dict:
-    return {"kb_deny": {m: [] for m in MODES}, "kb_allow": {"explore": []}}
+    return {"kb_deny": {m: [] for m in MODES}, "kb_allow": {"explore": []}, "kb_required": {m: {} for m in MODES}}
+
+
+def _required_settings(data: dict) -> dict:
+    stored = data.get('kb_required')
+    if not isinstance(stored, dict):
+        return {mode: {} for mode in MODES}
+    return {mode: {name: value for name, value in stored[mode].items() if type(value) is bool}
+            if isinstance(stored.get(mode), dict) else {} for mode in MODES}
 
 
 def kb_permissions(pid: str, legacy_data: dict | None = None) -> dict:
@@ -187,10 +195,10 @@ def kb_permissions(pid: str, legacy_data: dict | None = None) -> dict:
         deny = data.get('kb_deny') if isinstance(data.get('kb_deny'), dict) else {}
         allow = data.get('kb_allow') if isinstance(data.get('kb_allow'), dict) else {}
         permissions = {'kb_deny': {mode: list(deny.get(mode) or []) for mode in MODES},
-                       'kb_allow': {'explore': list(allow.get('explore') or [])}}
+                       'kb_allow': {'explore': list(allow.get('explore') or [])}, 'kb_required': _required_settings(data)}
     else:
         data = meta(pid)
-        permissions = {key: data[key] for key in ('kb_deny', 'kb_allow')}
+        permissions = {key: data[key] for key in ('kb_deny', 'kb_allow', 'kb_required')}
         if is_preset(pid):
             permissions['kb_allow'] = {'explore': _expand_allow(permissions['kb_allow']['explore'])}
     from . import kb_layout
@@ -239,6 +247,7 @@ def meta(pid: str) -> dict:
     allow = data.get("kb_allow") if isinstance(data.get("kb_allow"), dict) else {}
     kb["kb_deny"] = {m: [x for x in deny.get(m) or [] if isinstance(x, str)] for m in MODES}
     kb["kb_allow"] = {"explore": [x for x in allow.get("explore") or [] if isinstance(x, str)]}
+    kb['kb_required'] = _required_settings(data)
     out.update(kb)
     return out
 
@@ -246,7 +255,7 @@ def meta(pid: str) -> dict:
 def _write_meta(pid: str, data: dict) -> None:
     path = _meta_path(pid)
     path.parent.mkdir(parents=True, exist_ok=True)
-    keep = {k: data[k] for k in ("name", "form", "kb_deny", "kb_allow", "created", "updated") if k in data}
+    keep = {k: data[k] for k in ("name", "form", "kb_deny", "kb_allow", "kb_required", "created", "updated") if k in data}
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps({"version": 1, **keep}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
@@ -282,7 +291,7 @@ def clean_form(form) -> dict | None:
     if not isinstance(form, dict):
         raise ValueError("表单设置须为对象")
     from .machine_settings import strip
-    form = strip({k: v for k, v in form.items() if k not in ("kb_deny", "kb_allow", "profile")})
+    form = strip({k: v for k, v in form.items() if k not in ("kb_deny", "kb_allow", "kb_required", "profile")})
     if len(json.dumps(form, ensure_ascii=False).encode("utf-8")) > MAX_FORM_BYTES:
         raise ValueError("表单设置太大")
     return form
@@ -299,7 +308,8 @@ def save_form(pid: str, form) -> dict:
     return meta(pid)
 
 
-def set_kb_permissions(pid: str, kb_deny: dict | None = None, kb_allow: dict | None = None) -> dict:
+def set_kb_permissions(pid: str, kb_deny: dict | None = None, kb_allow: dict | None = None,
+                       kb_required: dict | None = None) -> dict:
     """新建配置的知识库权限（已经由调用方按知识库校验过）。本机原有设置的权限在 configs/local.console.json。"""
     pid = _writable(pid)
     if pid == LEGACY:
@@ -310,6 +320,8 @@ def set_kb_permissions(pid: str, kb_deny: dict | None = None, kb_allow: dict | N
         data["kb_deny"] = {**current["kb_deny"], **kb_deny}
     if kb_allow is not None:
         data["kb_allow"] = {**current["kb_allow"], **kb_allow}
+    if kb_required is not None:
+        data['kb_required'] = {**current['kb_required'], **kb_required}
     data["updated"] = time.time()
     _write_meta(pid, data)
     return meta(pid)
@@ -389,6 +401,7 @@ def create(name, base: str = DEFAULT, form=None, kb: dict | None = None) -> str:
         if isinstance(kb, dict):
             perms["kb_deny"].update({m: list(v) for m, v in (kb.get("kb_deny") or {}).items() if m in MODES})
             perms["kb_allow"].update({m: list(v) for m, v in (kb.get("kb_allow") or {}).items() if m == "explore"})
+            perms['kb_required'] = _required_settings(kb)
         _write_meta(pid, {"name": name, "form": form, **perms, "created": now, "updated": now})
     except Exception:
         shutil.rmtree(target, ignore_errors=True)
@@ -435,7 +448,8 @@ def legacy_customized() -> bool:
         return False
     deny = prefs.get("kb_deny") if isinstance(prefs, dict) and isinstance(prefs.get("kb_deny"), dict) else {}
     allow = prefs.get("kb_allow") if isinstance(prefs, dict) and isinstance(prefs.get("kb_allow"), dict) else {}
-    return any(deny.get(m) for m in MODES) or bool(allow.get("explore"))
+    return (any(deny.get(m) for m in MODES) or bool(allow.get("explore"))
+            or isinstance(prefs, dict) and any(_required_settings(prefs).values()))
 
 
 def selected() -> str:

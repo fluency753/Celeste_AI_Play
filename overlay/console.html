@@ -263,6 +263,7 @@
   .kb-item button.name { background: none; border: 0; text-align: left; cursor: pointer; padding: 0; min-width: 0; overflow-wrap: anywhere; }
   .kb-item.denied button.name { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(143, 154, 179, 0.6); }
   .kb-item .size { color: var(--muted); font-size: 12px; white-space: nowrap; display: flex; gap: 6px; align-items: center; }
+  .kb-item .required { display: inline-flex; gap: 4px; align-items: center; }
   .editor-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
   .editor-head .path { font: 13px Consolas, "Cascadia Mono", monospace; color: var(--muted); flex: 1; min-width: 160px; overflow-wrap: anywhere; }
   textarea.code { font: 12.5px/1.6 Consolas, "Cascadia Mono", monospace; min-height: 62vh; tab-size: 2; white-space: pre-wrap; }
@@ -571,7 +572,7 @@
           <label class="switch"><span class="text"><b>不启动智能体</b><span>只开游戏工具服务，手动测试</span></span><input type="checkbox" id="noAgent"></label>
           <label class="switch wide"><span class="text"><b>画帧号条码</b><span>录像左下角画帧号，只用于校准</span></span><input type="checkbox" id="recordMarker"></label>
         </div>
-        <p class="hint">推进速度大于 1 是快进，只用于测试，录像会失真。</p>
+        <p class="hint">限时速通练习默认以 4 帧推进动作。正式开录后锁步，每次只推进 1 帧。</p>
       </details>
 
       <details class="more" id="machineBox">
@@ -778,7 +779,7 @@
       </div>
       <span class="kb-count" id="kbCount"></span>
     </div>
-    <p class="hint" style="margin-top:0">勾选的文件智能体能读到（挂进容器的 /kb）；取消勾选的不挂进去，准备阶段也不要求读。"必读"是准备阶段要求从头读完的文件。与运行页的游玩模式同步。</p>
+    <p class="hint" style="margin-top:0">左侧复选框控制智能体能否读取。勾选「必读」后，准备阶段会要求读完这份文件。设置随当前配置与游玩模式保存。</p>
     <div class="presets" style="margin-top:8px"><button type="button" class="chip" id="kbAllowAll">全部可读</button></div>
     <div id="kbList"></div>
   </section>
@@ -1735,6 +1736,7 @@ function formOptions() {
     recording_mode: $("recordingMode").value, freeze_chapter_select: $("freezeChapterSelect").checked,
     freeze_file_select: $("freezeFileSelect").checked, freeze_main_menu: $("freezeMainMenu").checked,
     tune, kb_deny: kbDeny(ui.mode), kb_allow: ui.mode === "explore" ? kbAllow(ui.mode) : [],
+    kb_required: kbRequired(ui.mode),
   };
   if ($("continuousMusic").checked) options.continuous_music = true;
   if ($("collisionImage").value) options.collision_image = $("collisionImage").value;
@@ -1801,7 +1803,7 @@ function profileReadonly() { return !!(ui.profiles && ui.profiles.current && ui.
 // 存进配置的表单设置：运行页的全部选项（知识库权限另存），另记分段选择
 function profileForm() {
   const o = formOptions();
-  delete o.kb_deny; delete o.kb_allow;
+  delete o.kb_deny; delete o.kb_allow; delete o.kb_required;
   o.seg_off = JSON.parse(JSON.stringify(ui.segOff || {}));
   // 不随配置保存：本机设置、用量设置、直播与录屏、调试项、没固定的本次运行设置（orchestrator/machine_settings.strip）
   for (const key of notInProfile()) delete o[key];
@@ -2548,6 +2550,11 @@ function kbAllow(mode) {
   return list ? (list.allow || []).slice() : ((prefs && prefs[mode]) || []);
 }
 
+function kbRequired(mode) {
+  const list = ui.kb[mode];
+  return { ...(list ? list.required : ui.options?.prefs?.kb_required?.[mode]) };
+}
+
 function kbReadable(list, d) {
   return d.opt_in ? (list.allow || []).includes(d.path) : !list.deny.includes(d.path);
 }
@@ -2569,9 +2576,11 @@ function renderKb() {
   const locked = profileReadonly();
   const editedCount = list.documents.filter(d => d.edited).length;
   $("kbRoot").textContent = `${list.root}/ → 容器里的 /kb` + (editedCount ? `（这份配置改了 ${editedCount} 个文件，存在 ${list.edits_dir}/）` : "");
-  const required = list.documents.filter(d => d.required);
+  const readablePaths = new Set(list.documents.filter(readable).map(d => d.path));
+  const required = new Set(list.documents.filter(d => d.required && readablePaths.has(d.path) && readablePaths.has(d.study_target))
+    .map(d => d.study_target));
   const own = list.documents.filter(d => !d.opt_in), extra = list.documents.filter(d => d.opt_in);
-  $("kbCount").textContent = `${own.filter(readable).length} / ${own.length} 个文件可读，其中必读 ${required.filter(readable).length} 个`
+  $("kbCount").textContent = `${own.filter(readable).length} / ${own.length} 个文件可读，准备阶段须读 ${required.size} 份文本`
     + (extra.length ? `；速通资料开放 ${extra.filter(readable).length} / ${extra.length} 个（挂在 /kb/speedrun/）` : "")
     + (list.sim_readme ? "；Claude 开模拟器时另有 /sim/README.md" : "");
   const groups = [];
@@ -2596,14 +2605,29 @@ function renderKb() {
       row.className = "kb-item" + (readable(d) ? "" : " denied") + (ui.kbFile && ui.kbFile.mode === ui.mode && ui.kbFile.path === d.path ? " open" : "");
       const box = document.createElement("input");
       box.type = "checkbox"; box.checked = readable(d); box.disabled = locked;
-      box.title = d.opt_in ? "开放给探索模式的智能体（挂在 /kb/speedrun/ 下，选读）" : "智能体能不能读这个文件";
+      box.title = d.opt_in ? "开放给探索模式的智能体（挂在 /kb/speedrun/ 下）" : "智能体能不能读这个文件";
       box.setAttribute("aria-label", `${d.path} 可读`);
       box.addEventListener("change", () => setReadable([d], box.checked));
       const name = document.createElement("button");
       name.type = "button"; name.className = "name"; name.textContent = d.path;
       name.addEventListener("click", () => openKbFile(ui.mode, d.path));
       const size = document.createElement("span"); size.className = "size";
-      if (d.required) size.appendChild(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "必读" }));
+      const rule = document.createElement("label");
+      rule.className = "required";
+      const requiredBox = document.createElement("input");
+      requiredBox.type = "checkbox";
+      requiredBox.checked = !!d.required;
+      requiredBox.disabled = locked || !d.study_target;
+      rule.title = !d.study_target ? "缺少可以核验阅读的对应文本，可按需查看"
+        : d.study_target === d.path ? "准备阶段须读完此文件"
+        : `原文与同文文字版 ${d.study_target} 均可读时，准备阶段核验文字覆盖；插图可按需查阅`;
+      requiredBox.setAttribute("aria-label", `${d.path} 必读`);
+      requiredBox.addEventListener("change", () => setRequired(ui.mode, d.path, requiredBox.checked));
+      rule.append(requiredBox, "必读");
+      size.appendChild(rule);
+      if (d.required_via?.length && !d.required) size.appendChild(Object.assign(document.createElement("span"), {
+        className: "tag gold", textContent: "PDF 要求", title: `此文字版仍由 ${d.required_via.join("、")} 的必读设置要求阅读`,
+      }));
       if (d.local_only) size.appendChild(Object.assign(document.createElement("span"), { className: "tag", textContent: "本机" }));
       if (d.edited) size.appendChild(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "已改", title: "这份配置改过这个文件（程序自带的文件不变）" }));
       size.appendChild(document.createTextNode(bytes(d.size)));
@@ -2621,21 +2645,36 @@ async function setDeny(paths, denied) {
   await setReadable(list.documents.filter(d => paths.includes(d.path)), !denied);
 }
 
+let kbRequiredUpdates = Promise.resolve();
+function setRequired(mode, path, required) {
+  const profile = ui.profiles?.current?.id;
+  kbRequiredUpdates = kbRequiredUpdates.then(async () => {
+    if (profile !== ui.profiles?.current?.id) return;
+    try {
+      ui.options.prefs = await postJSON("/api/console/prefs", {
+        kb_required: { [mode]: { ...kbRequired(mode), [path]: required } },
+      });
+      await loadKbList(mode);
+      renderKb(); updateSummary(); schedulePreview();
+    } catch (e) { toast(e.message, true); renderKb(); }
+  });
+}
+
 // 勾选 / 取消：本模式自己的文件改不给看的列表；探索模式另列的速通资料改开放列表
 async function setReadable(docs, readable) {
-  const list = ui.kb[ui.mode];
+  const mode = ui.mode;
+  const list = ui.kb[mode];
   const deny = new Set(list.deny), allow = new Set(list.allow || []);
   for (const d of docs) {
     if (d.opt_in) { if (readable) allow.add(d.path); else allow.delete(d.path); }
     else if (readable) deny.delete(d.path); else deny.add(d.path);
   }
-  const update = { kb_deny: { [ui.mode]: [...deny].sort() } };
-  if (ui.mode === "explore") update.kb_allow = { explore: [...allow].sort() };
+  const update = { kb_deny: { [mode]: [...deny].sort() } };
+  if (mode === "explore") update.kb_allow = { explore: [...allow].sort() };
   try {
     const prefs = await postJSON("/api/console/prefs", update);
     ui.options.prefs = prefs;
-    list.deny = prefs.kb_deny[ui.mode] || [];
-    list.allow = (prefs.kb_allow && prefs.kb_allow[ui.mode]) || [];
+    await loadKbList(mode);
     renderKb(); updateSummary(); schedulePreview();
   } catch (e) { toast(e.message, true); renderKb(); }
 }

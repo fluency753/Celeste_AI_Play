@@ -330,6 +330,7 @@ class RunConfig:
     tuning: dict = field(default_factory=dict)   # 与默认值不同的可调参数（记进 run_state，续跑沿用）
     kb_deny: list = field(default_factory=list)  # 不给智能体看的知识库文件（知识库内的相对路径；控制台的"知识库"页）
     kb_allow: list = field(default_factory=list)  # 探索模式额外开放的速通知识库文件（speedrun/<kb 内路径>，挂在 /kb/speedrun/ 下）
+    kb_required: dict[str, bool] = field(default_factory=dict)
     # 本机追加的资料目录（例如某个系列赛自己加的资料，放在 local/ 下、不入库）：里面的文件加进挂给智能体的 /kb，
     # 与默认知识库同名的文件覆盖默认版本。空字符串表示不追加。命令行 --kb-extra，续跑沿用
     kb_extra: str = ""
@@ -392,7 +393,8 @@ class RunConfig:
     def kb_view(self) -> bool:
         """新布局总是合成视图；兼容旧布局时仅过滤、覆盖或追加需要副本。"""
         from .kb_layout import enabled
-        return bool(getattr(self, '_kb_bound_view', None)) or enabled(REPO_ROOT/'kb') or bool(self.kb_deny or self.kb_extra or self.kb_allow or self.kb_overlay)
+        return bool(getattr(self, '_kb_bound_view', None)) or enabled(REPO_ROOT/'kb') or bool(
+            self.kb_deny or self.kb_extra or self.kb_allow or self.kb_overlay or self.kb_required)
 
     @property
     def kb_dir(self) -> Path:

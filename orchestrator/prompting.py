@@ -31,7 +31,7 @@ TOOL_NOTES = {
     "cutscene": "在剧情决策点尝试跳过或继续观看，在真实输入节点推进或选择",
     "simulate": "花模拟体力预测短路线",
     "travel": "请主控代为换到已解锁章节 A 面的检查点（计划外地图开着时才有）",
-    "practice_room": "允许重启章节时，直达当前目标地图的房间练习",
+    "goto_room": "查询或直达当前目标地图内有重生点的房间",
     "start_speedrun_recording": "准备好输入后，在选章开启正式速通录像",
 }
 CN_COUNT = {1: "一", 2: "两", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九"}
@@ -129,22 +129,28 @@ def kb_reference_rule(cfg) -> str:
     """知识库里社区资料原文（kb/reference/，不入库、在本机生成）的一句：本机没有或不给看时为空。"""
     root = getattr(cfg, "kb_source", None)
     from .kb_access import KB_ROOT
-    from .kb_layout import enabled
-    if getattr(cfg, '_kb_bound_view', None) is not None:
+    from .kb_layout import enabled, CELESTE_SOURCE, local_source
+    bound = getattr(cfg, '_kb_bound_view', None) is not None
+    deny = set(getattr(cfg, "kb_deny", None) or [])
+    source_available = (not is_explore(cfg) and CELESTE_SOURCE not in deny and
+                        ((cfg.kb_dir / CELESTE_SOURCE).is_file() if bound else
+                         enabled(KB_ROOT) and local_source(KB_ROOT).is_file()))
+    source_note = (f'本机《蔚蓝》反编译源码整理成单份 `/kb/{CELESTE_SOURCE}`。'
+                   '可搜索类名、方法名或 SOURCE FILE 标记，再按行读取相应片段。') if source_available else ''
+    if bound:
         root = cfg.kb_dir
     elif enabled(KB_ROOT) and not is_explore(cfg):
         root = KB_ROOT
-    deny = set(getattr(cfg, "kb_deny", None) or [])
     if root is None or not (root / "reference").is_dir():
-        return ""
+        return source_note
     files = [p for p in (root / "reference").rglob("*") if p.is_file()
-             and p.relative_to(root).as_posix() not in deny]
+             and p.relative_to(root).as_posix() not in deny | {CELESTE_SOURCE}]
     if not files:
-        return ""
+        return source_note
     text = "`/kb/reference/` 收录了社区资料原文，可以用 Grep 查技巧名"
     if any(p.suffix.lower() == ".pdf" and "community" in p.parts for p in files):
         text += "；文字版看不到的插图，可以用 Read 打开 `/kb/reference/community/pdf/` 里的原 PDF"
-    return text + "。"
+    return " ".join(part for part in (text + "。", source_note) if part)
 
 
 def speedrun_allow_rule(cfg) -> str:
@@ -166,7 +172,7 @@ def speedrun_allow_rule(cfg) -> str:
             items += [f"{folder}/{name}" for name in names]
         else:
             items.append(f"{folder}/ 下的 {len(names)} 个文件")
-    return f"本次另外开放了速通知识库的 {len(allow)} 个文件（/kb/speedrun/ 下：{'、'.join(items)}），按需查阅，不要求准备阶段读完。"
+    return f"本次另外开放了速通知识库的 {len(allow)} 个文件（/kb/speedrun/ 下：{'、'.join(items)}），阅读要求以本次必读清单为准。"
 
 
 def save_context_act(cfg) -> str:

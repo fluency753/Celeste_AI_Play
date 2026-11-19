@@ -114,7 +114,7 @@ class GamePolicyTests(unittest.TestCase):
         self.assertIsNotNone(denial(self.controller, 'start_speedrun_recording'))
         speedrun.speedrun_record_on_demand = True
         for name in GAME_ACTIONS:
-            cfg = speedrun if name in {'practice_room', 'start_speedrun_recording'} else self.controller.cfg
+            cfg = speedrun if name in {'goto_room', 'start_speedrun_recording'} else self.controller.cfg
             with patch.object(self.controller, 'cfg', cfg):
                 self.assertIsNone(denial(self.controller, name))
                 for flag in ('prepare_only', 'chat_only', 'goal_finishing', 'stop_requested',

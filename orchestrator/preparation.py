@@ -55,7 +55,8 @@ async def _prepare(args, profile):
         permissions = profiles.kb_permissions(profile)
         cfg.kb_deny = permissions['kb_deny'][cfg.mode]
         cfg.kb_allow = permissions['kb_allow'].get(cfg.mode, [])
-        profile_state = {'profile': profile, 'kb_deny': cfg.kb_deny, 'kb_allow': cfg.kb_allow}
+        cfg.kb_required = permissions['kb_required'][cfg.mode]
+        profile_state = {'profile': profile, 'kb_deny': cfg.kb_deny, 'kb_allow': cfg.kb_allow, 'kb_required': cfg.kb_required}
     cfg.model, cfg.effort = await asyncio.to_thread(adapter.resolve, cfg.model, cfg.effort, cfg.provider)
     adapter.token(cfg)  # Fail before creating containers or changing the selected session.
     cfg.mcp_port = getattr(args, 'mcp_port', cfg.mcp_port)
@@ -71,11 +72,11 @@ async def _prepare(args, profile):
     game.mkdir(parents=True, exist_ok=True)
     install_game_helpers(cfg.workspace_dir)
     from .sim_mode import sim_readme
-    study = KbStudy(cfg.kb_dir, cfg.max_minutes, sim_readme(cfg))
+    study = KbStudy(cfg.kb_dir, cfg.max_minutes, sim_readme(cfg), required=cfg.kb_required)
     if args.quick_check:
         # 联调仅检查索引文件；不能把联调结果记成全库已读。
         study.files = ["README.md"]
-        study.total = {"README.md": study.total["README.md"]}
+        study.total = {"README.md": len((cfg.kb_dir / 'README.md').read_text(encoding='utf-8').splitlines())}
         study.read = {"README.md": set()}
     metrics = Metrics(directory / "metrics.json", cfg.agent, cfg.model, cfg.effort,
                       cfg.budget_seconds, study=True)

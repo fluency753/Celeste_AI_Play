@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.14.0";
+    public const string Version = "1.15.0";
     private sealed record ChapterCapture(object? Capture);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Session, ChapterCapture> chapterCaptures = new();
     private static object captureEpoch = new();
@@ -229,7 +229,9 @@ internal static class Bridge {
             return;
         }
 
-        int budget = Math.Clamp(job.FramesPerTick, 1, 600);
+        // Lockstep itself advances one frame. Keep a pending recorded job at
+        // that limit even if the clock disconnects and the loop falls back.
+        int budget = captureStarted || RecordingAudio.Enabled ? 1 : Math.Clamp(job.FramesPerTick, 1, 600);
         for (int i = 0; i < budget && job != null; i++) {
             if (i > 0) {
                 PollPlatformEventsSafe();
@@ -789,6 +791,7 @@ internal static class Bridge {
                     w.WriteBoolean("checkpoints", true);
                     w.WriteBoolean("load_room_modes", true);
                     w.WriteBoolean("speedrun_practice_room", true);
+                    w.WriteBoolean("speedrun_goto_room", true);
                     w.WriteBoolean("speedrun_recorded_attempt", true);
                     w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("entry_guard", MapEntryGuard.Available);
@@ -979,7 +982,8 @@ internal static class Bridge {
                 break;
 
             case "speedrun_practice_room":
-                PracticeRoom(req.Id, a);
+            case "speedrun_goto_room":
+                GotoRoom(req.Id, a, querySupported: req.Cmd == "speedrun_goto_room");
                 break;
 
             case "areas":
@@ -1151,7 +1155,7 @@ internal static class Bridge {
         }));
     }
 
-    private static void PracticeRoom(long id, JsonElement args) {
+    private static void GotoRoom(long id, JsonElement args, bool querySupported) {
         if (!Active || job != null || Playback.Running || Engine.Scene is not Level level || level.Completed) {
             IpcServer.Send(Reply.Error(id, "practice requires an active, unfinished level with no step or playback"));
             return;
@@ -1163,10 +1167,35 @@ internal static class Bridge {
             IpcServer.Send(Reply.Error(id, "practice target does not match the current official chapter, side and save"));
             return;
         }
+        if (querySupported && !args.TryGetProperty("room", out _)) {
+            IpcServer.Send(Reply.Ok(id, w => {
+                w.WriteStartArray("rooms");
+                foreach (LevelData candidate in current.MapData.Levels) {
+                    if (candidate.Spawns.Count == 0) continue;
+                    w.WriteStartObject();
+                    w.WriteString("room", candidate.Name);
+                    w.WriteStartArray("spawns");
+                    foreach (Vector2 position in candidate.Spawns) WriteSpawn(w, position);
+                    w.WriteEndArray();
+                    w.WriteEndObject();
+                }
+                w.WriteEndArray();
+            }));
+            return;
+        }
         string room = GetString(args, "room", "");
-        if (room.Length == 0 || current.MapData.Get(room) is not { Spawns.Count: > 0 }) {
+        if (room.Length == 0 || current.MapData.Get(room) is not { Spawns.Count: > 0 } destination) {
             IpcServer.Send(Reply.Error(id, "practice room does not exist or has no spawn"));
             return;
+        }
+        Vector2? respawn = null;
+        if (args.TryGetProperty("spawn_index", out JsonElement index)) {
+            if (index.ValueKind != JsonValueKind.Number || !index.TryGetInt32(out int spawn) ||
+                spawn < 0 || spawn >= destination.Spawns.Count) {
+                IpcServer.Send(Reply.Error(id, $"spawn_index must be from 0 to {destination.Spawns.Count - 1}"));
+                return;
+            }
+            respawn = destination.Spawns[spawn];
         }
         // Keep StartCheckpoint null so the original Restart Chapter menu returns to the chapter start.
         var practice = new Session(area) {
@@ -1176,9 +1205,23 @@ internal static class Bridge {
             Inventory = current.Inventory,
             Dreaming = current.Dreaming,
             CoreMode = current.CoreMode,
+            RespawnPoint = respawn,
         };
         Engine.Scene = new LevelLoader(practice);
-        IpcServer.Send(Reply.Ok(id, w => w.WriteString("room", room)));
+        IpcServer.Send(Reply.Ok(id, w => {
+            w.WriteString("room", room);
+            if (respawn is { } position) {
+                w.WritePropertyName("spawn");
+                WriteSpawn(w, position);
+            }
+        }));
+    }
+
+    private static void WriteSpawn(Utf8JsonWriter w, Vector2 position) {
+        w.WriteStartArray();
+        w.WriteNumberValue(position.X);
+        w.WriteNumberValue(position.Y);
+        w.WriteEndArray();
     }
 
     private static void Teleport(long id, JsonElement a) {

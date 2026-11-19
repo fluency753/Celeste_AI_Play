@@ -20,6 +20,7 @@ class SpeedrunBridge(DetourGame):
         self.attempt = getattr(self, 'attempt', 0) + 1
         self.valid_time = True
         self.captured_head = False
+        self.respawn = None
 
     def observation(self):
         obs = super().observation()
@@ -27,24 +28,35 @@ class SpeedrunBridge(DetourGame):
         if obs.get('level'):
             obs['level'].update(chapterTimeValid=self.valid_time, chapterSessionId=self.attempt,
                                 chapterRecordedFromStart=self.captured_head)
+            if self.respawn is not None:
+                obs['respawnPoint'] = self.respawn
+                obs['player']['pos'] = self.respawn
         if obs.get('completion'):
             obs['completion']['chapterTimeValid'] = self.valid_time
             obs['completion']['chapterRecordedFromStart'] = self.captured_head
         return obs
 
     def call(self, command, **options):
-        if command == 'speedrun_practice_room':
+        if command == 'speedrun_goto_room':
             self.commands.append(command)
             assert options['slot'] == self.slot and options['sid'] == CITY and options['mode'] == 0
+            spawns = [[10, 20], [40, 50]]
+            if 'room' not in options:
+                return {'rooms': [{'room': 'practice', 'spawns': spawns}]}
             assert options['allow_reconnect'] is False
             if options['room'] != 'practice':
                 raise RuntimeError('practice room does not exist')
+            index = options.get('spawn_index', 0)
+            if index >= len(spawns):
+                raise RuntimeError('spawn_index must be from 0 to 1')
             self.room, self.valid_time, self.ticks = options['room'], False, 0
+            self.respawn, self.captured_head = spawns[index], False
             self.attempt += 1
-            return {'room': self.room}
+            return {'room': self.room, 'spawn': self.respawn}
         reply = super().call(command, **options)
         if command == 'hello':
             reply['speedrun_practice_room'] = True
+            reply['speedrun_goto_room'] = True
             reply['speedrun_recorded_attempt'] = True
         if command == 'step':
             self.step_speed = options.get('speed')
@@ -74,7 +86,7 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
     async def test_tool_can_repeat_practice_and_records_native_eligibility(self):
         server = build_server(self.session)
         for _ in range(2):
-            result = await server.call_tool('practice_room', {'room': 'practice'})
+            result = await server.call_tool('goto_room', {'room': 'practice'})
             self.assertFalse(result.is_error, result)
             payload = json.loads(result.content[0].text.splitlines()[0])
             self.assertIs(payload['chapter_time_valid'], False)
@@ -84,7 +96,7 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
 
     def test_gray_completion_does_not_finish_or_restrict_settlement(self):
         self.cfg.cutscene_mode = 'auto'
-        self.session.practice_room('practice')
+        self.session.goto_room('practice')
         self.session.set_goal({'conditions': [{'field': 'map_complete', 'op': 'eq', 'value': True}]})
         self.session.act(['1,R'], '跑到练习终点', None)
         self.assertFalse(self.session.done)
@@ -114,11 +126,11 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
         before = self.session.last_obs
         configure(self.cfg, ActionPermissions())
         with self.assertRaisesRegex(ActError, '重启章节权限'):
-            self.session.practice_room('practice')
-        self.assertNotIn('speedrun_practice_room', self.bridge.commands)
+            self.session.goto_room('practice')
+        self.assertNotIn('speedrun_goto_room', self.bridge.commands)
         configure(self.cfg, ActionPermissions(restart_chapter=True))
         with self.assertRaisesRegex(ActError, 'does not exist'):
-            self.session.practice_room('missing')
+            self.session.goto_room('missing')
         self.assertIs(self.session.last_obs, before)
         self.assertTrue(self.bridge.valid_time)
 
@@ -126,10 +138,25 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
         ticket = REQUEST_TICKET.set(RequestTicket(lambda: '发起该请求的轮次已结束'))
         try:
             with self.assertRaisesRegex(ActError, '轮次已结束'):
-                self.session.practice_room('practice')
+                self.session.goto_room('practice')
         finally:
             REQUEST_TICKET.reset(ticket)
-        self.assertNotIn('speedrun_practice_room', self.bridge.commands)
+        self.assertNotIn('speedrun_goto_room', self.bridge.commands)
+
+    def test_goto_lists_current_map_without_advancing_and_selects_native_spawn(self):
+        before = self.bridge.frame
+        listing = self.session.goto_room()
+        self.assertEqual(listing['rooms'], [{'room': 'practice', 'spawns': [[10, 20], [40, 50]]}])
+        self.assertEqual(self.bridge.frame, before)
+        with self.assertRaisesRegex(ActError, 'spawn_index must be'):
+            self.session.goto_room('practice', 2)
+        self.assertEqual(self.bridge.frame, before)
+        result = self.session.goto_room('practice', 1)
+        self.assertEqual(result['respawn_point'], [40, 50])
+        self.assertFalse(result['chapter_time_valid'])
+        self.bridge.state = 'select'
+        with self.assertRaisesRegex(ActError, '进入目标章节'):
+            self.session.goto_room()
 
     def set_speedrun_target(self, ticks=20_000_000):
         self.cfg.speedrun_target_ticks = self.session.speedrun_target_ticks = ticks
@@ -161,8 +188,10 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result.is_error, result)
         self.assertEqual(starts, ['select'])
         self.assertTrue(self.session.time_snapshot()['speedrun']['recording'])
-        with self.assertRaisesRegex(ActError, '正式录制'):
-            self.session.practice_room('practice')
+        self.assertEqual(self.session._step_options()['speed'], 1)
+        self.bridge._enter(CITY, 'A')
+        self.assertFalse(self.session.goto_room('practice')['chapter_time_valid'])
+        self.assertTrue(self.session.speedrun_recording)
         for captured, continuous, ticks, passes in (
                 (False, True, 19_000_000, False),
                 (True, False, 19_000_000, False),
