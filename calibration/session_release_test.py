@@ -2,6 +2,7 @@
 import asyncio
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -18,6 +19,7 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
             args = SimpleNamespace(no_agent=False)
             client = SimpleNamespace(call=Mock(), close=Mock())
             session = GameSession.__new__(GameSession)
+            session.lock = threading.RLock()
             session.client = client
             session.done = False
             session._frames_log = Mock()
@@ -64,6 +66,7 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
 class CloseTests(unittest.TestCase):
     def test_bridge_socket_and_logs_close_even_if_deactivate_fails(self):
         session=GameSession.__new__(GameSession)
+        session.lock=threading.RLock()
         client=SimpleNamespace(call=Mock(side_effect=RuntimeError('lost reply')),close=Mock())
         session.client=client
         session._frames_log=Mock();session._decisions_log=Mock()

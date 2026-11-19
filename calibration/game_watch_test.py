@@ -214,6 +214,7 @@ class GameWatchTests(unittest.TestCase):
 
     def test_session_announces_the_exit_in_public_events(self):
         session = GameSession.__new__(GameSession)
+        session.lock = threading.RLock()
         session.run_dir, session.client = self.run, None
         session._frames_log, session._decisions_log = Mock(), Mock()
         with patch.object(game_watch, '_system', return_value=self.system):
@@ -254,6 +255,7 @@ class GameWatchTests(unittest.TestCase):
 
     def test_session_watches_after_connect_and_stops_on_close(self):
         session = GameSession.__new__(GameSession)
+        session.lock = threading.RLock()
         session.run_dir, session.client = self.run, None
         session._frames_log, session._decisions_log = Mock(), Mock()
         with patch.object(game_watch, '_system', return_value=self.system):
