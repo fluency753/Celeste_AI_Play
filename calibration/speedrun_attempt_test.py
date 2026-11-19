@@ -15,6 +15,8 @@ CITY = CHAPTER_SIDS[1]
 
 
 class SpeedrunBridge(DetourGame):
+    SKIP_FADE_FRAMES = 45
+
     def _enter(self, sid, side):
         super()._enter(sid, side)
         self.attempt = getattr(self, 'attempt', 0) + 1
@@ -30,6 +32,8 @@ class SpeedrunBridge(DetourGame):
             obs['player'] = {**full_observation()['player'], **obs['player']}
             obs['level'].update(chapterTimeValid=self.valid_time, chapterSessionId=self.attempt,
                                 chapterRecordedFromStart=self.captured_head)
+            if self.state == 'skipping':
+                obs['level'].update(inCutscene=True, skippingCutscene=True, screenWipe=True, canPause=False)
             if self.respawn is not None:
                 obs['respawnPoint'] = self.respawn
                 obs['player']['pos'] = self.respawn
@@ -37,6 +41,23 @@ class SpeedrunBridge(DetourGame):
             obs['completion']['chapterTimeValid'] = self.valid_time
             obs['completion']['chapterRecordedFromStart'] = self.captured_head
         return obs
+
+    def in_level(self):
+        return self.state == 'skipping' or super().in_level()
+
+    def _press(self, key, policy, events):
+        before = self.state
+        block = super()._press(key, policy, events)
+        if before == 'pause' and self.state == 'results':
+            self.state, self.wait = 'skipping', self.SKIP_FADE_FRAMES
+        return block
+
+    def _frame(self, before, events):
+        super()._frame(before, events)
+        if before == self.state == 'skipping':
+            self.wait -= 1
+            if self.wait == 0:
+                self.state = 'results'
 
     def call(self, command, **options):
         if command == 'practice_savestate':
@@ -238,39 +259,73 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
         self.session.verify_speedrun_capture = lambda: bool(starts)
         server = build_server(self.session)
         from mcp.server.mcpserver.exceptions import ToolError
+
+        async def act(inputs, thought):
+            result = await server.call_tool('act', {'inputs': inputs, 'thought': thought})
+            self.assertFalse(result.is_error, result)
+
+        async def enter_chapter():
+            self.bridge.panel_target = (CITY, 'A')
+            await act(['1,C'], '打开章节面板')
+            self.assertEqual(self.bridge.state, 'panel')
+            await act(['1,C', '60'], '从章首进入 1A')
+            self.assertEqual(self.bridge.state, 'level')
+            self.assertEqual(self.bridge.room, 'a-00')
+
+        async def settle_chapter():
+            self.assertEqual(self.bridge.state, 'ending')
+            start = len(self.bridge.steps)
+            result = await server.call_tool('cutscene', {'action': 'skip'})
+            self.assertFalse(result.is_error, result)
+            self.assertEqual(self.bridge.state, 'results')
+            self.assertEqual(self.bridge.step_speed, 1)
+            self.assertEqual(self.session.last_obs['scene'], 'AreaComplete')
+            steps = self.bridge.steps[start:]
+            after_skip = steps[steps.index(['1,C', '1']) + 1:]
+            self.assertGreaterEqual(sum(int(part) for step in after_skip for part in step),
+                                    self.bridge.SKIP_FADE_FRAMES - 1)
+            if not starts:
+                with self.assertRaisesRegex(ToolError, '稳定选章界面'):
+                    await server.call_tool('start_speedrun_recording', {})
+                self.assertEqual(starts, [])
+            await act(['1,C'], '确认结算')
+            self.assertEqual(self.bridge.state, 'select')
+            self.assertEqual(self.session.last_obs['menu']['current'], 'OuiChapterSelect')
+
         with self.assertRaisesRegex(ToolError, '稳定选章界面'):
             await server.call_tool('start_speedrun_recording', {})
         self.assertEqual(starts, [])
         self.bridge.ticks = 19_000_000
-        self.session.act(['1,R'], '跑完练习', None)
+        await act(['1,R'], '跑完练习')
         self.assertEqual(self.bridge.step_speed, 4)
         self.assertFalse(self.metrics.state.speedrun_last_attempt['recorded_from_start'])
         self.assertFalse(self.session.done)
         self.assertFalse(self.session._pending_complete)
-        self.bridge.state = 'select'
+        await settle_chapter()
         for _ in range(2):
             result = await server.call_tool('start_speedrun_recording', {})
             self.assertFalse(result.is_error, result)
         self.assertEqual(starts, ['select'])
         self.assertTrue(self.session.time_snapshot()['speedrun']['recording'])
         self.assertEqual(self.session._step_options()['speed'], 1)
-        self.bridge._enter(CITY, 'A')
+        await enter_chapter()
         self.assertFalse(self.session.goto_room('practice')['chapter_time_valid'])
         self.assertTrue(self.session.speedrun_recording)
+        await act(['1,R'], '完成灰计时练习')
+        await settle_chapter()
         for captured, continuous, ticks, passes in (
                 (False, True, 19_000_000, False),
                 (True, False, 19_000_000, False),
                 (True, True, 20_000_000, False),
                 (True, True, 19_999_999, True)):
             with self.subTest(captured=captured, continuous=continuous, ticks=ticks):
-                self.bridge._enter(CITY, 'A')
+                await enter_chapter()
                 self.bridge.captured_head = captured
                 self.session.verify_speedrun_capture = lambda: continuous
                 self.bridge.ticks = ticks
-                self.session.act(['1,R'], '跑完本次尝试', None)
+                await act(['1,R'], '跑完本次尝试')
                 self.assertEqual(self.bridge.step_speed, 1)
-                self.bridge.state = 'select'
-                self.session.observe()
+                await settle_chapter()
                 self.assertEqual(self.session.done, passes)
         self.assertEqual([row['ticks'] for row in self.metrics.state.splits], [19_999_999])
 
