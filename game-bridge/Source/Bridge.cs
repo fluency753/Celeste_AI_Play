@@ -21,10 +21,11 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.15.0";
+    public const string Version = "1.16.0";
     private sealed record ChapterCapture(object? Capture);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Session, ChapterCapture> chapterCaptures = new();
     private static object captureEpoch = new();
+    internal static void InvalidateRecordedChapter() => captureEpoch = new();
     private static bool captureStarted;
 
     internal static bool RecordedFromChapterStart(Session session) =>
@@ -558,6 +559,7 @@ internal static class Bridge {
         if (!Active) {
             return;
         }
+        PracticeSaves.Clear();
         InputInjector.Uninstall();
         Playback.Reset();
         SetAudio(AudioMode.Playing);
@@ -793,6 +795,7 @@ internal static class Bridge {
                     w.WriteBoolean("speedrun_practice_room", true);
                     w.WriteBoolean("speedrun_goto_room", true);
                     w.WriteBoolean("speedrun_recorded_attempt", true);
+                    w.WriteBoolean("practice_savestate", PracticeSaves.Available);
                     w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("entry_guard", MapEntryGuard.Available);
                     w.WriteBoolean("map_entry_set", MapEntryGuard.Available);
@@ -984,6 +987,10 @@ internal static class Bridge {
             case "speedrun_practice_room":
             case "speedrun_goto_room":
                 GotoRoom(req.Id, a, querySupported: req.Cmd == "speedrun_goto_room");
+                break;
+
+            case "practice_savestate":
+                PracticeSavestate(req.Id, a);
                 break;
 
             case "areas":
@@ -1224,6 +1231,51 @@ internal static class Bridge {
         w.WriteEndArray();
     }
 
+    private static void PracticeSavestate(long id, JsonElement args) {
+        if (!PracticeSaves.Available)
+            throw new InvalidOperationException("practice savestates require Speedrun Tool 3.29.2 or compatible exports");
+        string action = GetString(args, "action", "");
+        if (action == "status") {
+            IpcServer.Send(Reply.Ok(id, w => {
+                w.WriteStartArray("slots");
+                for (int i = 1; i <= 2; i++) {
+                    w.WriteStartObject();
+                    w.WriteNumber("slot", i);
+                    if (PracticeSaves.Get(i) is { } saved) {
+                        w.WriteString("map", saved.Sid);
+                        w.WriteNumber("mode", (int)saved.Side);
+                        w.WriteString("room", saved.Room);
+                    }
+                    w.WriteEndObject();
+                }
+                w.WriteEndArray();
+            }));
+            return;
+        }
+        int slot = GetInt(args, "slot", 0);
+        if (slot is < 1 or > 2 || action is not ("save" or "load"))
+            throw new ArgumentException("choose save/load and practice slot 1 or 2");
+        if (captureStarted || RecordingAudio.Enabled || ClockServer.LockstepRequested)
+            throw new InvalidOperationException("practice savestates are unavailable during recording");
+        if (!Active || job != null || Playback.Running || Engine.Scene is not Level level || level.Completed ||
+            UserIO.Saving || !IsOfficial(AreaData.Get(level.Session.Area)) ||
+            SaveData.Instance?.FileSlot != GetInt(args, "file_slot", -1) ||
+            level.Session.Area.SID != GetString(args, "sid", "") ||
+            (int)level.Session.Area.Mode != GetInt(args, "mode", -1))
+            throw new InvalidOperationException("practice savestates require the active target level, side and save");
+        if (action == "save") {
+            Player? player = StateExtractor.GetPlayer(level);
+            if (player == null || !StateExtractor.IsControllable(level, player) || level.Transitioning || level.Wipe != null)
+                throw new InvalidOperationException("wait for a stable, controllable frame to save");
+            PracticeSaves.Save(slot, level, player, CurrentInput);
+        } else {
+            var restored = PracticeSaves.Restore(slot, level);
+            CurrentInput = restored.Input;
+            Playback.EndOverlay();
+        }
+        SendObservation(id, args, defaultImage: false);
+    }
+
     private static void Teleport(long id, JsonElement a) {
         if (!Active || job != null) {
             IpcServer.Send(Reply.Error(id, "teleport needs an active bridge and no running step"));
@@ -1283,12 +1335,16 @@ internal static class Bridge {
         }
         SnapshotOptions opt = ReadSnapshotOptions(a);
         string buffer = GetString(a, "buffer", "level");
+        string held = PracticeSaves.HeldKeys(CurrentInput);
+        string inputFormat = CurrentInput.Tas ? "celeste_tas" : "celeste_ai";
         byte[] obs = Reply.Object(w => StateExtractor.WriteSnapshot(w, opt));
         void Body(Utf8JsonWriter w) {
             w.WriteBoolean("active", Active);
                     w.WriteBoolean("frozen", Frozen);
                     w.WriteBoolean("input_owned", OwnsInput);
                     w.WriteString("freeze_scope", "configured-menus");
+            w.WriteString("held_keys", held);
+            w.WriteString("input_format", inputFormat);
             w.WritePropertyName("obs");
             w.WriteRawValue(obs, skipInputValidation: true);
         }

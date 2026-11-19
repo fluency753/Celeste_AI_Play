@@ -581,6 +581,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                         if name != 'celeste_observe' and (reload_ticket[1]
                                 or reload_ticket[0] != getattr(self.session, 'reload_epoch', 0)
                                 or getattr(self.session, 'reload_observation_required', False)):
+                            if getattr(self.session, 'practice_load_observation', False):
+                                raise ValueError('练习读档已改变起点，请先默认 observe；排队的旧计划未执行。')
                             raise ValueError('桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。')
                         if name != 'celeste_observe' and (reload_ticket[2] != getattr(self.session, 'token_motion_epoch', 0) or getattr(self.session, 'token_observation_required', False)):
                             if notice := token_observe_notice(self.session):
@@ -796,7 +798,7 @@ class CodexRunner(ModelRecovery, SessionControls):
         from .modes import game_tools
         required = {'celeste_' + name for name in game_tools(self.cfg)}
         # Older prepared/player threads use the original tool registrations.
-        missing = required - names - {'celeste_finish_goal', 'celeste_goto_room'}
+        missing = required - names - {'celeste_finish_goal', 'celeste_goto_room', 'celeste_practice_savestate'}
         if 'celeste_start_speedrun_recording' in missing:
             raise RuntimeError('旧会话没有登记限时速通的开录工具；请用 --fresh-session 新建 Player 会话。')
         if missing:
@@ -815,6 +817,8 @@ class CodexRunner(ModelRecovery, SessionControls):
             raise RuntimeError('旧会话没有登记 read（旧名 celeste_read），无法按实际送达的内容计量必读知识库；'
                                '本版本协议不能在恢复时补登记工具，请新建准备会话。')
         notes = []
+        if 'celeste_practice_savestate' in required - names:
+            notes.append('（系统）此旧会话未登记练习存读档；新建 Player 会话可使用。')
         if 'celeste_finish_goal' not in names:
             notes.append('（系统）此旧会话未登记 celeste_finish_goal。文字任务达成后请向用户说明结果，请用户在 HUD 停止并保存；自动条件仍由主控核验。')
         if 'celeste_goto_room' in required - names:

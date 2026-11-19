@@ -26,6 +26,8 @@ class SpeedrunBridge(DetourGame):
         obs = super().observation()
         obs['saving'] = False
         if obs.get('level'):
+            from calibration.collision_contract_test import observation as full_observation
+            obs['player'] = {**full_observation()['player'], **obs['player']}
             obs['level'].update(chapterTimeValid=self.valid_time, chapterSessionId=self.attempt,
                                 chapterRecordedFromStart=self.captured_head)
             if self.respawn is not None:
@@ -37,6 +39,24 @@ class SpeedrunBridge(DetourGame):
         return obs
 
     def call(self, command, **options):
+        if command == 'practice_savestate':
+            self.commands.append(command)
+            slots = self.__dict__.setdefault('practice_slots', {})
+            action = options['action']
+            if action == 'status':
+                return {'slots': [{'slot': number, **({'room': slots[number][0]} if number in slots else {})}
+                                  for number in (1, 2)]}
+            assert options['file_slot'] == self.slot and options['sid'] == CITY and options['mode'] == 0
+            slot = options['slot']
+            if action == 'save':
+                slots[slot] = self.room, self.respawn
+            else:
+                self.room, self.respawn = slots[slot]
+                self.attempt += 1
+                self.valid_time, self.captured_head = False, False
+                if getattr(self, 'lose_practice_ack', False):
+                    raise ConnectionError('lost reply after applying load')
+            return {'obs': self.observation(), 'held_keys': 'R', 'input_format': 'celeste_ai'}
         if command == 'speedrun_goto_room':
             self.commands.append(command)
             assert options['slot'] == self.slot and options['sid'] == CITY and options['mode'] == 0
@@ -57,6 +77,10 @@ class SpeedrunBridge(DetourGame):
         if command == 'hello':
             reply['speedrun_practice_room'] = True
             reply['speedrun_goto_room'] = True
+            reply['speedrun_recorded_attempt'] = True
+            reply['practice_savestate'] = True
+        if command == 'observe':
+            reply.update(held_keys='R', input_format='celeste_ai')
             reply['speedrun_recorded_attempt'] = True
         if command == 'step':
             self.step_speed = options.get('speed')
@@ -160,6 +184,47 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
 
     def set_speedrun_target(self, ticks=20_000_000):
         self.cfg.speedrun_target_ticks = self.session.speedrun_target_ticks = ticks
+
+    async def test_practice_load_requires_fresh_observation_and_forbids_formal_restore(self):
+        self.set_speedrun_target()
+        self.cfg.speedrun_record_on_demand = True
+        server = build_server(self.session)
+        saved = await server.call_tool('practice_savestate', {'action': 'save', 'slot': 1})
+        self.assertIn('"chapter_time_valid": true', saved.content[0].text)
+        self.bridge.room = 'later'
+        frame = self.bridge.frame
+        loaded = await server.call_tool('practice_savestate', {'action': 'load', 'slot': 1})
+        self.assertIn('"chapter_time_valid": false', loaded.content[0].text)
+        self.assertEqual(self.session.last_obs['level']['room'], 'a-00')
+        self.assertEqual(self.bridge.frame, frame)
+        self.assertEqual(self.session._held_input, ('R', 'celeste_ai'))
+        with self.assertRaisesRegex(ActError, '默认 observe'):
+            self.session.simulate({'request_id': 'new'})
+        denied = await server.call_tool('act', {'inputs': ['1,R'], 'thought': '旧计划'})
+        self.assertIn('排队的旧计划未执行', denied.content[0].text)
+        await server.call_tool('observe', {})
+        self.assertFalse(self.session.reload_observation_required)
+        self.session.mark_speedrun_recording()
+        commands = self.bridge.commands.count('practice_savestate')
+        with self.assertRaisesRegex(ActError, '正式录像'):
+            self.session.practice_savestate('load', 1)
+        self.assertEqual(self.bridge.commands.count('practice_savestate'), commands)
+
+    async def test_lost_practice_load_reply_reconciles_on_observe_without_resending(self):
+        self.set_speedrun_target()
+        self.cfg.speedrun_record_on_demand = True
+        self.session.practice_savestate('save', 1)
+        self.bridge.room = 'later'
+        self.bridge.lose_practice_ack = True
+        with self.assertRaisesRegex(ActError, 'lost reply'):
+            self.session.practice_savestate('load', 1)
+        commands = self.bridge.commands.count('practice_savestate')
+        server = build_server(self.session)
+        await server.call_tool('observe', {})
+        self.assertEqual(self.bridge.commands.count('practice_savestate'), commands)
+        self.assertEqual(self.session.last_obs['level']['room'], 'a-00')
+        self.assertEqual(self.session._held_input, ('R', 'celeste_ai'))
+        self.assertFalse(self.session.reload_observation_required)
 
     async def test_player_arms_once_from_menu_and_only_recorded_attempt_qualifies(self):
         self.set_speedrun_target()

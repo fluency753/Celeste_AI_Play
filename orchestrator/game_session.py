@@ -519,6 +519,7 @@ class GameSession:
         self.map_entry_set_supported = hello.get('map_entry_set') is True
         self.speedrun_practice_supported = hello.get('speedrun_practice_room') is True
         self.speedrun_spawn_selection = hello.get('speedrun_goto_room') is True
+        self.practice_savestate_supported = hello.get('practice_savestate') is True
         if self.cfg.play_scope == 'visited' and not self.map_entry_set_supported:
             raise RuntimeError('自由探索需要支持 map_entry_set 的桥接 1.10.0；未发送游戏输入')
         if detour_enabled(self.cfg) and not self.map_entry_set_supported:
@@ -620,41 +621,48 @@ class GameSession:
 
     def after_bridge_reload(self, obs: dict) -> None:
         """Publish a fresh baseline after the resident core has finished its hold."""
+        self._after_state_change(obs)
+
+    def _after_state_change(self, obs: dict, held=('', 'celeste_ai'), *, practice_load=False) -> None:
         with self.lock:
             self.reload_epoch = getattr(self, 'reload_epoch', 0) + 1
             self.reload_observation_required = True
-            self._transition_wait = None
-            self.last_obs = enrich_obs(obs)
-            level = self.last_obs.get('level') or {}
-            self._transition_observed = (self._transition_epoch(), self.last_obs.get('scene'),
-                                         self._transition_identity(self.last_obs, level),
-                                         self.last_obs.get('frame'), level.get('deaths'))
-            self._persist_transition_wait({'wait': None}, required=True)
-            self._input_formats = None
-            self._last_positions, self._last_room = {}, None
-            self._collision_png = None
-            self._held_input = ('', 'celeste_ai')
-            held = self.run_dir / 'held_input.json'
-            pending = held.with_suffix('.reload-tmp')
-            try:
-                pending.write_text(json.dumps({'keys': '', 'input_format': 'celeste_ai', 'frame': obs.get('frame')}), encoding='utf-8')
-                pending.replace(held)
-            finally:
-                pending.unlink(missing_ok=True)
-            reset = getattr(self, 'reset_observation_delivery', None)
-            if reset:
-                reset()
-            self._update_metrics_from_obs(self.last_obs)
-            if self.workspace:
-                game = self.workspace / 'game'
-                game.mkdir(parents=True, exist_ok=True)
-                for name in ('last_act.json', 'retry.json', 'sim_state.json', 'latest_obs.json', 'collision.json'):
-                    (game / name).unlink(missing_ok=True)
-                # Unlike post-act best-effort output, a reload must not report
-                # a fresh baseline while leaving stale files behind on failure.
-                self._write_json('game/latest_obs.json', {'decision': self.decision_index, 'obs': self.last_obs})
-                self._write_collision_view(self.last_obs)
-                self._write_sim_state()
+            self.practice_load_observation = practice_load
+            self._refresh_state_baseline(obs, held)
+
+    def _refresh_state_baseline(self, obs: dict, held) -> None:
+        self._transition_wait = None
+        self.last_obs = enrich_obs(obs)
+        level = self.last_obs.get('level') or {}
+        self._transition_observed = (self._transition_epoch(), self.last_obs.get('scene'),
+                                     self._transition_identity(self.last_obs, level),
+                                     self.last_obs.get('frame'), level.get('deaths'))
+        self._persist_transition_wait({'wait': None}, required=True)
+        self._input_formats = None
+        self._last_positions, self._last_room = {}, None
+        self._collision_png = None
+        self._held_input = held
+        held_path = self.run_dir / 'held_input.json'
+        pending = held_path.with_suffix('.reload-tmp')
+        try:
+            pending.write_text(json.dumps({'keys': held[0], 'input_format': held[1], 'frame': obs.get('frame')}), encoding='utf-8')
+            pending.replace(held_path)
+        finally:
+            pending.unlink(missing_ok=True)
+        reset = getattr(self, 'reset_observation_delivery', None)
+        if reset:
+            reset()
+        self._update_metrics_from_obs(self.last_obs)
+        if self.workspace:
+            game = self.workspace / 'game'
+            game.mkdir(parents=True, exist_ok=True)
+            for name in ('last_act.json', 'retry.json', 'sim_state.json', 'latest_obs.json', 'collision.json'):
+                (game / name).unlink(missing_ok=True)
+            # Unlike post-act best-effort output, a reload must not report
+            # a fresh baseline while leaving stale files behind on failure.
+            self._write_json('game/latest_obs.json', {'decision': self.decision_index, 'obs': self.last_obs})
+            self._write_collision_view(self.last_obs)
+            self._write_sim_state()
 
     def acknowledge_reload_observation(self, epoch: int) -> None:
         with self.lock:
@@ -663,6 +671,8 @@ class GameSession:
 
     def _require_reload_observation(self) -> None:
         if getattr(self, 'reload_observation_required', False):
+            if getattr(self, 'practice_load_observation', False):
+                raise ActError('练习读档后，请先默认 observe 核对当前状态，再提交新动作或模拟请求。')
             raise ActError('桥接已重载，当前房间和玩家状态可能变化；请先默认 observe 获取新观测，再重新决定动作。旧计划未执行。')
 
     def _step_options(self):
@@ -1238,6 +1248,9 @@ class GameSession:
             reply = self.client.call("observe", image=True, scope="room", fields=True)
             obs, image = enrich_obs(reply["obs"]), reply.get("image")
             self._ingest_transition(obs)
+            if getattr(self, 'practice_load_unconfirmed', False):
+                self._refresh_state_baseline(obs, (reply['held_keys'], reply['input_format']))
+                self.practice_load_unconfirmed = False
             self._commit_completion(obs)
             reload_observation = getattr(self, 'reload_observation_required', False)
             if not reload_observation and not self.done:
@@ -2861,6 +2874,49 @@ class GameSession:
 
     def _advance_speed(self, speed: int) -> int:
         return 1 if getattr(self, 'speedrun_recording', False) else speed
+
+    def practice_savestate(self, action: str, slot: int | None = None) -> dict:
+        from tools.cutscene import QUIET
+        if action not in {'status', 'save', 'load'} or (action != 'status' and (type(slot) is not int or slot not in {1, 2})):
+            raise ActError('请选择 status、save 或 load；存读档使用槽位 1 或 2。')
+        with self.lock:
+            if not self.cfg.speedrun_record_on_demand:
+                raise ActError('练习存读档仅在限时速通中提供。')
+            if not getattr(self, 'practice_savestate_supported', False):
+                raise ActError('练习存读档需要 Bridge 1.16.0 与本机 Speedrun Tool 3.29.2 或兼容版本。')
+            if action == 'status':
+                return {'slots': self.client.call('practice_savestate', action=action)['slots'],
+                        'recording': self.speedrun_recording}
+            if self.speedrun_recording or self.speedrun_recording_uncertain:
+                raise ActError('正式录像期间停用练习存读档。')
+            if self.done or self.goals.stop_motion.is_set():
+                raise ActError('试玩已停止，未发送练习存读档。')
+            self._require_reload_observation()
+            before = self.client.call('observe', **QUIET)['obs']
+            piece = self.piece
+            if piece is None or before.get('scene') != 'Level':
+                raise ActError('请先进入本次的目标关卡。')
+            if (ticket := REQUEST_TICKET.get()) is not None:
+                ticket.before_input()
+            try:
+                reply = self.client.call('practice_savestate', action=action, slot=slot,
+                                         file_slot=self.cfg.save_slot, sid=CHAPTER_SIDS.get(piece.chapter),
+                                         mode={'A': 0, 'B': 1, 'C': 2}[piece.side],
+                                         scope='room', **QUIET, allow_reconnect=False)
+                obs = reply['obs']
+                if action == 'load':
+                    self._after_state_change(obs, (reply['held_keys'], reply['input_format']), practice_load=True)
+            except (RuntimeError, OSError, ValueError, KeyError) as exc:
+                if action == 'load':
+                    if not getattr(self, 'reload_observation_required', False):
+                        self.reload_epoch = getattr(self, 'reload_epoch', 0) + 1
+                    self.reload_observation_required = self.practice_load_observation = True
+                    self.practice_load_unconfirmed = True
+                raise ActError(f'练习存读档未确认：{exc}。请先默认 observe 核对当前状态。') from exc
+            level = obs.get('level') or {}
+            return {'action': action, 'slot': slot, 'room': level.get('room'), 'frame': obs.get('frame'),
+                    'chapter_time_valid': level.get('chapterTimeValid'),
+                    'held_keys': reply['held_keys']}
 
     def goto_room(self, room: str | None = None, spawn_index: int | None = None) -> dict:
         from .action_policy import permissions_for

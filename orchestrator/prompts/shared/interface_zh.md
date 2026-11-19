@@ -83,6 +83,12 @@ watch 不是通用等待；“没有待处理剧情”不代表死亡或重试�
 获准重启章节且已在目标关卡内时，省略参数可查询当前地图及面别内有原生重生点的房间。传 `room` 跳转，传 `spawn_index` 可选择列表内从 0 起算的重生点，省略则使用游戏默认重生点。换房后先 observe。跳房使本趟计时变灰，正在进行的录像继续。原生「重启章节」可回到章首开始新的有效尝试。
 <!-- /tool:goto_room -->
 
+<!-- tool:practice_savestate -->
+## {tool:practice_savestate}：练习存读档
+
+已安装兼容 Speedrun Tool 时，`status` 列出槽 1 和 2，`save` 在当前可操作帧存档，`load` 恢复同存档、同章同面的已存状态。可以把不同路线带过转场后的入场状态分别存进两个槽。读档后先默认 observe，再用新请求编号模拟或提交新动作；本趟计时变灰。正式录像开始后存读档不可用。
+<!-- /tool:practice_savestate -->
+
 <!-- tool:start_speedrun_recording -->
 ## {tool:start_speedrun_recording}：开启正式速通录像
 

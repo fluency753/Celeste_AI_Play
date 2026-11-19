@@ -61,7 +61,7 @@ def game_tools(cfg) -> list[str]:
     """本次运行注册给智能体的游戏工具（不带前缀）。"""
     tools = ["observe", "act", "narrate", "set_effort", "stop_run", "finish_goal"]
     if getattr(cfg, 'speedrun_record_on_demand', False):
-        tools.append('start_speedrun_recording')
+        tools.extend(['start_speedrun_recording', 'practice_savestate'])
     if getattr(cfg, "live", False):
         tools.append("exit_level")          # 直播时观众/用户可以要求退出关卡
     from .action_policy import permissions_for

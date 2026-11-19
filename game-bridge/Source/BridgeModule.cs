@@ -27,11 +27,17 @@ public class BridgeModule : EverestModule {
             Log.Warn("resident runtime cannot re-apply input bindings after Input.Initialize; reloads will be refused by the controller");
         try {
             Hooks.Load();
+            try {
+                PracticeSaves.Bind();
+            } catch (Exception e) {
+                Log.Warn($"optional Speedrun Tool integration unavailable: {e.Message}");
+            }
             Metadata.VersionString = Bridge.Version;
             BridgeRuntime.Attach(owner, 1, Bridge.Version, Bridge.Tick, Bridge.Enqueue, Bridge.CanReload,
                 Bridge.ExportReloadState, Bridge.ImportReloadState, Bridge.ServiceReloadRequests);
             attached = true;
         } catch {
+            PracticeSaves.Unbind();
             Hooks.Unload();
             throw;
         }
@@ -75,6 +81,7 @@ public class BridgeModule : EverestModule {
             attached = false;
         }
         void Cleanup() {
+            PracticeSaves.Unbind();
             Bridge.ReleasePayloadResources();
             ModHud.Unload();
             Hooks.Unload();

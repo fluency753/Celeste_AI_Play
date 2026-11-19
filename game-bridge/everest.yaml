@@ -1,5 +1,5 @@
 - Name: CelesteAIBridge
-  Version: 1.15.0
+  Version: 1.16.0
   DLL: bin/CelesteAIBridge.dll
   SupportsCodeReload: false
   Dependencies:
@@ -7,3 +7,6 @@
       Version: 1.1.0
     - Name: EverestCore
       Version: 1.5935.0
+  OptionalDependencies:
+    - Name: SpeedrunTool
+      Version: 3.29.2

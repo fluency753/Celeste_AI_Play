@@ -281,6 +281,8 @@ def build_server(session: GameSession, study: KbStudy | None = None, *, catalog:
         if ticket is not None and (ticket[1] or ticket[0] != getattr(session, 'reload_epoch', 0)
                                    or getattr(session, 'reload_observation_required', False)):
             journal.not_executed()
+            if getattr(session, 'practice_load_observation', False):
+                return '练习读档已改变起点，请先默认 observe；排队的旧计划未执行。'
             return '桥接已重载，请先默认 observe 获取新观测后重新决定动作；排队的旧计划未执行。'
         if name != 'observe' and (getattr(session, 'token_observation_required', False)
                 or ticket is not None and ticket[2] != getattr(session, 'token_motion_epoch', 0)):
@@ -644,6 +646,26 @@ def build_server(session: GameSession, study: KbStudy | None = None, *, catalog:
                 return [json.dumps(result, ensure_ascii=False) + ('\n请先 observe 再安排下一次动作。' if room is not None else '')]
             except ActError as err:
                 journal.log_failure(err, phase='goto_room')
+                raise ToolError(str(err)) from err
+            finally:
+                finish()
+
+    @optional_tool(catalog or 'practice_savestate' in tools, name='practice_savestate',
+                   description='限时速通的未录制练习。status 查询槽 1 和 2；save 从可操作帧存当前状态；load 恢复同存档及地图的槽，计时变灰。读档后先默认 observe，再用新 request_id 预测或重新提交输入。',
+                   structured_output=False)
+    async def practice_savestate(action: str = 'status', slot: int | None = None) -> list:
+        ticket = reload_ticket()
+        async with journal.execution(call_lock):
+            if (note := gated('practice_savestate', ticket)) is not None:
+                return [note]
+            begin()
+            try:
+                result = await asyncio.to_thread(session.practice_savestate, action, slot)
+                journal.detail(result)
+                return [json.dumps(result, ensure_ascii=False) +
+                        ('\n请先默认 observe，再模拟或发送新动作。' if action == 'load' else '')]
+            except ActError as err:
+                journal.log_failure(err, phase='practice_savestate')
                 raise ToolError(str(err)) from err
             finally:
                 finish()
