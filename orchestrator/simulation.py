@@ -148,7 +148,7 @@ def predict(session, request):
         guard = (lambda: tool_guard('simulate')) if tool_guard else getattr(session, 'control_guard', None)
         if guard and (reason := guard()):
             raise ValueError(reason)
-        if session.done or session.goals.stop_motion.is_set():
+        if getattr(session, '_prediction_worker_closed', False) or session.done or session.goals.stop_motion.is_set():
             raise ValueError('试玩已结束或正在收尾，本次未执行模拟')
         if not enabled(session.cfg):
             raise ValueError('未开启限额模拟能力，本次未执行；工作区程序仍可使用')
@@ -193,7 +193,7 @@ def predict(session, request):
                 raise RuntimeError(f'模拟请求 {ident} 尚未提交、未执行；额度返还落盘失败，保留同一编号核验，不重新预测：{refund_error}') from exc
             raise ValueError(f'模拟请求 {ident} 尚未提交、未执行，预留额度已返还：{exc}') from exc
         try:
-            result = sim_assist.run_predictions(session.cfg, directory, candidates)
+            result = sim_assist.run_predictions(session, directory, candidates)
         except Exception as exc:
             # Docker/transport failure can happen after execution. Never issue a free retry.
             try:

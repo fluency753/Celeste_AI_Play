@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+from queue import Empty, Queue
 import re
 import subprocess
 import threading
@@ -11,9 +12,9 @@ import uuid
 from dataclasses import dataclass, fields
 from copy import deepcopy
 from pathlib import Path
-import tempfile
 
 from .config import find_docker_exe
+from .session_store import write_json
 
 @dataclass(frozen=True)
 class AssistRules:
@@ -210,16 +211,17 @@ def _remove_container(docker, name):
 def _read_leftovers(path):
     try:
         rows = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return []
-    return [row for row in rows if isinstance(row, dict) and CONTAINER_NAME.fullmatch(str(row.get('name')))] \
-        if isinstance(rows, list) else []
+    if not isinstance(rows, list):
+        raise ValueError(f'容器归属记录不是列表：{path}')
+    return [row for row in rows if isinstance(row, dict) and CONTAINER_NAME.fullmatch(str(row.get('name')))]
 
 
 def _write_leftovers(path, rows):
     try:
         if rows:
-            path.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
+            write_json(path, rows, indent=1)
         elif path.exists():
             path.unlink()
     except OSError as exc:
@@ -242,48 +244,159 @@ def retry_leftovers(directory: Path, docker=None):
     return remaining
 
 
-def run_predictions(cfg, directory: Path, candidates):
-    """A private, networkless worker; never expose /sim or full scene state to agent Bash."""
-    docker, name = find_docker_exe(), "celeste-sim-assist-" + uuid.uuid4().hex
-    retry_leftovers(directory, docker)
-    owner = Path(directory).resolve().parent
-    command = [docker, "run", "--rm", "-i", "--name", name, "--network", "none", "--read-only",
-               "--label", "celeste.sim-assist=1", "--label", f"celeste.run={owner.name}",
-               "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "32",
-               "--memory", "512m", "--cpus", "2", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
-               "-e", "DOTNET_EnableDiagnostics=0", "-v", f"{cfg.sim_dir}:/sim:ro",
-               "-v", f"{directory.resolve()}:/state:ro", "--entrypoint", "/sim/celeste-sim",
-               cfg.image, "serve"]
-    requests = [{"state": "/state/state.json"}, {"batch": [
-        {"inputs": p, "stop_on_death": True, "stop_on_room": True} for p in candidates]}]
-    try:
-        # Bound retained output before decoding; do not buffer an entire worker in host RAM.
-        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-            result = subprocess.run(command, input="".join(json.dumps(r) + "\n" for r in requests),
-                                    stdout=output, stderr=errors, text=True, encoding="utf-8", timeout=15)
-            if output.tell() > 32 * 1024 * 1024:
-                raise RuntimeError('模拟输出超过32 MiB，结果未确认；请缩小后续批量请求')
-            output.seek(0)
-            text = output.read().decode('utf-8')
-            errors.seek(0)
-            error = errors.read(1000).decode('utf-8', errors='replace')
-        replies = [json.loads(line) for line in text.splitlines() if line.strip()]
-        if result.returncode or len(replies) != 2 or not all(r.get("ok") for r in replies):
-            raise RuntimeError("模拟辅助服务失败：" + (error or str(replies))[-1000:])
-        results = replies[1]["results"]
-        if len(results) != len(candidates) or any(not r.get("ok") for r in results):
-            raise RuntimeError("模拟辅助返回了不完整的结果")
-        return {"info": replies[0]["info"], "results": results}
-    finally:
-        # Killing a timed-out Docker client does not reliably stop its container.
-        # 收尾失败不能把已经拿到的结果变成异常（主控限额预测会按“已提交未获结果”扣费）：
-        # 记下残留容器及其所属运行，下次预测前只重试删除。
-        gone, cleanup_error = _remove_container(docker, name)
-        if not gone:
-            print(f'[sim] 模拟容器 {name} 删除失败，已记录待重试：{cleanup_error}', flush=True)
-            path = Path(directory) / LEFTOVERS
-            _write_leftovers(path, [*_read_leftovers(path), {'name': name, 'run': str(owner), 'wall': time.time(),
-                                                            'attempts': 1, 'error': cleanup_error}])
+REPLY_LIMIT = 32 * 1024 * 1024
+
+
+def inherit_leftovers(previous, directory):
+    rows = _read_leftovers(previous / 'sim_private' / LEFTOVERS)
+    if rows:
+        write_json(directory / LEFTOVERS, rows, indent=1)
+
+
+class PredictionWorker:
+    """One private Linux simulator for a run. Calls are serialized by the session lock."""
+
+    def __init__(self, cfg, directory, *, timeout=15):
+        self.cfg, self.directory, self.timeout = cfg, Path(directory).resolve(), timeout
+        self.docker = self.name = self.process = self.stderr_thread = None
+        self.error_tail = b''
+
+    def _start(self):
+        self.docker = find_docker_exe()
+        leftovers = retry_leftovers(self.directory, self.docker)
+        self.name = 'celeste-sim-assist-' + uuid.uuid4().hex
+        owner = self.directory.parent
+        row = {'name': self.name, 'run': str(owner), 'wall': time.time(), 'attempts': 0}
+        write_json(self.directory / LEFTOVERS, [*leftovers, row], indent=1)
+        command = [self.docker, 'run', '--rm', '-i', '--pull', 'never', '--name', self.name, '--network', 'none', '--read-only',
+                   '--log-driver', 'none', '--label', 'celeste.sim-assist=1', '--label', f'celeste.run={owner.name}',
+                   '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '32',
+                   '--memory', '512m', '--cpus', '2', '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m',
+                   '-e', 'DOTNET_EnableDiagnostics=0', '-v', f'{self.cfg.sim_dir}:/sim:ro',
+                   '-v', f'{self.directory}:/state:ro', '--entrypoint', '/sim/celeste-sim', self.cfg.image, 'serve']
+        self.error_tail = b''
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.stderr_thread = threading.Thread(target=self._drain_stderr, args=(self.process.stderr,), daemon=True)
+        self.stderr_thread.start()
+
+    def _drain_stderr(self, stream):
+        while chunk := stream.read1(4096):
+            self.error_tail = (self.error_tail + chunk)[-4096:]
+
+    @staticmethod
+    def _request(process, request, limit):
+        process.stdin.write(json.dumps(request).encode('utf-8') + b'\n')
+        process.stdin.flush()
+        line = process.stdout.readline(limit + 1)
+        if len(line) > limit:
+            raise RuntimeError('模拟输出超过32 MiB，结果未确认；请缩小后续批量请求')
+        if not line.endswith(b'\n'):
+            raise RuntimeError('模拟容器未返回完整的一行')
+        reply = json.loads(line)
+        if not isinstance(reply, dict) or reply.get('ok') is not True:
+            raise RuntimeError(f'模拟容器拒绝请求：{str(reply)[:300]}')
+        return reply, len(line)
+
+    def predict(self, candidates):
+        outcome = Queue(maxsize=1)
+        io_thread = None
+
+        def exchange(process):
+            try:
+                state, size = self._request(process, {'state': '/state/state.json'}, REPLY_LIMIT)
+                if not isinstance(state.get('info'), dict):
+                    raise RuntimeError('模拟容器未确认读取当前快照')
+                reply, _ = self._request(process, {'batch': [
+                    {'inputs': plan, 'stop_on_death': True, 'stop_on_room': True} for plan in candidates
+                ]}, REPLY_LIMIT - size)
+                results = reply.get('results')
+                if not isinstance(results, list) or len(results) != len(candidates) or any(
+                        not isinstance(row, dict) or row.get('ok') is not True for row in results):
+                    raise RuntimeError('模拟辅助返回了不完整的结果')
+                outcome.put({'info': state['info'], 'results': results})
+            except Exception as exc:
+                outcome.put(exc)
+
+        try:
+            if self.process is not None and self.process.poll() is not None:
+                self.close()
+            if self.process is None:
+                self._start()
+            io_thread = threading.Thread(target=exchange, args=(self.process,), daemon=True)
+            io_thread.start()
+            try:
+                result = outcome.get(timeout=self.timeout)
+            except Empty:
+                raise TimeoutError(f'模拟容器在 {self.timeout:g} 秒内未完成本批') from None
+            if isinstance(result, Exception):
+                raise result
+            return result
+        except BaseException as exc:
+            self.close(io_thread)
+            if not isinstance(exc, Exception):
+                raise
+            error = self.error_tail.decode('utf-8', errors='replace').strip()
+            raise RuntimeError(f'模拟辅助服务失败：{exc}' + (f'（{error[-1000:]}）' if error else '')) from exc
+
+    def close(self, io_thread=None):
+        name, self.name = self.name, None
+        process, self.process = self.process, None
+        if process is not None:
+            try:
+                if io_thread is None and process.poll() is None:
+                    process.stdin.close()
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        pass
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=2)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                print(f'[sim] 模拟容器客户端退出未确认：{exc}', flush=True)
+        if name is not None:
+            path = self.directory / LEFTOVERS
+            gone, error = _remove_container(self.docker, name)
+            # `--rm` can be removing the container as the attached client exits.
+            for delay in (0.1, 0.2, 0.4):
+                if gone or 'already in progress' not in error.lower():
+                    break
+                time.sleep(delay)
+                gone, error = _remove_container(self.docker, name)
+            if not gone:
+                print(f'[sim] 模拟容器 {name} 删除失败，保留记录待重试：{error}', flush=True)
+            try:
+                rows = _read_leftovers(path)
+                if gone:
+                    rows = [row for row in rows if row['name'] != name]
+                else:
+                    for row in rows:
+                        if row['name'] == name:
+                            row.update(attempts=1, error=error, wall=time.time())
+                _write_leftovers(path, rows)
+            except (OSError, ValueError) as exc:
+                print(f'[sim] 容器已执行清理，原归属记录暂未更新：{exc}', flush=True)
+        if process is not None:
+            threads = [io_thread, self.stderr_thread]
+            for thread in threads:
+                if thread is not None and thread.ident is not None:
+                    thread.join(timeout=1)
+            for pipe, thread in ((process.stdin, io_thread), (process.stdout, io_thread),
+                                 (process.stderr, self.stderr_thread)):
+                if thread is None or not thread.is_alive():
+                    try:
+                        pipe.close()
+                    except OSError:
+                        pass
+            self.stderr_thread = None
+
+
+def run_predictions(session, directory, candidates):
+    """Run a batch through the session's private worker without exposing the simulator to agent Bash."""
+    worker = getattr(session, '_prediction_worker', None)
+    if worker is None:
+        worker = session._prediction_worker = PredictionWorker(session.cfg, directory)
+    return worker.predict(candidates)
 
 
 def write_replay(workspace, predictions, start_frame):

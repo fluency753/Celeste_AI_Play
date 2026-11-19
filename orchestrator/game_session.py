@@ -1243,7 +1243,11 @@ class GameSession:
 
     def close(self, release: bool = True) -> None:
         """试玩结束交还控制；release=False 仅供明确需要保留接管的内部调试使用。"""
-        client, self.client = self.client, None
+        with self.lock:
+            self._prediction_worker_closed = True
+            worker = getattr(self, '_prediction_worker', None)
+            self._prediction_worker = None
+            client, self.client = self.client, None
         try:
             if client:
                 try:
@@ -1252,11 +1256,15 @@ class GameSession:
                 finally:
                     client.close()
         finally:
-            watch = getattr(self, 'game_watch', None)
-            if watch is not None:
-                watch.close()
-            self._frames_log.close()
-            self._decisions_log.close()
+            try:
+                watch = getattr(self, 'game_watch', None)
+                if watch is not None:
+                    watch.close()
+                self._frames_log.close()
+                self._decisions_log.close()
+            finally:
+                if worker is not None:
+                    worker.close()
 
     def bridge_call(self, cmd: str, **args) -> dict:
         """主控其他部分（如录制）向桥接发指令：与智能体的动作互斥，共用同一个连接（桥接只接受一个连接）。"""

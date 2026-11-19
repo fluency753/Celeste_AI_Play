@@ -1211,6 +1211,9 @@ async def _run_session(cfg: RunConfig, args: argparse.Namespace, run_dir: Path, 
             shutil.copy2(previous["dir"] / "goal.json", run_dir / "goal.json")
     if previous and (previous["dir"] / "sim_energy.json").exists():
         shutil.copy2(previous["dir"] / "sim_energy.json", run_dir / "sim_energy.json")
+    if previous:
+        from .sim_assist import inherit_leftovers
+        inherit_leftovers(previous['dir'], run_dir / 'sim_private')
     session = GameSession(cfg, run_dir, metrics)
     result = None
     try:

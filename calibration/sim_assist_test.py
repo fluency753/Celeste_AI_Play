@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -12,7 +14,8 @@ from unittest.mock import patch
 from orchestrator.config import RunConfig
 from orchestrator.game_session import GameSession
 from orchestrator.metrics import Metrics
-from orchestrator.sim_assist import SimEnergy, moving_frames, run_predictions, validate_request, write_replay
+from orchestrator.sim_assist import (PredictionWorker, SimEnergy, inherit_leftovers, moving_frames,
+                                    validate_request, write_replay)
 
 
 class SimEnergyTests(unittest.TestCase):
@@ -113,95 +116,152 @@ class SimEnergyTests(unittest.TestCase):
         self.assertEqual(moving_frames(rows, [0, 0]), 2)
         self.assertEqual(moving_frames([], [0, 0]), 0)
 
-    def fake_docker(self, rm_replies):
-        """docker run answers like a worker; docker rm follows the scripted replies."""
-        replies = '\n'.join(json.dumps(r) for r in [
-            {"ok": True, "info": {"frame": 1}}, {"ok": True, "results": [{"ok": True, "frames": []}]}])
-        calls = []
-        def response(argv, **kwargs):
-            calls.append(argv)
-            if argv[1] == 'run':
-                kwargs['stdout'].write(replies.encode('utf-8'))
-                return SimpleNamespace(returncode=0)
-            reply = rm_replies.pop(0) if rm_replies else SimpleNamespace(returncode=0, stderr='')
+    _SIMULATOR = r"""
+import json, os, sys, time
+from pathlib import Path
+state_file, mode = Path(sys.argv[1]), sys.argv[2]
+frame = None
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'state' in request:
+        assert request == {'state': '/state/state.json'}
+        frame = json.loads(state_file.read_text())['frame']
+        print(json.dumps({'ok': True, 'info': {'frame': frame, 'pid': os.getpid()}}), flush=True)
+    else:
+        if mode == 'timeout':
+            time.sleep(20)
+        if mode == 'oversize':
+            print('x' * 4096, flush=True)
+        if mode == 'partial':
+            print('{', end='', flush=True)
+            break
+        sys.stderr.write('diagnostic\n' * 10000)
+        assert all(r['stop_on_death'] and r['stop_on_room'] for r in request['batch'])
+        print(json.dumps({'ok': True, 'results': [
+            {'ok': True, 'stop': 'done', 'frames': [[frame, 2, 3]]} for r in request['batch']
+        ]}), flush=True)
+"""
+
+    def worker_fixture(self, modes=None, removals=None, timeout=5):
+        directory = self.root / 'sim_private'
+        directory.mkdir()
+        (directory / 'state.json').write_text('{"frame": 10}', encoding='utf-8')
+        worker = PredictionWorker(RunConfig(agent='test', save='test', model='test'), directory, timeout=timeout)
+        worker_calls, remove_calls = [], []
+        real_popen = subprocess.Popen
+        modes, removals = iter(modes or []), iter(removals or [])
+
+        def start(command, **options):
+            worker_calls.append(command)
+            name = command[command.index('--name') + 1]
+            state_dir = Path(next(arg.removesuffix(':/state:ro') for arg in command if arg.endswith(':/state:ro')))
+            ledger = json.loads((state_dir / 'leftover_containers.json').read_text(encoding='utf-8'))
+            self.assertIn(name, [row['name'] for row in ledger])
+            return real_popen([sys.executable, '-u', '-c', self._SIMULATOR, str(state_dir / 'state.json'),
+                               next(modes, 'ok')], **options)
+
+        def remove(command, **options):
+            remove_calls.append(command)
+            reply = next(removals, SimpleNamespace(returncode=0, stderr=''))
             if isinstance(reply, Exception):
                 raise reply
             return reply
-        return calls, response
 
-    def test_failed_container_cleanup_is_recorded_and_only_removal_is_retried(self):
-        import subprocess
-        cfg = RunConfig(agent="test", save="test", model="test")
-        private = self.root / 'sim_private'
-        private.mkdir()
-        busy = SimpleNamespace(returncode=1, stderr='Error response from daemon: removal already in progress')
-        calls, response = self.fake_docker([busy, subprocess.TimeoutExpired('docker', 10)])
-        with patch("orchestrator.sim_assist.find_docker_exe", return_value="docker"), \
-             patch("orchestrator.sim_assist.subprocess.run", side_effect=response):
-            first = run_predictions(cfg, private, [["60,R"]])        # result kept despite cleanup failure
-            self.assertEqual(first["results"][0]["ok"], True)
-            ledger = json.loads((private / 'leftover_containers.json').read_text(encoding='utf-8'))
-            leftover = ledger[0]['name']
-            self.assertEqual((ledger[0]['run'], ledger[0]['attempts']), (str(self.root.resolve()), 1))
-            run = next(argv for argv in calls if argv[1] == 'run')
-            self.assertIn(f"celeste.run={self.root.resolve().name}", run)
-            calls.clear()
-            run_predictions(cfg, private, [["60,R"]])                 # retry removal first: timeout again
-            self.assertEqual([argv[1:3] for argv in calls][:2], [['rm', '-f'], ['run', '--rm']])
-            self.assertEqual(calls[0][-1], leftover)
-            self.assertEqual(sum(argv[1] == 'run' for argv in calls), 1)   # never re-runs the old prediction
-            self.assertEqual(json.loads((private / 'leftover_containers.json').read_text(encoding='utf-8'))[0]['attempts'], 2)
-            calls.clear()
-            run_predictions(cfg, private, [["60,R"]])                 # removal now succeeds
-            self.assertFalse((private / 'leftover_containers.json').exists())
+        for target, options in (('find_docker_exe', {'return_value': 'docker'}),
+                                ('subprocess.Popen', {'side_effect': start}),
+                                ('subprocess.run', {'side_effect': remove})):
+            mocked = patch('orchestrator.sim_assist.' + target, **options)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        self.addCleanup(worker.close)
+        return worker, worker_calls, remove_calls
+
+    def test_private_worker_reuses_process_and_reloads_each_snapshot(self):
+        worker, starts, removes = self.worker_fixture()
+        first = worker.predict([['1,R']])
+        (worker.directory / 'state.json').write_text('{"frame": 20}', encoding='utf-8')
+        second = worker.predict([['1,L'], ['1,R']])
+        self.assertEqual(first['info']['pid'], second['info']['pid'])
+        self.assertEqual([r['frames'][0][0] for r in second['results']], [20, 20])
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(removes, [])
+        argv = starts[0]
+        for option in ('--network', '--log-driver'):
+            self.assertEqual(argv[argv.index(option) + 1], 'none')
+        self.assertIn('--read-only', argv)
+        self.assertIn(f'{worker.directory}:/state:ro', argv)
+        self.assertFalse(any('/workspace' in part or 'openai' in part for part in argv))
+        worker.close()
+        worker.close()
+        self.assertEqual(len(removes), 1)
+        self.assertFalse((worker.directory / 'leftover_containers.json').exists())
+
+    def test_timeout_drops_worker_and_next_batch_never_replays_old_input(self):
+        worker, starts, removes = self.worker_fixture(['timeout', 'ok'], timeout=1)
+        with self.assertRaisesRegex(RuntimeError, '秒内未完成本批'):
+            worker.predict([['1,R']])
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(len(removes), 1)
+        worker.timeout = 5
+        self.assertEqual(len(worker.predict([['4']])['results']), 1)
+        self.assertEqual(len(starts), 2)
+
+    def test_oversized_reply_invalidates_worker(self):
+        worker, starts, removes = self.worker_fixture(['oversize'])
+        with patch('orchestrator.sim_assist.REPLY_LIMIT', 512):
+            with self.assertRaisesRegex(RuntimeError, '模拟输出超过'):
+                worker.predict([['1,R']])
+        self.assertIsNone(worker.process)
+        self.assertEqual(len(removes), 1)
+
+    def test_incomplete_line_invalidates_worker(self):
+        worker, starts, removes = self.worker_fixture(['partial'])
+        with self.assertRaisesRegex(RuntimeError, '未返回完整的一行'):
+            worker.predict([['1,R']])
+        self.assertIsNone(worker.process)
+        self.assertEqual(len(removes), 1)
+
+    def test_cleanup_failure_preserves_result_and_is_recovered_on_resume(self):
+        busy = SimpleNamespace(returncode=1, stderr='daemon not responding')
+        worker, starts, removes = self.worker_fixture(removals=[busy])
+        result = worker.predict([['60,R']])
+        worker.close()
+        self.assertEqual(result['info']['frame'], 10)
+        ledger = worker.directory / 'leftover_containers.json'
+        leftover = json.loads(ledger.read_text(encoding='utf-8'))[0]
+        self.assertEqual((leftover['run'], leftover['attempts']), (str(self.root.resolve()), 1))
+        resumed = self.root / 'next' / 'sim_private'
+        inherit_leftovers(self.root, resumed)
+        (resumed / 'state.json').write_text('{"frame": 10}', encoding='utf-8')
+        new_worker = PredictionWorker(worker.cfg, resumed)
+        self.addCleanup(new_worker.close)
+        new_worker.predict([['1']])
+        self.assertEqual(removes[-1][-1], leftover['name'])
+        self.assertEqual(len(starts), 2)
+        self.assertNotEqual(starts[0], starts[1])
 
     def test_missing_container_counts_as_removed_and_foreign_names_are_never_removed(self):
-        cfg = RunConfig(agent="test", save="test", model="test")
-        private = self.root / 'sim_private'
-        private.mkdir()
-        (private / 'leftover_containers.json').write_text(json.dumps(
-            [{'name': 'user-database'}, {'name': 'celeste-sim-assist-' + 'a' * 32, 'attempts': 1}]), encoding='utf-8')
-        gone = SimpleNamespace(returncode=1, stderr='Error: No such container: celeste-sim-assist-' + 'a' * 32)
-        calls, response = self.fake_docker([gone])
-        with patch("orchestrator.sim_assist.find_docker_exe", return_value="docker"), \
-             patch("orchestrator.sim_assist.subprocess.run", side_effect=response):
-            run_predictions(cfg, private, [["60,R"]])
-        self.assertNotIn('user-database', [argv[-1] for argv in calls])
-        self.assertFalse((private / 'leftover_containers.json').exists())
+        gone = SimpleNamespace(returncode=1, stderr='Error: No such container')
+        worker, starts, removes = self.worker_fixture(removals=[gone])
+        foreign = {'name': 'user-database'}
+        old = {'name': 'celeste-sim-assist-' + 'a' * 32, 'attempts': 1}
+        ledger = worker.directory / 'leftover_containers.json'
+        ledger.write_text(json.dumps([foreign, old]), encoding='utf-8')
+        worker.predict([['1']])
+        self.assertEqual([argv[-1] for argv in removes], [old['name']])
+        worker.close()
+        self.assertFalse(ledger.exists())
 
-    def test_worker_failure_still_records_a_stuck_container_and_raises(self):
-        cfg = RunConfig(agent="test", save="test", model="test")
-        private = self.root / 'sim_private'
-        private.mkdir()
-        def response(argv, **kwargs):
-            if argv[1] == 'run':
-                return SimpleNamespace(returncode=125)
-            return SimpleNamespace(returncode=1, stderr='daemon not responding')
-        with patch("orchestrator.sim_assist.find_docker_exe", return_value="docker"), \
-             patch("orchestrator.sim_assist.subprocess.run", side_effect=response):
-            with self.assertRaisesRegex(RuntimeError, '模拟辅助服务失败'):
-                run_predictions(cfg, private, [["60,R"]])
-        self.assertEqual(len(json.loads((private / 'leftover_containers.json').read_text(encoding='utf-8'))), 1)
-
-    def test_worker_only_gets_private_state_and_has_no_network(self):
-        replies = '\n'.join(json.dumps(r) for r in [
-            {"ok": True, "info": {"frame": 1}}, {"ok": True, "results": [{"ok": True, "frames": []}]}])
-        def response(*args, **kwargs):
-            if 'input' in kwargs:
-                kwargs['stdout'].write(replies.encode('utf-8'))
-            return SimpleNamespace(returncode=0)
-        cfg = RunConfig(agent="test", save="test", model="test")
-        with patch("orchestrator.sim_assist.find_docker_exe", return_value="docker"), \
-             patch("orchestrator.sim_assist.subprocess.run", side_effect=response) as run:
-            run_predictions(cfg, self.root, [["60,R"]])
-        args = run.call_args_list[0].args[0]
-        self.assertEqual(args[args.index("--network") + 1], "none")
-        self.assertIn("--read-only", args)
-        self.assertFalse(any("/workspace" in a or "openai" in a for a in args))
-        request = run.call_args_list[0].kwargs["input"]
-        self.assertIn('"stop_on_death": true', request)
-        self.assertIn('"stop_on_room": true', request)
-        self.assertEqual(run.call_args_list[-1].args[0][1:3], ["rm", "-f"])
+    def test_invalid_ownership_ledger_is_not_overwritten_or_lost_on_resume(self):
+        worker, starts, removes = self.worker_fixture()
+        ledger = worker.directory / 'leftover_containers.json'
+        ledger.write_text('{"invalid": true}', encoding='utf-8')
+        with self.assertRaisesRegex(RuntimeError, '容器归属记录不是列表'):
+            worker.predict([['1']])
+        with self.assertRaisesRegex(ValueError, '容器归属记录不是列表'):
+            inherit_leftovers(self.root, self.root/'next'/'sim_private')
+        self.assertEqual(json.loads(ledger.read_text(encoding='utf-8')), {'invalid': True})
+        self.assertEqual(starts + removes, [])
 
     def test_predictions_feed_existing_playback_log(self):
         from orchestrator.playback import read_logs
