@@ -789,10 +789,10 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     # selected save; the runtime session installs its own stricter policy.
     client.step_options = lambda: startup_step_options(client, cfg)
     from .chapter_recording import menu_options
-    if cfg.speedrun_target_ticks is not None:
+    if (target_ticks := getattr(cfg, 'speedrun_target_ticks', None)) is not None:
         from .speedrun_goal import require_timing_bridge
         try:
-            require_timing_bridge(cfg.speedrun_target_ticks, client.call('hello'))
+            require_timing_bridge(target_ticks, client.call('hello'))
         except BaseException:
             client.close()
             raise

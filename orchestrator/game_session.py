@@ -345,6 +345,7 @@ def expand_inputs(inputs: list[str], max_frames: int, allowed: set[str] = AGENT_
 
 
 class GameSession:
+    speedrun_target_ticks: int | None = None
     _ending_pending = False   # 见 __init__
     _ending_agent = False
     _detour = None            # 计划外地图（--allow-detour）：正在玩的非计划地图 {sid, side, completed, deaths}
