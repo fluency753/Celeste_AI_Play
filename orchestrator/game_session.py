@@ -422,6 +422,7 @@ class GameSession:
         self._entered_level = False
         self.start_sid: str | None = None
         self.end_scene: str | None = None
+        self.summit_credits_finished = False
         self.decision_index = 0
         self.container: str | None = None   # 智能体容器（自动重试时在里面运行重算程序）
         self.before_advance = None          # 每次推进游戏前调用（录制时：确认游戏窗口没有最小化）
@@ -2589,7 +2590,7 @@ class GameSession:
                 and (self._pending_complete or (obs.get('level') or {}).get('completed'))):
             self.chapter_queue.clear()
             if agent:
-                self.end_scene = obs.get('scene')
+                self._remember_agent_completion(obs)
             self._pending_complete=False
             if not self.done:self._chapter_complete()
             if agent:
@@ -3286,7 +3287,10 @@ class GameSession:
         ready = (self._agent_completion_ready(obs) if self.cfg.cutscene_mode == 'agent' else
                  not story_pending(obs) and not _automatic_loader_transition(obs))
         if self._pending_complete and ready:
-            self.end_scene = obs.get('scene')
+            if self.cfg.cutscene_mode == 'agent':
+                self._remember_agent_completion(obs)
+            else:
+                self.end_scene = obs.get('scene')
             self._pending_complete = False
             self._chapter_complete()
             self._persist_completion_pending()
@@ -3315,7 +3319,7 @@ class GameSession:
         reentered = obs.get('scene') == 'Level' and (obs.get('level') or {}).get('completed') is False
         if (self._pending_complete and (self._agent_completion_ready(obs) or reentered)
                 and (obs.get('save') or {}).get('slot') == self.cfg.save_slot):
-            self.end_scene = obs.get('scene')
+            self._remember_agent_completion(obs)
             self._pending_complete = False
             self._chapter_complete(timed_ticks=self._qualified_speedrun_ticks())
             self._persist_completion_pending()
@@ -3344,17 +3348,37 @@ class GameSession:
     def _agent_completion_ready(self, obs):
         if self._at_chapter_select(obs):
             return True
-        # A saved, matching panel is sufficient for terminal settlement. A chapter
-        # handoff still uses the existing chapter-select navigation boundary.
-        if not (self._pending_complete and self._at_chapter_menu(obs) and obs.get('saving') is False
+        # Alternate settlement boundaries only apply to the last whole chapter.
+        at_menu = self._at_chapter_menu(obs)
+        if not (self._pending_complete and (at_menu or self._at_finished_summit_credits(obs))
+                and obs.get('saving') is False
                 and self.cfg.play_scope == 'chapter' and self.cfg.completion_policy == 'stop'
                 and self.piece is not None and self.piece.whole() and not self.chapter_queue
-                and not self.chapter_finished and not self._in_detour()):
+                and not self.chapter_finished and not self._in_detour()
+                and self.cfg.save_slot is not None and (obs.get('save') or {}).get('slot') == self.cfg.save_slot):
             return False
+        if not at_menu:
+            return True
         menu = obs['menu']
-        return (self.cfg.save_slot is not None and (obs.get('save') or {}).get('slot') == self.cfg.save_slot
-                and menu.get('panelSelectingMode') is True and menu.get('panelArea') == self.piece.chapter
+        return (menu.get('panelSelectingMode') is True and menu.get('panelArea') == self.piece.chapter
                 and menu.get('panelSide') == PANEL_SIDES[self.piece.side])
+
+    def _at_finished_summit_credits(self, obs):
+        # Summit credits end by entering the Epilogue. The entry guard can leave
+        # the completed Summit session behind with its player still in Dummy.
+        level = obs.get('level') or {}
+        return (self.piece is not None and self.piece.chapter == 7 and self.piece.side == 'A'
+                and obs.get('scene') == 'Level' and level.get('sid') == 'Celeste/7-Summit'
+                and level.get('side') == 'A' and level.get('room') == 'credits-summit'
+                and level.get('completed') is True and level.get('inCutscene') is False
+                and not level.get('skippingCutscene') and not level.get('transitioning') and not level.get('screenWipe')
+                and not level.get('paused') and not story_pending(obs)
+                and not story_input(obs) and not story_decision(obs)
+                and (obs.get('player') or {}).get('state') == 'Dummy')
+
+    def _remember_agent_completion(self, obs):
+        self.end_scene = obs.get('scene')
+        self.summit_credits_finished = self._at_finished_summit_credits(obs)
 
     def _completion_panel_note(self, obs):
         if (self.cfg.cutscene_mode == 'agent' and self._pending_complete and not self.done
@@ -3617,7 +3641,7 @@ class GameSession:
         if self.cfg.cutscene_mode == 'agent':
             # Cleanup observes the outcome; it never supplies the agent's missing
             # heart/results/menu inputs, including after an interrupted ending.
-            if self.end_scene != 'Overworld':
+            if self.end_scene != 'Overworld' and not getattr(self, 'summit_credits_finished', False):
                 raise RuntimeError('智能体尚未自行返回选章地图，主控不会代按结算')
             return
         with self.lock:

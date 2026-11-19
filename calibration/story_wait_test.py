@@ -1,5 +1,6 @@
 """Story waiting boundaries with real session/tool consumers and only a bridge fixture."""
 import asyncio
+import argparse
 import copy
 import json
 from pathlib import Path
@@ -11,6 +12,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from orchestrator.config import RunConfig
 from orchestrator.game_session import AGENT_STORY_WAIT_FRAMES, TRANSITION_WAIT_FRAMES, ActError, GameSession
 from orchestrator.metrics import Metrics
+from orchestrator.run import _shutdown_mode
 from orchestrator.server import build_server
 from orchestrator.navigation import ChapterNavigation
 from orchestrator.segments import Piece
@@ -832,6 +834,52 @@ class StoryWaitTests(unittest.TestCase):
         self.assertIn('本次试玩已结束', '\n'.join(item.text for item in result.content if item.type == 'text'))
         self.assertEqual(client.steps, [])
         self.assertEqual(self.session.done_reason, '章节完成')
+
+    def test_final_summit_credits_settle_saved_chapter_without_entering_epilogue(self):
+        self.session.cfg.save_slot = 13
+        self.session.cfg.chapter = 7
+        self.session.piece = Piece(7)
+        state_path = self.root / 'run_state.json'
+        state_path.write_text('{}', encoding='utf-8')
+        self.session._handle_events({'events': [{'type': 'complete'}]})
+        sid = 'Celeste/7-Summit'
+        credits = observation(cutscene=False, sid=sid, room='credits-summit',
+                              completed=True, chapterTimeTicks=34816510000)
+        credits.update(saving=False, save={'slot': 13})
+        variants = (
+            {'saving': True},
+            {'save': {'slot': 12}},
+            {'storyInput': 'dialogue'},
+            {'level': {**credits['level'], 'inCutscene': True}},
+            {'level': {**credits['level'], 'skippingCutscene': True}},
+            {'level': {**credits['level'], 'screenWipe': True}},
+            {'level': {**credits['level'], 'completed': False}},
+            {'level': {**credits['level'], 'side': 'B'}},
+            {'level': {**credits['level'], 'room': 'summit'}},
+        )
+        for change in variants:
+            with self.subTest(change=change):
+                self.assertFalse(self.session._agent_completion_ready({**credits, **change}))
+        self.session.chapter_queue = [Piece(8)]
+        self.assertFalse(self.session._agent_completion_ready(credits))
+        self.session.chapter_queue = []
+        client = self.bridge(credits)
+        self.session.metrics.update(chapter=sid, chapter_time_ticks=34816510000)
+        server = build_server(self.session)
+        result = asyncio.run(server.call_tool('observe', {}))
+        self.assertFalse(result.is_error)
+        self.assertIn('本次试玩已结束', '\n'.join(item.text for item in result.content if item.type == 'text'))
+        self.session.observe()
+        self.session.finish_at_results()
+        self.assertEqual(self.session.end_scene, 'Level')
+        self.assertEqual(self.session.done_reason, '章节完成')
+        self.assertEqual(client.steps, [])
+        self.assertFalse(json.loads(state_path.read_text(encoding='utf-8'))['completion_pending'])
+        splits = self.session.metrics.state.splits
+        self.assertEqual(len(splits), 1)
+        self.assertEqual(splits[0]['chapter'], sid)
+        self.assertEqual(splits[0]['ticks'], 34816510000)
+        self.assertEqual(_shutdown_mode(self.session.cfg, argparse.Namespace(no_agent=False), self.session), 'freeze')
 
     def test_goal_stop_can_settle_pending_final_panel_from_latest_observation(self):
         self.session.cfg.save_slot = 15

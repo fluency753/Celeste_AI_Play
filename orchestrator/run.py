@@ -1246,6 +1246,8 @@ def _shutdown_mode(cfg, args, session, *, interrupted=False, model_failed=False)
     """
     if args.no_agent:
         return 'release'
+    if session.done and getattr(session, 'summit_credits_finished', False):
+        return 'freeze'
     goals = getattr(session, 'goals', None)
     if goals is not None and not goals.immediate and goals.snapshot().get('reached') is True:
         return 'freeze'
