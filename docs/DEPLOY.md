@@ -255,8 +255,8 @@ winget install Gyan.FFmpeg
 
 预置模拟器由游戏代码生成，**不在仓库里，也不应公开分发**。在新电脑上有两种选择：
 
-- 如果你有一台已经构建好模拟器的开发机，把 `sim\dist` 整个目录（`celeste-sim`、`sim.py`、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`）复制到新电脑仓库的 `sim\dist`；它是 Linux 单文件程序，仅主控私有 Docker worker 使用，不向 agent 挂载或复制；能力默认关闭，与 Windows 版本无关。自检：游戏在 test 存档的关卡里时运行 `.\.venv\Scripts\python.exe tools\sim_check.py`，应"逐帧一致"。
-- 没有模拟器时照常运行：速通模式新运行自动按 `--no-sim` 运行（关模拟器的版本）。有模拟器时，Claude 执行器的速通在容器方式下默认开放 `/sim`；Codex 执行器的速通需显式用 `--sim --limit-planning`（主控限额预测，仅试玩运行且有额度时接受）；探索模式两个执行器都用 `--sim-assist`（默认关闭）。
+- 如果你有一台已经构建好模拟器的开发机，把 `sim\dist` 整个目录（`celeste-sim`、`sim.py`、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`）复制到新电脑仓库的 `sim\dist`。主控在断网 Docker 容器里运行 Linux 模拟器。自检时，让游戏停在 test 存档的关卡里并运行 `.\.venv\Scripts\python.exe tools\sim_check.py`。
+- Claude 的容器速通在本机有模拟器时默认提供 `/sim`，Codex 用 `--sim` 开启。装有完整发布目录的新运行默认由主控代跑，可用 `--no-sim-relay` 保留容器内直跑。硬限额速通用 `--sim --limit-planning`，探索用 `--sim-assist`。没有模拟器时可用 `--no-sim` 正常游玩。
 
 ### 4.9 知识库参考资料（可选）
 
