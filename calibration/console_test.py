@@ -20,6 +20,22 @@ def options(**extra):
 
 
 class LaunchOptionsTests(unittest.TestCase):
+    def test_single_chapter_speedrun_target_reaches_cli_and_prompt_preview(self):
+        from orchestrator.launch_options import config_for
+        from orchestrator.prompting import play_prompt
+        from orchestrator.run import parse_args
+        plan = options(chapters=[1], speedrun_target_seconds='48.1234567', sim=False)
+        argv = build(plan)
+        self.assertEqual(argv[argv.index('--speedrun-target-seconds') + 1], '48.1234567')
+        with patch('sys.argv', ['orchestrator.run', *argv]):
+            cfg, _ = parse_args()
+        self.assertEqual(cfg.speedrun_target_ticks, 481234567)
+        self.assertEqual(config_for(plan).speedrun_target_ticks, cfg.speedrun_target_ticks)
+        self.assertIn('严格低于 48.1234567 秒', play_prompt(cfg))
+        for extra in ({'chapters': [1, 2]}, {'mode': 'explore'}, {'speedrun_target_seconds': 0}):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                build({**plan, **extra})
+
     def test_chapter_recording_and_independent_menu_freeze_options(self):
         default = build(options())
         self.assertEqual(default[default.index('--recording-mode') + 1], 'chapter')

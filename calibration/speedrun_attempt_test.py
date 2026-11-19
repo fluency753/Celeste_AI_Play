@@ -123,3 +123,50 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
         finally:
             REQUEST_TICKET.reset(ticket)
         self.assertNotIn('speedrun_practice_room', self.bridge.commands)
+
+    def set_speedrun_target(self, ticks=20_000_000):
+        self.cfg.speedrun_target_ticks = self.session.speedrun_target_ticks = ticks
+
+    def test_timed_goal_retries_equal_slow_and_gray_then_records_current_valid_ticks(self):
+        self.set_speedrun_target()
+        self.session.set_goal({'conditions': [{'field': 'map_complete', 'op': 'eq', 'value': True}]})
+        for ticks, valid in ((20_000_000, True), (20_000_001, True), (10_000_000, False), (19_999_999, True)):
+            with self.subTest(ticks=ticks, valid=valid):
+                self.bridge._enter(CITY, 'A')
+                self.bridge.ticks, self.bridge.valid_time = ticks, valid
+                self.metrics.update(plan_banked_ticks=99_000_000)
+                self.session.act(['1,R'], '跑到终点', None)
+                self.assertFalse(self.session.done)
+                self.assertFalse(self.session.goals.stop_motion.is_set())
+                self.bridge.state = 'select'
+                self.session.observe()
+                self.assertEqual(self.session.done, valid and ticks < 20_000_000)
+        self.assertTrue(self.session.done)
+        self.assertEqual([row['ticks'] for row in self.metrics.state.splits], [19_999_999])
+        self.assertEqual(self.session.time_snapshot()['speedrun']['target_seconds'], 2)
+
+    def test_auto_cutscene_slow_finish_leaves_menu_controls_available(self):
+        self.set_speedrun_target()
+        self.cfg.cutscene_mode = 'auto'
+        self.bridge.ticks = 21_000_000
+        result = self.session.act(['1,R'], '跑到终点', None)
+        self.assertIn('未达到严格低于 2 秒', ' '.join(result.auto_notes))
+        self.session.act(['1,P'], '打开结尾菜单', None)
+        self.assertEqual(self.bridge.state, 'pause')
+        self.assertFalse(self.session.done)
+        self.assertFalse(self.metrics.state.splits)
+        with self.assertRaisesRegex(ActError, '由主控核验'):
+            self.session.finish_goal('已完成', '本次通关')
+
+    def test_qualified_results_survive_reconnect_and_same_map_reentry(self):
+        self.set_speedrun_target()
+        self.bridge.state, self.bridge.ticks = 'results', 15_000_000
+        with patch('orchestrator.game_session.BridgeClient', return_value=self.bridge):
+            self.session.connect()
+        self.session.observe()
+        self.assertTrue(self.session._pending_complete)
+        self.assertFalse(self.session.done)
+        self.bridge._enter(CITY, 'A')
+        self.session.observe()
+        self.assertTrue(self.session.done)
+        self.assertEqual([row['ticks'] for row in self.metrics.state.splits], [15_000_000])

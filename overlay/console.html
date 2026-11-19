@@ -466,6 +466,7 @@
         <div class="row" style="margin-top:10px">
           <label class="field">智能体标签<input type="text" id="agent" maxlength="40" placeholder="例如 opus-explore 或 dev-opus"></label>
           <label class="field">现实时间上限（分钟）<input type="number" id="maxMinutes" min="1" max="9999999" step="1" value="1000" title="1～9999999；很大的值相当于不限时"></label>
+          <label class="field" id="rowSpeedrunTarget">整章速通目标（秒）<input type="number" id="speedrunTarget" min="0" step="any" placeholder="留空则通关即完成" title="仅单章整章速通，有效通关时长须严格低于此值"></label>
         </div>
         <p class="hint">标签决定日志目录 runs/&lt;标签&gt;/ 与智能体的工作区；同一个系列一直用同一个标签（续跑、笔记都按标签找），临时试验可以用 dev- 开头。</p>
         <div class="group-title" id="usageTitle">提供方账户的用量</div>
@@ -1233,6 +1234,7 @@ async function loadOptions() {
   const d = o.defaults;
   $("tokenDrift").checked = !!d.token_drift;
   $("maxMinutes").value = d.max_minutes;
+  $("speedrunTarget").value = d.speedrun_target_seconds ?? "";
   $("agent").value = (o.deploy && o.deploy.agent) || "";
   // 先定章节选择再填存档：fillSaves 会调 onSaveChange，它要读 ui.chapters／ui.sides
   ui.chapters = [0];
@@ -1422,6 +1424,7 @@ function setMode(mode) {
   document.querySelectorAll("[data-kbmode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.kbmode === mode)));
   document.querySelectorAll("[data-pmode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.pmode === mode)));
   $("rowSim").hidden = mode !== "speedrun";
+  $("rowSpeedrunTarget").hidden = mode !== "speedrun";
   $("rowSimAssist").hidden = mode !== "explore";
   $("rowStiffness").hidden = mode !== "explore";
   $("rowTokenDrift").hidden = mode !== "explore";
@@ -1718,6 +1721,7 @@ function formOptions() {
     allow_detour: $("allowDetour").checked,
     cutscene_mode: $("cutsceneAgent").checked ? "agent" : "auto", chapters: ui.chapters, segments: ui.sides.length ? null : selectedSegments(), sides: ui.sides, save,
     max_minutes: Number($("maxMinutes").value), autocompact: $("autocompact").value.trim(), map: ui.map,
+    speedrun_target_seconds: ui.mode === "speedrun" ? ($("speedrunTarget").value || null) : null,
     runtime: $("runMode").value, study_minutes: withDefault("studyMinutes", "study_minutes"),
     max_usage: numberOrNull("maxUsage"), quota_wait_max_hours: withDefault("quotaHours", "quota_wait_max_hours"),
     play_speed: withDefault("playSpeed", "play_speed"), auto_speed: withDefault("autoSpeed", "auto_speed"),
@@ -1870,6 +1874,7 @@ function applyProfileForm(form) {
   if (has("cutscene_mode")) $("cutsceneAgent").checked = form.cutscene_mode === "agent";
   if (has("collision_image") && !pick("collisionImage", form.collision_image || "")) $("collisionImage").value = "";
   if (has("max_minutes")) $("maxMinutes").value = form.max_minutes;
+  if (has("speedrun_target_seconds")) $("speedrunTarget").value = form.speedrun_target_seconds ?? "";
   if (has("autocompact")) $("autocompact").value = form.autocompact || "";
   for (const [key, id] of [["study_minutes", "studyMinutes"], ["play_speed", "playSpeed"],
       ["auto_speed", "autoSpeed"], ["rounds_per_room", "roundsPerRoom"], ["room_scale", "roomScale"]]) {
@@ -1914,7 +1919,7 @@ const USAGE_DEFAULTS = { max_usage: null, quota_wait: true, quota_wait_max_hours
 // 本次运行的设置（与 orchestrator/machine_settings.RUN_GROUPS 相同，calibration/run_pins_test.py 核对）：按组固定在配置里，
 // 没固定的组记住上次填写的；直播与录屏各自记住；调试项每次回到默认
 const RUN_GROUPS = { model: ["engine", "provider", "model", "effort"], agent: ["agent"],
-  chapters: ["map", "chapters", "segments", "sides", "seg_off"], save: ["save"], max_minutes: ["max_minutes"],
+  chapters: ["map", "chapters", "segments", "sides", "seg_off", "speedrun_target_seconds"], save: ["save"], max_minutes: ["max_minutes"],
   start_paused: ["start_paused"], autocompact: ["autocompact"] };
 const PIN_LABELS = { model: "模型", agent: "标签", chapters: "章节", save: "存档", max_minutes: "时限",
   start_paused: "先暂停", autocompact: "压缩窗口" };
@@ -2324,7 +2329,12 @@ function renderRun(m) {
   $("mEffort").textContent = m.effort_pending && m.effort_pending !== m.effort ? `${m.effort} → ${m.effort_pending}` : (m.effort || "—");
   $("mContext").textContent = tokens(m.context_tokens);
   $("runToolCall").textContent = m.tool_call ? `正在调用：${m.tool_call}${m.tool_status ? " — " + m.tool_status : ""}` : "";
-  $("runAside").textContent = (m.activity_status || m.status) === "paused" ? "已暂停" : "";
+  const attempt = m.speedrun_last_attempt;
+  const target = m.speedrun_target_ticks;
+  const attemptText = target != null && attempt?.valid && Number.isFinite(attempt.ticks)
+    ? `上次有效通关 ${attempt.ticks / 1e7} 秒（${attempt.ticks < target ? "达标" : "未达标"}）` : "";
+  $("runAside").textContent = [(m.activity_status || m.status) === "paused" ? "已暂停" : "",
+    target != null ? `有效整章目标 < ${target / 1e7} 秒` : "", attemptText].filter(Boolean).join(" · ");
 }
 
 function renderControls() {

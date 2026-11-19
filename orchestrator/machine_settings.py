@@ -24,7 +24,7 @@ RUN_STATE_KEYS = ("runtime", "bridge_port", "recording_mode", "freeze_chapter_se
 USAGE_KEYS = ("max_usage", "quota_wait", "quota_wait_max_hours")
 # 本次运行的设置（docs/开发/设置分层.md 第三步）：按组固定在配置里；没固定的组记住上次填写的（本机，所有配置共用）
 RUN_GROUPS = {"model": ("engine", "provider", "model", "effort"), "agent": ("agent",),
-              "chapters": ("map", "chapters", "segments", "sides", "seg_off"), "save": ("save",),
+              "chapters": ("map", "chapters", "segments", "sides", "seg_off", "speedrun_target_seconds"), "save": ("save",),
               "max_minutes": ("max_minutes",), "start_paused": ("start_paused",), "autocompact": ("autocompact",)}
 RUN_KEYS = tuple(key for keys in RUN_GROUPS.values() for key in keys)
 INDEPENDENT_KEYS = ("live", "record")       # 直播与 OBS 录屏：各自记住上次的选择，不进配置

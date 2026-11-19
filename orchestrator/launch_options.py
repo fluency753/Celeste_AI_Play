@@ -39,7 +39,8 @@ DEFAULTS = {
     "sides": [],      # 另外要玩的 B／C 面（整章）：[[章节编号, "B"], ...]；空 = 只玩 A 面（命令与原来相同）
     "action_permissions": None, "allow_detour": False,
     "recording_mode": "chapter", "freeze_chapter_select": True, "freeze_file_select": False, "freeze_main_menu": False,
-    "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 1000, "autocompact": "",
+    "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 1000,
+    "speedrun_target_seconds": None, "autocompact": "",
     # 以下是"更多设置"里的参数，默认值与命令行相同
     "map": "celeste", "runtime": "container", "study_minutes": 60, "max_usage": None, "quota_wait_max_hours": 24,
     "play_speed": 1, "auto_speed": 1, "rounds_per_room": 3, "room_scale": 2.0, "record_marker": False,
@@ -169,7 +170,15 @@ def normalize(options: dict) -> dict:
         from .segments import chapters_of, load_table, pieces_of, validate_segments
         table = load_table()
         o["segments"] = [list(s) for s in validate_segments(o["segments"], table)]
-        o["chapters"] = chapters_of(pieces_of([tuple(s) for s in o["segments"]], table))
+        plan = pieces_of([tuple(s) for s in o["segments"]], table)
+        o["chapters"] = chapters_of(plan)
+    if o['speedrun_target_seconds'] is not None:
+        from .speedrun_goal import parse_target_seconds, target_seconds_text
+        whole = (len(plan) == 1 and plan[0].whole() if o.get('segments') is not None
+                 else len(o['chapters']) + len(o['sides']) == 1)
+        if o['mode'] != SPEEDRUN or not whole or o['no_agent']:
+            raise ValueError('速通时间目标需要单张指定地图的整章速通')
+        o['speedrun_target_seconds'] = target_seconds_text(parse_target_seconds(o['speedrun_target_seconds']))
     save = o["save"]
     if not isinstance(save, dict) or set(save) - {"name", "slot", "create"}:
         raise ValueError("存档设置无效")
@@ -250,6 +259,8 @@ def build(options: dict, profile: str | None = None) -> list[str]:
     argv = ["--engine", o["engine"], "--provider", o["provider"], "--model", o["model"], "--effort", o["effort"],
             "--agent", o["agent"], "--mode", o["mode"], "--max-minutes", minutes_text(o['max_minutes']),
             "--save", o["save"]["name"], "--cutscene-mode", o["cutscene_mode"]]
+    if o['speedrun_target_seconds'] is not None:
+        argv += ['--speedrun-target-seconds', o['speedrun_target_seconds']]
     argv.append("--live" if o["live"] else "--no-live")
     argv += recording_args(o)
     if not o['allow_detour']:
@@ -396,6 +407,9 @@ def config_for(options: dict, profile: str | None = None):
     cfg.knowledge_profile = KNOWLEDGE_OF_MODE[o["mode"]]
     # 与 run.parse_args 相同的几项：提示词里会写到时间上限、存档槽位与提供方（calibration/prompt_parity_test.py 对照）
     cfg.max_minutes = float(o["max_minutes"])
+    if o['speedrun_target_seconds'] is not None:
+        from .speedrun_goal import parse_target_seconds
+        cfg.speedrun_target_ticks = parse_target_seconds(o['speedrun_target_seconds'])
     cfg.save_slot = o["save"]["slot"]
     from .runtimes import runtime
     try:

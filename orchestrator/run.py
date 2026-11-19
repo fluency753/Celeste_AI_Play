@@ -89,6 +89,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "第三方提供方的 API 密钥只从本机读取（configs/local.providers.json 的 key_file，或环境变量）")
     ap.add_argument("--effort", default="high", help="推理强度标识，支持的档位由所选模型决定")
     ap.add_argument("--max-minutes", type=float, default=1000.0, help="现实时间上限（分钟，默认 1000）；目标以游戏内计时为主，这里只防止无限运行")
+    from .speedrun_goal import parse_target_seconds
+    timed_goal = ap.add_mutually_exclusive_group()
+    timed_goal.add_argument('--speedrun-target-seconds', dest='speedrun_target_ticks', type=parse_target_seconds,
+                            help='单章整章速通：有效通关的原生章节计时须严格低于此秒数')
+    timed_goal.add_argument('--no-speedrun-target', action='store_true', help='续跑时清除整章速通时间目标')
     ap.add_argument("--bridge-port", type=int, default=47774)
     ap.add_argument('--recording-mode', choices=('chapter','continuous'), default=None, help='新运行默认按章独立录像；continuous跨章连续录制')
     for menu in ('chapter-select','file-select','main-menu'):
@@ -616,6 +621,18 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     raise SystemExit("这次运行的章节已经全部通关，不需要续跑（要接着玩下一章：加 --chapters）")
                 cfg.chapters = remaining or None
                 cfg.chapter = remaining[0] if remaining else None
+    if not args.no_speedrun_target:
+        cfg.speedrun_target_ticks = args.speedrun_target_ticks
+        if cfg.speedrun_target_ticks is None and previous and not (args.chapters or args.segments):
+            cfg.speedrun_target_ticks = previous['state'].get('speedrun_target_ticks')
+    if cfg.speedrun_target_ticks is not None:
+        if type(cfg.speedrun_target_ticks) is not int or not 0 < cfg.speedrun_target_ticks <= 2**63 - 1:
+            ap.error('保存的速通时间目标无效')
+        from .segments import Piece
+        target = cfg.plan or [Piece(ch) for ch in (cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else []))]
+        if (cfg.mode != 'speedrun' or cfg.play_scope != 'chapter' or cfg.completion_policy != 'stop'
+                or args.no_agent or len(target) != 1 or not Piece.of(target[0]).whole()):
+            ap.error('速通时间目标需要单张指定地图的整章速通与通关停止策略')
     if cfg.completion_policy == 'continue' and cfg.plan:
         from .segments import plan_is_partial
         if plan_is_partial(cfg.plan):
@@ -697,6 +714,8 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     state['navigation_remaining'] = [] if cfg.play_scope == 'visited' else [p.row() for p in map(Piece.of,current_plan)]
     state.update({key:getattr(cfg,key) for key in ('recording_mode','freeze_chapter_select','freeze_file_select','freeze_main_menu')})
     state['pause_callback_command'] = cfg.pause_callback_command
+    if cfg.speedrun_target_ticks is not None:
+        state['speedrun_target_ticks'] = cfg.speedrun_target_ticks
     if cfg.codex_player_login:
         state['codex_player_login'] = True
     if getattr(cfg, "profile", "local") != "local":
@@ -770,6 +789,13 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     # selected save; the runtime session installs its own stricter policy.
     client.step_options = lambda: startup_step_options(client, cfg)
     from .chapter_recording import menu_options
+    if cfg.speedrun_target_ticks is not None:
+        from .speedrun_goal import require_timing_bridge
+        try:
+            require_timing_bridge(cfg.speedrun_target_ticks, client.call('hello'))
+        except BaseException:
+            client.close()
+            raise
     if getattr(cfg, 'play_scope', 'chapter') == 'visited' and client.call('hello').get('map_entry_set') is not True:
         client.close()
         raise RuntimeError('已到访地图自由探索需要支持地图集合门禁的新版桥接；未发送游戏输入')
@@ -975,6 +1001,11 @@ def check_resume_position(cfg: RunConfig) -> bool:
             return True
         if cfg.cutscene_mode == 'agent' and right_save and cfg.resume_completion_pending and obs.get('scene') in {'AreaComplete','LevelExit','OverworldLoader','Overworld'}:
             return True
+        if (right_save and cfg.speedrun_target_ticks is not None and
+                (obs.get('scene') in {'AreaComplete', 'LevelExit', 'OverworldLoader'}
+                 or (obs.get('scene') == 'Overworld'
+                     and (obs.get('menu') or {}).get('current') in {'OuiChapterSelect', 'OuiChapterPanel'}))):
+            return True  # 保留原生结算／选章，交给 Player 继续操作。
         completion = obs.get('completion') or {}
         if (right_save and cfg.mode == 'speedrun' and cfg.play_scope != 'visited'
                 and (not cfg.plan or Piece.of(cfg.plan[0]).whole())):
@@ -1492,7 +1523,8 @@ def total_time_ticks(state, session) -> int:
     """总结里的总计时：已完成各截之和，加上没完成的这一截在计划章节里已经用掉的计时（各段会话之和）。
     这一截已完成时不再加；停在计划外地图时不加它的章节计时，只加计划章节此前各段会话（含离开前最后那段）。
     没有绕行时与原来相同。"""
-    if state.piece_done or session.chapter_finished or session.done_reason in ("章节完成", "分段完成"):
+    if (getattr(session, 'speedrun_target_ticks', None) is not None or state.piece_done
+            or session.chapter_finished or session.done_reason in ("章节完成", "分段完成")):
         return state.completed_ticks
     if getattr(session, '_requires_single_run', lambda: False)() and getattr(state, 'chapter_time_valid', None) is False:
         return state.completed_ticks

@@ -642,6 +642,12 @@ def prompt_parts(cfg) -> list[PromptPart]:
                                        else "；不得自行扩展。"), "\n"))
     else:
         parts = _speedrun_parts(cfg)
+    if (target_ticks := getattr(cfg, 'speedrun_target_ticks', None)) is not None:
+        from .speedrun_goal import target_seconds_text
+        parts.append(PromptPart('整章速通时间目标',
+                                f'从目标地图章首开始，完成一趟原生计时有效且严格低于 {target_seconds_text(target_ticks)} 秒的通关。'
+                                '等于目标或更慢的通关仍可正常结算并从章首再试。灰计时练习、累加时间或文字报告不能完成本目标。',
+                                None, '\n\n'))
     if not workspace_capabilities(cfg).workspace_read:
         from .prompt_environment import environment_instructions
         parts.append(PromptPart('当前执行环境', environment_instructions(cfg), None, '\n\n'))
