@@ -27,6 +27,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 
 
 @dataclass
@@ -43,6 +44,7 @@ class MetricsState:
     started_wall: float = 0.0
     elapsed_s: float = 0.0
     budget_s: float = 0.0
+    wall_budget_remaining_s: float | None = None
     thinking_s: float = 0.0
     tool_s: float = 0.0
     play_game_s: float = 0.0
@@ -168,6 +170,7 @@ class Metrics:
         from .decision_timing import DecisionTiming
         self.timing = DecisionTiming(path.parent / "decision_timing.jsonl")
         self._lock = threading.Lock()
+        self._read_wall_budget: Callable[[], float] | None = None
         self.pause_serial = 0  # Detect even pause/resume windows with no usage notification.
         self._t0 = time.monotonic()
         self._offset = 0.0              # 续跑时上一段运行已用的现实用时
@@ -198,6 +201,26 @@ class Metrics:
     def elapsed(self) -> float:
         """现实用时（准备阶段与等待额度的时间不算）。"""
         return self._offset + self._running(time.monotonic()) if self.playing else 0.0
+
+    def track_wall_budget(self, remaining: Callable[[], float]) -> None:
+        with self._lock:
+            self._read_wall_budget = remaining
+        self.refresh_wall_budget()
+
+    def refresh_wall_budget(self) -> None:
+        with self._lock:
+            if self._read_wall_budget is not None:
+                remaining = max(0.0, self._read_wall_budget())
+                if remaining != self.state.wall_budget_remaining_s:
+                    self.state.wall_budget_remaining_s = remaining
+                    self._write_locked()
+
+    def finish_wall_budget(self) -> None:
+        with self._lock:
+            if self._read_wall_budget is not None:
+                self.state.wall_budget_remaining_s = max(0.0, self._read_wall_budget())
+                self._read_wall_budget = None
+                self._write_locked()
 
     # ---- 思考与工具时间 ----
 

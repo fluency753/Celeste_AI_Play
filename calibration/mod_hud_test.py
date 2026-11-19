@@ -30,6 +30,14 @@ def metrics(now, **extra):
 
 
 class ViewModelTests(unittest.TestCase):
+    def test_remaining_wall_budget_is_separate_from_game_time(self):
+        now = time.time()
+        for remaining, expected in ((3722.1, '1:02:03'), (0.1, '0:00:01'), (0, '0:00:00'), (None, None)):
+            with self.subTest(remaining=remaining):
+                vm = view_model(metrics(now, wall_budget_remaining_s=remaining), CONFIG, [], now)
+                stats = {k: v for k, v, _ in vm.stats}
+                self.assertEqual(stats.get('剩余预算'), expected)
+
     def test_retry_bubbles_and_metrics_fallback_do_not_reappear(self):
         now = time.time()
         items = [{'id': 'act:1:0', 'text': '原文', 'kind': '尝试'},

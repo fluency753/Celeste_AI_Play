@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from urllib.parse import urlparse
+from unittest.mock import patch
 
 from orchestrator.codex_agent import CodexRunner
 from orchestrator.config import RunConfig
@@ -17,6 +18,33 @@ from calibration.network_retry_test import ERROR
 
 
 class NetworkRetryHudTests(unittest.TestCase):
+    def test_claude_play_budget_follows_resumed_elapsed_and_freezes_at_end(self):
+        from orchestrator.agent import ClaudeRunner
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as tmp, patch('orchestrator.metrics.time.monotonic') as monotonic:
+            monotonic.return_value = 100
+            metrics = Metrics(Path(tmp)/'metrics.json', 'fixture', 'fixture', 'medium', 600, study=True)
+            runner = SimpleNamespace(cfg=SimpleNamespace(budget_seconds=600), metrics=metrics)
+            metrics.track_wall_budget(lambda: ClaudeRunner._play_budget_remaining(runner))
+            def remaining():
+                metrics.refresh_wall_budget()
+                return metrics.snapshot()['wall_budget_remaining_s']
+            monotonic.return_value = 150
+            self.assertEqual(remaining(), 600)
+            metrics.restore({'elapsed_s': 60}, 'previous-run')
+            monotonic.return_value = 160
+            metrics.pause(status='paused')
+            paused = remaining()
+            monotonic.return_value = 170
+            self.assertEqual(remaining(), paused)
+            metrics.resume(quota=False)
+            monotonic.return_value = 180
+            self.assertEqual(remaining(), paused - 10)
+            metrics.finish_wall_budget()
+            monotonic.return_value = 900
+            self.assertEqual(remaining(), paused - 10)
+
     def test_real_pages_show_retry_and_freeze_thinking_without_freezing_tools(self):
         try:
             from playwright.sync_api import sync_playwright
@@ -78,6 +106,15 @@ class NetworkRetryHudTests(unittest.TestCase):
                             if urlparse(route.request.url).netloc==urlparse(base).netloc else route.abort())
                         page.goto(base+'/hud')
                         page.wait_for_function("document.querySelector('#status').textContent.includes('模型连接中断')")
+                        self.assertTrue(page.locator('#wallBudgetBox').is_hidden())
+                        budget = 62.2
+                        metrics.track_wall_budget(lambda: budget)
+                        page.wait_for_function("document.querySelector('#wallBudget').textContent === '0:01:03'")
+                        self.assertTrue(page.locator('#wallBudgetBox').is_visible())
+                        budget = -1
+                        metrics.refresh_wall_budget()
+                        page.wait_for_function("document.querySelector('#wallBudget').textContent === '0:00:00'")
+                        metrics.finish_wall_budget()
                         first = [page.locator('#'+key).inner_text() for key in ('thinking', 'tool')]
                         page.wait_for_timeout(1200)
                         second = [page.locator('#'+key).inner_text() for key in ('thinking', 'tool')]

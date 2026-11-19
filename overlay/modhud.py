@@ -442,6 +442,9 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     if energy is not None and m.get("sim_stats", True):   # 探索模式的限额短路线预测：只显示余额 / 上限（规则说明不上 HUD）
         value = f"{energy.get('balance')} / {energy.get('capacity')}" if isinstance(energy, dict) else str(energy)
         stats.append(("推演额度", value, ""))
+    remaining = m.get("wall_budget_remaining_s")
+    if isinstance(remaining, (int, float)) and math.isfinite(remaining):
+        stats.append(("剩余预算", clock(math.ceil(remaining)), ""))
 
     call = ""
     if not ended and m.get("tool_call"):

@@ -508,6 +508,7 @@ class SessionControls:
 
     async def _heartbeat(self):
         while True:
+            self.metrics.refresh_wall_budget()
             self.control.heartbeat(paused=self.paused and not self.pausing,
                 phase="pausing" if self.pausing else "chatting" if self.turn_active else "idle",
                 session_id=self.session_id, chat_only=self.chat_only,

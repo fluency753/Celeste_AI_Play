@@ -609,6 +609,8 @@ class ClaudeRunner(SessionControls):
             if self.prepare_only:
                 first += self._lifecycle_prompt()
             self.metrics.update(telemetry_source='claude_stream_json', chat_thread_id=self.session_id)
+            if self.session is not None and not (self.chat_only or self.prepare_only or self.naming_only):
+                self.metrics.track_wall_budget(self._play_budget_remaining)
             if self.paused:
                 self.pause_at = time.monotonic()
                 self.metrics.pause()
@@ -660,6 +662,10 @@ class ClaudeRunner(SessionControls):
         finally:
             primary = sys.exception()
             failure = primary
+            try:
+                self.metrics.finish_wall_budget()
+            except BaseException as error:
+                failure = _cleanup_failure(failure, error, '现实用时预算收尾')
             try:
                 await self._finish_token_worker()
             except BaseException as error:
@@ -1009,6 +1015,9 @@ class ClaudeRunner(SessionControls):
         从这次会话开始算——唤起时整次运行往往早已超过预算，按整次运行算会让会话一开始就被结束（与 Codex 执行器一致）。"""
         if self.naming_only or self.chat_only:
             return self.cfg.budget_seconds - (time.monotonic() - started)
+        return self._play_budget_remaining()
+
+    def _play_budget_remaining(self) -> float:
         return self.cfg.budget_seconds - self.metrics.elapsed()
 
     async def _wait_turn(self, timeout: float) -> bool:

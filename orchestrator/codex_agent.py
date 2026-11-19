@@ -705,6 +705,9 @@ class CodexRunner(ModelRecovery, SessionControls):
         now = time.monotonic()
         return now - started - self.paused_seconds - (now - self.pause_at if self.pause_at else 0)
 
+    def _budget_remaining(self, started):
+        return self.cfg.budget_seconds - self._elapsed(started)
+
     async def _steer_user(self, text):
         await self.rpc.request("turn/steer", {"threadId": self.session_id,
             "expectedTurnId": self.turn_id, "input": [{"type": "text", "text": text}]})
@@ -847,6 +850,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         (self.run_dir / ("chat_system_prompt.md" if self.chat_only else "system_prompt.md")).write_text(prompt, encoding="utf-8")
         started = time.monotonic()
         try:
+            if self.session is not None and not (self.chat_only or self.prepare_only or self.naming_only):
+                self.metrics.track_wall_budget(lambda: self._budget_remaining(started))
             await self.rpc.start()
             # All Player phases retain writable workspace and native Shell capability.
             # celeste-read remains an old-image compatibility profile only.
@@ -922,7 +927,7 @@ class CodexRunner(ModelRecovery, SessionControls):
             message = self._first_prompt()
             opening = not self.chat_only
             retry_rows, retry_input = [], False
-            while self._elapsed(started) < self.cfg.budget_seconds:
+            while self._budget_remaining(started) > 0:
                 if self.stop_requested:
                     return await self._stopped_reason()
                 if self.session is not None and self.session.done:
@@ -997,7 +1002,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                             return self.session.done_reason
                     if self.rpc.reader.done():
                         raise ConnectionError(self._rpc_disconnect_message("Codex app-server 已断开"))
-                    if self._elapsed(started) >= self.cfg.budget_seconds:
+                    if self._budget_remaining(started) <= 0:
                         await self.rpc.request("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id})
                         return "现实时间预算用完"
                     await asyncio.sleep(0.1)
@@ -1064,6 +1069,10 @@ class CodexRunner(ModelRecovery, SessionControls):
         finally:
             primary = sys.exception()
             cleanup_errors = []
+            try:
+                self.metrics.finish_wall_budget()
+            except BaseException as error:
+                cleanup_errors.append(error)
             try:
                 await self._finish_token_worker()
             except BaseException as error:

@@ -373,6 +373,12 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(result['sent']), 2)
                 self.assertGreaterEqual(result['metrics'].state.net_wait_s, 30)
                 self.assertIn(result['reason'], ('隔离验证完成', '存档命名完成'))
+                remaining = result['metrics'].snapshot()['wall_budget_remaining_s']
+                if naming:
+                    self.assertIsNone(remaining)
+                else:
+                    self.assertGreater(remaining, 0)
+                    self.assertLessEqual(remaining, 20)
 
     async def test_preparation_limit_excludes_capacity_wait(self):
         result = await self.run_case(preparing=True)
