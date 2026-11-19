@@ -683,7 +683,9 @@ def prompt_parts(cfg) -> list[PromptPart]:
         parts.append(PromptPart('当前剧情处理', '当前 auto 模式由主控推进和跳过剧情；仍需确认或操作时依据最新观测处理。', None, '\n\n'))
     from .action_policy import permissions_for
     from .detour import enabled as detour_enabled, instructions as detour_instructions, map_rule
-    parts.append(PromptPart("游戏操作权限", permissions_for(cfg).instructions(experiments=getattr(cfg, 'play_scope', 'chapter') == 'visited'), None, "\n\n"))
+    from .action_policy import full_control
+    parts.append(PromptPart("游戏操作权限", permissions_for(cfg).instructions(experiments=getattr(cfg, 'play_scope', 'chapter') == 'visited',
+                                                                        full=full_control(cfg)), None, "\n\n"))
     if detour_enabled(cfg):
         parts.append(PromptPart("计划外地图（开了才加）", detour_instructions(cfg), None, "\n\n"))
     if 'exit_level' in game_tools(cfg):

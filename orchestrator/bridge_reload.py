@@ -712,8 +712,11 @@ def reload_bridge(session, run_dir, request, *, cancel=None, owner_was_paused=No
             raise BridgeReloadError('新桥接缺少保留场景交接能力；保持暂停')
         try:
             require_pico8_guard(hello)
+            from .action_policy import require_settings_guard
+            require_settings_guard(session.cfg, hello)
         except ValueError as exc:
             raise BridgeReloadError(str(exc) + '保持暂停，修复后用 --retry 重新核验。') from exc
+        session.settings_menu_guard_supported = hello.get('settings_menu_guard') is True
         if hello.get('entry_guard') is not True:
             raise BridgeReloadError('新桥接的地图入场门禁未加载，保持暂停')
         if getattr(session.cfg, 'play_scope', 'chapter') == 'visited' and hello.get('map_entry_set') is not True:

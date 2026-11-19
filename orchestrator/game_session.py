@@ -531,8 +531,10 @@ class GameSession:
         if held := hold_message(hello):
             # A previous controller's reload hold: never activate or send input into it.
             raise RuntimeError(held)
-        from .action_policy import require_pico8_guard
+        from .action_policy import require_pico8_guard, require_settings_guard
         require_pico8_guard(hello)
+        require_settings_guard(self.cfg, hello)
+        self.settings_menu_guard_supported = hello.get('settings_menu_guard') is True
         self.bridge_reload_supported = type(hello.get('bridge_reload')) is int and hello['bridge_reload'] == 1
         self.entry_guard_supported = hello.get('entry_guard') is True
         self.chapter_reset_guard_supported = hello.get('chapter_reset_guard') is True
@@ -1731,9 +1733,10 @@ class GameSession:
         return stop
 
     def _allowed_letters(self) -> set[str]:
-        """这次 act 可用的按键：agent 剧情模式、片尾交给智能体时，以及开了计划外地图（要自己用 P、B 操作暂停菜单与
-        选章界面）时开放桥接的全部按键；其余 auto 剧情模式只开放游玩按键与 C。"""
-        if (self.cfg.cutscene_mode == 'agent' or self._ending_agent or self._detour_agent
+        """这次 act 可用的按键：速通模式（开放全部游戏操作）、agent 剧情模式、片尾交给智能体时，以及开了计划外地图
+        （要自己用 P、B 操作暂停菜单与选章界面）时开放桥接的全部按键；其余 auto 剧情模式只开放游玩按键与 C。"""
+        if (getattr(self.cfg, 'full_control', False)
+                or self.cfg.cutscene_mode == 'agent' or self._ending_agent or self._detour_agent
                 or self._speedrun_menu_allowed() or self._speedrun_retry_ending(self.last_obs or {})
                 or detour_enabled(self.cfg) or self._in_detour()):   # 开关关掉时还在计划外地图里：照样能离开
             return LETTERS

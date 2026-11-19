@@ -150,6 +150,10 @@ def normalize(options: dict) -> dict:
                                else ActionPermissions.read(o['action_permissions'])).snapshot()
     if o['allow_detour']:
         o['action_permissions']['return_to_map'] = True   # 计划外地图要靠暂停菜单的"返回地图"离开计划章节
+    if o['mode'] == SPEEDRUN:
+        # 速通模式开放全部游戏操作（与 run.py 相同），表单里的三项开关不起作用
+        o['action_permissions'] = {key: True for key in o['action_permissions']}
+        o['allow_chapter_reset'] = True
     if o["collision_image"] in ("", "default"):
         o["collision_image"] = None
     if o["collision_image"] not in (None, "always", "room", "off"):
@@ -442,6 +446,7 @@ def config_for(options: dict, profile: str | None = None):
     cfg.record, cfg.recording_mode = bool(o["record"]), o["recording_mode"]
     cfg.allow_chapter_reset = o["allow_chapter_reset"]
     cfg.action_permissions = o['action_permissions']
+    cfg.full_control = o['mode'] == SPEEDRUN
     if cfg.speedrun_record_on_demand:
         from .action_policy import configure, permissions_for
         cfg.recording_mode = 'continuous'

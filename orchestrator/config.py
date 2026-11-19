@@ -226,6 +226,7 @@ class RunConfig:
     create_save: bool = False       # 显式新建空存档；只用于首次进档，不用于续跑或换章
     allow_chapter_reset: bool = False  # 允许菜单重启章节、未通关返回地图/保存退出
     action_permissions: dict | None = None  # canonical 三权限；None 仅用于兼容旧总开关
+    full_control: bool = False      # 速通模式：开放全部游戏操作（三项权限固定允许、全部按键），只拦设置类子菜单（run.py 按模式设定）
     allow_detour: bool = False      # 计划外地图：章节／顺序范围下允许 agent 自行去别的已解锁官方地图，计划不变（见 detour.py）
     save_slot: int | None = None    # 存档身份由槽位决定，名称可以重复
     cutscene_mode: str = 'auto'     # auto 自动跳过；agent 自行决定观看、推进或跳过

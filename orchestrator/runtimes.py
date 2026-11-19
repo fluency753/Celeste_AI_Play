@@ -195,6 +195,8 @@ def config_from_state(state, metrics=None):
     except ValueError:
         cfg.kb_overlay = ''            # 配置已被删除：唤起会话时 activate 会报错
     from .action_policy import configure, permissions_from_state
+    from .modes import MODE_OF_KNOWLEDGE, SPEEDRUN
+    cfg.full_control = (state.get('mode') or MODE_OF_KNOWLEDGE.get(state.get('knowledge_profile', 'full'), SPEEDRUN)) == SPEEDRUN
     configure(cfg, permissions_from_state(state))
     cfg.allow_detour = bool(state.get('allow_detour', False)) and cfg.play_scope != 'visited'
     runtime(state['engine']).configure(cfg, state.get('provider'))

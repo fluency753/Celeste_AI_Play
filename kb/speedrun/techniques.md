@@ -741,10 +741,10 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 | --- | --- | --- | --- |
 | 回图重开（Bubsdrop） | 用 walljump/climbjump 抵消向上换房带来的上升，不落到入口的单向平台上，掉回上一个房间；重生点改为该房间上部最近的出生点 | ✗（依赖特定房间结构，对计时无益） | 未核实 |
 | 剧情跳过取消冲刺 / 剧情 ultra / 剧情位移（Cutscene skip, cutscene ultra, cutscene warp） | 剧情开始时减速，首帧跳过可保速但取消冲刺状态；部分剧情跳过只改 x | auto 剧情模式 ✗（主控自动跳过，时机不由智能体控制）；agent 剧情模式 △（可用 `{tool:cutscene}` 的 skip 或 {tool:act} 的 `P` 自选时机，帧精度未核实） | 未核实 |
-| 暂停缓冲（Pause buffering） | 解除暂停后约 10 帧内还没有恢复控制，其中最后 5 帧里的按键会在恢复后的第一帧执行，用来逐帧输入（celeste.ink：缓冲窗口 6 帧） | ✗（harness 本身逐帧输入，用不着暂停缓冲；agent 剧情模式虽可用 `P` 暂停，暂停期间 IGT 照走） | 未核实 |
+| 暂停缓冲（Pause buffering） | 解除暂停后约 10 帧内还没有恢复控制，其中最后 5 帧里的按键会在恢复后的第一帧执行，用来逐帧输入（celeste.ink：缓冲窗口 6 帧） | ✗（harness 本身逐帧输入，用不着暂停缓冲；速通模式与 agent 剧情模式虽可用 `P` 暂停，暂停期间 IGT 照走） | 未核实 |
 | half-stamina climb（Half stamina climbing） | 见 4.5 | ✓（TAS 级） | 未核实 |
 | Kermit dash | 见 6.5 | ✓ | 代码已核实 |
-| 望远镜技巧（Bino clip / bino control storage / bino interaction storage / bino extensions） | 卡刺：用望远镜让屏幕外刺球卸载；控制存储：在望远镜里移动（需暂停缓冲）；交互存储：进入望远镜行走后一旦离地，"正在用望远镜"的标记不清除，下一次换房时会把状态设为 Normal（可取消冲刺，例如保住 grounded ultra 的速度）；延长：反复进出扩大镜头范围 | △（1A/2A 有望远镜；控制存储要暂停缓冲，只有 agent 剧情模式能用 `P` 暂停；交互存储理论上可行）（未核实） | 未核实 |
+| 望远镜技巧（Bino clip / bino control storage / bino interaction storage / bino extensions） | 卡刺：用望远镜让屏幕外刺球卸载；控制存储：在望远镜里移动（需暂停缓冲）；交互存储：进入望远镜行走后一旦离地，"正在用望远镜"的标记不清除，下一次换房时会把状态设为 Normal（可取消冲刺，例如保住 grounded ultra 的速度）；延长：反复进出扩大镜头范围 | △（1A/2A 有望远镜；控制存储要暂停缓冲，速通模式与 agent 剧情模式能用 `P` 暂停；交互存储理论上可行）（未核实） | 未核实 |
 | Roboboost | 在移动块上做 6 帧 hyper bunnyhop + 反向 cornerboost（TAS） | △ / △ / △ | 未核实 |
 | subpixel 操纵（Subpixel manipulation） | 不是独立技巧：通过组合动作把余量（`README.md` §5）调到特定值，以满足像素级技巧。模拟器可以直接枚举 | ✓ | — |
 | 仅见名称的条目 | NamuWiki 列有 Jasig jump（2.10）、Bino storage（本表望远镜技巧）、Oshiro super（6.7 弹跳）、Overclock（4.5）、Climb jump cancel（按"用 climbjump 取消冲刺"理解，3.14、5.2）、Yep（无定义）。celeste.ink Tech/aurora 草稿页里另有一批只有名字的条目，见 §9.3 | — | — |

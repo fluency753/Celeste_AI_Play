@@ -26,6 +26,8 @@ Python 的 `action_policy.py` 统一验证、迁移、构造策略和生成提�
 
 1.7.1 起，动作与安全项按按钮当前绑定的原生回调识别，不按显示文字猜测。桥接读取实际 `Level.orig_Pause`、`Level.GiveUp` 和 `IntroVignette.OpenMenu` 的按钮构造与回调关联，核验原生 `TextMenu.Button` 本类型、单一回调及其所属场景；`GiveUp` 的确认读取真实闭包 `restartArea` 区分重启和返回，取消单独识别。菜单重建、已有菜单和桥接重载后均可重新识别；改标签不改变实际动作，替换／追加回调、伪造文字或按钮子类不能沿用安全身份。
 
+**设置类子菜单**（Bridge 1.18.0）：暂停菜单里的「选项」（`Level.orig_Pause` 的 `menu_pause_options`）、Everest 的「Mod 选项」（`CoreModule.CreatePauseMenuButtons` 的 `menu_pause_modoptions`，已对照官方 6642 源码）以及「辅助」「变体」（`menu_pause_assist`、`menu_pause_variant`）同样按原生回调识别。新主控在 `action_policy` 里发送 `settings_menus: false`，这四项在任何权限组合下都拦下（`rule_id: menu.settings`，`action: settings_menu`）；它们能改按键绑定、抓取方式和本系统自己的 Mod 设置。没有这个字段的旧客户端保持原行为。四个回调都识别到时 `hello.settings_menu_guard` 为 true；Mod 选项的构造方法找不到只让这项拦截不可用，章节重置门禁照常。三项权限全部允许时（速通模式固定如此）主控要求这项能力。原生检查（`calibration/chapter_reset`）覆盖四个按钮在全部允许／部分允许／旧客户端下的放行与拦截、原生确认不触发回调，以及线上格式的解析。
+
 在 **Level／IntroVignette 且三项权限没有全部允许**时，未知菜单项一律拦下（`rule_id: menu.unknown_item`，`action: menu_item`，`actual` 是按钮文字）；继续、重试、跳过剧情、取消以及获准的原生动作正常执行。选项、辅助、变体和其他未知按钮也受此限制。通关状态或当前关卡离开许可只豁免已认证的返回地图／保存退出，不豁免未知动作或重启；防止危险回调变成 unknown 后反而放行。三项全允许时，以及地图与主菜单里，未知项按原游戏逻辑处理。只在主控的 step 执行期间生效，用户自己操作菜单不受影响。
 
 地图入口在 `OuiChapterPanel.Start(checkpoint)` 方法入口核验；方向切换、按键边沿和重复均由原生面板处理。按原生 `StartRoutine` 规则纯解析检查点前缀的目的地图，再核验实际 SID/存档槽位；拒绝时不改变 Focused、Area，不播放启动音效或创建启动协程。因此方向优先时不会误拦，而方向到边界后实际触发的错误入场仍会被拒绝。

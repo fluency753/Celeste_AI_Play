@@ -805,6 +805,7 @@ internal static class Bridge {
                     w.WriteBoolean("chapter_loaded_stop", true);
                     w.WriteBoolean("reload_ready_stop", true);
                     w.WriteBoolean("chapter_reset_guard", ChapterResetGuard.Available);
+                    w.WriteBoolean("settings_menu_guard", ChapterResetGuard.SettingsAvailable);
                     w.WriteBoolean("pico8_entry_guard", Hooks.Pico8GuardAvailable);
                     w.WriteNumber("action_policy", ChapterResetGuard.Available && MapEntryGuard.Available ? ActionPolicy.Version : 0);
                     w.WriteBoolean("dialog_choices", true);

@@ -19,12 +19,16 @@ internal sealed class ActionPolicy {
     public const int Version = 1;
     public readonly ActionPermissions Permissions;
     public readonly MapEntryGuard? Entry;
+    /// <summary>Whether options, mod options, assist and variant submenus may be opened (still only with all three
+    /// permissions). Clients that do not send settings_menus keep the earlier behavior.</summary>
+    public readonly bool SettingsMenus;
     private Level? departureLevel;
     private Session? departureSession;
 
-    public ActionPolicy(ActionPermissions permissions, MapEntryGuard? entry = null, bool departure = false) {
+    public ActionPolicy(ActionPermissions permissions, MapEntryGuard? entry = null, bool departure = false, bool settingsMenus = true) {
         Permissions = permissions;
         Entry = entry;
+        SettingsMenus = settingsMenus;
         // A job starting in a menu/loading scene cannot authorize a later Level.
         departureLevel = departure ? Engine.Scene as Level : null;
         departureSession = departureLevel?.Session;
@@ -41,6 +45,14 @@ internal sealed class ActionPolicy {
         NoteScene(Engine.Scene);
         string? action = ChapterResetGuard.ActionOf(item);
         bool completed = Engine.Scene is Level { Completed: true };
+        if (action == ChapterResetGuard.SettingsAction) {
+            // Key bindings, grab mode, assists and the bridge's own mod settings would break input and simulation.
+            if (Engine.Scene is Level or IntroVignette && !(SettingsMenus && Permissions.AllowsAll))
+                return new("chapter_reset_blocked", "menu.settings", ChapterResetGuard.SettingsAction,
+                    "Controller policy keeps the options, mod options, assist and variant submenus closed",
+                    "no settings submenu", ChapterResetGuard.LabelOf(item));
+            return null;
+        }
         if (action == null) {
             // A list of dangerous callbacks alone would let through a button a mod adds or changes.
             // Completion and departure grants apply only to authenticated
@@ -70,8 +82,9 @@ internal sealed class ActionPolicy {
                     throw new FormatException("Unknown permission: " + field.Name);
             string departure = data.GetProperty("departure").GetString() ?? "none";
             if (departure is not ("none" or "current_level")) throw new FormatException("Unknown departure scope");
+            bool settings = !data.TryGetProperty("settings_menus", out _) || Bool(data, "settings_menus");
             return new(new(Bool(permissions, "restart_chapter"), Bool(permissions, "return_to_map"), Bool(permissions, "save_quit")),
-                ReadEntry(data, "entry_target"), departure == "current_level");
+                ReadEntry(data, "entry_target"), departure == "current_level", settings);
         }
         // Older clients retain their wire format, but grants get the fixed lifetime.
         bool allow = Bool(request, "allow_chapter_reset", optional: true);

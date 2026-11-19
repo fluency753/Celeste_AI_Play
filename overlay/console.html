@@ -509,9 +509,10 @@
           <label class="switch"><span class="text"><b>先读知识库</b><span>开局前的准备阶段，不计现实用时</span></span><input type="checkbox" id="study" checked></label>
           <label class="switch"><span class="text"><b>开始时先暂停</b><span>进入章节后先暂停，点“继续”后才开始</span></span><input type="checkbox" id="startPaused"></label>
           <label class="switch"><span class="text"><b>剧情交给智能体</b><span>关时由主控自动跳过剧情</span></span><input type="checkbox" id="cutsceneAgent"></label>
-          <label class="switch"><span class="text"><b>允许重启章节</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowRestartChapter"></label>
-          <label class="switch"><span class="text"><b>允许返回地图</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowReturnToMap"></label>
-          <label class="switch"><span class="text"><b>允许保存退出</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowSaveQuit"></label>
+          <label class="switch" id="permsFixed" hidden><span class="text"><b>游戏操作：全部开放</b><span>速通模式固定允许重启章节、返回地图、保存并退出与全部按键；暂停菜单的「选项」「Mod 选项」仍由主控拦截</span></span><input type="checkbox" checked disabled aria-label="游戏操作全部开放"></label>
+          <label class="switch" data-perm><span class="text"><b>允许重启章节</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowRestartChapter"></label>
+          <label class="switch" data-perm><span class="text"><b>允许返回地图</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowReturnToMap"></label>
+          <label class="switch" data-perm><span class="text"><b>允许保存退出</b><span>默认禁止，已核验完成后的退出由主控授权</span></span><input type="checkbox" id="allowSaveQuit"></label>
           <label class="switch"><span class="text"><b>允许去计划外的已解锁地图</b><span>智能体可以自行返回地图，去其他已解锁的官方章节、面与检查点（例如收集水晶之心）再回来；计划不变，开启时一并允许返回地图</span></span><input type="checkbox" id="allowDetour"></label>
         </div>
       </fieldset>
@@ -1434,6 +1435,9 @@ function setMode(mode) {
   $("rowTokenDrift").hidden = mode !== "explore";
   if (mode !== "explore") $("tokenDrift").checked = false;
   $("fsExplore").hidden = mode !== "explore";
+  // 速通模式开放全部游戏操作（主控固定三项允许）：三个开关只对探索模式起作用
+  document.querySelectorAll("label[data-perm]").forEach(label => { label.hidden = mode === "speedrun"; });
+  $("permsFixed").hidden = mode !== "speedrun";
   $("liveNote").textContent = mode === "explore"
     ? "观众实时观看：解说更勤，每次决策约 10～20 秒，可按要求退出关卡；HUD 默认用可交互的网页形式"
     : "观众实时观看：解说更勤，可按要求退出关卡，HUD 默认用可交互的网页形式；不改变速通目标";
@@ -2396,7 +2400,9 @@ function renderControls() {
     const input = $('live'+id);
     if (document.activeElement !== input) input.value = (c.action_permissions?.[key] ?? c.allow_chapter_reset) ? 'allow' : 'deny';
     // 计划外地图开着时返回地图必须允许：先关计划外地图才能单独禁止它
-    input.disabled = !connected || !c.chapter_reset_control || c.action_policy_supported !== true || (key === 'return_to_map' && c.allow_detour === true);
+    input.disabled = !connected || !c.chapter_reset_control || c.action_policy_supported !== true || c.action_permissions_fixed === true
+      || (key === 'return_to_map' && c.allow_detour === true);
+    input.title = c.action_permissions_fixed === true ? "速通模式固定开放全部游戏操作" : "";
   }
   const detourInput = $("liveDetour");     // 计划外地图：与三项权限同样在动作之间生效；开启需要桥接的地图集合门禁
   if (document.activeElement !== detourInput) detourInput.value = c.allow_detour ? "allow" : "deny";

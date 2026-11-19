@@ -561,9 +561,13 @@ class SessionControls:
                                 raise ValueError('当前没有在试玩，不能改章节重置策略')
                             if row['kind'] == 'action_permissions' and not self._chapter_reset_status()['action_policy_supported']:
                                 raise ValueError('当前会话未加载新版操作策略，不能独立修改权限')
-                            from .action_policy import ActionPermissions, configure, permissions_for
+                            from .action_policy import ActionPermissions, configure, full_control, permissions_for
+                            if full_control(self.cfg):
+                                raise ValueError('速通模式固定开放全部游戏操作（重启章节、返回地图、保存并退出），不能单独修改')
                             permissions = (ActionPermissions.legacy(row['text'] == 'allow') if row['kind'] == 'chapter_reset'
                                            else permissions_for(self.cfg).update(json.loads(row['text'])))
+                            if all(permissions.snapshot().values()) and not getattr(self.session, 'settings_menu_guard_supported', False):
+                                raise ValueError('三项权限全部允许需要桥接 1.18.0 的设置菜单拦截（选项、Mod 选项）；请先更新桥接')
                             from .detour import enabled as detour_enabled
                             if detour_enabled(self.cfg) and not permissions.return_to_map:
                                 raise ValueError('计划外地图开着时必须允许返回地图；要禁止返回地图，请先关闭计划外地图')
@@ -896,11 +900,12 @@ class SessionControls:
                 'fast_pending':bool(self.capabilities.fast and self.turn_active and self.turn_fast != self.fast_mode)}
 
     def _chapter_reset_status(self):
-        from .action_policy import permissions_for
+        from .action_policy import full_control, permissions_for
         permissions = permissions_for(self.cfg).snapshot()
         return {'chapter_reset_control': bool(self.session is not None and not self.session.done and not self.chat_only),
                 'action_permissions': permissions,
                 'action_policy_supported': getattr(self.session, 'action_policy_supported', None) == 1,
+                'action_permissions_fixed': full_control(self.cfg),
                 'allow_chapter_reset': all(permissions.values()),
                 'chapter_reset_guard_supported': bool(getattr(self.session, 'chapter_reset_guard_supported', False))}
 

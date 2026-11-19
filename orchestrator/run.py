@@ -429,6 +429,16 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     cfg.knowledge_profile = KNOWLEDGE_OF_MODE[cfg.mode]
     if previous and cfg.mode != default_mode:
         raise SystemExit("不能通过 --resume 改变游玩模式（速通 / 探索）；请新开一次运行，避免继承另一种模式的知识")
+    cfg.full_control = cfg.mode == SPEEDRUN
+    if cfg.full_control:
+        # 速通模式开放全部游戏操作：三项权限固定允许（设置类子菜单仍由桥接拦截，见 action_policy.step_options）
+        denied = [name for name in ('chapter_reset', 'restart_chapter', 'return_to_map', 'save_quit')
+                  if getattr(args, 'allow_' + name) is False]
+        if denied:
+            raise SystemExit('速通模式固定开放全部游戏操作（重启章节、返回地图、保存并退出），不能用 '
+                             + '、'.join('--no-allow-' + name.replace('_', '-') for name in denied) + ' 单独禁止；'
+                             '需要限制时请用探索模式')
+        configure(cfg, ActionPermissions(True, True, True))
     if not any(a == '--model' or a.startswith('--model=') for a in sys.argv) and not previous:
         cfg.model = adapter.default_model
     if not any(a == '--effort' or a.startswith('--effort=') for a in sys.argv) and not previous:
@@ -668,7 +678,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         cfg.recording_mode = 'continuous'
         if args.play_speed is None:
             cfg.play_speed = previous['state'].get('speedrun_practice_speed', 4) if previous else 4
-        configure(cfg, permissions.update({'restart_chapter': True, 'return_to_map': True}))
+        from .action_policy import permissions_for
+        configure(cfg, permissions_for(cfg).update({'restart_chapter': True, 'return_to_map': True}))
     elif previous and cfg.recording_mode != previous['state'].get('recording_mode', 'continuous') and not args.new_recording:
         raise SystemExit('更改录像组织方式需先收尾旧录像，再显式使用 --new-recording；不会隐式拆分或合并原录像')
     if cfg.completion_policy == 'continue' and cfg.plan:

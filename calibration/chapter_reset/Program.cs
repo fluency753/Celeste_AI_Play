@@ -108,10 +108,10 @@ TextMenu Menu(params string[] labels) {
     return menu;
 }
 StepJob Job(bool allow = false, bool exit = false, ActionPermissions? permissions = null, MapEntryGuard? entry = null,
-        bool nativeAreaEntry = false) {
+        bool nativeAreaEntry = false, bool settingsMenus = true) {
     var job = new StepJob(1, new() { InputFrame.Neutral, InputFrame.Neutral }, Array.Empty<string>(), 1,
         false, "level", new SnapshotOptions(), false,
-        actionPolicy: new ActionPolicy(permissions ?? new(allow, allow, allow), entry, exit), nativeAreaEntry: nativeAreaEntry);
+        actionPolicy: new ActionPolicy(permissions ?? new(allow, allow, allow), entry, exit, settingsMenus), nativeAreaEntry: nativeAreaEntry);
     typeof(Bridge).GetField("job", flags)!.SetValue(null, job);
     return job;
 }
@@ -293,6 +293,27 @@ foreach (var (label, ok) in new[] { ("menu_pause_resume", true), ("menu_pause_re
     Check(!Job().AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Finished level allowed unknown items");
     Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)));
     Check(Job().AllowMenuConfirmation(Menu("ordinary settings").Items[0]), "Menus outside a Level were whitelisted");
+}
+{
+    // Options, Everest mod options, assist and variants: identified by their native callbacks, closed even with all
+    // three permissions when the controller sends settings_menus=false; older clients keep the earlier behavior.
+    Check(ChapterResetGuard.SettingsAvailable, "Settings submenu callbacks were not recognized");
+    foreach (string label in new[] { "menu_pause_options", "menu_pause_modoptions", "menu_pause_assist", "menu_pause_variant" }) {
+        Check(nativeCallbacks.ContainsKey(label), "Native callback missing: " + label);
+        Scene(Level()); var closed = Job(allow: true, settingsMenus: false);
+        Check(!closed.AllowMenuConfirmation(Menu(label).Items[0]) && closed.StopReason == "chapter_reset_blocked",
+            "All-allowed run with settings closed opened " + label);
+        Scene(Level()); Check(Job(allow: true).AllowMenuConfirmation(Menu(label).Items[0]), "Older all-allowed client lost " + label);
+        Scene(Level()); Check(!Job(permissions: new(false, true, false)).AllowMenuConfirmation(Menu(label).Items[0]),
+            "Partial permission opened " + label);
+        Scene(Level()); Feed(""); var menu = Menu(label); var job = Job(allow: true, settingsMenus: false); int before = pressed;
+        Feed("C"); menu.orig_Update();
+        Check(pressed == before && job.StopReason == "chapter_reset_blocked", "Native confirmation opened " + label);
+    }
+    Scene(Level()); Check(Job(allow: true, settingsMenus: false).AllowMenuConfirmation(Menu("ordinary settings").Items[0]),
+        "Closing settings submenus closed other unknown buttons");
+    Scene(Level()); Check(Job(allow: true, settingsMenus: false).AllowMenuConfirmation(Menu("menu_pause_restartarea").Items[0]),
+        "Closing settings submenus blocked an allowed restart");
 }
 Scene((Scene)RuntimeHelpers.GetUninitializedObject(typeof(Scene)));
 int entries = 0;
@@ -582,6 +603,7 @@ foreach (string invalid in new[] {
     "{\"version\":1,\"permissions\":{\"restart_chapter\":false,\"return_to_map\":false,\"save_quit\":false,\"unknown\":true},\"departure\":\"none\"}",
     "{\"version\":1,\"permissions\":{\"restart_chapter\":1,\"return_to_map\":false,\"save_quit\":false},\"departure\":\"none\"}",
     "{\"version\":1,\"permissions\":{\"restart_chapter\":false,\"return_to_map\":false,\"save_quit\":false},\"departure\":\"always\"}",
+    "{\"version\":1,\"permissions\":{\"restart_chapter\":true,\"return_to_map\":true,\"save_quit\":true},\"departure\":\"none\",\"settings_menus\":\"no\"}",
 }) {
     using var data = System.Text.Json.JsonDocument.Parse("{\"action_policy\":" + invalid + "}");
     try { ActionPolicy.Read(data.RootElement); throw new Exception("Malformed policy accepted"); }
@@ -596,6 +618,16 @@ using (var data = System.Text.Json.JsonDocument.Parse("""
     Check(!policy.Permissions.RestartChapter && policy.CheckMenu(Menu("menu_pause_savequit").Items[0]) != null,
         "Legacy arguments overrode canonical permissions");
     Check(policy.Entry?.Check("wrong", 10)?.RuleId == "target.map", "Canonical mandatory target missing");
+    Check(policy.SettingsMenus, "A client without settings_menus lost the earlier behavior");
+}
+using (var data = System.Text.Json.JsonDocument.Parse("""
+    {"action_policy":{"version":1,"permissions":{"restart_chapter":true,"return_to_map":true,"save_quit":true},
+     "departure":"none","settings_menus":false}}
+    """)) {
+    var policy = ActionPolicy.Read(data.RootElement);
+    Scene(Level());
+    Check(!policy.SettingsMenus && policy.CheckMenu(Menu("menu_pause_options").Items[0])?.RuleId == "menu.settings",
+        "settings_menus=false did not close the options submenu");
 }
 Console.WriteLine("PASS: production IL hook + real TextMenu + virtual buttons + StepJob: native/TAS resets, secondary confirmations, safe callbacks, simultaneous direction+confirm, configured allow and verified departure");
 Console.WriteLine("PASS: cross-Level/loading grants revoked, split permissions, actual Panel direction priority/held input/checkpoint destination/save-slot entry hooks");

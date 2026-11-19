@@ -21,7 +21,8 @@ MIXED = {'restart_chapter': False, 'return_to_map': False, 'save_quit': True}
 
 class PolicyConfigurationTests(unittest.TestCase):
     def cfg(self):
-        return RunConfig(agent='test', save='test', model='test', runtime='host')
+        # 三项独立选择只在探索模式里有意义（速通模式固定全部允许，见下面的速通用例）
+        return RunConfig(agent='test', save='test', model='test', runtime='host', mode='explore', knowledge_profile='explore')
 
     def test_legacy_import_and_canonical_precedence(self):
         cfg = self.cfg()
@@ -41,16 +42,43 @@ class PolicyConfigurationTests(unittest.TestCase):
                 ActionPermissions().update(data)
 
     def test_console_and_cli_preserve_three_independent_choices(self):
-        options = {'agent':'test', 'action_permissions':MIXED}
+        options = {'agent':'test', 'mode':'explore', 'action_permissions':MIXED}
         cfg = config_for(options)
         self.assertEqual(permissions_for(cfg).snapshot(), MIXED)
         argv = build(options)
         for flag in ('--no-allow-restart-chapter','--no-allow-return-to-map','--allow-save-quit'):
             self.assertIn(flag, argv)
-        with patch('sys.argv', ['run', '--agent','test','--save','test','--no-agent','--no-record','--no-sim',
+        with patch('sys.argv', ['run', '--agent','test','--save','test','--no-agent','--no-record','--mode','explore',
                                 '--allow-chapter-reset','--no-allow-restart-chapter','--no-allow-return-to-map']):
             cfg, _ = parse_args()
         self.assertEqual(permissions_for(cfg).snapshot(), MIXED)
+        self.assertFalse(cfg.full_control)
+
+    def test_speedrun_opens_every_game_action_and_rejects_partial_denials(self):
+        everything = {'restart_chapter': True, 'return_to_map': True, 'save_quit': True}
+        options = {'agent':'test', 'mode':'speedrun', 'action_permissions':MIXED}
+        cfg = config_for(options)
+        self.assertTrue(cfg.full_control)
+        self.assertEqual(permissions_for(cfg).snapshot(), everything)
+        self.assertFalse(any(flag.startswith('--no-allow') for flag in build(options)))
+        with patch('sys.argv', ['run', '--agent','test','--save','test','--no-agent','--no-record','--no-sim']):
+            cfg, _ = parse_args()
+        self.assertTrue(cfg.full_control)
+        self.assertEqual(permissions_for(cfg).snapshot(), everything)
+        # 之后任何来源（运行中偏好、续跑快照）都不改变速通的三项权限
+        configure(cfg, ActionPermissions.read(MIXED))
+        self.assertEqual(permissions_for(cfg).snapshot(), everything)
+        with tempfile.TemporaryDirectory() as folder:
+            speedrun = RunConfig(agent='test', save='test', model='test', runtime='host')
+            configure(speedrun, ActionPermissions.read(MIXED))     # 早于 1.41.0 的速通运行存的是部分允许
+            write_run_state(Path(folder), speedrun, 'old', None)
+            state = json.loads((Path(folder) / 'run_state.json').read_text(encoding='utf-8'))
+        self.assertEqual(state['action_permissions'], MIXED)
+        self.assertEqual(permissions_for(config_from_state(state)).snapshot(), everything)
+        for flag in ('--no-allow-save-quit', '--no-allow-chapter-reset'):
+            with self.subTest(flag=flag), patch('sys.argv', ['run','--agent','test','--save','test','--no-agent','--no-record',
+                                                              '--no-sim', flag]), self.assertRaisesRegex(SystemExit, '速通模式固定开放'):
+                parse_args()
 
     def test_preferences_migrate_and_partial_updates_do_not_collapse(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -85,7 +113,29 @@ class PolicyConfigurationTests(unittest.TestCase):
     def test_wire_policy_retains_mandatory_target_and_limited_scope(self):
         cfg = self.cfg(); configure(cfg, ActionPermissions.read(MIXED))
         policy = step_options(cfg, sid='target', slot=10, departure=True)['action_policy']
-        self.assertEqual(policy, {'version':1,'permissions':MIXED,'entry_target':{'sid':'target','slot':10},'departure':'current_level'})
+        self.assertEqual(policy, {'version':1,'permissions':MIXED,'entry_target':{'sid':'target','slot':10},'departure':'current_level',
+                                  'settings_menus': False})
+
+
+class SettingsMenuGuardTests(unittest.TestCase):
+    def test_all_permissions_require_bridge_settings_guard(self):
+        from orchestrator.action_policy import require_settings_guard
+        cfg = RunConfig(agent='test', save='test', model='test', runtime='host', mode='explore', knowledge_profile='explore')
+        configure(cfg, ActionPermissions.read(MIXED))
+        require_settings_guard(cfg, {})                   # 权限受限时选项本来就按未知项拦下，不需要新桥接
+        configure(cfg, ActionPermissions(True, True, True))
+        with self.assertRaisesRegex(ValueError, '1.18.0'):
+            require_settings_guard(cfg, {'settings_menu_guard': False})
+        require_settings_guard(cfg, {'settings_menu_guard': True})
+
+    def test_speedrun_sends_every_bridge_key_and_explains_settings_block(self):
+        from types import SimpleNamespace
+        from orchestrator.action_policy import block_note
+        from orchestrator.game_session import GameSession, LETTERS
+        self.assertEqual(GameSession._allowed_letters(SimpleNamespace(cfg=SimpleNamespace(full_control=True))), LETTERS)
+        note = block_note({'action': 'settings_menu', 'rule_id': 'menu.settings', 'actual': '选项'})
+        self.assertIn('「选项」', note)
+        self.assertIn('B 返回', note)
 
 
 class PolicyUiTests(unittest.TestCase):
@@ -118,3 +168,6 @@ process.stdout.write(JSON.stringify(inputs));''' % (json.dumps(MIXED), source[st
             old_script = script.replace('action_policy_supported:true,', '')
             old = json.loads(subprocess.run([node,'-e',old_script],capture_output=True,text=True,check=True).stdout)
             self.assertTrue(all(old[prefix+ident]['disabled'] for ident in ('RestartChapter','ReturnToMap','SaveQuit')))
+            fixed_script = script.replace('action_policy_supported:true,', 'action_policy_supported:true,action_permissions_fixed:true,')
+            fixed = json.loads(subprocess.run([node,'-e',fixed_script],capture_output=True,text=True,check=True).stdout)
+            self.assertTrue(all(fixed[prefix+ident]['disabled'] for ident in ('RestartChapter','ReturnToMap','SaveQuit')))

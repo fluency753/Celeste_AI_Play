@@ -129,7 +129,20 @@ class ClaudeControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('重启章节=禁止', self.packets[-1]['message']['content'])
         self.assertEqual(self.action(ident)['status'], 'submitted')
 
+    async def test_all_permissions_need_settings_guard_and_speedrun_keeps_them_fixed(self):
+        self.controls()
+        ident = self.runner.control.enqueue('chapter_reset', 'allow')
+        await self.until(lambda: self.action(ident)['status'] == 'error')
+        self.assertIn('1.18.0', self.action(ident)['detail'])
+        self.assertFalse(self.cfg.allow_chapter_reset)
+        self.cfg.full_control = True
+        ident = self.runner.control.enqueue('action_permissions', '{"save_quit":false}')
+        await self.until(lambda: self.action(ident)['status'] == 'error')
+        self.assertIn('速通模式固定开放', self.action(ident)['detail'])
+        self.assertTrue(self.runner._chapter_reset_status()['action_permissions_fixed'])
+
     async def test_chapter_reset_change_waits_for_current_action(self):
+        self.session.settings_menu_guard_supported = True
         self.controls()
         async with self.runner.action_lock:
             ident = self.runner.control.enqueue('chapter_reset', 'allow')

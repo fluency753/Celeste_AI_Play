@@ -290,7 +290,7 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 81;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 82;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -1050,7 +1050,8 @@ async function pollControl() {
       const input=$('permission'+id);
       if(document.activeElement!==input) input.value=(c.action_permissions?.[key] ?? c.allow_chapter_reset) ? 'allow' : 'deny';
       // 计划外地图开着时返回地图必须允许：先关计划外地图才能单独禁止它
-      input.disabled=!c.connected || !c.chapter_reset_control || c.action_policy_supported !== true || busy || pendingPermissions || (key==='return_to_map' && c.allow_detour===true);
+      input.disabled=!c.connected || !c.chapter_reset_control || c.action_policy_supported !== true || c.action_permissions_fixed===true || busy || pendingPermissions || (key==='return_to_map' && c.allow_detour===true);
+      input.title=c.action_permissions_fixed===true ? '速通模式固定开放全部游戏操作' : '';
     }
     const detourInput=$('permissionDetour');   // 计划外地图：与三项权限同样在动作之间生效；开启需要桥接的地图集合门禁
     if(document.activeElement!==detourInput) detourInput.value=c.allow_detour ? 'allow' : 'deny';

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from orchestrator.config import RunConfig
+from orchestrator.action_policy import ActionPermissions, configure
 from orchestrator.control import RunControl
 from orchestrator.game_session import ActError, GameSession
 from orchestrator.launch_options import build, normalize
@@ -42,10 +43,23 @@ class ChapterResetTests(unittest.TestCase):
 
     def test_default_and_explicit_configuration_reach_prompt_and_launcher(self):
         self.assertFalse(self.cfg.allow_chapter_reset)
-        self.assertFalse(normalize({'agent':'test'})['allow_chapter_reset'])
-        self.assertIn('--no-allow-chapter-reset', build({'agent':'test'}))
-        self.assertIn('--allow-chapter-reset', build({'agent':'test', 'allow_chapter_reset': True}))
+        explore = {'agent':'test', 'mode':'explore'}
+        self.assertFalse(normalize(explore)['allow_chapter_reset'])
+        self.assertIn('--no-allow-chapter-reset', build(explore))
+        self.assertIn('--allow-chapter-reset', build({**explore, 'allow_chapter_reset': True}))
         self.assertIn('重启章节=禁止', play_prompt(self.cfg))
+        # 速通模式开放全部游戏操作：表单里的开关不起作用，命令行一律允许，提示词换成全部开放的说明
+        self.assertTrue(normalize({'agent':'test'})['allow_chapter_reset'])
+        argv = build({'agent':'test', 'action_permissions':{'restart_chapter':False,'return_to_map':False,'save_quit':False}})
+        for flag in ('--allow-chapter-reset', '--allow-restart-chapter', '--allow-return-to-map', '--allow-save-quit'):
+            self.assertIn(flag, argv)
+        self.assertFalse(any(flag.startswith('--no-allow') for flag in argv))
+        self.cfg.full_control = True
+        configure(self.cfg, ActionPermissions())
+        prompt = play_prompt(self.cfg)
+        self.assertIn('速通模式开放全部游戏操作', prompt)
+        self.assertIn('Mod 选项', prompt)
+        self.assertNotIn('重启章节=禁止', prompt)
 
     def test_every_caller_is_constrained_and_cannot_override_session_policy(self):
         client = self.client()

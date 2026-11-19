@@ -13,20 +13,29 @@ namespace CelesteAI.Bridge;
 internal static class ChapterResetGuard {
     private sealed record Binding(string Key, string? Action, FieldInfo[] Owner, FieldInfo? RestartArea);
     private static Dictionary<MethodInfo, Binding> bindings = new();
-    private static bool dispatchReady, identitiesReady;
+    private static bool dispatchReady, identitiesReady, settingsReady;
     public static bool Available { get => dispatchReady && identitiesReady; set => dispatchReady = value; }
+    /// <summary>The settings submenus (options, mod options, assist, variants) are recognized by their native callbacks.</summary>
+    public static bool SettingsAvailable => Available && settingsReady;
+    public const string SettingsAction = "settings_menu";
     private static readonly Dictionary<string, string?> Roles = new() {
         ["menu_pause_restartarea"] = "restart_chapter", ["menu_pause_return"] = "return_to_map",
         ["menu_pause_savequit"] = "save_quit", ["intro_vignette_quit"] = "return_to_map",
         ["menu_pause_resume"] = null, ["menu_pause_retry"] = null, ["menu_pause_skip_cutscene"] = null,
         ["intro_vignette_resume"] = null, ["intro_vignette_skip"] = null,
     };
+    // Submenus that change key bindings, grab mode, assists or mod settings (the bridge and runtime among them).
+    private static readonly HashSet<string> SettingsRoles = new() {
+        "menu_pause_options", "menu_pause_assist", "menu_pause_variant", "menu_pause_modoptions",
+    };
 
     internal static bool Initialize() {
         identitiesReady = false;
+        settingsReady = false;
         bindings = new();
+        var settingsFound = new HashSet<string>();
         try {
-            var found = new HashSet<string>();
+            var found = settingsFound;
             ReadConstruction(typeof(Level).GetMethod("orig_Pause", All)!, false, found);
             ReadConstruction(typeof(Level).GetMethod("GiveUp", All)!, true, found);
             ReadConstruction(typeof(IntroVignette).GetMethod("OpenMenu", All)!, false, found);
@@ -36,6 +45,20 @@ internal static class ChapterResetGuard {
         } catch (Exception e) {
             bindings.Clear();
             Log.Error("chapter reset guard native callback identities unavailable: " + e);
+        }
+        if (identitiesReady) {
+            // Mod Options is added by Everest's core module, not by Level.orig_Pause. Missing it only disables
+            // the settings guard (reported separately in hello); the reset guard stays available.
+            try {
+                MethodInfo? modOptions = typeof(Celeste.Mod.Core.CoreModule).GetMethod("CreatePauseMenuButtons", All);
+                if (modOptions == null) throw new InvalidOperationException("Everest CoreModule.CreatePauseMenuButtons not found");
+                ReadConstruction(modOptions, false, found: settingsFound);
+                settingsReady = SettingsRoles.All(settingsFound.Contains);
+                if (!settingsReady)
+                    Log.Error("settings menu guard missing callbacks: " + string.Join(", ", SettingsRoles.Where(k => !settingsFound.Contains(k))));
+            } catch (Exception e) {
+                Log.Error("settings menu guard unavailable: " + e);
+            }
         }
         return identitiesReady;
     }
@@ -49,7 +72,7 @@ internal static class ChapterResetGuard {
         int confirmations = 0;
         foreach (var instruction in body.Definition.Body.Instructions) {
             if (instruction.OpCode == OpCodes.Ldstr && instruction.Operand is string text)
-                key = Roles.ContainsKey(text) ? text : giveUp ? text switch {
+                key = Roles.ContainsKey(text) || SettingsRoles.Contains(text) ? text : giveUp ? text switch {
                     "menu_restart_continue" or "menu_return_continue" => "menu_restart_continue",
                     "menu_restart_cancel" or "menu_return_cancel" => "menu_restart_cancel", _ => null,
                 } : null;
@@ -73,7 +96,7 @@ internal static class ChapterResetGuard {
                             ins.Operand is FieldReference field && field.ResolveReflection() == restart))
                         throw new InvalidOperationException("Native confirmation no longer reads its restartArea choice");
                 }
-                var binding = new Binding(key, Roles.GetValueOrDefault(key), owner, restart);
+                var binding = new Binding(key, SettingsRoles.Contains(key) ? SettingsAction : Roles.GetValueOrDefault(key), owner, restart);
                 if (bindings.TryGetValue(callback, out var prior) && prior != binding)
                     throw new InvalidOperationException("Native callback has conflicting menu meanings: " + key);
                 bindings[callback] = binding;
