@@ -53,7 +53,7 @@ def _normalize(path, name='file_path'):
     parts = path.split('/')[1:]
     path = '/' + '/'.join(part for part in parts if part and part != '.')
     if '..' in parts or not any(path == root or path.startswith(root + '/') for root in ROOTS):
-        raise ValueError('只允许 /workspace、/kb 内的路径；不允许 .. 路径')
+        raise ValueError(f'只允许 {"、".join(ROOTS)} 内的路径；不允许 .. 路径')
     return path
 
 
@@ -735,14 +735,15 @@ BOOTSTRAP = ("import json,sys\n"
              "request=json.loads(sys.stdin.read())\n"
              "scope={'__name__':'celeste_read_worker'}\n"
              "exec(compile(request['source'],'codex_read.py','exec'),scope)\n"
+             "if request.get('sim_root') is True: scope['ROOTS'] += ('/sim',)\n"
              "scope['_serve'](request['payload'])\n")
 
 
-def _run_worker(container: str, operation: str, arguments: dict) -> dict:
+def _run_worker(container: str, operation: str, arguments: dict, *, sim_root=False) -> dict:
     from .codex_container import _run
     from .program_sandbox import bwrap_args
     sandbox = bwrap_args() + ['--ro-bind', '/workspace', '/workspace', '--tmpfs', '/tmp']
-    request = {'source': Path(__file__).read_text(encoding='utf-8'),
+    request = {'source': Path(__file__).read_text(encoding='utf-8'), 'sim_root': sim_root,
                'payload': {'operation': operation, 'arguments': arguments}}
     result = _run(container, '/usr/bin/timeout', '--signal=TERM', '--kill-after=2s', '90s',
                   *sandbox, '/opt/py/bin/python', '-I', '-c', BOOTSTRAP,
@@ -758,16 +759,16 @@ def _run_worker(container: str, operation: str, arguments: dict) -> dict:
     return payload
 
 
-def read_file(container: str, arguments: dict) -> dict:
+def read_file(container: str, arguments: dict, *, sim_root=False) -> dict:
     """Present a container file or directory without granting native program or write access."""
-    return _run_worker(container, 'read', arguments)
+    return _run_worker(container, 'read', arguments, sim_root=sim_root)
 
 
-def search_files(container: str, operation: str, arguments: dict) -> dict:
+def search_files(container: str, operation: str, arguments: dict, *, sim_root=False) -> dict:
     """glob / grep: the same read-only worker, roots and no-follow walk."""
     if operation not in {'glob', 'grep'}:
         raise ValueError('未知的搜索操作')
-    return _run_worker(container, operation, arguments)
+    return _run_worker(container, operation, arguments, sim_root=sim_root)
 
 
 if __name__ == '__main__':

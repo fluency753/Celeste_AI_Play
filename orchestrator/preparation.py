@@ -44,9 +44,8 @@ async def _prepare(args, profile):
                     sim=False, sim_assist=False,
                     live=True, max_minutes=args.max_minutes)
     adapter.configure(cfg, args.provider)
-    from .sim_mode import controller_owned
-    # Claude 执行器的速通准备与原来相同：挂 /sim，并把 /sim/README.md 列入必读（Codex 的模拟只在试玩中由主控提供）
-    cfg.sim = args.knowledge == "full" and not controller_owned(cfg) and (cfg.sim_dir / "celeste-sim").is_file()
+    from .sim_mode import preparation_sim
+    cfg.sim = preparation_sim(cfg, getattr(args, 'sim', None))
     cfg.codex_player_login = getattr(args, 'codex_player_login', False) and cfg.engine == 'codex'
     profile_state = {}
     if profile is not None:
@@ -104,7 +103,7 @@ async def _prepare(args, profile):
                 effective_profile = model_profile_state(cfg, resolved_model=metrics.state.model)
                 result = {"reason": reason, "quick_check": args.quick_check, "game_tools_registered": True, "success":runner.completed_preparation,
                           "engine":cfg.engine, "provider":cfg.provider, "runtime":cfg.runtime, "requested_model":cfg.model,
-                          "knowledge_profile": cfg.knowledge_profile, "mode": cfg.mode,
+                          "knowledge_profile": cfg.knowledge_profile, "mode": cfg.mode, "sim_direct": cfg.sim,
                           "kb_study": study.summary(), "kb_hashes": hashes,
                           "kb_identity": study_identity(study.kb_dir),
                           "session_id": runner.session_id, "turns": runner.turns, "metrics": metrics.snapshot(),
@@ -142,6 +141,7 @@ def main():
     ap.add_argument("--profile", help="使用指定控制台预设的提示词和知识库")
     ap.add_argument("--codex-player-login", action="store_true", help="使用项目持久的 Codex player 登录")
     ap.add_argument("--knowledge", choices=["explore", "full"], default="explore")
+    ap.add_argument('--sim', action=argparse.BooleanOptionalAction, default=None, help='速通准备时挂载只读 /sim')
     ap.add_argument("--model", default="", help="留空沿用 Codex 已登录配置，由服务回报实际模型")
     ap.add_argument("--effort", default="medium")
     ap.add_argument("--max-minutes", type=float, default=60)

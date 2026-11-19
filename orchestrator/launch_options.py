@@ -134,7 +134,7 @@ def normalize(options: dict) -> dict:
     o.update(recording_options(o))
     if o["sim"] is None:
         # 按执行器默认（sim_mode.py）：Claude 在容器运行方式、本机构建了模拟器时默认开放 /sim（与原来相同）；
-        # Codex 的主控限额预测须显式开启
+        # Codex 的预置模拟器须显式开启。
         o["sim"] = o["engine"] != "codex" and o["runtime"] == "container" and simulator_installed()
     if o["hud_mod"] is None and type(o["live"]) is bool:
         o["hud_mod"] = not o["live"]             # 与命令行相同：不开直播时游戏内 HUD 默认开
@@ -215,8 +215,6 @@ def normalize(options: dict) -> dict:
     from types import SimpleNamespace
     capabilities = workspace_capabilities(SimpleNamespace(engine=o['engine'], runtime=o['runtime']))
     if o['mode'] == SPEEDRUN and o['sim'] and not o['limit_planning']:
-        if o['engine'] == 'codex':
-            raise ValueError('主控预置模拟必须同时开启限额使用')
         if not capabilities.programs:
             raise ValueError("当前本机执行器没有沙箱，不能直接调用预置模拟器（可开规划硬限额改用主控预测）")
     o["study_minutes"] = _number(o, "study_minutes", 1, 600, "准备阶段上限")
@@ -430,8 +428,8 @@ def config_for(options: dict, profile: str | None = None):
     from .segments import load_table
     cfg.checkpoints = load_table()
     capabilities = workspace_capabilities(cfg)
-    # 限额：主控预测（两个执行器）；不限额：/sim 直接调用（只有 Claude，需要容器程序通道），见 sim_mode.py
-    cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and (o["limit_planning"] or (o["engine"] != "codex" and capabilities.programs))
+    # 限额走主控，不限额时通过容器程序通道直接调用 /sim。
+    cfg.sim = o["mode"] == SPEEDRUN and o["sim"] and (o["limit_planning"] or capabilities.programs)
     cfg.sim_assist = o["mode"] == EXPLORE and o["sim_assist"]
     cfg.stiffness = o["mode"] == EXPLORE and o["stiffness"]
     cfg.token_drift = o["mode"] == EXPLORE and o["token_drift"]

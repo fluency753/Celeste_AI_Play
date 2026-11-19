@@ -1,7 +1,7 @@
 # 预置模拟器
 
 本次运行开放了预置模拟器，在 `/sim`（只读）。它用游戏本身的逻辑逐帧推演 Madeline 与房间里的实体，已经与真实
-游戏逐帧对照过，结果可以直接当作游戏的结果使用。用法见 `/sim/README.md`（开始前会要求你读完）。
+游戏逐帧对照过，结果可以直接当作游戏的结果使用。用法见 `/sim/README.md`。
 
 - 每次游戏停下，主控都会把当前这一帧的完整场景写到 `/workspace/game/sim_state.json`，模拟器从它出发推演任意按键。
 - 用 `/sim/sim.py` 的 `Sim` / `SimPool` 在 Python 里调用，或直接用 `/sim/celeste-sim` 命令行。容器有多个 CPU 核，`SimPool()` 默认开 4 个进程并行推演，可以用 `workers` 参数开更多。

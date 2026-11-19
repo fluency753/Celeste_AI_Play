@@ -565,7 +565,7 @@ def _direct_sim_parts(cfg) -> list[PromptPart]:
 
 def _speedrun_parts(cfg) -> list[PromptPart]:
     """速通模式的系统提示词，按预置模拟器分成三个版本（目标都是以最短的章节计时通关，见 sim_mode.py）：
-    - 不限额直接调用 /sim（目前只有 Claude，需容器程序通道）：智能体随意推演、寻找并优化路线（_direct_sim_parts）；
+    - 不限额直接调用 /sim（需容器程序通道）：智能体自行推演和优化路线；
     - 限额（--sim --limit-planning，两个执行器相同）：预置模拟是主控限额能力，经 simulate 请求，不向工作区发布实现；
     - 关模拟器：只写目标、规则与工具接口，其余由智能体自己决定（system_nosim、container_nosim）。"""
     from .sim_mode import agent_sim, controller_sim
@@ -734,9 +734,8 @@ def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = Fals
     files = "\n".join(f"- {path}" for path in paths)
     if any(path.endswith('/') for path in paths):
         files += '\n路径以 / 结尾的是目录集合。用文件工具列出子目录，再逐个读取文本文件。'
-    from .sim_mode import controller_owned
-    # 不限额直接调用 /sim（Claude）；限额时与 Codex 相同，经主控预测
-    legacy_sim = sim and not (cfg is not None and (controller_owned(cfg) or getattr(cfg, 'pause_limit', False)))
+    from .sim_mode import agent_sim
+    legacy_sim = sim and (cfg is None or agent_sim(cfg))
     sim_note = ("本次预置模拟器已开放，资料位于 /sim。\n" if legacy_sim else
                 "本次可选模拟能力由主控提供；准备阶段不能预测，不需要导入或读取模拟器文件。\n" if sim else "")
     if prepare_only:

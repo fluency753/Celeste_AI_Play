@@ -3033,7 +3033,7 @@ async function loadPromptPreview() {
   const o = { ...promptOptions(), engine };
   const bits = [engine === "codex" ? "Codex（GPT）" : "Claude Code", o.mode === "explore" ? "探索" : "速通"];
   if (o.mode === "speedrun") bits.push(o.sim && o.limit_planning ? "主控限额模拟"
-                                        : o.engine !== "codex" && o.sim && o.runtime === "container" ? "开模拟器（/sim）" : "无模拟能力");
+                                        : o.sim && (o.engine === "codex" || o.runtime === "container") ? "开模拟器（/sim）" : "无模拟能力");
   else if (o.sim_assist) bits.push("限额预测");
   if (o.mode === "explore" && o.stiffness) bits.push("思考僵直");
   if (o.mode === "explore" && o.token_drift) bits.push("Token 推进");
@@ -3156,14 +3156,12 @@ function fillRuntimes(list, keep) {
   updateRuntimeNote();
 }
 
-// 预置模拟器（orchestrator/sim_mode.py）：不限额时 Claude 直接调用 /sim（有模拟器时默认开）；开规划硬限额时两个执行器
-// 都改由主控按额度预测；Codex 只有后一种（默认关，须同时开规划硬限额）
+// 不限额时直接调用 /sim，规划硬限额启用时由主控预测。Codex 默认关闭预置模拟器。
 function simEngine() { return ($("runtime").value || "").split(":")[0] || "claude"; }
 function updateSimRow(resetDefault) {
   const o = ui.options || {}, codex = simEngine() === "codex";
-  $("simTitle").textContent = codex ? "主控模拟能力（需配置模拟器）" : "预置模拟器";
+  $("simTitle").textContent = "预置模拟器";
   $("simNote").textContent = !o.sim_available ? "没有安装预置模拟器（sim/dist）"
-    : codex ? "需同时开启规划硬限额，仅试玩运行中可请求预测"
     : "逐帧精确地推演路线：不限额时直接调用 /sim，开规划硬限额后改由主控按额度预测";
   $("sim").disabled = !o.sim_available;
   if (!o.sim_available) $("sim").checked = false;

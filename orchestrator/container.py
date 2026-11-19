@@ -3,7 +3,7 @@
 容器里：/workspace 挂载宿主机的 workspaces/<标签>/（可写），/kb 挂载仓库的 kb/（只读），
 /home/agent/.claude 是独立的数据卷（会话记录，便于中断后续跑）。游戏目录、存档、OBS 都不挂载。
 Codex 使用独立的 /home/agent/.codex 持久卷，普通启动不导入宿主登录或会话。
-不限额直接调用预置模拟器时（只有 Claude 执行器，见 sim_mode.py），本机的 sim/dist 只读挂到 /sim；限额时模拟器仅由
+不限额直接调用预置模拟器时（见 sim_mode.py），本机的 sim/dist 只读挂到 /sim；限额时模拟器仅由
 主控的私有 worker 使用，不挂入 agent 容器。工作区的 /workspace/.git 固定为真实目录并单独嵌套挂载（两个执行器相同），
 智能体可以直接在工作区根目录用 git 管理自己的程序与笔记。
 配置变了要重建容器时，旧容器 /tmp 里的东西（智能体常把程序和中间结果放在 Claude Code 的 /tmp/claude-<uid>）
@@ -47,7 +47,7 @@ def docker(*args: str, check: bool = True, timeout: float = 120) -> subprocess.C
 
 def _sim_label(cfg: RunConfig) -> str:
     from .sim_mode import agent_sim, controller_owned
-    return "host-only-v1" if controller_owned(cfg) else ("1" if agent_sim(cfg) else "0")
+    return "1" if agent_sim(cfg) else ("host-only-v1" if controller_owned(cfg) else "0")
 
 
 def _labels(cfg: RunConfig) -> dict[str, str]:
@@ -111,24 +111,34 @@ def init_workspace_git(cfg: RunConfig, name: str, log=print) -> None:
         log("[container] 已在工作区根目录建好 Git 仓库（/workspace/.git）")
 
 
-def _git_mount_matches(cfg: RunConfig, mounts: list) -> bool:
-    def source(value):
-        # Docker Desktop may expose the daemon's VM spelling instead of D:\...
-        # for a Windows bind. Compare those two spellings of the same source.
-        if os.name == 'nt':
-            match = re.fullmatch(r'/run/desktop/mnt/host/([A-Za-z])/(.*)', value.replace('\\', '/'))
-            if match:
-                value = match[1] + ':/' + match[2]
-        return os.path.normcase(os.path.normpath(value))
+def _mount_source(value):
+    # Docker Desktop may expose the VM spelling of a Windows bind.
+    if os.name == 'nt':
+        match = re.fullmatch(r'/run/desktop/mnt/host/([A-Za-z])/(.*)', value.replace('\\', '/'))
+        if match:
+            value = match[1] + ':/' + match[2]
+    return os.path.normcase(os.path.normpath(value))
 
+
+def _git_mount_matches(cfg: RunConfig, mounts: list) -> bool:
     expected = {'/workspace': cfg.workspace_dir.resolve(),
                 '/workspace/.git': (cfg.workspace_dir / '.git').resolve()}
     for destination, path in expected.items():
         found = [row for row in mounts if row.get('Destination') == destination]
         if (len(found) != 1 or found[0].get('Type') != 'bind' or found[0].get('RW') is not True
-                or source(found[0].get('Source', '')) != source(str(path))):
+                or _mount_source(found[0].get('Source', '')) != _mount_source(str(path))):
             return False
     return not any(row.get('Destination', '').startswith('/workspace/.git/') for row in mounts)
+
+
+def _sim_mount_matches(cfg: RunConfig, mounts: list) -> bool:
+    from .sim_mode import agent_sim
+    found = [row for row in mounts if row.get('Destination') == '/sim' or row.get('Destination', '').startswith('/sim/')]
+    if not agent_sim(cfg):
+        return not found
+    return (len(found) == 1 and found[0].get('Destination') == '/sim' and found[0].get('Type') == 'bind'
+            and found[0].get('RW') is False
+            and _mount_source(found[0].get('Source', '')) == _mount_source(str(cfg.sim_dir.resolve())))
 
 
 def _codex_volume(cfg: RunConfig) -> str:
@@ -260,8 +270,6 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
         running, container_image, labels, mounts = inspect.stdout.strip().split("|", 3)
         current = json.loads(labels or "{}") or {}
         mounted = json.loads(mounts or '[]')
-        exposed = any(row.get('Destination') == '/sim' or row.get('Destination', '').startswith('/sim/')
-                      for row in mounted)
         git_stale = not _git_mount_matches(cfg, mounted)
         player_mounts = [row for row in mounted if row.get('Destination') == PLAYER_LOGIN_MOUNT]
         expected_login = cfg.engine == 'codex' and cfg.codex_player_login
@@ -270,8 +278,7 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
                        or player_mounts[0].get('RW') is not True) if expected_login else bool(player_mounts)
         if login_stale:
             raise RuntimeError(f'容器 {name} 已使用另一种 Codex 登录方式，请使用新工作区标签')
-        from .sim_mode import agent_sim
-        stale = exposed != agent_sim(cfg) or git_stale or container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
+        stale = not _sim_mount_matches(cfg, mounted) or git_stale or container_image != image_id or any(current.get(k, LABEL_DEFAULTS.get(k)) != v
                                                    for k, v in _labels(cfg).items())
         if stale:
             log(f"[container] {name} 的镜像或配置已变化，重建（工作区、会话与 /tmp 保留）")

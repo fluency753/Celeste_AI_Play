@@ -153,13 +153,12 @@ class ContainerCodexTests(unittest.TestCase):
         docker.assert_called_once()
         snapshot.assert_not_called()
 
-    def test_only_claude_agent_creation_mounts_the_preset_simulator(self):
+    def test_agent_creation_only_mounts_the_preset_simulator_for_direct_mode(self):
         for engine in ('codex', 'claude'):
-            for enabled in (False, True):
-                with self.subTest(engine=engine, sim=enabled):
-                    # Codex 只有限额（主控预测）；Claude 不限额时直接调用 /sim
+            for enabled, limited in ((False, False), (True, False), (True, True)):
+                with self.subTest(engine=engine, sim=enabled, limited=limited):
                     cfg = RunConfig(agent='fixture', save='fixture', model='fixture', engine=engine,
-                                    sim=enabled, pause_limit=enabled and engine == 'codex')
+                                    sim=enabled, pause_limit=limited)
                     with patch('orchestrator.config.REPO_ROOT', self.root), \
                          patch.object(container, 'REPO_ROOT', self.root), patch.object(container, 'docker') as docker:
                         container._create(cfg, 'fixture')
@@ -170,19 +169,26 @@ class ContainerCodexTests(unittest.TestCase):
                     mounts = [args[index + 1] for index, arg in enumerate(args[:-1]) if arg == '-v']
                     self.assertTrue(any(mount.endswith(':/workspace') for mount in mounts))
                     self.assertTrue(any(mount.endswith(':/kb:ro') for mount in mounts))
-                    if engine == 'codex':
-                        # Codex 的预置模拟器只由主控私有 worker 使用
-                        self.assertFalse(any(':/sim' in mount for mount in mounts), mounts)
-                        self.assertEqual(labels['celeste-ai-play.sim'], 'host-only-v1')
-                        self.assertIn('celeste-ai-play.sim=host-only-v1', args)
-                    else:
-                        # Claude 不限额：sim/dist 只读挂到 /sim，智能体直接调用（限额时同 Codex，见 container_tmp_test）
-                        self.assertEqual(any(m == f'{self.root / "sim" / "dist"}:/sim:ro' for m in mounts), enabled, mounts)
-                        self.assertEqual(sum(':/sim' in mount for mount in mounts), int(enabled), mounts)
-                        self.assertEqual(labels['celeste-ai-play.sim'], '1' if enabled else '0')
+                    direct = enabled and not limited
+                    self.assertEqual(any(m == f'{self.root / "sim" / "dist"}:/sim:ro' for m in mounts), direct, mounts)
+                    self.assertEqual(sum(':/sim' in mount for mount in mounts), int(direct), mounts)
+                    self.assertEqual(labels['celeste-ai-play.sim'], '1' if direct else 'host-only-v1' if engine == 'codex' else '0')
                     # 两个执行器都把 /workspace/.git 固定为真实目录并单独挂载
                     self.assertIn(git_mount, mounts)
                     self.assertEqual(labels['celeste-ai-play.git_mount'], 'workspace-dir-v1')
+
+    def test_direct_sim_mount_requires_a_single_read_only_bind_of_the_expected_directory(self):
+        cfg = RunConfig(agent='fixture', save='fixture', model='fixture', engine='codex', sim=True)
+        with patch('orchestrator.config.REPO_ROOT', self.root):
+            mount = {'Destination': '/sim', 'Type': 'bind', 'RW': False, 'Source': str(cfg.sim_dir.resolve())}
+            self.assertTrue(container._sim_mount_matches(cfg, [mount]))
+            for unexpected in ({'RW': True}, {'Source': str(self.root)}, {'Destination': '/sim/assets'}, {'Type': 'volume'}):
+                with self.subTest(unexpected=unexpected):
+                    self.assertFalse(container._sim_mount_matches(cfg, [{**mount, **unexpected}]))
+            self.assertFalse(container._sim_mount_matches(cfg, [mount, {**mount, 'Destination': '/sim/assets'}]))
+            cfg.pause_limit = True
+            self.assertFalse(container._sim_mount_matches(cfg, [mount]))
+            self.assertTrue(container._sim_mount_matches(cfg, []))
 
     def test_auth_is_explicit_stdin_atomic_and_failure_does_not_expose_secrets(self):
         source = self.root/'selected-auth.json'

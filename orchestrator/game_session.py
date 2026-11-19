@@ -507,12 +507,15 @@ class GameSession:
         if self.sim_energy:
             self.metrics.update(sim_energy=self.sim_energy.snapshot())
         if self.workspace:
+            from .sim_mode import agent_sim
             (self.workspace / "game" / "rooms").mkdir(parents=True, exist_ok=True)
             # 给观众看的展示接口（HUD 进度、轨迹记录），每次运行都换成主控这一版；上次运行留下的进度清掉
             install_game_helpers(self.workspace)
             (self.workspace / "game" / "hud_status.json").unlink(missing_ok=True)
             if not (cfg.sim and cfg.pause_limit):
                 (self.workspace / 'game/rounds.json').unlink(missing_ok=True)
+            if not agent_sim(cfg):
+                (self.workspace / 'game/sim_state.json').unlink(missing_ok=True)
 
     # ---- 连接与观测 ----
 
@@ -1442,8 +1445,7 @@ class GameSession:
                     path.unlink(missing_ok=True)
 
     def _write_sim_state(self) -> None:
-        """Claude 执行器开预置模拟器（/sim）时的起始状态：当前这一帧的完整场景（调用方持有连接锁）。
-        取不到时删掉旧文件，免得智能体用错帧。Codex 的主控预测自己取私有快照，不写进工作区。"""
+        """开放 /sim 时写当前帧的场景。主控限额预测使用自己的私有快照。"""
         from .sim_mode import agent_sim
         if not (agent_sim(self.cfg) and self.workspace):
             return

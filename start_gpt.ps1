@@ -6,6 +6,7 @@ param(
     [string]$Prepared = "",
     [string]$Model = "",
     [ValidateSet('explore','full')][string]$Knowledge = 'explore',
+    [switch]$Sim,
     [ValidateSet('low','medium','high','xhigh','max')][string]$Effort = 'medium',
     [int]$Chapter = 1,
     [string]$Chapters = '',
@@ -28,6 +29,7 @@ $hasGoalFile = $PSBoundParameters.ContainsKey('GoalFile')
 if ($hasGoal -and $hasGoalFile) { throw '-Goal 和 -GoalFile 不能同时使用。' }
 if (($hasGoal -or $hasGoalFile) -and -not $Play) { throw '-Goal 和 -GoalFile 需要 -Play。' }
 if (-not $Play) {
+    if ($Sim) { $extra += '--sim' }
     & $py -X utf8 -m orchestrator.preparation --agent gpt-native @extra
 } else {
     if ($Resume -and $Prepared) { throw '-Resume 和 -Prepared 不能同时使用。' }
@@ -52,10 +54,12 @@ if (-not $Play) {
     }
     if ($Resume) {
         $runArgs += @('--resume', $Resume)
+        if ($Sim) { $runArgs += @('--sim', '--free-planning') }
         if ($PSBoundParameters.ContainsKey('Effort')) { $runArgs += @('--effort', $Effort) }
         if ($Model) { $runArgs += @('--model', $Model) }
     } else {
         $runArgs += $chapterArgs + @('--prepared', $Prepared) + $extra
+        if ($Sim) { $runArgs += '--sim' }
         if ($NoSummitEpilogue) { $runArgs += '--no-summit-epilogue' }
     }
     if ($hasGoal) { $runArgs += "--goal=$Goal" }

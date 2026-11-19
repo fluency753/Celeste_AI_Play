@@ -116,12 +116,16 @@ class LaunchOptionsTests(unittest.TestCase):
         self.assertNotIn("--no-study", argv)
         self.assertTrue(command_line(argv).startswith("python -m orchestrator.run --engine claude"))
 
-    def test_codex_preset_simulation_requires_explicit_limit(self):
+    def test_codex_preset_simulation_supports_unlimited_and_explicit_limit(self):
+        from orchestrator.launch_options import config_for
+        from orchestrator.sim_mode import agent_sim, controller_sim, kb_variant
         for runtime in ('host', 'container'):
             with self.subTest(runtime=runtime):
                 config = options(engine='codex', runtime=runtime, sim=True)
-                with self.assertRaisesRegex(ValueError, '限额使用'):
-                    normalize(config)
+                self.assertIn('--sim', build(config))
+                self.assertNotIn('--limit-planning', build(config))
+                self.assertTrue(agent_sim(config_for(config)))
+                self.assertEqual(kb_variant(config_for(config)), 'direct')
                 config['limit_planning'] = True
                 normalized = normalize(config)
                 self.assertTrue(normalized['sim'])
@@ -129,6 +133,7 @@ class LaunchOptionsTests(unittest.TestCase):
                 argv = build(config)
                 self.assertIn('--sim', argv)
                 self.assertIn('--limit-planning', argv)
+                self.assertTrue(controller_sim(config_for(config)))
         self.assertFalse(normalize(options(engine='codex'))['sim'])          # Codex 默认关
 
     def test_claude_preset_simulator_keeps_unlimited_default_and_needs_container(self):

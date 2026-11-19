@@ -168,7 +168,7 @@ class CodexRunner(ModelRecovery, SessionControls):
     async def tool_specs(self):
         page = {'offset': {'type': 'integer', 'minimum': 1}, 'limit': {'type': 'integer', 'minimum': 1}}
         tools = [spec('read',
-            '读取文件／目录，限/workspace、/kb，不跟随符号链接、不计程序次数。准备必读须用本工具。'
+            '读取 /workspace、/kb 内的文件或目录，启用直调模拟器时也可读 /sim。不跟随符号链接、不计程序次数。准备必读须用本工具。'
             'offset从1起、limit按行／目录项分页；文本或图像直接送达本轮。支持文本、图像、PDF、notebook；PDF pages从1起最多20页。',
             {'file_path': TEXT, 'path': {**TEXT, 'description': '旧版file_path别名，二者不能冲突'},
              **page, 'pages': TEXT}),
@@ -544,10 +544,12 @@ class CodexRunner(ModelRecovery, SessionControls):
             if game and (note := self._tool_guard(name, args)):
                 raise ValueError(note)
             if name in FILE_TOOLS:
+                from .sim_mode import agent_sim
                 worker_args = {**args, '_tool_names': {key: self._file_tool_name(key) for key in FILE_TOOLS}}
+                reader_options = {'sim_root': True} if agent_sim(self.cfg) else {}
                 try:
-                    result = await (asyncio.to_thread(read_file, self.container, worker_args) if name == 'read' else
-                                    asyncio.to_thread(search_files, self.container, name, worker_args))
+                    result = await (asyncio.to_thread(read_file, self.container, worker_args, **reader_options) if name == 'read' else
+                                    asyncio.to_thread(search_files, self.container, name, worker_args, **reader_options))
                 except (ValueError, OSError, subprocess.SubprocessError) as exc:
                     result = {'kind': 'error', 'error': str(exc) or type(exc).__name__}
                 return await self._file_response(result, requested, ident, origin_turn)

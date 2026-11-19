@@ -78,8 +78,8 @@ if __name__ == "__main__":
         cfg.kb_required = dict(metadata.get('kb_required') or {})
     from .runtimes import runtime
     runtime(args.engine).configure(cfg, args.provider)
-    from .sim_mode import controller_owned, sim_readme
-    cfg.sim = args.knowledge == "full" and not controller_owned(cfg) and (cfg.sim_dir / "celeste-sim").is_file()
+    from .sim_mode import preparation_sim, sim_readme
+    cfg.sim = preparation_sim(cfg, metadata.get('sim_direct'))
     from .kb_access import prepare_view
     prepare_view(cfg)
     study = KbStudy(cfg.kb_dir, 60, sim_readme(cfg), required=cfg.kb_required)
