@@ -652,6 +652,13 @@ def step_switches(a: Answers) -> None:
     a["agent"] = ask("智能体标签（决定容器、工作区与日志目录；同一模型准备与正式用同一个标签）",
                      a.get("agent") or (a.get("model") or "agent").replace("/", "-"))
     a["chapters"] = ask("依次通关的章节（逗号分隔：0 序章、1 1A、2 2A……）", a.get("chapters", "0,1,2"))
+    from orchestrator.segments import Piece, parse_chapters
+    try:
+        pieces = parse_chapters(a['chapters'])
+    except ValueError:
+        pieces = []
+    if Piece(7) in pieces and Piece(8) not in pieces:
+        a['summit_epilogue'] = ask_yes('7A 通关后继续尾声？', a.get('summit_epilogue', True))
     a["max_minutes"] = ask("现实时间上限（分钟；只是安全上限，不显示给智能体）", str(a.get("max_minutes", 1000)))
     from orchestrator.runtimes import runtime
     catalog = runtime(a.get('engine', 'claude')).models(a.get('provider', 'anthropic'))
@@ -681,6 +688,8 @@ def launcher_args(a: Answers, save: str, chapters: str, minutes: str) -> list[st
     args = ["--agent", a["agent"], "--save", save, "--provider", a.get("provider", "anthropic"),
             "--model", a.get("model", "opus"), "--effort", a.get("effort", "high"), "--chapters", chapters,
             "--max-minutes", str(minutes)]
+    if a.get('summit_epilogue') is False:
+        args.append('--no-summit-epilogue')
     args += [] if a.get("sim") else ["--no-sim"]
     args += ["--live"] if a.get("live_mode") else []
     if a.get("hud_mod") is not None:

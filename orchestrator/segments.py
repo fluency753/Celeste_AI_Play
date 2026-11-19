@@ -212,6 +212,26 @@ def chapters_of(pieces) -> list[int]:
     return out
 
 
+def with_summit_epilogue(pieces: list[Piece]) -> list[Piece]:
+    summit, epilogue = Piece(7), Piece(8)
+    if summit not in pieces or any(piece.chapter == epilogue.chapter for piece in pieces):
+        return pieces
+    after = pieces.index(summit) + 1
+    return [*pieces[:after], epilogue, *pieces[after:]]
+
+
+def apply_summit_epilogue(cfg, enabled: bool) -> None:
+    if cfg.play_scope == 'visited':
+        return
+    pieces = cfg.plan or [Piece(chapter) for chapter in
+                         (cfg.chapters or ([] if cfg.chapter is None else [cfg.chapter]))]
+    if enabled:
+        pieces = with_summit_epilogue(pieces)
+    if any((left, right) == (Piece(7), Piece(8)) for left, right in zip(pieces, pieces[1:])):
+        cfg.plan = pieces
+        cfg.chapters, cfg.chapter = chapters_of(pieces), pieces[0].chapter
+
+
 def plan_has_sides(pieces) -> bool:
     """计划里有没有 B／C 面。"""
     return any(Piece.of(p).side != "A" for p in pieces or [])

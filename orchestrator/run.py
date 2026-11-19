@@ -102,6 +102,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--play-speed", type=int, help="动作推进速度（每次渲染推进几帧，限时速通练习默认 4，其余默认 1）")
     ap.add_argument("--auto-speed", type=int, default=1, help="转场、剧情、重生段的推进速度；1 与原版一致，大于 1 为快进（只用于调试，录像会失真）")
     ap.add_argument("--chapter", type=int, help="进入的章节编号：0 序章、1 被遗弃之城、2 旧址；默认进入选章页当前选中的章节")
+    ap.add_argument('--summit-epilogue', action=argparse.BooleanOptionalAction, default=True,
+                    help='整章 7A 默认附带尾声；用 --no-summit-epilogue 关闭自动加入')
     ap.add_argument("--chapters", help="依次通关的章节编号，逗号分隔，例如 0,1,2（正式挑战）：一章通关后主控自动走完结算画面、"
                                        "进入下一章，智能体接着玩；给了它就不用 --chapter")
     ap.add_argument("--segments", help="按段通关：逗号分隔，每项是 章节（整章）、章节.段 或 章节.起-止，例如 1.1-2,2,9.3。"
@@ -403,7 +405,12 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     elif cfg.play_scope=='campaign' and not previous:
         from .play_scope import chapter_sequence
         cfg.chapters=chapter_sequence(cfg.chapter if cfg.chapter is not None else 0,'campaign')
+        if not args.summit_epilogue and 7 in cfg.chapters:
+            cfg.chapters.remove(8)
         cfg.chapter=cfg.chapters[0]
+    if not previous or args.chapters or args.segments:
+        from .segments import apply_summit_epilogue
+        apply_summit_epilogue(cfg, args.summit_epilogue)
     if args.create_save and (args.resume or args.skip_enter or cfg.chapter != 0):
         raise SystemExit('--create-save 只可从序章新开一局，不能与续跑或跳过进档合用')
     cfg.runtime = args.runtime
@@ -639,8 +646,17 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
             ap.error('保存的速通时间目标无效')
         from .segments import Piece
         target = cfg.plan or [Piece(ch) for ch in (cfg.chapters or ([cfg.chapter] if cfg.chapter is not None else []))]
+        cfg.speedrun_summit_epilogue = target == [Piece(7), Piece(8)]
+        if (target == [Piece(8)] and previous and not (args.chapters or args.segments)
+                and previous['state'].get('speedrun_summit_epilogue') is True):
+            splits = previous['metrics'].get('splits') or []
+            if (not splits or splits[-1].get('chapter') != CHAPTER_SIDS[7]
+                    or splits[-1].get('side', 'A') != 'A' or type(splits[-1].get('ticks')) is not int
+                    or not 0 <= splits[-1]['ticks'] < cfg.speedrun_target_ticks or args.new_recording):
+                ap.error('续跑尾声需要已达标的 7A 成绩与原录像')
+            cfg.speedrun_summit_epilogue = True
         if (cfg.mode != 'speedrun' or cfg.play_scope != 'chapter' or cfg.completion_policy != 'stop'
-                or args.no_agent or len(target) != 1 or not Piece.of(target[0]).whole()):
+                or args.no_agent or (not cfg.speedrun_summit_epilogue and (len(target) != 1 or not Piece.of(target[0]).whole()))):
             ap.error('速通时间目标需要单张指定地图的整章速通与通关停止策略')
         if not args.record:
             ap.error('速通时间目标需要允许 Player 开启录像，不能使用 --no-record')
@@ -737,6 +753,8 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     state['pause_callback_command'] = cfg.pause_callback_command
     if cfg.speedrun_target_ticks is not None:
         state['speedrun_target_ticks'] = cfg.speedrun_target_ticks
+        if cfg.speedrun_summit_epilogue:
+            state['speedrun_summit_epilogue'] = True
         if cfg.speedrun_record_on_demand:
             state['speedrun_record_on_demand'] = True
             state['speedrun_practice_speed'] = cfg.play_speed
@@ -1823,8 +1841,9 @@ def _main(cfg, args) -> int:
             print(f'[run] Codex 开局预检失败，未接管游戏或启动录像。{exc}。预检日志 {log_dir}', flush=True)
             return 2
         args.codex_preflight = (container, cfg.mcp_port)
-    from .bridge_requirements import preflight_bridge
+    from .bridge_requirements import preflight_bridge, require_summit_epilogue
     hello = preflight_bridge(cfg.bridge_port)
+    require_summit_epilogue(cfg, hello)
     from .speedrun_goal import require_capture_bridge
     require_capture_bridge(cfg, hello)
     if getattr(cfg, '_parked_needs_release_check', False) and hello.get('active') is not False:
@@ -1853,6 +1872,8 @@ def _main(cfg, args) -> int:
             from .chapter_recording import resolve_saved
             saved_recording = resolve_saved(saved_recording,hello,prepare_next=args.record)
         recording_mode = resume_recording_mode(cfg, args, saved_recording, hello)
+        if getattr(cfg, 'speedrun_summit_epilogue', False) and cfg.chapter == 8 and recording_mode == 'new':
+            raise SystemExit('续跑尾声需要接回 7A 的原录像，未启动新录像或接管游戏')
         if recording_mode == 'new':
             saved_recording = None
         resume_recording = recording_mode != 'new'

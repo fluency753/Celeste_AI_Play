@@ -20,6 +20,39 @@ def options(**extra):
 
 
 class LaunchOptionsTests(unittest.TestCase):
+    def test_summit_goal_defaults_to_epilogue_and_respects_explicit_cancellation(self):
+        from orchestrator.launch_options import config_for
+        from orchestrator.run import parse_args
+        from orchestrator.segments import Piece
+        for form, expected in (
+            (options(chapters=[7]), [Piece(7), Piece(8)]),
+            (options(chapters=[7], summit_epilogue=False), [Piece(7)]),
+            (options(chapters=[7, 8], summit_epilogue=False), [Piece(7), Piece(8)]),
+            (options(chapters=[], sides=[[7, 'B']]), [Piece(7, side='B')]),
+            (options(chapters=[7], segments=[[7, 0]]), [Piece(7, end=1)]),
+        ):
+            with self.subTest(form=form), patch('sys.argv', ['run', *build(form)]):
+                cfg, _ = parse_args()
+                preview = config_for(form)
+                self.assertEqual(cfg.plan or [Piece(c) for c in cfg.chapters or [cfg.chapter]], expected)
+                self.assertEqual(preview.plan or [Piece(c) for c in preview.chapters], expected)
+                if form.get('summit_epilogue') is False:
+                    self.assertIn('--no-summit-epilogue', build(form))
+
+    def test_timed_summit_goal_scopes_the_seconds_to_summit(self):
+        from orchestrator.launch_options import config_for
+        from orchestrator.prompting import play_prompt
+        from orchestrator.run import parse_args
+        from orchestrator.segments import Piece
+        form = options(chapters=[7], speedrun_target_seconds='100', sim=False)
+        with patch('sys.argv', ['run', *build(form)]):
+            cfg, _ = parse_args()
+        self.assertEqual(cfg.plan, [Piece(7), Piece(8)])
+        self.assertTrue(cfg.speedrun_summit_epilogue)
+        self.assertTrue(config_for(form).speedrun_summit_epilogue)
+        self.assertIn('7A 达标后，沿用原录像完成尾声', play_prompt(cfg))
+        self.assertFalse(config_for({**form, 'summit_epilogue': False}).speedrun_summit_epilogue)
+
     def test_single_chapter_speedrun_target_reaches_cli_and_prompt_preview(self):
         from orchestrator.launch_options import config_for
         from orchestrator.prompting import play_prompt

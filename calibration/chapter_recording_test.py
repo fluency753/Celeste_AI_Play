@@ -460,7 +460,7 @@ class ChapterRecordingTests(unittest.TestCase):
                'all_chapters':[6],'plan_pieces':None,'session_id':'abc','mcp_port':47780}
         write_json(old/'run_state.json',state);write_json(old/'metrics.json',{'splits':[{'chapter':6}],'effort':'high'})
         note=old/'note.txt';note.write_text('next chapter',encoding='utf-8')
-        argv=['run','--resume',str(old),'--agent','opus5.5','--save','opus5.5','--chapters','7',
+        argv=['run','--resume',str(old),'--agent','opus5.5','--save','opus5.5','--chapters','7','--no-summit-epilogue',
               '--max-minutes','4500','--note-file',str(note)]
         with patch.object(sys,'argv',argv):
             cfg,args=run.parse_args()

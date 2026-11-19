@@ -2,6 +2,16 @@
 import re
 
 
+def require_summit_epilogue(cfg, hello):
+    from .segments import Piece
+    plan = getattr(cfg, 'plan', None) or ()
+    if not any((left, right) == (Piece(7), Piece(8)) for left, right in zip(plan, plan[1:])):
+        return
+    version = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)', str(hello.get('bridge', '')))
+    if version is None or tuple(map(int, version.groups())) < (1, 16, 1):
+        raise RuntimeError('7A 接续尾声需要 Bridge 1.16.1 或更新版本。未开始录制或发送游戏输入。')
+
+
 def validate_bridge(hello):
     from .bridge_reload import hold_message
     if held := hold_message(hello):

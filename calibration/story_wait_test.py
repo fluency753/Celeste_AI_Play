@@ -933,6 +933,68 @@ class StoryWaitTests(unittest.TestCase):
         self.assertEqual(len(self.session.metrics.state.splits), 1)
         self.assertEqual(client.steps, [])
 
+    def test_auto_summit_followup_waits_for_credits_before_switching(self):
+        obs = self.summit_epilogue(scene='Level')
+        self.session.cfg.cutscene_mode = 'auto'
+        self.session.chapter_queue = [Piece(8)]
+        client = self.bridge(obs)
+        completed = observation(cutscene=False, sid='Celeste/7-Summit', completed=True)
+        self.session._handle_events({'events': [{'type': 'complete'}]}, completed)
+        self.session._commit_completion(completed)
+        self.assertTrue(self.session._pending_complete)
+        self.assertTrue(self.session._ending_pending)
+        self.assertFalse(self.session.chapter_finished)
+        self.assertFalse(self.session.metrics.state.splits)
+        self.session._finish_ending()
+        self.session.observe()
+        self.assertEqual(self.session.piece, Piece(8))
+        self.assertFalse(self.session.done)
+        self.assertEqual(self.session.metrics.state.splits[0]['ticks'], 34816510000)
+        self.assertEqual(client.steps, [])
+
+    def test_auto_summit_followup_still_switches_if_credits_return_to_menu(self):
+        obs = self.summit_epilogue()
+        self.session.cfg.cutscene_mode = 'auto'
+        self.session.chapter_queue = [Piece(8)]
+        self.bridge({'scene': 'Overworld', 'frame': 135, 'save': obs['save'], 'menu': {'current': 'OuiChapterSelect'}})
+        self.session.metrics.update(chapter='Celeste/7-Summit', chapter_time_ticks=34816510000)
+        completed = observation(cutscene=False, sid='Celeste/7-Summit', completed=True)
+        self.session._handle_events({'events': [{'type': 'complete'}]}, completed)
+        self.session._commit_completion(completed)
+        self.session._finish_ending()
+        self.assertFalse(self.session.done)
+        self.assertTrue(self.session.chapter_finished)
+        self.assertEqual(self.session.navigation.target, Piece(8))
+        self.assertEqual(self.session.metrics.state.splits[0]['ticks'], 34816510000)
+
+    def test_timed_summit_followup_reuses_capture_and_needs_only_epilogue_completion(self):
+        obs = self.summit_epilogue(scene='Level', ticks=200)
+        session = self.session
+        session.cfg.speedrun_summit_epilogue = True
+        session.cfg.speedrun_record_on_demand = True
+        session.verify_speedrun_capture = lambda: True
+        session.speedrun_target_ticks = 201
+        session.speedrun_recording = True
+        session.chapter_queue = [Piece(8)]
+        client = self.bridge(obs)
+        session.observe()
+        self.assertEqual(session.piece, Piece(7))
+        self.assertFalse(session.metrics.state.splits)
+        client.obs['summitEpilogue']['chapterRecordedFromStart'] = True
+        session.observe()
+        self.assertEqual(session.piece, Piece(8))
+        self.assertIsNone(session.speedrun_target_ticks)
+        self.assertTrue(session.speedrun_recording)
+        self.assertFalse(session.done)
+        client.obs = {'scene': 'Level', 'frame': 200, 'save': obs['save'], 'level': {
+            'sid': 'Celeste/8-Epilogue', 'side': 'A', 'room': 'inside', 'completed': True, 'chapterTimeTicks': 10000}}
+        session.observe()
+        client.obs = {'scene': 'Overworld', 'frame': 201, 'save': obs['save'], 'menu': {'current': 'OuiChapterSelect'}}
+        session.observe()
+        self.assertTrue(session.done)
+        self.assertEqual([(row['chapter'], row['ticks']) for row in session.metrics.state.splits],
+                         [('Celeste/7-Summit', 200), ('Celeste/8-Epilogue', 10000)])
+
     def test_auto_resume_at_native_epilogue_loader_keeps_pending_entry(self):
         obs = self.summit_epilogue()
         arrived = self.summit_epilogue(scene='Level')

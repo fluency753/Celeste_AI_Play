@@ -754,6 +754,7 @@
       <button type="button" class="chip" data-preset="clear">清空</button>
     </div>
     <p class="hint" id="routeNote"></p>
+    <label class="check" id="summitEpilogueRow" hidden><input type="checkbox" id="summitEpilogue" checked> 山顶完成后继续尾声</label>
     <div id="sideBox" hidden>
       <div class="subhead" style="margin:16px 0 2px">B 面与 C 面 <span class="aside">整章游玩，排在同一章的 A 面之后</span></div>
       <p class="hint" style="margin-top:2px">只列有 B/C 面的章节。B 面要先在这一章的 A 面拿到磁带，C 面要先拿到 8 个 B 面的心；开跑前主控按存档核对，没解锁时报错。新建存档不能选。B/C 面不按检查点分段。</p>
@@ -1080,7 +1081,7 @@ const STATUS = {
   quota_wait: ["等待额度重置", "var(--muted)"], net_wait: ["模型连接中断，等待重试", "var(--warn)"], model_wait: ["模型被换，正在换回", "var(--warn)"], paused: ["已暂停", "var(--blue)"], done: ["已完成", "var(--muted)"],
   stopped: ["已结束", "var(--muted)"],
 };
-const SHORT = ["序", "1A", "2A", "3A", "4A", "5A", "6A", "7A", "终", "8A", "9"];
+const SHORT = ["序", "1A", "2A", "3A", "4A", "5A", "6A", "7A", "尾", "8A", "9"];
 const EXPLORE_KEYS = ["explore_program_s", "explore_program_runs"];   // 时长单独显示；旧次数键仅为隐藏配置兼容
 
 const ui = { options: null, segOff: {}, status: null, control: null, controlRun: null, hud: null, runs: [], models: [],
@@ -1236,6 +1237,7 @@ async function loadOptions() {
   $("tokenDrift").checked = !!d.token_drift;
   $("maxMinutes").value = d.max_minutes;
   $("speedrunTarget").value = d.speedrun_target_seconds ?? "";
+  $("summitEpilogue").checked = d.summit_epilogue !== false;
   $("agent").value = (o.deploy && o.deploy.agent) || "";
   // 先定章节选择再填存档：fillSaves 会调 onSaveChange，它要读 ui.chapters／ui.sides
   ui.chapters = [0];
@@ -1457,9 +1459,22 @@ function onSaveChange() {
   schedulePreview();
 }
 
+function wholeSummitSelected() {
+  return ui.chapters.includes(7) && !(ui.segOff[7] || []).length;
+}
+
+function routeChapters() {
+  if (wholeSummitSelected() && $("summitEpilogue").checked && !ui.chapters.includes(8)) {
+    return [...ui.chapters, 8].sort((a, b) => a - b);
+  }
+  return ui.chapters;
+}
+
 // 章节路线：11 个点沿一条往上的折线排开
 function buildRoute() {
   const host = $("route"), chapters = (ui.options && ui.options.chapters) || [];
+  const selected = routeChapters();
+  $("summitEpilogueRow").hidden = !wholeSummitSelected() || ui.chapters.includes(8);
   host.replaceChildren();
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   host.appendChild(svg);
@@ -1475,7 +1490,7 @@ function buildRoute() {
     svg.appendChild(l);
   };
   for (let i = 1; i < points.length; i++) {
-    const on = ui.chapters.includes(points[i - 1].c.id) && ui.chapters.includes(points[i].c.id);
+    const on = selected.includes(points[i - 1].c.id) && selected.includes(points[i].c.id);
     line(points[i - 1], points[i], on ? "#E0475B" : "rgba(236,239,248,0.16)", on ? 4 : 2);
   }
   const current = currentChapterId();
@@ -1483,11 +1498,16 @@ function buildRoute() {
     const b = document.createElement("button");
     b.type = "button"; b.textContent = SHORT[p.c.id] || String(p.c.id);
     b.title = p.c.label; b.setAttribute("aria-label", p.c.label);
-    b.setAttribute("aria-pressed", String(ui.chapters.includes(p.c.id)));
+    b.setAttribute("aria-pressed", String(selected.includes(p.c.id)));
     b.classList.toggle("current", running() && current === p.c.id);
     b.style.left = p.x + "%"; b.style.top = p.y + "%";
     b.addEventListener("click", () => {
-      ui.chapters = ui.chapters.includes(p.c.id) ? ui.chapters.filter(c => c !== p.c.id) : [...ui.chapters, p.c.id].sort((a, b) => a - b);
+      if (selected.includes(p.c.id)) {
+        ui.chapters = ui.chapters.filter(c => c !== p.c.id);
+        if (p.c.id === 8 && wholeSummitSelected()) $("summitEpilogue").checked = false;
+      } else {
+        ui.chapters = [...ui.chapters, p.c.id].sort((a, b) => a - b);
+      }
       buildRoute(); updateSummary(); schedulePreview();
     });
     host.appendChild(b);
@@ -1580,20 +1600,25 @@ function selectedSegments() {
 
 function chapterText(long) {
   const chapters = (ui.options && ui.options.chapters) || [];
+  const selected = routeChapters();
   if (ui.sides.length) {
     // 有 B／C 面：按官方顺序（同一章 A、B、C 面依次）列出
-    const items = [...ui.chapters.map(id => [id, "A"]), ...ui.sides].sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1]));
+    const items = [...selected.map(id => [id, "A"]), ...ui.sides].sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1]));
+    if (selected.includes(8) && !ui.chapters.includes(8)) {
+      const [epilogue] = items.splice(items.findIndex(([id]) => id === 8), 1);
+      items.splice(items.findIndex(([id, side]) => id === 7 && side === "A") + 1, 0, epilogue);
+    }
     const text = items.map(([id, side]) => side === "A" ? chapterLabel(id) : sideCode(id, side)).join(long ? "、" : " → ");
     return long ? `依次通关：${text}；B/C 面整章游玩，开跑前按存档核对已解锁。` : text;
   }
-  const names = ui.chapters.map(id => (chapters.find(c => c.id === id) || {}).label || id);
-  if (!ui.chapters.length) return "点选要依次通关的章节。";
-  const partial = ui.chapters.filter(id => (ui.segOff[id] || []).length).map(chapterLabel);
+  const names = selected.map(id => (chapters.find(c => c.id === id) || {}).label || id);
+  if (!selected.length) return "点选要依次通关的章节。";
+  const partial = selected.filter(id => (ui.segOff[id] || []).length).map(chapterLabel);
   if (partial.length) {
-    const short = names.map((n, i) => (ui.segOff[ui.chapters[i]] || []).length ? `${n}（部分）` : n);
+    const short = names.map((n, i) => (ui.segOff[selected[i]] || []).length ? `${n}（部分）` : n);
     return long ? `依次玩：${short.join("、")}；部分章节只玩选中的段。` : short.join(" → ");
   }
-  if (ui.chapters.length === 1) return long ? `只玩 ${names[0]}。` : names[0];
+  if (selected.length === 1) return long ? `只玩 ${names[0]}。` : names[0];
   return long ? `依次通关：${names.join("、")}；一章通关后主控自动进入下一章。` : names.join(" → ");
 }
 
@@ -1723,6 +1748,7 @@ function formOptions() {
     cutscene_mode: $("cutsceneAgent").checked ? "agent" : "auto", chapters: ui.chapters, segments: ui.sides.length ? null : selectedSegments(), sides: ui.sides, save,
     max_minutes: Number($("maxMinutes").value), autocompact: $("autocompact").value.trim(), map: ui.map,
     speedrun_target_seconds: ui.mode === "speedrun" ? ($("speedrunTarget").value || null) : null,
+    summit_epilogue: $("summitEpilogue").checked,
     runtime: $("runMode").value, study_minutes: withDefault("studyMinutes", "study_minutes"),
     max_usage: numberOrNull("maxUsage"), quota_wait_max_hours: withDefault("quotaHours", "quota_wait_max_hours"),
     play_speed: withDefault("playSpeed", "play_speed"), auto_speed: withDefault("autoSpeed", "auto_speed"),
@@ -1877,6 +1903,7 @@ function applyProfileForm(form) {
   if (has("collision_image") && !pick("collisionImage", form.collision_image || "")) $("collisionImage").value = "";
   if (has("max_minutes")) $("maxMinutes").value = form.max_minutes;
   if (has("speedrun_target_seconds")) $("speedrunTarget").value = form.speedrun_target_seconds ?? "";
+  if (has("summit_epilogue")) $("summitEpilogue").checked = form.summit_epilogue;
   if (has("autocompact")) $("autocompact").value = form.autocompact || "";
   for (const [key, id] of [["study_minutes", "studyMinutes"], ["play_speed", "playSpeed"],
       ["auto_speed", "autoSpeed"], ["rounds_per_room", "roundsPerRoom"], ["room_scale", "roomScale"]]) {
@@ -1921,7 +1948,7 @@ const USAGE_DEFAULTS = { max_usage: null, quota_wait: true, quota_wait_max_hours
 // 本次运行的设置（与 orchestrator/machine_settings.RUN_GROUPS 相同，calibration/run_pins_test.py 核对）：按组固定在配置里，
 // 没固定的组记住上次填写的；直播与录屏各自记住；调试项每次回到默认
 const RUN_GROUPS = { model: ["engine", "provider", "model", "effort"], agent: ["agent"],
-  chapters: ["map", "chapters", "segments", "sides", "seg_off", "speedrun_target_seconds"], save: ["save"], max_minutes: ["max_minutes"],
+  chapters: ["map", "chapters", "segments", "sides", "seg_off", "summit_epilogue", "speedrun_target_seconds"], save: ["save"], max_minutes: ["max_minutes"],
   start_paused: ["start_paused"], autocompact: ["autocompact"] };
 const PIN_LABELS = { model: "模型", agent: "标签", chapters: "章节", save: "存档", max_minutes: "时限",
   start_paused: "先暂停", autocompact: "压缩窗口" };
@@ -2336,7 +2363,7 @@ function renderRun(m) {
   const attemptText = target != null && attempt?.valid && Number.isFinite(attempt.ticks)
     ? `上次有效通关 ${attempt.ticks / 1e7} 秒（${attempt.recorded_from_start === false ? "缺少章首录像" : attempt.ticks < target ? "达标" : "未达标"}）` : "";
   $("runAside").textContent = [(m.activity_status || m.status) === "paused" ? "已暂停" : "",
-    target != null ? `有效整章目标 < ${target / 1e7} 秒` : "",
+    target != null ? `${m.speedrun_summit_epilogue ? "7A 有效整章目标" : "有效整章目标"} < ${target / 1e7} 秒` : "",
     target != null && m.speedrun_recording != null ? (m.speedrun_recording ? "正式录制" : "练习未录制") : "",
     attemptText].filter(Boolean).join(" · ");
 }
@@ -3767,6 +3794,7 @@ $("setup").addEventListener("input", schedulePreview);
 $("exploreUnlimited").addEventListener("change", () => { $("exploreSeconds").disabled = $("exploreUnlimited").checked; });
 $("setup").addEventListener("change", schedulePreview);
 $("setup").addEventListener("submit", startRun);
+$("summitEpilogue").addEventListener("change", () => { buildRoute(); updateSummary(); schedulePreview(); });
 $("tuneReset").addEventListener("click", () => {
   for (const k of Object.keys(ui.tune)) if (!EXPLORE_KEYS.includes(k)) delete ui.tune[k];
   buildTunables(); schedulePreview();

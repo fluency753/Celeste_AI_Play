@@ -471,13 +471,15 @@ class GameSession:
         self._side_plan = cfg.play_scope != 'visited' and (plan_has_sides(plan) or bool(getattr(cfg, '_side_plan', False)))
         self.metrics.update(piece_done=False)
         self._pending_complete = cfg.resume_completion_pending
-        self.speedrun_target_ticks = cfg.speedrun_target_ticks
+        self.speedrun_target_ticks = (None if cfg.speedrun_summit_epilogue and cfg.chapter == 8
+                                      else cfg.speedrun_target_ticks)
         self.speedrun_recording = False
         self.speedrun_recording_uncertain = False
         self.open_speedrun_recording = None
         self.verify_speedrun_capture = None
-        if self.speedrun_target_ticks is not None:
-            self.metrics.update(speedrun_target_ticks=self.speedrun_target_ticks)
+        if cfg.speedrun_target_ticks is not None:
+            self.metrics.update(speedrun_target_ticks=cfg.speedrun_target_ticks,
+                                speedrun_summit_epilogue=cfg.speedrun_summit_epilogue)
         if cfg.speedrun_record_on_demand:
             self.metrics.update(speedrun_recording=False)
         # 统计是绕行分类的持久化来源；当前许可关闭不改变已经归属的地图。
@@ -517,6 +519,8 @@ class GameSession:
     def connect(self) -> dict:
         self.client = BridgeClient(port=self.cfg.bridge_port, timeout=600)
         hello = self.client.call('hello')
+        from .bridge_requirements import require_summit_epilogue
+        require_summit_epilogue(self.cfg, hello)
         from .speedrun_goal import require_capture_bridge
         require_capture_bridge(self.cfg, hello)
         self.game_process_id = hello.get('process_id')
@@ -1286,7 +1290,7 @@ class GameSession:
                 # 自动跳过剧情：剧情（含跳过的淡出）还没结束就先推进完，不让智能体看着黑屏或剧情画面判断
                 obs, image, _, notes = self._auto_advance(obs, image)
                 self.goals.check(self.goal_values(obs))
-            if (self.speedrun_target_ticks is not None and not reload_observation and self._ending_pending
+            if (not reload_observation and self._ending_pending
                     and not self.done and not self.goals.stop_motion.is_set()):
                 obs, image, more = self._finish_ending()
                 notes = [*notes, *more]
@@ -1674,6 +1678,7 @@ class GameSession:
     def _requires_single_run(self) -> bool:
         piece = getattr(self, 'piece', None)
         return (not is_explore(self.cfg) and getattr(self.cfg, 'play_scope', 'chapter') != 'visited'
+                and not (getattr(self.cfg, 'speedrun_summit_epilogue', False) and piece == Piece(8))
                 and (piece is None or piece.whole()))
 
     def _speedrun_menu_allowed(self) -> bool:
@@ -2597,10 +2602,16 @@ class GameSession:
                 'chapter_elapsed_seconds':ticks/10_000_000 if ticks is not None else None},
                 'real':{'elapsed_seconds':values['elapsed'], 'playing':self.metrics.playing},
                 'goal':self.goals.time_status(values)}
-            if self.speedrun_target_ticks is not None:
-                result['speedrun'] = {'target_seconds': self.speedrun_target_ticks / 10_000_000,
+            target_ticks = self.speedrun_target_ticks
+            summit_epilogue = getattr(self.cfg, 'speedrun_summit_epilogue', False)
+            if summit_epilogue and self.piece == Piece(8):
+                target_ticks = self.cfg.speedrun_target_ticks
+            if target_ticks is not None:
+                result['speedrun'] = {'target_seconds': target_ticks / 10_000_000,
                                       'comparison': 'strictly_below',
                                       'last_attempt': self.metrics.state.speedrun_last_attempt}
+                if summit_epilogue:
+                    result['speedrun'].update(target_map=CHAPTER_SIDS[7], target_reached=self.piece == Piece(8))
                 if self.cfg.speedrun_record_on_demand:
                     result['speedrun'].update(recording=self.speedrun_recording,
                                               practice_speed=self.cfg.play_speed,
@@ -3306,6 +3317,11 @@ class GameSession:
             self._commit_summit_exit(obs, source)
             return
         self._note_map(obs)
+        if (self._pending_complete and self.cfg.cutscene_mode == 'auto' and self._summit_followed_by_epilogue()
+                and (self._ending_pending or self._ending_agent)):
+            if self._ending_agent:
+                self._commit_summit_menu(obs)
+            return
         if self.speedrun_target_ticks is not None and not self.done and not self._in_detour():
             self._commit_timed_completion(obs)
             return
@@ -3415,7 +3431,7 @@ class GameSession:
     def _summit_source(self, obs):
         piece = self.piece
         if (piece is not None and piece.chapter == 7 and piece.side == 'A' and piece.end is None
-                and getattr(self.cfg, 'play_scope', 'chapter') == 'chapter'
+                and getattr(self.cfg, 'play_scope', 'chapter') != 'visited'
                 and getattr(self.cfg, 'save_slot', None) is not None
                 and (obs.get('save') or {}).get('slot') == self.cfg.save_slot):
             return summit_epilogue_source(obs)
@@ -3428,6 +3444,20 @@ class GameSession:
         return (self.navigation.target == Piece(8) and self.cfg.save_slot is not None
                 and (obs.get('save') or {}).get('slot') == self.cfg.save_slot
                 and summit_epilogue_source(obs) is not None)
+
+    def _summit_followed_by_epilogue(self):
+        return (self.piece == Piece(7) and bool(self.chapter_queue)
+                and Piece.of(self.chapter_queue[0]) == Piece(8))
+
+    def _commit_summit_menu(self, obs):
+        if not (self._pending_complete and self._summit_followed_by_epilogue() and self._at_chapter_select(obs)):
+            return False
+        self._pending_complete = self._ending_pending = self._ending_agent = False
+        self.end_scene = obs.get('scene')
+        ticks = self._qualified_speedrun_ticks() if self.speedrun_target_ticks is not None else None
+        self._chapter_complete(timed_ticks=ticks, ending_finished=True)
+        self._persist_completion_pending()
+        return True
 
     def _commit_summit_exit(self, obs, source):
         if self.done or self.chapter_finished or obs.get('saving') is not False:
@@ -3444,6 +3474,7 @@ class GameSession:
             self._persist_completion_pending()
         if not qualified:
             return
+        self._ending_pending = self._ending_agent = False
         terminal = not self.chapter_queue and self.cfg.completion_policy == 'stop'
         if terminal:
             self.end_scene = obs.get('scene')
@@ -3452,7 +3483,7 @@ class GameSession:
         if not self.metrics.state.piece_done:
             self.metrics.update(chapter=source['sid'], chapter_side='A', chapter_time_ticks=source['chapterTimeTicks'],
                                 chapter_time_valid=source.get('chapterTimeValid'))
-            self._chapter_complete(timed_ticks=ticks)
+            self._chapter_complete(timed_ticks=ticks, ending_finished=True)
         elif terminal:
             self._ending_pending = self._ending_agent = False
             self._mark_done('章节完成')
@@ -3468,7 +3499,7 @@ class GameSession:
                     '请用 act 短按 B 返回上一层并核对菜单。回到选章地图后由主控核验，再按本次任务范围收尾或换章。')
         return None
 
-    def _chapter_complete(self, *, timed_ticks=None) -> None:
+    def _chapter_complete(self, *, timed_ticks=None, ending_finished=False) -> None:
         """当前章节通关：记下分段成绩；还有下一章就等进入下一章，否则本次运行完成。
         auto 剧情模式的最终章：先不结束，片尾在这次动作里走完（_finish_ending），走不完交给智能体。
         计划外地图（--allow-detour）的通关另记一条绕行成绩，不动分段成绩与计划（_detour_complete）。"""
@@ -3485,6 +3516,10 @@ class GameSession:
         if self.goals.check(values):
             self.user_stopped = True
             self.chapter_queue.clear()
+        if self.cfg.cutscene_mode == 'auto' and self._summit_followed_by_epilogue() and not ending_finished:
+            self._ending_pending = self._pending_complete = True
+            self._persist_completion_pending()
+            return
         split_options = ({'side': st.chapter_side} if getattr(self.cfg, 'play_scope', 'chapter') == 'visited'
                          else {'side': self.piece.side} if self.piece is not None and self.piece.side != 'A' else {})
         self.metrics.add_split(st.chapter, timed_ticks if timed_ticks is not None else self._plan_ticks(),
@@ -3521,10 +3556,14 @@ class GameSession:
         obs, image = enrich_obs(reply["obs"]), reply.get("image")
         if self._summit_source(obs):
             self._commit_completion(obs)
-            if self.done:
+            if self.done or self.chapter_finished:
                 return obs, image, ['山顶片尾已原生衔接尾声，7A 成绩已登记。']
         if self._at_chapter_select(obs) or self.goals.immediate:
             self.end_scene = obs.get('scene')
+            if self._commit_summit_menu(obs):
+                if not self.chapter_finished and not self.done and self.speedrun_target_ticks is not None:
+                    return obs, image, [self._speedrun_retry_note(obs)]
+                return obs, image, ['山顶成绩已核验，接下来完成计划中的尾声。']
             self._mark_done("章节完成")
             return obs, image, ["通关后主控走完了片尾、确认了结算，已回到选章地图"]
         self._ending_agent = True
@@ -3997,6 +4036,8 @@ class GameSession:
         piece = self.navigation.confirm_entry(obs, self._table, require_departure=require_departure)
         if piece is None:
             return False
+        if getattr(self.cfg, 'speedrun_summit_epilogue', False) and piece == Piece(8):
+            self.speedrun_target_ticks = None
         level = obs['level']
         self.start_sid = level['sid']
         if self._classifying() or self.metrics.state.plan_banked_ticks:

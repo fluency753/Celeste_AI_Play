@@ -47,6 +47,7 @@ class MetricsState:
     wall_budget_remaining_s: float | None = None
     chapter_time_valid: bool | None = None   # 原生章节计时是否从章首开始
     speedrun_target_ticks: int | None = None
+    speedrun_summit_epilogue: bool = False
     speedrun_recording: bool | None = None
     speedrun_last_attempt: dict | None = None
     thinking_s: float = 0.0

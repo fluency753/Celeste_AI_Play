@@ -41,7 +41,7 @@ DEFAULTS = {
     "action_permissions": None, "allow_detour": False,
     "recording_mode": "chapter", "freeze_chapter_select": True, "freeze_file_select": False, "freeze_main_menu": False,
     "save": {"name": "test", "slot": None, "create": False}, "max_minutes": 1000,
-    "speedrun_target_seconds": None, "autocompact": "",
+    "speedrun_target_seconds": None, "summit_epilogue": True, "autocompact": "",
     # 以下是"更多设置"里的参数，默认值与命令行相同
     "map": "celeste", "runtime": "container", "study_minutes": 60, "max_usage": None, "quota_wait_max_hours": 24,
     "play_speed": 1, "auto_speed": 1, "rounds_per_room": 3, "room_scale": 2.0, "record_marker": False,
@@ -140,6 +140,7 @@ def normalize(options: dict) -> dict:
         o["hud_mod"] = not o["live"]             # 与命令行相同：不开直播时游戏内 HUD 默认开
     for key in SWITCHES:
         _bool(o, key)
+    _bool(o, 'summit_epilogue')
     if o['token_drift'] and o['mode'] != EXPLORE:
         raise ValueError('Token 推进只用于探索模式')
     if o['token_drift'] and o['stiffness']:
@@ -175,8 +176,9 @@ def normalize(options: dict) -> dict:
         o["chapters"] = chapters_of(plan)
     if o['speedrun_target_seconds'] is not None:
         from .speedrun_goal import parse_target_seconds, target_seconds_text
-        whole = (len(plan) == 1 and plan[0].whole() if o.get('segments') is not None
-                 else len(o['chapters']) + len(o['sides']) == 1)
+        from .segments import Piece
+        timed_plan = plan if o.get('segments') is not None else [Piece(c) for c in o['chapters']] + [Piece(c, side=side) for c, side in o['sides']]
+        whole = (len(timed_plan) == 1 and timed_plan[0].whole()) or timed_plan == [Piece(7), Piece(8)]
         if o['mode'] != SPEEDRUN or not whole or o['no_agent']:
             raise ValueError('速通时间目标需要单张指定地图的整章速通')
         if not o['record']:
@@ -265,6 +267,8 @@ def build(options: dict, profile: str | None = None) -> list[str]:
             "--save", o["save"]["name"], "--cutscene-mode", o["cutscene_mode"]]
     if o['speedrun_target_seconds'] is not None:
         argv += ['--speedrun-target-seconds', o['speedrun_target_seconds']]
+    if not o['summit_epilogue']:
+        argv.append('--no-summit-epilogue')
     argv.append("--live" if o["live"] else "--no-live")
     argv += recording_args(o)
     if not o['allow_detour']:
@@ -456,6 +460,9 @@ def config_for(options: dict, profile: str | None = None):
         from .segments import load_table, pieces_of
         cfg.checkpoints = load_table()
         cfg.plan = pieces_of([tuple(s) for s in o["segments"]], cfg.checkpoints)
+    from .segments import Piece, apply_summit_epilogue
+    apply_summit_epilogue(cfg, o['summit_epilogue'])
+    cfg.speedrun_summit_epilogue = cfg.speedrun_target_ticks is not None and cfg.plan == [Piece(7), Piece(8)]
     cfg.study, cfg.study_minutes = o["study"], o["study_minutes"]
     cfg.kb_deny = list(o["kb_deny"])
     cfg.kb_allow = list(o["kb_allow"])

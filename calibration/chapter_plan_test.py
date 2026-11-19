@@ -208,6 +208,20 @@ class ResumeExtensionTests(unittest.TestCase):
             self.assertTrue(cfg.resume_completion_pending)
             self.assertEqual(cfg.chapters,[7])
 
+    def test_timed_summit_resume_retains_qualified_split_and_epilogue_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = self.make_run(root, [[7, 0, None], [8, 0, None]],
+                                [{'chapter': 'Celeste/7-Summit', 'ticks': 200}], {
+                'mode': 'speedrun', 'record': True, 'recording_mode': 'continuous', 'piece_pending': True,
+                'speedrun_target_ticks': 201, 'speedrun_record_on_demand': True, 'speedrun_summit_epilogue': True,
+            })
+            cfg, _ = self.parse(root, '--resume', str(run))
+            self.assertEqual(cfg.plan, [Piece(8)])
+            self.assertTrue(cfg.resume_pending)
+            self.assertTrue(cfg.speedrun_summit_epilogue)
+            self.assertEqual(cfg.speedrun_target_ticks, 201)
+
     def test_completed_plan_can_continue_with_next_chapter(self):
         from orchestrator.run import write_run_state
         done = [{"chapter": "Celeste/0-Intro"}, {"chapter": "Celeste/1-ForsakenCity"}, {"chapter": "Celeste/2-OldSite"}]

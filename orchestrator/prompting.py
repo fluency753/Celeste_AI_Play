@@ -659,9 +659,15 @@ def prompt_parts(cfg) -> list[PromptPart]:
         if getattr(cfg, 'speedrun_record_on_demand', False):
             recording_requirement = ('先在未录制阶段设计并练习输入，由你决定何时在选章开启录像。'
                                      '只有开录后从章首开始且连续录制的有效通关才能达标。')
-        parts.append(PromptPart('整章速通时间目标',
-                                f'{recording_requirement}从目标地图章首开始，完成一趟原生计时有效且严格低于 {target_seconds_text(target_ticks)} 秒的通关。'
-                                '等于目标或更慢的通关仍可正常结算并从章首再试。灰计时练习、累加时间或文字报告不能完成本目标。',
+        summit_epilogue = getattr(cfg, 'speedrun_summit_epilogue', False)
+        if summit_epilogue and cfg.chapter == 8:
+            requirement = '7A 的速通成绩已达标。继续沿用原录像完成尾声，尾声没有额外的计时要求。'
+        else:
+            requirement = (f'{recording_requirement}从{"7A" if summit_epilogue else "目标地图"}章首开始，完成一趟原生计时有效且严格低于 {target_seconds_text(target_ticks)} 秒的通关。'
+                           '等于目标或更慢的通关仍可正常结算并从章首再试。灰计时练习、累加时间或文字报告不能完成本目标。')
+            if summit_epilogue:
+                requirement += '7A 达标后，沿用原录像完成尾声，尾声没有额外的计时要求。'
+        parts.append(PromptPart('整章速通时间目标', requirement,
                                 None, '\n\n'))
     if not workspace_capabilities(cfg).workspace_read:
         from .prompt_environment import environment_instructions

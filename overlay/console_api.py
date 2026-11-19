@@ -20,7 +20,7 @@ from orchestrator.recording_lifecycle import pending_recording as is_recording_p
 from orchestrator.session_store import load_json
 
 CHAPTER_LABELS = {0: "序章", 1: "1A 被遗弃之城", 2: "2A 旧址", 3: "3A 天空度假村", 4: "4A 黄金山脊", 5: "5A 镜之神殿",
-                  6: "6A 映像", 7: "7A 顶峰", 8: "终章", 9: "8A 核心", 10: "第九章 告别"}
+                  6: "6A 映像", 7: "7A 顶峰", 8: "尾声", 9: "8A 核心", 10: "第九章 告别"}
 LAUNCH_RECORD = REPO_ROOT / "local" / "console" / "last_launch.json"
 CONTROLLER_MUTEX = "Local\\CelesteAIPlayController"
 
@@ -796,7 +796,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.34.2"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.35.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

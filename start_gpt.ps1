@@ -9,6 +9,7 @@ param(
     [ValidateSet('low','medium','high','xhigh','max')][string]$Effort = 'medium',
     [int]$Chapter = 1,
     [string]$Chapters = '',
+    [switch]$NoSummitEpilogue,
     [string]$Save = '',
     [Nullable[int]]$SaveSlot = $null,
     [switch]$CreateSave,
@@ -55,6 +56,7 @@ if (-not $Play) {
         if ($Model) { $runArgs += @('--model', $Model) }
     } else {
         $runArgs += $chapterArgs + @('--prepared', $Prepared) + $extra
+        if ($NoSummitEpilogue) { $runArgs += '--no-summit-epilogue' }
     }
     if ($hasGoal) { $runArgs += "--goal=$Goal" }
     if ($hasGoalFile) { $runArgs += "--goal-file=$GoalFile" }
