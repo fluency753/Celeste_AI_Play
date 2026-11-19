@@ -445,6 +445,13 @@ def kb_list(mode: str) -> dict:
     with profiles.using(pid):
         docs = documents(mode)
     known = {d["path"] for d in docs}
+    from orchestrator.kb_layout import enabled, policy_documents
+    from orchestrator.kb_access import KB_ROOT
+    if enabled(KB_ROOT):
+        known.update(doc.path for doc in policy_documents(KB_ROOT, mode).values())
+        if mode == 'explore':
+            known.update('speedrun/' + name for name, doc in policy_documents(KB_ROOT, 'speedrun').items()
+                         if not doc.children and doc.source.is_relative_to(KB_ROOT))
     prefs = load_prefs()
     deny = [x for x in prefs["kb_deny"].get(mode, []) if x in known]
     allow = [x for x in prefs["kb_allow"].get(mode, []) if x in known]
@@ -461,8 +468,6 @@ def kb_list(mode: str) -> dict:
         if sources := via.get(doc['path']):
             doc['required_via'] = sources
     sim_readme = REPO_ROOT / "sim" / "dist" / "README.md"     # Claude 执行器开模拟器时另要读完
-    from orchestrator.kb_layout import enabled
-    from orchestrator.kb_access import KB_ROOT
     source_label = 'kb/shared + kb/'+mode if enabled(KB_ROOT) else root.relative_to(REPO_ROOT).as_posix()
     return {"mode": mode, "root": source_label, "documents": docs, "deny": deny, "allow": allow, "required": required,
             "sim_readme": mode == "speedrun" and sim_readme.is_file(), "profile": pid, "readonly": profiles.readonly(pid),
@@ -656,7 +661,7 @@ def prompt_preview(options: dict, engine: str | None = None) -> dict:
 def _prompt_preview(cfg) -> dict:
     from types import SimpleNamespace
     from orchestrator.kb_access import root_of
-    from orchestrator.kb_study import CONTAINER_KB, required_files
+    from orchestrator.kb_study import CONTAINER_KB, collection_paths, required_files
     from orchestrator.prompting import overridden_parts, prompt_parts, study_prompt
     from orchestrator.startup_prompt import runtime_prompt_parts
     from orchestrator.button_prompts import catalog
@@ -688,8 +693,11 @@ def _prompt_preview(cfg) -> dict:
     if cfg.study and workspace_capabilities(cfg).workspace_read:
         from orchestrator import kb_layout
         from orchestrator.kb_access import KB_ROOT
-        files = (kb_layout.selected(cfg, KB_ROOT)[1] if kb_layout.enabled(KB_ROOT) else
-                 [rel for rel in required_files(root_of(cfg.mode), cfg.kb_required) if rel not in set(cfg.kb_deny)])
+        if kb_layout.enabled(KB_ROOT):
+            _, files, _, groups = kb_layout.selected(cfg, KB_ROOT)
+            files = collection_paths(files, groups)
+        else:
+            files = [rel for rel in required_files(root_of(cfg.mode), cfg.kb_required) if rel not in set(cfg.kb_deny)]
         paths = [f"{CONTAINER_KB}/{rel}" for rel in files]
         from orchestrator.sim_mode import agent_sim
         if agent_sim(cfg):          # Claude 开模拟器：/sim/README.md 排在知识库正文之后、社区原文之前（与 KbStudy 相同）
@@ -788,7 +796,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.33.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.34.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

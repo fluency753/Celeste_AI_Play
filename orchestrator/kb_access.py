@@ -22,7 +22,7 @@ from .modes import EXPLORE, SPEEDRUN
 
 KB_ROOT = REPO_ROOT / "kb"
 TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv"}
-STUDY_SUFFIXES = TEXT_SUFFIXES | {'.cs'}
+STUDY_SUFFIXES = TEXT_SUFFIXES | {'.cs', '.csproj', '.config', '.xml', '.yml', '.yaml', '.py'}
 SPEEDRUN_PREFIX = "speedrun/"     # 探索模式里开放的速通知识库文件在 /kb 下的位置
 MAX_EDIT_BYTES = 2 * 1024 * 1024
 
@@ -69,7 +69,7 @@ def speedrun_files() -> list[str]:
     from .kb_layout import enabled, catalog, CELESTE_SOURCE
     if enabled(KB_ROOT):
         return [doc.path for doc in catalog(KB_ROOT, SPEEDRUN)
-                if not doc.path.startswith('shared/') and doc.path != CELESTE_SOURCE]
+                if not doc.path.startswith('shared/') and not doc.children and doc.path != CELESTE_SOURCE]
     return [rel for rel in (path.relative_to(KB_ROOT).as_posix() for path in _files(KB_ROOT))
             if not rel.startswith("explore/")]
 
@@ -79,15 +79,15 @@ def _edits_root() -> Path:
     return kb_edits_dir()
 
 
-def _edit_of(path: Path) -> Path:
+def _edit_of(path: Path, doc=None) -> Path:
     """仓库知识库文件在当前配置里的修改版本的位置（不一定存在）。"""
     from .kb_layout import enabled, edit_path
-    return (edit_path(KB_ROOT, path, _edits_root()) if enabled(KB_ROOT) else
+    return (edit_path(KB_ROOT, path, _edits_root(), doc) if enabled(KB_ROOT) else
             _edits_root() / path.resolve().relative_to(KB_ROOT.resolve()))
 
 
-def _effective(path: Path) -> Path:
-    edit = _edit_of(path)
+def _effective(path: Path, doc=None) -> Path:
+    edit = _edit_of(path, doc)
     return edit if edit.is_file() else path
 
 
@@ -100,10 +100,19 @@ def documents(mode: str) -> list[dict]:
         docs = [(doc, False) for doc in catalog(KB_ROOT, mode)]
         if mode == EXPLORE:
             docs += [(doc, True) for doc in catalog(KB_ROOT, SPEEDRUN)
-                     if not doc.path.startswith('shared/') and doc.path != CELESTE_SOURCE]
+                     if not doc.path.startswith('shared/') and not doc.children and doc.path != CELESTE_SOURCE]
         rows = []
         for doc, opt in docs:
-            effective = _effective(doc.source)
+            if doc.children:
+                names = {child.path for child in doc.children}
+                studyable = any(study_target(name, names) for name in names)
+                rows.append({'path': doc.path, 'size': sum(child.source.stat().st_size for child in doc.children),
+                             'group': '目录集合', 'required': doc.required and studyable, 'editable': False,
+                             'local_only': not doc.source.is_relative_to(KB_ROOT), 'edited': False,
+                             'directory': True, 'file_count': len(doc.children),
+                             'study_target': doc.path if studyable else None})
+                continue
+            effective = _effective(doc.source, doc)
             size = effective.stat().st_size
             rows.append({'path': (SPEEDRUN_PREFIX if opt else '') + doc.path, 'size': size,
                          'group': ('本机游戏源码' if doc.path == CELESTE_SOURCE else
@@ -139,11 +148,13 @@ def normalize_deny(mode: str, deny) -> list[str]:
         return []
     if not isinstance(deny, list) or not all(isinstance(x, str) for x in deny):
         raise ValueError("知识库权限须为文件路径列表")
-    from .kb_layout import enabled, lookup
-    if enabled(KB_ROOT):
-        deny = [name.strip().replace('\\', '/') for name in deny]
-        deny = [(lookup(KB_ROOT, mode, name).path if lookup(KB_ROOT, mode, name) else name) for name in deny]
+    from .kb_layout import canonical_path, enabled, policy_documents
     known = {row["path"] for row in documents(mode) if not row.get("opt_in")}
+    if enabled(KB_ROOT):
+        policy = policy_documents(KB_ROOT, mode)
+        deny = [canonical_path(name.strip().replace('\\', '/')) for name in deny]
+        deny = [policy[name].path if name in policy else name for name in deny]
+        known.update(doc.path for doc in policy.values())
     out = sorted({x.strip().replace("\\", "/") for x in deny if x.strip()})
     unknown = [x for x in out if x not in known]
     if unknown:
@@ -161,11 +172,12 @@ def normalize_allow(mode: str, allow) -> list[str]:
     if out and mode != EXPLORE:
         raise ValueError("只有探索模式需要单独开放速通知识库的文件")
     known = {SPEEDRUN_PREFIX + rel for rel in speedrun_files()}
-    from .kb_layout import enabled, lookup, CELESTE_SOURCE
+    from .kb_layout import enabled, policy_documents
     if enabled(KB_ROOT):
+        policy = policy_documents(KB_ROOT, SPEEDRUN)
         known.update(name for name in out if name.startswith(SPEEDRUN_PREFIX)
-                     and name != SPEEDRUN_PREFIX + CELESTE_SOURCE
-                     and lookup(KB_ROOT, SPEEDRUN, name[len(SPEEDRUN_PREFIX):]))
+                     and (doc := policy.get(name[len(SPEEDRUN_PREFIX):]))
+                     and not doc.children and doc.source.is_relative_to(KB_ROOT))
     unknown = [x for x in out if x not in known]
     if unknown:
         raise ValueError("速通知识库里没有这些文件：" + "、".join(unknown[:5]))
@@ -195,25 +207,39 @@ def apply_required(defaults, overrides, available) -> set[str]:
 def _annotate_study_targets(rows):
     available = {row['path'] for row in rows}
     for row in rows:
-        row['study_target'] = study_target(row['path'], available)
+        if not row.get('directory'):
+            row['study_target'] = study_target(row['path'], available)
     return rows
 
 
 def normalize_required(mode: str, overrides) -> dict[str, bool]:
+    from .kb_layout import canonical_required, enabled, policy_documents
     if not isinstance(overrides, dict) or not all(
             isinstance(name, str) and type(value) is bool for name, value in overrides.items()):
         raise ValueError('知识库必读设置须为文件路径与布尔值')
     if not overrides:
         return {}
     known = {row['path']: row for row in documents(mode)}
+    policy = policy_documents(KB_ROOT, mode) if enabled(KB_ROOT) else {}
+    available = set(known) | {doc.path for doc in policy.values()}
+    if mode == EXPLORE and enabled(KB_ROOT):
+        for doc in policy_documents(KB_ROOT, SPEEDRUN).values():
+            if not doc.children and doc.source.is_relative_to(KB_ROOT):
+                name = SPEEDRUN_PREFIX + doc.path
+                available.add(name)
     result = {}
-    for name, value in overrides.items():
-        name = name.strip().replace('\\', '/')
+    for name, value in canonical_required({name.strip().replace('\\', '/'): value for name, value in overrides.items()}).items():
+        if name not in known and name in policy:
+            doc = policy[name]
+            name = doc.path
+            known.setdefault(name, {'required': doc.required, 'study_target': study_target(name, available)})
+        if name not in known and name.startswith(SPEEDRUN_PREFIX) and name in available:
+            known[name] = {'required': False, 'study_target': study_target(name, available)}
         if name not in known:
             raise ValueError(f'知识库里没有文件 {name}')
         if value and not known[name]['study_target']:
             raise ValueError(f'{name} 缺少可以核验阅读的对应文本，仅可选读')
-        if value != known[name]['required']:
+        if value != known[name]['required'] or known[name].get('directory'):
             result[name] = value
     return result
 
@@ -222,13 +248,11 @@ def _resolve(mode: str, rel: str) -> Path:
     root = root_of(mode).resolve()
     if not isinstance(rel, str) or not rel or rel.startswith(("/", "\\")) or ".." in Path(rel).parts:
         raise ValueError("文件路径无效")
-    from .kb_layout import enabled, lookup, CELESTE_SOURCE
+    from .kb_layout import enabled, lookup
     if enabled(KB_ROOT):
         rel = rel.replace('\\', '/')
-        if mode == EXPLORE and rel == SPEEDRUN_PREFIX + CELESTE_SOURCE:
-            raise ValueError(f'找不到 {rel}')
         doc = lookup(KB_ROOT, SPEEDRUN, rel[len(SPEEDRUN_PREFIX):]) if mode == EXPLORE and rel.startswith(SPEEDRUN_PREFIX) else lookup(KB_ROOT, mode, rel)
-        if doc is None:
+        if doc is None or (doc.children and mode == EXPLORE and rel.startswith(SPEEDRUN_PREFIX)):
             raise ValueError(f'找不到 {rel}')
         return doc.source
     if mode == EXPLORE and rel.startswith(SPEEDRUN_PREFIX):   # 探索页里列出的速通知识库文件
@@ -244,6 +268,8 @@ def _resolve(mode: str, rel: str) -> Path:
 def read_document(mode: str, rel: str) -> dict:
     """读一个文件：当前配置改过时读修改后的版本（edited）。"""
     path = _resolve(mode, rel)
+    if path.is_dir():
+        return {'path': rel, 'directory': True, 'editable': False, 'text': None, 'edited': False}
     if not path.is_file():
         raise ValueError(f"找不到 {rel}")
     effective = _effective(path)
@@ -257,9 +283,6 @@ def read_document(mode: str, rel: str) -> dict:
     if size > MAX_EDIT_BYTES:
         return {"path": rel, "editable": False, "text": text,
                 "size": size, "truncated": True, "edited": edited}
-    from .kb_layout import CELESTE_SOURCE
-    if rel == CELESTE_SOURCE and effective == path and not path.is_relative_to(KB_ROOT):
-        return {'path': rel, 'editable': False, 'text': text, 'size': size, 'edited': False}
     return {"path": rel, "editable": True, "text": text, "size": len(data),
             "mtime": effective.stat().st_mtime, "edited": edited}
 
@@ -268,6 +291,8 @@ def write_document(mode: str, rel: str, text: str, expected_mtime: float | None 
     """保存编辑：只允许文本文件；修改存进当前配置的目录（仓库里的文件不变），改回与仓库相同就删掉修改；
     文件在打开之后被别处改过时拒绝（expected_mtime 对不上）。"""
     path = _resolve(mode, rel)
+    if path.is_dir():
+        raise ValueError('目录集合不能在控制台编辑')
     if not path.resolve().is_relative_to(KB_ROOT.resolve()):
         raise ValueError('本机生成的源码资料为只读文件')
     if path.suffix.lower() not in TEXT_SUFFIXES:
@@ -297,6 +322,8 @@ def write_document(mode: str, rel: str, text: str, expected_mtime: float | None 
 def reset_document(mode: str, rel: str) -> dict:
     """恢复仓库版本：删掉当前配置对这个文件的修改。"""
     path = _resolve(mode, rel)
+    if path.is_dir():
+        raise ValueError('目录集合不能在控制台编辑')
     if not path.resolve().is_relative_to(KB_ROOT.resolve()):
         raise ValueError('本机生成的源码资料为只读文件')
     edit = _edit_of(path)

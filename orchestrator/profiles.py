@@ -204,9 +204,14 @@ def kb_permissions(pid: str, legacy_data: dict | None = None) -> dict:
     from . import kb_layout
     from .kb_access import KB_ROOT
     if kb_layout.enabled(KB_ROOT):
+        for mode, values in permissions['kb_required'].items():
+            permissions['kb_required'][mode] = kb_layout.canonical_required(values)
         for mode, names in permissions['kb_deny'].items():
-            permissions['kb_deny'][mode] = sorted({doc.path if (doc := kb_layout.lookup(KB_ROOT, mode, name)) else name
-                                                   for name in names})
+            if not names:
+                continue
+            policy = kb_layout.policy_documents(KB_ROOT, mode)
+            canonical = (kb_layout.canonical_path(name) for name in names)
+            permissions['kb_deny'][mode] = sorted({doc.path if (doc := policy.get(name)) else name for name in canonical})
     return permissions
 
 

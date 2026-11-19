@@ -757,7 +757,10 @@ class CodexRunner(ModelRecovery, SessionControls):
     def _first_prompt(self):
         if self.study and not self.study.complete():
             from .button_prompts import notification
-            paths = "\n".join(f"- {p}" for p in self.study.container_paths())
+            entries = getattr(self.study, 'display_paths', self.study.container_paths)()
+            paths = "\n".join(f"- {p}" for p in entries)
+            if any(path.endswith('/') for path in entries):
+                paths += '\n路径以 / 结尾的是目录集合，用文件工具列出子目录后逐个读取文本文件。'
             facts = "本次必读清单：\n" + paths + f"\n必读资料必须用 {self._reader_name()} 的 file_path 与 offset/limit 分页读取，按实际送达的完整行计量。"
             facts += ('\n本次只准备，不启动游戏；完成后调用 celeste_finish_preparation 提交完成信号。'
                       if self.prepare_only else '\n本次准备完成后开放试玩工具。')

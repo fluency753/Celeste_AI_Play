@@ -76,7 +76,8 @@ def reference_path(cfg, name):
         old = kb_layout.SHARED_ALIASES.get(rel, ())
         aliases = (*old, *('explore/'+path for path in old))
         deny = set(getattr(cfg, 'kb_deny', None) or [])
-        if not (KB_ROOT/rel).is_file() or deny.intersection((rel, *aliases)):
+        if (not (KB_ROOT/rel).is_file() or deny.intersection((rel, *aliases))
+                or any(rel.startswith(path + '/') for path in deny)):
             return None
         return '/kb/' + rel
     rel = ('help/' if getattr(cfg, 'mode', 'speedrun') == 'explore' else 'explore/help/') + name

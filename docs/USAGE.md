@@ -854,7 +854,18 @@ Codex 开局会在原工作区内完成一轮模型预检，通过后才接管�
 
 知识库页每行分别设置「可读」和「必读」，按当前配置和游玩模式保存。必读只对可读文件生效，沿用到该次运行的准备与续跑。直接从命令行启动时可传 `--kb-required '{"README.md":false}'` 覆盖个别文件。两份社区 PDF 的必读进度通过对应文字版核验，原文插图仍可按需查看。
 
-探索模式还可以开放速通资料（命令行 `--kb-allow speedrun/<kb 内路径>,...`），挂在 `/kb/speedrun/` 下，开放后可设为必读。本机游戏源码只在速通模式可用。存在 `local/kb/celeste-source.txt` 时，整个反编译结果作为一条可读、默认选读的资料挂载到 `/kb/reference/celeste-source.txt`。Player 可以按类型名搜索，再分页读取对应文件段落。
+探索模式还可以开放单独的速通资料（命令行 `--kb-allow speedrun/<kb 内路径>,...`），挂在 `/kb/speedrun/` 下，开放后可设为必读。
+
+需要整体管理的目录可在本机 `local/kb/collections.json` 中添加。每组在控制台只显示一行，统一设置「可读」和「必读」。Player 在 `/kb` 中按原始子目录和文件名搜索、读取。开启必读时，主控逐个核对集合中可计量的文本。配置是 JSON 数组，`source` 从项目根目录起算，`path` 从容器的 `/kb` 起算，`modes` 指定集合出现的模式，`required` 省略时默认为选读。
+
+```json
+[
+  {"path": "reference/my-notes", "source": "local/kb/my-notes", "modes": ["speedrun"], "required": false},
+  {"path": "shared/tools", "source": "kb/shared/tools", "modes": ["speedrun", "explore"]}
+]
+```
+
+本机配置可以按 `path` 覆盖程序的 `kb/.collections.json`。现有 `kb/` 目录集合须保留原来的容器路径。`modes` 控制集合在哪些模式显示，已有共享资料在其它模式仍按其原有方式显示。程序已把 `local/kb/celeste-source/` 设成速通专用的选读集合，Player 在 `/kb/reference/celeste-source/` 下搜索和读取源码文件。
 
 控制台的“关于”页显示本机版本与 GitHub 上所选通道的最新版本（打开时自动检查，也可点“检查更新”；会 `git fetch --tags`）。通道有三个：**正式版**（主线上最新的 `vX.Y.Z` 标签）、**公测版**（主线上最新的预发布标签或正式版标签，谁新用谁）、**开发版**（主线的最新提交），选择记在本机浏览器存储里。“一键更新”更新到所选通道的最新版本，只在本机能快进时可用：没有主控在运行、本机没有改动程序文件、也没有 GitHub 上没有的提交；本机已经比所选通道的最新版本新时（例如在开发版上选了正式版通道）只提示，要换回去用下面的“换版本”。它执行 `git merge --ff-only <那个版本>`，然后重启 HUD 服务（控制台接口在里面），页面会自动刷新。桥接 Mod、Python 依赖或容器镜像有变化时，页面会提示按 docs/DEPLOY.md 另外处理。
 

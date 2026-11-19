@@ -2580,7 +2580,7 @@ function renderKb() {
   const required = new Set(list.documents.filter(d => d.required && readablePaths.has(d.path) && readablePaths.has(d.study_target))
     .map(d => d.study_target));
   const own = list.documents.filter(d => !d.opt_in), extra = list.documents.filter(d => d.opt_in);
-  $("kbCount").textContent = `${own.filter(readable).length} / ${own.length} 个文件可读，准备阶段须读 ${required.size} 份文本`
+  $("kbCount").textContent = `${own.filter(readable).length} / ${own.length} 项资料可读，准备阶段须读 ${required.size} 项`
     + (extra.length ? `；速通资料开放 ${extra.filter(readable).length} / ${extra.length} 个（挂在 /kb/speedrun/）` : "")
     + (list.sim_readme ? "；Claude 开模拟器时另有 /sim/README.md" : "");
   const groups = [];
@@ -2605,6 +2605,10 @@ function renderKb() {
       row.className = "kb-item" + (readable(d) ? "" : " denied") + (ui.kbFile && ui.kbFile.mode === ui.mode && ui.kbFile.path === d.path ? " open" : "");
       const box = document.createElement("input");
       box.type = "checkbox"; box.checked = readable(d); box.disabled = locked;
+      if (d.directory && box.checked && list.deny.some(path => path.startsWith(d.path + "/"))) {
+        box.checked = false;
+        box.indeterminate = true;
+      }
       box.title = d.opt_in ? "开放给探索模式的智能体（挂在 /kb/speedrun/ 下）" : "智能体能不能读这个文件";
       box.setAttribute("aria-label", `${d.path} 可读`);
       box.addEventListener("change", () => setReadable([d], box.checked));
@@ -2617,8 +2621,14 @@ function renderKb() {
       const requiredBox = document.createElement("input");
       requiredBox.type = "checkbox";
       requiredBox.checked = !!d.required;
+      if (d.directory && !Object.hasOwn(list.required, d.path) &&
+          Object.entries(list.required).some(([path, value]) => path.startsWith(d.path + "/") && value !== d.required)) {
+        requiredBox.checked = false;
+        requiredBox.indeterminate = true;
+      }
       requiredBox.disabled = locked || !d.study_target;
-      rule.title = !d.study_target ? "缺少可以核验阅读的对应文本，可按需查看"
+      rule.title = d.directory ? "准备阶段须读完目录集合内的文本"
+        : !d.study_target ? "缺少可以核验阅读的对应文本，可按需查看"
         : d.study_target === d.path ? "准备阶段须读完此文件"
         : `原文与同文文字版 ${d.study_target} 均可读时，准备阶段核验文字覆盖；插图可按需查阅`;
       requiredBox.setAttribute("aria-label", `${d.path} 必读`);
@@ -2630,7 +2640,7 @@ function renderKb() {
       }));
       if (d.local_only) size.appendChild(Object.assign(document.createElement("span"), { className: "tag", textContent: "本机" }));
       if (d.edited) size.appendChild(Object.assign(document.createElement("span"), { className: "tag gold", textContent: "已改", title: "这份配置改过这个文件（程序自带的文件不变）" }));
-      size.appendChild(document.createTextNode(bytes(d.size)));
+      size.appendChild(document.createTextNode(d.directory ? `目录 · ${d.file_count} 个文件` : bytes(d.size)));
       row.append(box, name, size);
       wrap.appendChild(row);
     }
@@ -2651,8 +2661,10 @@ function setRequired(mode, path, required) {
   kbRequiredUpdates = kbRequiredUpdates.then(async () => {
     if (profile !== ui.profiles?.current?.id) return;
     try {
+      const overrides = { ...kbRequired(mode), [path]: required };
+      for (const key of Object.keys(overrides)) if (key.startsWith(path + "/")) delete overrides[key];
       ui.options.prefs = await postJSON("/api/console/prefs", {
-        kb_required: { [mode]: { ...kbRequired(mode), [path]: required } },
+        kb_required: { [mode]: overrides },
       });
       await loadKbList(mode);
       renderKb(); updateSummary(); schedulePreview();
@@ -2667,7 +2679,10 @@ async function setReadable(docs, readable) {
   const deny = new Set(list.deny), allow = new Set(list.allow || []);
   for (const d of docs) {
     if (d.opt_in) { if (readable) allow.add(d.path); else allow.delete(d.path); }
-    else if (readable) deny.delete(d.path); else deny.add(d.path);
+    else if (readable) {
+      deny.delete(d.path);
+      if (d.directory) for (const path of deny) if (path.startsWith(d.path + "/")) deny.delete(path);
+    } else deny.add(d.path);
   }
   const update = { kb_deny: { [mode]: [...deny].sort() } };
   if (mode === "explore") update.kb_allow = { explore: [...allow].sort() };
@@ -2689,7 +2704,8 @@ async function openKbFile(mode, path) {
     const text = $("kbText");
     text.value = doc.text ?? "";
     text.readOnly = !doc.editable;
-    $("kbStatus").textContent = doc.text == null ? "这不是文本文件，不能在这里查看或编辑。"
+    $("kbStatus").textContent = doc.directory ? "目录集合。Player 可以在此路径下搜索、读取单个文件。"
+      : doc.text == null ? "这不是文本文件，不能在这里查看或编辑。"
       : !doc.editable ? (doc.truncated ? "文件太大，只显示开头，不能在这里编辑。" : "只读。")
       : profileReadonly() ? "内置配置只读：要修改先在顶部“配置”里新建一份。"
       : doc.edited ? "这份配置改过这个文件，正在编辑的是修改后的版本。" : "";

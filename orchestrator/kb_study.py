@@ -16,6 +16,12 @@ CORE_ORDER = ["README.md", "player_physics.md", "input.md", "entities.md", "tech
               "game_data.md"]
 
 
+def collection_paths(paths, groups):
+    """Keep the exact file list for receipts and collapse only its presentation."""
+    grouped = {member: group + '/' for group, members in groups.items() for member in members}
+    return list(dict.fromkeys(grouped.get(path, path) for path in paths))
+
+
 def required_files(kb_dir: Path, overrides=None) -> list[str]:
     """需要读完的文件（知识库内的相对路径）。草莓酱文本只要求英文原版，中文版是同一内容的翻译。"""
     from .kb_layout import read_manifest
@@ -74,6 +80,8 @@ class KbStudy:
         self.kb_dir = kb_dir
         self.minutes = minutes
         self.files = required_files(kb_dir, required)
+        from .kb_layout import read_manifest
+        self.groups = (read_manifest(kb_dir) or {}).get('groups', {})
         self.extra = dict(extra or {})
         if self.extra:
             k = next((i for i, rel in enumerate(self.files) if rel.startswith("reference/")), len(self.files))
@@ -155,12 +163,24 @@ class KbStudy:
     def container_paths(self) -> list[str]:
         return [self.container_path(rel) for rel in self.files]
 
+    def display_paths(self) -> list[str]:
+        return [self.container_path(rel) for rel in collection_paths(self.files, self.groups)]
+
     def reminder(self, *, reader: str = 'Read') -> str:
         lines = ["知识库还没有读完，游戏工具暂不执行（没有消耗任何游戏帧，也没有开始计时）。还没读到的部分："]
+        members = {member for paths in self.groups.values() for member in paths}
         for rel in self.files:
+            if rel in members:
+                continue
             missing = self.unread(rel)
             if missing:
                 lines.append(f"- {self.container_path(rel)}：第 {_ranges(missing)} 行（共 {self.total[rel]} 行）")
+        for group, paths in self.groups.items():
+            remaining = [rel for rel in paths if rel in self.read and len(self.read[rel]) < self.total[rel]]
+            if remaining:
+                rel = remaining[0]
+                lines.append(f'- {self.container_path(group)}/ 还有 {len(remaining)} 个文件未读完。'
+                             f'可以从 {self.container_path(rel)} 的第 {_ranges(self.unread(rel))} 行继续。')
         lines.append("请用 Read 读完这些行再开始（文件长时 Read 会截断，用 offset 与 limit 接着读，直到最后一行）。"
                      if reader == 'Read' else
                      f"请用 {reader} 读完这些行再开始（文件长时用 offset 与 limit 分页接着读，截断的片段不算完整行）。")

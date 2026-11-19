@@ -130,14 +130,16 @@ def kb_reference_rule(cfg) -> str:
     """知识库里社区资料原文（kb/reference/，不入库、在本机生成）的一句：本机没有或不给看时为空。"""
     root = getattr(cfg, "kb_source", None)
     from .kb_access import KB_ROOT
-    from .kb_layout import enabled, CELESTE_SOURCE, local_source
+    from .kb_layout import enabled, CELESTE_SOURCE, LEGACY_CELESTE_SOURCE, canonical_path, collection_exists
     bound = getattr(cfg, '_kb_bound_view', None) is not None
-    deny = set(getattr(cfg, "kb_deny", None) or [])
+    deny = {canonical_path(name) for name in getattr(cfg, "kb_deny", None) or []}
     source_available = (not is_explore(cfg) and CELESTE_SOURCE not in deny and
-                        ((cfg.kb_dir / CELESTE_SOURCE).is_file() if bound else
-                         enabled(KB_ROOT) and local_source(KB_ROOT).is_file()))
-    source_note = (f'本机《蔚蓝》反编译源码整理成单份 `/kb/{CELESTE_SOURCE}`。'
-                   '可搜索类名、方法名或 SOURCE FILE 标记，再按行读取相应片段。') if source_available else ''
+                        ((cfg.kb_dir / CELESTE_SOURCE).is_dir() if bound else
+                         enabled(KB_ROOT) and collection_exists(KB_ROOT, 'speedrun', CELESTE_SOURCE)))
+    source_note = (f'本机《蔚蓝》反编译源码位于 `/kb/{CELESTE_SOURCE}/`。'
+                   '可在目录中搜索类名和方法名，再按原路径读取对应文件。') if source_available else ''
+    if bound and not source_note and (cfg.kb_dir / LEGACY_CELESTE_SOURCE).is_file():
+        source_note = f'本次已绑定的旧知识库快照中，本机《蔚蓝》源码位于 `/kb/{LEGACY_CELESTE_SOURCE}`。'
     if bound:
         root = cfg.kb_dir
     elif enabled(KB_ROOT) and not is_explore(cfg):
@@ -145,7 +147,8 @@ def kb_reference_rule(cfg) -> str:
     if root is None or not (root / "reference").is_dir():
         return source_note
     files = [p for p in (root / "reference").rglob("*") if p.is_file()
-             and p.relative_to(root).as_posix() not in deny | {CELESTE_SOURCE}]
+             and p.relative_to(root).as_posix() not in deny | {LEGACY_CELESTE_SOURCE}
+             and not p.is_relative_to(root / CELESTE_SOURCE)]
     if not files:
         return source_note
     text = "`/kb/reference/` 收录了社区资料原文，可以用 Grep 查技巧名"
@@ -314,8 +317,8 @@ def fill(text: str, cfg) -> str:
     def reference(name):
         path = reference_path(cfg, name)
         return f'详细格式按需查阅 {path}。' if path else '详细参数以本次工具声明和实际返回为准。'
-    observe_reference = reference('observation.md')
-    if not workspace.workspace_read:
+    observe_reference = reference('observation.md') if '{observe_reference_rule}' in text else ''
+    if '{observe_reference_rule}' in text and not workspace.workspace_read:
         from .kb_access import KB_ROOT, _effective
         geometry = KB_ROOT/'shared/tools/observe/geometry.md'
         if geometry.is_file():
@@ -333,8 +336,8 @@ def fill(text: str, cfg) -> str:
         '{observe_reference_rule}': observe_reference,
         '{act_files_rule}': ('相关文件：plan_file 是你提交的 JSON 计划；/workspace/game/last_act.json 保存输入及逐帧轨迹；retry.json 记录自动重算原因；tas.py 用于显式读取 TAS 输入。last_tool.json 记录最近调用与最近推进动作，状态未确认时先核实，不盲目重放。'
                              if workspace.workspace_read else ''),
-        '{act_reference_rule}': reference('actions.md'),
-        '{files_reference_rule}': reference('workspace.md'),
+        '{act_reference_rule}': reference('actions.md') if '{act_reference_rule}' in text else '',
+        '{files_reference_rule}': reference('workspace.md') if '{files_reference_rule}' in text else '',
         '{file_tool_names}': '/'.join(dict.fromkeys(tool_name(cfg, name) for name in ('Read','Glob','Grep','Write','Edit'))),
         "{tas_workspace_rule}": ("`/workspace/game/tas.py` 提供 `load(path,start_line=...)`、`window(document,offset,count)` 和 `to_sim(inputs)`。前两者只生成计划，不操作游戏；不执行 console/Set/Read 等命令，需显式选取纯输入区。模拟转换拒绝不能表达的菜单键，不忽略它们。"
                                   if workspace.programs else ""),
@@ -363,9 +366,9 @@ def fill(text: str, cfg) -> str:
                                     if workspace.programs else "根据观测中的矩形边界和角色尺寸核对候选通道，用短动作验证存在歧义的连接。"),
         "{geometry_record_rule}": ("在笔记或程序里保留已验证的通道、连接依据、失败假设及适用条件。"
                                    if workspace.workspace_write else "在公开解说中简短总结已验证的通道、连接依据与失败假设。"),
-        "{room_reference_rule}": room_reference_rule(cfg),
-        "{story_reference_rule}": story_reference_rule(cfg),
-        "{program_reference_rule}": program_reference_rule(cfg),
+        "{room_reference_rule}": room_reference_rule(cfg) if "{room_reference_rule}" in text else "",
+        "{story_reference_rule}": story_reference_rule(cfg) if "{story_reference_rule}" in text else "",
+        "{program_reference_rule}": program_reference_rule(cfg) if "{program_reference_rule}" in text else "",
         "{program_timeout_rule}": program_timeout_rule(cfg),
         "{program_progress_rule}": ('每轮运行搜索前用公开 commentary 简述验证目标，程序中用 show.status 报告真实进展。'
                                       if getattr(cfg, 'engine', 'claude') == 'codex' else
@@ -386,7 +389,7 @@ def fill(text: str, cfg) -> str:
         "{formal_thought_act}": formal_thought_act(cfg),
         "{save_context_rule}": save_context_act(cfg),
         "{save_context_print}": save_context_print(cfg),
-        "{kb_reference_rule}": kb_reference_rule(cfg),
+        "{kb_reference_rule}": kb_reference_rule(cfg) if "{kb_reference_rule}" in text else "",
         # 碰撞图什么时候附在工具结果里（--collision-image；默认只在进新房间与 observe 时）
         "{act_collision_image}": {
             "always": "和完整碰撞图（开启图像时）",
@@ -721,7 +724,10 @@ def study_prompt(study: KbStudy, sim: bool = False, *, prepare_only: bool = Fals
     """准备阶段的第一条消息。仅准备时不开始试玩（结束方式见 agent._lifecycle_prompt，这里不重复）；
     准备后接着试玩时写明读完后的下一步，开了预置模拟器的速通另外要求先想清技巧与要写的程序并记进笔记。"""
     from .button_prompts import notification
-    files = "\n".join(f"- {path}" for path in study.container_paths())
+    paths = getattr(study, 'display_paths', study.container_paths)()
+    files = "\n".join(f"- {path}" for path in paths)
+    if any(path.endswith('/') for path in paths):
+        files += '\n路径以 / 结尾的是目录集合。用文件工具列出子目录，再逐个读取文本文件。'
     from .sim_mode import controller_owned
     # 不限额直接调用 /sim（Claude）；限额时与 Codex 相同，经主控预测
     legacy_sim = sim and not (cfg is not None and (controller_owned(cfg) or getattr(cfg, 'pause_limit', False)))

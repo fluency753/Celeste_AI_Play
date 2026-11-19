@@ -54,12 +54,20 @@ class SharedDocsTests(unittest.TestCase):
 
     def test_local_source_is_one_readonly_optional_speedrun_document(self):
         source = kb_layout.local_source(self.kb)
-        source.parent.mkdir(parents=True)
-        code = '========== SOURCE FILE: Celeste/Player.cs ==========\npublic class Player {}\n'
-        source.write_text(code, encoding='utf-8')
+        (source/'Celeste').mkdir(parents=True)
+        code = 'public class Player {}\n'
+        (source/'Celeste/Player.cs').write_text(code, encoding='utf-8')
+        (source/'project.csproj').write_text('<Project/>\n', encoding='utf-8')
+        (source/'example.ico').write_bytes(b'original non-text file')
         path = kb_layout.CELESTE_SOURCE
+        (self.kb/'.collections.json').write_text(json.dumps([{
+            'path': path, 'source': 'local/kb/celeste-source', 'modes': ['speedrun'],
+        }]), encoding='utf-8')
+        fname = path + '/Celeste/Player.cs'
         rows = [row for row in kb_access.documents('speedrun') if row['local_only']]
         self.assertEqual([row['path'] for row in rows], [path])
+        self.assertTrue(rows[0]['directory'])
+        self.assertEqual(rows[0]['file_count'], 3)
         self.assertFalse(rows[0]['required'])
         self.assertFalse(rows[0]['editable'])
         self.assertNotIn('speedrun/' + path, [row['path'] for row in kb_access.documents('explore')])
@@ -71,18 +79,79 @@ class SharedDocsTests(unittest.TestCase):
         from orchestrator.prompting import kb_reference_rule
         self.assertIn('/kb/' + path, kb_reference_rule(cfg))
         self.assertNotIn(path, kb_reference_rule(self.cfg))
-        self.assertEqual((kb_access.prepare_view(cfg) / path).read_text(encoding='utf-8'), code)
-        self.assertNotIn(path, required_files(cfg.kb_dir))
-        required = replace(cfg, kb_required={path: True, 'README.md': False})
+        self.assertEqual((kb_access.prepare_view(cfg) / fname).read_text(encoding='utf-8'), code)
+        self.assertEqual((cfg.kb_dir / path / 'example.ico').read_bytes(), b'original non-text file')
+        self.assertTrue(kb_access.read_document('speedrun', path)['directory'])
+        self.assertNotIn(fname, required_files(cfg.kb_dir))
+        required = replace(cfg, kb_required={kb_layout.LEGACY_CELESTE_SOURCE: True, 'README.md': False})
         view = kb_access.prepare_view(required)
-        self.assertIn(path, required_files(view))
+        self.assertIn(fname, required_files(view))
+        self.assertIn(path + '/project.csproj', required_files(view))
+        self.assertNotIn(path + '/example.ico', required_files(view))
         self.assertNotIn('README.md', required_files(view))
+        study = KbStudy(view, 1)
+        self.assertIn('/kb/' + path + '/', study.display_paths())
+        self.assertNotIn('/kb/' + fname, study.display_paths())
+        self.assertIn('/kb/' + fname, study.container_paths())
         self.assertNotEqual(view, cfg.kb_dir)
-        denied = replace(required, kb_deny=[path])
+        denied = replace(required, kb_deny=[kb_layout.LEGACY_CELESTE_SOURCE])
         view = kb_access.prepare_view(denied)
         self.assertFalse((view / path).exists())
-        self.assertNotIn(path, required_files(view))
+        self.assertNotIn(fname, required_files(view))
         self.assertNotIn(path, kb_reference_rule(denied))
+        self.assertEqual(kb_access.normalize_deny('speedrun', [kb_layout.LEGACY_CELESTE_SOURCE]), [path])
+
+    def test_user_config_can_group_builtin_directory_without_reopening_denied_child(self):
+        group, child = 'shared/tools', 'shared/tools/act.md'
+        config = self.root/'local/kb/collections.json'
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps([{'path': group, 'source': 'kb/shared/tools',
+                                      'modes': ['explore', 'speedrun'], 'required': True}]), encoding='utf-8')
+        entries = {row['path']: row for row in kb_access.documents('explore')}
+        self.assertTrue(entries[group]['directory'])
+        self.assertNotIn(child, entries)
+        self.assertEqual(kb_access.normalize_deny('explore', ['help/actions.md']), [child])
+        view = kb_access.prepare_view(self.cfg)
+        self.assertIn(child, required_files(view))
+        self.assertEqual((view/child).read_bytes(), (view/'help/actions.md').read_bytes())
+        edits = self.root/'local/kb_edits'
+        (edits/child).parent.mkdir(parents=True)
+        (edits/child).write_text('改写 {tool:act}\n', encoding='utf-8')
+        edited = kb_access.prepare_view(replace(self.cfg, kb_overlay=str(edits)))
+        self.assertEqual((edited/child).read_text(encoding='utf-8'), '改写 celeste_act\n')
+        view = kb_access.prepare_view(replace(self.cfg, kb_deny=[child]))
+        self.assertFalse((view/child).exists())
+        self.assertFalse((view/'help/actions.md').exists())
+        view = kb_access.prepare_view(replace(self.cfg, kb_required={group: False}))
+        self.assertNotIn(child, required_files(view))
+        self.assertTrue((view/child).is_file())
+
+    def test_collection_rejects_ambiguous_mount_and_path_traversal(self):
+        config = self.kb/'.collections.json'
+        base = {'path': 'shared/tools', 'source': 'kb/shared/tools', 'modes': ['explore']}
+        config.write_text(json.dumps([base, {**base, 'path': 'Shared/Tools/Nested'}]), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, '路径重叠'):
+            kb_access.documents('explore')
+        config.write_text(json.dumps([{**base, 'source': 'local/kb/.. /outside'}]), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, '路径组件'):
+            kb_access.documents('explore')
+        config.write_text(json.dumps([{**base, 'path': 'speedrun/collision'}]), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, '路径冲突'):
+            kb_access.documents('explore')
+
+    def test_grouping_speedrun_files_keeps_an_existing_explore_grant(self):
+        child = 'route/physics.md'
+        source = self.kb/'speedrun'/child
+        source.parent.mkdir()
+        source.write_text('旧资料\n', encoding='utf-8')
+        (self.kb/'.collections.json').write_text(json.dumps([{
+            'path': 'route', 'source': 'kb/speedrun/route', 'modes': ['speedrun'],
+        }]), encoding='utf-8')
+        path = 'speedrun/' + child
+        self.assertEqual(kb_access.normalize_allow('explore', [path]), [path])
+        view = kb_access.prepare_view(replace(self.cfg, kb_allow=[path]))
+        self.assertEqual((view/path).read_text(encoding='utf-8'), '旧资料\n')
+        self.assertNotIn(path, [row['path'] for row in kb_access.documents('explore')])
 
     def test_pdf_uses_paired_text_for_an_explicit_read_requirement(self):
         original = 'reference/community/pdf/example.pdf'

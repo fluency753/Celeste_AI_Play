@@ -1,0 +1,7 @@
+[
+  {
+    "path": "reference/celeste-source",
+    "source": "local/kb/celeste-source",
+    "modes": ["speedrun"]
+  }
+]
