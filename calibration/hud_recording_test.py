@@ -21,7 +21,9 @@ class HudRecordingTests(unittest.TestCase):
         if not node:self.skipTest('Node is required')
         html=(Path(__file__).resolve().parent.parent/'overlay/hud.html').read_text(encoding='utf-8')
         functions=html[html.index('let recordingSelectionRun='):html.index("let lifecycleBusy=")]
-        button=html[html.index("$('sessionPlay').onclick="):html.index('async function sendControl(')]
+        button_start=html.index("$('sessionPlay').onclick=")
+        button_end=html.index('\n  };',button_start)+len('\n  };')
+        button=html[button_start:button_end]
         script=r'''
 const assert=require('assert'),fs=require('fs'),source=JSON.parse(fs.readFileSync(0,'utf8'));
 const elements={};const $=id=>elements[id] || (elements[id]={value:'',checked:false,disabled:false,textContent:''});
