@@ -1,5 +1,6 @@
 """Check relay mounts, authoritative counting and replay snapshot identity."""
 import io
+import importlib.util
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -79,23 +80,69 @@ class SimRelayTests(unittest.TestCase):
         with patch('orchestrator.sim_relay.find_docker_exe', return_value='docker'), patch('orchestrator.sim_relay.threading.Timer'):
             relay = sim_relay.SimRelay(self.session)
             trace = {'stop': 'room', 'frames': [[21, 2, 3]]}
+            second = {'stop': 'death', 'frames': [[21, 5, 6]]}
+            current = {'frame': 20, 'room': '1', 'sid': 'city', 'digest': 'current'}
             events = [
                 {'ready': True},
-                {'simulated': 250, 'start': {'frame': 8, 'room': '1', 'sid': 'city'}, 'trace': trace},
-                {'simulated': 10, 'start': {'frame': 20, 'room': '1', 'sid': 'city', 'digest': 'current'}, 'trace': trace},
-                {'simulated': 5, 'start': {'frame': 20, 'room': '1', 'sid': 'other'}, 'trace': trace},
+                {'simulated': 250},
+                {'simulated': 10, 'start': current, 'traces': [trace]},
+                {'simulated': 5, 'start': {**current, 'sid': 'other'}, 'traces': [trace]},
+                {'simulated': 9, 'start': current, 'traces': [second]},
+                {'simulated': 6, 'start': current},
             ]
             relay.process = SimpleNamespace(stdout=io.BytesIO(''.join(json.dumps(e) + '\n' for e in events).encode()))
             relay.read()
             relay.flush()
             self.assertTrue(relay.ready.is_set())
-            self.playback.collect_prediction.assert_called_once_with([trace], 20)
-            self.metrics.add.assert_called_once_with(sim_calls=3, sim_rollouts=265)
+            self.playback.collect_prediction.assert_called_once_with(
+                [trace, second], 20, relay_batch=(('city', '1', 20, 'current'), 25))
+            self.metrics.add.assert_called_once_with(sim_calls=5, sim_rollouts=280)
+            relay.accept(events[2])
+            self.session.last_obs['frame'] += 1
+            relay.flush()
+            self.playback.collect_prediction.assert_called_once()
+            self.metrics.add.assert_called_with(sim_calls=1, sim_rollouts=10)
             self.playback.enabled = False
             relay.accept(events[2])
             relay.flush()
             self.playback.collect_prediction.assert_called_once()
             self.metrics.add.assert_called_with(sim_calls=1, sim_rollouts=10)
+
+
+class RelayWorkerPreviewTests(unittest.TestCase):
+    def setUp(self):
+        source = Path(__file__).resolve().parents[1] / 'agent-container/sim-relay.py'
+        spec = importlib.util.spec_from_file_location('_relay_worker', source)
+        self.worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.worker)
+
+    @staticmethod
+    def result(end, length, stop='done', events=()):
+        return {'ok': True, 'stop': stop, 'events': events,
+                'frames': [[i, i * end / length, 0, 'ignored'] for i in range(length + 1)]}
+
+    def test_preview_preserves_first_room_exit_and_ignores_backtracking_as_best(self):
+        back = self.result(10, 3, 'room')
+        cross = self.result(100, 10, 'death', [[6, 'room_exit', '2'], [7, 'room_enter', '2']])
+        slow = self.result(55, 8, 'room')
+        tracks = self.worker.preview_tracks([back, cross, slow], 1, 100, 40)
+        self.assertEqual(tracks, [{'stop': 'room', 'frames': [row[:3] for row in cross['frames'][:7]]}])
+
+    def test_budget_is_shared_across_replies_without_losing_counts(self):
+        start = {'digest': 'current'}
+        budget = [0, 0, 0]
+        results = [self.result(i, 12) for i in range(110)]
+        data = json.dumps({'results': results}).encode()
+        self.worker.PREVIEW_POINTS = 400
+        with patch.object(self.worker, 'time', SimpleNamespace(monotonic=lambda: 10)):
+            events = [self.worker.simulation_event(data, {'batch': []}, start, 'current', threading.Lock(),
+                                                   budget, None, 40) for _ in range(3)]
+        tracks = [track for event in events for track in event.get('traces', [])]
+        self.assertEqual(len(events[0]['traces']), 24)
+        self.assertGreater(len(events[1]['traces']), 1)
+        self.assertEqual(len(tracks), 30)
+        self.assertNotIn('traces', events[2])
+        self.assertEqual(sum(event['simulated'] for event in events), 330)
 
 
 class RelayClientCliTests(unittest.TestCase):

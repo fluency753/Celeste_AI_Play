@@ -427,15 +427,16 @@ def run_predictions(session, directory, candidates):
     return worker.predict(candidates)
 
 
-def write_replay(workspace, predictions, start_frame):
+def write_replay(workspace, predictions, start_frame, *, directory=None):
     """Use the existing binary trajectory format without running agent-controlled Python."""
     import importlib.util
     source = Path(__file__).parent / "workspace_files" / "show.py"
     spec = importlib.util.spec_from_file_location("_assist_show", source)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module._LOG_DIR = str(workspace / "game" / "simlog")
-    (workspace / "game" / "simlog").mkdir(parents=True, exist_ok=True)
+    directory = workspace / "game" / "simlog" if directory is None else directory
+    module._LOG_DIR = str(directory)
+    directory.mkdir(parents=True, exist_ok=True)
     log = module._Log()
     path = None
     try:

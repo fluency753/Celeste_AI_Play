@@ -14,6 +14,14 @@ from .session_store import write_json
 from .sim_assist import LEFTOVERS, _read_leftovers, _remove_container, _write_leftovers, retry_leftovers
 
 RELAY_PATH = '/workspace/.sim-relay'
+REPLAY_TRACK_LIMIT = 48
+REPLAY_POINT_LIMIT = 24_000
+
+
+def replay_key(session):
+    obs = session.last_obs or {}
+    level = obs.get('level') or {}
+    return level.get('sid'), level.get('room'), obs.get('frame'), getattr(session, 'sim_snapshot_digest', None)
 
 
 def enabled(cfg):
@@ -72,8 +80,13 @@ class SimRelay:
         self.lifecycle = threading.Lock()
         self.closed = False
         self.lock = threading.Lock()
+        self.flush_lock = threading.Lock()
         self.calls = self.count = 0
         self.timer = None
+        self.preview_key = None
+        self.preview_tracks = []
+        self.preview_count = 0
+        self.preview_points = 0
 
     def start(self):
         with self.lifecycle:
@@ -82,6 +95,7 @@ class SimRelay:
             self._start()
 
     def _start(self):
+        from .playback import BACKTRACK_PX
         cfg = self.session.cfg
         private = self.session.run_dir / 'sim_private'
         self.ledger = private / LEFTOVERS
@@ -99,7 +113,7 @@ class SimRelay:
                    '--label', 'celeste.sim-assist=1', '--label', f'celeste.run={self.session.run_dir.name}',
                    '-e', 'DOTNET_EnableDiagnostics=0', *worker_mounts(cfg),
                    '-v', f'{engine}:/engine.py:ro', '-v', f'{volume(cfg)}:/relay', '-v', f'{private}:/control:ro',
-                   '--entrypoint', 'python3', cfg.image, '-u', '/engine.py', self.endpoint]
+                   '--entrypoint', 'python3', cfg.image, '-u', '/engine.py', self.endpoint, str(BACKTRACK_PX)]
         self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
@@ -123,30 +137,51 @@ class SimRelay:
         with self.lock:
             self.calls += 1
             self.count += event['simulated']
-            if self.timer is None:
-                self.timer = threading.Timer(.5, self.flush)
-                self.timer.daemon = True
-                self.timer.start()
-        playback = self.session.playback
-        if playback is None or not playback.enabled or 'trace' not in event:
-            return
-        obs = self.session.last_obs or {}
-        level = obs.get('level') or {}
-        start = event['start']
-        if (start['sid'] and start.get('digest') == getattr(self.session, 'sim_snapshot_digest', None)
-                and (start['sid'], start['room'], start['frame']) == (level.get('sid'), level.get('room'), obs.get('frame'))):
-            playback.collect_prediction([event['trace']], start['frame'])
+            playback = self.session.playback
+            start = event.get('start')
+            if playback is not None and playback.enabled and start and start['sid']:
+                key = (start['sid'], start['room'], start['frame'], start.get('digest'))
+                if key[3] and key == replay_key(self.session):
+                    if key != self.preview_key:
+                        self.preview_key, self.preview_count, self.preview_tracks, self.preview_points = key, 0, [], 0
+                    self.preview_count += event['simulated']
+                    for track in event.get('traces', ()):
+                        if len(self.preview_tracks) >= REPLAY_TRACK_LIMIT:
+                            break
+                        points = len(track['frames'])
+                        if self.preview_points + points <= REPLAY_POINT_LIMIT:
+                            self.preview_tracks.append(track)
+                            self.preview_points += points
+            if self.timer is None and not self.closed:
+                self._schedule_flush()
+
+    def _schedule_flush(self):
+        self.timer = threading.Timer(.5, self.flush)
+        self.timer.daemon = True
+        self.timer.start()
 
     def flush(self):
-        with self.lock:
-            calls, count = self.calls, self.count
-            self.calls = self.count = 0
-            self.timer = None
-            if count:
-                try:
-                    self.session.metrics.add(sim_calls=calls, sim_rollouts=count)
-                except OSError as exc:
-                    print(f'[sim] 主控模拟统计落盘失败：{exc}', flush=True)
+        with self.flush_lock:
+            with self.lock:
+                calls, count = self.calls, self.count
+                self.calls = self.count = 0
+                key, preview_count, tracks = self.preview_key, self.preview_count, self.preview_tracks
+                self.preview_key, self.preview_count, self.preview_tracks, self.preview_points = None, 0, [], 0
+            try:
+                if count:
+                    try:
+                        self.session.metrics.add(sim_calls=calls, sim_rollouts=count)
+                    except OSError as exc:
+                        print(f'[sim] 主控模拟统计落盘失败：{exc}', flush=True)
+                if tracks and not self.closed and key == replay_key(self.session):
+                    self.session.playback.collect_prediction(tracks, key[2], relay_batch=(key, preview_count))
+            except Exception as exc:  # 路线展示故障不影响推演及统计
+                print(f'[sim] 主控模拟回放提交失败：{exc}', flush=True)
+            finally:
+                with self.lock:
+                    self.timer = None
+                    if self.calls and not self.closed:
+                        self._schedule_flush()
 
     def close(self):
         with self.lifecycle:

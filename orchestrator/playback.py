@@ -329,6 +329,7 @@ class _RoundJob:
     account: bool = True
     completion: _PreviewCompletion | None = None
     generation: int | None = None
+    relay_batch: tuple | None = None
 
 
 class Playback:
@@ -518,7 +519,7 @@ class Playback:
                 self._enqueue(_RoundJob(owner.label, [sources[i] for i in indexes], [moved[i] for i in indexes],
                                         account=owner.account_rollouts, completion=completion))
 
-    def collect_prediction(self, predictions: list[dict], start_frame: int) -> None:
+    def collect_prediction(self, predictions: list[dict], start_frame: int, *, relay_batch=None) -> None:
         """Collect native predictions immediately; GameSession already counted/charged them."""
         if not self.collect:
             return
@@ -526,6 +527,17 @@ class Playback:
         # Claim precisely these files before a concurrent Bash collector can see them.
         with self._submit_lock:
             if self._closed:
+                return
+            if relay_batch is not None:
+                from .sim_relay import replay_key
+                if not self._can_draw(self._generation) or relay_batch[0] != replay_key(self.session):
+                    return
+                with self._cv:
+                    if self._backlog >= 2:
+                        return
+                paths = write_replay(self.session.workspace, predictions, start_frame, directory=self.pending)
+                if paths:
+                    self._enqueue(_RoundJob("主控模拟", paths, paths, account=False, relay_batch=relay_batch))
                 return
             paths = write_replay(self.session.workspace, predictions, start_frame)
             if not paths:
@@ -662,6 +674,13 @@ class Playback:
                         self._preview_success[job.key] = False
                         success = bool(self._play_round(label, sources, False, preview=True, generation=job.key[0]))
                         self._preview_success[job.key] = previous and success
+                elif job.relay_batch is not None:
+                    from .sim_relay import replay_key
+                    key, count = job.relay_batch
+                    with self.session.lock:
+                        if self._can_draw(job.generation) and key == replay_key(self.session):
+                            self._play_round(job.label, job.sources, False, preview=True,
+                                             generation=job.generation, relay_count=count)
                 else:
                     label, sources, account, completion = job.label, job.sources, job.account, job.completion
                     if isinstance(completion, _PreviewCompletion):
@@ -723,7 +742,7 @@ class Playback:
             yield log.subset(np.asarray(batch))
 
     def _play_round(self, label: str, sources: list, account: bool = True,
-                    preview=False, skip_render=False, log=None, generation=None) -> bool | None:
+                    preview=False, skip_render=False, log=None, generation=None, relay_count=None) -> bool | None:
         t0 = time.monotonic()
         rd = self._digest(read_logs(sources) if log is None else log, label,
                           all_tracks=preview and not self._stream_sample)
@@ -738,11 +757,12 @@ class Playback:
                 self.rounds.append(Round(rd.label, rd.rollouts, [], best_exit=rd.best_exit))
             number = len(self.rounds) + int(preview)
         stage = '搜索中增量' if preview else f'第 {number} 轮'
-        self.log(f"[playback] {stage}：推演 {rd.rollouts} 条，绘制 {len(rd.tracks)} 条（{time.monotonic() - t0:.1f} 秒）")
+        shown_rollouts = rd.rollouts if relay_count is None else relay_count
+        self.log(f"[playback] {stage}：推演 {shown_rollouts} 条，绘制 {len(rd.tracks)} 条（{time.monotonic() - t0:.1f} 秒）")
         # HUD：这次调用推演的路线条数（这一轮画完清零）与当前房间推演出的最快出房帧数；总条数另记
         if account:
             self.metrics.add(sim_rollouts=rd.rollouts)
-        self.metrics.update(sim_round_rollouts=rd.rollouts)
+        self.metrics.update(sim_round_rollouts=shown_rollouts)
         if rd.best_exit:
             current = self.metrics.state.sim_best_frames
             if not current or rd.best_exit < current:
@@ -776,13 +796,13 @@ class Playback:
                                 hold=max(1, int(18 / factor)), fade=0)
         seg["camera"] = "keep"
         try:
-            reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=rd.rollouts, generation=generation)
+            reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=shown_rollouts, generation=generation)
         finally:
             self.metrics.update(sim_round_rollouts=0)   # 这一轮画完：HUD 的"推演路径"清零
         record = {"t": time.time(), "decision": self.session.decision_index + 1, "round": number, "label": rd.label,
                   "search_preview": preview,
-                  "preview_sampled": bool(preview and self._stream_sample),
-                  "rollouts": rd.rollouts, "frames": seg["frames"], "speed": seg["speed"], "dim": (reply or {}).get("dim", seg["dim"]),
+                  "preview_sampled": bool(preview and (self._stream_sample or shown_rollouts > len(rd.tracks))),
+                  "rollouts": shown_rollouts, "frames": seg["frames"], "speed": seg["speed"], "dim": (reply or {}).get("dim", seg["dim"]),
                   "fade_frames": (reply or {}).get("fade_frames", seg["fade"]),
                   "trail_half_life_frames": (reply or {}).get("trail_half_life_frames"),
                   "spinner_visual_peak": (reply or {}).get("spinner_visual_peak"),
