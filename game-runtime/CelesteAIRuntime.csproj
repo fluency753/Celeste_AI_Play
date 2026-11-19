@@ -11,7 +11,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <NoWarn>$(NoWarn);CS0436</NoWarn>
-    <Version>1.1.2</Version>
+    <Version>1.1.3</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <!-- Payload-only commits must not change the resident DLL's debug identity. -->
     <EnableSourceLink>false</EnableSourceLink>
@@ -37,6 +37,7 @@
     <Compile Include="../game-bridge/Source/ClockServer.cs" Link="ClockServer.cs" />
     <Compile Include="../game-bridge/Source/InputFrame.cs" Link="InputFrame.cs" />
     <Compile Include="../game-bridge/Source/InputInjector.cs" Link="InputInjector.cs" />
+    <Compile Include="../game-bridge/Source/StickTrig.cs" Link="StickTrig.cs" />
   </ItemGroup>
   <Target Name="CopyToModBin" AfterTargets="Build">
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll;$(OutputPath)$(AssemblyName).pdb" DestinationFolder="$(MSBuildThisFileDirectory)bin" />

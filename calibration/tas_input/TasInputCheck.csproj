@@ -12,5 +12,6 @@
     <Compile Include="../../game-bridge/Source/MapEntryGuard.cs" Link="MapEntryGuard.cs" />
     <Compile Include="../../game-bridge/Source/ActionBlock.cs" Link="ActionBlock.cs" />
     <Compile Include="../../game-bridge/Source/InputInjector.cs" Link="InputInjector.cs" />
+    <Compile Include="../../game-bridge/Source/StickTrig.cs" Link="StickTrig.cs" />
   </ItemGroup>
 </Project>

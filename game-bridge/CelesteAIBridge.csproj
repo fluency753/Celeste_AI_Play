@@ -22,7 +22,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <Compile Remove="Source/RecordingAudio.cs;Source/RecordingBanks.cs;Source/RecordingMixSnapshot.cs;Source/ClockServer.cs;Source/IpcServer.cs;Source/InputFrame.cs;Source/InputInjector.cs" />
+        <Compile Remove="Source/RecordingAudio.cs;Source/RecordingBanks.cs;Source/RecordingMixSnapshot.cs;Source/ClockServer.cs;Source/IpcServer.cs;Source/InputFrame.cs;Source/InputInjector.cs;Source/StickTrig.cs" />
         <ProjectReference Include="../game-runtime/CelesteAIRuntime.csproj" />
         <Reference Include="$(CelestePrefix)\Celeste.dll" Private="false" Publicize="true" />
         <Reference Include="$(CelestePrefix)\FNA.dll" Private="false" Publicize="true" />
