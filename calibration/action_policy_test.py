@@ -96,7 +96,7 @@ class PolicyUiTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         for filename, prefix, first, last in (
             ('console.html','live', "  for (const [key,id]", '  $("fastToggle").hidden'),
-            ('hud.html','permission', '    const pendingPermissions=', '    const manageable ='),
+            ('hud.html','permission', '    const pendingPermissions=', "    $('cutsceneMode').value"),
         ):
             source = (root/'overlay'/filename).read_text(encoding='utf-8')
             offset = source.index('function renderControls') if filename == 'console.html' else source.index('const pendingStory=')
