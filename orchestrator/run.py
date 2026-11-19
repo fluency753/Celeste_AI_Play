@@ -165,6 +165,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                          "同时开 --limit-planning 时改为主控私有的限额预测，不向 agent 开放模拟器文件；Codex 默认关闭模拟器")
     ap.add_argument("--sim-assist", action=argparse.BooleanOptionalAction, default=None,
                     help="只用于探索模式：有额度的短路线预测（默认关闭；需自配标准模拟器 sim/dist；续跑沿用原运行）；不向智能体开放模拟器文件")
+    ap.add_argument('--sim-relay', action=argparse.BooleanOptionalAction, default=None,
+                    help='不限额速通：通过断网管道调用主控模拟器，原 /sim 接口可继续使用')
     ap.add_argument("--stiffness", action=argparse.BooleanOptionalAction, default=None,
                     help="只用于探索模式：思考僵直（默认关；续跑沿用原运行）。一次冻结里思考、运行工具的时间各自满 2.5 分钟后，"
                          "按比例在下一次 act 前让角色保持上一帧的按键僵直（思考每 2.5 分钟 0.2 秒、工具每 2.5 分钟另加 0.4 秒，"
@@ -677,6 +679,11 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         raise SystemExit("--limit-planning 只用于开模拟器的版本（关模拟器的版本不限制思考与调用）")
     if cfg.sim and not cfg.pause_limit and not capabilities.programs:
         raise SystemExit("直接调用的预置模拟器只能用于容器运行方式（本机运行方式请加 --no-sim，或加 --limit-planning 改用主控限额预测）")
+    relay_eligible = cfg.sim and not cfg.pause_limit and capabilities.programs and (cfg.sim_dir / 'sim.py').is_file()
+    if args.sim_relay is True and not relay_eligible:
+        raise SystemExit('--sim-relay 需要不限额速通、容器运行方式和完整的 sim/dist')
+    use_relay = (previous['state'].get('sim_relay', False) if previous else True) if args.sim_relay is None else args.sim_relay
+    cfg.sim_relay = bool(relay_eligible and use_relay)
     if cfg.sim:
         if not (cfg.sim_dir / "celeste-sim").is_file():
             raise SystemExit(f"找不到预置模拟器：{cfg.sim_dir / 'celeste-sim'}（模拟器只在本机，见使用说明的预置模拟器一节；"
@@ -757,6 +764,8 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
         if cfg.speedrun_record_on_demand:
             state['speedrun_record_on_demand'] = True
             state['speedrun_practice_speed'] = cfg.play_speed
+    if getattr(cfg, 'sim_relay', False):
+        state['sim_relay'] = True
     if cfg.codex_player_login:
         state['codex_player_login'] = True
     if getattr(cfg, "profile", "local") != "local":
@@ -1465,6 +1474,10 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                     container = await asyncio.to_thread(ensure_container, cfg, lambda m: print(m, flush=True))
                 print(f"[run] 智能体容器：{container}（工作区 {cfg.workspace_dir}）", flush=True)
                 session.container = container
+            if getattr(cfg, 'sim_relay', False):
+                from .sim_relay import SimRelay
+                relay = session.sim_relay = SimRelay(session)
+                await asyncio.to_thread(relay.start)
             note = opening_note(cfg, previous, resumed_session, getattr(args, "note_text", None),
                                 include_rules=cfg.engine != 'claude')
             publish_user_note(run_dir, getattr(args, "note_text", None))
@@ -1527,6 +1540,11 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
                                              primary.__traceback__ if primary else None)
             except BaseException as error:
                 cleanup_errors.append(('HTTP 服务', error))
+        if relay := getattr(session, 'sim_relay', None):
+            try:
+                await asyncio.to_thread(relay.close)
+            except BaseException as error:
+                cleanup_errors.append(('主控速通模拟', error))
         if playback is not None:
             try:
                 playback.close()

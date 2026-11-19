@@ -275,6 +275,7 @@ class RunConfig:
                                      # 按 playback_speed 画会超过时，这一轮整体按比例加速，在这个时长内画完
     thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
     sim: bool = False                # 速通预置模拟器：不限额时 Claude 直接调用 /sim；开 pause_limit 时改为主控限额预测（sim_mode.py）
+    sim_relay: bool = False          # 不限额速通保留 /sim 接口，由主控持有实际模拟器
     sim_assist: bool = False         # 新手模式的限额模拟：后台持有模拟器，真实试玩赚取体力
     knowledge_profile: str = "full"  # explore：精简入门资料和独立工作区；full：原有速通资料（由 mode 决定，见 modes.py）
     mode: str = "speedrun"           # 速通模式 speedrun / 探索模式 explore（互斥）；直播模式是 live，可以和任一个叠加

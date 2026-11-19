@@ -1461,9 +1461,18 @@ class GameSession:
         try:
             reply = self.client.call("sim_state", margin=4)
             tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(reply["state"], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            payload = json.dumps(reply['state'], ensure_ascii=False, separators=(',', ':'))
+            tmp.write_text(payload, encoding='utf-8')
             tmp.replace(path)
+            if getattr(self.cfg, 'sim_relay', False):
+                import hashlib
+                self.sim_snapshot_digest = hashlib.sha256(payload.encode()).hexdigest()
+                try:
+                    write_json(self.run_dir / 'sim_private' / 'relay_snapshot.json', self.sim_snapshot_digest)
+                except OSError:
+                    self.sim_snapshot_digest = None
         except Exception:
+            self.sim_snapshot_digest = None
             path.unlink(missing_ok=True)
 
     # ---- 动作 ----

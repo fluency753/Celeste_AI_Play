@@ -47,6 +47,9 @@ def docker(*args: str, check: bool = True, timeout: float = 120) -> subprocess.C
 
 def _sim_label(cfg: RunConfig) -> str:
     from .sim_mode import agent_sim, controller_owned
+    from .sim_relay import enabled
+    if enabled(cfg):
+        return 'relay-v1'
     return "1" if agent_sim(cfg) else ("host-only-v1" if controller_owned(cfg) else "0")
 
 
@@ -133,12 +136,22 @@ def _git_mount_matches(cfg: RunConfig, mounts: list) -> bool:
 
 def _sim_mount_matches(cfg: RunConfig, mounts: list) -> bool:
     from .sim_mode import agent_sim
+    from .sim_relay import RELAY_PATH, enabled, public_dir, volume
     found = [row for row in mounts if row.get('Destination') == '/sim' or row.get('Destination', '').startswith('/sim/')]
-    if not agent_sim(cfg):
-        return not found
+    relays = [row for row in mounts if row.get('Destination') == RELAY_PATH]
+    if enabled(cfg):
+        if len(relays) != 1 or relays[0].get('Type') != 'volume' or relays[0].get('Name') != volume(cfg) or not relays[0].get('RW'):
+            return False
+        source = public_dir(cfg)
+    else:
+        if relays:
+            return False
+        if not agent_sim(cfg):
+            return not found
+        source = cfg.sim_dir
     return (len(found) == 1 and found[0].get('Destination') == '/sim' and found[0].get('Type') == 'bind'
             and found[0].get('RW') is False
-            and _mount_source(found[0].get('Source', '')) == _mount_source(str(cfg.sim_dir.resolve())))
+            and _mount_source(found[0].get('Source', '')) == _mount_source(str(source.resolve())))
 
 
 def _codex_volume(cfg: RunConfig) -> str:
@@ -182,7 +195,10 @@ def _create(cfg: RunConfig, name: str) -> None:
             args += ['-v', f'{PLAYER_LOGIN_VOLUME}:{PLAYER_LOGIN_MOUNT}',
                      '-e', 'CELESTE_CODEX_PLAYER_LOGIN=1']
     from .sim_mode import agent_sim
-    if agent_sim(cfg):
+    from .sim_relay import RELAY_PATH, enabled, public_dir, volume
+    if enabled(cfg):
+        args += ['-v', f'{public_dir(cfg)}:/sim:ro', '-v', f'{volume(cfg)}:{RELAY_PATH}']
+    elif agent_sim(cfg):
         args += ["-v", f"{cfg.sim_dir}:/sim:ro"]
     if cfg.seccomp_unconfined:
         args += ["--security-opt", "seccomp=unconfined"]
@@ -256,11 +272,14 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
     """返回已就绪（防火墙生效）的容器名；知识库先按当前环境生成。"""
     from .codex_container import ACCOUNT_AGENT, initialize_context_config
     from .kb_access import prepare_view
+    from .sim_relay import enabled, prepare as prepare_sim_relay
     player_codex = cfg.engine == 'codex' and cfg.agent != ACCOUNT_AGENT
     prepare_view(cfg, log)
     image = docker("image", "inspect", "-f", "{{.Id}}", cfg.image, check=False)
     if image.returncode != 0:
         raise RuntimeError(f"找不到镜像 {cfg.image}，请先在仓库根目录执行：docker build -t {cfg.image} agent-container")
+    if enabled(cfg):
+        prepare_sim_relay(cfg)
     image_id = image.stdout.strip()
     # Reject an unsafe pre-existing layout before backing up/removing a container.
     _workspace_git(cfg)
