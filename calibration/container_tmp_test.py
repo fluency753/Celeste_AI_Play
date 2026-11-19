@@ -159,8 +159,10 @@ class CarryTmpTests(unittest.TestCase):
             self.cfg = replace(cfg, sim=True)
             labels = self.matching_labels()
             self.assertEqual(labels['celeste-ai-play.sim'], '1')
+            with patch('orchestrator.config.REPO_ROOT', self.root):
+                sim_mount = {'Destination': '/sim', 'Source': str(self.cfg.sim_dir.resolve()), 'Type': 'bind', 'RW': False}
             mounted = FakeDocker({}, image='sha:new', labels=labels,
-                                 mounts=[*self.git_mounts(), {'Destination': '/sim'}])
+                                 mounts=[*self.git_mounts(), sim_mount])
             _, created = self.ensure(mounted)
             self.assertEqual(created, [])
             missing = FakeDocker({'tmp/search.py': b'print(1)\n'}, image='sha:new', labels=labels,

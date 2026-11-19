@@ -40,15 +40,13 @@ class PromptFocusTests(unittest.TestCase):
         self.assertNotIn('"presentation"', text)
         self.assertEqual(current_settings(cfg)['task']['targets'][1]['side'], 'B')
 
-    def test_runtime_settings_report_preset_simulator_only_when_enabled_and_bounded(self):
+    def test_runtime_settings_report_preset_simulator_whenever_enabled(self):
         for engine in ('codex', 'claude'):
             for sim in (False, True):
                 for limited in (False, True):
                     cfg = replace(self.cfg, engine=engine, mode='speedrun', knowledge_profile='full',
                                   sim=sim, pause_limit=limited)
-                    # Codex：主控预测须限额；Claude：/sim 直接调用，记账与否都算开放
-                    expected = sim and (limited or engine == 'claude')
-                    self.assertEqual(current_settings(cfg)['prediction']['preset_simulator'], expected)
+                    self.assertEqual(current_settings(cfg)['prediction']['preset_simulator'], sim)
 
     def test_limited_simulation_prompt_is_the_same_controller_version_for_both_executors(self):
         for engine, runtime in (('codex', 'container'), ('claude', 'container'), ('claude', 'host')):

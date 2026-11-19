@@ -1,4 +1,4 @@
-"""速通预置模拟器按是否限额区分：不限额时 Claude 直接调用 /sim，限额时两个执行器都经主控预测（orchestrator/sim_mode.py）。"""
+"""速通预置模拟器直调与主控限额的行为检查。"""
 import json
 import tempfile
 import unittest
@@ -24,23 +24,26 @@ class SimModeTests(unittest.TestCase):
         self.assertTrue(controller_sim(claude))
         self.assertIsNone(sim_readme(claude))
         self.assertEqual(kb_variant(claude), 'controller')
-        self.assertFalse(agent_sim(codex))
-        self.assertIsNone(sim_readme(codex))
-        self.assertEqual(kb_variant(codex), 'controller')
+        self.assertTrue(agent_sim(codex))
+        self.assertEqual(list(sim_readme(codex)), ['/sim/README.md'])
+        self.assertEqual(kb_variant(codex), 'direct')
         codex.pause_limit = True
         self.assertTrue(controller_sim(codex))
+        self.assertIsNone(sim_readme(codex))
+        self.assertEqual(kb_variant(codex), 'controller')
         explore = RunConfig(agent='a', save='s', model='m', engine='claude', mode='explore')
         self.assertEqual(kb_variant(explore), 'direct')
 
 
 class SimStateTests(unittest.TestCase):
-    def test_only_claude_sim_writes_start_state_into_workspace(self):
+    def test_only_direct_sim_writes_start_state_into_workspace(self):
         from orchestrator.game_session import GameSession
         with tempfile.TemporaryDirectory() as folder:
             workspace = Path(folder)
             (workspace / 'game').mkdir()
             for engine, sim, limit, expected in (('claude', True, False, True), ('claude', False, False, False),
-                                                 ('claude', True, True, False), ('codex', True, True, False)):
+                                                 ('claude', True, True, False), ('codex', True, False, True),
+                                                 ('codex', True, True, False)):
                 with self.subTest(engine=engine, sim=sim, limit=limit):
                     path = workspace / 'game' / 'sim_state.json'
                     path.unlink(missing_ok=True)
@@ -73,7 +76,7 @@ class KnowledgeExecutorBlockTests(unittest.TestCase):
         from orchestrator.kb_layout import _write_view
         root = Path(__file__).resolve().parent.parent / 'kb'
         with tempfile.TemporaryDirectory() as folder:
-            for engine, limit in (('claude', False), ('claude', True), ('codex', True)):
+            for engine, limit in (('claude', False), ('claude', True), ('codex', False), ('codex', True)):
                 cfg = RunConfig(agent='a', save='s', model='m', engine=engine, mode='speedrun', knowledge_profile='full',
                                 sim=True, pause_limit=limit)
                 view = Path(folder) / f'{engine}-{limit}'
