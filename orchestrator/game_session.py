@@ -458,8 +458,14 @@ class GameSession:
         self.metrics.update(piece_done=False)
         self._pending_complete = cfg.resume_completion_pending
         self.speedrun_target_ticks = cfg.speedrun_target_ticks
+        self.speedrun_recording = False
+        self.speedrun_recording_uncertain = False
+        self.open_speedrun_recording = None
+        self.verify_speedrun_capture = None
         if self.speedrun_target_ticks is not None:
             self.metrics.update(speedrun_target_ticks=self.speedrun_target_ticks)
+        if cfg.speedrun_record_on_demand:
+            self.metrics.update(speedrun_recording=False)
         # 统计是绕行分类的持久化来源；当前许可关闭不改变已经归属的地图。
         self._detour_latched = cfg.play_scope != 'visited' and bool(
             cfg.resume_detour_classifying or metrics.state.detour_classifying or metrics.state.detour)
@@ -497,8 +503,8 @@ class GameSession:
     def connect(self) -> dict:
         self.client = BridgeClient(port=self.cfg.bridge_port, timeout=600)
         hello = self.client.call('hello')
-        from .speedrun_goal import require_timing_bridge
-        require_timing_bridge(self.speedrun_target_ticks, hello)
+        from .speedrun_goal import require_capture_bridge
+        require_capture_bridge(self.cfg, hello)
         self.game_process_id = hello.get('process_id')
         from .bridge_reload import hold_message
         if held := hold_message(hello):
@@ -587,7 +593,8 @@ class GameSession:
                 self.piece = Piece(chapter)
         parked_menu = getattr(self.cfg, '_parked_source', None) and self._at_chapter_menu(obs)
         timed_result = self.speedrun_target_ticks is not None and self._timed_finish(obs) is not None
-        if obs.get("scene") != "Level" and not parked_menu and not timed_result and not self._speedrun_retry_ending(obs) and not (self.cfg.cutscene_mode == 'agent' and (
+        timed_menu = self.speedrun_target_ticks is not None and self._at_chapter_menu(obs)
+        if obs.get("scene") != "Level" and not parked_menu and not timed_menu and not timed_result and not self._speedrun_retry_ending(obs) and not (self.cfg.cutscene_mode == 'agent' and (
                 story_pending(obs) or ((self._pending_complete or self.chapter_finished or self._in_detour()) and obs.get('scene') in END_SCENES)
                 or (obs.get('scene') == 'Overworld' and (obs.get('menu') or {}).get('current') in {'OuiChapterSelect','OuiChapterPanel'}))):
             raise RuntimeError(f"当前不在关卡内（scene={obs.get('scene')}），请先进入存档")
@@ -1096,7 +1103,7 @@ class GameSession:
         t0 = time.monotonic()
         try:
             reply = self.client.call("step", inputs=[f"{frames},{keys}" if keys else str(frames)],
-                                     stop_on=stops, speed=self.cfg.play_speed, image=True, scope="room",
+                                     stop_on=stops, speed=self._advance_speed(self.cfg.play_speed), image=True, scope="room",
                                      fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
                                      on_event=self._on_progress, **self._stop_rooms(), **extra)
         except Exception:
@@ -1664,14 +1671,21 @@ class GameSession:
                 or (obs.get('save') or {}).get('slot') != self.cfg.save_slot):
             return None
         ticks = source.get('chapterTimeTicks')
-        return {'map': source['sid'], 'side': source['side'], 'slot': self.cfg.save_slot,
-                'ticks': ticks if type(ticks) is int and ticks >= 0 else None,
-                'valid': source.get('chapterTimeValid') is True}
+        result = {'map': source['sid'], 'side': source['side'], 'slot': self.cfg.save_slot,
+                  'ticks': ticks if type(ticks) is int and ticks >= 0 else None,
+                  'valid': source.get('chapterTimeValid') is True}
+        if self.cfg.speedrun_record_on_demand:
+            result['recorded_from_start'] = bool(
+                source.get('chapterRecordedFromStart') is True and self.verify_speedrun_capture
+                and self.verify_speedrun_capture())
+        return result
 
     def _qualified_speedrun_ticks(self, attempt=None):
         if attempt is None:
             attempt = self.metrics.state.speedrun_last_attempt or {}
         ticks = attempt.get('ticks')
+        if self.cfg.speedrun_record_on_demand and attempt.get('recorded_from_start') is not True:
+            return None
         if (attempt.get('valid') is True and type(ticks) is int and 0 <= ticks < self.speedrun_target_ticks
                 and self.piece is not None and (attempt.get('map'), attempt.get('side'), attempt.get('slot')) ==
                 (CHAPTER_SIDS.get(self.piece.chapter), self.piece.side, self.cfg.save_slot)):
@@ -1689,6 +1703,9 @@ class GameSession:
             prefix = (f'本次有效通关用时 {target_seconds_text(ticks)} 秒，未达到严格低于 {target} 秒的目标。'
                       if attempt.get('valid') is True and type(ticks) is int and ticks >= self.speedrun_target_ticks
                       else f'整章速通目标仍待达成：有效通关须严格低于 {target} 秒。')
+            if self.cfg.speedrun_record_on_demand and not attempt.get('recorded_from_start'):
+                prefix = ('本次没有可核实的章首连续录像。' if self.speedrun_recording
+                          else '本次为未录制练习。回到选章后，准备好输入时调用开启录像工具。')
         return prefix + '请按当前界面确认结算，在选章界面从章节开头再试。'
 
     def _least_frames(self, plan: PlanSpec, planned: int) -> int:
@@ -1776,7 +1793,7 @@ class GameSession:
                           "stiffness_interrupted": True}
             else:
                 t0 = time.monotonic()
-                reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self.cfg.play_speed, image=True,
+                reply = self.client.call("step", inputs=plan.inputs, stop_on=stop, speed=self._advance_speed(self.cfg.play_speed), image=True,
                                          scope="room", fields=True, entityTrajectory=True, progress=PROGRESS_EVERY,
                                          on_event=self._on_progress, **self._stop_rooms(), **extra)
                 game_s = time.monotonic() - t0
@@ -2155,7 +2172,7 @@ class GameSession:
                 if mode == 'auto' and menu_closes < 3 and not self._agent_menu(obs):
                     # 自动跳过剧情时暂停菜单只会是跳过剧情留下的（智能体按不了暂停键）：关掉后接着推进
                     menu_closes += 1
-                    reply = self.client.call("step", inputs=["1,B", "20"], stop_on=[], speed=self.cfg.auto_speed,
+                    reply = self.client.call("step", inputs=["1,B", "20"], stop_on=[], speed=self._advance_speed(self.cfg.auto_speed),
                                              image=False, entities=False, tiles=False)
                     log_step(["1,B", "20"], reply["result"])
                     obs = reply["obs"]
@@ -2205,7 +2222,7 @@ class GameSession:
                                      '本次试玩没有结束，请 observe 查看后再操作。')
                         break
                     reply = self.client.call("step", inputs=["10"], stop_on=["controllable", "complete", "story_input"],
-                                             speed=self.cfg.auto_speed, image=False, entities=False, tiles=False,
+                                             speed=self._advance_speed(self.cfg.auto_speed), image=False, entities=False, tiles=False,
                                              progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
                     log_step(["10"], reply["result"])
                     map_wait += reply["result"]["consumed"] + reply["result"].get("loadingFrames", 0)
@@ -2355,7 +2372,7 @@ class GameSession:
                 inputs = [f'1,{keys}']
                 stops = ['controllable', 'story_input', 'story_decision', 'death', 'complete', 'menu_prompt']
             reply = self.client.call("step", inputs=inputs, stop_on=stops,
-                                     speed=1 if transition else self.cfg.auto_speed, image=False, entities=False, tiles=False,
+                                     speed=1 if transition else self._advance_speed(self.cfg.auto_speed), image=False, entities=False, tiles=False,
                                      progress=PROGRESS_EVERY, on_event=self._on_progress, **self._stop_rooms())
             log_step(inputs, reply["result"], reply['obs'])
             obs = reply["obs"]
@@ -2416,6 +2433,8 @@ class GameSession:
     def _before_advance(self) -> None:
         """推进游戏之前的检查（录制时由 run.py 设成"确认游戏窗口没有最小化"）；出错不影响游玩。"""
         self._require_reload_observation()
+        if getattr(self, 'speedrun_recording_uncertain', False):
+            raise ActError('开录状态待核验，游戏保持冻结；请正常续跑恢复交接。')
         if self.before_advance is not None:
             from .recording import RecordingHalt
             try:
@@ -2533,6 +2552,9 @@ class GameSession:
                 result['speedrun'] = {'target_seconds': self.speedrun_target_ticks / 10_000_000,
                                       'comparison': 'strictly_below',
                                       'last_attempt': self.metrics.state.speedrun_last_attempt}
+                if self.cfg.speedrun_record_on_demand:
+                    result['speedrun'].update(recording=self.speedrun_recording,
+                                              practice_speed=self._advance_speed(self.cfg.play_speed))
             return result
 
     def finish_user_stop(self):
@@ -2792,6 +2814,46 @@ class GameSession:
             print(f'[run] 阻塞诊断未写入：{exc}', flush=True)
         return result
 
+    def mark_speedrun_recording(self) -> None:
+        self.speedrun_recording = True
+        self.metrics.update(speedrun_recording=True)
+
+    def start_speedrun_recording(self) -> str:
+        from .recording import RecordingError
+        with self.lock:
+            if not self.cfg.speedrun_record_on_demand or self.open_speedrun_recording is None:
+                raise ActError('当前任务未开启限时整章速通。')
+            if self.done or self.goals.stop_motion.is_set():
+                raise ActError('任务已停止，未开启录像。')
+            self._require_reload_observation()
+            if self.speedrun_recording:
+                return '录像已经开启，仍使用同一录像。请从目标章首开始或继续当前正式跑。'
+            if self.speedrun_recording_uncertain:
+                raise ActError('开录状态待核验；请正常续跑恢复交接。')
+            obs = self.client.call('observe', image=False, fields=False)['obs']
+            if (not self._at_chapter_menu(obs) or (obs.get('save') or {}).get('slot') != self.cfg.save_slot
+                    or obs.get('saving') is not False):
+                raise ActError('请回到本次存档的稳定选章界面，等存档写入完成后再开启录像。')
+            ticket = REQUEST_TICKET.get()
+            if ticket is not None and (reason := ticket.refused()):
+                raise ActError(reason)
+
+            def authorize_request():
+                if self.goals.stop_motion.is_set():
+                    raise ActError('已请求停止，开录指令未发送。')
+                if ticket is not None:
+                    ticket.before_input()
+
+            try:
+                self.open_speedrun_recording(authorize_request)
+            except (RecordingError, OSError, RuntimeError) as exc:
+                raise ActError(f'未确认开启录像。{exc}') from exc
+            self.mark_speedrun_recording()
+            return '录像已开启并进入锁步。请选择目标章节及正确面别，从章首执行准备好的输入。'
+
+    def _advance_speed(self, speed: int) -> int:
+        return 1 if getattr(self, 'speedrun_recording', False) else speed
+
     def practice_room(self, room: str) -> dict:
         from .action_policy import permissions_for
         from .recording import RecordingHalt
@@ -2801,6 +2863,8 @@ class GameSession:
         if not isinstance(room, str) or not room.strip() or len(room) > 120:
             raise ActError('房间名须为 1～120 字。')
         with self.lock:
+            if self.speedrun_recording or self.speedrun_recording_uncertain:
+                raise ActError('已进入正式录制阶段。请使用原生菜单从章首再试。')
             if self.done or self.goals.stop_motion.is_set() or self._pending_complete or self.chapter_finished:
                 raise ActError('任务已停止或正在确认有效通关，未发送操作。')
             if not self._requires_single_run() or not permissions_for(self.cfg).restart_chapter:
@@ -3574,7 +3638,7 @@ class GameSession:
                     if unchanged >= ENDING_STUCK_STEPS:
                         raise RuntimeError(f"片尾画面约 {ENDING_STUCK_STEPS // 2} 秒没有变化，已停止自动推进")
             self._before_advance()
-            reply = self.client.call("step", inputs=inputs, stop_on=[], speed=self.cfg.auto_speed,
+            reply = self.client.call("step", inputs=inputs, stop_on=[], speed=self._advance_speed(self.cfg.auto_speed),
                                      image=False, entities=False, tiles=False)
             log_step(inputs, reply["result"])
             obs = reply["obs"]

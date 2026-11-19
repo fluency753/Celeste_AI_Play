@@ -19,13 +19,17 @@ class SpeedrunBridge(DetourGame):
         super()._enter(sid, side)
         self.attempt = getattr(self, 'attempt', 0) + 1
         self.valid_time = True
+        self.captured_head = False
 
     def observation(self):
         obs = super().observation()
+        obs['saving'] = False
         if obs.get('level'):
-            obs['level'].update(chapterTimeValid=self.valid_time, chapterSessionId=self.attempt)
+            obs['level'].update(chapterTimeValid=self.valid_time, chapterSessionId=self.attempt,
+                                chapterRecordedFromStart=self.captured_head)
         if obs.get('completion'):
             obs['completion']['chapterTimeValid'] = self.valid_time
+            obs['completion']['chapterRecordedFromStart'] = self.captured_head
         return obs
 
     def call(self, command, **options):
@@ -41,6 +45,9 @@ class SpeedrunBridge(DetourGame):
         reply = super().call(command, **options)
         if command == 'hello':
             reply['speedrun_practice_room'] = True
+            reply['speedrun_recorded_attempt'] = True
+        if command == 'step':
+            self.step_speed = options.get('speed')
         if command == 'step' and not self.valid_time:
             for event in reply['result']['events']:
                 if event['type'] == 'complete':
@@ -126,6 +133,83 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
 
     def set_speedrun_target(self, ticks=20_000_000):
         self.cfg.speedrun_target_ticks = self.session.speedrun_target_ticks = ticks
+
+    async def test_player_arms_once_from_menu_and_only_recorded_attempt_qualifies(self):
+        self.set_speedrun_target()
+        self.cfg.speedrun_record_on_demand = True
+        self.cfg.play_speed = 4
+        starts = []
+        def open_recording(authorize):
+            authorize()
+            starts.append(self.bridge.state)
+        self.session.open_speedrun_recording = open_recording
+        self.session.verify_speedrun_capture = lambda: bool(starts)
+        server = build_server(self.session)
+        from mcp.server.mcpserver.exceptions import ToolError
+        with self.assertRaisesRegex(ToolError, '稳定选章界面'):
+            await server.call_tool('start_speedrun_recording', {})
+        self.assertEqual(starts, [])
+        self.bridge.ticks = 19_000_000
+        self.session.act(['1,R'], '跑完练习', None)
+        self.assertEqual(self.bridge.step_speed, 4)
+        self.assertFalse(self.metrics.state.speedrun_last_attempt['recorded_from_start'])
+        self.assertFalse(self.session.done)
+        self.assertFalse(self.session._pending_complete)
+        self.bridge.state = 'select'
+        for _ in range(2):
+            result = await server.call_tool('start_speedrun_recording', {})
+            self.assertFalse(result.is_error, result)
+        self.assertEqual(starts, ['select'])
+        self.assertTrue(self.session.time_snapshot()['speedrun']['recording'])
+        with self.assertRaisesRegex(ActError, '正式录制'):
+            self.session.practice_room('practice')
+        for captured, continuous, ticks, passes in (
+                (False, True, 19_000_000, False),
+                (True, False, 19_000_000, False),
+                (True, True, 20_000_000, False),
+                (True, True, 19_999_999, True)):
+            with self.subTest(captured=captured, continuous=continuous, ticks=ticks):
+                self.bridge._enter(CITY, 'A')
+                self.bridge.captured_head = captured
+                self.session.verify_speedrun_capture = lambda: continuous
+                self.bridge.ticks = ticks
+                self.session.act(['1,R'], '跑完本次尝试', None)
+                self.assertEqual(self.bridge.step_speed, 1)
+                self.bridge.state = 'select'
+                self.session.observe()
+                self.assertEqual(self.session.done, passes)
+        self.assertEqual([row['ticks'] for row in self.metrics.state.splits], [19_999_999])
+
+    def test_expired_turn_cannot_start_capture(self):
+        self.set_speedrun_target()
+        self.cfg.speedrun_record_on_demand = True
+        self.bridge.state = 'select'
+        self.session.open_speedrun_recording = lambda _: self.fail('expired request started capture')
+        ticket = REQUEST_TICKET.set(RequestTicket(lambda: '发起该请求的轮次已结束'))
+        try:
+            with self.assertRaisesRegex(ActError, '轮次已结束'):
+                self.session.start_speedrun_recording()
+        finally:
+            REQUEST_TICKET.reset(ticket)
+
+    def test_request_expiring_while_obs_initializes_cannot_start_capture(self):
+        self.set_speedrun_target()
+        self.cfg.speedrun_record_on_demand = True
+        self.bridge.state = 'select'
+        expired = False
+        def open_recording(authorize):
+            nonlocal expired
+            expired = True
+            authorize()
+            self.fail('expired request started capture')
+        self.session.open_speedrun_recording = open_recording
+        ticket = REQUEST_TICKET.set(RequestTicket(lambda: '发起该请求的轮次已结束' if expired else None))
+        try:
+            with self.assertRaisesRegex(ActError, '轮次已结束'):
+                self.session.start_speedrun_recording()
+        finally:
+            REQUEST_TICKET.reset(ticket)
+        self.assertFalse(self.session.speedrun_recording)
 
     def test_timed_goal_retries_equal_slow_and_gray_then_records_current_valid_ticks(self):
         self.set_speedrun_target()

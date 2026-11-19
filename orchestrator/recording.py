@@ -667,7 +667,7 @@ class Recorder:
             raise RecordingOwnershipError('OBS 录制目录已变化，拒绝停止或归档其他会话的录像')
         return clock, plugin
 
-    def start(self, timeout: float = 20.0) -> dict:
+    def start(self, timeout: float = 20.0, *, before_request=None) -> dict:
         if self.started or self._stop.requested or self.result is not None:
             raise RecordingError('录制对象已经使用，请为新录像创建新的 Recorder')
         directory = self.opts.dir.resolve()
@@ -679,9 +679,9 @@ class Recorder:
         self.validate_resume(None, hello)
         if (directory / 'session.json').exists():
             raise RecordingError('录制目录已有会话，请另选目录或接续原录像')
-        return self._start_capture(directory, timeout, hello=hello)
+        return self._start_capture(directory, timeout, hello=hello, before_request=before_request)
 
-    def _start_capture(self, directory, timeout, *, hello=None):
+    def _start_capture(self, directory, timeout, *, hello=None, before_request=None):
         hello = hello if hello is not None else self.call('hello')
         self.validate_resume(None, hello)
         clock = hello.get('clock') or {}
@@ -697,9 +697,16 @@ class Recorder:
             raise RecordingError("OBS 插件没有连上桥接的时钟端口：先运行 python tools/obs_setup.py launch 启动 OBS"
                                  "（插件构建见使用说明 4.4 节）")
         gamewindow.ensure_visible(self.log)  # 游戏窗口最小化时 OBS 采不到画面
+        if before_request is not None:
+            before_request()
+            self._recovery_start = {'capture_dir': str(directory), 'phase': 'prepared'}
         if self._recovery_start is not None:
             self._recovery_start.update(phase='requested', requested_wall=time.time())
-            self._save_session('recovering')
+            try:
+                self._save_session('recovering')
+            except Exception:
+                self._recovery_start['phase'] = 'prepared'
+                raise
         try:
             self.call("record", action="start", dir=str(directory), ffmpeg=self.opts.ffmpeg, video_args=self.opts.video_args,
                       audio_offset_ms=self.opts.audio_offset_ms, marker=self.opts.marker,

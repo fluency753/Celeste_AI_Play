@@ -24,3 +24,9 @@ def target_seconds_text(ticks: int) -> str:
 def require_timing_bridge(target_ticks, hello) -> None:
     if target_ticks is not None and hello.get('speedrun_practice_room') is not True:
         raise ValueError('整章速通时间目标需要 Bridge 1.13.0 或更新版本提供原生计时资格。')
+
+
+def require_capture_bridge(cfg, hello) -> None:
+    require_timing_bridge(getattr(cfg, 'speedrun_target_ticks', None), hello)
+    if getattr(cfg, 'speedrun_record_on_demand', False) and hello.get('speedrun_recorded_attempt') is not True:
+        raise ValueError('录制整章速通需要 Bridge 1.14.0 或更新版本；未发送游戏输入。')

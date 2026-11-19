@@ -240,6 +240,7 @@ class RunConfig:
     resume_completion_pending: bool = False  # agent 尚未自行确认结算、返回选章地图
     resume_practice_map: tuple[str, str] | None = None
     speedrun_target_ticks: int | None = None
+    speedrun_record_on_demand: bool = False
     resume_detour_classifying: bool = False  # 从前次统计恢复的分类事实，不授予新的绕行入场许可
     resume_segment: int | None = None  # 续跑：上次在当前这一截里已经走到的段
     runtime: str = "container"      # Claude客户端位置；Codex客户端始终在本机，工作区工具始终走容器（见execution.py）

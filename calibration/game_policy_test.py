@@ -111,8 +111,10 @@ class GamePolicyTests(unittest.TestCase):
         from orchestrator.action_policy import ActionPermissions, configure
         speedrun = RunConfig(agent='test', save='test', model='test', mode='speedrun')
         configure(speedrun, ActionPermissions(restart_chapter=True))
+        self.assertIsNotNone(denial(self.controller, 'start_speedrun_recording'))
+        speedrun.speedrun_record_on_demand = True
         for name in GAME_ACTIONS:
-            cfg = speedrun if name == 'practice_room' else self.controller.cfg
+            cfg = speedrun if name in {'practice_room', 'start_speedrun_recording'} else self.controller.cfg
             with patch.object(self.controller, 'cfg', cfg):
                 self.assertIsNone(denial(self.controller, name))
                 for flag in ('prepare_only', 'chat_only', 'goal_finishing', 'stop_requested',

@@ -101,6 +101,7 @@ internal static class StateExtractor {
             w.WriteString("room", session.Level);
             w.WriteNumber("chapterTimeTicks", session.Time);
             w.WriteBoolean("chapterTimeValid", session.StartedFromBeginning);
+            w.WriteBoolean("chapterRecordedFromStart", Bridge.RecordedFromChapterStart(session));
             w.WriteEndObject();
         }
 
@@ -301,6 +302,7 @@ internal static class StateExtractor {
         w.WriteBoolean("completed", level.Completed);
         w.WriteNumber("chapterTimeTicks", s.Time);
         w.WriteBoolean("chapterTimeValid", s.StartedFromBeginning);
+        w.WriteBoolean("chapterRecordedFromStart", Bridge.RecordedFromChapterStart(s));
         w.WriteNumber("chapterSessionId", ChapterSessions.GetValue(s,
             _ => new ChapterSessionId(Interlocked.Increment(ref nextChapterSession))).Value);
         w.WriteNumber("deaths", s.Deaths);

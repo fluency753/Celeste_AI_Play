@@ -21,7 +21,16 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.13.0";
+    public const string Version = "1.14.0";
+    private sealed record ChapterCapture(object? Capture);
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Session, ChapterCapture> chapterCaptures = new();
+    private static object captureEpoch = new();
+    private static bool captureStarted;
+
+    internal static bool RecordedFromChapterStart(Session session) =>
+        captureStarted && lockstepEngaged && ClockServer.Connected && ClockServer.LockstepRequested &&
+        recordingAudioFailure == null && chapterCaptures.TryGetValue(session, out var proof) &&
+        ReferenceEquals(proof.Capture, captureEpoch);
     internal static bool RecordOnlyChapters { get; private set; }
     internal static bool ChapterRecordingEnabled => RecordOnlyChapters && RecordingAudio.Enabled;
     internal static bool RecordingChapterActive { get; private set; }
@@ -428,6 +437,7 @@ internal static class Bridge {
         bool changed = want != lockstepEngaged;
         if (changed) {
             lockstepEngaged = want;
+            if (!want) captureEpoch = new();
             Engine.Instance.IsFixedTimeStep = !want;
             presentationModePending = true;
             Log.Info($"lockstep {(want ? "engaged" : "released")}");
@@ -577,11 +587,19 @@ internal static class Bridge {
         freeFrame = !OwnsInput;
         FeedInputThisFrame = feedInput;
         CurrentInput = input;
+        var chapterBefore = (Engine.Scene as Level)?.Session;
+        bool atChapterStart = chapterBefore?.Time == 0;
         try {
             runOriginal();
             if (Engine.Scene is Overworld or GameLoader) RecordingChapterActive = false;
             else if (SceneControl.ChapterScene(Engine.Scene)) RecordingChapterActive = true;
             captureThisFrame = !RecordOnlyChapters || RecordingChapterActive;
+            if (Engine.Scene is Level { Session: { } chapter }) {
+                chapterCaptures.GetValue(chapter, current => new ChapterCapture(
+                    captureThisFrame && captureStarted && lockstepEngaged && current.StartedFromBeginning &&
+                    (ReferenceEquals(chapterBefore, current) ? atChapterStart : current.Time == 0)
+                    ? captureEpoch : null));
+            }
             job?.NoteScene(Engine.Scene);
             if (captureThisFrame) {
                 BeginCapturedFrame();
@@ -771,6 +789,7 @@ internal static class Bridge {
                     w.WriteBoolean("checkpoints", true);
                     w.WriteBoolean("load_room_modes", true);
                     w.WriteBoolean("speedrun_practice_room", true);
+                    w.WriteBoolean("speedrun_recorded_attempt", true);
                     w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("entry_guard", MapEntryGuard.Available);
                     w.WriteBoolean("map_entry_set", MapEntryGuard.Available);
@@ -843,10 +862,16 @@ internal static class Bridge {
                         GetBool(a, "chapter_context", false) && Engine.Scene is LevelLoader or LevelExit or OverworldLoader;
                     recordingHasFrame = false; recordingSid = recordingSide = null; recordingSidLookupFailed = false;
                     recordingAudioFailure = null;
+                    captureEpoch = new();
+                    captureStarted = true;
                 }
                 DrawFrameMarker = GetBool(a, "marker", DrawFrameMarker);
                 continuousMusic = GetBool(a, "continuous_music", continuousMusic);
-                if (recordAction == "stop") RecordingAudio.Stop();
+                if (recordAction == "stop") {
+                    captureStarted = false;
+                    captureEpoch = new();
+                    RecordingAudio.Stop();
+                }
                 ClockServer.Send("R " + a.GetRawText());
                 IpcServer.Send(Reply.Ok(req.Id, w => w.WriteBoolean("marker", DrawFrameMarker)));
                 break;

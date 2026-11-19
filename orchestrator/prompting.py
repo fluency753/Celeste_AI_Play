@@ -32,6 +32,7 @@ TOOL_NOTES = {
     "simulate": "花模拟体力预测短路线",
     "travel": "请主控代为换到已解锁章节 A 面的检查点（计划外地图开着时才有）",
     "practice_room": "允许重启章节时，直达当前目标地图的房间练习",
+    "start_speedrun_recording": "准备好输入后，在选章开启正式速通录像",
 }
 CN_COUNT = {1: "一", 2: "两", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九"}
 
@@ -644,8 +645,12 @@ def prompt_parts(cfg) -> list[PromptPart]:
         parts = _speedrun_parts(cfg)
     if (target_ticks := getattr(cfg, 'speedrun_target_ticks', None)) is not None:
         from .speedrun_goal import target_seconds_text
+        recording_requirement = ''
+        if getattr(cfg, 'speedrun_record_on_demand', False):
+            recording_requirement = ('先在未录制阶段设计并练习输入，由你决定何时在选章开启录像。'
+                                     '只有开录后从章首开始且连续录制的有效通关才能达标。')
         parts.append(PromptPart('整章速通时间目标',
-                                f'从目标地图章首开始，完成一趟原生计时有效且严格低于 {target_seconds_text(target_ticks)} 秒的通关。'
+                                f'{recording_requirement}从目标地图章首开始，完成一趟原生计时有效且严格低于 {target_seconds_text(target_ticks)} 秒的通关。'
                                 '等于目标或更慢的通关仍可正常结算并从章首再试。灰计时练习、累加时间或文字报告不能完成本目标。',
                                 None, '\n\n'))
     if not workspace_capabilities(cfg).workspace_read:

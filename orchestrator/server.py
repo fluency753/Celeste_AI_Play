@@ -605,9 +605,29 @@ def build_server(session: GameSession, study: KbStudy | None = None, *, catalog:
                 journal.log_failure(err, phase='publish_goal')
             return ['主控已记录目标及达成依据，按智能体报告结束试玩并收尾录像。没有发送游戏输入。请结束本轮。']
 
+    @optional_tool(catalog or 'start_speedrun_recording' in tools, name='start_speedrun_recording',
+                   description='限时整章速通：输入准备好后，在当前存档的稳定选章界面开启录像。确认成功后，从目标章节开头执行准备好的输入。',
+                   structured_output=False)
+    async def start_speedrun_recording() -> list:
+        ticket = reload_ticket()
+        async with journal.execution(call_lock):
+            if (note := gated('start_speedrun_recording', ticket)) is not None:
+                return [note]
+            await flush_tokens()
+            if (note := gated('start_speedrun_recording', ticket)) is not None:
+                return [note]
+            begin()
+            try:
+                return [await asyncio.to_thread(session.start_speedrun_recording)]
+            except ActError as err:
+                journal.log_failure(err, phase='start_speedrun_recording')
+                raise ToolError(str(err)) from err
+            finally:
+                finish()
+
     from .detour import map_rule
     @optional_tool(catalog or 'practice_room' in tools, name='practice_room',
-                   description='整章速通且允许重启章节时，按房间名在当前目标地图的指定出生点开始灰计时练习。保留会话与录像；换房后先 observe。使用原生菜单重启章节，恢复从章首计时。',
+                   description='整章速通且允许重启章节时，按房间名在当前目标地图的指定出生点开始灰计时练习。限时任务只在开录前可用；换房后先 observe。使用原生菜单重启章节，恢复从章首计时。',
                    structured_output=False)
     async def practice_room(room: str) -> list:
         ticket = reload_ticket()

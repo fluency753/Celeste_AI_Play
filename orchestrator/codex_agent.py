@@ -795,6 +795,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         required = {'celeste_' + name for name in game_tools(self.cfg)}
         # Older prepared/player threads use the original tool registrations.
         missing = required - names - {'celeste_finish_goal', 'celeste_practice_room'}
+        if 'celeste_start_speedrun_recording' in missing:
+            raise RuntimeError('旧会话没有登记限时速通的开录工具；请用 --fresh-session 新建 Player 会话。')
         if missing:
             raise RuntimeError('旧会话缺少当前必需工具：' + ', '.join(sorted(missing))
                                + '。该容器记录的接口不完整，请新建准备会话；不会借用宿主工具绕过缺失接口。')

@@ -30,9 +30,13 @@ class LaunchOptionsTests(unittest.TestCase):
         with patch('sys.argv', ['orchestrator.run', *argv]):
             cfg, _ = parse_args()
         self.assertEqual(cfg.speedrun_target_ticks, 481234567)
+        self.assertEqual(cfg.play_speed, 4)
+        self.assertEqual(cfg.recording_mode, 'continuous')
+        self.assertTrue(cfg.speedrun_record_on_demand)
         self.assertEqual(config_for(plan).speedrun_target_ticks, cfg.speedrun_target_ticks)
         self.assertIn('严格低于 48.1234567 秒', play_prompt(cfg))
-        for extra in ({'chapters': [1, 2]}, {'mode': 'explore'}, {'speedrun_target_seconds': 0}):
+        self.assertIn('章首开始且连续录制', play_prompt(cfg))
+        for extra in ({'chapters': [1, 2]}, {'mode': 'explore'}, {'speedrun_target_seconds': 0}, {'record': False}):
             with self.subTest(extra=extra), self.assertRaises(ValueError):
                 build({**plan, **extra})
 

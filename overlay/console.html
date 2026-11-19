@@ -466,7 +466,7 @@
         <div class="row" style="margin-top:10px">
           <label class="field">智能体标签<input type="text" id="agent" maxlength="40" placeholder="例如 opus-explore 或 dev-opus"></label>
           <label class="field">现实时间上限（分钟）<input type="number" id="maxMinutes" min="1" max="9999999" step="1" value="1000" title="1～9999999；很大的值相当于不限时"></label>
-          <label class="field" id="rowSpeedrunTarget">整章速通目标（秒）<input type="number" id="speedrunTarget" min="0" step="any" placeholder="留空则通关即完成" title="仅单章整章速通，有效通关时长须严格低于此值"></label>
+          <label class="field" id="rowSpeedrunTarget">整章速通目标（秒）<input type="number" id="speedrunTarget" min="0" step="any" placeholder="留空则通关即完成" title="练习期间不录像。Player 从选章开录后，须从章首有效通关并严格快于此值。"></label>
         </div>
         <p class="hint">标签决定日志目录 runs/&lt;标签&gt;/ 与智能体的工作区；同一个系列一直用同一个标签（续跑、笔记都按标签找），临时试验可以用 dev- 开头。</p>
         <div class="group-title" id="usageTitle">提供方账户的用量</div>
@@ -2332,9 +2332,11 @@ function renderRun(m) {
   const attempt = m.speedrun_last_attempt;
   const target = m.speedrun_target_ticks;
   const attemptText = target != null && attempt?.valid && Number.isFinite(attempt.ticks)
-    ? `上次有效通关 ${attempt.ticks / 1e7} 秒（${attempt.ticks < target ? "达标" : "未达标"}）` : "";
+    ? `上次有效通关 ${attempt.ticks / 1e7} 秒（${attempt.recorded_from_start === false ? "缺少章首录像" : attempt.ticks < target ? "达标" : "未达标"}）` : "";
   $("runAside").textContent = [(m.activity_status || m.status) === "paused" ? "已暂停" : "",
-    target != null ? `有效整章目标 < ${target / 1e7} 秒` : "", attemptText].filter(Boolean).join(" · ");
+    target != null ? `有效整章目标 < ${target / 1e7} 秒` : "",
+    target != null && m.speedrun_recording != null ? (m.speedrun_recording ? "正式录制" : "练习未录制") : "",
+    attemptText].filter(Boolean).join(" · ");
 }
 
 function renderControls() {

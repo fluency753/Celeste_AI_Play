@@ -99,7 +99,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     for menu in ('chapter-select','file-select','main-menu'):
         ap.add_argument('--freeze-'+menu, action=argparse.BooleanOptionalAction, default=None, help='接管时冻结此菜单的就绪界面')
     ap.add_argument("--mcp-port", type=int, default=47780)
-    ap.add_argument("--play-speed", type=int, default=1, help="智能体动作段的推进速度（每次渲染推进几帧）")
+    ap.add_argument("--play-speed", type=int, help="动作推进速度（每次渲染推进几帧，限时速通练习默认 4，其余默认 1）")
     ap.add_argument("--auto-speed", type=int, default=1, help="转场、剧情、重生段的推进速度；1 与原版一致，大于 1 为快进（只用于调试，录像会失真）")
     ap.add_argument("--chapter", type=int, help="进入的章节编号：0 序章、1 被遗弃之城、2 旧址；默认进入选章页当前选中的章节")
     ap.add_argument("--chapters", help="依次通关的章节编号，逗号分隔，例如 0,1,2（正式挑战）：一章通关后主控自动走完结算画面、"
@@ -295,7 +295,8 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         print('[run] 续跑采用当前本机 HUD、ffmpeg、OBS 保留偏好与暂停回调命令；连接、执行环境、容器资源及录像沿原约束', flush=True)
     cfg = RunConfig(agent=args.agent, save=args.save, model=args.model, effort=args.effort, provider=args.provider,
                     bridge_port=args.bridge_port, mcp_port=args.mcp_port, max_minutes=args.max_minutes,
-                    play_speed=args.play_speed, auto_speed=args.auto_speed, skip_enter=args.skip_enter)
+                    play_speed=args.play_speed if args.play_speed is not None else 1,
+                    auto_speed=args.auto_speed, skip_enter=args.skip_enter)
     from .pause_callback import validate_command
     try:
         cfg.pause_callback_command = validate_command(args.pause_callback_command if args.pause_callback_command is not None
@@ -307,8 +308,6 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     for key, default in (('freeze_chapter_select',True),('freeze_file_select',False),('freeze_main_menu',False)):
         value=getattr(args,key)
         setattr(cfg,key, value if value is not None else previous['state'].get(key,False) if previous else default)
-    if previous and cfg.recording_mode != previous['state'].get('recording_mode','continuous') and not args.new_recording:
-        raise SystemExit('更改录像组织方式需先收尾旧录像，再显式使用 --new-recording；不会隐式拆分或合并原录像')
     from .action_policy import ActionPermissions, configure, permissions_from_state
     cfg.play_scope=args.scope or (previous['state'].get('play_scope','chapter') if previous else 'chapter')
     choosing_visited = cfg.play_scope == 'visited' and (not previous or previous['state'].get('play_scope') != 'visited')
@@ -633,6 +632,15 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
         if (cfg.mode != 'speedrun' or cfg.play_scope != 'chapter' or cfg.completion_policy != 'stop'
                 or args.no_agent or len(target) != 1 or not Piece.of(target[0]).whole()):
             ap.error('速通时间目标需要单张指定地图的整章速通与通关停止策略')
+        if not args.record:
+            ap.error('速通时间目标需要允许 Player 开启录像，不能使用 --no-record')
+        cfg.speedrun_record_on_demand = True
+        cfg.recording_mode = 'continuous'
+        if args.play_speed is None:
+            cfg.play_speed = previous['state'].get('speedrun_practice_speed', 4) if previous else 4
+        configure(cfg, permissions.update({'restart_chapter': True, 'return_to_map': True}))
+    elif previous and cfg.recording_mode != previous['state'].get('recording_mode', 'continuous') and not args.new_recording:
+        raise SystemExit('更改录像组织方式需先收尾旧录像，再显式使用 --new-recording；不会隐式拆分或合并原录像')
     if cfg.completion_policy == 'continue' and cfg.plan:
         from .segments import plan_is_partial
         if plan_is_partial(cfg.plan):
@@ -716,6 +724,9 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     state['pause_callback_command'] = cfg.pause_callback_command
     if cfg.speedrun_target_ticks is not None:
         state['speedrun_target_ticks'] = cfg.speedrun_target_ticks
+        if cfg.speedrun_record_on_demand:
+            state['speedrun_record_on_demand'] = True
+            state['speedrun_practice_speed'] = cfg.play_speed
     if cfg.codex_player_login:
         state['codex_player_login'] = True
     if getattr(cfg, "profile", "local") != "local":
@@ -790,9 +801,9 @@ def enter_save(cfg: RunConfig, recorder: Recorder | None = None) -> None:
     client.step_options = lambda: startup_step_options(client, cfg)
     from .chapter_recording import menu_options
     if (target_ticks := getattr(cfg, 'speedrun_target_ticks', None)) is not None:
-        from .speedrun_goal import require_timing_bridge
+        from .speedrun_goal import require_capture_bridge
         try:
-            require_timing_bridge(target_ticks, client.call('hello'))
+            require_capture_bridge(cfg, client.call('hello'))
         except BaseException:
             client.close()
             raise
@@ -1237,6 +1248,48 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
     primary = None
     reason = "中断"
     saved_recording = getattr(cfg, '_recording_resume_manifest', None)
+    deferred_recording = getattr(cfg, 'speedrun_record_on_demand', False)
+
+    def create_recorder():
+        owner = Recorder(session.bridge_call,
+                         options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms,
+                                      args.record_marker, continuous_music=cfg.continuous_music),
+                         log=lambda m: print(m, flush=True))
+        owner.bind_run(run_dir)
+        return owner
+
+    def start_speedrun_recording(before_request):
+        nonlocal recorder
+        try:
+            cfg._speedrun_obs_launched = ensure_obs() or getattr(cfg, '_speedrun_obs_launched', False)
+        except SystemExit as exc:
+            raise RecordingError(str(exc)) from exc
+        owner = create_recorder()
+        try:
+            owner.start(before_request=before_request)
+        except Exception as exc:
+            if owner._recovery_start is not None or owner.started:
+                cfg._keep_frozen = cfg._recording_retained = True
+                session.speedrun_recording_uncertain = True
+                from .control import RunControl
+                RunControl(run_dir).enqueue('pause', json.dumps({'pause_fault': {
+                    'category': 'recording', 'reason': str(exc)}}, ensure_ascii=False))
+                raise RecordingHalt('开录结果未就绪。游戏保持冻结，保留录像交接；请正常续跑以核验原请求。') from exc
+            raise
+        recorder = owner
+        session.before_advance = recording_guard(owner, run_dir)
+
+    def verify_speedrun_capture():
+        if recorder is None or not recorder.started:
+            return False
+        try:
+            return recorder.segment_failed() is None
+        except (RecordingError, OSError, RuntimeError):
+            return False
+
+    if deferred_recording:
+        session.open_speedrun_recording = start_speedrun_recording
+        session.verify_speedrun_capture = verify_speedrun_capture
     try:
         if args.prepared or previous:
             from .control import RunControl
@@ -1286,12 +1339,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             if getattr(cfg, '_recording_resume_manifest', None):
                 cfg._recording_adopted = True
                 cfg._keep_frozen = False
-        elif args.record and not getattr(cfg, '_recording_resume_manifest', None):
-            recorder = Recorder(session.bridge_call,
-                                options_from(run_dir, args.ffmpeg, args.record_video_args, args.audio_offset_ms, args.record_marker,
-                                             continuous_music=cfg.continuous_music),
-                                log=lambda m: print(m, flush=True))
-            recorder.bind_run(run_dir)
+        elif args.record and not deferred_recording and not saved_recording:
+            recorder = create_recorder()
             from .chapter_recording import wrap
             recorder = wrap(cfg,recorder)
             recorder.start()
@@ -1301,6 +1350,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             if getattr(cfg,'recording_mode','continuous') == 'chapter':
                 session.client.before_step = lambda: session.before_advance(boundary_only=True)
             session.before_advance = recording_guard(recorder, run_dir)
+            if deferred_recording:
+                session.mark_speedrun_recording()
 
         capabilities = workspace_capabilities(cfg)
         from .sim_mode import controller_sim
@@ -1356,6 +1407,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             cfg._recording_adopted = True
             cfg._keep_frozen = False
             session.before_advance = recording_guard(recorder, run_dir)
+            if deferred_recording:
+                session.mark_speedrun_recording()
         if args.no_agent:
             print("[run] --no-agent：工具服务已就绪，按 Ctrl+C 结束", flush=True)
             await web_task
@@ -1395,7 +1448,9 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
         cleanup_errors = []
         parked = bool(runner and getattr(runner, 'parked_for_switch', False))
         try:
-            if saved_recording and not getattr(cfg, '_recording_adopted', False):
+            if getattr(session, 'speedrun_recording_uncertain', False):
+                shutdown = 'retain'
+            elif saved_recording and not getattr(cfg, '_recording_adopted', False):
                 # Startup/adopt failure must not release another run's live capture.
                 shutdown = 'retain'
             elif parked:
@@ -1680,6 +1735,13 @@ def resume_recording_mode(cfg, args, saved, hello) -> str:
     追加章节（--chapters / --segments）且原录像已正常收尾（finished）时另起新录像：上一章的录像目录与成片原样保留，
     不把下一章拼进去。只有明确 --new-recording 才放弃尚未收尾的原录像。"""
     state = (saved or {}).get('state')
+    previous_state = (getattr(args, 'previous', None) or {}).get('state', {})
+    if (saved and getattr(cfg, 'speedrun_record_on_demand', False)
+            and previous_state.get('speedrun_record_on_demand') is not True):
+        if state not in {'finished', 'failed', 'abandoned'} or pending_recording(saved):
+            raise RecordingError('旧录像需要先收尾，才能进入由 Player 开录的限时速通')
+        Recorder.validate_resume(None, hello)
+        return 'new'
     if getattr(args, 'new_recording', False):
         return 'live' if Recorder.validate_resume(saved, hello) else 'new'
     if saved and not args.record and state in {'finished', 'failed', 'abandoned'}:
@@ -1742,6 +1804,8 @@ def _main(cfg, args) -> int:
         args.codex_preflight = (container, cfg.mcp_port)
     from .bridge_requirements import preflight_bridge
     hello = preflight_bridge(cfg.bridge_port)
+    from .speedrun_goal import require_capture_bridge
+    require_capture_bridge(cfg, hello)
     if getattr(cfg, '_parked_needs_release_check', False) and hello.get('active') is not False:
         raise SystemExit('上次挂起未确认交还游戏，请先在控制台交还游戏控制，再恢复挂起试玩')
     if getattr(cfg, 'play_scope', 'chapter') == 'visited' and hello.get('map_entry_set') is not True:
@@ -1813,7 +1877,7 @@ def _main(cfg, args) -> int:
         if getattr(cfg, '_recording_resume_manifest', None):
             Recorder.link_saved(cfg._recording_resume_manifest, run_dir)
         mod_hud = start_mod_hud(cfg, run_dir)
-        if args.record:
+        if args.record and (not getattr(cfg, 'speedrun_record_on_demand', False) or resume_recording):
             obs_launched = ensure_obs()
         if recording_mode == 'recover':
             from tools.bridge_client import BridgeClient
@@ -1841,7 +1905,8 @@ def _main(cfg, args) -> int:
             handoff_needed = True
         elif previous or not cfg.skip_enter:
             # 新开一局，或续跑时游戏不在要续跑的关卡里（两章之间中断、游戏重启过）：用菜单宏进入
-            if args.record and not getattr(cfg, '_recording_resume_manifest', None):
+            if (args.record and not getattr(cfg, 'speedrun_record_on_demand', False)
+                    and not getattr(cfg, '_recording_resume_manifest', None)):
                 # 开局（选存档、进章节）也录进录像：录制从选档页开始。HUD 服务先起来，显示这一局的名字
                 if not args.no_hud:
                     from overlay.server import start_in_thread  # noqa: WPS433
@@ -1904,6 +1969,7 @@ def _main(cfg, args) -> int:
                     latest.write_text(str(previous['dir']), encoding='utf-8')
             if mod_hud is not None:
                 mod_hud.close()
+            obs_launched = obs_launched or getattr(cfg, '_speedrun_obs_launched', False)
             if obs_launched and not args.keep_obs_open and not getattr(cfg, '_recording_retained', False):
                 close_obs()
             elif obs_launched:

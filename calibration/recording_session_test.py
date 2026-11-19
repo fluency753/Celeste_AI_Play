@@ -64,6 +64,44 @@ class RecordingSessionTests(unittest.TestCase):
             recorder.start()
         return recorder
 
+    def test_player_start_lost_reply_retains_ownership_for_adoption(self):
+        def lost_reply(command, **args):
+            reply = self.call(command, **args)
+            if command == 'record':
+                saved = Recorder.saved_session(self.first)
+                self.assertEqual(saved['recovery_start']['phase'], 'requested')
+                raise ConnectionError('lost start reply')
+            return reply
+
+        recorder = Recorder(lost_reply, RecordOptions(self.directory, 'ffmpeg', '', audio_source='game_nrt'))
+        recorder.bind_run(self.first)
+        authorize = Mock()
+        with patch('orchestrator.recording.gamewindow.ensure_visible'):
+            with self.assertRaisesRegex(ConnectionError, 'lost start reply'):
+                recorder.start(before_request=authorize)
+        authorize.assert_called_once()
+        self.assertFalse(recorder.started)
+        saved = Recorder.saved_session(self.first)
+        self.assertEqual(Recorder.resume_mode(saved, self.hello), 'live')
+        adopted = Recorder.adopt(self.call, saved, self.second)
+        self.assertTrue(adopted.started)
+        self.assertEqual(adopted.session_id, recorder.session_id)
+        self.assertEqual([args['action'] for cmd, args in self.commands if cmd == 'record'], ['start'])
+
+    def test_legacy_automatic_capture_cannot_arm_player_speedrun(self):
+        from orchestrator.run import resume_recording_mode
+        cfg = SimpleNamespace(speedrun_record_on_demand=True)
+        args = SimpleNamespace(record=True, previous={'state': {}})
+        recorder = self.start()
+        live = Recorder.saved_session(self.first)
+        with self.assertRaisesRegex(RecordingError, '旧录像需要先收尾'):
+            resume_recording_mode(cfg, args, live, self.hello)
+        args.previous['state']['speedrun_record_on_demand'] = True
+        self.assertEqual(resume_recording_mode(cfg, args, live, self.hello), 'live')
+        recorder.stop()
+        args.previous['state'].clear()
+        self.assertEqual(resume_recording_mode(cfg, args, Recorder.saved_session(self.first), self.hello), 'new')
+
     def test_maintenance_stop_defers_media_work_and_repeat_stop_does_not_resend(self):
         recorder=self.start();self.advance(3)
         with patch('orchestrator.recording.make_pure') as pure,patch('orchestrator.recording_recovery.finalize') as publish:

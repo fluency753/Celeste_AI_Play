@@ -178,6 +178,8 @@ def normalize(options: dict) -> dict:
                  else len(o['chapters']) + len(o['sides']) == 1)
         if o['mode'] != SPEEDRUN or not whole or o['no_agent']:
             raise ValueError('速通时间目标需要单张指定地图的整章速通')
+        if not o['record']:
+            raise ValueError('速通时间目标需要允许 Player 开启录像')
         o['speedrun_target_seconds'] = target_seconds_text(parse_target_seconds(o['speedrun_target_seconds']))
     save = o["save"]
     if not isinstance(save, dict) or set(save) - {"name", "slot", "create"}:
@@ -410,6 +412,7 @@ def config_for(options: dict, profile: str | None = None):
     if o['speedrun_target_seconds'] is not None:
         from .speedrun_goal import parse_target_seconds
         cfg.speedrun_target_ticks = parse_target_seconds(o['speedrun_target_seconds'])
+        cfg.speedrun_record_on_demand = True
     cfg.save_slot = o["save"]["slot"]
     from .runtimes import runtime
     try:
@@ -433,6 +436,10 @@ def config_for(options: dict, profile: str | None = None):
     cfg.record, cfg.recording_mode = bool(o["record"]), o["recording_mode"]
     cfg.allow_chapter_reset = o["allow_chapter_reset"]
     cfg.action_permissions = o['action_permissions']
+    if cfg.speedrun_record_on_demand:
+        from .action_policy import configure, permissions_for
+        cfg.recording_mode = 'continuous'
+        configure(cfg, permissions_for(cfg).update({'restart_chapter': True, 'return_to_map': True}))
     cfg.allow_detour = o['allow_detour']
     cfg.pause_limit = o["limit_planning"] and cfg.sim
     cfg.rounds_per_room, cfg.room_scale = o["rounds_per_room"], o["room_scale"]
