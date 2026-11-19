@@ -20,12 +20,15 @@ internal static class Hooks {
     private static ILHook? menuConfirmationHook;
     private static Hook? chapterEntryHook;
     private static Hook? fileContinueHook, fileNewGameHook, firstAreaHook, levelEntryHook;
+    private static Hook? summitCreditsEndHook;
+    [ThreadStatic] private static Level? summitCreditsSource;
     private static Hook? picoConsoleHook, picoMenuHook;
     internal static bool Pico8GuardAvailable { get; private set; }
 
     public static void Load() {
         InstallMenuGuard();
         InstallEntryGuard();
+        InstallSummitCreditsHook();
         InstallPico8Guard();
         // FNA 的 Game.EndDraw 里调用 Present：钩在它之后，锁步时回复"这一帧已经呈现"
         MethodInfo? endDraw = typeof(Game).GetMethod("EndDraw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -55,6 +58,7 @@ internal static class Hooks {
         fileNewGameHook?.Dispose(); fileNewGameHook = null;
         firstAreaHook?.Dispose(); firstAreaHook = null;
         levelEntryHook?.Dispose(); levelEntryHook = null;
+        summitCreditsEndHook?.Dispose(); summitCreditsEndHook = null;
         try { menuConfirmationHook?.Dispose(); } catch (Exception e) { Log.Error("chapter reset guard: removing the menu hook failed: " + e.Message); }
         menuConfirmationHook = null;
         endDrawHook?.Dispose();
@@ -71,6 +75,15 @@ internal static class Hooks {
         PlaybackVisualPass.End();
         IL.Monocle.EntityList.RenderExcept -= ILEntityRenderExcept;
         On.Celeste.RunThread.Start -= OnRunThreadStart;
+    }
+
+    private static void InstallSummitCreditsHook() {
+        try {
+            summitCreditsEndHook = new Hook(typeof(CS07_Credits).GetMethod(nameof(CS07_Credits.OnEnd))!,
+                typeof(Hooks).GetMethod(nameof(OnSummitCreditsEnd), BindingFlags.Static | BindingFlags.NonPublic)!);
+        } catch (Exception e) {
+            Log.Error("Summit credits entry unavailable: " + e.Message);
+        }
     }
 
     private delegate void OrigEndDraw(Game self);
@@ -173,7 +186,25 @@ internal static class Hooks {
     }
     private delegate void OrigLevelEnter(Session session, bool fromSaveData);
     private static void OnLevelEnter(OrigLevelEnter orig, Session session, bool fromSaveData) {
-        if (session == null || Bridge.AllowAreaEntry(session.Area)) orig(session!, fromSaveData);
+        if (Bridge.NativeAreaEntryEnabled && session != null &&
+                SummitEpilogue.FromCredits(summitCreditsSource, session, fromSaveData) is { } finish) {
+            if (!Bridge.AllowNativeAreaEntry(finish.Slot)) return;
+            orig(session, fromSaveData);
+            if (Engine.Instance.nextScene is LevelEnter enter && ReferenceEquals(enter.session, session)) {
+                SummitEpilogue.Remember(session, finish);
+                Bridge.NoteNativeAreaEntry();
+            }
+        } else if (session == null || Bridge.AllowAreaEntry(session.Area)) {
+            orig(session!, fromSaveData);
+        }
+    }
+
+    private delegate void OrigSummitCreditsEnd(CS07_Credits self, Level level);
+    private static void OnSummitCreditsEnd(OrigSummitCreditsEnd orig, CS07_Credits self, Level level) {
+        var previous = summitCreditsSource;
+        summitCreditsSource = level;
+        try { orig(self, level); }
+        finally { summitCreditsSource = previous; }
     }
 
     private static void InstallPico8Guard() {

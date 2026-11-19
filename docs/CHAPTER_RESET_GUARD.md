@@ -30,6 +30,8 @@ Python 的 `action_policy.py` 统一验证、迁移、构造策略和生成提�
 
 地图入口在 `OuiChapterPanel.Start(checkpoint)` 方法入口核验；方向切换、按键边沿和重复均由原生面板处理。按原生 `StartRoutine` 规则纯解析检查点前缀的目的地图，再核验实际 SID/存档槽位；拒绝时不改变 Focused、Area，不播放启动音效或创建启动协程。因此方向优先时不会误拦，而方向到边界后实际触发的错误入场仍会被拒绝。
 
+Bridge 1.16.1 起，新主控在 step 中声明支持原生章节交接。已完成的山顶 A 面在片尾原生 `CS07_Credits.OnEnd` 中衔接尾声时，仍核验当前存档槽位，允许游戏进入尾声并截断该动作的剩余输入。主控使用来源章节的计时和录像凭据结算山顶，计划包含尾声时等原生关卡载入后接续。主动选章和从存档继续仍使用原入场门禁。
+
 原生构造中的 `menu_pause_restartarea`、`menu_pause_return`、`menu_pause_savequit`、`intro_vignette_quit` 等键用于定位实际回调，不拿其译文匹配按钮；二级“是”即使重启／返回显示完全相同，也按实际确认行为使用独立权限。序章退出归入返回地图，原生取消仍允许。两类拦截统一输出 `result.block: {rule_id, action, reason, expected, actual}`，同时保留 `entry_blocked`/`chapter_reset_blocked` 停止原因和事件用于兼容。此前输入及本帧已经发生的导航仍计入 consumed，后续计划不执行，不自动关菜单或代选；主控在 act 结果里附中文说明（`action_policy.block_note`：拦的是哪项权限或哪个菜单项，菜单仍开着先按 B 返回或选「继续」，不要用退出重进代替找路；入场被拦时写明地图或存档与任务不符）。
 
 验证：Python 回归使用临时运行目录、真实策略分发与会话控制消费者，不连接在用主控。原生检查先构建桥接，再运行：

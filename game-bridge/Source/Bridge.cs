@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.16.0";
+    public const string Version = "1.16.1";
     private sealed record ChapterCapture(object? Capture);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Session, ChapterCapture> chapterCaptures = new();
     private static object captureEpoch = new();
@@ -60,6 +60,9 @@ internal static class Bridge {
         job?.AllowSaveEntry(slot.SaveData, slot.FileSlot) ?? true;
     public static bool AllowNewSave(OuiFileSelectSlot slot) => job?.AllowNewSave(slot.FileSlot) ?? true;
     public static bool AllowAreaEntry(AreaKey area) => job?.AllowAreaEntry(area, SaveData.Instance?.FileSlot) ?? true;
+    internal static bool NativeAreaEntryEnabled => job?.NativeAreaEntryEnabled == true;
+    internal static bool AllowNativeAreaEntry(int slot) => job?.AllowNativeAreaEntry(slot) ?? true;
+    internal static void NoteNativeAreaEntry() => job?.NoteNativeAreaEntry();
     public static bool AllowPico8Entry() => !Active || (job?.AllowPico8Entry() ?? true);
 
     /// <summary>接管以来推进过的总帧数（含空闲菜单和加载帧）。</summary>
@@ -1396,7 +1399,8 @@ internal static class Bridge {
             expect: expect,
             tolerance: tolerance,
             progressEvery: GetInt(a, "progress", 0),
-            stopRooms: stopRooms, inputFormat: inputFormat, actionPolicy: policy);
+            stopRooms: stopRooms, inputFormat: inputFormat, actionPolicy: policy,
+            nativeAreaEntry: GetBool(a, "native_area_entry", false));
 
         if (job.Finished) {
             FinishJob(); // 空计划：直接回报当前帧

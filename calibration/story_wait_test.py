@@ -12,7 +12,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from orchestrator.config import RunConfig
 from orchestrator.game_session import AGENT_STORY_WAIT_FRAMES, TRANSITION_WAIT_FRAMES, ActError, GameSession
 from orchestrator.metrics import Metrics
-from orchestrator.run import _shutdown_mode
+from orchestrator.run import _shutdown_mode, write_run_state
 from orchestrator.server import build_server
 from orchestrator.navigation import ChapterNavigation
 from orchestrator.segments import Piece
@@ -880,6 +880,104 @@ class StoryWaitTests(unittest.TestCase):
         self.assertEqual(splits[0]['chapter'], sid)
         self.assertEqual(splits[0]['ticks'], 34816510000)
         self.assertEqual(_shutdown_mode(self.session.cfg, argparse.Namespace(no_agent=False), self.session), 'freeze')
+
+    def summit_epilogue(self, *, scene='LevelEnter', ticks=34816510000, valid=True):
+        self.session.cfg.save_slot = 13
+        self.session.cfg.chapter = 7
+        self.session.piece = Piece(7)
+        return {
+            'scene': scene, 'frame': 134, 'saving': False, 'save': {'slot': 13, 'name': 'test'},
+            'summitEpilogue': {'sid': 'Celeste/7-Summit', 'side': 'A', 'chapterTimeTicks': ticks,
+                               'chapterTimeValid': valid, 'chapterRecordedFromStart': False},
+            'level': {'sid': 'Celeste/8-Epilogue', 'room': 'start', 'side': 'A', 'chapterTimeTicks': 20}
+            if scene == 'Level' else None,
+        }
+
+    def test_native_summit_exit_settles_original_timer_at_epilogue_entry(self):
+        obs = self.summit_epilogue()
+        client = self.bridge(obs)
+        self.session.metrics.update(chapter='Celeste/8-Epilogue', chapter_time_ticks=20)
+        result = asyncio.run(build_server(self.session).call_tool('observe', {}))
+        self.assertFalse(result.is_error)
+        self.assertIn('本次试玩已结束', '\n'.join(item.text for item in result.content if item.type == 'text'))
+        self.session.observe()
+        self.session.finish_at_results()
+        splits = self.session.metrics.state.splits
+        self.assertEqual([(x['chapter'], x['ticks']) for x in splits], [('Celeste/7-Summit', 34816510000)])
+        self.assertEqual(client.steps, [])
+        self.assertEqual(self.session.end_scene, 'LevelEnter')
+        self.assertEqual(_shutdown_mode(self.session.cfg, argparse.Namespace(no_agent=False), self.session), 'release')
+
+    def test_native_summit_exit_keeps_epilogue_as_next_planned_chapter(self):
+        obs = self.summit_epilogue(scene='Level')
+        self.session.chapter_queue = [Piece(8)]
+        self.bridge(obs)
+        self.session.observe()
+        self.assertFalse(self.session.done)
+        self.assertEqual(self.session.piece, Piece(8))
+        self.assertEqual(self.session.metrics.state.chapter, 'Celeste/8-Epilogue')
+        self.assertEqual(self.session.metrics.state.chapter_time_ticks, 20)
+        self.assertEqual(self.session.metrics.state.splits[0]['ticks'], 34816510000)
+
+    def test_auto_summit_ending_keeps_already_recorded_split_and_accepts_native_exit(self):
+        obs = self.summit_epilogue()
+        client = self.bridge(obs)
+        self.session.cfg.cutscene_mode = 'auto'
+        self.session.metrics.update(chapter='Celeste/7-Summit', chapter_time_ticks=34816510000)
+        self.session._chapter_complete()
+        self.assertTrue(self.session._ending_pending)
+        self.session._finish_ending()
+        self.session.finish_at_results()
+        self.assertTrue(self.session.done)
+        self.assertEqual(self.session.end_scene, 'LevelEnter')
+        self.assertEqual(len(self.session.metrics.state.splits), 1)
+        self.assertEqual(client.steps, [])
+
+    def test_auto_resume_at_native_epilogue_loader_keeps_pending_entry(self):
+        obs = self.summit_epilogue()
+        arrived = self.summit_epilogue(scene='Level')
+        session = self.session
+        session.cfg.cutscene_mode = 'auto'
+        session.cfg.resume_pending = True
+        session.cfg.chapter = 8
+        session.piece = Piece(8)
+
+        class ResumeBridge(StoryBridge):
+            def call(self, command, **args):
+                if command == 'hello':
+                    return {'pico8_entry_guard': True, 'entry_guard': True, 'action_policy': 1}
+                if command == 'activate':
+                    return {'obs': copy.deepcopy(self.obs)}
+                if command == 'step':
+                    self.steps.append(args['inputs'])
+                    self.obs = copy.deepcopy(arrived)
+                    return {'obs': copy.deepcopy(self.obs), 'result': {'consumed': 1, 'events': [], 'trajectory': []}}
+                return super().call(command, **args)
+
+        client = ResumeBridge(obs)
+        with patch('orchestrator.game_session.BridgeClient', return_value=client):
+            session.connect()
+        self.assertTrue(session.chapter_finished)
+        self.assertEqual(session.navigation.target, Piece(8))
+        self.assertEqual(client.steps, [])
+        write_run_state(self.root, session.cfg, None, None, piece_pending=session.chapter_finished)
+        self.assertTrue(json.loads((self.root / 'run_state.json').read_text(encoding='utf-8'))['piece_pending'])
+        session.observe()
+        self.assertFalse(session.chapter_finished)
+        self.assertEqual(session.piece, Piece(8))
+        self.assertEqual(session.metrics.state.chapter, 'Celeste/8-Epilogue')
+        self.assertEqual(client.steps, [['120']])
+
+    def test_native_summit_exit_keeps_unqualified_attempt_open(self):
+        obs = self.summit_epilogue(scene='Level', ticks=200)
+        self.session.speedrun_target_ticks = 200
+        client = self.bridge(obs)
+        self.session.observe()
+        self.assertFalse(self.session.done)
+        self.assertFalse(self.session.metrics.state.splits)
+        self.assertEqual(self.session.metrics.state.speedrun_last_attempt['ticks'], 200)
+        self.assertIn('用暂停菜单返回选章', '\n'.join(self.session.observe_notes))
+        self.assertEqual(client.steps, [])
 
     def test_goal_stop_can_settle_pending_final_panel_from_latest_observation(self):
         self.session.cfg.save_slot = 15

@@ -65,14 +65,16 @@ internal sealed class StepJob {
     public int LoadingFrames;
     public string? StopReason { get; private set; }
     public bool Finished => StopReason != null;
+    internal bool NativeAreaEntryEnabled { get; }
 
     public StepJob(long requestId, List<InputFrame> plan, IEnumerable<string> stopOn, int framesPerTick,
         bool wantImage, string buffer, SnapshotOptions snapshot, bool recordTrajectory, bool recordEntities = false,
         List<ExpectRow?>? expect = null, float tolerance = 1f, int progressEvery = 0, IEnumerable<string>? stopRooms = null,
         string inputFormat = "celeste_ai", MapEntryGuard? entryGuard = null, bool allowChapterReset = false,
-        bool allowMapExit = false, ActionPolicy? actionPolicy = null) {
+        bool allowMapExit = false, ActionPolicy? actionPolicy = null, bool nativeAreaEntry = false) {
         RequestId = requestId;
         InputFormat = inputFormat;
+        NativeAreaEntryEnabled = nativeAreaEntry;
         policy = actionPolicy ?? new ActionPolicy(new(allowChapterReset, allowChapterReset, allowChapterReset), entryGuard, allowMapExit);
         this.progressEvery = Math.Max(0, progressEvery);
         this.expect = expect is { Count: > 0 } ? expect : null;
@@ -217,6 +219,13 @@ internal sealed class StepJob {
         if (policy.Entry == null) return true;
         return Check(policy.Entry.Check(area.SID, slot,
             area.Mode switch { AreaMode.Normal => "A", AreaMode.BSide => "B", _ => "C" }));
+    }
+
+    internal bool AllowNativeAreaEntry(int slot) => Check(policy.Entry?.CheckSlot(slot));
+
+    internal void NoteNativeAreaEntry() {
+        StopReason ??= "native_transition";
+        events.Add((Bridge.Frame, "native_transition", SummitEpilogue.Epilogue));
     }
 
     public bool AllowMenuConfirmation(TextMenu.Item item) {

@@ -107,10 +107,11 @@ TextMenu Menu(params string[] labels) {
     menu.Selection = 0;
     return menu;
 }
-StepJob Job(bool allow = false, bool exit = false, ActionPermissions? permissions = null, MapEntryGuard? entry = null) {
+StepJob Job(bool allow = false, bool exit = false, ActionPermissions? permissions = null, MapEntryGuard? entry = null,
+        bool nativeAreaEntry = false) {
     var job = new StepJob(1, new() { InputFrame.Neutral, InputFrame.Neutral }, Array.Empty<string>(), 1,
         false, "level", new SnapshotOptions(), false,
-        actionPolicy: new ActionPolicy(permissions ?? new(allow, allow, allow), entry, exit));
+        actionPolicy: new ActionPolicy(permissions ?? new(allow, allow, allow), entry, exit), nativeAreaEntry: nativeAreaEntry);
     typeof(Bridge).GetField("job", flags)!.SetValue(null, job);
     return job;
 }
@@ -506,6 +507,76 @@ foreach (string method in new[] { "EnterFirstArea", nameof(LevelEnter.Go) }) {
     }
 }
 Console.WriteLine("PASS: file-selection saved/empty-session resume and new-save entry reject before StartingGame/SaveData.Start/wipe; first-area and LevelEnter.Go share SID/side/slot policy");
+{
+    var previousAreas = AreaData.Areas;
+    var previousSave = SaveData.Instance;
+    var previousScene = Engine.Scene;
+    var nextScene = typeof(Engine).GetField("nextScene", flags)!;
+    var previousNext = nextScene.GetValue(engine);
+    try {
+        AreaData.Areas = Enumerable.Range(0, 9).Select(id => new AreaData { ID = id, SID = $"test/{id}" }).ToList();
+        AreaData.Areas[7].SID = SummitEpilogue.Summit;
+        AreaData.Areas[8].SID = SummitEpilogue.Epilogue;
+        Tracker.Initialize();
+        var map = AreaData.Areas[8];
+        var room = (LevelData)RuntimeHelpers.GetUninitializedObject(typeof(LevelData));
+        room.Name = "start";
+        room.Bounds = new Microsoft.Xna.Framework.Rectangle(-10, -10, 100, 100);
+        var mode = new ModeProperties { AudioState = new AudioState("", "") };
+        mode.MapData = (MapData)RuntimeHelpers.GetUninitializedObject(typeof(MapData));
+        mode.MapData.Data = map;
+        mode.MapData.ModeData = mode;
+        mode.MapData.Levels = new() { room };
+        map.Mode = new[] { mode };
+        SaveData.Instance = new SaveData { FileSlot = 10, LevelSets = new(),
+            Areas = Enumerable.Range(0, 9).Select(id => new AreaStats(id)).ToList() };
+
+        var session = new Session { Area = new AreaKey(7), Level = "credits-summit", Time = 123456, StartedFromBeginning = true };
+        var level = Level(session);
+        level.Completed = true;
+        Scene(level);
+        var credits = (CS07_Credits)RuntimeHelpers.GetUninitializedObject(typeof(CS07_Credits));
+        typeof(CS07_Credits).GetField("gotoEpilogue", flags)!.SetValue(credits, true);
+        var end = typeof(CS07_Credits).GetMethod(nameof(CS07_Credits.OnEnd))!;
+        using var bus = new Hook(typeof(Audio).GetMethod(nameof(Audio.BusMuted), flags)!,
+            (Func<string, bool?, bool>)((_, _) => false));
+        using var creditsGuard = new Hook(end, typeof(Hooks).GetMethod("OnSummitCreditsEnd", flags)!);
+        using var levelGuard = new Hook(typeof(LevelEnter).GetMethod(nameof(LevelEnter.Go), flags)!,
+            typeof(Hooks).GetMethod("OnLevelEnter", flags)!);
+
+        foreach (var (slot, complete, optedIn, creditsRoom, allowed) in new[] {
+                (11, true, true, "credits-summit", false), (10, false, true, "credits-summit", false),
+                (10, true, false, "credits-summit", false), (10, true, true, "credits-summit", true),
+                (10, true, true, "credits-prologue", true) }) {
+            nextScene.SetValue(engine, null);
+            level.Completed = complete;
+            session.Level = creditsRoom;
+            var job = Job(entry: new(SummitEpilogue.Summit, slot), nativeAreaEntry: optedIn);
+            end.Invoke(credits, new object[] { level });
+            Check(job.StopReason == (allowed ? "native_transition" : "entry_blocked"), "Credits entry did not protect the correct step boundary");
+            Check((nextScene.GetValue(engine) is LevelEnter) == allowed, "Unexpected native tail scene");
+            if (nextScene.GetValue(engine) is LevelEnter destination) {
+                using var stream = new MemoryStream();
+                using (var writer = new System.Text.Json.Utf8JsonWriter(stream)) {
+                    writer.WriteStartObject(); SummitEpilogue.Write(writer, destination); writer.WriteEndObject();
+                }
+                using var json = System.Text.Json.JsonDocument.Parse(stream.ToArray());
+                var proof = json.RootElement.GetProperty("summitEpilogue");
+                Check(proof.GetProperty("chapterTimeTicks").GetInt64() == session.Time, "Footer used the destination timer");
+            }
+        }
+        nextScene.SetValue(engine, null);
+        var directJob = Job(entry: new(SummitEpilogue.Summit, 10), nativeAreaEntry: true);
+        LevelEnter.Go(new Session { Area = new AreaKey(8) }, false);
+        Check(directJob.StopReason == "entry_blocked" && nextScene.GetValue(engine) == null, "Direct epilogue entry bypassed the guard");
+        Console.WriteLine("PASS: real Summit credits OnEnd enters Epilogue under the Summit guard, records source ticks and stops input; wrong slot, unfinished Summit and direct entry rejected");
+    } finally {
+        AreaData.Areas = previousAreas;
+        SaveData.Instance = previousSave;
+        Scene(previousScene);
+        nextScene.SetValue(engine, previousNext);
+    }
+}
 foreach (string invalid in new[] {
     "{\"version\":2}", "{\"version\":true}", "{\"version\":\"1\"}",
     "{\"version\":1,\"permissions\":{\"restart_chapter\":false,\"return_to_map\":false,\"save_quit\":false,\"unknown\":true},\"departure\":\"none\"}",

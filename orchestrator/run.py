@@ -32,7 +32,7 @@ from .prompting import current_rules_note, next_chapter_prompt, resume_prompt
 from .runtimes import RUNTIMES, runtime
 from .config import CHAPTER_SIDS, REPO_ROOT, RunConfig, chapter_name, chapter_name_by_id
 from .container import ensure_container
-from .game_session import GameSession
+from .game_session import GameSession, summit_epilogue_source
 from .kb_study import KbStudy
 from .execution import workspace_capabilities
 from .recording_lifecycle import pending_recording
@@ -698,7 +698,8 @@ def prompt_override_hashes() -> dict[str, str]:
     return {name: hashlib.sha256((root / name).read_bytes()).hexdigest()[:12] for name in overridden_parts()}
 
 
-def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None) -> None:
+def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previous: dict | None,
+                    *, piece_pending: bool | None = None) -> None:
     """记下续跑需要的设置与 Claude Code 会话编号。"""
     all_chapters = previous["state"].get("all_chapters") if previous else (list(cfg.chapters) if cfg.chapters else None)
     extended = getattr(cfg, "_extended_plan", None)     # 续跑时追加了章节（见 parse_args）
@@ -717,7 +718,8 @@ def write_run_state(run_dir: Path, cfg: RunConfig, session_id: str | None, previ
     state = {"agent": cfg.agent, "save": cfg.save, "save_slot": cfg.save_slot, "cutscene_mode":cfg.cutscene_mode, "action_permissions":cfg.action_permissions, "allow_chapter_reset":cfg.allow_chapter_reset, "allow_detour":bool(getattr(cfg,"allow_detour",False)), "play_scope":cfg.play_scope, "completion_policy":cfg.completion_policy, "visited_maps":cfg.visited_maps, "model": cfg.model, "provider": cfg.provider, "engine": cfg.engine, "requested_model":cfg.model, "mcp_port":cfg.mcp_port,
              "effort": cfg.effort, "max_minutes": cfg.max_minutes, "knowledge_profile": cfg.knowledge_profile,
              "runtime": cfg.runtime, "pause_limit": cfg.pause_limit, "planning_rules": {"rounds_per_room": cfg.rounds_per_room, "room_scale": cfg.room_scale}, "sim": cfg.sim, "sim_assist": cfg.sim_assist, "stiffness": cfg.stiffness, "token_drift": cfg.token_drift, "formal_thought": cfg.formal_thought, "collision_image": cfg.collision_image, "save_context": cfg.save_context, "autocompact": cfg.autocompact, "live": cfg.live, "live_mode": cfg.live, "mode": cfg.mode, "record": cfg.record, "playback": cfg.playback, "hud_mod": cfg.hud_mod, "all_chapters": all_chapters, "plan_pieces": plan_pieces,
-             "piece_pending": cfg.cutscene_mode == 'agent' and cfg.resume_pending, "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
+             "piece_pending": (cfg.cutscene_mode == 'agent' and cfg.resume_pending) if piece_pending is None else piece_pending,
+             "completion_pending":cfg.resume_completion_pending, "session_id": session_id,
              "tuning": dict(cfg.tuning), "kb_deny": list(cfg.kb_deny), "kb_allow": list(cfg.kb_allow), "kb_extra": cfg.kb_extra, "prompt_overrides": prompt_override_hashes(),
              "resumed_from": str(previous["dir"]) if previous else None,
              "controller_host": os.environ.get("CELESTE_CONTROLLER_HOST"), "controller_pid": os.getpid(),
@@ -999,6 +1001,10 @@ def check_resume_position(cfg: RunConfig) -> bool:
         right_save = save == cfg.save and (cfg.save_slot is None or (obs.get('save') or {}).get('slot') == cfg.save_slot)
         sid = (obs.get("level") or {}).get("sid")
         want = CHAPTER_SIDS.get(cfg.chapter) if cfg.chapter is not None else sid
+        if right_save and summit_epilogue_source(obs) and (
+                (want == CHAPTER_SIDS[7] and first_side(cfg) == 'A')
+                or (cfg.resume_pending and want == CHAPTER_SIDS[8] and first_side(cfg) == 'A')):
+            return True
         if cfg.resume_pending:
             if cfg.cutscene_mode == 'agent' and right_save:
                 return True  # retain agent-owned navigation, including the previous chapter's menu
@@ -1246,7 +1252,8 @@ def _shutdown_mode(cfg, args, session, *, interrupted=False, model_failed=False)
     """
     if args.no_agent:
         return 'release'
-    if session.done and getattr(session, 'summit_credits_finished', False):
+    if (session.done and getattr(session, 'summit_credits_finished', False)
+            and not getattr(session, 'summit_epilogue_entered', False)):
         return 'freeze'
     goals = getattr(session, 'goals', None)
     if goals is not None and not goals.immediate and goals.snapshot().get('reached') is True:
@@ -1337,7 +1344,8 @@ async def _run_connected_session(cfg, args, run_dir, token, previous, study, met
             session_id = None  # App Server assigns the ID; a failed startup must not publish a placeholder.
         if args.no_agent:
             metrics.update(telemetry_source="external", chat_thread_id=None)
-        write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous)
+        write_run_state(run_dir, cfg, None if args.no_agent else session_id, previous,
+                        piece_pending=getattr(session, 'chapter_finished', None))
         if args.prepared:
             try:
                 prepared_state = load_json(Path(args.prepared) / 'run_state.json')
