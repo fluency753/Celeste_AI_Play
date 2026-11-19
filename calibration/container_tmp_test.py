@@ -49,7 +49,7 @@ class FakeDocker:
 
     def run(self, argv, stdout=None, stdin=None, stderr=None, timeout=None):
         self.calls.append(tuple(argv[1:]))
-        if argv[1:3] == ["cp", "-a"]:
+        if argv[1:3] == ["exec", "-i"]:
             self.restored = stdin.read()
             return SimpleNamespace(returncode=0, stderr=b"")
         if self.save_fails:
@@ -76,8 +76,8 @@ class CarryTmpTests(unittest.TestCase):
         return name, created
 
     def order(self, fake):
-        return [c[0] if c[0] != "cp" else ("save" if c[1] != "-a" else "restore") for c in fake.calls
-                if c[0] in {"cp", "rm", "create"}]
+        return [{"cp": "save", "exec": "restore"}.get(c[0], c[0]) for c in fake.calls
+                if c[0] in {"cp", "rm", "create"} or c[:2] == ("exec", "-i")]
 
     def test_rebuild_carries_tmp_over(self):
         fake = FakeDocker({"tmp/claude-1500/bs/bsearch.py": b"print(1)\n", "tmp/claude-1500/reg/csim.py": b"x = 1\n"})
@@ -101,6 +101,42 @@ class CarryTmpTests(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         with tarfile.open(kept[0]) as tar:
             self.assertEqual(sorted(m.name for m in tar), ["tmp/a.py", "tmp/b.py"])
+
+    def test_rebuild_uses_original_ownership_and_omits_only_codex_runtime_paths(self):
+        fake = FakeDocker({"tmp/codex-daemon-1500/old": b"a",
+                           "tmp/codex-bwrap-synthetic-mount-targets-1500/lock": b"b",
+                           "tmp/codex-daemon-1500-notes/plan.py": b"c",
+                           "tmp/claude-1500/search.py": b"d"}, found=2)
+        name, _ = self.ensure(fake)
+        restore = next(c for c in fake.calls if c[:2] == ("exec", "-i"))
+        self.assertEqual(restore[:6], ("exec", "-i", "--user", "0:0", name, "tar"))
+        self.assertIn("--numeric-owner", restore)
+        self.assertIn("--same-owner", restore)
+        self.assertIn("-xpf", restore)
+        self.assertIn("--directory=/tmp", restore)
+        self.assertIn("--anchored", restore)
+        self.assertEqual({arg for arg in restore if arg.startswith("--exclude=")},
+                         {"--exclude=tmp/codex-daemon-1500", "--exclude=tmp/codex-bwrap-synthetic-mount-targets-1500"})
+        self.assertEqual(fake.restored, fake.archive)
+
+    def test_archive_outside_tmp_is_rejected_before_rebuild(self):
+        fake = FakeDocker({"tmp/../workspace/script.py": b"x"})
+        with self.assertRaisesRegex(RuntimeError, "归档路径不在 /tmp"):
+            self.ensure(fake)
+        self.assertEqual(self.order(fake), ["save"])
+
+    def test_hard_link_into_omitted_runtime_state_keeps_old_container(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as tar:
+            link = tarfile.TarInfo("tmp/keep")
+            link.type = tarfile.LNKTYPE
+            link.linkname = "tmp/codex-daemon-1500/old"
+            tar.addfile(link)
+        fake = FakeDocker({})
+        fake.archive = buffer.getvalue()
+        with self.assertRaisesRegex(RuntimeError, "归档硬链接指向 Codex 临时状态"):
+            self.ensure(fake)
+        self.assertEqual(self.order(fake), ["save"])
 
     def matching_labels(self):
         with patch('orchestrator.config.REPO_ROOT', self.root):

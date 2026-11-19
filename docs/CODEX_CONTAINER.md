@@ -50,7 +50,7 @@ HUD 新建的 Codex player 会话各自持有工作区、线程和配置。登�
 
 工作区根目录支持普通 `git init`、`git add` 和 `git commit`。`celeste-write` 显式开放 `/workspace/.git`，该路径同时绑定到宿主工作区里的真实 `.git` 目录；Git 数据仍随工作区保存。子挂载点不能被 agent 改名或替换为外指链接，`.git` 内部的链接也不获得工作区外写权限。容器镜像的 root 所有系统配置仅信任 `/workspace`，处理 Windows 挂载所有权显示不一致的问题，不使用 `safe.directory=*`。网络、凭据、其他受保护目录及 `celeste-read` 权限保持原规则；`approval_policy=never` 不代替文件权限。
 
-启动时若根 `.git` 已是符号链接、Windows 目录联接或文件式 gitdir，会在替换旧容器前明确拒绝，不删除或转换已有仓库。旧容器按现有流程备份并恢复 `/tmp`，保留工作区和会话数据卷后重建。用户此前自行建立的 `.celeste-git` 等仓库不会自动迁移；没有根 `.git` 时只创建挂载用的空目录，是否初始化仓库由 agent 的任务决定。
+启动时若根 `.git` 已是符号链接、Windows 目录联接或文件式 gitdir，会在替换旧容器前明确拒绝，不删除或转换已有仓库。重建保留工作区和会话数据卷，并把 `/tmp` 的文件按归档属主和权限恢复。Codex 的进程 socket 目录和临时挂载锁由新进程创建。用户此前自行建立的 `.celeste-git` 等仓库不会自动迁移；没有根 `.git` 时只创建挂载用的空目录，是否初始化仓库由 agent 的任务决定。
 
 Codex 钩子负责原生工具格式、会话／轮次身份、执行前后计量、可靠超时和进程收尾。托管权限及钩子文件归 root，原生程序不能修改。工作区固定标为 untrusted，不加载 agent 可写的项目配置、MCP 或项目钩子，与 Claude 的 restricted 入口对齐。Shell 采用非登录执行；固定版本 CLI 实测将自定义 shell 路径规整为可信解释器，钩子的归一化参数不含原始 shell 字段，不能将此说成钩子拒绝了该字段。升级 CLI 必须复验该边界。内层程序得到稳定 PATH 与临时 HOME；外层 HOME 不设为程序可写目录。App Server 使用独立 owner 标识，关闭时按 PID、启动时间和 UID 核验自身进程树，不用 `killall`，不影响同容器其他进程。
 

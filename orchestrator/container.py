@@ -7,7 +7,7 @@ Codex 使用独立的 /home/agent/.codex 持久卷，普通启动不导入宿主
 主控的私有 worker 使用，不挂入 agent 容器。工作区的 /workspace/.git 固定为真实目录并单独嵌套挂载（两个执行器相同），
 智能体可以直接在工作区根目录用 git 管理自己的程序与笔记。
 配置变了要重建容器时，旧容器 /tmp 里的东西（智能体常把程序和中间结果放在 Claude Code 的 /tmp/claude-<uid>）
-先打包到本机 local/container_tmp/，新容器建好后原样放回（保留属主与权限）。
+先打包到本机 local/container_tmp/，新容器建好后恢复属主与权限；Codex 的进程目录由新进程重建。
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import stat
 import subprocess
 import tarfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import config as _config
 from .config import REPO_ROOT, RunConfig, find_docker_exe
@@ -27,6 +27,7 @@ LABEL = "celeste-ai-play"
 PLAYER_LOGIN_MOUNT = '/var/lib/celeste-codex-login'
 PLAYER_LOGIN_VOLUME = 'celeste-player-codex-auth-v1'
 CODEX_CONTEXT_CONFIG_LABEL = f'{LABEL}.codex_initial_context'
+CODEX_TMP_RUNTIME = ('tmp/codex-daemon-1500', 'tmp/codex-bwrap-synthetic-mount-targets-1500')
 
 
 def slug(agent: str) -> str:
@@ -207,7 +208,7 @@ def _create(cfg: RunConfig, name: str) -> None:
     docker(*args, cfg.image)
 
 
-def _save_tmp(name: str) -> Path:
+def _save_tmp(name: str) -> tuple[Path, int]:
     """重建前把旧容器的 /tmp 打包到本机（docker cp 的 tar 保留属主与权限，套接字会被跳过）。失败就抛错、不重建。"""
     folder = _config.REPO_ROOT / "local" / "container_tmp"
     folder.mkdir(parents=True, exist_ok=True)
@@ -218,24 +219,47 @@ def _save_tmp(name: str) -> Path:
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()[:300]
         raise RuntimeError(f"要重建容器 {name}，但没能先保存它的 /tmp（{detail}）；容器没有动")
-    return archive
+    try:
+        return archive, _tmp_file_count(archive)
+    except (OSError, tarfile.TarError, ValueError) as exc:
+        raise RuntimeError(f"旧容器的 /tmp 打包无法校验，容器没有动；已保留 {archive}：{exc}") from exc
 
 
-def _regular_files(archive: Path) -> int:
+def _tmp_file_count(archive: Path) -> int:
+    def validate(name: str):
+        path = PurePosixPath(name)
+        if path.parts[:1] != ('tmp',) or '..' in path.parts:
+            raise ValueError(f"归档路径不在 /tmp：{name}")
+        return path
+
+    def runtime_path(path: PurePosixPath) -> bool:
+        return '/'.join(path.parts[:2]) in CODEX_TMP_RUNTIME
+
+    count = 0
     with tarfile.open(archive) as tar:
-        return sum(1 for member in tar if member.isfile())
+        for member in tar:
+            path = validate(member.name)
+            if runtime_path(path):
+                continue
+            if member.islnk() and runtime_path(validate(member.linkname)):
+                raise ValueError(f"归档硬链接指向 Codex 临时状态：{member.name}")
+            if member.isfile() or member.islnk():
+                count += 1
+    return count
 
 
-def _restore_tmp(name: str, archive: Path, log=print) -> None:
-    """把旧容器的 /tmp 放回新容器（-a：按打包里的属主写入，智能体用户照样能改）。核对普通文件数后删掉本机打包。"""
-    hint = f"旧 /tmp 的打包保留在 {archive}，可以手动放回：docker cp -a - {name}:/ < 打包文件"
+def _restore_tmp(name: str, archive: Path, expected: int, log=print) -> None:
+    """在新容器内按归档恢复 UID/GID 和权限。Docker 的 stdin 导入会重映射为 root。"""
+    command = ["exec", "-i", "--user", "0:0", name, "tar", "--numeric-owner", "--same-owner",
+               "--strip-components=1", "--directory=/tmp", "--anchored",
+               *(f"--exclude={path}" for path in CODEX_TMP_RUNTIME), "-xpf", "-"]
+    hint = f"旧 /tmp 的打包保留在 {archive}；可将归档作为二进制标准输入重新执行 docker {' '.join(command)}"
     with open(archive, "rb") as source:
-        result = subprocess.run([find_docker_exe(), "cp", "-a", "-", f"{name}:/"], stdin=source,
+        result = subprocess.run([find_docker_exe(), *command], stdin=source,
                                 stderr=subprocess.PIPE, timeout=900)
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()[:300]
         raise RuntimeError(f"容器 {name} 已重建，但没能放回旧的 /tmp（{detail}）。{hint}")
-    expected = _regular_files(archive)
     found = docker("exec", name, "sh", "-c", "find /tmp -type f | wc -l", check=False)
     try:
         count = int(found.stdout.strip())
@@ -301,14 +325,14 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
                                                    for k, v in _labels(cfg).items())
         if stale:
             log(f"[container] {name} 的镜像或配置已变化，重建（工作区、会话与 /tmp 保留）")
-            archive = _save_tmp(name)
+            archive, expected = _save_tmp(name)
             _workspace_git(cfg)  # A long /tmp backup must not hide a changed layout.
             docker("rm", "-f", name)
             try:
                 _create(cfg, name)
             except Exception as exc:
                 raise RuntimeError(f"重建容器 {name} 失败：{exc}；旧 /tmp 的打包保留在 {archive}") from exc
-            _restore_tmp(name, archive, log)
+            _restore_tmp(name, archive, expected, log)
         elif running != "true":
             log(f"[container] 启动 {name}")
             docker("start", name)
