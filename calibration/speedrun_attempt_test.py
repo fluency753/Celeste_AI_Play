@@ -274,6 +274,39 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.session.done, passes)
         self.assertEqual([row['ticks'] for row in self.metrics.state.splits], [19_999_999])
 
+    def test_watch_finishes_native_skip_after_practice_completion(self):
+        self.set_speedrun_target()
+        self.cfg.speedrun_record_on_demand = True
+        self.bridge.ticks = 574_090_000
+        self.session.act(['1,R'], '跑到练习终点', None)
+        observation = self.bridge.observation
+
+        def native_observation():
+            obs = observation()
+            if self.bridge.state == 'ending':
+                obs['level'].update(skippingCutscene=True, screenWipe=True)
+            return obs
+
+        def finish_skip(options, reply):
+            self.assertEqual(options['inputs'], ['30'])
+            self.assertEqual(options['speed'], 1)
+            self.assertNotIn('complete', options['stop_on'])
+            self.bridge.state = 'results'
+            reply['obs'] = native_observation()
+
+        before = self.bridge.frame
+        self.bridge.after_step = finish_skip
+        with patch.object(self.bridge, 'observation', side_effect=native_observation):
+            obs, _, _ = self.session.cutscene('watch')
+        self.assertEqual(obs['scene'], 'AreaComplete')
+        self.assertEqual(self.bridge.frame, before + 30)
+        self.assertEqual(self.session.observe()[0]['scene'], 'AreaComplete')
+        self.assertEqual(self.bridge.frame, before + 30)
+        self.assertFalse(self.session.done)
+        self.assertFalse(self.metrics.state.splits)
+        self.assertEqual(self.metrics.state.speedrun_last_attempt['ticks'], 574_090_000)
+        self.assertFalse(self.metrics.state.speedrun_last_attempt['recorded_from_start'])
+
     def test_expired_turn_cannot_start_capture(self):
         self.set_speedrun_target()
         self.cfg.speedrun_record_on_demand = True

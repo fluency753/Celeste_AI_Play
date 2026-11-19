@@ -2247,10 +2247,16 @@ class GameSession:
             if guard and guard():
                 notes.append('用户已暂停，主控停止自动播放。')
                 break
-            if self._speedrun_retry_ending(obs):
+            scene = obs.get('scene')
+            level = obs.get('level') or {}
+            skipping = scene == 'Level' and level.get('skippingCutscene')
+            paused = level.get('paused') or obs.get('pauseMenu')
+            # A retry leaves settlement input to the player. A native skip
+            # already in progress still needs neutral frames to reach it.
+            if (not skipping or paused) and self._speedrun_retry_ending(obs):
                 notes.append(self._speedrun_retry_note(obs))
                 break
-            if (obs.get('level') or {}).get('paused') or obs.get('pauseMenu'):
+            if paused:
                 if mode == 'auto' and menu_closes < 3 and not self._agent_menu(obs):
                     # 自动跳过剧情时暂停菜单只会是跳过剧情留下的（智能体按不了暂停键）：关掉后接着推进
                     menu_closes += 1
@@ -2261,10 +2267,7 @@ class GameSession:
                     continue
                 notes.append('游戏暂停菜单已打开，主控停止自动播放。')
                 break
-            scene = obs.get("scene")
             automatic_transition = _automatic_loader_transition(obs)
-            level = obs.get("level") or {}
-            skipping = scene == 'Level' and level.get('skippingCutscene')
             remember(obs)
             node = story_input(obs)
             if mode == 'agent' and node:
