@@ -54,13 +54,16 @@ def pipe(lane, name, flags):
 
 
 def room_tracks(results):
+    """每条候选在当前房间里的部分：画到第一次出房或第一次死亡为止（死亡不停时，之后是死亡动画与重生）。"""
     tracks = []
     for result in results:
         frames = result.get('frames', [])
-        exit_frame = next((frame for frame, kind, _ in result.get('events', ()) if kind in {'room_exit', 'room'}), None)
-        size = len(frames) if exit_frame is None else bisect_right(frames, exit_frame, key=lambda row: row[0])
+        end = next(((frame, kind) for frame, kind, _ in result.get('events', ())
+                    if kind in {'room_exit', 'room', 'death'}), None)
+        size = len(frames) if end is None else bisect_right(frames, end[0], key=lambda row: row[0])
         if size and len(frames[0]) >= 3 and len(frames[size - 1]) >= 3:
-            tracks.append((frames, size, 'room' if exit_frame is not None else result.get('stop')))
+            stop = result.get('stop') if end is None else 'death' if end[1] == 'death' else 'room'
+            tracks.append((frames, size, stop))
     return tracks
 
 

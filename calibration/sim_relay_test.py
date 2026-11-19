@@ -135,6 +135,21 @@ class RelayWorkerPreviewTests(unittest.TestCase):
         self.assertEqual(index.stop.tolist(), [2])
         self.assertEqual(index.end.tolist(), [[60, 0]])
 
+    def test_preview_stops_at_first_death_when_simulation_runs_through_deaths(self):
+        # 死亡不停（--through-deaths）时，死亡动画里的帧只有帧号；轨迹画到死亡那一帧为止，不把重生后的路线连上去
+        rows = [[i, float(i), 0.0, 1.0, 0.0, 'Normal', 1, 0] for i in range(6)]
+        rows += [[i] for i in range(6, 12)]
+        rows += [[i, 100.0 + i, 50.0, 0.0, 0.0, 'IntroRespawn', 1, 1] for i in range(12, 20)]
+        dying = {'ok': True, 'stop': 'done', 'events': [[5, 'death', None], [11, 'respawn', None]], 'frames': rows}
+        ends_dead = {'ok': True, 'stop': 'done', 'events': [[3, 'death', None]],
+                     'frames': [[i, float(i), 0.0] for i in range(4)] + [[i] for i in range(4, 9)]}
+        tracks = self.worker.room_tracks([dying, ends_dead])
+        data = self.worker.pack_preview(tracks, 1, 1 << 20, 1, show, 40)
+        index = read_logs([data])
+        self.assertEqual(index.npts.tolist(), [6, 4])
+        self.assertEqual(index.stop.tolist(), [1, 1])
+        self.assertEqual(index.end.tolist(), [[5, 0], [3, 0]])
+
     def test_full_batch_fits_and_shared_budget_does_not_change_counts(self):
         start = {'digest': 'current', 'frame': 10}
         budget = [0, 0]
