@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -170,10 +171,66 @@ class LaunchTests(unittest.TestCase):
         with patch.object(game_instance.sys, 'platform', 'win32'), \
                 patch.object(game_instance, 'game_processes', return_value=[]), \
                 patch.object(game_instance, 'ensure_steam'), \
-                patch.object(game_instance, '_detached', return_value=Process()), \
+                patch.object(game_instance, '_detached', return_value=Process()) as start, \
                 patch.object(game_instance, 'apply_title', return_value=True), \
                 patch.object(game_instance.time, 'sleep'):
+            self.start = start
             return game_instance.launch(self.marker['dir'], log=lambda _: None)
+
+    def registry(self, values):
+        """假的 winreg：values = {(HKCU|HKLM, 程序路径): 兼容性设置}。"""
+        class Key:
+            def __init__(self, items):
+                self.items = items
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class FakeWinreg:
+            HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE = 'HKCU', 'HKLM'
+
+            @staticmethod
+            def OpenKey(hive, path):
+                assert path == r'Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers'
+                return Key([(name, value, 1) for (where, name), value in values.items() if where == hive])
+
+            @staticmethod
+            def EnumValue(key, index):
+                if index >= len(key.items):
+                    raise OSError('no more values')
+                return key.items[index]
+
+        environ = {k: v for k, v in os.environ.items() if k != '__COMPAT_LAYER'}
+        return patch.dict(sys.modules, {'winreg': FakeWinreg}), patch.dict(os.environ, environ, clear=True)
+
+    def launched_layer(self, values):
+        modules, environ = self.registry(values)
+        with modules, environ:
+            self.launch(None)
+        env = self.start.call_args.kwargs.get('env')
+        return None if env is None else env.get('__COMPAT_LAYER')
+
+    def test_launch_passes_the_compatibility_settings_like_steam(self):
+        # 实测（150% 缩放）：Steam 启动的个人游戏带 __COMPAT_LAYER=HighDpiAware、窗口 1920×1080 物理像素；
+        # 控制台直接启动的副本不认注册表里的同一设置，窗口被放大成 2880×1620、画面发虚
+        instance = str(Path(self.marker['dir']) / 'Celeste.exe')
+        source = str(Path(self.marker['source']) / 'Celeste.exe')
+        self.assertEqual(self.launched_layer({('HKCU', instance): '~ HIGHDPIAWARE'}), 'HIGHDPIAWARE')
+        self.assertEqual(self.launched_layer({('HKCU', instance): 'DPIUNAWARE', ('HKCU', source): 'HIGHDPIAWARE'}),
+                         'DPIUNAWARE')
+        # 副本自己没设时沿用个人游戏的设置；提权类选项不放进环境变量（会让启动直接失败）
+        self.assertEqual(self.launched_layer({('HKLM', source): '~ RUNASADMIN HIGHDPIAWARE'}), 'HIGHDPIAWARE')
+        self.assertIsNone(self.launched_layer({('HKCU', source): 'RUNASADMIN'}))
+        self.assertIsNone(self.launched_layer({}))
+
+    def test_an_existing_compatibility_variable_is_left_alone(self):
+        modules, environ = self.registry({('HKCU', str(Path(self.marker['dir']) / 'Celeste.exe')): 'HIGHDPIAWARE'})
+        with modules, environ, patch.dict(os.environ, {'__COMPAT_LAYER': 'RunAsInvoker'}):
+            self.launch(None)
+        self.assertIsNone(self.start.call_args.kwargs.get('env'))
 
     def test_launch_reports_a_game_that_exits_right_away(self):
         self.assertEqual(self.launch(None)['pid'], 99)

@@ -11,6 +11,9 @@
 游戏位置（控制台“游戏位置”或 CELESTE_DIR）指向副本时进入副本模式：主控只接管桥接报告的模组路径在副本里的游戏，
 把它的窗口标题改成标记里的标题；找游戏窗口（还原最小化、采集尺寸）只认副本目录里的 Celeste.exe；OBS 按窗口标题采集，
 标题不符的窗口（个人游戏）不会被录进去。输入不需要另外隔离：游戏窗口没有焦点时，Monocle 的 MInput 把键盘与手柄都清空。
+
+启动副本时照 Steam 的做法带上 Windows「兼容性」里给游戏设的选项（例如「替代高 DPI 缩放」）：Steam 启动个人游戏时把它们放进
+环境变量 __COMPAT_LAYER，副本不经过 Steam 启动，直接启动时这些选项不生效（见 launch_env）。
 """
 from __future__ import annotations
 
@@ -265,13 +268,62 @@ def game_processes(game_dir) -> list[int]:
     return found
 
 
-def _detached(args, cwd=None):
+def _detached(args, cwd=None, env=None):
     """独立于启动它的进程（控制台或主控宿主退出、所在作业被关掉时，游戏与 Steam 不跟着被结束）。"""
     flags = (getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))
     try:
-        return subprocess.Popen(args, cwd=cwd, close_fds=True, creationflags=flags | 0x01000000)  # CREATE_BREAKAWAY_FROM_JOB
+        return subprocess.Popen(args, cwd=cwd, env=env, close_fds=True, creationflags=flags | 0x01000000)  # CREATE_BREAKAWAY_FROM_JOB
     except OSError:
-        return subprocess.Popen(args, cwd=cwd, close_fds=True, creationflags=flags)
+        return subprocess.Popen(args, cwd=cwd, env=env, close_fds=True, creationflags=flags)
+
+
+LAYERS_KEY = r'Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers'
+ELEVATION_LAYERS = {'RUNASADMIN', 'RUNASHIGHEST', 'RUNASINVOKER'}   # 提权类选项放进环境变量会让启动直接失败，不带
+
+
+def compat_layers(exe) -> str:
+    """Windows「兼容性」里给这个程序设的选项（注册表 AppCompatFlags\\Layers，当前用户优先于本机），去掉 `~` 与提权类选项，
+    用空格连接；没设时返回空串。"""
+    if sys.platform != 'win32':
+        return ''
+    try:
+        import winreg
+    except ImportError:
+        return ''
+    target = os.path.normcase(os.path.abspath(str(exe)))
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            key = winreg.OpenKey(hive, LAYERS_KEY)
+        except OSError:
+            continue
+        with key:
+            index = 0
+            while True:
+                try:
+                    name, value, _kind = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                index += 1
+                if isinstance(value, str) and os.path.normcase(os.path.abspath(name)) == target:
+                    flags = [flag for flag in value.split() if flag != '~' and flag.upper() not in ELEVATION_LAYERS]
+                    if flags:
+                        return ' '.join(flags)
+    return ''
+
+
+def launch_env(target: Path, marker: dict) -> dict | None:
+    """启动副本用的环境变量；不需要改时返回 None（沿用当前环境）。
+
+    Steam 启动游戏时把「兼容性」选项放进 __COMPAT_LAYER（例如在 150% 缩放的屏幕上给个人游戏设了「替代高 DPI 缩放：应用程序」，
+    Steam 传 HighDpiAware，游戏按物理像素开 1920×1080 的窗口）；直接启动的进程不认注册表里的这项设置，游戏不感知 DPI，
+    窗口被 Windows 放大 1.5 倍、画面发虚，OBS 采到的分辨率也跟着窗口变。这里照 Steam 的做法：先用副本 Celeste.exe 自己的设置，
+    没设时沿用来源安装（个人游戏）的 Celeste.exe 的设置；当前环境已有 __COMPAT_LAYER 时不改。"""
+    if os.environ.get('__COMPAT_LAYER'):
+        return None
+    layers = compat_layers(Path(target) / 'Celeste.exe')
+    if not layers and marker.get('source'):
+        layers = compat_layers(Path(marker['source']) / 'Celeste.exe')
+    return {**os.environ, '__COMPAT_LAYER': layers} if layers else None
 
 
 def _steam_registry():
@@ -354,7 +406,7 @@ def launch(game_dir=None, *, background: bool = False, log=print) -> dict:
 
     def work():
         ensure_steam(log=log)
-        process = _detached([str(target / 'Celeste.exe')], cwd=str(target))
+        process = _detached([str(target / 'Celeste.exe')], cwd=str(target), env=launch_env(target, marker))
         deadline = time.monotonic() + 180
         while True:     # 桥接 1.11.0 起模组加载时就改好标题；这里核对，旧桥接时补改
             if process.poll() is not None:
