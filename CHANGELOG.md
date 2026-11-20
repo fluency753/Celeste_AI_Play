@@ -4,6 +4,9 @@
 
 ## 2026-11-20
 
+- **项目 1.42.4：明确速通公共提示词的目标、权限和公开解说范围。** 三种模拟器配置都区分章节计时与现实用时。直调只免除推演轮次额度，路径预测以实机复验为准。共享启动说明区分本次任务与游戏、工作区及工具返回的参考文本；HUD 请求可公开的路线判断和进展。
+  验证：独立复核两种执行器、三种模拟器配置和两种 HUD 显示设置的 12 种组合，保留整章严格限时、章首连续录像和仅练习可快进的规则。提示词专项回归 38 项通过、1 项跳过；启动器文件版本为 1.42.4。
+
 - **待办：记下 AI 副本窗口发虚的原因与修法（版本不变）。** 控制台直接启动副本时 Windows 的「替代高 DPI 缩放」不生效，Steam 启动的个人游戏靠环境变量 `__COMPAT_LAYER` 才生效；实测数据与修法写在 `TODO.md` 第二优先，暂不改代码。
 
 - **知识库：补充 CelesteTAS wiki 的最优输入与效率数据；资料抓取工具加入 CelesteTAS wiki（组件版本不变）。** `techniques.md` 新增第 10 节：TAS 输入写法与本项目的对照（可直接用 `input_format="celeste_tas"` 提交）、最优 ultra、平地从静止起步的连续 grounded ultra、攀爬效率表（连续 climbjump、half-stamina climb、double HSC、偷体力 + neutral、纯 neutral）、climbjump 的条件与优先级、double cornerboost 的速度上限、计时器利用（variable jump、coyote time、dash attack）、撞墙保留速度的延伸用法、climbhop 的附带效果、取整误差与原版随机数；9.6 是原文对照表。更正 4.4 neutral jump 的循环：跳键一直按住、两个跳键交替，每 25 帧升 25.5 px（61.2 px/s），原写法只按满 12 帧就松开，26 帧升约 19 px。`tools/fetch_reference.py` 另抓 CelesteTAS wiki 里与原版有关的 17 页到 `kb/reference/celestetas/`（只放本机，选读，不列入准备阶段的必读清单），新增 `--skip-tas`。

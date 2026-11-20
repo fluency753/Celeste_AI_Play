@@ -106,9 +106,8 @@ def formal_thought_rule(cfg) -> str:
     where = temp_thought_where(cfg)
     temp = (f"冻结期间的 narrate 与公开 commentary 是临时思考，{where}。" if n is None else
             f"冻结期间用 narrate 写的是临时思考，{where}；每条汉字不超过 {n} 个"
-            "（英文术语不计），写你此刻的分析、尝试与判断，想法有进展就更新。")
-    return ("本次开启了“仅正式思考”：游戏画面的 HUD 上只显示每次 act 的 thought（正式思考），它要概括这次冻结期间"
-            "（从上一次 act 结束到这次 act）你整个的思考、分析和判断，而不只是这一段按键的意图。" + temp)
+            "（英文术语不计），简要记录路线判断、尝试结果或当前进展。")
+    return ("本次开启了“仅正式思考”：游戏画面的 HUD 上只显示每次 act 的 thought（正式思考），用它向观众简要说明本次路线判断、验证结果或下一步。" + temp)
 
 
 SAVE_CONTEXT_ACT = ("本次开启了节省上下文，act 结果更简短：轨迹不写列名（列依次为帧、x、y、vx、vy、状态、冲刺、着地）；"
@@ -198,8 +197,8 @@ def formal_thought_act(cfg) -> str:
     from .thought import temp_thoughts
     if not temp_thoughts(cfg):
         return ""
-    return ("\n  本次开启了“仅正式思考”：这里的 thought 是正式思考，游戏画面的 HUD 上只显示它；用它概括这次冻结期间"
-            f"（从上一次 act 结束到现在）你整个的思考、分析和判断。冻结期间的临时思考用 narrate 写，{temp_thought_where(cfg)}。")
+    return ("\n  本次开启了“仅正式思考”：这里的 thought 是正式思考，游戏画面的 HUD 上只显示它；用它向观众说明路线判断、验证结果或下一步。"
+            f"冻结期间的进展用 narrate 简要记录，{temp_thought_where(cfg)}。")
 
 
 def thought_temp_limit(cfg) -> str:
@@ -408,9 +407,9 @@ def fill(text: str, cfg) -> str:
         # 开了"仅正式思考"时换掉提示词里说 narrate 给观众看的几处；没开时与原来的文字完全相同
         "{narrate_target}": "写下临时思考" if getattr(cfg, "formal_thought", False) else "告诉观众",
         "{hud_thought_shown}": ("你最近一次 act 的 thought（正式思考）" if getattr(cfg, "formal_thought", False)
-                                else "你最新写下的一句思考"),
+                                else "你最新写下的一句路线解说"),
         "{narrate_viewers}": ("。这些是临时思考（规则见前面“仅正式思考”的说明）：中文，" if getattr(cfg, "formal_thought", False)
-                              else "——观众在你思考的这段时间里只能看到 `narrate` 写下的内容。规则与 `act` 的 `thought` 相同：一两句中文，"),
+                              else "。这条解说会显示给观众。用一两句中文，"),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
         "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
         "{explore_program_rule}": explore_program_rule(cfg),

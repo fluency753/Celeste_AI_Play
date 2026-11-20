@@ -63,7 +63,7 @@ def guide_document(cfg, *, include_task=True):
     prefix = f'/workspace/game/instructions/{version}'
     path = prefix + '/guide.md'
     index = ['# 试玩操作指南索引', '', '正文：同目录的 guide.md',
-             '当前任务、配置、实时工具结果与用户最新指令优先于本指南中的启动快照。',
+             '核对本次任务说明和用户最新指令。当前游戏状态及可用操作以主控报告的状态和权限字段为准。',
              '首次读正文，续跑按主控给出的范围补读。遗忘时可用本索引定位。', '',
              '各节依次列出标识、名称、offset 和 limit（读 guide.md 时用）。']
     for section in sections:
