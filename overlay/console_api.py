@@ -19,8 +19,6 @@ from orchestrator.config import CHAPTER_SIDS, REPO_ROOT
 from orchestrator.recording_lifecycle import pending_recording as is_recording_pending
 from orchestrator.session_store import load_json
 
-CHAPTER_LABELS = {0: "序章", 1: "1A 被遗弃之城", 2: "2A 旧址", 3: "3A 天空度假村", 4: "4A 黄金山脊", 5: "5A 镜之神殿",
-                  6: "6A 映像", 7: "7A 顶峰", 8: "尾声", 9: "8A 核心", 10: "第九章 告别"}
 LAUNCH_RECORD = REPO_ROOT / "local" / "console" / "last_launch.json"
 CONTROLLER_MUTEX = "Local\\CelesteAIPlayController"
 
@@ -154,16 +152,18 @@ def options() -> dict:
     except Exception as exc:  # noqa: BLE001（没有部署配置时也要能打开控制台）
         saves_error = str(exc)
     deploy = _read_json(REPO_ROOT / "configs" / "local.deploy.json")
-    from orchestrator.segments import load_table
+    from orchestrator.config import SIDE_CHAPTERS, read_chapter_areas
+    from orchestrator.segments import table_from_areas
+    areas = read_chapter_areas()
     checkpoints = {str(c): [{"index": int(p.get("index", i)), "level": p.get("level"),
                              "name": p.get("name_zh") or p.get("name") or p.get("level")} for i, p in enumerate(points)]
-                   for c, points in load_table().items()}
-    from orchestrator.config import SIDE_CHAPTERS, side_code, side_label
-    return {"runtimes": configured_runtimes(), "chapters": [{"id": i, "label": CHAPTER_LABELS.get(i, sid)}
-                                                           for i, sid in sorted(CHAPTER_SIDS.items())],
+                   for c, points in table_from_areas(areas).items()}
+    by_sid = {area.get("sid"): area for area in areas}
+    chapters = [{"id": i, "sid": sid, "number": by_sid.get(sid, {}).get("chapter_number"),
+                 "label": _exported_chapter_name(by_sid, sid)} for i, sid in sorted(CHAPTER_SIDS.items())]
+    return {"runtimes": configured_runtimes(), "chapters": chapters,
             # 有 B／C 面的章节（第 1～7 章与核心）：控制台按 A／B／C 分行选；B／C 面只整章游玩
-            "sides": [{"id": i, "side": side, "code": side_code(i, side), "label": side_label(i, side)}
-                      for side in ("B", "C") for i in SIDE_CHAPTERS],
+            "sides": [{"id": i, "side": side} for side in ("B", "C") for i in SIDE_CHAPTERS],
             "checkpoints": checkpoints,
             "saves": saves, "saves_error": saves_error, "sim_available": sim_available(REPO_ROOT),
             "defaults": {**DEFAULTS, "hud_mod": None}, "deploy": {k: deploy.get(k) for k in ("agent", "save", "chapters")},
@@ -796,7 +796,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.42.6"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.43.0"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]
@@ -1286,16 +1286,16 @@ def runs(limit: int = 40) -> list[dict]:
     return rows
 
 
+def _exported_chapter_name(areas: dict, sid: str) -> str:
+    area = areas.get(sid, {})
+    return area.get("name_zh") or area.get("name_en") or sid
+
+
 def video_label(sid, side) -> str:
-    """分章录像的显示名，区分面：4A、4B 是两段录像（"4A 黄金山脊"、"4B 黄金山脊 B 面"、"8C 核心 C 面"）。"""
-    from orchestrator.config import SIDE_CHAPTERS, side_label
-    ids = {s: i for i, s in CHAPTER_SIDS.items()}
-    chapter = ids.get(sid)
-    if chapter is None:
-        return str(sid or "")
-    if side in ("B", "C") and chapter in SIDE_CHAPTERS:
-        return side_label(chapter, side)
-    return CHAPTER_LABELS.get(chapter, sid)
+    """分章录像的纯文本标签。"""
+    from orchestrator.config import read_chapter_areas
+    name = _exported_chapter_name({area.get("sid"): area for area in read_chapter_areas()}, sid or "")
+    return f"{name} {side}面" if name and side in ("B", "C") else name
 
 
 def _launch(argv: list[str]) -> dict:

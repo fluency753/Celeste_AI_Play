@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.18.2";
+    public const string Version = "1.19.0";
     private sealed record ChapterCapture(object? Capture);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Session, ChapterCapture> chapterCaptures = new();
     private static object captureEpoch = new();
@@ -1047,7 +1047,11 @@ internal static class Bridge {
             ModeProperties mode = area.Mode[0];
             w.WriteStartObject();
             w.WriteNumber("id", area.ID);
-            w.WriteString("sid", area.ToKey().SID);
+            AreaKey key = area.ToKey();
+            w.WriteString("sid", key.SID);
+            int chapterNumber = key.ChapterIndex; // 同原生选章面板，插曲没有章节编号。
+            if (chapterNumber > 0) w.WriteNumber("chapter_number", chapterNumber);
+            else if (area.Interlude) w.WriteNull("chapter_number");
             Names(area.Name);
             w.WriteStartArray("checkpoints");
             w.WriteStartObject();                       // 0：章节开头

@@ -1,7 +1,7 @@
 """从正在运行的游戏导出官方章节（A 面）的检查点表，写进 configs/checkpoints.json。
 
 按段通关（--segments、控制台的分段选择）用这张表：段 k 从检查点 k（0 = 章节开头）到下一个检查点或通关。
-表与游戏里选章面板的检查点一致（房间名与检查点名，名字有中英文）。需要游戏开着、桥接 1.0.6 或更新；
+表与游戏里选章面板的检查点一致（房间名与检查点名，名字有中英文）。需要游戏开着、桥接 1.19.0 或更新；
 不接管游戏（不发 activate），游戏停在什么画面都可以。
 
     python tools/dump_checkpoints.py
@@ -20,6 +20,9 @@ except ImportError:  # 作为 tools 包导入时
     from tools.bridge_client import BridgeClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from orchestrator.config import CHAPTER_SIDS
 
 
 def main() -> int:
@@ -31,9 +34,13 @@ def main() -> int:
     try:
         hello = client.call("hello")
         if not hello.get("checkpoints"):
-            print(f"桥接 {hello.get('bridge')} 还不能导出检查点：请更新到 1.0.6 或更新版本", file=sys.stderr)
+            print(f"桥接 {hello.get('bridge')} 还不能导出检查点：请更新到 1.19.0 或更新版本", file=sys.stderr)
             return 1
-        areas = client.call("areas")["areas"]
+        by_sid = {area["sid"]: area for area in client.call("areas")["areas"]}
+        areas = [by_sid.get(sid, {}) for sid in CHAPTER_SIDS.values()]
+        if any("chapter_number" not in area for area in areas):
+            print("未读到完整的游戏内章节编号。请使用 Bridge 1.19.0 或更新版本，并在原版关卡集或未载入存档时导出。", file=sys.stderr)
+            return 1
     finally:
         client.close()
     keep = ("index", "level", "name_en", "name_zh")
@@ -41,6 +48,7 @@ def main() -> int:
         "note": "官方章节（A 面）的检查点：第 0 项是章节开头。由 tools/dump_checkpoints.py 从游戏导出，按段通关用。",
         "bridge": hello.get("bridge"),
         "areas": [{"id": a["id"], "sid": a["sid"], "name_en": a.get("name_en"), "name_zh": a.get("name_zh"),
+                   "chapter_number": a["chapter_number"],
                    "checkpoints": [{k: p.get(k) for k in keep} for p in a.get("checkpoints") or []]} for a in areas],
     }
     out = Path(args.out)

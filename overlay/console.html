@@ -228,6 +228,8 @@
   .seg-row { display: grid; grid-template-columns: 9em 1fr; gap: 4px 10px; align-items: start; margin-top: 8px; }
   .seg-row .seg-ch { padding-top: 5px; color: var(--muted); font-size: 13px; }
   .seg-row .plan { margin-top: 0; }
+  .chapter-face-b { color: #8ee3ff; font-weight: 700; }
+  .chapter-face-c { color: #ffe29a; font-weight: 700; }
   @media (max-width: 560px) { .seg-row { grid-template-columns: 1fr; } }
   .tag { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
   .tag.ok { color: var(--green); border-color: rgba(76, 195, 138, 0.5); }
@@ -750,7 +752,7 @@
     <h2 id="chapterTitle">章节 <span class="aside">点选要依次通关的章节</span></h2>
     <div class="route" id="route" aria-label="要依次通关的章节"></div>
     <div class="presets">
-      <button type="button" class="chip" data-preset="formal">序章 → 2A</button>
+      <button type="button" class="chip" data-preset="formal"></button>
       <button type="button" class="chip" data-preset="one">只玩一章</button>
       <button type="button" class="chip" data-preset="all">全部章节</button>
       <button type="button" class="chip" data-preset="clear">清空</button>
@@ -1083,7 +1085,6 @@ const STATUS = {
   quota_wait: ["等待额度重置", "var(--muted)"], net_wait: ["模型连接中断，等待重试", "var(--warn)"], model_wait: ["模型被换，正在换回", "var(--warn)"], paused: ["已暂停", "var(--blue)"], done: ["已完成", "var(--muted)"],
   stopped: ["已结束", "var(--muted)"],
 };
-const SHORT = ["序", "1A", "2A", "3A", "4A", "5A", "6A", "7A", "尾", "8A", "9"];
 const EXPLORE_KEYS = ["explore_program_s", "explore_program_runs"];   // 时长单独显示；旧次数键仅为隐藏配置兼容
 
 const ui = { options: null, segOff: {}, status: null, control: null, controlRun: null, hud: null, runs: [], models: [],
@@ -1499,9 +1500,10 @@ function buildRoute() {
     line(points[i - 1], points[i], on ? "#E0475B" : "rgba(236,239,248,0.16)", on ? 4 : 2);
   }
   const current = currentChapterId();
+  document.querySelector('[data-preset="formal"]').textContent = [chapterLabel(0), chapterLabel(2)].join(" → ");
   for (const p of points) {
     const b = document.createElement("button");
-    b.type = "button"; b.textContent = SHORT[p.c.id] || String(p.c.id);
+    b.type = "button"; b.textContent = p.c.number ?? p.c.label;
     b.title = p.c.label; b.setAttribute("aria-label", p.c.label);
     b.setAttribute("aria-pressed", String(selected.includes(p.c.id)));
     b.classList.toggle("current", running() && current === p.c.id);
@@ -1517,14 +1519,13 @@ function buildRoute() {
     });
     host.appendChild(b);
   }
-  $("routeNote").textContent = chapterText(true);
+  $("routeNote").replaceChildren(...chapterText(true));
   buildSides();
   buildSegments();
 }
 
 // B／C 面：只列有这些面的章节（options.sides），按 B、C 分行；整章游玩，与按检查点分段互斥
 function hasSide(id, side) { return ui.sides.some(x => x[0] === id && x[1] === side); }
-function sideCode(id, side) { return ((ui.options && ui.options.sides) || []).find(x => x.id === id && x.side === side)?.code || `${id}${side}`; }
 function buildSides() {
   const host = $("sideList"), items = (ui.options && ui.options.sides) || [];
   host.replaceChildren();
@@ -1535,7 +1536,7 @@ function buildSides() {
     const chips = document.createElement("div"); chips.className = "plan";
     for (const item of items.filter(x => x.side === side)) {
       const b = document.createElement("button");
-      b.type = "button"; b.textContent = item.code; b.title = item.label; b.setAttribute("aria-label", item.label);
+      b.type = "button"; b.append(chapterDisplay(chapterLabel(item.id), side));
       b.setAttribute("aria-pressed", String(hasSide(item.id, side)));
       b.disabled = isNew;
       b.addEventListener("click", () => {
@@ -1561,7 +1562,21 @@ function segInfo(chapter) {
            label: (k) => `${name(k)} → ${k + 1 < n ? name(k + 1) : "通关"}` };
 }
 function chapterLabel(id) {
-  return (((ui.options && ui.options.chapters) || []).find(x => x.id === id) || {}).label || `第 ${id} 章`;
+  return ui.options?.chapters?.find(x => x.id === id)?.label || `地图 ${id}`;
+}
+function chapterForSid(sid) {
+  return ui.options?.chapters?.find(x => x.sid === sid);
+}
+function chapterDisplay(label, side) {
+  const name = document.createElement("span");
+  name.append(label);
+  if (side === "B" || side === "C") {
+    const badge = document.createElement("span");
+    badge.className = `chapter-face-${side.toLowerCase()}`;
+    badge.textContent = `${side}面`;
+    name.append(" ", badge);
+  }
+  return name;
 }
 function buildSegments() {
   const host = $("segList");
@@ -1604,7 +1619,6 @@ function selectedSegments() {
 }
 
 function chapterText(long) {
-  const chapters = (ui.options && ui.options.chapters) || [];
   const selected = routeChapters();
   if (ui.sides.length) {
     // 有 B／C 面：按官方顺序（同一章 A、B、C 面依次）列出
@@ -1613,27 +1627,28 @@ function chapterText(long) {
       const [epilogue] = items.splice(items.findIndex(([id]) => id === 8), 1);
       items.splice(items.findIndex(([id, side]) => id === 7 && side === "A") + 1, 0, epilogue);
     }
-    const text = items.map(([id, side]) => side === "A" ? chapterLabel(id) : sideCode(id, side)).join(long ? "、" : " → ");
-    return long ? `依次通关：${text}；B/C 面整章游玩，开跑前按存档核对已解锁。` : text;
+    const parts = [];
+    if (long) parts.push("依次通关：");
+    items.forEach(([id, side], i) => {
+      if (i) parts.push(long ? "、" : " → ");
+      parts.push(chapterDisplay(chapterLabel(id), side));
+    });
+    if (long) parts.push("；B/C 面整章游玩，开跑前按存档核对已解锁。");
+    return parts;
   }
-  const names = selected.map(id => (chapters.find(c => c.id === id) || {}).label || id);
-  if (!selected.length) return "点选要依次通关的章节。";
+  const names = selected.map(chapterLabel);
+  if (!selected.length) return ["点选要依次通关的章节。"];
   const partial = selected.filter(id => (ui.segOff[id] || []).length).map(chapterLabel);
   if (partial.length) {
     const short = names.map((n, i) => (ui.segOff[selected[i]] || []).length ? `${n}（部分）` : n);
-    return long ? `依次玩：${short.join("、")}；部分章节只玩选中的段。` : short.join(" → ");
+    return [long ? `依次玩：${short.join("、")}；部分章节只玩选中的段。` : short.join(" → ")];
   }
-  if (selected.length === 1) return long ? `只玩 ${names[0]}。` : names[0];
-  return long ? `依次通关：${names.join("、")}；一章通关后主控自动进入下一章。` : names.join(" → ");
+  if (selected.length === 1) return [long ? `只玩 ${names[0]}。` : names[0]];
+  return [long ? `依次通关：${names.join("、")}；一章通关后主控自动进入下一章。` : names.join(" → ")];
 }
 
 function currentChapterId() {
-  const m = ui.hud && ui.hud.metrics, sid = m && m.chapter;
-  if (!sid || !ui.options) return null;
-  const order = ["0-Intro", "1-ForsakenCity", "2-OldSite", "3-CelestialResort", "4-GoldenRidge", "5-MirrorTemple",
-                 "6-Reflection", "7-Summit", "8-Epilogue", "9-Core", "LostLevels"];
-  const i = order.indexOf(sid.replace(/^Celeste\//, ""));
-  return i >= 0 ? i : null;
+  return chapterForSid(ui.hud?.metrics?.chapter)?.id ?? null;
 }
 
 function updateSummary() {
@@ -1644,7 +1659,7 @@ function updateSummary() {
   const existing = (ui.options.saves || []).find(s => `slot:${s.slot}` === saveValue);
   $("sumSave").textContent = saveValue === "new" ? `新建：${$("newSave").value.trim() || "（还没填名字）"}`
     : existing ? `${existing.name}（槽位 ${existing.slot}）` : (ui.options.saves_error ? "读不到存档列表" : "—");
-  $("sumChapters").textContent = ui.chapters.length || ui.sides.length ? chapterText(false) : "还没选";
+  $("sumChapters").replaceChildren(...(ui.chapters.length || ui.sides.length ? chapterText(false) : ["还没选"]));
   const list = ui.kb[ui.mode];
   if (list) {
     const own = list.documents.filter(d => !d.opt_in), extra = list.documents.filter(d => d.opt_in);
@@ -2345,9 +2360,8 @@ function renderRun(m) {
   if (m.status === 'net_wait' && /at capacity|overloaded|modelCapacity/i.test(m.network_retry_reason || '')) $('runStatus').textContent = '模型容量不足，等待重试';
   $('runStatus').title = m.network_retry_reason || '';
   $("runDot").style.background = color;
-  const chapterName = (cfg.chapters || {})[m.chapter] || (m.chapter || "").replace(/^Celeste\//, "");
-  const chapter = /^[BC]$/.test(m.chapter_side || "") ? chapterName.replace(/A$/, m.chapter_side) : chapterName;   // 与 HUD 相同：4B、8C
-  $("runWhere").replaceChildren(document.createTextNode(chapter || ""), Object.assign(document.createElement("small"), { textContent: m.room || "" }));
+  const chapterName = chapterForSid(m.chapter)?.label || (m.chapter || "");
+  $("runWhere").replaceChildren(chapterDisplay(chapterName, m.chapter_side), Object.assign(document.createElement("small"), { textContent: m.room || "" }));
   const done = m.piece_done != null ? !!m.piece_done : (m.splits || []).some(s => s.chapter === m.chapter);
   const base = m.chapter_base || {};       // 按一局算，换图、换章不清零（与 HUD 相同）
   const since = (key) => Math.max(0, (m[key] || 0) - (base[key] || 0));
@@ -2368,7 +2382,7 @@ function renderRun(m) {
   const attemptText = target != null && attempt?.valid && Number.isFinite(attempt.ticks)
     ? `上次有效通关 ${attempt.ticks / 1e7} 秒（${attempt.recorded_from_start === false ? "缺少章首录像" : attempt.ticks < target ? "达标" : "未达标"}）` : "";
   $("runAside").textContent = [(m.activity_status || m.status) === "paused" ? "已暂停" : "",
-    target != null ? `${m.speedrun_summit_epilogue ? "7A 有效整章目标" : "有效整章目标"} < ${target / 1e7} 秒` : "",
+    target != null ? `${m.speedrun_summit_epilogue ? chapterLabel(7) + "有效整章目标" : "有效整章目标"} < ${target / 1e7} 秒` : "",
     target != null && m.speedrun_recording != null ? (m.speedrun_recording ? "正式录制" : "练习未录制") : "",
     attemptText].filter(Boolean).join(" · ");
 }
@@ -2437,9 +2451,21 @@ function renderPlan(c) {
   if (!ui.planDraft || ui.planDraft.base !== serverKey) ui.planDraft = { base: serverKey, queue: seg.queue.map(s => [...s]) };
   const draft = ui.planDraft.queue, has = (list, s) => list.some(x => key(x) === key(s));
   const cur = seg.current, curKey = cur ? key(cur) : -1;
-  const segText = (s) => s[2] ? sideCode(s[0], s[2]) : `${chapterLabel(s[0])}${segInfo(s[0]).n > 1 ? " " + segInfo(s[0]).label(s[1]) : ""}`;
-  $("planSummary").textContent = (cur ? `正在玩：${segText(cur)}；之后 ${seg.queue.length} 段` : (plan.switching ? "正在换过去" : ""))
-    + (plan.detour ? `；正在计划外地图 ${plan.detour.chapter.replace("Celeste/", "")} ${plan.detour.side}面${plan.detour.completed ? "（已通关）" : ""}` : "");
+  const summary = $("planSummary");
+  summary.replaceChildren();
+  if (cur) {
+    summary.append("正在玩：", chapterDisplay(chapterLabel(cur[0]), cur[2]));
+    const info = segInfo(cur[0]);
+    if (!cur[2] && info.n > 1) summary.append(" ", info.label(cur[1]));
+    summary.append(`；之后 ${seg.queue.length} 段`);
+  } else if (plan.switching) {
+    summary.append("正在换过去");
+  }
+  if (plan.detour) {
+    const { chapter, side, completed } = plan.detour;
+    summary.append("；正在计划外地图 ", chapterDisplay(chapterForSid(chapter)?.label || chapter, side));
+    if (completed) summary.append("（已通关）");
+  }
   const rows = [];
   for (const ch of ((ui.options && ui.options.chapters) || [])) {
     const info = segInfo(ch.id);
@@ -2475,7 +2501,7 @@ function renderPlan(c) {
     const chips = document.createElement("div"); chips.className = "plan";
     for (const s of sided.sort((a, b2) => key(a) - key(b2))) {
       const b = document.createElement("button");
-      b.type = "button"; b.textContent = sideCode(s[0], s[2]);
+      b.type = "button"; b.append(chapterDisplay(chapterLabel(s[0]), s[2]));
       if (has(seg.done, s)) { b.className = "done"; b.disabled = true; b.title = "已完成"; }
       else if (cur && key(s) === curKey) { b.className = "current"; b.disabled = true; b.title = "正在玩"; }
       else {

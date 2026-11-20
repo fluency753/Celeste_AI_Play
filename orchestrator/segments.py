@@ -11,14 +11,11 @@
 """
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import CHAPTER_SIDS, REPO_ROOT, SIDE_CHAPTERS, SIDES, chapter_name_by_id
-
-CHECKPOINTS_FILE = REPO_ROOT / "configs" / "checkpoints.json"
+from .config import CHECKPOINTS_FILE, CHAPTER_SIDS, SIDE_CHAPTERS, SIDES, chapter_name_by_id, read_chapter_areas
 
 # A 面的段是 (章节编号, 段号)；B／C 面只整章游玩，写成 (章节编号, 0, 面)。检查点表只有 A 面。
 Segment = tuple
@@ -74,11 +71,7 @@ class Piece:
 
 def load_table(path: Path = CHECKPOINTS_FILE) -> dict[int, list[dict]]:
     """{章节编号: [{"index", "level", "name", ...}, ...]}（第 0 项是章节开头）；没有文件时为空表。"""
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return table_from_areas(data.get("areas") or [])
+    return table_from_areas(read_chapter_areas(path))
 
 
 def table_from_areas(areas: list[dict]) -> dict[int, list[dict]]:

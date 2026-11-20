@@ -1,12 +1,14 @@
 """运行配置与本机路径。"""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+CHECKPOINTS_FILE = REPO_ROOT / "configs" / "checkpoints.json"
 
 CHAPTER_NAMES = {
     "Celeste/0-Intro": "序章",
@@ -43,25 +45,43 @@ def chapter_name_by_id(chapter: int, side: str = "A") -> str:
     return name if (side or "A") == "A" else f"{name} {side} 面"
 
 
-def chapter_number(chapter: int) -> int:
-    """游戏里显示的章节序号：1～7 与内部编号相同，核心（内部 9）是第 8 章。只用于有 B／C 面的章节。"""
-    return 8 if chapter == 9 else chapter
+def read_chapter_areas(path: Path = CHECKPOINTS_FILE) -> list[dict]:
+    """Read the official chapter and checkpoint metadata exported by the bridge."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    areas = data.get("areas") if isinstance(data, dict) else None
+    return [area for area in areas if isinstance(area, dict)] if isinstance(areas, list) else []
+
+
+def _chapter_numbers() -> dict[int, int]:
+    """CLI 兼容缺少编号的旧导出。控制台显示的章号直接取导出值。"""
+    numbered = {area["id"]: area["chapter_number"] for area in read_chapter_areas()
+                if area.get("id") in CHAPTER_SIDS and type(area.get("chapter_number")) is int
+                and area["chapter_number"] > 0}
+    if numbered:
+        return numbered
+    # 旧的原版命令按游戏章节顺序，跳过序幕和尾声两个插曲。
+    return {chapter: i for i, chapter in enumerate((c for c in CHAPTER_SIDS if c not in (0, 8)), 1)}
+
+
+def chapter_number(chapter: int) -> int | None:
+    """选章面板用的章节编号，插曲没有章节编号。"""
+    return _chapter_numbers().get(chapter)
 
 
 def side_code(chapter: int, side: str) -> str:
-    """按游戏习惯的简写：4A、4B、8C（核心）。"""
-    return f"{chapter_number(chapter)}{side}"
-
-
-def side_label(chapter: int, side: str) -> str:
-    """控制台里 B／C 面的显示名，例如"4B 黄金山脊 B 面"、"8B 核心 B 面"（与"8A 核心"一致）。"""
-    name = chapter_name(CHAPTER_SIDS[chapter]).split(" ", 1)[-1]
-    return f"{side_code(chapter, side)} {name} {side} 面"
+    """用于命令和交流的章节简称，如 4A、8C。"""
+    number = chapter_number(chapter)
+    if number is None:
+        raise ValueError(f"地图编号 {chapter} 对应的章节没有游戏内章节编号")
+    return f"{number}{side}"
 
 
 def parse_chapter_item(text: str) -> tuple[int, str]:
     """--chapters 的一项 → (内部章节编号, 面)。纯数字是内部编号（A 面，与原来相同）；带面写法按游戏里的章节序号，
-    不分大小写：1A～8A、1B～8B、1C～8C（8 是核心）。序章、终章、告别没有 B／C 面，写纯编号 0、8、10。"""
+    不分大小写。序幕、尾声没有章号，仍用内部编号 0、8。"""
     item = str(text).strip()
     if item.isdigit():
         return int(item), "A"
@@ -69,12 +89,10 @@ def parse_chapter_item(text: str) -> tuple[int, str]:
     if not head.isdigit() or side not in SIDES:
         raise ValueError(f"--chapters 的 {item!r} 不对：写成章节编号（如 4）或章节序号加面（如 4B、8C）")
     number = int(head)
-    if not 1 <= number <= 8:
-        if side == "A":
-            raise ValueError(f"--chapters 的 {item!r} 不对：带面的写法只用于 1A～8A；序章、终章、告别写纯编号 0、8、10")
-        raise ValueError(f"--chapters 的 {item!r} 不对：只有第 1～7 章与核心（8B、8C）有 B／C 面，"
-                         "序章、终章与告别没有")
-    return (9 if number == 8 else number), side
+    chapter = next((area for area, chapter_no in _chapter_numbers().items() if chapter_no == number), None)
+    if chapter is None or (side != "A" and chapter not in SIDE_CHAPTERS):
+        raise ValueError(f"--chapters 的 {item!r} 不对：没有相应的游戏章号或面别。序幕和尾声用内部编号 0、8")
+    return chapter, side
 
 
 def load_dotenv(path: Path) -> dict[str, str]:

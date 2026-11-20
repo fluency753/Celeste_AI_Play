@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from orchestrator.config import CHAPTER_SIDS, chapter_name_by_id, parse_chapter_item, side_code, side_label
+from orchestrator.config import CHAPTER_SIDS, chapter_name_by_id, chapter_number, parse_chapter_item, side_code
 from orchestrator.launch_options import build, command_line, normalize
 from orchestrator.saves import side_locked_reason, side_progress, validate_sides
 from orchestrator.segments import (Piece, load_table, parse_chapters, parse_segments, piece_label, pieces_of,
@@ -43,9 +43,21 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(parse_chapter_item(' 8C '), (9, 'C'))       # 8 是核心（内部编号 9）
         self.assertEqual(parse_chapter_item('1A'), (1, 'A'))
         self.assertEqual(parse_chapter_item('10'), (10, 'A'))
-        for bad, phrase in (('0B', '没有'), ('9B', '没有'), ('10C', '没有'), ('4D', '不对'), ('xB', '不对'), ('0A', '纯编号')):
-            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, phrase):
+        self.assertEqual(parse_chapter_item('8'), (8, 'A'))  # 尾声的内部 ID
+        self.assertEqual(parse_chapter_item('8A'), (9, 'A'))  # 原生第 8 章是核心
+        self.assertEqual(parse_chapter_item('9A'), (10, 'A'))  # 原生第 9 章是再见
+        for bad in ('0B', '9B', '10C', '4D', 'xB', '0A'):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "不对"):
                 parse_chapter_item(bad)
+
+    def test_chapter_shortcuts_support_old_exports_and_use_native_numbers_when_present(self):
+        for areas in ([], [{"id": 9, "name_zh": "核心"}]):
+            with self.subTest(areas=areas), patch("orchestrator.config.read_chapter_areas", return_value=areas):
+                self.assertEqual(parse_chapter_item("8C"), (9, "C"))
+                self.assertEqual(side_code(9, "B"), "8B")
+        with patch("orchestrator.config.read_chapter_areas", return_value=[{"id": 9, "chapter_number": 11}]):
+            self.assertEqual(parse_chapter_item("11C"), (9, "C"))
+            self.assertEqual(side_code(9, "B"), "11B")
 
     def test_plan_pieces_and_rows(self):
         plan = parse_chapters('0,4B,8c')
@@ -60,8 +72,9 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(Piece(4, 0, None, 'B').segments(), [(4, 0, 'B')])
 
     def test_names_follow_the_game(self):
-        self.assertEqual(side_label(9, 'B'), '8B 核心 B 面')
-        self.assertEqual(side_label(4, 'C'), '4C 黄金山脊 C 面')
+        self.assertIsNone(chapter_number(8))
+        self.assertEqual(chapter_number(9), 8)
+        self.assertEqual(chapter_number(10), 9)
         self.assertEqual(side_code(9, 'C'), '8C')
         self.assertEqual(chapter_name_by_id(4), '4 黄金山脊')               # A 面与原来相同
         self.assertEqual(chapter_name_by_id(4, 'B'), '4 黄金山脊 B 面')
@@ -539,9 +552,80 @@ class ConsoleTests(unittest.TestCase):
         sides = data['sides']
         self.assertEqual([(x['id'], x['side']) for x in sides if x['side'] == 'B'], [(c, 'B') for c in SIDE_CHAPTERS])
         self.assertEqual(len(sides), 16)
-        self.assertIn({'id': 9, 'side': 'B', 'code': '8B', 'label': '8B 核心 B 面'}, sides)
-        self.assertEqual(console_api.video_label(RIDGE, 'B'), '4B 黄金山脊 B 面')
-        self.assertEqual(console_api.video_label(RIDGE, 'A'), '4A 黄金山脊')
+        self.assertIn({'id': 9, 'side': 'B'}, sides)
+        chapters = {c['id']: c for c in data['chapters']}
+        self.assertEqual(chapters[1], {'id': 1, 'sid': CITY, 'number': 1, 'label': '被遗弃的城市'})
+        self.assertEqual(data['checkpoints']['1'][2]['name'], '峡谷')
+        self.assertEqual((chapters[8]['number'], chapters[9]['number'], chapters[10]['number']), (None, 8, 9))
+        self.assertEqual(console_api.video_label(RIDGE, 'B'), '黄金山脊 B面')
+        self.assertEqual(console_api.video_label(RIDGE, 'A'), '黄金山脊')
+
+    def test_console_renders_exported_labels_and_colored_side_suffixes(self):
+        try:
+            from playwright.sync_api import Error, sync_playwright
+        except ImportError:
+            self.skipTest("Playwright unavailable")
+        from overlay import console_api
+
+        with patch('orchestrator.saves.inventory', return_value=[]), \
+                patch.object(console_api, 'machine_payload', return_value={}):
+            options = console_api.options()
+        html = (Path(__file__).resolve().parents[1] / 'overlay' / 'console.html').read_text(encoding='utf-8')
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Error as error:
+                self.skipTest(f"Chromium unavailable: {error}")
+            try:
+                page = browser.new_page()
+                page.route('**/*', lambda route: route.fulfill(content_type='text/html; charset=utf-8', body=html)
+                           if route.request.url.endswith('/console') else route.fulfill(json={}))
+                page.goto('http://console.test/console')
+                page.evaluate("""(options) => {
+                  ui.options = options;
+                  ui.chapters = [1];
+                  ui.sides = [[9, "B"], [9, "C"]];
+                  ui.segOff = {};
+                  ui.status = {orchestrator: {running: true}};
+                  buildRoute();
+                  updateSummary();
+                  renderPlan({chapters_control: true, chapter_plan: {segments: {
+                    current: [1, 2], done: [], queue: [[9, 0, "B"], [9, 0, "C"]]
+                  }}});
+                  renderRun({chapter: "Celeste/9-Core", chapter_side: "C", room: "a-00"});
+                }""", options)
+                self.assertEqual(page.locator('#planSummary').inner_text(), '正在玩：被遗弃的城市 峡谷 → 通关；之后 2 段')
+                self.assertEqual(page.locator('#sumChapters').inner_text(), '被遗弃的城市 → 核心 B面 → 核心 C面')
+                self.assertEqual(page.locator('#route button[title="核心"]').inner_text(), '8')
+                self.assertEqual(page.locator('#route button[title="再见"]').inner_text(), '9')
+                self.assertEqual(page.locator('#route button[title="尾声"]').inner_text(), '尾声')
+                self.assertEqual(page.locator('#runWhere .chapter-face-c').inner_text(), 'C面')
+                b = page.locator('#planChips .chapter-face-b')
+                c = page.locator('#planChips .chapter-face-c')
+                self.assertNotEqual(b.evaluate('(e) => getComputedStyle(e).color'),
+                                    c.evaluate('(e) => getComputedStyle(e).color'))
+            finally:
+                browser.close()
+
+    def test_export_preserves_native_numbers_and_rejects_incomplete_response(self):
+        from tools import dump_checkpoints
+
+        from orchestrator.config import read_chapter_areas
+
+        areas = read_chapter_areas()
+        with tempfile.TemporaryDirectory() as folder, patch.object(dump_checkpoints, 'BridgeClient') as bridge:
+            path = Path(folder) / 'checkpoints.json'
+            client = bridge.return_value
+            client.call.side_effect = [{"checkpoints": True, "bridge": "1.19.0"}, {"areas": areas}]
+            with patch.object(sys, 'argv', ['dump_checkpoints', '--out', str(path)]):
+                self.assertEqual(dump_checkpoints.main(), 0)
+                exported = path.read_bytes()
+                self.assertEqual(json.loads(exported)['areas'], areas)
+
+                for incomplete in (areas[:-1], [dict(areas[0]), {"id": 9, "sid": CORE}, *areas[1:9], areas[10]]):
+                    client.call.side_effect = [{"checkpoints": True, "bridge": "1.19.0"}, {"areas": incomplete}]
+                    self.assertEqual(dump_checkpoints.main(), 1)
+                    self.assertEqual(path.read_bytes(), exported)
 
     def test_console_start_checks_unlock(self):
         from overlay import console_api

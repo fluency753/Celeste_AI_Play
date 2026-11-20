@@ -7,6 +7,7 @@
       "sid": "Celeste/0-Intro",
       "name_en": "Prologue",
       "name_zh": "序幕",
+      "chapter_number": null,
       "checkpoints": [
         {
           "index": 0,
@@ -21,6 +22,7 @@
       "sid": "Celeste/1-ForsakenCity",
       "name_en": "Forsaken City",
       "name_zh": "被遗弃的城市",
+      "chapter_number": 1,
       "checkpoints": [
         {
           "index": 0,
@@ -47,6 +49,7 @@
       "sid": "Celeste/2-OldSite",
       "name_en": "Old Site",
       "name_zh": "旧址",
+      "chapter_number": 2,
       "checkpoints": [
         {
           "index": 0,
@@ -73,6 +76,7 @@
       "sid": "Celeste/3-CelestialResort",
       "name_en": "Celestial Resort",
       "name_zh": "天空度假山庄",
+      "chapter_number": 3,
       "checkpoints": [
         {
           "index": 0,
@@ -105,6 +109,7 @@
       "sid": "Celeste/4-GoldenRidge",
       "name_en": "Golden Ridge",
       "name_zh": "黄金山脊",
+      "chapter_number": 4,
       "checkpoints": [
         {
           "index": 0,
@@ -137,6 +142,7 @@
       "sid": "Celeste/5-MirrorTemple",
       "name_en": "Mirror Temple",
       "name_zh": "镜之寺庙",
+      "chapter_number": 5,
       "checkpoints": [
         {
           "index": 0,
@@ -175,6 +181,7 @@
       "sid": "Celeste/6-Reflection",
       "name_en": "Reflection",
       "name_zh": "沉思",
+      "chapter_number": 6,
       "checkpoints": [
         {
           "index": 0,
@@ -219,6 +226,7 @@
       "sid": "Celeste/7-Summit",
       "name_en": "The Summit",
       "name_zh": "山顶",
+      "chapter_number": 7,
       "checkpoints": [
         {
           "index": 0,
@@ -269,6 +277,7 @@
       "sid": "Celeste/8-Epilogue",
       "name_en": "Epilogue",
       "name_zh": "尾声",
+      "chapter_number": null,
       "checkpoints": [
         {
           "index": 0,
@@ -283,6 +292,7 @@
       "sid": "Celeste/9-Core",
       "name_en": "Core",
       "name_zh": "核心",
+      "chapter_number": 8,
       "checkpoints": [
         {
           "index": 0,
@@ -315,6 +325,7 @@
       "sid": "Celeste/LostLevels",
       "name_en": "Farewell",
       "name_zh": "再见",
+      "chapter_number": 9,
       "checkpoints": [
         {
           "index": 0,
