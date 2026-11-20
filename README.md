@@ -167,7 +167,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Check     # 只检查各�
 | 本机位置 | 是什么 | 新电脑上怎么办 |
 | --- | --- | --- |
 | `sim\dist\` | 预置模拟器：`celeste-sim`（Linux 单文件程序；Claude 执行器只读挂到智能体容器的 `/sim`，Codex 执行器只由主控私有 worker 使用）、可选的 `celeste-sim.exe`（同一份源码的 Windows 单文件程序；有它时主控的限额预测在本机直接运行，不启动 Docker）、`sim.py`、`README.md`、`sim_assets.json`、`statemap.json`、`VERSION`。由游戏代码生成，不公开分发 | 有构建好的模拟器时把整个文件夹复制到同一位置；Claude 的速通有它时默认开放；Codex 需显式开启限额能力，不向 agent 挂载；没有时不启用预测 |
-| `kb\reference\` | 知识库参考资料原文：Celeste Wiki 技巧页面、草莓酱训练场与机制库、导入的社区资料 | 用 `tools\fetch_reference.py`、`tools\import_reference_pdf.py` 生成；没有时只读知识库正文 |
+| `kb\reference\` | 知识库参考资料原文：Celeste Wiki 技巧页面、草莓酱训练场与机制库、CelesteTAS wiki、导入的社区资料 | 用 `tools\fetch_reference.py`、`tools\import_reference_pdf.py` 生成；没有时只读知识库正文 |
 | `.env` | Claude Code 订阅令牌 | 用 `claude setup-token` 重新生成（部署向导会引导） |
 | `configs\local.*.json` | 本机路径、密钥文件位置、录制参数、HUD 窗口与字号、控制台记住的设置 | 由部署向导与控制台重新生成 |
 | `local\` | 后台宿主的启动记录与输出日志、控制台里新建的配置（`local\profiles\`）、改过的提示词与个人追加要求、按阅读权限生成的知识库副本、AI 专用游戏副本与私有 OBS 等 | 想沿用自己的配置时复制 `local\profiles\`（以及旧版本留下的 `local\prompts\` 与 `local\personal_prompts.json`） |

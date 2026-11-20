@@ -27,6 +27,7 @@
 - **【代码已核实】**：条件与数值逐条对照反编译代码确认。
 - **【由规则推算】**：用本知识库的规则（float32、dt = 0.0166667）算出的数值，没有在游戏里实测；位置按连续值近似，不含 subpixel 取整，误差约 ±1 px。
 - **（未核实）**：只有社区来源，代码里没有找到或没有查。标（未核实）以外的条目经过人工对照，默认可用；实测不符时以实测为准。
+- **【模拟器实测】**：用本项目的模拟器（与游戏逐帧一致，见 `/sim/README.md`）在真实房间里推演得到。
 - **【社区说法与代码不符】**：社区来源与代码不一致，以代码为准。这类差异大多只是"当前帧算不算在内"之类的数帧口径不同，不是机制本身不同。
 
 ### 0.4 序章/1A/2A 可用性
@@ -432,8 +433,8 @@
 
 - **作用**：不按水平方向、不按抓，从墙上蹬跳：vx = 130 离墙，**不强制水平输入**，之后立即按回墙的方向；循环即可无体力上墙。neutral jump 离墙的距离固定，也常用来做像素级定位。
 - **前置**：StNormal（空中或 wallslide），间隙 ≤ 2 px；不按抓或不朝墙（否则变成 climbjump）；攀爬状态里不按方向按跳是**climbjump**（耗体力），所以要先松开抓。
-- **输入**（右侧墙）：`["1,J", "11,R,J", "<k>,R", "1,J", ...]`。
-- **结果**【由规则推算】：按满跳的循环约 26 帧上升约 19 px，约 **43.5 px/s**。攀爬是 45 px/s 但耗体力，neutral jump 不耗体力。
+- **输入**（右侧墙）：`["1,J", "24,R,J", "1,K", "24,R,K", ...]`。跳键**一直按住**到下一次 neutral，两个跳键交替使用（按住 J 时按下 K 算一次新的按下，见 7.5）。
+- **结果**【模拟器实测，与 CelesteTAS wiki 一致】：每个循环 25 帧上升 25.5 px，即 **61.2 px/s**。一直按住跳的好处是顶点附近 |vy| < 40 时重力减半、下落更慢；只按满 12 帧就松开（`["1,J", "11,R,J", "14,R"]`）的循环要 26 帧、只升约 19 px（约 44 px/s）。攀爬是 45 px/s 但耗体力，neutral jump 不耗体力；偷体力 + neutral 的循环更快，见 10.4。
 - **序章/1A/2A**：✓ / ✓ / ✓
 - **来源 / 核实**：SJ Advanced Gym "Neutral Jump"；celeste.ink；BWIKI（无体力上墙）；NamuWiki；【代码已核实】（walljump 只在起跳时 moveX ≠ 0 才强制方向）。
 
@@ -443,7 +444,7 @@
 - **规则**【代码已核实】（`player_physics.md` §5.10）：climbjump 在帧 C、moveX = 0 → 窗口 0.2 s。第 C+1…C+12 帧的检查读的是**上一帧**的 moveX，所以在 **C+1…C+11 共 11 帧**内按离墙方向，下一帧生效。窗口内"疲劳"判定用的体力额外加 27.5。
 - **overclock**：退还不受 110 上限限制。地面上处于攀爬状态时 climbjump 不耗体力，之后离地再触发偷体力 → 137.5；或在 climbjump 后、退还前吃水晶（先补满 110 再 +27.5）。在地面上时每帧都会把体力重置为 110，所以退还必须发生在离地之后。
 - **用途**：代替 neutral jump 无体力上墙（尽早偷体力，不按上）；把水平的平台加速换成 130；快速重新抓住坠落块。
-- **half-stamina climb（half stamina climbing，TAS 级）**：偷体力后约 2 帧内人仍离墙足够近，可以再 climbjump（+40 朝墙），用一次 climbjump 的体力换两次的高度（未核实）。这 2 帧内也可以 neutral jump（不耗体力），比只用 neutral jump 爬得快。
+- **half-stamina climb（half stamina climbing，TAS 级）**：偷体力后约 2 帧内人仍离墙足够近，可以再 climbjump（+40 朝墙），用一次 climbjump 的体力换两次的高度（未核实）。TAS 的最优输入与效率数据见 10.4。这 2 帧内也可以 neutral jump（不耗体力），比只用 neutral jump 爬得快。
 - **偷体力的速度细节**【代码已核实，与 celeste.ink 数值一致】：按离墙方向的那一帧先吃空中加速（0 → 10.83）；下一帧被设为 130，同帧再算空中摩擦：仍按住离墙方向 → 125.67；已松开 → 119.17。
 - **变体**（celeste.ink）：
   - **偷体力 neutral jump（wallboost neutral）**：偷体力后立刻转回墙，循环 = 无体力上墙。最佳做法是起跳后下一帧就按离墙方向，再下一帧松开。比纯 neutral jump 略快；在地图禁用 neutral jump 时也能用。
@@ -742,7 +743,7 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 | 回图重开（Bubsdrop） | 用 walljump/climbjump 抵消向上换房带来的上升，不落到入口的单向平台上，掉回上一个房间；重生点改为该房间上部最近的出生点 | ✗（依赖特定房间结构，对计时无益） | 未核实 |
 | 剧情跳过取消冲刺 / 剧情 ultra / 剧情位移（Cutscene skip, cutscene ultra, cutscene warp） | 剧情开始时减速，首帧跳过可保速但取消冲刺状态；部分剧情跳过只改 x | auto 剧情模式 ✗（主控自动跳过，时机不由智能体控制）；agent 剧情模式 △（可用 `{tool:cutscene}` 的 skip 或 {tool:act} 的 `P` 自选时机，帧精度未核实） | 未核实 |
 | 暂停缓冲（Pause buffering） | 解除暂停后约 10 帧内还没有恢复控制，其中最后 5 帧里的按键会在恢复后的第一帧执行，用来逐帧输入（celeste.ink：缓冲窗口 6 帧） | ✗（harness 本身逐帧输入，用不着暂停缓冲；速通模式与 agent 剧情模式虽可用 `P` 暂停，暂停期间 IGT 照走） | 未核实 |
-| half-stamina climb（Half stamina climbing） | 见 4.5 | ✓（TAS 级） | 未核实 |
+| half-stamina climb（Half stamina climbing） | 见 4.5、10.4 | ✓（TAS 级） | 未核实 |
 | Kermit dash | 见 6.5 | ✓ | 代码已核实 |
 | 望远镜技巧（Bino clip / bino control storage / bino interaction storage / bino extensions） | 卡刺：用望远镜让屏幕外刺球卸载；控制存储：在望远镜里移动（需暂停缓冲）；交互存储：进入望远镜行走后一旦离地，"正在用望远镜"的标记不清除，下一次换房时会把状态设为 Normal（可取消冲刺，例如保住 grounded ultra 的速度）；延长：反复进出扩大镜头范围 | △（2A 只有 d3 一个望远镜，4A–7A 与告别章更多；速通模式能用 `T`、`P`；控制存储要暂停缓冲） | 卡刺、交互存储：代码已核实，实测游戏与预置模拟器逐帧一致（交互后下一帧起跳，带着标记换房）；控制存储、延长：未核实 |
 | Roboboost | 在移动块上做 6 帧 hyper bunnyhop + 反向 cornerboost（TAS） | △ / △ / △ | 未核实 |
@@ -990,6 +991,120 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 | 「Library Ultra Mechanics」 | 2.25 | 3.10 |
 | 「Library Water」 | 2.26 | 6.7 |
 
+
+### 9.6 CelesteTAS wiki：`/kb/reference/celestetas/*.md`
+
+| 文件 | 本知识库位置 | 备注 |
+| --- | --- | --- |
+| `Index.md` | — | 术语与同义词索引，附外部资料链接 |
+| `Input-File.md` | 10.0 | 输入文件写法；按键对照见 10.0 |
+| `Player-Moves.md`、`Player-States.md` | `player_physics.md`；3.x；4.x | 各动作数值与 26 个状态，与已核实的常量一致 |
+| `Ultras.md` | 3.10–3.13；10.1–10.3 | |
+| `Climbjumps---Variations.md` | 4.4–4.6；5.2；10.4–10.6 | |
+| `Climbhop-Cancel.md` | 10.9 | |
+| `Retention-Tech.md` | 6.3；10.8 | |
+| `Timer-Abuse.md` | 4.3；6.5；10.7 | |
+| `Rounding-Errors.md` | 10.10 | |
+| `Randomness.md` | 10.11 | |
+| `Superdash.md`、`Moonboost.md`、`Binoculars.md`、`Holdable-Movement.md`、`Seekers.md`、`Obscure-Interactions.md` | 3.2；6.7；7.6 | 物品、寻者等后续章节的实体；用到时再看原文 |
+
+
+## 10. CelesteTAS wiki 补充：TAS 的最优输入与效率数据
+
+来源：CelesteTAS（游戏 TAS 工具）的 wiki，原文副本在 `/kb/reference/celestetas/`（可选，本机生成，对照表见 9.6）。这一节只收前面各节没有的内容：TAS 用的最优按键序列、效率数字和几条计时器、取整规则。标记沿用 0.3；"TAS 数据"表示数字取自原文、本项目没有逐条复核。
+
+### 10.0 读 TAS 输入
+
+- 原文的输入文件写法与本项目几乎相同：每行 `帧数,键,键…`，相邻两行都有的键视为一直按住（不会重新按下），帧数**包含 freeze frames**（`14,R,Z` 接 `1,R,J` 正好是 F14 起跳，与 3.3 一致）。
+- 键名差异：TAS 的 `C` 是**第二个冲刺键**（本项目是 `Y`；本项目的 `C` 是确认），`H` 是第二个抓键，`S` 是暂停（本项目 `P`），`Q` 快速重开，`O` 确认，`F,角度` 是摇杆（本项目 `A:角度`）。`L R U D J K X Z V G N` 两边相同。
+- act 可以直接提交 TAS 写法：`input_format="celeste_tas"`（见 `/kb/tools/act.md`）。不要手工逐字替换。
+- 原文例子默认**朝右、墙在右侧**；墙在左侧时把 `L`、`R` 对调。原文中"# collide here"之类的注释行表示该处的帧数要按地形调整。
+
+### 10.1 最优 ultra（hyper 后立即斜下冲刺）
+
+- **输入**（TAS 数据）：`14,R,Z` → `1,R,J`（F14 hyper）→ `15,R,D,X`（F15 起斜下冲刺，冲刺结束后落地撞地）→ `1,R,J`（撞地后的下一帧起跳）。
+- 与 3.10 相同的做法；区别只是 TAS 在冲刺开始那一帧就按住 D，会以下蹲姿态冲刺（`DashBegin` 里 moveY = 1 就下蹲，空中也一样【代码已核实】），对 ultra 没有影响。
+- 落点太高：推迟斜下冲刺，让冲刺在落地前结束（多吃几帧空中摩擦）。落点太低：冲刺结束后按 D 快速下落，尽早撞地。
+
+### 10.2 平地最快移动（从静止开始）
+
+- **连续 grounded ultra 循环**（同 3.12）：`14,R,D,X` → `1,R,J`，重复。
+- **起步**（TAS 数据）：`6,R,Z` → `1,R,J` → `7,R` → `1,R,J` → 接循环。先在地面 crouch dash，第 7 帧（F6）hyper，落地后 hyper bunnyhop，然后进入循环；起步的 hyper 推迟到 F6，是为了等冲刺冷却与补充冲刺。
+- **更快到达 hyper 速度的起步**（TAS 数据）：`4,R,Z` → `2,R,J` → `8,R` → `1,R,J` → `12,R,D,X` → 接循环；最早拿到 hyper 速度，但进第一次 grounded ultra 前多损失一点摩擦。
+- 地面不完全平时，优先用高低差与墙角做连续 ultra（3.11）。
+
+### 10.3 Grounded ultra 的速度保留
+
+- **gultra cancel**：冲刺正常结束会把水平速度重置为 160，所以要在 F14 前用别的动作结束冲刺（3.14）。
+- **借墙保留**（TAS 数据，机制与 6.3 的撞墙保留一致【代码已核实】）：gultra 后撞墙 → 冲刺结束（速度被重置，但保留值不受影响）→ 4 帧内越过墙顶，保留的速度退还。保留计时只有 4 帧，所以只够 climbjump 越过约 1 格高的墙，而且要靠取整误差（10.8）。
+
+### 10.4 攀爬效率表（墙在右；从 110 体力开始）
+
+| 方法 | 输入 | 一轮 | 平均竖直速度 | 体力/像素 | 核实 |
+| --- | --- | --- | --- | --- | --- |
+| 连续 climbjump | `12,J,G` `12,K,G` `12,J,G` `12,K,G` | 4 次共 48 帧升 84 px | −105 px/s | 1.31 | 【由规则推算】每次 12 帧 × 1.75 px |
+| half-stamina climb（HSC） | `1,J,G` `3,R,J` `3,J` `1,R,J` `1,J` `1,R,J` `1,L,J` `1,R,J` `13,R,K,G` | 25 帧约 43.5 px，一轮净耗 27.5；满体力共约 174 px | ≈ −103.85 px/s | 0.63 | TAS 数据；第 2、3 行帧数随撞墙时机调整 |
+| double HSC | `9,J,G` `1,R,J` `1,L,J` `1,R,J` `2,R,K,G` `12,R,J,G` | 满体力共约 91 px | −105 px/s | 1.21 | TAS 数据 |
+| 偷体力 + neutral（无体力消耗最快） | `11,J,G` `1,L,J` `1,K` `24,R,K` | 37 帧升 46.5 px，体力每轮先扣 27.5 再退还 | ≈ −75.4 px/s | 0 | 【模拟器实测】一轮 46.6 px / 37 帧 |
+| 纯 neutral（真正不耗体力） | `1,J` `24,R,J`（下一轮换 K） | 25 帧升 25.5 px | −61.2 px/s | 0 | 【模拟器实测】见 4.4 |
+
+- HSC、double HSC 每次 climbjump 后还能多等最多 7～8 帧，每轮多升最多 22～28 px，平均速度随之下降。
+- 选法：高度短、体力够 → 连续 climbjump；中等高度或要省体力 → HSC；体力要留到后面 → 偷体力 + neutral。
+
+### 10.5 climbjump 的条件与优先级（`Player.WallJumpCheck`）【代码已核实】
+
+- 墙在身侧 3 px 内（碰撞箱外的间隙 ≤ 2 px）；dash attack 中、冲刺方向正上、且墙上没有朝自己的尖刺时放宽到 5 px。
+- 能起身（下蹲时头顶要有空间）；离房间左边界至少 3 px、右边界至少 4 px；墙内没有挡边缘的攀爬阻挡（原版只有隐形墙有）。
+- 只有 StNormal、StDash、StClimb、红泡泡冲刺、撞击挤压状态里会检查 climbjump。
+- 优先级：能地面起跳（含 coyote time）时先地面起跳；能抓墙时先抓墙。抓墙要求 vy ≥ 0 且间隙 ≤ 1 px；上升中、恰好离墙 2 px、下蹲、水平速度背离墙、体力 < 20、处在冲刺状态时都抓不上墙，按跳就是 climbjump。
+
+### 10.6 cornerboost 的 TAS 数据
+
+- **hyper 接 cornerboost**（TAS 例）：`10,R,Z` → `1,R,J`（hyper）→ `9,R` → `1,R,J,G`（cornerboost）→ `10,R` → `1,R,J`。
+- **double cornerboost 的速度上限**【由规则推算】：第一次 cornerboost 后的速度 = 原速 − 4.333（按住前进时的空中减速）+ 40，必须小于 180（每帧 3 px）才可能在下一帧仍未撞墙；所以原速须 < 144.33 px/s，越接近上限越依赖 subpixel。与 celeste.ink 的 144.33 一致（附录 B 里的这一条由此可视为已推算）。
+- **grounded wallboost**：无方向 climbjump 后落在墙顶，转身朝前跳：约 130 + 40 − 地面摩擦 ≈ 165 px/s（TAS 数据）。无冲刺时越过大缺口用。
+- **wallboost CB / DCB**：无方向 climbjump，靠近对面的墙时转身 → 以 130 − 摩擦 + 40 做 cornerboost（或 double）。**double wallboost**（`1,J,G` `1,R,J` `1,L,J` `1,K,G` `100,R,K`）比 walljump 接 2 帧 wallboost 少 0.48 px 水平距离，但全程可以保持下蹲（头顶有障碍时用）（TAS 数据）。
+- **cobwob**（cornerboost wallboost）：用无方向 climbjump 做 cornerboost 再偷体力，瞬间把高速降到 130，常用来"先用一段高速、再取消"（4.5）。
+
+### 10.7 计时器利用（Timer abuse）
+
+- **variable jump 计时**（`varJumpTimer`）被清零的情形【代码已核实】：在 StNormal / StDummy 里松开跳（AutoJump 为假时）；`varJumpTimer` < 0.15（9 帧）时撞天花板；向下换房。其他会改变状态或速度的事件**不清零**它，所以"起跳 → 临时改变轨迹 → 计时未到时恢复按跳"可以把 vy 重新钳回起跳速度（jump timer abuse，JTA）。
+  - **dashbounce**：wallbounce（variable jump 0.25 s，−160）之后很快再冲刺，冲刺结束时计时还没到 → vy 又被设为 −160（与 4.3 的 wallbounce cancel 同一机制）。
+  - **medboost**：wallbounce 后很快进入 Badeline 球（6A 以后才有），球的协程把人放进 StDummy；全程按住跳，出球后仍是 −160。
+- **向上换房**：设 vy = −105、variable jump 0.2 s，并且 **AutoJump 一直保持**（不用按跳也算按住），见 6.5。
+- **coyote time**（`jumpGraceTimer` 0.1 s，实际 5 帧）：碰地、出梦境块（冲刺方向不是正竖直时）、被核心块弹起时设置；被地面跳（含 super、hyper）、walljump、climbjump、wallbounce、进羽毛、踩雪球等弹跳、**换房**、碰弹簧清零【代码已核实】。**冲刺不清零 coyote time**：离开地面后在 coyote 时间内冲刺，冲刺中按跳仍是 super / hyper（3.2、3.3 的"空中 hyper"即此）。
+- **dash attack**（`dashAttackTimer` 0.3 s）：冲刺状态本身（不含 freeze frames）11 帧，第 12 帧回到 StNormal；被地面跳、walljump、climbjump、wallbounce、撞实心物、进梦境块、弹跳清零。冲刺被别的事件提前结束而计时还在时，仍算"在冲刺中"，可以撞碎冲刺砖、进梦境块（Kermit dash 见 6.5）。
+- **带刺 wallbounce**：正上冲刺在刺下方结束，再按离墙方向让 vx 背离墙（尖刺按运动方向判定，背离时不死），即可在有刺的墙上 wallbounce（4.3）。
+
+### 10.8 撞墙保留速度的延伸（Retention tech）
+
+- 规则见 6.3：撞墙时记下原 vx，保留 4 帧（0.06 s）；离开 StNormal / StClimb、保留值被退还、或速度方向与保留值相反时立刻作废。
+- **延长保留**：同一帧里"离墙 → 速度变成 0 或朝墙"，下一帧碰撞箱前方 1 px 已无实心物 → 保留值退还，之后可再撞墙重新记下。重复可以带着保留速度越过高墙（每次损失一点摩擦）。离墙后把速度扳回的办法：同帧撞到对面的墙、碰到只改速度不改状态的实体、进入向上换房；或不靠速度离墙（被移动方块推开、climbhop cancel、泡泡保留）。
+- **9 px 缝**：在 N px 宽的缝里，一帧内撞到对面墙需要移动 ≥ N − 7.5 px（碰撞箱宽 8 px，撞墙后位置在像素中心）。9 px 缝里 neutral 离墙、同帧撞到对面墙，下一帧保留值退还；常配合在离墙期间做 cornerboost。原文还提到 11 px、14 px 的变体（TAS 数据）。
+- **cornerglide**：高速斜上冲刺撞墙 → 冲刺自然结束 → 很快越过墙顶，拿回保留速度。
+- **向上换房保留（transition cornerboost）**：撞墙得到保留值，同一帧 neutral 离墙并进入向上换房；换房期间 Madeline 不更新、保留计时不走，到新房间下一帧退还；常接一次 cornerboost（与 5.2 的"换房抓角"同一机制）。
+- **泡泡保留**：撞墙后进泡泡，在泡泡状态里越过墙顶 → 保留值退还；泡泡出发时仍把人拉回泡泡中心，所以可以带着高速从泡泡冲刺出去（2A 以后）。
+- **launch dash redirect**：在弹射状态（StLaunch，被弹球、Kevin 等弹出）里撞墙得到保留值，再冲刺（多为竖直），保留值在冲刺中退还；冲刺方向不因此改变。
+
+### 10.9 climbhop 的附带效果（climbhop cancel）
+
+- climbhop【代码已核实，`player_physics.md` §5.5】：设为 StNormal，**12 帧强制水平输入为 0**，vy 取 min(vy, −120)，越过墙顶的那一帧给 vx = 100（期间若离开 StNormal 则不给）。
+- 不阻止起跳、冲刺、拾取物品，所以 climbhop 后可以立即接别的动作（只是 12 帧内方向键不起作用）。
+- 强制水平输入未结束时，若刚攀过的方块移动了，下一帧 Madeline 跟着移动同样距离（与速度无关）；其他设置强制水平输入的事件（侧弹簧 18 帧、鸟抛 12 帧、带水母 walljump 16 帧、非 neutral walljump 10 帧）可以把这个效果延长（climbhop entanglement）。换房、撞 Kevin 等反弹会清除它。
+- 另一种触发：攀爬状态、vy < 0、前方 1 px 已无实心物时也会 climbhop，这种不检查墙顶的刺（可以爬上顶上有刺的墙）。
+
+### 10.10 取整误差（Rounding errors）
+
+- `Engine.DeltaTime` 是 float：TargetElapsedTime 为 166667 个 0.1 微秒刻度，存成 float 约 0.0166667，比 1/60 略大【由规则推算】。所以 240 px/s 每帧移动约 4.0000078 px 而不是正好 4 px，subpixel 会慢慢漂移；"恰好不够"的跳在取整误差下有时刚好够。
+- 例（TAS 数据）：撞地后 `4,Z` → `1,R,J` → `3,R` → `1,R,J` → `3,R` → `4,R,K`：hyper bunnyhop 落地时 y 的 subpixel 很高，之后的地面跳 4 帧越过 1 格（8 px）高的墙；按 −105 与 1/60 算应该刚好不行。
+- 结论：像素级的极限路线不要只凭整数算，用模拟器枚举 subpixel（7.6"subpixel 操纵"）。
+
+### 10.11 原版里的随机数（Randomness）
+
+- 影响运动的随机数只有两处：序章那座桥的木板掉落时机；第 7 章"升空"前 Madeline 的抖动。其余随机数只用在画面上（与 `/sim/README.md`"结果的口径与边界"一致）。
+- 1A 没有影响路线的随机因素：同一串按键从同一状态出发结果总是相同。
+
+
 ---
 
 ## 附录 A. 训练场 / 机制库里出现的自定义实体与工具（原版没有）
@@ -1024,7 +1139,7 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 15. 梦境 hyper 窗口：celeste.ink 写"4–8 帧"；代码中跳的执行帧最多 4 帧（F4–F7，冲刺在 E+4 受理时），8 帧应是含缓冲的按键窗口（推断）。
 - **表述差异、并不矛盾**：celeste.ink 说缓冲"之后 4 帧"，即按下帧 + 4 帧 = 代码的 5 帧；SJ 说冲刺"共 15 帧（含 freeze frames）"，与 F0–F14 一致。
 
-**未核实**：岩浆块"垂直 ×2.25"（celeste.ink）；双重抓角的速度阈值（144 / 100）；吃水晶冻结的起始帧；缓冲冲刺出梦境块的"4 px"；羽毛斜向初速是否未归一化；seeker 反弹、望远镜卡刺、熔岩攀爬、ceiling pop、bubsdrop、剧情跳过类、带水母进果冻的细节；spike jump 在 1A/2A 是否有带刺移动块。
+**未核实**：岩浆块"垂直 ×2.25"（celeste.ink）；双重抓角的速度阈值（BWIKI 的 100；144.33 已由规则推算，见 10.6）；吃水晶冻结的起始帧；缓冲冲刺出梦境块的"4 px"；羽毛斜向初速是否未归一化；seeker 反弹、望远镜卡刺、熔岩攀爬、ceiling pop、bubsdrop、剧情跳过类、带水母进果冻的细节；spike jump 在 1A/2A 是否有带刺移动块。
 
 ---
 
@@ -1045,6 +1160,7 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 **原文副本（`/kb/reference/`，对照表见 §9）**：
 - `/kb/reference/celeste_wiki/Tech.md`（https://celeste.ink/wiki/Tech 修订 13628，GPLv3）及子页面 `Bubsdrop.md`、`Bunnyhops.md`、`Dashing.md`、`Demodash.md`、`Dream_tech.md`、`Freeze_frames.md`、`Hyperdashes.md`、`Momentum.md`、`Neutrals.md`、`Pause_Buffering.md`、`Stamina.md`、`Superdashes.md`、`Tech_aurora.md`、`Ultradashes.md`、`Vators.md`、`Wallbounces.md`。
 - `/kb/reference/strawberry_jam/gyms_en.md`、`gyms_zh.md`、`library_en.md`、`library_zh.md`（SJ 训练场与机制库全文）。
+- `/kb/reference/celestetas/*.md`：CelesteTAS wiki（https://github.com/EverestAPI/CelesteTAS-EverestInterop/wiki）中与原版有关的页面，对照表见 9.6。
 
 **本地资料（只阅读，未复制原文）**：
 - Strawberry Jam 2021 mod 的对话文件（英文与简体中文，键 `SJ2021_Gym_*`、`SJ2021_Library_*`），即各 gym 小节与机制库的说明文字；本文用自己的话概括。

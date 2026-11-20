@@ -4,6 +4,9 @@
 
 ## 2026-11-20
 
+- **知识库：补充 CelesteTAS wiki 的最优输入与效率数据；资料抓取工具加入 CelesteTAS wiki（组件版本不变）。** `techniques.md` 新增第 10 节：TAS 输入写法与本项目的对照（可直接用 `input_format="celeste_tas"` 提交）、最优 ultra、平地从静止起步的连续 grounded ultra、攀爬效率表（连续 climbjump、half-stamina climb、double HSC、偷体力 + neutral、纯 neutral）、climbjump 的条件与优先级、double cornerboost 的速度上限、计时器利用（variable jump、coyote time、dash attack）、撞墙保留速度的延伸用法、climbhop 的附带效果、取整误差与原版随机数；9.6 是原文对照表。更正 4.4 neutral jump 的循环：跳键一直按住、两个跳键交替，每 25 帧升 25.5 px（61.2 px/s），原写法只按满 12 帧就松开，26 帧升约 19 px。`tools/fetch_reference.py` 另抓 CelesteTAS wiki 里与原版有关的 17 页到 `kb/reference/celestetas/`（只放本机，选读，不列入准备阶段的必读清单），新增 `--skip-tas`。
+  验证：WallJumpCheck 的 3/5 px、撞墙保留 0.06 s、climbhop 的 12 帧强制输入与 −120、冲刺不清零 coyote、换房与弹簧清零 coyote、撞天花板清零 variable jump 等逐条对照游戏代码；用模拟器在 1A 第一个房间的墙上推演：纯 neutral 一轮 25 帧升 25.5 px、偷体力 + neutral 一轮 37 帧升 46.6 px，与原文一致，原 4.4 的写法 26 帧升 19.25 px；double cornerboost 的 144.33 由空中减速与每帧 3 px 推出。HSC 与 double HSC 的数字是原文数据，标为未核实。全量回归通过。
+
 - **项目 1.42.3：Codex 试玩的准备阶段按 `--study-minutes` 收尾，不计入现实用时；README 写的桥接版本改为 1.18.2。** 使用说明写的是准备阶段不计入现实用时、超过 `--study-minutes` 时自动开始计时并开放游戏工具，Claude 执行器照此执行，Codex 执行器却没有：准备阶段的时间算进预算，上限也不生效，只能读完全部知识库才能开始游玩。1.42.1 起 HUD 在准备阶段按累计用时显示满额预算，而停止判定仍按这次会话的计时，两者不一致。现在 Codex 的试玩会话与 Claude 相同：预算一律按整次运行的现实用时算（准备阶段与等待额度不算，续跑接着算）；准备阶段到达上限时开放游戏工具、开始计时，之后的轮次改用继续游玩的提示。单独的准备会话、存档命名与唤起的聊天不变。README 系统组成表里的桥接版本在 1.42.2 时漏改，版本一致性测试改为同时核对 README 里桥接与常驻核心的版本。
   验证：新增两项回归（准备阶段到达上限后 `celeste_act` 能执行并开始计时；准备阶段读一小时不耗 30 秒的预算），修复前都失败；版本测试在改 README 之前失败；云端全量回归通过。启动器文件版本为 1.42.3。
 

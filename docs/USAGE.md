@@ -102,10 +102,11 @@ docker build -t celeste-agent:0.1 agent-container
 
 ### 2.5 生成知识库里的参考资料原文
 
-知识库 `kb/` 里的物理常量与机制文件已入库；另外两份社区资料的原文不入库（第三方文本，不在公开仓库里再分发），需要在本机生成一次，生成后随 `kb/` 一起只读挂载进容器的 `/kb/reference/`：
+知识库 `kb/` 里的物理常量与机制文件已入库；另外三份社区资料的原文不入库（第三方文本，不在公开仓库里再分发），需要在本机生成一次，生成后随 `kb/` 一起只读挂载进容器的 `/kb/reference/`：
 
 - Celeste Wiki（celeste.ink）的 Tech 总表与全部技巧子页面（转成 Markdown，许可 GPLv3）；
-- 草莓酱（Strawberry Jam Collab）训练场 Beginner → Grandmaster 的全部说明文字与机制库全文（英文、简体中文），直接从本机安装的 Mod 压缩包读取。
+- 草莓酱（Strawberry Jam Collab）训练场 Beginner → Grandmaster 的全部说明文字与机制库全文（英文、简体中文），直接从本机安装的 Mod 压缩包读取；
+- CelesteTAS wiki 里与原版有关的页面（TAS 的最优输入、攀爬与 ultra 的效率数据、计时器与取整规则；英文原文），选读，摘要已写进 `techniques.md` 第 10 节。
 
 ```powershell
 .\.venv\Scripts\python.exe tools\fetch_reference.py

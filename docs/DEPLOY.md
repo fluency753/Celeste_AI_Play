@@ -261,7 +261,7 @@ winget install Gyan.FFmpeg
 ### 4.9 知识库参考资料（可选）
 
 ```powershell
-.\.venv\Scripts\python.exe tools\fetch_reference.py            # Wiki + 草莓酱
+.\.venv\Scripts\python.exe tools\fetch_reference.py            # Wiki + 草莓酱 + CelesteTAS wiki
 .\.venv\Scripts\python.exe tools\fetch_reference.py --skip-sj  # 没装草莓酱 Mod
 .\.venv\Scripts\python.exe tools\import_reference_pdf.py 资料.pdf --name <英文名> --title "<标题>"   # 导入本机 PDF（可选）
 ```
@@ -419,7 +419,7 @@ HUD 新建的 Codex 会话各用自己的工作区和线程，项目 player 登�
 | `tools\run_status.py` | 查看运行进度 | `-n` |
 | `tools\make_pure.py <recording 目录>` | 补生成纯享版 | `--ffmpeg`、`--video-args` |
 | `tools\check_recording_audio.py <audio.wav>` | 离线检查录像声音的断口 | `--silence-threshold` |
-| `tools\fetch_reference.py` | 生成知识库参考资料 | `--celeste-dir`、`--skip-wiki`、`--skip-sj`、`--index-only` |
+| `tools\fetch_reference.py` | 生成知识库参考资料 | `--celeste-dir`、`--skip-wiki`、`--skip-sj`、`--skip-tas`、`--index-only` |
 | `tools\import_reference_pdf.py` | 导入 PDF 资料 | `--name`、`--title`、`--note` |
 | `tools\sim_check.py` | 模拟器与游戏逐帧对照 | `--segments`、`--agent` |
 | `python -m orchestrator.verify` | 容器隔离验收 | `--agent` |

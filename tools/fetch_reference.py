@@ -4,14 +4,17 @@
    转成 Markdown，图片与视频保留文件名占位。
 2. Strawberry Jam（草莓酱）训练场（Beginner → Grandmaster 各房间的说明文字）与机制库（Library）的全部文本，
    直接从本机安装的 Mod 压缩包里的对话文件读取，英文与简体中文各一份，去掉显示用的格式代码。
+3. CelesteTAS wiki（GitHub）里与原版有关的页面：TAS 的最优输入、效率数据、计时器与取整规则等，
+   取 wiki 的 Markdown 原文（英文），图片保留原链接。
 
-用法（仓库根目录，需要能访问 celeste.ink；草莓酱部分需要本机装有该 Mod）：
+用法（仓库根目录，需要能访问 celeste.ink 与 raw.githubusercontent.com；草莓酱部分需要本机装有该 Mod）：
     python tools/fetch_reference.py --celeste-dir "D:\\path\\to\\steamapps\\common\\Celeste"
 
 输出（kb/reference/ 已在 .gitignore 中，随 kb/ 一起只读挂载进智能体容器的 /kb/reference/）：
     kb/reference/README.md（按目录里现有的文件生成，包括用 tools/import_reference_pdf.py 导入的社区资料）
     kb/reference/celeste_wiki/<页面>.md
     kb/reference/strawberry_jam/gyms_en.md、gyms_zh.md、library_en.md、library_zh.md
+    kb/reference/celestetas/<页面>.md
 """
 from __future__ import annotations
 
@@ -37,6 +40,28 @@ WIKI_EXCLUDE = re.compile(r"/sandbox$", re.IGNORECASE)  # 草稿页
 SJ_ZIP = "StrawberryJam2021.zip"
 SJ_LANGS = {"en": "Dialog/English.txt", "zh": "Dialog/Simplified Chinese.txt"}
 SJ_LEVELS = ["Beginner", "Intermediate", "Advanced", "Expert", "Grandmaster"]
+TAS_WIKI = "https://github.com/EverestAPI/CelesteTAS-EverestInterop/wiki/"
+TAS_RAW = "https://raw.githubusercontent.com/wiki/EverestAPI/CelesteTAS-EverestInterop/"
+# 与原版有关的页面（wiki 内路径 → 说明）；Mod 专用页面（CommunalHelper、FrostHelper）与 Studio 编辑器文档不抓
+TAS_PAGES = {
+    "Index": "术语与同义词索引",
+    "Documention/CelesteTAS/Input-File": "输入文件写法",
+    "Documention/CelesteTAS/Randomness": "原版里的随机数",
+    "Reference/Player-Moves": "各动作的数值与条件",
+    "Reference/Player-States": "Madeline 的状态与计时",
+    "Reference/Ultras": "ultra 全解与最优输入",
+    "Reference/Climbjumps---Variations": "climbjump、HSC、cornerboost、wallboost 的输入与效率",
+    "Reference/Climbhop-Cancel": "climbhop 的附带效果",
+    "Reference/Retention-Tech": "撞墙保留速度的延伸用法",
+    "Reference/Timer-Abuse": "计时器利用：JTA、coyote、dash attack",
+    "Reference/Rounding-Errors": "取整误差",
+    "Reference/Superdash": "super",
+    "Reference/Moonboost": "moonboost",
+    "Reference/Binoculars": "望远镜",
+    "Reference/Holdable-Movement": "带物品移动",
+    "Seekers": "寻者",
+    "Obscure-Interactions": "少见的交互",
+}
 
 
 # ---------------------------------------------------------------- Celeste Wiki
@@ -369,6 +394,35 @@ def fetch_wiki(out_dir: Path) -> tuple[list[dict], str]:
     return pages, license_text
 
 
+# ---------------------------------------------------------------- CelesteTAS wiki
+
+def fetch_tas(out_dir: Path) -> list[dict]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    today = _dt.date.today().isoformat()
+    pages = []
+    for path, desc in TAS_PAGES.items():
+        req = urllib.request.Request(TAS_RAW + urllib.parse.quote(path) + ".md", headers={"User-Agent": USER_AGENT})
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    body = resp.read().decode("utf-8")
+                break
+            except (urllib.error.URLError, TimeoutError):
+                if attempt == 2:
+                    raise
+                time.sleep(2 * (attempt + 1))
+        title = path.rsplit("/", 1)[-1].replace("---", "\0").replace("-", " ").replace("\0", " - ")
+        name = safe_name(path.rsplit("/", 1)[-1])
+        header = (f"# {title}\n\n"
+                  f"> 来源：CelesteTAS wiki [{path}]({TAS_WIKI}{path.rsplit('/', 1)[-1]})（{desc}），抓取于 {today}。\n"
+                  "> 原文照录（wiki 的 Markdown 原文，英文）。输入例是 CelesteTAS 的输入文件写法，与本项目的按键写法几乎相同，"
+                  "差异见 `/kb/techniques.md` §10.0；图片链接指向原站。\n\n")
+        (out_dir / f"{name}.md").write_text(header + body, encoding="utf-8")
+        pages.append({"path": path, "file": f"celestetas/{name}.md", "chars": len(body)})
+        print(f"  CelesteTAS wiki：{path}（{len(body)} 字符）", flush=True)
+    return pages
+
+
 # ---------------------------------------------------------------- Strawberry Jam
 
 KEY_LINE = re.compile(r"^(\w+)=(.*)$")
@@ -526,6 +580,14 @@ def write_index(out: Path) -> None:
             lines.append(f"| `strawberry_jam/{p.name}` | {desc[kind]}（{lang}） | {keys} |")
         lines += ["", "训练场与机制库讲的技巧和机制都是原版游戏就有的。个别演示房间用 Mod 实体来摆位置或做演示"
                   "（例如侧向的单向平台、改造过的梦境块），原版章节里没有这些实体，但讲的机制本身是原版的。", ""]
+    tas_dir = out / "celestetas"
+    if tas_dir.is_dir() and any(tas_dir.glob("*.md")):
+        lines += ["## CelesteTAS wiki（与原版有关的页面）", "", "| 页面 | 文件 | 大小 |", "|---|---|---|"]
+        lines += [f"| {_first_heading(p)} | `celestetas/{p.name}` | {p.stat().st_size // 1024} KB |"
+                  for p in sorted(tas_dir.glob("*.md"))]
+        lines += ["", "TAS 工具社区整理的资料：最优按键序列、效率数字、计时器与取整规则。输入例的写法与本项目几乎相同"
+                  "（TAS 的 `C` 是第二个冲刺键，本项目是 `Y`），对照与摘要见 `techniques.md` §9.6、§10。"
+                  "这一部分没有经过项目作者逐条审核，与 `techniques.md` 不一致时以 `techniques.md` 为准。", ""]
     community = out / "community"
     if community.is_dir() and any(community.glob("*.md")):
         lines += ["## 社区资料（项目作者提供）", "", "| 文档 | 文件 | 原 PDF |", "|---|---|---|"]
@@ -545,6 +607,7 @@ def main() -> int:
     ap.add_argument("--out", default=str(REPO_ROOT / "kb" / "reference"), help="输出目录")
     ap.add_argument("--skip-wiki", action="store_true")
     ap.add_argument("--skip-sj", action="store_true")
+    ap.add_argument("--skip-tas", action="store_true", help="不抓 CelesteTAS wiki")
     ap.add_argument("--index-only", action="store_true", help="只按现有文件重新生成 README.md 索引")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
@@ -554,6 +617,9 @@ def main() -> int:
     if not args.index_only and not args.skip_wiki:
         print("抓取 Celeste Wiki 技巧页面…", flush=True)
         fetch_wiki(out / "celeste_wiki")
+    if not args.index_only and not args.skip_tas:
+        print("抓取 CelesteTAS wiki 页面…", flush=True)
+        fetch_tas(out / "celestetas")
     if not args.index_only and not args.skip_sj:
         print("读取草莓酱训练场与机制库文本…", flush=True)
         if str(REPO_ROOT) not in sys.path:
