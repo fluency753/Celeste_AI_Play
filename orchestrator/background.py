@@ -39,8 +39,8 @@ class LaunchRejected(RuntimeError):
 # 从目录里启动的 Python 因此是低完整性进程，没有权限经 WMI 建进程。
 WMI_ACCESS_DENIED = "0x80041003"
 ACCESS_DENIED_HINT = ("（Windows 拒绝经 WMI 建进程。常见原因是程序目录被设成了低完整性级别："
-                      "用 icacls 查看程序目录，出现 Low Mandatory Level 时用 "
-                      "icacls \"<程序目录>\" /setintegritylevel \"(OI)(CI)M\" 改回；也可能是安全软件拦截）")
+                      "用 icacls 查看程序目录，出现 Low Mandatory Level 时运行 tools\\clear_integrity_label.ps1 "
+                      "去掉标签；也可能是安全软件拦截）")
 
 
 def _oem_encoding():

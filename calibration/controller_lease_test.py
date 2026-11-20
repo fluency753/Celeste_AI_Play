@@ -144,6 +144,10 @@ class LaunchRejectionTests(unittest.TestCase):
         self.assertIn('拒绝访问', message)
         self.assertIn('0x80041003', message)
         self.assertIn('Low Mandatory Level', message)          # access denied comes with the integrity-level hint
+        self.assertIn('clear_integrity_label.ps1', message)
+        script = Path(__file__).resolve().parent.parent / 'tools' / 'clear_integrity_label.ps1'
+        self.assertTrue(script.is_file())
+        self.assertTrue(script.read_bytes().startswith(b'\xef\xbb\xbf'))   # Windows PowerShell 5.1 reads Chinese only with a BOM
 
     def test_other_powershell_errors_get_no_access_denied_hint(self):
         failure = subprocess.CalledProcessError(1, 'powershell.exe', output=b'', stderr='Invoke-CimMethod : 无效类'.encode('gbk'))

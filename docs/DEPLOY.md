@@ -552,7 +552,8 @@ Remove-Item "<OBS 安装目录>\obs-plugins\64bit\celeste-lockstep.dll"
 | 第三方平台提示找不到密钥 | 按 9 节写 `configs\local.providers.json` 的 `key_file`，或设环境变量 |
 | 原生 GPT 提示容器缺少 Codex 或未登录 | 按 4.11 节检查镜像，按提示用 `python -m orchestrator.codex_container --container NAME login` 授权目标工作区 |
 | 后台试玩提示主控已经运行 / 端口被占用 | 已有一个后台主控在运行（同一时间只允许一个）；看 `local\background\` 下最新目录的 `status.json` 与 `output.log` |
-| 控制台或后台试玩提示“Windows 独立启动失败”，报错里有“拒绝访问”、`0x80041003` | Windows 不允许经 WMI 建进程。先用 `icacls "<程序目录>"` 查看程序目录：出现 `Low Mandatory Level` 时，说明目录被设成了低完整性级别（有的沙箱工具为了让受限进程写这个目录会这样设），从目录里启动的 Python 都是低完整性进程，没有这项权限；用 `icacls "<程序目录>" /setintegritylevel "(OI)(CI)M"` 改回普通级别（会改整个目录树，要几分钟）。没有这一项时，看安全软件有没有拦截 |
+| 控制台或后台试玩提示“Windows 独立启动失败”，报错里有“拒绝访问”、`0x80041003` | Windows 不允许经 WMI 建进程。先用 `icacls "<程序目录>"` 查看程序目录：出现 `Low Mandatory Level` 时，说明目录被设成了低完整性级别（有的沙箱工具为了让受限进程写这个目录会这样设），从目录里启动的 Python 都是低完整性进程，没有这项权限；运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\clear_integrity_label.ps1` 去掉标签（先在临时目录自测，再处理整个程序目录）。没有这一项时，看安全软件有没有拦截 |
+| 控制台窗口打开了，但里面一片空白 | 窗口里的网页组件（WebView2）没能启动。也先用 `icacls "<程序目录>"` 查看：出现任何 `Mandatory Level`（包括 `Medium`）时用上一行的脚本去掉标签。用内置管理员账户时其他程序都以高完整性运行，程序目录带“中”标签会让控制台以中完整性运行，网页组件随之启动失败；不要用 `icacls /setintegritylevel` 改标签。窗口空白时可以先用浏览器打开 `http://127.0.0.1:47790/console` |
 | 智能体想从零开始 | 删除 `workspaces\<标签>\`，再 `docker rm -f celeste-agent-<标签>`、`docker volume rm celeste-claude-<标签>` |
 | 存档进度不对 | 从运行目录的 `save_backup\` 恢复（先关游戏），并确认已关闭云同步 |
 
