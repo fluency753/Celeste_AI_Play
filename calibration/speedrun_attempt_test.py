@@ -231,6 +231,35 @@ class SpeedrunAttemptTests(unittest.IsolatedAsyncioTestCase):
             self.session.practice_savestate('load', 1)
         self.assertEqual(self.bridge.commands.count('practice_savestate'), commands)
 
+    async def test_untimed_speedrun_offers_practice_savestates(self):
+        """No time target means no recording phase: the whole run is practice, so savestates are offered."""
+        from orchestrator.modes import game_tools
+        self.assertFalse(getattr(self.cfg, 'speedrun_record_on_demand', False))
+        self.assertIn('practice_savestate', game_tools(self.cfg))
+        self.assertNotIn('start_speedrun_recording', game_tools(self.cfg))
+        server = build_server(self.session)
+        saved = await server.call_tool('practice_savestate', {'action': 'save', 'slot': 1})
+        self.assertFalse(saved.is_error, saved)
+        self.bridge.room = 'later'
+        loaded = await server.call_tool('practice_savestate', {'action': 'load', 'slot': 1})
+        self.assertFalse(loaded.is_error, loaded)
+        self.assertIn('"chapter_time_valid": false', loaded.content[0].text)
+        self.assertEqual(self.session.last_obs['level']['room'], 'a-00')
+        self.assertTrue(self.session.reload_observation_required)
+
+    def test_explore_and_visited_runs_do_not_offer_practice_savestates(self):
+        from orchestrator.modes import game_tools
+        for field, value in (('mode', 'explore'), ('play_scope', 'visited')):
+            original = getattr(self.cfg, field)
+            setattr(self.cfg, field, value)
+            try:
+                self.assertNotIn('practice_savestate', game_tools(self.cfg))
+                with self.assertRaisesRegex(ActError, '只在速通模式'):
+                    self.session.practice_savestate('save', 1)
+            finally:
+                setattr(self.cfg, field, original)
+        self.assertNotIn('practice_savestate', self.bridge.commands)
+
     async def test_lost_practice_load_reply_reconciles_on_observe_without_resending(self):
         self.set_speedrun_target()
         self.cfg.speedrun_record_on_demand = True

@@ -57,11 +57,25 @@ def has_cutscene_tool(cfg) -> bool:
     return is_explore(cfg) or bool(getattr(cfg, "live", False)) or getattr(cfg, "cutscene_mode", "auto") == "agent"
 
 
+def practice_savestate_offered(cfg) -> bool:
+    """练习存读档（Speedrun Tool 的存读档，经桥接调用）：限时速通在开录前提供；不设时间目标的速通整趟都是练习，
+    单章或顺序试玩、允许重启章节时也提供（读档放弃当前的有效尝试，与 goto_room 同一项权限；速通模式固定允许）。
+    探索模式与已到访地图自由进出不提供。"""
+    if getattr(cfg, 'speedrun_record_on_demand', False):
+        return True
+    if is_explore(cfg) or getattr(cfg, 'play_scope', 'chapter') == 'visited':
+        return False
+    from .action_policy import permissions_for
+    return bool(permissions_for(cfg).restart_chapter)
+
+
 def game_tools(cfg) -> list[str]:
     """本次运行注册给智能体的游戏工具（不带前缀）。"""
     tools = ["observe", "act", "narrate", "set_effort", "stop_run", "finish_goal"]
     if getattr(cfg, 'speedrun_record_on_demand', False):
         tools.extend(['start_speedrun_recording', 'practice_savestate'])
+    elif practice_savestate_offered(cfg):
+        tools.append('practice_savestate')      # 不设时间目标的速通：整趟都是练习，同样可以存读档
     if getattr(cfg, "live", False):
         tools.append("exit_level")          # 直播时观众/用户可以要求退出关卡
     from .action_policy import permissions_for

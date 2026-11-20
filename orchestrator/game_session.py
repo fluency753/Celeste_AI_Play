@@ -2990,8 +2990,9 @@ class GameSession:
         if action not in {'status', 'save', 'load'} or (action != 'status' and (type(slot) is not int or slot not in {1, 2})):
             raise ActError('请选择 status、save 或 load；存读档使用槽位 1 或 2。')
         with self.lock:
-            if not self.cfg.speedrun_record_on_demand:
-                raise ActError('练习存读档仅在限时速通中提供。')
+            from .modes import practice_savestate_offered
+            if not practice_savestate_offered(self.cfg):
+                raise ActError('练习存读档只在速通模式的单章或顺序试玩、允许重启章节时提供。')
             if not getattr(self, 'practice_savestate_supported', False):
                 raise ActError('练习存读档需要 Bridge 1.16.0 与本机 Speedrun Tool 3.29.2 或兼容版本。')
             if action == 'status':

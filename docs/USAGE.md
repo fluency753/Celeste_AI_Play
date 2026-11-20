@@ -630,7 +630,7 @@ M5 验收（2026-10-23，桥接 0.7.0，当时的网页 HUD）：`python calibra
 
 时间目标需要 Bridge 1.14.0 或更新版本，且需要允许录像。默认续跑沿用目标；练习续跑仍不录像，已开录则尝试接续原录像。录像采集重建或 Bridge 重载后，Player 须从章首重新跑才能取得连续录像凭据。旧版本自动开启的录像须先收尾；旧 Codex 会话缺少开录工具时，使用 `--fresh-session` 建立新 Player 会话。可用 `--speedrun-target-seconds` 覆盖，或用 `--no-speedrun-target` 恢复整章通关即完成。追加另一张地图时按新地图重新指定秒数。
 
-限时速通可选用 Bridge 1.16.0 的 `practice_savestate`（Codex 为 `celeste_practice_savestate`），需要在游戏内加载 Speedrun Tool 3.29.2 或兼容版本。`status` 查询两个内存槽，`save` 保存当前可操作帧，`load` 显式恢复同存档、同章同面的已存状态。读档使本趟计时变灰，Player 需要默认 observe，再提交使用新请求编号的模拟或新动作。正式开录后禁用工具的写入和恢复；Bridge 保持原生有效用时的判定。槽位属于当前 Bridge，退出游戏或重载 Bridge 后重新存档。练习死亡仍由 Player 决定是否读档。
+速通模式（单章或顺序试玩）可选用 Bridge 1.16.0 的 `practice_savestate`（Codex 为 `celeste_practice_savestate`），需要在游戏内加载 Speedrun Tool 3.29.2 或兼容版本。项目 1.44.0 起不设时间目标的速通也提供：没有开录这一步，整趟都是练习，随时可以存读档。`status` 查询两个内存槽，`save` 保存当前可操作帧，`load` 显式恢复同存档、同章同面的已存状态。读档使本趟计时变灰，Player 需要默认 observe，再提交使用新请求编号的模拟或新动作。正式开录后禁用工具的写入和恢复；Bridge 保持原生有效用时的判定。槽位属于当前 Bridge，退出游戏或重载 Bridge 后重新存档。练习死亡仍由 Player 决定是否读档。
 
 ### 4.6.1 按检查点分段（`--segments`）
 
