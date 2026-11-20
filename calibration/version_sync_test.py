@@ -4,6 +4,7 @@ README 这一处曾两次在升版本时漏改。版本摘要里的最新一节�
 import re
 import unittest
 from pathlib import Path
+from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,6 +19,16 @@ def as_tuple(version: str):
 
 
 class VersionSyncTests(unittest.TestCase):
+    def test_bridge_reports_the_version_of_its_distribution(self):
+        bridge = ROOT / "game-bridge"
+        code = (bridge / "Source" / "Bridge.cs").read_text(encoding="utf-8")
+        manifest = (bridge / "everest.yaml").read_text(encoding="utf-8")
+        project = ElementTree.parse(bridge / "CelesteAIBridge.csproj")
+        reported = re.search(r'public const string Version = "(\d+\.\d+\.\d+)";', code).group(1)
+        manifest_version = re.search(r'^  Version: (\d+\.\d+\.\d+)\s*$', manifest, re.M).group(1)
+        self.assertEqual(reported, project.findtext("./PropertyGroup/Version"))
+        self.assertEqual(reported, manifest_version)
+
     def test_launcher_and_readme_follow_the_console_version(self):
         version = console_version()
         rc = (ROOT / "tools" / "launcher" / "launcher.rc").read_text(encoding="utf-8")
