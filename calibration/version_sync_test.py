@@ -1,6 +1,6 @@
 """项目版本只有一个来源（docs/开发/发布流程.md）：overlay/console_api.py 的 CONSOLE_VERSION。
 控制台启动器的文件版本（launcher.rc、launcher.manifest）与 README 里写的版本必须跟它一致——
-README 这一处曾两次在升版本时漏改。版本摘要里的最新一节不能比它新（摘要写的版本要已经在主线上）。"""
+README 这一处曾两次在升版本时漏改。桥接与常驻核心的版本另在各自的工程、Everest 清单与 README 里，也要一致。版本摘要里的最新一节不能比它新（摘要写的版本要已经在主线上）。"""
 import re
 import unittest
 from pathlib import Path
@@ -28,6 +28,17 @@ class VersionSyncTests(unittest.TestCase):
         manifest_version = re.search(r'^  Version: (\d+\.\d+\.\d+)\s*$', manifest, re.M).group(1)
         self.assertEqual(reported, project.findtext("./PropertyGroup/Version"))
         self.assertEqual(reported, manifest_version)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"| 桥接 Mod CelesteAIBridge（{reported}） |", readme)
+
+    def test_readme_follows_the_runtime_version(self):
+        runtime = ROOT / "game-runtime"
+        project = ElementTree.parse(runtime / "CelesteAIRuntime.csproj").findtext("./PropertyGroup/Version")
+        manifest = re.search(r'^  Version: (\d+\.\d+\.\d+)\s*$',
+                             (runtime / "everest.yaml").read_text(encoding="utf-8"), re.M).group(1)
+        self.assertEqual(project, manifest)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"| 常驻核心 CelesteAIRuntime（{project}） |", readme)
 
     def test_launcher_and_readme_follow_the_console_version(self):
         version = console_version()

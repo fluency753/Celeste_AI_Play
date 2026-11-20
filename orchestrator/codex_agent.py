@@ -574,7 +574,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                 result = await control_server.call_tool('set_effort', args)
                 return await self._game_response(result, name, ident, origin_turn)
             elif game and self.game_server is not None:
-                if name in ("celeste_act", "celeste_observe") and self.study and not self.study.complete():
+                self._open_play_at_study_deadline()
+                if name in ("celeste_act", "celeste_observe") and self.study and not self.study.ready():
                     raise ValueError(self.study.reminder(reader=self._reader_name()))
                 if tool_name(name) in GAME_ACTIONS:
                     async with self.action_lock:
@@ -712,10 +713,22 @@ class CodexRunner(ModelRecovery, SessionControls):
         return now - started - self.paused_seconds - (now - self.pause_at if self.pause_at else 0)
 
     def _budget_remaining(self, started):
-        if self._has_play_budget() and self.metrics.playing:
+        if self._has_play_budget():
+            # 试玩按整次运行的现实用时算（续跑接着算；准备阶段与等待额度不算），与 Claude 执行器相同。
+            # 准备阶段由 --study-minutes 的上限约束（_open_play_at_study_deadline）。
             return self._play_budget_remaining()
-        # Keep the local deadline for startup preparation and standalone sessions.
+        # 单独的准备会话、存档命名与唤起的聊天从这次会话开始算。
         return self.cfg.budget_seconds - self._elapsed(started)
+
+    def _open_play_at_study_deadline(self):
+        """试玩里的准备阶段到了上限：开放游戏工具并开始计现实用时（与 Claude 执行器相同）。"""
+        if (self.study is None or self.prepare_only or not self._has_play_budget() or self.metrics.playing
+                or time.monotonic() < self.study.deadline()):
+            return
+        self.study.force_open()
+        self.metrics.start_play()
+        print(f"[codex] 准备阶段到达上限 {self.study.minutes:g} 分钟，开始计时"
+              f"（知识库已读 {self.study.progress():.0%}）", flush=True)
 
     def _has_play_budget(self):
         return self.session is not None and not (self.chat_only or self.prepare_only or self.naming_only)
@@ -956,7 +969,10 @@ class CodexRunner(ModelRecovery, SessionControls):
             message = self._first_prompt()
             opening = not self.chat_only
             retry_rows, retry_input = [], False
-            while self._budget_remaining(started) > 0:
+            while True:
+                self._open_play_at_study_deadline()
+                if self._budget_remaining(started) <= 0:
+                    break
                 if self.stop_requested:
                     return await self._stopped_reason()
                 if self.session is not None and self.session.done:
@@ -1033,6 +1049,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                             return self.session.done_reason
                     if self.rpc.reader.done():
                         raise ConnectionError(self._rpc_disconnect_message("Codex app-server 已断开"))
+                    self._open_play_at_study_deadline()
                     if self._budget_remaining(started) <= 0:
                         await self.rpc.request("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id})
                         return "现实时间预算用完"
@@ -1067,7 +1084,7 @@ class CodexRunner(ModelRecovery, SessionControls):
                     return "知识库准备完成"
                 from .prompting import continue_play_prompt, controller_turn_prompt
                 message = (controller_turn_prompt(f"继续准备，用 {self._reader_name()} 分页读取尚未读完的资料。", cfg=self.cfg)
-                           if self.study and not self.study.complete() else continue_play_prompt(self.cfg))
+                           if self.study and not self.study.ready() else continue_play_prompt(self.cfg))
             return "现实时间预算用完"
         except (ConnectionError, TimeoutError):
             # Without an acknowledgement the turn might already have run tools.

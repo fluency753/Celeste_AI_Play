@@ -114,7 +114,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_case(self, *, failure='rpc', failures=1, action=False,
                        waiting=None, configure=None, initial_user=None, preparing=False, naming=False,
-                       report_goal=False, restored_elapsed=None):
+                       report_goal=False, restored_elapsed=None, study_elapsed=None, during_turn=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cfg = RunConfig(agent='capacity-test', save='test', model='test', engine='codex',
@@ -144,6 +144,8 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                 kb.mkdir()
                 (kb/'README.md').write_text('unread required line\n', encoding='utf-8')
                 study = KbStudy(kb, 10)
+                if study_elapsed is not None:
+                    study.started -= study_elapsed      # 准备阶段已经过去的时间（相对上限 10 分钟）
             study_started = study.started if study else None
             if not preparing:
                 metrics.start_play()
@@ -155,6 +157,8 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
             state = {'reason': None, 'error': None}
 
             async def finish(number, failed):
+                if during_turn and number == 1:
+                    await during_turn(runner, session, metrics, actions)
                 if report_goal:
                     session.agent_stop = {'reason': '已解决的历史阻塞'}
                     response = await runner._request('item/tool/call', {
@@ -402,6 +406,30 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
         result['runner'].rpc.request.assert_not_awaited()
         self.assertEqual(result['steps'], [])
         self.assertEqual(result['shutdown'], 'release')
+
+    async def test_preparation_deadline_opens_game_tools_and_starts_play_clock(self):
+        # 试玩里的准备阶段到了上限（--study-minutes）：与 Claude 执行器相同，开放游戏工具并开始计现实用时
+        async def act(runner, session, metrics, actions):
+            actions.append(await runner._request('item/tool/call', {
+                'callId': 'act-after-deadline', 'tool': 'celeste_act',
+                'arguments': {'inputs': ['1,R'], 'thought': '准备阶段到上限后动作'}}))
+        result = await self.run_case(failures=0, preparing=True, study_elapsed=11 * 60, during_turn=act)
+        self.assertIsNone(result['error'])
+        self.assertTrue(result['actions'][0]['success'], result['actions'][0])
+        self.assertTrue(result['metrics'].playing)
+        self.assertEqual(result['steps'], [['1,R']])
+
+    async def test_preparation_time_does_not_consume_wall_budget(self):
+        # 准备阶段（还没执行游戏工具）不算现实用时：读知识库读了一小时，30 秒的预算也不会用完
+        async def read_for_an_hour(runner, session, metrics, actions):
+            self.clock.skew += 3600
+        result = await self.run_case(failures=0, preparing=True, study_elapsed=0, during_turn=read_for_an_hour,
+                                     configure=lambda cfg: setattr(cfg, 'max_minutes', .5))
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['reason'], '隔离验证完成')
+        remaining = result['metrics'].snapshot()['wall_budget_remaining_s']
+        self.assertGreater(remaining, 0)
+        self.assertLessEqual(remaining, 30)
 
     async def test_preparation_limit_excludes_capacity_wait(self):
         result = await self.run_case(preparing=True)
