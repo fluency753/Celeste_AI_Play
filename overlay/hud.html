@@ -213,7 +213,6 @@
     <div class="stat"><span class="k">死亡</span><span class="v num" id="deaths">0 次</span></div>
     <div class="stat" id="simCallsBox"><span class="k">模拟器调用</span><span class="v num" id="simCalls">0 次</span></div>
     <div class="stat" id="simRunsBox"><span class="k">累计推演</span><span class="v num" id="simRuns">0 条</span></div>
-    <div class="stat" id="simBestBox"><span class="k">推演最速</span><span class="v num" id="simBest">—</span></div>
     <div class="stat wide hidden" id="simEnergyBox"><span class="k">推演额度</span><span class="v num" id="simEnergy">—</span></div>
     <div class="stat hidden" id="wallBudgetBox" title="距离本次试玩的现实用时上限还有多久"><span class="k">剩余预算</span><span class="v num" id="wallBudget"></span></div>
     <div class="stat wide"><span class="k">调用工具</span><span class="v call" id="toolCall">—</span></div>
@@ -290,7 +289,8 @@
 <script>
 "use strict";
 const params = new URLSearchParams(location.search);
-const PAGE_VERSION = 82;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const PAGE_VERSION = 83;   // 与 configs/hud.json 的 page_version 一致（calibration/mod_hud_test.py 检查）
+const UNLIMITED_BUDGET_MINUTES = 999999;   // 现实时间上限不小于它时剩余预算显示“不限”（与 overlay/modhud.py 一致）
 const OBS_SURFACE = params.get('surface') === 'obs';
 document.documentElement.classList.toggle('obs-surface', OBS_SURFACE);
 // 由 HUD 服务提供时用相对地址；作为本地文件打开（OBS 浏览器源的本地文件模式）时连默认端口——
@@ -701,24 +701,23 @@ function render() {
   // 死亡次数
   setText($("deaths"), `${since(m, "deaths")} 次`);
 
+  // 现实时间上限不小于 UNLIMITED_BUDGET_MINUTES 分钟时显示“不限”（与 overlay/modhud.py 相同）
   const wallBudget = m.wall_budget_remaining_s;
-  $("wallBudgetBox").classList.toggle("hidden", !Number.isFinite(wallBudget));
-  if (Number.isFinite(wallBudget)) setText($("wallBudget"), clock(Math.ceil(wallBudget)));
+  const unlimitedBudget = Number.isFinite(m.budget_s) && m.budget_s >= UNLIMITED_BUDGET_MINUTES * 60;
+  $("wallBudgetBox").classList.toggle("hidden", !unlimitedBudget && !Number.isFinite(wallBudget));
+  if (unlimitedBudget) setText($("wallBudget"), "不限");
+  else if (Number.isFinite(wallBudget)) setText($("wallBudget"), clock(Math.ceil(wallBudget)));
 
-  // 预置模拟器：调用次数（调用了模拟器的消息数）、当前这次调用推演的路线条数（这一轮回放画完清零）、
-  // 当前房间里推演出的最快出房用时（换房间清零）
+  // 预置模拟器：调用次数（调用了模拟器的消息数）、当前这次调用推演的路线条数（这一轮回放画完清零）
   setText($("simCalls"), `${since(m, "sim_calls")} 次`);
   const energy = m.sim_energy;
   const simStats = m.sim_stats !== false;   // 探索模式关掉限额预测时智能体不能推演：推演相关的几栏都不显示
-  for (const id of ["simCallsBox", "simRunsBox", "simBestBox"]) $(id).classList.toggle("hidden", !simStats);
+  for (const id of ["simCallsBox", "simRunsBox"]) $(id).classList.toggle("hidden", !simStats);
   $("simEnergyBox").classList.toggle("hidden", !energy || !simStats);
   setText($("simEnergy"), energy ? `${energy.balance} / ${energy.capacity}` : "—");
   $("simEnergyBox").title = energy ? energy.rules : "";
   const runs = since(m, "sim_rollouts");
   setText($("simRuns"), (runs >= 10000 ? `${(runs / 10000).toFixed(runs >= 1e6 ? 0 : 1)}万` : runs.toLocaleString("en-US")) + " 条");
-  const best = m.sim_best_frames || 0;
-  setText($("simBest"), best > 0 ? `${(best / 60).toFixed(3)}s` : "—");
-  $("simBest").classList.toggle("dim", best <= 0);
 
   // 调用工具：智能体正在调用的工具与说明（Bash 用它写的 description，文件工具用路径）；没有在调用工具时显示"—"
   // 实时展示：正在运行的程序报告的进度跟在工具说明后面

@@ -60,7 +60,8 @@ TIMER_CHARS = "0123456789:."
 # 统计栏的值按栏名上色（键名用 label 色）；上下文快满时仍用 warn，未开始的"—"仍用 label
 STAT_COLORS = {"思考": "stat_think", "工具": "stat_tool", "上下文": "stat_context", "压缩": "stat_compact",
                "知识库读取": "stat_study", "死亡": "stat_death", "模拟器调用": "stat_sim", "推演路径": "stat_sim",
-               "推演最速": "stat_sim", "推演额度": "stat_sim"}
+               "推演额度": "stat_sim"}
+UNLIMITED_BUDGET_MINUTES = 999999   # 现实时间上限不小于它时，剩余预算显示“不限”（控制台的上限最大 9999999 分钟）
 
 STATUS = {
     "starting": ("等待", "idle"), "studying": ("读知识库", "studying"), "thinking": ("思考中", "thinking"),
@@ -428,7 +429,6 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
     limit = context_limit(m, config)
     runs_n = m.get("sim_round_rollouts") or 0
     runs_text = (f"{runs_n / 10000:.{0 if runs_n >= 1e6 else 1}f}万" if runs_n >= 10000 else f"{runs_n:,}") + " 条"
-    best = m.get("sim_best_frames") or 0
     # （键, 值, 值的颜色种类：""/"warn"/"dim"）
     stats = [
         ("思考", clock(thinking), ""), ("上下文", tokens_text(ctx), "warn" if ctx / limit >= 0.9 else ""),
@@ -436,14 +436,16 @@ def view_model(m: dict, config: dict, history: list[dict], now: float) -> ViewMo
         ("知识库读取", clock(study) if studied else "—", "" if studied else "dim"), ("死亡", f"{since('deaths')} 次", ""),
     ]
     if m.get("sim_stats", True):             # 探索模式关掉限额预测时智能体不能推演，这几栏不显示
-        stats += [("模拟器调用", f"{since('sim_calls')} 次", ""), ("推演路径", runs_text, ""),
-                  ("推演最速", f"{best / 60:.3f}s" if best > 0 else "—", "" if best > 0 else "dim")]
+        stats += [("模拟器调用", f"{since('sim_calls')} 次", ""), ("推演路径", runs_text, "")]
     energy = m.get("sim_energy")
     if energy is not None and m.get("sim_stats", True):   # 探索模式的限额短路线预测：只显示余额 / 上限（规则说明不上 HUD）
         value = f"{energy.get('balance')} / {energy.get('capacity')}" if isinstance(energy, dict) else str(energy)
         stats.append(("推演额度", value, ""))
     remaining = m.get("wall_budget_remaining_s")
-    if isinstance(remaining, (int, float)) and math.isfinite(remaining):
+    budget = m.get("budget_s")
+    if isinstance(budget, (int, float)) and budget >= UNLIMITED_BUDGET_MINUTES * 60:
+        stats.append(("剩余预算", "不限", ""))
+    elif isinstance(remaining, (int, float)) and math.isfinite(remaining):
         stats.append(("剩余预算", clock(math.ceil(remaining)), ""))
 
     call = ""

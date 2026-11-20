@@ -38,6 +38,18 @@ class ViewModelTests(unittest.TestCase):
                 stats = {k: v for k, v, _ in vm.stats}
                 self.assertEqual(stats.get('剩余预算'), expected)
 
+    def test_unlimited_wall_budget_reads_unlimited_in_both_huds(self):
+        from overlay.modhud import UNLIMITED_BUDGET_MINUTES
+        now = time.time()
+        for minutes, remaining, expected in ((9999999, 599_999_000.0, '不限'), (999999, None, '不限'),
+                                              (999998, 3722.1, '1:02:03'), (1000, None, None)):
+            with self.subTest(minutes=minutes):
+                vm = view_model(metrics(now, budget_s=minutes * 60.0, wall_budget_remaining_s=remaining), CONFIG, [], now)
+                self.assertEqual({k: v for k, v, _ in vm.stats}.get('剩余预算'), expected)
+        page = (Path(__file__).resolve().parent.parent / "overlay" / "hud.html").read_text(encoding="utf-8")
+        self.assertIn(f"const UNLIMITED_BUDGET_MINUTES = {UNLIMITED_BUDGET_MINUTES};", page)
+        self.assertNotIn("推演最速", page)
+
     def test_retry_bubbles_and_metrics_fallback_do_not_reappear(self):
         now = time.time()
         items = [{'id': 'act:1:0', 'text': '原文', 'kind': '尝试'},
@@ -80,7 +92,7 @@ class ViewModelTests(unittest.TestCase):
         self.assertEqual(stats["思考"][0], "0:02:00")                  # 100 秒 + 正在思考的 20 秒
         self.assertEqual(stats["上下文"], ("950k", "warn"))
         self.assertEqual(stats["推演路径"][0], "2.5万 条")
-        self.assertEqual(stats["推演最速"][0], "2.000s")
+        self.assertNotIn("推演最速", stats)                           # 1.44.1 起去掉这一栏
         self.assertEqual(stats["知识库读取"], ("—", "dim"))
         self.assertEqual([e.text for e in vm.history], ["进入房间", "贴墙跳上去再冲刺。"])   # 最新一句补在末尾
         self.assertTrue(vm.history[-1].latest and not vm.history[0].latest)
