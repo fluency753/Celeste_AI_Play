@@ -4,6 +4,8 @@
 
 ## 2026-11-20
 
+- **待办：记下 AI 副本窗口发虚的原因与修法（版本不变）。** 控制台直接启动副本时 Windows 的「替代高 DPI 缩放」不生效，Steam 启动的个人游戏靠环境变量 `__COMPAT_LAYER` 才生效；实测数据与修法写在 `TODO.md` 第二优先，暂不改代码。
+
 - **知识库：补充 CelesteTAS wiki 的最优输入与效率数据；资料抓取工具加入 CelesteTAS wiki（组件版本不变）。** `techniques.md` 新增第 10 节：TAS 输入写法与本项目的对照（可直接用 `input_format="celeste_tas"` 提交）、最优 ultra、平地从静止起步的连续 grounded ultra、攀爬效率表（连续 climbjump、half-stamina climb、double HSC、偷体力 + neutral、纯 neutral）、climbjump 的条件与优先级、double cornerboost 的速度上限、计时器利用（variable jump、coyote time、dash attack）、撞墙保留速度的延伸用法、climbhop 的附带效果、取整误差与原版随机数；9.6 是原文对照表。更正 4.4 neutral jump 的循环：跳键一直按住、两个跳键交替，每 25 帧升 25.5 px（61.2 px/s），原写法只按满 12 帧就松开，26 帧升约 19 px。`tools/fetch_reference.py` 另抓 CelesteTAS wiki 里与原版有关的 17 页到 `kb/reference/celestetas/`（只放本机，选读，不列入准备阶段的必读清单），新增 `--skip-tas`。
   验证：WallJumpCheck 的 3/5 px、撞墙保留 0.06 s、climbhop 的 12 帧强制输入与 −120、冲刺不清零 coyote、换房与弹簧清零 coyote、撞天花板清零 variable jump 等逐条对照游戏代码；用模拟器在 1A 第一个房间的墙上推演：纯 neutral 一轮 25 帧升 25.5 px、偷体力 + neutral 一轮 37 帧升 46.6 px，与原文一致，原 4.4 的写法 26 帧升 19.25 px；double cornerboost 的 144.33 由空中减速与每帧 3 px 推出。HSC 与 double HSC 的数字是原文数据，标为未核实。全量回归通过。
 
