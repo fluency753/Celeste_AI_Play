@@ -196,7 +196,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
     ap.add_argument("--runtime", choices=["container", "host"], default="container",
                     help="container：智能体在 Docker 容器里运行（默认）；host：在本机运行且只开放游戏工具（M2 的过渡方式）")
     ap.add_argument("--quota-wait", action=argparse.BooleanOptionalAction, default=None,
-                    help="额度用完时是否等待：等待时游戏保持冻结，额度重置后接着同一个会话继续；--no-quota-wait 直接停止。"
+                    help="Claude 额度用完时是否等待：等待时游戏保持冻结，额度重置后接着同一个会话继续；--no-quota-wait 直接停止。Codex 账户额度耗尽时保留现场并停止，额度恢复后续跑。"
                          "不写时按提供方的用量设置（configs/local.providers.json 的 usage），默认等待")
     ap.add_argument("--quota-wait-max-hours", type=float, default=None,
                     help="额度重置还要等超过这么多小时就停止本次运行（之后可用 --resume 续跑）；不写时按提供方的用量设置，默认 24")

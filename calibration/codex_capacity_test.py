@@ -17,6 +17,7 @@ from calibration.http_fixture import bound_server
 
 from calibration.collision_contract_test import FakeBridge
 from orchestrator.codex_agent import CodexRunner
+from orchestrator.codex_rpc import CodexRPCError
 from orchestrator.config import RunConfig
 from orchestrator.game_session import GameSession
 from orchestrator.kb_study import KbStudy
@@ -25,6 +26,7 @@ from orchestrator.server import build_server
 
 
 CAPACITY = 'Selected model is at capacity. Please try a different model.'
+QUOTA = {'message': 'You’ve hit your usage limit.', 'codexErrorInfo': 'usageLimitExceeded'}
 
 
 class WaitClock:
@@ -106,6 +108,17 @@ class ModelAvailabilityClassificationTests(unittest.TestCase):
                 self.assertFalse(is_model_unavailable(error))
 
 
+    def test_only_structured_account_limit_is_quota_exhaustion(self):
+        from orchestrator.codex_recovery import is_model_unavailable, is_usage_limit
+        for error in (QUOTA, CodexRPCError({'code': -32000, 'data': QUOTA}),
+                      {**QUOTA, 'message': CAPACITY}):
+            self.assertTrue(is_usage_limit(error))
+            self.assertFalse(is_model_unavailable(error))
+        for error in ('usageLimitExceeded', {'status': 429}, {'codexErrorInfo': 'rateLimitExceeded'},
+                      {'codexErrorInfo': 'sessionBudgetExceeded'}, {**QUOTA, 'code': -32602}):
+            self.assertFalse(is_usage_limit(error))
+
+
 class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
     async def until(self, condition):
         async with asyncio.timeout(15):     # 上限而已：慢的机器上 3 秒不够
@@ -152,7 +165,9 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
             runner = CodexRunner(cfg, root, session, metrics, 'unused', game_server=build_server(session),
                                  resume_note='原始任务，请执行原始动作标记。', study=study, naming_only=naming)
             if initial_user:
-                runner.pending_messages.append({'id': -1, 'text': initial_user})
+                ident = runner.control.enqueue('message', initial_user)
+                runner.control.mark(ident, 'waiting', '等待提交给当前会话')
+                runner.pending_messages.append({'id': ident, 'kind': 'message', 'text': initial_user})
             sent, actions, children = [], [], []
             state = {'reason': None, 'error': None}
 
@@ -174,6 +189,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                     actions.append(response)
                 terminal_errors = {
                     'auth_after_action': {'message': 'workspace routing discovery unauthorized (401)'},
+                    'quota_after_action': QUOTA,
                     'parameter_after_turn': {'code': -32602, 'message': 'HTTP 401 is not a valid model name'},
                 }
                 runner._event('turn/completed', {'turn': {
@@ -195,6 +211,8 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                     failed = failures is None or number <= failures
                     if failed and failure == 'rpc':
                         raise RuntimeError(CAPACITY)
+                    if failed and failure == 'quota_rpc':
+                        raise CodexRPCError({'code': -32000, 'data': QUOTA})
                     if failed and failure == 'auth':
                         raise RuntimeError('HTTP 401 Unauthorized: invalid authentication')
                     if failed and failure == 'parameter':
@@ -247,6 +265,8 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                                                      interrupted=runner.interrupted_for_resume,
                                                      model_failed=(getattr(runner, 'retain_on_model_failure', False)
                                                                    and not runner.stop_requested)))
+                with runner.control._db() as db:
+                    state['control_actions'] = [dict(row) for row in db.execute('SELECT * FROM actions')]
                 return state
             finally:
                 if watcher and not watcher.done():
@@ -328,6 +348,22 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['metrics'].state.net_waits, 0)
                 self.assertEqual(len(result['sent']), 1)
                 self.assertEqual(result['steps'], [['1,R']] if action else [])
+
+    async def test_account_quota_stops_normally_without_replaying_actions(self):
+        for failure, action in [('quota_rpc', False), ('quota_after_action', True)]:
+            with self.subTest(failure=failure):
+                result = await self.run_case(failure=failure, action=action, initial_user='额度检查留言')
+                self.assertIsNone(result['error'])
+                self.assertIn('Codex 账号额度用完', result['reason'])
+                self.assertIn('原运行目录续跑', result['public'])
+                self.assertEqual(result['shutdown'], 'retain')
+                self.assertEqual(result['metrics'].state.net_waits, 0)
+                self.assertEqual([turn['threadId'] for turn in result['sent']], ['same-thread'])
+                self.assertEqual(result['steps'], [['1,R']] if action else [])
+                message = next(row for row in result['control_actions'] if row['kind'] == 'message')
+                self.assertEqual(message['status'], 'submitted' if action else 'error')
+                if not action:
+                    self.assertIn('未送达', message['detail'])
 
     async def test_unknown_start_ack_does_not_replay_and_retains_control(self):
         for failure in ('timeout', 'connection'):
@@ -489,10 +525,13 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_auth_error_retains_real_recorder_and_writes_resume_reason(self):
         await self.exercise('workspace routing discovery unauthorized (401)', auth=True)
 
+    async def test_quota_stops_normally_and_preserves_live_recording(self):
+        await self.exercise(CodexRPCError(QUOTA), quota=True)
+
     async def test_crash_after_the_game_process_exited_names_the_exit_as_the_reason(self):
         await self.exercise(CAPACITY, game_gone=True)
 
-    async def exercise(self, failure, *, auth=False, game_gone=False):
+    async def exercise(self, failure, *, auth=False, quota=False, game_gone=False):
         from calibration.recording_session_test import RecordingSessionTests
         from orchestrator.recording import Recorder
         from orchestrator.run import _run_connected_session
@@ -532,7 +571,7 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                         return {'thread': {'id': 'retained-thread'}, 'model': 'test',
                                 'activePermissionProfile': {'id': params['permissions']}}
                     if method == 'turn/start':
-                        raise RuntimeError(failure)
+                        raise failure if isinstance(failure, Exception) else RuntimeError(failure)
                     return {}
                 return SimpleNamespace(start=AsyncMock(), close=AsyncMock(),
                                        request=AsyncMock(side_effect=request),
@@ -546,7 +585,7 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                         patch('orchestrator.run.Playback', return_value=SimpleNamespace(collect=False, close=Mock())), \
                         patch('orchestrator.model_catalog.load_models', return_value={'models': []}), \
                         patch('orchestrator.codex_agent.CodexRPC', side_effect=create_rpc):
-                    if auth:
+                    if auth or quota:
                         await _run_connected_session(cfg, args, root, None, None, None,
                                                      metrics, recorder, None, session)
                     else:
@@ -569,6 +608,10 @@ class CapacityRecordingLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 if auth:
                     ensure.assert_not_called()
                     self.assertIn('--container unused-container login', summary['stop_reason'])
+                    self.assertEqual(summary['session_id'], 'retained-thread')
+                    self.assertNotIn('error', summary)
+                elif quota:
+                    self.assertIn('Codex 账号额度用完', summary['stop_reason'])
                     self.assertEqual(summary['session_id'], 'retained-thread')
                     self.assertNotIn('error', summary)
                 elif game_gone:

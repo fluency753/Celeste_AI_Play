@@ -8,6 +8,7 @@ import json
 import re
 import time
 import secrets
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -17,7 +18,7 @@ from .prompting import play_prompt
 from .game_policy import GAME_ACTIONS, is_game_tool, tool_name
 from .codex_rpc import CodexRPC, CodexRPCError
 from .codex_container import CodexLoginRequired
-from .codex_recovery import ModelRecovery, is_model_unavailable, requires_login
+from .codex_recovery import ModelRecovery, is_model_unavailable, is_usage_limit, requires_login
 from .codex_read import read_file, search_files
 from .session_controls import RuntimeCapabilities, SessionControls
 from .session_store import load_json, write_json
@@ -1021,6 +1022,14 @@ class CodexRunner(ModelRecovery, SessionControls):
                         "serviceTierForTurn": tier,
                         "input": [{"type": "text", "text": turn_input}]})
                 except RuntimeError as exc:
+                    if is_usage_limit(exc) and self.control:
+                        self._hold_model_failure()
+                        for row in assigned:
+                            if row.get('kind') == 'message':
+                                try:
+                                    self.control.mark(row['id'], 'error', '账号额度用完，本条留言未送达')
+                                except (OSError, sqlite3.Error) as error:
+                                    print(f'[codex] 留言未送达状态写入失败：{error}', flush=True)
                     if not is_model_unavailable(exc):
                         raise
                     # An explicit RPC refusal did not accept these inputs. Keep user rows
@@ -1092,6 +1101,24 @@ class CodexRunner(ModelRecovery, SessionControls):
             self._hold_model_failure()
             raise
         except RuntimeError as exc:
+            if is_usage_limit(exc):
+                reason = 'Codex 账号额度用完'
+                if self.session is not None and not (self.chat_only or self.prepare_only):
+                    self._hold_model_failure()
+                    self.model_waiting = True
+                    async with self.action_lock:
+                        pass
+                    if self.stop_requested:
+                        return await self._stopped_reason()
+                    if self.session.done:
+                        return self.session.done_reason
+                    reason += '。游戏接管和录像保留，额度恢复后从原运行目录续跑。'
+                print(f'[codex] {reason}（服务端回执：{exc}）', flush=True)
+                try:
+                    publish(self.run_dir, 'system:codex-usage-limit', reason, role='system', kind='系统')
+                except OSError as error:
+                    print(f'[codex] 额度通知写入失败：{error}', flush=True)
+                return reason
             if requires_login(exc):
                 login = exc if isinstance(exc, CodexLoginRequired) else CodexLoginRequired(self.container)
                 if self.session is None or self.chat_only or self.prepare_only:

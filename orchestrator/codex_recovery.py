@@ -23,9 +23,19 @@ def requires_login(error) -> bool:
         text, re.I))
 
 
+def is_usage_limit(error) -> bool:
+    """Recognize account quota exhaustion from the app-server protocol."""
+    value = getattr(error, 'error', error)
+    if not isinstance(value, dict) or value.get('code') in {-32600, -32601, -32602}:
+        return False
+    details = value.get('data')
+    return (value.get('codexErrorInfo') == 'usageLimitExceeded'
+            or isinstance(details, dict) and details.get('codexErrorInfo') == 'usageLimitExceeded')
+
+
 def is_model_unavailable(error) -> bool:
-    """Only model availability failures, never authentication or tool-policy errors."""
-    if requires_login(error):
+    """Only model availability failures, never authentication, quota or tool-policy errors."""
+    if is_usage_limit(error) or requires_login(error):
         return False
     value = getattr(error, 'error', error)
     if isinstance(value, dict) and value.get('code') in {-32600, -32601, -32602}:
