@@ -37,7 +37,7 @@ CASES = {
     "探索 · Codex": {"mode": "explore", "engine": "codex", "provider": "codex", "model": "gpt-5.5"},
     "探索 · 计划外地图与剧情交给智能体": {"mode": "explore", "allow_detour": True, "cutscene_mode": "agent",
                                    "action_permissions": {"restart_chapter": False, "return_to_map": False, "save_quit": False}},
-    "探索 · 仅正式思考、思考僵直、直播": {"mode": "explore", "formal_thought": True, "stiffness": True, "live": True,
+    "探索 · 仅录制解说、思考僵直、直播": {"mode": "explore", "formal_thought": True, "stiffness": True, "live": True,
                                   "tune": {"explore_program_s": None, "explore_act_frames": 300}},
     "探索 · Codex 计划外地图": {"mode": "explore", "engine": "codex", "provider": "codex", "model": "gpt-5.5",
                             "allow_detour": True, "formal_thought": True},

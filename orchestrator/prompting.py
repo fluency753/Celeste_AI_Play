@@ -23,7 +23,7 @@ def remind_text(seconds: float) -> str:
 TOOL_NOTES = {
     "observe": '获取新观测，可有界等待已核实的过渡；detail="time"只查询计时与各时长目标已用／剩余',
     "act": "推进若干帧",
-    "narrate": "思考期间更新观众看到的思考，不推进游戏",
+    "narrate": "思考时更新观众看到的一句解说，不推进游戏",
     "set_effort": "调整你自己的推理强度",
     "stop_run": "分类报告任务阻塞，按工具回执完成确认后才暂停试玩",
     "finish_goal": "用户交代的整次任务已达成且无自动停止条件时，提交目标与依据，正常结束试玩",
@@ -41,8 +41,8 @@ CN_COUNT = {1: "一", 2: "两", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七"
 def game_tool_list(cfg) -> str:
     from .thought import temp_thoughts
     notes = dict(TOOL_NOTES)
-    if temp_thoughts(cfg):     # 开了“仅正式思考”：narrate 写的是临时思考，观众看不到
-        notes["narrate"] = "思考期间写临时思考（只在控制台显示，观众看不到），不推进游戏"
+    if temp_thoughts(cfg):     # 开了“仅录制解说”：narrate 写的是控制台解说
+        notes["narrate"] = "思考时写控制台解说（显示在控制台），不推进游戏"
     items = [f"`{name}`（{notes.get(name, '见工具说明')}）" for name in game_tools(cfg)]
     listed = items[0] if len(items) == 1 else "、".join(items[:-1]) + "和 " + items[-1]
     return f"游戏工具有{CN_COUNT.get(len(items), str(len(items)))}个：{listed}。"
@@ -73,41 +73,42 @@ def cpu_rule(cfg) -> str:
     return f"本次最多可以用 {cpus} 个核，用几个按实际环境决定"
 
 
-# 思考语句的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
+# 解说的语气（用户要求）：不必一直冷静理智，可以带情绪。两种执行器都有；提示词与 act、narrate 的说明里都写
 THOUGHT_MOOD = '语气自然，可以表达情绪，不必刻意表演。'
 THOUGHT_MOOD_SHORT = "语气不必一直冷静理智，可以自然带点情绪，但不要夸张。"
 
 
 def thought_brief_rule(cfg) -> str:
-    """提示词里思考语句汉字数的一句（上限见 orchestrator/thought.py 的 hanzi_limit）；
-    不限时为空（Codex 执行器的模型档案没写时）。开了"仅正式思考"时只说 act 的 thought（正式思考），临时思考的字数写在 formal_thought_rule 里。"""
+    """提示词里解说汉字数的一句（上限见 orchestrator/thought.py 的 hanzi_limit）；
+    不限时为空（Codex 执行器的模型档案没写时）。开了"仅录制解说"时只说 act 的 thought（录制解说），控制台解说的字数写在 formal_thought_rule 里。"""
     from .thought import hanzi_limit, temp_thoughts
     n = hanzi_limit(cfg)
     if n is None:
         return ""
     if temp_thoughts(cfg):
-        return f"act 的 thought（正式思考）尽量简短，汉字不超过 {n} 个（英文术语不计）。"
-    return f"思考语句尽量简短，汉字不超过 {n} 个（英文术语不计）。"
+        return f"act 的 thought（录制解说）尽量简短，汉字不超过 {n} 个（英文术语不计）。"
+    return f"解说尽量简短，汉字不超过 {n} 个（英文术语不计）。"
 
 
 def temp_thought_where(cfg) -> str:
-    """临时思考显示在哪里：游戏内 HUD 只显示正式思考；用网页 HUD（直播或 --no-hud-mod）时它的历史一栏也会列出临时思考。"""
+    """控制台解说显示在哪里：游戏内 HUD 只显示录制解说；用网页 HUD（直播或 --no-hud-mod）时它的历史一栏也会列出控制台解说。"""
     if getattr(cfg, "hud_mod", True):
-        return "只显示在控制台，游戏画面的 HUD 和录像里都看不到"
-    return "显示在控制台和网页 HUD 的历史里，但不算正式思考"
+        return "显示在控制台，不替换游戏画面上的录制解说"
+    return "显示在控制台和网页 HUD 的历史里，不替换录制解说"
 
 
 def formal_thought_rule(cfg) -> str:
-    """开了"仅正式思考"（--formal-thought）时提示词里的说明；没开时为空（提示词与原来完全相同）。"""
+    """开了"仅录制解说"（--formal-thought）时提示词里的说明；没开时为空（提示词与原来完全相同）。"""
     from .thought import hanzi_limit, temp_thoughts
     if not temp_thoughts(cfg):
         return ""
     n = hanzi_limit(cfg, temp=True)
     where = temp_thought_where(cfg)
-    temp = (f"冻结期间的 narrate 与公开 commentary 是临时思考，{where}。" if n is None else
-            f"冻结期间用 narrate 写的是临时思考，{where}；每条汉字不超过 {n} 个"
-            "（英文术语不计），简要记录路线判断、尝试结果或当前进展。")
-    return ("本次开启了“仅正式思考”：游戏画面的 HUD 上只显示每次 act 的 thought（正式思考），用它向观众简要说明本次路线判断、验证结果或下一步。" + temp)
+    temp = (f"冻结期间的 narrate 与公开 commentary 是控制台解说，{where}。" if n is None else
+            f"冻结期间用 narrate 写的是控制台解说，{where}；每条汉字不超过 {n} 个"
+            "（英文术语不计），换了一个判断时再更新一句结论。")
+    return ("本次开启了“仅录制解说”：游戏画面的 HUD 上只显示每次 act 的 thought（录制解说）。"
+            "它是给观众的一句对外播报，写结论即可，不需要复述你的推理过程。" + temp)
 
 
 SAVE_CONTEXT_ACT = ("本次开启了节省上下文，act 结果更简短：轨迹不写列名（列依次为帧、x、y、vx、vy、状态、冲刺、着地）；"
@@ -193,16 +194,17 @@ def save_context_print(cfg) -> str:
 
 
 def formal_thought_act(cfg) -> str:
-    """act 工具说明里 thought 的补充（开了"仅正式思考"时）；没开时为空。"""
+    """act 工具说明里 thought 的补充（开了"仅录制解说"时）；没开时为空。"""
     from .thought import temp_thoughts
     if not temp_thoughts(cfg):
         return ""
-    return ("\n  本次开启了“仅正式思考”：这里的 thought 是正式思考，游戏画面的 HUD 上只显示它；用它向观众说明路线判断、验证结果或下一步。"
-            f"冻结期间的进展用 narrate 简要记录，{temp_thought_where(cfg)}。")
+    return ("\n  本次开启了“仅录制解说”：这里的 thought 是录制解说，游戏画面的 HUD 上只显示它。"
+            "它是给观众的一句对外播报，写结论即可，不需要复述你的推理过程；"
+            f"冻结期间用 narrate 写控制台解说，{temp_thought_where(cfg)}。")
 
 
 def thought_temp_limit(cfg) -> str:
-    """开了"仅正式思考"时 narrate（临时思考）说明里的字数。"""
+    """开了"仅录制解说"时 narrate（控制台解说）说明里的字数。"""
     from .thought import char_cap, hanzi_limit
     n = hanzi_limit(cfg, temp=True)
     return f"{char_cap(cfg, temp=True)} 字以内" if n is None else f"汉字不超过 {n} 个，英文术语不计"
@@ -355,7 +357,7 @@ def fill(text: str, cfg) -> str:
                                    "依据当前观测与已有对话记录目标、已验证事实和待验证问题，不把旧状态当作当前事实。"),
         "{public_feedback_rule}": ('有新判断时用 '
                                    + ('公开 commentary 或 narrate' if getattr(cfg, 'engine', 'claude') == 'codex' else 'narrate')
-                                   + (' 写下临时思考；' if getattr(cfg, 'formal_thought', False) else ' 更新 HUD；')),
+                                   + (' 写下控制台解说；' if getattr(cfg, 'formal_thought', False) else ' 更新 HUD；')),
         "{observation_delivery_rule}": ("具备脚本能力且当前观测文件核对成功时，默认正文只给状态、快照身份及文件位置；程序优先读取latest_obs.json的obs，完整碰撞数据不重复进入正文。文件不可用或规划工具受限时回退完整布局baseline/同房delta。"
                                         if workspace.programs else "首次入房或默认observe返回完整布局baseline，同房act/cutscene返回变化delta；快照链缺失时默认observe重建。"),
         "{observation_source_rule}": ("优先从 `/workspace/game/latest_obs.json` 的 `obs` 读取当前原始数据；默认正文只给状态、快照身份和文件位置；若回退布局则按实际格式读取。"
@@ -404,12 +406,12 @@ def fill(text: str, cfg) -> str:
             "off": "工具结果不附图，工作区里写有",
         }[collision_image_mode(cfg)],
         "{temp_thought_where}": temp_thought_where(cfg),
-        # 开了"仅正式思考"时换掉提示词里说 narrate 给观众看的几处；没开时与原来的文字完全相同
-        "{narrate_target}": "写下临时思考" if getattr(cfg, "formal_thought", False) else "告诉观众",
-        "{hud_thought_shown}": ("你最近一次 act 的 thought（正式思考）" if getattr(cfg, "formal_thought", False)
-                                else "你最新写下的一句路线解说"),
-        "{narrate_viewers}": ("。这些是临时思考（规则见前面“仅正式思考”的说明）：中文，" if getattr(cfg, "formal_thought", False)
-                              else "。这条解说会显示给观众。用一两句中文，"),
+        # 开了"仅录制解说"时换掉提示词里说 narrate 给观众看的几处；没开时与原来的文字完全相同
+        "{narrate_target}": "写下控制台解说" if getattr(cfg, "formal_thought", False) else "告诉观众",
+        "{hud_thought_shown}": ("你最近一次 act 的 thought（录制解说）" if getattr(cfg, "formal_thought", False)
+                                else "你最新写下的一句解说"),
+        "{narrate_viewers}": ("。这些是控制台解说（规则见前面“仅录制解说”的说明）：中文，" if getattr(cfg, "formal_thought", False)
+                              else "——观众在你思考的这段时间里只能看到 `narrate` 写下的内容。规则与 `act` 的 `thought` 相同：给观众的一句对外播报，一两句中文，"),
         "{bash_default}": seconds_text(getattr(cfg, "bash_default_s", 300)),
         "{bash_max}": seconds_text(getattr(cfg, "bash_max_s", 600)),
         "{explore_program_rule}": explore_program_rule(cfg),
@@ -821,7 +823,7 @@ def model_resume_prompt(expected: str, actual: str, chat: bool = False, study_no
     from .button_prompts import notification
     if chat:
         return notification('wake_chat', facts=text + "请接着处理用户刚才的消息。")
-    text += "这段时间游戏一直冻结，章节计时没有走。正式思考里不要提这件事。"
+    text += "这段时间游戏一直冻结，章节计时没有走。录制解说里不要提这件事。"
     if study_note:
         return notification('resume_prepare', facts=text + "准备阶段还没有结束：\n" + study_note)
     return notification('reconnect', facts=text)

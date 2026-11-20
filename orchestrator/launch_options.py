@@ -289,7 +289,7 @@ def build(options: dict, profile: str | None = None) -> list[str]:
         if o["token_drift"]:
             argv.append("--token-drift")
     if o["formal_thought"]:
-        argv.append("--formal-thought")         # 仅正式思考（默认关）
+        argv.append("--formal-thought")         # 仅录制解说（默认关）
     argv.append("--save-context" if o["save_context"] else "--no-save-context")   # 节省上下文（默认开）
     if o["collision_image"]:
         argv += ["--collision-image", o["collision_image"]]

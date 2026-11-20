@@ -99,7 +99,7 @@ class ModelListTests(unittest.TestCase):
                 data = runtime("claude").models("demo")
         big, small = data["models"]
         self.assertEqual((big["autocompact"], big["context_limit"]), ("400000", 380000))
-        self.assertEqual(big["thought"], {"max_hanzi": 40})                     # 临时思考 5 个：低于可调参数的下限，不用
+        self.assertEqual(big["thought"], {"max_hanzi": 40})                     # 控制台解说 5 个：低于可调参数的下限，不用
         self.assertNotIn("thought", small)
         self.assertNotIn("autocompact", small)
         self.assertNotIn("context_limit", small)
@@ -183,7 +183,7 @@ class SourceTests(unittest.TestCase):
         out = profile_sources(cfg)
         self.assertEqual(out["autocompact"], {"value": "500000", "source": "save_context"})
         self.assertEqual(out["thought_max_hanzi"], {"value": 40, "source": "model"})
-        self.assertNotIn("thought_temp_max_hanzi", out)                          # 没开仅正式思考：不用
+        self.assertNotIn("thought_temp_max_hanzi", out)                          # 没开仅录制解说：不用
         self.assertEqual(out["images"], {"value": True, "source": "provider"})
         self.assertEqual(out["context_limit"], {"value": 900000, "source": "model"})
         cfg.save_context, cfg.formal_thought = False, True

@@ -37,15 +37,15 @@ TUNABLES: tuple[Tunable, ...] = (
     Tunable("min_frames_per_act", "单次 act 最少推进的帧数", "执行与解说", int, 1, 1, 600, "帧",
             "两种模式都用（超过本模式的上限时按上限算）：inputs 或计划文件合计不足就退回，让智能体在末尾补空帧或继续保持按键；"
             "死亡、换房等截断条件照样提前停下"),
-    Tunable("thought_max_chars", "思考语句最长字数", "执行与解说", int, 120, 20, 400, "字",
+    Tunable("thought_max_chars", "解说最长字数", "执行与解说", int, 120, 20, 400, "字",
             "act 的 thought 与 narrate 的长度上限"),
-    Tunable("thought_max_hanzi", "思考语句最多汉字数", "执行与解说", int, 30, 5, 400, "个",
+    Tunable("thought_max_hanzi", "解说最多汉字数", "执行与解说", int, 30, 5, 400, "个",
             "只对 Claude Code 执行器：act 的 thought 与 narrate 里的汉字数（英文术语、数字与标点不计），超过时照常执行、显示截短后的文字并告诉智能体；"
             "提示词与工具说明里的数字跟着变"),
-    Tunable("thought_temp_max_hanzi", "临时思考最多汉字数", "执行与解说", int, 120, 10, 400, "个",
-            "只在开了“仅正式思考”时用、只对 Claude Code 执行器：narrate 写的临时思考（只显示在控制台）的汉字数上限，"
-            "英文术语、数字与标点不计；act 的正式思考仍按上一项"),
-    Tunable("thought_lead_s", "动作前等 HUD 换上新思考", "执行与解说", float, 0.4, 0, 3, "秒",
+    Tunable("thought_temp_max_hanzi", "控制台解说最多汉字数", "执行与解说", int, 120, 10, 400, "个",
+            "只在开了“仅录制解说”时用、只对 Claude Code 执行器：narrate 写的控制台解说（只显示在控制台）的汉字数上限，"
+            "英文术语、数字与标点不计；act 的录制解说仍按上一项"),
+    Tunable("thought_lead_s", "动作前等 HUD 换上新解说", "执行与解说", float, 0.4, 0, 3, "秒",
             "游戏冻结着等，录像里不占时间"),
     Tunable("notes_warn_percent", "笔记整理提醒阈值", "执行与解说", int, 60, 0, 100, "%",
             "上下文超过此占用且本监测周期未检测到notes.md内容更新时提醒一次；0关闭此提醒。压缩后仍提醒读取笔记；须有实际或明确配置的上下文窗口。"),

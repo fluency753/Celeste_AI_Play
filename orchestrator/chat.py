@@ -142,7 +142,7 @@ async def chat(directory, name_request=None, allow_programs=False, sim=False, fr
     cfg.mode = state.get("mode") or MODE_OF_KNOWLEDGE.get(cfg.knowledge_profile, cfg.mode)
     cfg.sim_assist = bool(state.get("sim_assist")) and cfg.mode == "explore"
     apply(cfg, state.get("tuning") or {})
-    # 提示词的其他开关也按原运行：仅正式思考、思考僵直、碰撞图、节省上下文（原来没带上，唤起的会话看到的规则与试玩时不同）
+    # 提示词的其他开关也按原运行：仅录制解说、思考僵直、碰撞图、节省上下文（原来没带上，唤起的会话看到的规则与试玩时不同）
     cfg.stiffness = bool(state.get("stiffness")) and cfg.mode == "explore"
     cfg.token_drift = bool(state.get("token_drift", False)) and cfg.mode == "explore"
     cfg.formal_thought = bool(state.get("formal_thought"))

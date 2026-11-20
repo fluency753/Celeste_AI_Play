@@ -136,7 +136,7 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="关闭规划回放（新运行的默认）：不把推演过的路线画进游戏")
     ap.add_argument("--no-hud", action="store_true", help="不在主控进程里启动 HUD 服务（也不打开置顶 HUD 窗口）")
     ap.add_argument("--hud-mod", dest="hud_mod", action="store_true", default=None,
-                    help="HUD 以 MOD 形式显示在游戏画面右上角（不开直播时默认开启）：旧版卡片加思考语句历史，章节计时逐帧准确；"
+                    help="HUD 以 MOD 形式显示在游戏画面右上角（不开直播时默认开启）：旧版卡片加解说历史，章节计时逐帧准确；"
                          "不打开置顶 HUD 窗口，OBS 浏览器源里的网页 HUD 也不显示。需要桥接 0.13.0")
     ap.add_argument("--no-hud-mod", dest="hud_mod", action="store_false",
                     help="不用游戏内 HUD，用网页 HUD（置顶窗口与 OBS 浏览器源；直播模式默认）")
@@ -177,9 +177,9 @@ def parse_args() -> tuple[RunConfig, argparse.Namespace]:
                     help="工具结果里附碰撞图：always 每次，room 只在进新房间与 observe 时，off 不附（工作区里每次照样写图）；"
                          "不写时续跑沿用原配置；未配置时统一默认 room")
     ap.add_argument("--formal-thought", action=argparse.BooleanOptionalAction, default=None,
-                    help="仅正式思考（默认关；续跑沿用原运行）：冻结期间 narrate 写的临时思考只显示在控制台（Claude Code 执行器"
-                         "汉字不超过 120 个，可调参数 thought_temp_max_hanzi）；act 的 thought 是正式思考，概括整个冻结期间的"
-                         "思考（汉字不超过 30 个），游戏内 HUD 只显示当前这一句，字号更大")
+                    help="仅录制解说（默认关；续跑沿用原运行）：冻结期间 narrate 写的控制台解说显示在控制台（Claude Code 执行器"
+                         "汉字不超过 120 个，可调参数 thought_temp_max_hanzi）；act 的 thought 是录制解说，写一句给观众的"
+                         "对外播报即可，不需要复述推理过程（汉字不超过 30 个），游戏内 HUD 只显示当前这一句，字号更大")
     ap.add_argument("--save-context", action=argparse.BooleanOptionalAction, default=None,
                     help="节省上下文（新运行默认开；续跑沿用原运行，没记过的旧运行按关，免得章节中途换返回格式）："
                          "act 结果更简短（轨迹不写列名、实体只列起止位置不同的、没僵直不写僵直说明；同一房间里观测文件只给一行、"

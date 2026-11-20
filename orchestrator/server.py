@@ -44,7 +44,7 @@ plan_file：（有工作区时可用）工作区里的计划文件路径，与 i
   JSON也可声明input_format，旧会话工具没有同名参数时使用此方式。/workspace/game/tas.py 可把显式选定的TAS输入行切成有来源游标的JSON计划；动作返回input_cursor与remaining_inputs，按实际consumed继续，不自动执行剩余输入。
   retry：死亡、偏离（或 "done"：按键用完仍在本房间）时，主控在零网络沙箱里运行 command（工作目录 /workspace），
   它应读取 /workspace/game/ 下的最新数据并改写同一个计划文件，主控接着执行，最多 max 次，不唤醒你。格式详见 /kb/game_data.md。
-thought：一两句中文{thought_brief}，会显示给观众。只写你对当前房间或这一段的分析与判断（难点在哪、怎么取舍、打算怎么过），
+thought：给观众的一句中文解说{thought_brief}，会显示给观众。这是对外的一句话，不需要复述你的推理过程；只写结论性的判断（难点在哪、怎么取舍、打算怎么过），
   不写具体数值（帧数、坐标、速度、推演条数等），也不写用了什么算法、程序搜出了什么路线。{thought_mood_short}{formal_thought_act}
 stop_on：提前停下的条件，可选 death room uncontrollable controllable land refill complete story_input story_decision；
   默认 ["death", "room", "complete"]，death 总会生效；agent 模式已登记通关后不再用 complete 反复截断结算操作。
@@ -62,15 +62,15 @@ OBSERVE_DESCRIPTION = '默认获取新观测{observe_collision_image}，可有�
 SET_EFFORT_DESCRIPTION = '调整下一轮推理强度，不推进游戏。level取观测头部可选档位，reason说明原因；简单房间可调低、难房间调高。调用后结束本轮，不再调用工具；主控切换后通知继续。'
 
 
-NARRATE_DESCRIPTION = "更新 HUD 公开解说，不推进游戏。thought 用一两句中文（{thought_limit}）写新判断和下一步；不写具体数值、算法或内部推理，技巧专名用英文。{thought_mood_short}一有初步判断就先写一句，不要攒到 act 时才写；有真实进展时更新，不重复空话。"
+NARRATE_DESCRIPTION = "更新 HUD 公开解说，不推进游戏。thought 用一两句中文（{thought_limit}）写一句给观众的对外播报，写结论即可，不需要复述推理过程；不写具体数值、算法或内部推理，技巧专名用英文。{thought_mood_short}一有新的结论就先写一句，不要攒到 act 时才写；换了一个判断时再更新一句结论，不重复空话。"
 
-# 开了"仅正式思考"（--formal-thought）时 narrate 的说明：写的是临时思考，只显示在控制台，游戏画面的 HUD 上没有
-NARRATE_TEMP_DESCRIPTION = '更新临时思考，{temp_thought_where}；游戏 HUD 只显示 act 的正式 thought。不推进游戏。thought 用中文（{thought_temp_limit}）写实际判断，不写数值、算法或内部推理，技巧专名用英文。'
+# 开了"仅录制解说"（--formal-thought）时 narrate 的说明：写的是控制台解说，只显示在控制台，游戏画面的 HUD 上没有
+NARRATE_TEMP_DESCRIPTION = '更新控制台解说，{temp_thought_where}。不推进游戏。thought 用中文（{thought_temp_limit}）写一句结论性的判断，不写数值、算法或内部推理，不需要复述推理过程，技巧专名用英文。'
 
 COMPACT_ACT_DESCRIPTION = '''推进输入并返回新状态{act_collision_image}。{save_context_rule}
 inputs 为按键段数组，如 ["12,R","1,R,J","27,R"]；与工作区 JSON plan_file 二选一。至少 {act_min_frames}、最多 {act_max_frames} 帧，截断可提前停下。方向 LRUD，J跳/X冲刺/G抓墙/T交互，Z蹲冲，K/Y/V为第二键；纯帧数松键，重复触发须松开1帧。C确认；agent剧情另可B返回/P暂停/N日志。
 stop_on 可选 death/room/uncontrollable/controllable/land/refill/complete/story_input/story_decision，默认 death/room/complete；death总生效，触发后剩余输入不执行；agent已登记通关后不因complete反复截断结算。
-thought 一两句中文{thought_brief}，显示给观众，简述判断，不写数值、算法或内部推理。{thought_mood_short}{formal_thought_act}
+thought 给观众的一句中文解说{thought_brief}，显示给观众，只写结论性判断，不写数值、算法或内部推理，不需要复述推理过程。{thought_mood_short}{formal_thought_act}
 input_format 默认celeste_ai；TAS须显式celeste_tas且agent剧情，TAS不自动推进转场／重生，不能混用键义。复杂计划和TAS使用前查 {actions_reference}；数据格式查 {observation_reference}。'''
 
 COMPACT_OBSERVE_DESCRIPTION = '''获取新观测{observe_collision_image}，可有界等待已核实的过渡和演出。文件可用时返回状态与latest_obs.json位置，否则baseline/delta。detail="geometry"用region=[x,y,w,h]精查缓存，offset/limit分页最多64，后续页带同一snapshot_id；观测更新后重查第一页。detail="player"查完整玩家；detail="time"按秒查章节／现实计时及目标剩余量，桥接累计时钟不等于任务时长。三种详情不改变布局基线。身份、覆盖和形状完整性须核对，未知或局部空结果不证明安全。格式查 {observation_reference}。'''
@@ -91,14 +91,14 @@ def observation_tool_description(cfg, name):
 
 # 实时展示的解说更新计时器：思考状态累计满 RunConfig.live_remind_s 秒没有 narrate，就在智能体下一次调用任何工具时
 # 由容器里的 PreToolUse 钩子把这句提醒放到那次工具结果旁边（见 tool_gate.add_gate_route 与 agent-container/celeste-gate.py）
-LIVE_REMINDER = ("（系统·实时展示）你已经思考了约 {s} 秒没有更新 HUD 上的思考内容，观众看不到你此刻的思路。"
-                 "请调用 narrate 写一句你现在的分析与判断，之后想法每有进展再写一句。")
-TEMP_REMINDER = ("（系统）你已经思考了约 {s} 秒没有更新临时思考。"
-                 "请调用 narrate 写一句你现在的分析与判断（只显示在控制台），之后想法每有进展再写一句。")
+LIVE_REMINDER = ("（系统·实时展示）你已经思考了约 {s} 秒没有更新 HUD 上的解说，观众那边还没有新的内容。"
+                 "请调用 narrate 写一句给观众的对外播报，之后换了一个判断时再更新一句结论。")
+TEMP_REMINDER = ("（系统）你已经思考了约 {s} 秒没有更新控制台解说。"
+                 "请调用 narrate 写一句结论性的判断（显示在控制台），之后换了一个判断时再更新一句结论。")
 
 
 def narrate_reminder(cfg, seconds: float) -> str:
-    """解说计时满了时提醒的话：开了"仅正式思考"时提醒更新临时思考。"""
+    """解说计时满了时提醒的话：开了"仅录制解说"时提醒更新控制台解说。"""
     return (TEMP_REMINDER if getattr(cfg, "formal_thought", False) else LIVE_REMINDER).format(s=int(seconds))
 
 
@@ -806,15 +806,15 @@ def build_server(session: GameSession, study: KbStudy | None = None, *, catalog:
             journal.detail(result)
             return [json.dumps(result, ensure_ascii=False)]
 
-    # narrate 在所有模式都有：思考期间更新 HUD 的思考语句
+    # narrate 在所有模式都有：思考期间更新 HUD 的解说
     temp_thoughts = bool(getattr(session.cfg, "formal_thought", False))
 
     @server.tool(name="narrate", description=fill(NARRATE_TEMP_DESCRIPTION if temp_thoughts else NARRATE_DESCRIPTION,
                                                   session.cfg), structured_output=False)
     async def narrate(thought: str) -> list:
         journal.start_current()
-        # 不推进游戏、不受准备阶段限制、不开始计现实用时；只换 HUD 上的思考语句
-        # 开了"仅正式思考"时写的是临时思考：只进公开历史（控制台），不换游戏内 HUD 上的正式思考
+        # 不推进游戏、不受准备阶段限制、不开始计现实用时；只换 HUD 上的解说
+        # 开了"仅录制解说"时写的是控制台解说：只进公开历史（控制台），不换游戏内 HUD 上的录制解说
         text = " ".join((thought or "").split())
         if not text:
             return ["thought 不能为空。"]
@@ -830,7 +830,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, *, catalog:
             publish(session.run_dir, f"narrate:{time.time_ns()}", text, kind="临时思考" if temp_thoughts else "解说")
         except OSError as exc:
             journal.log_failure(exc, phase='publish_narration')
-        return [("已更新（临时思考，只显示在控制台）。" if temp_thoughts else "已更新。") + (cut_note + "。" if cut_note else "")]
+        return [("已更新（控制台解说）。" if temp_thoughts else "已更新。") + (cut_note + "。" if cut_note else "")]
 
     @server.tool(name="set_effort", description=SET_EFFORT_DESCRIPTION, structured_output=False)
     async def set_effort(level: str, reason: str = "") -> list:

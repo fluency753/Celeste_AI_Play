@@ -503,7 +503,7 @@
           <label class="switch" id="rowSimAssist" hidden><span class="text"><b>限额短路线预测（需自配标准模拟器）</b><span id="simAssistNote">按体力额度预测短路线</span></span><input type="checkbox" id="simAssist"></label>
           <label class="switch" id="rowStiffness" hidden><span class="text"><b>思考僵直</b><span>冻结期间的思考与工具时间按比例变成下一次动作前的僵直（参数在“可调参数”里）</span></span><input type="checkbox" id="stiffness"></label>
           <label class="switch" id="rowTokenDrift" hidden><span class="text"><b>Token 推进</b><span>按新增输出 token 保持最后输入推进游戏，与思考僵直互斥；比例在可调参数中设置</span></span><input type="checkbox" id="tokenDrift"></label>
-          <label class="switch"><span class="text"><b>仅正式思考</b><span>冻结期间的临时思考只显示在控制台，游戏内 HUD 只显示每次动作的正式思考</span></span><input type="checkbox" id="formalThought"></label>
+          <label class="switch"><span class="text"><b>仅录制解说</b><span>冻结期间的控制台解说只显示在控制台，游戏内 HUD 只显示每次动作的录制解说</span></span><input type="checkbox" id="formalThought"></label>
           <label class="switch"><span class="text"><b>节省上下文</b><span>动作结果省略每次都一样的部分，提示词建议精简程序输出；Claude 的自动压缩窗口默认 50 万</span></span><input type="checkbox" id="saveContext" checked></label>
           <label class="switch"><span class="text"><b>规划回放</b><span>把推演过的路线画进游戏；需要在提示词里让智能体主动写推演程序，并适配系统的绘制接口</span></span><input type="checkbox" id="playback"></label>
           <label class="switch"><span class="text"><b>OBS 录屏</b><span>锁步录制完整版与纯享版</span></span><input type="checkbox" id="record" checked></label>
@@ -840,7 +840,7 @@
       </div>
     </div>
     <label class="inline-check" style="margin:2px 0 8px"><input type="checkbox" id="promptDiff"> 标出与另一执行器不同的行</label>
-    <p class="hint" style="margin-top:0">两种执行器共用同一套模板，不同的只有：游戏工具名（Claude 写 act，Codex 写 celeste_act）、文件与程序工具（Read、Bash 与 read、原生 Shell）、临时思考的写法（Codex 还可以用公开 commentary）、思考字数上限（只对 Claude）、图像送达方式、个人追加要求的适用范围，以及外层（Claude Code 自带的系统提示词，或 Codex 的开发者指令）。</p>
+    <p class="hint" style="margin-top:0">两种执行器共用同一套模板，不同的只有：游戏工具名（Claude 写 act，Codex 写 celeste_act）、文件与程序工具（Read、Bash 与 read、原生 Shell）、控制台解说的写法（Codex 还可以用公开 commentary）、解说字数上限（只对 Claude）、图像送达方式、个人追加要求的适用范围，以及外层（Claude Code 自带的系统提示词，或 Codex 的开发者指令）。</p>
     <p class="hint" id="promptWhat" style="margin-top:0">—</p>
     <div class="pbar" id="promptBar" role="img" aria-label="这一版由哪些部分组成，按长度"></div>
     <div class="plist" id="promptParts"></div>
@@ -3076,7 +3076,7 @@ async function loadPromptPreview() {
   else if (o.sim_assist) bits.push("限额预测");
   if (o.mode === "explore" && o.stiffness) bits.push("思考僵直");
   if (o.mode === "explore" && o.token_drift) bits.push("Token 推进");
-  if (o.formal_thought) bits.push("仅正式思考");
+  if (o.formal_thought) bits.push("仅录制解说");
   if (o.save_context) bits.push("节省上下文");
   if (o.mode === "speedrun" && o.limit_planning && o.sim) bits.push("限制规划轮次");
   bits.push(o.live ? "直播" : "不直播");

@@ -1,4 +1,4 @@
-"""仅正式思考（--formal-thought）、单次 act 的最短帧数（min_frames_per_act）与游戏内 HUD 的全透明样式。"""
+"""仅录制解说（--formal-thought）、单次 act 的最短帧数（min_frames_per_act）与游戏内 HUD 的全透明样式。"""
 import json
 import sys
 import tempfile
@@ -41,11 +41,11 @@ class ThoughtLengthTests(unittest.TestCase):
     def test_on_temp_thoughts_get_120_hanzi_and_act_stays_30(self):
         c = explore(formal_thought=True)
         self.assertIsNone(thought_problem(c, "字" * 120 + " wallbounce hyper", temp=True))
-        self.assertIn("临时思考", thought_problem(c, "字" * 121, temp=True))
+        self.assertIn("控制台解说", thought_problem(c, "字" * 121, temp=True))
         from orchestrator.thought import fit_thought
         shown, note = fit_thought(c, "字" * 121, temp=True)            # 超长不退回：截短显示并说明
         self.assertEqual(shown, "字" * 119 + "…")
-        self.assertIn("临时思考 有 121 个汉字，超过上限 120 个", note)
+        self.assertIn("控制台解说 有 121 个汉字，超过上限 120 个", note)
         self.assertIn("31 个汉字", thought_problem(c, "字" * 31))
         c.thought_temp_max_hanzi = 60
         self.assertIn("61 个汉字", thought_problem(c, "字" * 61, temp=True))
@@ -60,42 +60,42 @@ class PromptTests(unittest.TestCase):
     def test_off_prompt_has_no_formal_rule(self):
         for c in (explore(), cfg(mode="speedrun", knowledge_profile="full", sim=True)):
             text = play_prompt(c)
-            self.assertNotIn("仅正式思考", text)
+            self.assertNotIn("仅录制解说", text)
             self.assertNotIn("{formal_thought", text)
             self.assertNotIn("{act_min_frames}", text)
 
     def test_on_prompt_explains_both_kinds(self):
         text = play_prompt(explore(formal_thought=True))
-        self.assertIn("本次开启了“仅正式思考”", text)
+        self.assertIn("本次开启了“仅录制解说”", text)
         self.assertIn("每条汉字不超过 120 个", text)
-        self.assertIn("act 的 thought（正式思考）尽量简短，汉字不超过 30 个", text)
-        self.assertNotIn("思考语句尽量简短，汉字不超过 30 个", text)
+        self.assertIn("act 的 thought（录制解说）尽量简短，汉字不超过 30 个", text)
+        self.assertNotIn("解说尽量简短，汉字不超过 30 个", text)
         speed = play_prompt(cfg(mode="speedrun", knowledge_profile="full", sim=True, formal_thought=True))
-        self.assertIn("本次开启了“仅正式思考”", speed)
+        self.assertIn("本次开启了“仅录制解说”", speed)
 
     def test_tool_texts_and_reminder(self):
         from orchestrator.server import ACT_DESCRIPTION, NARRATE_DESCRIPTION, NARRATE_TEMP_DESCRIPTION
         on, off = explore(formal_thought=True), explore()
-        self.assertIn("这里的 thought 是正式思考", fill(ACT_DESCRIPTION, on))
-        self.assertNotIn("正式思考", fill(ACT_DESCRIPTION, off))
+        self.assertIn("这里的 thought 是录制解说", fill(ACT_DESCRIPTION, on))
+        self.assertNotIn("录制解说", fill(ACT_DESCRIPTION, off))
         self.assertIn("汉字不超过 120 个", fill(NARRATE_TEMP_DESCRIPTION, on))
         self.assertNotIn("{", fill(NARRATE_TEMP_DESCRIPTION, on))
-        self.assertIn("HUD 上的思考内容", narrate_reminder(off, 31))
-        self.assertIn("临时思考", narrate_reminder(on, 31))
-        self.assertIn("HUD 上的思考内容", narrate_reminder(None, 31))
+        self.assertIn("HUD 上的解说", narrate_reminder(off, 31))
+        self.assertIn("控制台解说", narrate_reminder(on, 31))
+        self.assertIn("HUD 上的解说", narrate_reminder(None, 31))
         self.assertIn("汉字不超过 30 个", fill(NARRATE_DESCRIPTION, off))
 
     def test_on_prompt_replaces_the_sentences_that_send_narrate_to_viewers(self):
         explore_on = play_prompt(explore(formal_thought=True))
-        self.assertIn('用 narrate 写下临时思考', explore_on)
+        self.assertIn('用 narrate 写下控制台解说', explore_on)
         self.assertNotIn('用 narrate 更新 HUD', explore_on)
         self.assertNotIn("告诉观众；", explore_on)
         speed_on = play_prompt(cfg(mode="speedrun", knowledge_profile="full", sim=True, formal_thought=True))
-        self.assertIn("HUD 显示你最近一次 act 的 thought（正式思考）", speed_on)
+        self.assertIn("HUD 显示你最近一次 act 的 thought（录制解说）", speed_on)
         self.assertNotIn("只能看到 `narrate` 写下的内容", speed_on)
-        self.assertLess(speed_on.index("本次开启了“仅正式思考”"), speed_on.index("这些是临时思考"))
+        self.assertLess(speed_on.index("本次开启了“仅录制解说”"), speed_on.index("这些是控制台解说"))
         host = play_prompt(cfg(mode="speedrun", knowledge_profile="full", runtime="host", formal_thought=True))
-        self.assertIn("本次开启了“仅正式思考”", host)          # 没有 hud_zh 时规则也在
+        self.assertIn("本次开启了“仅录制解说”", host)          # 没有 hud_zh 时规则也在
         web = play_prompt(explore(formal_thought=True, hud_mod=False))
         self.assertIn("显示在控制台和网页 HUD 的历史里", web)
 

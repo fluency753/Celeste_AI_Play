@@ -292,7 +292,7 @@ class RunConfig:
     playback_stagger_s: float = 0.8  # 一轮里各条路线按推演先后陆续出场的时间跨度（秒）
     playback_round_s: float = 1.5    # 一轮回放的最长时长（以 1A 第一间、一屏 320×180 的房间为准；房间面积是它的几倍就乘几倍）；
                                      # 按 playback_speed 画会超过时，这一轮整体按比例加速，在这个时长内画完
-    thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的思考语句（游戏冻结着，录像里不占时间）
+    thought_lead_s: float = 0.4      # 每段动作推进之前等 HUD 换上新的解说（游戏冻结着，录像里不占时间）
     sim: bool = False                # 速通预置模拟器：不限额时 Claude 直接调用 /sim；开 pause_limit 时改为主控限额预测（sim_mode.py）
     sim_relay: bool = False          # 不限额速通保留 /sim 接口，由主控持有实际模拟器
     sim_assist: bool = False         # 新手模式的限额模拟：后台持有模拟器，真实试玩赚取体力
@@ -308,8 +308,8 @@ class RunConfig:
     hud_mod: bool = False            # HUD 以 MOD 形式画在游戏画面里（overlay/modhud.py；不开直播时默认开）
     collision_image: str | None = None  # 工具结果里附碰撞图：always 每次 / room 只在进新房间与 observe 时 / off 不附；
                                         # None = 默认 room（只在进房与 observe 时）。工作区里每次照样写图
-    formal_thought: bool = False     # 仅正式思考（--formal-thought，默认关）：冻结期间 narrate 写临时思考，只进控制台；
-                                     # act 的 thought 是正式思考，概括整个冻结期间的思考，游戏内 HUD 只显示当前这一句
+    formal_thought: bool = False     # 仅录制解说（--formal-thought，默认关）：冻结期间 narrate 写控制台解说，只进控制台；
+                                     # act 的 thought 是录制解说，写一句给观众的对外播报，游戏内 HUD 只显示当前这一句
     save_context: bool = False       # 节省上下文（--save-context；新运行默认开，续跑沿用原运行，没记过的旧运行按关）：
                                      # act 结果省略每次都一样的部分；程序一节建议精简输出；Claude 的自动压缩窗口默认 50 万
     notes_warn_percent: int = 60    # 本周期未观察到笔记更新且上下文超过此百分比时提醒；0关闭前置提醒
@@ -317,7 +317,7 @@ class RunConfig:
     # 以下是可调参数（orchestrator/tuning.py，命令行 --tune 名称=值）；默认值就是一直以来的数值
     thought_max_chars: int = 120     # act 的 thought 与 narrate 的长度上限
     thought_max_hanzi: int = 30      # Claude Code 执行器：thought 与 narrate 的汉字数上限（英文术语不计，见 orchestrator/thought.py）
-    thought_temp_max_hanzi: int = 120  # 开了"仅正式思考"时：Claude Code 执行器 narrate（临时思考）的汉字数上限
+    thought_temp_max_hanzi: int = 120  # 开了"仅录制解说"时：Claude Code 执行器 narrate（控制台解说）的汉字数上限
     remind_s: float = 30.0           # 解说提醒间隔（不开直播）
     remind_live_s: float = 10.0      # 解说提醒间隔（直播）
     bash_default_s: int = 300        # Claude Code 的 Bash 不写 timeout 时的上限（速通模式）

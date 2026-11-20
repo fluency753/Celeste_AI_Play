@@ -43,14 +43,14 @@ def _cfg(mode="speedrun", sim=True, live=False, sim_assist=False, cutscene_mode=
 class FormalRunTest(unittest.TestCase):
     def test_prompt_versions_by_mode(self):
         speedrun = play_prompt(_cfg())
-        self.assertIn("# 公开解说与工具状态（HUD）", speedrun)
+        self.assertIn("# 解说与工具状态（HUD）", speedrun)
         self.assertIn("半分钟", speedrun)
         self.assertNotIn("# 直播", speedrun)
         self.assertNotIn("exit_level", speedrun)
         self.assertNotIn("当前剧情模式", speedrun)
         self.assertIn("预置模拟器", speedrun)
         nosim = play_prompt(_cfg(sim=False))
-        self.assertIn("本次运行关闭预置模拟器", nosim)
+        self.assertIn("本次运行不提供预置模拟器", nosim)
         self.assertNotIn("# 预置模拟器", nosim)
         speedrun_live = play_prompt(_cfg(live=True))
         self.assertIn("# 直播", speedrun_live)

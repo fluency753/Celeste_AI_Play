@@ -544,15 +544,15 @@ PLACEHOLDERS = {
     "{observation_source_rule}": "房间完整数据从哪里取（能读工作区时可读 latest_obs.json）",
     "{geometry_program_rule}": "分析房间几何的做法（能运行程序时可写程序扫描通道，否则按矩形边界核对）",
     "{geometry_record_rule}": "已验证的通道记在哪里（能写工作区时记进笔记或程序，否则在公开解说里简短总结）",
-    "{thought_temp_limit}": "开了“仅正式思考”时 narrate（临时思考）的字数（可调参数 thought_temp_max_hanzi）",
-    "{temp_thought_where}": "开了“仅正式思考”时临时思考显示在哪里（游戏内 HUD 时只在控制台；网页 HUD 时也在它的历史里）",
-    "{narrate_target}": "探索提示词里 narrate 的用途：没开“仅正式思考”时为“告诉观众”，开了为“写下临时思考”",
-    "{hud_thought_shown}": "速通 hud_zh.md 里 HUD 显示哪句思考：没开“仅正式思考”时为最新写下的一句，开了为最近一次 act 的正式思考",
-    "{narrate_viewers}": "速通 hud_zh.md 里 narrate 给谁看的一句：没开“仅正式思考”时为原文，开了改为临时思考的说明",
+    "{thought_temp_limit}": "开了“仅录制解说”时 narrate（控制台解说）的字数（可调参数 thought_temp_max_hanzi）",
+    "{temp_thought_where}": "开了“仅录制解说”时控制台解说显示在哪里（游戏内 HUD 时只显示在控制台；网页 HUD 时也在它的历史里）",
+    "{narrate_target}": "探索提示词里 narrate 的用途：没开“仅录制解说”时为“告诉观众”，开了为“写下控制台解说”",
+    "{hud_thought_shown}": "速通 hud_zh.md 里 HUD 显示哪句解说：没开“仅录制解说”时为最新写下的一句，开了为最近一次 act 的录制解说",
+    "{narrate_viewers}": "速通 hud_zh.md 里 narrate 给谁看的一句：没开“仅录制解说”时为原文，开了改为控制台解说的说明",
     "{act_collision_image}": "act 说明里碰撞图什么时候附在结果里（--collision-image：always / room / off；默认 room，只在进新房间与 observe 时）",
     "{observe_collision_image}": "observe 说明里是否附碰撞图（--collision-image off 时只写进工作区）",
     "{collision_image_when}": "速通 interface_zh.md 里碰撞图什么时候返回（随 --collision-image）",
-    "{formal_thought_act}": "开了“仅正式思考”时 act 工具说明里 thought 的补充；没开时为空",
+    "{formal_thought_act}": "开了“仅录制解说”时 act 工具说明里 thought 的补充；没开时为空",
     "{save_context_rule}": "开了“节省上下文”时 act 工具说明里的一段（结果省略了什么、轨迹列名、进新房间和 observe 照常给全）；没开时为空",
     "{save_context_print}": "开了“节省上下文”时 interface_zh.md 程序一节的建议（合并调用、程序只打印结论、地形不整房打印字符画、长命令写成脚本）；没开时为空",
     "{act_min_frames}": "单次 act 最少推进的帧数（可调参数 min_frames_per_act，默认 1；不超过本模式的上限）",
@@ -561,16 +561,16 @@ PLACEHOLDERS = {
     "{cpu_rule}": "探索模式最多可以用几个 CPU 核的一句（可调参数 agent_cpus，默认本机的核数；容器运行时不超过 Docker 实际能用的核数）",
     "{stiffness_rule}": "探索模式的思考僵直或 Token 推进说明；前者按时间、后者按新增输出 token 换算帧数（tokens_per_frame 可调），两项互斥；均未开时为空",
     "{thinking_freeze_rule}": "未启用 Token 推进时说明思考期间冻结；启用时为空",
-    "{formal_thought_rule}": "开了“仅正式思考”时的说明（HUD 只显示 act 的正式思考，冻结期间 narrate 写的临时思考只显示在控制台；可调参数 thought_temp_max_hanzi）；没开时为空",
+    "{formal_thought_rule}": "开了“仅录制解说”时的说明（HUD 只显示 act 的录制解说，冻结期间 narrate 写的控制台解说显示在控制台；可调参数 thought_temp_max_hanzi）；没开时为空",
     "{bash_default}": "Bash 不写 timeout 时的上限（可调参数 bash_default_s）",
     "{bash_max}": "Bash 最长时长（可调参数 bash_max_s）",
     "{explore_program}": "探索模式单次规划程序最长（可调参数 explore_program_s；不限时写\"不限\"）",
     "{explore_program_rule}": "探索模式单次规划程序时长的一句（\"单次规划程序最多 2 分钟；\"，不限时为\"单次规划程序不限时长；\"）",
     "{playback_ratio}": "规划回放每多少条推演画一条（可调参数 playback_ratio）",
     "{playback_min_tracks}": "规划回放每轮至少画几条（可调参数 playback_min_tracks）",
-    "{thought_max}": "思考语句最长字数（可调参数 thought_max_chars）",
+    "{thought_max}": "解说最长字数（可调参数 thought_max_chars）",
     "{thought_mood}": "简短的自然表达约定，不提供情绪示例",
-    "{thought_brief_rule}": "\"思考语句尽量简短，汉字不超过 30 个（英文术语不计）。\"一句（可调参数 thought_max_hanzi）：只给 Claude Code 执行器，Codex 执行器为空",
+    "{thought_brief_rule}": "\"解说尽量简短，汉字不超过 30 个（英文术语不计）。\"一句（可调参数 thought_max_hanzi）：只给 Claude Code 执行器，Codex 执行器为空",
     "{remind}": "解说提醒间隔（可调参数 remind_s / remind_live_s）",
     "{rounds}": "一屏大的房间存入的规划轮次（--rounds-per-room）",
     "{rounds4}": "两倍长、两倍高的房间的规划轮次",
@@ -636,7 +636,7 @@ def _version(text: str) -> str:
 def prompt_preview(options: dict, engine: str | None = None) -> dict:
     """按运行页的当前设置与选中的配置，生成智能体会收到的提示词（分块，标出来源文件与本机修改）和准备阶段的第一条消息。
     engine 给出时按那个执行器生成（提示词页的“Claude Code／Codex”切换，不改运行页）：两种执行器共用同一套模板，
-    不同的是工具名、文件与程序工具、临时思考的写法与字数上限、图像送达方式和个人追加要求的适用范围。"""
+    不同的是工具名、文件与程序工具、控制台解说的写法与字数上限、图像送达方式和个人追加要求的适用范围。"""
     from orchestrator.launch_options import config_for
     # 预览不需要真的起名字或选存档：没填的用占位值，免得运行页还没填完就看不了提示词
     options = dict(options or {})
@@ -796,7 +796,7 @@ def _button_template(name):
 
 # ---------------------------------------------------------------- 关于页
 
-CONSOLE_VERSION = "1.43.1"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
+CONSOLE_VERSION = "1.43.2"     # 控制台的版本（启动器 CelesteAIConsole.exe 的文件版本相同）
 GITHUB = "https://github.com/fluency753/Celeste_AI_Play"
 AUTHORS = [{"name": "Fluency", "url": "https://space.bilibili.com/490510003"},
            {"name": "Mechanic Pig", "url": "https://space.bilibili.com/384651096"}]

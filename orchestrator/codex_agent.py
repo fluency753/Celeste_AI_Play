@@ -45,7 +45,7 @@ def codex_prompt(cfg, *, guide=None, include_task=True) -> str:
 
 
 def tool_change_notice(registered, current) -> list[str]:
-    """Codex 恢复会话沿用开会话时登记的工具说明，恢复时不能更新。写进说明的设置（节省上下文、仅正式思考、碰撞图、
+    """Codex 恢复会话沿用开会话时登记的工具说明，恢复时不能更新。写进说明的设置（节省上下文、仅录制解说、碰撞图、
     动作帧数上下限、解说字数等）或程序升级改了说明时，恢复后的第一轮把说明变了的工具补发一次，以补发的为准。
     登记里没有说明文字的工具（旧格式或测试替身）不比较。"""
     now = {tool.get('name'): tool.get('description') or '' for tool in current or [] if isinstance(tool, dict)}
@@ -284,7 +284,7 @@ class CodexRunner(ModelRecovery, SessionControls):
             if self.cfg.live and time.monotonic() - self._last_public > 0.4:
                 latest = " ".join(text.split())[-self.cfg.thought_max_chars:]
                 if getattr(self.cfg, "formal_thought", False):
-                    self.metrics.set_temp_thought(latest)      # 仅正式思考：commentary 是临时思考
+                    self.metrics.set_temp_thought(latest)      # 仅录制解说：commentary 是控制台解说
                 else:
                     self.metrics.set_thought(latest)
                 self._last_public = time.monotonic()

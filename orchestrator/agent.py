@@ -56,7 +56,7 @@ from .telemetry import publish
 GAME_TOOLS = ['mcp__celeste__' + name for name in
               ('observe', 'act', 'set_effort', 'cutscene', 'exit_level', 'simulate', 'stop_run', 'finish_goal', 'travel',
                'goto_room', 'start_speedrun_recording', 'practice_savestate')]
-NARRATE_TOOL = "mcp__celeste__narrate"   # 所有模式都有：更新 HUD 上的思考语句（算思考时间，不算工具）
+NARRATE_TOOL = "mcp__celeste__narrate"   # 所有模式都有：更新 HUD 上的解说（算思考时间，不算工具）
 # /effort 命令成功时 Claude Code 的回复，例如 "Set effort level to low (this session only): ..."
 EFFORT_OK = re.compile(r"^Set effort level to ([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\s|$)")
 # 额度用完时 Claude Code 给出的提示（没收到 rejected 限额事件时的后备判断），例如
@@ -1295,7 +1295,7 @@ class ClaudeRunner(SessionControls):
                         self.naming_reply = block['text']
                     self._public_message(str(message.get('id') or uuid.uuid4()) + ":" + str(index), block['text'])
                 if block.get("type") == "tool_use" and block.get("name") == NARRATE_TOOL:
-                    self._tool_calls_this_turn += 1     # 只换 HUD 上的思考语句：算思考时间，不显示在"调用工具"一栏
+                    self._tool_calls_this_turn += 1     # 只换 HUD 上的解说：算思考时间，不显示在"调用工具"一栏
                     continue
                 if block.get("type") == "tool_use":
                     self._tool_calls_this_turn += 1

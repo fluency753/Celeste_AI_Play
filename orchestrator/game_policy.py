@@ -28,7 +28,7 @@ def denial(controller, name, arguments=None):
     name = tool_name(name)
     mismatch = getattr(controller, 'model_mismatch', None)
     if mismatch:
-        # 服务模型被换掉（agent.ClaudeRunner._model_switched）：换回指定模型之前什么都不执行，包括 HUD 思考语句
+        # 服务模型被换掉（agent.ClaudeRunner._model_switched）：换回指定模型之前什么都不执行，包括 HUD 解说
         return (f"服务模型被自动换成了 {mismatch['actual']}（指定 {mismatch['expected']}），主控已拦下，"
                 f"本次 {requested} 未执行。")
     if name in CONTROL_TOOLS:
