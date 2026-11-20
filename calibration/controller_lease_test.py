@@ -123,6 +123,44 @@ class LaunchRejectionTests(unittest.TestCase):
         with self.assertRaisesRegex(background.LaunchRejected, 'Invoke-CimMethod'):
             self.launch(side_effect=failure)
 
+    def test_powershell_error_in_console_code_page_keeps_its_text(self):
+        """Windows PowerShell 5.1 writes redirected errors in the console code page (GBK on Chinese systems).
+        Decoding them as UTF-8 failed inside the reader thread and the dialog showed only the exit status."""
+        stderr = ('Invoke-CimMethod : 拒绝访问 \r\n    + FullyQualifiedErrorId : HRESULT 0x80041003,'
+                  'Microsoft.Management.Infrastructure.CimCmdlets.InvokeCimMethodCommand').encode('gbk')
+        def run(command, **kwargs):
+            err = stderr
+            if kwargs.get('encoding'):        # like subprocess's reader thread: a failed decode loses the stream
+                try:
+                    err = stderr.decode(kwargs['encoding'], kwargs.get('errors', 'strict'))
+                except UnicodeDecodeError:
+                    err = None
+            raise subprocess.CalledProcessError(1, command, output=b'' if not kwargs.get('encoding') else '',
+                                                stderr=err)
+        with patch.object(background, '_oem_encoding', return_value='cp936', create=True), \
+             self.assertRaises(background.LaunchRejected) as caught:
+            self.launch(side_effect=run)
+        message = str(caught.exception)
+        self.assertIn('拒绝访问', message)
+        self.assertIn('0x80041003', message)
+        self.assertIn('Low Mandatory Level', message)          # access denied comes with the integrity-level hint
+
+    def test_other_powershell_errors_get_no_access_denied_hint(self):
+        failure = subprocess.CalledProcessError(1, 'powershell.exe', output=b'', stderr='Invoke-CimMethod : 无效类'.encode('gbk'))
+        with patch.object(background, '_oem_encoding', return_value='cp936', create=True), \
+             self.assertRaises(background.LaunchRejected) as caught:
+            self.launch(side_effect=failure)
+        self.assertIn('无效类', str(caught.exception))
+        self.assertNotIn('Mandatory', str(caught.exception))
+
+    def test_byte_output_from_powershell_is_parsed(self):
+        directory = self.root / 'local/background/attempt'
+        def started(*args, **kwargs):
+            (directory / 'status.json').write_text('{"state": "running", "host_pid": 7}', encoding='utf-8')
+            return SimpleNamespace(stdout=b'{"ReturnValue":0,"ProcessId":7}\r\n')
+        folder, data = self.launch(side_effect=started)
+        self.assertEqual((folder, data['host_pid']), (directory, 7))
+
     def test_timeout_is_not_reported_as_rejected(self):
         with self.assertRaises(subprocess.TimeoutExpired) as caught:
             self.launch(side_effect=subprocess.TimeoutExpired('powershell.exe', 30))

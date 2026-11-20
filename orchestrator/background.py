@@ -35,6 +35,38 @@ class LaunchRejected(RuntimeError):
     """Windows 明确没有创建宿主进程（WMI 返回失败或 PowerShell 调用失败），可以安全地换目录重试。"""
 
 
+# WMI 拒绝访问（WBEM_E_ACCESS_DENIED）。2026-11-20 实际遇到的原因：程序目录被打上了“低完整性”标签，
+# 从目录里启动的 Python 因此是低完整性进程，没有权限经 WMI 建进程。
+WMI_ACCESS_DENIED = "0x80041003"
+ACCESS_DENIED_HINT = ("（Windows 拒绝经 WMI 建进程。常见原因是程序目录被设成了低完整性级别："
+                      "用 icacls 查看程序目录，出现 Low Mandatory Level 时用 "
+                      "icacls \"<程序目录>\" /setintegritylevel \"(OI)(CI)M\" 改回；也可能是安全软件拦截）")
+
+
+def _oem_encoding():
+    try:
+        return f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+    except (AttributeError, OSError):
+        return "utf-8"
+
+
+def _console_text(data):
+    """Windows PowerShell 5.1 按控制台代码页（中文系统是 GBK）写出重定向的输出。按 UTF-8 解不开时改按 OEM
+    代码页解，解不出的字替换掉，不让报错原文丢失。"""
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return data
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return data.decode(_oem_encoding(), errors="replace")
+    except LookupError:
+        return data.decode("utf-8", errors="replace")
+
+
 def launch(arguments, *, probe=False, service="play", directory=None):
     if os.name != "nt":
         raise RuntimeError("独立宿主目前只支持 Windows")
@@ -57,13 +89,17 @@ def launch(arguments, *, probe=False, service="play", directory=None):
               f"CommandLine={quote(command)};CurrentDirectory={quote(ROOT)};ProcessStartupInformation=$startup" + "}; "
               "$result | Select-Object ReturnValue,ProcessId | ConvertTo-Json -Compress")
     try:
+        # 按字节读：PowerShell 的报错是控制台代码页的文字，按 UTF-8 解码会在读取线程里失败，报错原文就丢了。
         result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                                capture_output=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW,
+                                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
                                 timeout=POWERSHELL_WAIT_S, check=True)
     except subprocess.CalledProcessError as exc:
         # ErrorActionPreference=Stop: Invoke-CimMethod failed, so no process exists.
-        raise LaunchRejected(f"Windows 独立启动失败：{(exc.stderr or exc.stdout or '').strip() or exc}") from exc
-    created = json.loads(result.stdout.strip())
+        detail = (_console_text(exc.stderr).strip() or _console_text(exc.stdout).strip() or str(exc))
+        if WMI_ACCESS_DENIED in detail:
+            detail += ACCESS_DENIED_HINT
+        raise LaunchRejected(f"Windows 独立启动失败：{detail}") from exc
+    created = json.loads(_console_text(result.stdout).strip())
     if created["ReturnValue"]:
         raise LaunchRejected(f"Windows 独立启动失败：{created}")
     from .session_store import load_json
