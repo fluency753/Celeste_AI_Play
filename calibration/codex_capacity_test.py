@@ -114,7 +114,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_case(self, *, failure='rpc', failures=1, action=False,
                        waiting=None, configure=None, initial_user=None, preparing=False, naming=False,
-                       report_goal=False):
+                       report_goal=False, restored_elapsed=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cfg = RunConfig(agent='capacity-test', save='test', model='test', engine='codex',
@@ -129,7 +129,9 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
             # 有 waiting 步骤时，等待先原地不动，等这些步骤做完（或它自己放行）才走到期。
             clock = self.clock = WaitClock(hold=waiting is not None)
             clock_time = Proxy(time, monotonic=clock.monotonic)
-            metrics = Metrics(root/'metrics.json', 'capacity-test', 'test', 'high', 60, study=preparing)
+            metrics = Metrics(root/'metrics.json', 'capacity-test', 'test', 'high', cfg.budget_seconds, study=preparing)
+            if restored_elapsed is not None:
+                metrics.restore({'elapsed_s': restored_elapsed}, 'previous')
             with patch('orchestrator.config.REPO_ROOT', root):
                 session = GameSession(cfg, root, metrics)
             bridge = CountingBridge()
@@ -379,6 +381,27 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     self.assertGreater(remaining, 0)
                     self.assertLessEqual(remaining, 20)
+
+    async def test_resumed_play_budget_uses_cumulative_elapsed(self):
+        result = await self.run_case(failures=0, restored_elapsed=225,
+                                     configure=lambda cfg: setattr(cfg, 'max_minutes', 4))
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['reason'], '隔离验证完成')
+        self.assertEqual(len(result['sent']), 1)
+        remaining = result['metrics'].snapshot()['wall_budget_remaining_s']
+        self.assertGreater(remaining, 0)
+        self.assertLessEqual(remaining, 15)
+
+    async def test_exhausted_resumed_play_budget_sends_no_model_request(self):
+        result = await self.run_case(failures=0, restored_elapsed=240,
+                                     configure=lambda cfg: setattr(cfg, 'max_minutes', 4))
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['reason'], '现实时间预算用完')
+        self.assertEqual(result['metrics'].snapshot()['wall_budget_remaining_s'], 0)
+        result['runner'].rpc.start.assert_not_awaited()
+        result['runner'].rpc.request.assert_not_awaited()
+        self.assertEqual(result['steps'], [])
+        self.assertEqual(result['shutdown'], 'release')
 
     async def test_preparation_limit_excludes_capacity_wait(self):
         result = await self.run_case(preparing=True)

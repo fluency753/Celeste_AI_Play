@@ -712,7 +712,16 @@ class CodexRunner(ModelRecovery, SessionControls):
         return now - started - self.paused_seconds - (now - self.pause_at if self.pause_at else 0)
 
     def _budget_remaining(self, started):
+        if self._has_play_budget() and self.metrics.playing:
+            return self._play_budget_remaining()
+        # Keep the local deadline for startup preparation and standalone sessions.
         return self.cfg.budget_seconds - self._elapsed(started)
+
+    def _has_play_budget(self):
+        return self.session is not None and not (self.chat_only or self.prepare_only or self.naming_only)
+
+    def _play_budget_remaining(self):
+        return self.cfg.budget_seconds - self.metrics.elapsed()
 
     async def _steer_user(self, text):
         await self.rpc.request("turn/steer", {"threadId": self.session_id,
@@ -868,8 +877,10 @@ class CodexRunner(ModelRecovery, SessionControls):
         (self.run_dir / ("chat_system_prompt.md" if self.chat_only else "system_prompt.md")).write_text(prompt, encoding="utf-8")
         started = time.monotonic()
         try:
-            if self.session is not None and not (self.chat_only or self.prepare_only or self.naming_only):
-                self.metrics.track_wall_budget(lambda: self._budget_remaining(started))
+            if self._has_play_budget():
+                self.metrics.track_wall_budget(self._play_budget_remaining)
+                if self._play_budget_remaining() <= 0:
+                    return "现实时间预算用完"
             await self.rpc.start()
             # All Player phases retain writable workspace and native Shell capability.
             # celeste-read remains an old-image compatibility profile only.
@@ -966,6 +977,8 @@ class CodexRunner(ModelRecovery, SessionControls):
                     return await self._stopped_reason()
                 if self.session is not None and self.session.done:
                     return self.session.done_reason
+                if self._budget_remaining(started) <= 0:
+                    break
                 fresh = list(self.pending_messages)
                 assigned = retry_rows + fresh
                 self.pending_messages.clear()
