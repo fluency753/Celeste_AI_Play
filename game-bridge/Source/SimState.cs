@@ -150,6 +150,8 @@ internal static class SimState {
                      ("MoveX", Input.MoveX), ("MoveY", Input.MoveY), ("GliderMoveY", Input.GliderMoveY),
                      ("Aim", Input.Aim), ("Feather", Input.Feather), ("Jump", Input.Jump), ("Dash", Input.Dash),
                      ("Talk", Input.Talk), ("Grab", Input.Grab), ("CrouchDash", Input.CrouchDash),
+                     // 速通模式能按暂停、返回、日志键：暂停键有 0.1 秒缓冲，模拟器据此判断这一帧会不会打开暂停菜单
+                     ("Pause", Input.Pause), ("MenuCancel", Input.MenuCancel), ("MenuJournal", Input.MenuJournal),
                  }) {
             if (input == null) continue;
             w.WritePropertyName(name);
@@ -201,6 +203,37 @@ internal static class SimState {
         Num(w, "timeActive", level.TimeActive);
         Num(w, "rawTimeActive", level.RawTimeActive);
         Num(w, "wasPausedTimer", level.wasPausedTimer);
+        // 刚关掉暂停菜单：之后 0.15 秒关卡不推进（unpauseTimer），这一帧内不能再暂停（wasPaused）
+        Num(w, "unpauseTimer", level.unpauseTimer);
+        w.WriteBoolean("wasPaused", level.wasPaused);
+        // 进行中的转场遮罩（Level.Wipe）：遮罩没走完时不能暂停；死亡后的遮罩走完才重载房间（回调写成方法名）
+        w.WritePropertyName("wipe");
+        if (level.Wipe is { } wipe) {
+            w.WriteStartObject();
+            w.WriteString("type", TypeName(wipe.GetType()));
+            w.WriteBoolean("wipeIn", wipe.WipeIn);
+            Num(w, "percent", wipe.Percent);
+            Num(w, "duration", wipe.Duration);
+            Num(w, "endTimer", wipe.EndTimer);
+            w.WriteBoolean("completed", wipe.Completed);
+            w.WriteBoolean("rendering", level.RendererList.Renderers.Contains(wipe));
+            w.WritePropertyName("onComplete");
+            Value(w, wipe.OnComplete, c, 0);
+            w.WriteEndObject();
+        } else {
+            w.WriteNullValue();
+        }
+        // Madeline 此刻站在哪个交互范围里（TalkComponent.PlayerOver，[实体编号, 组件序号]）：这一帧按交互键时起跳与冲刺会被吞掉
+        w.WritePropertyName("talkPlayerOver");
+        if (TalkComponent.PlayerOver is { Entity: { } talkOwner } over && c.EntityIndex.TryGetValue(talkOwner, out int talkIndex)
+            && talkOwner.Components.components.IndexOf(over) is int talkK and >= 0) {
+            w.WriteStartArray();
+            w.WriteNumberValue(talkIndex);
+            w.WriteNumberValue(talkK);
+            w.WriteEndArray();
+        } else {
+            w.WriteNullValue();
+        }
         w.WriteNumber("coreMode", (int) level.CoreMode);
         // 光照强度（镜子传送门等按它计时）与存档里影响关卡逻辑的值（心门按心数开、作弊模式）
         if (level.Lighting != null) Num(w, "lightingAlpha", level.Lighting.Alpha);

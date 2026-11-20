@@ -685,7 +685,7 @@
 | 羽毛技巧（Feather boost / shielded feather / feather bump / feather super） | 羽毛起飞初速 250 × 方向；撞墙按 −0.5 反弹；离地 3 px 内按跳 → 普通起跳保留羽毛速度（"feather super"） | 羽毛 | 代码已核实 |
 | 月亮块加速（Moonboost） | 冲刺撞月亮块，把块推开（最多 8 px，缓动）并被角修正送到块顶；块还在动时起跳拿平台加成 | 月亮块 | 部分核实 |
 | 水面加速（Waterboost） | 水面上每次起跳 +40；水中冲刺不消耗冲刺次数；harness 用 J/K 交替可以每帧起跳（7.5） | 水 | 代码已核实 |
-| 望远镜卡刺（Bino clip） | 用望远镜把镜头移远，使屏幕外刺球卸载，再快速冲过 | 刺球+望远镜 | 未核实 |
+| 望远镜卡刺（Bino clip） | 用望远镜把镜头移远：水晶刺离开镜头（外扩 16 px）后，在它自己的可见性检查（每 0.25 秒一次）时变成不可见，不可见期间不碰撞；退出望远镜、恢复控制时镜头还在远处，镜头追回来、刺重新出现之前快速冲过 | 刺球+望远镜 | 代码已核实；实测（告别章 f-06）游戏与预置模拟器逐帧一致：看远后冲过紧挨着的刺 |
 | 熔岩攀爬 / 熔岩 wallbounce（Lava climbing / wallbounce） | 熔岩墙的实心区在伤害区内 2 px，留出 1 px 的 walljump/攀爬窗口；wallbounce 5 px | 熔岩墙 | 未核实 |
 | Seeker 反弹（Seeker bounce） | seeker 撞墙后的短暂状态里撞它：约 hyper 速度并补冲刺 | seeker | 未核实 |
 | 门处 grounded ultra 取消（Grounded ultra cancel） | 钥匙门/镜像神殿门开启时的状态取消保住 390 | 门 | 未核实 |
@@ -744,7 +744,7 @@ F0 时冲刺方向为零，算"水平"，dash attack 已开始；若此时离地
 | 暂停缓冲（Pause buffering） | 解除暂停后约 10 帧内还没有恢复控制，其中最后 5 帧里的按键会在恢复后的第一帧执行，用来逐帧输入（celeste.ink：缓冲窗口 6 帧） | ✗（harness 本身逐帧输入，用不着暂停缓冲；速通模式与 agent 剧情模式虽可用 `P` 暂停，暂停期间 IGT 照走） | 未核实 |
 | half-stamina climb（Half stamina climbing） | 见 4.5 | ✓（TAS 级） | 未核实 |
 | Kermit dash | 见 6.5 | ✓ | 代码已核实 |
-| 望远镜技巧（Bino clip / bino control storage / bino interaction storage / bino extensions） | 卡刺：用望远镜让屏幕外刺球卸载；控制存储：在望远镜里移动（需暂停缓冲）；交互存储：进入望远镜行走后一旦离地，"正在用望远镜"的标记不清除，下一次换房时会把状态设为 Normal（可取消冲刺，例如保住 grounded ultra 的速度）；延长：反复进出扩大镜头范围 | △（1A/2A 有望远镜；控制存储要暂停缓冲，速通模式与 agent 剧情模式能用 `P` 暂停；交互存储理论上可行）（未核实） | 未核实 |
+| 望远镜技巧（Bino clip / bino control storage / bino interaction storage / bino extensions） | 卡刺：用望远镜让屏幕外刺球卸载；控制存储：在望远镜里移动（需暂停缓冲）；交互存储：进入望远镜行走后一旦离地，"正在用望远镜"的标记不清除，下一次换房时会把状态设为 Normal（可取消冲刺，例如保住 grounded ultra 的速度）；延长：反复进出扩大镜头范围 | △（2A 只有 d3 一个望远镜，4A–7A 与告别章更多；速通模式能用 `T`、`P`；控制存储要暂停缓冲） | 卡刺、交互存储：代码已核实，实测游戏与预置模拟器逐帧一致（交互后下一帧起跳，带着标记换房）；控制存储、延长：未核实 |
 | Roboboost | 在移动块上做 6 帧 hyper bunnyhop + 反向 cornerboost（TAS） | △ / △ / △ | 未核实 |
 | subpixel 操纵（Subpixel manipulation） | 不是独立技巧：通过组合动作把余量（`README.md` §5）调到特定值，以满足像素级技巧。模拟器可以直接枚举 | ✓ | — |
 | 仅见名称的条目 | NamuWiki 列有 Jasig jump（2.10）、Bino storage（本表望远镜技巧）、Oshiro super（6.7 弹跳）、Overclock（4.5）、Climb jump cancel（按"用 climbjump 取消冲刺"理解，3.14、5.2）、Yep（无定义）。celeste.ink Tech/aurora 草稿页里另有一批只有名字的条目，见 §9.3 | — | — |
