@@ -1,5 +1,6 @@
 """Check relay mounts, authoritative counting and replay snapshot identity."""
 import base64
+import hashlib
 import io
 import importlib.util
 import json
@@ -112,6 +113,20 @@ class SimRelayTests(unittest.TestCase):
             self.metrics.add.assert_called_with(sim_calls=1, sim_rollouts=10)
 
 
+    def test_previews_from_another_room_are_grouped_by_their_origin(self):
+        # 同一快照出发、起点在别的房间（检查点）的推演单独成组：一组只画一个房间，交给回放时仍用当前帧的核对键
+        with patch('orchestrator.sim_relay.find_docker_exe', return_value='docker'), patch('orchestrator.sim_relay.threading.Timer'):
+            relay = sim_relay.SimRelay(self.session)
+            here = b'CSL2' + show._pack_record([(2, 3)], 'room', 20)
+            there = b'CSL2' + show._pack_record([(400, 3)], 'room', 140)
+            current = {'frame': 20, 'room': '1', 'sid': 'city', 'digest': 'current'}
+            relay.accept({'simulated': 4, 'start': current, 'replay': base64.b64encode(here).decode()})
+            relay.accept({'simulated': 6, 'start': {**current, 'origin': '2'}, 'replay': base64.b64encode(there).decode()})
+            relay.accept({'simulated': 3, 'start': {**current, 'origin': '2'}, 'replay': base64.b64encode(there).decode()})
+            relay.flush()
+            self.playback.collect_relay_preview.assert_called_once_with([there, there], ('city', '1', 20, 'current'), 9)
+
+
 class RelayWorkerPreviewTests(unittest.TestCase):
     def setUp(self):
         source = Path(__file__).resolve().parents[1] / 'agent-container/sim-relay.py'
@@ -165,6 +180,52 @@ class RelayWorkerPreviewTests(unittest.TestCase):
         self.assertLessEqual(sum(map(len, chunks)), full_bytes + 1000)
         self.assertNotIn('replay', events[2])
         self.assertEqual(sum(event['simulated'] for event in events), 330)
+
+    def test_checkpoint_start_is_checked_against_its_base_snapshot(self):
+        # 从检查点规划下一个房间：按它所依据的快照核对（主控写快照时的紧凑写法），起点取检查点那一帧与所在房间
+        base = {'format': 'celeste-sim-state/1', 'frame': 581, 'level': {'room': '1', 'session': {'area': 'city'}},
+                'note': '中文', 'x': 1.25}
+        payload = json.dumps(base, ensure_ascii=False, separators=(',', ':'))
+        controller = hashlib.sha256(payload.encode()).hexdigest()
+        checkpoint = {'format': 'celeste-sim-checkpoint/1', 'frame': 700, 'inputs': ['119,R'],
+                      'base': json.loads(payload)}
+        line = json.dumps({'snapshot': checkpoint}, indent=1).encode() + b'\n'   # 客户端怎么排版都行
+        info = {'frame': 700, 'room': '2', 'checkpoint': {'baseFrame': 581, 'frames': 119},
+                'player': {'x': 300.5, 'y': -20.0}}
+        start = self.worker.snapshot_start(line, checkpoint, info)
+        self.assertEqual((start['sid'], start['room'], start['frame'], start['digest']), ('city', '1', 581, controller))
+        self.assertEqual((start['origin'], start['origin_frame'], start['origin_xy']), ('2', 700, (300.5, -20.0)))
+        plain = b'{"snapshot":' + payload.encode() + b'}\n'
+        start = self.worker.snapshot_start(plain, base, {'frame': 581, 'room': '1', 'player': {'x': 1, 'y': 2}})
+        self.assertEqual((start['room'], start['frame'], start['digest'], start['origin']), ('1', 581, controller, '1'))
+
+    def test_trimmed_batch_replays_a_few_rerun_routes_without_extra_counts(self):
+        # rows 精简的回复只有最后一帧：挑几条按原设置补推完整轨迹，只用于回放；智能体得到的回复与计数不变
+        def trimmed(end, length, stop='done', events=()):
+            return {'ok': True, 'stop': stop, 'events': list(events), 'count': length + 1,
+                    'frames': [[length, float(end), 0.0, 0, 0, 'Normal', 1, 1]]}
+        results = [trimmed(100, 10, 'room', [[10, 'room', '2']]), trimmed(5, 4, 'death'), trimmed(30, 12)]
+        batch = [{'inputs': [f'{n},R'], 'stop_on_room': False, 'rows': 'last', 'track': ['ZipMover']} for n in (10, 4, 12)]
+        asked = []
+        which = {'10,R': 0, '4,R': 1, '12,R': 2}
+        def rerun(candidates):
+            asked.append(candidates)
+            picked = [results[which[c['inputs'][0]]] for c in candidates]
+            return [self.result(r['frames'][0][1], r['count'] - 1, r['stop'], r['events']) for r in picked]
+        start = {'digest': 'current', 'frame': 50, 'origin_frame': 120, 'origin_xy': (0.0, 0.0)}
+        with patch.object(self.worker, 'time', SimpleNamespace(monotonic=lambda: 10)):
+            event = self.worker.simulation_event(json.dumps({'results': results}).encode(), {'batch': batch}, start,
+                                                 'current', threading.Lock(), [0, 0], None, 1 << 20, show, 40, rerun=rerun)
+        self.assertEqual(event['simulated'], 3)
+        self.assertEqual(len(asked), 1)
+        self.assertTrue(all('rows' not in c and 'track' not in c and c['stop_on_room'] is False for c in asked[0]))
+        index = read_logs([base64.b64decode(event['replay'])])
+        self.assertEqual(sorted(index.npts.tolist()), [5, 11, 13])
+        self.assertEqual(set(index.ends_at().tolist()), {125, 131, 133})   # 从检查点那一帧（origin_frame）起算
+        self.assertNotIn('origin_xy', event['start'])
+        no_rerun = self.worker.simulation_event(json.dumps({'results': results}).encode(), {'batch': batch}, start,
+                                                'current', threading.Lock(), [0, 0], None, 1 << 20, show, 40)
+        self.assertNotIn('replay', no_rerun)
 
     def test_encoding_error_does_not_drop_simulation_count(self):
         result = self.result(1_000_000_000, 2)

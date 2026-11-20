@@ -18,6 +18,8 @@ namespace CelesteAI.Bridge;
 /// - 一轮放完保留彩色；开始新一轮时旧路线转为淡灰并衰减，过淡的线清掉；真实执行开始清空全部历史；
 /// - 镜头临时借用：渲染前把关卡镜头换成回放镜头（跟着金色路线的前端平滑移动、受房间边界限制），渲染后原样换回，
 ///   连同 Level.cameraPreShake；渲染期间随机数换成单独的发生器（Calc.PushRandom），游戏状态一点不变。
+///   这一轮的路线从别的房间出发时（智能体从检查点规划下一个房间），镜头移到那个房间、受那个房间的边界限制：
+///   地形是整张地图一起建的，那个房间的地形照常画出来；那个房间的实体没有载入，画面上没有；
 ///   两轮之间（主控等智能体规划下一轮时）画面停在回放镜头上，历史线照常画；
 /// - 执行前的最后一段（final）：不画新的线，镜头用 return 帧平滑回到 Madeline（镜头本来就在那里时直接结束）；
 ///   真实执行开始时清掉全部线条；
@@ -78,6 +80,7 @@ internal static class Playback {
     private static bool camValid, returnStarted;
     private static Vector2 savedCam, savedPreShake;
     private static bool swapped;
+    private static Rectangle viewRoom;                     // 这一轮回放镜头所在的房间（空：当前房间）
 
     // 缓存层（见文件头）
     private const int LayerMargin = 16, MaxLayerSize = 4096;
@@ -142,6 +145,9 @@ internal static class Playback {
             historyClear = true;
         }
         roundLayerFrame = 0;
+        // 这一轮在哪个房间：路线的起点（镜头目标的第一个点）所在的房间；执行前的最后一段回到当前房间
+        Vector2 anchor = focus.Length > 0 ? focus[0] : incoming.Count > 0 ? incoming[0].P[0] : level.Camera.Position + new Vector2(160f, 90f);
+        viewRoom = final ? Rectangle.Empty : RoomAt(level, anchor);
         realCam = level.Camera.Position;
         if (GetString(a, "camera", "keep") == "real" || !camValid) cam = realCam;
         if (final && Vector2.Distance(cam, realCam) < 0.5f) {
@@ -186,6 +192,7 @@ internal static class Playback {
         if (running) return;
         overlay = false;
         camValid = false;
+        viewRoom = Rectangle.Empty;
         PlaybackSpinners.Clear();
         History.Clear();
         Tracks.Clear();
@@ -238,8 +245,20 @@ internal static class Playback {
         return Vector2.Lerp(focus[i], focus[j], u - (int) u);
     }
 
+    /// <summary>地图里包含这一点的房间范围；当前房间优先，不在任何房间里时是当前房间（空矩形表示当前房间）。</summary>
+    private static Rectangle RoomAt(Level level, Vector2 point) {
+        var at = new Point((int) Math.Floor(point.X), (int) Math.Floor(point.Y));
+        if (level.Bounds.Contains(at)) return Rectangle.Empty;
+        if (level.Session?.MapData?.Levels is { } rooms)
+            foreach (LevelData room in rooms)
+                if (room.Bounds.Contains(at)) return room.Bounds;
+        return Rectangle.Empty;
+    }
+
+    private static Rectangle ViewBounds(Level level) => viewRoom.Width > 0 && viewRoom.Height > 0 ? viewRoom : level.Bounds;
+
     private static Vector2 ClampCamera(Level level, Vector2 p) {
-        Rectangle b = level.Bounds;
+        Rectangle b = ViewBounds(level);
         float x = Math.Clamp(p.X, b.Left, Math.Max(b.Left, b.Right - 320));
         float y = Math.Clamp(p.Y, b.Top, Math.Max(b.Top, b.Bottom - 180));
         return new Vector2(x, y);
@@ -469,11 +488,16 @@ internal static class Playback {
             DepthStencilState.None, RasterizerState.CullNone, null, Matrix.CreateTranslation(-area.X, -area.Y, 0f));
     }
 
-    /// <summary>缓存层覆盖当前房间；房间变了就重建（历史线与本轮已画的部分重新画进去）。</summary>
+    /// <summary>缓存层覆盖当前房间（回放在别的房间时连同那个房间，放不下时只覆盖那个房间）；
+    /// 范围变了就重建（历史线与本轮已画的部分重新画进去）。</summary>
     private static bool EnsureLayers(Level level) {
         if (layersBroken) return false;
-        Rectangle want = level.Bounds;
+        Rectangle want = viewRoom.Width > 0 && viewRoom.Height > 0 ? Rectangle.Union(level.Bounds, viewRoom) : level.Bounds;
         want.Inflate(LayerMargin, LayerMargin);
+        if (want.Width > MaxLayerSize || want.Height > MaxLayerSize) {
+            want = ViewBounds(level);
+            want.Inflate(LayerMargin, LayerMargin);
+        }
         if (want.Width <= 0 || want.Height <= 0 || want.Width > MaxLayerSize || want.Height > MaxLayerSize) {
             DisposeLayers();
             return false;

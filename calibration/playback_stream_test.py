@@ -365,6 +365,19 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(self.budget.bank,3)
         self.assertEqual(self.budget.rounds_used,0)
 
+    def test_relay_preview_from_another_room_is_drawn(self):
+        # 主控代跑从检查点规划下一个房间：起点不在当前房间，照样回放（本地推演记录仍只画当前房间）
+        session = self.playback.session
+        session.lock = threading.RLock()
+        session.last_obs = {'frame': 20, 'level': {'sid': 'city', 'room': '1', 'bounds': [0, -100, 300, 200]}}
+        session.sim_snapshot_digest = 'current'
+        far = MAGIC + HEADER.pack(1.0, 120, 0, 2, 7, 5000 * 8, 0, 5001 * 8, 0, *([0] * 16)) + b'\x08\0\0\0'
+        self.playback.collect_relay_preview([far], ('city', '1', 20, 'current'), 1)
+        self.wait()
+        self.assertEqual(self.playback._call.call_count, 1)
+        drawn = self.playback._call.call_args[0][0]['tracks']
+        self.assertEqual(drawn[0]['p'][1], 5000.0)
+
     def test_finish_ignores_incomplete_record_after_all_complete_routes(self):
         self.start()
         self.file.write_bytes(MAGIC+b''.join(record(i) for i in range(1,6))+record(6)[:10])

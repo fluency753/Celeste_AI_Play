@@ -686,8 +686,10 @@ class Playback:
                     preview_size = sum(map(len, job.sources))
                     with self.session.lock:
                         if self._can_draw(job.generation) and key == replay_key(self.session):
+                            # 主控代跑的推演已按快照摘要核对过是从游戏当前这一帧（或由它存的检查点）出发：
+                            # 规划别的房间时起点不在当前房间，也照样回放（桥接把镜头移到那个房间）
                             self._play_round(job.label, job.sources, False, preview=True,
-                                             generation=job.generation, relay_count=count)
+                                             generation=job.generation, relay_count=count, any_room=True)
                 else:
                     label, sources, account, completion = job.label, job.sources, job.account, job.completion
                     if isinstance(completion, _PreviewCompletion):
@@ -751,10 +753,11 @@ class Playback:
             yield log.subset(np.asarray(batch))
 
     def _play_round(self, label: str, sources: list, account: bool = True,
-                    preview=False, skip_render=False, log=None, generation=None, relay_count=None) -> bool | None:
+                    preview=False, skip_render=False, log=None, generation=None, relay_count=None,
+                    any_room=False) -> bool | None:
         t0 = time.monotonic()
         rd = self._digest(read_logs(sources) if log is None else log, label,
-                          all_tracks=preview and not self._stream_sample)
+                          all_tracks=preview and not self._stream_sample, any_room=any_room)
         if rd is None:
             # A batch outside the observed room has nothing to draw. It still
             # completed normally; do not abort subsequent eligible tail batches.
@@ -871,12 +874,12 @@ class Playback:
         except OSError:
             pass
 
-    def _digest(self, log: LogIndex, label: str, all_tracks=False) -> Round | None:
-        """一轮结束：只留当前房间里起步的推演，挑出要画的路线并解出它们的逐帧位置。"""
+    def _digest(self, log: LogIndex, label: str, all_tracks=False, any_room=False) -> Round | None:
+        """一轮结束：只留当前房间里起步的推演（any_room：主控代跑、已核对出发点的推演不限房间），挑出要画的路线并解出它们的逐帧位置。"""
         if len(log) == 0:
             return None
         bounds = ((self.session.last_obs or {}).get("level") or {}).get("bounds")
-        if bounds:
+        if bounds and not any_room:
             bx, by, bw, bh = bounds
             ok = ((log.first[:, 0] >= bx - 16) & (log.first[:, 0] <= bx + bw + 16)
                   & (log.first[:, 1] >= by - 16) & (log.first[:, 1] <= by + bh + 16))

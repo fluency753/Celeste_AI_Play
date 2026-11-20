@@ -147,8 +147,10 @@ class SimRelay:
             if playback is not None and playback.enabled and start and start['sid']:
                 key = (start['sid'], start['room'], start['frame'], start.get('digest'))
                 if key[3] and key == replay_key(self.session):
-                    if key != self.preview_key:
-                        self.preview_key, self.preview_count, self.preview_chunks, self.preview_bytes = key, 0, [], 0
+                    # 同一快照出发的推演按起点房间分组（从检查点规划下一个房间时起点在别的房间），一组只画一个房间
+                    group = (key, start.get('origin', start['room']))
+                    if group != self.preview_key:
+                        self.preview_key, self.preview_count, self.preview_chunks, self.preview_bytes = group, 0, [], 0
                     self.preview_count += event['simulated']
                     self._accept_replay(event.get('replay'))
             if self.timer is None and not self.closed:
@@ -176,8 +178,9 @@ class SimRelay:
             with self.lock:
                 calls, count = self.calls, self.count
                 self.calls = self.count = 0
-                key, preview_count, chunks = self.preview_key, self.preview_count, self.preview_chunks
+                group, preview_count, chunks = self.preview_key, self.preview_count, self.preview_chunks
                 self.preview_key, self.preview_count, self.preview_chunks, self.preview_bytes = None, 0, [], 0
+                key = group[0] if group else None
             try:
                 if count:
                     try:

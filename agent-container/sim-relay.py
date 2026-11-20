@@ -22,7 +22,8 @@ from pathlib import Path
 MAX_REQUEST = 32 * 1024 * 1024
 MAX_RESPONSE = 48 * 1024 * 1024
 NAME = re.compile(r'[a-f0-9]{32}')
-INPUT_KEYS = {'inputs', 'stop_on_death', 'stop_on_room', 'track'}
+INPUT_KEYS = {'inputs', 'stop_on_death', 'stop_on_room', 'track', 'rows'}
+PREVIEW_RERUN = 24      # 精简回复（rows）的一批里，最多挑这么多条补全逐帧轨迹给规划回放
 
 
 def reply(p, request):
@@ -67,6 +68,42 @@ def room_tracks(results):
     return tracks
 
 
+def preview_candidates(results, indexes, origin, exit_distance, limit=PREVIEW_RERUN):
+    """精简回复的候选只有最后一帧：按结局挑出少数几条补全轨迹回放——往前出房的按出房先后、死亡的按位置散开，
+    其余按终点位置散开。origin 是起点（读入状态时 Madeline 的位置）。"""
+    def end(i):
+        frames = results[i].get('frames') or []
+        row = frames[-1] if frames else None
+        return (row[1], row[2]) if row and len(row) >= 3 else None
+
+    def away(i):
+        e = end(i)
+        return e is not None and origin is not None and (e[0] - origin[0]) ** 2 + (e[1] - origin[1]) ** 2 > exit_distance ** 2
+
+    def exit_frame(i):
+        r = results[i]
+        frames = [frame for frame, kind, _ in r.get('events', ()) if kind in {'room', 'room_exit'}]
+        if frames:
+            return min(frames)
+        return (r.get('frames') or [[0]])[-1][0] if r.get('stop') == 'room' else None
+
+    chosen = []
+    exits = sorted((i for i in indexes if exit_frame(i) is not None and away(i)), key=exit_frame)
+    chosen += exits[:max(1, limit // 3)]
+    cells = set()
+    for kind in ('death', None):
+        for i in indexes:
+            if len(chosen) >= (limit * 2 // 3 if kind else limit):
+                break
+            if i in chosen or (kind and results[i].get('stop') != kind) or (e := end(i)) is None:
+                continue
+            cell = (kind, int(e[0] // 16), int(e[1] // 16))
+            if cell not in cells:
+                cells.add(cell)
+                chosen.append(i)
+    return chosen[:limit]
+
+
 def pack_preview(tracks, needed, available, frame, codec, exit_distance):
     if available < len(codec._LOG_MAGIC) + codec._LOG_HEAD.size:
         return b''
@@ -99,7 +136,28 @@ def pack_preview(tracks, needed, available, frame, codec, exit_distance):
     return codec._LOG_MAGIC + b''.join(record for _, record in sorted(selected)) if selected else b''
 
 
-def simulation_event(data, request, start, digest, audit, budget, decoding, byte_limit, codec, exit_distance):
+def snapshot_start(line, state, info):
+    """读入的起始状态是哪一帧：回放只画从游戏当前这一帧出发的推演，主控按（章节、房间、帧号、快照摘要）核对。
+    检查点按它所依据的快照核对（与主控写快照时同样的紧凑写法），帧号与房间也取快照的；
+    origin 是推演真正的起点（检查点那一帧、所在的房间与 Madeline 的位置），回放从那里开始画。"""
+    checkpoint = isinstance(state.get('base'), dict)
+    base = state['base'] if checkpoint else state
+    level = (base.get('level') or {}) if isinstance(base, dict) else {}
+    if checkpoint:
+        snapshot_bytes = json.dumps(base, ensure_ascii=False, separators=(',', ':')).encode()
+        frame = (info.get('checkpoint') or {}).get('baseFrame', base.get('frame'))
+        room = level.get('room')
+    else:
+        snapshot_bytes = line[len(b'{"snapshot":'):-2] if line.startswith(b'{"snapshot":') else b''
+        frame, room = info.get('frame'), info.get('room')
+    player = info.get('player') or {}
+    return {'frame': frame, 'room': room, 'sid': (level.get('session') or {}).get('area'),
+            'digest': hashlib.sha256(snapshot_bytes).hexdigest() if snapshot_bytes else None,
+            'origin': info.get('room'), 'origin_frame': info.get('frame'),
+            'origin_xy': (player['x'], player['y']) if 'x' in player and 'y' in player else None}
+
+
+def simulation_event(data, request, start, digest, audit, budget, decoding, byte_limit, codec, exit_distance, rerun=None):
     with (decoding if len(data) > 2 * 1024 * 1024 else nullcontext()):
         response = json.loads(data)
         results = response.get('results', [response] if 'inputs' in request else [])
@@ -108,7 +166,7 @@ def simulation_event(data, request, start, digest, audit, budget, decoding, byte
             return None
         event = {'simulated': len(completed)}
         if digest and start and start['digest'] == digest:
-            event['start'] = start
+            event['start'] = {key: start[key] for key in ('frame', 'room', 'sid', 'digest', 'origin') if key in start}
             try:
                 now = time.monotonic()
                 with audit:
@@ -117,13 +175,23 @@ def simulation_event(data, request, start, digest, audit, budget, decoding, byte
                     remaining = int(budget[1])
                 if remaining < len(codec._LOG_MAGIC) + codec._LOG_HEAD.size:
                     return event
-                tracks = room_tracks(completed)
+                full = [r for r in completed if 'count' not in r]
+                partial = [i for i, r in enumerate(results) if r.get('ok') is True and 'count' in r]
+                if partial and rerun is not None:
+                    # 精简回复（rows）没有逐帧轨迹：挑几条按原设置补推一次完整轨迹，只用来回放，不回给智能体
+                    candidates = request['batch'] if 'batch' in request else [request]
+                    picks = preview_candidates(results, partial, start.get('origin_xy'), exit_distance)
+                    if picks:
+                        again = [{k: v for k, v in candidates[i].items() if k not in {'rows', 'track'}} for i in picks]
+                        full += [r for r in rerun(again) if r.get('ok') is True and 'count' not in r]
+                tracks = room_tracks(full)
                 if tracks:
                     needed = len(codec._LOG_MAGIC) + sum(codec._LOG_HEAD.size + 4 * (size - 1) for _, size, _ in tracks)
                     with audit:
                         available = min(int(budget[1]), needed)
                         budget[1] -= available
-                    packed = pack_preview(tracks, needed, available, start['frame'], codec, exit_distance)
+                    packed = pack_preview(tracks, needed, available, start.get('origin_frame', start['frame']), codec,
+                                          exit_distance)
                     if packed:
                         event['replay'] = base64.b64encode(packed).decode('ascii')
             except (ArithmeticError, ValueError, TypeError, KeyError, struct.error) as exc:
@@ -149,16 +217,11 @@ def simulate(p, reader, writer, audit, budget, decoding, byte_limit, codec, exit
             raise ValueError('无效模拟请求')
         if request.keys() == {'snapshot'} and isinstance(request['snapshot'], dict):
             state = request['snapshot']
-            base = state.get('base', state)
             with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8') as f:
                 json.dump(state, f, separators=(',', ':'))
                 f.flush()
                 data = reply(p, json.dumps({'state': f.name}).encode() + b'\n')
-            info = json.loads(data).get('info') or {}
-            level = (base.get('level') or {}) if isinstance(base, dict) else {}
-            snapshot_bytes = line[len(b'{"snapshot":'):-2] if line.startswith(b'{"snapshot":') else b''
-            start = {'frame': info.get('frame'), 'room': info.get('room'), 'sid': (level.get('session') or {}).get('area'),
-                     'digest': hashlib.sha256(snapshot_bytes).hexdigest() if snapshot_bytes else None}
+            start = snapshot_start(line, state, json.loads(data).get('info') or {})
             next_check = 0.0
         elif (is_prediction := prediction(request)) or request == {'info': True}:
             data = reply(p, line)
@@ -178,7 +241,9 @@ def simulate(p, reader, writer, audit, budget, decoding, byte_limit, codec, exit
                         except (OSError, ValueError):
                             digest = None
                     event = simulation_event(data, request, start, digest, audit, budget, decoding,
-                                             byte_limit, codec, exit_distance)
+                                             byte_limit, codec, exit_distance,
+                                             rerun=lambda batch: json.loads(reply(p, json.dumps({'batch': batch}).encode()
+                                                                                  + b'\n')).get('results', []))
                     if event:
                         with audit:
                             print(json.dumps(event, separators=(',', ':')), flush=True)
