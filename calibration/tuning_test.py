@@ -51,14 +51,14 @@ class TunableTests(unittest.TestCase):
         self.assertIn('一次至少 1 帧、最多 600 帧', fill(ACT_DESCRIPTION, speed))
         self.assertIn("默认最多 5 分钟（用 Bash 的 timeout 参数最多加到 10 分钟）", base)
         self.assertIn("大约每 100 条画 1 条，至少 40 条", base)
-        self.assertIn("解说计时缩短为 10 秒", base)
+        self.assertIn("解说提醒间隔缩短为 10 秒", base)
         tuning.apply(speed, {"max_frames_per_act": 900, "bash_default_s": 90, "bash_max_s": 1200,
                              "playback_ratio": 50, "playback_min_tracks": 20})
         speed.live_remind_s = 15.0
         changed = play_prompt(speed)
         self.assertIn('最多 900 帧', fill(ACT_DESCRIPTION, speed))
         for text in ("默认最多 90 秒（用 Bash 的 timeout 参数最多加到 20 分钟）",
-                     "大约每 50 条画 1 条，至少 20 条", "解说计时缩短为 15 秒"):
+                     "大约每 50 条画 1 条，至少 20 条", "解说提醒间隔缩短为 15 秒"):
             self.assertIn(text, changed)
         explore = cfg(mode="explore", knowledge_profile="explore", chapter=1)
         self.assertIn("每条程序命令（含编译）最多 2 分钟", play_prompt(explore))
