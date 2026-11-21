@@ -15,6 +15,7 @@ from pathlib import Path
 DISCONNECT_LOG = 'app_server_exits.jsonl'
 STDERR_TAIL_BYTES = 4000
 STDERR_TAIL_LINES = 12
+CODEX_MULTI_AGENT_ENABLED = False
 
 
 def codex_executable() -> str:
@@ -34,7 +35,8 @@ def process_options(*, container=False) -> list[str]:
     for feature in ("shell_tool", "unified_exec", "view_image", "apps", "browser_use", "computer_use",
                     "in_app_browser", "skill_search", "multi_agent", "workspace_dependencies", "goals",
                     "sleep_tool", "image_generation", "code_mode"):
-        if container and feature in {'shell_tool', 'view_image'}:
+        if container and (feature in {'shell_tool', 'view_image'}
+                          or (feature == 'multi_agent' and CODEX_MULTI_AGENT_ENABLED)):
             options += ['--enable', feature]
         else:
             options += ["--disable", feature]

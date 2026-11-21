@@ -28,6 +28,30 @@ class ModelTests(unittest.TestCase):
     def test_empty_catalog_is_an_error_instead_of_guessed_model_names(self):
         with self.assertRaises(RuntimeError):normalize_models([])
 
+    def test_single_agent_catalog_deduplicates_known_ultra_aliases_and_defaults(self):
+        declared = [{'reasoningEffort': name} for name in ('low', 'xhigh', 'max', 'ultra')]
+        result = normalize_models([
+            model(ident, defaultReasoningEffort='ultra', supportedReasoningEfforts=declared)
+            for ident in ('gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-5.6-sol')
+        ])
+        for row, effective in zip(result['models'], ('xhigh', 'xhigh', 'max')):
+            self.assertEqual(row['efforts'], ['low', 'xhigh', 'max'])
+            self.assertEqual(row['default_effort'], effective)
+            self.assertEqual(row['effort_aliases'], {'ultra': effective})
+            with patch('orchestrator.model_catalog.load_models', return_value=result):
+                self.assertEqual(resolve_selection(row['id'], 'ultra'), (row['id'], effective))
+                self.assertEqual(resolve_selection(row['id'], 'max'), (row['id'], 'max'))
+
+    def test_multi_agent_catalog_keeps_ultra_when_enabled(self):
+        declared = [{'reasoningEffort': name} for name in ('xhigh', 'max', 'ultra')]
+        with patch('orchestrator.model_catalog.CODEX_MULTI_AGENT_ENABLED', True):
+            result = normalize_models([model('gpt-6.2-astra', defaultReasoningEffort='ultra',
+                                             supportedReasoningEfforts=declared)])
+        row = result['models'][0]
+        self.assertEqual(row['efforts'], ['xhigh', 'max', 'ultra'])
+        self.assertEqual(row['default_effort'], 'ultra')
+        self.assertNotIn('effort_aliases', row)
+
     def test_selection_and_effort_must_both_exist_in_catalog(self):
         with patch('orchestrator.model_catalog.load_models',return_value=normalize_models([model('one')])):
             self.assertEqual(resolve_selection('','high'),('one','high'))

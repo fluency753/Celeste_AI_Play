@@ -955,7 +955,9 @@ function updateModelEfforts() {
   }));
   if(selected){
     const current=selected.id===controlData?.model ? state?.effort : null;
-    $('sessionEffort').value=selected.efforts.includes(old)?old:selected.efforts.includes(current)?current:selected.default_effort;
+    const previous=selected.effort_aliases?.[old] || old;
+    const effective=selected.effort_aliases?.[current] || current;
+    $('sessionEffort').value=selected.efforts.includes(previous)?previous:selected.efforts.includes(effective)?effective:selected.default_effort;
     $('sessionModel').title=selected.description;
   }
 }

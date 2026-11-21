@@ -376,7 +376,7 @@ class SessionControls:
         from .game_policy import effort_denial
         if note := effort_denial(self, value):
             raise ValueError(note)
-        await self._validate_effort(value)
+        return await self._validate_effort(value)
 
     def _public_message(self, ident, text):
         from .telemetry import publish
@@ -692,7 +692,7 @@ class SessionControls:
                         elif row['kind'] == 'effort':
                             value=None if row['text']=='auto' else row['text']
                             if value is not None:
-                                await self._validate_effort(value)
+                                value = await self._validate_effort(value) or value
                             self.manual_effort=value
                             self.control.set_effort(value)
                             self.metrics.request_effort(value if value != self.metrics.state.effort else None,

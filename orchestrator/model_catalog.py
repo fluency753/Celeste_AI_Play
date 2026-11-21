@@ -6,13 +6,32 @@ import threading
 import time
 
 from .config import REPO_ROOT
-from .codex_rpc import CodexRPC
+from .codex_rpc import CODEX_MULTI_AGENT_ENABLED, CodexRPC
 from .codex_container import ensure_account_container
 from .efforts import normalize_efforts
 
 _lock = threading.Lock()
 _cached = None
 _loaded = 0.0
+
+# Codex 0.169 model/list omits multi_agent_reasoning_effort. These values
+# come from the provider catalog and the client's Max fallback for these models.
+_ULTRA_SINGLE_AGENT = {
+    'gpt-6.2-sol': 'xhigh',
+    'gpt-6.2-astra': 'xhigh',
+    'gpt-6.1-terra': 'xhigh',
+    'gpt-6.1-sol': 'xhigh',
+    'gpt-6-astra': 'xhigh',
+    'gpt-6-sol': 'max',
+    'gpt-5.6-sol': 'max',
+    'gpt-5.6-terra': 'max',
+}
+
+
+def canonical_codex_effort(model, effort):
+    if effort == 'ultra' and not CODEX_MULTI_AGENT_ENABLED:
+        return _ULTRA_SINGLE_AGENT.get(model, effort)
+    return effort
 
 
 def normalize_models(rows):
@@ -27,14 +46,20 @@ def normalize_models(rows):
             continue
         if row.get('inputModalities') and 'image' not in row['inputModalities']:
             continue
-        efforts = normalize_efforts([e.get('reasoningEffort') for e in (row.get('supportedReasoningEfforts') or [])
-                                     if isinstance(e, dict)])
+        advertised = normalize_efforts([e.get('reasoningEffort') for e in (row.get('supportedReasoningEfforts') or [])
+                                        if isinstance(e, dict)])
+        aliases = {effort: canonical for effort in advertised
+                   if (canonical := canonical_codex_effort(ident, effort)) != effort and canonical in advertised}
+        efforts = [effort for effort in advertised if effort not in aliases]
         if not efforts:
             continue
         default_effort = row.get('defaultReasoningEffort')
+        if isinstance(default_effort, str):
+            default_effort = aliases.get(default_effort, default_effort)
         models.append({'id': ident, 'label': row.get('displayName') or ident,
                        'description': row.get('description') or '', 'efforts': efforts,
                        'default_effort': default_effort if default_effort in efforts else efforts[0],
+                       **({'effort_aliases': aliases} if aliases else {}),
                        'default': bool(row.get('isDefault'))})
         seen.add(ident)
     if not models:
@@ -83,6 +108,9 @@ def resolve_selection(model, effort):
     selected = next((item for item in catalog['models'] if item['id'] == ident), None)
     if selected is None:
         raise ValueError('模型不在当前列表中，请刷新模型列表后重新选择')
+    canonical = canonical_codex_effort(ident, effort)
+    if canonical in selected['efforts']:
+        effort = canonical
     if effort not in selected['efforts']:
         raise ValueError('所选模型不支持该推理强度，请重新选择')
     return ident, effort

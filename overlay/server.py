@@ -436,7 +436,7 @@ def make_handler(pinned: Path | None):
                     engine = (load_json(state_path) if state_path.exists() else {}).get('engine', 'codex')
                     if data.get('text') != 'auto' and engine == 'codex':
                         from orchestrator.model_catalog import resolve_selection
-                        resolve_selection((read_metrics(directory) or {}).get('model'),data.get('text'))
+                        _, data['text'] = resolve_selection((read_metrics(directory) or {}).get('model'), data.get('text'))
                 if data.get('kind') in {'chapter_reset', 'action_permissions'} and not control.snapshot().get('chapter_reset_control'):
                     raise ValueError('当前主控不支持实时章节重置策略')
                 if data.get('kind') == 'action_permissions' and control.snapshot().get('action_policy_supported') is not True:

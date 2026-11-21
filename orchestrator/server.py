@@ -844,7 +844,7 @@ def build_server(session: GameSession, study: KbStudy | None = None, *, catalog:
             return ["尚未连接可核验模型能力的 agent，不能调整推理强度。"]
         if policy:
             try:
-                await policy(level)
+                level = await policy(level) or level
             except ValueError as exc:
                 journal.log_failure(exc, phase='set_effort')
                 return [str(exc)]

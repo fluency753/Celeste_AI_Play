@@ -103,6 +103,20 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.metrics.state.effort,'medium')
         self.assertEqual(self.metrics.state.effort_pending,'low')
 
+    async def test_single_agent_ultra_alias_preserves_effective_effort(self):
+        self.runner.turn_active = False
+        self.runner.turn_id = None
+        self.metrics.update(model='gpt-6.2-astra', effort='xhigh')
+        self.runner.control.enqueue('effort', 'ultra')
+        catalog = {'models': [{'id': 'gpt-6.2-astra', 'efforts': ['xhigh', 'max']}]}
+        with patch('orchestrator.model_catalog.load_models', return_value=catalog):
+            self.assertEqual(await self.runner._agent_effort_policy('ultra'), 'xhigh')
+            self.task = asyncio.create_task(self.runner._controls())
+            await self.wait_for(lambda: self.runner.control.effort_preference() == 'xhigh')
+        self.assertEqual(self.runner.manual_effort, 'xhigh')
+        self.assertIsNone(self.metrics.state.effort_pending)
+        self.runner.rpc.request.assert_not_called()
+
     async def test_manual_effort_blocks_agent_changes_until_auto_is_restored(self):
         self.runner.manual_effort='high';self.runner.control.set_effort('high')
         denied=await self.runner._request('item/tool/call',{'tool':'celeste_set_effort','arguments':{'level':'low'}})

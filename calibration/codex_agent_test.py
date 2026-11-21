@@ -659,6 +659,34 @@ class NativeAgentTests(unittest.IsolatedAsyncioTestCase):
         from orchestrator.codex_native import finish_native_tools
         finish_native_tools(self.runner)
 
+    async def test_restored_ultra_preference_is_canonical_before_first_turn(self):
+        from calibration.note_reminders_test import runner_fixture
+        with runner_fixture('codex', agent='effort-alias-test', resume=True, session_id='fixture') as (runner, _, _):
+            runner.cfg.model = 'gpt-6.2-astra'
+            runner.cfg.effort = runner.manual_effort = 'ultra'
+            runner.control.set_effort('ultra')
+            runner.metrics.update(effort='ultra', effort_pending='ultra')
+            captured = {}
+
+            async def rpc_request(method, params, **kwargs):
+                captured[method] = params
+                if method == 'thread/resume':
+                    return {'thread': {'id': 'fixture'}, 'model': runner.cfg.model, 'reasoningEffort': 'ultra',
+                            'activePermissionProfile': {'id': params['permissions']}}
+                if method == 'turn/start':
+                    raise RuntimeError('captured first turn')
+                return {}
+
+            runner.rpc.start, runner.rpc.close, runner.rpc.request = AsyncMock(), AsyncMock(), rpc_request
+            with patch.object(runner, '_validate_resumed_tools'), self.assertRaisesRegex(RuntimeError, 'captured first turn'):
+                await runner.run()
+
+            self.assertEqual(captured['thread/resume']['config']['model_reasoning_effort'], 'xhigh')
+            self.assertEqual(captured['turn/start']['effort'], 'xhigh')
+            self.assertEqual(runner.control.snapshot()['effort_manual'], 'xhigh')
+            self.assertEqual(runner.metrics.state.effort, 'xhigh')
+            self.assertIsNone(runner.metrics.state.effort_pending)
+
     async def test_resolved_default_model_limits_reach_the_first_turn_and_state(self):
         from calibration.note_reminders_test import runner_fixture
         from orchestrator.session_store import write_json, load_json

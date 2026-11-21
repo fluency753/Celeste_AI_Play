@@ -24,19 +24,19 @@ HOOK_HEADERS = {'content-type': 'application/json', 'host': 'host.docker.interna
 
 
 @contextmanager
-def runner_fixture(engine='codex', user_note=None, **options):
+def runner_fixture(engine='codex', user_note=None, *, agent='notes', **options):
     with tempfile.TemporaryDirectory() as folder, patch('orchestrator.config.REPO_ROOT', Path(folder)):
         root = Path(folder)
         run = root / 'run'
         run.mkdir()
-        cfg = RunConfig(agent='notes', save='test', model='stub', engine=engine, runtime='container',
+        cfg = RunConfig(agent=agent, save='test', model='stub', engine=engine, runtime='container',
                         provider_info={'images': False}, sim=False, chapter=3, cutscene_mode='agent')
         cfg._user_note = user_note
         cfg.min_frames_per_act = 1
         cfg.workspace_dir.mkdir(parents=True)
         notes = cfg.workspace_dir / 'notes.md'
         notes.write_bytes(b'original notes')
-        metrics = Metrics(run / 'metrics.json', 'notes', 'stub', 'high', 600)
+        metrics = Metrics(run / 'metrics.json', agent, 'stub', 'high', 600)
         session = GameSession(cfg, run, metrics)
         session.client = FakeBridge()
         if engine == 'codex':

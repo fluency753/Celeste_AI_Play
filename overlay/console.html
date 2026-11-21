@@ -1414,8 +1414,9 @@ function fillEfforts(preferred) {
   const model = ui.models.find(m => m.id === $("model").value);
   const efforts = (model && model.efforts) || [];
   const sel = $("effort"), previous = preferred || sel.value;
+  const canonical = model?.effort_aliases?.[previous] || previous;
   sel.replaceChildren(...efforts.map(e => new Option(e, e)));
-  sel.value = efforts.includes(previous) ? previous : (model && model.default_effort) || efforts[0] || "";
+  sel.value = efforts.includes(canonical) ? canonical : (model && model.default_effort) || efforts[0] || "";
   sel.disabled = !efforts.length;
 }
 

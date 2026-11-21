@@ -764,7 +764,8 @@ class CodexRunner(ModelRecovery, SessionControls):
 
     async def _validate_effort(self, value):
         from .model_catalog import resolve_selection
-        await asyncio.to_thread(resolve_selection, self.metrics.state.model, value)
+        _, effort = await asyncio.to_thread(resolve_selection, self.metrics.state.model, value)
+        return effort
 
     async def _interrupt_user(self):
         if self.turn_active and self.turn_id and not self.turn_done.is_set():
@@ -896,11 +897,13 @@ class CodexRunner(ModelRecovery, SessionControls):
                 if self._play_budget_remaining() <= 0:
                     return "现实时间预算用完"
             await self.rpc.start()
+            from .model_catalog import canonical_codex_effort
+            initial_effort = canonical_codex_effort(self.cfg.model, self.manual_effort or self.cfg.effort)
             # All Player phases retain writable workspace and native Shell capability.
             # celeste-read remains an old-image compatibility profile only.
             params = {"cwd": "/workspace", "permissions": "celeste-write",
                       "approvalPolicy": "never", "baseInstructions": prompt, "dynamicTools": await self.tool_specs(),
-                      "config": {"model_reasoning_effort": self.manual_effort or self.cfg.effort}, "selectedCapabilityRoots": []}
+                      "config": {"model_reasoning_effort": initial_effort}, "selectedCapabilityRoots": []}
             if self.cfg.model:
                 params["model"] = self.cfg.model
             resuming = bool(self.resume and self.session_id)
@@ -919,7 +922,16 @@ class CodexRunner(ModelRecovery, SessionControls):
                 self._guide_reading.session_id = self.session_id
             if self.fast_mode is None:
                 self.fast_mode = result.get("serviceTier") in {"priority", "fast"}
-            self.metrics.update(model=result["model"], effort=result.get("reasoningEffort") or self.cfg.effort)
+            resolved_model = result["model"]
+            canonical_manual = canonical_codex_effort(resolved_model, self.manual_effort)
+            if canonical_manual != self.manual_effort:
+                self.manual_effort = canonical_manual
+                if self.control:
+                    self.control.set_effort(canonical_manual)
+            current_effort = canonical_codex_effort(resolved_model, result.get("reasoningEffort") or initial_effort)
+            pending_effort = canonical_codex_effort(resolved_model, self.metrics.state.effort_pending)
+            self.metrics.update(model=resolved_model, effort=current_effort,
+                                effort_pending=pending_effort if pending_effort != current_effort else None)
             # Live controls must not use the catalog currently being browsed for
             # a different, new conversation in the HUD.
             catalog_label = None
