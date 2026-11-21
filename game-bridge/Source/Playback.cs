@@ -19,7 +19,8 @@ namespace CelesteAI.Bridge;
 /// - 镜头临时借用：渲染前把关卡镜头换成回放镜头（跟着金色路线的前端平滑移动、受房间边界限制），渲染后原样换回，
 ///   连同 Level.cameraPreShake；渲染期间随机数换成单独的发生器（Calc.PushRandom），游戏状态一点不变。
 ///   这一轮的路线从别的房间出发时（智能体从检查点规划下一个房间），镜头移到那个房间、受那个房间的边界限制：
-///   地形是整张地图一起建的，那个房间的地形照常画出来；那个房间的实体没有载入，画面上没有；
+///   地形是整张地图一起建的，那个房间的地形照常画出来；那个房间的实体没有载入，按地图数据补画（PlaybackRoomGhost：
+///   房间刚载入时的样子，只画不建）；
 ///   两轮之间（主控等智能体规划下一轮时）画面停在回放镜头上，历史线照常画；
 /// - 执行前的最后一段（final）：不画新的线，镜头用 return 帧平滑回到 Madeline（镜头本来就在那里时直接结束）；
 ///   真实执行开始时清掉全部线条；
@@ -148,6 +149,7 @@ internal static class Playback {
         // 这一轮在哪个房间：路线的起点（镜头目标的第一个点）所在的房间；执行前的最后一段回到当前房间
         Vector2 anchor = focus.Length > 0 ? focus[0] : incoming.Count > 0 ? incoming[0].P[0] : level.Camera.Position + new Vector2(160f, 90f);
         viewRoom = final ? Rectangle.Empty : RoomAt(level, anchor);
+        if (!final) PlaybackRoomGhost.Prepare(level, viewRoom);   // 执行前的最后一段沿用上一轮的补画，镜头回去时那个房间不会突然变空
         realCam = level.Camera.Position;
         if (GetString(a, "camera", "keep") == "real" || !camValid) cam = realCam;
         if (final && Vector2.Distance(cam, realCam) < 0.5f) {
@@ -194,6 +196,7 @@ internal static class Playback {
         camValid = false;
         viewRoom = Rectangle.Empty;
         PlaybackSpinners.Clear();
+        PlaybackRoomGhost.Clear();
         History.Clear();
         Tracks.Clear();
         historyDrawn = 0;
@@ -247,6 +250,7 @@ internal static class Playback {
 
     /// <summary>地图里包含这一点的房间范围；当前房间优先，不在任何房间里时是当前房间（空矩形表示当前房间）。</summary>
     private static Rectangle RoomAt(Level level, Vector2 point) {
+        if (level.Session?.MapData == null) return Rectangle.Empty;   // 没有地图数据（例如原生检查里的空关卡）：当前房间
         var at = new Point((int) Math.Floor(point.X), (int) Math.Floor(point.Y));
         if (level.Bounds.Contains(at)) return Rectangle.Empty;
         if (level.Session?.MapData?.Levels is { } rooms)

@@ -14,6 +14,7 @@ internal static class PlaybackVisualPass {
         entities = level.Entities;
         PlaybackSpinners.Collect(level);
         PlaybackDust.CollectEyes(level);
+        PlaybackRoomGhost.Collect();
         queue.Sort();
     }
 
