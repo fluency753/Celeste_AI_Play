@@ -73,27 +73,29 @@ class AdapterPolicyTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(engine=engine), tempfile.TemporaryDirectory() as folder, \
                  patch('orchestrator.config.REPO_ROOT', Path(folder)), ExitStack() as cleanup:
                 root = Path(folder)
-                cfg = RunConfig(agent='test', save='test', model='stub', engine=engine)
-                metrics = Metrics(root / 'metrics.json', 'test', 'stub', 'high', 100)
+                model = 'stub' if engine == 'claude' else 'gpt-6.2-astra'
+                cfg = RunConfig(agent='test', save='test', model=model, engine=engine)
+                metrics = Metrics(root / 'metrics.json', 'test', model, 'high', 100)
                 if engine == 'claude':
                     session = SimpleNamespace(cfg=cfg, metrics=metrics, workspace=None, done=False, run_dir=root)
                     server = build_server(session)
                     runner = ClaudeRunner(cfg, root, session, metrics, 'fixture', chat_only=True)
+                    runner._validate_effort = AsyncMock(return_value=None)
                 else:
                     runner = CodexRunner(cfg, root, None, metrics, 'fixture', chat_only=True)
+                    catalog = {'models': [{'id': model, 'efforts': ['high', 'xhigh', 'max']}]}
+                    cleanup.enter_context(patch('orchestrator.model_catalog.load_models', return_value=catalog))
                 cleanup.callback(runner.close_events)
-                # Replace only external model capability lookup; retain shared effort policy.
-                runner._validate_effort = AsyncMock()
                 runner.turn_active, runner.turn_id = True, 'turn'
                 async def request():
-                    args = {'level': 'low', 'reason': 'fixture'}
+                    args = {'level': 'low' if engine == 'claude' else 'ultra', 'reason': 'fixture'}
                     if engine == 'claude':
                         return (await server.call_tool('set_effort', args)).content[0].text
                     result = await runner._request('item/tool/call', {
                         'tool': 'celeste_set_effort', 'callId': 'effort', 'arguments': args})
                     return result['contentItems'][0]['text']
                 self.assertIn('登记', await request())
-                self.assertEqual(metrics.state.effort_pending, 'low')
+                self.assertEqual(metrics.state.effort_pending, 'low' if engine == 'claude' else 'xhigh')
                 runner.manual_effort = 'high'
                 self.assertIn('固定', await request())
 
