@@ -285,9 +285,9 @@ agent 操作触发关卡街机或主菜单 PICO-8 入口时，在切场景及解
 
 容器里的智能体：
 
-- **工具**：Bash、Read、Write、Edit、Glob、Grep 与游戏工具（见下文"游戏工具"）；不限额的速通另有后台任务配套的 TaskOutput（取后台命令的输出，可以阻塞等它结束）与 TaskStop（停掉后台命令）。WebSearch、WebFetch 在托管配置里被拒绝；Claude Code 以受限模式启动，不读取任何用户、项目或本地设置文件，文件工具只能访问 `/workspace` 与 `/kb`。
+- **工具**：Bash、Read、Write、Edit、Glob、Grep 与游戏工具（见下文"游戏工具"）；不限额的速通另有后台任务配套的 TaskStop（停掉后台命令）。WebSearch、WebFetch 在托管配置里被拒绝；Claude Code 以受限模式启动，不读取任何用户、项目或本地设置文件，文件工具只能访问 `/workspace` 与 `/kb`。
 - **网络**：容器出站只放行所用模型平台的域名（默认 Anthropic 官方域名；`--provider deepseek` 时只放行 api.deepseek.com，不放行 Anthropic）与宿主机上的游戏工具端口；Bash 命令（智能体自写的程序）在零网络的沙箱里运行，连模型平台也连不上。验收方法见 2.4 节。
-- **后台任务**（1.48.0 起）：不限额的速通开放 Claude Code 的后台任务（Bash 的 `run_in_background`）。长搜索放到后台后，智能体等结果时可以接着分析、读别的结果，维护者发消息打断当前这一轮时后台命令也照常跑完；游戏照旧只在 `act` 时推进；后台命令本身不计入 HUD 的工具时间，智能体用 TaskOutput 等它时才算。智能体不要为了等后台命令而结束这一轮（轮次结束后主控不再放行工具），用 TaskOutput 阻塞等待。探索模式（单次规划程序有时长上限）与限额规划（按轮计量）仍以 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 启动，Bash 只在前台运行。前台命令默认最多 5 分钟，写 timeout 时最长由可调参数 `bash_max_s` 决定（默认 10 分钟，最多 60 分钟，见 4.11 节），超时就结束、不会转入后台。
+- **后台任务**（1.48.0 起）：不限额的速通开放 Claude Code 的后台任务（Bash 的 `run_in_background`）。长搜索放到后台后，智能体等结果时可以接着分析、读别的结果，维护者发消息打断当前这一轮时后台命令也照常跑完；游戏照旧只在 `act` 时推进；后台命令本身不计入 HUD 的工具时间，智能体用前台命令等它时才算。容器里的 Claude Code（2.1 起）没有 TaskOutput 工具，Read 又只能读 `/workspace` 与 `/kb`，所以后台命令要把输出重定向到工作区文件、结束时写完成标记；智能体不要为了等后台命令而结束这一轮（轮次结束后主控不再放行工具），要等就用一条前台 Bash 轮询完成标记。探索模式（单次规划程序有时长上限）与限额规划（按轮计量）仍以 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 启动，Bash 只在前台运行。前台命令默认最多 5 分钟，写 timeout 时最长由可调参数 `bash_max_s` 决定（默认 10 分钟，最多 60 分钟，见 4.11 节），超时就结束、不会转入后台。
 - **工作区** `/workspace`：对应宿主机的 `workspaces\<标签>\`，跨房间、跨章节、跨运行保留。每次观测与动作后，主控把完整观测（`game/latest_obs.json`）、上一次动作的全精度逐帧轨迹（`game/last_act.json`）与每个房间的首次观测（`game/rooms/`）写进来，供智能体的程序读取。
 - **知识库** `/kb`：只读挂载仓库的 `kb/`，记录物理常量、状态机、实体规则、全部技巧与机制库、工作区数据格式，以及 `reference/` 里的社区资料原文（见 2.5 节）。技巧与机制的专有名词一律用英文（wallbounce、cornerboost、coyote time、liftboost 等），不用中文译名；基本动作（冲刺、跳、抓墙、体力）与实体名照常用中文。系统提示词也这样写，并要求智能体的思考语句同样只把这类专有名词写成英文。维护知识库时可以用 `python tools\english_terms.py kb\*.md orchestrator\prompts\*.md`（加 `--check` 只检查）按其中的对照表统一替换；不要用它处理 `kb\reference\` 的原文。
 - **计划文件**：智能体可以把程序算出的按键序列写成 JSON 文件，调用 `act` 时传 `plan_file`，不必把按键抄进参数。

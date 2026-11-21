@@ -213,7 +213,8 @@ class WorkspacePreparationTests(unittest.IsolatedAsyncioTestCase):
 
 class BackgroundTaskTests(unittest.TestCase):
     def test_only_unlimited_container_speedrun_opens_background_tasks(self):
-        # 不限额的速通开放后台任务及取输出、停止两个工具；探索模式与限额规划仍关闭。开放的工具与每轮的工具列表核对一致
+        # 不限额的速通开放后台任务及停止后台命令的工具；探索模式与限额规划仍关闭。开放的工具与每轮的工具列表核对一致。
+        # Claude Code 2.1 起没有 TaskOutput 工具：不登记、核对时也不放行
         from orchestrator.agent import ClaudeRunner
         from orchestrator.metrics import Metrics
         cases = (({'mode': 'speedrun'}, True), ({'mode': 'explore'}, False),
@@ -230,10 +231,11 @@ class BackgroundTaskTests(unittest.TestCase):
                     tools = command[command.index('--tools') + 1].split(',')
                     allowed = command[command.index('--allowedTools') + 1:command.index('--append-system-prompt')]
                     self.assertEqual('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1' not in command, opened)
-                    for name in ('TaskOutput', 'TaskStop'):
-                        self.assertEqual(name in tools, opened)
-                        self.assertEqual(name in allowed, opened)
-                        self.assertEqual(runner._allowed_tool(name), opened)
+                    self.assertEqual('TaskStop' in tools, opened)
+                    self.assertEqual('TaskStop' in allowed, opened)
+                    self.assertEqual(runner._allowed_tool('TaskStop'), opened)
+                    self.assertNotIn('TaskOutput', tools)
+                    self.assertFalse(runner._allowed_tool('TaskOutput'))
                     self.assertTrue(runner._allowed_tool('Bash'))
                     self.assertFalse(runner._allowed_tool('Agent'))
                 finally:

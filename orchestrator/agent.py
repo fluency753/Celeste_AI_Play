@@ -63,8 +63,9 @@ EFFORT_OK = re.compile(r"^Set effort level to ([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\s|
 # "Claude AI usage limit reached|1792766400"、"You've hit your limit · resets 3pm"
 LIMIT_TEXT = re.compile(r"usage limit|hit your (?:usage )?limit|rate[ _]limit", re.I)
 CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
-# 后台任务（Bash 的 run_in_background）配套的两个工具：取后台命令的输出（可以阻塞等它结束）、停掉它
-BACKGROUND_TOOLS = ["TaskOutput", "TaskStop"]
+# 后台任务（Bash 的 run_in_background）配套的工具：停掉后台命令。Claude Code 2.1 起没有 TaskOutput 工具（已移除，
+# 改为用 Read 读输出文件）；容器里 Read 只能读工作区与知识库，所以后台命令把输出重定向到工作区文件
+BACKGROUND_TOOLS = ["TaskStop"]
 MODEL_RESTARTS = 2      # 服务模型被换掉后自动重启换回的次数；连续这么多次都换不回就保持暂停
 
 
@@ -131,7 +132,7 @@ UNLIMITED_PROGRAM_S = 24 * 3600
 def background_tasks(cfg) -> bool:
     """容器里的 Claude Code 能不能用后台任务：只有不限额的速通开放（长搜索放到后台，等结果时可以接着想、读别的结果，
     维护者发消息也不会打断后台的搜索）。探索模式有单次规划程序的时长上限、限额规划按轮计量，后台跑的程序会绕过这些限制，
-    这两种仍然关闭。游戏照旧只在 act 时推进；后台命令本身不计入工具时间，用 TaskOutput 等它时才算。"""
+    这两种仍然关闭。游戏照旧只在 act 时推进；后台命令本身不计入工具时间，用前台命令等它时才算。"""
     return getattr(cfg, "mode", "speedrun") == "speedrun" and not getattr(cfg, "pause_limit", False)
 
 
@@ -577,7 +578,7 @@ class ClaudeRunner(SessionControls):
         return ''
 
     def _builtin_tools(self) -> list[str]:
-        """容器里开放的内置工具；开放后台任务时另有取输出与停止后台命令的两个工具。"""
+        """容器里开放的内置工具；开放后台任务时另有停止后台命令的工具。"""
         if workspace_capabilities(self.cfg).agent_location == "container" and background_tasks(self.cfg):
             return CONTAINER_BUILTIN_TOOLS + BACKGROUND_TOOLS
         return CONTAINER_BUILTIN_TOOLS
