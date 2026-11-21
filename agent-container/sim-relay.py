@@ -22,7 +22,7 @@ from pathlib import Path
 MAX_REQUEST = 32 * 1024 * 1024
 MAX_RESPONSE = 48 * 1024 * 1024
 NAME = re.compile(r'[a-f0-9]{32}')
-INPUT_KEYS = {'inputs', 'stop_on_death', 'stop_on_room', 'track', 'rows', 'time', 'digest'}
+INPUT_KEYS = {'inputs', 'stop_on_death', 'stop_on_room', 'track', 'rows', 'time', 'digest', 'player'}
 PREVIEW_RERUN = 24      # 精简回复（rows）的一批里，最多挑这么多条补全逐帧轨迹给规划回放
 
 
@@ -182,7 +182,7 @@ def simulation_event(data, request, start, digest, audit, budget, decoding, byte
                     candidates = request['batch'] if 'batch' in request else [request]
                     picks = preview_candidates(results, partial, start.get('origin_xy'), exit_distance)
                     if picks:
-                        again = [{k: v for k, v in candidates[i].items() if k not in {'rows', 'track', 'time', 'digest'}} for i in picks]
+                        again = [{k: v for k, v in candidates[i].items() if k not in {'rows', 'track', 'time', 'digest', 'player'}} for i in picks]
                         full += [r for r in rerun(again) if r.get('ok') is True and 'count' not in r]
                 tracks = room_tracks(full)
                 if tracks:

@@ -205,7 +205,8 @@ class RelayWorkerPreviewTests(unittest.TestCase):
             return {'ok': True, 'stop': stop, 'events': list(events), 'count': length + 1,
                     'frames': [[length, float(end), 0.0, 0, 0, 'Normal', 1, 1]]}
         results = [trimmed(100, 10, 'room', [[10, 'room', '2']]), trimmed(5, 4, 'death'), trimmed(30, 12)]
-        batch = [{'inputs': [f'{n},R'], 'stop_on_room': False, 'rows': 'last', 'track': ['ZipMover'], 'time': True, 'digest': True}
+        batch = [{'inputs': [f'{n},R'], 'stop_on_room': False, 'rows': 'last', 'track': ['ZipMover'], 'time': True, 'digest': True,
+                  'player': True}
                  for n in (10, 4, 12)]
         asked = []
         which = {'10,R': 0, '4,R': 1, '12,R': 2}
@@ -233,6 +234,11 @@ class RelayWorkerPreviewTests(unittest.TestCase):
         self.assertTrue(self.worker.prediction({'inputs': ['3,R'], 'time': True, 'digest': True}))
         self.assertTrue(self.worker.prediction({'batch': [{'inputs': ['3,R'], 'time': True}, {'inputs': ['1'], 'digest': True, 'rows': 'last'}]}))
         self.assertFalse(self.worker.prediction({'inputs': ['3,R'], 'state': '/workspace/other.json'}))
+
+    def test_player_field_requests_are_forwarded(self):
+        # 结束时 Madeline 的全部字段（player）也只是回复里的附加字段：照常转发、照常计入推演
+        self.assertTrue(self.worker.prediction({'inputs': [], 'player': True}))
+        self.assertTrue(self.worker.prediction({'batch': [{'inputs': ['3,R'], 'player': True, 'rows': 'last'}, {'inputs': ['1']}]}))
 
     def test_encoding_error_does_not_drop_simulation_count(self):
         result = self.result(1_000_000_000, 2)
