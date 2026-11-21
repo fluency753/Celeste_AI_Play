@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import base64
 from bisect import bisect_right
 from contextlib import nullcontext
@@ -18,6 +17,11 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+try:
+    from snapshot_identity import snapshot_identity   # 主控把 orchestrator/snapshot_identity.py 只读挂成 /snapshot_identity.py
+except ImportError:                                  # 测试从仓库直接载入本文件
+    from orchestrator.snapshot_identity import snapshot_identity
 
 MAX_REQUEST = 32 * 1024 * 1024
 MAX_RESPONSE = 48 * 1024 * 1024
@@ -136,23 +140,22 @@ def pack_preview(tracks, needed, available, frame, codec, exit_distance):
     return codec._LOG_MAGIC + b''.join(record for _, record in sorted(selected)) if selected else b''
 
 
-def snapshot_start(line, state, info):
-    """读入的起始状态是哪一帧：回放只画从游戏当前这一帧出发的推演，主控按（章节、房间、帧号、快照摘要）核对。
-    检查点按它所依据的快照核对（与主控写快照时同样的紧凑写法），帧号与房间也取快照的；
+def snapshot_start(state, info):
+    """读入的起始状态是哪一帧：回放只画从游戏当前这一帧出发的推演，主控按（章节、房间、快照的身份摘要）核对。
+    身份摘要与主控写快照时用同一份实现（snapshot_identity），不计游戏全局帧号与实体编号：重开游戏或续跑之后，
+    智能体存下的同一场景的旧快照副本照样对得上。检查点按它所依据的快照核对，帧号与房间也取快照的；
     origin 是推演真正的起点（检查点那一帧、所在的房间与 Madeline 的位置），回放从那里开始画。"""
     checkpoint = isinstance(state.get('base'), dict)
     base = state['base'] if checkpoint else state
     level = (base.get('level') or {}) if isinstance(base, dict) else {}
     if checkpoint:
-        snapshot_bytes = json.dumps(base, ensure_ascii=False, separators=(',', ':')).encode()
         frame = (info.get('checkpoint') or {}).get('baseFrame', base.get('frame'))
         room = level.get('room')
     else:
-        snapshot_bytes = line[len(b'{"snapshot":'):-2] if line.startswith(b'{"snapshot":') else b''
         frame, room = info.get('frame'), info.get('room')
     player = info.get('player') or {}
     return {'frame': frame, 'room': room, 'sid': (level.get('session') or {}).get('area'),
-            'digest': hashlib.sha256(snapshot_bytes).hexdigest() if snapshot_bytes else None,
+            'digest': snapshot_identity(base) if isinstance(base, dict) else None,
             'origin': info.get('room'), 'origin_frame': info.get('frame'),
             'origin_xy': (player['x'], player['y']) if 'x' in player and 'y' in player else None}
 
@@ -221,7 +224,7 @@ def simulate(p, reader, writer, audit, budget, decoding, byte_limit, codec, exit
                 json.dump(state, f, separators=(',', ':'))
                 f.flush()
                 data = reply(p, json.dumps({'state': f.name}).encode() + b'\n')
-            start = snapshot_start(line, state, json.loads(data).get('info') or {})
+            start = snapshot_start(state, json.loads(data).get('info') or {})
             next_check = 0.0
         elif (is_prediction := prediction(request)) or request == {'info': True}:
             data = reply(p, line)

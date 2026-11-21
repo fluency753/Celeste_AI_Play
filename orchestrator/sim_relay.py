@@ -19,9 +19,14 @@ RELAY_PATH = '/workspace/.sim-relay'
 
 
 def replay_key(session):
+    """规划回放的核对键：章节、房间与当前快照的身份摘要（见 snapshot_identity）。摘要不计游戏全局帧号，
+    所以另核对主控写这份快照时的帧号仍是游戏当前这一帧：游戏推进之后、新快照写好之前，不回放旧快照出发的推演。"""
     obs = session.last_obs or {}
     level = obs.get('level') or {}
-    return level.get('sid'), level.get('room'), obs.get('frame'), getattr(session, 'sim_snapshot_digest', None)
+    digest = getattr(session, 'sim_snapshot_digest', None)
+    if getattr(session, 'sim_snapshot_frame', None) != obs.get('frame'):
+        digest = None
+    return level.get('sid'), level.get('room'), digest
 
 
 def enabled(cfg):
@@ -107,6 +112,7 @@ class SimRelay:
         self.name = name
         engine = REPO_ROOT / 'agent-container' / 'sim-relay.py'
         codec = REPO_ROOT / 'orchestrator' / 'workspace_files' / 'show.py'
+        identity_module = REPO_ROOT / 'orchestrator' / 'snapshot_identity.py'
         available_cpus = subprocess.check_output([self.docker, 'info', '--format', '{{.NCPU}}'], timeout=8, text=True)
         cpus = str(max(1, int(available_cpus)))
         command = [self.docker, 'run', '--rm', '--init', '--pull', 'never', '--name', name, '--network', 'none',
@@ -116,6 +122,7 @@ class SimRelay:
                    '--label', 'celeste.sim-assist=1', '--label', f'celeste.run={self.session.run_dir.name}',
                    '-e', 'DOTNET_EnableDiagnostics=0', *worker_mounts(cfg),
                    '-v', f'{engine}:/engine.py:ro', '-v', f'{codec}:/replay_codec.py:ro',
+                   '-v', f'{identity_module}:/snapshot_identity.py:ro',
                    '-v', f'{volume(cfg)}:/relay', '-v', f'{private}:/control:ro',
                    '--entrypoint', 'python3', cfg.image, '-u', '/engine.py', self.endpoint,
                    str(self.preview_byte_limit), str(BACKTRACK_PX)]
@@ -145,8 +152,8 @@ class SimRelay:
             playback = self.session.playback
             start = event.get('start')
             if playback is not None and playback.enabled and start and start['sid']:
-                key = (start['sid'], start['room'], start['frame'], start.get('digest'))
-                if key[3] and key == replay_key(self.session):
+                key = (start['sid'], start['room'], start.get('digest'))
+                if key[2] and key == replay_key(self.session):
                     # 同一快照出发的推演按起点房间分组（从检查点规划下一个房间时起点在别的房间），一组只画一个房间
                     group = (key, start.get('origin', start['room']))
                     if group != self.preview_key:

@@ -1486,8 +1486,12 @@ class GameSession:
             tmp.write_text(payload, encoding='utf-8')
             tmp.replace(path)
             if getattr(self.cfg, 'sim_relay', False):
-                import hashlib
-                self.sim_snapshot_digest = hashlib.sha256(payload.encode()).hexdigest()
+                from .snapshot_identity import snapshot_identity
+                # 回放核对键：摘要不计游戏全局帧号与实体编号（见 snapshot_identity），帧号另记，核对快照仍是游戏当前这一帧。
+                # 先清掉旧摘要再换帧号，读核对键的线程不会把旧摘要配上新帧号
+                self.sim_snapshot_digest = None
+                self.sim_snapshot_frame = reply['state'].get('frame')
+                self.sim_snapshot_digest = snapshot_identity(reply['state'])
                 try:
                     write_json(self.run_dir / 'sim_private' / 'relay_snapshot.json', self.sim_snapshot_digest)
                 except OSError:

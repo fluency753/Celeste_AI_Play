@@ -1,6 +1,5 @@
 """Check relay mounts, authoritative counting and replay snapshot identity."""
 import base64
-import hashlib
 import io
 import importlib.util
 import json
@@ -12,6 +11,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from orchestrator import sim_relay
+from orchestrator.config import RunConfig
+from orchestrator.snapshot_identity import snapshot_identity
 from orchestrator.container import _sim_label, _sim_mount_matches
 from orchestrator.playback import read_logs
 from orchestrator.workspace_files import show
@@ -26,7 +27,7 @@ class SimRelayTests(unittest.TestCase):
         self.playback = Mock(enabled=True)
         self.metrics = Mock()
         self.session = SimpleNamespace(cfg=self.cfg, metrics=self.metrics, playback=self.playback,
-                                       sim_snapshot_digest='current',
+                                       sim_snapshot_digest='current', sim_snapshot_frame=20,
                                        last_obs={'frame': 20, 'level': {'sid': 'city', 'room': '1'}})
 
     def test_raw_distribution_is_rejected_if_controller_owns_simulation(self):
@@ -99,7 +100,7 @@ class SimRelayTests(unittest.TestCase):
             relay.read()
             relay.flush()
             self.assertTrue(relay.ready.is_set())
-            self.playback.collect_relay_preview.assert_called_once_with([trace, second], ('city', '1', 20, 'current'), 25)
+            self.playback.collect_relay_preview.assert_called_once_with([trace, second], ('city', '1', 'current'), 25)
             self.metrics.add.assert_called_once_with(sim_calls=5, sim_rollouts=280)
             relay.accept(events[2])
             self.session.last_obs['frame'] += 1
@@ -124,15 +125,37 @@ class SimRelayTests(unittest.TestCase):
             relay.accept({'simulated': 6, 'start': {**current, 'origin': '2'}, 'replay': base64.b64encode(there).decode()})
             relay.accept({'simulated': 3, 'start': {**current, 'origin': '2'}, 'replay': base64.b64encode(there).decode()})
             relay.flush()
-            self.playback.collect_relay_preview.assert_called_once_with([there, there], ('city', '1', 20, 'current'), 9)
+            self.playback.collect_relay_preview.assert_called_once_with([there, there], ('city', '1', 'current'), 9)
+
+    def test_saved_copy_of_the_current_scene_replays_until_the_game_advances(self):
+        # 智能体存下的同一场景的快照副本：游戏全局帧号与当前快照不同（重开游戏或续跑之后），身份摘要相同，照样回放；
+        # 游戏推进之后、主控写好新快照之前（写快照时的帧号已不是游戏当前这一帧）不回放
+        with patch('orchestrator.sim_relay.find_docker_exe', return_value='docker'), patch('orchestrator.sim_relay.threading.Timer'):
+            relay = sim_relay.SimRelay(self.session)
+            trace = b'CSL2' + show._pack_record([(2, 3)], 'room', 5602)
+            event = {'simulated': 7, 'start': {'frame': 5602, 'room': '1', 'sid': 'city', 'digest': 'current'},
+                     'replay': base64.b64encode(trace).decode()}
+            relay.accept(event)
+            relay.flush()
+            self.playback.collect_relay_preview.assert_called_once_with([trace], ('city', '1', 'current'), 7)
+            self.session.last_obs['frame'] += 1
+            relay.accept(event)
+            relay.flush()
+            self.playback.collect_relay_preview.assert_called_once()
+            self.metrics.add.assert_called_with(sim_calls=1, sim_rollouts=7)
+
+
+def load_worker():
+    source = Path(__file__).resolve().parents[1] / 'agent-container/sim-relay.py'
+    spec = importlib.util.spec_from_file_location('_relay_worker', source)
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+    return worker
 
 
 class RelayWorkerPreviewTests(unittest.TestCase):
     def setUp(self):
-        source = Path(__file__).resolve().parents[1] / 'agent-container/sim-relay.py'
-        spec = importlib.util.spec_from_file_location('_relay_worker', source)
-        self.worker = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.worker)
+        self.worker = load_worker()
 
     @staticmethod
     def result(end, length, stop='done', events=()):
@@ -182,21 +205,18 @@ class RelayWorkerPreviewTests(unittest.TestCase):
         self.assertEqual(sum(event['simulated'] for event in events), 330)
 
     def test_checkpoint_start_is_checked_against_its_base_snapshot(self):
-        # 从检查点规划下一个房间：按它所依据的快照核对（主控写快照时的紧凑写法），起点取检查点那一帧与所在房间
+        # 从检查点规划下一个房间：按它所依据的快照核对（与主控写快照时同一份身份摘要），起点取检查点那一帧与所在房间
         base = {'format': 'celeste-sim-state/1', 'frame': 581, 'level': {'room': '1', 'session': {'area': 'city'}},
                 'note': '中文', 'x': 1.25}
-        payload = json.dumps(base, ensure_ascii=False, separators=(',', ':'))
-        controller = hashlib.sha256(payload.encode()).hexdigest()
-        checkpoint = {'format': 'celeste-sim-checkpoint/1', 'frame': 700, 'inputs': ['119,R'],
-                      'base': json.loads(payload)}
-        line = json.dumps({'snapshot': checkpoint}, indent=1).encode() + b'\n'   # 客户端怎么排版都行
+        controller = snapshot_identity(base)
+        checkpoint = json.loads(json.dumps({'format': 'celeste-sim-checkpoint/1', 'frame': 700, 'inputs': ['119,R'],
+                                            'base': base}, indent=1))   # 客户端怎么排版都行
         info = {'frame': 700, 'room': '2', 'checkpoint': {'baseFrame': 581, 'frames': 119},
                 'player': {'x': 300.5, 'y': -20.0}}
-        start = self.worker.snapshot_start(line, checkpoint, info)
+        start = self.worker.snapshot_start(checkpoint, info)
         self.assertEqual((start['sid'], start['room'], start['frame'], start['digest']), ('city', '1', 581, controller))
         self.assertEqual((start['origin'], start['origin_frame'], start['origin_xy']), ('2', 700, (300.5, -20.0)))
-        plain = b'{"snapshot":' + payload.encode() + b'}\n'
-        start = self.worker.snapshot_start(plain, base, {'frame': 581, 'room': '1', 'player': {'x': 1, 'y': 2}})
+        start = self.worker.snapshot_start(json.loads(json.dumps(base)), {'frame': 581, 'room': '1', 'player': {'x': 1, 'y': 2}})
         self.assertEqual((start['room'], start['frame'], start['digest'], start['origin']), ('1', 581, controller, '1'))
 
     def test_trimmed_batch_replays_a_few_rerun_routes_without_extra_counts(self):
@@ -291,3 +311,65 @@ class RelayClientCliTests(unittest.TestCase):
             args = SimpleNamespace(inputs=['3'], inputs_file=str(plan))
             self.assertEqual(client.plan_of(args), ['3', '12,R', '1,R,J'])
             self.assertEqual(client.plan_of(SimpleNamespace(inputs=None, inputs_file=None)), [])
+
+
+class SnapshotIdentityTests(unittest.TestCase):
+    """主控写快照与代跑通道读入快照两边的身份摘要：重开游戏或续跑后同一场景的快照、智能体存下的副本都对得上。"""
+
+    def setUp(self):
+        self.worker = load_worker()
+
+    @staticmethod
+    def live():
+        return {'format': 'celeste-sim-state/1', 'frame': 551,
+                'engine': {'freezeTimer': 0, 'timeRate': 1, 'frameCounter': 162955},
+                'level': {'room': '1', 'session': {'area': 'city'}}, 'note': '中文',
+                'entities': [{'i': 0, 'type': 'Celeste.Solid', 'u': 1, 'c': [1.25, -3.5]},
+                             {'i': 1, 'type': 'Celeste.Player', 'u': 2, 'c': [32.0, 120.75]},
+                             {'i': 2, 'type': 'Celeste.Spring', 'data': {'level': 'lvl_1', 'id': 4}}]}
+
+    @staticmethod
+    def controller(state):
+        """主控写快照（GameSession._write_sim_state）记下的身份摘要与帧号。"""
+        from orchestrator.game_session import GameSession
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'workspace' / 'game').mkdir(parents=True)
+            session = GameSession.__new__(GameSession)
+            session.cfg = RunConfig(agent='a', save='s', model='m', engine='claude', sim=True, pause_limit=False,
+                                    sim_relay=True)
+            session.workspace, session.run_dir = root / 'workspace', root / 'run'
+            session.client = SimpleNamespace(call=Mock(return_value={'state': state}))
+            session._write_sim_state()
+            written = json.loads((root / 'run' / 'sim_private' / 'relay_snapshot.json').read_text(encoding='utf-8'))
+            assert written == session.sim_snapshot_digest
+            return session.sim_snapshot_digest, session.sim_snapshot_frame
+
+    def test_saved_copy_from_an_earlier_game_run_matches_the_current_snapshot(self):
+        live = self.live()
+        digest, frame = self.controller(live)
+        self.assertEqual(frame, 551)
+        copy = json.loads(json.dumps(live))
+        copy['frame'], copy['engine']['frameCounter'] = 5602, 7
+        for entity, uid in zip(copy['entities'], (830, 831)):
+            entity['u'] = uid
+        # 智能体的工具怎么排版都行：换了键序与缩进再读回来
+        copy = json.loads(json.dumps(dict(reversed(list(copy.items()))), indent=2, ensure_ascii=False))
+        start = self.worker.snapshot_start(copy, {'frame': 5602, 'room': '1', 'player': {'x': 32.0, 'y': 120.75}})
+        self.assertEqual((start['sid'], start['room'], start['digest']), ('city', '1', digest))
+        checkpoint = {'format': 'celeste-sim-checkpoint/1', 'frame': 5700, 'inputs': ['98,R'], 'base': copy}
+        start = self.worker.snapshot_start(checkpoint, {'frame': 5700, 'room': '2', 'checkpoint': {'baseFrame': 5602}})
+        self.assertEqual((start['room'], start['digest'], start['origin']), ('1', digest, '2'))
+
+    def test_any_change_to_the_scene_itself_changes_the_identity(self):
+        digest, _ = self.controller(self.live())
+        changes = {'Madeline 的位置': lambda s: s['entities'][1]['c'].__setitem__(0, 32.5),
+                   '冻结计时': lambda s: s['engine'].__setitem__('freezeTimer', 1),
+                   '房间': lambda s: s['level'].__setitem__('room', '2'),
+                   '实体顺序': lambda s: s['entities'].reverse(),
+                   '多出编号': lambda s: s['entities'][2].__setitem__('u', 3)}
+        for name, change in changes.items():
+            state = self.live()
+            change(state)
+            with self.subTest(name):
+                self.assertNotEqual(self.controller(state)[0], digest)

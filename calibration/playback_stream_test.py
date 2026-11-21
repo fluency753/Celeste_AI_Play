@@ -393,9 +393,9 @@ class StreamTests(unittest.TestCase):
         session = self.playback.session
         session.lock = threading.RLock()
         session.last_obs = {'frame': 20, 'level': {'sid': 'city', 'room': '1', 'bounds': [0, -100, 300, 200]}}
-        session.sim_snapshot_digest = 'current'
+        session.sim_snapshot_digest, session.sim_snapshot_frame = 'current', 20
         far = MAGIC + HEADER.pack(1.0, 120, 0, 2, 7, 5000 * 8, 0, 5001 * 8, 0, *([0] * 16)) + b'\x08\0\0\0'
-        self.playback.collect_relay_preview([far], ('city', '1', 20, 'current'), 1)
+        self.playback.collect_relay_preview([far], ('city', '1', 'current'), 1)
         self.wait()
         self.assertEqual(self.playback._call.call_count, 1)
         drawn = self.playback._call.call_args[0][0]['tracks']
@@ -627,8 +627,8 @@ class StreamTests(unittest.TestCase):
         session.lock = threading.RLock()
         session.last_obs.update(frame=20)
         session.last_obs['level'].update(sid='city', room='1')
-        session.sim_snapshot_digest = 'scene'
-        key = ('city', '1', 20, 'scene')
+        session.sim_snapshot_digest, session.sim_snapshot_frame = 'scene', 20
+        key = ('city', '1', 'scene')
         tracks = [MAGIC + show._pack_record([(0, 0), (50, 0)], 'room', 20)
                   + show._pack_record([(0, 1), (15, 1)], 'death', 20)]
         playback.collect_relay_preview(tracks, key, 450)
