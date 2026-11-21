@@ -206,6 +206,12 @@ internal static class SimState {
         // 刚关掉暂停菜单：之后 0.15 秒关卡不推进（unpauseTimer），这一帧内不能再暂停（wasPaused）
         Num(w, "unpauseTimer", level.unpauseTimer);
         w.WriteBoolean("wasPaused", level.wasPaused);
+        // 章节计时（Session.Time，刻度）与计时器状态：模拟器据此给出推演结束时的章节计时，并照游戏判断计时何时开始、停止
+        w.WriteNumber("chapterTimeTicks", level.Session.Time);
+        w.WriteBoolean("timerStarted", level.TimerStarted);
+        w.WriteBoolean("timerStopped", level.TimerStopped);
+        w.WriteBoolean("completed", level.Completed);
+        w.WriteBoolean("inCredits", level.InCredits);
         // 进行中的转场遮罩（Level.Wipe）：遮罩没走完时不能暂停；死亡后的遮罩走完才重载房间（回调写成方法名）
         w.WritePropertyName("wipe");
         if (level.Wipe is { } wipe) {

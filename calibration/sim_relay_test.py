@@ -205,7 +205,8 @@ class RelayWorkerPreviewTests(unittest.TestCase):
             return {'ok': True, 'stop': stop, 'events': list(events), 'count': length + 1,
                     'frames': [[length, float(end), 0.0, 0, 0, 'Normal', 1, 1]]}
         results = [trimmed(100, 10, 'room', [[10, 'room', '2']]), trimmed(5, 4, 'death'), trimmed(30, 12)]
-        batch = [{'inputs': [f'{n},R'], 'stop_on_room': False, 'rows': 'last', 'track': ['ZipMover']} for n in (10, 4, 12)]
+        batch = [{'inputs': [f'{n},R'], 'stop_on_room': False, 'rows': 'last', 'track': ['ZipMover'], 'time': True, 'digest': True}
+                 for n in (10, 4, 12)]
         asked = []
         which = {'10,R': 0, '4,R': 1, '12,R': 2}
         def rerun(candidates):
@@ -218,7 +219,7 @@ class RelayWorkerPreviewTests(unittest.TestCase):
                                                  'current', threading.Lock(), [0, 0], None, 1 << 20, show, 40, rerun=rerun)
         self.assertEqual(event['simulated'], 3)
         self.assertEqual(len(asked), 1)
-        self.assertTrue(all('rows' not in c and 'track' not in c and c['stop_on_room'] is False for c in asked[0]))
+        self.assertTrue(all(c.keys() == {'inputs', 'stop_on_room'} and c['stop_on_room'] is False for c in asked[0]))
         index = read_logs([base64.b64decode(event['replay'])])
         self.assertEqual(sorted(index.npts.tolist()), [5, 11, 13])
         self.assertEqual(set(index.ends_at().tolist()), {125, 131, 133})   # 从检查点那一帧（origin_frame）起算
@@ -226,6 +227,12 @@ class RelayWorkerPreviewTests(unittest.TestCase):
         no_rerun = self.worker.simulation_event(json.dumps({'results': results}).encode(), {'batch': batch}, start,
                                                 'current', threading.Lock(), [0, 0], None, 1 << 20, show, 40)
         self.assertNotIn('replay', no_rerun)
+
+    def test_chapter_time_and_state_digest_requests_are_forwarded(self):
+        # 章节计时（time）与结束状态摘要（digest）只是回复里的附加字段：代跑通道照常转发、照常计入推演
+        self.assertTrue(self.worker.prediction({'inputs': ['3,R'], 'time': True, 'digest': True}))
+        self.assertTrue(self.worker.prediction({'batch': [{'inputs': ['3,R'], 'time': True}, {'inputs': ['1'], 'digest': True, 'rows': 'last'}]}))
+        self.assertFalse(self.worker.prediction({'inputs': ['3,R'], 'state': '/workspace/other.json'}))
 
     def test_encoding_error_does_not_drop_simulation_count(self):
         result = self.result(1_000_000_000, 2)
