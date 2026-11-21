@@ -63,6 +63,8 @@ EFFORT_OK = re.compile(r"^Set effort level to ([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\s|
 # "Claude AI usage limit reached|1792766400"、"You've hit your limit · resets 3pm"
 LIMIT_TEXT = re.compile(r"usage limit|hit your (?:usage )?limit|rate[ _]limit", re.I)
 CONTAINER_BUILTIN_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
+# 后台任务（Bash 的 run_in_background）配套的两个工具：取后台命令的输出（可以阻塞等它结束）、停掉它
+BACKGROUND_TOOLS = ["TaskOutput", "TaskStop"]
 MODEL_RESTARTS = 2      # 服务模型被换掉后自动重启换回的次数；连续这么多次都换不回就保持暂停
 
 
@@ -124,6 +126,13 @@ def _strip_images(value):
 
 # 探索模式设成"不限时"时 Bash 的上限：24 小时，实际由整次运行的现实时间上限（--max-minutes）约束
 UNLIMITED_PROGRAM_S = 24 * 3600
+
+
+def background_tasks(cfg) -> bool:
+    """容器里的 Claude Code 能不能用后台任务：只有不限额的速通开放（长搜索放到后台，等结果时可以接着想、读别的结果，
+    维护者发消息也不会打断后台的搜索）。探索模式有单次规划程序的时长上限、限额规划按轮计量，后台跑的程序会绕过这些限制，
+    这两种仍然关闭。游戏照旧只在 act 时推进；后台命令本身不计入工具时间，用 TaskOutput 等它时才算。"""
+    return getattr(cfg, "mode", "speedrun") == "speedrun" and not getattr(cfg, "pause_limit", False)
 
 
 def bash_limits_ms(cfg) -> tuple[int, int]:
@@ -523,9 +532,9 @@ class ClaudeRunner(SessionControls):
                 find_docker_exe(), "exec", "-i", "-u", "agent", "-w", "/workspace",
                 *[arg for name in self._credential_names() for arg in ("-e", name)],
                 "-e", "MCP_TOOL_TIMEOUT=900000", "-e", "MAX_MCP_OUTPUT_TOKENS=40000",
-                # 不允许后台任务：游戏只在 act 时推进，后台跑的搜索会绕过每次暂停一轮工具的限制，也让计时失真。
-                # 前台命令默认最多等 5 分钟（可以用 timeout 参数加到 10 分钟），超时就结束，不会转入后台
-                "-e", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+                # 后台任务只在不限额的速通开放（见 background_tasks）；其余模式关闭：后台跑的程序会绕过单次程序时长与
+                # 按轮计量的限制。前台命令照旧受下面的 Bash 时长上限约束，超时就结束，不会转入后台
+                *([] if background_tasks(self.cfg) else ["-e", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1"]),
                 # Bash 等子进程里清掉凭据变量（ANTHROPIC_AUTH_TOKEN 等）：第三方的 API 密钥不能让智能体的程序看到。
                 # 不设时 Claude Code 只清订阅令牌，实测 Bash 里能读到 ANTHROPIC_AUTH_TOKEN
                 "-e", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
@@ -535,9 +544,9 @@ class ClaudeRunner(SessionControls):
                 self.container, "claude", *self._common_args(),
                 # 受限模式：不读取用户、项目与本地设置文件（智能体改不了自己的配置），文件工具只能访问工作区与知识库
                 "--restricted", "--add-dir", "/kb", *(["--add-dir", "/sim"] if agent_sim(self.cfg) else []),
-                "--tools", ",".join(CONTAINER_BUILTIN_TOOLS),
+                "--tools", ",".join(self._builtin_tools()),
                 "--mcp-config", mcp,
-                "--allowedTools", *CONTAINER_BUILTIN_TOOLS, *self._game_tools(),
+                "--allowedTools", *self._builtin_tools(), *self._game_tools(),
                 "--append-system-prompt", prompt,
             ]
         mcp_config = self.run_dir / "mcp.json"
@@ -567,10 +576,16 @@ class ClaudeRunner(SessionControls):
                     '不观察或操作游戏，不自行开始试玩。没有用户消息时等待。', cfg=self.cfg)
         return ''
 
+    def _builtin_tools(self) -> list[str]:
+        """容器里开放的内置工具；开放后台任务时另有取输出与停止后台命令的两个工具。"""
+        if workspace_capabilities(self.cfg).agent_location == "container" and background_tasks(self.cfg):
+            return CONTAINER_BUILTIN_TOOLS + BACKGROUND_TOOLS
+        return CONTAINER_BUILTIN_TOOLS
+
     def _allowed_tool(self, name: str) -> bool:
         if name.startswith("mcp__celeste__"):
             return True
-        return workspace_capabilities(self.cfg).builtin_tools and name in CONTAINER_BUILTIN_TOOLS
+        return workspace_capabilities(self.cfg).builtin_tools and name in self._builtin_tools()
 
     def _env(self) -> dict[str, str]:
         # 去掉所有 Claude / Anthropic / MCP 相关的继承变量（例如外层 Claude Code 会话留下的推理强度、

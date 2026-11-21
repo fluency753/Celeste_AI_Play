@@ -209,3 +209,32 @@ class WorkspacePreparationTests(unittest.IsolatedAsyncioTestCase):
                 async with host_runner(cfg, None, None, None, prepare_only=True):
                     self.fail('host Claude cannot read the required knowledge files')
             runner.assert_not_called()
+
+
+class BackgroundTaskTests(unittest.TestCase):
+    def test_only_unlimited_container_speedrun_opens_background_tasks(self):
+        # 不限额的速通开放后台任务及取输出、停止两个工具；探索模式与限额规划仍关闭。开放的工具与每轮的工具列表核对一致
+        from orchestrator.agent import ClaudeRunner
+        from orchestrator.metrics import Metrics
+        cases = (({'mode': 'speedrun'}, True), ({'mode': 'explore'}, False),
+                 ({'mode': 'speedrun', 'sim': True, 'pause_limit': True}, False))
+        for settings, opened in cases:
+            cfg = RunConfig(agent='test', save='test', model='opus', runtime='container', **settings)
+            with self.subTest(**settings), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                runner = ClaudeRunner(cfg, root, SimpleNamespace(done=False),
+                                      Metrics(root / 'metrics.json', 'test', 'opus', 'high', 60), 'celeste-agent-test')
+                try:
+                    with patch('orchestrator.agent.find_docker_exe', return_value='docker'):
+                        command = runner._command()
+                    tools = command[command.index('--tools') + 1].split(',')
+                    allowed = command[command.index('--allowedTools') + 1:command.index('--append-system-prompt')]
+                    self.assertEqual('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1' not in command, opened)
+                    for name in ('TaskOutput', 'TaskStop'):
+                        self.assertEqual(name in tools, opened)
+                        self.assertEqual(name in allowed, opened)
+                        self.assertEqual(runner._allowed_tool(name), opened)
+                    self.assertTrue(runner._allowed_tool('Bash'))
+                    self.assertFalse(runner._allowed_tool('Agent'))
+                finally:
+                    runner.close_events()
