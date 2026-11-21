@@ -1,4 +1,5 @@
 import json
+import math
 import tempfile
 import threading
 import unittest
@@ -9,7 +10,9 @@ from unittest.mock import Mock, patch
 
 from orchestrator.config import RunConfig
 from orchestrator.metrics import Metrics
-from orchestrator.playback import Playback, MAGIC, HEADER, read_logs
+import numpy as np
+
+from orchestrator.playback import Playback, MAGIC, HEADER, read_logs, build_segment, Track, KIND_OPEN, KIND_BEST
 from orchestrator.rollout_tail import RecordTail
 from orchestrator.planning_budget import PlanningBudget
 from orchestrator.workspace_files import show
@@ -216,6 +219,26 @@ class StreamTests(unittest.TestCase):
         segment=self.playback._call.call_args.args[0]
         self.assertEqual(len(segment['tracks']),100)
         self.assertLessEqual(segment['frames'],90)
+
+    def test_preview_segment_ends_when_its_routes_are_drawn(self):
+        # 增量预览一段接一段：画完就结束，不再停 18 帧、也不让镜头沿最远的线往回走
+        self.start();self.file.write_bytes(MAGIC+record(1))
+        self.poll();self.wait()
+        segment=self.playback._call.call_args.args[0]
+        self.assertEqual(segment['frames'],max(1,math.ceil(1/float(self.playback.cfg.playback_speed))))
+
+    def test_segment_without_settle_keeps_camera_at_the_far_end(self):
+        path=np.array([[float(i),0.0] for i in range(101)])
+        open_track=Track(kind=KIND_OPEN,path=path,stop=0,order=0)
+        settled=build_segment([open_track],2.0,0,4.0)
+        self.assertEqual(settled['frames'],50+25+18)          # 正常一轮：画完、往回走、再停
+        quick=build_segment([open_track],2.0,0,4.0,hold=0,settle=False)
+        self.assertEqual(quick['frames'],50)
+        xs=quick['focus'][0::2]
+        self.assertEqual(xs,sorted(xs))                       # 镜头一路跟着往前，不往回走
+        best=build_segment([Track(kind=KIND_BEST,path=path,stop=2,order=0)],2.0,0,4.0,hold=0,settle=False)
+        self.assertEqual(best['frames'],50+25)                # 金色路线照旧从终点往回变金
+        self.assertLess(best['focus'][-2],50)                   # 镜头跟着变金的那一点往回走
 
     def test_slow_preview_coalesces_updates_instead_of_unbounded_queue(self):
         entered,release=threading.Event(),threading.Event()

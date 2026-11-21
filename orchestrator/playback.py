@@ -795,7 +795,10 @@ class Playback:
         speed = float(self.cfg.playback_speed)
         stagger = int(self.cfg.playback_stagger_s * 60)
         recolor = float(self.cfg.playback_recolor)
-        seg = build_segment(rd.tracks, speed, stagger, recolor)
+        # 搜索中的增量预览（以及搜索结束时只重画金色路线的那一段）一段接一段地画：画完就结束，不再停留、
+        # 不再让镜头沿最远的线往回走，免得每段之间都停一下
+        settle = not (preview or skip_render)
+        seg = build_segment(rd.tracks, speed, stagger, recolor, hold=18 if settle else 0, settle=settle)
         cap = self.round_cap_frames()
         if preview or skip_render:
             cap = min(cap, max(1, round(getattr(self.cfg, 'playback_stream_clip_s', 1.5) * 60)))
@@ -805,7 +808,7 @@ class Playback:
                 break
             factor *= seg["frames"] / cap
             seg = build_segment(rd.tracks, speed * factor, max(1, int(stagger / factor)), recolor * factor,
-                                hold=max(1, int(18 / factor)), fade=0)
+                                hold=max(1, int(18 / factor)) if settle else 0, fade=0, settle=settle)
         seg["camera"] = "keep"
         try:
             reply = self._call(seg, round_no=number, label=rd.label or f"第 {number} 轮规划", runs=shown_rollouts, generation=generation)
@@ -981,10 +984,11 @@ class Playback:
 
 
 def build_segment(tracks: list[Track], speed: float, stagger: int, recolor: float = 4.0, hold: int = 18,
-                  fade: int = 0) -> dict:
+                  fade: int = 0, settle: bool = True) -> dict:
     """一轮的回放：路线按推演先后在 stagger 帧里陆续出场，每个画面帧推进 speed 帧游戏时间；延伸中一律绿色，
     走到头时死亡的从终点往起点变红、金色的变金（每个画面帧传导 recolor 帧）。所有线都画完、变完色之后再停 hold 帧。
-    镜头先跟着伸得最远的绿线，金色路线走到头后跟着变金的那一点往回走；没有金色路线时，所有线画完后沿伸得最远的那条往回走。"""
+    镜头先跟着伸得最远的绿线，金色路线走到头后跟着变金的那一点往回走；没有金色路线时，所有线画完后沿伸得最远的那条往回走
+    （settle 为 False 时不往回走：镜头停在伸得最远的那一点，线画完、变完色这一段就结束）。"""
     n = len(tracks)
     delays = [int(i * stagger / max(1, n - 1)) for i in range(n)]
 
@@ -1001,12 +1005,14 @@ def build_segment(tracks: list[Track], speed: float, stagger: int, recolor: floa
         [float(np.hypot(*(t.path[-1] - origin))) for t in tracks]))
     lead = tracks[lead_i].path
     lead_last = len(lead) - 1
-    if best_i is None:
+    if best_i is not None:
+        back_from = finish[best_i]              # 金色路线走到头、开始往回变金
+    elif settle:
         back_from = max(finish)                 # 所有线都画完之后再往回走
         end_at = max(end_at, back_from + lead_last / recolor)
     else:
-        back_from = finish[best_i]              # 金色路线走到头、开始往回变金
-    frames = int(math.ceil(end_at)) + hold
+        back_from = math.inf                    # 不往回走
+    frames = max(1, int(math.ceil(end_at)) + hold)
 
     # 镜头目标（每 4 帧一个）：往回走之前跟着"伸得最远的绿线"——此刻所有已出场路线里，前端离起点最远的那一点；
     # 之后沿着金色路线（没有金色时是伸得最远的那条）从终点往回移，回到起点后停住
