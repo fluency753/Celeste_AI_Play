@@ -21,7 +21,7 @@ namespace CelesteAI.Bridge;
 /// 任务完成后回报并恢复对应场景的空闲策略。加载场景自动走完。
 /// </summary>
 internal static class Bridge {
-    public const string Version = "1.22.0";
+    public const string Version = "1.22.1";
     private sealed record ChapterCapture(object? Capture);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Session, ChapterCapture> chapterCaptures = new();
     private static object captureEpoch = new();
@@ -799,6 +799,7 @@ internal static class Bridge {
                     w.WriteBoolean("speedrun_goto_room", true);
                     w.WriteBoolean("speedrun_recorded_attempt", true);
                     w.WriteBoolean("practice_savestate", PracticeSaves.Available);
+                    w.WriteString("speedrun_tool_hotkeys", SpeedrunToolHotkeys.State);
                     w.WriteBoolean("stop_rooms", true);
                     w.WriteBoolean("entry_guard", MapEntryGuard.Available);
                     w.WriteBoolean("map_entry_set", MapEntryGuard.Available);

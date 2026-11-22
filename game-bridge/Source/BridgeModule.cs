@@ -32,11 +32,17 @@ public class BridgeModule : EverestModule {
             } catch (Exception e) {
                 Log.Warn($"optional Speedrun Tool integration unavailable: {e.Message}");
             }
+            try {
+                SpeedrunToolHotkeys.Bind();
+            } catch (Exception e) {
+                Log.Warn($"Speedrun Tool hotkeys stay live during control: {e.Message}");
+            }
             Metadata.VersionString = Bridge.Version;
             BridgeRuntime.Attach(owner, 1, Bridge.Version, Bridge.Tick, Bridge.Enqueue, Bridge.CanReload,
                 Bridge.ExportReloadState, Bridge.ImportReloadState, Bridge.ServiceReloadRequests);
             attached = true;
         } catch {
+            SpeedrunToolHotkeys.Unbind();
             PracticeSaves.Unbind();
             Hooks.Unload();
             throw;
@@ -81,6 +87,7 @@ public class BridgeModule : EverestModule {
             attached = false;
         }
         void Cleanup() {
+            SpeedrunToolHotkeys.Unbind();
             PracticeSaves.Unbind();
             Bridge.ReleasePayloadResources();
             ModHud.Unload();

@@ -3,6 +3,9 @@
 Simulation allowance belongs to the host simulation entry, not this transport.
 """
 import re
+import time
+
+SLOW_GATE_S = 2.0      # 一次门禁请求在主控里处理超过这么久就记一笔（钩子 25 秒超时）
 
 
 async def decide_tool(tool_name, *, metrics=None, live_remind_s=None, session=None,
@@ -46,28 +49,38 @@ def add_gate_route(app, metrics=None, live_remind_s: float | None = None, sessio
     from starlette.routing import Route
 
     async def endpoint(request: Request):
+        # 钩子超时（主控工具门禁不可用）多半是事件循环被占住：第一次请求时在这个循环上挂看门狗，卡住时记下栈
+        from .loop_watchdog import ensure_watchdog
+        ensure_watchdog()
+        started = time.monotonic()
+        response, tool = await handle(request)
+        if (took := time.monotonic() - started) >= SLOW_GATE_S:
+            print(f'[gate] 工具门禁处理 {tool or "（未知工具）"} 用了 {took:.1f} 秒', flush=True)
+        return response
+
+    async def handle(request: Request):
         # 只认容器钩子的请求：JSON 类型（网页不经预检发不出这种请求）且 Host 是本机或容器看到的宿主名
         # （网页把自己的域名解析到本机再来访问时，Host 仍是它的域名）。提醒一经取出就算送达，不能让外人取走。
         content_type = request.headers.get('content-type', '').split(';')[0].strip().lower()
         if content_type != 'application/json' or not GATE_HOST.fullmatch(request.headers.get('host', '').strip().lower()):
             return JSONResponse({'decision': 'deny', 'reason': '工具门禁只接受本机钩子的 JSON 请求，本次未执行。', 'context': ''},
-                                status_code=403)
+                                status_code=403), None
         try:
             data = await request.json()
         except ValueError:
             data = {}
         if not isinstance(data, dict):
-            return JSONResponse({'decision': 'deny', 'reason': '工具门禁请求必须是对象，本次未执行。', 'context': ''})
+            return JSONResponse({'decision': 'deny', 'reason': '工具门禁请求必须是对象，本次未执行。', 'context': ''}), None
+        tool = str(data.get('tool_name') or '')
         if data.get('engine') == 'codex':
             callback = getattr(session, 'native_tool_hook', None)
             if callback is None:
-                return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Codex 会话', 'context': ''})
-            return JSONResponse(await callback(data))
+                return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Codex 会话', 'context': ''}), tool
+            return JSONResponse(await callback(data)), tool
         owner_guard = getattr(session, 'workspace_hook_guard', None)
         if owner_guard is None and session is not None:
-            return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Claude 工具会话，本次未执行。', 'context': ''})
-        return JSONResponse(await decide_tool(str(data.get('tool_name') or ''),
-                                              metrics=metrics, live_remind_s=live_remind_s, session=session,
-                                              execution_guard=(lambda: owner_guard(data)) if owner_guard else None))
+            return JSONResponse({'decision': 'deny', 'reason': '没有正在接管的 Claude 工具会话，本次未执行。', 'context': ''}), tool
+        return JSONResponse(await decide_tool(tool, metrics=metrics, live_remind_s=live_remind_s, session=session,
+                                              execution_guard=(lambda: owner_guard(data)) if owner_guard else None)), tool
 
     app.router.routes.insert(0, Route("/gate", endpoint, methods=["POST"]))

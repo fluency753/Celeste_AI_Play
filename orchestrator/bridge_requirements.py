@@ -31,6 +31,19 @@ def validate_bridge(hello):
     check_identity(hello)
 
 
+def speedrun_tool_hotkey_notice(hello):
+    """Speedrun Tool 的快捷键自己读真实键盘与手柄，不看桥接的合成输入；桥接 1.22.1 起在接管期间停用它们。
+    没装 Speedrun Tool 或已停用时不提醒；旧桥接或没挂上时提醒一句（不拦开跑）。"""
+    state = hello.get('speedrun_tool_hotkeys')
+    if state in ('guarded', 'absent'):
+        return None
+    if state is None:
+        return ('[run] 桥接早于 1.22.1：装了 Speedrun Tool 时，接管期间它的快捷键仍会被手柄（包括虚拟手柄）'
+                '或游戏窗口在前台时的键盘触发，读档、传送房间、刷出望远镜等会改动受控的关卡。请更新桥接 Mod。')
+    return ('[run] 装了 Speedrun Tool，但桥接没能在接管期间停用它的快捷键（Speedrun Tool 版本不认得）：手柄或键盘'
+            '仍可能触发读档、传送房间、刷出望远镜等，改动受控的关卡。运行期间请别碰手柄与游戏窗口，或在 Speedrun Tool 设置里关掉快捷键。')
+
+
 def preflight_bridge(port):
     from tools.bridge_client import BridgeClient
     client = BridgeClient(port=port)
@@ -49,6 +62,8 @@ def preflight_bridge(port):
         # Steam 在游戏启动后重启过或已退出：游戏调用 Steam 时可能被直接结束，先请用户重启游戏。
         from .game_watch import require_live_steam
         require_live_steam(hello, log=lambda line: print(line, flush=True))
+        if notice := speedrun_tool_hotkey_notice(hello):
+            print(notice, flush=True)
         return hello
     finally:
         client.close()
