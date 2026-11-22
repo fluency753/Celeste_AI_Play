@@ -8,6 +8,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -127,7 +128,8 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_case(self, *, failure='rpc', failures=1, action=False,
                        waiting=None, configure=None, initial_user=None, preparing=False, naming=False,
-                       report_goal=False, restored_elapsed=None, study_elapsed=None, during_turn=None):
+                       report_goal=False, restored_elapsed=None, study_elapsed=None, during_turn=None,
+                       rpc_boundary=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cfg = RunConfig(agent='capacity-test', save='test', model='test', engine='codex',
@@ -201,7 +203,7 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                     session.done = True
                     session.done_reason = '隔离验证完成'
 
-            async def request(method, params):
+            async def request(method, params, *, timeout=None):
                 if method == 'thread/start':
                     return {'thread': {'id': 'same-thread'}, 'model': 'test',
                             'activePermissionProfile': {'id': params['permissions']}}
@@ -224,9 +226,15 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
                     child = asyncio.create_task(finish(number, failed))
                     children.append(child)
                     return {'turn': {'id': f'turn-{number}'}}
+                if rpc_boundary:
+                    return await rpc_boundary(runner, method, params)
                 return {}
 
-            runner.rpc.start, runner.rpc.close = AsyncMock(), AsyncMock()
+            async def close():
+                if rpc_boundary:
+                    await asyncio.gather(*children)
+
+            runner.rpc.start, runner.rpc.close = AsyncMock(), AsyncMock(side_effect=close)
             runner.rpc.request = AsyncMock(side_effect=request)
             runner.rpc.reader = asyncio.get_running_loop().create_future()
             watcher = None
@@ -441,6 +449,77 @@ class CodexCapacityTests(unittest.IsolatedAsyncioTestCase):
         result['runner'].rpc.start.assert_not_awaited()
         result['runner'].rpc.request.assert_not_awaited()
         self.assertEqual(result['steps'], [])
+        self.assertEqual(result['shutdown'], 'release')
+
+    async def test_budget_cutoff_waits_for_inflight_image_before_interrupt(self):
+        delivery_order = []
+
+        async def act(runner, session, metrics, actions):
+            actions.append(await runner._request('item/tool/call', {
+                'callId': 'image-at-cutoff', 'tool': 'celeste_act',
+                'arguments': {'inputs': ['1,R'], 'thought': '测试最后一次动作的观测'}}))
+            runner.cfg.max_minutes = 0  # Also let the fixture stop if the expected steer never happened.
+            await self.until(lambda: 'interrupt' in delivery_order)
+
+        async def server(runner, method, params):
+            if method == 'turn/steer' and any(part['type'] == 'image' for part in params['input']):
+                runner.cfg.max_minutes = 0
+                await self.until(lambda: getattr(runner, '_budget_expired', False) or 'interrupt' in delivery_order)
+                if 'interrupt' in delivery_order:
+                    raise CodexRPCError({'code': -32600, 'message': 'no active turn to steer'})
+                delivery_order.append('image')
+                return {'turnId': params['expectedTurnId']}
+            if method == 'turn/interrupt':
+                delivery_order.append('interrupt')
+            return {}
+
+        result = await self.run_case(failures=0, during_turn=act, rpc_boundary=server,
+                                     configure=lambda cfg: setattr(cfg, 'collision_image', 'always'))
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['reason'], '现实时间预算用完')
+        self.assertEqual(result['steps'], [['1,R']])
+        self.assertTrue(result['actions'][0]['success'], result['actions'][0])
+        self.assertFalse(result['runner'].paused)
+        self.assertEqual(result['shutdown'], 'release')
+        self.assertEqual(delivery_order, ['image', 'interrupt'])
+
+    async def test_budget_cutoff_cancels_new_image_from_finished_game_action(self):
+        interrupted = threading.Event()
+
+        async def act(runner, session, metrics, actions):
+            loop = asyncio.get_running_loop()
+            bridge_call = session.client.call
+
+            def call(command, **args):
+                result = bridge_call(command, **args)
+                if command == 'step':
+                    loop.call_soon_threadsafe(setattr, runner.cfg, 'max_minutes', 0)
+                    if not interrupted.wait(5):
+                        raise AssertionError('Codex did not interrupt at the budget cutoff')
+                return result
+
+            session.client.call = call
+            actions.append(await runner._request('item/tool/call', {
+                'callId': 'game-at-cutoff', 'tool': 'celeste_act',
+                'arguments': {'inputs': ['1,R'], 'thought': '核对预算到期后的动作回执'}}))
+
+        async def server(runner, method, params):
+            if method == 'turn/interrupt':
+                interrupted.set()
+            if method == 'turn/steer' and any(part['type'] == 'image' for part in params['input']):
+                raise CodexRPCError({'code': -32600, 'message': 'no active turn to steer'})
+            return {}
+
+        result = await self.run_case(failures=0, during_turn=act, rpc_boundary=server,
+                                     configure=lambda cfg: setattr(cfg, 'collision_image', 'always'))
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['reason'], '现实时间预算用完')
+        self.assertEqual(result['steps'], [['1,R']])
+        self.assertFalse(result['actions'][0]['success'])
+        text = '\n'.join(block['text'] for block in result['actions'][0]['contentItems'])
+        self.assertIn('现实时间预算已用完，未提交图像', text)
+        self.assertIn('勿重复已执行动作', text)
+        self.assertFalse(result['runner'].paused)
         self.assertEqual(result['shutdown'], 'release')
 
     async def test_preparation_deadline_opens_game_tools_and_starts_play_clock(self):

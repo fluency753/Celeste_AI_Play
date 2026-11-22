@@ -47,6 +47,8 @@ def denial(controller, name, arguments=None):
     if (getattr(session, 'done', False) or controller.goal_finishing
             or stop_motion is not None and stop_motion.is_set()):
         return '本次试玩已结束或正在收尾，本次游戏工具未执行。'
+    if getattr(controller, '_budget_expired', False):
+        return '现实时间预算已用完，本次游戏工具未执行。'
     if controller.stop_requested:
         return '用户已中断本次运行，本次游戏工具未执行。'
     if name == 'stop_run':

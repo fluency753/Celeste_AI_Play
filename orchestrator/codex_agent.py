@@ -81,6 +81,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         self.turn_id = None
         self.turn_done = asyncio.Event()
         self.turn_result = None
+        self._budget_expired = False
+        self._observation_delivery_lock = asyncio.Lock()
         self.fatal = None
         self.model_waiting = False
         self.retain_on_model_failure = False
@@ -412,7 +414,8 @@ class CodexRunner(ModelRecovery, SessionControls):
 
     def _steerable(self, origin_turn):
         return bool(origin_turn and self.turn_id == origin_turn and self.turn_active
-                    and not self.turn_done.is_set() and not self.stop_requested and not self.pausing)
+                    and not self.turn_done.is_set() and not self.stop_requested and not self.pausing
+                    and not self._budget_expired)
 
     async def _steer_receipt(self, origin_turn, items, receipt):
         if not self._steerable(origin_turn):
@@ -513,6 +516,8 @@ class CodexRunner(ModelRecovery, SessionControls):
         args = params.get('arguments') or {}
         origin_turn, origin_epoch = self.turn_id, self._sampling_epoch
         def request_void():
+            if self._budget_expired:
+                return '现实时间预算已用完，本次动作未执行。'
             if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
                     or self.turn_done.is_set() or self.stop_requested or self.pausing):
                 return '发起此请求的轮次已结束，动作未执行；等待当前轮次的新指令。'
@@ -687,25 +692,31 @@ class CodexRunner(ModelRecovery, SessionControls):
                     {'type': 'text', 'text': f'【{tool} 图像】' + label},
                     {'type': 'image', 'url': f"data:{data['mimeType']};base64,{data['data']}"}])
         if attachments:
-            try:
-                if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
-                        or self.turn_done.is_set() or self.paused or self.pausing or self.stop_requested):
-                    raise RuntimeError('原轮次已停止或试玩已暂停')
-                response = await self.rpc.request('turn/steer', {'threadId': self.session_id,
-                    'expectedTurnId': origin_turn, 'input': attachments}, timeout=15)
-                if not isinstance(response, dict) or response.get('turnId') != origin_turn:
-                    raise RuntimeError('图像交付未确认原轮次')
-                self._audit_delivery('observation_queued', tool=tool, call_id=str(call_id),
-                                     images=sum(item['type'] == 'image' for item in attachments))
-            except (RuntimeError, OSError, TimeoutError) as exc:
-                self._audit_delivery('observation_unconfirmed', tool=tool, call_id=str(call_id), error=str(exc))
-                if tool == 'celeste_observe' and getattr(self.session, 'reload_epoch', 0):
-                    self.session.reload_observation_required = True
-                self._agent_pause('观测图像交付失败', kind='error', category='observation_delivery', error=exc)
-                content.append({'type': 'inputText', 'text':
-                    '图像交付失败：' + str(exc) + '。上面的游戏执行结果仍有效，勿重复已执行动作；'
-                    '试玩保持暂停，请结束本轮并等待处理。恢复后重新observe，不沿用旧图。'})
-                return await self._notes_response({'contentItems': content, 'success': False}, origin_turn)
+            async with self._observation_delivery_lock:
+                if self._budget_expired:
+                    self._audit_delivery('observation_cancelled', tool=tool, call_id=str(call_id), reason='wall_budget')
+                    content.append({'type': 'inputText', 'text':
+                        '现实时间预算已用完，未提交图像。正文中的游戏执行结果仍有效，勿重复已执行动作。'})
+                    return {'contentItems': content, 'success': False}
+                try:
+                    if (not origin_turn or self.turn_id != origin_turn or not self.turn_active
+                            or self.turn_done.is_set() or self.paused or self.pausing or self.stop_requested):
+                        raise RuntimeError('原轮次已停止或试玩已暂停')
+                    response = await self.rpc.request('turn/steer', {'threadId': self.session_id,
+                        'expectedTurnId': origin_turn, 'input': attachments}, timeout=15)
+                    if not isinstance(response, dict) or response.get('turnId') != origin_turn:
+                        raise RuntimeError('图像交付未确认原轮次')
+                    self._audit_delivery('observation_queued', tool=tool, call_id=str(call_id),
+                                         images=sum(item['type'] == 'image' for item in attachments))
+                except (RuntimeError, OSError, TimeoutError) as exc:
+                    self._audit_delivery('observation_unconfirmed', tool=tool, call_id=str(call_id), error=str(exc))
+                    if tool == 'celeste_observe' and getattr(self.session, 'reload_epoch', 0):
+                        self.session.reload_observation_required = True
+                    self._agent_pause('观测图像交付失败', kind='error', category='observation_delivery', error=exc)
+                    content.append({'type': 'inputText', 'text':
+                        '图像交付失败：' + str(exc) + '。上面的游戏执行结果仍有效，勿重复已执行动作；'
+                        '试玩保持暂停，请结束本轮并等待处理。恢复后重新observe，不沿用旧图。'})
+                    return await self._notes_response({'contentItems': content, 'success': False}, origin_turn)
             content.append({'type': 'inputText', 'text': '图像已提交到同轮输入。'})
         return await self._notes_response({'contentItems':content,'success':not result.is_error}, origin_turn)
 
@@ -1072,7 +1083,16 @@ class CodexRunner(ModelRecovery, SessionControls):
                         raise ConnectionError(self._rpc_disconnect_message("Codex app-server 已断开"))
                     self._open_play_at_study_deadline()
                     if self._budget_remaining(started) <= 0:
-                        await self.rpc.request("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id})
+                        self._budget_expired = True
+                        # Only wait for an image steer already in progress. A game tool
+                        # still computing at cutoff must not submit a new image.
+                        async with self._observation_delivery_lock:
+                            if not self.stop_requested:
+                                if self.turn_done.is_set():
+                                    break  # Preserve the normal completed-turn handling below.
+                                await self.rpc.request("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id})
+                        if self.stop_requested:
+                            return await self._stopped_reason()
                         return "现实时间预算用完"
                     await asyncio.sleep(0.1)
                 self._end_model_turn()
