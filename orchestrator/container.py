@@ -321,6 +321,11 @@ def ensure_container(cfg: RunConfig, log=print) -> str:
     prepare_view(cfg, log)
     image = docker("image", "inspect", "-f", "{{.Id}}", cfg.image, check=False)
     if image.returncode != 0:
+        # Docker 引擎没起来时这条命令同样失败：先问一下引擎，别把"Docker Desktop 没开"说成找不到镜像
+        engine = docker("version", "--format", "{{.Server.Version}}", check=False)
+        if engine.returncode != 0:
+            detail = (engine.stderr or engine.stdout).strip()[:200]
+            raise RuntimeError(f"Docker 引擎没有运行（Docker Desktop 没有启动或还在启动），启动后再运行或续跑。{detail}")
         raise RuntimeError(f"找不到镜像 {cfg.image}，请先在仓库根目录执行：docker build -t {cfg.image} agent-container")
     if enabled(cfg):
         prepare_sim_relay(cfg)

@@ -350,5 +350,42 @@ class CarryTmpTests(unittest.TestCase):
         self.assertEqual((target / 'keep').read_text(encoding='utf-8'), 'untouched')
 
 
+
+class DockerEngineTests(unittest.TestCase):
+    """Docker 引擎没起来时 docker image inspect 也会失败：要报引擎没运行，不能说成找不到镜像。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+        self.cfg = RunConfig(agent="engine", save="s", model="m")
+
+    def ensure(self, docker):
+        with patch.object(container, "docker", docker), patch.object(container, "find_docker_exe", lambda: "docker"), \
+             patch("orchestrator.config.REPO_ROOT", self.root), patch("orchestrator.kb_access.KB_ROOT", self.root / 'kb'):
+            return container.ensure_container(self.cfg, log=lambda *_: None)
+
+    def test_engine_not_running_is_not_reported_as_missing_image(self):
+        down = 'failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine'
+
+        def docker(*args, check=True, timeout=120):
+            return SimpleNamespace(returncode=1, stdout='', stderr=down)
+
+        with self.assertRaises(RuntimeError) as caught:
+            self.ensure(docker)
+        self.assertIn('Docker 引擎没有运行', str(caught.exception))
+        self.assertIn(down, str(caught.exception))
+        self.assertNotIn('找不到镜像', str(caught.exception))
+
+    def test_missing_image_with_engine_running_still_says_so(self):
+        def docker(*args, check=True, timeout=120):
+            if args[:2] == ('image', 'inspect'):
+                return SimpleNamespace(returncode=1, stdout='', stderr='Error: No such image: celeste-agent:0.1')
+            return SimpleNamespace(returncode=0, stdout='29.0.1', stderr='')
+
+        with self.assertRaisesRegex(RuntimeError, '找不到镜像 celeste-agent:0.1'):
+            self.ensure(docker)
+
+
 if __name__ == "__main__":
     unittest.main()
