@@ -2,6 +2,11 @@
 
 按日期倒序；同一天的条目也按时间倒序（新的在上）。原生 GPT、直播、可交互网页 HUD 等改动的细节另见 [docs/LIVE_ADAPTATION.md](docs/LIVE_ADAPTATION.md)。
 
+## 2026-11-26
+
+- **发布公测版 v1.48.4-beta.1**（版本不变）：维护者同意后，在维护者的 Chrome 里从 GitHub 网页发布 Release `v1.48.4-beta.1`（指向 `55ea112`，Pre-release；Latest 仍是 `v1.25.8`），标题“v1.48.4-beta.1 公测版 · 速通练习与限时、模拟器跨房推演”，说明取自《版本摘要.md》1.48.4-beta.1 一节（相对 1.25.8 的变化，其间没有发过公测版）。发布前：`cd1c8fe` 的持续集成（Windows 与 Linux 的全量回归、静态检查、端口检查）与组件候选构建通过，`55ea112`（只加了版本摘要）的持续集成也通过。这次没有跑实机冒烟（维护者决定；上一次是 1.25.7），转正式版之前要补跑。
+  验证：发布后组件构建自动完成并上传两个附件；按外部使用的方式下载核对：`Celeste_AI_Play-v1.48.4-beta.1-components-windows-x64.zip`（474826 字节，SHA256 `49c44897…a79c00`）与 `components.json`（2238 字节，SHA256 `4cb72e7a…8e258f`）都与 GitHub 给出的 digest 一致；用 `tools/component_package.py` 解包校验通过（标签 v1.48.4-beta.1、项目 1.48.4、桥接 1.22.1、常驻核心 1.1.3、OBS 33.0.0、Everest stable-1.6642.0、源码提交 `55ea112`、源码指纹与本地检出一致、包内清单与附件相同）；源码压缩包（659 个文件）不含 `docs/开发/`、`CHANGELOG.md`、`AGENTS.md`。
+
 ## 2026-11-22
 
 - **项目 1.48.4 / Bridge 1.22.1：接管期间停用 Speedrun Tool 的快捷键；工具门禁超时时记下主控事件循环卡在哪里。**
